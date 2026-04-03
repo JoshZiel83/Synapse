@@ -27,7 +27,7 @@ export async function probeLocalRelayDesktop(): Promise<RelayLocalDesktopStatusV
 export async function sendPairingToLocalRelayDesktop(input: {
   serverBaseUrl: string;
   pairingCode: string;
-  displayName?: string;
+  title?: string;
 }): Promise<RelayLocalDesktopPairingResponse> {
   const response = await fetch(`${RELAY_LOCAL_DESKTOP_ORIGIN}/pairing`, {
     method: 'POST',
@@ -52,7 +52,7 @@ export function buildRelayDesktopDeepLink(pairing: RelayPairingSessionView): str
   url.searchParams.set('serverBaseUrl', pairing.serverBaseUrl);
   url.searchParams.set('code', pairing.pairingCode);
   if (pairing.requestedDisplayName) {
-    url.searchParams.set('displayName', pairing.requestedDisplayName);
+    url.searchParams.set('title', pairing.requestedDisplayName);
   }
   return url.toString();
 }

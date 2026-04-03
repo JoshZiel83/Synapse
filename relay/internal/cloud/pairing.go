@@ -17,7 +17,7 @@ import (
 
 type PairingClaimResult struct {
 	DeviceID              string `json:"deviceId"`
-	DisplayName           string `json:"displayName"`
+	Title                 string `json:"title"`
 	WorkspaceID           string `json:"workspaceId"`
 	ProtocolVersion       int    `json:"protocolVersion"`
 	WebSocketURL          string `json:"websocketUrl"`
@@ -50,8 +50,9 @@ func ClaimPairing(ctx context.Context, relayCfg config.RelayConfig, pairingCode,
 
 	requestBody := map[string]interface{}{
 		"pairingCode":          strings.TrimSpace(pairingCode),
-		"displayName":          resolvedDisplayName,
-		"clientKind":           "desktop",
+		"title":                resolvedDisplayName,
+		"deviceType":           "desktop_computer",
+		"authorizationMode":    "server_trust",
 		"platform":             runtimePlatform(),
 		"publicKey":            identity.PublicKeyPEM,
 		"publicKeyFingerprint": identity.Fingerprint,
@@ -117,14 +118,14 @@ func ClaimPairing(ctx context.Context, relayCfg config.RelayConfig, pairingCode,
 	nextRelay.ServerBaseURL = serverBaseURL
 	nextRelay.WebSocketURL = config.DeriveWebSocketURL(serverBaseURL)
 	nextRelay.DeviceID = result.DeviceID
-	nextRelay.DisplayName = ResolveRelayDisplayName(result.DisplayName)
+	nextRelay.DisplayName = ResolveRelayDisplayName(result.Title)
 	nextRelay.PublicKeyFingerprint = identity.Fingerprint
 	nextRelay.PrivateKeyPath = identity.PrivateKeyPath
 	nextRelay.ServerTLSPublicKeyPin = capturedServerPin
 
 	result.ServerBaseURL = nextRelay.ServerBaseURL
 	result.WebSocketURL = nextRelay.WebSocketURL
-	result.DisplayName = nextRelay.DisplayName
+	result.Title = nextRelay.DisplayName
 	result.ServerTLSPublicKeyPin = capturedServerPin
 	return &nextRelay, &result, nil
 }

@@ -48,7 +48,7 @@ import {
 } from '../runtime-grants/service.js';
 
 const createPairingSchema = z.object({
-  displayName: z.string().trim().min(1).max(255).optional(),
+  title: z.string().trim().min(1).max(255).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 
@@ -59,7 +59,10 @@ const relayDesktopUpdateQuerySchema = z.object({
 });
 
 const updateRelayDeviceSchema = z.object({
-  displayName: z.string().trim().min(1).max(255),
+  title: z.string().trim().min(1).max(255),
+  description: z.string().trim().max(4000).nullable().optional(),
+  deviceType: z.string().trim().min(1).max(64).optional(),
+  authorizationMode: z.string().trim().min(1).max(64).optional(),
   metadata: z.record(z.unknown()).optional(),
 });
 
@@ -91,8 +94,10 @@ const updateRelayExposureSchema = z.object({
 
 const claimPairingSchema = z.object({
   pairingCode: z.string().trim().min(4).max(32),
-  displayName: z.string().trim().min(1).max(255).optional(),
-  clientKind: z.string().trim().min(1).max(40).optional(),
+  title: z.string().trim().min(1).max(255).optional(),
+  description: z.string().trim().max(4000).optional(),
+  deviceType: z.string().trim().min(1).max(64).optional(),
+  authorizationMode: z.string().trim().min(1).max(64).optional(),
   platform: z.string().trim().min(1).max(40).optional(),
   publicKey: z.string().trim().min(1),
   publicKeyFingerprint: z.string().trim().min(8).max(128),
@@ -129,9 +134,11 @@ type RelayDeviceSummaryRow = {
   id: string;
   workspace_id: string;
   owner_workspace_member_id: string | null;
-  display_name: string;
-  client_kind: string;
+  title: string;
+  description: string | null;
+  device_type: string;
   platform: string | null;
+  authorization_mode: string;
   public_key_fingerprint: string;
   trust_status: RelayDeviceSummaryView['trustStatus'];
   is_connected: boolean;
@@ -156,7 +163,10 @@ type RelayPairingRow = {
   requested_by_workspace_member_id: string | null;
   device_id: string | null;
   server_base_url: string;
-  requested_display_name: string | null;
+  requested_title: string | null;
+  requested_description: string | null;
+  requested_device_type: string | null;
+  requested_authorization_mode: string | null;
   pairing_code: string;
   verification_uri: string;
   verification_uri_complete: string | null;
@@ -184,9 +194,11 @@ type RelaySyncSourceRow = {
 };
 
 type RelayExposureToolRow = {
+  capability_id: string;
   exposure_id: string;
   exposure_stable_key: string;
   exposure_display_name: string;
+  exposure_description: string | null;
   exposure_transport: RelayExposureView['transport'];
   exposure_runtime_status: RelayExposureView['runtimeStatus'];
   exposure_conversation_type_mask_override: number | null;
@@ -316,9 +328,12 @@ function mapRelayDeviceSummary(row: RelayDeviceSummaryRow): RelayDeviceSummaryVi
     id: row.id,
     workspaceId: row.workspace_id,
     ownerWorkspaceMemberId: row.owner_workspace_member_id || undefined,
-    displayName: row.display_name,
-    clientKind: row.client_kind,
+    title: row.title,
+    description: row.description || undefined,
+    deviceType: row.device_type as RelayDeviceSummaryView['deviceType'],
     platform: row.platform || undefined,
+    authorizationMode:
+      row.authorization_mode as RelayDeviceSummaryView['authorizationMode'],
     publicKeyFingerprint: row.public_key_fingerprint,
     trustStatus: row.trust_status,
     isConnected: Boolean(row.is_connected),
@@ -346,7 +361,7 @@ function mapRelayPairingSession(row: RelayPairingRow): RelayPairingSessionView {
       row.requested_by_workspace_member_id || undefined,
     deviceId: row.device_id || undefined,
     serverBaseUrl: row.server_base_url,
-    requestedDisplayName: row.requested_display_name || undefined,
+    requestedDisplayName: row.requested_title || undefined,
     pairingCode: row.pairing_code,
     verificationUri: row.verification_uri,
     verificationUriComplete: row.verification_uri_complete || undefined,
@@ -437,9 +452,11 @@ function groupRelayExposures(
     let exposure = exposures.get(row.exposure_id);
     if (!exposure) {
       exposure = {
+        capabilityId: row.capability_id,
         id: row.exposure_id,
         stableKey: row.exposure_stable_key,
         displayName: row.exposure_display_name,
+        description: row.exposure_description || undefined,
         transport: row.exposure_transport,
         runtimeStatus: row.exposure_runtime_status,
         workspaceConversationTypeMask,
@@ -460,11 +477,9 @@ function groupRelayExposures(
       };
       exposures.set(row.exposure_id, exposure);
     }
-    const currentExposure = exposure;
-
     const tool = mapRelayTool(row);
-    if (tool) {
-      currentExposure.tools.push(tool);
+    if (tool && exposure) {
+      exposure.tools.push(tool);
     }
   }
 
@@ -680,9 +695,11 @@ async function listRelayDeviceSummaries(workspaceId: string) {
         d.id,
         d.workspace_id,
         d.owner_workspace_member_id,
-        d.display_name,
-        d.client_kind,
+        d.title,
+        d.description,
+        d.device_type,
         d.platform,
+        d.authorization_mode,
         d.public_key_fingerprint,
         d.trust_status,
         d.last_seen_at,
@@ -761,9 +778,11 @@ async function getRelayDeviceSummary(workspaceId: string, deviceId: string) {
         d.id,
         d.workspace_id,
         d.owner_workspace_member_id,
-        d.display_name,
-        d.client_kind,
+        d.title,
+        d.description,
+        d.device_type,
         d.platform,
+        d.authorization_mode,
         d.public_key_fingerprint,
         d.trust_status,
         d.last_seen_at,
@@ -871,9 +890,12 @@ async function assertRelayExposureInWorkspaceDevice(
 function mapRuntimeGrantView(record: RuntimeGrantRecord): RuntimeGrantView {
   return {
     id: record.id,
-    relayToolName: record.relayToolName,
+    relayToolStableKey: record.relayToolStableKey,
+    contractKey: record.contractKey,
+    displayPayload: record.displayPayload,
     workspaceId: record.workspaceId,
     deviceId: record.relayDeviceId,
+    relayCapabilityId: record.relayCapabilityId,
     exposureId: record.relayExposureId,
     conversationId: record.conversationId,
     actorId: record.actorId,
@@ -910,11 +932,13 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
     executeSql<RelayExposureToolRow>(
       `SELECT
           e.id AS exposure_id,
+          capability.id AS capability_id,
           e.stable_key AS exposure_stable_key,
           e.display_name AS exposure_display_name,
+          e.description AS exposure_description,
           e.transport AS exposure_transport,
           e.runtime_status AS exposure_runtime_status,
-          e.conversation_type_mask_override AS exposure_conversation_type_mask_override,
+          capability.conversation_type_mask_override AS exposure_conversation_type_mask_override,
           e.last_seen_at AS exposure_last_seen_at,
           e.last_healthy_at AS exposure_last_healthy_at,
           e.last_error AS exposure_last_error,
@@ -947,6 +971,8 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
           tr.annotations AS tool_annotations,
           tr.definition_hash AS tool_definition_hash
        FROM relay_exposures e
+       LEFT JOIN relay_capabilities capability
+         ON capability.exposure_id = e.id
        LEFT JOIN relay_sync_sources source
          ON source.id = e.sync_source_id
        LEFT JOIN relay_tools t
@@ -959,7 +985,7 @@ async function buildRelayDeviceDetail(workspaceId: string, deviceId: string): Pr
       ORDER BY e.display_name ASC, t.current_name ASC NULLS LAST`,
       [deviceId],
     ),
-    getWorkspaceCapabilityConversationTypeMask(workspaceId, 'relay_exposure'),
+    getWorkspaceCapabilityConversationTypeMask(workspaceId, 'relay_capability'),
   ]);
 
   return {
@@ -977,7 +1003,7 @@ async function createRelayPairingSession(params: {
   workspaceId: string;
   requestedByWorkspaceMemberId: string;
   serverBaseUrl: string;
-  displayName?: string;
+  title?: string;
   metadata?: Record<string, unknown>;
 }) {
   const expiresAt = new Date(Date.now() + RELAY_PAIRING_TTL_MS).toISOString();
@@ -991,7 +1017,7 @@ async function createRelayPairingSession(params: {
            workspace_id,
            requested_by_workspace_member_id,
            server_base_url,
-           requested_display_name,
+           requested_title,
            pairing_code,
            verification_uri,
            verification_uri_complete,
@@ -1004,7 +1030,7 @@ async function createRelayPairingSession(params: {
           params.workspaceId,
           params.requestedByWorkspaceMemberId,
           params.serverBaseUrl,
-          params.displayName || null,
+          params.title || null,
           pairingCode,
           buildVerificationUri(params.serverBaseUrl, 'pending'),
           buildVerificationUriComplete(params.serverBaseUrl, 'pending', pairingCode),
@@ -1188,22 +1214,28 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
       `INSERT INTO relay_devices (
          workspace_id,
          owner_workspace_member_id,
-         display_name,
-         client_kind,
+         title,
+         description,
+         device_type,
          platform,
+         authorization_mode,
          public_key,
          public_key_fingerprint,
          trust_status,
          metadata
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8)
-       RETURNING id, workspace_id, display_name`,
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9)
+       RETURNING id, workspace_id, title`,
       [
         pairing.workspace_id,
         pairing.requested_by_workspace_member_id,
-        input.displayName || pairing.requested_display_name || 'Relay Device',
-        input.clientKind || 'desktop',
+        input.title || pairing.requested_title || 'Relay Device',
+        input.description || pairing.requested_description || null,
+        input.deviceType || pairing.requested_device_type || 'desktop_computer',
         input.platform || null,
+        input.authorizationMode ||
+          pairing.requested_authorization_mode ||
+          'server_trust',
         input.publicKey,
         computedFingerprint,
         JSON.stringify(input.metadata || {}),
@@ -1225,7 +1257,7 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
     await ensureRelayLifecycleAutomationSourcesForDeviceTx(clientRunner(client), {
       workspaceId: device.workspace_id as string,
       deviceId: device.id as string,
-      displayName: device.display_name as string,
+      displayName: device.title as string,
     });
 
     return {
@@ -1233,7 +1265,7 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
       workspaceId: device.workspace_id as string,
       ownerWorkspaceMemberId:
         pairing.requested_by_workspace_member_id || undefined,
-      displayName: device.display_name as string,
+      title: device.title as string,
       serverBaseUrl: pairing.server_base_url,
       websocketUrl: buildRelayWebSocketUrl(pairing.server_base_url),
     };
@@ -1317,7 +1349,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
         workspaceId,
         requestedByWorkspaceMemberId: workspaceMemberId,
         serverBaseUrl: resolveServerBaseUrl(request),
-        displayName: body.displayName,
+        title: body.title,
         metadata: body.metadata,
       });
 
@@ -1327,7 +1359,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
         eventType: 'relay.pairing.created',
         eventData: {
           pairingId: pairing.id,
-          requestedDisplayName: pairing.requestedDisplayName,
+          requestedTitle: pairing.requestedDisplayName,
         },
       });
 
@@ -1404,13 +1436,13 @@ export function registerRelayRoutes(app: FastifyInstance) {
         eventType: 'relay.pairing.claimed',
         eventData: {
           deviceId: claimed.deviceId,
-          displayName: claimed.displayName,
+          title: claimed.title,
         },
       });
 
       reply.status(201).send({
         deviceId: claimed.deviceId,
-        displayName: claimed.displayName,
+        title: claimed.title,
         workspaceId: claimed.workspaceId,
         protocolVersion: RELAY_PROTOCOL_VERSION,
         websocketUrl: claimed.websocketUrl,
@@ -1616,16 +1648,27 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const body = updateRelayDeviceSchema.parse(request.body);
       const result = await executeSql(
         `UPDATE relay_devices
-         SET display_name = $3,
+         SET title = $3,
+             description = COALESCE($4, description),
+             device_type = COALESCE($5, device_type),
+             authorization_mode = COALESCE($6, authorization_mode),
              metadata = CASE
-               WHEN $4::jsonb IS NULL THEN metadata
-               ELSE $4::jsonb
+               WHEN $7::jsonb IS NULL THEN metadata
+               ELSE $7::jsonb
              END,
              updated_at = NOW()
          WHERE id = $1
            AND workspace_id = $2
          RETURNING id`,
-        [id, workspaceId, body.displayName, body.metadata ? JSON.stringify(body.metadata) : null],
+        [
+          id,
+          workspaceId,
+          body.title,
+          body.description ?? null,
+          body.deviceType ?? null,
+          body.authorizationMode ?? null,
+          body.metadata ? JSON.stringify(body.metadata) : null,
+        ],
       );
 
       if (result.rows.length === 0) {
@@ -1637,7 +1680,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
         {
           workspaceId,
           deviceId: id,
-          displayName: body.displayName,
+          displayName: body.title,
         },
       );
 
@@ -1645,7 +1688,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
         workspaceId,
         relayId: id,
         eventType: 'relay.device.updated',
-        eventData: { displayName: body.displayName },
+        eventData: { title: body.title },
       });
 
       const detail = await buildRelayDeviceDetail(workspaceId, id);
@@ -1706,9 +1749,11 @@ export function registerRelayRoutes(app: FastifyInstance) {
            id,
            workspace_id,
            owner_workspace_member_id,
-           display_name,
-           client_kind,
+           title,
+           description,
+           device_type,
            platform,
+           authorization_mode,
            public_key_fingerprint,
            trust_status,
            EXISTS(

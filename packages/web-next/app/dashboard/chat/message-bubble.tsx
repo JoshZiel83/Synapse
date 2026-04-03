@@ -448,7 +448,7 @@ function describeRuntimeGrantEffect(scope: RuntimeGrantEffect) {
     }
   }
 
-  if (scope.capability === "chrome") {
+  if (scope.capability === "browser") {
     return {
       icon: Globe,
       summary: "browser automation",
@@ -1062,7 +1062,7 @@ function InteractionCard({
 
         <div className="space-y-1.5">
           <p className="text-sm leading-6 font-medium text-foreground">
-            {`Authorize ${interaction.runtimeAuthorization.relayToolName} on ${interaction.runtimeAuthorization.deviceDisplayName}`}
+            {`Authorize ${interaction.runtimeAuthorization.relayToolStableKey} on ${interaction.runtimeAuthorization.deviceDisplayName}`}
           </p>
           <p className="text-xs leading-5 text-muted-foreground">
             {interaction.runtimeAuthorization.reason}

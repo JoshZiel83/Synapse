@@ -409,7 +409,7 @@ export default function PluginsPage() {
     if (!normalizedSearch) return relayDashboard.devices;
 
     return relayDashboard.devices.filter((relay) =>
-      [relay.displayName, relay.clientKind, relay.platform || '', relay.publicKeyFingerprint]
+      [relay.title, relay.deviceType, relay.platform || '', relay.publicKeyFingerprint]
         .join(' ')
         .toLowerCase()
         .includes(normalizedSearch),
@@ -534,7 +534,7 @@ export default function PluginsPage() {
       const response = await sendPairingToLocalRelayDesktop({
         serverBaseUrl: pairing.serverBaseUrl,
         pairingCode: pairing.pairingCode,
-        displayName: pairing.requestedDisplayName,
+        title: pairing.requestedDisplayName,
       });
       setSentToDesktopPairingId(pairing.id);
       toast.success(response.message || 'Pairing request sent to the desktop app');
@@ -685,7 +685,7 @@ export default function PluginsPage() {
                     <div className="min-w-0 flex-1">
                       <div className="flex flex-wrap items-center gap-2">
                         <AppCardTitle className="truncate text-sm">
-                          {relay.displayName}
+                          {relay.title}
                         </AppCardTitle>
                         <Badge variant="outline">Relay</Badge>
                       </div>
@@ -722,7 +722,7 @@ export default function PluginsPage() {
 
               <AppCardContent className="flex flex-col gap-3">
                 <div className="text-xs leading-5 text-muted-foreground">
-                  {relay.clientKind}
+                  {relay.deviceType}
                   {relay.platform ? ` on ${relay.platform}` : ''}. {relay.exposureCount} MCP exposure
                   {relay.exposureCount === 1 ? '' : 's'} and {relay.toolCount} tool
                   {relay.toolCount === 1 ? '' : 's'}.
@@ -986,7 +986,7 @@ export default function PluginsPage() {
 
                 <div className="mt-3 text-sm font-medium text-foreground">
                   {localRelayDesktop
-                    ? localRelayDesktop.displayName || 'Desktop relay detected'
+                    ? localRelayDesktop.title || 'Desktop relay detected'
                     : probingLocalRelayDesktop
                       ? 'Looking for a local relay app'
                       : 'No local relay app detected'}

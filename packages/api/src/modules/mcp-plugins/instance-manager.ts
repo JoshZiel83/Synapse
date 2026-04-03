@@ -602,6 +602,7 @@ async function createRelayInstance(
       sessionId: executionContext?.sessionId,
       requestedByWorkspaceMemberId: executionContext?.workspaceMemberId,
       requestedByActorId: executionContext?.actorId,
+      relayCapabilityId: exposureId,
       deviceId,
       exposureId,
       visibleToolName: toolName,

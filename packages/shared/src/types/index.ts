@@ -1654,13 +1654,13 @@ export interface CapabilityInvocationContext {
   providerCallId?: string;
   namespacedToolName?: string;
   toolName?: string;
-  sourceType?: "builtin" | "mcp_plugin" | "relay_exposure";
+  sourceType?: "builtin" | "mcp_plugin" | "relay_capability";
 }
 
 export interface ToolSurfaceItem {
   id: string;
   name: string;
-  source: "builtin" | "plugin_installation" | "relay_exposure";
+  source: "builtin" | "plugin_installation" | "relay_capability";
 }
 
 export interface SkillSurfaceItem {
@@ -2818,8 +2818,8 @@ export interface RuntimeCuaGrantEffect {
   mode: "control";
 }
 
-export interface RuntimeChromeGrantEffect {
-  capability: "chrome";
+export interface RuntimeBrowserGrantEffect {
+  capability: "browser";
   mode: "automation";
 }
 
@@ -2832,7 +2832,7 @@ export interface RuntimeCommandlineGrantEffect {
 export type RuntimeGrantEffect =
   | RuntimeFilesystemGrantEffect
   | RuntimeCuaGrantEffect
-  | RuntimeChromeGrantEffect
+  | RuntimeBrowserGrantEffect
   | RuntimeCommandlineGrantEffect;
 
 export interface RuntimeGrantSummary {
@@ -2848,19 +2848,25 @@ export interface RuntimeGrantSummary {
 }
 
 export interface RuntimeGrantView extends RuntimeGrantSummary {
-  relayToolName: string;
+  relayToolStableKey: string;
+  contractKey: string;
+  displayPayload: Record<string, unknown>;
   workspaceId: UUID;
   deviceId: UUID;
+  relayCapabilityId: UUID;
   exposureId: UUID;
   conversationId?: UUID;
   actorId?: UUID;
 }
 
 export interface RuntimeAuthorizationInteractionSummary {
-  relayToolName: string;
+  relayToolStableKey: string;
   reason: string;
+  contractKey: string;
+  displayPayload: Record<string, unknown>;
   deviceId: UUID;
   deviceDisplayName: string;
+  relayCapabilityId: UUID;
   exposureId: UUID;
   exposureDisplayName: string;
   requestedEffect: RuntimeGrantEffect;
@@ -4088,7 +4094,8 @@ export type AccessResourceType =
   | "installed_skill"
   | "plugin_installation"
   | "relay_device"
-  | "relay_exposure";
+  | "relay_exposure"
+  | "relay_capability";
 export type AccessSubjectType =
   | "platform"
   | "workspace"
@@ -4350,9 +4357,11 @@ export interface RelayDeviceRecord {
   id: string;
   workspaceId: string;
   ownerWorkspaceMemberId?: string;
-  displayName: string;
-  clientKind: string;
+  title: string;
+  description?: string;
+  deviceType: string;
   platform?: string;
+  authorizationMode: "server_trust" | "client_local";
   publicKeyFingerprint: string;
   trustStatus: "pending" | "active" | "revoked" | "blocked";
   metadata: Record<string, unknown>;

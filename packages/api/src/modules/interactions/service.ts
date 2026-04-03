@@ -68,8 +68,12 @@ type RawInteractionRow = {
   target_member_id: string | null;
   resolved_by_workspace_member_id: string | null;
   resolved_by_member_id: string | null;
+  relay_capability_id: string | null;
   relay_device_id: string | null;
   relay_exposure_id: string | null;
+  relay_tool_stable_key: string | null;
+  contract_key: string | null;
+  display_payload: unknown;
   device_display_name: string | null;
   exposure_display_name: string | null;
   exposure_stable_key: string | null;
@@ -123,10 +127,13 @@ export interface CreateRuntimeAuthorizationInteractionParams {
   requesterMemberId: string;
   requesterActorId?: string;
   requesterWorkspaceMemberId?: string;
+  relayCapabilityId: string;
   relayDeviceId: string;
   relayExposureId: string;
   runtimeSessionId: string;
-  relayToolName: string;
+  relayToolStableKey: string;
+  contractKey: string;
+  displayPayload: Record<string, unknown>;
   reason: string;
   requestedEffect: RuntimeGrantEffect;
   requestMode: RuntimeAuthorizationRequestMode;
@@ -155,9 +162,11 @@ export interface FindOpenRuntimeAuthorizationInteractionParams {
   workspaceId: string;
   conversationId: string;
   requesterMemberId: string;
+  relayCapabilityId: string;
   relayDeviceId: string;
   relayExposureId: string;
-  relayToolName: string;
+  relayToolStableKey: string;
+  contractKey: string;
   requestedEffect: RuntimeGrantEffect;
   requestMode: RuntimeAuthorizationRequestMode;
 }
@@ -593,14 +602,24 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
     };
   } else {
     runtimeAuthorization = {
-      relayToolName:
-        typeof requestedEffect.relayToolName === "string"
-          ? requestedEffect.relayToolName
+      relayToolStableKey:
+        typeof requestedEffect.relayToolStableKey === "string"
+          ? requestedEffect.relayToolStableKey
           : "",
       reason:
         typeof requestedEffect.reason === "string" ? requestedEffect.reason : "",
+      contractKey:
+        typeof requestedEffect.contractKey === "string"
+          ? requestedEffect.contractKey
+          : "",
+      displayPayload:
+        requestedEffect.displayPayload &&
+        typeof requestedEffect.displayPayload === "object"
+          ? (requestedEffect.displayPayload as Record<string, unknown>)
+          : {},
       deviceId: row.relay_device_id || "",
       deviceDisplayName: row.device_display_name || "Relay Device",
+      relayCapabilityId: row.relay_capability_id || "",
       exposureId: row.relay_exposure_id || "",
       exposureDisplayName: row.exposure_display_name || "Relay Exposure",
       requestedEffect:
@@ -655,7 +674,11 @@ async function getInteractionRowById(
             auth.request_payload AS request_payload,
             COALESCE(question.resolution_payload, auth.resolution_payload, '{}'::jsonb) AS resolution_payload,
             auth.relay_device_id,
+            auth.relay_capability_id,
             auth.relay_exposure_id,
+            auth.relay_tool_stable_key,
+            auth.contract_key,
+            auth.display_payload,
             requester.member_type AS requester_member_type,
             COALESCE(requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
             requester_actor.title AS requester_title,
@@ -677,7 +700,7 @@ async function getInteractionRowById(
             resolver_actor.avatar_file_id AS resolved_by_actor_avatar_file_id,
             resolver_user.avatar_file_id AS resolved_by_user_avatar_file_id,
             resolver_actor.avatar_emoji AS resolved_by_avatar_emoji,
-            device.display_name AS device_display_name,
+            device.title AS device_display_name,
             exposure.display_name AS exposure_display_name,
             exposure.stable_key AS exposure_stable_key
      FROM interaction_requests ir
@@ -950,8 +973,12 @@ async function insertRuntimeAuthorizationInteractionDetails(
   params: {
     interactionId: string;
     relayDeviceId: string;
+    relayCapabilityId: string;
     relayExposureId: string;
+    relayToolStableKey: string;
+    contractKey: string;
     requestedEffect: Record<string, unknown>;
+    displayPayload: Record<string, unknown>;
     requestPayload: Record<string, unknown>;
   },
 ) {
@@ -960,9 +987,14 @@ async function insertRuntimeAuthorizationInteractionDetails(
     db.insertInto("interaction_runtime_authorization_requests").values({
       interaction_id: params.interactionId,
       relay_device_id: params.relayDeviceId,
+      relay_capability_id: params.relayCapabilityId,
       relay_exposure_id: params.relayExposureId,
+      relay_tool_stable_key: params.relayToolStableKey,
+      contract_key: params.contractKey,
       requested_effect:
         params.requestedEffect as TableInsert<"interaction_runtime_authorization_requests">["requested_effect"],
+      display_payload:
+        params.displayPayload as TableInsert<"interaction_runtime_authorization_requests">["display_payload"],
       request_payload:
         params.requestPayload as TableInsert<"interaction_runtime_authorization_requests">["request_payload"],
       resolution_payload:
@@ -1111,14 +1143,20 @@ export async function createRuntimeAuthorizationInteractionRequest(
     await insertRuntimeAuthorizationInteractionDetails(client, {
       interactionId,
       relayDeviceId: params.relayDeviceId,
+      relayCapabilityId: params.relayCapabilityId,
       relayExposureId: params.relayExposureId,
+      relayToolStableKey: params.relayToolStableKey,
+      contractKey: params.contractKey,
       requestedEffect: {
         runtimeSessionId: params.runtimeSessionId,
-        relayToolName: params.relayToolName,
+        relayToolStableKey: params.relayToolStableKey,
+        contractKey: params.contractKey,
+        displayPayload: params.displayPayload,
         reason: params.reason,
         requestMode: params.requestMode,
         requestedEffect: params.requestedEffect,
       },
+      displayPayload: params.displayPayload,
       requestPayload: {
         sourceRetryNonce: params.sourceRetryNonce,
         sourceRequestArgs: params.sourceRequestArgs || {},
@@ -1179,10 +1217,12 @@ export async function findOpenRuntimeAuthorizationInteraction(
       ]),
     )
     .where("auth.relay_device_id", "=", params.relayDeviceId)
+    .where("auth.relay_capability_id", "=", params.relayCapabilityId)
     .where("auth.relay_exposure_id", "=", params.relayExposureId)
     .where(
-      sql<boolean>`auth.requested_effect->>'relayToolName' = ${params.relayToolName}`,
+      sql<boolean>`auth.relay_tool_stable_key = ${params.relayToolStableKey}`,
     )
+    .where("auth.contract_key", "=", params.contractKey)
     .where(
       sql<boolean>`auth.requested_effect->'requestedEffect' = ${JSON.stringify(params.requestedEffect)}::jsonb`,
     )
@@ -1645,6 +1685,7 @@ export async function resolveInteractionRequest(
         {
           workspaceId: existing.workspace_id,
           relayDeviceId: existing.relay_device_id || "",
+          relayCapabilityId: existing.relay_capability_id || "",
           relayExposureId: existing.relay_exposure_id || "",
           conversationId: existing.conversation_id,
           actorId: existing.requester_actor_id || undefined,
@@ -1652,9 +1693,13 @@ export async function resolveInteractionRequest(
           sourceInteractionId: existing.id,
           sourceTaskId: existing.task_id || undefined,
           preset: params.preset || "once",
-          relayToolName:
-            typeof requestedEffect.relayToolName === "string"
-              ? requestedEffect.relayToolName
+          relayToolStableKey:
+            typeof requestedEffect.relayToolStableKey === "string"
+              ? requestedEffect.relayToolStableKey
+              : "",
+          contractKey:
+            typeof requestedEffect.contractKey === "string"
+              ? requestedEffect.contractKey
               : "",
           sourceRetryNonce:
             typeof requestPayload.sourceRetryNonce === "string"
@@ -1672,6 +1717,11 @@ export async function resolveInteractionRequest(
           effect:
             (requestedEffect.requestedEffect as RuntimeGrantEffect | undefined) ||
             ({ capability: "cua", mode: "control" } as RuntimeGrantEffect),
+          displayPayload:
+            requestedEffect.displayPayload &&
+            typeof requestedEffect.displayPayload === "object"
+              ? (requestedEffect.displayPayload as Record<string, unknown>)
+              : {},
         },
         client,
       );

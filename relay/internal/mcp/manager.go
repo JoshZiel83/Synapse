@@ -122,7 +122,7 @@ func shouldInitializeServer(cfg config.ServerConfig) bool {
 	}
 
 	switch strings.TrimSpace(strings.ToLower(cfg.Builtin.Kind)) {
-	case "chrome", "cua", "filesystem":
+	case "chrome", "cua", "filesystem", "commandline":
 		return true
 	default:
 		return false
@@ -183,6 +183,29 @@ func pendingMessage(phase string) string {
 	}
 }
 
+func normalizedBuiltinKind(kind string) string {
+	normalized := strings.TrimSpace(strings.ToLower(kind))
+	if normalized == "chrome" {
+		return "browser"
+	}
+	return normalized
+}
+
+func builtinExposureStableKey(kind string) string {
+	switch normalizedBuiltinKind(kind) {
+	case "browser":
+		return "synapse.builtin.browser.v1"
+	case "cua":
+		return "synapse.builtin.cua.v1"
+	case "filesystem":
+		return "synapse.builtin.filesystem.v1"
+	case "commandline":
+		return "synapse.builtin.commandline.v1"
+	default:
+		return ""
+	}
+}
+
 // InitAll starts all configured MCP servers, initializes them, and discovers their tools
 func (m *Manager) InitAll(ctx context.Context) error {
 	for _, cfg := range m.configs {
@@ -240,6 +263,11 @@ func (m *Manager) attemptServerStart(ctx context.Context, cfg config.ServerConfi
 
 	serverName := cfg.Name
 	stableKey := cfg.StableKey
+	if cfg.Transport == "builtin" && cfg.Builtin != nil {
+		if builtinStableKey := builtinExposureStableKey(cfg.Builtin.Kind); builtinStableKey != "" {
+			stableKey = builtinStableKey
+		}
+	}
 	if notifier, ok := srv.(toolListChangeNotifier); ok {
 		notifier.SetToolsChangedHandler(func() {
 			m.notifyCatalogHint(serverName, stableKey)
@@ -278,8 +306,9 @@ func (m *Manager) attemptServerStart(ctx context.Context, cfg config.ServerConfi
 		metadata = map[string]interface{}{}
 	}
 	if cfg.Transport == "builtin" && cfg.Builtin != nil {
-		metadata["builtinKind"] = cfg.Builtin.Kind
+		metadata["builtinKind"] = normalizedBuiltinKind(cfg.Builtin.Kind)
 		metadata["trustRemoteAuthorization"] = true
+		metadata["authorizationMode"] = "server_trust"
 	}
 	if provider, ok := srv.(metadataProvider); ok {
 		for key, value := range provider.Metadata() {
@@ -289,7 +318,7 @@ func (m *Manager) attemptServerStart(ctx context.Context, cfg config.ServerConfi
 
 	return &serverEntry{
 		cfg:           cfg,
-		stableKey:     cfg.StableKey,
+		stableKey:     stableKey,
 		syncSourceKey: cfg.SyncSourceKey,
 		name:          cfg.Name,
 		transport:     cfg.Transport,
@@ -366,7 +395,7 @@ func (m *Manager) GetServerInfo() []ServerInfo {
 				params = t.InputSchema
 			}
 			tools[i] = ToolInfo{
-				StableKey:   stableKeyForTool(t.Name),
+				StableKey:   stableKeyForTool(s, t.Name),
 				Name:        t.Name,
 				Description: t.Description,
 				InputSchema: params,
@@ -676,7 +705,10 @@ func (m *Manager) retryPendingServers(ctx context.Context) bool {
 	return changed
 }
 
-func stableKeyForTool(name string) string {
+func stableKeyForTool(server serverEntry, name string) string {
+	if builtinKind, ok := server.metadata["builtinKind"].(string); ok && builtinKind != "" {
+		return fmt.Sprintf("synapse.builtin.%s.%s.v1", builtinKind, strings.ToLower(name))
+	}
 	return "tool_" + name
 }
 

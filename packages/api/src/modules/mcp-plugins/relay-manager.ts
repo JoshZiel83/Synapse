@@ -184,6 +184,7 @@ interface RelayCallParams {
   sessionId?: string;
   requestedByWorkspaceMemberId?: string;
   requestedByActorId?: string;
+  relayCapabilityId: string;
   deviceId: string;
   exposureId: string;
   visibleToolName: string;
@@ -686,14 +687,16 @@ function buildAuthorizationRequiredResult(params: {
 }) {
   const requirement = params.requirement;
   return {
-    content: textBlocks(requirement?.message || "User authorization is required."),
+    content: textBlocks(requirement?.reason || "User authorization is required."),
     structuredContent: {
       authorization_required: true,
       relayToolName: params.relayToolName,
+      relayToolStableKey: requirement?.toolStableKey,
+      contractKey: requirement?.contractKey,
       runtimeSessionId: params.runtimeSessionId,
       effect: requirement?.effect,
+      displayPayload: requirement?.displayPayload || {},
       available_presets: ["once", "actor", "conversation", "workspace"],
-      client_hint: requirement?.clientHint,
     },
     isError: true,
   };
@@ -701,9 +704,11 @@ function buildAuthorizationRequiredResult(params: {
 
 export async function resolveRelayToolAuthorization(params: {
   workspaceId: string;
+  relayCapabilityId: string;
   relayExposureId: string;
   conversationId?: string | null;
   actorId?: string | null;
+  relayToolStableKey?: string;
   relayToolName: string;
   toolArguments: Record<string, unknown>;
   runtimeSessionId: string;
@@ -711,6 +716,7 @@ export async function resolveRelayToolAuthorization(params: {
   authorization?: RelayRuntimeAuthorizationEnvelope;
 }) {
   const requirement = inferRelaySpecialAuthorizationRequirement({
+    toolStableKey: params.relayToolStableKey,
     visibleToolName: params.relayToolName,
     toolInput: params.toolArguments,
     exposureMetadata: params.exposureMetadata,
@@ -723,10 +729,12 @@ export async function resolveRelayToolAuthorization(params: {
 
   const grant = await findMatchingRuntimeGrant({
     workspaceId: params.workspaceId,
+    relayCapabilityId: params.relayCapabilityId,
     relayExposureId: params.relayExposureId,
     conversationId: params.conversationId || undefined,
     actorId: params.actorId || undefined,
-    relayToolName: params.relayToolName,
+    relayToolStableKey: requirement.toolStableKey,
+    contractKey: requirement.contractKey,
     effect: requirement.effect,
     retryNonce: params.authorization?.retryNonce,
     consumeOnce: true,
@@ -856,9 +864,11 @@ async function callRelayToolLocal(params: RelayCallParams): Promise<unknown> {
     await validateRelayCallTargetLocal(params);
   const authorizationState = await resolveRelayToolAuthorization({
     workspaceId: connected.workspaceId,
+    relayCapabilityId: params.relayCapabilityId,
     relayExposureId: params.exposureId,
     conversationId: params.conversationId,
     actorId: params.requestedByActorId,
+    relayToolStableKey: currentTool.binding.stableKey,
     relayToolName: currentTool.visible.name,
     toolArguments: params.args,
     runtimeSessionId: params.runtimeSessionId,
@@ -986,9 +996,11 @@ async function enqueueRelayToolTaskLocal(
     await validateRelayCallTargetLocal(params);
   const authorizationState = await resolveRelayToolAuthorization({
     workspaceId: params.workspaceId,
+    relayCapabilityId: params.relayCapabilityId,
     relayExposureId: params.exposureId,
     conversationId: params.conversationId,
     actorId: params.requestedByActorId,
+    relayToolStableKey: currentTool.binding.stableKey,
     relayToolName: currentTool.visible.name,
     toolArguments: params.args,
     runtimeSessionId: params.runtimeSessionId,
@@ -1561,9 +1573,11 @@ function getRelayExposureCatalogLocal(deviceId: string, exposureId: string): Rel
     tools: exposure.tools.map((tool) => ({
       binding: { ...tool.binding },
       visible: {
+        stableKey: tool.visible.stableKey,
         name: tool.visible.name,
         description: tool.visible.description,
         inputSchema: tool.visible.inputSchema,
+        metadata: {},
       },
       definitionHash: tool.definitionHash,
     })),
@@ -1595,9 +1609,11 @@ export async function loadRelayExposureCatalogSnapshot(
     tools: catalog.tools.map((tool) => ({
       binding: { ...tool.binding },
       visible: {
+        stableKey: tool.visible.stableKey,
         name: tool.visible.name,
         description: tool.visible.description,
         inputSchema: tool.visible.inputSchema,
+        metadata: {},
       },
       definitionHash: tool.definitionHash,
     })),
@@ -1989,7 +2005,7 @@ async function authenticateRelayDevice(deviceId: unknown): Promise<RelayAuthRow 
   if (typeof deviceId !== 'string' || deviceId.trim().length === 0) return null;
 
   const result = await executeSql<RelayAuthRow>(
-    `SELECT id, workspace_id, owner_workspace_member_id, display_name, public_key, public_key_fingerprint, trust_status
+    `SELECT id, workspace_id, owner_workspace_member_id, title AS display_name, public_key, public_key_fingerprint, trust_status
      FROM relay_devices
      WHERE id = $1
      LIMIT 1`,
@@ -2012,7 +2028,7 @@ async function markRelayLifecycleConnected(params: {
 }) {
   return transaction(async (client) => {
     const result = await executeSqlOn<RelayLifecycleRow>(client, 
-      `SELECT id, workspace_id, display_name, automation_lifecycle_state, automation_lifecycle_grace_until
+      `SELECT id, workspace_id, title AS display_name, automation_lifecycle_state, automation_lifecycle_grace_until
        FROM relay_devices
        WHERE id = $1
        FOR UPDATE`,
@@ -2047,7 +2063,7 @@ async function markRelayLifecycleDisconnectPending(params: {
 }) {
   return transaction(async (client) => {
     const result = await executeSqlOn<RelayLifecycleRow>(client, 
-      `SELECT id, workspace_id, display_name, automation_lifecycle_state
+      `SELECT id, workspace_id, title AS display_name, automation_lifecycle_state
        FROM relay_devices
        WHERE id = $1
        FOR UPDATE`,
@@ -2316,6 +2332,9 @@ function normalizeToolRegistration(raw: unknown, index: number): RelayToolRegist
       ? raw.stableKey.trim()
       : `legacy:${name}:${index}`,
     visible: {
+      stableKey: typeof raw.stableKey === 'string' && raw.stableKey.trim().length > 0
+        ? raw.stableKey.trim()
+        : `legacy:${name}:${index}`,
       name,
       description: typeof raw.description === 'string' ? raw.description : '',
       inputSchema,
@@ -2693,7 +2712,7 @@ async function loadExposureCatalog(exposureId: string): Promise<ConnectedRelayEx
   const result = await executeSql(
     `SELECT
         d.id AS device_id,
-        d.display_name AS device_display_name,
+        d.title AS device_display_name,
         e.id AS exposure_id,
         e.stable_key AS exposure_stable_key,
         e.display_name AS exposure_display_name,
@@ -2701,6 +2720,7 @@ async function loadExposureCatalog(exposureId: string): Promise<ConnectedRelayEx
         e.runtime_status AS exposure_runtime_status,
         e.metadata AS exposure_metadata,
         t.id AS tool_id,
+        t.stable_key AS tool_stable_key,
         tr.id AS tool_revision_id,
         tr.catalog_revision_id,
         tr.tool_name,
@@ -2732,11 +2752,14 @@ async function loadExposureCatalog(exposureId: string): Promise<ConnectedRelayEx
         catalogRevisionId: row.catalog_revision_id,
         toolId: row.tool_id,
         toolRevisionId: row.tool_revision_id,
+        stableKey: row.tool_stable_key,
       },
       visible: {
+        stableKey: row.tool_stable_key,
         name: row.tool_name,
         description: row.description || '',
         inputSchema: asObject(row.input_schema),
+        metadata: {},
       },
       definitionHash: row.definition_hash,
     }));
@@ -2817,7 +2840,7 @@ async function loadAsyncRelayOperationRecord(operationId: string) {
        ro.requested_by_actor_id,
        ro.task_id,
        ro.device_id,
-       device.display_name AS device_display_name,
+       device.title AS device_display_name,
        ro.exposure_id,
        exposure.stable_key AS exposure_stable_key,
        exposure.display_name AS exposure_display_name,
@@ -2860,7 +2883,7 @@ async function loadRelayOperationByTaskId(taskId: string) {
        ro.requested_by_actor_id,
        ro.task_id,
        ro.device_id,
-       device.display_name AS device_display_name,
+       device.title AS device_display_name,
        ro.exposure_id,
        exposure.stable_key AS exposure_stable_key,
        exposure.display_name AS exposure_display_name,
@@ -3425,7 +3448,7 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
        ro.requested_by_actor_id,
        ro.task_id,
        ro.device_id,
-       device.display_name AS device_display_name,
+       device.title AS device_display_name,
        ro.exposure_id,
        exposure.stable_key AS exposure_stable_key,
        exposure.display_name AS exposure_display_name,

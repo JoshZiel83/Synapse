@@ -693,6 +693,7 @@ async function resolveRelayAuthorizationRequirementOrThrow(params: {
   }
 
   const requirement = inferRelaySpecialAuthorizationRequirement({
+    toolStableKey: relayTarget.relayToolStableKey,
     visibleToolName: relayTarget.visibleToolName,
     toolInput: params.toolArguments,
     exposureMetadata: relayCatalog.metadata,
@@ -738,6 +739,7 @@ async function retryAuthorizedRelayTool(params: {
     sessionId: params.context.sessionId,
     requestedByWorkspaceMemberId: params.context.workspaceMemberId,
     requestedByActorId: params.context.actorId,
+    relayCapabilityId: resolved.relayTarget.capabilityId,
     deviceId: resolved.relayTarget.deviceId,
     exposureId: resolved.relayTarget.exposureId,
     visibleToolName: resolved.relayTarget.visibleToolName,
@@ -2139,12 +2141,12 @@ export function registerCallableToolPlugins(): void {
 
       const requesterAllowed = await authorizeAction({
         subject: actorSubject(context.actorId),
-        action: "relay_exposure.request_authorization",
-        resourceId: relayTarget.exposureId,
+        action: "relay_capability.request_runtime_authorization",
+        resourceId: relayTarget.capabilityId,
       });
       if (!requesterAllowed) {
         throwToolError(
-          "Current actor is not allowed to request authorization for this relay exposure",
+          "Current actor is not allowed to request authorization for this relay capability",
         );
       }
 
@@ -2175,9 +2177,11 @@ export function registerCallableToolPlugins(): void {
               workspaceId: context.workspaceId,
               conversationId,
               requesterMemberId: requesterMember.id,
+              relayCapabilityId: relayTarget.capabilityId,
               relayDeviceId: relayTarget.deviceId,
               relayExposureId: relayTarget.exposureId,
-              relayToolName,
+              relayToolStableKey: requirement.toolStableKey,
+              contractKey: requirement.contractKey,
               requestedEffect: requirement.effect,
               requestMode: mode,
             })
@@ -2228,10 +2232,13 @@ export function registerCallableToolPlugins(): void {
         deliveryPolicy: "human_interaction",
         supportsCancel: true,
         requestPayload: {
+          relayCapabilityId: relayTarget.capabilityId,
           relayDeviceId: relayTarget.deviceId,
           relayExposureId: relayTarget.exposureId,
           runtimeSessionId: relayTarget.runtimeSessionId,
-          relayToolName,
+          relayToolStableKey: requirement.toolStableKey,
+          contractKey: requirement.contractKey,
+          displayPayload: requirement.displayPayload,
           reason,
           requestMode: mode,
           requestedEffect: requirement.effect,
@@ -2250,10 +2257,13 @@ export function registerCallableToolPlugins(): void {
           requesterMemberId: requesterMember.id,
           requesterActorId: context.actorId,
           requesterWorkspaceMemberId: context.workspaceMemberId,
+          relayCapabilityId: relayTarget.capabilityId,
           relayDeviceId: relayTarget.deviceId,
           relayExposureId: relayTarget.exposureId,
           runtimeSessionId: relayTarget.runtimeSessionId || "",
-          relayToolName,
+          relayToolStableKey: requirement.toolStableKey,
+          contractKey: requirement.contractKey,
+          displayPayload: requirement.displayPayload,
           reason,
           requestedEffect: requirement.effect,
           requestMode: mode,

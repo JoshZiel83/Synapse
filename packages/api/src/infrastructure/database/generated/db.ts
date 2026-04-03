@@ -225,9 +225,15 @@ export type RelationshipRequestStatus = "approved" | "pending" | "rejected";
 
 export type RelationshipTargetType = "actor" | "member";
 
+export type RelayAuthorizationMode = "client_local" | "server_trust";
+
+export type RelayCapabilitiesStatus = "active" | "archived" | "unavailable";
+
 export type RelayCatalogRevisionsStatus = "active" | "superseded";
 
 export type RelayDevicesAutomationLifecycleState = "offline" | "online";
+
+export type RelayDevicesDeviceType = "custom" | "desktop_computer" | "laptop_computer" | "mobile_phone" | "server" | "tablet" | "virtual_machine";
 
 export type RelayDeviceSessionsStatus = "active" | "closed" | "closing" | "connecting" | "rejected";
 
@@ -1074,9 +1080,13 @@ export interface InteractionRequests {
 }
 
 export interface InteractionRuntimeAuthorizationRequests {
+  contract_key: string;
+  display_payload: Generated<Json>;
   interaction_id: string;
+  relay_capability_id: string;
   relay_device_id: string;
   relay_exposure_id: string;
+  relay_tool_stable_key: string;
   request_payload: Generated<Json>;
   requested_effect: Generated<Json>;
   resolution_payload: Generated<Json>;
@@ -1442,6 +1452,17 @@ export interface RealtimeEventOutbox {
   workspace_id: string;
 }
 
+export interface RelayCapabilities {
+  conversation_type_mask_override: number | null;
+  created_at: Generated<Timestamp | null>;
+  exposure_id: string;
+  id: Generated<string>;
+  metadata: Generated<Json>;
+  status: Generated<RelayCapabilitiesStatus>;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
+}
+
 export interface RelayCatalogRevisions {
   activated_at: Generated<Timestamp | null>;
   created_at: Generated<Timestamp | null>;
@@ -1456,12 +1477,13 @@ export interface RelayCatalogRevisions {
 }
 
 export interface RelayDevices {
+  authorization_mode: Generated<RelayAuthorizationMode>;
   automation_lifecycle_event_at: Timestamp | null;
   automation_lifecycle_grace_until: Timestamp | null;
   automation_lifecycle_state: RelayDevicesAutomationLifecycleState | null;
-  client_kind: Generated<string>;
   created_at: Generated<Timestamp | null>;
-  display_name: string;
+  description: string | null;
+  device_type: Generated<RelayDevicesDeviceType>;
   id: Generated<string>;
   last_catalog_changed_at: Timestamp | null;
   last_connected_at: Timestamp | null;
@@ -1471,12 +1493,14 @@ export interface RelayDevices {
   platform: string | null;
   public_key: string;
   public_key_fingerprint: string;
+  title: string;
   trust_status: Generated<RelayDevicesTrustStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
 
 export interface RelayDeviceSessions {
+  authorization_mode: Generated<RelayAuthorizationMode>;
   client_version: string | null;
   close_reason: string | null;
   created_at: Generated<Timestamp | null>;
@@ -1497,6 +1521,7 @@ export interface RelayDeviceSessions {
 export interface RelayExposures {
   conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
+  description: string | null;
   device_id: string;
   display_name: string;
   id: Generated<string>;
@@ -1504,7 +1529,6 @@ export interface RelayExposures {
   last_healthy_at: Timestamp | null;
   last_seen_at: Timestamp | null;
   metadata: Generated<Json | null>;
-  projected_catalog_item_id: string | null;
   runtime_status: Generated<RelayExposuresRuntimeStatus>;
   stable_key: string;
   sync_source_id: string | null;
@@ -1575,8 +1599,11 @@ export interface RelayPairingSessions {
   id: Generated<string>;
   metadata: Generated<Json | null>;
   pairing_code: string;
+  requested_authorization_mode: RelayAuthorizationMode | null;
   requested_by_workspace_member_id: string | null;
-  requested_display_name: string | null;
+  requested_description: string | null;
+  requested_device_type: RelayDevicesDeviceType | null;
+  requested_title: string | null;
   server_base_url: string;
   status: Generated<RelayPairingSessionsStatus>;
   updated_at: Generated<Timestamp | null>;
@@ -1647,15 +1674,18 @@ export interface RuntimeEvents {
 export interface RuntimeGrants {
   actor_id: string | null;
   consumed_at: Timestamp | null;
+  contract_key: string;
   conversation_id: string | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
+  display_payload: Generated<Json>;
   effect: Generated<Json>;
   id: Generated<string>;
   metadata: Generated<Json>;
+  relay_capability_id: string;
   relay_device_id: string;
   relay_exposure_id: string;
-  relay_tool_name: string;
+  relay_tool_stable_key: string;
   retention: RuntimeGrantsRetention;
   revoked_at: Timestamp | null;
   scope: RuntimeGrantsScope;
@@ -2195,6 +2225,7 @@ export interface DB {
   provider_steps: ProviderSteps;
   publishers: Publishers;
   realtime_event_outbox: RealtimeEventOutbox;
+  relay_capabilities: RelayCapabilities;
   relay_catalog_revisions: RelayCatalogRevisions;
   relay_device_sessions: RelayDeviceSessions;
   relay_devices: RelayDevices;

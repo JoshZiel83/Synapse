@@ -40,14 +40,16 @@ const CUA_CONTROL_TOOL_NAMES = new Set([
 export type RelaySpecialMcpKind =
   | "filesystem"
   | "cua"
-  | "chrome"
+  | "browser"
   | "commandline";
 
 export interface RelaySpecialAuthorizationRequirement {
   kind: RelaySpecialMcpKind;
+  toolStableKey: string;
+  contractKey: string;
   effect: RuntimeGrantEffect;
-  message: string;
-  clientHint: string;
+  displayPayload: Record<string, unknown>;
+  reason: string;
 }
 
 function asTrimmedString(value: unknown) {
@@ -61,7 +63,7 @@ function normalizeBuiltinKind(value: unknown): RelaySpecialMcpKind | null {
   if (
     normalized === "filesystem" ||
     normalized === "cua" ||
-    normalized === "chrome" ||
+    normalized === "browser" ||
     normalized === "commandline"
   ) {
     return normalized;
@@ -125,6 +127,7 @@ function inferFilesystemPath(toolInput: Record<string, unknown>) {
 }
 
 export function inferRelaySpecialAuthorizationRequirement(params: {
+  toolStableKey?: string;
   visibleToolName: string;
   toolInput: Record<string, unknown>;
   exposureMetadata?: Record<string, unknown>;
@@ -139,14 +142,19 @@ export function inferRelaySpecialAuthorizationRequirement(params: {
     const cwdPrefix = asTrimmedString(params.toolInput.cwd);
     return {
       kind: "commandline",
+      toolStableKey:
+        params.toolStableKey || "synapse.builtin.commandline.bash.v1",
+      contractKey: "relay_builtin.commandline.exec",
       effect: {
         capability: "commandline",
         executor: "bash",
         cwdPrefix,
       },
-      message: "Running bash commands on the relay requires user authorization.",
-      clientHint:
-        "Ask the user whether this command execution should be allowed once, for this actor, for this conversation, or always.",
+      displayPayload: {
+        executor: "bash",
+        cwdPrefix: cwdPrefix || null,
+      },
+      reason: "Running shell commands on the relay requires user authorization.",
     };
   }
 
@@ -168,14 +176,21 @@ export function inferRelaySpecialAuthorizationRequirement(params: {
       access === "read_write" ? "read and write" : access;
     return {
       kind: "filesystem",
+      toolStableKey:
+        params.toolStableKey ||
+        `synapse.builtin.filesystem.${params.visibleToolName}.v1`,
+      contractKey: "relay_builtin.filesystem.path_access",
       effect: {
         capability: "filesystem",
         path: resolvedPath,
         access,
       },
-      message: `Access to ${resolvedPath} (${accessLabel}) requires user authorization.`,
-      clientHint:
-        "Ask the user whether this filesystem access should be allowed once, for this actor, for this conversation, or always.",
+      displayPayload: {
+        path: resolvedPath,
+        access,
+        accessLabel,
+      },
+      reason: `Access to ${resolvedPath} (${accessLabel}) requires user authorization.`,
     };
   }
 
@@ -188,28 +203,36 @@ export function inferRelaySpecialAuthorizationRequirement(params: {
     }
     return {
       kind: "cua",
+      toolStableKey:
+        params.toolStableKey ||
+        `synapse.builtin.cua.${params.visibleToolName}.v1`,
+      contractKey: "relay_builtin.cua.control",
       effect: {
         capability: "cua",
         mode: "control",
       },
-      message:
-        "Desktop control actions on the relay require user authorization.",
-      clientHint:
-        "Ask the user whether desktop control should be allowed once, for this actor, for this conversation, or always.",
+      displayPayload: {
+        mode: "control",
+      },
+      reason: "Desktop control actions on the relay require user authorization.",
     };
   }
 
-  if (builtinKind === "chrome") {
+  if (builtinKind === "browser") {
     return {
-      kind: "chrome",
+      kind: "browser",
+      toolStableKey:
+        params.toolStableKey ||
+        `synapse.builtin.browser.${params.visibleToolName}.v1`,
+      contractKey: "relay_builtin.browser.automation",
       effect: {
-        capability: "chrome",
+        capability: "browser",
         mode: "automation",
       },
-      message:
-        "Browser automation on the relay requires user authorization.",
-      clientHint:
-        "Ask the user whether browser automation should be allowed once, for this actor, for this conversation, or always.",
+      displayPayload: {
+        mode: "automation",
+      },
+      reason: "Browser automation on the relay requires user authorization.",
     };
   }
 

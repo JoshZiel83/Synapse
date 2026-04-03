@@ -55,12 +55,14 @@ interface ResolveParams extends RuntimeActorContext {
 }
 
 export interface ResolvedRelayToolTarget {
+  capabilityId: string;
   deviceId: string;
   deviceDisplayName: string;
   exposureId: string;
   exposureStableKey: string;
   exposureDisplayName: string;
   visibleToolName: string;
+  relayToolStableKey?: string;
   runtimeSessionId?: string;
 }
 
@@ -78,7 +80,8 @@ type VisiblePluginRow = {
   conversation_type_mask_override: number | null;
 };
 
-type VisibleRelayExposureRow = {
+type VisibleRelayCapabilityRow = {
+  capability_id: string;
   exposure_id: string;
   owner_workspace_id: string;
   exposure_stable_key: string;
@@ -118,12 +121,14 @@ type VisibleAccessBindingRow = {
 };
 
 type RelayToolRuntimeContext = {
+  capabilityId: string;
   deviceId: string;
   deviceDisplayName: string;
   exposureId: string;
   exposureStableKey: string;
   exposureDisplayName: string;
   visibleToolName: string;
+  relayToolStableKey?: string;
   runtimeSessionId: string;
 };
 
@@ -173,6 +178,7 @@ function buildRelayBinaryMetadata(
   return {
     source: {
       kind: "relay_mcp",
+      relayCapabilityId: context.capabilityId,
       deviceId: context.deviceId,
       deviceDisplayName: context.deviceDisplayName,
       exposureId: context.exposureId,
@@ -180,6 +186,7 @@ function buildRelayBinaryMetadata(
       exposureDisplayName: context.exposureDisplayName,
       runtimeSessionId: context.runtimeSessionId,
       visibleToolName: context.visibleToolName,
+      relayToolStableKey: context.relayToolStableKey,
       namespacedToolName,
     },
   };
@@ -255,7 +262,7 @@ function accessBindingMatchesContext(
 }
 
 async function loadVisibleAccessBindings(params: {
-  resourceType: "plugin_installation" | "relay_exposure";
+  resourceType: "plugin_installation" | "relay_capability";
   resourceIds: string[];
 }) {
   if (params.resourceIds.length === 0) {
@@ -392,6 +399,7 @@ function buildPluginNamespace(
 function buildRelayScopedInstance(params: {
   baseInstance: McpInstance;
   tools: ToolDefinition[];
+  capabilityId: string;
   deviceId: string;
   deviceDisplayName: string;
   exposureId: string;
@@ -418,12 +426,14 @@ function buildRelayScopedInstance(params: {
           params.sessionId,
           `${params.namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${toolName}`,
           {
+            capabilityId: params.capabilityId,
             deviceId: params.deviceId,
             deviceDisplayName: params.deviceDisplayName,
             exposureId: params.exposureId,
             exposureStableKey: params.exposureStableKey,
             exposureDisplayName: params.exposureDisplayName,
             visibleToolName: toolBinding.visibleToolName,
+            relayToolStableKey: toolBinding.binding.stableKey,
             runtimeSessionId,
           },
         );
@@ -443,9 +453,11 @@ function buildRelayScopedInstance(params: {
 
         const authorizationState = await resolveRelayToolAuthorization({
           workspaceId: params.baseInstance.workspaceId || "",
+          relayCapabilityId: params.capabilityId,
           relayExposureId: params.exposureId,
           conversationId: executionContext.conversationId,
           actorId: executionContext.actorId,
+          relayToolStableKey: toolBinding.binding.stableKey,
           relayToolName: toolBinding.visibleToolName,
           toolArguments: input,
           runtimeSessionId,
@@ -465,6 +477,7 @@ function buildRelayScopedInstance(params: {
           sourceToolCallId: executionContext.toolCallId,
           sourceToolName:
             executionContext.namespacedToolName || toolBinding.visibleToolName,
+          relayCapabilityId: params.capabilityId,
           deviceId: params.deviceId,
           exposureId: params.exposureId,
           visibleToolName: toolBinding.visibleToolName,
@@ -592,13 +605,13 @@ async function loadVisiblePlugins(params: ResolveParams) {
 
 async function loadVisibleRelayExposures(params: ResolveParams) {
   const subjects = await buildVisibilitySubjects(params);
-  const visibleExposureIds = new Set<string>();
+  const visibleCapabilityIds = new Set<string>();
 
   const lookups = await Promise.all(
     subjects.map((subject) =>
       lookupResources({
-        resourceType: "relay_exposure",
-        permission: "invoke",
+        resourceType: "relay_capability",
+        permission: "use",
         subject,
       }),
     ),
@@ -606,30 +619,33 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
 
   for (const ids of lookups) {
     for (const id of ids) {
-      visibleExposureIds.add(id);
+      visibleCapabilityIds.add(id);
     }
   }
 
-  if (visibleExposureIds.size === 0) {
-    return [] as VisibleRelayExposureRow[];
+  if (visibleCapabilityIds.size === 0) {
+    return [] as VisibleRelayCapabilityRow[];
   }
 
   const rows = await db
-    .selectFrom("relay_exposures as exposure")
+    .selectFrom("relay_capabilities as capability")
+    .innerJoin("relay_exposures as exposure", "exposure.id", "capability.exposure_id")
     .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
     .select([
+      "capability.id as capability_id",
       "exposure.id as exposure_id",
       "device.workspace_id as owner_workspace_id",
       "exposure.stable_key as exposure_stable_key",
       "exposure.display_name as exposure_display_name",
       "exposure.updated_at as exposure_updated_at",
       "device.id as device_id",
-      "device.display_name as device_display_name",
-      sql<number | null>`exposure.conversation_type_mask_override`.as(
+      "device.title as device_display_name",
+      sql<number | null>`capability.conversation_type_mask_override`.as(
         "conversation_type_mask_override",
       ),
     ])
-    .where("exposure.id", "in", Array.from(visibleExposureIds))
+    .where("capability.id", "in", Array.from(visibleCapabilityIds))
+    .where("capability.status", "=", "active")
     .where("exposure.runtime_status", "=", "healthy")
     .where(sql<boolean>`EXISTS (
       SELECT 1
@@ -642,8 +658,8 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
 
   const [bindingsByExposureId, workspacePolicyMap] = await Promise.all([
     loadVisibleAccessBindings({
-      resourceType: "relay_exposure",
-      resourceIds: rows.map((row) => row.exposure_id),
+      resourceType: "relay_capability",
+      resourceIds: rows.map((row) => row.capability_id),
     }),
     getWorkspaceCapabilityConversationTypePolicyMap(
       rows.map((row) => row.owner_workspace_id),
@@ -652,13 +668,13 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
 
   return rows.filter((row) => {
     const workspaceConversationTypeMask =
-      workspacePolicyMap.get(row.owner_workspace_id)?.relay_exposure ||
+      workspacePolicyMap.get(row.owner_workspace_id)?.relay_capability ||
       DEFAULT_CONVERSATION_TYPE_MASK;
     const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
       workspaceConversationTypeMask,
       row.conversation_type_mask_override,
     );
-    const matchingBindings = (bindingsByExposureId.get(row.exposure_id) || []).filter(
+    const matchingBindings = (bindingsByExposureId.get(row.capability_id) || []).filter(
       (binding) =>
         accessBindingMatchesContext(binding, params) &&
         isConversationTypeAllowed(
@@ -670,7 +686,7 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
         ),
     );
     return matchingBindings.length > 0;
-  }) as VisibleRelayExposureRow[];
+  }) as VisibleRelayCapabilityRow[];
 }
 
 export async function listVisibleHealthyRelayCommandlineExposureMetadata(
@@ -777,6 +793,7 @@ async function resolveTools(
         const relayInstance = buildRelayScopedInstance({
           baseInstance: baseRelayInstance,
           tools: relayTools,
+          capabilityId: plugin.installation_id,
           deviceId: entry.deviceId,
           deviceDisplayName: relayCatalog.deviceDisplayName,
           exposureId: entry.exposureId,
@@ -869,7 +886,7 @@ async function resolveTools(
     }
     const baseRelayInstance = await getOrCreateInstance({
       pluginId: exposure.exposure_id,
-      installationId: exposure.exposure_id,
+      installationId: exposure.capability_id,
       pluginSlug: exposureSlug,
       orgSlug: "relay",
       transport: "relay",
@@ -889,6 +906,7 @@ async function resolveTools(
     const relayInstance = buildRelayScopedInstance({
       baseInstance: baseRelayInstance,
       tools: relayTools,
+      capabilityId: exposure.capability_id,
       deviceId: exposure.device_id,
       deviceDisplayName: exposure.device_display_name,
       exposureId: exposure.exposure_id,
@@ -1076,12 +1094,14 @@ export async function resolveRelayTargetForNamespacedTool(
         continue;
       }
       return {
+        capabilityId: exposure.capability_id,
         deviceId: exposure.device_id,
         deviceDisplayName: exposure.device_display_name,
         exposureId: exposure.exposure_id,
         exposureStableKey: exposure.exposure_stable_key,
         exposureDisplayName: exposure.exposure_display_name,
         visibleToolName: tool.visible.name,
+        relayToolStableKey: tool.visible.stableKey,
       };
     }
   }

@@ -1,8 +1,5 @@
 import type pg from "pg";
-import {
-  DEFAULT_CONVERSATION_TYPE_MASK,
-  resolveNarrowedConversationTypeMask,
-} from "@synapse/shared";
+import { resolveNarrowedConversationTypeMask } from "@synapse/shared";
 import type { CapabilityAccessTarget } from "@synapse/shared/types";
 import {
   deleteRelation,
@@ -25,10 +22,10 @@ import { incrementMcpVersion } from "./runtime-version.js";
 
 type Queryable = Pick<pg.PoolClient, "query">;
 
-const RELAY_EXPOSURE_PERMISSION_SUMMARY = {
-  requiredPermissions: ["invoke"],
+const RELAY_CAPABILITY_PERMISSION_SUMMARY = {
+  requiredPermissions: ["use"],
   suggestedAccessTargetType: "workspace" as const,
-  reason: "Relay exposure access controls who can invoke tools from this relay exposure.",
+  reason: "Relay capability access controls who can use tools from this relay exposure.",
 };
 
 export function buildRelayDeviceAuthzMutations(params: {
@@ -70,6 +67,17 @@ export function buildRelayExposureBaseAuthzMutations(params: {
   ] satisfies AuthzRelationMutation[];
 }
 
+export function buildRelayCapabilityBaseAuthzMutations(params: {
+  capabilityId: string;
+  workspaceId: string;
+  operation: "touch" | "delete";
+}) {
+  const mutate = params.operation === "delete" ? deleteRelation : touchRelation;
+  return [
+    mutate("relay_capability", params.capabilityId, "workspace", "workspace", params.workspaceId),
+  ] satisfies AuthzRelationMutation[];
+}
+
 async function flushRelayAuthzEntries(entryIds: string[], source: string) {
   if (entryIds.length === 0) return;
   try {
@@ -85,16 +93,22 @@ async function loadRelayExposurePolicyState(
 ) {
   const result = await executeSql<{
     id: string;
+    capability_id: string;
     owner_workspace_id: string;
-    conversation_type_mask_override: number | null;
+    exposure_conversation_type_mask_override: number | null;
+    capability_conversation_type_mask_override: number | null;
   }>(
     `SELECT
        e.id,
+       capability.id AS capability_id,
        d.workspace_id AS owner_workspace_id,
-       e.conversation_type_mask_override
+       e.conversation_type_mask_override AS exposure_conversation_type_mask_override,
+       capability.conversation_type_mask_override AS capability_conversation_type_mask_override
      FROM relay_exposures e
      INNER JOIN relay_devices d
        ON d.id = e.device_id
+     INNER JOIN relay_capabilities capability
+       ON capability.exposure_id = e.id
      WHERE e.id = $1
        AND d.workspace_id = $2
      LIMIT 1`,
@@ -106,7 +120,7 @@ async function loadRelayExposurePolicyState(
 
 async function listRelayExposureAccessRows(
   workspaceId: string,
-  exposureId: string,
+  capabilityId: string,
   includeRevoked = false,
 ) {
   const result = await executeSql<AccessBindingRow>(
@@ -134,27 +148,27 @@ async function listRelayExposureAccessRows(
      LEFT JOIN conversation_actor_contexts cac
        ON cac.id = binding.subject_conversation_actor_context_id
      WHERE binding.workspace_id = $1
-       AND binding.resource_type = 'relay_exposure'
+       AND binding.resource_type = 'relay_capability'
        AND binding.resource_id = $2
        ${includeRevoked ? "" : "AND binding.status = 'active'"}
      ORDER BY binding.created_at ASC`,
-    [workspaceId, exposureId],
+    [workspaceId, capabilityId],
   );
   return result.rows;
 }
 
 export async function ensureRelayExposureDefaultAccess(params: {
   workspaceId: string;
-  exposureId: string;
+  capabilityId: string;
 }) {
   const authzEntryIds = await transaction(async (client) => {
     const existing = await executeSqlOn<{ id: string }>(client, 
       `SELECT id
        FROM access_bindings
-       WHERE resource_type = 'relay_exposure'
+       WHERE resource_type = 'relay_capability'
          AND resource_id = $1
        LIMIT 1`,
-      [params.exposureId],
+      [params.capabilityId],
     );
 
     if (existing.rows.length > 0) {
@@ -178,14 +192,14 @@ export async function ensureRelayExposureDefaultAccess(params: {
          metadata
        )
        VALUES (
-        $1, 'relay_exposure', $2, 'workspace', 'use_workspace', $3, NULL, NULL, NULL, ARRAY['invoke']::text[], 'active', $4, $5::jsonb
+        $1, 'relay_capability', $2, 'workspace', 'use_workspace', $3, NULL, NULL, NULL, ARRAY['use']::text[], 'active', $4, $5::jsonb
        )
        RETURNING *`,
       [
         params.workspaceId,
-        params.exposureId,
+        params.capabilityId,
         params.workspaceId,
-        RELAY_EXPOSURE_PERMISSION_SUMMARY.reason,
+        RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
         JSON.stringify({ isDefault: true }),
       ],
     );
@@ -198,22 +212,22 @@ export async function ensureRelayExposureDefaultAccess(params: {
     return queueAuthzRelationships(
       client,
       buildResourceAccessAuthzMutations({
-        resourceType: "relay_exposure",
-        resourceId: params.exposureId,
+        resourceType: "relay_capability",
+        resourceId: params.capabilityId,
         workspaceId: params.workspaceId,
         target,
         operation: "touch",
       }),
       {
-        source: "relay.exposure.default_access",
+        source: "relay.capability.default_access",
         workspaceId: params.workspaceId,
-        exposureId: params.exposureId,
+        capabilityId: params.capabilityId,
         bindingId: inserted.rows[0]!.id,
       },
     );
   });
 
-  await flushRelayAuthzEntries(authzEntryIds, "relay.exposure.default_access");
+  await flushRelayAuthzEntries(authzEntryIds, "relay.capability.default_access");
 }
 
 export async function touchRelayDeviceAuthzState(params: {
@@ -245,27 +259,53 @@ export async function touchRelayExposureAuthzState(params: {
   deviceId: string;
   exposureId: string;
 }) {
-  const authzEntryIds = await transaction(async (client) =>
-    queueAuthzRelationships(
+  const authzEntryIds = await transaction(async (client) => {
+    const capability = await executeSqlOn<{ id: string }>(client,
+      `INSERT INTO relay_capabilities (
+         workspace_id,
+         exposure_id,
+         status
+       )
+       VALUES ($1, $2, 'active')
+       ON CONFLICT (exposure_id) DO UPDATE
+         SET workspace_id = EXCLUDED.workspace_id,
+             status = 'active',
+             updated_at = NOW()
+       RETURNING id`,
+      [params.workspaceId, params.exposureId],
+    );
+    return queueAuthzRelationships(
       client,
-      buildRelayExposureBaseAuthzMutations({
-        exposureId: params.exposureId,
-        deviceId: params.deviceId,
-        workspaceId: params.workspaceId,
-        operation: "touch",
-      }),
+      [
+        ...buildRelayExposureBaseAuthzMutations({
+          exposureId: params.exposureId,
+          deviceId: params.deviceId,
+          workspaceId: params.workspaceId,
+          operation: "touch",
+        }),
+        ...buildRelayCapabilityBaseAuthzMutations({
+          capabilityId: capability.rows[0]!.id,
+          workspaceId: params.workspaceId,
+          operation: "touch",
+        }),
+      ],
       {
         source: "relay.exposure.touch",
         workspaceId: params.workspaceId,
         exposureId: params.exposureId,
         deviceId: params.deviceId,
+        capabilityId: capability.rows[0]!.id,
       },
-    ),
-  );
+    );
+  });
   await flushRelayAuthzEntries(authzEntryIds, "relay.exposure.touch");
+  const state = await loadRelayExposurePolicyState(params.workspaceId, params.exposureId);
+  if (!state) {
+    throw new Error("Relay capability was not created for exposure");
+  }
   await ensureRelayExposureDefaultAccess({
     workspaceId: params.workspaceId,
-    exposureId: params.exposureId,
+    capabilityId: state.capability_id,
   });
 }
 
@@ -282,15 +322,15 @@ export async function listRelayExposureAccessState(
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       exposure.owner_workspace_id,
-      "relay_exposure",
+      "relay_capability",
     );
-  const grants = (await listRelayExposureAccessRows(workspaceId, exposureId)).map(
+  const grants = (await listRelayExposureAccessRows(workspaceId, exposure.capability_id)).map(
     (row) =>
-      mapAccessBindingToGrant(row, ["invoke"], undefined, {
+      mapAccessBindingToGrant(row, ["use"], undefined, {
         effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
           resolveNarrowedConversationTypeMask(
             workspaceConversationTypeMask,
-            exposure.conversation_type_mask_override,
+            exposure.capability_conversation_type_mask_override,
           ),
           row.conversation_type_mask_override,
         ),
@@ -299,14 +339,16 @@ export async function listRelayExposureAccessState(
   return {
     grants,
     summary: {
-      ...RELAY_EXPOSURE_PERMISSION_SUMMARY,
+      ...RELAY_CAPABILITY_PERMISSION_SUMMARY,
       workspaceConversationTypeMask,
-      conversationTypeMaskOverride: exposure.conversation_type_mask_override ?? null,
+      capabilityId: exposure.capability_id,
+      conversationTypeMaskOverride:
+        exposure.capability_conversation_type_mask_override ?? null,
       effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
         workspaceConversationTypeMask,
-        exposure.conversation_type_mask_override,
+        exposure.capability_conversation_type_mask_override,
       ),
-      effectivePermissions: grants.length > 0 ? ["invoke"] : [],
+      effectivePermissions: grants.length > 0 ? ["use"] : [],
       isVisible: grants.length > 0,
       isAuthorized: grants.length > 0,
       matchingGrantIds: grants.map((grant) => grant.id),
@@ -335,7 +377,7 @@ export async function grantRelayExposureAccess(input: {
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       exposure.owner_workspace_id,
-      "relay_exposure",
+      "relay_capability",
     );
   const target = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
@@ -344,7 +386,7 @@ export async function grantRelayExposureAccess(input: {
 
   const existing = (await listRelayExposureAccessRows(
     input.workspaceId,
-    input.exposureId,
+    exposure.capability_id,
   )).find(
     (row) =>
       row.relation === target.relation &&
@@ -359,11 +401,11 @@ export async function grantRelayExposureAccess(input: {
   );
 
   if (existing) {
-    return mapAccessBindingToGrant(existing, ["invoke"], undefined, {
+    return mapAccessBindingToGrant(existing, ["use"], undefined, {
       effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
         resolveNarrowedConversationTypeMask(
           workspaceConversationTypeMask,
-          exposure.conversation_type_mask_override,
+          exposure.capability_conversation_type_mask_override,
         ),
         existing.conversation_type_mask_override,
       ),
@@ -391,12 +433,12 @@ export async function grantRelayExposureAccess(input: {
          metadata
        )
        VALUES (
-        $1, 'relay_exposure', $2, $3, $4, $5, $6, $7, $8, $9, $10, ARRAY['invoke']::text[], 'active', $11, $12, $13::jsonb
+        $1, 'relay_capability', $2, $3, $4, $5, $6, $7, $8, $9, $10, ARRAY['use']::text[], 'active', $11, $12, $13::jsonb
        )
        RETURNING *`,
       [
         input.workspaceId,
-        input.exposureId,
+        exposure.capability_id,
         target.targetType,
         target.relation,
         target.subjectWorkspaceId,
@@ -406,7 +448,7 @@ export async function grantRelayExposureAccess(input: {
         target.subjectConversationActorContextId,
         input.conversationTypeMaskOverride ?? null,
         input.grantedByWorkspaceMemberId || null,
-        input.reason || RELAY_EXPOSURE_PERMISSION_SUMMARY.reason,
+        input.reason || RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
         JSON.stringify(input.metadata || {}),
       ],
     );
@@ -414,16 +456,17 @@ export async function grantRelayExposureAccess(input: {
     const authzEntryIds = await queueAuthzRelationships(
       client,
       buildResourceAccessAuthzMutations({
-        resourceType: "relay_exposure",
-        resourceId: input.exposureId,
+        resourceType: "relay_capability",
+        resourceId: exposure.capability_id,
         workspaceId: input.workspaceId,
         target,
         operation: "touch",
       }),
       {
-        source: "relay.exposure.grant",
+        source: "relay.capability.grant",
         workspaceId: input.workspaceId,
         exposureId: input.exposureId,
+        capabilityId: exposure.capability_id,
         bindingId: binding.rows[0]!.id,
       },
     );
@@ -434,7 +477,7 @@ export async function grantRelayExposureAccess(input: {
     };
   });
 
-  await flushRelayAuthzEntries(inserted.authzEntryIds, "relay.exposure.grant");
+  await flushRelayAuthzEntries(inserted.authzEntryIds, "relay.capability.grant");
   await incrementMcpVersion(input.workspaceId);
   return mapAccessBindingToGrant({
     ...inserted.binding,
@@ -442,11 +485,11 @@ export async function grantRelayExposureAccess(input: {
     subject_conversation_id: target.subjectConversationId,
     subject_conversation_actor_context_id:
       target.subjectConversationActorContextId,
-  } as AccessBindingRow, ["invoke"], undefined, {
+  } as AccessBindingRow, ["use"], undefined, {
     effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
       resolveNarrowedConversationTypeMask(
         workspaceConversationTypeMask,
-        exposure.conversation_type_mask_override,
+        exposure.capability_conversation_type_mask_override,
       ),
       input.conversationTypeMaskOverride,
     ),
@@ -463,8 +506,13 @@ export async function revokeRelayExposureAccess(input: {
      FROM access_bindings
      WHERE id = $1
        AND workspace_id = $2
-       AND resource_type = 'relay_exposure'
-       AND resource_id = $3
+       AND resource_type = 'relay_capability'
+       AND resource_id = (
+         SELECT capability.id
+         FROM relay_capabilities capability
+         WHERE capability.exposure_id = $3
+         LIMIT 1
+       )
      LIMIT 1`,
     [input.bindingId, input.workspaceId, input.exposureId],
   );
@@ -482,16 +530,17 @@ export async function revokeRelayExposureAccess(input: {
     const ids = await queueAuthzRelationships(
       client,
       buildResourceAccessAuthzMutations({
-        resourceType: "relay_exposure",
-        resourceId: input.exposureId,
+        resourceType: "relay_capability",
+        resourceId: binding.resource_id,
         workspaceId: input.workspaceId,
         target: readAccessBindingTarget(binding),
         operation: "delete",
       }),
       {
-        source: "relay.exposure.revoke",
+        source: "relay.capability.revoke",
         workspaceId: input.workspaceId,
         exposureId: input.exposureId,
+        capabilityId: binding.resource_id,
         bindingId: binding.id,
       },
     );
@@ -507,7 +556,7 @@ export async function revokeRelayExposureAccess(input: {
     return ids;
   });
 
-  await flushRelayAuthzEntries(authzEntryIds, "relay.exposure.revoke");
+  await flushRelayAuthzEntries(authzEntryIds, "relay.capability.revoke");
   await incrementMcpVersion(input.workspaceId);
 }
 
@@ -521,12 +570,14 @@ export async function updateRelayExposurePolicy(input: {
   }
 
   await executeSql(
-    `UPDATE relay_exposures exposure
+    `UPDATE relay_capabilities capability
      SET conversation_type_mask_override = $3,
          updated_at = NOW()
-     FROM relay_devices device
-     WHERE exposure.id = $1
-       AND exposure.device_id = device.id
+     FROM relay_exposures exposure
+     JOIN relay_devices device
+       ON device.id = exposure.device_id
+     WHERE capability.exposure_id = exposure.id
+       AND exposure.id = $1
        AND device.workspace_id = $2`,
     [input.exposureId, input.workspaceId, input.conversationTypeMaskOverride],
   );
@@ -552,7 +603,7 @@ export async function updateRelayExposureAccessGrant(input: {
 
   const existing = (await listRelayExposureAccessRows(
     input.workspaceId,
-    input.exposureId,
+    exposure.capability_id,
     true,
   )).find((row) => row.id === input.bindingId);
   if (!existing) {
@@ -575,7 +626,7 @@ export async function updateRelayExposureAccessGrant(input: {
 
   const updated = (await listRelayExposureAccessRows(
     input.workspaceId,
-    input.exposureId,
+    exposure.capability_id,
   )).find((row) => row.id === input.bindingId);
   if (!updated) {
     const error = new Error("Relay exposure access binding not found") as Error & {
@@ -588,14 +639,14 @@ export async function updateRelayExposureAccessGrant(input: {
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       exposure.owner_workspace_id,
-      "relay_exposure",
+      "relay_capability",
     );
 
-  return mapAccessBindingToGrant(updated, ["invoke"], undefined, {
+  return mapAccessBindingToGrant(updated, ["use"], undefined, {
     effectiveConversationTypeMask: resolveNarrowedConversationTypeMask(
       resolveNarrowedConversationTypeMask(
         workspaceConversationTypeMask,
-        exposure.conversation_type_mask_override,
+        exposure.capability_conversation_type_mask_override,
       ),
       updated.conversation_type_mask_override,
     ),
@@ -613,8 +664,10 @@ export async function revokeRelayDeviceAuthzState(input: {
         `SELECT *
          FROM access_bindings
          WHERE workspace_id = $1
-           AND resource_type = 'relay_exposure'
-           AND resource_id = ANY($2::text[])
+           AND resource_type = 'relay_capability'
+           AND resource_id IN (
+             SELECT id FROM relay_capabilities WHERE exposure_id = ANY($2::uuid[])
+           )
            AND status = 'active'`,
         [input.workspaceId, input.exposureIds],
       )
@@ -638,9 +691,20 @@ export async function revokeRelayDeviceAuthzState(input: {
             operation: "delete",
           }),
         ),
+        ...[...new Set(activeBindings.rows.map((binding) => binding.resource_id))]
+          .filter((resourceId) => Boolean(resourceId))
+          .map((resourceId) =>
+            deleteRelation(
+              "relay_capability",
+              resourceId,
+              "workspace",
+              "workspace",
+              input.workspaceId,
+            ),
+          ),
         ...activeBindings.rows.flatMap((binding) =>
           buildResourceAccessAuthzMutations({
-            resourceType: "relay_exposure",
+            resourceType: "relay_capability",
             resourceId: binding.resource_id,
             workspaceId: input.workspaceId,
             target: readAccessBindingTarget(binding),

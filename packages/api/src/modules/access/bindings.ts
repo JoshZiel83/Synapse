@@ -14,7 +14,7 @@ import { ensureConversationActorSessionContext } from "../session/service.js";
 
 export type AccessBindableResourceType = Extract<
   AuthzObjectType,
-  "installed_skill" | "plugin_installation" | "relay_exposure"
+  "installed_skill" | "plugin_installation" | "relay_capability"
 >;
 
 export type AccessBindingRow = {

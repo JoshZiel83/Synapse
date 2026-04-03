@@ -25,7 +25,7 @@ function mapToolSurfaceItem(toolName: string): ToolSurfaceItem {
     id: toolName,
     name: toolName,
     source: toolName.startsWith("relay__")
-      ? "relay_exposure"
+      ? "relay_capability"
       : "plugin_installation",
   };
 }

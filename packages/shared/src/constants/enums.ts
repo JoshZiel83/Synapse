@@ -72,7 +72,7 @@ export const DEFAULT_CONVERSATION_TYPE_MASK =
 export const CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES = [
   'plugin_installation',
   'installed_skill',
-  'relay_exposure',
+  'relay_capability',
 ] as const;
 export const ATTACHMENT_TARGET_TYPES = [
   'workspace',
@@ -260,6 +260,16 @@ export const TASK_NOTICE_STATUSES = ['completed', 'failed', 'cancelled'] as cons
 
 export const RELAY_DEVICE_TRUST_STATUSES = ['pending', 'active', 'revoked', 'blocked'] as const;
 export const RELAY_MANAGEABLE_TRUST_STATUSES = ['active', 'revoked', 'blocked'] as const;
+export const RELAY_DEVICE_TYPES = [
+  'desktop_computer',
+  'laptop_computer',
+  'mobile_phone',
+  'tablet',
+  'server',
+  'virtual_machine',
+  'custom',
+] as const;
+export const RELAY_AUTHORIZATION_MODES = ['server_trust', 'client_local'] as const;
 export const RELAY_PAIRING_STATUSES = [
   'pending',
   'confirmed',
@@ -310,7 +320,7 @@ export const RUNTIME_AUTHORIZATION_REQUEST_MODES = [
 export const RUNTIME_AUTHORIZATION_CAPABILITIES = [
   'filesystem',
   'cua',
-  'chrome',
+  'browser',
   'commandline',
 ] as const;
 export const RUNTIME_FILESYSTEM_AUTHORIZATION_ACCESSES = [

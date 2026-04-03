@@ -1,11 +1,13 @@
 import {
   RELAY_CATALOG_REVISION_STATUSES,
+  RELAY_DEVICE_TYPES,
   RELAY_DELIVERY_STATUSES,
   RELAY_DEVICE_TRUST_STATUSES,
   RELAY_EXPOSURE_RUNTIME_STATUSES,
   RELAY_EXPOSURE_TRANSPORTS,
   RELAY_OPERATION_STATUSES,
   RELAY_PAIRING_STATUSES,
+  RELAY_AUTHORIZATION_MODES,
   RELAY_SESSION_STATUSES,
   RELAY_SYNC_MODES,
   RELAY_SYNC_SOURCE_KINDS,
@@ -16,6 +18,8 @@ import {
 export type RelayProtocolVersion = 2;
 
 export type RelayDeviceTrustStatus = typeof RELAY_DEVICE_TRUST_STATUSES[number];
+export type RelayDeviceType = typeof RELAY_DEVICE_TYPES[number];
+export type RelayAuthorizationMode = typeof RELAY_AUTHORIZATION_MODES[number];
 
 export type RelayPairingStatus = typeof RELAY_PAIRING_STATUSES[number];
 
@@ -51,9 +55,11 @@ export type RelayOperationErrorCode =
   | 'operation_expired';
 
 export interface RelayVisibleToolDefinition {
+  stableKey: string;
   name: string;
   description: string;
   inputSchema: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
 }
 
 export interface RelayHiddenToolBinding {
@@ -61,6 +67,7 @@ export interface RelayHiddenToolBinding {
   catalogRevisionId: string;
   toolId: string;
   toolRevisionId: string;
+  stableKey: string;
 }
 
 export interface RelayCatalogToolSnapshot {
@@ -145,9 +152,11 @@ export interface RelayToolView {
 }
 
 export interface RelayExposureView {
+  capabilityId: string;
   id: string;
   stableKey: string;
   displayName: string;
+  description?: string;
   transport: RelayExposureTransport;
   runtimeStatus: RelayExposureRuntimeStatus;
   workspaceConversationTypeMask: number;
@@ -167,9 +176,11 @@ export interface RelayDeviceSummaryView {
   id: string;
   workspaceId: string;
   ownerWorkspaceMemberId?: string;
-  displayName: string;
-  clientKind: string;
+  title: string;
+  description?: string;
+  deviceType: RelayDeviceType;
   platform?: string;
+  authorizationMode: RelayAuthorizationMode;
   publicKeyFingerprint: string;
   trustStatus: RelayDeviceTrustStatus;
   isConnected: boolean;
@@ -210,7 +221,7 @@ export interface RelayLocalDesktopStatusView {
   authFailureMessage?: string;
   authFailurePermanent?: boolean;
   deviceId?: string;
-  displayName?: string;
+  title?: string;
   serverBaseUrl?: string;
   websocketUrl?: string;
   publicKeyFingerprint?: string;

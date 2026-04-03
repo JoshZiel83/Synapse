@@ -129,7 +129,7 @@ function describeRuntimeGrantEffect(effect: RuntimeGrantEffect) {
       detail: effect.cwdPrefix || 'Any working directory',
     };
   }
-  if (effect.capability === 'chrome') {
+  if (effect.capability === 'browser') {
     return {
       icon: Globe,
       summary: 'Browser automation',
@@ -216,10 +216,10 @@ export default function RelayDevicePage() {
         definition,
         source: definition.buildSource({
           providerRef: relayDetail?.device.id || relayId,
-          providerLabel: relayDetail?.device.displayName || draftName || relayId,
+          providerLabel: relayDetail?.device.title || draftName || relayId,
         }),
       })),
-    [draftName, relayDetail?.device.displayName, relayDetail?.device.id, relayId],
+    [draftName, relayDetail?.device.title, relayDetail?.device.id, relayId],
   );
 
   const activeExposure = useMemo(() => {
@@ -234,7 +234,7 @@ export default function RelayDevicePage() {
     try {
       const detail = await api.getRelayDevice(workspaceId, relayId);
       setRelayDetail(detail);
-      setDraftName(detail.device.displayName);
+      setDraftName(detail.device.title);
     } catch (error) {
       console.error('Failed to load relay detail:', error);
       toast.error(error instanceof Error ? error.message : 'Failed to load relay');
@@ -306,7 +306,7 @@ export default function RelayDevicePage() {
 
     setSaving(true);
     try {
-      await api.updateRelayDevice(workspaceId, relayDetail.device.id, { displayName: draftName.trim() });
+      await api.updateRelayDevice(workspaceId, relayDetail.device.id, { title: draftName.trim() });
       await loadRelayDetail();
       toast.success('Relay updated');
     } catch (error) {
@@ -319,7 +319,7 @@ export default function RelayDevicePage() {
 
   async function handleDisconnectRelay() {
     if (!workspaceId || !relayDetail) return;
-    if (!window.confirm(`Disconnect relay device "${relayDetail.device.displayName}"?`)) return;
+    if (!window.confirm(`Disconnect relay device "${relayDetail.device.title}"?`)) return;
 
     setSaving(true);
     try {
@@ -358,7 +358,7 @@ export default function RelayDevicePage() {
 
   async function handleDeleteRelay() {
     if (!workspaceId || !relayDetail) return;
-    if (!window.confirm(`Delete relay device "${relayDetail.device.displayName}"?`)) return;
+    if (!window.confirm(`Delete relay device "${relayDetail.device.title}"?`)) return;
 
     setSaving(true);
     try {
@@ -377,7 +377,7 @@ export default function RelayDevicePage() {
     if (!workspaceId || !relayDetail) return;
 
     const actionLabel = nextTrustStatus === 'active' ? 'reactivate' : nextTrustStatus;
-    if (!window.confirm(`${actionLabel[0].toUpperCase()}${actionLabel.slice(1)} relay device "${relayDetail.device.displayName}"?`)) {
+    if (!window.confirm(`${actionLabel[0].toUpperCase()}${actionLabel.slice(1)} relay device "${relayDetail.device.title}"?`)) {
       return;
     }
 
@@ -466,7 +466,7 @@ export default function RelayDevicePage() {
               </div>
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <AppCardTitle>{relayDetail.device.displayName}</AppCardTitle>
+                  <AppCardTitle>{relayDetail.device.title}</AppCardTitle>
                   <Badge variant={relayTrustVariant(relayDetail.device.trustStatus)}>
                     {relayDetail.device.trustStatus}
                   </Badge>
@@ -477,7 +477,8 @@ export default function RelayDevicePage() {
                 <AppCardDescription className="mt-2 flex flex-wrap items-center gap-3">
                   <span className="inline-flex items-center gap-1.5">
                     <Wrench className="size-4" />
-                    {relayDetail.device.clientKind}
+                    {relayDetail.device.deviceType}
+                    {relayDetail.device.authorizationMode ? ` · ${relayDetail.device.authorizationMode}` : ''}
                     {relayDetail.device.platform ? ` on ${relayDetail.device.platform}` : ''}
                   </span>
                   <span className="inline-flex items-center gap-1.5">
@@ -767,7 +768,7 @@ export default function RelayDevicePage() {
                             <div className="min-w-0 space-y-2">
                               <div className="flex flex-wrap items-center gap-2">
                                 <Badge variant="secondary">{formatRuntimeGrantScope(grant.scope)}</Badge>
-                                <Badge variant="outline">{grant.relayToolName}</Badge>
+                                <Badge variant="outline">{grant.relayToolStableKey}</Badge>
                                 <Badge variant="outline">{grant.status}</Badge>
                               </div>
                               <div className="flex items-start gap-2">

@@ -81,6 +81,7 @@ export interface RuntimeGrantRecord {
   id: string;
   workspaceId: string;
   relayDeviceId: string;
+  relayCapabilityId: string;
   relayExposureId: string;
   conversationId?: string;
   actorId?: string;
@@ -90,12 +91,14 @@ export interface RuntimeGrantRecord {
   scope: RuntimeGrantScope;
   retention: RuntimeGrantRetention;
   status: RuntimeGrantStatus;
-  relayToolName: string;
+  relayToolStableKey: string;
+  contractKey: string;
   sourceRetryNonce?: string;
   sourceRuntimeSessionId?: string;
   sourceRequestArgs: Record<string, unknown>;
   sourceRequestHash?: string;
   effect: RuntimeGrantEffect;
+  displayPayload: Record<string, unknown>;
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
@@ -107,6 +110,7 @@ export interface RuntimeGrantRecord {
 export interface CreateRuntimeGrantParams {
   workspaceId: string;
   relayDeviceId: string;
+  relayCapabilityId: string;
   relayExposureId: string;
   conversationId?: string;
   actorId?: string;
@@ -114,20 +118,24 @@ export interface CreateRuntimeGrantParams {
   sourceInteractionId?: string;
   sourceTaskId?: string;
   preset: RuntimeAuthorizationPreset;
-  relayToolName: string;
+  relayToolStableKey: string;
+  contractKey: string;
   sourceRetryNonce?: string;
   sourceRuntimeSessionId?: string;
   sourceRequestArgs: Record<string, unknown>;
   effect: RuntimeGrantEffect;
+  displayPayload?: Record<string, unknown>;
   metadata?: Record<string, unknown>;
 }
 
 export interface FindMatchingRuntimeGrantParams {
   workspaceId: string;
+  relayCapabilityId: string;
   relayExposureId: string;
   conversationId?: string;
   actorId?: string;
-  relayToolName: string;
+  relayToolStableKey: string;
+  contractKey: string;
   effect: RuntimeGrantEffect;
   retryNonce?: string;
   consumeOnce?: boolean;
@@ -138,6 +146,7 @@ function mapRuntimeGrantRow(row: any): RuntimeGrantRecord {
     id: row.id,
     workspaceId: row.workspace_id,
     relayDeviceId: row.relay_device_id,
+    relayCapabilityId: row.relay_capability_id,
     relayExposureId: row.relay_exposure_id,
     conversationId: row.conversation_id || undefined,
     actorId: row.actor_id || undefined,
@@ -148,12 +157,14 @@ function mapRuntimeGrantRow(row: any): RuntimeGrantRecord {
     scope: row.scope,
     retention: row.retention,
     status: row.status,
-    relayToolName: row.relay_tool_name,
+    relayToolStableKey: row.relay_tool_stable_key,
+    contractKey: row.contract_key,
     sourceRetryNonce: row.source_retry_nonce || undefined,
     sourceRuntimeSessionId: row.source_runtime_session_id || undefined,
     sourceRequestArgs: parseJsonObject(row.source_request_args),
     sourceRequestHash: row.source_request_hash || undefined,
     effect: parseJsonObject(row.effect) as unknown as RuntimeGrantEffect,
+    displayPayload: parseJsonObject(row.display_payload),
     metadata: parseJsonObject(row.metadata),
     createdAt: toIsoString(row.created_at) || new Date().toISOString(),
     updatedAt: toIsoString(row.updated_at) || new Date().toISOString(),
@@ -190,6 +201,7 @@ export async function createRuntimeGrant(
     .values({
       workspace_id: params.workspaceId,
       relay_device_id: params.relayDeviceId,
+      relay_capability_id: params.relayCapabilityId,
       relay_exposure_id: params.relayExposureId,
       conversation_id: params.conversationId || null,
       actor_id: params.actorId || null,
@@ -200,13 +212,16 @@ export async function createRuntimeGrant(
       scope,
       retention,
       status: "active",
-      relay_tool_name: params.relayToolName,
+      relay_tool_stable_key: params.relayToolStableKey,
+      contract_key: params.contractKey,
       source_retry_nonce: params.sourceRetryNonce || null,
       source_runtime_session_id: params.sourceRuntimeSessionId || null,
       source_request_args:
         params.sourceRequestArgs as TableInsert<"runtime_grants">["source_request_args"],
       source_request_hash: hashRequestPayload(params.sourceRequestArgs),
       effect: params.effect as unknown as TableInsert<"runtime_grants">["effect"],
+      display_payload:
+        (params.displayPayload || {}) as TableInsert<"runtime_grants">["display_payload"],
       metadata:
         (params.metadata || {}) as TableInsert<"runtime_grants">["metadata"],
     })
@@ -363,7 +378,7 @@ export function runtimeGrantEffectMatches(
   if (granted.capability === "cua" && requested.capability === "cua") {
     return granted.mode === requested.mode;
   }
-  if (granted.capability === "chrome" && requested.capability === "chrome") {
+  if (granted.capability === "browser" && requested.capability === "browser") {
     return granted.mode === requested.mode;
   }
   return false;
@@ -377,8 +392,10 @@ export async function findMatchingRuntimeGrant(
     .selectFrom("runtime_grants")
     .selectAll()
     .where("workspace_id", "=", params.workspaceId)
+    .where("relay_capability_id", "=", params.relayCapabilityId)
     .where("relay_exposure_id", "=", params.relayExposureId)
-    .where("relay_tool_name", "=", params.relayToolName)
+    .where("relay_tool_stable_key", "=", params.relayToolStableKey)
+    .where("contract_key", "=", params.contractKey)
     .where("status", "=", "active")
     .where((eb) =>
       eb.or([
@@ -437,13 +454,13 @@ export async function findMatchingRuntimeGrant(
 }
 
 export async function listActiveRuntimeGrantsForExposure(
-  relayExposureId: string,
+  relayCapabilityId: string,
   queryable?: Queryable,
 ) {
   const statement = db
     .selectFrom("runtime_grants")
     .selectAll()
-    .where("relay_exposure_id", "=", relayExposureId)
+    .where("relay_capability_id", "=", relayCapabilityId)
     .where("status", "=", "active")
     .orderBy("created_at", "desc");
   const rows = isQueryExecutor(queryable)

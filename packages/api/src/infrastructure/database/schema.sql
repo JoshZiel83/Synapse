@@ -138,6 +138,8 @@ CREATE TYPE plugin_connections_status AS ENUM ('active', 'expired', 'revoked');
 CREATE TYPE plugin_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'follow_upstream', 'detached');
 CREATE TYPE relay_devices_trust_status AS ENUM ('pending', 'active', 'revoked', 'blocked');
 CREATE TYPE relay_devices_automation_lifecycle_state AS ENUM ('online', 'offline');
+CREATE TYPE relay_devices_device_type AS ENUM ('desktop_computer', 'laptop_computer', 'mobile_phone', 'tablet', 'server', 'virtual_machine', 'custom');
+CREATE TYPE relay_authorization_mode AS ENUM ('server_trust', 'client_local');
 CREATE TYPE relay_pairing_sessions_status AS ENUM ('pending', 'confirmed', 'consumed', 'expired', 'cancelled', 'rejected');
 CREATE TYPE relay_device_sessions_status AS ENUM ('connecting', 'active', 'closing', 'closed', 'rejected');
 CREATE TYPE relay_device_sessions_transport AS ENUM ('websocket');
@@ -148,6 +150,7 @@ CREATE TYPE relay_exposures_transport AS ENUM ('builtin', 'stdio', 'http', 'sse'
 CREATE TYPE relay_exposures_runtime_status AS ENUM ('discovered', 'starting', 'healthy', 'degraded', 'failed', 'quarantined', 'offline');
 CREATE TYPE relay_catalog_revisions_status AS ENUM ('active', 'superseded');
 CREATE TYPE relay_tools_status AS ENUM ('active', 'removed');
+CREATE TYPE relay_capabilities_status AS ENUM ('active', 'unavailable', 'archived');
 CREATE TYPE relay_operations_delivery_policy AS ENUM ('online_only', 'store_and_forward');
 CREATE TYPE relay_operations_status AS ENUM ('created', 'dispatched', 'received', 'started', 'cancel_requested', 'completed', 'failed', 'cancelled', 'aborted', 'expired');
 CREATE TYPE relay_operation_deliveries_status AS ENUM ('queued', 'sent', 'acked', 'nacked', 'timed_out', 'cancelled');
@@ -270,7 +273,7 @@ CREATE TABLE workspace_access_bindings (
 CREATE TABLE workspace_capability_conversation_type_policies (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   resource_family VARCHAR(60) NOT NULL
-    CHECK (resource_family IN ('plugin_installation', 'installed_skill', 'relay_exposure')),
+    CHECK (resource_family IN ('plugin_installation', 'installed_skill', 'relay_capability')),
   default_conversation_type_mask INT NOT NULL
     CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 31),
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -2494,9 +2497,11 @@ CREATE TABLE relay_devices (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   owner_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  display_name VARCHAR(255) NOT NULL,
-  client_kind VARCHAR(40) NOT NULL DEFAULT 'desktop',
+  title VARCHAR(255) NOT NULL,
+  description TEXT,
+  device_type relay_devices_device_type NOT NULL DEFAULT 'desktop_computer',
   platform VARCHAR(40),
+  authorization_mode relay_authorization_mode NOT NULL DEFAULT 'server_trust',
   public_key TEXT NOT NULL,
   public_key_fingerprint VARCHAR(128) NOT NULL UNIQUE,
   trust_status relay_devices_trust_status NOT NULL DEFAULT 'pending',
@@ -2522,7 +2527,10 @@ CREATE TABLE relay_pairing_sessions (
   requested_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   device_id UUID REFERENCES relay_devices(id) ON DELETE SET NULL,
   server_base_url TEXT NOT NULL,
-  requested_display_name VARCHAR(255),
+  requested_title VARCHAR(255),
+  requested_description TEXT,
+  requested_device_type relay_devices_device_type,
+  requested_authorization_mode relay_authorization_mode,
   pairing_code VARCHAR(32) NOT NULL UNIQUE,
   verification_uri TEXT NOT NULL,
   verification_uri_complete TEXT,
@@ -2540,6 +2548,7 @@ CREATE TABLE relay_device_sessions (
   device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
   protocol_version INT NOT NULL DEFAULT 2,
   client_version VARCHAR(64),
+  authorization_mode relay_authorization_mode NOT NULL DEFAULT 'server_trust',
   status relay_device_sessions_status NOT NULL DEFAULT 'connecting',
   transport relay_device_sessions_transport NOT NULL DEFAULT 'websocket',
   remote_addr TEXT,
@@ -2575,11 +2584,11 @@ CREATE TABLE relay_exposures (
   sync_source_id UUID REFERENCES relay_sync_sources(id) ON DELETE SET NULL,
   stable_key VARCHAR(255) NOT NULL,
   display_name VARCHAR(255) NOT NULL,
+  description TEXT,
   transport relay_exposures_transport NOT NULL,
   runtime_status relay_exposures_runtime_status NOT NULL DEFAULT 'discovered',
   conversation_type_mask_override INT
     CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
-  projected_catalog_item_id UUID REFERENCES catalog_items(id) ON DELETE SET NULL,
   last_seen_at TIMESTAMPTZ,
   last_healthy_at TIMESTAMPTZ,
   last_error TEXT,
@@ -2588,6 +2597,20 @@ CREATE TABLE relay_exposures (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(device_id, stable_key)
 );
+
+CREATE TABLE relay_capabilities (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  exposure_id UUID NOT NULL UNIQUE REFERENCES relay_exposures(id) ON DELETE CASCADE,
+  status relay_capabilities_status NOT NULL DEFAULT 'active',
+  conversation_type_mask_override INT
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE INDEX idx_relay_capabilities_workspace ON relay_capabilities(workspace_id, created_at DESC);
 
 CREATE TABLE relay_catalog_revisions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2742,8 +2765,12 @@ CREATE TABLE interaction_question_requests (
 CREATE TABLE interaction_runtime_authorization_requests (
   interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE CASCADE,
   relay_device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  relay_capability_id UUID NOT NULL REFERENCES relay_capabilities(id) ON DELETE CASCADE,
   relay_exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
+  relay_tool_stable_key TEXT NOT NULL,
+  contract_key TEXT NOT NULL,
   requested_effect JSONB NOT NULL DEFAULT '{}',
+  display_payload JSONB NOT NULL DEFAULT '{}',
   request_payload JSONB NOT NULL DEFAULT '{}',
   resolution_payload JSONB NOT NULL DEFAULT '{}'
 );
@@ -2752,6 +2779,7 @@ CREATE TABLE runtime_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   relay_device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
+  relay_capability_id UUID NOT NULL REFERENCES relay_capabilities(id) ON DELETE CASCADE,
   relay_exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
   actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
@@ -2761,12 +2789,14 @@ CREATE TABLE runtime_grants (
   scope runtime_grants_scope NOT NULL,
   retention runtime_grants_retention NOT NULL,
   status runtime_grants_status NOT NULL DEFAULT 'active',
-  relay_tool_name TEXT NOT NULL,
+  relay_tool_stable_key TEXT NOT NULL,
+  contract_key TEXT NOT NULL,
   source_retry_nonce TEXT,
   source_runtime_session_id TEXT,
   source_request_args JSONB NOT NULL DEFAULT '{}',
   source_request_hash TEXT,
   effect JSONB NOT NULL DEFAULT '{}',
+  display_payload JSONB NOT NULL DEFAULT '{}',
   consumed_at TIMESTAMPTZ,
   revoked_at TIMESTAMPTZ,
   superseded_at TIMESTAMPTZ,
@@ -2784,8 +2814,8 @@ CREATE INDEX idx_interaction_requests_target
 CREATE INDEX idx_interaction_runtime_authorization_requests_device
   ON interaction_runtime_authorization_requests(relay_device_id, interaction_id);
 CREATE INDEX idx_runtime_grants_exposure
-  ON runtime_grants(relay_exposure_id, status, scope, created_at DESC);
+  ON runtime_grants(relay_capability_id, status, scope, created_at DESC);
 CREATE INDEX idx_runtime_grants_actor
-  ON runtime_grants(actor_id, relay_exposure_id, status, created_at DESC);
+  ON runtime_grants(actor_id, relay_capability_id, status, created_at DESC);
 CREATE INDEX idx_runtime_grants_conversation
-  ON runtime_grants(conversation_id, relay_exposure_id, status, created_at DESC);
+  ON runtime_grants(conversation_id, relay_capability_id, status, created_at DESC);

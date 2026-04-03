@@ -40,6 +40,7 @@ export type AuthzObjectType =
   | "plugin_installation"
   | "relay_device"
   | "relay_exposure"
+  | "relay_capability"
   | "conversation_actor_context"
   | "conversation"
   | "memory_space"
@@ -75,6 +76,7 @@ const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
   "plugin_installation",
   "relay_device",
   "relay_exposure",
+  "relay_capability",
   "conversation_actor_context",
   "conversation",
   "memory_space",

@@ -286,15 +286,23 @@ definition relay_exposure {
     relation device: relay_device
     relation owner: workspace_member | actor
     relation operator: workspace_member | actor
+
+    permission view = device->view + owner + operator + workspace->manage_relays
+    permission edit = owner + operator + workspace->manage_relays
+    permission delete = owner + workspace->manage_relays
+}
+
+definition relay_capability {
+    relation workspace: workspace
     relation use_actor: actor
     relation use_conversation: conversation
     relation use_actor_in_conversation: conversation_actor_context
     relation use_workspace: workspace
 
-    permission view = device->view + owner + operator + workspace->manage_relays
-    permission invoke = device->invoke + owner + operator + workspace->manage_relays + use_actor + use_conversation->principal + use_actor_in_conversation->principal + use_workspace->principal
-    permission request_authorization = invoke
-    permission edit = owner + operator + workspace->manage_relays
+    permission use = workspace->manage_relays + use_actor + use_conversation->principal + use_actor_in_conversation->principal + use_workspace->principal
+    permission request_runtime_authorization = use
+    permission view = use + workspace->manage_relays
+    permission edit = workspace->manage_relays
     permission grant = edit
-    permission delete = owner + workspace->manage_relays
+    permission delete = workspace->manage_relays
 }
