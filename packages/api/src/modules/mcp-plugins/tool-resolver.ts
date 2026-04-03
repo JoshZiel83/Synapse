@@ -100,15 +100,14 @@ type VisibleRelayCapabilityRow = {
 
 type VisibleAccessBindingRow = {
   id: string;
-  workspace_id: string | null;
-  resource_type: string;
+  workspace_id: string;
+  resource_type: "plugin_installation" | "relay_capability";
   resource_id: string;
   target_type:
     | "workspace"
     | "conversation"
     | "actor"
     | "actor_in_conversation";
-  relation: string;
   subject_workspace_id: string | null;
   subject_workspace_member_id: string | null;
   subject_actor_id: string | null;
@@ -275,8 +274,17 @@ async function loadVisibleAccessBindings(params: {
     return new Map<string, VisibleAccessBindingRow[]>();
   }
 
+  const resourceColumn =
+    params.resourceType === "plugin_installation"
+      ? "binding.plugin_installation_id"
+      : "binding.relay_capability_id";
+  const resourceIdSelect =
+    params.resourceType === "plugin_installation"
+      ? sql<string>`binding.plugin_installation_id::text`.as("resource_id")
+      : sql<string>`binding.relay_capability_id::text`.as("resource_id");
+
   const rows = await db
-    .selectFrom("access_bindings as binding")
+    .selectFrom("resource_access_bindings as binding")
     .leftJoin(
       "conversation_actor_contexts as cac",
       "cac.id",
@@ -286,9 +294,8 @@ async function loadVisibleAccessBindings(params: {
       "binding.id",
       "binding.workspace_id",
       "binding.resource_type",
-      "binding.resource_id",
+      resourceIdSelect,
       "binding.target_type",
-      "binding.relation",
       "binding.subject_workspace_id",
       "binding.subject_workspace_member_id",
       sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
@@ -314,7 +321,7 @@ async function loadVisibleAccessBindings(params: {
       ),
     ])
     .where("binding.resource_type", "=", params.resourceType)
-    .where("binding.resource_id", "in", params.resourceIds)
+    .where(resourceColumn, "in", params.resourceIds)
     .where("binding.status", "=", "active")
     .orderBy("binding.created_at", "desc")
     .execute() as VisibleAccessBindingRow[];

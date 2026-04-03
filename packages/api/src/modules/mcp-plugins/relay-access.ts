@@ -12,6 +12,7 @@ import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.j
 import {
   buildResourceAccessAuthzMutations,
   mapAccessBindingToGrant,
+  normalizeAccessBindingRow,
   readAccessBindingTarget,
   resolveAccessGrantTarget,
   type AccessBindingRow,
@@ -152,9 +153,11 @@ async function listRelayExposureAccessRows(
        binding.id,
        binding.workspace_id,
        binding.resource_type,
-       binding.resource_id,
+       binding.installed_skill_id,
+       binding.plugin_installation_id,
+       binding.relay_capability_id,
+       binding.relay_capability_id::text AS resource_id,
        binding.target_type,
-       binding.relation,
        binding.subject_workspace_id,
        binding.subject_workspace_member_id,
        COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
@@ -168,17 +171,16 @@ async function listRelayExposureAccessRows(
        binding.metadata,
        binding.created_at,
        binding.revoked_at
-     FROM access_bindings binding
+     FROM resource_access_bindings binding
      LEFT JOIN conversation_actor_contexts cac
        ON cac.id = binding.subject_conversation_actor_context_id
      WHERE binding.workspace_id = $1
-       AND binding.resource_type = 'relay_capability'
-       AND binding.resource_id = $2
+       AND binding.relay_capability_id = $2::uuid
        ${includeRevoked ? "" : "AND binding.status = 'active'"}
      ORDER BY binding.created_at ASC`,
     [workspaceId, capabilityId],
   );
-  return result.rows;
+  return result.rows.map((row) => normalizeAccessBindingRow(row));
 }
 
 export async function ensureRelayExposureDefaultAccess(params: {
@@ -188,9 +190,8 @@ export async function ensureRelayExposureDefaultAccess(params: {
   const authzEntryIds = await transaction(async (client) => {
     const existing = await executeSqlOn<{ id: string }>(client, 
       `SELECT id
-       FROM access_bindings
-       WHERE resource_type = 'relay_capability'
-         AND resource_id = $1
+       FROM resource_access_bindings
+       WHERE relay_capability_id = $1::uuid
        LIMIT 1`,
       [params.capabilityId],
     );
@@ -200,12 +201,11 @@ export async function ensureRelayExposureDefaultAccess(params: {
     }
 
     const inserted = await executeSqlOn<AccessBindingRow>(client, 
-      `INSERT INTO access_bindings (
+      `INSERT INTO resource_access_bindings (
          workspace_id,
          resource_type,
-         resource_id,
+         relay_capability_id,
          target_type,
-         relation,
          subject_workspace_id,
          subject_workspace_member_id,
          subject_actor_id,
@@ -216,9 +216,9 @@ export async function ensureRelayExposureDefaultAccess(params: {
          metadata
        )
        VALUES (
-        $1, 'relay_capability', $2, 'workspace', 'use_workspace', $3, NULL, NULL, NULL, ARRAY['use']::text[], 'active', $4, $5::jsonb
+        $1, 'relay_capability', $2, 'workspace', $3, NULL, NULL, NULL, ARRAY['use']::text[], 'active', $4, $5::jsonb
        )
-       RETURNING *`,
+       RETURNING *, relay_capability_id::text AS resource_id`,
       [
         params.workspaceId,
         params.capabilityId,
@@ -425,7 +425,7 @@ export async function grantRelayExposureAccess(input: {
     exposure.capability_id,
   )).find(
     (row) =>
-      row.relation === target.relation &&
+      row.target_type === target.targetType &&
       (row.subject_workspace_id || null) === (target.subjectWorkspaceId || null) &&
       (row.subject_workspace_member_id || null) ===
         (target.subjectWorkspaceMemberId || null) &&
@@ -457,12 +457,11 @@ export async function grantRelayExposureAccess(input: {
 
   const inserted = await transaction(async (client) => {
     const binding = await executeSqlOn<AccessBindingRow>(client, 
-        `INSERT INTO access_bindings (
+        `INSERT INTO resource_access_bindings (
          workspace_id,
          resource_type,
-         resource_id,
+         relay_capability_id,
          target_type,
-         relation,
          subject_workspace_id,
          subject_workspace_member_id,
          subject_actor_id,
@@ -476,14 +475,13 @@ export async function grantRelayExposureAccess(input: {
          metadata
        )
        VALUES (
-        $1, 'relay_capability', $2, $3, $4, $5, $6, $7, $8, $9, $10, ARRAY['use']::text[], 'active', $11, $12, $13::jsonb
+        $1, 'relay_capability', $2, $3, $4, $5, $6, $7, $8, $9, ARRAY['use']::text[], 'active', $10, $11, $12::jsonb
        )
-       RETURNING *`,
+       RETURNING *, relay_capability_id::text AS resource_id`,
       [
         input.workspaceId,
         exposure.capability_id,
         target.targetType,
-        target.relation,
         target.subjectWorkspaceId,
         target.subjectWorkspaceMemberId,
         target.subjectActorId,
@@ -523,7 +521,7 @@ export async function grantRelayExposureAccess(input: {
   await flushRelayAuthzEntries(inserted.authzEntryIds, "relay.capability.grant");
   await incrementMcpVersion(input.workspaceId);
   return mapAccessBindingToGrant({
-    ...inserted.binding,
+    ...normalizeAccessBindingRow(inserted.binding),
     subject_actor_id: target.subjectActorId,
     subject_conversation_id: target.subjectConversationId,
     subject_conversation_actor_context_id:
@@ -542,12 +540,11 @@ export async function revokeRelayExposureAccess(input: {
   bindingId: string;
 }) {
   const result = await executeSql<AccessBindingRow>(
-    `SELECT *
-     FROM access_bindings
+    `SELECT *, relay_capability_id::text AS resource_id
+     FROM resource_access_bindings
      WHERE id = $1
        AND workspace_id = $2
-       AND resource_type = 'relay_capability'
-       AND resource_id = (
+       AND relay_capability_id = (
          SELECT capability.id
          FROM relay_capabilities capability
          WHERE capability.exposure_id = $3
@@ -565,7 +562,7 @@ export async function revokeRelayExposureAccess(input: {
     throw error;
   }
 
-  const binding = result.rows[0]!;
+  const binding = normalizeAccessBindingRow(result.rows[0]!);
   const authzEntryIds = await transaction(async (client) => {
     const ids = await queueAuthzRelationships(
       client,
@@ -586,7 +583,7 @@ export async function revokeRelayExposureAccess(input: {
     );
 
     await executeSqlOn(client, 
-      `UPDATE access_bindings
+      `UPDATE resource_access_bindings
        SET status = 'revoked',
            revoked_at = NOW()
        WHERE id = $1`,
@@ -711,7 +708,7 @@ export async function updateRelayExposureAccessGrant(input: {
 
   if (input.conversationTypeMaskOverride !== undefined) {
     await executeSql(
-      `UPDATE access_bindings
+      `UPDATE resource_access_bindings
        SET conversation_type_mask_override = $2
        WHERE id = $1
          AND workspace_id = $3`,
@@ -747,11 +744,10 @@ export async function revokeRelayDeviceAuthzState(input: {
 }) {
   const activeBindings = input.exposureIds.length > 0
     ? await executeSql<AccessBindingRow>(
-        `SELECT *
-         FROM access_bindings
+        `SELECT *, relay_capability_id::text AS resource_id
+         FROM resource_access_bindings
          WHERE workspace_id = $1
-           AND resource_type = 'relay_capability'
-           AND resource_id IN (
+           AND relay_capability_id IN (
              SELECT id FROM relay_capabilities WHERE exposure_id = ANY($2::uuid[])
            )
            AND status = 'active'`,
@@ -777,7 +773,7 @@ export async function revokeRelayDeviceAuthzState(input: {
             operation: "delete",
           }),
         ),
-        ...[...new Set(activeBindings.rows.map((binding) => binding.resource_id))]
+        ...[...new Set(activeBindings.rows.map((binding) => normalizeAccessBindingRow(binding).resource_id))]
           .filter((resourceId) => Boolean(resourceId))
           .map((resourceId) =>
             deleteRelation(
@@ -788,7 +784,9 @@ export async function revokeRelayDeviceAuthzState(input: {
               input.workspaceId,
             ),
           ),
-        ...activeBindings.rows.flatMap((binding) =>
+        ...activeBindings.rows
+          .map((binding) => normalizeAccessBindingRow(binding))
+          .flatMap((binding) =>
           buildResourceAccessAuthzMutations({
             resourceType: "relay_capability",
             resourceId: binding.resource_id,
@@ -807,7 +805,7 @@ export async function revokeRelayDeviceAuthzState(input: {
 
     if (activeBindings.rows.length > 0) {
       await executeSqlOn(client, 
-        `UPDATE access_bindings
+        `UPDATE resource_access_bindings
          SET status = 'revoked',
              revoked_at = NOW()
          WHERE id = ANY($1::uuid[])`,

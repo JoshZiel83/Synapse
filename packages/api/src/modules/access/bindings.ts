@@ -17,21 +17,31 @@ export type AccessBindableResourceType = Extract<
   "installed_skill" | "plugin_installation" | "relay_capability"
 >;
 
-export type AccessBindingRow = {
+export type ResourceAccessBindingStorageRow = {
+  resource_type: AccessBindableResourceType;
+  installed_skill_id: string | null;
+  plugin_installation_id: string | null;
+  relay_capability_id: string | null;
+};
+
+export type AccessBindingTargetType =
+  | "workspace"
+  | "conversation"
+  | "actor"
+  | "actor_in_conversation";
+
+export type AccessBindingRelation =
+  | "use_workspace"
+  | "use_conversation"
+  | "use_actor"
+  | "use_actor_in_conversation";
+
+export type AccessBindingRow = ResourceAccessBindingStorageRow & {
   id: string;
-  workspace_id: string | null;
-  resource_type: string;
+  workspace_id: string;
   resource_id: string;
-  target_type:
-    | "workspace"
-    | "conversation"
-    | "actor"
-    | "actor_in_conversation";
-  relation:
-    | "use_workspace"
-    | "use_conversation"
-    | "use_actor"
-    | "use_actor_in_conversation";
+  target_type: AccessBindingTargetType;
+  relation: AccessBindingRelation;
   subject_workspace_id: string | null;
   subject_workspace_member_id: string | null;
   subject_actor_id: string | null;
@@ -46,6 +56,82 @@ export type AccessBindingRow = {
   created_at: string;
   revoked_at: string | null;
 };
+
+export function readAccessBindingResourceId(
+  row: Pick<
+    ResourceAccessBindingStorageRow,
+    | "resource_type"
+    | "installed_skill_id"
+    | "plugin_installation_id"
+    | "relay_capability_id"
+  >,
+) {
+  switch (row.resource_type) {
+    case "installed_skill":
+      if (!row.installed_skill_id) {
+        throw new Error("installed_skill_id is required for installed_skill bindings");
+      }
+      return row.installed_skill_id;
+    case "plugin_installation":
+      if (!row.plugin_installation_id) {
+        throw new Error(
+          "plugin_installation_id is required for plugin_installation bindings",
+        );
+      }
+      return row.plugin_installation_id;
+    case "relay_capability":
+      if (!row.relay_capability_id) {
+        throw new Error("relay_capability_id is required for relay_capability bindings");
+      }
+      return row.relay_capability_id;
+    default:
+      throw new Error(`Unsupported access binding resource type: ${String(row.resource_type)}`);
+  }
+}
+
+export function buildResourceAccessBindingRef(input: {
+  resourceType: AccessBindableResourceType;
+  resourceId: string;
+}): ResourceAccessBindingStorageRow {
+  return {
+    resource_type: input.resourceType,
+    installed_skill_id:
+      input.resourceType === "installed_skill" ? input.resourceId : null,
+    plugin_installation_id:
+      input.resourceType === "plugin_installation" ? input.resourceId : null,
+    relay_capability_id:
+      input.resourceType === "relay_capability" ? input.resourceId : null,
+  };
+}
+
+export function relationForAccessTargetType(
+  targetType: AccessBindingTargetType,
+): AccessBindingRelation {
+  switch (targetType) {
+    case "workspace":
+      return "use_workspace";
+    case "conversation":
+      return "use_conversation";
+    case "actor":
+      return "use_actor";
+    case "actor_in_conversation":
+      return "use_actor_in_conversation";
+    default:
+      throw new Error(`Unsupported access binding target type: ${String(targetType)}`);
+  }
+}
+
+export function normalizeAccessBindingRow<
+  T extends ResourceAccessBindingStorageRow & { target_type: AccessBindingTargetType },
+>(
+  row: T,
+): T & { resource_id: string; relation: AccessBindingRelation } {
+  return {
+    ...row,
+    resource_id: readAccessBindingResourceId(row),
+    relation: relationForAccessTargetType(row.target_type),
+  };
+}
 
 export type AccessGrantTarget = {
   targetType: AccessTarget["type"];
@@ -98,7 +184,7 @@ export async function resolveAccessGrantTarget(input: {
       return {
         targetType: "workspace",
         bindScope: "workspace",
-        relation: "use_workspace",
+        relation: relationForAccessTargetType("workspace"),
         subjectType: "workspace",
         subjectWorkspaceId: input.workspaceId,
         subjectWorkspaceMemberId: null,
@@ -117,7 +203,7 @@ export async function resolveAccessGrantTarget(input: {
       return {
         targetType: "conversation",
         bindScope: "conversation",
-        relation: "use_conversation",
+        relation: relationForAccessTargetType("conversation"),
         subjectType: "conversation",
         subjectWorkspaceId: null,
         subjectWorkspaceMemberId: null,
@@ -136,7 +222,7 @@ export async function resolveAccessGrantTarget(input: {
       return {
         targetType: "actor",
         bindScope: "actor",
-        relation: "use_actor",
+        relation: relationForAccessTargetType("actor"),
         subjectType: "actor",
         subjectWorkspaceId: null,
         subjectWorkspaceMemberId: null,
@@ -162,7 +248,7 @@ export async function resolveAccessGrantTarget(input: {
       return {
         targetType: "actor_in_conversation",
         bindScope: "actor_in_conversation",
-        relation: "use_actor_in_conversation",
+        relation: relationForAccessTargetType("actor_in_conversation"),
         subjectType: "conversation_actor_context",
         subjectWorkspaceId: null,
         subjectWorkspaceMemberId: null,
@@ -185,7 +271,6 @@ export function readAccessBindingTarget(
   row: Pick<
     AccessBindingRow,
     | "target_type"
-    | "relation"
     | "subject_workspace_id"
     | "subject_workspace_member_id"
     | "subject_actor_id"
@@ -199,7 +284,7 @@ export function readAccessBindingTarget(
       return {
         targetType: "workspace",
         bindScope: "workspace",
-        relation: row.relation,
+        relation: relationForAccessTargetType(row.target_type),
         subjectType: "workspace",
         subjectWorkspaceId: row.subject_workspace_id,
         subjectWorkspaceMemberId: null,
@@ -215,7 +300,7 @@ export function readAccessBindingTarget(
       return {
         targetType: "conversation",
         bindScope: "conversation",
-        relation: row.relation,
+        relation: relationForAccessTargetType(row.target_type),
         subjectType: "conversation",
         subjectWorkspaceId: null,
         subjectWorkspaceMemberId: null,
@@ -231,7 +316,7 @@ export function readAccessBindingTarget(
       return {
         targetType: "actor",
         bindScope: "actor",
-        relation: row.relation,
+        relation: relationForAccessTargetType(row.target_type),
         subjectType: "actor",
         subjectWorkspaceId: null,
         subjectWorkspaceMemberId: null,
@@ -247,7 +332,7 @@ export function readAccessBindingTarget(
       return {
         targetType: "actor_in_conversation",
         bindScope: "actor_in_conversation",
-        relation: row.relation,
+        relation: relationForAccessTargetType(row.target_type),
         subjectType: "conversation_actor_context",
         subjectWorkspaceId: null,
         subjectWorkspaceMemberId: null,

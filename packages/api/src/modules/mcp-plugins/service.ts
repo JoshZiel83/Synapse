@@ -61,8 +61,10 @@ import {
   normalizeFeishuFeatureKeys,
 } from "./feishu/features.js";
 import {
+  buildResourceAccessBindingRef,
   buildResourceAccessAuthzMutations,
   mapAccessBindingToGrant,
+  normalizeAccessBindingRow,
   readAccessBindingTarget,
   resolveAccessGrantTarget,
   type AccessBindingRow,
@@ -989,7 +991,7 @@ async function loadInstallationRows(
 
 async function listAccessRows(installationId: string, includeRevoked = false) {
   let builder = db
-    .selectFrom("access_bindings as binding")
+    .selectFrom("resource_access_bindings as binding")
     .leftJoin(
       "conversation_actor_contexts as cac",
       "cac.id",
@@ -999,9 +1001,11 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
       "binding.id",
       "binding.workspace_id",
       "binding.resource_type",
-      "binding.resource_id",
+      "binding.installed_skill_id",
+      "binding.plugin_installation_id",
+      "binding.relay_capability_id",
+      sql<string>`binding.plugin_installation_id::text`.as("resource_id"),
       "binding.target_type",
-      "binding.relation",
       "binding.subject_workspace_id",
       "binding.subject_workspace_member_id",
       sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
@@ -1020,8 +1024,7 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
       "binding.created_at",
       "binding.revoked_at",
     ])
-    .where("binding.resource_type", "=", "plugin_installation")
-    .where("binding.resource_id", "=", installationId);
+    .where("binding.plugin_installation_id", "=", installationId);
 
   if (!includeRevoked) {
     builder = builder.where("binding.status", "=", "active");
@@ -1029,7 +1032,9 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
 
   const rows = await builder.orderBy("binding.created_at", "asc").execute();
   return rows.map((row) =>
-    buildInstallationAccessRow(row as unknown as AccessBindingRow),
+    buildInstallationAccessRow(
+      normalizeAccessBindingRow(row as unknown as AccessBindingRow),
+    ),
   );
 }
 
@@ -1933,13 +1938,14 @@ export async function installPluginUnified(data: {
     const insertedAccess = await executeTakeFirst<{ id: string }>(
       client,
       db
-        .insertInto("access_bindings")
+        .insertInto("resource_access_bindings")
         .values({
           workspace_id: data.workspaceId,
-          resource_type: "plugin_installation",
-          resource_id: installationId,
+          ...buildResourceAccessBindingRef({
+            resourceType: "plugin_installation",
+            resourceId: installationId,
+          }),
           target_type: initialAccessTarget.targetType,
-          relation: initialAccessTarget.relation,
           subject_workspace_id: initialAccessTarget.subjectWorkspaceId,
           subject_workspace_member_id:
             initialAccessTarget.subjectWorkspaceMemberId,
@@ -1948,7 +1954,7 @@ export async function installPluginUnified(data: {
           subject_conversation_actor_context_id:
             initialAccessTarget.subjectConversationActorContextId,
           granted_permissions: approvedRuntimePermissions,
-          metadata: {} as TableInsert<"access_bindings">["metadata"],
+          metadata: {} as TableInsert<"resource_access_bindings">["metadata"],
           status: "active",
           created_by_workspace_member_id:
             data.installedByWorkspaceMemberId || null,
@@ -2068,9 +2074,8 @@ export async function uninstallPluginUnified(installId: string) {
     await executeCompiledQuery(
       client,
       db
-        .deleteFrom("access_bindings")
-        .where("resource_type", "=", "plugin_installation")
-        .where("resource_id", "=", installId),
+        .deleteFrom("resource_access_bindings")
+        .where("plugin_installation_id", "=", installId),
     );
 
     await executeCompiledQuery(
@@ -2437,13 +2442,14 @@ export async function grantPluginInstallationAccess(input: {
     const inserted = await executeTakeFirst(
       client,
       db
-        .insertInto("access_bindings")
+        .insertInto("resource_access_bindings")
         .values({
           workspace_id: input.workspaceId,
-          resource_type: "plugin_installation",
-          resource_id: input.installationId,
+          ...buildResourceAccessBindingRef({
+            resourceType: "plugin_installation",
+            resourceId: input.installationId,
+          }),
           target_type: accessTarget.targetType,
-          relation: accessTarget.relation,
           subject_workspace_id: accessTarget.subjectWorkspaceId,
           subject_workspace_member_id:
             accessTarget.subjectWorkspaceMemberId,
@@ -2455,7 +2461,7 @@ export async function grantPluginInstallationAccess(input: {
             input.conversationTypeMaskOverride ?? null,
           granted_permissions: input.permissions || [],
           metadata:
-            (input.metadata || {}) as TableInsert<"access_bindings">["metadata"],
+            (input.metadata || {}) as TableInsert<"resource_access_bindings">["metadata"],
           status: "active",
           created_by_workspace_member_id:
             input.grantedByWorkspaceMemberId || null,
@@ -2465,7 +2471,7 @@ export async function grantPluginInstallationAccess(input: {
     );
 
     const accessRow = buildInstallationAccessRow({
-      ...(inserted as unknown as AccessBindingRow),
+      ...(normalizeAccessBindingRow(inserted as unknown as AccessBindingRow)),
       subject_actor_id: accessTarget.subjectActorId,
       subject_conversation_id: accessTarget.subjectConversationId,
       subject_conversation_actor_context_id:
@@ -2543,7 +2549,7 @@ export async function updatePluginInstallationAccessGrant(input: {
   }
 
   await db
-    .updateTable("access_bindings")
+    .updateTable("resource_access_bindings")
     .set({
       conversation_type_mask_override:
         input.conversationTypeMaskOverride ?? null,
@@ -2604,7 +2610,7 @@ export async function revokePluginInstallationAccess(input: {
     await executeCompiledQuery(
       client,
       db
-        .updateTable("access_bindings")
+        .updateTable("resource_access_bindings")
         .set({
           status: "revoked",
           revoked_at: sql`NOW()`,

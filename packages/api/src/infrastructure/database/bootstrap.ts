@@ -7,9 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const __filename = fileURLToPath(import.meta.url);
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8");
 
-const CURRENT_SCHEMA_VERSION = "2026-04-02-02";
+const CURRENT_SCHEMA_VERSION = "2026-04-03-02";
 const CURRENT_SCHEMA_DESCRIPTION =
-  "rewrite memory around memory_spaces/items with local embedding indexing";
+  "derive resource access binding relation from target_type and remove redundant stored relation";
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

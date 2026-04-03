@@ -36,9 +36,12 @@ import {
 } from "../capabilities/conversation-type-policies.js";
 import {
   accessBindingMetadata,
+  buildResourceAccessBindingRef,
   buildResourceAccessAuthzMutations,
   mapAccessBindingToGrant,
+  normalizeAccessBindingRow,
   readAccessBindingTarget,
+  relationForAccessTargetType,
   resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js";
@@ -1521,9 +1524,11 @@ async function loadAccessBindingsBySkillIds(
        binding.id,
        binding.workspace_id,
        binding.resource_type,
-       binding.resource_id,
+       binding.installed_skill_id,
+       binding.plugin_installation_id,
+       binding.relay_capability_id,
+       binding.installed_skill_id::text AS resource_id,
        binding.target_type,
-       binding.relation,
        binding.subject_workspace_id,
        binding.subject_workspace_member_id,
        COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
@@ -1537,19 +1542,18 @@ async function loadAccessBindingsBySkillIds(
        binding.metadata,
        binding.created_at,
        binding.revoked_at
-     FROM access_bindings binding
+     FROM resource_access_bindings binding
      LEFT JOIN conversation_actor_contexts cac
        ON cac.id = binding.subject_conversation_actor_context_id
-     WHERE binding.resource_type = 'installed_skill'
-       AND binding.resource_id = ANY($1::text[])
+     WHERE binding.installed_skill_id = ANY($1::uuid[])
        ${includeRevoked ? "" : "AND binding.status = 'active'"}
-     ORDER BY binding.resource_id, binding.created_at DESC`,
+     ORDER BY binding.installed_skill_id, binding.created_at DESC`,
     [skillIds],
   );
 
   const map = new Map<string, SkillAccessRow[]>();
   for (const rawRow of result.rows) {
-    const row = buildSkillAccessRow(rawRow);
+    const row = buildSkillAccessRow(normalizeAccessBindingRow(rawRow));
     const existing = map.get(row.skill_id) || [];
     existing.push(row);
     map.set(row.skill_id, existing);
@@ -1659,15 +1663,13 @@ async function findSkillIdsByBindingFilter(params: {
   const values: unknown[] = [params.workspaceId];
   const conditions = [
     `workspace_id = $1`,
-    `resource_type = 'installed_skill'`,
+    `installed_skill_id IS NOT NULL`,
     `status = 'active'`,
   ];
 
   if (target) {
     values.push(target.targetType);
     conditions.push(`target_type = $${values.length}`);
-    values.push(target.relation);
-    conditions.push(`relation = $${values.length}`);
     values.push(target.subjectConversationActorContextId);
     conditions.push(
       `subject_conversation_actor_context_id IS NOT DISTINCT FROM $${values.length}::uuid`,
@@ -1700,8 +1702,8 @@ async function findSkillIdsByBindingFilter(params: {
   }
 
   const result = await runQuery<{ skill_id: string }>(
-    `SELECT DISTINCT resource_id AS skill_id
-     FROM access_bindings
+    `SELECT DISTINCT installed_skill_id::text AS skill_id
+     FROM resource_access_bindings
      WHERE ${conditions.join(" AND ")}`,
     values,
   );
@@ -1749,43 +1751,44 @@ async function ensureSkillBinding(
 
   const existing = await run<AccessBindingRow>(
     `SELECT
-       access_bindings.id,
-       access_bindings.workspace_id,
-       access_bindings.resource_type,
-       access_bindings.resource_id,
-       access_bindings.target_type,
-       access_bindings.relation,
-       access_bindings.subject_workspace_id,
-       access_bindings.subject_workspace_member_id,
-       COALESCE(access_bindings.subject_actor_id, cac.actor_id) AS subject_actor_id,
-       COALESCE(access_bindings.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
-       access_bindings.subject_conversation_actor_context_id,
-       access_bindings.granted_permissions,
-       access_bindings.status,
-       access_bindings.created_by_workspace_member_id,
-       access_bindings.reason,
-       access_bindings.metadata,
-       access_bindings.created_at,
-       access_bindings.revoked_at
-     FROM access_bindings
+       binding.id,
+       binding.workspace_id,
+       binding.resource_type,
+       binding.installed_skill_id,
+       binding.plugin_installation_id,
+       binding.relay_capability_id,
+       binding.installed_skill_id::text AS resource_id,
+       binding.target_type,
+       binding.subject_workspace_id,
+       binding.subject_workspace_member_id,
+       COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
+       COALESCE(binding.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
+       binding.subject_conversation_actor_context_id,
+       binding.granted_permissions,
+       binding.status,
+       binding.created_by_workspace_member_id,
+       binding.reason,
+       binding.metadata,
+       binding.created_at,
+       binding.revoked_at
+     FROM resource_access_bindings binding
      LEFT JOIN conversation_actor_contexts cac
-       ON cac.id = access_bindings.subject_conversation_actor_context_id
-     WHERE workspace_id = $1
-       AND resource_type = 'installed_skill'
-       AND resource_id = $2
-       AND relation = $3
+       ON cac.id = binding.subject_conversation_actor_context_id
+     WHERE binding.workspace_id = $1
+       AND binding.installed_skill_id = $2::uuid
+       AND target_type = $3
        AND subject_workspace_id IS NOT DISTINCT FROM $4::uuid
        AND subject_workspace_member_id IS NOT DISTINCT FROM $5::uuid
        AND subject_actor_id IS NOT DISTINCT FROM $6::uuid
        AND subject_conversation_id IS NOT DISTINCT FROM $7::uuid
        AND subject_conversation_actor_context_id IS NOT DISTINCT FROM $8::uuid
        AND status = 'active'
-     ORDER BY access_bindings.created_at DESC
+     ORDER BY binding.created_at DESC
      LIMIT 1`,
     [
       input.workspaceId,
       input.skillId,
-      grantTarget.relation,
+      grantTarget.targetType,
       grantTarget.subjectWorkspaceId,
       grantTarget.subjectWorkspaceMemberId,
       grantTarget.subjectActorId,
@@ -1803,12 +1806,11 @@ async function ensureSkillBinding(
   }
 
   const inserted = await run<{ id: string }>(
-    `INSERT INTO access_bindings (
+    `INSERT INTO resource_access_bindings (
        workspace_id,
        resource_type,
-       resource_id,
+       installed_skill_id,
        target_type,
-       relation,
        subject_workspace_id,
        subject_workspace_member_id,
        subject_actor_id,
@@ -1829,18 +1831,16 @@ async function ensureSkillBinding(
        $6,
        $7,
        $8,
-       $9,
-       $10::text[],
-       $11::jsonb,
+       $9::text[],
+       $10::jsonb,
        'active',
-       $12
+       $11
      )
      RETURNING id`,
     [
       input.workspaceId,
       input.skillId,
       grantTarget.targetType,
-      grantTarget.relation,
       grantTarget.subjectWorkspaceId,
       grantTarget.subjectWorkspaceMemberId,
       grantTarget.subjectActorId,
@@ -2823,12 +2823,11 @@ export async function grantInstalledSkillAccess(input: {
 
   const result = await transaction(async (client) => {
     const inserted = await executeSqlOn<AccessBindingRow>(client, 
-      `INSERT INTO access_bindings (
+      `INSERT INTO resource_access_bindings (
          workspace_id,
          resource_type,
-         resource_id,
+         installed_skill_id,
          target_type,
-         relation,
          subject_workspace_id,
          subject_workspace_member_id,
          subject_actor_id,
@@ -2852,20 +2851,21 @@ export async function grantInstalledSkillAccess(input: {
          $7,
          $8,
          $9,
-         $10,
-         $11::text[],
-         $12::jsonb,
+         $10::text[],
+         $11::jsonb,
          'active',
-         $13,
-         $14
+         $12,
+         $13
        )
        RETURNING
          id,
          workspace_id,
          resource_type,
-         resource_id,
+         installed_skill_id,
+         plugin_installation_id,
+         relay_capability_id,
+         installed_skill_id::text AS resource_id,
          target_type,
-         relation,
          subject_workspace_id,
          subject_workspace_member_id,
          subject_actor_id,
@@ -2883,7 +2883,6 @@ export async function grantInstalledSkillAccess(input: {
         input.workspaceId,
         input.installedSkillId,
         accessTarget.targetType,
-        accessTarget.relation,
         accessTarget.subjectWorkspaceId,
         accessTarget.subjectWorkspaceMemberId,
         accessTarget.subjectActorId,
@@ -2898,7 +2897,7 @@ export async function grantInstalledSkillAccess(input: {
     );
 
     const accessRow = buildSkillAccessRow({
-      ...inserted.rows[0]!,
+      ...normalizeAccessBindingRow(inserted.rows[0]!),
       subject_actor_id: accessTarget.subjectActorId,
       subject_conversation_id: accessTarget.subjectConversationId,
       subject_conversation_actor_context_id:
@@ -2959,9 +2958,9 @@ export async function updateInstalledSkillAccessGrant(input: {
     throw new SkillError(404, "Access grant not found");
   }
 
-  if (input.conversationTypeMaskOverride !== undefined) {
+    if (input.conversationTypeMaskOverride !== undefined) {
     await executeSql(
-      `UPDATE access_bindings
+      `UPDATE resource_access_bindings
        SET conversation_type_mask_override = $2
        WHERE id = $1
          AND workspace_id = $3`,
@@ -3014,7 +3013,7 @@ export async function revokeInstalledSkillAccess(input: {
     );
 
     await executeSqlOn(client, 
-      `UPDATE access_bindings
+      `UPDATE resource_access_bindings
        SET status = 'revoked',
            revoked_at = NOW()
        WHERE id = $1`,
@@ -3441,9 +3440,11 @@ export async function uninstallInstalledSkill(
          id,
          workspace_id,
          resource_type,
-         resource_id,
+         installed_skill_id,
+         plugin_installation_id,
+         relay_capability_id,
+         installed_skill_id::text AS resource_id,
          target_type,
-         relation,
          subject_workspace_id,
          subject_workspace_member_id,
          subject_actor_id,
@@ -3456,9 +3457,8 @@ export async function uninstallInstalledSkill(
          metadata,
          created_at,
          revoked_at
-       FROM access_bindings
-       WHERE resource_type = 'installed_skill'
-         AND resource_id = $1`,
+       FROM resource_access_bindings
+       WHERE installed_skill_id = $1::uuid`,
       [installedSkillId],
     );
 
@@ -3477,6 +3477,7 @@ export async function uninstallInstalledSkill(
         operation: "delete",
       }),
       ...bindings.rows
+        .map((binding) => normalizeAccessBindingRow(binding))
         .filter((binding) => binding.status === "active")
         .flatMap((binding) =>
           buildResourceAccessAuthzMutations({
@@ -3489,9 +3490,8 @@ export async function uninstallInstalledSkill(
     ];
 
     await executeSqlOn(client, 
-      `DELETE FROM access_bindings
-       WHERE resource_type = 'installed_skill'
-         AND resource_id = $1`,
+      `DELETE FROM resource_access_bindings
+       WHERE installed_skill_id = $1::uuid`,
       [installedSkillId],
     );
 
@@ -3579,18 +3579,15 @@ function visibleRowToAccessRow(
 ): SkillAccessRow {
   const publicScope = resolvePublicUseScope(row.access_bind_scope);
   const relation =
-    publicScope === "workspace"
-      ? "use_workspace"
-      : publicScope === "actor"
-        ? "use_actor"
-        : publicScope === "conversation"
-          ? "use_conversation"
-          : "use_actor_in_conversation";
+    relationForAccessTargetType(publicScope);
 
   return {
     id: row.access_binding_id,
     workspace_id: workspaceId,
-    resource_type: "installed_skill",
+    ...buildResourceAccessBindingRef({
+      resourceType: "installed_skill",
+      resourceId: row.skill_id,
+    }),
     resource_id: row.skill_id,
     target_type: publicScope,
     relation,

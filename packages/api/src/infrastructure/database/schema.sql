@@ -15,8 +15,9 @@ CREATE TYPE workspace_invites_trust_level AS ENUM ('admin', 'member', 'guest');
 CREATE TYPE conversations_kind AS ENUM ('group', 'private', 'virtual');
 CREATE TYPE conversations_boundary AS ENUM ('internal', 'external');
 CREATE TYPE files_category AS ENUM ('general', 'chat_attachment', 'plugin_output', 'plugin_asset');
-CREATE TYPE access_bindings_status AS ENUM ('active', 'revoked');
-CREATE TYPE access_bindings_target_type AS ENUM ('workspace', 'conversation', 'actor', 'actor_in_conversation');
+CREATE TYPE resource_access_bindings_status AS ENUM ('active', 'revoked');
+CREATE TYPE resource_access_bindings_target_type AS ENUM ('workspace', 'conversation', 'actor', 'actor_in_conversation');
+CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'plugin_installation', 'relay_capability');
 CREATE TYPE authz_outbox_operation AS ENUM ('touch', 'delete');
 CREATE TYPE authz_outbox_status AS ENUM ('pending', 'processing', 'applied', 'failed');
 CREATE TYPE realtime_event_outbox_status AS ENUM ('pending', 'processing', 'dispatched', 'failed');
@@ -358,71 +359,6 @@ ALTER TABLE users
   FOREIGN KEY (avatar_file_id) REFERENCES files(id) ON DELETE SET NULL;
 
 -- ============ Access Core ============
-CREATE TABLE access_bindings (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  resource_type VARCHAR(60) NOT NULL,
-  resource_id TEXT NOT NULL,
-  target_type access_bindings_target_type NOT NULL,
-  relation VARCHAR(60) NOT NULL,
-  subject_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  subject_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  subject_actor_id UUID,
-  subject_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  subject_conversation_actor_context_id UUID,
-  conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
-  granted_permissions TEXT[] NOT NULL DEFAULT '{}',
-  status access_bindings_status NOT NULL DEFAULT 'active',
-  created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  reason TEXT,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ,
-  CONSTRAINT chk_access_bindings_target CHECK (
-    (target_type = 'workspace' AND subject_workspace_id IS NOT NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL) OR
-    (target_type = 'conversation' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NOT NULL AND subject_conversation_actor_context_id IS NULL) OR
-    (target_type = 'actor' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NOT NULL AND subject_conversation_id IS NULL) OR
-    (target_type = 'actor_in_conversation' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL AND subject_conversation_actor_context_id IS NOT NULL)
-  )
-);
-
-CREATE UNIQUE INDEX uq_access_bindings_active
-  ON access_bindings(
-    resource_type,
-    resource_id,
-    relation,
-    target_type,
-    COALESCE(subject_workspace_id::text, ''),
-    COALESCE(subject_workspace_member_id::text, ''),
-    COALESCE(subject_actor_id::text, ''),
-    COALESCE(subject_conversation_id::text, ''),
-    COALESCE(subject_conversation_actor_context_id::text, '')
-  )
-  WHERE status = 'active';
-CREATE INDEX idx_access_bindings_workspace ON access_bindings(workspace_id, created_at DESC);
-CREATE INDEX idx_access_bindings_resource ON access_bindings(resource_type, resource_id, created_at DESC);
-CREATE INDEX idx_access_bindings_subject_lookup
-  ON access_bindings(
-    target_type,
-    subject_workspace_id,
-    subject_workspace_member_id,
-    subject_actor_id,
-    subject_conversation_id,
-    subject_conversation_actor_context_id,
-    created_at DESC
-  );
-CREATE INDEX idx_access_bindings_target_lookup
-  ON access_bindings(
-    target_type,
-    subject_conversation_actor_context_id,
-    subject_conversation_id,
-    subject_actor_id,
-    subject_workspace_member_id,
-    subject_workspace_id,
-    created_at DESC
-  );
-
 CREATE TABLE authz_outbox (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   operation authz_outbox_operation NOT NULL,
@@ -726,10 +662,6 @@ CREATE TABLE actors (
 
 CREATE INDEX idx_actors_workspace ON actors(workspace_id, created_at DESC);
 CREATE INDEX idx_actors_parent ON actors(parent_id);
-
-ALTER TABLE access_bindings
-  ADD CONSTRAINT access_bindings_subject_actor_id_fkey
-  FOREIGN KEY (subject_actor_id) REFERENCES actors(id) ON DELETE CASCADE;
 
 CREATE TABLE workspace_relationship_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1108,12 +1040,6 @@ CREATE INDEX idx_conversation_actor_contexts_conversation
   ON conversation_actor_contexts(conversation_id, created_at DESC);
 CREATE INDEX idx_conversation_actor_contexts_actor
   ON conversation_actor_contexts(actor_id, created_at DESC);
-
-ALTER TABLE access_bindings
-  ADD CONSTRAINT access_bindings_subject_conversation_actor_context_id_fkey
-  FOREIGN KEY (subject_conversation_actor_context_id)
-  REFERENCES conversation_actor_contexts(id)
-  ON DELETE CASCADE;
 
 CREATE TABLE conversation_members (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2611,6 +2537,89 @@ CREATE TABLE relay_capabilities (
 );
 
 CREATE INDEX idx_relay_capabilities_workspace ON relay_capabilities(workspace_id, created_at DESC);
+
+-- Keep resource access bindings here so every resource and subject foreign key
+-- can be declared inline instead of being patched in later.
+CREATE TABLE resource_access_bindings (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  resource_type resource_access_binding_resource_type NOT NULL,
+  installed_skill_id UUID REFERENCES installed_skills(id) ON DELETE CASCADE,
+  plugin_installation_id UUID REFERENCES plugin_installations(id) ON DELETE CASCADE,
+  relay_capability_id UUID REFERENCES relay_capabilities(id) ON DELETE CASCADE,
+  target_type resource_access_bindings_target_type NOT NULL,
+  subject_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  subject_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
+  subject_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  subject_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  subject_conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
+  conversation_type_mask_override INT
+    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
+  granted_permissions TEXT[] NOT NULL DEFAULT '{}',
+  status resource_access_bindings_status NOT NULL DEFAULT 'active',
+  created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
+  reason TEXT,
+  metadata JSONB DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  revoked_at TIMESTAMPTZ,
+  CONSTRAINT chk_resource_access_bindings_resource CHECK (
+    (resource_type = 'installed_skill' AND installed_skill_id IS NOT NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL) OR
+    (resource_type = 'plugin_installation' AND installed_skill_id IS NULL AND plugin_installation_id IS NOT NULL AND relay_capability_id IS NULL) OR
+    (resource_type = 'relay_capability' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NOT NULL)
+  ),
+  CONSTRAINT chk_resource_access_bindings_target CHECK (
+    (target_type = 'workspace' AND subject_workspace_id IS NOT NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL) OR
+    (target_type = 'conversation' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NOT NULL AND subject_conversation_actor_context_id IS NULL) OR
+    (target_type = 'actor' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NOT NULL AND subject_conversation_id IS NULL) OR
+    (target_type = 'actor_in_conversation' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL AND subject_conversation_actor_context_id IS NOT NULL)
+  )
+);
+
+CREATE UNIQUE INDEX uq_resource_access_bindings_active
+  ON resource_access_bindings(
+    resource_type,
+    COALESCE(installed_skill_id::text, ''),
+    COALESCE(plugin_installation_id::text, ''),
+    COALESCE(relay_capability_id::text, ''),
+    target_type,
+    COALESCE(subject_workspace_id::text, ''),
+    COALESCE(subject_workspace_member_id::text, ''),
+    COALESCE(subject_actor_id::text, ''),
+    COALESCE(subject_conversation_id::text, ''),
+    COALESCE(subject_conversation_actor_context_id::text, '')
+  )
+  WHERE status = 'active';
+CREATE INDEX idx_resource_access_bindings_workspace
+  ON resource_access_bindings(workspace_id, created_at DESC);
+CREATE INDEX idx_resource_access_bindings_installed_skill
+  ON resource_access_bindings(installed_skill_id, created_at DESC)
+  WHERE installed_skill_id IS NOT NULL;
+CREATE INDEX idx_resource_access_bindings_plugin_installation
+  ON resource_access_bindings(plugin_installation_id, created_at DESC)
+  WHERE plugin_installation_id IS NOT NULL;
+CREATE INDEX idx_resource_access_bindings_relay_capability
+  ON resource_access_bindings(relay_capability_id, created_at DESC)
+  WHERE relay_capability_id IS NOT NULL;
+CREATE INDEX idx_resource_access_bindings_subject_lookup
+  ON resource_access_bindings(
+    target_type,
+    subject_workspace_id,
+    subject_workspace_member_id,
+    subject_actor_id,
+    subject_conversation_id,
+    subject_conversation_actor_context_id,
+    created_at DESC
+  );
+CREATE INDEX idx_resource_access_bindings_target_lookup
+  ON resource_access_bindings(
+    target_type,
+    subject_conversation_actor_context_id,
+    subject_conversation_id,
+    subject_actor_id,
+    subject_workspace_member_id,
+    subject_workspace_id,
+    created_at DESC
+  );
 
 CREATE TABLE relay_catalog_revisions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

@@ -4086,16 +4086,11 @@ export type PluginReuseScopeV2 =
   | "conversation"
   | "actor";
 export type AccessBindingStatus = "active" | "revoked";
-export type AccessResourceType =
-  | "workspace"
-  | "conversation"
-  | "workspace_in_conversation"
-  | "actor"
+export type ResourceAccessBindingResourceType =
   | "installed_skill"
   | "plugin_installation"
-  | "relay_device"
-  | "relay_exposure"
   | "relay_capability";
+export type AccessResourceType = ResourceAccessBindingResourceType;
 export type AccessSubjectType =
   | "platform"
   | "workspace"

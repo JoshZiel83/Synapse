@@ -5,10 +5,6 @@
 
 import type { ColumnType } from "kysely";
 
-export type AccessBindingsStatus = "active" | "revoked";
-
-export type AccessBindingsTargetType = "actor" | "actor_in_conversation" | "conversation" | "workspace";
-
 export type ActorAccessPolicy = "approval_required" | "workspace_open";
 
 export type ActorSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
@@ -261,6 +257,12 @@ export type RelaySyncSourcesSyncMode = "follow" | "snapshot";
 
 export type RelayToolsStatus = "active" | "removed";
 
+export type ResourceAccessBindingResourceType = "installed_skill" | "plugin_installation" | "relay_capability";
+
+export type ResourceAccessBindingsStatus = "active" | "revoked";
+
+export type ResourceAccessBindingsTargetType = "actor" | "actor_in_conversation" | "conversation" | "workspace";
+
 export type RuntimeEventsLevel = "debug" | "error" | "info" | "warn";
 
 export type RuntimeEventsSource = "a2a" | "conversation" | "provider" | "relay" | "system" | "tool";
@@ -344,28 +346,6 @@ export type WorkspaceAccessBindingsAccessKey = "actor_admin" | "conversation_adm
 export type WorkspaceInvitesTrustLevel = "admin" | "guest" | "member";
 
 export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
-
-export interface AccessBindings {
-  conversation_type_mask_override: number | null;
-  created_at: Generated<Timestamp | null>;
-  created_by_workspace_member_id: string | null;
-  granted_permissions: Generated<string[]>;
-  id: Generated<string>;
-  metadata: Generated<Json | null>;
-  reason: string | null;
-  relation: string;
-  resource_id: string;
-  resource_type: string;
-  revoked_at: Timestamp | null;
-  status: Generated<AccessBindingsStatus>;
-  subject_actor_id: string | null;
-  subject_conversation_actor_context_id: string | null;
-  subject_conversation_id: string | null;
-  subject_workspace_id: string | null;
-  subject_workspace_member_id: string | null;
-  target_type: AccessBindingsTargetType;
-  workspace_id: string | null;
-}
 
 export interface ActorAccessRequests {
   actor_id: string;
@@ -1653,6 +1633,29 @@ export interface RelayTools {
   updated_at: Generated<Timestamp | null>;
 }
 
+export interface ResourceAccessBindings {
+  conversation_type_mask_override: number | null;
+  created_at: Generated<Timestamp | null>;
+  created_by_workspace_member_id: string | null;
+  granted_permissions: Generated<string[]>;
+  id: Generated<string>;
+  installed_skill_id: string | null;
+  metadata: Generated<Json | null>;
+  plugin_installation_id: string | null;
+  reason: string | null;
+  relay_capability_id: string | null;
+  resource_type: ResourceAccessBindingResourceType;
+  revoked_at: Timestamp | null;
+  status: Generated<ResourceAccessBindingsStatus>;
+  subject_actor_id: string | null;
+  subject_conversation_actor_context_id: string | null;
+  subject_conversation_id: string | null;
+  subject_workspace_id: string | null;
+  subject_workspace_member_id: string | null;
+  target_type: ResourceAccessBindingsTargetType;
+  workspace_id: string;
+}
+
 export interface RuntimeEvents {
   actor_id: string | null;
   conversation_id: string | null;
@@ -2149,7 +2152,6 @@ export interface Workspaces {
 }
 
 export interface DB {
-  access_bindings: AccessBindings;
   actor_access_requests: ActorAccessRequests;
   actor_model_group_assignments: ActorModelGroupAssignments;
   actor_source_refs: ActorSourceRefs;
@@ -2237,6 +2239,7 @@ export interface DB {
   relay_sync_sources: RelaySyncSources;
   relay_tool_revisions: RelayToolRevisions;
   relay_tools: RelayTools;
+  resource_access_bindings: ResourceAccessBindings;
   runtime_events: RuntimeEvents;
   runtime_grants: RuntimeGrants;
   schema_migrations: SchemaMigrations;
