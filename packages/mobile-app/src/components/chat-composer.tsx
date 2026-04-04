@@ -14,6 +14,7 @@ import {
   ActivityIndicator,
   Alert,
   Modal,
+  Platform,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -35,6 +36,7 @@ import {
   type ChatDraftMention,
 } from "@/lib/chat-compose";
 import { subscribeMentionSelection } from "@/lib/chat-mention-selection";
+import { buildChatFilePreviewHref } from "@/lib/chat-rich-content";
 import {
   buildReplyPreviewText,
   getEntityDisplayName,
@@ -236,11 +238,13 @@ function AttachmentListSheet({
   attachments,
   onClose,
   onRemove,
+  onPreview,
 }: {
   open: boolean;
   attachments: LocalAttachment[];
   onClose: () => void;
   onRemove: (attachmentId: string) => void;
+  onPreview: (attachment: LocalAttachment) => void;
 }) {
   const insets = useSafeAreaInsets();
 
@@ -271,11 +275,15 @@ function AttachmentListSheet({
               <AttachmentRow
                 key={attachment.id}
                 attachment={attachment}
+                onPress={() => onPreview(attachment)}
                 accessory={
                   <Pressable
                     accessibilityRole="button"
                     accessibilityLabel={`移除 ${attachment.name}`}
-                    onPress={() => onRemove(attachment.id)}
+                    onPress={(event) => {
+                      event.stopPropagation();
+                      onRemove(attachment.id);
+                    }}
                     style={styles.attachmentRowClose}
                   >
                     <Feather name="x" size={16} color={theme.colors.textMuted} />
@@ -759,6 +767,46 @@ export function ChatComposer({
     }
   }
 
+  function openAttachmentPreview(attachment: LocalAttachment) {
+    const previewCategory =
+      attachment.file?.contentKind ??
+      (attachment.kind === "file" ? "document" : attachment.kind);
+    const previewName = attachment.file?.originalName ?? attachment.name;
+    const previewMimeType = attachment.file?.mimeType ?? attachment.mimeType;
+
+    if (attachment.file?.url) {
+      router.push(
+        buildChatFilePreviewHref({
+          uri: attachment.file.url,
+          mimeType: previewMimeType,
+          name: previewName,
+          category: previewCategory,
+          source: "remote",
+        }),
+      );
+      return;
+    }
+
+    if (!attachment.localUri) {
+      return;
+    }
+
+    if (attachment.kind === "file" && Platform.OS !== "web") {
+      Alert.alert("文件上传完成后可预览", "文档类附件会在上传成功后打开预览。");
+      return;
+    }
+
+    router.push(
+      buildChatFilePreviewHref({
+        uri: attachment.localUri,
+        mimeType: previewMimeType,
+        name: previewName,
+        category: previewCategory,
+        source: "local",
+      }),
+    );
+  }
+
   const sendDisabled =
     disabled ||
     sending ||
@@ -799,7 +847,7 @@ export function ChatComposer({
                   setMenuVisible(false);
                   setAttachmentSheetOpen(true);
                 }
-              : undefined
+              : () => openAttachmentPreview(primaryAttachment)
           }
           accessory={
             attachments.length > 1 ? (
@@ -817,7 +865,10 @@ export function ChatComposer({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={`移除 ${primaryAttachment.name}`}
-                onPress={() => removeAttachment(primaryAttachment.id)}
+                onPress={(event) => {
+                  event.stopPropagation();
+                  removeAttachment(primaryAttachment.id);
+                }}
                 style={styles.attachmentRowClose}
               >
                 <Feather name="x" size={16} color={theme.colors.textMuted} />
@@ -946,6 +997,7 @@ export function ChatComposer({
         attachments={attachments}
         onClose={() => setAttachmentSheetOpen(false)}
         onRemove={removeAttachment}
+        onPreview={openAttachmentPreview}
       />
     </View>
   );

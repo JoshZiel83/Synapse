@@ -1,7 +1,6 @@
 import Feather from "@expo/vector-icons/Feather";
 import { Image } from "expo-image";
-import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
-import { useVideoPlayer, VideoView } from "expo-video";
+import { useRouter } from "expo-router";
 import {
   Pressable,
   StyleSheet,
@@ -10,7 +9,13 @@ import {
   type GestureResponderEvent,
 } from "react-native";
 
+import { ChatMarkdown } from "@/components/chat-markdown";
 import { Avatar } from "@/components/ui";
+import {
+  buildChatFilePreviewHref,
+  getAttachmentLabel,
+  serializeMarkdownBlocks,
+} from "@/lib/chat-rich-content";
 import { useAuthenticatedMediaSource } from "@/hooks/use-authenticated-media-source";
 import {
   buildReplyPreviewText,
@@ -21,7 +26,6 @@ import {
 import { theme } from "@/theme/tokens";
 import {
   extractText,
-  formatMentionText,
   summarizeConversationEvent,
 } from "@shared";
 
@@ -43,89 +47,13 @@ function isMine(item: MobileChatItem, viewerParticipantId?: string) {
   );
 }
 
-function AudioAttachment({ uri }: { uri: string }) {
-  const source = useAuthenticatedMediaSource(uri);
-
-  if (!source) {
-    return (
-      <View style={styles.audioChip}>
-        <Feather name="loader" size={18} color={theme.colors.primary} />
-        <Text style={styles.audioChipLabel}>加载语音...</Text>
-      </View>
-    );
-  }
-
-  return <ResolvedAudioAttachment source={source} />;
-}
-
-function ResolvedAudioAttachment({
-  source,
+function ImageAttachment({
+  uri,
+  onPress,
 }: {
-  source: NonNullable<ReturnType<typeof useAuthenticatedMediaSource>>;
+  uri: string;
+  onPress: () => void;
 }) {
-  const player = useAudioPlayer(source);
-  const status = useAudioPlayerStatus(player);
-
-  async function togglePlayback() {
-    if (status.playing) {
-      player.pause();
-      return;
-    }
-
-    if (
-      status.didJustFinish ||
-      (status.duration > 0 && status.currentTime >= status.duration - 0.1)
-    ) {
-      await player.seekTo(0);
-    }
-
-    player.play();
-  }
-
-  return (
-    <Pressable onPress={() => void togglePlayback()} style={styles.audioChip}>
-      <Feather
-        name={status.playing ? "pause-circle" : "play-circle"}
-        size={18}
-        color={theme.colors.primary}
-      />
-      <Text style={styles.audioChipLabel}>
-        {status.playing ? "暂停语音" : "播放语音"}
-      </Text>
-    </Pressable>
-  );
-}
-
-function VideoAttachment({ uri }: { uri: string }) {
-  const source = useAuthenticatedMediaSource(uri);
-  if (!source) {
-    return <View style={styles.videoAttachmentPlaceholder} />;
-  }
-
-  return <ResolvedVideoAttachment source={source} />;
-}
-
-function ResolvedVideoAttachment({
-  source,
-}: {
-  source: NonNullable<ReturnType<typeof useAuthenticatedMediaSource>>;
-}) {
-  const player = useVideoPlayer(source);
-
-  return (
-    <View style={styles.videoShell}>
-      <VideoView
-        player={player}
-        style={styles.videoAttachment}
-        nativeControls
-        contentFit="cover"
-        allowsFullscreen
-      />
-    </View>
-  );
-}
-
-function ImageAttachment({ uri }: { uri: string }) {
   const source = useAuthenticatedMediaSource(uri);
 
   if (!source) {
@@ -133,51 +61,95 @@ function ImageAttachment({ uri }: { uri: string }) {
   }
 
   return (
-    <Image
-      source={source}
-      style={styles.imageAttachment}
-      contentFit="cover"
-      transition={150}
-    />
+    <Pressable onPress={onPress}>
+      <Image
+        source={source}
+        style={styles.imageAttachment}
+        contentFit="cover"
+        transition={150}
+      />
+    </Pressable>
   );
 }
 
-function InlineMessageText({
-  item,
+function MarkdownMessage({
+  blocks,
   mine,
 }: {
-  item: MobileChatItem;
+  blocks: MobileChatItem["contentBlocks"];
   mine: boolean;
 }) {
-  const inlineBlocks = item.contentBlocks.filter((block) => block.type !== "file_ref");
-  if (inlineBlocks.length === 0) {
+  const markdown = serializeMarkdownBlocks(
+    blocks.filter((block) => block.type !== "file_ref"),
+  );
+
+  if (!markdown) {
     return null;
   }
 
   return (
-    <Text style={[styles.messageText, mine && styles.messageTextMine]}>
-      {inlineBlocks.map((block) => {
-        if (block.type === "text") {
-          return <Text key={block.id}>{block.text}</Text>;
-        }
+    <View style={styles.markdownWrap}>
+      <ChatMarkdown markdown={markdown} mine={mine} />
+    </View>
+  );
+}
 
-        if (block.type === "mention") {
-          return (
-            <Text
-              key={block.id}
-              style={[
-                styles.mentionText,
-                mine && styles.mentionTextMine,
-              ]}
-            >
-              {formatMentionText(block)}
-            </Text>
-          );
-        }
+function FileAttachmentCard({
+  category,
+  fileName,
+  mimeType,
+  mine,
+  onPress,
+}: {
+  category: "audio" | "video" | "document";
+  fileName: string;
+  mimeType: string;
+  mine: boolean;
+  onPress: () => void;
+}) {
+  const iconName =
+    category === "audio"
+      ? "mic"
+      : category === "video"
+        ? "video"
+        : "file-text";
 
-        return null;
-      })}
-    </Text>
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [
+        styles.fileCard,
+        mine && styles.fileCardMine,
+        pressed && styles.fileCardPressed,
+      ]}
+    >
+      <View style={[styles.fileCardIcon, mine && styles.fileCardIconMine]}>
+        <Feather
+          name={iconName}
+          size={18}
+          color={mine ? theme.colors.white : theme.colors.primary}
+        />
+      </View>
+      <View style={styles.fileCardBody}>
+        <Text
+          numberOfLines={1}
+          style={[styles.fileCardTitle, mine && styles.fileCardTitleMine]}
+        >
+          {fileName}
+        </Text>
+        <Text
+          numberOfLines={1}
+          style={[styles.fileCardMeta, mine && styles.fileCardMetaMine]}
+        >
+          {`${getAttachmentLabel(category)} · ${mimeType}`}
+        </Text>
+      </View>
+      <Feather
+        name="arrow-up-right"
+        size={16}
+        color={mine ? "rgba(255,255,255,0.78)" : theme.colors.textMuted}
+      />
+    </Pressable>
   );
 }
 
@@ -216,37 +188,78 @@ function MessageReplyPreview({
 function MessageBlocks({
   item,
   mine,
+  onOpenAttachment,
 }: {
   item: MobileChatItem;
   mine: boolean;
+  onOpenAttachment: (
+    uri: string,
+    mimeType: string,
+    name: string,
+    category: "image" | "video" | "audio" | "document",
+  ) => void;
 }) {
   const attachments = item.contentBlocks.filter((block) => block.type === "file_ref");
 
   return (
     <View style={styles.messageBody}>
-      <InlineMessageText item={item} mine={mine} />
+      <MarkdownMessage blocks={item.contentBlocks} mine={mine} />
       {attachments.map((block) => {
         if (block.type !== "file_ref") return null;
 
         if (block.category === "image") {
-          return <ImageAttachment key={block.id} uri={block.url} />;
-        }
-
-        if (block.category === "video") {
-          return <VideoAttachment key={block.id} uri={block.url} />;
+          return (
+            <ImageAttachment
+              key={block.id}
+              uri={block.url}
+              onPress={() =>
+                onOpenAttachment(
+                  block.url,
+                  block.mimeType,
+                  block.originalName,
+                  "image",
+                )
+              }
+            />
+          );
         }
 
         if (block.category === "audio") {
-          return <AudioAttachment key={block.id} uri={block.url} />;
+          return (
+            <FileAttachmentCard
+              key={block.id}
+              category="audio"
+              fileName={block.originalName}
+              mimeType={block.mimeType}
+              mine={mine}
+              onPress={() =>
+                onOpenAttachment(
+                  block.url,
+                  block.mimeType,
+                  block.originalName,
+                  "audio",
+                )
+              }
+            />
+          );
         }
 
         return (
-          <View key={block.id} style={styles.fileChip}>
-            <Feather name="file-text" size={16} color={theme.colors.textMuted} />
-            <Text numberOfLines={1} style={styles.fileChipLabel}>
-              {block.originalName}
-            </Text>
-          </View>
+          <FileAttachmentCard
+            key={block.id}
+            category={block.category === "video" ? "video" : "document"}
+            fileName={block.originalName}
+            mimeType={block.mimeType}
+            mine={mine}
+            onPress={() =>
+              onOpenAttachment(
+                block.url,
+                block.mimeType,
+                block.originalName,
+                block.category,
+              )
+            }
+          />
         );
       })}
     </View>
@@ -277,6 +290,7 @@ export function MessageItem({
   }
 
   const mine = isMine(item, viewerParticipantId);
+  const router = useRouter();
   const localDeliveryStatus = item.localDeliveryStatus;
   const author = item.author;
   const authorName = getEntityDisplayName(author);
@@ -291,7 +305,21 @@ export function MessageItem({
   );
   const bubbleNode = (
     <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
-      <MessageBlocks item={item} mine={mine} />
+      <MessageBlocks
+        item={item}
+        mine={mine}
+        onOpenAttachment={(uri, mimeType, name, category) =>
+          router.push(
+            buildChatFilePreviewHref({
+              uri,
+              mimeType,
+              name,
+              category,
+              source: "remote",
+            }),
+          )
+        }
+      />
     </View>
   );
   const messageNode = (
@@ -307,7 +335,11 @@ export function MessageItem({
       <View style={[styles.messageColumn, mine && styles.messageColumnMine]}>
         {!mine ? <Text style={styles.author}>{authorName}</Text> : null}
         {onLongPress ? (
-          <Pressable onLongPress={onLongPress} delayLongPress={240}>
+          <Pressable
+            onLongPress={onLongPress}
+            delayLongPress={240}
+            style={styles.longPressSurface}
+          >
             {messageNode}
           </Pressable>
         ) : (
@@ -349,6 +381,7 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: 10,
     alignItems: "flex-end",
+    minWidth: 0,
   },
   messageRowMine: {
     justifyContent: "flex-end",
@@ -358,14 +391,22 @@ const styles = StyleSheet.create({
   },
   messageColumn: {
     maxWidth: "82%",
+    minWidth: 0,
+    flexShrink: 1,
     gap: 5,
   },
   messageColumnMine: {
     alignItems: "flex-end",
   },
+  longPressSurface: {
+    minWidth: 0,
+    maxWidth: "100%",
+  },
   messageStack: {
     gap: 6,
     alignItems: "flex-start",
+    minWidth: 0,
+    maxWidth: "100%",
   },
   messageStackMine: {
     alignItems: "flex-end",
@@ -380,6 +421,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 14,
     paddingVertical: 12,
     gap: 8,
+    minWidth: 0,
+    maxWidth: "100%",
+    overflow: "hidden",
   },
   bubbleMine: {
     backgroundColor: theme.colors.primary,
@@ -391,6 +435,14 @@ const styles = StyleSheet.create({
   },
   messageBody: {
     gap: 10,
+    minWidth: 0,
+    maxWidth: "100%",
+  },
+  markdownWrap: {
+    width: "100%",
+    maxWidth: "100%",
+    minWidth: 0,
+    overflow: "hidden",
   },
   replyPreview: {
     maxWidth: 248,
@@ -436,22 +488,6 @@ const styles = StyleSheet.create({
   replyTextMine: {
     color: theme.colors.text,
   },
-  messageText: {
-    fontSize: 15,
-    lineHeight: 22,
-    color: theme.colors.text,
-  },
-  messageTextMine: {
-    color: theme.colors.white,
-  },
-  mentionText: {
-    color: theme.colors.primary,
-    fontWeight: "700",
-  },
-  mentionTextMine: {
-    color: theme.colors.white,
-    fontWeight: "800",
-  },
   timestamp: {
     fontSize: 11,
     color: theme.colors.textSoft,
@@ -482,53 +518,57 @@ const styles = StyleSheet.create({
     borderRadius: 18,
     backgroundColor: theme.colors.backgroundAlt,
   },
-  videoShell: {
+  fileCard: {
+    minWidth: 180,
+    maxWidth: 250,
     borderRadius: 18,
-    overflow: "hidden",
-  },
-  videoAttachment: {
-    width: 220,
-    height: 220,
-    backgroundColor: theme.colors.black,
-  },
-  videoAttachmentPlaceholder: {
-    width: 220,
-    height: 220,
-    borderRadius: 18,
-    backgroundColor: theme.colors.backgroundAlt,
-  },
-  audioChip: {
-    minWidth: 128,
-    borderRadius: theme.radii.pill,
-    backgroundColor: theme.colors.primarySoft,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-  },
-  audioChipLabel: {
-    fontSize: 13,
-    fontWeight: "700",
-    color: theme.colors.primary,
-  },
-  fileChip: {
-    minWidth: 148,
-    maxWidth: 220,
-    borderRadius: 16,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.backgroundAlt,
     paddingHorizontal: 12,
-    paddingVertical: 10,
+    paddingVertical: 12,
     flexDirection: "row",
     alignItems: "center",
-    gap: 8,
+    gap: 10,
   },
-  fileChipLabel: {
+  fileCardMine: {
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderColor: "rgba(255,255,255,0.18)",
+  },
+  fileCardPressed: {
+    opacity: 0.82,
+  },
+  fileCardIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.colors.primarySoft,
+  },
+  fileCardIconMine: {
+    backgroundColor: "rgba(255,255,255,0.16)",
+  },
+  fileCardBody: {
     flex: 1,
+    minWidth: 0,
+    gap: 2,
+  },
+  fileCardTitle: {
     fontSize: 13,
     lineHeight: 18,
     color: theme.colors.text,
+    fontWeight: "700",
+  },
+  fileCardTitleMine: {
+    color: theme.colors.white,
+  },
+  fileCardMeta: {
+    fontSize: 11,
+    lineHeight: 15,
+    color: theme.colors.textMuted,
+  },
+  fileCardMetaMine: {
+    color: "rgba(255,255,255,0.74)",
   },
 });

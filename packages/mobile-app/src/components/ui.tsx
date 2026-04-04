@@ -20,6 +20,7 @@ import {
 } from "react-native-safe-area-context";
 
 import { useAuthenticatedMediaSource } from "@/hooks/use-authenticated-media-source";
+import { getTwemojiUrl } from "@/lib/twemoji";
 import { theme } from "@/theme/tokens";
 
 export function ScreenScroll({
@@ -292,6 +293,7 @@ export function Avatar({
 }) {
   const fallback = (name || "?").slice(0, 1).toUpperCase();
   const source = useAuthenticatedMediaSource(uri);
+  const emojiSource = !source && !icon ? getTwemojiUrl(name) : null;
 
   return (
     <View
@@ -313,6 +315,16 @@ export function Avatar({
             borderRadius: size / 2,
           }}
           contentFit="cover"
+        />
+      ) : emojiSource ? (
+        <Image
+          source={{ uri: emojiSource }}
+          style={{
+            width: size,
+            height: size,
+            borderRadius: size / 2,
+          }}
+          contentFit="contain"
         />
       ) : icon ? (
         <Feather name={icon} size={size * 0.45} color={theme.colors.primary} />
