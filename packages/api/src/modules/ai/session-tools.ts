@@ -34,6 +34,11 @@ import {
   throwToolError,
 } from "./tool-errors.js";
 import { registerToolPlugin } from "./tool-plugins.js";
+import {
+  buildUserInteractionCandidatesFromEntries,
+  buildUserInteractionCandidatesFromRows,
+  type UserInteractionCandidate,
+} from "./session-tool-user-interactions.js";
 import { db } from "../../infrastructure/database/kysely.js";
 import { sql } from "kysely";
 import { getSession } from "../session/service.js";
@@ -101,13 +106,6 @@ type SendToCandidate = {
   name: string;
   label: string;
   aliases: string[];
-};
-
-type UserInteractionCandidate = {
-  participantId: string;
-  workspaceMemberId: string;
-  name: string;
-  label: string;
 };
 
 type ToolQuestionFieldInput = {
@@ -432,58 +430,6 @@ function buildSendToCandidates(
         aliases,
       });
     }
-  }
-
-  return candidates;
-}
-
-function buildUserInteractionCandidates(
-  participants: any[],
-): UserInteractionCandidate[] {
-  const candidates: UserInteractionCandidate[] = [];
-
-  for (const participant of participants) {
-    const state =
-      typeof participant.state === "string" &&
-      participant.state.trim().length > 0
-        ? participant.state
-        : "active";
-    if (state !== "active") continue;
-
-    const workspaceMemberId =
-      typeof participant.user_id === "string" &&
-      participant.user_id.trim().length > 0
-        ? participant.user_id
-        : typeof participant.workspaceMemberId === "string" &&
-            participant.workspaceMemberId.trim().length > 0
-          ? participant.workspaceMemberId
-          : participant.type === "workspace_member" &&
-              typeof participant.id === "string" &&
-              participant.id.trim().length > 0
-            ? participant.id
-            : null;
-    if (!workspaceMemberId) continue;
-
-    const participantId =
-      typeof participant.participantId === "string" &&
-      participant.participantId.trim().length > 0
-        ? participant.participantId
-        : typeof participant.id === "string" && participant.id.trim().length > 0
-          ? participant.id
-          : null;
-    if (!participantId) continue;
-
-    const name =
-      (typeof participant.user_name === "string" &&
-        participant.user_name.trim()) ||
-      (typeof participant.name === "string" && participant.name.trim()) ||
-      "User";
-    candidates.push({
-      participantId,
-      workspaceMemberId,
-      name,
-      label: `"${name}" (user)`,
-    });
   }
 
   return candidates;
@@ -1438,7 +1384,9 @@ export function registerCallableToolPlugins(): void {
       if (!getToolContextConversationId(ctx) || !conversationParticipants?.length) {
         return { active: false, definition: null as any };
       }
-      const candidates = buildUserInteractionCandidates(conversationParticipants);
+      const candidates = buildUserInteractionCandidatesFromEntries(
+        conversationParticipants,
+      );
       if (candidates.length === 0) {
         return { active: false, definition: null as any };
       }
@@ -1532,7 +1480,7 @@ export function registerCallableToolPlugins(): void {
         );
       }
 
-      const candidates = buildUserInteractionCandidates(allMembers);
+      const candidates = buildUserInteractionCandidatesFromRows(allMembers);
       if (candidates.length === 0) {
         throwToolError("There are no active user participants in this conversation");
       }
@@ -1730,7 +1678,9 @@ export function registerCallableToolPlugins(): void {
       if (!getToolContextConversationId(ctx) || !conversationParticipants?.length) {
         return { active: false, definition: null as any };
       }
-      const candidates = buildUserInteractionCandidates(conversationParticipants);
+      const candidates = buildUserInteractionCandidatesFromEntries(
+        conversationParticipants,
+      );
       if (candidates.length === 0) {
         return { active: false, definition: null as any };
       }
@@ -1818,7 +1768,7 @@ export function registerCallableToolPlugins(): void {
         );
       }
 
-      const candidates = buildUserInteractionCandidates(allMembers);
+      const candidates = buildUserInteractionCandidatesFromRows(allMembers);
       if (candidates.length === 0) {
         throwToolError("There are no active user participants in this conversation");
       }
@@ -1939,7 +1889,9 @@ export function registerCallableToolPlugins(): void {
       if (!getToolContextConversationId(ctx) || !conversationParticipants?.length) {
         return { active: false, definition: null as any };
       }
-      const candidates = buildUserInteractionCandidates(conversationParticipants);
+      const candidates = buildUserInteractionCandidatesFromEntries(
+        conversationParticipants,
+      );
       if (candidates.length === 0) {
         return { active: false, definition: null as any };
       }
@@ -2003,7 +1955,7 @@ export function registerCallableToolPlugins(): void {
         );
       }
 
-      const candidates = buildUserInteractionCandidates(allMembers);
+      const candidates = buildUserInteractionCandidatesFromRows(allMembers);
       if (candidates.length === 0) {
         throwToolError(
           "This conversation has no active user who could receive a runtime authorization request",
