@@ -7,6 +7,7 @@ import {
   type ToolResolveContext,
 } from '@synapse/shared';
 import { getToolErrorMessage, getToolErrorMetadata } from './tool-errors.js';
+import { isBuiltinToolAllowedInCollaborationMode } from './session-plan-mode.js';
 
 /**
  * Unified Built-in Tool Plugin Registry
@@ -33,6 +34,15 @@ export async function resolveBuiltinTools(
 ): Promise<ToolDefinition[]> {
   const tools: ToolDefinition[] = [];
   for (const plugin of registry.values()) {
+    if (
+      !isBuiltinToolAllowedInCollaborationMode(
+        plugin.name,
+        ctx.collaborationMode,
+        ctx.conversationKind,
+      )
+    ) {
+      continue;
+    }
     if (
       plugin.conversationTypeMask !== undefined &&
       !maskAllowsConversationType(

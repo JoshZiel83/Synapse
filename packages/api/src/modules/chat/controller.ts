@@ -4,6 +4,7 @@ import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { requireWorkspaceMemberIdentity } from "./workspace-identity.js";
 import {
   createChatConversation,
+  getConversationParticipant,
   getChatBootstrap,
   getChatConversationMessages,
   getChatSync,
@@ -12,8 +13,14 @@ import {
   sendChatConversationMessage,
   updateChatConversationReadWatermark,
 } from "./service.js";
+import {
+  canUserViewInteraction,
+  getInteractionRequestSummary,
+  resolveInteractionRequest,
+} from "../interactions/service.js";
 
 const CHAT_BASE_PATH = "/api/v1/workspaces/:workspaceId/chat";
+const CONVERSATION_BASE_PATH = "/api/v1/workspaces/:workspaceId/conversations";
 
 const jsonRecordSchema = z.record(z.any()).optional();
 
@@ -76,6 +83,20 @@ const readWatermarkSchema = z.object({
   readUpToSequence: z.number().int().min(0),
   lastVisibleSequence: z.number().int().min(0).optional(),
   clientInstanceId: z.string().uuid().optional(),
+});
+
+const interactionAnswerSchema = z.object({
+  questionId: z.string().trim().min(1),
+  selectedOptionIds: z.array(z.string().trim().min(1)).optional(),
+  otherText: z.string().trim().optional(),
+  text: z.string().trim().optional(),
+});
+
+const resolveInteractionSchema = z.object({
+  answers: z.array(interactionAnswerSchema).optional(),
+  decision: z.enum(["approve", "reject", "revise"]).optional(),
+  preset: z.enum(["once", "actor", "conversation", "workspace"]).optional(),
+  note: z.string().trim().optional(),
 });
 
 function getRequestUserId(request: any) {
@@ -253,6 +274,78 @@ export default async function chatController(app: FastifyInstance) {
         lastVisibleSequence: body.lastVisibleSequence,
       });
       return reply.send(response);
+    } catch (error) {
+      return replyChatError(reply, error);
+    }
+  });
+
+  app.post<{
+    Params: {
+      workspaceId: string;
+      conversationId: string;
+      interactionId: string;
+    };
+  }>(`${CONVERSATION_BASE_PATH}/:conversationId/interactions/:interactionId/respond`, async (request, reply) => {
+    try {
+      const body = resolveInteractionSchema.parse(request.body);
+      const workspaceMemberId = await resolveRequestWorkspaceMemberId(request, reply);
+      if (!workspaceMemberId) return;
+
+      const interaction = await getInteractionRequestSummary(
+        request.params.interactionId,
+      );
+      if (
+        !interaction ||
+        interaction.workspaceId !== request.params.workspaceId ||
+        interaction.conversationId !== request.params.conversationId
+      ) {
+        return reply.status(404).send({
+          error: "Interaction not found",
+          code: "interaction_not_found",
+        });
+      }
+
+      const canView = await canUserViewInteraction({
+        interactionId: interaction.id,
+        userId: getRequestUserId(request),
+      });
+      if (!canView) {
+        return reply.status(403).send({
+          error: "You cannot access this interaction",
+          code: "interaction_access_denied",
+        });
+      }
+
+      const resolverParticipant = await getConversationParticipant({
+        conversationId: request.params.conversationId,
+        workspaceMemberId,
+      });
+      if (!resolverParticipant?.id) {
+        return reply.status(403).send({
+          error: "You are not an active participant in this conversation",
+          code: "interaction_resolver_not_participant",
+        });
+      }
+
+      try {
+        const result = await resolveInteractionRequest({
+          interactionId: interaction.id,
+          resolverWorkspaceMemberId: workspaceMemberId,
+          resolverParticipantId: resolverParticipant.id,
+          answers: body.answers,
+          decision: body.decision,
+          preset: body.preset,
+          note: body.note,
+        });
+        return reply.send({ interaction: result.interaction });
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to resolve interaction";
+        return reply.status(400).send({
+          error: message,
+          code: "interaction_resolution_failed",
+        });
+      }
     } catch (error) {
       return replyChatError(reply, error);
     }

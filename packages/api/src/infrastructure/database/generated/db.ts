@@ -153,7 +153,7 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
 
-export type InteractionRequestsKind = "question_choice" | "runtime_authorization";
+export type InteractionRequestsKind = "plan_approval" | "runtime_authorization" | "user_input";
 
 export type InteractionRequestsStatus = "answered" | "approved" | "cancelled" | "expired" | "pending" | "rejected" | "superseded";
 
@@ -287,6 +287,8 @@ export type SessionInterruptsType = "priority_override" | "progress_check";
 
 export type SessionsChannelType = "api" | "bridge" | "web";
 
+export type SessionsCollaborationMode = "default" | "plan_drafting" | "plan_awaiting_approval";
+
 export type SessionsStatus = "blocked" | "closed" | "idle" | "queued" | "running";
 
 export type SessionWakeupsSourceParticipantType = "actor" | "external" | "system" | "workspace_member";
@@ -315,7 +317,7 @@ export type ToolCallTasksDeliveryPolicy = "human_interaction" | "online_only" | 
 
 export type ToolCallTasksDispatchStatus = "accepted" | "cancel_requested" | "dispatched" | "input_requested" | "queued" | "received" | "started";
 
-export type ToolCallTasksExecutorKind = "interaction_form" | "interaction_question" | "relay_mcp" | "runtime_authorization";
+export type ToolCallTasksExecutorKind = "interaction_user_input" | "plan_approval" | "relay_mcp" | "runtime_authorization";
 
 export type ToolCallTasksStatus = "cancelled" | "completed" | "failed" | "input_required" | "working";
 
@@ -1122,9 +1124,9 @@ export interface InstalledSkills {
   workspace_id: string;
 }
 
-export interface InteractionQuestionRequests {
+export interface InteractionPlanApprovalRequests {
   interaction_id: string;
-  prompt_payload: Generated<Json>;
+  plan_payload: Generated<Json>;
   resolution_payload: Generated<Json>;
 }
 
@@ -1135,15 +1137,11 @@ export interface InteractionRequests {
   expires_at: Timestamp | null;
   id: Generated<string>;
   kind: InteractionRequestsKind;
-  requester_actor_id: string | null;
-  requester_participant_id: string | null;
-  requester_workspace_member_id: string | null;
+  requester_participant_id: string;
   resolved_at: Timestamp | null;
   resolved_by_participant_id: string | null;
-  resolved_by_workspace_member_id: string | null;
   status: Generated<InteractionRequestsStatus>;
   target_participant_id: string | null;
-  target_workspace_member_id: string | null;
   task_id: string;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -1159,6 +1157,12 @@ export interface InteractionRuntimeAuthorizationRequests {
   relay_tool_stable_key: string;
   request_payload: Generated<Json>;
   requested_effect: Generated<Json>;
+  resolution_payload: Generated<Json>;
+}
+
+export interface InteractionUserInputRequests {
+  interaction_id: string;
+  prompt_payload: Generated<Json>;
   resolution_payload: Generated<Json>;
 }
 
@@ -1814,8 +1818,11 @@ export interface SessionInterrupts {
 }
 
 export interface Sessions {
+  active_plan_approval_interaction_id: string | null;
   actor_id: string;
   channel_type: Generated<SessionsChannelType>;
+  collaboration_mode: Generated<SessionsCollaborationMode>;
+  collaboration_state: Generated<Json>;
   completed_at: Timestamp | null;
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
@@ -2300,9 +2307,10 @@ export interface DB {
   file_parse_runs: FileParseRuns;
   files: Files;
   installed_skills: InstalledSkills;
-  interaction_question_requests: InteractionQuestionRequests;
+  interaction_plan_approval_requests: InteractionPlanApprovalRequests;
   interaction_requests: InteractionRequests;
   interaction_runtime_authorization_requests: InteractionRuntimeAuthorizationRequests;
+  interaction_user_input_requests: InteractionUserInputRequests;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_item_chunks: MemoryItemChunks;
   memory_item_parts: MemoryItemParts;

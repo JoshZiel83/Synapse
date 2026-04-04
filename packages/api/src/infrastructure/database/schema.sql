@@ -48,6 +48,7 @@ CREATE TYPE model_group_grants_grant_scope AS ENUM ('platform', 'workspace', 'wo
 CREATE TYPE model_group_grants_status AS ENUM ('active', 'revoked');
 CREATE TYPE sessions_channel_type AS ENUM ('web', 'api', 'bridge');
 CREATE TYPE sessions_status AS ENUM ('idle', 'queued', 'running', 'blocked', 'closed');
+CREATE TYPE sessions_collaboration_mode AS ENUM ('default', 'plan_drafting', 'plan_awaiting_approval');
 CREATE TYPE conversation_participants_kind AS ENUM ('workspace_member', 'actor', 'external', 'system');
 CREATE TYPE conversation_participants_state AS ENUM ('active', 'left', 'removed');
 CREATE TYPE chat_client_instances_status AS ENUM ('active', 'revoked');
@@ -81,7 +82,7 @@ CREATE TYPE provider_steps_request_type AS ENUM ('actor_think', 'ai_complete');
 CREATE TYPE provider_steps_status AS ENUM ('success', 'error', 'timeout');
 CREATE TYPE tool_calls_tool_kind AS ENUM ('builtin', 'callable', 'action', 'mcp_plugin', 'mcp_relay', 'provider_builtin', 'a2a_proxy');
 CREATE TYPE tool_calls_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
-CREATE TYPE tool_call_tasks_executor_kind AS ENUM ('interaction_question', 'interaction_form', 'runtime_authorization', 'relay_mcp');
+CREATE TYPE tool_call_tasks_executor_kind AS ENUM ('interaction_user_input', 'plan_approval', 'runtime_authorization', 'relay_mcp');
 CREATE TYPE tool_call_tasks_delivery_policy AS ENUM ('online_only', 'store_and_forward', 'human_interaction');
 CREATE TYPE tool_call_tasks_status AS ENUM ('working', 'input_required', 'completed', 'failed', 'cancelled');
 CREATE TYPE tool_call_tasks_dispatch_status AS ENUM ('accepted', 'queued', 'dispatched', 'received', 'started', 'input_requested', 'cancel_requested');
@@ -159,7 +160,7 @@ CREATE TYPE relay_capabilities_status AS ENUM ('active', 'unavailable', 'archive
 CREATE TYPE relay_operations_delivery_policy AS ENUM ('online_only', 'store_and_forward');
 CREATE TYPE relay_operations_status AS ENUM ('created', 'dispatched', 'received', 'started', 'cancel_requested', 'completed', 'failed', 'cancelled', 'aborted', 'expired');
 CREATE TYPE relay_operation_deliveries_status AS ENUM ('queued', 'sent', 'acked', 'nacked', 'timed_out', 'cancelled');
-CREATE TYPE interaction_requests_kind AS ENUM ('question_choice', 'runtime_authorization');
+CREATE TYPE interaction_requests_kind AS ENUM ('user_input', 'plan_approval', 'runtime_authorization');
 CREATE TYPE interaction_requests_status AS ENUM ('pending', 'answered', 'approved', 'rejected', 'cancelled', 'expired', 'superseded');
 CREATE TYPE runtime_grants_scope AS ENUM ('once', 'actor', 'conversation', 'workspace');
 CREATE TYPE runtime_grants_retention AS ENUM ('consume_once', 'until_revoked');
@@ -1054,11 +1055,26 @@ CREATE TABLE sessions (
   channel_type sessions_channel_type NOT NULL DEFAULT 'web',
   trigger VARCHAR(50) NOT NULL DEFAULT 'user_message',
   status sessions_status NOT NULL DEFAULT 'idle',
+  collaboration_mode sessions_collaboration_mode NOT NULL DEFAULT 'default',
+  -- FK is added later because sessions and interaction_requests participate
+  -- in a schema dependency cycle via conversation_items.
+  active_plan_approval_interaction_id UUID,
+  collaboration_state JSONB NOT NULL DEFAULT '{}',
   memory_bootstrap_completed BOOLEAN NOT NULL DEFAULT FALSE,
   error_message TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  completed_at TIMESTAMPTZ
+  completed_at TIMESTAMPTZ,
+  CONSTRAINT sessions_active_plan_approval_pointer_mode_chk CHECK (
+    (
+      collaboration_mode = 'plan_awaiting_approval'
+      AND active_plan_approval_interaction_id IS NOT NULL
+    )
+    OR (
+      collaboration_mode <> 'plan_awaiting_approval'
+      AND active_plan_approval_interaction_id IS NULL
+    )
+  )
 );
 
 CREATE INDEX idx_sessions_workspace ON sessions(workspace_id);
@@ -1067,6 +1083,9 @@ CREATE INDEX idx_sessions_actor_status ON sessions(actor_id, status);
 CREATE INDEX idx_sessions_conversation ON sessions(conversation_id);
 CREATE UNIQUE INDEX uq_sessions_conversation_actor
   ON sessions(conversation_id, actor_id);
+CREATE UNIQUE INDEX uq_sessions_active_plan_approval_interaction
+  ON sessions(active_plan_approval_interaction_id)
+  WHERE active_plan_approval_interaction_id IS NOT NULL;
 
 CREATE TABLE conversation_actor_contexts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2874,36 +2893,36 @@ CREATE TABLE interaction_requests (
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   task_id UUID NOT NULL REFERENCES tool_call_tasks(id) ON DELETE CASCADE,
   conversation_item_id UUID UNIQUE REFERENCES conversation_items(id) ON DELETE SET NULL,
-  requester_participant_id UUID REFERENCES conversation_participants(id) ON DELETE SET NULL,
-  requester_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  requester_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  requester_participant_id UUID NOT NULL REFERENCES conversation_participants(id) ON DELETE RESTRICT,
   kind interaction_requests_kind NOT NULL,
   status interaction_requests_status NOT NULL DEFAULT 'pending',
   target_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
-  target_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE RESTRICT,
-  resolved_by_participant_id UUID REFERENCES conversation_participants(id) ON DELETE SET NULL,
-  resolved_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
+  resolved_by_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
   resolved_at TIMESTAMPTZ,
   expires_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CONSTRAINT interaction_requests_target_requirement_chk CHECK (
     (
-      kind = 'question_choice'
+      kind IN ('user_input', 'plan_approval')
       AND target_participant_id IS NOT NULL
-      AND target_workspace_member_id IS NOT NULL
     )
     OR (
       kind = 'runtime_authorization'
       AND target_participant_id IS NULL
-      AND target_workspace_member_id IS NULL
     )
   )
 );
 
-CREATE TABLE interaction_question_requests (
+CREATE TABLE interaction_user_input_requests (
   interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE CASCADE,
   prompt_payload JSONB NOT NULL DEFAULT '{}',
+  resolution_payload JSONB NOT NULL DEFAULT '{}'
+);
+
+CREATE TABLE interaction_plan_approval_requests (
+  interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE CASCADE,
+  plan_payload JSONB NOT NULL DEFAULT '{}',
   resolution_payload JSONB NOT NULL DEFAULT '{}'
 );
 
@@ -2919,6 +2938,13 @@ CREATE TABLE interaction_runtime_authorization_requests (
   request_payload JSONB NOT NULL DEFAULT '{}',
   resolution_payload JSONB NOT NULL DEFAULT '{}'
 );
+
+-- This FK cannot be declared inline on sessions because interaction_requests
+-- depends on conversation_items, and conversation_items already depends on sessions.
+ALTER TABLE sessions ADD CONSTRAINT fk_sessions_active_plan_approval_interaction
+  FOREIGN KEY (active_plan_approval_interaction_id)
+  REFERENCES interaction_requests(id)
+  ON DELETE SET NULL;
 
 CREATE TABLE runtime_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2954,7 +2980,7 @@ CREATE INDEX idx_interaction_requests_conversation
 CREATE INDEX idx_interaction_requests_task
   ON interaction_requests(task_id);
 CREATE INDEX idx_interaction_requests_target
-  ON interaction_requests(target_workspace_member_id, status, created_at DESC);
+  ON interaction_requests(target_participant_id, status, created_at DESC);
 CREATE INDEX idx_interaction_runtime_authorization_requests_device
   ON interaction_runtime_authorization_requests(relay_device_id, interaction_id);
 CREATE INDEX idx_runtime_grants_exposure

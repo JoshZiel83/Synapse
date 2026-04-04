@@ -175,9 +175,14 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "branch checkpoints and recovery",
   },
   {
-    table: "interaction_question_requests",
+    table: "interaction_user_input_requests",
     requiredColumns: ["interaction_id", "prompt_payload", "resolution_payload"],
-    reason: "question interaction subtype storage",
+    reason: "user input interaction subtype storage",
+  },
+  {
+    table: "interaction_plan_approval_requests",
+    requiredColumns: ["interaction_id", "plan_payload", "resolution_payload"],
+    reason: "plan approval interaction subtype storage",
   },
   {
     table: "tool_call_tasks",
@@ -200,7 +205,13 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
   },
   {
     table: "interaction_requests",
-    requiredColumns: ["task_id", "conversation_id", "kind", "status"],
+    requiredColumns: [
+      "task_id",
+      "conversation_id",
+      "requester_participant_id",
+      "kind",
+      "status",
+    ],
     reason: "interaction requests linked to task governance",
   },
   {

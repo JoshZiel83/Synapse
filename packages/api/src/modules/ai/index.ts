@@ -31,6 +31,8 @@ import {
   textBlock,
   textBlocks,
 } from "@synapse/shared";
+import { isPlanCollaborationMode } from "@synapse/shared/utils";
+import type { SessionCollaborationMode } from "@synapse/shared/types";
 import { randomUUID } from "crypto";
 import { config } from "../../config/index.js";
 import {
@@ -79,6 +81,7 @@ import {
   logProviderStep,
   updateToolCallStatus,
 } from "../execution/service.js";
+import { getSession } from "../session/service.js";
 
 export { buildActorPrompt } from "./prompt-builder.js";
 
@@ -569,6 +572,7 @@ export async function actorThink(
   options?: {
     sessionId?: string;
     turnId?: string;
+    collaborationMode?: SessionCollaborationMode;
     conversationId?: string;
     conversationKind?: "private" | "group" | "virtual";
     conversationBoundary?: "internal" | "external";
@@ -591,10 +595,15 @@ export async function actorThink(
     mcpSetTurnId?: (turnId: string, round?: number) => void;
     system: string;
     checkNewMessages?: () => Promise<CanonicalContextItem[] | null>;
+    refreshCollaborationContext?: () => Promise<{
+      collaborationMode?: SessionCollaborationMode;
+      system?: string;
+    }>;
   },
 ): Promise<ThinkingResult> {
   const actorDefinition = actor.definition ?? actor;
-  const system = options?.system || "";
+  let currentSystem = options?.system || "";
+  let currentCollaborationMode = options?.collaborationMode || "default";
   let allTools: import("@synapse/shared").ToolDefinition[] = [];
   const effectiveModelPlan =
     modelPlan && modelPlan.candidates.length > 0
@@ -640,13 +649,13 @@ export async function actorThink(
       (config.ai.provider ? getDefaultModelEngineKind(config.ai.provider) : ''),
     model: resolved?.modelName || config.ai.model,
     round,
-    attempt: attempt || 1,
-    groupId: effectiveModelPlan.groupId,
-    groupName: effectiveModelPlan.groupName,
-    candidateProfileIds: effectiveModelPlan.candidates.map(
-      (candidate: ResolvedModelConfig) => candidate.profileId,
-    ),
-    system,
+      attempt: attempt || 1,
+      groupId: effectiveModelPlan.groupId,
+      groupName: effectiveModelPlan.groupName,
+      candidateProfileIds: effectiveModelPlan.candidates.map(
+        (candidate: ResolvedModelConfig) => candidate.profileId,
+      ),
+    system: currentSystem,
     contextWindow: allContextWindow,
     tools: allTools,
     builtinTools: resolved?.builtinTools || null,
@@ -654,7 +663,10 @@ export async function actorThink(
   });
 
   // MCP tools (already resolved and authorized by tool-resolver.ts)
-  let mcpToolDefs = options?.mcpTools || [];
+  const initialMcpToolDefs = options?.mcpTools || [];
+  let mcpToolDefs = isPlanCollaborationMode(currentCollaborationMode)
+    ? []
+    : initialMcpToolDefs;
   let mcpToolNames = new Set(mcpToolDefs.map((t) => t.name));
   let currentToolConversationParticipants = options?.conversationParticipants;
   const getThreadSemantics = () =>
@@ -670,6 +682,7 @@ export async function actorThink(
     sessionId: options?.sessionId || "",
     actorId: actor.id,
     workspaceId: workspaceId || "",
+    collaborationMode: currentCollaborationMode,
     conversationId: options?.conversationId,
     conversationKind: options?.conversationKind,
     conversationBoundary: options?.conversationBoundary,
@@ -685,6 +698,35 @@ export async function actorThink(
   const refreshBuiltinTools = async (): Promise<
     import("@synapse/shared").ToolDefinition[]
   > => {
+    if (options?.refreshCollaborationContext) {
+      const refreshed = await options.refreshCollaborationContext();
+      if (refreshed?.collaborationMode) {
+        currentCollaborationMode = refreshed.collaborationMode;
+      }
+      if (typeof refreshed?.system === "string") {
+        currentSystem = refreshed.system;
+      }
+    } else if (options?.sessionId) {
+      const refreshedSession = await getSession(options.sessionId).catch(
+        () => null,
+      );
+      if (refreshedSession?.collaborationMode) {
+        currentCollaborationMode = refreshedSession.collaborationMode;
+      }
+    }
+
+    if (isPlanCollaborationMode(currentCollaborationMode)) {
+      mcpToolDefs = [];
+      mcpToolNames = new Set();
+    } else if (
+      mcpToolDefs.length === 0 &&
+      initialMcpToolDefs.length > 0 &&
+      !options?.mcpRefresh
+    ) {
+      mcpToolDefs = initialMcpToolDefs;
+      mcpToolNames = new Set(mcpToolDefs.map((t) => t.name));
+    }
+
     currentToolConversationParticipants = await loadToolResolveConversationParticipants({
       conversationId: options?.conversationId,
       actorId: actor.id,
@@ -854,10 +896,14 @@ export async function actorThink(
             if (
               branchState &&
               branchKey &&
-              shouldRebuildBranchState(allContextWindow, branchState, system)
+              shouldRebuildBranchState(
+                allContextWindow,
+                branchState,
+                currentSystem,
+              )
             ) {
               const rebuiltBranchState = await provider.rebuildBranchState({
-                system,
+                system: currentSystem,
                 contextWindow: allContextWindow,
                 branchState,
                 tools: allTools,
@@ -877,7 +923,7 @@ export async function actorThink(
 
             const response = await withTimeout(
               provider.chat({
-                system,
+                system: currentSystem,
                 contextWindow: allContextWindow,
                 branchState,
                 tools: allTools,
@@ -1653,12 +1699,15 @@ export async function actorThink(
 
         // Otherwise continue to next round
         // Dynamic MCP tool refresh between rounds
-        if (options?.mcpRefresh) {
+        if (
+          !isPlanCollaborationMode(currentCollaborationMode) &&
+          options?.mcpRefresh
+        ) {
           if (mcpReplanRequired && onStatus) {
             await onStatus("MCP tools changed. Refreshing tool definitions...");
           }
-          let needsRefresh = mcpReplanRequired;
-          if (workspaceId) {
+            let needsRefresh = mcpReplanRequired;
+            if (workspaceId) {
             const latestVersion = await getMcpVersion(workspaceId);
             if (latestVersion !== currentMcpVersion) {
               needsRefresh = true;
@@ -1682,6 +1731,9 @@ export async function actorThink(
               }
             }
           }
+        } else if (isPlanCollaborationMode(currentCollaborationMode)) {
+          mcpToolDefs = [];
+          mcpToolNames = new Set();
         }
 
         builtinTools = await refreshBuiltinTools();

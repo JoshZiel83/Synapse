@@ -187,9 +187,19 @@ export const CONVERSATION_GRANT_PERMISSIONS = [
   'manage_members',
   'attach_resources',
 ] as const;
+export const INTERACTION_REQUEST_KIND = {
+  USER_INPUT: 'user_input',
+  PLAN_APPROVAL: 'plan_approval',
+  RUNTIME_AUTHORIZATION: 'runtime_authorization',
+} as const;
 export const INTERACTION_REQUEST_KINDS = [
-  'question_choice',
-  'runtime_authorization',
+  INTERACTION_REQUEST_KIND.USER_INPUT,
+  INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
+  INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
+] as const;
+export const TARGETED_INTERACTION_REQUEST_KINDS = [
+  INTERACTION_REQUEST_KIND.USER_INPUT,
+  INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
 ] as const;
 export const INTERACTION_REQUEST_STATUSES = [
   'pending',
@@ -200,12 +210,13 @@ export const INTERACTION_REQUEST_STATUSES = [
   'expired',
   'superseded',
 ] as const;
-export const INTERACTION_QUESTION_FIELD_TYPES = [
+export const INTERACTION_INPUT_QUESTION_TYPES = [
   'single_select',
   'multi_select',
   'text',
 ] as const;
 export const INTERACTION_DECISIONS = ['approve', 'reject'] as const;
+export const PLAN_APPROVAL_DECISIONS = ['approve', 'revise'] as const;
 export const MODEL_GROUP_ROUTING_STRATEGIES = [
   'weighted_random',
   'round_robin',
@@ -274,6 +285,16 @@ export const MEMORY_RECALL_TYPES = ['bootstrap', 'turn_recall', 'manual_search']
 export const SESSION_STATUSES = ['idle', 'queued', 'running', 'blocked', 'closed'] as const;
 export const SESSION_CHANNELS = ['web', 'api', 'bridge'] as const;
 export const SESSION_CHANNEL_INPUTS = ['web', 'im', 'api'] as const;
+export const SESSION_COLLABORATION_MODES = [
+  'default',
+  'plan_drafting',
+  'plan_awaiting_approval',
+] as const;
+export const PLAN_CHECKLIST_STEP_STATUSES = [
+  'pending',
+  'in_progress',
+  'completed',
+] as const;
 export const SESSION_TRIGGERS = [
   'user_message',
   'group_message',

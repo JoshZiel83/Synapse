@@ -5,7 +5,7 @@ import {
   describeAutomationDelivery,
   describeAutomationPolicy,
   describeAutomationTrigger,
-  INTERACTION_QUESTION_FIELD_TYPES,
+  INTERACTION_INPUT_QUESTION_TYPES,
   isGroupConversationKind,
   isThreadConversationKind,
   normalizeActorDocs,
@@ -23,8 +23,10 @@ import type {
   CapabilityInvocationContext,
   ConversationParticipantEntry,
   ConversationEntityRef,
-  InteractionQuestionFieldDefinition,
-  InteractionQuestionFieldType,
+  InteractionInputOption,
+  InteractionInputQuestionDefinition,
+  InteractionInputQuestionType,
+  PlanChecklistStep,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestMode,
   RuntimeGrantEffect,
@@ -35,13 +37,29 @@ import {
 } from "./tool-errors.js";
 import { registerToolPlugin } from "./tool-plugins.js";
 import {
+  buildEnterPlanModeToolDescription,
+  buildExitPlanModeToolDescription,
+  buildRequestUserInputToolDescription,
+  buildUpdatePlanToolDescription,
+} from "./session-tool-guidance.js";
+import {
+  assertPlanModeConversationKind,
+  canEnterPlanMode,
+  canExitPlanMode,
+  canUpdatePlan,
+} from "./session-plan-mode.js";
+import {
   buildUserInteractionCandidatesFromEntries,
   buildUserInteractionCandidatesFromRows,
   type UserInteractionCandidate,
 } from "./session-tool-user-interactions.js";
 import { db } from "../../infrastructure/database/kysely.js";
 import { sql } from "kysely";
-import { getSession } from "../session/service.js";
+import { getSession, updateSessionCollaboration } from "../session/service.js";
+import {
+  buildSessionPlanDraftState,
+  requireSessionPlanDraftState,
+} from "../session/collaboration-state.js";
 import {
   addConversationParticipants,
   listConversationParticipants,
@@ -70,8 +88,9 @@ import {
 } from "../tool-call-tasks/service.js";
 import {
   cancelInteractionRequestByTaskId,
-  createQuestionInteractionRequest,
+  createPlanApprovalInteractionRequest,
   createRuntimeAuthorizationInteractionRequest,
+  createUserInputInteractionRequest,
   findOpenRuntimeAuthorizationInteraction,
   getInteractionRequestSummaryByTaskId,
   getInteractionRequestSummary,
@@ -108,25 +127,32 @@ type SendToCandidate = {
   aliases: string[];
 };
 
-type ToolQuestionFieldInput = {
+type ToolUserInputOptionInput = {
   id?: string;
-  type?: string;
   label?: string;
   description?: string;
+  preview?: string;
+};
+
+type ToolUserInputQuestionInput = {
+  id?: string;
+  header?: string;
+  type?: string;
+  prompt?: string;
+  description?: string;
   required?: boolean;
-  options?: string[];
+  options?: Array<string | ToolUserInputOptionInput>;
   allowOther?: boolean;
-  otherLabel?: string;
-  otherPlaceholder?: string;
   placeholder?: string;
   minSelections?: number;
   maxSelections?: number;
+  secret?: boolean;
 };
 
 const sendToIntentSchema = z.enum(SEND_TO_INTENTS);
-const questionFieldTypeOptions = [...INTERACTION_QUESTION_FIELD_TYPES];
-const selectableQuestionFieldTypeOptions = questionFieldTypeOptions.filter(
-  (value): value is Exclude<(typeof INTERACTION_QUESTION_FIELD_TYPES)[number], "text"> =>
+const userInputQuestionTypeOptions = [...INTERACTION_INPUT_QUESTION_TYPES];
+const selectableQuestionFieldTypeOptions = userInputQuestionTypeOptions.filter(
+  (value): value is Exclude<(typeof INTERACTION_INPUT_QUESTION_TYPES)[number], "text"> =>
     value !== "text",
 );
 const sendToInputSchema = z
@@ -458,11 +484,102 @@ function resolveUserInteractionCandidate(
   };
 }
 
+function resolveHumanInteractionTarget(params: {
+  requestedParticipantId?: string;
+  conversationKind?: string;
+  candidates: UserInteractionCandidate[];
+}) {
+  const requestedParticipantId = params.requestedParticipantId?.trim() || "";
+  const isPrivateConversation =
+    params.conversationKind === "private" && params.candidates.length === 1;
+
+  if (isPrivateConversation) {
+    const implicitCandidate = params.candidates[0] || null;
+    if (!implicitCandidate) {
+      return {
+        candidate: null,
+        error: "There is no active user participant available.",
+      };
+    }
+    if (
+      requestedParticipantId &&
+      requestedParticipantId !== implicitCandidate.participantId
+    ) {
+      return {
+        candidate: null,
+        error: `targetParticipantId must be omitted or set to ${implicitCandidate.participantId} in a private conversation.`,
+      };
+    }
+    return { candidate: implicitCandidate, error: null };
+  }
+
+  if (!requestedParticipantId) {
+    return {
+      candidate: null,
+      error: "targetParticipantId is required in this conversation.",
+    };
+  }
+
+  return resolveUserInteractionCandidate(
+    requestedParticipantId,
+    params.candidates,
+  );
+}
+
+function parsePlanChecklist(rawPlan: unknown): {
+  checklist: PlanChecklistStep[];
+  error?: string;
+} {
+  if (!Array.isArray(rawPlan)) {
+    return { checklist: [], error: "plan must be an array." };
+  }
+
+  const checklist: PlanChecklistStep[] = [];
+  for (const [index, rawItem] of rawPlan.entries()) {
+    if (!rawItem || typeof rawItem !== "object") {
+      return {
+        checklist: [],
+        error: `plan item ${index + 1} is invalid.`,
+      };
+    }
+    const step =
+      typeof (rawItem as { step?: unknown }).step === "string"
+        ? (rawItem as { step: string }).step.trim()
+        : "";
+    const status =
+      typeof (rawItem as { status?: unknown }).status === "string"
+        ? (rawItem as { status: string }).status.trim()
+        : "";
+    if (!step) {
+      return {
+        checklist: [],
+        error: `plan item ${index + 1} is missing step.`,
+      };
+    }
+    if (
+      status !== "pending" &&
+      status !== "in_progress" &&
+      status !== "completed"
+    ) {
+      return {
+        checklist: [],
+        error: `plan item ${index + 1} has invalid status.`,
+      };
+    }
+    checklist.push({
+      step,
+      status: status as PlanChecklistStep["status"],
+    });
+  }
+
+  return { checklist };
+}
+
 async function createGovernedToolCallTask(params: {
   context: NonNullable<ReturnType<typeof getToolExecutionContext>>;
   executorKind:
-    | "interaction_question"
-    | "interaction_form"
+    | "interaction_user_input"
+    | "plan_approval"
     | "runtime_authorization";
   deliveryPolicy: "human_interaction";
   requestPayload: Record<string, unknown>;
@@ -767,9 +884,9 @@ async function waitForRuntimeAuthorizationResolution(params: {
   };
 }
 
-function normalizeQuestionFieldType(
+function normalizeUserInputQuestionType(
   value: unknown,
-): InteractionQuestionFieldType | null {
+): InteractionInputQuestionType | null {
   if (typeof value !== "string") return null;
   switch (value.trim().toLowerCase()) {
     case "single_select":
@@ -789,85 +906,119 @@ function normalizeQuestionFieldType(
   }
 }
 
-function buildQuestionFieldDefinition(
-  rawField: ToolQuestionFieldInput,
+function buildUserInputOptionDefinitions(
+  questionId: string,
+  rawOptions: ToolUserInputQuestionInput["options"],
+): InteractionInputOption[] {
+  const options: InteractionInputOption[] = [];
+  const usedIds = new Set<string>();
+
+  for (const [index, rawOption] of (rawOptions || []).entries()) {
+    if (typeof rawOption === "string") {
+      const label = rawOption.trim();
+      if (!label) continue;
+      const id = `${questionId}_option_${index + 1}`;
+      usedIds.add(id);
+      options.push({ id, label });
+      continue;
+    }
+    if (!rawOption || typeof rawOption !== "object") continue;
+    const label =
+      typeof rawOption.label === "string" ? rawOption.label.trim() : "";
+    if (!label) continue;
+    let id =
+      typeof rawOption.id === "string" ? rawOption.id.trim() : "";
+    if (!id || usedIds.has(id)) {
+      id = `${questionId}_option_${index + 1}`;
+    }
+    usedIds.add(id);
+    options.push({
+      id,
+      label,
+      description:
+        typeof rawOption.description === "string"
+          ? rawOption.description.trim() || undefined
+          : undefined,
+      preview:
+        typeof rawOption.preview === "string"
+          ? rawOption.preview.trim() || undefined
+          : undefined,
+    });
+  }
+
+  return options;
+}
+
+function buildUserInputQuestionDefinition(
+  rawQuestion: ToolUserInputQuestionInput,
   fallbackIndex: number,
-): { field: InteractionQuestionFieldDefinition | null; error?: string } {
-  const label = String(rawField.label || "").trim();
-  if (!label) {
+): { question: InteractionInputQuestionDefinition | null; error?: string } {
+  const prompt = String(rawQuestion.prompt || "").trim();
+  if (!prompt) {
     return {
-      field: null,
-      error: `Field ${fallbackIndex + 1} is missing a label.`,
+      question: null,
+      error: `Question ${fallbackIndex + 1} is missing a prompt.`,
     };
   }
 
-  const normalizedType = normalizeQuestionFieldType(rawField.type);
+  const normalizedType = normalizeUserInputQuestionType(rawQuestion.type);
   const type =
     normalizedType ||
-    (Array.isArray(rawField.options) ? "single_select" : "text");
+    (Array.isArray(rawQuestion.options) ? "single_select" : "text");
   const id =
-    String(rawField.id || `field_${fallbackIndex + 1}`).trim() ||
-    `field_${fallbackIndex + 1}`;
-  const field: InteractionQuestionFieldDefinition = {
+    String(rawQuestion.id || `question_${fallbackIndex + 1}`).trim() ||
+    `question_${fallbackIndex + 1}`;
+  const question: InteractionInputQuestionDefinition = {
     id,
+    header:
+      typeof rawQuestion.header === "string"
+        ? rawQuestion.header.trim() || `Q${fallbackIndex + 1}`
+        : `Q${fallbackIndex + 1}`,
     type,
-    label,
+    prompt,
     description:
-      typeof rawField.description === "string"
-        ? rawField.description.trim() || undefined
+      typeof rawQuestion.description === "string"
+        ? rawQuestion.description.trim() || undefined
         : undefined,
-    required: rawField.required !== false,
+    required: rawQuestion.required !== false,
   };
 
   if (type === "text") {
-    field.placeholder =
-      typeof rawField.placeholder === "string"
-        ? rawField.placeholder.trim() || undefined
+    question.placeholder =
+      typeof rawQuestion.placeholder === "string"
+        ? rawQuestion.placeholder.trim() || undefined
         : undefined;
-    return { field };
+    question.secret = rawQuestion.secret === true;
+    return { question };
   }
 
-  const optionLabels = Array.from(
-    new Set(
-      (Array.isArray(rawField.options) ? rawField.options : [])
-        .map((value) => String(value || "").trim())
-        .filter((value) => value.length > 0),
-    ),
-  );
-  if (optionLabels.length === 0) {
-    return { field: null, error: `"${label}" requires at least one option.` };
+  const options = buildUserInputOptionDefinitions(id, rawQuestion.options);
+  if (options.length === 0) {
+    return {
+      question: null,
+      error: `"${prompt}" requires at least one option.`,
+    };
   }
 
-  field.options = optionLabels.map((optionLabel, optionIndex) => ({
-    id: `${id}_option_${optionIndex + 1}`,
-    label: optionLabel,
-  }));
-  field.allowOther = rawField.allowOther === true;
-  field.otherLabel =
-    typeof rawField.otherLabel === "string"
-      ? rawField.otherLabel.trim() || undefined
-      : undefined;
-  field.otherPlaceholder =
-    typeof rawField.otherPlaceholder === "string"
-      ? rawField.otherPlaceholder.trim() || undefined
-      : undefined;
+  question.options = options;
+  question.allowOther = rawQuestion.allowOther === true;
 
   if (type === "multi_select") {
     if (
-      typeof rawField.minSelections === "number" &&
-      Number.isFinite(rawField.minSelections)
+      typeof rawQuestion.minSelections === "number" &&
+      Number.isFinite(rawQuestion.minSelections)
     ) {
-      field.minSelections = Math.max(0, Math.trunc(rawField.minSelections));
+      question.minSelections = Math.max(0, Math.trunc(rawQuestion.minSelections));
     }
     if (
-      typeof rawField.maxSelections === "number" &&
-      Number.isFinite(rawField.maxSelections)
+      typeof rawQuestion.maxSelections === "number" &&
+      Number.isFinite(rawQuestion.maxSelections)
     ) {
-      field.maxSelections = Math.max(1, Math.trunc(rawField.maxSelections));
+      question.maxSelections = Math.max(1, Math.trunc(rawQuestion.maxSelections));
     }
   }
 
-  return { field };
+  return { question };
 }
 
 const taskStatusFilterValues = [
@@ -885,36 +1036,51 @@ const taskOutputStreamValues = [
   "system",
 ] as const;
 
-function buildQuestionFieldDefinitions(rawFields: unknown): {
-  fields: InteractionQuestionFieldDefinition[];
+function buildUserInputQuestionDefinitions(rawQuestions: unknown): {
+  questions: InteractionInputQuestionDefinition[];
   error?: string;
 } {
-  if (!Array.isArray(rawFields) || rawFields.length === 0) {
-    return { fields: [], error: "fields must contain at least one question." };
+  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
+    return {
+      questions: [],
+      error: "questions must contain at least one question.",
+    };
+  }
+  if (rawQuestions.length > 4) {
+    return {
+      questions: [],
+      error: "questions supports at most 4 items.",
+    };
   }
 
-  const fields: InteractionQuestionFieldDefinition[] = [];
+  const questions: InteractionInputQuestionDefinition[] = [];
   const usedIds = new Set<string>();
 
-  for (const [index, rawField] of rawFields.entries()) {
-    if (!rawField || typeof rawField !== "object") {
-      return { fields: [], error: `Field ${index + 1} is invalid.` };
+  for (const [index, rawQuestion] of rawQuestions.entries()) {
+    if (!rawQuestion || typeof rawQuestion !== "object") {
+      return { questions: [], error: `Question ${index + 1} is invalid.` };
     }
-    const { field, error } = buildQuestionFieldDefinition(
-      rawField as ToolQuestionFieldInput,
+    const { question, error } = buildUserInputQuestionDefinition(
+      rawQuestion as ToolUserInputQuestionInput,
       index,
     );
-    if (!field) {
-      return { fields: [], error: error || `Field ${index + 1} is invalid.` };
+    if (!question) {
+      return {
+        questions: [],
+        error: error || `Question ${index + 1} is invalid.`,
+      };
     }
-    if (usedIds.has(field.id)) {
-      return { fields: [], error: `Field id "${field.id}" is duplicated.` };
+    if (usedIds.has(question.id)) {
+      return {
+        questions: [],
+        error: `Question id "${question.id}" is duplicated.`,
+      };
     }
-    usedIds.add(field.id);
-    fields.push(field);
+    usedIds.add(question.id);
+    questions.push(question);
   }
 
-  return { fields };
+  return { questions };
 }
 
 async function listInviteableActors(params: {
@@ -1318,359 +1484,71 @@ export function registerCallableToolPlugins(): void {
   });
 
   registerToolPlugin({
-    name: "ask_user_question",
+    name: "request_user_input",
     kind: "callable",
     definition: {
-      name: "ask_user_question",
-      description:
-        "Ask one specific user in the current conversation a structured question. Supports single-select, multi-select, and an optional other input. Only that targeted user will be able to answer it.",
+      name: "request_user_input",
+      description: buildRequestUserInputToolDescription({ kind: "generic" }),
       parameters: {
         type: "object",
         properties: {
           targetParticipantId: {
             type: "string",
             description:
-              "The exact conversation participant ID of the target user in the current conversation.",
-          },
-          question: {
-            type: "string",
-            description: "The question to ask.",
-          },
-          instructions: {
-            type: "string",
-            description: "Optional short instructions or context for the user.",
-          },
-          options: {
-            type: "array",
-            description: "One or more answer choices shown to the user.",
-            items: { type: "string" },
-          },
-          selectionMode: {
-            type: "string",
-            description:
-              "Whether the user may pick one option or multiple options.",
-            enum: [...selectableQuestionFieldTypeOptions],
-          },
-          allowOther: {
-            type: "boolean",
-            description:
-              'Whether to allow a free-text "other" response in addition to the listed options.',
-          },
-          otherLabel: {
-            type: "string",
-            description: 'Optional label for the free-text "other" response.',
-          },
-          otherPlaceholder: {
-            type: "string",
-            description:
-              'Optional placeholder for the free-text "other" response.',
-          },
-          minSelections: {
-            type: "number",
-            description:
-              "Minimum number of selections when selectionMode is multi_select.",
-          },
-          maxSelections: {
-            type: "number",
-            description:
-              "Maximum number of selections when selectionMode is multi_select.",
-          },
-        },
-        required: ["targetParticipantId", "question", "options"],
-      },
-    },
-    resolve: (ctx) => {
-      const conversationParticipants = getToolContextConversationParticipants(ctx);
-      if (!getToolContextConversationId(ctx) || !conversationParticipants?.length) {
-        return { active: false, definition: null as any };
-      }
-      const candidates = buildUserInteractionCandidatesFromEntries(
-        conversationParticipants,
-      );
-      if (candidates.length === 0) {
-        return { active: false, definition: null as any };
-      }
-      const candidateDirectory = buildUserInteractionDirectory(candidates);
-      return {
-        active: true,
-        definition: {
-          name: "ask_user_question",
-          description: `Ask exactly one user in this conversation a structured question. Supports single-select, multi-select, and optional other input. Only the targeted user can answer it. Available targetParticipantId values: ${candidateDirectory}.`,
-          parameters: {
-            type: "object",
-            properties: {
-              targetParticipantId: {
-                type: "string",
-                description:
-                  "The exact conversation participant ID of the target user in the current conversation.",
-                enum: candidates.map((candidate) => candidate.participantId),
-              },
-              question: {
-                type: "string",
-                description: "The question to ask.",
-              },
-              instructions: {
-                type: "string",
-                description:
-                  "Optional short instructions or context for the user.",
-              },
-              options: {
-                type: "array",
-                description: "One or more answer choices shown to the user.",
-                items: { type: "string" },
-              },
-              selectionMode: {
-                type: "string",
-                description:
-                  "Whether the user may pick one option or multiple options.",
-                enum: [...selectableQuestionFieldTypeOptions],
-              },
-              allowOther: {
-                type: "boolean",
-                description: 'Whether to allow a free-text "other" response.',
-              },
-              otherLabel: {
-                type: "string",
-                description:
-                  'Optional label for the free-text "other" response.',
-              },
-              otherPlaceholder: {
-                type: "string",
-                description:
-                  'Optional placeholder for the free-text "other" response.',
-              },
-              minSelections: {
-                type: "number",
-                description:
-                  "Minimum number of selections when selectionMode is multi_select.",
-              },
-              maxSelections: {
-                type: "number",
-                description:
-                  "Maximum number of selections when selectionMode is multi_select.",
-              },
-            },
-            required: ["targetParticipantId", "question", "options"],
-          },
-        },
-      };
-    },
-    execute: async (input) => {
-      const context = getToolExecutionContext();
-      if (!context) {
-        throwToolError("No session context available");
-      }
-
-      const session = await getSession(context.sessionId);
-      const conversationId = getThreadConversationId(session);
-      if (!session || !conversationId) {
-        throwToolError(
-          "Current session is not attached to a thread conversation",
-        );
-      }
-
-      const allMembers = await listConversationParticipants(conversationId);
-      const requesterMember = allMembers.find(
-        (member) =>
-          member.actor_id === context.actorId && member.state === "active",
-      );
-      if (!requesterMember) {
-        throwToolError(
-          "Current actor is not an active participant of this conversation",
-        );
-      }
-
-      const candidates = buildUserInteractionCandidatesFromRows(allMembers);
-      if (candidates.length === 0) {
-        throwToolError("There are no active user participants in this conversation");
-      }
-
-      const targetParticipantId = String((input as any).targetParticipantId || "").trim();
-      const resolution = resolveUserInteractionCandidate(
-        targetParticipantId,
-        candidates,
-      );
-      if (!resolution.candidate) {
-        throwToolError(resolution.error || "Target user not found");
-      }
-
-      const question = String((input as any).question || "").trim();
-      if (!question) {
-        throwToolError("question is required");
-      }
-
-      const instructions =
-        typeof (input as any).instructions === "string"
-          ? String((input as any).instructions).trim()
-          : "";
-      const rawOptions = Array.isArray((input as any).options)
-        ? (input as any).options
-        : [];
-      const optionLabels: string[] = Array.from(
-        new Set(
-          rawOptions
-            .map((value: unknown) => String(value || "").trim())
-            .filter((value: string) => value.length > 0),
-        ),
-      );
-      if (optionLabels.length < 1) {
-        throwToolError("options must contain at least one non-empty choice");
-      }
-
-      const selectionMode =
-        normalizeQuestionFieldType((input as any).selectionMode) ||
-        "single_select";
-      if (selectionMode === "text") {
-        throwToolError(
-          "selectionMode must be single_select or multi_select",
-        );
-      }
-
-      const field: InteractionQuestionFieldDefinition = {
-        id: "field_1",
-        type: selectionMode,
-        label: question,
-        required: true,
-        options: optionLabels.map((label, index) => ({
-          id: `field_1_option_${index + 1}`,
-          label,
-        })),
-        allowOther: (input as any).allowOther === true,
-        otherLabel:
-          typeof (input as any).otherLabel === "string"
-            ? String((input as any).otherLabel).trim() || undefined
-            : undefined,
-        otherPlaceholder:
-          typeof (input as any).otherPlaceholder === "string"
-            ? String((input as any).otherPlaceholder).trim() || undefined
-            : undefined,
-      };
-
-      if (
-        selectionMode === "multi_select" &&
-        typeof (input as any).minSelections === "number" &&
-        Number.isFinite((input as any).minSelections)
-      ) {
-        field.minSelections = Math.max(
-          0,
-          Math.trunc(Number((input as any).minSelections)),
-        );
-      }
-      if (
-        selectionMode === "multi_select" &&
-        typeof (input as any).maxSelections === "number" &&
-        Number.isFinite((input as any).maxSelections)
-      ) {
-        field.maxSelections = Math.max(
-          1,
-          Math.trunc(Number((input as any).maxSelections)),
-        );
-      }
-
-      const task = await createGovernedToolCallTask({
-        context,
-        executorKind: "interaction_question",
-        deliveryPolicy: "human_interaction",
-        supportsCancel: true,
-        requestPayload: {
-          targetParticipantId: resolution.candidate.participantId,
-          targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
-          question,
-          instructions: instructions || undefined,
-          fields: [field],
-        },
-        summary: `Waiting for ${resolution.candidate.name} to answer "${question}".`,
-      });
-
-      let interaction;
-      try {
-        interaction = await createQuestionInteractionRequest({
-          workspaceId: context.workspaceId,
-          conversationId,
-          taskId: task.id,
-          requesterParticipantId: requesterMember.id,
-          requesterActorId: context.actorId,
-          requesterWorkspaceMemberId: context.workspaceMemberId,
-          targetParticipantId: resolution.candidate.participantId,
-          targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
-          prompt: question,
-          instructions: instructions || undefined,
-          fields: [field],
-        });
-      } catch (error) {
-        await cancelToolCallTask(task.id, {
-          summary: `Question request for ${resolution.candidate.name} failed before dispatch.`,
-          finalErrorPayload: {
-            message: error instanceof Error ? error.message : String(error),
-          },
-          notifyActor: false,
-        });
-        throw error;
-      }
-
-      return JSON.stringify({
-        success: true,
-        taskId: task.id,
-        interactionId: interaction.id,
-        targetMember: resolution.candidate.name,
-        message: `Question sent to ${resolution.candidate.name}. Only that participant can answer it.`,
-      });
-    },
-  });
-
-  registerToolPlugin({
-    name: "ask_user_form",
-    kind: "callable",
-    definition: {
-      name: "ask_user_form",
-      description:
-        "Ask one specific user in the current conversation a structured multi-question form. Supports single-select, multi-select, and text input fields. Only that targeted user can answer it.",
-      parameters: {
-        type: "object",
-        properties: {
-          targetParticipantId: {
-            type: "string",
-            description:
-              "The exact conversation participant ID of the target user in the current conversation.",
+              "Required in group conversations. Omit in a private conversation with one user.",
           },
           title: {
             type: "string",
-            description: "Short title or prompt shown at the top of the form.",
+            description: "Short title for the overall input request.",
           },
           instructions: {
             type: "string",
-            description: "Optional instructions or context for the whole form.",
+            description: "Optional short instructions for the user.",
           },
-          fields: {
+          questions: {
             type: "array",
-            description: "The questions or inputs shown to the user.",
+            description: "One to four questions shown to the user.",
             items: {
               type: "object",
               properties: {
                 id: { type: "string" },
+                header: { type: "string" },
                 type: {
                   type: "string",
-                  enum: [...questionFieldTypeOptions],
+                  enum: [...userInputQuestionTypeOptions],
                 },
-                label: { type: "string" },
+                prompt: { type: "string" },
                 description: { type: "string" },
                 required: { type: "boolean" },
                 options: {
                   type: "array",
-                  items: { type: "string" },
+                  items: {
+                    anyOf: [
+                      { type: "string" },
+                      {
+                        type: "object",
+                        properties: {
+                          id: { type: "string" },
+                          label: { type: "string" },
+                          description: { type: "string" },
+                          preview: { type: "string" },
+                        },
+                        required: ["label"],
+                      },
+                    ],
+                  },
                 },
                 allowOther: { type: "boolean" },
-                otherLabel: { type: "string" },
-                otherPlaceholder: { type: "string" },
                 placeholder: { type: "string" },
                 minSelections: { type: "number" },
                 maxSelections: { type: "number" },
+                secret: { type: "boolean" },
               },
-              required: ["type", "label"],
+              required: ["prompt"],
             } as any,
           },
         },
-        required: ["targetParticipantId", "title", "fields"],
+        required: ["title", "questions"],
       },
     },
     resolve: (ctx) => {
@@ -1684,61 +1562,88 @@ export function registerCallableToolPlugins(): void {
       if (candidates.length === 0) {
         return { active: false, definition: null as any };
       }
+      const isPrivateConversation =
+        getToolContextConversationKind(ctx) === "private" &&
+        candidates.length === 1;
       const candidateDirectory = buildUserInteractionDirectory(candidates);
       return {
         active: true,
         definition: {
-          name: "ask_user_form",
-          description: `Ask exactly one user in this conversation a structured form with one or more fields. Only the targeted user can answer it. Available targetParticipantId values: ${candidateDirectory}.`,
+          name: "request_user_input",
+          description: isPrivateConversation
+            ? buildRequestUserInputToolDescription({
+                kind: "private",
+                recipientLabel: candidates[0]!.label,
+              })
+            : buildRequestUserInputToolDescription({
+                kind: "group",
+                candidateDirectory,
+              }),
           parameters: {
             type: "object",
             properties: {
-              targetParticipantId: {
-                type: "string",
-                description:
-                  "The exact conversation participant ID of the target user in the current conversation.",
-                enum: candidates.map((candidate) => candidate.participantId),
-              },
+              ...(isPrivateConversation
+                ? {}
+                : {
+                    targetParticipantId: {
+                      type: "string",
+                      description:
+                        "The exact participant ID of the target user.",
+                      enum: candidates.map((candidate) => candidate.participantId),
+                    },
+                  }),
               title: {
                 type: "string",
-                description:
-                  "Short title or prompt shown at the top of the form.",
+                description: "Short title for the overall input request.",
               },
               instructions: {
                 type: "string",
-                description:
-                  "Optional instructions or context for the whole form.",
+                description: "Optional short instructions for the user.",
               },
-              fields: {
+              questions: {
                 type: "array",
-                description: "The questions or inputs shown to the user.",
+                description: "One to four questions shown to the user.",
                 items: {
                   type: "object",
                   properties: {
                     id: { type: "string" },
+                    header: { type: "string" },
                     type: {
                       type: "string",
-                      enum: [...questionFieldTypeOptions],
+                      enum: [...userInputQuestionTypeOptions],
                     },
-                    label: { type: "string" },
+                    prompt: { type: "string" },
                     description: { type: "string" },
                     required: { type: "boolean" },
                     options: {
                       type: "array",
-                      items: { type: "string" },
+                      items: {
+                        anyOf: [
+                          { type: "string" },
+                          {
+                            type: "object",
+                            properties: {
+                              id: { type: "string" },
+                              label: { type: "string" },
+                              description: { type: "string" },
+                              preview: { type: "string" },
+                            },
+                            required: ["label"],
+                          },
+                        ],
+                      },
                     },
                     allowOther: { type: "boolean" },
-                    otherLabel: { type: "string" },
-                    otherPlaceholder: { type: "string" },
                     placeholder: { type: "string" },
                     minSelections: { type: "number" },
                     maxSelections: { type: "number" },
+                    secret: { type: "boolean" },
                   },
-                  required: ["type", "label"],
+                  required: ["prompt"],
                 } as any,
               },
             },
-            required: ["targetParticipantId", "title", "fields"],
+            required: ["title", "questions"],
           },
         },
       };
@@ -1773,11 +1678,14 @@ export function registerCallableToolPlugins(): void {
         throwToolError("There are no active user participants in this conversation");
       }
 
-      const targetParticipantId = String((input as any).targetParticipantId || "").trim();
-      const resolution = resolveUserInteractionCandidate(
-        targetParticipantId,
+      const resolution = resolveHumanInteractionTarget({
+        requestedParticipantId:
+          typeof (input as any).targetParticipantId === "string"
+            ? String((input as any).targetParticipantId)
+            : undefined,
+        conversationKind: session.conversation_kind,
         candidates,
-      );
+      });
       if (!resolution.candidate) {
         throwToolError(resolution.error || "Target user not found");
       }
@@ -1792,8 +1700,8 @@ export function registerCallableToolPlugins(): void {
           ? String((input as any).instructions).trim()
           : "";
 
-      const { fields, error } = buildQuestionFieldDefinitions(
-        (input as any).fields,
+      const { questions, error } = buildUserInputQuestionDefinitions(
+        (input as any).questions,
       );
       if (error) {
         throwToolError(error);
@@ -1801,37 +1709,33 @@ export function registerCallableToolPlugins(): void {
 
       const task = await createGovernedToolCallTask({
         context,
-        executorKind: "interaction_form",
+        executorKind: "interaction_user_input",
         deliveryPolicy: "human_interaction",
         supportsCancel: true,
         requestPayload: {
           targetParticipantId: resolution.candidate.participantId,
-          targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
           title,
           instructions: instructions || undefined,
-          fields,
+          questions,
         },
         summary: `Waiting for ${resolution.candidate.name} to complete "${title}".`,
       });
 
       let interaction;
       try {
-        interaction = await createQuestionInteractionRequest({
+        interaction = await createUserInputInteractionRequest({
           workspaceId: context.workspaceId,
           conversationId,
           taskId: task.id,
           requesterParticipantId: requesterMember.id,
-          requesterActorId: context.actorId,
-          requesterWorkspaceMemberId: context.workspaceMemberId,
           targetParticipantId: resolution.candidate.participantId,
-          targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
-          prompt: title,
+          title,
           instructions: instructions || undefined,
-          fields,
+          questions,
         });
       } catch (error) {
         await cancelToolCallTask(task.id, {
-          summary: `Form request for ${resolution.candidate.name} failed before dispatch.`,
+          summary: `Input request for ${resolution.candidate.name} failed before dispatch.`,
           finalErrorPayload: {
             message: error instanceof Error ? error.message : String(error),
           },
@@ -1845,7 +1749,465 @@ export function registerCallableToolPlugins(): void {
         taskId: task.id,
         interactionId: interaction.id,
         targetMember: resolution.candidate.name,
-        message: `Form sent to ${resolution.candidate.name}. Only that participant can answer it.`,
+        message: `Input request sent to ${resolution.candidate.name}. Only that participant can answer it.`,
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: "enter_plan_mode",
+    kind: "callable",
+    definition: {
+      name: "enter_plan_mode",
+      description: buildEnterPlanModeToolDescription(),
+      parameters: {
+        type: "object",
+        properties: {
+          summary: {
+            type: "string",
+            description:
+              "Optional short summary of what the plan will cover.",
+          },
+        },
+        required: [],
+      },
+    },
+    resolve: (ctx) => ({
+      active:
+        Boolean(getToolContextConversationId(ctx)) &&
+        canEnterPlanMode(
+          ctx.collaborationMode,
+          getToolContextConversationKind(ctx),
+        ),
+      definition: {
+        name: "enter_plan_mode",
+        description: buildEnterPlanModeToolDescription(),
+        parameters: {
+          type: "object",
+          properties: {
+            summary: {
+              type: "string",
+              description:
+                "Optional short summary of what the plan will cover.",
+            },
+          },
+          required: [],
+        },
+      },
+    }),
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        throwToolError("No session context available");
+      }
+
+      const session = await getSession(context.sessionId);
+      if (!session || !getThreadConversationId(session)) {
+        throwToolError(
+          "Current session is not attached to a thread conversation",
+        );
+      }
+      assertPlanModeConversationKind(session.conversation_kind);
+      if (session.collaborationMode !== "default") {
+        throwToolError(
+          "enter_plan_mode is only available when the session is in default mode.",
+        );
+      }
+
+      const summary =
+        typeof (input as any).summary === "string"
+          ? String((input as any).summary).trim() || undefined
+          : undefined;
+
+      await updateSessionCollaboration({
+        sessionId: context.sessionId,
+        collaborationMode: "plan_drafting",
+        collaborationState: {
+          planDraft: buildSessionPlanDraftState({
+            summary,
+            checklist: [],
+            enteredAt: new Date().toISOString(),
+          }),
+        },
+        activePlanApprovalInteractionId: null,
+      });
+
+      return JSON.stringify({
+        success: true,
+        collaborationMode: "plan_drafting",
+        message: "Plan mode enabled.",
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: "update_plan",
+    kind: "callable",
+    definition: {
+      name: "update_plan",
+      description: buildUpdatePlanToolDescription(),
+      parameters: {
+        type: "object",
+        properties: {
+          explanation: {
+            type: "string",
+            description: "Optional short explanation for the latest plan update.",
+          },
+          plan: {
+            type: "array",
+            description: "Checklist steps to store for the current plan.",
+            items: {
+              type: "object",
+              properties: {
+                step: { type: "string" },
+                status: {
+                  type: "string",
+                  enum: ["pending", "in_progress", "completed"],
+                },
+              },
+              required: ["step", "status"],
+            } as any,
+          },
+        },
+        required: ["plan"],
+      },
+    },
+    resolve: (ctx) => ({
+      active: canUpdatePlan(
+        ctx.collaborationMode,
+        getToolContextConversationKind(ctx),
+      ),
+      definition: {
+        name: "update_plan",
+        description: buildUpdatePlanToolDescription(),
+        parameters: {
+          type: "object",
+          properties: {
+            explanation: {
+              type: "string",
+              description: "Optional short explanation for the latest plan update.",
+            },
+            plan: {
+              type: "array",
+              description: "Checklist steps to store for the current plan.",
+              items: {
+                type: "object",
+                properties: {
+                  step: { type: "string" },
+                  status: {
+                    type: "string",
+                    enum: ["pending", "in_progress", "completed"],
+                  },
+                },
+                required: ["step", "status"],
+              } as any,
+            },
+          },
+          required: ["plan"],
+        },
+      },
+    }),
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        throwToolError("No session context available");
+      }
+
+      const session = await getSession(context.sessionId);
+      if (!session) {
+        throwToolError("Session not found");
+      }
+      assertPlanModeConversationKind(session.conversation_kind);
+      if (session.collaborationMode !== "plan_drafting") {
+        throwToolError("update_plan is only available while drafting a plan.");
+      }
+
+      const { checklist, error } = parsePlanChecklist((input as any).plan);
+      if (error) {
+        throwToolError(error);
+      }
+      const explanation =
+        typeof (input as any).explanation === "string"
+          ? String((input as any).explanation).trim() || undefined
+          : undefined;
+      const existingDraft = requireSessionPlanDraftState(session);
+
+      await updateSessionCollaboration({
+        sessionId: context.sessionId,
+        collaborationState: {
+          planDraft: buildSessionPlanDraftState({
+            summary: existingDraft.summary,
+            checklist,
+            explanation,
+            enteredAt: existingDraft.enteredAt,
+          }),
+        },
+      });
+
+      return JSON.stringify({
+        success: true,
+        collaborationMode: "plan_drafting",
+        checklist,
+      });
+    },
+  });
+
+  registerToolPlugin({
+    name: "exit_plan_mode",
+    kind: "callable",
+    definition: {
+      name: "exit_plan_mode",
+      description: buildExitPlanModeToolDescription({ kind: "generic" }),
+      parameters: {
+        type: "object",
+        properties: {
+          targetParticipantId: {
+            type: "string",
+            description:
+              "Required in group conversations. Omit in a private conversation with one user.",
+          },
+          title: {
+            type: "string",
+            description: "Short title shown on the approval card.",
+          },
+          summary: {
+            type: "string",
+            description: "Optional one-line plan summary.",
+          },
+          planMarkdown: {
+            type: "string",
+            description: "The plan content to approve, in Markdown.",
+          },
+          checklist: {
+            type: "array",
+            description:
+              "Optional checklist snapshot. Omit to reuse the current plan checklist from update_plan.",
+            items: {
+              type: "object",
+              properties: {
+                step: { type: "string" },
+                status: {
+                  type: "string",
+                  enum: ["pending", "in_progress", "completed"],
+                },
+              },
+              required: ["step", "status"],
+            } as any,
+          },
+        },
+        required: ["title", "planMarkdown"],
+      },
+    },
+    resolve: (ctx) => {
+      const conversationParticipants = getToolContextConversationParticipants(ctx);
+      if (
+        !canExitPlanMode(
+          ctx.collaborationMode,
+          getToolContextConversationKind(ctx),
+        ) ||
+        !getToolContextConversationId(ctx) ||
+        !conversationParticipants?.length
+      ) {
+        return { active: false, definition: null as any };
+      }
+      const candidates = buildUserInteractionCandidatesFromEntries(
+        conversationParticipants,
+      );
+      if (candidates.length === 0) {
+        return { active: false, definition: null as any };
+      }
+      const isPrivateConversation =
+        getToolContextConversationKind(ctx) === "private" &&
+        candidates.length === 1;
+      const candidateDirectory = buildUserInteractionDirectory(candidates);
+      return {
+        active: true,
+        definition: {
+          name: "exit_plan_mode",
+          description: isPrivateConversation
+            ? buildExitPlanModeToolDescription({
+                kind: "private",
+                recipientLabel: candidates[0]!.label,
+              })
+            : buildExitPlanModeToolDescription({
+                kind: "group",
+                candidateDirectory,
+              }),
+          parameters: {
+            type: "object",
+            properties: {
+              ...(isPrivateConversation
+                ? {}
+                : {
+                    targetParticipantId: {
+                      type: "string",
+                      description:
+                        "The exact participant ID of the target user.",
+                      enum: candidates.map((candidate) => candidate.participantId),
+                    },
+                  }),
+              title: {
+                type: "string",
+                description: "Short title shown on the approval card.",
+              },
+              summary: {
+                type: "string",
+                description: "Optional one-line plan summary.",
+              },
+              planMarkdown: {
+                type: "string",
+                description: "The plan content to approve, in Markdown.",
+              },
+              checklist: {
+                type: "array",
+                description:
+                  "Optional checklist snapshot. Omit to reuse the current plan checklist from update_plan.",
+                items: {
+                  type: "object",
+                  properties: {
+                    step: { type: "string" },
+                    status: {
+                      type: "string",
+                      enum: ["pending", "in_progress", "completed"],
+                    },
+                  },
+                  required: ["step", "status"],
+                } as any,
+              },
+            },
+            required: ["title", "planMarkdown"],
+          },
+        },
+      };
+    },
+    execute: async (input) => {
+      const context = getToolExecutionContext();
+      if (!context) {
+        throwToolError("No session context available");
+      }
+
+      const session = await getSession(context.sessionId);
+      const conversationId = getThreadConversationId(session);
+      if (!session || !conversationId) {
+        throwToolError(
+          "Current session is not attached to a thread conversation",
+        );
+      }
+      assertPlanModeConversationKind(session.conversation_kind);
+      if (session.collaborationMode !== "plan_drafting") {
+        throwToolError(
+          "exit_plan_mode is only available while drafting a plan.",
+        );
+      }
+
+      const allMembers = await listConversationParticipants(conversationId);
+      const requesterMember = allMembers.find(
+        (member) =>
+          member.actor_id === context.actorId && member.state === "active",
+      );
+      if (!requesterMember) {
+        throwToolError(
+          "Current actor is not an active participant of this conversation",
+        );
+      }
+
+      const candidates = buildUserInteractionCandidatesFromRows(allMembers);
+      if (candidates.length === 0) {
+        throwToolError("There are no active user participants in this conversation");
+      }
+
+      const resolution = resolveHumanInteractionTarget({
+        requestedParticipantId:
+          typeof (input as any).targetParticipantId === "string"
+            ? String((input as any).targetParticipantId)
+            : undefined,
+        conversationKind: session.conversation_kind,
+        candidates,
+      });
+      if (!resolution.candidate) {
+        throwToolError(resolution.error || "Target user not found");
+      }
+
+      const title = String((input as any).title || "").trim();
+      if (!title) {
+        throwToolError("title is required");
+      }
+      const summary =
+        typeof (input as any).summary === "string"
+          ? String((input as any).summary).trim() || undefined
+          : undefined;
+      const planMarkdown = String((input as any).planMarkdown || "").trim();
+      if (!planMarkdown) {
+        throwToolError("planMarkdown is required");
+      }
+
+      let checklist: PlanChecklistStep[] | undefined;
+      if (Array.isArray((input as any).checklist)) {
+        const parsed = parsePlanChecklist((input as any).checklist);
+        if (parsed.error) {
+          throwToolError(parsed.error);
+        }
+        checklist = parsed.checklist;
+      } else {
+        checklist = requireSessionPlanDraftState(session).checklist;
+      }
+      const existingDraft = requireSessionPlanDraftState(session);
+
+      const task = await createGovernedToolCallTask({
+        context,
+        executorKind: "plan_approval",
+        deliveryPolicy: "human_interaction",
+        supportsCancel: true,
+        requestPayload: {
+          targetParticipantId: resolution.candidate.participantId,
+          title,
+          summary,
+          planMarkdown,
+          checklist,
+        },
+        summary: `Waiting for ${resolution.candidate.name} to review "${title}".`,
+      });
+
+      let interaction;
+      try {
+        interaction = await createPlanApprovalInteractionRequest({
+          workspaceId: context.workspaceId,
+          conversationId,
+          sessionId: context.sessionId,
+          taskId: task.id,
+          requesterParticipantId: requesterMember.id,
+          targetParticipantId: resolution.candidate.participantId,
+          title,
+          summary,
+          planMarkdown,
+          checklist,
+          collaborationState: {
+            planDraft: buildSessionPlanDraftState({
+              summary: existingDraft.summary,
+              checklist: checklist || [],
+              explanation: existingDraft.explanation,
+              enteredAt: existingDraft.enteredAt,
+            }),
+          },
+        });
+      } catch (error) {
+        await cancelToolCallTask(task.id, {
+          summary: `Plan approval request for ${resolution.candidate.name} failed before dispatch.`,
+          finalErrorPayload: {
+            message: error instanceof Error ? error.message : String(error),
+          },
+          notifyActor: false,
+        });
+        throw error;
+      }
+
+      return JSON.stringify({
+        success: true,
+        taskId: task.id,
+        interactionId: interaction.id,
+        collaborationMode: "plan_awaiting_approval",
+        targetMember: resolution.candidate.name,
+        message: `Plan submitted to ${resolution.candidate.name} for approval.`,
       });
     },
   });
@@ -2109,8 +2471,6 @@ export function registerCallableToolPlugins(): void {
           conversationId,
           taskId: task.id,
           requesterParticipantId: requesterMember.id,
-          requesterActorId: context.actorId,
-          requesterWorkspaceMemberId: context.workspaceMemberId,
           relayCapabilityId: relayTarget.capabilityId,
           relayDeviceId: relayTarget.deviceId,
           relayExposureId: relayTarget.exposureId,
@@ -2272,8 +2632,8 @@ export function registerCallableToolPlugins(): void {
 
       const task = await loadSessionTaskOrThrow(context.sessionId, taskId);
       const interaction =
-        task.executorKind === "interaction_question" ||
-        task.executorKind === "interaction_form" ||
+        task.executorKind === "interaction_user_input" ||
+        task.executorKind === "plan_approval" ||
         task.executorKind === "runtime_authorization"
           ? await getInteractionRequestSummaryByTaskId(task.id)
           : null;
@@ -2347,8 +2707,8 @@ export function registerCallableToolPlugins(): void {
           : await cancelHumanInteractionTask(task, reason);
       const current = await loadSessionTaskOrThrow(context.sessionId, task.id);
       const interaction =
-        current.executorKind === "interaction_question" ||
-        current.executorKind === "interaction_form" ||
+        current.executorKind === "interaction_user_input" ||
+        current.executorKind === "plan_approval" ||
         current.executorKind === "runtime_authorization"
           ? await getInteractionRequestSummaryByTaskId(current.id)
           : null;

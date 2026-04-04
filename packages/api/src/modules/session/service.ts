@@ -10,6 +10,7 @@ import { pool } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import {
   db,
+  executeCompiledQuery,
   executeTakeFirst,
   type QueryExecutor,
 } from '../../infrastructure/database/kysely.js';
@@ -34,6 +35,10 @@ import type {
   CanonicalContentBlock,
   SessionMessage,
 } from '@synapse/shared';
+import type {
+  SessionCollaborationMode,
+  SessionCollaborationState,
+} from '@synapse/shared/types';
 import {
   type SessionInterruptType,
   type SessionStatus,
@@ -43,6 +48,7 @@ import {
   nowISO,
 } from '@synapse/shared';
 import { sql } from 'kysely';
+import { parseSessionCollaborationState } from './collaboration-state.js';
 
 type SessionConversationMessageRole =
   | 'user'
@@ -57,6 +63,29 @@ type SessionConversationMessageSubtype = Exclude<
 import { v4 as uuidv4 } from 'uuid';
 import type { SessionsChannelType } from '../../infrastructure/database/generated/db.js';
 
+function parseJsonObject(value: unknown): Record<string, unknown> {
+  if (!value) return {};
+  if (typeof value === 'string') {
+    try {
+      const parsed = JSON.parse(value);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new Error('collaboration_state must be a JSON object');
+      }
+      return parsed as Record<string, unknown>;
+    } catch (error) {
+      throw new Error(
+        `collaboration_state must be valid JSON: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+      );
+    }
+  }
+  if (typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('collaboration_state must be an object');
+  }
+  return value as Record<string, unknown>;
+}
+
 function normalizeSessionRow(row: any) {
   if (!row) return null;
   return {
@@ -65,6 +94,12 @@ function normalizeSessionRow(row: any) {
     conversationKind: row.conversation_kind,
     conversationBoundary: row.conversation_boundary,
     conversationTitle: row.conversation_title,
+    collaborationMode: row.collaboration_mode || 'default',
+    activePlanApprovalInteractionId:
+      row.active_plan_approval_interaction_id || undefined,
+    collaborationState: parseSessionCollaborationState(
+      parseJsonObject(row.collaboration_state),
+    ),
     isGroupConversation: isGroupConversationKind(row.conversation_kind),
     hasThreadContext: isThreadConversationKind(row.conversation_kind),
   };
@@ -492,6 +527,38 @@ export async function updateSessionStatus(
     })
     .where('id', '=', sessionId)
     .execute();
+}
+
+export async function updateSessionCollaboration(params: {
+  sessionId: UUID;
+  collaborationMode?: SessionCollaborationMode;
+  collaborationState?: SessionCollaborationState;
+  activePlanApprovalInteractionId?: UUID | null;
+}, queryable: QueryExecutor = pool): Promise<void> {
+  const values: Record<string, unknown> = {
+    updated_at: sql`NOW()`,
+  };
+
+  if (params.collaborationMode) {
+    values.collaboration_mode = params.collaborationMode;
+  }
+  if (params.collaborationState) {
+    values.collaboration_state = parseSessionCollaborationState(
+      params.collaborationState,
+    ) as Record<string, unknown>;
+  }
+  if ('activePlanApprovalInteractionId' in params) {
+    values.active_plan_approval_interaction_id =
+      params.activePlanApprovalInteractionId ?? null;
+  }
+
+  await executeCompiledQuery(
+    queryable,
+    db
+      .updateTable('sessions')
+      .set(values)
+      .where('id', '=', params.sessionId),
+  );
 }
 
 // ============ Session Messages ============

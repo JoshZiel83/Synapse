@@ -27,7 +27,8 @@ import {
   CONVERSATION_TYPE_KEYS,
   INVITE_TRUST_LEVELS,
   INTERACTION_DECISIONS,
-  INTERACTION_QUESTION_FIELD_TYPES,
+  INTERACTION_INPUT_QUESTION_TYPES,
+  INTERACTION_REQUEST_KIND,
   INTERACTION_REQUEST_KINDS,
   INTERACTION_REQUEST_STATUSES,
   MEMORY_CATEGORIES,
@@ -41,6 +42,8 @@ import {
   PLUGIN_AUTH_CONNECTION_STATUSES,
   PLUGIN_AUTH_OWNER_SCOPES,
   PLUGIN_AUTH_SESSION_STATUSES,
+  PLAN_APPROVAL_DECISIONS,
+  TARGETED_INTERACTION_REQUEST_KINDS,
   REUSE_SCOPES,
   RUNTIME_AUTHORIZATION_CAPABILITIES,
   RUNTIME_AUTHORIZATION_PRESETS,
@@ -52,6 +55,7 @@ import {
   RUNTIME_GRANT_STATUSES,
   SESSION_CHANNEL_INPUTS,
   SESSION_CHANNELS,
+  SESSION_COLLABORATION_MODES,
   SESSION_INTERRUPT_TYPES,
   SESSION_STATUSES,
   SESSION_TRIGGERS,
@@ -59,6 +63,7 @@ import {
   SESSION_WAKEUP_SOURCE_TYPES,
   SESSION_WAKEUP_STATUSES,
   TASK_NOTICE_STATUSES,
+  PLAN_CHECKLIST_STEP_STATUSES,
   TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
   TRANSPORT_ACCOUNT_OWNER_SCOPES,
   TRANSPORT_ACCOUNT_STATUSES,
@@ -849,6 +854,10 @@ export type SessionStatus = typeof SESSION_STATUSES[number];
 export type SessionChannelType = typeof SESSION_CHANNELS[number];
 export type SessionChannelInput = typeof SESSION_CHANNEL_INPUTS[number];
 export type ChannelType = SessionChannelType;
+export type SessionCollaborationMode =
+  typeof SESSION_COLLABORATION_MODES[number];
+export type PlanChecklistStepStatus =
+  typeof PLAN_CHECKLIST_STEP_STATUSES[number];
 export type SessionTrigger = typeof SESSION_TRIGGERS[number];
 export type SessionMessageRole =
   | "user"
@@ -881,11 +890,30 @@ export interface Session {
   channelType: SessionChannelType;
   trigger: SessionTrigger;
   status: SessionStatus;
+  collaborationMode: SessionCollaborationMode;
+  activePlanApprovalInteractionId?: UUID;
+  collaborationState: SessionCollaborationState;
   metadata: Record<string, unknown>;
   errorMessage?: string;
   createdAt: Timestamp;
   updatedAt: Timestamp;
   completedAt?: Timestamp;
+}
+
+export interface PlanChecklistStep {
+  step: string;
+  status: PlanChecklistStepStatus;
+}
+
+export interface SessionPlanDraftState {
+  summary?: string;
+  checklist: PlanChecklistStep[];
+  explanation?: string;
+  enteredAt?: Timestamp;
+}
+
+export interface SessionCollaborationState {
+  planDraft?: SessionPlanDraftState;
 }
 
 export interface SessionWakeup {
@@ -1718,6 +1746,7 @@ export interface ToolResolveContext {
   sessionId: string;
   actorId: string;
   workspaceId: string;
+  collaborationMode: SessionCollaborationMode;
   conversationId?: string;
   conversationKind?: "private" | "group" | "virtual";
   conversationBoundary?: ConversationBoundary;
@@ -2841,54 +2870,84 @@ export type ActorVersionChangeWire =
   | ({ kind: "doc" } & ActorVersionDocChangeWire);
 
 export type InteractionRequestKind = typeof INTERACTION_REQUEST_KINDS[number];
+export type TargetedInteractionRequestKind =
+  typeof TARGETED_INTERACTION_REQUEST_KINDS[number];
 
 export type InteractionRequestStatus =
   typeof INTERACTION_REQUEST_STATUSES[number];
 
-export interface InteractionChoiceOption {
-  id: string;
-  label: string;
-  description?: string;
+export function isInteractionRequestKind(
+  value: unknown,
+): value is InteractionRequestKind {
+  return (
+    typeof value === "string" &&
+    (INTERACTION_REQUEST_KINDS as readonly string[]).includes(value)
+  );
 }
 
-export type InteractionQuestionFieldType =
-  typeof INTERACTION_QUESTION_FIELD_TYPES[number];
+export function isTargetedInteractionKind(
+  value: unknown,
+): value is TargetedInteractionRequestKind {
+  return (
+    typeof value === "string" &&
+    (TARGETED_INTERACTION_REQUEST_KINDS as readonly string[]).includes(value)
+  );
+}
 
-export interface InteractionQuestionFieldDefinition {
+export interface InteractionInputOption {
   id: string;
-  type: InteractionQuestionFieldType;
   label: string;
   description?: string;
+  preview?: string;
+}
+
+export type InteractionInputQuestionType =
+  typeof INTERACTION_INPUT_QUESTION_TYPES[number];
+
+export interface InteractionInputQuestionDefinition {
+  id: string;
+  header: string;
+  type: InteractionInputQuestionType;
+  prompt: string;
+  description?: string;
   required?: boolean;
-  options?: InteractionChoiceOption[];
+  options?: InteractionInputOption[];
   allowOther?: boolean;
-  otherLabel?: string;
-  otherPlaceholder?: string;
   placeholder?: string;
   minSelections?: number;
   maxSelections?: number;
+  secret?: boolean;
 }
 
-export interface InteractionQuestionFieldAnswer {
-  fieldId: string;
+export interface InteractionInputAnswer {
+  questionId: string;
   selectedOptionIds?: string[];
   selectedOptionLabels?: string[];
   otherText?: string;
   text?: string;
 }
 
-export interface InteractionQuestionFieldSummary extends InteractionQuestionFieldDefinition {
+export interface InteractionInputQuestionSummary
+  extends InteractionInputQuestionDefinition {
   required: boolean;
-  answer?: InteractionQuestionFieldAnswer;
+  answer?: InteractionInputAnswer;
 }
 
-export interface QuestionChoiceInteractionSummary {
-  prompt: string;
+export interface UserInputInteractionSummary {
+  title: string;
   instructions?: string;
-  fields: InteractionQuestionFieldSummary[];
+  questions: InteractionInputQuestionSummary[];
+}
+
+export interface PlanApprovalInteractionSummary {
+  title: string;
+  summary?: string;
+  planMarkdown: string;
+  checklist?: PlanChecklistStep[];
 }
 
 export type InteractionDecision = typeof INTERACTION_DECISIONS[number];
+export type PlanApprovalDecision = typeof PLAN_APPROVAL_DECISIONS[number];
 
 export type RuntimeAuthorizationPreset =
   typeof RUNTIME_AUTHORIZATION_PRESETS[number];
@@ -2991,7 +3050,8 @@ export interface InteractionRequestSummary {
   target?: ConversationEntityRef;
   resolvedBy?: ConversationEntityRef;
   resolutionNote?: string;
-  question?: QuestionChoiceInteractionSummary;
+  userInput?: UserInputInteractionSummary;
+  planApproval?: PlanApprovalInteractionSummary;
   runtimeAuthorization?: RuntimeAuthorizationInteractionSummary;
   createdAt: Timestamp;
   updatedAt: Timestamp;
@@ -3446,15 +3506,29 @@ export function summarizeConversationEvent(
     if (!interaction) {
       return "Interaction requested";
     }
-    if (interaction.kind === "question_choice") {
+    if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
       const targetName = interaction.target?.name?.trim() || "a user";
-      const prompt = interaction.question?.prompt?.trim() || "A question";
+      const prompt = interaction.userInput?.title?.trim() || "A question";
       if (interaction.status === "cancelled") {
-        return `Question for ${targetName} was cancelled: ${prompt}`;
+        return `Input request for ${targetName} was cancelled: ${prompt}`;
       }
       return interaction.status === "answered"
         ? `${targetName} answered: ${prompt}`
-        : `Question for ${targetName}: ${prompt}`;
+        : `Input requested from ${targetName}: ${prompt}`;
+    }
+    if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+      const targetName = interaction.target?.name?.trim() || "a user";
+      const title = interaction.planApproval?.title?.trim() || "Plan approval";
+      if (interaction.status === "cancelled") {
+        return `Plan approval for ${targetName} was cancelled: ${title}`;
+      }
+      if (interaction.status === "approved") {
+        return `${targetName} approved: ${title}`;
+      }
+      if (interaction.status === "rejected") {
+        return `${targetName} requested changes: ${title}`;
+      }
+      return `Plan approval requested from ${targetName}: ${title}`;
     }
     const deviceName =
       interaction.runtimeAuthorization?.deviceDisplayName?.trim() || "relay";

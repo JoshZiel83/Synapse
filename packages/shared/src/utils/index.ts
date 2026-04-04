@@ -81,6 +81,27 @@ export function isThreadConversationKind(kind: string | null | undefined): boole
   return kind === GROUP_CONVERSATION_KIND || kind === PRIVATE_CONVERSATION_KIND;
 }
 
+export function isPlanDraftingCollaborationMode(
+  mode: string | null | undefined,
+): boolean {
+  return mode === 'plan_drafting';
+}
+
+export function isPlanAwaitingApprovalCollaborationMode(
+  mode: string | null | undefined,
+): boolean {
+  return mode === 'plan_awaiting_approval';
+}
+
+export function isPlanCollaborationMode(
+  mode: string | null | undefined,
+): boolean {
+  return (
+    isPlanDraftingCollaborationMode(mode) ||
+    isPlanAwaitingApprovalCollaborationMode(mode)
+  );
+}
+
 export const CONVERSATION_TYPE_MASK_KEY_ORDER = CONVERSATION_TYPE_KEYS;
 
 export function resolveConversationTypeKey(

@@ -11,6 +11,7 @@ import {
   nowISO,
   textBlocks,
 } from '@synapse/shared';
+import { isPlanCollaborationMode } from '@synapse/shared/utils';
 import type {
   ActorAction,
   ConversationParticipantEntry,
@@ -525,15 +526,29 @@ export function startSessionThinkingWorker() {
           };
         })();
 
-        const { system } = buildActorPrompt(
-          actorPromptSource,
-          undefined,
-          undefined,
-          mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
-          promptConversationParticipants || conversationParticipants,
-          session.conversation_kind,
-          availableSkills,
-        );
+        const buildSystemPrompt = (currentSession: any) =>
+          buildActorPrompt(
+            actorPromptSource,
+            undefined,
+            undefined,
+            isPlanCollaborationMode(
+              currentSession.collaborationMode ||
+                currentSession.collaboration_mode ||
+                'default',
+            )
+              ? undefined
+              : mcpTools.tools.length > 0
+                ? mcpTools.tools
+                : undefined,
+            promptConversationParticipants || conversationParticipants,
+            currentSession.conversation_kind,
+            availableSkills,
+            currentSession.collaborationMode ||
+              currentSession.collaboration_mode ||
+              'default',
+          ).system;
+
+        const system = buildSystemPrompt(session);
 
         turn = await createTurn({
           sessionId,
@@ -578,6 +593,10 @@ export function startSessionThinkingWorker() {
             {
               sessionId,
               turnId: turn.id,
+              collaborationMode:
+                session.collaborationMode ||
+                session.collaboration_mode ||
+                'default',
               conversationId: session.conversation_id,
               conversationKind: session.conversation_kind,
               conversationBoundary:
@@ -592,6 +611,19 @@ export function startSessionThinkingWorker() {
               mcpRefresh: mcpTools.refresh,
               mcpSetTurnId: mcpTools.setTurnId,
               system,
+              refreshCollaborationContext: async () => {
+                const refreshedSession = await getSession(sessionId);
+                if (refreshedSession) {
+                  session = refreshedSession;
+                }
+                return {
+                  collaborationMode:
+                    session?.collaborationMode ||
+                    session?.collaboration_mode ||
+                    'default',
+                  system: session ? buildSystemPrompt(session) : system,
+                };
+              },
               checkNewMessages: conversationId && actorParticipantId ? async () => {
                 const update = await loadNewContextItems({
                   conversationId,

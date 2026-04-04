@@ -5,7 +5,17 @@ import {
   normalizeActorDocs,
   resolveThreadSemantics,
 } from "@synapse/shared";
-import type { ActorDoc, ToolDefinition } from "@synapse/shared";
+import type {
+  ActorDoc,
+  ToolDefinition,
+} from "@synapse/shared";
+import type { SessionCollaborationMode } from "@synapse/shared/types";
+import {
+  isGroupConversationKind,
+  isPlanAwaitingApprovalCollaborationMode,
+  isPlanCollaborationMode,
+  isPlanDraftingCollaborationMode,
+} from "@synapse/shared/utils";
 
 export interface ConversationParticipantInfo {
   id?: string;
@@ -209,6 +219,62 @@ function buildToolRoutingGuidance(
   return `# Tool Routing\n` + lines.join("\n");
 }
 
+function hasHumanConversationParticipant(
+  participants: ConversationParticipantInfo[] | undefined,
+): boolean {
+  if (!participants || participants.length === 0) return false;
+  return participants.some(
+    (participant) =>
+      Boolean(participant.user_id) ||
+      participant.participant_kind === "external" ||
+      Boolean(participant.transport_external_id),
+  );
+}
+
+export function buildRequestUserInputGuidance(
+  isPrivateConversation: boolean,
+): string {
+  const targetingRule = isPrivateConversation
+    ? "- In a direct conversation with one user, the recipient is implicit."
+    : "- In a group conversation, use the exact `targetParticipantId` for the intended recipient.";
+
+  return (
+    `# Requesting User Input\n` +
+    `Use \`request_user_input\` only when the answer cannot be discovered from local context and the response will materially change the work.\n` +
+    `- Explore the repo and current state first. Do not ask the user for facts you can inspect yourself.\n` +
+    `- Ask short, specific questions about requirements, preferences, or tradeoffs. Prefer one question and do not exceed four.\n` +
+    `- For choice questions, offer only meaningful options, put any recommended option first, and use \`allowOther\` instead of inventing an \`Other\` option.\n` +
+    `- Do not use \`request_user_input\` for status checks, courtesy confirmations, or plan approval.\n` +
+    `${targetingRule}`
+  );
+}
+
+export function buildPlanModeGuidance(
+  collaborationMode: Extract<
+    SessionCollaborationMode,
+    "plan_drafting" | "plan_awaiting_approval"
+  >,
+): string {
+  if (isPlanAwaitingApprovalCollaborationMode(collaborationMode)) {
+    return (
+      `# Collaboration Mode\n` +
+      `Current collaboration mode: \`plan_awaiting_approval\`.\n` +
+      `A plan approval request is already pending. Do not keep drafting, do not ask for approval again, and do not continue implementation.\n` +
+      `Do not use normal assistant text or \`request_user_input\` to ask whether the plan is okay. Wait for the approval result to move the session back to drafting or default mode.`
+    );
+  }
+
+  return (
+    `# Collaboration Mode\n` +
+    `Current collaboration mode: \`plan_drafting\`.\n` +
+    `You are planning, not executing. User requests to "go ahead" do not cancel this mode.\n` +
+    `Start with targeted read-only exploration to understand the existing system, then use \`request_user_input\` only for requirements, preferences, or tradeoffs you cannot resolve from the repo alone.\n` +
+    `Use \`update_plan\` only to maintain the checklist for this plan. It is not approval and it does not ask the user whether to proceed.\n` +
+    `Use \`exit_plan_mode\` only when the implementation plan is complete enough for approval: it should cover what will change, which existing code or patterns to reuse, and how the work will be verified.\n` +
+    `Do not request plan approval through normal assistant text or \`request_user_input\`. If you are effectively asking "is this plan okay?" or "should I proceed?", call \`exit_plan_mode\` instead.`
+  );
+}
+
 /**
  * Build the system prompt for an actor in a conversation.
  * Structure:
@@ -226,6 +292,7 @@ export function buildActorPrompt(
   conversationParticipants?: ConversationParticipantInfo[],
   conversationKind?: "private" | "group" | "virtual",
   availableSkills?: AvailableSkillSummary[],
+  collaborationMode: SessionCollaborationMode = "default",
 ): { system: string } {
   const parts: string[] = [];
   const threadSemantics = resolveThreadSemantics({
@@ -300,6 +367,33 @@ export function buildActorPrompt(
         availableSkills
           .map((skill) => `- \`${skill.slug}\`${skill.sourceKind === "relay_auto_loaded" ? " (relay auto-loaded)" : ""}: ${skill.description}`)
           .join("\n"),
+    );
+  }
+
+  if (hasHumanConversationParticipant(conversationParticipants)) {
+    parts.push(
+      buildRequestUserInputGuidance(threadSemantics.isPrivateConversation),
+    );
+  }
+
+  if (
+    isGroupConversationKind(conversationKind) &&
+    isPlanCollaborationMode(collaborationMode)
+  ) {
+    throw new Error("Plan mode is only available in private conversations.");
+  }
+
+  if (
+    isPlanDraftingCollaborationMode(collaborationMode) ||
+    isPlanAwaitingApprovalCollaborationMode(collaborationMode)
+  ) {
+    parts.push(
+      buildPlanModeGuidance(
+        collaborationMode as Extract<
+          SessionCollaborationMode,
+          "plan_drafting" | "plan_awaiting_approval"
+        >,
+      ),
     );
   }
 

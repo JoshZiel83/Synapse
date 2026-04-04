@@ -1,21 +1,33 @@
-import { textBlocks } from "@synapse/shared";
+import {
+  INTERACTION_INPUT_QUESTION_TYPES,
+  INTERACTION_REQUEST_KIND,
+  isTargetedInteractionKind,
+  textBlocks,
+} from "@synapse/shared";
+import {
+  isGroupConversationKind,
+  isPlanAwaitingApprovalCollaborationMode,
+} from "@synapse/shared/utils";
 import { v4 as uuidv4 } from "uuid";
 import type {
   ConversationFeedItem,
   ConversationFeedEventPayloadMap,
   ConversationEntityRef,
   InteractionDecision,
-  InteractionChoiceOption,
-  InteractionQuestionFieldAnswer,
-  InteractionQuestionFieldDefinition,
-  InteractionQuestionFieldSummary,
+  InteractionInputAnswer,
+  InteractionInputOption,
+  InteractionInputQuestionDefinition,
+  InteractionInputQuestionSummary,
   InteractionRequestKind,
   InteractionRequestStatus,
   InteractionRequestSummary,
+  PlanApprovalDecision,
+  PlanChecklistStep,
   RuntimeAuthorizationInteractionSummary,
   RuntimeAuthorizationPreset,
   RuntimeAuthorizationRequestMode,
   RuntimeGrantEffect,
+  SessionCollaborationState,
 } from "@synapse/shared/types";
 import {
   enqueueTransactionalEventDeliveries,
@@ -33,6 +45,7 @@ import {
   completeToolCallTask,
   failToolCallTask,
 } from "../tool-call-tasks/service.js";
+import { updateSessionCollaboration } from "../session/service.js";
 import { authorizeAction, userSubject } from "../access/service.js";
 import {
   createConversationEvent,
@@ -45,6 +58,10 @@ import {
   createRuntimeGrant,
   type RuntimeGrantRecord,
 } from "../runtime-grants/service.js";
+import {
+  buildSessionPlanDraftState,
+  parseSessionCollaborationState,
+} from "../session/collaboration-state.js";
 
 type RawInteractionRow = {
   id: string;
@@ -55,6 +72,7 @@ type RawInteractionRow = {
   kind: InteractionRequestKind;
   status: InteractionRequestStatus;
   prompt_payload: unknown;
+  plan_payload: unknown;
   requested_effect: unknown;
   request_payload: unknown;
   resolution_payload: unknown;
@@ -65,8 +83,10 @@ type RawInteractionRow = {
   requester_participant_id: string | null;
   requester_workspace_member_id: string | null;
   requester_actor_id: string | null;
+  target_actor_id: string | null;
   target_workspace_member_id: string | null;
   target_participant_id: string | null;
+  resolved_by_actor_id: string | null;
   resolved_by_workspace_member_id: string | null;
   resolved_by_participant_id: string | null;
   relay_capability_id: string | null;
@@ -106,18 +126,30 @@ function toIsoString(value: string | Date | null | undefined) {
   return value instanceof Date ? value.toISOString() : value;
 }
 
-export interface CreateQuestionInteractionParams {
+export interface CreateUserInputInteractionParams {
   workspaceId: string;
   conversationId: string;
   taskId: string;
   requesterParticipantId: string;
-  requesterActorId?: string;
-  requesterWorkspaceMemberId?: string;
   targetParticipantId: string;
-  targetWorkspaceMemberId: string;
-  prompt: string;
+  title: string;
   instructions?: string;
-  fields: InteractionQuestionFieldDefinition[];
+  questions: InteractionInputQuestionDefinition[];
+  expiresAt?: string;
+}
+
+export interface CreatePlanApprovalInteractionParams {
+  workspaceId: string;
+  conversationId: string;
+  sessionId: string;
+  taskId: string;
+  requesterParticipantId: string;
+  targetParticipantId: string;
+  title: string;
+  summary?: string;
+  planMarkdown: string;
+  checklist?: PlanChecklistStep[];
+  collaborationState: SessionCollaborationState;
   expiresAt?: string;
 }
 
@@ -126,8 +158,6 @@ export interface CreateRuntimeAuthorizationInteractionParams {
   conversationId: string;
   taskId: string;
   requesterParticipantId: string;
-  requesterActorId?: string;
-  requesterWorkspaceMemberId?: string;
   relayCapabilityId: string;
   relayDeviceId: string;
   relayExposureId: string;
@@ -147,9 +177,8 @@ export interface ResolveInteractionRequestParams {
   interactionId: string;
   resolverWorkspaceMemberId: string;
   resolverParticipantId: string;
-  answers?: InteractionQuestionFieldAnswer[];
-  selectedOptionId?: string;
-  decision?: InteractionDecision;
+  answers?: InteractionInputAnswer[];
+  decision?: InteractionDecision | PlanApprovalDecision;
   preset?: RuntimeAuthorizationPreset;
   note?: string;
 }
@@ -187,301 +216,346 @@ function parseJsonObject(value: unknown): Record<string, unknown> {
   return typeof value === "object" ? (value as Record<string, unknown>) : {};
 }
 
+function requireJsonObject(
+  value: unknown,
+  label: string,
+): Record<string, unknown> {
+  if (value === null || value === undefined) {
+    throw new Error(`${label} is required`);
+  }
+  if (typeof value === "string") {
+    if (value.trim().length === 0) {
+      throw new Error(`${label} is required`);
+    }
+    try {
+      const parsed = JSON.parse(value);
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error(`${label} must be a JSON object`);
+      }
+      return parsed as Record<string, unknown>;
+    } catch (error) {
+      if (error instanceof Error && error.message === `${label} must be a JSON object`) {
+        throw error;
+      }
+      throw new Error(`${label} must be a valid JSON object`);
+    }
+  }
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`${label} must be a JSON object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function requireTrimmedString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    throw new Error(`${label} is required`);
+  }
+  return value.trim();
+}
+
+function requireIsoString(
+  value: string | Date | null | undefined,
+  label: string,
+): string {
+  const iso = toIsoString(value);
+  if (!iso) {
+    throw new Error(`${label} is required`);
+  }
+  return iso;
+}
+
 function entityAvatarUrl(actorAvatarFileId?: string | null, userAvatarFileId?: string | null) {
   if (actorAvatarFileId) return getFileUrlById(actorAvatarFileId);
   if (userAvatarFileId) return getFileUrlById(userAvatarFileId);
   return undefined;
 }
 
-function parseQuestionOptions(
+function parseInputOptions(
   value: unknown,
-  fallbackPrefix = "option",
-): InteractionChoiceOption[] {
+  optionListLabel = "options",
+): InteractionInputOption[] {
   if (!Array.isArray(value)) {
     return [];
   }
 
-  const options: InteractionChoiceOption[] = [];
+  const options: InteractionInputOption[] = [];
   const usedIds = new Set<string>();
   for (const [index, item] of value.entries()) {
-    if (typeof item === "string") {
-      const label = item.trim();
-      if (!label) continue;
-      const id = `${fallbackPrefix}_${index + 1}`;
-      options.push({ id, label });
-      usedIds.add(id);
-      continue;
-    }
     if (!item || typeof item !== "object") {
-      continue;
+      throw new Error(
+        `Option ${index + 1} in ${optionListLabel} must be an object`,
+      );
     }
-    const rawId =
-      typeof (item as { id?: unknown }).id === "string"
-        ? (item as { id: string }).id.trim()
-        : "";
-    const label =
-      typeof (item as { label?: unknown }).label === "string"
-        ? (item as { label: string }).label.trim()
-        : "";
+    const rawId = requireTrimmedString(
+      (item as { id?: unknown }).id,
+      `Option ${index + 1} id in ${optionListLabel}`,
+    );
+    const optionLabel = requireTrimmedString(
+      (item as { label?: unknown }).label,
+      `Option ${index + 1} label in ${optionListLabel}`,
+    );
     const description =
       typeof (item as { description?: unknown }).description === "string"
         ? (item as { description: string }).description.trim()
         : undefined;
-    if (!label) continue;
-    let id = rawId || `${fallbackPrefix}_${index + 1}`;
+    const preview =
+      typeof (item as { preview?: unknown }).preview === "string"
+        ? (item as { preview: string }).preview.trim()
+        : undefined;
+    const id = rawId;
     if (usedIds.has(id)) {
-      id = `${fallbackPrefix}_${index + 1}`;
+      throw new Error(`Duplicate option id "${id}" in ${optionListLabel}`);
     }
     usedIds.add(id);
     options.push({
       id,
-      label,
+      label: optionLabel,
       description: description || undefined,
+      preview: preview || undefined,
     });
   }
   return options;
 }
 
-function normalizeQuestionFieldType(
+function normalizeInputQuestionType(
   value: unknown,
-  hasOptions: boolean,
-): InteractionQuestionFieldDefinition["type"] {
-  if (typeof value === "string") {
-    switch (value.trim().toLowerCase()) {
-      case "single_select":
-      case "single":
-      case "radio":
-        return "single_select";
-      case "multi_select":
-      case "multiple":
-      case "checkbox":
-        return "multi_select";
-      case "text":
-      case "input":
-      case "textarea":
-        return "text";
-      default:
-        break;
-    }
+): InteractionInputQuestionDefinition["type"] {
+  if (
+    typeof value === "string" &&
+    (INTERACTION_INPUT_QUESTION_TYPES as readonly string[]).includes(value)
+  ) {
+    return value as InteractionInputQuestionDefinition["type"];
   }
-
-  return hasOptions ? "single_select" : "text";
+  throw new Error(`Unsupported user input question type: ${String(value)}`);
 }
 
-function parseQuestionFieldDefinitions(
+function parseUserInputQuestionDefinitions(
   promptPayload: Record<string, unknown>,
-): InteractionQuestionFieldDefinition[] {
-  const rawFields = Array.isArray(promptPayload.fields)
-    ? promptPayload.fields
-    : null;
-  const definitions: InteractionQuestionFieldDefinition[] = [];
+): InteractionInputQuestionDefinition[] {
+  const rawQuestions = promptPayload.questions;
+  if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
+    throw new Error("user_input prompt_payload.questions must be a non-empty array");
+  }
+  const definitions: InteractionInputQuestionDefinition[] = [];
   const usedIds = new Set<string>();
 
-  if (rawFields) {
-    for (const [index, field] of rawFields.entries()) {
-      if (!field || typeof field !== "object") {
-        continue;
-      }
-      const rawOptions = parseQuestionOptions(
-        (field as { options?: unknown }).options,
-        `field_${index + 1}_option`,
-      );
-      const type = normalizeQuestionFieldType(
-        (field as { type?: unknown }).type,
-        rawOptions.length > 0,
-      );
-      const label =
-        typeof (field as { label?: unknown }).label === "string"
-          ? (field as { label: string }).label.trim()
-          : "";
-      if (!label) {
-        continue;
-      }
-      let id =
-        typeof (field as { id?: unknown }).id === "string"
-          ? (field as { id: string }).id.trim()
-          : "";
-      if (!id || usedIds.has(id)) {
-        id = `field_${index + 1}`;
-      }
-      usedIds.add(id);
-
-      const definition: InteractionQuestionFieldDefinition = {
-        id,
-        type,
-        label,
-        description:
-          typeof (field as { description?: unknown }).description === "string"
-            ? (field as { description: string }).description.trim() || undefined
-            : undefined,
-        required:
-          typeof (field as { required?: unknown }).required === "boolean"
-            ? Boolean((field as { required: boolean }).required)
-            : undefined,
-      };
-
-      if (type === "text") {
-        definition.placeholder =
-          typeof (field as { placeholder?: unknown }).placeholder === "string"
-            ? (field as { placeholder: string }).placeholder.trim() || undefined
-            : undefined;
-      } else {
-        definition.options = rawOptions;
-        definition.allowOther =
-          typeof (field as { allowOther?: unknown }).allowOther === "boolean"
-            ? Boolean((field as { allowOther: boolean }).allowOther)
-            : undefined;
-        definition.otherLabel =
-          typeof (field as { otherLabel?: unknown }).otherLabel === "string"
-            ? (field as { otherLabel: string }).otherLabel.trim() || undefined
-            : undefined;
-        definition.otherPlaceholder =
-          typeof (field as { otherPlaceholder?: unknown }).otherPlaceholder === "string"
-            ? (field as { otherPlaceholder: string }).otherPlaceholder.trim() || undefined
-            : undefined;
-        definition.minSelections =
-          typeof (field as { minSelections?: unknown }).minSelections === "number"
-          && Number.isFinite((field as { minSelections: number }).minSelections)
-            ? Math.max(0, Math.trunc((field as { minSelections: number }).minSelections))
-            : undefined;
-        definition.maxSelections =
-          typeof (field as { maxSelections?: unknown }).maxSelections === "number"
-          && Number.isFinite((field as { maxSelections: number }).maxSelections)
-            ? Math.max(1, Math.trunc((field as { maxSelections: number }).maxSelections))
-            : undefined;
-      }
-
-      definitions.push(definition);
+  for (const [index, question] of rawQuestions.entries()) {
+    if (!question || typeof question !== "object") {
+      throw new Error(`Question ${index + 1} must be an object`);
     }
+    const id = requireTrimmedString(
+      (question as { id?: unknown }).id,
+      `Question ${index + 1} id`,
+    );
+    if (usedIds.has(id)) {
+      throw new Error(`Duplicate question id "${id}"`);
+    }
+    usedIds.add(id);
+
+    const type = normalizeInputQuestionType(
+      (question as { type?: unknown }).type,
+    );
+    const definition: InteractionInputQuestionDefinition = {
+      id,
+      header: requireTrimmedString(
+        (question as { header?: unknown }).header,
+        `Question ${index + 1} header`,
+      ),
+      type,
+      prompt: requireTrimmedString(
+        (question as { prompt?: unknown }).prompt,
+        `Question ${index + 1} prompt`,
+      ),
+      description:
+        typeof (question as { description?: unknown }).description === "string"
+          ? (question as { description: string }).description.trim() || undefined
+          : undefined,
+      required: (() => {
+        if (typeof (question as { required?: unknown }).required !== "boolean") {
+          throw new Error(`Question "${id}" required must be a boolean`);
+        }
+        return Boolean((question as { required: boolean }).required);
+      })(),
+    };
+
+    if (type === "text") {
+      definition.placeholder =
+        typeof (question as { placeholder?: unknown }).placeholder === "string"
+          ? (question as { placeholder: string }).placeholder.trim() || undefined
+          : undefined;
+      if (typeof (question as { secret?: unknown }).secret !== "boolean") {
+        throw new Error(`Question "${id}" secret must be a boolean`);
+      }
+      definition.secret =
+        Boolean((question as { secret: boolean }).secret);
+    } else {
+      definition.options = parseInputOptions(
+        (question as { options?: unknown }).options,
+        `question "${id}" options`,
+      );
+      if (definition.options.length === 0) {
+        throw new Error(`Question "${id}" requires at least one option`);
+      }
+      if (typeof (question as { allowOther?: unknown }).allowOther !== "boolean") {
+        throw new Error(`Question "${id}" allowOther must be a boolean`);
+      }
+      definition.allowOther = Boolean(
+        (question as { allowOther: boolean }).allowOther,
+      );
+      if (
+        (question as { minSelections?: unknown }).minSelections !== undefined &&
+        (typeof (question as { minSelections?: unknown }).minSelections !== "number" ||
+          !Number.isFinite((question as { minSelections: number }).minSelections))
+      ) {
+        throw new Error(`Question "${id}" minSelections must be a finite number`);
+      }
+      if (
+        (question as { maxSelections?: unknown }).maxSelections !== undefined &&
+        (typeof (question as { maxSelections?: unknown }).maxSelections !== "number" ||
+          !Number.isFinite((question as { maxSelections: number }).maxSelections))
+      ) {
+        throw new Error(`Question "${id}" maxSelections must be a finite number`);
+      }
+      definition.minSelections =
+        typeof (question as { minSelections?: unknown }).minSelections === "number"
+          ? Math.max(
+              0,
+              Math.trunc((question as { minSelections: number }).minSelections),
+            )
+          : undefined;
+      definition.maxSelections =
+        typeof (question as { maxSelections?: unknown }).maxSelections === "number"
+          ? Math.max(
+              1,
+              Math.trunc((question as { maxSelections: number }).maxSelections),
+            )
+          : undefined;
+    }
+
+    definitions.push(definition);
   }
 
-  if (definitions.length > 0) {
-    return definitions;
-  }
-
-  const legacyOptions = parseQuestionOptions(promptPayload.options, "option");
-  if (legacyOptions.length === 0) {
-    return [];
-  }
-
-  return [
-    {
-      id: "field_1",
-      type: "single_select",
-      label:
-        typeof promptPayload.prompt === "string" && promptPayload.prompt.trim()
-          ? promptPayload.prompt.trim()
-          : "Question",
-      required: true,
-      options: legacyOptions,
-    },
-  ];
+  return definitions;
 }
 
-function parseQuestionAnswers(
+function parseUserInputAnswers(
   resolutionPayload: Record<string, unknown>,
-  fields: InteractionQuestionFieldDefinition[],
-): InteractionQuestionFieldAnswer[] {
-  const answers: InteractionQuestionFieldAnswer[] = [];
+  questions: InteractionInputQuestionDefinition[],
+): InteractionInputAnswer[] {
+  const answers: InteractionInputAnswer[] = [];
+  const seenQuestionIds = new Set<string>();
 
-  if (Array.isArray(resolutionPayload.answers)) {
-    for (const answer of resolutionPayload.answers) {
-      if (!answer || typeof answer !== "object") {
-        continue;
-      }
-      const fieldId =
-        typeof (answer as { fieldId?: unknown }).fieldId === "string"
-          ? (answer as { fieldId: string }).fieldId.trim()
-          : "";
-      if (!fieldId) {
-        continue;
-      }
-      const selectedOptionIds = Array.isArray(
-        (answer as { selectedOptionIds?: unknown }).selectedOptionIds,
-      )
-        ? Array.from(
-            new Set(
-              ((answer as { selectedOptionIds: unknown[] }).selectedOptionIds || [])
-                .map((optionId) =>
-                  typeof optionId === "string" ? optionId.trim() : "",
-                )
-                .filter((optionId) => optionId.length > 0),
-            ),
-          )
-        : undefined;
-      const selectedOptionLabels = Array.isArray(
-        (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels,
-      )
-        ? ((answer as { selectedOptionLabels: unknown[] }).selectedOptionLabels || [])
-            .map((label) => (typeof label === "string" ? label.trim() : ""))
-            .filter((label) => label.length > 0)
-        : undefined;
-      const otherText =
-        typeof (answer as { otherText?: unknown }).otherText === "string"
-          ? (answer as { otherText: string }).otherText.trim() || undefined
-          : undefined;
-      const text =
-        typeof (answer as { text?: unknown }).text === "string"
-          ? (answer as { text: string }).text.trim() || undefined
-          : undefined;
-      answers.push({
-        fieldId,
-        selectedOptionIds,
-        selectedOptionLabels,
-        otherText,
-        text,
-      });
-    }
-  }
-
-  if (answers.length > 0) {
+  if (resolutionPayload.answers === undefined) {
     return answers;
   }
-
-  const legacySelectedOptionId =
-    typeof resolutionPayload.selectedOptionId === "string"
-      ? resolutionPayload.selectedOptionId.trim()
-      : "";
-  if (!legacySelectedOptionId || fields.length === 0) {
-    return [];
+  if (!Array.isArray(resolutionPayload.answers)) {
+    throw new Error("interaction resolution_payload.answers must be an array");
   }
-  const legacyField = fields[0];
-  const legacyOption = (legacyField.options || []).find(
-    (option: InteractionChoiceOption) => option.id === legacySelectedOptionId,
-  );
-  return [
-    {
-      fieldId: legacyField.id,
-      selectedOptionIds: [legacySelectedOptionId],
-      selectedOptionLabels: legacyOption ? [legacyOption.label] : undefined,
-    },
-  ];
+
+  for (const [index, answer] of resolutionPayload.answers.entries()) {
+    if (!answer || typeof answer !== "object") {
+      throw new Error(`Answer ${index + 1} must be an object`);
+    }
+    const questionId = requireTrimmedString(
+      (answer as { questionId?: unknown }).questionId,
+      `Answer ${index + 1} questionId`,
+    );
+    if (!questions.some((question) => question.id === questionId)) {
+      throw new Error(`Answer references unknown question "${questionId}"`);
+    }
+    if (seenQuestionIds.has(questionId)) {
+      throw new Error(`Duplicate answer for question "${questionId}"`);
+    }
+    seenQuestionIds.add(questionId);
+    const selectedOptionIds = Array.isArray(
+      (answer as { selectedOptionIds?: unknown }).selectedOptionIds,
+    )
+      ? Array.from(
+          new Set(
+            ((answer as { selectedOptionIds: unknown[] }).selectedOptionIds || [])
+              .map((optionId) =>
+                typeof optionId === "string" ? optionId.trim() : "",
+              )
+              .filter((optionId) => optionId.length > 0),
+          ),
+        )
+      : undefined;
+    if (
+      (answer as { selectedOptionIds?: unknown }).selectedOptionIds !== undefined &&
+      !Array.isArray((answer as { selectedOptionIds?: unknown }).selectedOptionIds)
+    ) {
+      throw new Error(`Answer "${questionId}" selectedOptionIds must be an array`);
+    }
+    const selectedOptionLabels = Array.isArray(
+      (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels,
+    )
+      ? ((answer as { selectedOptionLabels: unknown[] }).selectedOptionLabels || [])
+          .map((label) => (typeof label === "string" ? label.trim() : ""))
+          .filter((label) => label.length > 0)
+      : undefined;
+    if (
+      (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels !== undefined &&
+      !Array.isArray((answer as { selectedOptionLabels?: unknown }).selectedOptionLabels)
+    ) {
+      throw new Error(
+        `Answer "${questionId}" selectedOptionLabels must be an array`,
+      );
+    }
+    const otherText =
+      typeof (answer as { otherText?: unknown }).otherText === "string"
+        ? (answer as { otherText: string }).otherText.trim() || undefined
+        : undefined;
+    if (
+      (answer as { otherText?: unknown }).otherText !== undefined &&
+      typeof (answer as { otherText?: unknown }).otherText !== "string"
+    ) {
+      throw new Error(`Answer "${questionId}" otherText must be a string`);
+    }
+    const text =
+      typeof (answer as { text?: unknown }).text === "string"
+        ? (answer as { text: string }).text.trim() || undefined
+        : undefined;
+    if (
+      (answer as { text?: unknown }).text !== undefined &&
+      typeof (answer as { text?: unknown }).text !== "string"
+    ) {
+      throw new Error(`Answer "${questionId}" text must be a string`);
+    }
+    answers.push({
+      questionId,
+      selectedOptionIds,
+      selectedOptionLabels,
+      otherText,
+      text,
+    });
+  }
+  return answers;
 }
 
-function buildQuestionFieldSummaries(
+function buildUserInputQuestionSummaries(
   promptPayload: Record<string, unknown>,
   resolutionPayload: Record<string, unknown>,
-): InteractionQuestionFieldSummary[] {
-  const definitions = parseQuestionFieldDefinitions(promptPayload);
-  const answers = parseQuestionAnswers(resolutionPayload, definitions);
-  const answerMap = new Map<string, InteractionQuestionFieldAnswer>();
+): InteractionInputQuestionSummary[] {
+  const definitions = parseUserInputQuestionDefinitions(promptPayload);
+  const answers = parseUserInputAnswers(resolutionPayload, definitions);
+  const answerMap = new Map<string, InteractionInputAnswer>();
   for (const answer of answers) {
-    answerMap.set(answer.fieldId, answer);
+    answerMap.set(answer.questionId, answer);
   }
 
-  return definitions.map((field) => {
-    const answer = answerMap.get(field.id);
+  return definitions.map((question) => {
+    const answer = answerMap.get(question.id);
     const labels =
       answer?.selectedOptionIds?.map(
         (selectedId: string) =>
-          (field.options || []).find(
-            (option: InteractionChoiceOption) => option.id === selectedId,
+          (question.options || []).find(
+            (option: InteractionInputOption) => option.id === selectedId,
           )?.label ||
           selectedId,
       ) || undefined;
     return {
-      ...field,
-      required: field.required !== false,
+      ...question,
+      required: question.required === true,
       answer: answer
         ? {
             ...answer,
@@ -495,16 +569,16 @@ function buildQuestionFieldSummaries(
   });
 }
 
-function summarizeQuestionAnswers(
-  question: InteractionRequestSummary["question"],
+function summarizeUserInputAnswers(
+  userInput: InteractionRequestSummary["userInput"],
 ): string {
-  if (!question) {
+  if (!userInput) {
     return "a response";
   }
 
   const parts: string[] = [];
-  for (const field of question.fields) {
-    const answer = field.answer;
+  for (const question of userInput.questions) {
+    const answer = question.answer;
     if (!answer) continue;
     const valueParts: string[] = [];
     if (answer.selectedOptionLabels?.length) {
@@ -520,9 +594,9 @@ function summarizeQuestionAnswers(
       continue;
     }
     parts.push(
-      question.fields.length === 1
+      userInput.questions.length === 1
         ? valueParts.join(", ")
-        : `${field.label}: ${valueParts.join(", ")}`,
+        : `${question.prompt}: ${valueParts.join(", ")}`,
     );
   }
 
@@ -550,7 +624,11 @@ function mapEntityRefFromRow(
         ? row.target_workspace_member_id
         : row.resolved_by_workspace_member_id;
   const actorId =
-    prefix === "requester" ? row.requester_actor_id : null;
+    prefix === "requester"
+      ? row.requester_actor_id
+      : prefix === "target"
+        ? row.target_actor_id
+        : row.resolved_by_actor_id;
   const name = row[`${prefix}_name` as keyof RawInteractionRow];
   const title = row[`${prefix}_title` as keyof RawInteractionRow];
   const role = row[`${prefix}_role` as keyof RawInteractionRow];
@@ -578,55 +656,134 @@ function mapEntityRefFromRow(
   };
 }
 
-function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSummary {
-  const promptPayload = parseJsonObject(row.prompt_payload);
-  const requestedEffect = parseJsonObject(row.requested_effect);
-  const resolutionPayload = parseJsonObject(row.resolution_payload);
-  const target = mapEntityRefFromRow("target", row);
-  if (row.kind === "question_choice" && !target) {
-    throw new Error(`Interaction ${row.id} is missing a target entity`);
+function requireEntityRef(
+  entity: ConversationEntityRef | undefined,
+  label: string,
+): ConversationEntityRef {
+  if (!entity?.participantId || !entity.participantType) {
+    throw new Error(`${label} is missing a participant entity`);
   }
+  return entity;
+}
 
-  let question: InteractionRequestSummary["question"];
+function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSummary {
+  const requester = requireEntityRef(
+    mapEntityRefFromRow("requester", row),
+    `Interaction ${row.id} requester`,
+  );
+  const target = isTargetedInteractionKind(row.kind)
+    ? requireEntityRef(
+        mapEntityRefFromRow("target", row),
+        `Interaction ${row.id} target`,
+      )
+    : undefined;
+  const resolvedBy = row.resolved_by_participant_id
+    ? requireEntityRef(
+        mapEntityRefFromRow("resolved_by", row),
+        `Interaction ${row.id} resolved_by`,
+      )
+    : undefined;
+  const resolutionPayload = requireJsonObject(
+    row.resolution_payload,
+    `Interaction ${row.id} resolution_payload`,
+  );
+
+  let userInput: InteractionRequestSummary["userInput"];
+  let planApproval: InteractionRequestSummary["planApproval"];
   let runtimeAuthorization:
     | RuntimeAuthorizationInteractionSummary
     | undefined;
 
-  if (row.kind === "question_choice") {
-    question = {
-      prompt:
-        typeof promptPayload.prompt === "string" ? promptPayload.prompt : "",
+  if (row.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
+    const promptPayload = requireJsonObject(
+      row.prompt_payload,
+      `Interaction ${row.id} prompt_payload`,
+    );
+    userInput = {
+      title: requireTrimmedString(
+        promptPayload.title,
+        `Interaction ${row.id} user_input.title`,
+      ),
       instructions:
         typeof promptPayload.instructions === "string"
-          ? promptPayload.instructions
+          ? promptPayload.instructions.trim() || undefined
           : undefined,
-      fields: buildQuestionFieldSummaries(promptPayload, resolutionPayload),
+      questions: buildUserInputQuestionSummaries(promptPayload, resolutionPayload),
+    };
+  } else if (row.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+    const planPayload = requireJsonObject(
+      row.plan_payload,
+      `Interaction ${row.id} plan_payload`,
+    );
+    planApproval = {
+      title: requireTrimmedString(
+        planPayload.title,
+        `Interaction ${row.id} plan_approval.title`,
+      ),
+      summary:
+        typeof planPayload.summary === "string"
+          ? planPayload.summary.trim() || undefined
+          : undefined,
+      planMarkdown: requireTrimmedString(
+        planPayload.planMarkdown,
+        `Interaction ${row.id} plan_approval.planMarkdown`,
+      ),
+      checklist: Array.isArray(planPayload.checklist)
+        ? (planPayload.checklist as PlanChecklistStep[])
+        : undefined,
     };
   } else {
+    const requestedEffect = requireJsonObject(
+      row.requested_effect,
+      `Interaction ${row.id} requested_effect`,
+    );
+    const displayPayload = requireJsonObject(
+      row.display_payload,
+      `Interaction ${row.id} display_payload`,
+    );
     runtimeAuthorization = {
-      relayToolStableKey:
-        typeof requestedEffect.relayToolStableKey === "string"
-          ? requestedEffect.relayToolStableKey
-          : "",
-      reason:
-        typeof requestedEffect.reason === "string" ? requestedEffect.reason : "",
-      contractKey:
-        typeof requestedEffect.contractKey === "string"
-          ? requestedEffect.contractKey
-          : "",
-      displayPayload:
-        requestedEffect.displayPayload &&
-        typeof requestedEffect.displayPayload === "object"
-          ? (requestedEffect.displayPayload as Record<string, unknown>)
-          : {},
-      deviceId: row.relay_device_id || "",
-      deviceDisplayName: row.device_display_name || "Relay Device",
-      relayCapabilityId: row.relay_capability_id || "",
-      exposureId: row.relay_exposure_id || "",
-      exposureDisplayName: row.exposure_display_name || "Relay Exposure",
-      requestedEffect:
-        (requestedEffect.requestedEffect as RuntimeGrantEffect | undefined) ||
-        ({ capability: "cua", mode: "control" } as RuntimeGrantEffect),
+      relayToolStableKey: requireTrimmedString(
+        row.relay_tool_stable_key,
+        `Interaction ${row.id} relay_tool_stable_key`,
+      ),
+      reason: requireTrimmedString(
+        requestedEffect.reason,
+        `Interaction ${row.id} runtime_authorization.reason`,
+      ),
+      contractKey: requireTrimmedString(
+        row.contract_key,
+        `Interaction ${row.id} contract_key`,
+      ),
+      displayPayload,
+      deviceId: requireTrimmedString(
+        row.relay_device_id,
+        `Interaction ${row.id} relay_device_id`,
+      ),
+      deviceDisplayName: requireTrimmedString(
+        row.device_display_name,
+        `Interaction ${row.id} device_display_name`,
+      ),
+      relayCapabilityId: requireTrimmedString(
+        row.relay_capability_id,
+        `Interaction ${row.id} relay_capability_id`,
+      ),
+      exposureId: requireTrimmedString(
+        row.relay_exposure_id,
+        `Interaction ${row.id} relay_exposure_id`,
+      ),
+      exposureDisplayName: requireTrimmedString(
+        row.exposure_display_name,
+        `Interaction ${row.id} exposure_display_name`,
+      ),
+      requestedEffect: (() => {
+        const effect = requestedEffect.requestedEffect;
+        if (!effect || typeof effect !== "object") {
+          throw new Error(
+            `Interaction ${row.id} runtime_authorization.requestedEffect is required`,
+          );
+        }
+        return effect as RuntimeGrantEffect;
+      })(),
       approvedPreset:
         typeof resolutionPayload.approvedPreset === "string"
           ? (resolutionPayload.approvedPreset as RuntimeAuthorizationPreset)
@@ -637,7 +794,14 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
           ? (resolutionPayload.approvedGrant as RuntimeAuthorizationInteractionSummary["approvedGrant"])
           : undefined,
       requestMode:
-        requestedEffect.requestMode === "blocking" ? "blocking" : "background",
+        requestedEffect.requestMode === "blocking" ||
+        requestedEffect.requestMode === "background"
+          ? (requestedEffect.requestMode as RuntimeAuthorizationRequestMode)
+          : (() => {
+              throw new Error(
+                `Interaction ${row.id} runtime_authorization.requestMode is invalid`,
+              );
+            })(),
     };
   }
 
@@ -649,17 +813,18 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
     itemId: row.conversation_item_id || undefined,
     kind: row.kind,
     status: row.status,
-    requester: mapEntityRefFromRow("requester", row),
+    requester,
     ...(target ? { target } : {}),
-    resolvedBy: mapEntityRefFromRow("resolved_by", row),
+    resolvedBy,
     resolutionNote:
       typeof resolutionPayload.note === "string"
-        ? resolutionPayload.note
+        ? resolutionPayload.note.trim() || undefined
         : undefined,
-    question,
+    userInput,
+    planApproval,
     runtimeAuthorization,
-    createdAt: toIsoString(row.created_at) || new Date().toISOString(),
-    updatedAt: toIsoString(row.updated_at) || new Date().toISOString(),
+    createdAt: requireIsoString(row.created_at, `Interaction ${row.id} created_at`),
+    updatedAt: requireIsoString(row.updated_at, `Interaction ${row.id} updated_at`),
     resolvedAt: toIsoString(row.resolved_at),
     expiresAt: toIsoString(row.expires_at),
   };
@@ -671,16 +836,24 @@ async function getInteractionRowById(
 ) {
   const compiled = sql<RawInteractionRow>`
     SELECT ir.*,
-            question.prompt_payload AS prompt_payload,
+            user_input.prompt_payload AS prompt_payload,
+            plan.plan_payload AS plan_payload,
             auth.requested_effect AS requested_effect,
             auth.request_payload AS request_payload,
-            COALESCE(question.resolution_payload, auth.resolution_payload, '{}'::jsonb) AS resolution_payload,
+            COALESCE(
+              user_input.resolution_payload,
+              plan.resolution_payload,
+              auth.resolution_payload,
+              '{}'::jsonb
+            ) AS resolution_payload,
             auth.relay_device_id,
             auth.relay_capability_id,
             auth.relay_exposure_id,
             auth.relay_tool_stable_key,
             auth.contract_key,
             auth.display_payload,
+            requester.workspace_member_id AS requester_workspace_member_id,
+            requester.actor_id AS requester_actor_id,
             requester.participant_kind AS requester_participant_kind,
             COALESCE(requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
             requester_actor.title AS requester_title,
@@ -688,6 +861,8 @@ async function getInteractionRowById(
             requester_actor.avatar_file_id AS requester_actor_avatar_file_id,
             requester_user.avatar_file_id AS requester_user_avatar_file_id,
             requester_actor.avatar_emoji AS requester_avatar_emoji,
+            target.workspace_member_id AS target_workspace_member_id,
+            target.actor_id AS target_actor_id,
             target.participant_kind AS target_participant_kind,
             COALESCE(target_actor.name, target_user.name, target.display_name) AS target_name,
             target_actor.title AS target_title,
@@ -695,6 +870,8 @@ async function getInteractionRowById(
             target_actor.avatar_file_id AS target_actor_avatar_file_id,
             target_user.avatar_file_id AS target_user_avatar_file_id,
             target_actor.avatar_emoji AS target_avatar_emoji,
+            resolver.workspace_member_id AS resolved_by_workspace_member_id,
+            resolver.actor_id AS resolved_by_actor_id,
             resolver.participant_kind AS resolved_by_participant_kind,
             COALESCE(resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
             resolver_actor.title AS resolved_by_title,
@@ -706,8 +883,10 @@ async function getInteractionRowById(
             exposure.display_name AS exposure_display_name,
             exposure.stable_key AS exposure_stable_key
      FROM interaction_requests ir
-     LEFT JOIN interaction_question_requests question
-       ON question.interaction_id = ir.id
+     LEFT JOIN interaction_user_input_requests user_input
+       ON user_input.interaction_id = ir.id
+     LEFT JOIN interaction_plan_approval_requests plan
+       ON plan.interaction_id = ir.id
      LEFT JOIN interaction_runtime_authorization_requests auth
        ON auth.interaction_id = ir.id
      LEFT JOIN conversation_participants requester
@@ -751,10 +930,17 @@ async function queueInteractionUpdatedEvent(
   queryable: Queryable,
   interaction: InteractionRequestSummary,
 ) {
-  const recipients = await listConversationRealtimeRecipients(
+  const allRecipients = await listConversationRealtimeRecipients(
     interaction.conversationId,
     queryable,
   );
+  const recipients =
+    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
+      ? allRecipients
+      : allRecipients.filter((recipient) =>
+          recipient.workspaceMemberId === interaction.target?.workspaceMemberId ||
+          recipient.workspaceMemberId === interaction.requester?.workspaceMemberId,
+        );
   await enqueueTransactionalEventDeliveries(queryable, {
     type: "interaction.updated",
     payload: {
@@ -780,9 +966,9 @@ async function syncInteractionEventPayload(
   );
 }
 
-function buildQuestionAsyncNotice(interaction: InteractionRequestSummary) {
-  const prompt = interaction.question?.prompt?.trim() || "Question";
-  const answer = summarizeQuestionAnswers(interaction.question);
+function buildUserInputAsyncNotice(interaction: InteractionRequestSummary) {
+  const prompt = interaction.userInput?.title?.trim() || "Input request";
+  const answer = summarizeUserInputAnswers(interaction.userInput);
   const targetName = interaction.target?.name || "A user";
   const resolutionNote = interaction.resolutionNote?.trim();
   const summary = `${targetName} answered "${prompt}".`;
@@ -803,6 +989,72 @@ function buildQuestionAsyncNotice(interaction: InteractionRequestSummary) {
         interaction,
       },
       isError: false,
+    },
+    metadata: {
+      interactionId: interaction.id,
+      interactionKind: interaction.kind,
+      interactionStatus: interaction.status,
+    },
+  };
+}
+
+function buildPlanApprovalApprovedNotice(interaction: InteractionRequestSummary) {
+  const resolverName = interaction.resolvedBy?.name || "A user";
+  const title = interaction.planApproval?.title?.trim() || "Plan";
+  const summary = `${resolverName} approved "${title}".`;
+  const lines = [
+    summary,
+    interaction.resolutionNote?.trim()
+      ? `Note: ${interaction.resolutionNote.trim()}`
+      : "",
+  ].filter(Boolean);
+  const messageBlocks = textBlocks(lines.join("\n"));
+
+  return {
+    summary,
+    messageBlocks,
+    finalResultPayload: {
+      content: messageBlocks,
+      structuredContent: {
+        interactionId: interaction.id,
+        interaction,
+      },
+      isError: false,
+    },
+    metadata: {
+      interactionId: interaction.id,
+      interactionKind: interaction.kind,
+      interactionStatus: interaction.status,
+    },
+  };
+}
+
+function buildPlanApprovalRevisionNotice(interaction: InteractionRequestSummary) {
+  const resolverName = interaction.resolvedBy?.name || "A user";
+  const title = interaction.planApproval?.title?.trim() || "Plan";
+  const summary = `${resolverName} requested revisions for "${title}".`;
+  const lines = [
+    summary,
+    interaction.resolutionNote?.trim()
+      ? `Feedback: ${interaction.resolutionNote.trim()}`
+      : "",
+  ].filter(Boolean);
+  const messageBlocks = textBlocks(lines.join("\n"));
+
+  return {
+    summary,
+    messageBlocks,
+    finalResultPayload: {
+      content: messageBlocks,
+      structuredContent: {
+        interactionId: interaction.id,
+        interaction,
+      },
+      isError: true,
+    },
+    finalErrorPayload: {
+      interactionId: interaction.id,
+      reason: "plan_revision_requested",
     },
     metadata: {
       interactionId: interaction.id,
@@ -923,11 +1175,8 @@ async function insertInteractionRequest(
   conversationId: string;
   taskId: string;
   requesterParticipantId: string;
-  requesterWorkspaceMemberId?: string;
-  requesterActorId?: string;
   kind: InteractionRequestKind;
   targetParticipantId?: string;
-  targetWorkspaceMemberId?: string;
   expiresAt?: string;
 }) {
   const interactionId = uuidv4();
@@ -940,12 +1189,9 @@ async function insertInteractionRequest(
         conversation_id,
         task_id,
         requester_participant_id,
-        requester_workspace_member_id,
-        requester_actor_id,
         kind,
         status,
         target_participant_id,
-        target_workspace_member_id,
         expires_at
       )
       VALUES (
@@ -954,12 +1200,9 @@ async function insertInteractionRequest(
         ${params.conversationId},
         ${params.taskId},
         ${params.requesterParticipantId},
-        ${params.requesterWorkspaceMemberId || null},
-        ${params.requesterActorId || null},
         ${params.kind},
         'pending',
         ${params.targetParticipantId || null},
-        ${params.targetWorkspaceMemberId || null},
         ${params.expiresAt || null}
       )
       RETURNING id
@@ -971,7 +1214,7 @@ async function insertInteractionRequest(
   return created.rows[0]!.id;
 }
 
-async function insertQuestionInteractionDetails(
+async function insertUserInputInteractionDetails(
   client: Queryable,
   params: {
     interactionId: string;
@@ -980,12 +1223,31 @@ async function insertQuestionInteractionDetails(
 ) {
   await executeCompiledQuery(
     client,
-    db.insertInto("interaction_question_requests").values({
+    db.insertInto("interaction_user_input_requests").values({
       interaction_id: params.interactionId,
       prompt_payload:
-        params.promptPayload as TableInsert<"interaction_question_requests">["prompt_payload"],
+        params.promptPayload as TableInsert<"interaction_user_input_requests">["prompt_payload"],
       resolution_payload:
-        {} as TableInsert<"interaction_question_requests">["resolution_payload"],
+        {} as TableInsert<"interaction_user_input_requests">["resolution_payload"],
+    }),
+  );
+}
+
+async function insertPlanApprovalInteractionDetails(
+  client: Queryable,
+  params: {
+    interactionId: string;
+    planPayload: Record<string, unknown>;
+  },
+) {
+  await executeCompiledQuery(
+    client,
+    db.insertInto("interaction_plan_approval_requests").values({
+      interaction_id: params.interactionId,
+      plan_payload:
+        params.planPayload as TableInsert<"interaction_plan_approval_requests">["plan_payload"],
+      resolution_payload:
+        {} as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
     }),
   );
 }
@@ -1062,14 +1324,28 @@ async function updateInteractionResolutionPayload(
   interactionId: string,
   payload: Record<string, unknown>,
 ) {
-  if (interactionKind === "question_choice") {
+  if (interactionKind === INTERACTION_REQUEST_KIND.USER_INPUT) {
     await executeCompiledQuery(
       client,
       db
-        .updateTable("interaction_question_requests")
+        .updateTable("interaction_user_input_requests")
         .set({
           resolution_payload:
-            payload as TableInsert<"interaction_question_requests">["resolution_payload"],
+            payload as TableInsert<"interaction_user_input_requests">["resolution_payload"],
+        })
+        .where("interaction_id", "=", interactionId),
+    );
+    return;
+  }
+
+  if (interactionKind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+    await executeCompiledQuery(
+      client,
+      db
+        .updateTable("interaction_plan_approval_requests")
+        .set({
+          resolution_payload:
+            payload as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
         })
         .where("interaction_id", "=", interactionId),
     );
@@ -1088,8 +1364,8 @@ async function updateInteractionResolutionPayload(
   );
 }
 
-export async function createQuestionInteractionRequest(
-  params: CreateQuestionInteractionParams,
+export async function createUserInputInteractionRequest(
+  params: CreateUserInputInteractionParams,
 ) {
   return transaction(async (client) => {
     const interactionId = await insertInteractionRequest(client, {
@@ -1097,20 +1373,17 @@ export async function createQuestionInteractionRequest(
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
-      requesterActorId: params.requesterActorId,
-      requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
-      kind: "question_choice",
+      kind: INTERACTION_REQUEST_KIND.USER_INPUT,
       targetParticipantId: params.targetParticipantId,
-      targetWorkspaceMemberId: params.targetWorkspaceMemberId,
       expiresAt: params.expiresAt,
     });
 
-    await insertQuestionInteractionDetails(client, {
+    await insertUserInputInteractionDetails(client, {
       interactionId,
       promptPayload: {
-        prompt: params.prompt,
+        title: params.title,
         instructions: params.instructions,
-        fields: params.fields,
+        questions: params.questions,
       },
     });
 
@@ -1147,6 +1420,80 @@ export async function createQuestionInteractionRequest(
   });
 }
 
+export async function createPlanApprovalInteractionRequest(
+  params: CreatePlanApprovalInteractionParams,
+) {
+  return transaction(async (client) => {
+    const interactionId = await insertInteractionRequest(client, {
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      taskId: params.taskId,
+      requesterParticipantId: params.requesterParticipantId,
+      kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
+      targetParticipantId: params.targetParticipantId,
+      expiresAt: params.expiresAt,
+    });
+
+    await insertPlanApprovalInteractionDetails(client, {
+      interactionId,
+      planPayload: {
+        title: params.title,
+        summary: params.summary,
+        planMarkdown: params.planMarkdown,
+        checklist: params.checklist,
+      },
+    });
+
+    let interaction = await getInteractionRequestSummary(interactionId, client);
+    if (!interaction) {
+      throw new Error("Failed to load created interaction request");
+    }
+
+    const created = await createConversationEvent({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      eventType: "interaction_requested",
+      authorParticipantId: params.requesterParticipantId,
+      eventPayload: { interaction },
+      timelinePolicy: "targeted_members",
+      contextPolicy: "targeted_members",
+      restrictedAudienceParticipantIds: [params.targetParticipantId],
+      contextTargetParticipantIds: [params.targetParticipantId],
+      queryable: client,
+    });
+
+    await updateInteractionConversationItemId(
+      client,
+      interactionId,
+      created.item.id,
+    );
+
+    interaction = await getInteractionRequestSummary(interactionId, client);
+    if (!interaction) {
+      throw new Error("Failed to reload created interaction request");
+    }
+    const collaborationState = parseSessionCollaborationState(
+      params.collaborationState,
+    );
+    if (!collaborationState.planDraft) {
+      throw new Error(
+        "Plan approval interactions require collaborationState.planDraft",
+      );
+    }
+    await updateSessionCollaboration(
+      {
+        sessionId: params.sessionId,
+        collaborationMode: "plan_awaiting_approval",
+        collaborationState,
+        activePlanApprovalInteractionId: interactionId,
+      },
+      client,
+    );
+    await syncInteractionEventPayload(interaction, client);
+    return interaction;
+  });
+}
+
 export async function createRuntimeAuthorizationInteractionRequest(
   params: CreateRuntimeAuthorizationInteractionParams,
 ) {
@@ -1156,9 +1503,7 @@ export async function createRuntimeAuthorizationInteractionRequest(
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
-      requesterActorId: params.requesterActorId,
-      requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
-      kind: "runtime_authorization",
+      kind: INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
       expiresAt: params.expiresAt,
     });
 
@@ -1230,7 +1575,7 @@ export async function findOpenRuntimeAuthorizationInteraction(
     .where("ir.workspace_id", "=", params.workspaceId)
     .where("ir.conversation_id", "=", params.conversationId)
     .where(sql<boolean>`ir.requester_participant_id = ${params.requesterParticipantId}`)
-    .where("ir.kind", "=", "runtime_authorization")
+    .where("ir.kind", "=", INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION)
     .where("ir.status", "=", "pending")
     .where((eb) =>
       eb.or([
@@ -1360,21 +1705,28 @@ export async function canUserViewInteraction(params: {
         eb.or([
         sql<boolean>`EXISTS (
           SELECT 1
-          FROM workspace_members wm
-          WHERE wm.id = ir.requester_workspace_member_id
+          FROM conversation_participants cp
+          JOIN workspace_members wm
+            ON wm.id = cp.workspace_member_id
+          WHERE cp.id = ir.requester_participant_id
             AND wm.user_id = ${params.userId}
         )`,
         eb.and([
-          eb("ir.kind", "=", "question_choice"),
+          eb("ir.kind", "in", [
+            INTERACTION_REQUEST_KIND.USER_INPUT,
+            INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
+          ]),
           sql<boolean>`EXISTS (
             SELECT 1
-            FROM workspace_members wm
-            WHERE wm.id = ir.target_workspace_member_id
+            FROM conversation_participants cp
+            JOIN workspace_members wm
+              ON wm.id = cp.workspace_member_id
+            WHERE cp.id = ir.target_participant_id
               AND wm.user_id = ${params.userId}
           )`,
         ]),
         eb.and([
-          eb("ir.kind", "=", "runtime_authorization"),
+          eb("ir.kind", "=", INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM conversation_participants cm
@@ -1401,21 +1753,23 @@ export async function canUserResolveInteraction(params: {
     return false;
   }
 
-  if (interaction.kind === "question_choice") {
-    const targetWorkspaceMemberId = interaction.target?.workspaceMemberId;
-    if (!targetWorkspaceMemberId) {
+  if (isTargetedInteractionKind(interaction.kind)) {
+    const targetParticipantId = interaction.target?.participantId;
+    if (!targetParticipantId) {
       return false;
     }
 
-    const viewerWorkspaceMember = await db
-      .selectFrom("workspace_members")
-      .select("id")
-      .where("workspace_id", "=", interaction.workspaceId)
-      .where("user_id", "=", userId)
+    const viewerParticipant = await db
+      .selectFrom("conversation_participants as cp")
+      .innerJoin("workspace_members as wm", "wm.id", "cp.workspace_member_id")
+      .select("cp.id")
+      .where("cp.id", "=", targetParticipantId)
+      .where("cp.state", "=", "active")
+      .where("wm.user_id", "=", userId)
       .limit(1)
       .executeTakeFirst();
 
-    return viewerWorkspaceMember?.id === targetWorkspaceMemberId;
+    return Boolean(viewerParticipant?.id);
   }
 
   const deviceId = interaction.runtimeAuthorization?.deviceId;
@@ -1477,13 +1831,13 @@ export async function enrichFeedItemInteractionsForUser(
   };
 }
 
-function buildSubmittedQuestionAnswers(
+function buildSubmittedUserInputAnswers(
   params: ResolveInteractionRequestParams,
-  fields: InteractionQuestionFieldDefinition[],
-): InteractionQuestionFieldAnswer[] {
+  questions: InteractionInputQuestionDefinition[],
+): InteractionInputAnswer[] {
   if (Array.isArray(params.answers) && params.answers.length > 0) {
     return params.answers.map((answer) => ({
-      fieldId: String(answer.fieldId || "").trim(),
+      questionId: String(answer.questionId || "").trim(),
       selectedOptionIds: Array.isArray(answer.selectedOptionIds)
         ? Array.from(
             new Set(
@@ -1503,61 +1857,52 @@ function buildSubmittedQuestionAnswers(
           : undefined,
     }));
   }
-
-  const legacyField = fields[0];
-  const selectedOptionId = String(params.selectedOptionId || "").trim();
-  if (!legacyField || !selectedOptionId) {
-    return [];
-  }
-  return [
-    {
-      fieldId: legacyField.id,
-      selectedOptionIds: [selectedOptionId],
-    },
-  ];
+  return questions.map((question) => ({
+    questionId: question.id,
+  }));
 }
 
-function validateQuestionAnswers(
-  fields: InteractionQuestionFieldDefinition[],
-  submittedAnswers: InteractionQuestionFieldAnswer[],
+function validateUserInputAnswers(
+  questions: InteractionInputQuestionDefinition[],
+  submittedAnswers: InteractionInputAnswer[],
 ) {
-  const fieldMap = new Map(fields.map((field) => [field.id, field]));
-  const answerMap = new Map<string, InteractionQuestionFieldAnswer>();
+  const questionMap = new Map(questions.map((question) => [question.id, question]));
+  const answerMap = new Map<string, InteractionInputAnswer>();
 
   for (const answer of submittedAnswers) {
-    if (!answer.fieldId) {
-      throw new Error("Each answer requires a fieldId");
+    if (!answer.questionId) {
+      throw new Error("Each answer requires a questionId");
     }
-    if (!fieldMap.has(answer.fieldId)) {
-      throw new Error(`Unknown question field "${answer.fieldId}"`);
+    if (!questionMap.has(answer.questionId)) {
+      throw new Error(`Unknown question "${answer.questionId}"`);
     }
-    if (answerMap.has(answer.fieldId)) {
-      throw new Error(`Duplicate answer for question field "${answer.fieldId}"`);
+    if (answerMap.has(answer.questionId)) {
+      throw new Error(`Duplicate answer for question "${answer.questionId}"`);
     }
-    answerMap.set(answer.fieldId, answer);
+    answerMap.set(answer.questionId, answer);
   }
 
-  const normalized: InteractionQuestionFieldAnswer[] = [];
+  const normalized: InteractionInputAnswer[] = [];
 
-  for (const field of fields) {
-    const answer = answerMap.get(field.id);
-    const required = field.required !== false;
+  for (const question of questions) {
+    const answer = answerMap.get(question.id);
+    const required = question.required !== false;
 
-    if (field.type === "text") {
+    if (question.type === "text") {
       const text = answer?.text?.trim() || undefined;
       if (required && !text) {
-        throw new Error(`"${field.label}" requires a response`);
+        throw new Error(`"${question.prompt}" requires a response`);
       }
       if (text) {
         normalized.push({
-          fieldId: field.id,
+          questionId: question.id,
           text,
         });
       }
       continue;
     }
 
-    const allowedOptions = field.options || [];
+    const allowedOptions = question.options || [];
     const selectedOptionIds = Array.from(
       new Set(
         (answer?.selectedOptionIds || []).filter(
@@ -1568,54 +1913,54 @@ function validateQuestionAnswers(
     for (const selectedOptionId of selectedOptionIds) {
       if (
         !allowedOptions.some(
-          (option: InteractionChoiceOption) => option.id === selectedOptionId,
+          (option: InteractionInputOption) => option.id === selectedOptionId,
         )
       ) {
-        throw new Error(`"${field.label}" contains an invalid option`);
+        throw new Error(`"${question.prompt}" contains an invalid option`);
       }
     }
 
     const otherText = answer?.otherText?.trim() || undefined;
-    if (otherText && !field.allowOther) {
-      throw new Error(`"${field.label}" does not allow other input`);
+    if (otherText && !question.allowOther) {
+      throw new Error(`"${question.prompt}" does not allow other input`);
     }
 
     const effectiveCount = selectedOptionIds.length + (otherText ? 1 : 0);
     const minSelections =
-      field.type === "multi_select"
-        ? field.minSelections ?? (required ? 1 : 0)
+      question.type === "multi_select"
+        ? question.minSelections ?? (required ? 1 : 0)
         : required
           ? 1
           : 0;
     const maxSelections =
-      field.type === "multi_select"
-        ? field.maxSelections ?? Number.MAX_SAFE_INTEGER
+      question.type === "multi_select"
+        ? question.maxSelections ?? Number.MAX_SAFE_INTEGER
         : 1;
 
     if (maxSelections < minSelections) {
-      throw new Error(`"${field.label}" has an invalid selection range`);
+      throw new Error(`"${question.prompt}" has an invalid selection range`);
     }
     if (effectiveCount < minSelections) {
-      throw new Error(`"${field.label}" requires more selections`);
+      throw new Error(`"${question.prompt}" requires more selections`);
     }
     if (effectiveCount > maxSelections) {
-      throw new Error(`"${field.label}" has too many selections`);
+      throw new Error(`"${question.prompt}" has too many selections`);
     }
-    if (field.type === "single_select" && effectiveCount > 1) {
-      throw new Error(`"${field.label}" only allows one response`);
+    if (question.type === "single_select" && effectiveCount > 1) {
+      throw new Error(`"${question.prompt}" only allows one response`);
     }
 
     if (effectiveCount > 0) {
       normalized.push({
-        fieldId: field.id,
+        questionId: question.id,
         selectedOptionIds:
           selectedOptionIds.length > 0 ? selectedOptionIds : undefined,
-          selectedOptionLabels:
+        selectedOptionLabels:
           selectedOptionIds.length > 0
             ? selectedOptionIds.map(
                 (selectedOptionId) =>
                   allowedOptions.find(
-                    (option: InteractionChoiceOption) =>
+                    (option: InteractionInputOption) =>
                       option.id === selectedOptionId,
                   )?.label || selectedOptionId,
               )
@@ -1636,8 +1981,8 @@ export async function resolveInteractionRequest(
     throw new Error("Interaction request not found");
   }
   if (
-    existing.kind === "question_choice" &&
-    existing.target_workspace_member_id !== params.resolverWorkspaceMemberId
+    isTargetedInteractionKind(existing.kind) &&
+    existing.target_participant_id !== params.resolverParticipantId
   ) {
     throw new Error("Only the targeted user can resolve this interaction");
   }
@@ -1646,34 +1991,33 @@ export async function resolveInteractionRequest(
   }
 
   const promptPayload = parseJsonObject(existing.prompt_payload);
-  const requestPayload = parseJsonObject(existing.request_payload);
   let nextStatus: InteractionRequestStatus;
   let resolutionPayload: Record<string, unknown>;
   let createdGrant: RuntimeGrantRecord | undefined;
 
-  if (existing.kind === "question_choice") {
-    const fields = parseQuestionFieldDefinitions(promptPayload);
-    if (fields.length === 0) {
-      throw new Error("Question form is invalid");
+  if (existing.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
+    const questions = parseUserInputQuestionDefinitions(promptPayload);
+    if (questions.length === 0) {
+      throw new Error("User input request is invalid");
     }
-    const submittedAnswers = buildSubmittedQuestionAnswers(params, fields);
-    const answers = validateQuestionAnswers(fields, submittedAnswers);
+    const submittedAnswers = buildSubmittedUserInputAnswers(params, questions);
+    const answers = validateUserInputAnswers(questions, submittedAnswers);
     if (answers.length === 0) {
       throw new Error("A valid response is required");
     }
 
     nextStatus = "answered";
-    const legacySingleField =
-      fields.length === 1 &&
-      fields[0].type === "single_select" &&
-      !answers[0]?.otherText &&
-      (answers[0]?.selectedOptionIds?.length || 0) === 1
-        ? answers[0]
-        : undefined;
     resolutionPayload = {
       answers,
-      selectedOptionId: legacySingleField?.selectedOptionIds?.[0],
-      selectedOptionLabel: legacySingleField?.selectedOptionLabels?.[0],
+      note: params.note?.trim() || undefined,
+    };
+  } else if (existing.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+    if (params.decision !== "approve" && params.decision !== "revise") {
+      throw new Error("decision must be approve or revise");
+    }
+    nextStatus = params.decision === "approve" ? "approved" : "rejected";
+    resolutionPayload = {
+      decision: params.decision,
       note: params.note?.trim() || undefined,
     };
   } else {
@@ -1684,7 +2028,6 @@ export async function resolveInteractionRequest(
       throw new Error("preset is required when approving runtime authorization");
     }
     nextStatus = params.decision === "approve" ? "approved" : "rejected";
-    const requestedEffect = parseJsonObject(existing.requested_effect);
     resolutionPayload = {
       decision: params.decision,
       approvedPreset:
@@ -1696,8 +2039,112 @@ export async function resolveInteractionRequest(
   }
 
   const interaction = await transaction(async (client) => {
-    if (existing.kind === "runtime_authorization" && params.decision === "approve") {
-      const requestedEffect = parseJsonObject(existing.requested_effect);
+    if (existing.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+      if (!existing.task_id) {
+        throw new Error(
+          `Interaction ${existing.id} is missing task governance`,
+        );
+      }
+      const taskRow = await executeTakeFirst(
+        client,
+        db
+          .selectFrom("tool_call_tasks")
+          .select("session_id")
+          .where("id", "=", existing.task_id)
+          .limit(1),
+      );
+      if (!taskRow?.session_id) {
+        throw new Error(
+          `Plan approval interaction ${existing.id} is missing a session`,
+        );
+      }
+      const sessionRow = await executeTakeFirst(
+        client,
+        db
+          .selectFrom("sessions as s")
+          .innerJoin("conversations as c", "c.id", "s.conversation_id")
+          .select([
+            "s.collaboration_state",
+            "s.collaboration_mode",
+            "s.active_plan_approval_interaction_id",
+            "c.kind as conversation_kind",
+          ])
+          .where("s.id", "=", taskRow.session_id)
+          .limit(1),
+      );
+      if (!sessionRow) {
+        throw new Error(`Session ${taskRow.session_id} not found`);
+      }
+      if (isGroupConversationKind(sessionRow.conversation_kind)) {
+        throw new Error("Plan mode is only available in private conversations.");
+      }
+      if (
+        !isPlanAwaitingApprovalCollaborationMode(sessionRow.collaboration_mode)
+      ) {
+        throw new Error(
+          `Session ${taskRow.session_id} must be in plan_awaiting_approval before resolving plan approval.`,
+        );
+      }
+      if (!sessionRow.active_plan_approval_interaction_id) {
+        throw new Error(
+          `Session ${taskRow.session_id} is missing active_plan_approval_interaction_id`,
+        );
+      }
+      if (sessionRow.active_plan_approval_interaction_id !== existing.id) {
+        throw new Error(
+          `Session ${taskRow.session_id} points to ${sessionRow.active_plan_approval_interaction_id}, not ${existing.id}`,
+        );
+      }
+
+      const collaborationState = parseSessionCollaborationState(
+        sessionRow.collaboration_state == null
+          ? {}
+          : requireJsonObject(
+              sessionRow.collaboration_state,
+              `Session ${taskRow.session_id} collaboration_state`,
+            ),
+      );
+      const existingDraft = collaborationState.planDraft;
+      if (!existingDraft) {
+        throw new Error(
+          `Session ${taskRow.session_id} is missing collaborationState.planDraft`,
+        );
+      }
+
+      await updateSessionCollaboration(
+        {
+          sessionId: taskRow.session_id,
+          collaborationMode:
+            nextStatus === "approved" ? "default" : "plan_drafting",
+          collaborationState:
+            nextStatus === "approved"
+              ? {}
+              : {
+                  planDraft: buildSessionPlanDraftState({
+                    summary: existingDraft.summary,
+                    checklist: existingDraft.checklist,
+                    explanation: existingDraft.explanation,
+                    enteredAt: existingDraft.enteredAt,
+                  }),
+                },
+          activePlanApprovalInteractionId: null,
+        },
+        client,
+      );
+    }
+
+    if (
+      existing.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+      params.decision === "approve"
+    ) {
+      const requestedEffect = requireJsonObject(
+        existing.requested_effect,
+        `Interaction ${existing.id} requested_effect`,
+      );
+      const requestPayload = requireJsonObject(
+        existing.request_payload,
+        `Interaction ${existing.id} request_payload`,
+      );
       createdGrant = await createRuntimeGrant(
         {
           workspaceId: existing.workspace_id,
@@ -1751,7 +2198,6 @@ export async function resolveInteractionRequest(
     await updateInteractionRequestRow(client, params.interactionId, {
       status: nextStatus,
       resolved_by_participant_id: params.resolverParticipantId,
-      resolved_by_workspace_member_id: params.resolverWorkspaceMemberId,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     });
@@ -1780,11 +2226,23 @@ export async function resolveInteractionRequest(
     throw new Error(`Interaction ${interaction.id} is missing task governance`);
   }
 
-  if (interaction.kind === "question_choice") {
+  if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
     await completeToolCallTask(
       interaction.taskId,
-      buildQuestionAsyncNotice(interaction),
+      buildUserInputAsyncNotice(interaction),
     );
+  } else if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+    if (interaction.status === "approved") {
+      await completeToolCallTask(
+        interaction.taskId,
+        buildPlanApprovalApprovedNotice(interaction),
+      );
+    } else {
+      await failToolCallTask(
+        interaction.taskId,
+        buildPlanApprovalRevisionNotice(interaction),
+      );
+    }
   } else if (interaction.status === "rejected") {
     await failToolCallTask(
       interaction.taskId,
@@ -1811,7 +2269,10 @@ export async function markRuntimeAuthorizationInteractionSuperseded(
   if (!existing) {
     throw new Error("Interaction request not found");
   }
-  if (existing.kind !== "runtime_authorization" || existing.status !== "pending") {
+  if (
+    existing.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION ||
+    existing.status !== "pending"
+  ) {
     const current = await getInteractionRequestSummary(interactionId);
     if (!current) {
       throw new Error("Failed to reload interaction request");
@@ -1828,7 +2289,7 @@ export async function markRuntimeAuthorizationInteractionSuperseded(
     });
     await updateInteractionResolutionPayload(
       client,
-      "runtime_authorization",
+      INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
       interactionId,
       {
         ...resolutionPayload,
