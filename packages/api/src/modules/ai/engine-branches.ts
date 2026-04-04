@@ -34,6 +34,16 @@ function stableSerialize(value: unknown): string {
   return JSON.stringify(value);
 }
 
+export function buildContextManifestHash(
+  window: Pick<ProviderContextWindow, 'manifest'>,
+) {
+  if (!window.manifest) return undefined;
+  return createHash('sha256')
+    .update(stableSerialize(window.manifest))
+    .digest('hex')
+    .slice(0, 16);
+}
+
 function buildToolCallBatchFingerprint(
   toolCalls: Array<Pick<CanonicalToolCall, 'callId' | 'providerCallId' | 'toolName' | 'input'>>,
 ) {
@@ -444,6 +454,7 @@ export function buildBranchDeltaWindow(
   const orderedTailItems = window.orderedTailItems.filter((item) => !isCoveredByBranch(item, branch));
 
   return {
+    manifest: undefined,
     sharedArchivePoint: null,
     sharedTailItems,
     privateArchivePoint: null,
@@ -457,6 +468,9 @@ export function canResumeBranchFromWindow(
   branch: EngineBranchState | undefined,
 ) {
   if (!branch) return false;
+  if (buildContextManifestHash(window) !== branch.metadata?.contextManifestHash) {
+    return false;
+  }
   if (
     window.sharedArchivePoint &&
     window.sharedArchivePoint.coversUntilSequence > (branch.cursor.sharedSequence || 0)

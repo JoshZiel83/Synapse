@@ -1,5 +1,7 @@
 import {
+  buildConversationMessageRef,
   normalizeCanonicalContentBlocks,
+  parseConversationMessageRef,
   extractText,
   type CanonicalContentBlock,
   type ChatBootstrapResponse,
@@ -1653,6 +1655,117 @@ async function validateConversationReplyTarget(
   return row;
 }
 
+export async function resolveConversationReplyRef(params: {
+  queryable?: Queryable;
+  conversationId: string;
+  participantId?: string;
+  replyRef?: string;
+}) {
+  if (!params.replyRef) {
+    return null;
+  }
+
+  const sequence = parseConversationMessageRef(params.replyRef);
+  if (!Number.isFinite(sequence)) {
+    throw createChatError(
+      400,
+      "invalid_reply_ref",
+      'replyToRef must use the form "m_<sequence>"',
+    );
+  }
+
+  const exactSql = `
+      SELECT id, sequence
+      FROM conversation_items
+      WHERE conversation_id = $1
+        AND sequence = $2::bigint
+        AND scope = 'shared'
+        AND surface = 'visible'
+        AND (
+          $3::uuid IS NULL
+          OR NOT EXISTS (
+            SELECT 1
+            FROM conversation_item_targets cit0
+            WHERE cit0.item_id = conversation_items.id
+          )
+          OR conversation_items.author_participant_id = $3
+          OR EXISTS (
+            SELECT 1
+            FROM conversation_item_targets cit
+            WHERE cit.item_id = conversation_items.id
+              AND cit.target_participant_id = $3
+          )
+        )
+      LIMIT 1
+    `;
+  const exact = params.queryable
+    ? await executeSqlOn<Pick<ItemRow, "id" | "sequence">>(
+        params.queryable,
+        exactSql,
+        [params.conversationId, sequence, params.participantId ?? null],
+      )
+    : await executeSql<Pick<ItemRow, "id" | "sequence">>(exactSql, [
+        params.conversationId,
+        sequence,
+        params.participantId ?? null,
+      ]);
+  const row = exact.rows[0];
+  if (row) {
+    return {
+      itemId: row.id,
+      sequence: toNumber(row.sequence),
+      ref: buildConversationMessageRef(toNumber(row.sequence)),
+    };
+  }
+
+  const nearbySql = `
+      SELECT id, sequence
+      FROM conversation_items
+      WHERE conversation_id = $1
+        AND scope = 'shared'
+        AND surface = 'visible'
+        AND (
+          $3::uuid IS NULL
+          OR NOT EXISTS (
+            SELECT 1
+            FROM conversation_item_targets cit0
+            WHERE cit0.item_id = conversation_items.id
+          )
+          OR conversation_items.author_participant_id = $3
+          OR EXISTS (
+            SELECT 1
+            FROM conversation_item_targets cit
+            WHERE cit.item_id = conversation_items.id
+              AND cit.target_participant_id = $3
+          )
+        )
+      ORDER BY ABS(sequence - $2::bigint) ASC, sequence ASC
+      LIMIT 3
+    `;
+  const nearby = params.queryable
+    ? await executeSqlOn<Pick<ItemRow, "id" | "sequence">>(
+        params.queryable,
+        nearbySql,
+        [params.conversationId, sequence, params.participantId ?? null],
+      )
+    : await executeSql<Pick<ItemRow, "id" | "sequence">>(nearbySql, [
+        params.conversationId,
+        sequence,
+        params.participantId ?? null,
+      ]);
+  const suggestions = nearby.rows
+    .map((candidate) => buildConversationMessageRef(toNumber(candidate.sequence)))
+    .filter((value, index, all) => all.indexOf(value) === index);
+  const suggestionText =
+    suggestions.length > 0 ? ` Did you mean ${suggestions.join(", ")}?` : "";
+
+  throw createChatError(
+    400,
+    "invalid_reply_ref",
+    `Unknown replyToRef "${params.replyRef}".${suggestionText}`,
+  );
+}
+
 async function prepareConversationItemWrite(
   queryable: Queryable,
   params: {
@@ -3054,6 +3167,8 @@ async function buildConversationItemDetails(
     }
     replyRefById.set(replyToItemId, {
       itemId: replyToItemId,
+      ref: buildConversationMessageRef(toNumber(replyRow.sequence)),
+      sequence: toNumber(replyRow.sequence),
       itemType: replyRow.item_type,
       subtype: replyRow.subtype,
       author: replyRow.author_participant_id

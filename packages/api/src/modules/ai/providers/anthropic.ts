@@ -24,6 +24,7 @@ import { buildAudioFallbackContext } from "../audio-fallback.js";
 import { buildImageFallbackContext } from "../image-fallback.js";
 import {
   advanceEngineBranchState,
+  buildContextManifestHash,
   buildAssistantMessageAppliedKey,
   buildToolCallBatchAppliedKey,
   buildBranchDeltaWindow,
@@ -403,6 +404,7 @@ export class AnthropicProvider implements AIProvider {
           },
           {
             systemPrompt: params.system,
+            contextManifestHash: buildContextManifestHash(params.contextWindow),
           },
           appliedKeys.length > 0 ? appliedKeys : undefined,
         )
@@ -447,7 +449,10 @@ export class AnthropicProvider implements AIProvider {
       params.branchState,
       params.contextWindow,
       { messages },
-      { systemPrompt: params.system },
+      {
+        systemPrompt: params.system,
+        contextManifestHash: buildContextManifestHash(params.contextWindow),
+      },
     );
   }
 

@@ -1406,6 +1406,8 @@ export interface CanonicalContextTarget {
 
 interface CanonicalContextItemBase {
   itemId?: string;
+  itemRef?: string;
+  replyable?: boolean;
   conversationId?: string;
   sessionId?: string;
   turnId?: string;
@@ -1528,6 +1530,7 @@ export interface CanonicalArchivePoint {
 }
 
 export interface ProviderContextWindow {
+  manifest?: ProviderContextManifest;
   sharedArchivePoint: CanonicalArchivePoint | null;
   sharedTailItems: CanonicalContextItem[];
   privateArchivePoint: CanonicalArchivePoint | null;
@@ -1618,10 +1621,20 @@ export interface ConversationParticipantEntry {
   id: string;
   name: string;
   title?: string;
+  role?: string;
   participantId?: string;
   linkedWorkspaceMemberId?: string;
   linkedWorkspaceMemberName?: string;
   externalUserKey?: string;
+}
+
+export interface ProviderContextManifest {
+  conversationId?: UUID;
+  conversationKind?: "private" | "group" | "virtual";
+  conversationBoundary?: ConversationBoundary;
+  selfParticipantId?: UUID;
+  selfActorId?: UUID;
+  participants: ConversationParticipantEntry[];
 }
 
 export interface ToolResolveContext {
@@ -2537,6 +2550,8 @@ export interface ConversationEntityRef {
 
 export interface ConversationReplyRef {
   itemId: UUID;
+  ref?: string;
+  sequence?: number;
   itemType: "message" | "event" | "summary" | "control";
   subtype: string;
   author?: ConversationEntityRef;
@@ -4650,4 +4665,15 @@ export interface RelayExposureRecord {
   metadata: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
+}
+
+export function buildConversationMessageRef(sequence: number): string {
+  return `m_${Math.trunc(sequence)}`;
+}
+
+export function parseConversationMessageRef(ref: string): number | null {
+  const match = /^m_(\d+)$/.exec(ref.trim());
+  if (!match) return null;
+  const parsed = Number(match[1]);
+  return Number.isFinite(parsed) ? parsed : null;
 }

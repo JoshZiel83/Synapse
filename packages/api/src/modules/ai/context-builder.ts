@@ -7,6 +7,7 @@ import type {
   CanonicalToolCall,
   CanonicalToolResult,
 } from "@synapse/shared";
+import { buildConversationMessageRef } from "@synapse/shared";
 import type {
   CanonicalContextAuthor,
   CanonicalContextItem,
@@ -188,6 +189,27 @@ function buildTargets(targets: any[]): CanonicalContextTarget[] | undefined {
   return built.length > 0 ? built : undefined;
 }
 
+function buildContextItemRef(item: {
+  sequence?: number | string;
+  scope?: string;
+  surface?: string;
+}) {
+  const sequence =
+    typeof item.sequence === "number"
+      ? item.sequence
+      : typeof item.sequence === "string"
+        ? Number(item.sequence)
+        : NaN;
+  if (
+    !Number.isFinite(sequence) ||
+    item.scope !== "shared" ||
+    item.surface !== "visible"
+  ) {
+    return undefined;
+  }
+  return buildConversationMessageRef(sequence);
+}
+
 export function conversationItemToContextItem(
   item: any,
   actorId: string,
@@ -214,6 +236,11 @@ export function conversationItemToContextItem(
     item.eventTimelinePolicy || item.event_timeline_policy;
   const eventContextPolicy =
     item.eventContextPolicy || item.event_context_policy;
+  const itemRef = buildContextItemRef({
+    sequence: item.sequence,
+    scope: item.scope || "shared",
+    surface: item.surface || "visible",
+  });
 
   if (metadata.excludeFromContext === true) {
     return null;
@@ -244,6 +271,8 @@ export function conversationItemToContextItem(
     return {
       kind: "event",
       itemId: item.id,
+      itemRef,
+      replyable: Boolean(itemRef),
       conversationId,
       sessionId: sessionId || undefined,
       turnId: turnId || undefined,
@@ -265,6 +294,8 @@ export function conversationItemToContextItem(
   return {
     kind: "message",
     itemId: item.id,
+    itemRef,
+    replyable: Boolean(itemRef),
     conversationId,
     sessionId: sessionId || undefined,
     turnId: turnId || undefined,

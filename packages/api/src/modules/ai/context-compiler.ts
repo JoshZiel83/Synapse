@@ -2,101 +2,392 @@ import type {
   CanonicalArchiveFrame,
   CanonicalContentBlock,
   ConversationMessage,
+  ProviderContextManifest,
   ProviderContextWindow,
 } from "@synapse/shared";
-import { extractText, formatMentionText, textBlock } from "@synapse/shared";
-import type {
-  CanonicalContextItem,
-  CanonicalContextTarget,
-} from "@synapse/shared/types";
+import { buildConversationMessageRef, textBlock } from "@synapse/shared";
+import type { CanonicalContextItem, ConversationEntityRef } from "@synapse/shared/types";
 
-function withTextPrefix(prefix: string, blocks: CanonicalContentBlock[]) {
-  if (!prefix) return blocks;
-  return [textBlock(prefix), ...blocks];
+function xmlEscapeText(value: string) {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
 }
 
-function targetLabel(targets?: CanonicalContextTarget[]) {
-  if (!targets || targets.length === 0) return "";
-  const names = targets.map((target) => target.name || "Unknown");
-  return names.join(", ");
+function xmlEscapeAttribute(value: string) {
+  return xmlEscapeText(value).replace(/"/g, "&quot;");
 }
 
-function authorLabel(
-  item: Extract<CanonicalContextItem, { kind: "message" | "event" }>,
+function buildXmlAttributes(
+  attributes: Record<string, string | number | boolean | undefined | null>,
 ) {
-  return item.author?.name || "Unknown";
+  return Object.entries(attributes)
+    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .map(([key, value]) => ` ${key}="${xmlEscapeAttribute(String(value))}"`)
+    .join("");
 }
 
-function normalizeParts(parts?: CanonicalContentBlock[]) {
-  if (!parts || parts.length === 0) {
-    return [textBlock("")];
-  }
+function openXmlTag(
+  tag: string,
+  attributes: Record<string, string | number | boolean | undefined | null> = {},
+) {
+  return `<${tag}${buildXmlAttributes(attributes)}>`;
+}
 
-  return parts.flatMap((part) => {
-    if (part.type === "mention") {
-      return [textBlock(formatMentionText(part))];
-    }
-    return [part];
-  });
+function closeXmlTag(tag: string) {
+  return `</${tag}>`;
+}
+
+function selfClosingXmlTag(
+  tag: string,
+  attributes: Record<string, string | number | boolean | undefined | null> = {},
+) {
+  return `<${tag}${buildXmlAttributes(attributes)}/>`;
+}
+
+function toXmlTextBlock(value: string) {
+  return textBlock(value);
 }
 
 function formatContextTimestamp(timestamp?: string) {
   if (!timestamp) return "";
   const date = new Date(timestamp);
   if (Number.isNaN(date.getTime())) return "";
-  const year = date.getUTCFullYear();
-  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
-  const day = String(date.getUTCDate()).padStart(2, "0");
-  const hour = String(date.getUTCHours()).padStart(2, "0");
-  const minute = String(date.getUTCMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day} ${hour}:${minute} UTC`;
+  return date.toISOString();
 }
 
-function buildMessageHeader(params: {
-  timestamp?: string;
-  author: string;
-  targets?: CanonicalContextTarget[];
-  replyToLabel?: string;
-}) {
-  const segments: string[] = [];
-  const formattedTime = formatContextTimestamp(params.timestamp);
-  if (formattedTime) {
-    segments.push(formattedTime);
+type XmlEntityLike = {
+  participantId?: string;
+  participantType?: string;
+  name?: string;
+  title?: string;
+  role?: string;
+};
+
+function compileEntityAttrs(prefix: string, entity?: XmlEntityLike) {
+  if (!entity) return {};
+  return {
+    [`${prefix}ParticipantId`]: entity.participantId,
+    [`${prefix}Type`]: entity.participantType,
+    [`${prefix}Name`]: entity.name,
+    [`${prefix}Title`]: entity.title,
+    [`${prefix}Role`]: entity.role,
+  };
+}
+
+function compileBodyBlocks(
+  parts?: CanonicalContentBlock[],
+): CanonicalContentBlock[] {
+  if (!parts || parts.length === 0) {
+    return [toXmlTextBlock("")];
   }
 
-  const targets = targetLabel(params.targets);
-  const replyToLabel = params.replyToLabel?.trim();
-  segments.push(
-    `${params.author}${targets ? ` → ${targets}` : ""}${replyToLabel ? ` ↩ ${replyToLabel}` : ""}`,
+  const compiled: CanonicalContentBlock[] = [];
+  for (const part of parts) {
+    if (part.type === "text") {
+      compiled.push(toXmlTextBlock(xmlEscapeText(part.text)));
+      continue;
+    }
+
+    if (part.type === "mention") {
+      compiled.push(
+        toXmlTextBlock(
+          selfClosingXmlTag("mention", {
+            participantId: part.mention.participantId,
+            participantType: part.mention.participantType,
+            name: part.mention.name,
+            title: part.mention.title,
+            role: part.mention.role,
+          }),
+        ),
+      );
+      continue;
+    }
+
+    compiled.push(
+      toXmlTextBlock(
+        selfClosingXmlTag("file-ref", {
+          fileId: part.fileId,
+          name: part.originalName,
+          category: part.category,
+          mimeType: part.mimeType,
+        }),
+      ),
+    );
+    compiled.push(part);
+  }
+
+  return compiled;
+}
+
+function compileReplyPreviewBlocks(item: Extract<CanonicalContextItem, { kind: "message" }>) {
+  if (!item.replyTo) return [];
+
+  const ref = item.replyTo.ref
+    || (typeof item.replyTo.sequence === "number"
+      ? buildConversationMessageRef(item.replyTo.sequence)
+      : undefined);
+  return [
+    toXmlTextBlock(
+      openXmlTag("reply_to", {
+        ref,
+        itemId: item.replyTo.itemId,
+        sequence: item.replyTo.sequence,
+        itemType: item.replyTo.itemType,
+        subtype: item.replyTo.subtype,
+        unavailable: item.replyTo.isUnavailable === true ? "true" : undefined,
+        ...compileEntityAttrs("author", item.replyTo.author),
+      }),
+    ),
+    toXmlTextBlock(openXmlTag("preview")),
+    toXmlTextBlock(xmlEscapeText(item.replyTo.previewText || "")),
+    toXmlTextBlock(closeXmlTag("preview")),
+    toXmlTextBlock(closeXmlTag("reply_to")),
+  ];
+}
+
+function compileRestrictedAudience(
+  targets?: Array<ConversationEntityRef | undefined>,
+) {
+  const resolved = (targets || []).filter(
+    (target): target is ConversationEntityRef => Boolean(target),
   );
+  if (resolved.length === 0) return [];
 
-  return `[${segments.join(" | ")}]: `;
+  return [
+    toXmlTextBlock(openXmlTag("restricted_audience")),
+    ...resolved.map((target) =>
+      toXmlTextBlock(
+        selfClosingXmlTag("participant", {
+          participantId: target.participantId,
+          participantType: target.participantType,
+          name: target.name,
+          title: target.title,
+          role: target.role,
+        }),
+      ),
+    ),
+    toXmlTextBlock(closeXmlTag("restricted_audience")),
+  ];
 }
 
-export async function compressContextItems(
-  items: CanonicalContextItem[],
-): Promise<CanonicalContextItem[]> {
-  return items;
+function compileMessageItem(
+  item: Extract<CanonicalContextItem, { kind: "message" }>,
+): ConversationMessage {
+  const ref =
+    item.itemRef
+    || (typeof item.sequence === "number" ? buildConversationMessageRef(item.sequence) : undefined);
+  const content: CanonicalContentBlock[] = [
+    toXmlTextBlock(
+      openXmlTag("message", {
+        ref,
+        itemId: item.itemId,
+        sequence: item.sequence,
+        createdAt: formatContextTimestamp(item.createdAt),
+        scope: item.scope,
+        surface: item.surface,
+        role: item.role,
+        subtype: item.messageType,
+        replyable: item.replyable === true ? "true" : undefined,
+        ...compileEntityAttrs("author", item.author),
+      }),
+    ),
+    ...compileReplyPreviewBlocks(item),
+    ...compileRestrictedAudience(item.targets),
+    toXmlTextBlock(openXmlTag("body")),
+    ...compileBodyBlocks(item.parts),
+    toXmlTextBlock(closeXmlTag("body")),
+    toXmlTextBlock(closeXmlTag("message")),
+  ];
+
+  if (item.role === "assistant" && item.author?.isSelf) {
+    return {
+      role: "assistant",
+      content,
+    };
+  }
+
+  return {
+    role: "user",
+    content,
+  };
 }
 
-export async function compressContextWindow(
-  window: ProviderContextWindow,
-): Promise<ProviderContextWindow> {
-  return window;
+function compileEventItem(
+  item: Extract<CanonicalContextItem, { kind: "event" }>,
+): ConversationMessage {
+  const ref =
+    item.itemRef
+    || (typeof item.sequence === "number" ? buildConversationMessageRef(item.sequence) : undefined);
+  const payloadText =
+    item.eventPayload && Object.keys(item.eventPayload).length > 0
+      ? JSON.stringify(item.eventPayload)
+      : "";
+  return {
+    role: "user",
+    content: [
+      toXmlTextBlock(
+        openXmlTag("event", {
+          ref,
+          itemId: item.itemId,
+          sequence: item.sequence,
+          createdAt: formatContextTimestamp(item.createdAt),
+          eventType: item.eventType,
+          scope: item.scope,
+          surface: item.surface,
+          timelinePolicy: item.timelinePolicy,
+          contextPolicy: item.contextPolicy,
+          replyable: item.replyable === true ? "true" : undefined,
+          ...compileEntityAttrs("author", item.author),
+        }),
+      ),
+      ...compileRestrictedAudience(item.targets),
+      toXmlTextBlock(openXmlTag("event_payload")),
+      toXmlTextBlock(xmlEscapeText(payloadText)),
+      toXmlTextBlock(closeXmlTag("event_payload")),
+      toXmlTextBlock(openXmlTag("body")),
+      ...compileBodyBlocks(item.parts),
+      toXmlTextBlock(closeXmlTag("body")),
+      toXmlTextBlock(closeXmlTag("event")),
+    ],
+  };
 }
 
-function archiveFramePrefix(frame: CanonicalArchiveFrame, chainLabel: string) {
-  const frameLabel = frame.frameType
-    ? `${chainLabel}/${frame.frameType}`
-    : chainLabel;
-  return `[Archive ${frameLabel}]: `;
+function compileSystemNoticeItem(
+  item: Extract<CanonicalContextItem, { kind: "system_notice" }>,
+): ConversationMessage {
+  return {
+    role: "user",
+    content: [
+      toXmlTextBlock(
+        openXmlTag("system_notice", {
+          itemId: item.itemId,
+          noticeType: item.noticeType,
+          scope: item.scope,
+          surface: item.surface,
+          createdAt: formatContextTimestamp(item.createdAt),
+        }),
+      ),
+      toXmlTextBlock(openXmlTag("body")),
+      ...compileBodyBlocks(item.parts),
+      toXmlTextBlock(closeXmlTag("body")),
+      toXmlTextBlock(closeXmlTag("system_notice")),
+    ],
+  };
+}
+
+function compileSummaryItem(
+  item: Extract<CanonicalContextItem, { kind: "summary" }>,
+): ConversationMessage {
+  return {
+    role: "user",
+    content: [
+      toXmlTextBlock(
+        openXmlTag("summary", {
+          itemId: item.itemId,
+          summaryType: item.summaryType,
+          scope: item.scope,
+          surface: item.surface,
+          createdAt: formatContextTimestamp(item.createdAt),
+        }),
+      ),
+      toXmlTextBlock(openXmlTag("body")),
+      ...compileBodyBlocks(item.parts),
+      toXmlTextBlock(closeXmlTag("body")),
+      toXmlTextBlock(closeXmlTag("summary")),
+    ],
+  };
+}
+
+function compileMemoryRecallItem(
+  item: Extract<CanonicalContextItem, { kind: "memory_recall" }>,
+): ConversationMessage {
+  const content: CanonicalContentBlock[] = [
+    toXmlTextBlock(
+      openXmlTag("memory_recall", {
+        recallType: item.recallType,
+        scope: item.scope,
+        surface: item.surface,
+      }),
+    ),
+  ];
+
+  for (const memory of item.memories) {
+    content.push(
+      toXmlTextBlock(
+        openXmlTag("memory", {
+          memoryId: memory.id,
+          spaceType: memory.spaceType,
+          category: memory.category,
+          importance: memory.importance,
+          confidence: memory.confidence,
+          textDigest: memory.textDigest,
+        }),
+      ),
+      toXmlTextBlock(openXmlTag("body")),
+      ...compileBodyBlocks(memory.contentBlocks),
+      toXmlTextBlock(closeXmlTag("body")),
+      toXmlTextBlock(closeXmlTag("memory")),
+    );
+  }
+
+  content.push(toXmlTextBlock(closeXmlTag("memory_recall")));
+  return {
+    role: "user",
+    content,
+  };
+}
+
+function compileManifestMessage(
+  manifest: ProviderContextManifest,
+): ConversationMessage {
+  const content: CanonicalContentBlock[] = [
+    toXmlTextBlock(
+      openXmlTag("conversation_manifest", {
+        conversationId: manifest.conversationId,
+        kind: manifest.conversationKind,
+        boundary: manifest.conversationBoundary,
+        selfParticipantId: manifest.selfParticipantId,
+        selfActorId: manifest.selfActorId,
+      }),
+    ),
+    toXmlTextBlock(openXmlTag("participants")),
+  ];
+
+  for (const participant of manifest.participants) {
+    const isSelf =
+      (manifest.selfParticipantId &&
+        participant.participantId === manifest.selfParticipantId)
+      || (participant.type === "actor" && participant.id === manifest.selfActorId);
+    content.push(
+      toXmlTextBlock(
+        selfClosingXmlTag("participant", {
+          participantId: participant.participantId,
+          participantType: participant.type,
+          name: participant.name,
+          title: participant.title,
+          role: participant.role,
+          isSelf: isSelf ? "true" : undefined,
+        }),
+      ),
+    );
+  }
+
+  content.push(
+    toXmlTextBlock(closeXmlTag("participants")),
+    toXmlTextBlock(closeXmlTag("conversation_manifest")),
+  );
+  return {
+    role: "user",
+    content,
+  };
 }
 
 function compileArchiveFrameToConversationMessages(
   frame: CanonicalArchiveFrame,
-  chainLabel: string,
 ): ConversationMessage[] {
-  const parts = normalizeParts(frame.parts);
+  const parts = frame.parts || [toXmlTextBlock("")];
 
   switch (frame.role) {
     case "assistant":
@@ -123,18 +414,11 @@ function compileArchiveFrameToConversationMessages(
       return [
         {
           role: "user",
-          content: withTextPrefix(archiveFramePrefix(frame, chainLabel), parts),
+          content: parts,
         },
       ];
 
     case "system":
-      return [
-        {
-          role: "user",
-          content: withTextPrefix(archiveFramePrefix(frame, chainLabel), parts),
-        },
-      ];
-
     case "user":
     default:
       return [
@@ -146,6 +430,18 @@ function compileArchiveFrameToConversationMessages(
   }
 }
 
+export async function compressContextItems(
+  items: CanonicalContextItem[],
+): Promise<CanonicalContextItem[]> {
+  return items;
+}
+
+export async function compressContextWindow(
+  window: ProviderContextWindow,
+): Promise<ProviderContextWindow> {
+  return window;
+}
+
 export async function compileContextItemsToConversationMessages(
   items: CanonicalContextItem[],
 ): Promise<ConversationMessage[]> {
@@ -153,126 +449,40 @@ export async function compileContextItemsToConversationMessages(
 
   for (const item of items) {
     switch (item.kind) {
-      case "system_notice": {
-        messages.push({
-          role: "user",
-          content: normalizeParts(item.parts),
-        });
+      case "system_notice":
+        messages.push(compileSystemNoticeItem(item));
         break;
-      }
 
-      case "event": {
-        const parts = normalizeParts(item.parts);
-        const timestamp = formatContextTimestamp(item.createdAt);
-        messages.push({
-          role: "user",
-          content: withTextPrefix(
-            timestamp ? `[System | ${timestamp}]: ` : "[System]: ",
-            parts,
-          ),
-        });
+      case "event":
+        messages.push(compileEventItem(item));
         break;
-      }
 
-      case "message": {
-        if (item.role === "system") {
-          const timestamp = formatContextTimestamp(item.createdAt);
-          messages.push({
-            role: "user",
-            content: withTextPrefix(
-              timestamp ? `[System | ${timestamp}]: ` : "[System]: ",
-              normalizeParts(item.parts),
-            ),
-          });
-          break;
-        }
-
-        if (item.role === "assistant" && item.author?.isSelf) {
-          const targetNames = targetLabel(item.targets);
-          const timestamp = formatContextTimestamp(item.createdAt);
-          const prefix = targetNames
-            ? `[${timestamp ? `${timestamp} | ` : ""}→ ${targetNames}] `
-            : timestamp
-              ? `[${timestamp}] `
-              : "";
-          messages.push({
-            role: "assistant",
-            content: withTextPrefix(prefix, normalizeParts(item.parts)),
-          });
-          break;
-        }
-
-        const header = buildMessageHeader({
-          timestamp: item.createdAt,
-          author: authorLabel(item),
-          targets: item.targets,
-          replyToLabel: item.replyTo?.author?.name || item.replyTo?.previewText,
-        });
-        messages.push({
-          role: "user",
-          content: withTextPrefix(header, normalizeParts(item.parts)),
-        });
+      case "message":
+        messages.push(compileMessageItem(item));
         break;
-      }
 
-      case "tool_call_batch": {
+      case "tool_call_batch":
         messages.push({
           role: "assistant",
           content: item.content && item.content.length > 0 ? item.content : [],
           toolCalls: item.toolCalls,
         });
         break;
-      }
 
-      case "tool_result_batch": {
+      case "tool_result_batch":
         messages.push({
           role: "tool_result",
           results: item.toolResults,
         });
         break;
-      }
 
-      case "summary": {
-        messages.push({
-          role: "user",
-          content: withTextPrefix("[Summary]: ", normalizeParts(item.parts)),
-        });
+      case "summary":
+        messages.push(compileSummaryItem(item));
         break;
-      }
 
-      case "memory_recall": {
-        const content: CanonicalContentBlock[] = [
-          textBlock(
-            item.recallType === "bootstrap"
-              ? "[Recalled Memory / Bootstrap]\n"
-              : "[Recalled Memory / Turn]\n",
-          ),
-        ];
-
-        item.memories.forEach((memory, index) => {
-          const fallbackText = extractText(memory.contentBlocks).trim();
-          const digest = memory.textDigest || fallbackText;
-          content.push(
-            textBlock(
-              `[${memory.spaceType}/${memory.category}]${digest ? ` ${digest}` : ""}\n`,
-            ),
-          );
-
-          if (memory.contentBlocks.length > 0) {
-            content.push(...memory.contentBlocks);
-          }
-
-          if (index < item.memories.length - 1) {
-            content.push(textBlock("\n"));
-          }
-        });
-
-        messages.push({
-          role: "user",
-          content: normalizeParts(content),
-        });
+      case "memory_recall":
+        messages.push(compileMemoryRecallItem(item));
         break;
-      }
     }
   }
 
@@ -284,19 +494,19 @@ export async function compileContextWindowToConversationMessages(
 ): Promise<ConversationMessage[]> {
   const messages: ConversationMessage[] = [];
 
+  if (window.manifest) {
+    messages.push(compileManifestMessage(window.manifest));
+  }
+
   if (window.sharedArchivePoint) {
     for (const frame of window.sharedArchivePoint.frames) {
-      messages.push(
-        ...compileArchiveFrameToConversationMessages(frame, "shared"),
-      );
+      messages.push(...compileArchiveFrameToConversationMessages(frame));
     }
   }
 
   if (window.privateArchivePoint) {
     for (const frame of window.privateArchivePoint.frames) {
-      messages.push(
-        ...compileArchiveFrameToConversationMessages(frame, "private"),
-      );
+      messages.push(...compileArchiveFrameToConversationMessages(frame));
     }
   }
 

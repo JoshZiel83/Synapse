@@ -7,6 +7,7 @@ import { query, transaction } from "../../infrastructure/database/index.js";
 import type {
   CanonicalArchiveFrame,
   CanonicalArchivePoint,
+  ProviderContextManifest,
   ProviderContextWindow,
 } from "@synapse/shared";
 import { db } from "../../infrastructure/database/kysely.js";
@@ -562,6 +563,7 @@ export async function buildProviderContextWindow(params: {
   conversationId: string;
   sessionId?: string;
   items: CanonicalContextItem[];
+  manifest?: ProviderContextManifest;
 }): Promise<ProviderContextWindow> {
   await Promise.all([
     maybeCompactChain({
@@ -606,6 +608,7 @@ export async function buildProviderContextWindow(params: {
   }
 
   return {
+    manifest: params.manifest,
     sharedArchivePoint,
     sharedTailItems,
     privateArchivePoint,
@@ -616,8 +619,10 @@ export async function buildProviderContextWindow(params: {
 
 export function buildAdHocProviderContextWindow(
   items: CanonicalContextItem[],
+  manifest?: ProviderContextManifest,
 ): ProviderContextWindow {
   return {
+    manifest,
     sharedArchivePoint: null,
     sharedTailItems: items,
     privateArchivePoint: null,

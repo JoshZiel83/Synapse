@@ -11,7 +11,12 @@ import {
   nowISO,
   textBlocks,
 } from '@synapse/shared';
-import type { ActorAction, ConversationParticipantEntry, ProviderContextWindow } from '@synapse/shared';
+import type {
+  ActorAction,
+  ConversationParticipantEntry,
+  ProviderContextManifest,
+  ProviderContextWindow,
+} from '@synapse/shared';
 import type { CanonicalContextItem } from '@synapse/shared/types';
 import { actorThink } from '../modules/ai/index.js';
 import { buildActorPrompt } from '../modules/ai/prompt-builder.js';
@@ -274,6 +279,7 @@ export function startSessionThinkingWorker() {
         let conversationParticipants: any[] | undefined;
         let promptConversationParticipants: any[] | undefined;
         let participantEntries: ConversationParticipantEntry[] = [];
+        let contextManifest: ProviderContextManifest | undefined;
         let actorParticipantId: string | undefined;
         let lastKnownConversationSequence = 0;
         let contextItems: CanonicalContextItem[];
@@ -292,14 +298,30 @@ export function startSessionThinkingWorker() {
               `Actor ${actorId} is not an active participant of conversation ${conversationId}`,
             );
           }
+          const selfParticipant = conversationParticipants.find(
+            (member: any) =>
+              member.actor_id === actorId && member.state === 'active',
+          );
+          if (selfParticipant) {
+            participantEntries.push({
+              type: 'actor',
+              id: actorId,
+              participantId: selfParticipant.id,
+              name: selfParticipant.actor_name || session.actor_name || 'Unknown actor',
+              title: selfParticipant.actor_title || selfParticipant.actor_role || 'Actor',
+              role: selfParticipant.actor_role || undefined,
+            });
+          }
 
           for (const member of conversationParticipants) {
             if (member.actor_id && member.actor_id !== actorId && member.state === 'active') {
               participantEntries.push({
                 type: 'actor',
                 id: member.actor_id,
+                participantId: member.id,
                 name: member.actor_name,
                 title: member.actor_title,
+                role: member.actor_role || undefined,
               });
             } else if (member.user_id && member.state === 'active') {
               const workspaceMemberId =
@@ -317,6 +339,7 @@ export function startSessionThinkingWorker() {
                 id: workspaceMemberId,
                 participantId: member.id,
                 name: member.user_name || 'User',
+                role: 'Workspace member',
               });
             } else if (member.participant_kind === 'external' && member.state === 'active') {
               const linkedUserName =
@@ -336,6 +359,7 @@ export function startSessionThinkingWorker() {
                 title: linkedUserName
                   ? `Linked workspace user: ${linkedUserName}`
                   : 'External participant',
+                role: 'External participant',
                 linkedWorkspaceMemberId:
                   (member.linked_user_id as string | null) || undefined,
                 linkedWorkspaceMemberName: linkedUserName,
@@ -344,6 +368,15 @@ export function startSessionThinkingWorker() {
               });
             }
           }
+          contextManifest = {
+            conversationId,
+            conversationKind: session.conversation_kind,
+            conversationBoundary:
+              session.conversationBoundary || session.conversation_boundary,
+            selfParticipantId: actorParticipantId,
+            selfActorId: actorId,
+            participants: participantEntries,
+          };
 
           const visibleItems = await getContextConversationItemsForParticipant({
             conversationId,
@@ -443,6 +476,7 @@ export function startSessionThinkingWorker() {
           conversationId: session.conversation_id,
           sessionId,
           items: finalContextItems,
+          manifest: contextManifest,
         });
 
         const capabilitySurface = await resolveActorCapabilitySurface({

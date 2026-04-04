@@ -332,12 +332,13 @@ async function loadToolResolveConversationParticipants(params: {
   for (const member of members) {
     if (member.state !== "active") continue;
     if (member.actor_id) {
-      if (member.actor_id === params.actorId) continue;
       entries.push({
         type: "actor",
         id: member.actor_id,
+        participantId: member.id,
         name: member.actor_name || "Unknown actor",
         title: member.actor_title || member.actor_role || "Actor",
+        role: member.actor_role || undefined,
       });
       continue;
     }
@@ -364,6 +365,7 @@ async function loadToolResolveConversationParticipants(params: {
         title: transportKind
           ? `Workspace member · reachable via ${transportKind === "feishu" ? "Feishu" : "WeChat"}`
           : "Workspace member",
+        role: "Workspace member",
       });
       continue;
     }
@@ -385,6 +387,7 @@ async function loadToolResolveConversationParticipants(params: {
         title: linkedWorkspaceMemberName
           ? `Linked workspace user: ${linkedWorkspaceMemberName}`
           : "External participant",
+        role: "External participant",
         linkedWorkspaceMemberId:
           (member.linked_user_id as string | null) || undefined,
         linkedWorkspaceMemberName,
@@ -606,6 +609,7 @@ export async function actorThink(
         };
 
   const allContextWindow: ProviderContextWindow = {
+    manifest: contextWindow.manifest,
     sharedArchivePoint: contextWindow.sharedArchivePoint,
     sharedTailItems: [...contextWindow.sharedTailItems],
     privateArchivePoint: contextWindow.privateArchivePoint,
@@ -657,7 +661,11 @@ export async function actorThink(
   const getThreadSemantics = () =>
     resolveThreadSemantics({
       kind: options?.conversationKind,
-      otherParticipantCount: currentToolConversationParticipants?.length || 0,
+      otherParticipantCount:
+        currentToolConversationParticipants?.filter(
+          (participant) =>
+            !(participant.type === "actor" && participant.id === actor.id),
+        ).length || 0,
     });
   const buildResolveCtx = (): ToolResolveContext => ({
     sessionId: options?.sessionId || "",

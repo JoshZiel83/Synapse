@@ -40,6 +40,7 @@ import { getSession } from "../session/service.js";
 import {
   addConversationParticipants,
   listConversationParticipants,
+  resolveConversationReplyRef,
   sendConversationMessageFromParticipant,
 } from "../chat/service.js";
 import { buildNormalizedMessageContent } from "../chat/message-content.js";
@@ -132,10 +133,10 @@ const selectableQuestionFieldTypeOptions = questionFieldTypeOptions.filter(
 );
 const sendToInputSchema = z
   .object({
-    recipients: z.array(z.string().trim().min(1)).min(1).optional(),
     message: z.string().trim().min(1).max(12000),
     intent: sendToIntentSchema,
     summary: z.string().trim().min(1).max(240),
+    replyToRef: z.string().trim().min(1).optional(),
   })
   .strict();
 const currentTimeInputSchema = z
@@ -170,16 +171,11 @@ function getThreadConversationId(session: {
 }
 
 function normalizeRawSendToInput(input: Record<string, unknown>) {
-  const rawRecipients = input.recipients;
   return {
-    recipients: Array.isArray(rawRecipients)
-      ? rawRecipients
-      : typeof rawRecipients === "string"
-        ? [rawRecipients]
-        : rawRecipients,
     message: input.message,
     intent: input.intent,
     summary: input.summary ?? input.task,
+    replyToRef: input.replyToRef,
   };
 }
 
@@ -191,9 +187,6 @@ function buildSendToDefinition(params: {
   conversationKind?: string;
   otherParticipants: ConversationParticipantEntry[];
 }): ToolDefinition {
-  const recipientNames = Array.from(
-    new Set(params.otherParticipants.map((member) => member.name)),
-  );
   const rosterDesc = params.otherParticipants
     .map((member) =>
       member.type === "workspace_member"
@@ -215,7 +208,7 @@ function buildSendToDefinition(params: {
     const peerName = params.otherParticipants[0]!.name;
     return {
       name: "send_to",
-      description: `Send a visible message to the other participant in this private thread. The recipient is implicit, so do not supply a recipients list unless you need to disambiguate a malformed roster. Current peer: ${rosterDesc}.`,
+      description: `Send a visible message to the other participant in this private thread. The recipient is implicit. Current peer: ${rosterDesc}.`,
       parameters: {
         type: "object",
         properties: {
@@ -229,10 +222,15 @@ function buildSendToDefinition(params: {
             description:
               "A concise structured summary. For reply, summarize what you are replying with. For request, summarize what you want the other participant to do or answer.",
           },
+          replyToRef: {
+            type: "string",
+            description:
+              'Optional short message reference such as "m_1775264233848001" from the XML context when you are replying to a specific message.',
+          },
           message: {
             type: "string",
             description:
-              `The visible message content sent in this private thread with ${peerName}. The system already knows who the peer is, so use <Mention name="${peerName}"/> only when the sentence itself explicitly points to that person, such as ownership, responsibility, follow-up, or who to contact. If a name is ambiguous, you must disambiguate with type+id or an explicit id attribute.`,
+              `The visible message content sent in this private thread with ${peerName}. Prefer inline <mention participantId="..."/>. You may also use <mention name="${peerName}"/> when the name is unique in the roster. Mention only when the sentence itself explicitly points to a participant.`,
           },
         },
         required: ["intent", "summary", "message"],
@@ -242,15 +240,10 @@ function buildSendToDefinition(params: {
 
   return {
     name: "send_to",
-    description: `Send a visible conversation message in the current conversation. Group messages stay visible to everyone; recipients tell the system who you are addressing so it can add recipient mentions and route wakeups correctly. Inline mentions inside the body are still only for sentence-level references. Available recipients: ${rosterDesc}.`,
+    description: `Send a visible conversation message in the current conversation. Group messages stay visible to everyone. Use inline mentions inside the message body only when the sentence explicitly refers to a participant. Active roster: ${rosterDesc}.`,
     parameters: {
       type: "object",
       properties: {
-        recipients: {
-          type: "array",
-          description: "One or more participant names you are addressing. The message still remains visible to the whole conversation.",
-          items: { type: "string", enum: recipientNames },
-        },
         intent: {
           type: "string",
           description:
@@ -262,13 +255,18 @@ function buildSendToDefinition(params: {
           description:
             "A concise structured summary for the UI. For request, state the requested action or question. For reply, state the substantive reply.",
         },
+        replyToRef: {
+          type: "string",
+          description:
+            'Optional short message reference such as "m_1775264233848001" from the XML context when you are replying to a specific message.',
+        },
         message: {
           type: "string",
           description:
-            'The visible message content. The system will automatically prepend mentions for the selected recipients, so do not manually duplicate them at the start of the message. Use inline <Mention .../> only when the sentence itself explicitly points to a participant, such as ownership, responsibility, follow-up, or who to contact. If a name matches multiple participants, you must disambiguate with type+id or an explicit id attribute.',
+            'The visible message content. Prefer inline <mention participantId="..."/>. You may also use <mention name="..."/> when the name is unique in the roster. Do not mechanically mention people at the start of every group message.',
         },
       },
-      required: ["recipients", "intent", "summary", "message"],
+      required: ["intent", "summary", "message"],
     },
   };
 }
@@ -1241,16 +1239,10 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "send_to",
       description:
-        "Send a visible conversation message in the current thread. In private threads the peer is implicit. In group threads you must specify who you are addressing, but the message remains visible to the whole conversation. Always include whether this is a reply or a request, and include a short structured summary for UI rendering.",
+        "Send a visible conversation message in the current thread. Messages remain visible to the whole conversation. Include whether this is a reply or a request, and include a short structured summary for UI rendering.",
       parameters: {
         type: "object",
         properties: {
-          recipients: {
-            type: "array",
-            description:
-              "Optional in private threads. Required in group threads. These are the addressees, not a private visibility filter.",
-            items: { type: "string" },
-          },
           intent: {
             type: "string",
             description: "Why you are sending this message.",
@@ -1259,12 +1251,17 @@ export function registerCallableToolPlugins(): void {
           summary: {
             type: "string",
             description:
-              "A concise structured summary. For reply, summarize what you are replying with. For request, summarize what you want the recipient(s) to do or answer.",
+              "A concise structured summary. For reply, summarize what you are replying with. For request, summarize what you want someone to do or answer.",
+          },
+          replyToRef: {
+            type: "string",
+            description:
+              'Optional short message reference such as "m_1775264233848001" from the XML context when you are replying to a specific message.',
           },
           message: {
             type: "string",
             description:
-              'The visible message content. In group threads the system will automatically prepend mentions for the selected recipients, so do not manually repeat them at the start of the message. Use inline <Mention .../> only when the sentence itself needs an explicit participant reference, such as ownership, responsibility, follow-up, or who to contact. If a name is ambiguous, you must disambiguate with type+id or an explicit id attribute.',
+              'The visible message content. Prefer inline <mention participantId="..."/>. You may also use <mention name="..."/> when the name is unique in the roster. Mention only when the sentence itself explicitly points to a participant.',
           },
         },
         required: ["intent", "summary", "message"],
@@ -1303,6 +1300,7 @@ export function registerCallableToolPlugins(): void {
         intent,
         summary,
         message,
+        replyToRef,
       } = parsed.data;
 
       const context = getToolExecutionContext();
@@ -1319,7 +1317,6 @@ export function registerCallableToolPlugins(): void {
       }
 
       const allMembers = await listConversationParticipants(conversationId);
-      const candidates = buildSendToCandidates(allMembers, context.actorId);
       const senderParticipant = allMembers.find(
         (member: any) =>
           member.actor_id === context.actorId && member.state === "active",
@@ -1327,114 +1324,11 @@ export function registerCallableToolPlugins(): void {
       if (!senderParticipant?.id) {
         throwToolError("Current actor is not an active participant in this conversation.");
       }
-      const threadSemantics = resolveThreadSemantics({
-        kind: session.conversation_kind,
-        otherParticipantCount: candidates.length,
-      });
-      const aliasMap = new Map<string, SendToCandidate[]>();
-      for (const candidate of candidates) {
-        for (const alias of candidate.aliases) {
-          const normalized = normalizeRecipientAlias(alias);
-          if (!normalized) continue;
-          const existing = aliasMap.get(normalized) || [];
-          existing.push(candidate);
-          aliasMap.set(normalized, existing);
-        }
-      }
-
-      const resolved: string[] = [];
-      const resolvedRecipients: SendToCandidate[] = [];
-      const errors: string[] = [];
-      let hasNonActorRecipients = false;
-      const parsedRecipientNames = parsed.data.recipients ?? [];
-      const recipientNames =
-        threadSemantics.addressingMode === "implicit_peer" &&
-        candidates.length === 1 &&
-        parsedRecipientNames.length === 0
-          ? [candidates[0]!.name]
-          : parsedRecipientNames;
-
-      if (
-        threadSemantics.addressingMode === "explicit_recipients" &&
-        recipientNames.length === 0
-      ) {
-        throwToolError("send_to requires recipients in a group thread.");
-      }
-      if (
-        threadSemantics.addressingMode === "implicit_peer" &&
-        recipientNames.length > 1
-      ) {
-        throwToolError(
-          "A private thread can only send to the other current participant.",
-        );
-      }
-      if (
-        threadSemantics.addressingMode === "implicit_peer" &&
-        candidates.length > 1 &&
-        recipientNames.length === 0
-      ) {
-        throwToolError(
-          "This private thread roster is ambiguous. Specify the recipient explicitly.",
-        );
-      }
-
-      for (const name of recipientNames) {
-        const normalizedName = normalizeRecipientAlias(name);
-        const exactMatches = aliasMap.get(normalizedName) || [];
-        if (exactMatches.length > 1) {
-          const options = Array.from(
-            new Set(exactMatches.map((candidate) => candidate.label)),
-          );
-          errors.push(
-            `"${name}" is ambiguous. Matches: ${options.join(", ")}.`,
-          );
-          continue;
-        }
-
-        let candidate = exactMatches[0];
-        if (!candidate) {
-          let bestMatch: { candidate: SendToCandidate; dist: number } | null =
-            null;
-          for (const currentCandidate of candidates) {
-            const distance = Math.min(
-              ...currentCandidate.aliases.map((alias) =>
-                levenshtein(normalizedName, normalizeRecipientAlias(alias)),
-              ),
-            );
-            if (distance <= 2 && (!bestMatch || distance < bestMatch.dist)) {
-              bestMatch = { candidate: currentCandidate, dist: distance };
-            }
-          }
-          if (bestMatch) {
-            errors.push(
-              `"${name}" not found. Did you mean ${bestMatch.candidate.label}?`,
-            );
-          } else {
-            errors.push(`"${name}" is not a participant of this conversation.`);
-          }
-          continue;
-        }
-
-        if (candidate.type !== "actor") {
-          hasNonActorRecipients = true;
-        }
-        resolvedRecipients.push(candidate);
-        resolved.push(candidate.label);
-      }
-
-      if (resolved.length === 0) {
-        const available = candidates.map((candidate) => candidate.label);
-        throwToolError("No valid recipients found.", {
-          details: errors,
-          extra: { availableMembers: available },
-        });
-      }
-
-      const isCoordination = !hasNonActorRecipients;
+      const mentionCandidates = buildSendToCandidates(allMembers);
       const normalizedMessage = await buildNormalizedMessageContent({
         content: message,
         inlineReferences: {
-          mentionCandidates: candidates.map(buildSendToMention),
+          mentionCandidates: mentionCandidates.map(buildSendToMention),
           defaultUser: buildDefaultUserMention({
             workspaceMemberId: context.workspaceMemberId,
             userName: "User",
@@ -1446,12 +1340,10 @@ export function registerCallableToolPlugins(): void {
           details: normalizedMessage.referenceWarnings,
         });
       }
-
-      const mentionPrelude = resolvedRecipients.flatMap((candidate, index) => {
-        const blocks = [mentionBlock({ mention: buildSendToMention(candidate) })];
-        const needsSpacer =
-          index < resolvedRecipients.length - 1 || normalizedMessage.contentBlocks.length > 0;
-        return needsSpacer ? [...blocks, textBlock(" ")] : blocks;
+      const replyTarget = await resolveConversationReplyRef({
+        conversationId,
+        participantId: senderParticipant.id,
+        replyRef: replyToRef,
       });
 
       await sendConversationMessageFromParticipant({
@@ -1460,9 +1352,9 @@ export function registerCallableToolPlugins(): void {
         senderParticipantId: senderParticipant.id,
         sessionId: context.sessionId,
         role: "assistant",
-        contentBlocks: [...mentionPrelude, ...normalizedMessage.contentBlocks],
+        contentBlocks: normalizedMessage.contentBlocks,
+        replyToItemId: replyTarget?.itemId,
         metadata: {
-          ...(isCoordination ? { coordination: true } : {}),
           sendToIntent: intent,
           sendToSummary: summary,
         },
@@ -1472,11 +1364,8 @@ export function registerCallableToolPlugins(): void {
         success: true,
         intent,
         summary,
-        sentTo: resolved,
-        message: `Message sent to ${resolved.join(", ")}.`,
-      };
-      if (errors.length > 0) {
-        result.warnings = errors;
+        replyToRef: replyTarget?.ref,
+        message: "Message sent.",
       }
       return JSON.stringify(result);
     },
