@@ -8,7 +8,12 @@ import {
   type ReactNode,
 } from 'react';
 
-import { ApiError, api, setApiAuthToken } from '@/lib/api';
+import {
+  ApiError,
+  api,
+  setApiAuthToken,
+  setApiUnauthorizedHandler,
+} from '@/lib/api';
 import { createChatPersistence } from '@/lib/chat-persistence';
 import { SESSION_TOKEN_KEY } from '@/lib/storage-keys';
 import { deleteStoredValue, readStoredValue, writeStoredValue } from '@/lib/storage';
@@ -113,6 +118,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshSession();
   }, [refreshSession]);
+
+  useEffect(() => {
+    setApiUnauthorizedHandler(() => clearSession());
+    return () => {
+      setApiUnauthorizedHandler(null);
+    };
+  }, [clearSession]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     const response = await api.login(email, password);

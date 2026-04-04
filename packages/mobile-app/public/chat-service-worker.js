@@ -342,7 +342,9 @@ async function fetchJson(auth, path, options) {
 
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    throw new Error((data && data.error) || "Request failed");
+    const error = new Error((data && data.error) || "Request failed");
+    error.status = response.status;
+    throw error;
   }
 
   return data;
@@ -715,7 +717,14 @@ async function runSyncPass(workspaceIdOverride, reason) {
         reason: reason || "sync-pass",
       },
     });
-  } catch {
+  } catch (error) {
+    if (error && error.status === 401) {
+      await broadcast({
+        type: "chat:auth-expired",
+      });
+      return;
+    }
+
     await broadcast({
       type: "chat:sync-failed",
       payload: {

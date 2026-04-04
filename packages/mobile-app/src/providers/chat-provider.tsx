@@ -31,6 +31,7 @@ import {
   subscribeToChatServiceWorker,
   syncChatServiceWorkerAuthContext,
 } from "@/lib/chat-web-service-worker";
+import { reportApiUnauthorized } from "@/lib/api";
 import { useSession } from "@/providers/session-provider";
 import { useWorkspace } from "@/providers/workspace-provider";
 import {
@@ -182,6 +183,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     }
 
     return subscribeToChatServiceWorker((message) => {
+      if (message.type === "chat:auth-expired") {
+        reportApiUnauthorized(401);
+        return;
+      }
+
       if (
         workspaceId &&
         message.type === "chat:snapshot-updated" &&

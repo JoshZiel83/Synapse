@@ -1,6 +1,5 @@
 import Feather from "@expo/vector-icons/Feather";
 import * as DocumentPicker from "expo-document-picker";
-import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
 import { useRouter, type Href } from "expo-router";
 import {
@@ -10,10 +9,11 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -22,8 +22,10 @@ import {
   View,
   useWindowDimensions,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Svg, { Circle } from "react-native-svg";
 
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import {
   buildContentBlocksFromDraftText,
   insertMentionIntoDraft,
@@ -44,25 +46,40 @@ import {
   fileRefBlock,
   type ChatConversationView,
   type ConversationReplyRef,
+  type FileRecordView,
 } from "@shared";
 
 type AttachmentKind = "image" | "video" | "audio" | "file";
+type AttachmentStatus = "uploading" | "uploaded" | "failed";
 
 interface LocalAttachment {
   id: string;
   kind: AttachmentKind;
-  uri: string;
+  localUri: string;
   name: string;
   mimeType: string;
+  webFile?: Blob | File | null;
+  progress: number;
+  status: AttachmentStatus;
+  file?: FileRecordView;
+  errorMessage?: string;
 }
 
 const DEFAULT_INPUT_HEIGHT = 22;
+const ATTACHMENT_ICON_SIZE = 32;
+const ATTACHMENT_ICON_STROKE = 2.5;
 
 function inferAttachmentKind(mimeType: string): AttachmentKind {
   if (mimeType.startsWith("video/")) return "video";
   if (mimeType.startsWith("audio/")) return "audio";
   if (mimeType.startsWith("image/")) return "image";
   return "file";
+}
+
+function normalizeContentKindToAttachmentKind(
+  contentKind: FileRecordView["contentKind"],
+): AttachmentKind {
+  return contentKind === "document" ? "file" : contentKind;
 }
 
 function assetName(kind: AttachmentKind, uri: string) {
@@ -114,6 +131,165 @@ function getDraftMeasurementText(text: string) {
   return text.endsWith("\n") ? `${text} ` : text;
 }
 
+function getAttachmentProgress(attachment: LocalAttachment) {
+  if (attachment.status === "uploaded" || attachment.status === "failed") {
+    return 1;
+  }
+
+  return Math.max(0.08, attachment.progress);
+}
+
+function AttachmentProgressIcon({
+  attachment,
+}: {
+  attachment: LocalAttachment;
+}) {
+  const center = ATTACHMENT_ICON_SIZE / 2;
+  const radius = center - ATTACHMENT_ICON_STROKE - 1;
+  const circumference = 2 * Math.PI * radius;
+  const progress = getAttachmentProgress(attachment);
+  const strokeColor =
+    attachment.status === "failed"
+      ? theme.colors.danger
+      : attachment.status === "uploaded"
+        ? theme.colors.success
+        : theme.colors.primary;
+
+  return (
+    <View style={styles.attachmentStatusIcon}>
+      <Svg
+        width={ATTACHMENT_ICON_SIZE}
+        height={ATTACHMENT_ICON_SIZE}
+        style={styles.attachmentStatusSvg}
+      >
+        <Circle
+          cx={center}
+          cy={center}
+          r={radius}
+          stroke={theme.colors.border}
+          strokeWidth={ATTACHMENT_ICON_STROKE}
+          fill="none"
+        />
+        <Circle
+          cx={center}
+          cy={center}
+          r={radius}
+          stroke={strokeColor}
+          strokeWidth={ATTACHMENT_ICON_STROKE}
+          strokeLinecap="round"
+          strokeDasharray={`${circumference} ${circumference}`}
+          strokeDashoffset={circumference * (1 - progress)}
+          fill="none"
+          transform={`rotate(-90 ${center} ${center})`}
+        />
+      </Svg>
+      <Feather
+        name={attachmentIconName(attachment.kind)}
+        size={14}
+        color={strokeColor}
+      />
+    </View>
+  );
+}
+
+function AttachmentRow({
+  attachment,
+  accessory,
+  onPress,
+}: {
+  attachment: LocalAttachment;
+  accessory: ReactNode;
+  onPress?: () => void;
+}) {
+  const content = (
+    <View style={styles.attachmentRow}>
+      <AttachmentProgressIcon attachment={attachment} />
+      <Text
+        numberOfLines={1}
+        style={[
+          styles.attachmentRowLabel,
+          attachment.status === "failed" && styles.attachmentRowLabelFailed,
+        ]}
+      >
+        {attachment.name}
+      </Text>
+      {accessory}
+    </View>
+  );
+
+  if (!onPress) {
+    return content;
+  }
+
+  return (
+    <Pressable
+      onPress={onPress}
+      style={({ pressed }) => [pressed && styles.attachmentRowPressed]}
+    >
+      {content}
+    </Pressable>
+  );
+}
+
+function AttachmentListSheet({
+  open,
+  attachments,
+  onClose,
+  onRemove,
+}: {
+  open: boolean;
+  attachments: LocalAttachment[];
+  onClose: () => void;
+  onRemove: (attachmentId: string) => void;
+}) {
+  const insets = useSafeAreaInsets();
+
+  return (
+    <Modal
+      animationType="slide"
+      transparent
+      visible={open}
+      onRequestClose={onClose}
+    >
+      <View style={styles.attachmentSheetOverlay}>
+        <Pressable style={StyleSheet.absoluteFill} onPress={onClose} />
+        <View
+          style={[
+            styles.attachmentSheet,
+            {
+              paddingBottom: Math.max(insets.bottom, 10),
+            },
+          ]}
+        >
+          <View style={styles.attachmentSheetHandle} />
+          <Text style={styles.attachmentSheetTitle}>待发送文件</Text>
+          <ScrollView
+            style={styles.attachmentSheetScroll}
+            contentContainerStyle={styles.attachmentSheetContent}
+          >
+            {attachments.map((attachment) => (
+              <AttachmentRow
+                key={attachment.id}
+                attachment={attachment}
+                accessory={
+                  <Pressable
+                    accessibilityRole="button"
+                    accessibilityLabel={`移除 ${attachment.name}`}
+                    onPress={() => onRemove(attachment.id)}
+                    style={styles.attachmentRowClose}
+                  >
+                    <Feather name="x" size={16} color={theme.colors.textMuted} />
+                  </Pressable>
+                }
+              />
+            ))}
+          </ScrollView>
+        </View>
+      </View>
+    </Modal>
+  );
+}
+
 export function ChatComposer({
   workspaceId,
   conversationId,
@@ -140,6 +316,7 @@ export function ChatComposer({
   const [selection, setSelection] = useState({ start: 0, end: 0 });
   const [inputHeight, setInputHeight] = useState(DEFAULT_INPUT_HEIGHT);
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
+  const [attachmentSheetOpen, setAttachmentSheetOpen] = useState(false);
   const [sending, setSending] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
@@ -147,6 +324,8 @@ export function ChatComposer({
   const draftTextRef = useRef(draftText);
   const draftMentionsRef = useRef(draftMentions);
   const selectionRef = useRef(selection);
+  const attachmentsRef = useRef(attachments);
+  const uploadControllersRef = useRef(new Map<string, AbortController>());
   const pendingMentionInsertIndexRef = useRef<number | null>(null);
   const maxInputHeight = Math.max(120, Math.floor(windowHeight * 0.4));
   const mentionsEnabled = conversation.kind !== "private";
@@ -162,6 +341,19 @@ export function ChatComposer({
     [draftMentions, draftText],
   );
 
+  const uploadedAttachments = useMemo(
+    () =>
+      attachments.filter(
+        (attachment): attachment is LocalAttachment & { file: FileRecordView } =>
+          attachment.status === "uploaded" && Boolean(attachment.file),
+      ),
+    [attachments],
+  );
+
+  const hasPendingAttachmentWork = attachments.some(
+    (attachment) => attachment.status !== "uploaded",
+  );
+
   useEffect(() => {
     draftTextRef.current = draftText;
   }, [draftText]);
@@ -175,7 +367,14 @@ export function ChatComposer({
   }, [selection]);
 
   useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  useEffect(() => {
     return () => {
+      uploadControllersRef.current.forEach((controller) => controller.abort());
+      uploadControllersRef.current.clear();
+
       if (recorderState.isRecording) {
         void recorder.stop().catch(() => undefined);
       }
@@ -221,6 +420,103 @@ export function ChatComposer({
     return true;
   }
 
+  function updateAttachment(
+    attachmentId: string,
+    updater: (attachment: LocalAttachment) => LocalAttachment,
+  ) {
+    setAttachments((current) =>
+      current.map((attachment) =>
+        attachment.id === attachmentId ? updater(attachment) : attachment,
+      ),
+    );
+  }
+
+  function beginAttachmentUpload(
+    attachmentInput: Omit<
+      LocalAttachment,
+      "progress" | "status" | "file" | "errorMessage"
+    >,
+  ) {
+    const attachment: LocalAttachment = {
+      ...attachmentInput,
+      progress: 0.04,
+      status: "uploading",
+    };
+
+    const controller = new AbortController();
+    uploadControllersRef.current.set(attachment.id, controller);
+
+    setAttachments((current) => [...current, attachment]);
+
+    void api
+      .uploadAsset(
+        workspaceId,
+        {
+          uri: attachment.localUri,
+          name: attachment.name,
+          mimeType: attachment.mimeType,
+          file: attachment.webFile,
+        },
+        {
+          signal: controller.signal,
+          onProgress: (progress) => {
+            updateAttachment(attachment.id, (current) => ({
+              ...current,
+              progress: Math.max(current.progress, progress),
+            }));
+          },
+        },
+      )
+      .then((file) => {
+        uploadControllersRef.current.delete(attachment.id);
+        updateAttachment(attachment.id, (current) => ({
+          ...current,
+          kind: normalizeContentKindToAttachmentKind(file.contentKind),
+          name: file.originalName,
+          mimeType: file.mimeType,
+          progress: 1,
+          status: "uploaded",
+          file,
+          errorMessage: undefined,
+        }));
+      })
+      .catch((error) => {
+        uploadControllersRef.current.delete(attachment.id);
+        if (error instanceof ApiError && error.code === "ABORTED") {
+          return;
+        }
+
+        updateAttachment(attachment.id, (current) => ({
+          ...current,
+          progress: 1,
+          status: "failed",
+          errorMessage:
+            error instanceof Error ? error.message : "上传失败，请移除后重试",
+        }));
+      });
+  }
+
+  function queueAttachments(
+    nextAttachments: Array<{
+      kind: AttachmentKind;
+      uri: string;
+      name: string;
+      mimeType: string;
+      webFile?: Blob | File | null;
+    }>,
+  ) {
+    nextAttachments.forEach((attachment) => {
+      beginAttachmentUpload({
+        id: createId("attachment"),
+        kind: attachment.kind,
+        localUri: attachment.uri,
+        name: attachment.name,
+        mimeType: attachment.mimeType,
+        webFile: attachment.webFile,
+      });
+    });
+  }
+
   async function pickLibrary() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) {
@@ -238,22 +534,21 @@ export function ChatComposer({
     if (result.canceled) return;
 
     setMenuVisible(false);
-    setAttachments((current) => [
-      ...current,
-      ...result.assets.map((asset) => {
+    queueAttachments(
+      result.assets.map((asset) => {
         const mimeType =
           asset.mimeType ||
           (asset.type === "video" ? "video/mp4" : "image/jpeg");
         const kind = inferAttachmentKind(mimeType);
         return {
-          id: createId("attachment"),
           kind,
           uri: asset.uri,
           name: asset.fileName || assetName(kind, asset.uri),
           mimeType,
+          webFile: asset.file,
         };
       }),
-    ]);
+    );
   }
 
   async function launchCamera() {
@@ -276,14 +571,13 @@ export function ChatComposer({
     const kind = inferAttachmentKind(mimeType);
 
     setMenuVisible(false);
-    setAttachments((current) => [
-      ...current,
+    queueAttachments([
       {
-        id: createId("attachment"),
         kind,
         uri: asset.uri,
         name: asset.fileName || assetName(kind, asset.uri),
         mimeType,
+        webFile: asset.file,
       },
     ]);
   }
@@ -297,20 +591,19 @@ export function ChatComposer({
     if (result.canceled) return;
 
     setMenuVisible(false);
-    setAttachments((current) => [
-      ...current,
-      ...result.assets.map((asset) => {
+    queueAttachments(
+      result.assets.map((asset) => {
         const mimeType = asset.mimeType || "application/octet-stream";
         const kind = inferAttachmentKind(mimeType);
         return {
-          id: createId("attachment"),
           kind,
           uri: asset.uri,
           name: asset.name || assetName(kind, asset.uri),
           mimeType,
+          webFile: asset.file,
         };
       }),
-    ]);
+    );
   }
 
   async function toggleRecording() {
@@ -328,10 +621,8 @@ export function ChatComposer({
       const uri = recorder.getStatus().url || recorderState.url;
       if (!uri) return;
 
-      setAttachments((existing) => [
-        ...existing,
+      queueAttachments([
         {
-          id: createId("attachment"),
           kind: "audio",
           uri,
           name: assetName("audio", uri),
@@ -360,35 +651,32 @@ export function ChatComposer({
   }
 
   async function handleSend() {
-    if (draftBlocks.length === 0 && attachments.length === 0) return;
+    if (draftBlocks.length === 0 && uploadedAttachments.length === 0) {
+      return;
+    }
+
+    if (hasPendingAttachmentWork) {
+      return;
+    }
 
     setMenuVisible(false);
     setSending(true);
 
     try {
-      const fileBlocks = [];
-      for (const attachment of attachments) {
-        const uploaded = await api.uploadAsset(workspaceId, {
-          uri: attachment.uri,
-          name: attachment.name,
-          mimeType: attachment.mimeType,
-        });
-
-        fileBlocks.push(
-          fileRefBlock({
-            fileId: uploaded.id,
-            storedName: uploaded.storedName,
-            url: uploaded.url,
-            mimeType: uploaded.mimeType,
-            originalName: uploaded.originalName,
-            sizeBytes: uploaded.sizeBytes,
-            category: attachment.kind === "file" ? "document" : attachment.kind,
-          }),
-        );
-      }
-
       await onSend({
-        contentBlocks: [...draftBlocks, ...fileBlocks],
+        contentBlocks: [
+          ...draftBlocks,
+          ...uploadedAttachments.map((attachment) =>
+            fileRefBlock({
+              fileId: attachment.file.id,
+              url: attachment.file.url,
+              mimeType: attachment.file.mimeType,
+              originalName: attachment.file.originalName,
+              sizeBytes: attachment.file.sizeBytes,
+              category: attachment.file.contentKind,
+            }),
+          ),
+        ],
         replyToItemId: replyTo?.itemId,
         replyTo: replyTo ?? undefined,
       });
@@ -397,6 +685,7 @@ export function ChatComposer({
       setSelection({ start: 0, end: 0 });
       setInputHeight(DEFAULT_INPUT_HEIGHT);
       setAttachments([]);
+      setAttachmentSheetOpen(false);
       onCancelReply?.();
     } finally {
       setSending(false);
@@ -454,14 +743,29 @@ export function ChatComposer({
     }
   }
 
-  function removeAttachment(id: string) {
+  function removeAttachment(attachmentId: string) {
+    const controller = uploadControllersRef.current.get(attachmentId);
+    if (controller) {
+      controller.abort();
+      uploadControllersRef.current.delete(attachmentId);
+    }
+
     setAttachments((current) =>
-      current.filter((attachment) => attachment.id !== id),
+      current.filter((attachment) => attachment.id !== attachmentId),
     );
+
+    if (attachmentsRef.current.length <= 2) {
+      setAttachmentSheetOpen(false);
+    }
   }
 
   const sendDisabled =
-    disabled || sending || (draftBlocks.length === 0 && attachments.length === 0);
+    disabled ||
+    sending ||
+    hasPendingAttachmentWork ||
+    (draftBlocks.length === 0 && uploadedAttachments.length === 0);
+
+  const primaryAttachment = attachments[0];
 
   return (
     <View style={styles.wrap}>
@@ -486,41 +790,41 @@ export function ChatComposer({
         </View>
       ) : null}
 
-      {attachments.length > 0 ? (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.attachmentRow}
-        >
-          {attachments.map((attachment) => (
-            <View key={attachment.id} style={styles.attachmentChip}>
-              {attachment.kind === "image" ? (
-                <Image
-                  source={{ uri: attachment.uri }}
-                  style={styles.attachmentThumb}
-                  contentFit="cover"
+      {primaryAttachment ? (
+        <AttachmentRow
+          attachment={primaryAttachment}
+          onPress={
+            attachments.length > 1
+              ? () => {
+                  setMenuVisible(false);
+                  setAttachmentSheetOpen(true);
+                }
+              : undefined
+          }
+          accessory={
+            attachments.length > 1 ? (
+              <View style={styles.attachmentSummaryAccessory}>
+                <Text style={styles.attachmentSummaryCount}>
+                  {attachments.length}
+                </Text>
+                <Feather
+                  name="chevron-down"
+                  size={16}
+                  color={theme.colors.textMuted}
                 />
-              ) : (
-                <View style={styles.attachmentIcon}>
-                  <Feather
-                    name={attachmentIconName(attachment.kind)}
-                    size={18}
-                    color={theme.colors.primary}
-                  />
-                </View>
-              )}
-              <Text numberOfLines={1} style={styles.attachmentLabel}>
-                {attachment.name}
-              </Text>
+              </View>
+            ) : (
               <Pressable
-                onPress={() => removeAttachment(attachment.id)}
-                style={styles.attachmentRemove}
+                accessibilityRole="button"
+                accessibilityLabel={`移除 ${primaryAttachment.name}`}
+                onPress={() => removeAttachment(primaryAttachment.id)}
+                style={styles.attachmentRowClose}
               >
-                <Feather name="x" size={14} color={theme.colors.textMuted} />
+                <Feather name="x" size={16} color={theme.colors.textMuted} />
               </Pressable>
-            </View>
-          ))}
-        </ScrollView>
+            )
+          }
+        />
       ) : null}
 
       {recorderState.isRecording ? (
@@ -558,7 +862,10 @@ export function ChatComposer({
             value={draftText}
             selection={selection}
             onChangeText={handleChangeText}
-            onFocus={() => setMenuVisible(false)}
+            onFocus={() => {
+              setMenuVisible(false);
+              setAttachmentSheetOpen(false);
+            }}
             onSelectionChange={(event) => {
               setSelection(event.nativeEvent.selection);
               selectionRef.current = event.nativeEvent.selection;
@@ -592,7 +899,10 @@ export function ChatComposer({
 
         <RoundAction
           icon="plus"
-          onPress={() => setMenuVisible((current) => !current)}
+          onPress={() => {
+            setAttachmentSheetOpen(false);
+            setMenuVisible((current) => !current);
+          }}
           disabled={disabled || sending}
           active={menuVisible}
         />
@@ -630,6 +940,13 @@ export function ChatComposer({
           <ActivityIndicator size="small" color={theme.colors.primary} />
         </View>
       ) : null}
+
+      <AttachmentListSheet
+        open={attachmentSheetOpen && attachments.length > 1}
+        attachments={attachments}
+        onClose={() => setAttachmentSheetOpen(false)}
+        onRemove={removeAttachment}
+      />
     </View>
   );
 }
@@ -716,49 +1033,93 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
   },
-  attachmentRow: {
-    gap: 10,
-  },
-  attachmentChip: {
-    minWidth: 154,
-    maxWidth: 190,
-    borderRadius: 18,
-    backgroundColor: theme.colors.surface,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    padding: 10,
-    gap: 10,
-  },
-  attachmentThumb: {
-    width: "100%",
-    height: 112,
-    borderRadius: 14,
-    backgroundColor: theme.colors.backgroundAlt,
-  },
-  attachmentIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
+  attachmentStatusIcon: {
+    width: ATTACHMENT_ICON_SIZE,
+    height: ATTACHMENT_ICON_SIZE,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: theme.colors.primarySoft,
   },
-  attachmentLabel: {
+  attachmentStatusSvg: {
+    position: "absolute",
+  },
+  attachmentRow: {
+    minHeight: 46,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    paddingLeft: 10,
+    paddingRight: 8,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+  },
+  attachmentRowPressed: {
+    opacity: 0.78,
+  },
+  attachmentRowLabel: {
+    flex: 1,
+    minWidth: 0,
     fontSize: 13,
     lineHeight: 18,
     color: theme.colors.text,
     fontWeight: "600",
   },
-  attachmentRemove: {
-    position: "absolute",
-    top: 8,
-    right: 8,
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: "rgba(255,255,255,0.92)",
+  attachmentRowLabelFailed: {
+    color: theme.colors.danger,
+  },
+  attachmentRowClose: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
     alignItems: "center",
     justifyContent: "center",
+  },
+  attachmentSummaryAccessory: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingLeft: 6,
+  },
+  attachmentSummaryCount: {
+    minWidth: 18,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: "700",
+    color: theme.colors.textMuted,
+    textAlign: "right",
+  },
+  attachmentSheetOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.14)",
+    justifyContent: "flex-end",
+  },
+  attachmentSheet: {
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    backgroundColor: theme.colors.surface,
+    paddingTop: 10,
+    paddingHorizontal: 14,
+    gap: 12,
+  },
+  attachmentSheetHandle: {
+    alignSelf: "center",
+    width: 42,
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: theme.colors.borderStrong,
+  },
+  attachmentSheetTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: theme.colors.text,
+  },
+  attachmentSheetScroll: {
+    maxHeight: 280,
+  },
+  attachmentSheetContent: {
+    gap: 8,
+    paddingBottom: 4,
   },
   recordingHint: {
     fontSize: 13,

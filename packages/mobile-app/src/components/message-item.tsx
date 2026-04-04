@@ -1,6 +1,5 @@
 import Feather from "@expo/vector-icons/Feather";
 import { Image } from "expo-image";
-import { useMemo } from "react";
 import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
 import { useVideoPlayer, VideoView } from "expo-video";
 import {
@@ -12,7 +11,7 @@ import {
 } from "react-native";
 
 import { Avatar } from "@/components/ui";
-import { buildAuthenticatedSource } from "@/lib/api";
+import { useAuthenticatedMediaSource } from "@/hooks/use-authenticated-media-source";
 import {
   buildReplyPreviewText,
   getEntityAvatarSpec,
@@ -45,7 +44,25 @@ function isMine(item: MobileChatItem, viewerParticipantId?: string) {
 }
 
 function AudioAttachment({ uri }: { uri: string }) {
-  const source = useMemo(() => buildAuthenticatedSource(uri), [uri]);
+  const source = useAuthenticatedMediaSource(uri);
+
+  if (!source) {
+    return (
+      <View style={styles.audioChip}>
+        <Feather name="loader" size={18} color={theme.colors.primary} />
+        <Text style={styles.audioChipLabel}>加载语音...</Text>
+      </View>
+    );
+  }
+
+  return <ResolvedAudioAttachment source={source} />;
+}
+
+function ResolvedAudioAttachment({
+  source,
+}: {
+  source: NonNullable<ReturnType<typeof useAuthenticatedMediaSource>>;
+}) {
   const player = useAudioPlayer(source);
   const status = useAudioPlayerStatus(player);
 
@@ -80,7 +97,19 @@ function AudioAttachment({ uri }: { uri: string }) {
 }
 
 function VideoAttachment({ uri }: { uri: string }) {
-  const source = useMemo(() => buildAuthenticatedSource(uri), [uri]);
+  const source = useAuthenticatedMediaSource(uri);
+  if (!source) {
+    return <View style={styles.videoAttachmentPlaceholder} />;
+  }
+
+  return <ResolvedVideoAttachment source={source} />;
+}
+
+function ResolvedVideoAttachment({
+  source,
+}: {
+  source: NonNullable<ReturnType<typeof useAuthenticatedMediaSource>>;
+}) {
   const player = useVideoPlayer(source);
 
   return (
@@ -97,7 +126,11 @@ function VideoAttachment({ uri }: { uri: string }) {
 }
 
 function ImageAttachment({ uri }: { uri: string }) {
-  const source = useMemo(() => buildAuthenticatedSource(uri), [uri]);
+  const source = useAuthenticatedMediaSource(uri);
+
+  if (!source) {
+    return <View style={styles.imageAttachment} />;
+  }
 
   return (
     <Image
@@ -457,6 +490,12 @@ const styles = StyleSheet.create({
     width: 220,
     height: 220,
     backgroundColor: theme.colors.black,
+  },
+  videoAttachmentPlaceholder: {
+    width: 220,
+    height: 220,
+    borderRadius: 18,
+    backgroundColor: theme.colors.backgroundAlt,
   },
   audioChip: {
     minWidth: 128,

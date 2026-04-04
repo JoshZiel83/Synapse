@@ -1,4 +1,5 @@
 import Constants from "expo-constants";
+import { FILE_ORIGIN_SYSTEMS } from "@shared";
 import type {
   AuthSessionPersistence,
   CanonicalContentBlock,
@@ -45,6 +46,8 @@ import type {
 import type { FileRecordView } from "@shared";
 
 let authToken: string | null = null;
+let unauthorizedHandler: (() => void | Promise<void>) | null = null;
+let unauthorizedHandlerPending = false;
 
 export class ApiError extends Error {
   status: number;
@@ -63,6 +66,27 @@ export class ApiError extends Error {
     this.code = code;
     this.details = details;
   }
+}
+
+interface UploadAssetOptions {
+  onProgress?: (progress: number) => void;
+  signal?: AbortSignal;
+}
+
+function notifyUnauthorizedStatus(status: number) {
+  if (
+    status !== 401 ||
+    !authToken ||
+    !unauthorizedHandler ||
+    unauthorizedHandlerPending
+  ) {
+    return;
+  }
+
+  unauthorizedHandlerPending = true;
+  void Promise.resolve(unauthorizedHandler()).finally(() => {
+    unauthorizedHandlerPending = false;
+  });
 }
 
 function getAuthHeaders() {
@@ -162,7 +186,7 @@ class ApiClient {
     const data = await response.json().catch(() => null);
 
     if (!response.ok) {
-      throw new ApiError(
+      const error = new ApiError(
         parseErrorMessage(data, "Request failed"),
         response.status,
         data &&
@@ -172,6 +196,8 @@ class ApiClient {
           : undefined,
         data,
       );
+      notifyUnauthorizedStatus(response.status);
+      throw error;
     }
 
     return data as T;
@@ -610,13 +636,35 @@ class ApiClient {
   async uploadAsset(
     workspaceId: string,
     asset: UploadAssetInput,
+    options?: UploadAssetOptions,
   ): Promise<FileRecordView> {
     const formData = new FormData();
-    formData.append("file", {
-      uri: asset.uri,
-      name: asset.name,
-      type: asset.mimeType,
-    } as never);
+    if (Platform.OS === "web") {
+      let fileBody: Blob | File | null = asset.file ?? null;
+      if (!fileBody) {
+        const response = await fetch(asset.uri);
+        if (!response.ok) {
+          throw new ApiError("Failed to read selected file", response.status);
+        }
+        fileBody = await response.blob();
+      }
+
+      formData.append("file", fileBody, asset.name);
+    } else {
+      formData.append("file", {
+        uri: asset.uri,
+        name: asset.name,
+        type: asset.mimeType,
+      } as never);
+    }
+
+    formData.append(
+      "origin",
+      JSON.stringify({
+        family: "user_upload",
+        system: FILE_ORIGIN_SYSTEMS.WORKSPACE_MOBILE_UPLOAD,
+      }),
+    );
 
     const headers = new Headers();
     const authHeaders = getAuthHeaders();
@@ -626,27 +674,104 @@ class ApiClient {
       );
     }
 
-    const response = await fetch(
-      `${API_BASE}/workspaces/${workspaceId}/files`,
-      {
-        method: "POST",
-        body: formData,
-        headers,
-      },
-    );
+    return new Promise<FileRecordView>((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      let settled = false;
+      let removeAbortListener: (() => void) | null = null;
 
-    const data = await response.json().catch(() => null);
+      function cleanup() {
+        removeAbortListener?.();
+        removeAbortListener = null;
+      }
 
-    if (!response.ok) {
-      throw new ApiError(
-        parseErrorMessage(data, "Upload failed"),
-        response.status,
-        undefined,
-        data,
-      );
-    }
+      function fail(error: ApiError) {
+        if (settled) {
+          return;
+        }
 
-    return data as FileRecordView;
+        settled = true;
+        cleanup();
+        reject(error);
+      }
+
+      function succeed(value: FileRecordView) {
+        if (settled) {
+          return;
+        }
+
+        settled = true;
+        cleanup();
+        resolve(value);
+      }
+
+      xhr.open("POST", `${API_BASE}/workspaces/${workspaceId}/files`);
+      headers.forEach((value, key) => {
+        xhr.setRequestHeader(key, value);
+      });
+
+      xhr.onload = () => {
+        let data: unknown = null;
+        if (
+          typeof xhr.responseText === "string" &&
+          xhr.responseText.length > 0
+        ) {
+          try {
+            data = JSON.parse(xhr.responseText);
+          } catch {
+            data = null;
+          }
+        }
+
+        if (xhr.status < 200 || xhr.status >= 300) {
+          const error = new ApiError(
+            parseErrorMessage(data, "Upload failed"),
+            xhr.status,
+            undefined,
+            data,
+          );
+          notifyUnauthorizedStatus(xhr.status);
+          fail(error);
+          return;
+        }
+
+        succeed(data as FileRecordView);
+      };
+
+      xhr.onerror = () => {
+        fail(new ApiError("Upload failed", 0, "NETWORK_ERROR"));
+      };
+
+      xhr.onabort = () => {
+        fail(new ApiError("Upload aborted", 0, "ABORTED"));
+      };
+
+      if (xhr.upload && options?.onProgress) {
+        xhr.upload.onprogress = (event) => {
+          if (!event.lengthComputable || event.total <= 0) {
+            return;
+          }
+
+          options.onProgress?.(Math.min(1, event.loaded / event.total));
+        };
+      }
+
+      if (options?.signal) {
+        const handleAbort = () => {
+          xhr.abort();
+        };
+
+        if (options.signal.aborted) {
+          handleAbort();
+          return;
+        }
+
+        options.signal.addEventListener("abort", handleAbort, { once: true });
+        removeAbortListener = () =>
+          options.signal?.removeEventListener("abort", handleAbort);
+      }
+
+      xhr.send(formData);
+    });
   }
 
   resolveQrLogin(token: string): Promise<AuthQrLoginResolveResponse> {
@@ -678,10 +803,21 @@ export const api = new ApiClient();
 
 export function setApiAuthToken(token: string | null) {
   authToken = token;
+  unauthorizedHandlerPending = false;
 }
 
 export function getApiAuthToken() {
   return authToken;
+}
+
+export function setApiUnauthorizedHandler(
+  handler: (() => void | Promise<void>) | null,
+) {
+  unauthorizedHandler = handler;
+}
+
+export function reportApiUnauthorized(status: number) {
+  notifyUnauthorizedStatus(status);
 }
 
 export function buildAuthenticatedSource(pathOrUrl: string) {

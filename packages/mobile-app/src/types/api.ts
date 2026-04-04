@@ -128,6 +128,7 @@ export interface UploadAssetInput {
   uri: string;
   name: string;
   mimeType: string;
+  file?: Blob | File | null;
 }
 
 export interface RelationshipProfileView {

@@ -36,6 +36,9 @@ type ChatWorkerBroadcast =
       payload?: {
         reason?: string;
       };
+    }
+  | {
+      type: "chat:auth-expired";
     };
 
 let registrationPromise: Promise<ServiceWorkerRegistration | null> | null = null;

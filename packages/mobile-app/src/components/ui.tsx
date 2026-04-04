@@ -19,7 +19,7 @@ import {
   useSafeAreaInsets,
 } from "react-native-safe-area-context";
 
-import { buildAuthenticatedSource } from "@/lib/api";
+import { useAuthenticatedMediaSource } from "@/hooks/use-authenticated-media-source";
 import { theme } from "@/theme/tokens";
 
 export function ScreenScroll({
@@ -291,7 +291,7 @@ export function Avatar({
   icon?: keyof typeof Feather.glyphMap;
 }) {
   const fallback = (name || "?").slice(0, 1).toUpperCase();
-  const source = uri ? buildAuthenticatedSource(uri) : null;
+  const source = useAuthenticatedMediaSource(uri);
 
   return (
     <View
