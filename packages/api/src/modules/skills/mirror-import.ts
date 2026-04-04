@@ -2,6 +2,7 @@ import fs from "node:fs/promises";
 import { basename, resolve } from "node:path";
 import * as unzipper from "unzipper";
 import {
+  FILE_ORIGIN_SYSTEMS,
   textBlocks,
   type CanonicalContentBlock,
   type CanonicalContentBlockInput,
@@ -9,7 +10,11 @@ import {
   type SkillSourceType,
 } from "@synapse/shared";
 import { config } from "../../config/index.js";
-import { storeFile } from "../files/service.js";
+import {
+  buildPackageImportOrigin,
+  storeFile,
+  toCanonicalFileRefBlock,
+} from "../files/service.js";
 import {
   SKILL_ENTRY_PATH,
   buildSkillContentHash,
@@ -345,24 +350,17 @@ async function convertBufferToSkillFile(
     mimeType: mediaType,
     workspaceId: null,
     uploaderUserId: null,
-    category: "general",
-    metadata,
+    origin: buildPackageImportOrigin({
+      system: FILE_ORIGIN_SYSTEMS.SKILL_MIRROR_IMPORT,
+      details: metadata,
+    }),
   });
 
   return {
     path: relativePath,
     mediaType: stored.mimeType,
     contentBlocks: [
-      {
-        type: "file_ref",
-        fileId: stored.id,
-        storedName: stored.storedName,
-        url: stored.url,
-        mimeType: stored.mimeType,
-        originalName: stored.originalName,
-        sizeBytes: stored.sizeBytes,
-        category: "document",
-      },
+      toCanonicalFileRefBlock(stored),
     ],
   };
 }

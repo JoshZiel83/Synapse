@@ -2,8 +2,8 @@
  * FileRef Resolver: validate and resolve <FileRef id="..."/> segments
  * from model output text into CanonicalContentBlock[].
  */
-import { fileRefBlock, textBlock, type CanonicalContentBlock, type CanonicalFileCategory } from '@synapse/shared';
-import { getFileRecord } from '../files/service.js';
+import { textBlock, type CanonicalContentBlock } from '@synapse/shared';
+import { getFileRecord, toCanonicalFileRefBlock } from '../files/service.js';
 
 export type FileRefSegment =
   | { type: 'text'; text: string }
@@ -30,13 +30,6 @@ export function parseFileRefSegments(text: string): FileRefSegment[] {
   return segments;
 }
 
-function mimeToCategory(mimeType: string): CanonicalFileCategory {
-  if (mimeType.startsWith('image/')) return 'image';
-  if (mimeType.startsWith('audio/')) return 'audio';
-  if (mimeType.startsWith('video/')) return 'video';
-  return 'document';
-}
-
 /**
  * Resolve FileRef segments (from provider.parseFileRefs) into CanonicalContentBlock[].
  * Text segments pass through; ref segments are looked up in the DB.
@@ -55,15 +48,7 @@ export async function resolveFileRefSegments(
     // Look up file record in DB
     const file = await getFileRecord(seg.fileId);
     if (file) {
-      blocks.push(fileRefBlock({
-        fileId: file.id,
-        storedName: file.storedName,
-        url: file.url,
-        mimeType: file.mimeType,
-        originalName: file.originalName,
-        sizeBytes: file.sizeBytes,
-        category: mimeToCategory(file.mimeType),
-      }));
+      blocks.push(toCanonicalFileRefBlock(file));
     } else {
       blocks.push(textBlock(`[File not found: ${seg.fileId}]`));
     }

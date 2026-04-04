@@ -3,6 +3,7 @@ import fs from "node:fs/promises";
 import type pg from "pg";
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
+  FILE_ORIGIN_SYSTEMS,
   normalizeConversationTypeMask,
   nowISO,
   REUSE_SCOPES,
@@ -48,7 +49,10 @@ import {
 } from "../../infrastructure/database/kysely.js";
 import { emitEvent } from "../../infrastructure/events/index.js";
 import { saveFromBuffer } from "../../infrastructure/storage/file-io.js";
-import { getFileUrlById } from "../files/service.js";
+import {
+  buildPlatformAssetOrigin,
+  getFileUrlById,
+} from "../files/service.js";
 import {
   attachAuthConnectionsToConfig,
 } from "./auth-service.js";
@@ -439,12 +443,14 @@ async function ensureBuiltinPluginIcon(
   const key = `${seedSlug}/${pluginSlug}`;
 
   const existing = await db
-    .selectFrom("files")
-    .select("id")
-    .where("workspace_id", "is", null)
-    .where("category", "=", "plugin_asset")
-    .where(sql<boolean>`metadata->>'builtin_plugin_icon_key' = ${key}`)
-    .where(sql<boolean>`metadata->>'sha256' = ${sha256}`)
+    .selectFrom("files as f")
+    .innerJoin("file_origins as fo", "fo.file_id", "f.id")
+    .select("f.id")
+    .where("f.workspace_id", "is", null)
+    .where("fo.source_family", "=", "platform_asset")
+    .where("fo.source_system", "=", FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON)
+    .where(sql<boolean>`fo.details_json->>'builtinPluginIconKey' = ${key}`)
+    .where(sql<boolean>`fo.details_json->>'sha256' = ${sha256}`)
     .limit(1)
     .executeTakeFirst();
 
@@ -461,12 +467,14 @@ async function ensureBuiltinPluginIcon(
     inferMimeTypeForAsset(relativeAssetPath),
     null,
     null,
-    "plugin_asset",
-    {
-      builtin_plugin_icon_key: key,
-      sha256,
-      source: "builtin_plugin_icon",
-    },
+    buildPlatformAssetOrigin({
+      system: FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON,
+      details: {
+        builtinPluginIconKey: key,
+        sha256,
+        source: "builtin_plugin_icon",
+      },
+    }),
   );
 
   return {

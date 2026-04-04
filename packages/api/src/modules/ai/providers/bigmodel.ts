@@ -16,10 +16,6 @@ import {
 import { randomUUID } from "crypto";
 import type { AIProvider, AIProviderConfig, FileRefSegment } from "./types.js";
 import {
-  readAsBuffer,
-  getFullUrl,
-} from "../../../infrastructure/storage/index.js";
-import {
   compileContextWindowToConversationMessages,
   compressContextWindow,
 } from "../context-compiler.js";
@@ -34,6 +30,10 @@ import {
   buildBranchDeltaWindow,
   canResumeBranchFromWindow,
 } from "../engine-branches.js";
+import {
+  getFullFileUrlById,
+  readFileBufferById,
+} from "../../files/service.js";
 
 const SUPPORTED_IMAGE_FORMATS = new Set([
   "image/jpeg",
@@ -442,7 +442,10 @@ export class BigModelChatCompletionsProvider implements AIProvider {
       }
 
       try {
-        let buffer = await readAsBuffer(block.storedName);
+        let buffer = await readFileBufferById(block.fileId);
+        if (!buffer) {
+          throw new Error("file not found");
+        }
         let mimeType = block.mimeType;
 
         if (block.category === "image") {
@@ -464,7 +467,7 @@ export class BigModelChatCompletionsProvider implements AIProvider {
                   }
                 : {
                     type: "image_url",
-                    image_url: { url: getFullUrl(block.storedName) },
+                    image_url: { url: getFullFileUrlById(block.fileId) },
                   };
             break;
           case "audio": {
@@ -482,13 +485,13 @@ export class BigModelChatCompletionsProvider implements AIProvider {
           case "document":
             nativeBlock = {
               type: "file_url",
-              file_url: { url: getFullUrl(block.storedName) },
+              file_url: { url: getFullFileUrlById(block.fileId) },
             };
             break;
           case "video":
             nativeBlock = {
               type: "video_url",
-              video_url: { url: getFullUrl(block.storedName) },
+              video_url: { url: getFullFileUrlById(block.fileId) },
             };
             break;
         }
@@ -503,7 +506,7 @@ export class BigModelChatCompletionsProvider implements AIProvider {
         }
       } catch (err: any) {
         console.error(
-          `[bigmodel] Failed to resolve file_ref ${block.storedName}:`,
+          `[bigmodel] Failed to resolve file_ref ${block.fileId}:`,
           err.message,
         );
         const desc = `[${block.category}: ${block.originalName} (read failed)]`;

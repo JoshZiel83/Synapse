@@ -1,5 +1,8 @@
-import { fileRefBlock, type CanonicalContentBlock, type CanonicalFileCategory, type ToolParameterProperty } from '@synapse/shared';
-import { getFileRecord } from '../files/service.js';
+import { type CanonicalContentBlock, type CanonicalFileCategory, type ToolParameterProperty } from '@synapse/shared';
+import {
+  getFileRecord,
+  toCanonicalFileRefBlock,
+} from '../files/service.js';
 import { fileToBase64, fileToBuffer, type FileRecord } from '../../infrastructure/storage/file-io.js';
 
 const FILE_REF_TAG_REGEX = /<FileRef\s+id="([^"]+)"\s*\/>/i;
@@ -29,15 +32,7 @@ export function fileRefsProperty(description: string): ToolParameterProperty {
 }
 
 export function pluginOutputFileRef(record: FileRecord): Extract<CanonicalContentBlock, { type: 'file_ref' }> {
-  return fileRefBlock({
-    fileId: record.id,
-    storedName: record.storedName,
-    url: record.url,
-    mimeType: record.mimeType,
-    originalName: record.originalName,
-    sizeBytes: record.sizeBytes,
-    category: mimeToCategory(record.mimeType),
-  });
+  return toCanonicalFileRefBlock(record);
 }
 
 export function extractFileRefId(value: unknown): string | null {
@@ -91,14 +86,14 @@ async function ensureSupportedVisionImage(buffer: Buffer, mimeType: string): Pro
 
 export async function resolveImageFileRefToDataUrl(value: unknown, label = 'fileRef'): Promise<string> {
   const record = await resolveFileRefRecord(value, label, 'image');
-  const originalBuffer = await fileToBuffer(record.storedName);
+  const originalBuffer = await fileToBuffer(record);
   const { buffer, mimeType } = await ensureSupportedVisionImage(originalBuffer, record.mimeType);
   return `data:${mimeType};base64,${buffer.toString('base64')}`;
 }
 
 export async function resolveAudioFileRefToBase64(value: unknown, label = 'fileRef'): Promise<{ base64: string; mimeType: string }> {
   const record = await resolveFileRefRecord(value, label, 'audio');
-  const base64 = await fileToBase64(record.storedName);
+  const base64 = await fileToBase64(record);
   return { base64, mimeType: record.mimeType };
 }
 

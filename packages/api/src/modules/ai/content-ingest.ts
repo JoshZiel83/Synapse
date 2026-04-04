@@ -2,26 +2,18 @@
  * Content Ingest: normalize arbitrary binary content (MCP results, model responses)
  * into platform file storage and return CanonicalContentBlock[].
  */
-import { fileRefBlock, normalizeCanonicalContentBlocks, textBlock, type CanonicalContentBlock, type CanonicalFileCategory, type ProviderType } from '@synapse/shared';
+import { normalizeCanonicalContentBlocks, textBlock, type CanonicalContentBlock, type ProviderType } from '@synapse/shared';
+import { FILE_ORIGIN_SYSTEMS } from '@synapse/shared/constants';
 import { saveFromBase64, saveFromUrl, type FileRecord } from '../../infrastructure/storage/file-io.js';
+import {
+  buildModelOutputOrigin,
+  buildToolOutputOrigin,
+  resolveModelResponseMediaOriginSystem,
+  toCanonicalFileRefBlock,
+} from '../files/service.js';
 
-function mimeToCategory(mimeType: string): CanonicalFileCategory {
-  if (mimeType.startsWith('image/')) return 'image';
-  if (mimeType.startsWith('audio/')) return 'audio';
-  if (mimeType.startsWith('video/')) return 'video';
-  return 'document';
-}
-
-function fileRecordToFileRef(rec: FileRecord, category: CanonicalFileCategory): CanonicalContentBlock {
-  return fileRefBlock({
-    fileId: rec.id,
-    storedName: rec.storedName,
-    url: rec.url,
-    mimeType: rec.mimeType,
-    originalName: rec.originalName,
-    sizeBytes: rec.sizeBytes,
-    category,
-  });
+function fileRecordToFileRef(rec: FileRecord): CanonicalContentBlock {
+  return toCanonicalFileRefBlock(rec);
 }
 
 /**
@@ -65,9 +57,11 @@ export async function ingestToolResultContent(
               mimeType,
               workspaceId,
               null,
-              'plugin_output',
+              buildToolOutputOrigin({
+                system: FILE_ORIGIN_SYSTEMS.MCP_TOOL_RESULT_INGEST,
+              }),
             );
-            blocks.push(fileRecordToFileRef(rec, 'image'));
+            blocks.push(fileRecordToFileRef(rec));
             break;
           }
           // Case 2: Anthropic URL format { source: { type: "url", url } }
@@ -77,9 +71,11 @@ export async function ingestToolResultContent(
               workspaceId,
               null,
               'mcp-image.png',
-              'plugin_output',
+              buildToolOutputOrigin({
+                system: FILE_ORIGIN_SYSTEMS.MCP_TOOL_RESULT_INGEST,
+              }),
             );
-            blocks.push(fileRecordToFileRef(rec, mimeToCategory(rec.mimeType)));
+            blocks.push(fileRecordToFileRef(rec));
             break;
           }
           // Case 3: MCP standard format { data, mimeType }
@@ -91,9 +87,11 @@ export async function ingestToolResultContent(
               mimeType,
               workspaceId,
               null,
-              'plugin_output',
+              buildToolOutputOrigin({
+                system: FILE_ORIGIN_SYSTEMS.MCP_TOOL_RESULT_INGEST,
+              }),
             );
-            blocks.push(fileRecordToFileRef(rec, 'image'));
+            blocks.push(fileRecordToFileRef(rec));
             break;
           }
           blocks.push(textBlock(`[Image: missing data, keys=${Object.keys(block).join(',')}]`));
@@ -114,9 +112,11 @@ export async function ingestToolResultContent(
               mimeType,
               workspaceId,
               null,
-              'plugin_output',
+              buildToolOutputOrigin({
+                system: FILE_ORIGIN_SYSTEMS.MCP_TOOL_RESULT_INGEST,
+              }),
             );
-            blocks.push(fileRecordToFileRef(rec, 'audio'));
+            blocks.push(fileRecordToFileRef(rec));
             break;
           }
           blocks.push(textBlock('[Audio: missing data]'));
@@ -133,7 +133,6 @@ export async function ingestToolResultContent(
             blocks.push(textBlock(block.resource.text));
           } else if (block.resource?.blob && block.resource?.mimeType) {
             const mimeType = block.resource.mimeType;
-            const category = mimeToCategory(mimeType);
             const ext = mimeType.split('/')[1] || 'bin';
             const rec = await saveFromBase64(
               block.resource.blob,
@@ -141,9 +140,11 @@ export async function ingestToolResultContent(
               mimeType,
               workspaceId,
               null,
-              'plugin_output',
+              buildToolOutputOrigin({
+                system: FILE_ORIGIN_SYSTEMS.MCP_TOOL_RESULT_INGEST,
+              }),
             );
-            blocks.push(fileRecordToFileRef(rec, category));
+            blocks.push(fileRecordToFileRef(rec));
           } else {
             blocks.push(textBlock(JSON.stringify(block)));
           }
@@ -187,18 +188,24 @@ export async function ingestResponseMedia(
             mimeType,
             workspaceId,
             null,
-            'ai_output',
+            buildModelOutputOrigin({
+              system: resolveModelResponseMediaOriginSystem(providerType),
+              providerKey: providerType,
+            }),
           );
-          blocks.push(fileRecordToFileRef(rec, 'image'));
+          blocks.push(fileRecordToFileRef(rec));
         } else if (block.source?.type === 'url' && block.source?.url) {
           const rec = await saveFromUrl(
             block.source.url,
             workspaceId,
             null,
             'model-image.png',
-            'ai_output',
+            buildModelOutputOrigin({
+              system: resolveModelResponseMediaOriginSystem(providerType),
+              providerKey: providerType,
+            }),
           );
-          blocks.push(fileRecordToFileRef(rec, mimeToCategory(rec.mimeType)));
+          blocks.push(fileRecordToFileRef(rec));
         }
       } catch (err: any) {
         console.error('[content-ingest] Failed to ingest response media:', err.message);

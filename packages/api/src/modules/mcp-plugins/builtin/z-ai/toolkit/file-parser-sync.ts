@@ -1,8 +1,9 @@
-import { ToolDefinition } from '@synapse/shared';
+import { FILE_ORIGIN_SYSTEMS, ToolDefinition } from '@synapse/shared';
 import type { SubFeature } from './types.js';
 import { saveFromUrl, fileToBuffer } from '../../../../../infrastructure/storage/file-io.js';
 import { pluginOutputFileRef, resolveFileRefRecord, fileRefProperty } from '../../../file-ref.js';
 import { normalizeZhipuTransportError, throwZhipuApiError } from './zhipu-errors.js';
+import { buildToolOutputOrigin } from '../../../../files/service.js';
 
 const ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4';
 
@@ -85,7 +86,7 @@ export const fileParserSyncFeature: SubFeature = {
 
     const workspaceId = (config.workspace_id as string) || null;
     const record = await resolveFileRefRecord(input.fileRef, 'fileRef');
-    const buffer = await fileToBuffer(record.storedName);
+    const buffer = await fileToBuffer(record);
     const fileType = typeof input.fileType === 'string' && FILE_TYPES.includes(input.fileType)
       ? input.fileType
       : inferFileType(record.originalName, record.mimeType);
@@ -139,7 +140,14 @@ export const fileParserSyncFeature: SubFeature = {
           workspaceId,
           null,
           `${record.originalName || 'parsed-result'}.zip`,
-          'plugin_output',
+          buildToolOutputOrigin({
+            system: FILE_ORIGIN_SYSTEMS.ZHIPU_FILE_PARSER_SYNC,
+            providerKey: 'bigmodel',
+            parentFileId: record.id,
+            details: {
+              taskId: result.task_id,
+            },
+          }),
         );
         output.push({
           type: 'text',

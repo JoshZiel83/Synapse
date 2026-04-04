@@ -70,6 +70,7 @@ import { ensureAutomationSchedulerJob, startAutomationSchedulerWorker } from "./
 import { startAutomationExecutionWorker } from "./workers/automation-execution.js";
 import { startImTransportDeliveryWorker } from "./workers/im-transport-delivery.js";
 import { startMemoryIndexingWorker } from "./workers/memory-indexing.js";
+import { startFileParsingWorker } from "./workers/file-parsing.js";
 import { shutdownAllWorkers } from "./workers/registry.js";
 import { shutdownQueues } from "./workers/queues.js";
 import {
@@ -235,6 +236,7 @@ async function main() {
   startSessionThinkingWorker();
   startImTransportDeliveryWorker();
   startMemoryIndexingWorker();
+  startFileParsingWorker();
   void warmMemoryEmbeddingRuntime().catch((err) => {
     console.error("Failed to warm memory embedding runtime:", err);
   });

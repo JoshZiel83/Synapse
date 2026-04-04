@@ -1,17 +1,25 @@
 import { createAvatar } from "@dicebear/core";
 import { pixelArt } from "@dicebear/collection";
 import {
+  FILE_ORIGIN_SYSTEMS,
+  type SystemGeneratedFileOriginSystem,
+} from "@synapse/shared";
+import {
   db,
+  executeCompiledQuery,
   executeTakeFirst,
   type QueryExecutor,
-  type TableInsert,
 } from "../../infrastructure/database/kysely.js";
 import {
-  getFileUrl,
-  getFullUrl,
+  getStableFileUrl,
+  getStableFullFileUrl,
   normalizeOriginalNameForMimeType,
-  saveBuffer,
+  storeBufferInBackend,
 } from "../../infrastructure/storage/index.js";
+import {
+  buildSystemGeneratedOrigin,
+  mimeToFileContentKind,
+} from "../files/service.js";
 
 type DatabaseExecutor = QueryExecutor;
 
@@ -66,7 +74,6 @@ export type StoredAvatarFile = {
   fileId: string;
   url: string;
   fullUrl: string;
-  storedName: string;
   originalName: string;
   mimeType: string;
   sizeBytes: number;
@@ -262,6 +269,7 @@ async function saveSvgAvatarFile(
     originalName: string;
     workspaceId: string | null;
     uploaderUserId: string | null;
+    originSystem: SystemGeneratedFileOriginSystem;
     metadata?: Record<string, unknown>;
   },
 ): Promise<StoredAvatarFile> {
@@ -270,40 +278,79 @@ async function saveSvgAvatarFile(
     params.originalName,
     SVG_MIME_TYPE,
   );
-  const { storedName, sizeBytes } = await saveBuffer(
+  const storedBlob = await storeBufferInBackend({
+    backend: "local_fs",
     buffer,
-    normalizedOriginalName,
-    SVG_MIME_TYPE,
+    originalName: normalizedOriginalName,
+    mimeType: SVG_MIME_TYPE,
+  });
+  const origin = buildSystemGeneratedOrigin({
+    system: params.originSystem,
+    initiatorUserId: params.uploaderUserId,
+    details: params.metadata,
+  });
+
+  const blobRow = await executeTakeFirst<{ id: string }>(
+    executor,
+    db
+      .insertInto("file_blobs")
+      .values({
+        backend: storedBlob.backend,
+        storage_key: storedBlob.storageKey,
+        bucket: storedBlob.bucket,
+        locator_json: storedBlob.locator as any,
+      })
+      .returning("id"),
   );
+  if (!blobRow) {
+    throw new Error("Failed to persist avatar file blob");
+  }
 
   const row = await executeTakeFirst<{ id: string }>(
     executor,
     db
-      .insertInto('files')
+      .insertInto("files")
       .values({
         workspace_id: params.workspaceId,
         uploader_user_id: params.uploaderUserId,
         original_name: normalizedOriginalName,
-        stored_name: storedName,
         mime_type: SVG_MIME_TYPE,
-        size_bytes: sizeBytes,
-        category: 'general',
-        metadata: (params.metadata || {}) as TableInsert<'files'>['metadata'],
+        content_kind: mimeToFileContentKind(SVG_MIME_TYPE),
+        size_bytes: storedBlob.sizeBytes,
+        sha256: storedBlob.sha256,
+        blob_id: blobRow.id,
       })
-      .returning('id'),
+      .returning("id"),
   );
   if (!row) {
     throw new Error("Failed to persist avatar file");
   }
 
+  await executeCompiledQuery(
+    executor,
+    db
+      .insertInto("file_origins")
+      .values({
+        file_id: row.id,
+        source_family: origin.family,
+        source_system: origin.system,
+        initiator_user_id: origin.initiatorUserId ?? null,
+        initiator_actor_id: origin.initiatorActorId ?? null,
+        provider_key: origin.providerKey ?? null,
+        plugin_id: origin.pluginId ?? null,
+        parent_file_id: origin.parentFileId ?? null,
+        external_resource_key: origin.externalResourceKey ?? null,
+        details_json: (origin.details || {}) as any,
+      }),
+  );
+
   return {
     fileId: row.id,
-    url: getFileUrl(storedName),
-    fullUrl: getFullUrl(storedName),
-    storedName,
+    url: getStableFileUrl(row.id),
+    fullUrl: getStableFullFileUrl(row.id),
     originalName: normalizedOriginalName,
     mimeType: SVG_MIME_TYPE,
-    sizeBytes,
+    sizeBytes: storedBlob.sizeBytes,
   };
 }
 
@@ -325,6 +372,7 @@ export async function createGeneratedUserAvatarFile(
     originalName: `${sanitizeFileStem(params.name)}-avatar.svg`,
     workspaceId: null,
     uploaderUserId: params.userId,
+    originSystem: FILE_ORIGIN_SYSTEMS.GENERATED_USER_AVATAR,
     metadata: {
       source: "dicebear",
       style: "pixel-art",
@@ -355,6 +403,7 @@ export async function createGeneratedOfficialActorAvatarFile(
     originalName: `${sanitizeFileStem(params.actorSlug)}-avatar.svg`,
     workspaceId: null,
     uploaderUserId: params.uploaderUserId || null,
+    originSystem: FILE_ORIGIN_SYSTEMS.GENERATED_OFFICIAL_ACTOR_AVATAR,
     metadata: {
       source: "dicebear",
       style: "pixel-art",
@@ -392,6 +441,7 @@ export async function createGeneratedActorPixelArtAvatarFile(
     originalName: `${sanitizeFileStem(params.actorName)}-avatar.svg`,
     workspaceId: params.workspaceId,
     uploaderUserId: params.uploaderUserId || null,
+    originSystem: FILE_ORIGIN_SYSTEMS.GENERATED_ACTOR_PIXEL_ART_AVATAR,
     metadata: {
       source: "dicebear",
       style: "pixel-art",

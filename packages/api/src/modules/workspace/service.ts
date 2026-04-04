@@ -644,7 +644,7 @@ export async function getWorkspaceChiefActorPreference(
       "a.name as chief_actor_name",
       "a.role as chief_actor_role",
       "a.title as chief_actor_title",
-      "avatar_file.stored_name as chief_actor_avatar_stored_name",
+      "avatar_file.id as chief_actor_avatar_file_id",
     ])
     .where("pref.workspace_member_id", "=", member.id)
     .limit(1)
@@ -1041,8 +1041,8 @@ function mapWorkspaceChiefActorPreferenceRow(
             name: row.chief_actor_name,
             role: row.chief_actor_role,
             title: row.chief_actor_title || row.chief_actor_role || "Actor",
-            avatarUrl: row.chief_actor_avatar_stored_name
-              ? getFileUrl(row.chief_actor_avatar_stored_name)
+            avatarUrl: row.chief_actor_avatar_file_id
+              ? getFileUrlById(row.chief_actor_avatar_file_id)
               : undefined,
           }
         : undefined,

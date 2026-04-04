@@ -1,8 +1,9 @@
-import { ToolDefinition } from '@synapse/shared';
+import { FILE_ORIGIN_SYSTEMS, ToolDefinition } from '@synapse/shared';
 import type { SubFeature } from './types.js';
 import { saveFromUrl } from '../../../../../infrastructure/storage/file-io.js';
 import { fileRefProperty, pluginOutputFileRef, resolveFileRefRecord } from '../../../file-ref.js';
 import { normalizeZhipuTransportError, throwZhipuApiError } from './zhipu-errors.js';
+import { buildToolOutputOrigin } from '../../../../files/service.js';
 
 const ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4';
 const DEFAULT_MODEL = 'glm-ocr';
@@ -136,7 +137,15 @@ export const layoutParsingFeature: SubFeature = {
             workspaceId,
             null,
             `${record.originalName || 'layout-visualization'}-${index + 1}.png`,
-            'plugin_output',
+            buildToolOutputOrigin({
+              system: FILE_ORIGIN_SYSTEMS.ZHIPU_LAYOUT_PARSING,
+              providerKey: 'bigmodel',
+              parentFileId: record.id,
+              details: {
+                taskId: result.id,
+                visualizationIndex: index + 1,
+              },
+            }),
           );
           output.push({
             type: 'text',

@@ -686,7 +686,6 @@ export async function getSessionMessages(sessionId: UUID): Promise<SessionMessag
       "cip.file_id",
       "cip.name",
       "f.original_name",
-      "f.stored_name",
       "f.mime_type as file_mime_type",
       "f.size_bytes",
     ])

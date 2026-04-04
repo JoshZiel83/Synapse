@@ -14,7 +14,11 @@ CREATE TYPE workspace_access_bindings_access_key AS ENUM ('model_admin', 'actor_
 CREATE TYPE workspace_invites_trust_level AS ENUM ('admin', 'member', 'guest');
 CREATE TYPE conversations_kind AS ENUM ('group', 'private', 'virtual');
 CREATE TYPE conversations_boundary AS ENUM ('internal', 'external');
-CREATE TYPE files_category AS ENUM ('general', 'chat_attachment', 'plugin_output', 'plugin_asset');
+CREATE TYPE file_content_kind AS ENUM ('image', 'audio', 'video', 'document');
+CREATE TYPE file_storage_backend AS ENUM ('local_fs');
+CREATE TYPE file_origin_family AS ENUM ('user_upload', 'actor_output', 'tool_output', 'model_output', 'external_import', 'package_import', 'system_generated', 'platform_asset');
+CREATE TYPE file_parse_run_status AS ENUM ('pending', 'running', 'succeeded', 'failed', 'skipped');
+CREATE TYPE file_parse_output_kind AS ENUM ('text', 'structured_json', 'derived_file');
 CREATE TYPE resource_access_bindings_status AS ENUM ('active', 'revoked');
 CREATE TYPE resource_access_bindings_target_type AS ENUM ('workspace', 'conversation', 'actor', 'actor_in_conversation');
 CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'plugin_installation', 'relay_capability');
@@ -335,21 +339,79 @@ CREATE INDEX idx_audit_logs_action ON audit_logs(action);
 CREATE INDEX idx_audit_logs_resource ON audit_logs(resource_type, resource_id);
 
 -- ============ Files ============
+CREATE TABLE file_blobs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  backend file_storage_backend NOT NULL,
+  storage_key VARCHAR(500) NOT NULL,
+  bucket VARCHAR(255),
+  locator_json JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  UNIQUE (backend, storage_key)
+);
+
 CREATE TABLE files (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   uploader_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
   original_name VARCHAR(500) NOT NULL,
-  stored_name VARCHAR(500) NOT NULL,
   mime_type VARCHAR(255) NOT NULL,
+  content_kind file_content_kind NOT NULL,
   size_bytes BIGINT NOT NULL,
-  category files_category DEFAULT 'general',
-  metadata JSONB DEFAULT '{}',
+  sha256 VARCHAR(64) NOT NULL,
+  blob_id UUID NOT NULL REFERENCES file_blobs(id) ON DELETE RESTRICT,
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE file_origins (
+  file_id UUID PRIMARY KEY REFERENCES files(id) ON DELETE CASCADE,
+  source_family file_origin_family NOT NULL,
+  source_system VARCHAR(100) NOT NULL,
+  initiator_user_id UUID REFERENCES users(id) ON DELETE SET NULL,
+  initiator_actor_id UUID,
+  provider_key VARCHAR(100),
+  plugin_id UUID,
+  parent_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  external_resource_key VARCHAR(500),
+  details_json JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW()
+);
+
+CREATE TABLE file_parse_runs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  file_id UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+  pipeline VARCHAR(100) NOT NULL,
+  parser_key VARCHAR(100) NOT NULL,
+  parser_version VARCHAR(50),
+  trigger VARCHAR(50) NOT NULL,
+  status file_parse_run_status NOT NULL DEFAULT 'pending',
+  error_code VARCHAR(100),
+  error_message TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  started_at TIMESTAMPTZ,
+  finished_at TIMESTAMPTZ
+);
+
+CREATE TABLE file_parse_outputs (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  run_id UUID NOT NULL REFERENCES file_parse_runs(id) ON DELETE CASCADE,
+  output_kind file_parse_output_kind NOT NULL,
+  role VARCHAR(100) NOT NULL,
+  text_content TEXT,
+  structured_json JSONB NOT NULL DEFAULT '{}',
+  derived_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
+  is_primary BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_files_workspace ON files(workspace_id, created_at DESC);
 CREATE INDEX idx_files_uploader ON files(uploader_user_id, created_at DESC);
+CREATE INDEX idx_files_blob ON files(blob_id);
+CREATE INDEX idx_files_sha256 ON files(sha256);
+CREATE INDEX idx_file_origins_family ON file_origins(source_family, source_system, created_at DESC);
+CREATE INDEX idx_file_parse_runs_file ON file_parse_runs(file_id, created_at DESC);
+CREATE INDEX idx_file_parse_runs_status ON file_parse_runs(status, created_at DESC);
+CREATE INDEX idx_file_parse_outputs_run ON file_parse_outputs(run_id, created_at);
 
 ALTER TABLE users
   ADD CONSTRAINT users_avatar_file_id_fkey

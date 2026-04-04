@@ -92,7 +92,6 @@ export function canonicalContentBlocksToDraftParts(
         metadata: {
           id: block.fileId,
           originalName: block.originalName,
-          storedName: block.storedName,
           mimeType: block.mimeType,
           sizeBytes: block.sizeBytes,
           url: block.url,
@@ -142,8 +141,6 @@ export function draftPartsToCanonicalContentBlocks(
       blocks.push(
         fileRefBlock({
           fileId: part.fileId,
-          storedName:
-            typeof metadata.storedName === "string" ? metadata.storedName : "",
           url:
             typeof metadata.url === "string"
               ? metadata.url
@@ -205,7 +202,6 @@ export function itemPartsToCanonicalContentBlocks(
       blocks.push(
         fileRefBlock({
           fileId: part.file_id,
-          storedName: part.stored_name || String(metadata.storedName || ""),
           url:
             typeof metadata.url === "string"
               ? metadata.url

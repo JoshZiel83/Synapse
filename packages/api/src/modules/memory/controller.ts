@@ -45,7 +45,6 @@ const contentBlockSchema = z.discriminatedUnion('type', [
     id: z.string().uuid().optional(),
     type: z.literal('file_ref'),
     fileId: z.string().uuid(),
-    storedName: z.string(),
     url: z.string(),
     mimeType: z.string(),
     originalName: z.string(),

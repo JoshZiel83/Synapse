@@ -15,7 +15,6 @@ import {
   touchRelation,
   touchWorkspaceMemberContext,
 } from "../../infrastructure/authz/index.js";
-import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
 import {
   authorizeAction,
@@ -84,7 +83,7 @@ type ActorSummary = {
   name: string;
   title: string;
   role: string;
-  avatarStoredName?: string | null;
+  avatarFileId?: string | null;
   avatarEmoji?: string | null;
   accessPolicy: AccessPolicy;
   isPublicShared: boolean;
@@ -279,7 +278,7 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
       "a.access_policy",
       "a.is_public_shared",
       "a.avatar_emoji",
-      "avatar_file.stored_name as avatar_stored_name",
+      "avatar_file.id as avatar_file_id",
     ])
     .where("a.id", "=", actorId)
     .where("a.is_active", "=", true)
@@ -291,7 +290,7 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
     name: row.name,
     title: row.title,
     role: row.role,
-    avatarStoredName: row.avatar_stored_name,
+    avatarFileId: row.avatar_file_id,
     avatarEmoji: row.avatar_emoji,
     accessPolicy: row.access_policy as AccessPolicy,
     isPublicShared: Boolean(row.is_public_shared),
@@ -333,8 +332,8 @@ function mapActorFriendEntry(params: {
     targetType: "actor",
     title: params.actor.name,
     subtitle: `${params.actor.workspace.name} · ${params.actor.title}`,
-    avatarUrl: params.actor.avatarStoredName
-      ? getFileUrl(params.actor.avatarStoredName)
+    avatarUrl: params.actor.avatarFileId
+      ? getFileUrlById(params.actor.avatarFileId)
       : undefined,
     avatarEmoji: params.actor.avatarEmoji || undefined,
     workspace: params.actor.workspace,
@@ -380,8 +379,8 @@ function mapWorkspaceActorEntry(params: {
     targetType: "actor",
     title: params.actor.name,
     subtitle: params.actor.title,
-    avatarUrl: params.actor.avatarStoredName
-      ? getFileUrl(params.actor.avatarStoredName)
+    avatarUrl: params.actor.avatarFileId
+      ? getFileUrlById(params.actor.avatarFileId)
       : undefined,
     avatarEmoji: params.actor.avatarEmoji || undefined,
     workspace: params.actor.workspace,
@@ -974,7 +973,7 @@ async function buildContactHubEntryMap(params: {
           "a.access_policy",
           "a.is_public_shared",
           "a.avatar_emoji",
-          "avatar_file.stored_name as avatar_stored_name",
+          "avatar_file.id as avatar_file_id",
         ])
         .where("a.workspace_id", "=", params.workspaceId)
         .where("a.is_active", "=", true)
@@ -1038,7 +1037,7 @@ async function buildContactHubEntryMap(params: {
       name: row.name,
       title: row.title,
       role: row.role,
-      avatarStoredName: row.avatar_stored_name,
+      avatarFileId: row.avatar_file_id,
       avatarEmoji: row.avatar_emoji,
       accessPolicy: row.access_policy as AccessPolicy,
       isPublicShared: Boolean(row.is_public_shared),
@@ -1455,8 +1454,8 @@ export async function searchRelationshipsByIdentity(params: {
           targetType: "actor" as const,
           title: actor.name,
           subtitle: `${actor.workspace.name} · ${actor.title}`,
-          avatarUrl: actor.avatarStoredName
-            ? getFileUrl(actor.avatarStoredName)
+          avatarUrl: actor.avatarFileId
+            ? getFileUrlById(actor.avatarFileId)
             : undefined,
           avatarEmoji: actor.avatarEmoji || undefined,
           workspace: actor.workspace,
@@ -1489,8 +1488,8 @@ export async function searchRelationshipsByIdentity(params: {
           targetType: "actor" as const,
           title: actor.name,
           subtitle: `${actor.workspace.name} · ${actor.title}`,
-          avatarUrl: actor.avatarStoredName
-            ? getFileUrl(actor.avatarStoredName)
+          avatarUrl: actor.avatarFileId
+            ? getFileUrlById(actor.avatarFileId)
             : undefined,
           avatarEmoji: actor.avatarEmoji || undefined,
           workspace: actor.workspace,
@@ -1520,8 +1519,8 @@ export async function searchRelationshipsByIdentity(params: {
         targetType: "actor" as const,
         title: actor.name,
         subtitle: `${actor.workspace.name} · ${actor.title}`,
-        avatarUrl: actor.avatarStoredName
-          ? getFileUrl(actor.avatarStoredName)
+        avatarUrl: actor.avatarFileId
+          ? getFileUrlById(actor.avatarFileId)
           : undefined,
         avatarEmoji: actor.avatarEmoji || undefined,
         workspace: actor.workspace,

@@ -137,7 +137,15 @@ export type ConversationTransportBindingsInboundActorMode = "inherit_account" | 
 
 export type EngineBranchCheckpointsCheckpointKind = "compaction" | "snapshot";
 
-export type FilesCategory = "chat_attachment" | "general" | "plugin_asset" | "plugin_output";
+export type FileContentKind = "audio" | "document" | "image" | "video";
+
+export type FileOriginFamily = "actor_output" | "external_import" | "model_output" | "package_import" | "platform_asset" | "system_generated" | "tool_output" | "user_upload";
+
+export type FileParseOutputKind = "derived_file" | "structured_json" | "text";
+
+export type FileParseRunStatus = "failed" | "pending" | "running" | "skipped" | "succeeded";
+
+export type FileStorageBackend = "local_fs";
 
 export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   ? ColumnType<S, I | undefined, U>
@@ -1034,15 +1042,66 @@ export interface EngineBranchCheckpoints {
   shared_sequence: Generated<Int8>;
 }
 
-export interface Files {
-  category: Generated<FilesCategory | null>;
+export interface FileBlobs {
+  backend: FileStorageBackend;
+  bucket: string | null;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
-  metadata: Generated<Json | null>;
+  locator_json: Generated<Json>;
+  storage_key: string;
+}
+
+export interface FileOrigins {
+  created_at: Generated<Timestamp | null>;
+  details_json: Generated<Json>;
+  external_resource_key: string | null;
+  file_id: string;
+  initiator_actor_id: string | null;
+  initiator_user_id: string | null;
+  parent_file_id: string | null;
+  plugin_id: string | null;
+  provider_key: string | null;
+  source_family: FileOriginFamily;
+  source_system: string;
+}
+
+export interface FileParseOutputs {
+  created_at: Generated<Timestamp | null>;
+  derived_file_id: string | null;
+  id: Generated<string>;
+  is_primary: Generated<boolean>;
+  output_kind: FileParseOutputKind;
+  role: string;
+  run_id: string;
+  structured_json: Generated<Json>;
+  text_content: string | null;
+}
+
+export interface FileParseRuns {
+  created_at: Generated<Timestamp | null>;
+  error_code: string | null;
+  error_message: string | null;
+  file_id: string;
+  finished_at: Timestamp | null;
+  id: Generated<string>;
+  metadata: Generated<Json>;
+  parser_key: string;
+  parser_version: string | null;
+  pipeline: string;
+  started_at: Timestamp | null;
+  status: Generated<FileParseRunStatus>;
+  trigger: string;
+}
+
+export interface Files {
+  blob_id: string;
+  content_kind: FileContentKind;
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
   mime_type: string;
   original_name: string;
+  sha256: string;
   size_bytes: Int8;
-  stored_name: string;
   uploader_user_id: string | null;
   workspace_id: string | null;
 }
@@ -2235,6 +2294,10 @@ export interface DB {
   conversations: Conversations;
   direct_conversation_bindings: DirectConversationBindings;
   engine_branch_checkpoints: EngineBranchCheckpoints;
+  file_blobs: FileBlobs;
+  file_origins: FileOrigins;
+  file_parse_outputs: FileParseOutputs;
+  file_parse_runs: FileParseRuns;
   files: Files;
   installed_skills: InstalledSkills;
   interaction_question_requests: InteractionQuestionRequests;

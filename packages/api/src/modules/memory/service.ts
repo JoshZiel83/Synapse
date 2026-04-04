@@ -115,7 +115,6 @@ type MemoryPartRow = {
   name?: string | null;
   metadata?: Record<string, unknown> | string | null;
   original_name?: string | null;
-  stored_name?: string | null;
   file_mime_type?: string | null;
   size_bytes?: number | null;
 };
@@ -423,7 +422,6 @@ async function loadMemoryItemsFromRows(rows: MemoryRow[]) {
       'mip.name',
       'mip.metadata',
       'f.original_name',
-      'f.stored_name',
       'f.mime_type as file_mime_type',
       'f.size_bytes',
     ])

@@ -102,7 +102,6 @@ async function loadArchivePoint(
             cap.name,
             cap.metadata AS part_metadata,
             f.original_name,
-            f.stored_name,
             f.mime_type AS file_mime_type,
             f.size_bytes
      FROM context_archive_frames caf
@@ -128,7 +127,6 @@ async function loadArchivePoint(
         name: row.name,
         metadata: row.part_metadata,
         original_name: row.original_name,
-        stored_name: row.stored_name,
         file_mime_type: row.file_mime_type,
         size_bytes: row.size_bytes,
       });
@@ -298,7 +296,6 @@ function blockToArchivePart(block: CanonicalContentBlock) {
     mimeType: block.mimeType,
     name: block.originalName,
     metadata: {
-      storedName: block.storedName,
       sizeBytes: block.sizeBytes,
       category: block.category,
     },

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
+import type { FileStorageBackend } from '@synapse/shared/types';
 
 export const STORAGE_DIR = process.env.STORAGE_DIR || '/home/ubuntu/project/synapse/storage/files';
 export const FILE_URL_PREFIX = '/files/';
@@ -54,6 +55,34 @@ const SHARP_FORMAT_MIME_TYPES: Record<string, string> = {
   tiff: 'image/tiff',
   webp: 'image/webp',
 };
+
+export interface StoredFileBlob {
+  backend: FileStorageBackend;
+  storageKey: string;
+  bucket: string | null;
+  locator: Record<string, unknown>;
+  sizeBytes: number;
+  sha256: string;
+}
+
+export interface FileStorageReadTarget {
+  backend: FileStorageBackend;
+  storageKey: string;
+  bucket?: string | null;
+  locator?: Record<string, unknown>;
+}
+
+export interface FileStorageDriver {
+  readonly backend: FileStorageBackend;
+  ensureReady(): Promise<void>;
+  putBuffer(
+    buffer: Buffer,
+    originalName: string,
+    mimeType: string,
+  ): Promise<StoredFileBlob>;
+  readBuffer(target: FileStorageReadTarget): Promise<Buffer>;
+  readBase64(target: FileStorageReadTarget): Promise<string>;
+}
 
 /** Ensure the root storage directory exists */
 export async function ensureStorageDir(): Promise<void> {
@@ -251,6 +280,79 @@ export async function saveBuffer(
   return { storedName, sizeBytes: buffer.length };
 }
 
+function sha256Hex(buffer: Buffer): string {
+  return crypto.createHash('sha256').update(buffer).digest('hex');
+}
+
+export function resolveLocalStoragePath(storageKey: string): string {
+  return path.join(STORAGE_DIR, storageKey);
+}
+
+const localFsDriver: FileStorageDriver = {
+  backend: 'local_fs',
+
+  async ensureReady(): Promise<void> {
+    await ensureStorageDir();
+  },
+
+  async putBuffer(
+    buffer: Buffer,
+    originalName: string,
+    mimeType: string,
+  ): Promise<StoredFileBlob> {
+    const { storedName, sizeBytes } = await saveBuffer(buffer, originalName, mimeType);
+    return {
+      backend: 'local_fs',
+      storageKey: storedName,
+      bucket: null,
+      locator: { storageKey: storedName },
+      sizeBytes,
+      sha256: sha256Hex(buffer),
+    };
+  },
+
+  async readBuffer(target: FileStorageReadTarget): Promise<Buffer> {
+    return readAsBuffer(target.storageKey);
+  },
+
+  async readBase64(target: FileStorageReadTarget): Promise<string> {
+    return readAsBase64(target.storageKey);
+  },
+};
+
+export function getFileStorageDriver(
+  backend: FileStorageBackend = 'local_fs',
+): FileStorageDriver {
+  if (backend !== 'local_fs') {
+    throw new Error(`Unsupported file storage backend: ${backend}`);
+  }
+
+  return localFsDriver;
+}
+
+export async function storeBufferInBackend(params: {
+  backend?: FileStorageBackend;
+  buffer: Buffer;
+  originalName: string;
+  mimeType: string;
+}): Promise<StoredFileBlob> {
+  const driver = getFileStorageDriver(params.backend || 'local_fs');
+  await driver.ensureReady();
+  return driver.putBuffer(params.buffer, params.originalName, params.mimeType);
+}
+
+export async function readStoredBlobAsBuffer(
+  target: FileStorageReadTarget,
+): Promise<Buffer> {
+  return getFileStorageDriver(target.backend).readBuffer(target);
+}
+
+export async function readStoredBlobAsBase64(
+  target: FileStorageReadTarget,
+): Promise<string> {
+  return getFileStorageDriver(target.backend).readBase64(target);
+}
+
 /** Relative URL: /files/YYYY/MM/DD/uuid.ext */
 export function getFileUrl(storedName: string): string {
   return FILE_URL_PREFIX + storedName;
@@ -259,6 +361,14 @@ export function getFileUrl(storedName: string): string {
 /** Absolute URL: http://{BASE_URL}/files/... */
 export function getFullUrl(storedName: string): string {
   return BASE_URL + FILE_URL_PREFIX + storedName;
+}
+
+export function getStableFileUrl(fileId: string): string {
+  return `${FILE_URL_PREFIX}${fileId}`;
+}
+
+export function getStableFullFileUrl(fileId: string): string {
+  return `${BASE_URL}${getStableFileUrl(fileId)}`;
 }
 
 /** Read a stored file back as a Buffer */
@@ -273,11 +383,11 @@ export async function readAsBase64(storedName: string): Promise<string> {
   return buf.toString('base64');
 }
 
-/** Download a remote URL, save to disk, return metadata */
-export async function downloadAndSave(
+/** Download a remote URL into memory, resolving MIME type and fallback filename. */
+export async function downloadToBuffer(
   url: string,
   originalName?: string,
-): Promise<{ storedName: string; mimeType: string; sizeBytes: number; originalName: string }> {
+): Promise<{ buffer: Buffer; mimeType: string; sizeBytes: number; originalName: string }> {
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 60000);
 
@@ -296,10 +406,27 @@ export async function downloadAndSave(
     const arrayBuf = await res.arrayBuffer();
     const buffer = Buffer.from(arrayBuf);
     const mimeType = await resolveBufferMimeType(buffer, contentType);
-    const { storedName, sizeBytes } = await saveBuffer(buffer, originalName, mimeType);
-
-    return { storedName, mimeType, sizeBytes, originalName };
+    return { buffer, mimeType, sizeBytes: buffer.length, originalName };
   } finally {
     clearTimeout(timeout);
   }
+}
+
+/** Download a remote URL, save to disk, return metadata */
+export async function downloadAndSave(
+  url: string,
+  originalName?: string,
+): Promise<{ storedName: string; mimeType: string; sizeBytes: number; originalName: string }> {
+  const downloaded = await downloadToBuffer(url, originalName);
+  const { storedName, sizeBytes } = await saveBuffer(
+    downloaded.buffer,
+    downloaded.originalName,
+    downloaded.mimeType,
+  );
+  return {
+    storedName,
+    mimeType: downloaded.mimeType,
+    sizeBytes,
+    originalName: downloaded.originalName,
+  };
 }

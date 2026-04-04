@@ -1,12 +1,16 @@
-import type { ToolDefinition } from '@synapse/shared';
-import { z } from 'zod';
+import {
+  FILE_ORIGIN_SYSTEMS,
+  type ToolDefinition,
+} from '@synapse/shared';
 import { saveFromBase64 } from '../../infrastructure/storage/file-io.js';
 import {
+  buildActorOutputOrigin,
   getFileUrlById,
   getWorkspaceFileDetail,
   storeFile,
 } from '../files/service.js';
 import { extractFileRefId } from '../mcp-plugins/file-ref.js';
+import { normalizeActorUploadFileInput } from './file-tools-input.js';
 import { getToolExecutionContext } from './session-tools.js';
 import { throwToolError } from './tool-errors.js';
 import { registerToolPlugin } from './tool-plugins.js';
@@ -14,30 +18,25 @@ import { registerToolPlugin } from './tool-plugins.js';
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
 const DEFAULT_TEXT_MIME_TYPE = 'text/plain; charset=utf-8';
 const DEFAULT_BINARY_MIME_TYPE = 'application/octet-stream';
-const DEFAULT_CATEGORY = 'actor_output';
 const PROTECTED_LINK_NOTE = 'Links are workspace-protected and require an authenticated Synapse session.';
 
-const uploadFileInputSchema = z.object({
-  filename: z.string().trim().min(1).max(255),
-  mimeType: z.string().trim().min(1).max(255).optional(),
-  textContent: z.string().optional(),
-  base64Content: z.string().optional(),
-  category: z.string().trim().min(1).max(100).optional(),
-}).strict().superRefine((value, ctx) => {
-  const sourceCount = [value.textContent, value.base64Content]
-    .filter((candidate) => candidate !== undefined).length;
-  if (sourceCount !== 1) {
-    ctx.addIssue({
-      code: z.ZodIssueCode.custom,
-      message: 'Provide exactly one of textContent or base64Content.',
-      path: ['textContent'],
-    });
-  }
-});
-
-const fileLookupInputSchema = z.object({
-  fileRef: z.string().trim().min(1),
-}).strict();
+const fileLookupInputSchema = {
+  safeParse(input: Record<string, unknown>) {
+    const fileRef = typeof input.fileRef === 'string' ? input.fileRef.trim() : '';
+    if (!fileRef) {
+      return {
+        success: false as const,
+        error: {
+          issues: [{ message: 'fileRef is required.' }],
+        },
+      };
+    }
+    return {
+      success: true as const,
+      data: { fileRef },
+    };
+  },
+};
 
 type UploadMode = 'text' | 'base64';
 
@@ -47,20 +46,19 @@ function buildFileRef(fileId: string): string {
   return `<FileRef id="${fileId}"/>`;
 }
 
-function buildActorUploadMetadata(
+function buildActorUploadDetails(
   context: ActorFileToolContext,
   mode: UploadMode,
 ): Record<string, unknown> {
   return {
-    source: {
-      kind: 'actor_tool',
-      toolName: 'upload_file',
+    tool: {
+      name: 'upload_file',
       uploadMode: mode,
-      actorId: context.actorId,
-      sessionId: context.sessionId,
-      turnId: context.turnId,
-      conversationId: context.conversationId,
     },
+    actorId: context.actorId,
+    sessionId: context.sessionId,
+    turnId: context.turnId,
+    conversationId: context.conversationId,
   };
 }
 
@@ -89,24 +87,27 @@ function decodeBase64Payload(value: string): Buffer {
   return Buffer.from(normalized, 'base64');
 }
 
-function buildFileToolPayload(detail: NonNullable<Awaited<ReturnType<typeof getWorkspaceFileDetail>>>) {
+function buildFileToolPayload(
+  detail: NonNullable<Awaited<ReturnType<typeof getWorkspaceFileDetail>>>,
+) {
   return {
     fileId: detail.id,
     fileRef: buildFileRef(detail.id),
     originalName: detail.originalName,
     mimeType: detail.mimeType,
+    contentKind: detail.contentKind,
     sizeBytes: detail.sizeBytes,
+    sha256: detail.sha256,
+    storageBackend: detail.storageBackend,
     createdAt: detail.createdAt,
     byIdUrl: getFileUrlById(detail.id),
     url: detail.url,
     fullUrl: detail.fullUrl,
-    metadata: detail.metadata,
+    originSummary: detail.originSummary,
   };
 }
 
-async function resolveWorkspaceFileDetail(
-  rawValue: unknown,
-) {
+async function resolveWorkspaceFileDetail(rawValue: unknown) {
   const context = getToolExecutionContext();
   if (!context) {
     throwToolError('No session context available');
@@ -151,10 +152,6 @@ const uploadFileDefinition: ToolDefinition = {
         type: 'string',
         description: 'Binary file payload encoded as Base64. Data URLs like data:image/png;base64,... are also accepted.',
       },
-      category: {
-        type: 'string',
-        description: `Optional file category label. Defaults to ${DEFAULT_CATEGORY}.`,
-      },
     },
     required: ['filename'],
   },
@@ -163,8 +160,7 @@ const uploadFileDefinition: ToolDefinition = {
 const getFileLinkDefinition: ToolDefinition = {
   name: 'get_file_link',
   description:
-    'Resolve a FileRef or bare file ID to the protected workspace file links. ' +
-    'Returns both the stable ID-based route and the stored-path route.',
+    'Resolve a FileRef or bare file ID to the protected workspace file links.',
   parameters: {
     type: 'object',
     properties: {
@@ -208,44 +204,45 @@ export function registerActorFileToolPlugins(): void {
         throwToolError('No session context available');
       }
 
-      const parsed = uploadFileInputSchema.safeParse(input);
-      if (!parsed.success) {
-        throwToolError('Invalid input for upload_file.', {
-          details: parsed.error.issues.map((issue) => issue.message),
-        });
-      }
+      const { filename, mimeType, textContent, base64Content } =
+        normalizeActorUploadFileInput(input);
+      const origin = buildActorOutputOrigin({
+        system: FILE_ORIGIN_SYSTEMS.ACTOR_TOOL_UPLOAD_FILE,
+        initiatorActorId: context.actorId,
+        initiatorUserId: context.userId || null,
+        details: buildActorUploadDetails(
+          context,
+          textContent !== undefined ? 'text' : 'base64',
+        ),
+      });
 
-      const { filename, mimeType, textContent, base64Content, category } = parsed.data;
-      const nextCategory = category || DEFAULT_CATEGORY;
-
-      const record = textContent !== undefined
-        ? await (() => {
-          const buffer = Buffer.from(textContent, 'utf8');
-          ensureFileSizeLimit(buffer.length);
-          return storeFile({
-            buffer,
-            originalName: filename,
-            mimeType: mimeType || DEFAULT_TEXT_MIME_TYPE,
-            workspaceId: context.workspaceId,
-            uploaderUserId: null,
-            category: nextCategory,
-            metadata: buildActorUploadMetadata(context, 'text'),
-          });
-        })()
-        : await (() => {
-          const normalizedBase64 = normalizeBase64Payload(base64Content || '');
-          const buffer = decodeBase64Payload(normalizedBase64);
-          ensureFileSizeLimit(buffer.length);
-          return saveFromBase64(
-            normalizedBase64,
-            filename,
-            mimeType || DEFAULT_BINARY_MIME_TYPE,
-            context.workspaceId,
-            null,
-            nextCategory,
-            buildActorUploadMetadata(context, 'base64'),
-          );
-        })();
+      const record =
+        textContent !== undefined
+          ? await (() => {
+              const buffer = Buffer.from(textContent, 'utf8');
+              ensureFileSizeLimit(buffer.length);
+              return storeFile({
+                buffer,
+                originalName: filename,
+                mimeType: mimeType || DEFAULT_TEXT_MIME_TYPE,
+                workspaceId: context.workspaceId,
+                uploaderUserId: null,
+                origin,
+              });
+            })()
+          : await (() => {
+              const normalizedBase64 = normalizeBase64Payload(base64Content || '');
+              const buffer = decodeBase64Payload(normalizedBase64);
+              ensureFileSizeLimit(buffer.length);
+              return saveFromBase64(
+                normalizedBase64,
+                filename,
+                mimeType || DEFAULT_BINARY_MIME_TYPE,
+                context.workspaceId,
+                null,
+                origin,
+              );
+            })();
 
       const detail = await getWorkspaceFileDetail(record.id, context.workspaceId);
       if (!detail) {

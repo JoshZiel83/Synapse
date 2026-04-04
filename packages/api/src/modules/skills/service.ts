@@ -2,6 +2,7 @@ import crypto from "node:crypto";
 import type pg from "pg";
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
+  FILE_ORIGIN_SYSTEMS,
   maskAllowsConversationType,
   normalizeConversationTypeMask,
   resolveEffectiveConversationTypeMask,
@@ -45,6 +46,7 @@ import {
   type AccessBindingRow,
 } from "../access/bindings.js";
 import {
+  buildSystemGeneratedOrigin,
   canUserAccessFileWorkspace,
   duplicateFileRecord,
   getFileAccessInfo,
@@ -573,7 +575,7 @@ async function normalizeMarketplaceSkillIconFileId(
 
   if (authorUserId) {
     const canAccess = await canUserAccessFileWorkspace(
-      fileInfo.workspaceId,
+      fileInfo.workspaceId ?? null,
       authorUserId,
     );
     if (!canAccess) {
@@ -593,7 +595,13 @@ async function normalizeMarketplaceSkillIconFileId(
   const duplicated = await duplicateFileRecord(iconFileId, {
     workspaceId: null,
     uploaderUserId: authorUserId || null,
-    category: "skill_icon",
+    origin: buildSystemGeneratedOrigin({
+      system: FILE_ORIGIN_SYSTEMS.MARKETPLACE_SKILL_ICON_COPY,
+      initiatorUserId: authorUserId || null,
+      details: {
+        parentFileId: iconFileId,
+      },
+    }),
   });
   if (!duplicated) {
     throw new SkillError(400, "Skill icon file not found");

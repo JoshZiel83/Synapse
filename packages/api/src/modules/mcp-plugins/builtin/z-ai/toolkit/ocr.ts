@@ -67,7 +67,7 @@ export const ocrFeature: SubFeature = {
     if (!apiKey) throw new Error('ZhipuAI API key not configured.');
 
     const record = await resolveFileRefRecord(input.fileRef, 'fileRef', 'image');
-    const originalBuffer = await fileToBuffer(record.storedName);
+    const originalBuffer = await fileToBuffer(record);
     const prepared = await ensureSupportedOcrImage(originalBuffer, record.mimeType);
 
     const form = new FormData();

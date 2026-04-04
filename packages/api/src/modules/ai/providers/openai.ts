@@ -11,10 +11,6 @@ import { extractText, formatMentionText, textBlock } from "@synapse/shared";
 import { randomUUID } from "crypto";
 import type { AIProvider, AIProviderConfig, FileRefSegment } from "./types.js";
 import {
-  readAsBuffer,
-  getFullUrl,
-} from "../../../infrastructure/storage/index.js";
-import {
   compileContextWindowToConversationMessages,
   compressContextWindow,
 } from "../context-compiler.js";
@@ -29,6 +25,10 @@ import {
   buildBranchDeltaWindow,
   canResumeBranchFromWindow,
 } from "../engine-branches.js";
+import {
+  getFullFileUrlById,
+  readFileBufferById,
+} from "../../files/service.js";
 
 const SUPPORTED_IMAGE_FORMATS = new Set([
   "image/jpeg",
@@ -412,7 +412,10 @@ export class OpenAIChatCompletionsProvider implements AIProvider {
 
       // Supported — read from disk and build OpenAI native block
       try {
-        let buffer = await readAsBuffer(block.storedName);
+        let buffer = await readFileBufferById(block.fileId);
+        if (!buffer) {
+          throw new Error("file not found");
+        }
         let mimeType = block.mimeType;
 
         if (block.category === "image") {
@@ -434,7 +437,7 @@ export class OpenAIChatCompletionsProvider implements AIProvider {
             } else {
               nativeBlock = {
                 type: "image_url",
-                image_url: { url: getFullUrl(block.storedName) },
+                image_url: { url: getFullFileUrlById(block.fileId) },
               };
             }
             break;
@@ -470,7 +473,7 @@ export class OpenAIChatCompletionsProvider implements AIProvider {
         }
       } catch (err: any) {
         console.error(
-          `[openai] Failed to resolve file_ref ${block.storedName}:`,
+          `[openai] Failed to resolve file_ref ${block.fileId}:`,
           err.message,
         );
         const desc = `[${block.category}: ${block.originalName} (read failed)]`;

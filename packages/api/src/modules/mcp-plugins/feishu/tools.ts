@@ -1,9 +1,16 @@
 import { randomUUID } from "node:crypto";
-import type { ToolDefinition, ToolParameterProperty } from "@synapse/shared";
+import {
+  FILE_ORIGIN_SYSTEMS,
+  type ToolDefinition,
+  type ToolParameterProperty,
+} from "@synapse/shared";
 import {
   fileToBuffer,
   saveFromBuffer,
 } from "../../../infrastructure/storage/file-io.js";
+import {
+  buildExternalImportOrigin,
+} from "../../files/service.js";
 import {
   pluginOutputFileRef,
   resolveFileRefRecord,
@@ -1182,7 +1189,7 @@ const feishuToolSpecs: FeishuToolSpec[] = [
       };
 
       try {
-        const buffer = await fileToBuffer(record.storedName);
+        const buffer = await fileToBuffer(record);
         const form = new FormData();
         form.append("file_name", record.originalName);
         form.append("parent_type", getFeishuDocMediaParentType(mediaType));
@@ -1284,13 +1291,14 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         result.contentType,
         workspaceId,
         null,
-        "plugin_output",
-        {
-          provider: "feishu",
-          source: "docs.download_media",
-          token,
-          mediaType,
-        },
+        buildExternalImportOrigin({
+          system: FILE_ORIGIN_SYSTEMS.FEISHU_DOCS_DOWNLOAD_MEDIA,
+          providerKey: "feishu",
+          externalResourceKey: token,
+          details: {
+            mediaType,
+          },
+        }),
       );
 
       return [
@@ -1527,7 +1535,7 @@ const feishuToolSpecs: FeishuToolSpec[] = [
     async execute(input, config) {
       const { client } = createFeishuApiClient(config);
       const record = await resolveFileRefRecord(input.fileRef, "fileRef");
-      const buffer = await fileToBuffer(record.storedName);
+      const buffer = await fileToBuffer(record);
 
       const form = new FormData();
       form.append("file_name", asString(input.fileName) || record.originalName);
@@ -1585,12 +1593,11 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         result.contentType,
         workspaceId,
         null,
-        "plugin_output",
-        {
-          provider: "feishu",
-          source: "drive.download_file",
-          fileToken,
-        },
+        buildExternalImportOrigin({
+          system: FILE_ORIGIN_SYSTEMS.FEISHU_DRIVE_DOWNLOAD_FILE,
+          providerKey: "feishu",
+          externalResourceKey: fileToken,
+        }),
       );
 
       return [

@@ -425,7 +425,6 @@ function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
       mimeType: block.mimeType,
       name: block.originalName,
       metadata: {
-        storedName: block.storedName,
         url: block.url,
         sizeBytes: block.sizeBytes,
         category: block.category,

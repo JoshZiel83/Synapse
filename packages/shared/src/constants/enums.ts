@@ -31,6 +31,87 @@ export const WORKSPACE_ACCESS_KEYS = [
 
 export const CONTACT_TARGET_TYPES = ['member', 'actor'] as const;
 export const CANONICAL_FILE_CATEGORIES = ['image', 'audio', 'video', 'document'] as const;
+export const FILE_STORAGE_BACKENDS = ['local_fs'] as const;
+export const FILE_ORIGIN_FAMILIES = [
+  'user_upload',
+  'actor_output',
+  'tool_output',
+  'model_output',
+  'external_import',
+  'package_import',
+  'system_generated',
+  'platform_asset',
+] as const;
+export const FILE_ORIGIN_SYSTEMS = {
+  WORKSPACE_WEB_UPLOAD: 'workspace_web_upload',
+  WORKSPACE_MOBILE_UPLOAD: 'workspace_mobile_upload',
+  ACTOR_TOOL_UPLOAD_FILE: 'actor_tool_upload_file',
+  MCP_TOOL_RESULT_INGEST: 'mcp_tool_result_ingest',
+  MCP_RESULT_NORMALIZER: 'mcp_result_normalizer',
+  ZHIPU_TEXT_TO_SPEECH: 'zhipu_text_to_speech',
+  ZHIPU_FILE_PARSER_SYNC: 'zhipu_file_parser_sync',
+  ZHIPU_IMAGE_GENERATION: 'zhipu_image_generation',
+  ZHIPU_LAYOUT_PARSING: 'zhipu_layout_parsing',
+  ANTHROPIC_RESPONSE_MEDIA_INGEST: 'anthropic_response_media_ingest',
+  OPENAI_RESPONSE_MEDIA_INGEST: 'openai_response_media_ingest',
+  GENERIC_MODEL_RESPONSE_MEDIA_INGEST: 'generic_model_response_media_ingest',
+  FEISHU_DOCS_DOWNLOAD_MEDIA: 'feishu_docs_download_media',
+  FEISHU_DRIVE_DOWNLOAD_FILE: 'feishu_drive_download_file',
+  SKILL_MIRROR_IMPORT: 'skill_mirror_import',
+  GENERATED_USER_AVATAR: 'generated_user_avatar',
+  GENERATED_OFFICIAL_ACTOR_AVATAR: 'generated_official_actor_avatar',
+  GENERATED_ACTOR_PIXEL_ART_AVATAR: 'generated_actor_pixel_art_avatar',
+  MARKETPLACE_SKILL_ICON_COPY: 'marketplace_skill_icon_copy',
+  BUILTIN_PLUGIN_ICON: 'builtin_plugin_icon',
+} as const;
+export const USER_UPLOAD_FILE_ORIGIN_SYSTEMS = [
+  FILE_ORIGIN_SYSTEMS.WORKSPACE_WEB_UPLOAD,
+  FILE_ORIGIN_SYSTEMS.WORKSPACE_MOBILE_UPLOAD,
+] as const;
+export const ACTOR_OUTPUT_FILE_ORIGIN_SYSTEMS = [
+  FILE_ORIGIN_SYSTEMS.ACTOR_TOOL_UPLOAD_FILE,
+] as const;
+export const TOOL_OUTPUT_FILE_ORIGIN_SYSTEMS = [
+  FILE_ORIGIN_SYSTEMS.MCP_TOOL_RESULT_INGEST,
+  FILE_ORIGIN_SYSTEMS.MCP_RESULT_NORMALIZER,
+  FILE_ORIGIN_SYSTEMS.ZHIPU_TEXT_TO_SPEECH,
+  FILE_ORIGIN_SYSTEMS.ZHIPU_FILE_PARSER_SYNC,
+  FILE_ORIGIN_SYSTEMS.ZHIPU_IMAGE_GENERATION,
+  FILE_ORIGIN_SYSTEMS.ZHIPU_LAYOUT_PARSING,
+] as const;
+export const MODEL_OUTPUT_FILE_ORIGIN_SYSTEMS = [
+  FILE_ORIGIN_SYSTEMS.ANTHROPIC_RESPONSE_MEDIA_INGEST,
+  FILE_ORIGIN_SYSTEMS.OPENAI_RESPONSE_MEDIA_INGEST,
+  FILE_ORIGIN_SYSTEMS.GENERIC_MODEL_RESPONSE_MEDIA_INGEST,
+] as const;
+export const EXTERNAL_IMPORT_FILE_ORIGIN_SYSTEMS = [
+  FILE_ORIGIN_SYSTEMS.FEISHU_DOCS_DOWNLOAD_MEDIA,
+  FILE_ORIGIN_SYSTEMS.FEISHU_DRIVE_DOWNLOAD_FILE,
+] as const;
+export const PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS = [
+  FILE_ORIGIN_SYSTEMS.SKILL_MIRROR_IMPORT,
+] as const;
+export const SYSTEM_GENERATED_FILE_ORIGIN_SYSTEMS = [
+  FILE_ORIGIN_SYSTEMS.GENERATED_USER_AVATAR,
+  FILE_ORIGIN_SYSTEMS.GENERATED_OFFICIAL_ACTOR_AVATAR,
+  FILE_ORIGIN_SYSTEMS.GENERATED_ACTOR_PIXEL_ART_AVATAR,
+  FILE_ORIGIN_SYSTEMS.MARKETPLACE_SKILL_ICON_COPY,
+] as const;
+export const PLATFORM_ASSET_FILE_ORIGIN_SYSTEMS = [
+  FILE_ORIGIN_SYSTEMS.BUILTIN_PLUGIN_ICON,
+] as const;
+export const FILE_PARSE_RUN_STATUSES = [
+  'pending',
+  'running',
+  'succeeded',
+  'failed',
+  'skipped',
+] as const;
+export const FILE_PARSE_OUTPUT_KINDS = [
+  'text',
+  'structured_json',
+  'derived_file',
+] as const;
 export const CONVERSATION_BOUNDARIES = ['internal', 'external'] as const;
 export const CONVERSATION_TYPE_KEYS = [
   'internal_private',

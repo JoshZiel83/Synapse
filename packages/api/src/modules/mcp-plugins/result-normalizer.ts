@@ -1,28 +1,15 @@
-import { fileRefBlock, normalizeCanonicalContentBlocks, textBlock, textBlocks, type CanonicalContentBlock, type CanonicalFileCategory } from '@synapse/shared';
+import { normalizeCanonicalContentBlocks, textBlock, textBlocks, type CanonicalContentBlock } from '@synapse/shared';
+import { FILE_ORIGIN_SYSTEMS } from '@synapse/shared/constants';
 import type { NormalizedMcpToolResult } from '@synapse/shared/types';
 import { saveFromBase64, saveFromUrl, type FileRecord } from '../../infrastructure/storage/file-io.js';
+import { buildToolOutputOrigin, toCanonicalFileRefBlock } from '../files/service.js';
 
 export interface McpResultNormalizeOptions {
   binaryMetadata?: Record<string, unknown>;
 }
 
-function mimeToCategory(mimeType: string): CanonicalFileCategory {
-  if (mimeType.startsWith('image/')) return 'image';
-  if (mimeType.startsWith('audio/')) return 'audio';
-  if (mimeType.startsWith('video/')) return 'video';
-  return 'document';
-}
-
-function fileRecordToFileRef(rec: FileRecord, category: CanonicalFileCategory): CanonicalContentBlock {
-  return fileRefBlock({
-    fileId: rec.id,
-    storedName: rec.storedName,
-    url: rec.url,
-    mimeType: rec.mimeType,
-    originalName: rec.originalName,
-    sizeBytes: rec.sizeBytes,
-    category,
-  });
+function fileRecordToFileRef(rec: FileRecord): CanonicalContentBlock {
+  return toCanonicalFileRefBlock(rec);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | undefined {
@@ -51,6 +38,10 @@ async function normalizeMcpContentArray(
   options?: McpResultNormalizeOptions,
 ): Promise<CanonicalContentBlock[]> {
   const blocks: CanonicalContentBlock[] = [];
+  const origin = buildToolOutputOrigin({
+    system: FILE_ORIGIN_SYSTEMS.MCP_RESULT_NORMALIZER,
+    details: options?.binaryMetadata,
+  });
 
   for (const raw of content) {
     const block = raw as any;
@@ -78,10 +69,9 @@ async function normalizeMcpContentArray(
               mimeType,
               workspaceId,
               null,
-              'plugin_output',
-              options?.binaryMetadata,
+              origin,
             );
-            blocks.push(fileRecordToFileRef(rec, 'image'));
+            blocks.push(fileRecordToFileRef(rec));
             break;
           }
           if (block.source?.type === 'url' && block.source?.url) {
@@ -90,10 +80,9 @@ async function normalizeMcpContentArray(
               workspaceId,
               null,
               'mcp-image.png',
-              'plugin_output',
-              options?.binaryMetadata,
+              origin,
             );
-            blocks.push(fileRecordToFileRef(rec, mimeToCategory(rec.mimeType)));
+            blocks.push(fileRecordToFileRef(rec));
             break;
           }
           if (block.data) {
@@ -104,10 +93,9 @@ async function normalizeMcpContentArray(
               mimeType,
               workspaceId,
               null,
-              'plugin_output',
-              options?.binaryMetadata,
+              origin,
             );
-            blocks.push(fileRecordToFileRef(rec, 'image'));
+            blocks.push(fileRecordToFileRef(rec));
             break;
           }
           blocks.push(textBlock(`[Image: missing data, keys=${Object.keys(block).join(',')}]`));
@@ -128,10 +116,9 @@ async function normalizeMcpContentArray(
               mimeType,
               workspaceId,
               null,
-              'plugin_output',
-              options?.binaryMetadata,
+              origin,
             );
-            blocks.push(fileRecordToFileRef(rec, 'audio'));
+            blocks.push(fileRecordToFileRef(rec));
             break;
           }
           blocks.push(textBlock('[Audio: missing data]'));
@@ -148,7 +135,6 @@ async function normalizeMcpContentArray(
             blocks.push(textBlock(block.resource.text));
           } else if (block.resource?.blob && block.resource?.mimeType) {
             const mimeType = block.resource.mimeType;
-            const category = mimeToCategory(mimeType);
             const ext = mimeType.split('/')[1] || 'bin';
             const originalName =
               typeof block.resource?.name === 'string' && block.resource.name.trim()
@@ -164,10 +150,12 @@ async function normalizeMcpContentArray(
               mimeType,
               workspaceId,
               null,
-              'plugin_output',
-              perFileMetadata,
+              buildToolOutputOrigin({
+                system: FILE_ORIGIN_SYSTEMS.MCP_RESULT_NORMALIZER,
+                details: perFileMetadata,
+              }),
             );
-            blocks.push(fileRecordToFileRef(rec, category));
+            blocks.push(fileRecordToFileRef(rec));
           } else if (block.resource?.uri) {
             blocks.push(textBlock(String(block.resource.uri)));
           } else {

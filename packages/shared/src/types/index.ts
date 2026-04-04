@@ -9,6 +9,19 @@ import {
   AUTH_SESSION_PERSISTENCES,
   AUTH_TRANSPORTS,
   CANONICAL_FILE_CATEGORIES,
+  FILE_ORIGIN_SYSTEMS,
+  FILE_ORIGIN_FAMILIES,
+  USER_UPLOAD_FILE_ORIGIN_SYSTEMS,
+  ACTOR_OUTPUT_FILE_ORIGIN_SYSTEMS,
+  TOOL_OUTPUT_FILE_ORIGIN_SYSTEMS,
+  MODEL_OUTPUT_FILE_ORIGIN_SYSTEMS,
+  EXTERNAL_IMPORT_FILE_ORIGIN_SYSTEMS,
+  PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS,
+  SYSTEM_GENERATED_FILE_ORIGIN_SYSTEMS,
+  PLATFORM_ASSET_FILE_ORIGIN_SYSTEMS,
+  FILE_PARSE_OUTPUT_KINDS,
+  FILE_PARSE_RUN_STATUSES,
+  FILE_STORAGE_BACKENDS,
   CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
   CONVERSATION_BOUNDARIES,
   CONVERSATION_TYPE_KEYS,
@@ -1141,7 +1154,6 @@ export interface CanonicalFileRefBlock {
   id: UUID;
   type: "file_ref";
   fileId: string; // files table UUID
-  storedName: string; // disk relative path (resolved via readAsBuffer)
   url: string; // /files/... (frontend display)
   mimeType: string;
   originalName: string;
@@ -1176,6 +1188,30 @@ export type CanonicalContentBlockInput =
 
 // ============ Files ============
 
+export type FileContentKind = CanonicalFileCategory;
+export type FileStorageBackend = typeof FILE_STORAGE_BACKENDS[number];
+export type FileOriginFamily = typeof FILE_ORIGIN_FAMILIES[number];
+export type FileOriginSystem =
+  typeof FILE_ORIGIN_SYSTEMS[keyof typeof FILE_ORIGIN_SYSTEMS];
+export type UserUploadFileOriginSystem =
+  typeof USER_UPLOAD_FILE_ORIGIN_SYSTEMS[number];
+export type ActorOutputFileOriginSystem =
+  typeof ACTOR_OUTPUT_FILE_ORIGIN_SYSTEMS[number];
+export type ToolOutputFileOriginSystem =
+  typeof TOOL_OUTPUT_FILE_ORIGIN_SYSTEMS[number];
+export type ModelOutputFileOriginSystem =
+  typeof MODEL_OUTPUT_FILE_ORIGIN_SYSTEMS[number];
+export type ExternalImportFileOriginSystem =
+  typeof EXTERNAL_IMPORT_FILE_ORIGIN_SYSTEMS[number];
+export type PackageImportFileOriginSystem =
+  typeof PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS[number];
+export type SystemGeneratedFileOriginSystem =
+  typeof SYSTEM_GENERATED_FILE_ORIGIN_SYSTEMS[number];
+export type PlatformAssetFileOriginSystem =
+  typeof PLATFORM_ASSET_FILE_ORIGIN_SYSTEMS[number];
+export type FileParseRunStatus = typeof FILE_PARSE_RUN_STATUSES[number];
+export type FileParseOutputKind = typeof FILE_PARSE_OUTPUT_KINDS[number];
+
 export interface RelayMcpFileSourceMetadata {
   kind: "relay_mcp";
   deviceId: UUID;
@@ -1188,24 +1224,65 @@ export interface RelayMcpFileSourceMetadata {
   namespacedToolName: string;
 }
 
+export interface FileOriginSummary {
+  family: FileOriginFamily;
+  system: FileOriginSystem;
+  initiatorUserId?: UUID | null;
+  initiatorActorId?: UUID | null;
+  providerKey?: string;
+  parentFileId?: UUID | null;
+  externalResourceKey?: string;
+  details?: RelayMcpFileSourceMetadata | Record<string, unknown>;
+}
+
+export interface FileCreateOriginInput {
+  family: FileOriginFamily;
+  system: FileOriginSystem;
+  details?: Record<string, unknown>;
+}
+
 export interface FileRecordView {
   id: UUID;
   workspaceId?: UUID | null;
   uploaderUserId?: UUID | null;
   originalName: string;
-  storedName: string;
   url: string;
   fullUrl: string;
   mimeType: string;
+  contentKind: FileContentKind;
   sizeBytes: number;
+  sha256: string;
+  storageBackend: FileStorageBackend;
+  originSummary: FileOriginSummary;
   createdAt: Timestamp;
-  metadata?: Record<string, unknown> & {
-    source?: RelayMcpFileSourceMetadata | Record<string, unknown>;
-    absolutePath?: string;
-    sha256?: string;
-    modifiedAt?: Timestamp;
-    createdAt?: Timestamp;
-  };
+}
+
+export interface FileParseOutputView {
+  id: UUID;
+  outputKind: FileParseOutputKind;
+  role: string;
+  isPrimary: boolean;
+  textContent?: string;
+  structuredJson?: Record<string, unknown>;
+  derivedFileId?: UUID | null;
+  derivedFile?: FileRecordView;
+  createdAt: Timestamp;
+}
+
+export interface FileParseRunView {
+  id: UUID;
+  fileId: UUID;
+  pipeline: string;
+  parserKey: string;
+  parserVersion?: string | null;
+  trigger: string;
+  status: FileParseRunStatus;
+  errorCode?: string | null;
+  errorMessage?: string | null;
+  createdAt: Timestamp;
+  startedAt?: Timestamp | null;
+  finishedAt?: Timestamp | null;
+  outputs: FileParseOutputView[];
 }
 
 export interface ActorDocTemplate {
@@ -3954,7 +4031,6 @@ export function fileRefBlock(
         : createCanonicalContentBlockId("file"),
     type: "file_ref",
     fileId: input.fileId,
-    storedName: input.storedName,
     url: input.url,
     mimeType: input.mimeType,
     originalName: input.originalName,
@@ -4040,7 +4116,6 @@ export function isCanonicalContentBlock(
     const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes);
     return (
       typeof block.fileId === "string" &&
-      typeof block.storedName === "string" &&
       typeof block.url === "string" &&
       typeof block.mimeType === "string" &&
       typeof block.originalName === "string" &&
@@ -4077,7 +4152,6 @@ export function normalizeCanonicalContentBlocks(
       const sizeBytes = normalizeContentBlockSizeBytes(block.sizeBytes);
       if (
         typeof block.fileId !== "string" ||
-        typeof block.storedName !== "string" ||
         typeof block.url !== "string" ||
         typeof block.mimeType !== "string" ||
         typeof block.originalName !== "string" ||

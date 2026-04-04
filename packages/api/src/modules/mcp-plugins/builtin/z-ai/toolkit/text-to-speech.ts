@@ -1,8 +1,9 @@
-import { ToolDefinition } from '@synapse/shared';
+import { FILE_ORIGIN_SYSTEMS, ToolDefinition } from '@synapse/shared';
 import type { SubFeature } from './types.js';
 import { saveFromBuffer } from '../../../../../infrastructure/storage/file-io.js';
 import { pluginOutputFileRef } from '../../../file-ref.js';
 import { normalizeZhipuTransportError, throwZhipuApiError } from './zhipu-errors.js';
+import { buildToolOutputOrigin } from '../../../../files/service.js';
 
 const ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4';
 const DEFAULT_MODEL = 'glm-tts';
@@ -98,7 +99,16 @@ export const ttsFeature: SubFeature = {
         mimeType,
         workspaceId,
         null,
-        'plugin_output',
+        buildToolOutputOrigin({
+          system: FILE_ORIGIN_SYSTEMS.ZHIPU_TEXT_TO_SPEECH,
+          providerKey: 'bigmodel',
+          details: {
+            voice,
+            format,
+            speed,
+            volume,
+          },
+        }),
       );
 
       return [

@@ -5,8 +5,8 @@ import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
-import { readAsBuffer } from '../../infrastructure/storage/index.js';
 import { config } from '../../config/index.js';
+import { readFileBufferById } from '../files/service.js';
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: 'file_ref' }>;
 type AudioFileBlock = FileRefBlock & { category: 'audio' };
@@ -211,7 +211,13 @@ async function transcribeWithLocalSherpaOnnx(block: AudioFileBlock): Promise<Aud
       };
     }
 
-    const buffer = await readAsBuffer(block.storedName);
+    const buffer = await readFileBufferById(block.fileId);
+    if (!buffer) {
+      return {
+        ok: false,
+        error: 'audio file not found',
+      };
+    }
     const waveBuffer = await transcodeAudioToWave(block, buffer);
 
     const sherpa = await loadSherpaModule();

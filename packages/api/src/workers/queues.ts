@@ -9,6 +9,7 @@ export const automationSchedulerQueue = new Queue(QUEUE_NAMES.AUTOMATION_SCHEDUL
 export const automationExecutionQueue = new Queue(QUEUE_NAMES.AUTOMATION_EXECUTION, { connection });
 export const imTransportDeliveryQueue = new Queue(QUEUE_NAMES.IM_TRANSPORT_DELIVERY, { connection });
 export const memoryIndexingQueue = new Queue(QUEUE_NAMES.MEMORY_INDEXING, { connection });
+export const fileParsingQueue = new Queue(QUEUE_NAMES.FILE_PARSING, { connection });
 
 export async function enqueueAutomationExecutionJobs(executionIds: string[]) {
   const uniqueExecutionIds = Array.from(
@@ -46,6 +47,7 @@ const queues = [
   automationExecutionQueue,
   imTransportDeliveryQueue,
   memoryIndexingQueue,
+  fileParsingQueue,
 ];
 
 export async function shutdownQueues() {

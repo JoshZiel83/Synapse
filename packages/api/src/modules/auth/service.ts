@@ -990,7 +990,7 @@ export function createAuthService(_app: FastifyInstance) {
         throw new AuthError('Avatar file not found', 400, 'AVATAR_FILE_NOT_FOUND');
       }
 
-      const canAccess = await canUserAccessFileWorkspace(fileInfo.workspaceId, userId);
+      const canAccess = await canUserAccessFileWorkspace(fileInfo.workspaceId ?? null, userId);
       if (!canAccess) {
         throw new AuthError('Avatar file is not accessible', 403, 'AVATAR_FILE_FORBIDDEN');
       }

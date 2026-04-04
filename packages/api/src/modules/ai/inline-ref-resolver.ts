@@ -1,13 +1,11 @@
 import {
-  fileRefBlock,
   mentionBlock,
   textBlock,
   type CanonicalContentBlock,
-  type CanonicalFileCategory,
   type ConversationEntityRef,
   type ConversationParticipantEntry,
 } from "@synapse/shared";
-import { getFileRecord } from "../files/service.js";
+import { getFileRecord, toCanonicalFileRefBlock } from "../files/service.js";
 
 type InlineReferenceSegment =
   | { type: "text"; text: string }
@@ -406,15 +404,6 @@ function resolveMentionReference(
   };
 }
 
-function mimeToCategory(
-  mimeType: string,
-): CanonicalFileCategory {
-  if (mimeType.startsWith("image/")) return "image";
-  if (mimeType.startsWith("audio/")) return "audio";
-  if (mimeType.startsWith("video/")) return "video";
-  return "document";
-}
-
 export async function resolveInlineReferenceSegments(
   segments: InlineReferenceSegment[],
   options: InlineReferenceResolveOptions = {},
@@ -431,17 +420,7 @@ export async function resolveInlineReferenceSegments(
     if (segment.type === "file_ref") {
       const file = await getFileRecord(segment.fileId);
       if (file) {
-        blocks.push(
-          fileRefBlock({
-            fileId: file.id,
-            storedName: file.storedName,
-            url: file.url,
-            mimeType: file.mimeType,
-            originalName: file.originalName,
-            sizeBytes: file.sizeBytes,
-            category: mimeToCategory(file.mimeType),
-          }),
-        );
+        blocks.push(toCanonicalFileRefBlock(file));
       } else {
         warnings.push(`Unknown FileRef "${segment.fileId}"`);
         blocks.push(textBlock(`[File not found: ${segment.fileId}]`));

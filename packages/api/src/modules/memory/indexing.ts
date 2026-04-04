@@ -333,7 +333,6 @@ async function loadMemoryItemIndexSource(memoryItemId: string) {
       'mip.name',
       'mip.metadata',
       'f.original_name',
-      'f.stored_name',
       'f.mime_type as file_mime_type',
       'f.size_bytes',
     ])

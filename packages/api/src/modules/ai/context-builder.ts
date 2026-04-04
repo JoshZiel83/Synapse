@@ -83,7 +83,6 @@ export function itemPartsToCanonicalBlocks(
       blocks.push(
         fileRefBlock({
           fileId: part.file_id,
-          storedName: part.stored_name || String(metadata.storedName || ""),
           url: part.file_id ? getFileUrlById(part.file_id) : "",
           mimeType:
             part.file_mime_type || part.mime_type || "application/octet-stream",

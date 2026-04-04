@@ -12,11 +12,12 @@
  * Image URLs in the response are temporary (valid for 30 days).
  * @see https://docs.bigmodel.cn/api-reference/模型-api/图像生成
  */
-import { ToolDefinition } from '@synapse/shared';
+import { FILE_ORIGIN_SYSTEMS, ToolDefinition } from '@synapse/shared';
 import type { SubFeature } from './types.js';
 import { saveFromUrl } from '../../../../../infrastructure/storage/file-io.js';
 import { pluginOutputFileRef } from '../../../file-ref.js';
 import { normalizeZhipuTransportError, throwZhipuApiError } from './zhipu-errors.js';
+import { buildToolOutputOrigin } from '../../../../files/service.js';
 
 const ZHIPU_API_BASE = 'https://open.bigmodel.cn/api/paas/v4';
 const DEFAULT_MODEL = 'cogview-4-250304';
@@ -140,7 +141,14 @@ export const imageGenFeature: SubFeature = {
         workspaceId,
         null,
         'generated_image.png',
-        'plugin_output',
+        buildToolOutputOrigin({
+          system: FILE_ORIGIN_SYSTEMS.ZHIPU_IMAGE_GENERATION,
+          providerKey: 'bigmodel',
+          details: {
+            model,
+            prompt,
+          },
+        }),
       );
 
       // Return canonical file_ref block — already saved, ingest pipeline will pass through

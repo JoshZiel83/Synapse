@@ -1,8 +1,8 @@
 import type { CanonicalContentBlock } from '@synapse/shared';
 import { createRequire } from 'module';
 import { mkdir } from 'node:fs/promises';
-import { readAsBuffer } from '../../infrastructure/storage/index.js';
 import { config } from '../../config/index.js';
+import { readFileBufferById } from '../files/service.js';
 
 type FileRefBlock = Extract<CanonicalContentBlock, { type: 'file_ref' }>;
 type ImageFileBlock = FileRefBlock & { category: 'image' };
@@ -135,7 +135,13 @@ async function transcribeImageWithTesseract(block: ImageFileBlock): Promise<Imag
 
   try {
     await mkdir(config.imageFallback.tesseractCachePath, { recursive: true });
-    const inputBuffer = await readAsBuffer(block.storedName);
+    const inputBuffer = await readFileBufferById(block.fileId);
+    if (!inputBuffer) {
+      return {
+        ok: false,
+        error: 'image file not found',
+      };
+    }
     const imageBuffer = await prepareImageForOcr(inputBuffer);
     const worker = await tesseract.createWorker(
       getTesseractLangs(),
@@ -188,6 +194,19 @@ async function getOcrResult(block: ImageFileBlock): Promise<ImageOcrResult> {
     ocrCache.set(cacheKey, pending);
   }
   return pending;
+}
+
+export async function extractImageOcrText(fileId: string): Promise<ImageOcrResult> {
+  return getOcrResult({
+    id: `file-${fileId}`,
+    type: 'file_ref',
+    fileId,
+    url: '',
+    mimeType: 'image/*',
+    originalName: 'image',
+    sizeBytes: 0,
+    category: 'image',
+  });
 }
 
 export async function buildImageFallbackContext(
