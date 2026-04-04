@@ -140,7 +140,8 @@ const styles = StyleSheet.create({
   },
   triggerLabel: {
     flexShrink: 1,
-    fontSize: 20,
+    fontSize: 18,
+    lineHeight: 22,
     fontWeight: "800",
     color: theme.colors.text,
   },

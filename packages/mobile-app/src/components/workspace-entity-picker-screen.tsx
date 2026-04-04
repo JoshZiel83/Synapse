@@ -15,6 +15,7 @@ import {
 } from "@/components/alphabet-indexed-entity-list";
 import { EmptyState, LoadingBlock, ScreenView } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useChat } from "@/providers/chat-provider";
 import { useSession } from "@/providers/session-provider";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
@@ -113,6 +114,7 @@ export function WorkspaceEntityPickerScreen({
   const router = useRouter();
   const { user } = useSession();
   const { workspaceId } = useWorkspace();
+  const { createConversation } = useChat();
   const { actorId, workspaceMemberId, contactId } = useLocalSearchParams<{
     actorId?: string;
     workspaceMemberId?: string;
@@ -262,17 +264,17 @@ export function WorkspaceEntityPickerScreen({
         throw new Error("存在缺少 workspace 成员身份的联系人，暂时无法发起群聊。");
       }
 
-      const created = await api.createThread(workspaceId, {
+      const created = await createConversation({
         kind: "group",
         actorIds: selectedActorIds,
         workspaceMemberIds: selectedWorkspaceMemberIds,
       });
 
-      if (!created.conversationId) {
+      if (!created.conversation.conversationId) {
         throw new Error("服务器没有返回 conversationId");
       }
 
-      router.replace(`/chat/${created.conversationId}`);
+      router.replace(`/chat/${created.conversation.conversationId}`);
     } catch (nextError) {
       setError(nextError instanceof Error ? nextError.message : "发起群聊失败。");
     } finally {

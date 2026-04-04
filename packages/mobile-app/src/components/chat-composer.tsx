@@ -2,6 +2,7 @@ import Feather from "@expo/vector-icons/Feather";
 import * as DocumentPicker from "expo-document-picker";
 import { Image } from "expo-image";
 import * as ImagePicker from "expo-image-picker";
+import { useRouter, type Href } from "expo-router";
 import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
@@ -9,7 +10,7 @@ import {
   useAudioRecorder,
   useAudioRecorderState,
 } from "expo-audio";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -19,12 +20,31 @@ import {
   Text,
   TextInput,
   View,
+  useWindowDimensions,
 } from "react-native";
 
 import { api } from "@/lib/api";
+import {
+  buildContentBlocksFromDraftText,
+  insertMentionIntoDraft,
+  normalizeMentionBackspace,
+  reconcileDraftMentions,
+  type ChatComposerSendPayload,
+  type ChatDraftMention,
+} from "@/lib/chat-compose";
+import { subscribeMentionSelection } from "@/lib/chat-mention-selection";
+import {
+  buildReplyPreviewText,
+  getEntityDisplayName,
+  getMentionableConversationParticipants,
+} from "@/lib/chat-data";
 import { createId } from "@/lib/ids";
 import { theme } from "@/theme/tokens";
-import { fileRefBlock, textBlock, type CanonicalContentBlock } from "@shared";
+import {
+  fileRefBlock,
+  type ChatConversationView,
+  type ConversationReplyRef,
+} from "@shared";
 
 type AttachmentKind = "image" | "video" | "audio" | "file";
 
@@ -35,6 +55,8 @@ interface LocalAttachment {
   name: string;
   mimeType: string;
 }
+
+const DEFAULT_INPUT_HEIGHT = 22;
 
 function inferAttachmentKind(mimeType: string): AttachmentKind {
   if (mimeType.startsWith("video/")) return "video";
@@ -64,21 +86,93 @@ function attachmentIconName(
   return "image";
 }
 
+function findInsertedMentionTrigger(previousText: string, nextText: string) {
+  if (nextText.length !== previousText.length + 1) {
+    return null;
+  }
+
+  let index = 0;
+  while (
+    index < previousText.length &&
+    previousText[index] === nextText[index]
+  ) {
+    index += 1;
+  }
+
+  if (nextText[index] !== "@") {
+    return null;
+  }
+
+  return previousText.slice(index) === nextText.slice(index + 1) ? index : null;
+}
+
+function getDraftMeasurementText(text: string) {
+  if (text.length === 0) {
+    return " ";
+  }
+
+  return text.endsWith("\n") ? `${text} ` : text;
+}
+
 export function ChatComposer({
   workspaceId,
+  conversationId,
+  conversation,
+  viewerParticipantId,
   disabled,
+  replyTo,
+  onCancelReply,
   onSend,
 }: {
   workspaceId: string;
+  conversationId: string;
+  conversation: ChatConversationView;
+  viewerParticipantId?: string;
   disabled?: boolean;
-  onSend: (contentBlocks: CanonicalContentBlock[]) => Promise<void>;
+  replyTo?: ConversationReplyRef | null;
+  onCancelReply?: () => void;
+  onSend: (payload: ChatComposerSendPayload) => Promise<void>;
 }) {
-  const [draft, setDraft] = useState("");
+  const router = useRouter();
+  const { height: windowHeight } = useWindowDimensions();
+  const [draftText, setDraftText] = useState("");
+  const [draftMentions, setDraftMentions] = useState<ChatDraftMention[]>([]);
+  const [selection, setSelection] = useState({ start: 0, end: 0 });
+  const [inputHeight, setInputHeight] = useState(DEFAULT_INPUT_HEIGHT);
   const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
   const [sending, setSending] = useState(false);
   const [menuVisible, setMenuVisible] = useState(false);
   const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
   const recorderState = useAudioRecorderState(recorder);
+  const draftTextRef = useRef(draftText);
+  const draftMentionsRef = useRef(draftMentions);
+  const selectionRef = useRef(selection);
+  const pendingMentionInsertIndexRef = useRef<number | null>(null);
+  const maxInputHeight = Math.max(120, Math.floor(windowHeight * 0.4));
+  const mentionsEnabled = conversation.kind !== "private";
+
+  const mentionCandidates = useMemo(
+    () =>
+      getMentionableConversationParticipants(conversation, viewerParticipantId),
+    [conversation, viewerParticipantId],
+  );
+
+  const draftBlocks = useMemo(
+    () => buildContentBlocksFromDraftText(draftText, draftMentions),
+    [draftMentions, draftText],
+  );
+
+  useEffect(() => {
+    draftTextRef.current = draftText;
+  }, [draftText]);
+
+  useEffect(() => {
+    draftMentionsRef.current = draftMentions;
+  }, [draftMentions]);
+
+  useEffect(() => {
+    selectionRef.current = selection;
+  }, [selection]);
 
   useEffect(() => {
     return () => {
@@ -87,6 +181,45 @@ export function ChatComposer({
       }
     };
   }, [recorder, recorderState.isRecording]);
+
+  useEffect(() => {
+    return subscribeMentionSelection(conversationId, (mention) => {
+      const insertIndex = pendingMentionInsertIndexRef.current;
+      pendingMentionInsertIndexRef.current = null;
+      if (insertIndex === null) {
+        return;
+      }
+
+      const inserted = insertMentionIntoDraft(
+        draftTextRef.current,
+        draftMentionsRef.current,
+        mention,
+        insertIndex,
+      );
+      setDraftText(inserted.text);
+      setDraftMentions(inserted.mentions);
+      setSelection({
+        start: inserted.selection,
+        end: inserted.selection,
+      });
+    });
+  }, [conversationId]);
+
+  function openMentionPicker() {
+    if (
+      !mentionsEnabled ||
+      disabled ||
+      sending ||
+      mentionCandidates.length === 0
+    ) {
+      return false;
+    }
+
+    router.push(
+      `/chat/mention?conversationId=${encodeURIComponent(conversationId)}` as Href,
+    );
+    return true;
+  }
 
   async function pickLibrary() {
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -227,8 +360,7 @@ export function ChatComposer({
   }
 
   async function handleSend() {
-    const trimmed = draft.trim();
-    if (!trimmed && attachments.length === 0) return;
+    if (draftBlocks.length === 0 && attachments.length === 0) return;
 
     setMenuVisible(false);
     setSending(true);
@@ -255,16 +387,70 @@ export function ChatComposer({
         );
       }
 
-      const contentBlocks: CanonicalContentBlock[] = [
-        ...(trimmed ? [textBlock(trimmed)] : []),
-        ...fileBlocks,
-      ];
-
-      await onSend(contentBlocks);
-      setDraft("");
+      await onSend({
+        contentBlocks: [...draftBlocks, ...fileBlocks],
+        replyToItemId: replyTo?.itemId,
+        replyTo: replyTo ?? undefined,
+      });
+      setDraftText("");
+      setDraftMentions([]);
+      setSelection({ start: 0, end: 0 });
+      setInputHeight(DEFAULT_INPUT_HEIGHT);
       setAttachments([]);
+      onCancelReply?.();
     } finally {
       setSending(false);
+    }
+  }
+
+  function handleChangeText(nextText: string) {
+    const previousText = draftTextRef.current;
+    const normalizedDeletion = normalizeMentionBackspace(
+      previousText,
+      nextText,
+      draftMentionsRef.current,
+      selectionRef.current,
+    );
+
+    if (normalizedDeletion) {
+      setDraftText(normalizedDeletion.text);
+      setDraftMentions(normalizedDeletion.mentions);
+      if (normalizedDeletion.text.length === 0) {
+        setInputHeight(DEFAULT_INPUT_HEIGHT);
+      }
+      setSelection({
+        start: normalizedDeletion.selection,
+        end: normalizedDeletion.selection,
+      });
+      return;
+    }
+
+    const nextMentions = reconcileDraftMentions(
+      previousText,
+      nextText,
+      draftMentionsRef.current,
+    );
+
+    setDraftText(nextText);
+    setDraftMentions(nextMentions);
+    if (nextText.length === 0) {
+      setInputHeight(DEFAULT_INPUT_HEIGHT);
+    }
+
+    const mentionTriggerIndex = findInsertedMentionTrigger(previousText, nextText);
+    if (
+      mentionsEnabled &&
+      mentionTriggerIndex !== null &&
+      !nextMentions.some(
+        (mention) =>
+          mentionTriggerIndex >= mention.start &&
+          mentionTriggerIndex < mention.end,
+      )
+    ) {
+      pendingMentionInsertIndexRef.current = mentionTriggerIndex;
+      if (!openMentionPicker()) {
+        pendingMentionInsertIndexRef.current = null;
+      }
     }
   }
 
@@ -275,10 +461,31 @@ export function ChatComposer({
   }
 
   const sendDisabled =
-    disabled || sending || (!draft.trim() && attachments.length === 0);
+    disabled || sending || (draftBlocks.length === 0 && attachments.length === 0);
 
   return (
     <View style={styles.wrap}>
+      {replyTo ? (
+        <View style={styles.replyBar}>
+          <Feather
+            name="corner-up-left"
+            size={15}
+            color={theme.colors.primary}
+          />
+          <Text numberOfLines={1} style={styles.replyBarText}>
+            {`${getEntityDisplayName(replyTo.author)}: ${buildReplyPreviewText(replyTo)}`}
+          </Text>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="取消引用"
+            onPress={onCancelReply}
+            style={styles.replyBarClose}
+          >
+            <Feather name="x" size={16} color={theme.colors.textMuted} />
+          </Pressable>
+        </View>
+      ) : null}
+
       {attachments.length > 0 ? (
         <ScrollView
           horizontal
@@ -329,62 +536,100 @@ export function ChatComposer({
         />
 
         <View style={styles.inputShell}>
+          <View pointerEvents="none" style={styles.textMeasureLayer}>
+            <Text
+              onLayout={(event) => {
+                setInputHeight(
+                  Math.max(
+                    DEFAULT_INPUT_HEIGHT,
+                    Math.min(
+                      maxInputHeight,
+                      Math.ceil(event.nativeEvent.layout.height),
+                    ),
+                  ),
+                );
+              }}
+              style={styles.textMeasure}
+            >
+              {getDraftMeasurementText(draftText)}
+            </Text>
+          </View>
           <TextInput
-            value={draft}
-            onChangeText={setDraft}
+            value={draftText}
+            selection={selection}
+            onChangeText={handleChangeText}
             onFocus={() => setMenuVisible(false)}
+            onSelectionChange={(event) => {
+              setSelection(event.nativeEvent.selection);
+              selectionRef.current = event.nativeEvent.selection;
+            }}
+            onContentSizeChange={(event) => {
+              setInputHeight(
+                Math.max(
+                  DEFAULT_INPUT_HEIGHT,
+                  Math.min(
+                    maxInputHeight,
+                    Math.ceil(event.nativeEvent.contentSize.height),
+                  ),
+                ),
+              );
+            }}
             placeholder="发消息"
             placeholderTextColor={theme.colors.textSoft}
             multiline
-            style={styles.textInput}
+            scrollEnabled={inputHeight >= maxInputHeight}
+            style={[
+              styles.textInput,
+              {
+                height: inputHeight,
+                maxHeight: maxInputHeight,
+              },
+            ]}
+            textAlignVertical="top"
             editable={!disabled && !sending}
           />
         </View>
 
-        <View style={styles.actionRow}>
-          <RoundAction
-            icon="plus"
-            onPress={() => setMenuVisible((current) => !current)}
-            disabled={disabled || sending}
-            active={menuVisible}
-          />
-          <Pressable
-            onPress={() => void handleSend()}
-            disabled={sendDisabled}
-            style={({ pressed }) => [
-              styles.sendButton,
-              sendDisabled && styles.sendButtonDisabled,
-              pressed && !sendDisabled && styles.sendButtonPressed,
-            ]}
-          >
-            {sending ? (
-              <ActivityIndicator color={theme.colors.white} />
-            ) : (
-              <Feather name="send" size={16} color={theme.colors.white} />
-            )}
-          </Pressable>
-        </View>
+        <RoundAction
+          icon="plus"
+          onPress={() => setMenuVisible((current) => !current)}
+          disabled={disabled || sending}
+          active={menuVisible}
+        />
 
-        {menuVisible ? (
-          <View style={styles.quickMenu}>
-            <MenuAction
-              icon="image"
-              label="相册"
-              onPress={() => void pickLibrary()}
-            />
-            <MenuAction
-              icon="camera"
-              label="拍摄"
-              onPress={() => void launchCamera()}
-            />
-            <MenuAction
-              icon="file-text"
-              label="文件"
-              onPress={() => void pickDocument()}
-            />
-          </View>
-        ) : null}
+        <RoundAction
+          icon="send"
+          onPress={() => void handleSend()}
+          disabled={sendDisabled}
+          active={!sendDisabled}
+        />
       </View>
+
+      {menuVisible ? (
+        <View style={styles.quickMenu}>
+          <MenuAction
+            icon="image"
+            label="相册"
+            onPress={() => void pickLibrary()}
+          />
+          <MenuAction
+            icon="camera"
+            label="拍照"
+            onPress={() => void launchCamera()}
+          />
+          <MenuAction
+            icon="paperclip"
+            label="文件"
+            onPress={() => void pickDocument()}
+          />
+        </View>
+      ) : null}
+
+      {sending ? (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="small" color={theme.colors.primary} />
+        </View>
+      ) : null}
     </View>
   );
 }
@@ -414,7 +659,7 @@ function RoundAction({
       <Feather
         name={icon}
         size={18}
-        color={active ? theme.colors.white : theme.colors.primary}
+        color={active ? theme.colors.white : theme.colors.text}
       />
     </Pressable>
   );
@@ -431,100 +676,99 @@ function MenuAction({
 }) {
   return (
     <Pressable onPress={onPress} style={styles.menuAction}>
-      <View style={styles.menuActionIcon}>
-        <Feather name={icon} size={18} color={theme.colors.primary} />
+      <View style={styles.menuIcon}>
+        <Feather name={icon} size={18} color={theme.colors.text} />
       </View>
-      <Text style={styles.menuActionLabel}>{label}</Text>
+      <Text style={styles.menuLabel}>{label}</Text>
     </Pressable>
   );
 }
 
 const styles = StyleSheet.create({
   wrap: {
-    gap: 10,
-    paddingHorizontal: 14,
-    paddingTop: 10,
-    paddingBottom: 14,
-    backgroundColor: theme.colors.surface,
+    paddingHorizontal: 12,
+    paddingTop: 6,
+    paddingBottom: 8,
+    gap: 8,
+    backgroundColor: theme.colors.background,
     borderTopWidth: 1,
     borderTopColor: theme.colors.border,
   },
-  attachmentRow: {
-    gap: 10,
-    paddingHorizontal: 2,
-  },
-  attachmentChip: {
-    width: 140,
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    backgroundColor: theme.colors.surfaceMuted,
-    padding: 10,
+  replyBar: {
+    minHeight: 36,
+    borderRadius: 14,
+    backgroundColor: theme.colors.backgroundAlt,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    flexDirection: "row",
+    alignItems: "center",
     gap: 8,
   },
-  attachmentThumb: {
-    width: "100%",
-    height: 84,
-    borderRadius: 12,
-    backgroundColor: theme.colors.backgroundAlt,
+  replyBarText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    color: theme.colors.textMuted,
   },
-  attachmentIcon: {
-    width: "100%",
-    height: 84,
-    borderRadius: 12,
-    backgroundColor: theme.colors.primarySoft,
+  replyBarClose: {
+    width: 24,
+    height: 24,
     alignItems: "center",
     justifyContent: "center",
   },
+  attachmentRow: {
+    gap: 10,
+  },
+  attachmentChip: {
+    minWidth: 154,
+    maxWidth: 190,
+    borderRadius: 18,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    padding: 10,
+    gap: 10,
+  },
+  attachmentThumb: {
+    width: "100%",
+    height: 112,
+    borderRadius: 14,
+    backgroundColor: theme.colors.backgroundAlt,
+  },
+  attachmentIcon: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: theme.colors.primarySoft,
+  },
   attachmentLabel: {
-    fontSize: 12,
+    fontSize: 13,
+    lineHeight: 18,
     color: theme.colors.text,
+    fontWeight: "600",
   },
   attachmentRemove: {
     position: "absolute",
     top: 8,
     right: 8,
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: theme.colors.surface,
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: "rgba(255,255,255,0.92)",
     alignItems: "center",
     justifyContent: "center",
   },
   recordingHint: {
-    fontSize: 12,
-    color: theme.colors.accent,
-    paddingHorizontal: 2,
+    fontSize: 13,
+    lineHeight: 18,
+    color: theme.colors.primary,
+    fontWeight: "700",
   },
   composerShell: {
-    position: "relative",
     flexDirection: "row",
     alignItems: "flex-end",
-    gap: 10,
-  },
-  inputShell: {
-    flex: 1,
-    minHeight: 42,
-    maxHeight: 120,
-    borderRadius: 22,
-    backgroundColor: theme.colors.surfaceMuted,
-    borderWidth: 1,
-    borderColor: theme.colors.border,
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    justifyContent: "center",
-  },
-  textInput: {
-    minHeight: 22,
-    maxHeight: 96,
-    fontSize: 16,
-    lineHeight: 22,
-    color: theme.colors.text,
-    textAlignVertical: "center",
-  },
-  actionRow: {
-    flexDirection: "row",
-    alignItems: "center",
     gap: 8,
   },
   roundAction: {
@@ -533,64 +777,82 @@ const styles = StyleSheet.create({
     borderRadius: 21,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: theme.colors.primarySoft,
+    backgroundColor: theme.colors.surface,
+    borderWidth: 1,
+    borderColor: theme.colors.border,
   },
   roundActionActive: {
     backgroundColor: theme.colors.primary,
+    borderColor: theme.colors.primary,
   },
   roundActionDisabled: {
     opacity: 0.45,
   },
   roundActionPressed: {
-    transform: [{ scale: 0.96 }],
+    opacity: 0.7,
   },
-  sendButton: {
-    width: 42,
-    height: 42,
+  inputShell: {
+    flex: 1,
+    minHeight: 42,
     borderRadius: 21,
-    backgroundColor: theme.colors.primary,
-    alignItems: "center",
+    borderWidth: 1,
+    borderColor: theme.colors.border,
+    backgroundColor: theme.colors.surface,
+    paddingHorizontal: 12,
+    paddingVertical: 5,
     justifyContent: "center",
   },
-  sendButtonDisabled: {
-    opacity: 0.45,
+  textMeasureLayer: {
+    position: "absolute",
+    left: 12,
+    right: 12,
+    top: 5,
+    opacity: 0,
   },
-  sendButtonPressed: {
-    transform: [{ scale: 0.96 }],
+  textInput: {
+    minHeight: DEFAULT_INPUT_HEIGHT,
+    fontSize: 15,
+    lineHeight: 22,
+    color: theme.colors.text,
+    paddingVertical: 0,
+    paddingHorizontal: 0,
+  },
+  textMeasure: {
+    fontSize: 15,
+    lineHeight: 22,
+    color: theme.colors.text,
   },
   quickMenu: {
-    position: "absolute",
-    right: 52,
-    bottom: 52,
     flexDirection: "row",
-    gap: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
+    gap: 10,
+  },
+  menuAction: {
+    flex: 1,
     borderRadius: 18,
     borderWidth: 1,
     borderColor: theme.colors.border,
     backgroundColor: theme.colors.surface,
-    shadowColor: theme.colors.black,
-    shadowOpacity: 0.08,
-    shadowRadius: 14,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 10,
-  },
-  menuAction: {
-    width: 64,
+    paddingVertical: 12,
+    paddingHorizontal: 10,
     alignItems: "center",
     gap: 8,
   },
-  menuActionIcon: {
-    width: 44,
-    height: 44,
-    borderRadius: 16,
+  menuIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: theme.colors.primarySoft,
+    backgroundColor: theme.colors.backgroundAlt,
   },
-  menuActionLabel: {
-    fontSize: 12,
+  menuLabel: {
+    fontSize: 13,
+    fontWeight: "700",
     color: theme.colors.text,
+  },
+  loadingOverlay: {
+    position: "absolute",
+    top: 10,
+    right: 16,
   },
 });

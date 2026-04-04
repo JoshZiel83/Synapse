@@ -9,11 +9,10 @@ import {
 } from 'react';
 
 import { api } from '@/lib/api';
+import { WORKSPACE_KEY } from '@/lib/storage-keys';
 import { deleteStoredValue, readStoredValue, writeStoredValue } from '@/lib/storage';
 import { useSession } from '@/providers/session-provider';
 import type { WorkspaceInfo } from '@/types/api';
-
-const WORKSPACE_KEY = 'synapse.mobile.workspaceId';
 
 interface WorkspaceContextValue {
   workspaceId: string | null;

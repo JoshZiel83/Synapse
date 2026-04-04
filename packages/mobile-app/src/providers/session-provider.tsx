@@ -9,15 +9,12 @@ import {
 } from 'react';
 
 import { ApiError, api, setApiAuthToken } from '@/lib/api';
-import {
-  flushPendingConversationMessages,
-  flushPendingConversationReads,
-} from '@/lib/chat-sync';
+import { createChatPersistence } from '@/lib/chat-persistence';
+import { SESSION_TOKEN_KEY } from '@/lib/storage-keys';
 import { deleteStoredValue, readStoredValue, writeStoredValue } from '@/lib/storage';
 import type { AuthMeResponse } from '@/types/api';
 import type { AuthSessionSummary, User } from '@shared';
-
-const SESSION_TOKEN_KEY = 'synapse.mobile.sessionToken';
+const chatPersistence = createChatPersistence();
 
 type SessionStatus = 'loading' | 'authenticated' | 'unauthenticated';
 
@@ -82,6 +79,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const clearSession = useCallback(async () => {
     await persistSessionToken(null);
+    await chatPersistence.clearAllWorkspaceSnapshots();
     applySession({ token: null }, setState);
   }, []);
 
@@ -115,15 +113,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     void refreshSession();
   }, [refreshSession]);
-
-  useEffect(() => {
-    if (state.status !== 'authenticated' || !state.token) {
-      return;
-    }
-
-    void flushPendingConversationReads();
-    void flushPendingConversationMessages();
-  }, [state.status, state.token]);
 
   const signIn = useCallback(async (email: string, password: string) => {
     const response = await api.login(email, password);

@@ -8,6 +8,7 @@ import { useEffect } from "react";
 import "react-native-reanimated";
 import "react-native-url-polyfill/auto";
 
+import "@/lib/chat-background-task";
 import { AppProviders } from "@/providers/app-providers";
 import { useSession } from "@/providers/session-provider";
 import { useWorkspace } from "@/providers/workspace-provider";

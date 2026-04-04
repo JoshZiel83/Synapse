@@ -1,5 +1,18 @@
 import Constants from "expo-constants";
-import type { CanonicalContentBlock, AuthSessionPersistence } from "@shared";
+import type {
+  AuthSessionPersistence,
+  CanonicalContentBlock,
+  ChatBootstrapResponse,
+  ChatClientInstanceRegistrationResponse,
+  ChatConversationCreateResponse,
+  ChatConversationMessagesQuery,
+  ChatConversationMessagesPage,
+  ChatConversationReadWatermarkInput,
+  ChatConversationReadWatermarkResponse,
+  ChatConversationSendMessageInput,
+  ChatConversationSendMessageResponse,
+  ChatSyncResponse,
+} from "@shared";
 import { Platform } from "react-native";
 
 import {
@@ -17,10 +30,6 @@ import type {
   AuthResponse,
   ContactHubDetailResponse,
   ContactHubResponse,
-  ConversationCollectionResponse,
-  ConversationCreateResponse,
-  ConversationMemberListResponse,
-  ConversationSendResponse,
   DirectConversationOpenResponse,
   FriendIdProfileView,
   IdentitySearchResponse,
@@ -33,7 +42,7 @@ import type {
   WorkspaceListResponse,
   WorkspaceMemberListResponse,
 } from "@/types/api";
-import type { ConversationFeedPage, FileRecordView } from "@shared";
+import type { FileRecordView } from "@shared";
 
 let authToken: string | null = null;
 
@@ -122,30 +131,6 @@ function normalizeActorListResponse(data: unknown): ActorListResponse {
   }
 
   return { actors: [] };
-}
-
-function normalizeConversationCollectionResponse(
-  data: unknown,
-): ConversationCollectionResponse {
-  if (Array.isArray(data)) {
-    return { conversations: data };
-  }
-
-  if (data && typeof data === "object") {
-    const objectData = data as {
-      conversations?: unknown;
-      runtimeMap?: unknown;
-    };
-    return {
-      conversations: asArray(objectData.conversations),
-      runtimeMap:
-        objectData.runtimeMap && typeof objectData.runtimeMap === "object"
-          ? (objectData.runtimeMap as Record<string, unknown>)
-          : undefined,
-    };
-  }
-
-  return { conversations: [] };
 }
 
 class ApiClient {
@@ -484,109 +469,140 @@ class ApiClient {
     );
   }
 
-  getThreads(workspaceId: string): Promise<ConversationCollectionResponse> {
-    return this.request<unknown>(
-      `/workspaces/${workspaceId}/conversations`,
-    ).then(normalizeConversationCollectionResponse);
-  }
-
-  getThread(workspaceId: string, threadId: string) {
-    return this.request<{ conversation: unknown }>(
-      `/workspaces/${workspaceId}/conversations/${threadId}`,
-    ).then(
-      (data) => ({
-        conversation: (data?.conversation || null) as any,
-      }),
+  getChatBootstrap(workspaceId: string): Promise<ChatBootstrapResponse> {
+    return this.request<ChatBootstrapResponse>(
+      `/workspaces/${workspaceId}/chat/bootstrap`,
     );
   }
 
-  createThread(workspaceId: string, input: {
-    kind: "private" | "group";
-    actorIds?: string[];
-    workspaceMemberIds?: string[];
-    title?: string;
-    content?: string;
-    contentBlocks?: CanonicalContentBlock[];
-    targetActorIds?: string[];
-  }): Promise<ConversationCreateResponse> {
-    return this.request<ConversationCreateResponse>(
-      `/workspaces/${workspaceId}/conversations`,
-      {
-      method: "POST",
-      body: JSON.stringify(input),
-      },
-    );
-  }
-
-  getThreadMessages(
+  getChatSync(
     workspaceId: string,
-    threadId: string,
-    limit = 100,
-    before?: string,
-  ): Promise<ConversationFeedPage> {
+    input?: { cursor?: number; limit?: number },
+  ): Promise<ChatSyncResponse> {
     const params = new URLSearchParams();
-    if (limit > 0) params.set("limit", String(limit));
-    if (before) params.set("before", before);
+    if (typeof input?.cursor === "number") {
+      params.set("cursor", String(input.cursor));
+    }
+    if (typeof input?.limit === "number") {
+      params.set("limit", String(input.limit));
+    }
     const query = params.toString();
-    return this.request<ConversationFeedPage>(
-      `/workspaces/${workspaceId}/conversations/${threadId}/messages${query ? `?${query}` : ""}`,
+
+    return this.request<ChatSyncResponse>(
+      `/workspaces/${workspaceId}/chat/sync${query ? `?${query}` : ""}`,
     );
   }
 
-  getThreadMembers(
+  registerChatClientInstance(
     workspaceId: string,
-    threadId: string,
-  ): Promise<ConversationMemberListResponse> {
-    return this.request<ConversationMemberListResponse>(
-      `/workspaces/${workspaceId}/conversations/${threadId}/members`,
-    );
-  }
-
-  sendThreadMessage(
-    workspaceId: string,
-    threadId: string,
-    contentBlocks: CanonicalContentBlock[],
-    clientMessageId: string,
-  ): Promise<ConversationSendResponse> {
-    return this.request<ConversationSendResponse>(
-      `/workspaces/${workspaceId}/conversations/${threadId}/messages`,
+    clientInstanceId: string,
+    input?: {
+      platform?: string;
+      deviceLabel?: string;
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<ChatClientInstanceRegistrationResponse> {
+    return this.request<ChatClientInstanceRegistrationResponse>(
+      `/workspaces/${workspaceId}/chat/client-instances/${clientInstanceId}`,
       {
-        method: "POST",
+        method: "PUT",
         body: JSON.stringify({
-          contentBlocks,
-          clientMessageId,
+          platform: input?.platform,
+          deviceLabel: input?.deviceLabel,
+          metadata: input?.metadata,
         }),
       },
     );
   }
 
-  addThreadMembers(
+  createChatConversation(
     workspaceId: string,
-    threadId: string,
-    input: { actorIds?: string[]; workspaceMemberIds?: string[] },
-  ): Promise<ConversationMemberListResponse> {
-    return this.request<ConversationMemberListResponse>(
-      `/workspaces/${workspaceId}/conversations/${threadId}/members`,
+    input: {
+      clientRequestId: string;
+      kind: "group" | "private" | "virtual";
+      boundary?: "internal" | "external";
+      title?: string;
+      workspaceMemberIds?: string[];
+      actorIds?: string[];
+      metadata?: Record<string, unknown>;
+    },
+  ): Promise<ChatConversationCreateResponse> {
+    return this.request<ChatConversationCreateResponse>(
+      `/workspaces/${workspaceId}/chat/conversations`,
       {
         method: "POST",
         body: JSON.stringify({
-          actorIds: input.actorIds ?? [],
+          clientRequestId: input.clientRequestId,
+          kind: input.kind,
+          boundary: input.boundary,
+          title: input.title,
           workspaceMemberIds: input.workspaceMemberIds ?? [],
+          actorIds: input.actorIds ?? [],
+          metadata: input.metadata,
         }),
       },
     );
   }
 
-  markThreadRead(
+  getChatConversationMessages(
     workspaceId: string,
-    threadId: string,
-    readUpToSequence: number,
-  ) {
-    return this.request<void>(
-      `/workspaces/${workspaceId}/conversations/${threadId}/read`,
+    conversationId: string,
+    input?: ChatConversationMessagesQuery,
+  ): Promise<ChatConversationMessagesPage> {
+    const params = new URLSearchParams();
+    if (typeof input?.afterSequence === "number") {
+      params.set("afterSequence", String(input.afterSequence));
+    }
+    if (typeof input?.beforeSequence === "number") {
+      params.set("beforeSequence", String(input.beforeSequence));
+    }
+    if (typeof input?.limit === "number") {
+      params.set("limit", String(input.limit));
+    }
+    if (input?.clientInstanceId) {
+      params.set("clientInstanceId", input.clientInstanceId);
+    }
+    const query = params.toString();
+
+    return this.request<ChatConversationMessagesPage>(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages${query ? `?${query}` : ""}`,
+    );
+  }
+
+  sendChatConversationMessage(
+    workspaceId: string,
+    conversationId: string,
+    input: ChatConversationSendMessageInput,
+  ): Promise<ChatConversationSendMessageResponse> {
+    return this.request<ChatConversationSendMessageResponse>(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages`,
       {
-      method: "POST",
-      body: JSON.stringify({ readUpToSequence }),
+        method: "POST",
+        body: JSON.stringify({
+          clientMessageId: input.clientMessageId,
+          contentBlocks: input.contentBlocks,
+          replyToItemId: input.replyToItemId,
+          clientInstanceId: input.clientInstanceId,
+          metadata: input.metadata,
+        }),
+      },
+    );
+  }
+
+  updateChatConversationReadWatermark(
+    workspaceId: string,
+    conversationId: string,
+    input: ChatConversationReadWatermarkInput,
+  ): Promise<ChatConversationReadWatermarkResponse> {
+    return this.request<ChatConversationReadWatermarkResponse>(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/read-watermark`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          readUpToSequence: input.readUpToSequence,
+          lastVisibleSequence: input.lastVisibleSequence,
+          clientInstanceId: input.clientInstanceId,
+        }),
       },
     );
   }

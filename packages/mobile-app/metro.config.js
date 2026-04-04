@@ -6,6 +6,11 @@ const workspaceRoot = path.resolve(projectRoot, '../..');
 
 const config = getDefaultConfig(projectRoot);
 
+config.resolver.assetExts = [
+  ...(config.resolver.assetExts || []),
+  'wasm',
+];
+
 config.watchFolders = [workspaceRoot];
 config.resolver.blockList = [
   ...(config.resolver.blockList || []),

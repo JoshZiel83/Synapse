@@ -1,10 +1,6 @@
 import { useEffect, useRef, type MutableRefObject } from "react";
 
 import { getWebSocketUrl } from "@/lib/config";
-import {
-  flushPendingConversationMessages,
-  flushPendingConversationReads,
-} from "@/lib/chat-sync";
 import { useSession } from "@/providers/session-provider";
 import type { ChatSocketEvent } from "@shared";
 
@@ -206,8 +202,6 @@ function ensureSharedSocket() {
       if (normalizedType === "auth.ok") {
         sharedAuthenticated = true;
         syncSharedSubscriptions();
-        void flushPendingConversationReads();
-        void flushPendingConversationMessages();
         dispatchConnected();
         return;
       }

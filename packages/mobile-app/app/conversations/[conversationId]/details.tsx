@@ -1,6 +1,6 @@
 import Feather from "@expo/vector-icons/Feather";
 import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import {
@@ -13,63 +13,39 @@ import {
   SectionBlock,
   SectionTitleRow,
 } from "@/components/ui";
-import { api } from "@/lib/api";
 import {
-  conversationDisplayCount,
-  conversationScopeLabel,
-} from "@/lib/conversations";
-import { useWorkspace } from "@/providers/workspace-provider";
+  getConversationAvatarSpec,
+  getParticipantDisplayName,
+} from "@/lib/chat-data";
+import { useChat } from "@/providers/chat-provider";
 import { theme } from "@/theme/tokens";
-import type {
-  ConversationParticipantView,
-  ConversationSummaryView,
-} from "@/types/api";
 
 export default function ConversationDetailScreen() {
   const router = useRouter();
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
-  const { workspaceId } = useWorkspace();
-  const [conversation, setConversation] =
-    useState<ConversationSummaryView | null>(null);
-  const [members, setMembers] = useState<ConversationParticipantView[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const {
+    getConversation,
+    refreshConversation,
+    status,
+    workspaceMemberId,
+  } = useChat();
+  const conversation = conversationId ? getConversation(conversationId) : null;
+  const members = conversation?.participants ?? [];
+  const loading = status === "loading" && !conversation;
+  const heroAvatar = conversation
+    ? getConversationAvatarSpec(conversation, workspaceMemberId)
+    : null;
 
   useEffect(() => {
-    async function loadData() {
-      if (!conversationId || !workspaceId) {
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
-
-      try {
-        const [threadResponse, membersResponse] = await Promise.all([
-          api.getThread(workspaceId, conversationId),
-          api.getThreadMembers(workspaceId, conversationId),
-        ]);
-
-        setConversation(
-          (threadResponse.conversation as ConversationSummaryView | null) ??
-            null,
-        );
-        setMembers(membersResponse.members);
-        setError(null);
-      } catch (nextError) {
-        setError(
-          nextError instanceof Error ? nextError.message : "群聊详情加载失败。",
-        );
-      } finally {
-        setLoading(false);
-      }
+    if (!conversationId || conversation) {
+      return;
     }
 
-    void loadData();
-  }, [conversationId, workspaceId]);
+    void refreshConversation(conversationId).catch(() => undefined);
+  }, [conversation, conversationId, refreshConversation]);
 
   const activeCount = useMemo(
-    () => conversationDisplayCount(members),
+    () => members.filter((member) => member.state !== "removed").length,
     [members],
   );
 
@@ -80,29 +56,21 @@ export default function ConversationDetailScreen() {
           <Feather name="chevron-left" size={20} color={theme.colors.text} />
         </Pressable>
         <Text numberOfLines={1} style={styles.headerTitle}>
-          {conversation ? `${conversationScopeLabel(conversation)}详情` : "会话详情"}
+          会话详情
         </Text>
         <View style={styles.headerSpacer} />
       </View>
 
       {loading ? (
         <SectionBlock>
-          <LoadingBlock label="正在加载群聊详情..." />
-        </SectionBlock>
-      ) : error ? (
-        <SectionBlock>
-          <EmptyState
-            icon="alert-circle"
-            title="群聊详情加载失败"
-            description={error}
-          />
+          <LoadingBlock label="正在加载会话详情..." />
         </SectionBlock>
       ) : !conversation ? (
         <SectionBlock>
           <EmptyState
             icon="users"
-            title="没有找到这个群聊"
-            description="这个会话可能已经结束，或者你当前没有访问权限。"
+            title="没有找到这个会话"
+            description="这个会话可能还没同步下来，或者你当前没有访问权限。"
           />
         </SectionBlock>
       ) : (
@@ -110,26 +78,26 @@ export default function ConversationDetailScreen() {
           <SectionBlock>
             <View style={styles.heroRow}>
               <Avatar
-                name={conversation.title}
-                uri={conversation.avatarUrl}
+                name={heroAvatar?.name || conversation.title}
+                uri={heroAvatar?.uri}
+                icon={heroAvatar?.icon}
                 size={68}
-                icon="message-circle"
               />
               <View style={styles.heroBody}>
                 <Text style={styles.heroTitle}>{conversation.title}</Text>
                 <Text style={styles.heroSubtitle}>
-                  {`${conversationScopeLabel(conversation)} · ${activeCount} 位成员`}
+                  {`${conversation.kind === "private" ? "单聊" : "群聊"} · ${activeCount} 位成员`}
                 </Text>
               </View>
               <Pill
-                label={conversation.status === "active" ? "进行中" : "已完成"}
+                label={conversation.boundary === "external" ? "外部" : "内部"}
                 tone="primary"
               />
             </View>
             <Button
               label="打开聊天"
               icon="message-circle"
-              onPress={() => router.replace(`/chat/${conversation.id}`)}
+              onPress={() => router.replace(`/chat/${conversation.conversationId}`)}
             />
           </SectionBlock>
 
@@ -141,29 +109,35 @@ export default function ConversationDetailScreen() {
             {members.length > 0 ? (
               <View style={styles.listShell}>
                 {members.map((member) => (
-                  <View
-                    key={member.participantId || member.id}
-                    style={styles.rowCard}
-                  >
+                  <View key={member.participantId} style={styles.rowCard}>
                     <Avatar
-                      name={member.name}
+                      name={getParticipantDisplayName(member)}
                       uri={member.avatarUrl}
-                      icon={member.type === "actor" ? "cpu" : "user"}
+                      icon={
+                        member.participantType === "actor"
+                          ? "cpu"
+                          : member.participantType === "external"
+                            ? "globe"
+                            : "user"
+                      }
                       size={42}
                     />
                     <View style={styles.rowBody}>
                       <Text style={styles.rowTitle}>
-                        {member.name || "未命名成员"}
+                        {getParticipantDisplayName(member)}
                       </Text>
                       <Text style={styles.rowSubtitle}>
                         {member.title ||
-                          member.role ||
-                          (member.type === "workspace_member"
-                            ? "成员"
+                        (member.participantType === "workspace_member"
+                          ? "成员"
+                          : member.participantType === "actor"
+                            ? "Actor"
                             : "会话成员")}
                       </Text>
                     </View>
-                    <Pill label={member.type === "actor" ? "角色" : "成员"} />
+                    <Pill
+                      label={member.participantType === "actor" ? "角色" : "成员"}
+                    />
                   </View>
                 ))}
               </View>
@@ -171,7 +145,7 @@ export default function ConversationDetailScreen() {
               <EmptyState
                 icon="users"
                 title="当前没有成员"
-                description="这个群聊的成员数据暂时不可用。"
+                description="这个会话的成员信息暂时不可用。"
               />
             )}
           </SectionBlock>

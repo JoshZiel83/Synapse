@@ -1,8 +1,12 @@
 import { Pressable, StyleSheet, Text, View } from "react-native";
 
 import { Avatar } from "@/components/ui";
+import {
+  getConversationAvatarSpec,
+  type PendingChatRead,
+} from "@/lib/chat-data";
 import { theme } from "@/theme/tokens";
-import type { ConversationSummaryView } from "@/types/api";
+import type { ChatConversationView } from "@shared";
 
 function formatMessageTime(value?: string) {
   if (!value) return "";
@@ -20,22 +24,26 @@ function formatMessageTime(value?: string) {
 
 export function ConversationItem({
   conversation,
+  workspaceMemberId,
+  pendingRead,
   onPress,
   showDivider = true,
 }: {
-  conversation: ConversationSummaryView;
+  conversation: ChatConversationView;
+  workspaceMemberId?: string | null;
+  pendingRead?: PendingChatRead;
   onPress: () => void;
   showDivider?: boolean;
 }) {
-  const title = conversation.presentation?.title || conversation.title;
-  const avatarUrl =
-    conversation.presentation?.avatarUrl ||
-    conversation.avatarUrl ||
-    conversation.participants[0]?.avatarUrl;
-  const preview =
-    conversation.lastMessage?.content?.trim() || "打开会话继续沟通";
-  const messageAt =
-    conversation.lastMessage?.createdAt || conversation.createdAt;
+  const title = conversation.title;
+  const avatar = getConversationAvatarSpec(conversation, workspaceMemberId);
+  const preview = conversation.lastItem?.previewText?.trim() || "打开会话继续沟通";
+  const messageAt = conversation.lastItem?.createdAt || conversation.createdAt;
+  const latestSequence = conversation.lastItem?.sequence ?? 0;
+  const unreadCount =
+    pendingRead && pendingRead.readUpToSequence >= latestSequence
+      ? 0
+      : conversation.unreadCount;
 
   return (
     <Pressable
@@ -47,13 +55,13 @@ export function ConversationItem({
       ]}
     >
       <View style={styles.avatarWrap}>
-        <Avatar name={title} uri={avatarUrl} size={40} />
-        {conversation.unreadCount > 0 ? (
+        <Avatar name={avatar.name} uri={avatar.uri} icon={avatar.icon} size={40} />
+        {unreadCount > 0 ? (
           <View style={styles.unreadBadge}>
             <Text style={styles.unreadText}>
-              {conversation.unreadCount > 99
+              {unreadCount > 99
                 ? "99+"
-                : conversation.unreadCount}
+                : unreadCount}
             </Text>
           </View>
         ) : null}

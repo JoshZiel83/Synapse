@@ -22,15 +22,11 @@ import {
   SectionTitleRow,
 } from "@/components/ui";
 import { api } from "@/lib/api";
-import {
-  applyPendingConversationReadState,
-  sortConversationSummaries,
-} from "@/lib/conversations";
+import { useChat } from "@/providers/chat-provider";
 import { useScanLauncher } from "@/hooks/use-scan-launcher";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
-import type { ConversationSummaryView } from "@/types/api";
-import type { Actor } from "@shared";
+import { textBlock, type Actor } from "@shared";
 
 export default function HomeTab() {
   const router = useRouter();
@@ -43,10 +39,14 @@ export default function HomeTab() {
     needsOnboarding,
     setWorkspaceId,
   } = useWorkspace();
+  const {
+    conversations,
+    createConversation,
+    refreshInbox,
+    sendMessage,
+    workspaceMemberId,
+  } = useChat();
   const [actors, setActors] = useState<Actor[]>([]);
-  const [conversations, setConversations] = useState<ConversationSummaryView[]>(
-    [],
-  );
   const [selectedActorId, setSelectedActorId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -62,7 +62,6 @@ export default function HomeTab() {
   async function loadData(isRefreshing = false) {
     if (!workspaceId) {
       setActors([]);
-      setConversations([]);
       setSelectedActorId(null);
       setLoading(false);
       setRefreshing(false);
@@ -76,10 +75,9 @@ export default function HomeTab() {
     }
 
     try {
-      const [actorsResponse, conversationsResponse, preferenceResponse] =
+      const [actorsResponse, preferenceResponse] =
         await Promise.all([
           api.getActors(workspaceId),
-          api.getThreads(workspaceId),
           api.getWorkspaceChiefActorPreference(workspaceId).catch(() => null),
         ]);
 
@@ -88,13 +86,6 @@ export default function HomeTab() {
       );
 
       setActors(activeActors);
-      setConversations(
-        sortConversationSummaries(
-          await applyPendingConversationReadState(
-            conversationsResponse.conversations,
-          ),
-        ),
-      );
       setSelectedActorId(
         params.actorId ||
           preferenceResponse?.chiefActorId ||
@@ -130,16 +121,17 @@ export default function HomeTab() {
     setError(null);
 
     try {
-      const response = await api.createThread(workspaceId, {
+      const response = await createConversation({
         kind: "group",
         actorIds: [selectedActor.id],
         title: selectedActor.definition.name,
-        content: trimmed,
-        targetActorIds: [selectedActor.id],
       });
-      const conversationId = response.conversationId;
+      const conversationId = response.conversation.conversationId;
 
       if (conversationId) {
+        await sendMessage(conversationId, {
+          contentBlocks: [textBlock(trimmed)],
+        });
         startTransition(() => {
           router.push(`/chat/${conversationId}`);
         });
@@ -197,7 +189,9 @@ export default function HomeTab() {
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
-              onRefresh={() => void loadData(true)}
+              onRefresh={() => {
+                void Promise.all([loadData(true), refreshInbox()]);
+              }}
             />
           }
         >
@@ -234,10 +228,11 @@ export default function HomeTab() {
                 {conversations.length > 0 ? (
                   <ConversationList
                     conversations={conversations}
+                    workspaceMemberId={workspaceMemberId}
                     maxItems={3}
                     showDividers={false}
                     onPressConversation={(conversation) =>
-                      router.push(`/chat/${conversation.id}`)
+                      router.push(`/chat/${conversation.conversationId}`)
                     }
                   />
                 ) : (

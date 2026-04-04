@@ -1,17 +1,22 @@
 import { StyleSheet, View } from "react-native";
 
 import { ConversationItem } from "@/components/conversation-item";
+import type { PendingChatRead } from "@/lib/chat-data";
 import { theme } from "@/theme/tokens";
-import type { ConversationSummaryView } from "@/types/api";
+import type { ChatConversationView } from "@shared";
 
 export function ConversationList({
   conversations,
+  workspaceMemberId,
+  pendingReads,
   onPressConversation,
   maxItems,
   showDividers = false,
 }: {
-  conversations: ConversationSummaryView[];
-  onPressConversation: (conversation: ConversationSummaryView) => void;
+  conversations: ChatConversationView[];
+  workspaceMemberId?: string | null;
+  pendingReads?: Record<string, PendingChatRead>;
+  onPressConversation: (conversation: ChatConversationView) => void;
   maxItems?: number;
   showDividers?: boolean;
 }) {
@@ -24,8 +29,10 @@ export function ConversationList({
     <View style={styles.list}>
       {visibleConversations.map((conversation) => (
         <ConversationItem
-          key={conversation.id}
+          key={conversation.conversationId}
           conversation={conversation}
+          workspaceMemberId={workspaceMemberId}
+          pendingRead={pendingReads?.[conversation.conversationId]}
           showDivider={showDividers}
           onPress={() => onPressConversation(conversation)}
         />

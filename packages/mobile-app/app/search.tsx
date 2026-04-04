@@ -19,22 +19,22 @@ import {
   SectionTitleRow,
 } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useChat } from "@/providers/chat-provider";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
 import type {
   ContactHubEntryView,
   ContactHubResponse,
-  ConversationSummaryView,
   IdentitySearchMatchView,
   IdentitySearchResponse,
 } from "@/types/api";
+import type { ChatConversationView } from "@shared";
 
-function matchesConversation(conversation: ConversationSummaryView, query: string) {
+function matchesConversation(conversation: ChatConversationView, query: string) {
   if (!query) return false;
   return [
     conversation.title,
-    conversation.presentation?.title,
-    conversation.lastMessage?.content,
+    conversation.lastItem?.previewText,
   ]
     .join(" ")
     .toLowerCase()
@@ -80,9 +80,9 @@ function friendStateLabel(match: IdentitySearchMatchView) {
 export default function GlobalSearchScreen() {
   const router = useRouter();
   const { workspaceId } = useWorkspace();
+  const { conversations } = useChat();
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
-  const [conversations, setConversations] = useState<ConversationSummaryView[]>([]);
   const [hub, setHub] = useState<ContactHubResponse | null>(null);
   const [identityResults, setIdentityResults] =
     useState<IdentitySearchResponse | null>(null);
@@ -98,10 +98,9 @@ export default function GlobalSearchScreen() {
 
     let active = true;
     setLoading(true);
-    void Promise.all([api.getThreads(workspaceId), api.getContactHub(workspaceId)])
-      .then(([threadResponse, hubResponse]) => {
+    void Promise.all([api.getContactHub(workspaceId)])
+      .then(([hubResponse]) => {
         if (!active) return;
-        setConversations(threadResponse.conversations);
         setHub(hubResponse);
       })
       .finally(() => {
@@ -214,31 +213,28 @@ export default function GlobalSearchScreen() {
               <View style={styles.listShell}>
                 {matchedConversations.map((conversation) => (
                   <Pressable
-                    key={conversation.id}
-                    onPress={() => router.push(`/chat/${conversation.id}`)}
+                    key={conversation.conversationId}
+                    onPress={() => router.push(`/chat/${conversation.conversationId}`)}
                     style={({ pressed }) => [
                       styles.rowCard,
                       pressed && styles.rowCardPressed,
                     ]}
                   >
                     <Avatar
-                      name={conversation.presentation?.title || conversation.title}
-                      uri={conversation.presentation?.avatarUrl || conversation.avatarUrl}
+                      name={conversation.title}
                       icon="message-circle"
                       size={44}
                     />
                     <View style={styles.rowBody}>
                       <Text style={styles.rowTitle}>
-                        {conversation.presentation?.title || conversation.title}
+                        {conversation.title}
                       </Text>
                       <Text numberOfLines={1} style={styles.rowSubtitle}>
-                        {conversation.lastMessage?.content?.trim() || "打开会话"}
+                        {conversation.lastItem?.previewText?.trim() || "打开会话"}
                       </Text>
                     </View>
                     <Pill
-                      label={
-                        conversation.presentation?.chatType === "direct" ? "单聊" : "群聊"
-                      }
+                      label={conversation.kind === "private" ? "单聊" : "群聊"}
                     />
                   </Pressable>
                 ))}

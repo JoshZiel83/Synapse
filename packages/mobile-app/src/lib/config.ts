@@ -49,11 +49,14 @@ export function resolveApiUrl(pathOrUrl: string) {
 }
 
 export function getPlatformClientType() {
-  return Platform.OS === "ios" ? "ios" : "android";
+  if (Platform.OS === "ios") return "ios";
+  if (Platform.OS === "android") return "android";
+  return "web";
 }
 
 export function getDeviceLabel() {
   const deviceName = Constants.deviceName?.trim();
   if (deviceName) return deviceName;
+  if (Platform.OS === "web") return "Web App";
   return Platform.OS === "ios" ? "iPhone App" : "Android App";
 }

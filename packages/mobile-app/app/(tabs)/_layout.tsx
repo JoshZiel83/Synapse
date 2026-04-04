@@ -1,16 +1,13 @@
 import Ionicons from "@expo/vector-icons/Ionicons";
 import type { BottomTabBarProps } from "@react-navigation/bottom-tabs";
 import { Tabs } from "expo-router";
-import { useCallback, useEffect, useState } from "react";
+import { useMemo } from "react";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
-import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
-import { api } from "@/lib/api";
-import { applyPendingConversationReadState } from "@/lib/conversations";
+import { useChat } from "@/providers/chat-provider";
 import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
-import type { ChatSocketEvent, ConversationFeedItem } from "@shared";
 
 function AppTabBar({
   state,
@@ -109,76 +106,11 @@ function AppTabBar({
 
 export default function TabLayout() {
   const { workspaceId } = useWorkspace();
-  const [unreadCount, setUnreadCount] = useState(0);
-
-  const refreshUnreadCount = useCallback(async () => {
-    if (!workspaceId) {
-      setUnreadCount(0);
-      return;
-    }
-
-    try {
-      const response = await api.getThreads(workspaceId);
-      const conversations = await applyPendingConversationReadState(
-        response.conversations,
-      );
-      setUnreadCount(
-        conversations.reduce(
-          (total, conversation) => total + conversation.unreadCount,
-          0,
-        ),
-      );
-    } catch {
-      // Keep the last badge state if inbox refresh fails.
-    }
-  }, [workspaceId]);
-
-  useEffect(() => {
-    void refreshUnreadCount();
-  }, [refreshUnreadCount]);
-
-  const handleSocketEvent = useCallback(
-    (event: ChatSocketEvent | Record<string, unknown>) => {
-      if (!workspaceId || typeof event.type !== "string") {
-        return;
-      }
-
-      switch (event.type) {
-        case "conversation.item.created": {
-          const payload = (event as ChatSocketEvent<"conversation.item.created">)
-            .payload as ConversationFeedItem;
-          if (payload.conversationId) {
-            void refreshUnreadCount();
-          }
-          return;
-        }
-        case "conversation.updated":
-        case "conversation.read.updated":
-          void refreshUnreadCount();
-          return;
-        default:
-          return;
-      }
-    },
-    [refreshUnreadCount, workspaceId],
+  const { totalUnreadCount } = useChat();
+  const unreadCount = useMemo(
+    () => (workspaceId ? totalUnreadCount : 0),
+    [totalUnreadCount, workspaceId],
   );
-
-  useWorkspaceWebSocket({
-    workspaceId: workspaceId || undefined,
-    enabled: Boolean(workspaceId),
-    subscriptions: workspaceId
-      ? [
-          {
-            key: `tab-inbox:${workspaceId}`,
-            topic: "inbox",
-          },
-        ]
-      : [],
-    onConnected: () => {
-      void refreshUnreadCount();
-    },
-    onEvent: handleSocketEvent,
-  });
 
   return (
     <Tabs
