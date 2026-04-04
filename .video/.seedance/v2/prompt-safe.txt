@@ -1,0 +1,15 @@
+15s, 9:16, English UI only.
+
+Create a premium vertical product film for Synapse, an AI chat app. Calm pacing, clean storytelling, minimal interface, warm light, polished motion design. Main idea: AI is a contact you add and a teammate you work with inside chat.
+
+0-4s: A person lifts a phone in a clean modern workspace. Open a messaging app. Show a simple contact list with short English words only: "Contacts", "Add", "Scan". A new AI contact named "Agent" appears beside human contacts. Slow push in, macro UI close-up, elegant motion.
+
+4-9s: Open the AI contact. Private chat. User sends: "Client follow-up?" AI replies: "On it." Smooth cut into a group chat named "Team". Two coworkers and the same AI agent are already in the thread. The AI feels native to the chat, like a real participant.
+
+9-13s: User sends: "Continue on desktop." A linked desktop wakes and continues the same task. Show one small timer card and one soft activity pulse. Keep it visual and minimal.
+
+13-15s: Final hero frame. Contact list, private chat, group chat, and desktop continuity align into one clean composition. Leave space for the Synapse logo to be added later.
+
+Style: cinematic, 24fps, soft film grain, warm daylight, premium device materials, refined reflections, minimal messaging UI, clear composition.
+Sound: soft electronic build, message tap, scan cue, quiet notification, desktop wake sound.
+Avoid long text, logos, dashboards, settings pages, code, holograms, chaotic montage.
