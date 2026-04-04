@@ -17,6 +17,8 @@ import {
   textBlock,
   type CanonicalContentBlock,
   type ConversationEntityRef,
+  type ConversationReplyRef,
+  type FileRecordView,
 } from "@synapse/shared"
 import Mention from "@tiptap/extension-mention"
 import Placeholder from "@tiptap/extension-placeholder"
@@ -33,16 +35,29 @@ import {
   AtSign,
   FileText,
   Hash,
+  ImageIcon,
   Loader2,
+  Mic,
   Paperclip,
+  Reply,
   Send,
   SmilePlus,
   X,
+  Video,
 } from "lucide-react"
 import { toast } from "sonner"
 
+import {
+  buildReplyPreviewText,
+  getEntityDisplayName,
+} from "@/app/dashboard/chat/reply-utils"
 import ChatAvatar from "@/app/dashboard/chat/chat-avatar"
 import { Button } from "@/components/ui/button"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { searchEmojiSuggestions } from "@/lib/emoji"
 import { api } from "@/lib/api"
 import { cn } from "@/lib/utils"
@@ -57,9 +72,15 @@ const EMOJI_SUGGESTION_KEY = new PluginKey("chat-composer-emojis")
 type SuggestionTrigger = "@" | "#" | ":"
 type MentionTargetType = "participant" | "actor" | "attachment"
 
+type PendingAttachmentStatus = "uploading" | "uploaded" | "failed"
+
 type PendingAttachment = {
   id: string
   file: File
+  progress: number
+  status: PendingAttachmentStatus
+  uploadedFile?: FileRecordView
+  errorMessage?: string
 }
 
 type ComposerMentionNodeAttrs = {
@@ -67,8 +88,7 @@ type ComposerMentionNodeAttrs = {
   label?: string | null
   mentionSuggestionChar?: SuggestionTrigger | null
   targetType?: MentionTargetType | null
-  memberType?: ConversationEntityRef["memberType"] | null
-  memberId?: string | null
+  participantType?: ConversationEntityRef["participantType"] | null
   participantId?: string | null
   actorId?: string | null
   workspaceMemberId?: string | null
@@ -88,13 +108,11 @@ type ComposerSuggestionItem = {
   trigger: SuggestionTrigger
   kind: "participant" | "attachment" | "emoji"
   targetType?: MentionTargetType
-  participantType?: "actor" | "workspace_member" | "external"
   avatarUrl?: string
   emoji?: string
   inGroup?: boolean
   native?: string
-  memberType?: ConversationEntityRef["memberType"]
-  memberId?: string
+  participantType?: ChatComposerParticipant["type"]
   participantId?: string
   actorId?: string
   workspaceMemberId?: string
@@ -122,7 +140,6 @@ export type ChatComposerParticipant = {
   emoji?: string
   description?: string
   searchTerms?: string[]
-  memberId?: string
   participantId?: string
   actorId?: string
   workspaceMemberId?: string
@@ -134,8 +151,8 @@ export type ChatComposerParticipant = {
 export type ChatComposerSubmitPayload = {
   plainText: string
   contentBlocks: CanonicalContentBlock[]
-  targetParticipantIds?: string[]
-  targetActorIds?: string[]
+  replyToItemId?: string
+  replyTo?: ConversationReplyRef
   citedAttachmentIds?: string[]
 }
 
@@ -144,11 +161,13 @@ type ChatComposerProps = {
   participants?: ChatComposerParticipant[]
   disabled?: boolean
   placeholder?: string
+  replyTo?: ConversationReplyRef | null
   resetSignal?: number | string
   className?: string
   editorClassName?: string
   header?: ReactNode
   submitLabel?: string
+  onCancelReply?: () => void
   renderSubmitButton?: (props: {
     disabled: boolean
     submitting: boolean
@@ -174,6 +193,86 @@ function formatFileSize(bytes: number) {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+function getAttachmentProgress(attachment: PendingAttachment) {
+  if (attachment.status === "uploaded" || attachment.status === "failed") {
+    return 1
+  }
+
+  return Math.max(0.08, attachment.progress)
+}
+
+function getAttachmentKind(
+  attachment: Pick<PendingAttachment, "file" | "uploadedFile">
+): "image" | "video" | "audio" | "file" {
+  const mimeType = attachment.uploadedFile?.mimeType || attachment.file.type
+
+  if (mimeType.startsWith("image/")) return "image"
+  if (mimeType.startsWith("video/")) return "video"
+  if (mimeType.startsWith("audio/")) return "audio"
+  return "file"
+}
+
+function AttachmentStatusIcon({
+  attachment,
+}: {
+  attachment: PendingAttachment
+}) {
+  const size = 28
+  const strokeWidth = 2.5
+  const center = size / 2
+  const radius = center - strokeWidth - 1
+  const circumference = 2 * Math.PI * radius
+  const progress = getAttachmentProgress(attachment)
+  const kind = getAttachmentKind(attachment)
+  const strokeColor =
+    attachment.status === "failed"
+      ? "hsl(var(--destructive))"
+      : attachment.status === "uploaded"
+        ? "hsl(142 76% 36%)"
+        : "hsl(var(--primary))"
+  const Icon =
+    kind === "image"
+      ? ImageIcon
+      : kind === "video"
+        ? Video
+        : kind === "audio"
+          ? Mic
+          : FileText
+
+  return (
+    <div className="relative flex size-7 shrink-0 items-center justify-center">
+      <svg
+        width={size}
+        height={size}
+        viewBox={`0 0 ${size} ${size}`}
+        className="absolute inset-0 -rotate-90"
+        aria-hidden="true"
+      >
+        <circle
+          cx={center}
+          cy={center}
+          r={radius}
+          stroke="hsl(var(--border))"
+          strokeWidth={strokeWidth}
+          fill="none"
+        />
+        <circle
+          cx={center}
+          cy={center}
+          r={radius}
+          stroke={strokeColor}
+          strokeWidth={strokeWidth}
+          strokeLinecap="round"
+          strokeDasharray={`${circumference} ${circumference}`}
+          strokeDashoffset={circumference * (1 - progress)}
+          fill="none"
+        />
+      </svg>
+      <Icon className="size-3.5" style={{ color: strokeColor }} />
+    </div>
+  )
 }
 
 function filterParticipants(
@@ -212,8 +311,6 @@ function filterParticipants(
         avatarUrl: participant.avatarUrl,
         emoji: participant.emoji,
         inGroup: participant.inGroup,
-        memberType: participant.type,
-        memberId: participant.memberId,
         participantId:
           participant.participantId ||
           (targetType === "participant" ? participant.id : undefined),
@@ -238,6 +335,7 @@ function filterAttachments(
   const normalizedQuery = query.trim().toLowerCase()
 
   return attachments
+    .filter((attachment) => attachment.status === "uploaded")
     .filter((attachment) => {
       if (!normalizedQuery) return true
       return attachment.file.name.toLowerCase().includes(normalizedQuery)
@@ -252,11 +350,10 @@ function filterAttachments(
     }))
 }
 
-function collectMentionTargets(
+function collectComposerDraftState(
   editor: NonNullable<ReturnType<typeof useEditor>>
 ) {
-  const mentionedParticipantIds = new Set<string>()
-  const mentionedActorIds = new Set<string>()
+  let mentionCount = 0
   const citedAttachmentIds = new Set<string>()
 
   editor.state.doc.descendants((node) => {
@@ -265,13 +362,11 @@ function collectMentionTargets(
     const attrs = node.attrs as ComposerMentionNodeAttrs
     if (!attrs.id) return true
 
-    if (attrs.targetType === "actor") {
-      mentionedActorIds.add(attrs.id)
-      return true
-    }
-
-    if (attrs.targetType === "participant") {
-      mentionedParticipantIds.add(attrs.id)
+    if (
+      attrs.targetType === "actor" ||
+      attrs.targetType === "participant"
+    ) {
+      mentionCount += 1
       return true
     }
 
@@ -283,8 +378,7 @@ function collectMentionTargets(
   })
 
   return {
-    mentionedParticipantIds: Array.from(mentionedParticipantIds),
-    mentionedActorIds: Array.from(mentionedActorIds),
+    mentionCount,
     citedAttachmentIds: Array.from(citedAttachmentIds),
   }
 }
@@ -292,12 +386,11 @@ function collectMentionTargets(
 function buildMentionRef(
   attrs: ComposerMentionNodeAttrs
 ): ConversationEntityRef | null {
-  const memberType = attrs.memberType
-  if (!memberType) return null
+  const participantType = attrs.participantType
+  if (!participantType) return null
 
   const mention: ConversationEntityRef = {
-    memberType,
-    ...(attrs.memberId ? { memberId: attrs.memberId } : {}),
+    participantType,
     ...(attrs.participantId ? { participantId: attrs.participantId } : {}),
     ...(attrs.actorId ? { actorId: attrs.actorId } : {}),
     ...(attrs.workspaceMemberId
@@ -317,7 +410,7 @@ function buildMentionRef(
     ...(attrs.avatarEmoji ? { avatarEmoji: attrs.avatarEmoji } : {}),
   }
 
-  if (!mention.actorId && memberType === "actor" && attrs.id) {
+  if (!mention.actorId && participantType === "actor" && attrs.id) {
     mention.actorId = attrs.id
   }
 
@@ -627,8 +720,7 @@ const ComposerMention = Mention.extend({
               }
             : {},
       },
-      memberType: { default: null },
-      memberId: { default: null },
+      participantType: { default: null },
       participantId: { default: null },
       actorId: { default: null },
       workspaceMemberId: { default: null },
@@ -695,17 +787,20 @@ export default function ChatComposer({
   participants = [],
   disabled = false,
   placeholder = "Type a message...",
+  replyTo,
   resetSignal,
   className,
   editorClassName,
   header,
   submitLabel = "Send",
+  onCancelReply,
   renderSubmitButton,
   onSubmit,
 }: ChatComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const participantsRef = useRef(participants)
   const attachmentsRef = useRef<PendingAttachment[]>([])
+  const uploadControllersRef = useRef(new Map<string, AbortController>())
   const submitActionRef = useRef<() => void>(() => {})
   const previousResetSignalRef = useRef<number | string | undefined>(
     resetSignal
@@ -714,10 +809,7 @@ export default function ChatComposer({
   const [submitting, setSubmitting] = useState(false)
   const [dragDepth, setDragDepth] = useState(0)
   const [draftText, setDraftText] = useState("")
-  const [mentionedParticipantIds, setMentionedParticipantIds] = useState<
-    string[]
-  >([])
-  const [mentionedActorIds, setMentionedActorIds] = useState<string[]>([])
+  const [mentionCount, setMentionCount] = useState(0)
   const [citedAttachmentIds, setCitedAttachmentIds] = useState<string[]>([])
 
   useEffect(() => {
@@ -727,6 +819,15 @@ export default function ChatComposer({
   useEffect(() => {
     attachmentsRef.current = attachments
   }, [attachments])
+
+  useEffect(() => {
+    const controllers = uploadControllersRef.current
+
+    return () => {
+      controllers.forEach((controller) => controller.abort())
+      controllers.clear()
+    }
+  }, [])
 
   const suggestionRenderer = useMemo(() => createSuggestionRenderer(), [])
 
@@ -803,7 +904,10 @@ export default function ChatComposer({
               pluginKey: ATTACHMENT_SUGGESTION_KEY,
               char: "#",
               allowedPrefixes: null,
-              shouldShow: () => attachmentsRef.current.length > 0,
+              shouldShow: () =>
+                attachmentsRef.current.some(
+                  (attachment) => attachment.status === "uploaded"
+                ),
               items: ({ query }) =>
                 filterAttachments(attachmentsRef.current, query),
               render: suggestionRenderer,
@@ -844,24 +948,33 @@ export default function ChatComposer({
       immediatelyRender: true,
       onUpdate({ editor: currentEditor }) {
         const nextText = currentEditor.getText({ blockSeparator: "\n" })
-        const nextTargets = collectMentionTargets(currentEditor)
+        const nextDraftState = collectComposerDraftState(currentEditor)
 
         startTransition(() => {
           setDraftText(nextText)
-          setMentionedParticipantIds(nextTargets.mentionedParticipantIds)
-          setMentionedActorIds(nextTargets.mentionedActorIds)
-          setCitedAttachmentIds(nextTargets.citedAttachmentIds)
+          setMentionCount(nextDraftState.mentionCount)
+          setCitedAttachmentIds(nextDraftState.citedAttachmentIds)
         })
       },
     },
     [placeholder, suggestionRenderer]
   )
 
+  const uploadedAttachments = attachments.filter(
+    (attachment): attachment is PendingAttachment & { uploadedFile: FileRecordView } =>
+      attachment.status === "uploaded" && Boolean(attachment.uploadedFile)
+  )
+  const hasFailedAttachments = attachments.some(
+    (attachment) => attachment.status === "failed"
+  )
+  const hasPendingAttachmentWork = attachments.some(
+    (attachment) => attachment.status !== "uploaded"
+  )
   const hasDraftContent = draftText.trim().length > 0 || attachments.length > 0
-  const submitDisabled = disabled || submitting || !hasDraftContent
+  const submitDisabled =
+    disabled || submitting || !hasDraftContent || hasPendingAttachmentWork
   const isDragActive = dragDepth > 0
-  const totalMentionCount =
-    mentionedParticipantIds.length + mentionedActorIds.length
+  const totalMentionCount = mentionCount
 
   useEffect(() => {
     if (!editor) return
@@ -869,41 +982,108 @@ export default function ChatComposer({
     if (previousResetSignalRef.current === resetSignal) return
 
     previousResetSignalRef.current = resetSignal
+    uploadControllersRef.current.forEach((controller) => controller.abort())
+    uploadControllersRef.current.clear()
     editor.commands.clearContent()
     setAttachments([])
     setDraftText("")
-    setMentionedParticipantIds([])
-    setMentionedActorIds([])
+    setMentionCount(0)
     setCitedAttachmentIds([])
   }, [editor, resetSignal])
 
-  async function uploadPendingAttachments() {
-    if (!workspaceId || attachments.length === 0) return []
-
-    const uploads = await Promise.all(
-      attachments.map(async (attachment) => {
-        const uploaded = await api.uploadFile(workspaceId, attachment.file)
-        const mimeType = uploaded.mimeType || attachment.file.type
-
-        return fileRefBlock({
-          fileId: uploaded.id,
-          storedName: uploaded.storedName || "",
-          url: uploaded.url,
-          mimeType,
-          originalName: uploaded.originalName || attachment.file.name,
-          sizeBytes: uploaded.sizeBytes || attachment.file.size,
-          category: mimeType.startsWith("image/")
-            ? "image"
-            : mimeType.startsWith("audio/")
-              ? "audio"
-              : mimeType.startsWith("video/")
-                ? "video"
-                : "document",
-        })
-      })
+  function updateAttachment(
+    attachmentId: string,
+    updater: (attachment: PendingAttachment) => PendingAttachment
+  ) {
+    setAttachments((currentAttachments) =>
+      currentAttachments.map((attachment) =>
+        attachment.id === attachmentId ? updater(attachment) : attachment
+      )
     )
+  }
 
-    return uploads
+  function beginAttachmentUpload(file: File) {
+    if (!workspaceId) {
+      toast.error("Workspace context is required before files can be uploaded.")
+      return
+    }
+
+    const attachmentId = createAttachmentId()
+    const controller = new AbortController()
+
+    uploadControllersRef.current.set(attachmentId, controller)
+    setAttachments((currentAttachments) => [
+      ...currentAttachments,
+      {
+        id: attachmentId,
+        file,
+        progress: 0.04,
+        status: "uploading",
+      },
+    ])
+
+    void api
+      .uploadFile(workspaceId, file, {
+        signal: controller.signal,
+        onProgress: (progress) => {
+          updateAttachment(attachmentId, (attachment) => ({
+            ...attachment,
+            progress: Math.max(attachment.progress, progress),
+          }))
+        },
+      })
+      .then((uploadedFile) => {
+        uploadControllersRef.current.delete(attachmentId)
+        updateAttachment(attachmentId, (attachment) => ({
+          ...attachment,
+          progress: 1,
+          status: "uploaded",
+          uploadedFile,
+          errorMessage: undefined,
+        }))
+      })
+      .catch((error) => {
+        uploadControllersRef.current.delete(attachmentId)
+        const errorCode =
+          error && typeof error === "object" && "code" in error
+            ? error.code
+            : undefined
+        if (errorCode === "ABORTED") {
+          return
+        }
+
+        updateAttachment(attachmentId, (attachment) => ({
+          ...attachment,
+          progress: 1,
+          status: "failed",
+          errorMessage:
+            error instanceof Error ? error.message : "Upload failed",
+        }))
+      })
+  }
+
+  function buildAttachmentBlocks(
+    nextAttachments: Array<PendingAttachment & { uploadedFile: FileRecordView }>
+  ) {
+    return nextAttachments.map((attachment) => {
+      const uploaded = attachment.uploadedFile
+      const mimeType = uploaded.mimeType || attachment.file.type
+
+      return fileRefBlock({
+        fileId: uploaded.id,
+        url: uploaded.url,
+        mimeType,
+        originalName: uploaded.originalName || attachment.file.name,
+        sizeBytes: uploaded.sizeBytes || attachment.file.size,
+        category: mimeType.startsWith("image/")
+          ? "image"
+          : mimeType.startsWith("audio/")
+            ? "audio"
+            : mimeType.startsWith("video/")
+              ? "video"
+              : "document",
+      })
+    })
   }
 
   function insertTrigger(trigger: SuggestionTrigger) {
@@ -918,7 +1098,7 @@ export default function ChatComposer({
     const attachment = attachmentsRef.current.find(
       (currentAttachment) => currentAttachment.id === attachmentId
     )
-    if (!attachment) return
+    if (!attachment || attachment.status !== "uploaded") return
 
     editor
       .chain()
@@ -942,6 +1122,8 @@ export default function ChatComposer({
   }
 
   function removeAttachment(attachmentId: string) {
+    uploadControllersRef.current.get(attachmentId)?.abort()
+    uploadControllersRef.current.delete(attachmentId)
     setAttachments((currentAttachments) =>
       currentAttachments.filter((attachment) => attachment.id !== attachmentId)
     )
@@ -955,27 +1137,20 @@ export default function ChatComposer({
     if (rawFiles.length === 0) return
 
     const rejectedNames: string[] = []
-    const acceptedAttachments = rawFiles.reduce<PendingAttachment[]>(
-      (result, file) => {
-        if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
-          rejectedNames.push(file.name)
-          return result
-        }
-
-        result.push({
-          id: createAttachmentId(),
-          file,
-        })
+    const acceptedFiles = rawFiles.reduce<File[]>((result, file) => {
+      if (file.size > MAX_ATTACHMENT_SIZE_BYTES) {
+        rejectedNames.push(file.name)
         return result
-      },
-      []
-    )
+      }
 
-    if (acceptedAttachments.length > 0) {
-      setAttachments((currentAttachments) => [
-        ...currentAttachments,
-        ...acceptedAttachments,
-      ])
+      result.push(file)
+      return result
+    }, [])
+
+    if (acceptedFiles.length > 0) {
+      acceptedFiles.forEach((file) => {
+        beginAttachmentUpload(file)
+      })
     }
 
     if (rejectedNames.length > 0) {
@@ -984,38 +1159,44 @@ export default function ChatComposer({
   }
 
   async function handleSubmit() {
-    if (!editor || submitDisabled) return
+    if (!editor) return
+
+    if (hasPendingAttachmentWork) {
+      toast.error("Wait for attachments to finish uploading before sending.")
+      return
+    }
+
+    if (submitDisabled) return
 
     const plainText = editor.getText({ blockSeparator: "\n" }).trim()
-    const {
-      mentionedParticipantIds: targetParticipantIds,
-      mentionedActorIds: targetActorIds,
-      citedAttachmentIds,
-    } = collectMentionTargets(editor)
+    const { citedAttachmentIds } = collectComposerDraftState(editor)
 
     setSubmitting(true)
 
     try {
-      const uploadedBlocks = await uploadPendingAttachments()
-      const contentBlocks = buildComposerContentBlocks(editor, uploadedBlocks)
+      const contentBlocks = buildComposerContentBlocks(
+        editor,
+        buildAttachmentBlocks(uploadedAttachments)
+      )
 
       const submissionResult = await onSubmit({
         plainText,
         contentBlocks,
-        targetParticipantIds:
-          targetParticipantIds.length > 0 ? targetParticipantIds : undefined,
-        targetActorIds: targetActorIds.length > 0 ? targetActorIds : undefined,
+        replyToItemId: replyTo?.itemId,
+        replyTo: replyTo || undefined,
         citedAttachmentIds:
           citedAttachmentIds.length > 0 ? citedAttachmentIds : undefined,
       })
 
       if (submissionResult !== false) {
+        uploadControllersRef.current.forEach((controller) => controller.abort())
+        uploadControllersRef.current.clear()
         editor.commands.clearContent()
         setAttachments([])
         setDraftText("")
-        setMentionedParticipantIds([])
-        setMentionedActorIds([])
+        setMentionCount(0)
         setCitedAttachmentIds([])
+        onCancelReply?.()
       }
     } catch (error) {
       const message =
@@ -1089,33 +1270,89 @@ export default function ChatComposer({
 
       {header ? <div className="px-5 pt-4">{header}</div> : null}
 
+      {replyTo ? (
+        <div className="border-b border-border/70 px-4 py-3">
+          <div className="flex items-start gap-3 rounded-2xl bg-muted/35 px-3 py-2.5">
+            <div className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <Reply className="size-4" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-xs font-medium text-foreground">
+                Replying to {getEntityDisplayName(replyTo.author)}
+              </div>
+              <div className="mt-0.5 line-clamp-2 text-xs leading-5 text-muted-foreground">
+                {buildReplyPreviewText(replyTo)}
+              </div>
+            </div>
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              className="shrink-0 rounded-full text-muted-foreground"
+              onClick={onCancelReply}
+              aria-label="Cancel reply"
+            >
+              <X className="size-4" />
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
       {attachments.length > 0 ? (
         <div className="flex flex-wrap gap-2 border-b border-border/70 px-4 py-3">
           {attachments.map((attachment) => {
             const cited = citedAttachmentIds.includes(attachment.id)
+            const isClickableToCite =
+              attachment.status === "uploaded" && !disabled && !submitting
+            const uploadedSize =
+              attachment.uploadedFile?.sizeBytes || attachment.file.size
+            const statusLabel =
+              attachment.status === "uploading"
+                ? `Uploading ${Math.round(getAttachmentProgress(attachment) * 100)}%`
+                : attachment.status === "failed"
+                  ? attachment.errorMessage || "Upload failed"
+                  : formatFileSize(uploadedSize)
 
-            return (
+            const attachmentButton = (
               <button
                 key={attachment.id}
                 type="button"
-                onClick={() => insertAttachmentCitation(attachment.id)}
+                onClick={() => {
+                  if (isClickableToCite) {
+                    insertAttachmentCitation(attachment.id)
+                  }
+                }}
                 className={cn(
                   "inline-flex items-center gap-2 rounded-2xl border px-3 py-1.5 text-left text-xs shadow-sm transition-colors",
                   cited
                     ? "border-amber-500/30 bg-amber-500/10 text-amber-800"
-                    : "border-border bg-background text-muted-foreground hover:border-amber-500/30 hover:bg-amber-500/5"
+                    : "border-border bg-background text-muted-foreground",
+                  !isClickableToCite && "cursor-default",
+                  isClickableToCite &&
+                    "hover:border-amber-500/30 hover:bg-amber-500/5"
                 )}
               >
-                <Paperclip className="size-3.5 shrink-0" />
-                <span className="max-w-[14rem] truncate font-medium">
-                  {attachment.file.name}
+                <AttachmentStatusIcon attachment={attachment} />
+                <span className="min-w-0">
+                  <span className="block max-w-[14rem] truncate font-medium text-foreground">
+                    {attachment.file.name}
+                  </span>
+                  <span
+                    className={cn(
+                      "block max-w-[14rem] truncate text-[11px]",
+                      attachment.status === "failed"
+                        ? "text-destructive"
+                        : "text-muted-foreground/70"
+                    )}
+                  >
+                    {statusLabel}
+                  </span>
                 </span>
-                <span className="text-muted-foreground/70">
-                  {formatFileSize(attachment.file.size)}
-                </span>
-                <span className="hidden text-[11px] sm:inline">
-                  {cited ? "Cited" : "Click to cite"}
-                </span>
+                {cited ? (
+                  <span className="hidden rounded-full bg-amber-500/15 px-2 py-0.5 text-[11px] font-medium text-amber-800 sm:inline">
+                    Cited
+                  </span>
+                ) : null}
                 <span
                   onClick={(event) => {
                     event.stopPropagation()
@@ -1128,6 +1365,19 @@ export default function ChatComposer({
                   <X className="size-3.5" />
                 </span>
               </button>
+            )
+
+            if (!isClickableToCite || cited) {
+              return attachmentButton
+            }
+
+            return (
+              <Tooltip key={attachment.id}>
+                <TooltipTrigger asChild>{attachmentButton}</TooltipTrigger>
+                <TooltipContent side="top" sideOffset={8}>
+                  Click to cite
+                </TooltipContent>
+              </Tooltip>
             )
           })}
         </div>
@@ -1170,14 +1420,14 @@ export default function ChatComposer({
             size="icon-sm"
             className="rounded-full text-muted-foreground"
             onClick={() => {
-              if (attachments.length === 1) {
-                insertAttachmentCitation(attachments[0].id)
+              if (uploadedAttachments.length === 1) {
+                insertAttachmentCitation(uploadedAttachments[0].id)
                 return
               }
 
               insertTrigger("#")
             }}
-            disabled={disabled || submitting || attachments.length === 0}
+            disabled={disabled || submitting || uploadedAttachments.length === 0}
             aria-label="Cite an attachment"
           >
             <Hash className="size-4.5" />
@@ -1211,6 +1461,13 @@ export default function ChatComposer({
             <span className="hidden text-xs text-muted-foreground sm:inline">
               {totalMentionCount} mention
               {totalMentionCount > 1 ? "s" : ""}
+            </span>
+          ) : null}
+          {hasPendingAttachmentWork ? (
+            <span className="hidden text-xs text-muted-foreground sm:inline">
+              {hasFailedAttachments
+                ? "Remove failed attachments to send"
+                : "Uploading attachments..."}
             </span>
           ) : null}
 

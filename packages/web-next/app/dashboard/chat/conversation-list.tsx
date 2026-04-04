@@ -1,11 +1,10 @@
 "use client"
 
-import { type ReactNode, useState } from "react"
-import { APP_NAME, type ActorRuntimeState } from "@synapse/shared"
+import { useState } from "react"
+import { type ActorRuntimeState } from "@synapse/shared"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
-import { MobilePageHeader } from "@/components/mobile-page-header"
 import { cn } from "@/lib/utils"
 import { Plus, Search } from "lucide-react"
 import ChatAvatar from "./chat-avatar"
@@ -37,11 +36,8 @@ interface ConversationListProps {
   onSelect: (id: string) => void
   onNewConversation: () => void
   className?: string
-  headerVariant?: "default" | "mobile"
   title?: string
   loading?: boolean
-  headerAction?: ReactNode
-  showSearchInput?: boolean
 }
 
 function getRuntimePriority(runtime: ActorRuntimeState) {
@@ -128,16 +124,11 @@ export default function ConversationList({
   onSelect,
   onNewConversation,
   className,
-  headerVariant = "default",
   title,
   loading = false,
-  headerAction,
-  showSearchInput = true,
 }: ConversationListProps) {
   const [search, setSearch] = useState("")
-  const headerTitle =
-    title || (headerVariant === "mobile" ? APP_NAME : "Messages")
-  const isMobileHeader = headerVariant === "mobile"
+  const headerTitle = title || "Messages"
 
   const filtered = search
     ? conversations.filter((conversation) => {
@@ -159,78 +150,36 @@ export default function ConversationList({
         className
       )}
     >
-      {isMobileHeader ? (
-        <>
-          <MobilePageHeader
-            title={headerTitle}
-            action={
-              headerAction ?? (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="size-8 shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-                  onClick={onNewConversation}
-                  title="New Conversation"
-                >
-                  <Plus className="size-5" />
-                </Button>
-              )
-            }
-          />
-          {showSearchInput ? (
-            <div className="border-b border-border bg-background px-4 py-3">
-              <div className="relative">
-                <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  type="text"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search conversations…"
-                  className="h-10 rounded-2xl border-border/70 bg-muted/35 pl-9 shadow-none"
-                />
-              </div>
-            </div>
-          ) : null}
-        </>
-      ) : (
-        <div className="border-b border-border px-4 py-4">
-          <div className="mb-4 flex items-center justify-between gap-3">
-            <h2 className="text-lg font-semibold tracking-tight text-foreground">
-              {headerTitle}
-            </h2>
-            <Button
-              variant="ghost"
-              size="icon"
-              className="size-8 shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
-              onClick={onNewConversation}
-              title="New Conversation"
-            >
-              <Plus className="size-5" />
-            </Button>
-          </div>
-          <div className="relative">
-            <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
-            <Input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search conversations..."
-              className="pl-9"
-            />
-          </div>
+      <div className="border-b border-border px-4 py-4">
+        <div className="mb-4 flex items-center justify-between gap-3">
+          <h2 className="text-lg font-semibold tracking-tight text-foreground">
+            {headerTitle}
+          </h2>
+          <Button
+            variant="ghost"
+            size="icon"
+            className="size-8 shrink-0 rounded-full text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+            onClick={onNewConversation}
+            title="New Conversation"
+          >
+            <Plus className="size-5" />
+          </Button>
         </div>
-      )}
+        <div className="relative">
+          <Search className="absolute top-1/2 left-3 h-4 w-4 -translate-y-1/2 text-gray-400 dark:text-gray-500" />
+          <Input
+            type="text"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="Search conversations..."
+            className="pl-9"
+          />
+        </div>
+      </div>
 
-      {/* Conversation List */}
-      <div
-        className={cn(
-          "min-h-0 flex-1 overflow-y-auto",
-          isMobileHeader &&
-            "pb-[calc(var(--mobile-tab-bar-clearance,0px)+1rem)]"
-        )}
-      >
+      <div className="min-h-0 flex-1 overflow-y-auto">
         {loading ? (
-          <ConversationListSkeletonRows isMobileHeader={isMobileHeader} />
+          <ConversationListSkeletonRows isMobileHeader={false} />
         ) : (
           filtered.map((conversation) => {
             const isSelected = conversation.id === selectedId

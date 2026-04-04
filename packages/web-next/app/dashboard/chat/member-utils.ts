@@ -60,13 +60,13 @@ export function resolveAuthorMember(
   conversationMembers: ConversationMember[] | undefined,
 ) {
   if (!author) return undefined
-  const participantId = author.participantId || author.memberId
+  const participantId = author.participantId
   return conversationMembers?.find((member) => {
     if (participantId && member.participantId === participantId) {
       return true
     }
     if (
-      author.memberType === "actor" &&
+      author.participantType === "actor" &&
       member.type === "actor" &&
       author.actorId &&
       member.id === author.actorId
@@ -74,10 +74,18 @@ export function resolveAuthorMember(
       return true
     }
     if (
-      author.memberType === "workspace_member" &&
+      author.participantType === "workspace_member" &&
       member.type === "workspace_member" &&
       author.workspaceMemberId &&
       member.id === author.workspaceMemberId
+    ) {
+      return true
+    }
+    if (
+      author.participantType === "external" &&
+      member.type === "external" &&
+      author.externalUserKey &&
+      member.externalUserKey === author.externalUserKey
     ) {
       return true
     }
@@ -94,10 +102,13 @@ export function getAuthorContactHref(
   if (authorMember) {
     return getConversationMemberContactHref(authorMember, basePath)
   }
-  if (author?.memberType === "actor" && author.actorId) {
+  if (author?.participantType === "actor" && author.actorId) {
     return `${basePath}?kind=actor&id=${author.actorId}`
   }
-  if (author?.memberType === "workspace_member" && author.workspaceMemberId) {
+  if (
+    author?.participantType === "workspace_member" &&
+    author.workspaceMemberId
+  ) {
     return `${basePath}?kind=member&id=${author.workspaceMemberId}`
   }
   return undefined

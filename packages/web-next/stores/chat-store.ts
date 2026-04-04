@@ -3,18 +3,26 @@
 import { create } from "zustand"
 import { api } from "@/lib/api"
 import {
-  clearPendingConversationRead,
-  queuePendingConversationRead,
-} from "@/lib/read-watermark-queue"
+  createEmptyStoredChatSnapshot,
+  loadStoredChatSnapshot,
+  saveStoredChatSnapshot,
+  type PendingOutboxMessage as PersistedOutboxEntry,
+  type PendingConversationRead,
+  type StoredChatSnapshot,
+} from "@/lib/chat-persistence"
 import type {
   ActorRuntimeState,
   CanonicalContentBlock,
+  ChatConversationItem,
+  ChatConversationReadWatermarkResponse,
+  ChatConversationView,
+  ChatSyncEvent,
   ConversationEntityRef,
   ConversationFeedEventPayloadMap,
   ConversationFeedEventType,
-  ConversationFeedItem,
   ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
+  ConversationReplyRef,
   InteractionRequestSummary,
   TransportKind,
 } from "@synapse/shared"
@@ -35,7 +43,6 @@ export interface ConversationParticipant {
 }
 
 export interface ConversationMember {
-  memberId: string
   participantId: string
   type: "actor" | "workspace_member" | "external"
   id: string
@@ -104,12 +111,13 @@ export interface FeedMessage {
   clientMessageId?: string
   deliveryStatus?: "sending" | "retrying" | "sent"
   metadata?: Record<string, unknown>
+  replyToItemId?: string
+  replyTo?: ConversationReplyRef
   toolsUsed?: string[]
   serverToolCalls?: ServerToolCall[]
   citationSources?: Record<string, { url: string; title: string }>
   coordination?: boolean
-  targetParticipantIds?: string[]
-  targetActorIds?: string[]
+  restrictedAudienceParticipantIds?: string[]
   transport?: ConversationMessageTransportContext
   transportDeliveries?: ConversationMessageTransportDelivery[]
   eventType?: ConversationFeedEventType
@@ -124,74 +132,68 @@ export type ConversationRuntimeMap = Record<
   Record<string, ActorRuntimeState>
 >
 
-export interface OutboxEntry {
-  clientMessageId: string
-  workspaceId: string
-  conversationId: string
-  contentBlocks: CanonicalContentBlock[]
-  targetParticipantIds: string[]
-  targetActorIds: string[]
-  createdAt: string
-  optimisticSequence: number
-  status: "sending" | "retrying"
-  attemptCount: number
-  firstFailedAt?: string
-  lastAttemptAt?: string
-  lastErrorMessage?: string
-}
+export type OutboxEntry = PersistedOutboxEntry
 
 interface ChatState {
   activeWorkspaceId: string | null
-  conversations: ConversationSummary[]
+  workspaceMemberId: string | null
+  clientInstanceId: string | null
   selectedConversationId: string | null
+  visibleConversationId: string | null
+  conversations: ConversationSummary[]
   messages: FeedMessage[]
   outbox: Record<string, OutboxEntry>
+  pendingReads: Record<string, PendingConversationRead>
   loadingConversations: boolean
   loadingMessages: boolean
+  syncing: boolean
   runtimeMap: ConversationRuntimeMap
   runtimeSeqMap: Record<string, number>
   totalUnread: number
 
+  snapshot: StoredChatSnapshot | null
+  loadedMessageItems: ChatConversationItem[]
+
+  deactivate: () => void
   loadConversations: (
     workspaceId: string,
     options?: { silent?: boolean }
   ) => Promise<void>
+  reloadPersistedSnapshot: (workspaceId: string) => Promise<void>
   selectConversation: (conversationId: string | null) => void
+  setVisibleConversation: (conversationId: string | null) => void
   loadMessages: (workspaceId: string, conversationId: string) => Promise<void>
   sendMessage: (
     workspaceId: string,
     conversationId: string,
-    contentBlocks: CanonicalContentBlock[],
-    targetParticipantIds?: string[],
-    targetActorIds?: string[]
+    input: {
+      contentBlocks: CanonicalContentBlock[]
+      replyToItemId?: string
+      replyTo?: ConversationReplyRef
+    }
   ) => Promise<void>
-  hydrateOutbox: (workspaceId: string) => void
-  flushOutbox: (workspaceId: string) => void
+  hydrateOutbox: (workspaceId: string) => Promise<void>
+  flushOutbox: (workspaceId?: string) => Promise<void>
+  syncFromServer: (workspaceId?: string) => Promise<void>
   createWorkspaceThread: (
     workspaceId: string,
     kind: "private" | "group",
     actorIds: string[],
     content?: string,
-    targetActorIdOrIds?: string | string[],
     contentBlocks?: CanonicalContentBlock[],
     title?: string
   ) => Promise<string>
   markConversationRead: (
     conversationId: string,
-    readUpToSequence: number
+    readUpToSequence: number,
+    lastVisibleSequence?: number
   ) => Promise<void>
 
-  handleConversationItemCreated: (item: ConversationFeedItem) => void
+  handleSyncEvent: (event: ChatSyncEvent) => void
   handleRuntimeUpdated: (payload: {
     conversationId: string
     runtimeSeq: number
     snapshot: ActorRuntimeState
-  }) => void
-  handleConversationUpdated: (payload: {
-    conversationId: string
-    action: "created" | "profile_updated" | "cancelled"
-    title?: string | null
-    avatarUrl?: string | null
   }) => void
   handleInteractionUpdated: (payload: {
     conversationId: string
@@ -201,35 +203,144 @@ interface ChatState {
   }) => void
 }
 
-function normalizeContentBlocks(blocks: unknown): CanonicalContentBlock[] {
-  if (Array.isArray(blocks)) {
-    return normalizeCanonicalContentBlocks(blocks)
+const OUTBOX_RETRY_DELAYS_MS = [1500, 3000, 5000, 8000, 12000, 20000, 30000]
+
+let persistPromise: Promise<void> = Promise.resolve()
+let bootstrapPromise: Promise<void> | null = null
+let bootstrapWorkspaceId: string | null = null
+let syncPromise: Promise<void> | null = null
+let outboxRetryTimer: ReturnType<typeof setTimeout> | null = null
+
+function queuePersistSnapshot(snapshot: StoredChatSnapshot | null) {
+  if (!snapshot || typeof window === "undefined") {
+    return Promise.resolve()
   }
-  return []
+
+  persistPromise = persistPromise
+    .then(() => saveStoredChatSnapshot(snapshot))
+    .catch(() => undefined)
+
+  return persistPromise
 }
 
-function previewTextForItem(item: FeedMessage) {
-  const text = item.content.trim()
-  if (text) return text
-  if (item.contentBlocks.some((block) => block.type === "file_ref"))
-    return "Attachment"
-  return item.kind === "event" ? "System event" : ""
+function clearOutboxRetryTimer() {
+  if (outboxRetryTimer) {
+    clearTimeout(outboxRetryTimer)
+    outboxRetryTimer = null
+  }
 }
 
-function sortMessages(messages: FeedMessage[]) {
-  return [...messages].sort((left, right) => {
-    if (left.sequence !== right.sequence) return left.sequence - right.sequence
+function scheduleOutboxRetry(attemptCount: number) {
+  clearOutboxRetryTimer()
+
+  const index = Math.max(
+    0,
+    Math.min(attemptCount, OUTBOX_RETRY_DELAYS_MS.length - 1)
+  )
+  const baseDelay = OUTBOX_RETRY_DELAYS_MS[index] || 30000
+  const delay = baseDelay + Math.round(Math.random() * 600)
+
+  outboxRetryTimer = setTimeout(() => {
+    outboxRetryTimer = null
+    void useChatStore.getState().flushOutbox()
+  }, delay)
+}
+
+function createId(prefix: string) {
+  if (
+    typeof crypto !== "undefined" &&
+    typeof crypto.randomUUID === "function"
+  ) {
+    return crypto.randomUUID()
+  }
+
+  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`
+}
+
+function buildDesktopDeviceLabel() {
+  if (typeof navigator === "undefined") {
+    return "Web Desktop"
+  }
+
+  const platform =
+    (navigator as Navigator & { userAgentData?: { platform?: string } })
+      .userAgentData?.platform ||
+    navigator.platform ||
+    "Desktop"
+
+  return `Web Desktop (${platform})`
+}
+
+function normalizeContentBlocks(blocks: unknown): CanonicalContentBlock[] {
+  if (!Array.isArray(blocks)) {
+    return []
+  }
+  return normalizeCanonicalContentBlocks(blocks)
+}
+
+function sortRawConversations(conversations: ChatConversationView[]) {
+  return [...conversations].sort((left, right) => {
+    const leftPinned = left.pinnedSortKey
+      ? new Date(left.pinnedSortKey).getTime()
+      : 0
+    const rightPinned = right.pinnedSortKey
+      ? new Date(right.pinnedSortKey).getTime()
+      : 0
+
+    if (leftPinned !== rightPinned) {
+      return rightPinned - leftPinned
+    }
+
+    const leftAt = left.lastItem?.createdAt ?? left.updatedAt ?? left.createdAt
+    const rightAt =
+      right.lastItem?.createdAt ?? right.updatedAt ?? right.createdAt
+
+    return new Date(rightAt).getTime() - new Date(leftAt).getTime()
+  })
+}
+
+function upsertRawConversation(
+  conversations: ChatConversationView[],
+  incoming: ChatConversationView
+) {
+  const next = conversations.filter(
+    (conversation) => conversation.conversationId !== incoming.conversationId
+  )
+  next.push(incoming)
+  return sortRawConversations(next)
+}
+
+function mergeRawItems(
+  existing: ChatConversationItem[],
+  incoming: ChatConversationItem[]
+) {
+  const byId = new Map<string, ChatConversationItem>()
+
+  for (const item of existing) {
+    byId.set(item.id, item)
+  }
+  for (const item of incoming) {
+    byId.set(item.id, item)
+  }
+
+  return [...byId.values()].sort((left, right) => {
+    if (left.sequence !== right.sequence) {
+      return left.sequence - right.sequence
+    }
     return (
       new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
     )
   })
 }
 
-function sortConversations(conversations: ConversationSummary[]) {
-  return [...conversations].sort((left, right) => {
-    const leftAt = left.lastMessage?.createdAt || left.createdAt
-    const rightAt = right.lastMessage?.createdAt || right.createdAt
-    return new Date(rightAt).getTime() - new Date(leftAt).getTime()
+function sortMessages(messages: FeedMessage[]) {
+  return [...messages].sort((left, right) => {
+    if (left.sequence !== right.sequence) {
+      return left.sequence - right.sequence
+    }
+    return (
+      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
+    )
   })
 }
 
@@ -240,95 +351,335 @@ function sumConversationUnread(conversations: ConversationSummary[]) {
   )
 }
 
-function createClientMessageId() {
-  if (
-    typeof crypto !== "undefined" &&
-    typeof crypto.randomUUID === "function"
-  ) {
-    return crypto.randomUUID()
+function getViewerParticipant(
+  conversation: ChatConversationView | undefined,
+  workspaceMemberId?: string | null
+) {
+  if (!conversation || !workspaceMemberId) {
+    return undefined
   }
-  return `client-${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
 
-function createOptimisticSequence(messages: FeedMessage[]) {
-  const maxSequence = messages.reduce(
-    (max, message) => Math.max(max, message.sequence),
-    0
+  return conversation.participants.find(
+    (participant) =>
+      participant.participantType === "workspace_member" &&
+      participant.workspaceMemberId === workspaceMemberId
   )
-  return Math.max(Date.now() * 1000, maxSequence) + 1
 }
 
-const OUTBOX_STORAGE_KEY = "chat-outbox:v2"
-const OUTBOX_RETRY_DELAYS_MS = [1500, 3000, 5000, 8000, 12000, 20000, 30000]
-const retryTimers = new Map<string, ReturnType<typeof setTimeout>>()
-
-function getOutboxRetryDelay(attemptCount: number) {
-  const index = Math.max(
-    0,
-    Math.min(attemptCount, OUTBOX_RETRY_DELAYS_MS.length - 1)
+function getPeerParticipant(
+  conversation: ChatConversationView,
+  workspaceMemberId?: string | null
+) {
+  return (
+    conversation.participants.find(
+      (participant) =>
+        participant.state === "active" &&
+        !(
+          participant.participantType === "workspace_member" &&
+          participant.workspaceMemberId === workspaceMemberId
+        )
+    ) ?? conversation.participants[0]
   )
-  const baseDelay = OUTBOX_RETRY_DELAYS_MS[index] || 30000
-  return baseDelay + Math.round(Math.random() * 600)
 }
 
-function loadStoredOutbox(): Record<string, OutboxEntry> {
-  if (typeof window === "undefined") return {}
-
-  try {
-    const raw = window.localStorage.getItem(OUTBOX_STORAGE_KEY)
-    if (!raw) return {}
-
-    const parsed = JSON.parse(raw) as OutboxEntry[] | null
-    if (!Array.isArray(parsed)) return {}
-
-    return Object.fromEntries(
-      parsed
-        .filter((entry) => entry && typeof entry.clientMessageId === "string")
-        .map((entry) => [entry.clientMessageId, entry])
-    )
-  } catch {
-    return {}
+function getConversationDisplayName(
+  conversation: ChatConversationView,
+  workspaceMemberId?: string | null
+) {
+  if (conversation.kind === "private") {
+    const peer = getPeerParticipant(conversation, workspaceMemberId)
+    return peer?.name?.trim() || conversation.title?.trim() || "Direct chat"
   }
+
+  return conversation.title?.trim() || "Group chat"
 }
 
-function persistOutbox(outbox: Record<string, OutboxEntry>) {
-  if (typeof window === "undefined") return
+function resolveConversationAvatarUrl(
+  conversation: ChatConversationView,
+  workspaceMemberId?: string | null
+) {
+  if (conversation.presentation?.avatarUrl) {
+    return conversation.presentation.avatarUrl
+  }
 
-  const entries = Object.values(outbox).sort(
-    (left, right) =>
-      new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
-  )
-  window.localStorage.setItem(OUTBOX_STORAGE_KEY, JSON.stringify(entries))
+  const peer = getPeerParticipant(conversation, workspaceMemberId)
+  return peer?.avatarUrl
 }
 
-function outboxEntryToMessage(entry: OutboxEntry): FeedMessage {
+function resolveConversationTransportKind(conversation: ChatConversationView) {
+  return conversation.participants.find((participant) => participant.transportKind)
+    ?.transportKind
+}
+
+function toConversationMember(
+  participant: ChatConversationView["participants"][number]
+): ConversationMember {
+  const id =
+    participant.actorId ||
+    participant.workspaceMemberId ||
+    participant.externalUserKey ||
+    participant.participantId
+
   return {
-    id: `temp:${entry.clientMessageId}`,
+    participantId: participant.participantId,
+    type:
+      participant.participantType === "workspace_member"
+        ? "workspace_member"
+        : participant.participantType === "external"
+          ? "external"
+          : "actor",
+    id,
+    workspaceMemberId: participant.workspaceMemberId,
+    name: participant.name || "Unknown",
+    role: participant.role || participant.roleKey,
+    title: participant.title,
+    emoji: participant.avatarEmoji,
+    avatarUrl: participant.avatarUrl,
+    sessionStatus: participant.sessionStatus,
+    externalUserKey: participant.externalUserKey,
+    transportKind: participant.transportKind,
+    transportAddressId: participant.transportAddressId,
+  }
+}
+
+function toConversationParticipant(
+  participant: ChatConversationView["participants"][number]
+): ConversationParticipant {
+  return {
+    id:
+      participant.actorId ||
+      participant.workspaceMemberId ||
+      participant.externalUserKey ||
+      participant.participantId,
+    name: participant.name || "Unknown",
+    role: participant.role || participant.roleKey || participant.participantType,
+    emoji: participant.avatarEmoji,
+    avatarUrl: participant.avatarUrl,
+    title: participant.title,
+  }
+}
+
+function deriveLastMessageRole(
+  author?: ConversationEntityRef,
+  itemType?: "message" | "event" | "summary" | "control"
+) {
+  if (itemType === "event") {
+    return "system"
+  }
+  if (author?.participantType === "workspace_member") {
+    return "user"
+  }
+  if (author?.participantType === "actor") {
+    return "assistant"
+  }
+  return "system"
+}
+
+function getAdjustedUnreadCount(
+  conversation: ChatConversationView,
+  pendingRead?: PendingConversationRead
+) {
+  if (!pendingRead) {
+    return conversation.unreadCount
+  }
+
+  const latestSequence = conversation.lastItem?.sequence ?? 0
+  if (pendingRead.readUpToSequence >= latestSequence) {
+    return 0
+  }
+
+  return conversation.unreadCount
+}
+
+function rawConversationToSummary(
+  conversation: ChatConversationView,
+  snapshot: StoredChatSnapshot
+): ConversationSummary {
+  const activeParticipants = conversation.participants.filter(
+    (participant) => participant.state === "active"
+  )
+  const title = getConversationDisplayName(
+    conversation,
+    snapshot.workspaceMemberId ?? null
+  )
+
+  return {
+    id: conversation.conversationId,
+    status: conversation.status,
+    transportKind: resolveConversationTransportKind(conversation),
+    participants: activeParticipants.map(toConversationParticipant),
+    members: activeParticipants.map(toConversationMember),
+    lastMessage: conversation.lastItem
+      ? {
+          content: conversation.lastItem.previewText,
+          role: deriveLastMessageRole(
+            conversation.lastItem.author,
+            conversation.lastItem.itemType
+          ),
+          actorName:
+            conversation.lastItem.author?.participantType === "actor"
+              ? conversation.lastItem.author.name
+              : undefined,
+          createdAt: conversation.lastItem.createdAt,
+        }
+      : undefined,
+    unreadCount: getAdjustedUnreadCount(
+      conversation,
+      snapshot.pendingReads[conversation.conversationId]
+    ),
+    createdAt: conversation.createdAt,
+    title,
+    name: title,
+    avatarUrl: resolveConversationAvatarUrl(
+      conversation,
+      snapshot.workspaceMemberId ?? null
+    ),
+    permissions: {
+      canManage: conversation.permissions.canManageConversation,
+      canManageMembers: conversation.permissions.canManageParticipants,
+    },
+  }
+}
+
+function buildMessagePreview(item: FeedMessage) {
+  const text = item.content.trim()
+  if (text) {
+    return text
+  }
+
+  if (item.contentBlocks.some((block) => block.type === "file_ref")) {
+    return "Attachment"
+  }
+
+  return item.kind === "event" ? "System event" : ""
+}
+
+function outboxEntryToMessage(
+  entry: OutboxEntry,
+  conversation: ChatConversationView | undefined,
+  workspaceMemberId?: string | null
+): FeedMessage {
+  const viewer = getViewerParticipant(conversation, workspaceMemberId)
+  const author = viewer
+    ? ({
+        participantId: viewer.participantId,
+        participantType: viewer.participantType,
+        workspaceMemberId: viewer.workspaceMemberId,
+        actorId: viewer.actorId,
+        externalUserKey: viewer.externalUserKey,
+        transportAddressId: viewer.transportAddressId,
+        transportKind: viewer.transportKind,
+        name: viewer.name,
+        title: viewer.title,
+        role: viewer.role,
+        avatarUrl: viewer.avatarUrl,
+        avatarEmoji: viewer.avatarEmoji,
+      } satisfies ConversationEntityRef)
+    : undefined
+
+  return {
+    id: `local:${entry.clientMessageId}`,
     kind: "message",
     conversationId: entry.conversationId,
     sequence: entry.optimisticSequence,
     sessionId: "",
     role: "user",
+    messageType: "chat.message",
     content: extractText(entry.contentBlocks),
     contentBlocks: entry.contentBlocks,
+    author,
+    fromWorkspaceMemberId: viewer?.workspaceMemberId,
     createdAt: entry.createdAt,
     clientMessageId: entry.clientMessageId,
     deliveryStatus: entry.status,
-    targetParticipantIds: entry.targetParticipantIds,
-    targetActorIds: entry.targetActorIds,
+    replyToItemId: entry.replyToItemId,
+    replyTo: entry.replyTo,
   }
 }
 
-function mergeConversationMessagesWithOutbox(
-  messages: FeedMessage[],
-  outbox: Record<string, OutboxEntry>,
+function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
+  if (item.itemType === "event") {
+    const content = summarizeConversationEvent(item.subtype, item.eventPayload)
+    return {
+      id: item.id,
+      kind: "event",
+      conversationId: item.conversationId,
+      sequence: item.sequence,
+      sessionId: item.sessionId || "",
+      role: "system",
+      messageType: item.subtype,
+      content,
+      contentBlocks: textBlocks(content),
+      author: item.author,
+      fromActorId: item.author?.actorId,
+      fromWorkspaceMemberId: item.author?.workspaceMemberId,
+      actorName:
+        item.author?.participantType === "actor" ? item.author.name : undefined,
+      actorRole: item.author?.role,
+      actorEmoji: item.author?.avatarEmoji,
+      createdAt: item.createdAt,
+      deliveryStatus: "sent",
+      eventType: item.subtype,
+      eventPayload: item.eventPayload,
+      interaction:
+        item.subtype === "interaction_requested" &&
+        item.eventPayload &&
+        typeof item.eventPayload === "object" &&
+        "interaction" in item.eventPayload
+          ? (item.eventPayload.interaction as InteractionRequestSummary)
+          : undefined,
+    }
+  }
+
+  const metadata = item.metadata || {}
+
+  return {
+    id: item.id,
+    kind: "message",
+    conversationId: item.conversationId,
+    sequence: item.sequence,
+    sessionId: item.sessionId || "",
+    role: item.role,
+    messageType: item.subtype,
+    content: item.content,
+    contentBlocks: normalizeContentBlocks(item.contentBlocks),
+    author: item.author,
+    fromActorId: item.author?.actorId,
+    fromWorkspaceMemberId: item.author?.workspaceMemberId,
+    actorName:
+      item.author?.participantType === "actor" ? item.author.name : undefined,
+    actorRole: item.author?.role,
+    actorEmoji: item.author?.avatarEmoji,
+    createdAt: item.createdAt,
+    clientMessageId: item.clientMessageId,
+    deliveryStatus: "sent",
+    metadata,
+    replyToItemId: item.replyToItemId,
+    replyTo: item.replyTo,
+    toolsUsed: metadata.toolsUsed as string[] | undefined,
+    serverToolCalls: metadata.serverToolCalls as ServerToolCall[] | undefined,
+    citationSources: metadata.citationSources as
+      | Record<string, { url: string; title: string }>
+      | undefined,
+    coordination: Boolean(metadata.coordination),
+    restrictedAudienceParticipantIds: item.restrictedAudienceParticipantIds,
+    transport: item.transport,
+    transportDeliveries: item.transportDeliveries,
+  }
+}
+
+function mergeMessagesWithOutbox(
+  loadedItems: ChatConversationItem[],
+  snapshot: StoredChatSnapshot,
   conversationId: string
 ) {
-  let nextMessages = sortMessages(messages)
-  const pendingEntries = Object.values(outbox)
-    .filter(
-      (entry) => entry.workspaceId && entry.conversationId === conversationId
-    )
+  let nextMessages = sortMessages(loadedItems.map(chatItemToFeedMessage))
+  const conversation = snapshot.conversations.find(
+    (entry) => entry.conversationId === conversationId
+  )
+
+  const pendingEntries = Object.values(snapshot.outbox)
+    .filter((entry) => entry.conversationId === conversationId)
     .sort((left, right) => left.optimisticSequence - right.optimisticSequence)
 
   for (const entry of pendingEntries) {
@@ -336,28 +687,64 @@ function mergeConversationMessagesWithOutbox(
       (message) =>
         message.clientMessageId &&
         message.clientMessageId === entry.clientMessageId &&
-        message.id !== `temp:${entry.clientMessageId}`
+        message.id !== `local:${entry.clientMessageId}`
     )
-    if (hasServerMessage) continue
-    nextMessages = upsertFeedMessage(nextMessages, outboxEntryToMessage(entry))
+
+    if (hasServerMessage) {
+      continue
+    }
+
+    nextMessages = sortMessages([
+      ...nextMessages.filter(
+        (message) => message.clientMessageId !== entry.clientMessageId
+      ),
+      outboxEntryToMessage(
+        entry,
+        conversation,
+        snapshot.workspaceMemberId ?? null
+      ),
+    ])
   }
 
   return nextMessages
 }
 
+function applyFeedMessageToConversation(
+  conversation: ConversationSummary,
+  item: FeedMessage
+) {
+  return {
+    ...conversation,
+    lastMessage: {
+      content: buildMessagePreview(item),
+      role: item.role,
+      actorName: item.actorName,
+      createdAt: item.createdAt,
+    },
+  }
+}
+
 function applyOutboxToConversations(
   conversations: ConversationSummary[],
-  outbox: Record<string, OutboxEntry>,
+  snapshot: StoredChatSnapshot,
   runtimeMap: ConversationRuntimeMap
 ) {
   let nextConversations = conversations
-  const pendingEntries = Object.values(outbox).sort(
+  const pendingEntries = Object.values(snapshot.outbox).sort(
     (left, right) =>
       new Date(left.createdAt).getTime() - new Date(right.createdAt).getTime()
   )
 
   for (const entry of pendingEntries) {
-    const optimisticMessage = outboxEntryToMessage(entry)
+    const rawConversation = snapshot.conversations.find(
+      (conversation) => conversation.conversationId === entry.conversationId
+    )
+    const optimisticMessage = outboxEntryToMessage(
+      entry,
+      rawConversation,
+      snapshot.workspaceMemberId ?? null
+    )
+
     nextConversations = sortConversations(
       nextConversations.map((conversation) =>
         conversation.id === entry.conversationId &&
@@ -365,11 +752,7 @@ function applyOutboxToConversations(
           new Date(entry.createdAt).getTime() >=
             new Date(conversation.lastMessage.createdAt).getTime())
           ? applyRuntimeMapToConversation(
-              applyFeedMessageToConversation(
-                conversation,
-                optimisticMessage,
-                true
-              ),
+              applyFeedMessageToConversation(conversation, optimisticMessage),
               runtimeMap[conversation.id]
             )
           : conversation
@@ -380,303 +763,12 @@ function applyOutboxToConversations(
   return nextConversations
 }
 
-function upsertFeedMessage(messages: FeedMessage[], item: FeedMessage) {
-  const byIdIndex = messages.findIndex((message) => message.id === item.id)
-  if (byIdIndex >= 0) {
-    const next = [...messages]
-    next[byIdIndex] = item
-    return sortMessages(next)
-  }
-
-  if (item.clientMessageId) {
-    const optimisticIndex = messages.findIndex(
-      (message) => message.clientMessageId === item.clientMessageId
-    )
-    if (optimisticIndex >= 0) {
-      const next = [...messages]
-      next[optimisticIndex] = item
-      return sortMessages(next)
-    }
-  }
-
-  return sortMessages([...messages, item])
-}
-
-function feedItemToMessage(item: ConversationFeedItem): FeedMessage {
-  if (item.kind === "event") {
-    const content = summarizeConversationEvent(item.eventType, item.payload)
-    return {
-      id: item.itemId,
-      kind: "event",
-      conversationId: item.conversationId,
-      sequence: item.sequence,
-      sessionId: item.sessionId || "",
-      role: "system",
-      content,
-      contentBlocks: textBlocks(content),
-      author: item.author,
-      fromActorId: item.author?.actorId,
-      fromWorkspaceMemberId: item.author?.workspaceMemberId,
-      actorName: item.author?.name,
-      actorRole: item.author?.role,
-      actorEmoji: item.author?.avatarEmoji,
-      createdAt: item.createdAt,
-      deliveryStatus: "sent",
-      eventType: item.eventType,
-      eventPayload: item.payload,
-      interaction:
-        item.eventType === "interaction_requested" &&
-        item.payload &&
-        typeof item.payload === "object" &&
-        "interaction" in item.payload
-          ? (item.payload.interaction as InteractionRequestSummary)
-          : undefined,
-    }
-  }
-
-  const targetParticipantIds = item.targets
-    .map((target) => target.participantId || target.memberId)
-    .filter((targetId): targetId is string => Boolean(targetId))
-  const metadata = item.metadata || {}
-  const targetActorIds = Array.isArray(metadata.targetActorIds)
-    ? metadata.targetActorIds.filter(
-        (targetId): targetId is string =>
-          typeof targetId === "string" && targetId.length > 0
-      )
-    : undefined
-
-  return {
-    id: item.itemId,
-    kind: "message",
-    conversationId: item.conversationId,
-    sequence: item.sequence,
-    sessionId: item.sessionId || "",
-    role: item.role,
-    messageType: item.messageType,
-    content: item.content,
-    contentBlocks: normalizeContentBlocks(item.contentBlocks),
-    author: item.author,
-    fromActorId: item.author?.actorId,
-    fromWorkspaceMemberId: item.author?.workspaceMemberId,
-    actorName:
-      item.author?.memberType === "actor" ? item.author.name : undefined,
-    actorRole: item.author?.role,
-    actorEmoji: item.author?.avatarEmoji,
-    createdAt: item.createdAt,
-    clientMessageId: item.clientMessageId,
-    deliveryStatus: "sent",
-    metadata,
-    toolsUsed: metadata.toolsUsed as string[] | undefined,
-    serverToolCalls: metadata.serverToolCalls as ServerToolCall[] | undefined,
-    citationSources: metadata.citationSources as
-      | Record<string, { url: string; title: string }>
-      | undefined,
-    coordination: Boolean(metadata.coordination),
-    targetParticipantIds,
-    targetActorIds,
-    transport: item.transport,
-    transportDeliveries: item.transportDeliveries,
-  }
-}
-
-function applyMemberJoined(
-  conversation: ConversationSummary,
-  payload: ConversationFeedEventPayloadMap["member_joined"]
-) {
-  const nextMembers = [...conversation.members]
-  const nextParticipants = [...conversation.participants]
-
-  for (const member of payload.members) {
-    const id =
-      member.actorId || member.workspaceMemberId || member.participantId || member.memberId
-    if (!id) continue
-
-    const normalizedMember: ConversationMember = {
-      memberId: member.memberId,
-      participantId: member.participantId || member.memberId,
-      type:
-        member.memberType === "workspace_member"
-          ? "workspace_member"
-          : member.memberType === "external"
-            ? "external"
-            : "actor",
-      id,
-      workspaceMemberId: member.workspaceMemberId,
-      name: member.name || "Unknown",
-      title: member.title,
-      role: member.role,
-      emoji: member.avatarEmoji,
-      avatarUrl: member.avatarUrl,
-    }
-
-    if (
-      !nextMembers.some(
-        (existing) => existing.memberId === normalizedMember.memberId
-      )
-    ) {
-      nextMembers.push(normalizedMember)
-    }
-
-    if (
-      normalizedMember.type === "actor" &&
-      !nextParticipants.some(
-        (participant) => participant.id === normalizedMember.id
-      )
-    ) {
-      nextParticipants.push({
-        id: normalizedMember.id,
-        name: normalizedMember.name,
-        role: normalizedMember.role || "specialist",
-        emoji: normalizedMember.emoji,
-        avatarUrl: normalizedMember.avatarUrl,
-        title: normalizedMember.title,
-      })
-    }
-  }
-
-  return {
-    ...conversation,
-    members: nextMembers,
-    participants: nextParticipants,
-  }
-}
-
-function applyMemberRemoved(
-  conversation: ConversationSummary,
-  payload:
-    | ConversationFeedEventPayloadMap["member_kicked"]
-    | ConversationFeedEventPayloadMap["member_left"]
-) {
-  const removedActorIds = new Set(
-    payload.members
-      .map((member) => member.actorId)
-      .filter((value): value is string => Boolean(value))
-  )
-  const removedUserIds = new Set(
-    payload.members
-      .map((member) => member.workspaceMemberId)
-      .filter((value): value is string => Boolean(value))
-  )
-
-  return {
-    ...conversation,
-    participants: conversation.participants.filter(
-      (participant) => !removedActorIds.has(participant.id)
-    ),
-    members: conversation.members.filter((member) =>
-      member.type === "actor"
-        ? !removedActorIds.has(member.id)
-        : !removedUserIds.has(member.id)
-    ),
-  }
-}
-
-function applyActorPatch(
-  conversation: ConversationSummary,
-  actorId: string,
-  patch: Partial<ConversationMember & ConversationParticipant>
-) {
-  return {
-    ...conversation,
-    participants: conversation.participants.map((participant) =>
-      participant.id === actorId ? { ...participant, ...patch } : participant
-    ),
-    members: conversation.members.map((member) =>
-      member.type === "actor" && member.id === actorId
-        ? { ...member, ...patch }
-        : member
-    ),
-  }
-}
-
-function applyFeedMessageToConversation(
-  conversation: ConversationSummary,
-  item: FeedMessage,
-  isSelected: boolean
-) {
-  let nextConversation: ConversationSummary = {
-    ...conversation,
-    lastMessage: {
-      content: previewTextForItem(item),
-      role: item.role,
-      actorName: item.actorName,
-      createdAt: item.createdAt,
-    },
-    unreadCount: isSelected
-      ? conversation.unreadCount
-      : conversation.unreadCount + 1,
-  }
-
-  if (item.kind !== "event" || !item.eventType || !item.eventPayload) {
-    return nextConversation
-  }
-
-  switch (item.eventType) {
-    case "member_joined":
-      nextConversation = applyMemberJoined(
-        nextConversation,
-        item.eventPayload as ConversationFeedEventPayloadMap["member_joined"]
-      )
-      break
-    case "member_kicked":
-    case "member_left":
-      nextConversation = applyMemberRemoved(
-        nextConversation,
-        item.eventPayload as
-          | ConversationFeedEventPayloadMap["member_kicked"]
-          | ConversationFeedEventPayloadMap["member_left"]
-      )
-      break
-    case "actor_renamed": {
-      const payload =
-        item.eventPayload as ConversationFeedEventPayloadMap["actor_renamed"]
-      if (payload.actor.actorId) {
-        nextConversation = applyActorPatch(
-          nextConversation,
-          payload.actor.actorId,
-          {
-          name: payload.newName,
-          }
-        )
-      }
-      break
-    }
-    case "actor_avatar_changed": {
-      const payload =
-        item.eventPayload as ConversationFeedEventPayloadMap["actor_avatar_changed"]
-      if (payload.actor.actorId) {
-        nextConversation = applyActorPatch(
-          nextConversation,
-          payload.actor.actorId,
-          {
-            avatarUrl: payload.newAvatarUrl,
-            emoji: payload.newAvatarEmoji,
-          }
-        )
-      }
-      break
-    }
-    case "actor_version_changed": {
-      const payload =
-        item.eventPayload as ConversationFeedEventPayloadMap["actor_version_changed"]
-      if (payload.actor.actorId) {
-        nextConversation = applyActorPatch(
-          nextConversation,
-          payload.actor.actorId,
-          {
-            name: payload.actor.name,
-            avatarUrl: payload.actor.avatarUrl,
-            emoji: payload.actor.avatarEmoji,
-          }
-        )
-      }
-      break
-    }
-    default:
-      break
-  }
-
-  return nextConversation
+function sortConversations(conversations: ConversationSummary[]) {
+  return [...conversations].sort((left, right) => {
+    const leftAt = left.lastMessage?.createdAt || left.createdAt
+    const rightAt = right.lastMessage?.createdAt || right.createdAt
+    return new Date(rightAt).getTime() - new Date(leftAt).getTime()
+  })
 }
 
 export function runtimePhaseToBadgePhase(
@@ -754,190 +846,611 @@ function applyRuntimeMapToConversation(
 
   return {
     ...nextConversation,
-    status: deriveConversationStatus(
-      nextConversation,
-      runtimesForConversation
+    status: deriveConversationStatus(nextConversation, runtimesForConversation),
+  }
+}
+
+function deriveConversationSummaries(
+  snapshot: StoredChatSnapshot,
+  runtimeMap: ConversationRuntimeMap
+) {
+  const base = sortRawConversations(snapshot.conversations).map((conversation) =>
+    applyRuntimeMapToConversation(
+      rawConversationToSummary(conversation, snapshot),
+      runtimeMap[conversation.conversationId]
+    )
+  )
+
+  return applyOutboxToConversations(base, snapshot, runtimeMap)
+}
+
+function createStateFromSnapshot(
+  currentState: ChatState,
+  snapshot: StoredChatSnapshot,
+  input?: {
+    selectedConversationId?: string | null
+    visibleConversationId?: string | null
+    loadedMessageItems?: ChatConversationItem[]
+  }
+) {
+  const candidateSelectedConversationId =
+    input?.selectedConversationId === undefined
+      ? currentState.selectedConversationId
+      : input.selectedConversationId
+
+  const selectedConversationId =
+    candidateSelectedConversationId &&
+    snapshot.conversations.some(
+      (conversation) =>
+        conversation.conversationId === candidateSelectedConversationId
+    )
+      ? candidateSelectedConversationId
+      : null
+
+  const loadedMessageItems =
+    input?.loadedMessageItems === undefined
+      ? selectedConversationId === currentState.selectedConversationId
+        ? currentState.loadedMessageItems
+        : []
+      : input.loadedMessageItems
+
+  const visibleConversationId =
+    input?.visibleConversationId === undefined
+      ? currentState.visibleConversationId === selectedConversationId
+        ? currentState.visibleConversationId
+        : null
+      : input.visibleConversationId
+
+  const conversations = deriveConversationSummaries(
+    snapshot,
+    currentState.runtimeMap
+  )
+  const messages =
+    selectedConversationId && loadedMessageItems.length >= 0
+      ? mergeMessagesWithOutbox(
+          loadedMessageItems,
+          snapshot,
+          selectedConversationId
+        )
+      : []
+
+  return {
+    snapshot,
+    activeWorkspaceId: snapshot.workspaceId,
+    workspaceMemberId: snapshot.workspaceMemberId ?? null,
+    clientInstanceId: snapshot.clientInstanceId ?? null,
+    outbox: snapshot.outbox,
+    pendingReads: snapshot.pendingReads,
+    conversations,
+    messages: selectedConversationId ? messages : [],
+    totalUnread: sumConversationUnread(conversations),
+    selectedConversationId,
+    visibleConversationId,
+    loadedMessageItems: selectedConversationId ? loadedMessageItems : [],
+  }
+}
+
+function shouldIncrementUnreadCount(
+  conversation: ChatConversationView,
+  item: ChatConversationItem
+) {
+  return (
+    item.itemType === "message" &&
+    item.scope === "shared" &&
+    item.surface === "visible" &&
+    item.authorParticipantId !== conversation.viewerParticipantId
+  )
+}
+
+function applyReadWatermarkAck(
+  snapshot: StoredChatSnapshot,
+  response: ChatConversationReadWatermarkResponse
+) {
+  const pendingReads = { ...snapshot.pendingReads }
+  const queued = pendingReads[response.conversationId]
+  if (queued && queued.readUpToSequence <= response.readWatermarkSequence) {
+    delete pendingReads[response.conversationId]
+  }
+
+  return {
+    ...snapshot,
+    pendingReads,
+    conversations: snapshot.conversations.map((conversation) =>
+      conversation.conversationId === response.conversationId
+        ? { ...conversation, unreadCount: 0 }
+        : conversation
     ),
   }
 }
 
-function applyFeedItemToRuntimeMap(
-  runtimeByActor: Record<string, ActorRuntimeState>,
-  item: FeedMessage
+function clearDeliveredOutbox(
+  outbox: StoredChatSnapshot["outbox"],
+  items: ChatConversationItem[]
 ) {
-  let nextRuntimeByActor = runtimeByActor
+  const deliveredClientIds = new Set(
+    items
+      .map((item) => item.clientMessageId)
+      .filter((value): value is string => Boolean(value))
+  )
+  if (deliveredClientIds.size === 0) {
+    return outbox
+  }
 
+  const nextOutbox = { ...outbox }
+  for (const clientMessageId of deliveredClientIds) {
+    delete nextOutbox[clientMessageId]
+  }
+  return nextOutbox
+}
+
+function applySyncEventToSnapshot(
+  snapshot: StoredChatSnapshot,
+  event: ChatSyncEvent,
+  visibleConversationId?: string | null
+) {
+  let nextSnapshot: StoredChatSnapshot = {
+    ...snapshot,
+    inboxCursor: Math.max(snapshot.inboxCursor, event.syncSeq),
+  }
+
+  switch (event.eventType) {
+    case "conversation.upsert": {
+      const payload = event.payload as ChatSyncEvent<"conversation.upsert">["payload"]
+      nextSnapshot = {
+        ...nextSnapshot,
+        conversations: upsertRawConversation(
+          nextSnapshot.conversations,
+          payload.conversation
+        ),
+      }
+      break
+    }
+    case "conversation.item.created": {
+      const payload =
+        event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+      const currentConversation = nextSnapshot.conversations.find(
+        (conversation) => conversation.conversationId === payload.conversationId
+      )
+
+      nextSnapshot = {
+        ...nextSnapshot,
+        outbox: clearDeliveredOutbox(nextSnapshot.outbox, [payload.item]),
+      }
+
+      if (!currentConversation) {
+        break
+      }
+
+      nextSnapshot = {
+        ...nextSnapshot,
+        conversations: upsertRawConversation(nextSnapshot.conversations, {
+          ...currentConversation,
+          unreadCount:
+            visibleConversationId === payload.conversationId
+              ? currentConversation.unreadCount
+              : shouldIncrementUnreadCount(currentConversation, payload.item)
+                ? currentConversation.unreadCount + 1
+                : currentConversation.unreadCount,
+          updatedAt: payload.item.createdAt,
+          lastItem: {
+            itemId: payload.item.id,
+            sequence: payload.item.sequence,
+            itemType: payload.item.itemType,
+            subtype: payload.item.subtype,
+            previewText:
+              extractText(payload.item.contentBlocks).trim() ||
+              payload.item.content ||
+              (payload.item.itemType === "event" ? payload.item.subtype : "Attachment"),
+            authorParticipantId: payload.item.authorParticipantId,
+            author: payload.item.author,
+            createdAt: payload.item.createdAt,
+          },
+        }),
+      }
+      break
+    }
+    case "conversation.read.updated": {
+      const payload =
+        event.payload as ChatSyncEvent<"conversation.read.updated">["payload"]
+      if (payload.workspaceMemberId !== nextSnapshot.workspaceMemberId) {
+        break
+      }
+
+      nextSnapshot = applyReadWatermarkAck(nextSnapshot, {
+        conversationId: payload.conversationId,
+        workspaceMemberId: payload.workspaceMemberId,
+        participantId: payload.participantId,
+        readWatermarkSequence: payload.readWatermarkSequence,
+        lastReadAt: payload.lastReadAt,
+      })
+      break
+    }
+  }
+
+  return nextSnapshot
+}
+
+async function bootstrapWorkspaceSnapshot(
+  workspaceId: string,
+  snapshot: StoredChatSnapshot | null
+) {
+  const bootstrap = await api.getChatBootstrap(workspaceId)
+
+  let baseSnapshot = snapshot ?? createEmptyStoredChatSnapshot(workspaceId)
   if (
-    item.kind === "message" &&
-    item.fromActorId &&
-    runtimeByActor[item.fromActorId]
+    baseSnapshot.workspaceMemberId &&
+    baseSnapshot.workspaceMemberId !== bootstrap.workspaceMemberId
   ) {
-    nextRuntimeByActor = {
-      ...runtimeByActor,
-      [item.fromActorId]: {
-        ...runtimeByActor[item.fromActorId],
-        actorName: item.actorName || runtimeByActor[item.fromActorId].actorName,
-        updatedAt: item.createdAt,
+    baseSnapshot = createEmptyStoredChatSnapshot(workspaceId)
+  }
+
+  const clientInstanceId = baseSnapshot.clientInstanceId || createId("client")
+  await api.registerChatClientInstance(workspaceId, clientInstanceId, {
+    platform: "web-desktop",
+    deviceLabel: buildDesktopDeviceLabel(),
+    metadata: {
+      workspaceMemberId: bootstrap.workspaceMemberId,
+    },
+  })
+
+  return {
+    ...baseSnapshot,
+    workspaceId,
+    workspaceMemberId: bootstrap.workspaceMemberId,
+    clientInstanceId,
+    inboxCursor: Math.max(baseSnapshot.inboxCursor, bootstrap.nextInboxCursor),
+    lastBootstrappedAt: new Date().toISOString(),
+    conversations: bootstrap.conversations.reduce(
+      upsertRawConversation,
+      baseSnapshot.conversations
+    ),
+  }
+}
+
+async function flushPendingReadsInternal(snapshot: StoredChatSnapshot) {
+  if (!snapshot.clientInstanceId) {
+    return snapshot
+  }
+
+  let nextSnapshot = snapshot
+  const pendingReads = Object.values(snapshot.pendingReads).sort(
+    (left, right) => left.readUpToSequence - right.readUpToSequence
+  )
+
+  for (const entry of pendingReads) {
+    try {
+      const response = await api.updateChatConversationReadWatermark(
+        snapshot.workspaceId,
+        entry.conversationId,
+        {
+          clientInstanceId: snapshot.clientInstanceId,
+          readUpToSequence: entry.readUpToSequence,
+          lastVisibleSequence: entry.lastVisibleSequence,
+        }
+      )
+      nextSnapshot = applyReadWatermarkAck(nextSnapshot, response)
+    } catch {
+      break
+    }
+  }
+
+  return nextSnapshot
+}
+
+async function flushOutboxInternal(
+  snapshot: StoredChatSnapshot,
+  selectedConversationId: string | null,
+  loadedMessageItems: ChatConversationItem[]
+) {
+  if (!snapshot.clientInstanceId) {
+    return { snapshot, loadedMessageItems, retryAttemptCount: null as number | null }
+  }
+
+  let nextSnapshot = snapshot
+  let nextLoadedMessageItems = loadedMessageItems
+  let retryAttemptCount: number | null = null
+
+  const entries = Object.values(snapshot.outbox).sort(
+    (left, right) => left.optimisticSequence - right.optimisticSequence
+  )
+
+  for (const entry of entries) {
+    nextSnapshot = {
+      ...nextSnapshot,
+      outbox: {
+        ...nextSnapshot.outbox,
+        [entry.clientMessageId]: {
+          ...nextSnapshot.outbox[entry.clientMessageId]!,
+          attemptCount: nextSnapshot.outbox[entry.clientMessageId]!.attemptCount + 1,
+          lastAttemptAt: new Date().toISOString(),
+        },
       },
     }
-  }
 
-  if (item.kind !== "event" || !item.eventType || !item.eventPayload) {
-    return nextRuntimeByActor
-  }
+    try {
+      const response = await api.sendChatConversationMessage(
+        snapshot.workspaceId,
+        entry.conversationId,
+        {
+          clientInstanceId: snapshot.clientInstanceId,
+          clientMessageId: entry.clientMessageId,
+          contentBlocks: entry.contentBlocks,
+          replyToItemId: entry.replyToItemId,
+        }
+      )
 
-  switch (item.eventType) {
-    case "member_kicked":
-    case "member_left": {
-      const payload = item.eventPayload as
-        | ConversationFeedEventPayloadMap["member_kicked"]
-        | ConversationFeedEventPayloadMap["member_left"]
-      const removedActorIds = payload.members
-        .map((member) => member.actorId)
-        .filter((value): value is string => Boolean(value))
-      if (removedActorIds.length === 0) return nextRuntimeByActor
-      const next = { ...nextRuntimeByActor }
-      for (const actorId of removedActorIds) {
-        delete next[actorId]
+      const nextOutbox = { ...nextSnapshot.outbox }
+      delete nextOutbox[entry.clientMessageId]
+
+      const currentConversation = nextSnapshot.conversations.find(
+        (conversation) => conversation.conversationId === entry.conversationId
+      )
+
+      nextSnapshot = {
+        ...nextSnapshot,
+        outbox: nextOutbox,
+        conversations: currentConversation
+          ? upsertRawConversation(nextSnapshot.conversations, {
+              ...currentConversation,
+              updatedAt: response.item.createdAt,
+              lastItem: {
+                itemId: response.item.id,
+                sequence: response.item.sequence,
+                itemType: response.item.itemType,
+                subtype: response.item.subtype,
+                previewText:
+                  extractText(response.item.contentBlocks).trim() ||
+                  response.item.content ||
+                  (response.item.itemType === "event"
+                    ? response.item.subtype
+                    : "Attachment"),
+                authorParticipantId: response.item.authorParticipantId,
+                author: response.item.author,
+                createdAt: response.item.createdAt,
+              },
+            })
+          : nextSnapshot.conversations,
       }
-      return next
-    }
-    case "actor_renamed": {
-      const payload =
-        item.eventPayload as ConversationFeedEventPayloadMap["actor_renamed"]
-      const actorId = payload.actor.actorId
-      if (!actorId || !nextRuntimeByActor[actorId]) return nextRuntimeByActor
-      return {
-        ...nextRuntimeByActor,
-        [actorId]: {
-          ...nextRuntimeByActor[actorId],
-          actorName: payload.newName,
-          updatedAt: item.createdAt,
+
+      if (selectedConversationId === entry.conversationId) {
+        nextLoadedMessageItems = mergeRawItems(nextLoadedMessageItems, [
+          response.item,
+        ])
+      }
+    } catch (error) {
+      const currentEntry = nextSnapshot.outbox[entry.clientMessageId]
+      if (!currentEntry) {
+        break
+      }
+
+      retryAttemptCount = currentEntry.attemptCount
+      nextSnapshot = {
+        ...nextSnapshot,
+        outbox: {
+          ...nextSnapshot.outbox,
+          [entry.clientMessageId]: {
+            ...currentEntry,
+            status: "retrying",
+            firstFailedAt: currentEntry.firstFailedAt || new Date().toISOString(),
+            lastErrorMessage:
+              error instanceof Error ? error.message : "Failed to send message",
+          },
         },
       }
+      break
     }
-    case "actor_version_changed": {
-      const payload =
-        item.eventPayload as ConversationFeedEventPayloadMap["actor_version_changed"]
-      const actorId = payload.actor.actorId
-      if (!actorId || !nextRuntimeByActor[actorId]) return nextRuntimeByActor
-      return {
-        ...nextRuntimeByActor,
-        [actorId]: {
-          ...nextRuntimeByActor[actorId],
-          actorName:
-            payload.actor.name || nextRuntimeByActor[actorId].actorName,
-          updatedAt: item.createdAt,
-        },
-      }
-    }
-    default:
-      return nextRuntimeByActor
   }
+
+  return { snapshot: nextSnapshot, loadedMessageItems: nextLoadedMessageItems, retryAttemptCount }
 }
 
 export const useChatStore = create<ChatState>((set, get) => ({
   activeWorkspaceId: null,
-  conversations: [],
+  workspaceMemberId: null,
+  clientInstanceId: null,
   selectedConversationId: null,
+  visibleConversationId: null,
+  conversations: [],
   messages: [],
   outbox: {},
+  pendingReads: {},
   loadingConversations: false,
   loadingMessages: false,
+  syncing: false,
   runtimeMap: {},
   runtimeSeqMap: {},
   totalUnread: 0,
+  snapshot: null,
+  loadedMessageItems: [],
+
+  deactivate: () => {
+    clearOutboxRetryTimer()
+    bootstrapPromise = null
+    bootstrapWorkspaceId = null
+    syncPromise = null
+
+    set({
+      activeWorkspaceId: null,
+      workspaceMemberId: null,
+      clientInstanceId: null,
+      selectedConversationId: null,
+      visibleConversationId: null,
+      conversations: [],
+      messages: [],
+      outbox: {},
+      pendingReads: {},
+      loadingConversations: false,
+      loadingMessages: false,
+      syncing: false,
+      runtimeMap: {},
+      runtimeSeqMap: {},
+      totalUnread: 0,
+      snapshot: null,
+      loadedMessageItems: [],
+    })
+  },
 
   loadConversations: async (workspaceId, options) => {
+    const currentState = get()
     const shouldShowLoading =
-      !options?.silent || get().conversations.length === 0
-    if (shouldShowLoading) {
-      set({ loadingConversations: true })
+      !options?.silent || currentState.conversations.length === 0
+
+    if (bootstrapPromise && bootstrapWorkspaceId === workspaceId) {
+      return bootstrapPromise
     }
-    try {
-      const res = await api.getThreads(workspaceId)
-      const incomingConversations = Array.isArray(res?.conversations)
-        ? (res.conversations as ConversationSummary[])
-        : []
-      const serverRuntime = (res?.runtimeMap || {}) as ConversationRuntimeMap
 
-      set((state) => {
-        const runtimeMap = { ...state.runtimeMap, ...serverRuntime }
-        const conversations = applyOutboxToConversations(
-          sortConversations(
-            incomingConversations.map((conversation) =>
-              applyRuntimeMapToConversation(
-                conversation,
-                runtimeMap[conversation.id]
-              )
-            )
-          ),
-          state.outbox,
-          runtimeMap
-        )
-        const currentSelection = state.selectedConversationId
-        const nextSelectedConversationId =
-          currentSelection &&
-          conversations.some(
-            (conversation) => conversation.id === currentSelection
-          )
-            ? currentSelection
-            : null
-
-        return {
+    bootstrapWorkspaceId = workspaceId
+    bootstrapPromise = (async () => {
+      if (shouldShowLoading) {
+        set({
           activeWorkspaceId: workspaceId,
-          conversations,
-          runtimeMap,
-          totalUnread: sumConversationUnread(conversations),
+          loadingConversations: true,
+        })
+      } else if (get().activeWorkspaceId !== workspaceId) {
+        set({
+          activeWorkspaceId: workspaceId,
+        })
+      }
+
+      const persisted =
+        (await loadStoredChatSnapshot(workspaceId).catch(() => null)) ||
+        createEmptyStoredChatSnapshot(workspaceId)
+
+      if (get().activeWorkspaceId && get().activeWorkspaceId !== workspaceId) {
+        return
+      }
+
+      set((state) => ({
+        ...createStateFromSnapshot(state, persisted),
+        loadingConversations: shouldShowLoading,
+        loadingMessages:
+          state.selectedConversationId !==
+          createStateFromSnapshot(state, persisted).selectedConversationId
+            ? false
+            : state.loadingMessages,
+      }))
+
+      const baseSnapshot = get().snapshot ?? persisted
+      const nextSnapshot = await bootstrapWorkspaceSnapshot(
+        workspaceId,
+        baseSnapshot
+      )
+
+      if (get().activeWorkspaceId && get().activeWorkspaceId !== workspaceId) {
+        return
+      }
+
+      set((state) => ({
+        ...createStateFromSnapshot(state, nextSnapshot),
+        loadingConversations: false,
+      }))
+      void queuePersistSnapshot(nextSnapshot)
+      await get().syncFromServer(workspaceId)
+    })()
+      .catch((error) => {
+        console.error("Failed to load conversations:", error)
+        set({
           loadingConversations: false,
-          ...(nextSelectedConversationId === currentSelection
-            ? {}
-            : {
-                selectedConversationId: nextSelectedConversationId,
-                messages: [],
-              }),
+        })
+      })
+      .finally(() => {
+        if (bootstrapWorkspaceId === workspaceId) {
+          bootstrapWorkspaceId = null
+          bootstrapPromise = null
         }
       })
-    } catch (err) {
-      console.error("Failed to load conversations:", err)
-      set({ loadingConversations: false })
+
+    return bootstrapPromise
+  },
+
+  reloadPersistedSnapshot: async (workspaceId) => {
+    const persisted = await loadStoredChatSnapshot(workspaceId).catch(() => null)
+    if (!persisted) {
+      return
     }
+
+    if (get().activeWorkspaceId && get().activeWorkspaceId !== workspaceId) {
+      return
+    }
+
+    set((state) => ({
+      ...createStateFromSnapshot(state, persisted),
+    }))
+  },
+
+  hydrateOutbox: async (workspaceId) => {
+    await get().reloadPersistedSnapshot(workspaceId)
   },
 
   selectConversation: (conversationId) => {
     const currentSelection = get().selectedConversationId
-    if (currentSelection === conversationId) return
+    if (currentSelection === conversationId) {
+      return
+    }
+
     set({
       selectedConversationId: conversationId,
+      loadedMessageItems: [],
       messages: [],
+      loadingMessages: false,
     })
   },
 
+  setVisibleConversation: (conversationId) => {
+    set((state) => ({
+      visibleConversationId: conversationId,
+      ...(state.snapshot
+        ? createStateFromSnapshot(state, state.snapshot, {
+            visibleConversationId: conversationId,
+          })
+        : {}),
+    }))
+  },
+
   loadMessages: async (workspaceId, conversationId) => {
+    const currentSnapshot = get().snapshot
     set({ loadingMessages: true })
+
     try {
-      const res = await api.getThreadMessages(workspaceId, conversationId, 100)
-      const fetchedMessages = sortMessages(
-        (res?.items || []).map(feedItemToMessage)
+      const response = await api.getChatConversationMessages(
+        workspaceId,
+        conversationId,
+        {
+          clientInstanceId: currentSnapshot?.clientInstanceId ?? undefined,
+          limit: 100,
+        }
       )
 
       set((state) => {
-        const currentSelection = state.selectedConversationId
-        if (currentSelection !== conversationId) {
-          return { loadingMessages: false }
+        const baseSnapshot =
+          state.snapshot ?? createEmptyStoredChatSnapshot(workspaceId)
+
+        if (state.selectedConversationId !== conversationId) {
+          return {
+            loadingMessages: false,
+          }
         }
 
-        return {
-          messages: mergeConversationMessagesWithOutbox(
-            fetchedMessages,
-            state.outbox,
-            conversationId
+        const nextSnapshot = {
+          ...baseSnapshot,
+          conversations: upsertRawConversation(
+            baseSnapshot.conversations,
+            response.conversation
           ),
+          outbox: clearDeliveredOutbox(baseSnapshot.outbox, response.items),
+        }
+
+        void queuePersistSnapshot(nextSnapshot)
+
+        return {
+          ...createStateFromSnapshot(state, nextSnapshot, {
+            loadedMessageItems: mergeRawItems([], response.items),
+          }),
           loadingMessages: false,
         }
       })
-    } catch (err) {
-      console.error("Failed to load messages:", err)
+    } catch (error) {
+      console.error("Failed to load messages:", error)
       set({ loadingMessages: false })
     }
   },
@@ -945,94 +1458,178 @@ export const useChatStore = create<ChatState>((set, get) => ({
   sendMessage: async (
     workspaceId,
     conversationId,
-    contentBlocks,
-    targetParticipantIds,
-    targetActorIds
+    input
   ) => {
-    const clientMessageId = createClientMessageId()
-    const createdAt = new Date().toISOString()
-    const optimisticSequence = createOptimisticSequence(get().messages)
+    const snapshot = get().snapshot
+    if (!snapshot || snapshot.workspaceId !== workspaceId) {
+      throw new Error("No active workspace")
+    }
+
+    const existingSequences = [
+      ...get().loadedMessageItems
+        .filter((item) => item.conversationId === conversationId)
+        .map((item) => item.sequence),
+      ...Object.values(snapshot.outbox)
+        .filter((entry) => entry.conversationId === conversationId)
+        .map((entry) => entry.optimisticSequence),
+      0,
+    ]
+
+    const optimisticSequence =
+      Math.max(Date.now() * 1000, ...existingSequences) + 1
+
     const entry: OutboxEntry = {
-      clientMessageId,
-      workspaceId,
+      clientMessageId: createId("message"),
       conversationId,
-      contentBlocks,
-      targetParticipantIds: targetParticipantIds || [],
-      targetActorIds: targetActorIds || [],
-      createdAt,
+      contentBlocks: input.contentBlocks,
+      replyToItemId: input.replyToItemId,
+      replyTo: input.replyTo,
+      createdAt: new Date().toISOString(),
       optimisticSequence,
       status: "sending",
       attemptCount: 0,
     }
-    const optimisticMessage = outboxEntryToMessage(entry)
 
     set((state) => {
-      const outbox = {
-        ...state.outbox,
-        [clientMessageId]: entry,
+      const currentSnapshot = state.snapshot
+      if (!currentSnapshot) {
+        return state
       }
-      const conversations = sortConversations(
-        state.conversations.map((conversation) =>
-          conversation.id === conversationId
-            ? applyRuntimeMapToConversation(
-                applyFeedMessageToConversation(
-                  conversation,
-                  optimisticMessage,
-                  true
-                ),
-                state.runtimeMap[conversationId]
-              )
-            : conversation
-        )
-      )
 
-      persistOutbox(outbox)
-      const currentSelection = state.selectedConversationId
-
-      return {
-        outbox,
-        messages:
-          currentSelection === conversationId
-            ? upsertFeedMessage(state.messages, optimisticMessage)
-            : state.messages,
-        conversations,
-        totalUnread: sumConversationUnread(conversations),
+      const nextSnapshot = {
+        ...currentSnapshot,
+        outbox: {
+          ...currentSnapshot.outbox,
+          [entry.clientMessageId]: entry,
+        },
       }
+
+      void queuePersistSnapshot(nextSnapshot)
+      return createStateFromSnapshot(state, nextSnapshot)
     })
 
-    scheduleOutboxSend(clientMessageId, 0)
+    await get().flushOutbox(workspaceId)
   },
 
-  hydrateOutbox: (workspaceId) => {
-    const storedOutbox = loadStoredOutbox()
-    set((state) => {
-      const conversations = applyOutboxToConversations(
-        state.conversations,
-        storedOutbox,
-        state.runtimeMap
-      )
-      const currentSelection = state.selectedConversationId
-      return {
-        outbox: storedOutbox,
-        conversations,
-        messages: currentSelection
-          ? mergeConversationMessagesWithOutbox(
-              state.messages,
-              storedOutbox,
-              currentSelection
-            )
-          : state.messages,
-        totalUnread: sumConversationUnread(conversations),
-      }
-    })
-    get().flushOutbox(workspaceId)
-  },
-
-  flushOutbox: (workspaceId) => {
-    for (const entry of Object.values(get().outbox)) {
-      if (entry.workspaceId !== workspaceId) continue
-      scheduleOutboxSend(entry.clientMessageId, 0)
+  flushOutbox: async (workspaceId) => {
+    const snapshot = get().snapshot
+    if (!snapshot) {
+      return
     }
+    if (workspaceId && snapshot.workspaceId !== workspaceId) {
+      return
+    }
+
+    clearOutboxRetryTimer()
+
+    const result = await flushOutboxInternal(
+      snapshot,
+      get().selectedConversationId,
+      get().loadedMessageItems
+    )
+
+    set((state) => ({
+      ...createStateFromSnapshot(state, result.snapshot, {
+        loadedMessageItems:
+          get().selectedConversationId === state.selectedConversationId
+            ? result.loadedMessageItems
+            : state.loadedMessageItems,
+      }),
+    }))
+    void queuePersistSnapshot(result.snapshot)
+
+    if (result.retryAttemptCount !== null) {
+      scheduleOutboxRetry(result.retryAttemptCount)
+    }
+  },
+
+  syncFromServer: async (workspaceId) => {
+    const currentSnapshot = get().snapshot
+    const effectiveWorkspaceId =
+      workspaceId || currentSnapshot?.workspaceId || get().activeWorkspaceId
+
+    if (!effectiveWorkspaceId) {
+      return
+    }
+
+    if (syncPromise) {
+      return syncPromise
+    }
+
+    set({ syncing: true })
+    syncPromise = (async () => {
+      let workingSnapshot = get().snapshot
+      if (!workingSnapshot || workingSnapshot.workspaceId !== effectiveWorkspaceId) {
+        return
+      }
+
+      let workingLoadedItems = get().loadedMessageItems
+      let cursor = workingSnapshot.inboxCursor
+      let hasMore = true
+
+      while (hasMore) {
+        if (get().snapshot?.workspaceId !== effectiveWorkspaceId) {
+          return
+        }
+
+        const response = await api.getChatSync(effectiveWorkspaceId, {
+          cursor,
+          limit: 200,
+        })
+
+        for (const event of response.events) {
+          workingSnapshot = applySyncEventToSnapshot(
+            workingSnapshot,
+            event,
+            get().visibleConversationId
+          )
+
+          if (event.eventType === "conversation.item.created") {
+            const payload =
+              event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+            if (payload.conversationId !== get().selectedConversationId) {
+              continue
+            }
+            workingLoadedItems = mergeRawItems(workingLoadedItems, [
+              payload.item,
+            ])
+          }
+        }
+
+        cursor = response.nextCursor
+        hasMore = response.hasMore
+      }
+
+      workingSnapshot = await flushPendingReadsInternal(workingSnapshot)
+
+      const outboxResult = await flushOutboxInternal(
+        workingSnapshot,
+        get().selectedConversationId,
+        workingLoadedItems
+      )
+      workingSnapshot = outboxResult.snapshot
+      workingLoadedItems = outboxResult.loadedMessageItems
+
+      set((state) => ({
+        ...createStateFromSnapshot(state, workingSnapshot, {
+          loadedMessageItems: workingLoadedItems,
+        }),
+      }))
+      void queuePersistSnapshot(workingSnapshot)
+
+      if (outboxResult.retryAttemptCount !== null) {
+        scheduleOutboxRetry(outboxResult.retryAttemptCount)
+      }
+    })()
+      .catch((error) => {
+        console.error("Failed to sync chat inbox:", error)
+      })
+      .finally(() => {
+        syncPromise = null
+        set({ syncing: false })
+      })
+
+    return syncPromise
   },
 
   createWorkspaceThread: async (
@@ -1040,110 +1637,147 @@ export const useChatStore = create<ChatState>((set, get) => ({
     kind,
     actorIds,
     content,
-    targetActorIdOrIds,
     contentBlocks,
     title
   ) => {
-    const targetActorIds = Array.isArray(targetActorIdOrIds)
-      ? targetActorIdOrIds.filter(Boolean)
-      : typeof targetActorIdOrIds === "string" && targetActorIdOrIds
-        ? [targetActorIdOrIds]
-        : []
-    const res = await api.createThread(workspaceId, {
+    const response = await api.createChatConversation(workspaceId, {
+      clientRequestId: createId("conversation"),
       kind,
+      title,
       actorIds,
-      ...(title ? { title } : {}),
-      ...(content ? { content } : {}),
-      ...(contentBlocks && contentBlocks.length > 0 ? { contentBlocks } : {}),
-      ...(targetActorIds.length > 0 ? { targetActorIds } : {}),
+      metadata:
+        content || (contentBlocks && contentBlocks.length > 0)
+          ? {
+              initialContent: content,
+              initialContentBlocks: contentBlocks,
+            }
+          : undefined,
     })
-    const conversationId = res.conversationId
-    await get().loadConversations(workspaceId)
-    return conversationId
+
+    if (get().activeWorkspaceId === workspaceId && get().snapshot) {
+      set((state) => {
+        if (!state.snapshot || state.snapshot.workspaceId !== workspaceId) {
+          return state
+        }
+
+        const nextSnapshot = {
+          ...state.snapshot,
+          conversations: upsertRawConversation(
+            state.snapshot.conversations,
+            response.conversation
+          ),
+        }
+
+        void queuePersistSnapshot(nextSnapshot)
+        return createStateFromSnapshot(state, nextSnapshot)
+      })
+    }
+
+    return response.conversation.conversationId
   },
 
-  markConversationRead: async (conversationId, readUpToSequence) => {
-    const workspaceId = get().activeWorkspaceId
-    if (!workspaceId) {
+  markConversationRead: async (
+    conversationId,
+    readUpToSequence,
+    lastVisibleSequence
+  ) => {
+    const snapshot = get().snapshot
+    if (!snapshot) {
       return
     }
-    set((state) => {
-      const conversations = state.conversations.map((conversation) =>
-        conversation.id === conversationId
+
+    const normalizedReadUpToSequence = Math.max(0, Math.floor(readUpToSequence))
+    const normalizedLastVisibleSequence = Math.max(
+      normalizedReadUpToSequence,
+      Math.floor(lastVisibleSequence ?? normalizedReadUpToSequence)
+    )
+
+    const nextSnapshot: StoredChatSnapshot = {
+      ...snapshot,
+      pendingReads: {
+        ...snapshot.pendingReads,
+        [conversationId]: {
+          conversationId,
+          readUpToSequence: Math.max(
+            normalizedReadUpToSequence,
+            snapshot.pendingReads[conversationId]?.readUpToSequence || 0
+          ),
+          lastVisibleSequence: Math.max(
+            normalizedLastVisibleSequence,
+            snapshot.pendingReads[conversationId]?.lastVisibleSequence || 0
+          ),
+          updatedAt: new Date().toISOString(),
+        },
+      },
+      conversations: snapshot.conversations.map((conversation) =>
+        conversation.conversationId === conversationId
           ? { ...conversation, unreadCount: 0 }
           : conversation
-      )
-      return {
-        conversations,
-        totalUnread: sumConversationUnread(conversations),
-      }
-    })
+      ),
+    }
+
+    set((state) => createStateFromSnapshot(state, nextSnapshot))
+    void queuePersistSnapshot(nextSnapshot)
+
+    if (!nextSnapshot.clientInstanceId) {
+      return
+    }
 
     try {
-      await api.markThreadRead(workspaceId, conversationId, readUpToSequence)
-      clearPendingConversationRead(conversationId, readUpToSequence)
-    } catch (err) {
-      queuePendingConversationRead(workspaceId, conversationId, readUpToSequence)
-      console.error("Failed to mark read:", err)
+      const response = await api.updateChatConversationReadWatermark(
+        nextSnapshot.workspaceId,
+        conversationId,
+        {
+          clientInstanceId: nextSnapshot.clientInstanceId,
+          readUpToSequence: normalizedReadUpToSequence,
+          lastVisibleSequence: normalizedLastVisibleSequence,
+        }
+      )
+
+      set((state) => {
+        if (!state.snapshot) {
+          return state
+        }
+        const confirmedSnapshot = applyReadWatermarkAck(state.snapshot, response)
+        void queuePersistSnapshot(confirmedSnapshot)
+        return createStateFromSnapshot(state, confirmedSnapshot)
+      })
+    } catch (error) {
+      console.error("Failed to mark conversation read:", error)
     }
   },
 
-  handleConversationItemCreated: (item) => {
-    const message = feedItemToMessage(item)
-
+  handleSyncEvent: (event) => {
     set((state) => {
-      const nextOutbox = { ...state.outbox }
-      if (message.clientMessageId && nextOutbox[message.clientMessageId]) {
-        delete nextOutbox[message.clientMessageId]
-        const timer = retryTimers.get(message.clientMessageId)
-        if (timer) {
-          clearTimeout(timer)
-          retryTimers.delete(message.clientMessageId)
-        }
+      if (!state.snapshot || state.snapshot.workspaceId !== event.workspaceId) {
+        return state
       }
 
-      const currentSelection = state.selectedConversationId
-      const isSelected = currentSelection === message.conversationId
-      const currentRuntime = state.runtimeMap[message.conversationId] || {}
-      const nextRuntime = applyFeedItemToRuntimeMap(currentRuntime, message)
-      const runtimeMap =
-        nextRuntime === currentRuntime
-          ? state.runtimeMap
-          : { ...state.runtimeMap, [message.conversationId]: nextRuntime }
-      const conversations = applyOutboxToConversations(
-        sortConversations(
-          state.conversations.map((conversation) =>
-            conversation.id === message.conversationId
-              ? applyRuntimeMapToConversation(
-                  applyFeedMessageToConversation(
-                    conversation,
-                    message,
-                    isSelected
-                  ),
-                  runtimeMap[message.conversationId]
-                )
-              : conversation
-          )
-        ),
-        nextOutbox,
-        runtimeMap
+      let nextLoadedItems = state.loadedMessageItems
+      const nextSnapshot = applySyncEventToSnapshot(
+        state.snapshot,
+        event,
+        state.visibleConversationId
       )
 
-      persistOutbox(nextOutbox)
-
-      return {
-        messages: isSelected
-          ? mergeConversationMessagesWithOutbox(
-              upsertFeedMessage(state.messages, message),
-              nextOutbox,
-              message.conversationId
-            )
-          : state.messages,
-        outbox: nextOutbox,
-        conversations,
-        runtimeMap,
-        totalUnread: sumConversationUnread(conversations),
+      if (event.eventType === "conversation.item.created") {
+        const payload =
+          event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+        if (payload.conversationId !== state.selectedConversationId) {
+          void queuePersistSnapshot(nextSnapshot)
+          return createStateFromSnapshot(state, nextSnapshot, {
+            loadedMessageItems: nextLoadedItems,
+          })
+        }
+        nextLoadedItems = mergeRawItems(state.loadedMessageItems, [
+          payload.item,
+        ])
       }
+
+      void queuePersistSnapshot(nextSnapshot)
+      return createStateFromSnapshot(state, nextSnapshot, {
+        loadedMessageItems: nextLoadedItems,
+      })
     })
   },
 
@@ -1158,80 +1792,31 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...(state.runtimeMap[payload.conversationId] || {}),
         [payload.snapshot.actorId]: payload.snapshot,
       }
+
       const runtimeMap = {
         ...state.runtimeMap,
         [payload.conversationId]: nextRuntimeForConversation,
       }
-      const conversations = state.conversations.map((conversation) =>
-        conversation.id === payload.conversationId
-          ? applyRuntimeMapToConversation(
-              conversation,
-              nextRuntimeForConversation
-            )
-          : conversation
-      )
+
+      const conversations = state.snapshot
+        ? deriveConversationSummaries(state.snapshot, runtimeMap)
+        : state.conversations
 
       return {
-        conversations,
         runtimeMap,
         runtimeSeqMap: {
           ...state.runtimeSeqMap,
           [payload.conversationId]: payload.runtimeSeq,
         },
+        conversations,
+        totalUnread: sumConversationUnread(conversations),
       }
-    })
-  },
-
-  handleConversationUpdated: (payload) => {
-    set((state) => {
-      const hasConversation = state.conversations.some(
-        (conversation) => conversation.id === payload.conversationId
-      )
-      if (!hasConversation) return state
-
-      const conversations = sortConversations(
-        state.conversations.map((conversation) => {
-          if (conversation.id !== payload.conversationId) return conversation
-
-          let nextConversation = conversation
-          if (payload.action === "profile_updated") {
-            const nextTitle =
-              payload.title?.trim() ||
-              conversation.title ||
-              conversation.name
-            nextConversation = {
-              ...nextConversation,
-              title: nextTitle,
-              name: nextTitle,
-              avatarUrl:
-                payload.avatarUrl === undefined
-                  ? conversation.avatarUrl
-                  : payload.avatarUrl || undefined,
-            }
-          }
-
-          if (payload.action === "cancelled") {
-            nextConversation = {
-              ...nextConversation,
-              status: "completed",
-            }
-          }
-
-          return applyRuntimeMapToConversation(
-            nextConversation,
-            state.runtimeMap[payload.conversationId]
-          )
-        })
-      )
-
-      return { conversations }
     })
   },
 
   handleInteractionUpdated: (payload) => {
     set((state) => {
-      const currentSelection = state.selectedConversationId
-      if (currentSelection !== payload.conversationId) {
+      if (state.selectedConversationId !== payload.conversationId) {
         return state
       }
 
@@ -1255,6 +1840,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const nextPayload = {
           interaction: payload.interaction,
         } as ConversationFeedEventPayloadMap["interaction_requested"]
+
         const content = summarizeConversationEvent(
           "interaction_requested",
           nextPayload
@@ -1274,109 +1860,3 @@ export const useChatStore = create<ChatState>((set, get) => ({
     })
   },
 }))
-
-function scheduleOutboxSend(clientMessageId: string, delayMs: number) {
-  const existingTimer = retryTimers.get(clientMessageId)
-  if (existingTimer) {
-    clearTimeout(existingTimer)
-  }
-
-  const timer = setTimeout(
-    () => {
-      retryTimers.delete(clientMessageId)
-      void processOutboxEntry(clientMessageId)
-    },
-    Math.max(0, delayMs)
-  )
-
-  retryTimers.set(clientMessageId, timer)
-}
-
-async function processOutboxEntry(clientMessageId: string) {
-  const state = useChatStore.getState()
-  const entry = state.outbox[clientMessageId]
-  if (!entry) {
-    return
-  }
-
-  const lastAttemptAt = new Date().toISOString()
-  useChatStore.setState((currentState) => {
-    const currentEntry = currentState.outbox[clientMessageId]
-    if (!currentEntry) return currentState
-
-    const nextOutbox = {
-      ...currentState.outbox,
-      [clientMessageId]: {
-        ...currentEntry,
-        attemptCount: currentEntry.attemptCount + 1,
-        lastAttemptAt,
-      },
-    }
-    persistOutbox(nextOutbox)
-    return {
-      outbox: nextOutbox,
-      messages:
-        currentState.selectedConversationId === currentEntry.conversationId
-          ? mergeConversationMessagesWithOutbox(
-              currentState.messages,
-              nextOutbox,
-              currentEntry.conversationId
-            )
-          : currentState.messages,
-    }
-  })
-
-  try {
-    const result = await api.sendThreadMessage(
-      entry.workspaceId,
-      entry.conversationId,
-      entry.contentBlocks,
-      entry.clientMessageId,
-      entry.targetParticipantIds,
-      entry.targetActorIds
-    )
-
-    if (result?.item) {
-      useChatStore.getState().handleConversationItemCreated(result.item)
-      return
-    }
-
-    throw new Error("Message send did not return an item")
-  } catch (error) {
-    const failedAt = new Date().toISOString()
-    let retryDelay = 30000
-
-    useChatStore.setState((currentState) => {
-      const currentEntry = currentState.outbox[clientMessageId]
-      if (!currentEntry) return currentState
-
-      retryDelay = getOutboxRetryDelay(currentEntry.attemptCount)
-      const nextEntry: OutboxEntry = {
-        ...currentEntry,
-        status: "retrying",
-        firstFailedAt: currentEntry.firstFailedAt || failedAt,
-        lastErrorMessage:
-          error instanceof Error ? error.message : "Failed to send message",
-      }
-      const nextOutbox = {
-        ...currentState.outbox,
-        [clientMessageId]: nextEntry,
-      }
-      persistOutbox(nextOutbox)
-
-      return {
-        outbox: nextOutbox,
-        messages:
-          currentState.selectedConversationId === nextEntry.conversationId
-            ? mergeConversationMessagesWithOutbox(
-                currentState.messages,
-                nextOutbox,
-                nextEntry.conversationId
-              )
-            : currentState.messages,
-      }
-    })
-
-    scheduleOutboxSend(clientMessageId, retryDelay)
-  }
-}

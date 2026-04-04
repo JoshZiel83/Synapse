@@ -1,14 +1,23 @@
 "use client"
 
 import { useCallback, useEffect, useMemo } from "react"
-import { extractText, type ChatSocketEvent } from "@synapse/shared"
+import {
+  extractText,
+  type ChatSocketEvent,
+  type ChatSyncEvent,
+} from "@synapse/shared"
 
 import { useNotifications } from "@/hooks/use-notifications"
 import {
   useWebSocket,
   type WebSocketSubscription,
 } from "@/hooks/use-websocket"
-import { flushPendingConversationReads } from "@/lib/read-watermark-queue"
+import {
+  ensureChatServiceWorkerRegistered,
+  requestChatServiceWorkerSync,
+  subscribeToChatServiceWorker,
+  syncChatServiceWorkerAuthContext,
+} from "@/lib/chat-service-worker"
 import { useChatStore } from "@/stores/chat-store"
 
 export function useChatRealtimeSync({
@@ -19,18 +28,20 @@ export function useChatRealtimeSync({
   selectedConversationId?: string | null
 }) {
   const { notify } = useNotifications()
-  const loadConversations = useChatStore((state) => state.loadConversations)
-  const loadMessages = useChatStore((state) => state.loadMessages)
-  const hydrateOutbox = useChatStore((state) => state.hydrateOutbox)
-  const flushOutbox = useChatStore((state) => state.flushOutbox)
-  const handleConversationItemCreated = useChatStore(
-    (state) => state.handleConversationItemCreated
+  const outboxCount = useChatStore((state) => Object.keys(state.outbox).length)
+  const pendingReadCount = useChatStore(
+    (state) => Object.keys(state.pendingReads).length
   )
+  const deactivate = useChatStore((state) => state.deactivate)
+  const loadConversations = useChatStore((state) => state.loadConversations)
+  const reloadPersistedSnapshot = useChatStore(
+    (state) => state.reloadPersistedSnapshot
+  )
+  const flushOutbox = useChatStore((state) => state.flushOutbox)
+  const syncFromServer = useChatStore((state) => state.syncFromServer)
+  const handleSyncEvent = useChatStore((state) => state.handleSyncEvent)
   const handleRuntimeUpdated = useChatStore(
     (state) => state.handleRuntimeUpdated
-  )
-  const handleConversationUpdated = useChatStore(
-    (state) => state.handleConversationUpdated
   )
   const handleInteractionUpdated = useChatStore(
     (state) => state.handleInteractionUpdated
@@ -47,15 +58,24 @@ export function useChatRealtimeSync({
       }
 
       switch (event.type) {
-        case "conversation.item.created": {
-          const payload = (event as ChatSocketEvent<"conversation.item.created">)
-            .payload
-          handleConversationItemCreated(payload)
-          if (payload.kind === "message" && payload.role === "assistant") {
-            const name = payload.author?.name || "Synapse"
-            const content = extractText(payload.contentBlocks || [])
-            notify(name, content, payload.conversationId)
+        case "chat.sync.event": {
+          const payload = (event as ChatSocketEvent<"chat.sync.event">).payload
+          handleSyncEvent(payload)
+
+          if (payload.eventType !== "conversation.item.created") {
+            break
           }
+
+          const syncPayload =
+            payload.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+          const item = syncPayload.item
+          if (item.itemType === "event" || item.role !== "assistant") {
+            break
+          }
+
+          const content = extractText(item.contentBlocks || [])
+          const name = item.author?.name || "Synapse"
+          notify(name, content, payload.conversationId)
           break
         }
         case "runtime.updated":
@@ -63,42 +83,20 @@ export function useChatRealtimeSync({
             (event as ChatSocketEvent<"runtime.updated">).payload
           )
           break
-        case "conversation.updated": {
-          const payload = (event as ChatSocketEvent<"conversation.updated">)
-            .payload
-          handleConversationUpdated(payload)
-          if (workspaceId && payload.action === "created") {
-            void loadConversations(workspaceId, { silent: true })
-          }
-          break
-        }
-        case "conversation.read.updated":
-          if (workspaceId) {
-            void loadConversations(workspaceId, { silent: true })
-          }
-          break
         case "interaction.updated":
           handleInteractionUpdated(
             (event as ChatSocketEvent<"interaction.updated">).payload
           )
-          break
-        case "actor.action":
-          if (workspaceId) {
-            void loadConversations(workspaceId, { silent: true })
-          }
           break
         default:
           break
       }
     },
     [
-      handleConversationUpdated,
-      handleConversationItemCreated,
       handleInteractionUpdated,
       handleRuntimeUpdated,
-      loadConversations,
+      handleSyncEvent,
       notify,
-      workspaceId,
     ]
   )
 
@@ -107,13 +105,13 @@ export function useChatRealtimeSync({
     if (workspaceId) {
       next.push({
         key: `inbox:${workspaceId}`,
-        topic: "inbox" as const,
+        topic: "inbox",
       })
     }
     if (selectedConversationId) {
       next.push({
         key: `conversation:${selectedConversationId}`,
-        topic: "conversation" as const,
+        topic: "conversation",
         conversationId: selectedConversationId,
       })
     }
@@ -121,16 +119,13 @@ export function useChatRealtimeSync({
   }, [selectedConversationId, workspaceId])
 
   const handleSocketConnected = useCallback(() => {
-    if (!workspaceId) return
-    void (async () => {
-      await flushPendingConversationReads()
-      void loadConversations(workspaceId, { silent: true })
-      if (selectedConversationId) {
-        void loadMessages(workspaceId, selectedConversationId)
-      }
-      flushOutbox(workspaceId)
-    })()
-  }, [flushOutbox, loadConversations, loadMessages, selectedConversationId, workspaceId])
+    if (!workspaceId) {
+      return
+    }
+
+    void syncFromServer(workspaceId)
+    void flushOutbox(workspaceId)
+  }, [flushOutbox, syncFromServer, workspaceId])
 
   useWebSocket({
     enabled: Boolean(workspaceId),
@@ -141,9 +136,73 @@ export function useChatRealtimeSync({
   })
 
   useEffect(() => {
-    if (!workspaceId) return
-    void flushPendingConversationReads()
-    hydrateOutbox(workspaceId)
+    if (!workspaceId) {
+      deactivate()
+      void syncChatServiceWorkerAuthContext({ workspaceId: null })
+      return
+    }
+
+    void ensureChatServiceWorkerRegistered()
+    void syncChatServiceWorkerAuthContext({ workspaceId })
+    void reloadPersistedSnapshot(workspaceId)
     void loadConversations(workspaceId)
-  }, [workspaceId, hydrateOutbox, loadConversations])
+
+    return () => {
+      void syncChatServiceWorkerAuthContext({ workspaceId: null })
+    }
+  }, [
+    deactivate,
+    loadConversations,
+    reloadPersistedSnapshot,
+    workspaceId,
+  ])
+
+  useEffect(() => {
+    if (!workspaceId) {
+      return
+    }
+    const activeWorkspaceId = workspaceId
+
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible") {
+        void syncFromServer(activeWorkspaceId)
+      }
+    }
+
+    function handleOnline() {
+      void syncFromServer(activeWorkspaceId)
+      void flushOutbox(activeWorkspaceId)
+      void requestChatServiceWorkerSync("browser-online")
+    }
+
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    window.addEventListener("online", handleOnline)
+    return () => {
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+      window.removeEventListener("online", handleOnline)
+    }
+  }, [flushOutbox, syncFromServer, workspaceId])
+
+  useEffect(() => {
+    return subscribeToChatServiceWorker((message) => {
+      if (
+        workspaceId &&
+        message.type === "chat:snapshot-updated" &&
+        message.payload.workspaceId === workspaceId
+      ) {
+        void reloadPersistedSnapshot(workspaceId)
+      }
+    })
+  }, [reloadPersistedSnapshot, workspaceId])
+
+  useEffect(() => {
+    if (
+      !workspaceId ||
+      (pendingReadCount === 0 && outboxCount === 0)
+    ) {
+      return
+    }
+
+    void requestChatServiceWorkerSync("queue-updated")
+  }, [outboxCount, pendingReadCount, workspaceId])
 }

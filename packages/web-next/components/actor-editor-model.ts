@@ -114,7 +114,6 @@ export type UploadedFile = {
   id: string
   url?: string
   fullUrl?: string
-  storedName: string
   originalName: string
   mimeType: string
   sizeBytes: number
@@ -304,7 +303,6 @@ export function editableDocToActorDoc(doc: EditableDoc): ActorDoc | null {
 export function fileRecordToBlock(file: UploadedFile): FileRefBlock {
   return fileRefBlock({
     fileId: file.id,
-    storedName: file.storedName,
     url: file.url || resolveFileUrl(file.fullUrl) || "",
     mimeType: file.mimeType,
     originalName: file.originalName,

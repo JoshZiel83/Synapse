@@ -1,3 +1,4 @@
+import { FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
 import type {
   ActorPackageInstallResult,
   CapabilityAccessTarget,
@@ -18,6 +19,16 @@ import type {
   AutomationRuleCreatePayload,
   AutomationRuleUpdatePayload,
   CanonicalContentBlock,
+  ChatBootstrapResponse,
+  ChatClientInstanceRegistrationResponse,
+  ChatConversationCreateResponse,
+  ChatConversationMessagesPage,
+  ChatConversationMessagesQuery,
+  ChatConversationReadWatermarkInput,
+  ChatConversationReadWatermarkResponse,
+  ChatConversationSendMessageInput,
+  ChatConversationSendMessageResponse,
+  ChatSyncResponse,
   CurrentUserWeixinBindingSummary,
   ConversationFeedItem,
   ConversationFeedPage,
@@ -70,6 +81,18 @@ export interface WorkspaceListResponse {
     currentWorkspaceMemberId?: string
     trustLevel?: string
   }>
+}
+
+export interface ChatInteractionResponseInput {
+  answers?: {
+    questionId: string
+    selectedOptionIds?: string[]
+    otherText?: string
+    text?: string
+  }[]
+  decision?: "approve" | "reject" | "revise"
+  preset?: "once" | "actor" | "conversation" | "workspace"
+  note?: string
 }
 
 export interface RelationshipProfileView {
@@ -1188,6 +1211,139 @@ class ApiClient {
     })
   }
 
+  getChatBootstrap(workspaceId: string): Promise<ChatBootstrapResponse> {
+    return this.fetch(`/workspaces/${workspaceId}/chat/bootstrap`)
+  }
+
+  getChatSync(
+    workspaceId: string,
+    input?: { cursor?: number; limit?: number }
+  ): Promise<ChatSyncResponse> {
+    const params = new URLSearchParams()
+    if (typeof input?.cursor === "number") {
+      params.set("cursor", String(input.cursor))
+    }
+    if (typeof input?.limit === "number") {
+      params.set("limit", String(input.limit))
+    }
+    const query = params.toString()
+
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/sync${query ? `?${query}` : ""}`
+    )
+  }
+
+  registerChatClientInstance(
+    workspaceId: string,
+    clientInstanceId: string,
+    input?: {
+      platform?: string
+      deviceLabel?: string
+      metadata?: Record<string, unknown>
+    }
+  ): Promise<ChatClientInstanceRegistrationResponse> {
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/client-instances/${clientInstanceId}`,
+      {
+        method: "PUT",
+        body: JSON.stringify({
+          platform: input?.platform,
+          deviceLabel: input?.deviceLabel,
+          metadata: input?.metadata,
+        }),
+      }
+    )
+  }
+
+  createChatConversation(
+    workspaceId: string,
+    input: {
+      clientRequestId: string
+      kind: "group" | "private" | "virtual"
+      boundary?: "internal" | "external"
+      title?: string
+      workspaceMemberIds?: string[]
+      actorIds?: string[]
+      metadata?: Record<string, unknown>
+    }
+  ): Promise<ChatConversationCreateResponse> {
+    return this.fetch(`/workspaces/${workspaceId}/chat/conversations`, {
+      method: "POST",
+      body: JSON.stringify({
+        clientRequestId: input.clientRequestId,
+        kind: input.kind,
+        boundary: input.boundary,
+        title: input.title,
+        workspaceMemberIds: input.workspaceMemberIds ?? [],
+        actorIds: input.actorIds ?? [],
+        metadata: input.metadata,
+      }),
+    })
+  }
+
+  getChatConversationMessages(
+    workspaceId: string,
+    conversationId: string,
+    input?: ChatConversationMessagesQuery
+  ): Promise<ChatConversationMessagesPage> {
+    const params = new URLSearchParams()
+    if (typeof input?.afterSequence === "number") {
+      params.set("afterSequence", String(input.afterSequence))
+    }
+    if (typeof input?.beforeSequence === "number") {
+      params.set("beforeSequence", String(input.beforeSequence))
+    }
+    if (typeof input?.limit === "number") {
+      params.set("limit", String(input.limit))
+    }
+    if (input?.clientInstanceId) {
+      params.set("clientInstanceId", input.clientInstanceId)
+    }
+    const query = params.toString()
+
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages${query ? `?${query}` : ""}`
+    )
+  }
+
+  sendChatConversationMessage(
+    workspaceId: string,
+    conversationId: string,
+    input: ChatConversationSendMessageInput
+  ): Promise<ChatConversationSendMessageResponse> {
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          clientMessageId: input.clientMessageId,
+          contentBlocks: input.contentBlocks,
+          replyToItemId: input.replyToItemId,
+          clientInstanceId: input.clientInstanceId,
+          metadata: input.metadata,
+        }),
+      }
+    )
+  }
+
+  updateChatConversationReadWatermark(
+    workspaceId: string,
+    conversationId: string,
+    input: ChatConversationReadWatermarkInput
+  ): Promise<ChatConversationReadWatermarkResponse> {
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/read-watermark`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          readUpToSequence: input.readUpToSequence,
+          lastVisibleSequence: input.lastVisibleSequence,
+          clientInstanceId: input.clientInstanceId,
+        }),
+      }
+    )
+  }
+
   // Threads
   getThreads(wsId: string): Promise<{
     conversations: unknown[]
@@ -1212,7 +1368,6 @@ class ApiClient {
     title?: string
     content?: string
     contentBlocks?: CanonicalContentBlock[]
-    targetActorIds?: string[]
   }): Promise<{ conversationId: string }> {
     return this.fetch(`/workspaces/${workspaceId}/conversations`, {
       method: "POST",
@@ -1255,23 +1410,15 @@ class ApiClient {
     workspaceId: string,
     threadId: string,
     contentBlocks: CanonicalContentBlock[],
-    clientMessageId: string,
-    targetParticipantIds?: string[],
-    targetActorIds?: string[]
+    clientMessageId: string
   ): Promise<{ item: ConversationFeedItem }> {
     const body: {
       contentBlocks: CanonicalContentBlock[]
       clientMessageId: string
-      targetParticipantIds?: string[]
-      targetActorIds?: string[]
     } = {
       contentBlocks,
       clientMessageId,
     }
-    if (targetParticipantIds && targetParticipantIds.length > 0)
-      body.targetParticipantIds = targetParticipantIds
-    if (targetActorIds && targetActorIds.length > 0)
-      body.targetActorIds = targetActorIds
     return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}/messages`, {
       method: "POST",
       body: JSON.stringify(body),
@@ -1281,18 +1428,7 @@ class ApiClient {
     workspaceId: string,
     threadId: string,
     interactionId: string,
-    data: {
-      answers?: {
-        fieldId: string
-        selectedOptionIds?: string[]
-        otherText?: string
-        text?: string
-      }[]
-      selectedOptionId?: string
-      decision?: "approve" | "reject"
-      preset?: "once" | "actor" | "conversation" | "workspace"
-      note?: string
-    }
+    data: ChatInteractionResponseInput
   ): Promise<{ interaction: InteractionRequestSummary }> {
     return this.fetch(
       `/workspaces/${workspaceId}/conversations/${threadId}/interactions/${interactionId}/respond`,
@@ -1935,19 +2071,93 @@ class ApiClient {
   }
 
   // File Upload
-  async uploadFile(wsId: string, file: File) {
+  async uploadFile(
+    wsId: string,
+    file: File,
+    options?: {
+      signal?: AbortSignal
+      onProgress?: (progress: number) => void
+    }
+  ): Promise<FileRecordView> {
     const formData = new FormData()
     formData.append("file", file)
-    const res = await fetch(`${API_BASE}/workspaces/${wsId}/files`, {
-      method: "POST",
-      body: formData,
-      credentials: "include",
+    formData.append(
+      "origin",
+      JSON.stringify({
+        family: "user_upload",
+        system: FILE_ORIGIN_SYSTEMS.WORKSPACE_WEB_UPLOAD,
+      })
+    )
+
+    return new Promise<FileRecordView>((resolve, reject) => {
+      const request = new XMLHttpRequest()
+      let completed = false
+
+      const cleanup = () => {
+        options?.signal?.removeEventListener("abort", handleAbort)
+      }
+
+      const finalizeReject = (error: Error) => {
+        if (completed) return
+        completed = true
+        cleanup()
+        reject(error)
+      }
+
+      const handleAbort = () => {
+        request.abort()
+        finalizeReject(new ApiError("Upload aborted", 0, "ABORTED"))
+      }
+
+      request.open("POST", `${API_BASE}/workspaces/${wsId}/files`)
+      request.withCredentials = true
+      request.responseType = "json"
+
+      request.upload.addEventListener("progress", (event) => {
+        if (!event.lengthComputable) {
+          return
+        }
+
+        options?.onProgress?.(event.loaded / event.total)
+      })
+
+      request.addEventListener("load", () => {
+        if (completed) return
+        completed = true
+        cleanup()
+
+        if (request.status >= 200 && request.status < 300) {
+          resolve(request.response as FileRecordView)
+          return
+        }
+
+        const response =
+          request.response && typeof request.response === "object"
+            ? request.response
+            : null
+        const message =
+          response &&
+          "error" in response &&
+          typeof response.error === "string"
+            ? response.error
+            : "Upload failed"
+
+        reject(new ApiError(message, request.status || 500))
+      })
+
+      request.addEventListener("error", () => {
+        finalizeReject(new Error("Upload failed"))
+      })
+      request.addEventListener("abort", () => {
+        finalizeReject(new ApiError("Upload aborted", 0, "ABORTED"))
+      })
+
+      options?.signal?.addEventListener("abort", handleAbort, {
+        once: true,
+      })
+
+      request.send(formData)
     })
-    if (!res.ok) {
-      const data = await res.json().catch(() => ({}))
-      throw new Error(data.error || "Upload failed")
-    }
-    return res.json()
   }
   getFileInfo(fileId: string): Promise<FileRecordView> {
     return this.fetch(`/files/${fileId}/info`)

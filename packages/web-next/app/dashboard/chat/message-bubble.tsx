@@ -1,20 +1,22 @@
 "use client"
 
-import type { ComponentPropsWithoutRef } from "react"
+import type { ComponentPropsWithoutRef, MouseEvent as ReactMouseEvent } from "react"
 import type {
   ActorRuntimeState,
   CanonicalContentBlock,
   ConversationEntityRef,
   ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
+  ConversationReplyRef,
   InteractionRequestSummary,
 } from "@synapse/shared"
+import { INTERACTION_REQUEST_KIND } from "@synapse/shared"
 import type {
-  InteractionQuestionFieldAnswer,
   RuntimeGrantEffect,
 } from "@synapse/shared/types"
 import { useRouter } from "next/navigation"
-import { useEffect, useMemo, useState } from "react"
+import { createPortal } from "react-dom"
+import { useEffect, useMemo, useRef, useState } from "react"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -38,6 +40,8 @@ import {
   Download,
   AlertTriangle,
   AtSign,
+  Copy,
+  CornerUpLeft,
   Expand,
   CheckCircle2,
   FolderOpen,
@@ -50,11 +54,17 @@ import {
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { extractText } from "@synapse/shared"
+import { toast } from "sonner"
 import { runtimeToAvatarStatus } from "@/stores/chat-store"
 import type { ServerToolCall } from "@/stores/chat-store"
 import type { ConversationMember } from "@/stores/chat-store"
+import type { ChatInteractionResponseInput } from "@/lib/api"
 import { cn, resolveFileUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
+import {
+  buildReplyPreviewText,
+  getEntityDisplayName,
+} from "./reply-utils"
 import {
   formatTransportKindLabel,
   getAuthorContactHref,
@@ -68,10 +78,10 @@ import {
 } from "./table-preview-overlay"
 
 interface MessageBubbleProps {
+  kind?: "message" | "event"
   messageId: string
   role: string
   messageType?: string
-  metadata?: Record<string, unknown>
   author?: ConversationEntityRef
   contentBlocks: CanonicalContentBlock[]
   actorName?: string
@@ -87,8 +97,8 @@ interface MessageBubbleProps {
   citationSources?: Record<string, { url: string; title: string }>
   coordination?: boolean
   conversationMembers?: ConversationMember[]
-  targetParticipantIds?: string[]
-  targetActorIds?: string[]
+  restrictedAudienceParticipantIds?: string[]
+  replyTo?: ConversationReplyRef
   workspaceActors?: Array<{
     id: string
     name: string
@@ -105,16 +115,11 @@ interface MessageBubbleProps {
   contactBasePath?: string
   retryPending?: boolean
   onParticipantClick?: (member: ConversationMember) => void
+  onQuoteMessage?: (replyTo: ConversationReplyRef) => void
   onRetryModelError?: (itemId: string) => Promise<void> | void
   onResolveInteraction?: (
     interactionId: string,
-    payload: {
-      answers?: InteractionQuestionFieldAnswer[]
-      selectedOptionId?: string
-      decision?: "approve" | "reject"
-      preset?: "once" | "actor" | "conversation" | "workspace"
-      note?: string
-    }
+    payload: ChatInteractionResponseInput
   ) =>
     | Promise<InteractionRequestSummary | void>
     | InteractionRequestSummary
@@ -396,6 +401,69 @@ function TransportSummary({
   )
 }
 
+function buildMessageReplyRef(input: {
+  messageId: string
+  messageType?: string
+  author?: ConversationEntityRef
+  content: string
+  contentBlocks: CanonicalContentBlock[]
+  createdAt?: string
+}) {
+  return {
+    itemId: input.messageId,
+    itemType: "message" as const,
+    subtype: input.messageType || "chat.message",
+    author: input.author,
+    previewText: input.content.trim(),
+    previewBlocks: input.contentBlocks,
+    createdAt: input.createdAt,
+  } satisfies ConversationReplyRef
+}
+
+function MessageReplyPreview({
+  replyTo,
+  isUser,
+}: {
+  replyTo: ConversationReplyRef
+  isUser: boolean
+}) {
+  return (
+    <div
+      className={cn(
+        "mb-3 flex min-w-0 items-start gap-3 rounded-2xl px-3 py-2.5",
+        isUser
+          ? "bg-white/10 text-primary-foreground/90"
+          : "bg-muted/35 text-foreground"
+      )}
+    >
+      <div
+        className={cn(
+          "mt-0.5 h-9 w-1 shrink-0 rounded-full",
+          isUser ? "bg-white/55" : "bg-primary/45"
+        )}
+      />
+      <div className="min-w-0 flex-1">
+        <div
+          className={cn(
+            "truncate text-xs font-medium",
+            isUser ? "text-primary-foreground" : "text-foreground"
+          )}
+        >
+          {getEntityDisplayName(replyTo.author)}
+        </div>
+        <div
+          className={cn(
+            "mt-0.5 line-clamp-2 text-xs leading-5",
+            isUser ? "text-primary-foreground/80" : "text-muted-foreground"
+          )}
+        >
+          {buildReplyPreviewText(replyTo)}
+        </div>
+      </div>
+    </div>
+  )
+}
+
 function getInteractionStatusLabel(
   status: InteractionRequestSummary["status"]
 ) {
@@ -480,34 +548,37 @@ type DraftQuestionAnswer = {
 function buildDraftQuestionAnswers(
   interaction: InteractionRequestSummary
 ): Record<string, DraftQuestionAnswer> {
-  if (interaction.kind !== "question_choice" || !interaction.question) {
+  if (
+    interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT ||
+    !interaction.userInput
+  ) {
     return {}
   }
 
   return Object.fromEntries(
-    interaction.question.fields.map((field) => [
-      field.id,
+    interaction.userInput.questions.map((question) => [
+      question.id,
       {
-        selectedOptionIds: [...(field.answer?.selectedOptionIds || [])],
-        otherText: field.answer?.otherText || "",
-        text: field.answer?.text || "",
+        selectedOptionIds: [...(question.answer?.selectedOptionIds || [])],
+        otherText: question.answer?.otherText || "",
+        text: question.answer?.text || "",
       },
     ])
   )
 }
 
 function summarizeQuestionFieldAnswer(
-  field: NonNullable<InteractionRequestSummary["question"]>["fields"][number]
+  question: NonNullable<InteractionRequestSummary["userInput"]>["questions"][number]
 ) {
   const parts: string[] = []
-  if (field.answer?.selectedOptionLabels?.length) {
-    parts.push(field.answer.selectedOptionLabels.join(", "))
+  if (question.answer?.selectedOptionLabels?.length) {
+    parts.push(question.answer.selectedOptionLabels.join(", "))
   }
-  if (field.answer?.otherText) {
-    parts.push(field.answer.otherText)
+  if (question.answer?.otherText) {
+    parts.push(question.answer.otherText)
   }
-  if (field.answer?.text) {
-    parts.push(field.answer.text)
+  if (question.answer?.text) {
+    parts.push(question.answer.text)
   }
   return parts.join(" | ")
 }
@@ -523,30 +594,57 @@ function InteractionStatusNote({
 }) {
   const targetName = interaction.target?.name || "the selected user"
 
-  if (interaction.kind === "question_choice") {
+  if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
     if (interaction.status === "pending") {
       return (
         <p className="text-xs text-muted-foreground">
           {isTargetUser
-            ? "Only you can answer this question."
+            ? "Only you can answer this input request."
             : `Waiting for ${targetName} to answer.`}
         </p>
       )
     }
     if (interaction.status === "answered") {
-      const fieldCount = interaction.question?.fields.length || 0
+      const questionCount = interaction.userInput?.questions.length || 0
       const answerSummary =
-        interaction.question?.fields
-          .map((field) => {
-            const summary = summarizeQuestionFieldAnswer(field)
+        interaction.userInput?.questions
+          .map((question) => {
+            const summary = summarizeQuestionFieldAnswer(question)
             if (!summary) return ""
-            return fieldCount > 1 ? `${field.label}: ${summary}` : summary
+            return questionCount > 1 ? `${question.prompt}: ${summary}` : summary
           })
           .filter((value) => value.length > 0)
           .join(" | ") || "a response"
       return (
         <p className="text-xs text-muted-foreground">
           {`${interaction.resolvedBy?.name || targetName} answered: ${answerSummary}.`}
+        </p>
+      )
+    }
+    return null
+  }
+
+  if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+    if (interaction.status === "pending") {
+      return (
+        <p className="text-xs text-muted-foreground">
+          {isTargetUser
+            ? "Approve the plan or request revisions."
+            : `Waiting for ${targetName} to review the plan.`}
+        </p>
+      )
+    }
+    if (interaction.status === "approved") {
+      return (
+        <p className="text-xs text-muted-foreground">
+          {`${interaction.resolvedBy?.name || targetName} approved the plan.`}
+        </p>
+      )
+    }
+    if (interaction.status === "rejected") {
+      return (
+        <p className="text-xs text-muted-foreground">
+          {`${interaction.resolvedBy?.name || targetName} requested revisions.`}
         </p>
       )
     }
@@ -595,38 +693,44 @@ function InteractionStatusNote({
 
 function InteractionCard({
   interaction,
-  viewerWorkspaceMemberId,
   onResolveInteraction,
 }: {
   interaction: InteractionRequestSummary
-  viewerWorkspaceMemberId?: string
   onResolveInteraction?: MessageBubbleProps["onResolveInteraction"]
 }) {
   const [submittingAction, setSubmittingAction] = useState<string | null>(null)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [resolutionNoteDraft, setResolutionNoteDraft] = useState("")
   const [draftAnswers, setDraftAnswers] = useState<
     Record<string, DraftQuestionAnswer>
   >(() => buildDraftQuestionAnswers(interaction))
 
   const isTargetUser =
-    interaction.target?.memberType === "workspace_member" &&
-    Boolean(viewerWorkspaceMemberId) &&
-    interaction.target?.workspaceMemberId === viewerWorkspaceMemberId
-  const canResolveQuestion =
-    interaction.kind === "question_choice" &&
-    Boolean(onResolveInteraction) &&
-    isTargetUser &&
-    interaction.status === "pending"
-  const canResolveRelayAuthorization =
-    interaction.kind === "runtime_authorization" &&
+    (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT ||
+      interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) &&
+    interaction.viewerCanResolve === true
+  const canResolveUserInput =
+    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT &&
     Boolean(onResolveInteraction) &&
     interaction.viewerCanResolve === true &&
     interaction.status === "pending"
-  const canResolve = canResolveQuestion || canResolveRelayAuthorization
+  const canResolvePlanApproval =
+    interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL &&
+    Boolean(onResolveInteraction) &&
+    interaction.viewerCanResolve === true &&
+    interaction.status === "pending"
+  const canResolveRelayAuthorization =
+    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+    Boolean(onResolveInteraction) &&
+    interaction.viewerCanResolve === true &&
+    interaction.status === "pending"
+  const canResolve =
+    canResolveUserInput || canResolvePlanApproval || canResolveRelayAuthorization
 
   useEffect(() => {
     setSubmittingAction(null)
     setSubmitError(null)
+    setResolutionNoteDraft("")
     setDraftAnswers(buildDraftQuestionAnswers(interaction))
   }, [interaction.id, interaction.status])
 
@@ -651,35 +755,38 @@ function InteractionCard({
   }
 
   function updateDraftAnswer(
-    fieldId: string,
+    questionId: string,
     updater: (current: DraftQuestionAnswer) => DraftQuestionAnswer
   ) {
     setDraftAnswers((current) => {
-      const existing = current[fieldId] || {
+      const existing = current[questionId] || {
         selectedOptionIds: [],
         otherText: "",
         text: "",
       }
       return {
         ...current,
-        [fieldId]: updater(existing),
+        [questionId]: updater(existing),
       }
     })
   }
 
-  function buildQuestionAnswerPayload() {
-    if (interaction.kind !== "question_choice" || !interaction.question) {
+  function buildUserInputAnswerPayload() {
+    if (
+      interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT ||
+      !interaction.userInput
+    ) {
       return []
     }
 
-    return interaction.question.fields.map((field) => {
-      const draft = draftAnswers[field.id] || {
+    return interaction.userInput.questions.map((question) => {
+      const draft = draftAnswers[question.id] || {
         selectedOptionIds: [],
         otherText: "",
         text: "",
       }
       return {
-        fieldId: field.id,
+        questionId: question.id,
         selectedOptionIds:
           draft.selectedOptionIds.length > 0
             ? draft.selectedOptionIds
@@ -690,14 +797,17 @@ function InteractionCard({
     })
   }
 
-  if (interaction.kind === "question_choice" && interaction.question) {
-    const question = interaction.question
-    const fields = question.fields
+  if (
+    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT &&
+    interaction.userInput
+  ) {
+    const userInput = interaction.userInput
+    const questions = userInput.questions
     const isSimpleSingleSelect =
-      canResolve &&
-      fields.length === 1 &&
-      fields[0]?.type === "single_select" &&
-      !fields[0]?.allowOther
+      canResolveUserInput &&
+      questions.length === 1 &&
+      questions[0]?.type === "single_select" &&
+      !questions[0]?.allowOther
 
     return (
       <div className="space-y-3">
@@ -707,7 +817,7 @@ function InteractionCard({
             className="rounded-full border-primary/20 bg-primary/5 text-primary"
           >
             <MousePointerClick className="mr-1 h-3 w-3" />
-            Question
+            Input Request
           </Badge>
           <Badge
             variant="outline"
@@ -722,41 +832,41 @@ function InteractionCard({
 
         <div className="space-y-1.5">
           <p className="text-sm leading-6 font-medium text-foreground">
-            {question.prompt}
+            {userInput.title}
           </p>
-          {question.instructions ? (
+          {userInput.instructions ? (
             <p className="text-xs leading-5 text-muted-foreground">
-              {question.instructions}
+              {userInput.instructions}
             </p>
           ) : null}
         </div>
 
         <div className="space-y-3">
-          {fields.map((field) => {
-            const draft = draftAnswers[field.id] || {
+          {questions.map((question) => {
+            const draft = draftAnswers[question.id] || {
               selectedOptionIds: [],
               otherText: "",
               text: "",
             }
-            const selectedOptionIds = canResolve
+            const selectedOptionIds = canResolveUserInput
               ? draft.selectedOptionIds
-              : field.answer?.selectedOptionIds || []
-            const fieldAnswerText = summarizeQuestionFieldAnswer(field)
+              : question.answer?.selectedOptionIds || []
+            const questionAnswerText = summarizeQuestionFieldAnswer(question)
             const shouldShowFieldHeading =
-              fields.length > 1 || field.label !== question.prompt
+              questions.length > 1 || question.prompt !== userInput.title
 
             return (
               <div
-                key={field.id}
+                key={question.id}
                 className="space-y-2 rounded-2xl border border-border/70 bg-muted/20 px-4 py-3"
               >
                 {shouldShowFieldHeading ? (
                   <div className="space-y-1">
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="text-sm font-medium text-foreground">
-                        {field.label}
+                        {question.header}
                       </div>
-                      {field.required ? (
+                      {question.required ? (
                         <Badge
                           variant="outline"
                           className="rounded-full border-border/70 bg-background/70 text-[10px] text-muted-foreground"
@@ -765,31 +875,32 @@ function InteractionCard({
                         </Badge>
                       ) : null}
                     </div>
-                    {field.description ? (
+                    <div className="text-sm text-foreground">{question.prompt}</div>
+                    {question.description ? (
                       <div className="text-xs text-muted-foreground">
-                        {field.description}
+                        {question.description}
                       </div>
                     ) : null}
                   </div>
                 ) : null}
 
-                {field.type === "text" ? (
-                  canResolve ? (
+                {question.type === "text" ? (
+                  canResolveUserInput ? (
                     <Textarea
                       value={draft.text}
                       onChange={(event) =>
-                        updateDraftAnswer(field.id, (current) => ({
+                        updateDraftAnswer(question.id, (current) => ({
                           ...current,
                           text: event.target.value,
                         }))
                       }
-                      placeholder={field.placeholder || "Type your answer"}
+                      placeholder={question.placeholder || "Type your answer"}
                       disabled={Boolean(submittingAction)}
                       className="min-h-24 resize-y rounded-2xl bg-background"
                     />
-                  ) : fieldAnswerText ? (
+                  ) : questionAnswerText ? (
                     <div className="rounded-xl border border-border/70 bg-background px-3 py-2 text-sm whitespace-pre-wrap text-foreground">
-                      {fieldAnswerText}
+                      {questionAnswerText}
                     </div>
                   ) : (
                     <div className="text-xs text-muted-foreground">
@@ -798,12 +909,12 @@ function InteractionCard({
                   )
                 ) : (
                   <div className="space-y-2">
-                    {(field.options || []).map((option) => {
+                    {(question.options || []).map((option) => {
                       const isSelected = selectedOptionIds.includes(option.id)
                       const isSubmitting =
-                        submittingAction === `${field.id}:${option.id}`
+                        submittingAction === `${question.id}:${option.id}`
 
-                      if (canResolve && isSimpleSingleSelect) {
+                      if (canResolveUserInput && isSimpleSingleSelect) {
                         return (
                           <Button
                             key={option.id}
@@ -812,11 +923,11 @@ function InteractionCard({
                             disabled={Boolean(submittingAction)}
                             onClick={() =>
                               void submitResolution(
-                                `${field.id}:${option.id}`,
+                                `${question.id}:${option.id}`,
                                 {
                                   answers: [
                                     {
-                                      fieldId: field.id,
+                                      questionId: question.id,
                                       selectedOptionIds: [option.id],
                                     },
                                   ],
@@ -842,23 +953,28 @@ function InteractionCard({
                                     {option.description}
                                   </div>
                                 ) : null}
+                                {option.preview ? (
+                                  <div className="mt-2 rounded-xl border border-border/60 bg-background/80 px-3 py-2 text-xs text-muted-foreground">
+                                    {option.preview}
+                                  </div>
+                                ) : null}
                               </div>
                             </div>
                           </Button>
                         )
                       }
 
-                      if (canResolve) {
+                      if (canResolveUserInput) {
                         return (
                           <button
                             key={option.id}
                             type="button"
                             disabled={Boolean(submittingAction)}
                             onClick={() =>
-                              updateDraftAnswer(field.id, (current) => {
+                              updateDraftAnswer(question.id, (current) => {
                                 const hasOption =
                                   current.selectedOptionIds.includes(option.id)
-                                if (field.type === "single_select") {
+                                if (question.type === "single_select") {
                                   return {
                                     ...current,
                                     selectedOptionIds: hasOption
@@ -900,6 +1016,11 @@ function InteractionCard({
                                   {option.description}
                                 </div>
                               ) : null}
+                              {option.preview ? (
+                                <div className="mt-2 rounded-xl border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                                  {option.preview}
+                                </div>
+                              ) : null}
                             </div>
                           </button>
                         )
@@ -930,48 +1051,51 @@ function InteractionCard({
                                   {option.description}
                                 </div>
                               ) : null}
+                              {option.preview ? (
+                                <div className="mt-2 rounded-xl border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+                                  {option.preview}
+                                </div>
+                              ) : null}
                             </div>
                           </div>
                         </div>
                       )
                     })}
 
-                    {field.allowOther ? (
-                      canResolve ? (
+                    {question.allowOther ? (
+                      canResolveUserInput ? (
                         <div className="space-y-1">
                           <div className="text-xs font-medium text-muted-foreground">
-                            {field.otherLabel || "Other"}
+                            Other
                           </div>
                           <Textarea
                             value={draft.otherText}
                             onChange={(event) =>
-                              updateDraftAnswer(field.id, (current) => ({
+                              updateDraftAnswer(question.id, (current) => ({
                                 ...current,
                                 otherText: event.target.value,
                                 selectedOptionIds:
-                                  field.type === "single_select" &&
+                                  question.type === "single_select" &&
                                   event.target.value.trim()
                                     ? []
                                     : current.selectedOptionIds,
                               }))
                             }
-                            placeholder={
-                              field.otherPlaceholder || "Add another answer"
-                            }
+                            placeholder="Add another answer"
                             disabled={Boolean(submittingAction)}
                             className="min-h-20 resize-y rounded-2xl bg-background"
                           />
                         </div>
-                      ) : field.answer?.otherText ? (
+                      ) : question.answer?.otherText ? (
                         <div className="rounded-xl border border-border/70 bg-background px-3 py-2 text-sm whitespace-pre-wrap text-foreground">
-                          {`${field.otherLabel || "Other"}: ${field.answer.otherText}`}
+                          {`Other: ${question.answer.otherText}`}
                         </div>
                       ) : null
                     ) : null}
 
                     {!canResolve &&
-                    !fieldAnswerText &&
-                    !field.answer?.otherText ? (
+                    !questionAnswerText &&
+                    !question.answer?.otherText ? (
                       <div className="text-xs text-muted-foreground">
                         No response provided.
                       </div>
@@ -983,14 +1107,14 @@ function InteractionCard({
           })}
         </div>
 
-        {canResolve && !isSimpleSingleSelect ? (
+        {canResolveUserInput && !isSimpleSingleSelect ? (
           <div className="flex items-center gap-2">
             <Button
               type="button"
               disabled={Boolean(submittingAction)}
               onClick={() =>
                 void submitResolution("submit_answers", {
-                  answers: buildQuestionAnswerPayload(),
+                  answers: buildUserInputAnswerPayload(),
                 })
               }
               className="rounded-full"
@@ -1025,7 +1149,142 @@ function InteractionCard({
   }
 
   if (
-    interaction.kind === "runtime_authorization" &&
+    interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL &&
+    interaction.planApproval
+  ) {
+    const planApproval = interaction.planApproval
+
+    return (
+      <div className="space-y-3">
+        <div className="flex flex-wrap items-center gap-2">
+          <Badge
+            variant="outline"
+            className="rounded-full border-primary/20 bg-primary/5 text-primary"
+          >
+            <GitBranch className="mr-1 h-3 w-3" />
+            Plan Approval
+          </Badge>
+          <Badge
+            variant="outline"
+            className={cn(
+              "rounded-full",
+              getInteractionStatusBadgeClassName(interaction.status)
+            )}
+          >
+            {getInteractionStatusLabel(interaction.status)}
+          </Badge>
+        </div>
+
+        <div className="space-y-1.5">
+          <p className="text-sm leading-6 font-medium text-foreground">
+            {planApproval.title}
+          </p>
+          {planApproval.summary ? (
+            <p className="text-xs leading-5 text-muted-foreground">
+              {planApproval.summary}
+            </p>
+          ) : null}
+        </div>
+
+        <div className="rounded-2xl border border-border/70 bg-background px-4 py-3">
+          <div className="prose prose-sm max-w-none text-foreground prose-p:my-2 prose-li:my-1 prose-ul:my-2 prose-ol:my-2">
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>
+              {planApproval.planMarkdown}
+            </ReactMarkdown>
+          </div>
+        </div>
+
+        {planApproval.checklist?.length ? (
+          <div className="space-y-2 rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
+            {planApproval.checklist.map((step, index) => (
+              <div
+                key={`${step.step}-${index}`}
+                className="flex items-center justify-between gap-3 text-sm"
+              >
+                <div className="min-w-0 text-foreground">{step.step}</div>
+                <Badge
+                  variant="outline"
+                  className="rounded-full border-border/70 bg-background/70 text-[10px] text-muted-foreground"
+                >
+                  {step.status}
+                </Badge>
+              </div>
+            ))}
+          </div>
+        ) : null}
+
+        {canResolvePlanApproval ? (
+          <div className="space-y-2">
+            <Textarea
+              value={resolutionNoteDraft}
+              onChange={(event) => setResolutionNoteDraft(event.target.value)}
+              placeholder="Optional approval note or revision feedback"
+              disabled={Boolean(submittingAction)}
+              className="min-h-24 resize-y rounded-2xl bg-background"
+            />
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                disabled={Boolean(submittingAction)}
+                onClick={() =>
+                  void submitResolution("approve_plan", {
+                    decision: "approve",
+                    note: resolutionNoteDraft.trim() || undefined,
+                  })
+                }
+                className="rounded-full"
+              >
+                {submittingAction === "approve_plan" ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-1 h-4 w-4" />
+                )}
+                Approve Plan
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={Boolean(submittingAction)}
+                onClick={() =>
+                  void submitResolution("revise_plan", {
+                    decision: "revise",
+                    note: resolutionNoteDraft.trim() || undefined,
+                  })
+                }
+                className="rounded-full"
+              >
+                {submittingAction === "revise_plan" ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <RotateCcw className="mr-1 h-4 w-4" />
+                )}
+                Request Changes
+              </Button>
+            </div>
+          </div>
+        ) : null}
+
+        <InteractionStatusNote
+          interaction={interaction}
+          isTargetUser={Boolean(isTargetUser)}
+          viewerCanResolve={canResolve}
+        />
+        {interaction.resolutionNote ? (
+          <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
+            {interaction.resolutionNote}
+          </div>
+        ) : null}
+        {submitError ? (
+          <div className="rounded-xl border border-destructive/20 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {submitError}
+          </div>
+        ) : null}
+      </div>
+    )
+  }
+
+  if (
+    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
     interaction.runtimeAuthorization
   ) {
     const requestedScope = describeRuntimeGrantEffect(
@@ -1239,21 +1498,6 @@ function InteractionCard({
   return null
 }
 
-type MessageRecipient = Pick<
-  ConversationMember,
-  | "id"
-  | "participantId"
-  | "type"
-  | "name"
-  | "title"
-  | "role"
-  | "emoji"
-  | "avatarUrl"
-  | "linkedWorkspaceMemberName"
-> & {
-  member?: ConversationMember
-}
-
 type FileRefBlock = Extract<CanonicalContentBlock, { type: "file_ref" }>
 type MentionBlock = Extract<CanonicalContentBlock, { type: "mention" }>
 type RenderedMessageBlock =
@@ -1273,6 +1517,8 @@ type RenderedMessageBlock =
       block: MentionBlock
     }
 
+const MENTION_MARKDOWN_PREFIX = "synapse-mention://"
+
 const AUDIO_EXTENSIONS = [
   ".wav",
   ".mp3",
@@ -1282,98 +1528,6 @@ const AUDIO_EXTENSIONS = [
   ".aac",
   ".wma",
 ]
-
-function resolveRecipients(
-  conversationMembers: ConversationMember[] | undefined,
-  targetParticipantIds: string[] | undefined,
-  targetActorIds: string[] | undefined,
-  workspaceActors: MessageBubbleProps["workspaceActors"]
-) {
-  const participantIds = Array.from(new Set(targetParticipantIds || []))
-  const actorIds = Array.from(new Set(targetActorIds || []))
-  const memberMap = new Map<string, ConversationMember>()
-  const recipients: MessageRecipient[] = []
-  const actorIdsRepresentedByParticipantTargets = new Set<string>()
-
-  for (const member of conversationMembers || []) {
-    memberMap.set(member.participantId || member.memberId, member)
-  }
-
-  for (const participantId of participantIds) {
-    const member = memberMap.get(participantId)
-    recipients.push({
-      participantId,
-      id: member?.id || participantId,
-      type: member?.type || "external",
-      name: member?.name || "Unknown recipient",
-      title: member?.title,
-      role: member?.role,
-      emoji: member?.emoji,
-      avatarUrl: member?.avatarUrl,
-      linkedWorkspaceMemberName: member?.linkedWorkspaceMemberName,
-      member,
-    })
-
-    if (member?.type === "actor") {
-      actorIdsRepresentedByParticipantTargets.add(member.id)
-    }
-  }
-
-  for (const actorId of actorIds) {
-    if (actorIdsRepresentedByParticipantTargets.has(actorId)) {
-      continue
-    }
-
-    const representedMember = (conversationMembers || []).find(
-      (member) => member.type === "actor" && member.id === actorId
-    )
-    if (representedMember) {
-      recipients.push({
-        participantId: representedMember.participantId,
-        id: representedMember.id,
-        type: representedMember.type,
-        name: representedMember.name,
-        title: representedMember.title,
-        role: representedMember.role,
-        emoji: representedMember.emoji,
-        avatarUrl: representedMember.avatarUrl,
-        linkedWorkspaceMemberName: representedMember.linkedWorkspaceMemberName,
-        member: representedMember,
-      })
-      continue
-    }
-
-    const actor = workspaceActors?.find((candidate) => candidate.id === actorId)
-    if (!actor) {
-      recipients.push({
-        participantId: actorId,
-        id: actorId,
-        type: "actor",
-        name: "Unknown actor",
-        title: undefined,
-        role: undefined,
-        emoji: undefined,
-        avatarUrl: undefined,
-        linkedWorkspaceMemberName: undefined,
-      })
-      continue
-    }
-
-    recipients.push({
-      participantId: actor.id,
-      id: actor.id,
-      type: "actor",
-      name: actor.name,
-      title: actor.title,
-      role: actor.role,
-      emoji: actor.emoji,
-      avatarUrl: actor.avatarUrl,
-      linkedWorkspaceMemberName: undefined,
-    })
-  }
-
-  return recipients
-}
 
 function resolveMentionMember(
   mention: ConversationEntityRef,
@@ -1386,7 +1540,6 @@ function resolveMentionMember(
       (member) =>
         (mention.participantId &&
           member.participantId === mention.participantId) ||
-        (mention.memberId && member.memberId === mention.memberId) ||
         (mention.actorId &&
           member.type === "actor" &&
           member.id === mention.actorId) ||
@@ -1400,18 +1553,13 @@ function resolveMentionMember(
 
   if (matchedMember) return matchedMember
 
-  if (mention.memberType === "actor") {
+  if (mention.participantType === "actor") {
     const actor = workspaceActors?.find(
       (candidate) => candidate.id === mention.actorId
     )
-    const fallbackId =
-      mention.actorId ||
-      mention.participantId ||
-      mention.memberId ||
-      "unknown-actor"
+    const fallbackId = mention.actorId || mention.participantId || "unknown-actor"
 
     return {
-      memberId: mention.memberId || fallbackId,
       participantId: mention.participantId || fallbackId,
       type: "actor" as const,
       id: mention.actorId || actor?.id || fallbackId,
@@ -1423,15 +1571,11 @@ function resolveMentionMember(
     }
   }
 
-  if (mention.memberType === "workspace_member") {
+  if (mention.participantType === "workspace_member") {
     const fallbackId =
-      mention.workspaceMemberId ||
-      mention.participantId ||
-      mention.memberId ||
-      "unknown-user"
+      mention.workspaceMemberId || mention.participantId || "unknown-user"
 
     return {
-      memberId: mention.memberId || fallbackId,
       participantId: mention.participantId || fallbackId,
       type: "workspace_member" as const,
       id: mention.workspaceMemberId || fallbackId,
@@ -1444,13 +1588,9 @@ function resolveMentionMember(
   }
 
   const fallbackId =
-    mention.externalUserKey ||
-    mention.participantId ||
-    mention.memberId ||
-    "unknown-external"
+    mention.externalUserKey || mention.participantId || "unknown-external"
 
   return {
-    memberId: mention.memberId || fallbackId,
     participantId: mention.participantId || fallbackId,
     type: "external" as const,
     id: fallbackId,
@@ -1511,115 +1651,68 @@ function groupRenderedMessageBlocks(blocks: RenderedMessageBlock[]) {
   return groups
 }
 
-function RecipientChip({
-  recipient,
-  onClick,
-  isMobile,
-  contactBasePath,
-}: {
-  recipient: MessageRecipient
-  onClick?: (member: ConversationMember) => void
-  isMobile: boolean
-  contactBasePath?: string
-}) {
-  const trigger =
-    recipient.member && onClick ? (
-      <button
-        type="button"
-        onClick={() => onClick(recipient.member!)}
-        className="cursor-pointer text-foreground/70 transition-colors hover:text-foreground"
-      >
-        @{recipient.name}
-      </button>
-    ) : (
-      <span className="cursor-help text-foreground/70 transition-colors hover:text-foreground">
-        @{recipient.name}
-      </span>
-    )
+function serializeInlineBlocksToMarkdown(blocks: InlineRenderedMessageBlock[]) {
+  const mentionBlocksById: Record<string, MentionBlock> = {}
+  const markdown = blocks
+    .map((block, index) => {
+      if (block.type === "text") {
+        return block.text
+      }
 
-  if (recipient.member && !isMobile) {
-    return (
-      <ChatParticipantHoverCard
-        member={recipient.member}
-        contactBasePath={contactBasePath}
-      >
-        <span
-          className="cursor-help text-foreground/70 transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
-          tabIndex={0}
-        >
-          @{recipient.name}
-        </span>
-      </ChatParticipantHoverCard>
-    )
+      const mentionId = block.id || String(index)
+      const href = `${MENTION_MARKDOWN_PREFIX}${encodeURIComponent(mentionId)}`
+      mentionBlocksById[mentionId] = block.block
+      return `[mention-${index}](${href})`
+    })
+    .join("")
+
+  return {
+    markdown,
+    mentionBlocksById,
   }
-
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>{trigger}</TooltipTrigger>
-      <TooltipContent
-        side="top"
-        className="flex max-w-64 items-start gap-2 px-3 py-2"
-      >
-        <ChatAvatar
-          name={recipient.name}
-          avatarUrl={recipient.avatarUrl}
-          emoji={recipient.emoji}
-          entityType={recipient.type}
-          size="sm"
-          className="shrink-0"
-        />
-        <div className="min-w-0">
-          <div className="font-medium">{recipient.name}</div>
-          <div className="text-background/80">
-            {recipient.type === "actor"
-              ? recipient.title || recipient.role || "Actor"
-              : recipient.type === "external"
-                ? recipient.linkedWorkspaceMemberName
-                  ? `External participant · linked to ${recipient.linkedWorkspaceMemberName}`
-                  : "External participant"
-                : "User"}
-          </div>
-        </div>
-      </TooltipContent>
-    </Tooltip>
-  )
 }
 
-function RecipientSummary({
-  recipients,
-  hasExplicitTargets,
-  onRecipientClick,
-  isMobile,
-  contactBasePath,
-}: {
-  recipients: MessageRecipient[]
-  hasExplicitTargets: boolean
-  onRecipientClick?: (member: ConversationMember) => void
-  isMobile: boolean
-  contactBasePath?: string
-}) {
-  if (!hasExplicitTargets) {
-    return (
-      <span className="text-[10px] text-muted-foreground/45">
-        To all members
-      </span>
-    )
+function getMentionBlockFromHref(
+  href: string | undefined,
+  mentionBlocksById?: Record<string, MentionBlock>
+) {
+  if (!href || !mentionBlocksById) {
+    return undefined
   }
 
-  return (
-    <span className="inline-flex flex-wrap items-center gap-1 text-[10px] text-muted-foreground/45">
-      <span>To</span>
-      {recipients.map((recipient) => (
-        <RecipientChip
-          key={`${recipient.type}:${recipient.id}`}
-          recipient={recipient}
-          onClick={onRecipientClick}
-          isMobile={isMobile}
-          contactBasePath={contactBasePath}
-        />
-      ))}
-    </span>
-  )
+  if (!href.startsWith(MENTION_MARKDOWN_PREFIX)) {
+    return undefined
+  }
+
+  const encodedId = href.slice(MENTION_MARKDOWN_PREFIX.length)
+  const mentionId = decodeURIComponent(encodedId)
+  return mentionBlocksById[mentionId]
+}
+
+function getSelectedTextWithinContainer(container: HTMLElement) {
+  if (typeof window === "undefined") {
+    return undefined
+  }
+
+  const selection = window.getSelection()
+  if (!selection || selection.isCollapsed || selection.rangeCount === 0) {
+    return undefined
+  }
+
+  const text = selection.toString().trim()
+  if (!text) {
+    return undefined
+  }
+
+  const range = selection.getRangeAt(0)
+  if (
+    !container.contains(range.startContainer) ||
+    !container.contains(range.endContainer)
+  ) {
+    return undefined
+  }
+
+  return text
 }
 
 function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
@@ -1722,10 +1815,20 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
 
 function MarkdownTextBlock({
   text,
+  isUser = false,
   enableTablePreview,
+  conversationMembers,
+  workspaceActors,
+  contactBasePath,
+  mentionBlocksById,
 }: {
   text: string
+  isUser?: boolean
   enableTablePreview: boolean
+  conversationMembers?: ConversationMember[]
+  workspaceActors?: MessageBubbleProps["workspaceActors"]
+  contactBasePath?: string
+  mentionBlocksById?: Record<string, MentionBlock>
 }) {
   const [expandedTable, setExpandedTable] =
     useState<TablePreviewContent | null>(null)
@@ -1746,6 +1849,22 @@ function MarkdownTextBlock({
               <ExpandableImage src={src} alt={alt} {...props} />
             ),
             a: ({ href, children, ...props }) => {
+              const mentionBlock = getMentionBlockFromHref(
+                href,
+                mentionBlocksById
+              )
+              if (mentionBlock) {
+                return (
+                  <MentionInlineBlock
+                    block={mentionBlock}
+                    isUser={isUser}
+                    conversationMembers={conversationMembers}
+                    workspaceActors={workspaceActors}
+                    contactBasePath={contactBasePath}
+                  />
+                )
+              }
+
               const isAudio =
                 href &&
                 AUDIO_EXTENSIONS.some((ext) => href.toLowerCase().endsWith(ext))
@@ -1994,7 +2113,29 @@ function InlineMessageSequence({
     ) : (
       <MarkdownTextBlock
         text={blocks[0].text}
+        isUser={isUser}
         enableTablePreview={enableTablePreview}
+        conversationMembers={conversationMembers}
+        workspaceActors={workspaceActors}
+        contactBasePath={contactBasePath}
+      />
+    )
+  }
+
+  if (!isUser) {
+    const { markdown, mentionBlocksById } = serializeInlineBlocksToMarkdown(
+      blocks
+    )
+
+    return (
+      <MarkdownTextBlock
+        text={markdown}
+        isUser={false}
+        enableTablePreview={enableTablePreview}
+        conversationMembers={conversationMembers}
+        workspaceActors={workspaceActors}
+        contactBasePath={contactBasePath}
+        mentionBlocksById={mentionBlocksById}
       />
     )
   }
@@ -2171,10 +2312,10 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
 }
 
 export default function MessageBubble({
+  kind = "message",
   messageId,
   role,
   messageType,
-  metadata,
   author,
   contentBlocks,
   actorName,
@@ -2190,8 +2331,8 @@ export default function MessageBubble({
   citationSources,
   coordination,
   conversationMembers,
-  targetParticipantIds,
-  targetActorIds,
+  restrictedAudienceParticipantIds,
+  replyTo,
   workspaceActors,
   transport,
   transportDeliveries,
@@ -2201,6 +2342,7 @@ export default function MessageBubble({
   contactBasePath = "/dashboard/contacts",
   retryPending = false,
   onParticipantClick,
+  onQuoteMessage,
   onRetryModelError,
   onResolveInteraction,
 }: MessageBubbleProps) {
@@ -2210,18 +2352,6 @@ export default function MessageBubble({
   const isSystem = role === "system"
   const isError = role === "error"
   const textContent = useMemo(() => extractText(contentBlocks), [contentBlocks])
-  const recipients = useMemo(
-    () =>
-      resolveRecipients(
-        conversationMembers,
-        targetParticipantIds,
-        targetActorIds,
-        workspaceActors
-      ),
-    [conversationMembers, targetActorIds, targetParticipantIds, workspaceActors]
-  )
-  const hasExplicitTargets =
-    (targetParticipantIds?.length || 0) > 0 || (targetActorIds?.length || 0) > 0
   const viewerUserMember = useMemo(() => {
     if (!viewerWorkspaceMemberId) return undefined
     return conversationMembers?.find(
@@ -2242,12 +2372,13 @@ export default function MessageBubble({
     isMobile && authorMember && onParticipantClick
   )
   const authorEntityType = useMemo(() => {
-    if (author?.memberType === "external") return "external" as const
-    if (author?.memberType === "workspace_member") return "workspace_member" as const
+    if (author?.participantType === "external") return "external" as const
+    if (author?.participantType === "workspace_member")
+      return "workspace_member" as const
     return "actor" as const
-  }, [author?.memberType])
+  }, [author?.participantType])
   const resolvedAuthorName = useMemo(() => {
-    if (author?.memberType === "workspace_member") {
+    if (author?.participantType === "workspace_member") {
       if (
         author.workspaceMemberId &&
         author.workspaceMemberId === viewerWorkspaceMemberId
@@ -2255,10 +2386,10 @@ export default function MessageBubble({
         return "You"
       return author.name || authorMember?.name || "User"
     }
-    if (author?.memberType === "external") {
+    if (author?.participantType === "external") {
       return author.name || authorMember?.name || "External participant"
     }
-    if (author?.memberType === "actor") {
+    if (author?.participantType === "actor") {
       return author.name || actorName || authorMember?.name || "Actor"
     }
     return actorName || (isUser ? "You" : "Member")
@@ -2272,7 +2403,7 @@ export default function MessageBubble({
       ? actorEmoji || author?.avatarEmoji || authorMember?.emoji
       : authorMember?.emoji || author?.avatarEmoji
   const resolvedAuthorSubtitle = useMemo(() => {
-    if (author?.memberType === "actor") {
+    if (author?.participantType === "actor") {
       return (
         actorRole ||
         author?.title ||
@@ -2282,12 +2413,12 @@ export default function MessageBubble({
         "Actor"
       )
     }
-    if (author?.memberType === "external") {
+    if (author?.participantType === "external") {
       return authorMember
         ? getConversationMemberSubtitle(authorMember)
         : "External participant"
     }
-    if (author?.memberType === "workspace_member") {
+    if (author?.participantType === "workspace_member") {
       return (
         author.workspaceMemberId &&
         author.workspaceMemberId === viewerWorkspaceMemberId
@@ -2307,6 +2438,187 @@ export default function MessageBubble({
     () => getCompactMessagePreview(textContent, renderedBlocks),
     [renderedBlocks, textContent]
   )
+  const contextMenuRef = useRef<HTMLDivElement | null>(null)
+  const [contextMenu, setContextMenu] = useState<{
+    x: number
+    y: number
+    selectedText?: string
+  } | null>(null)
+  const canCopyMessage = kind === "message" && !interaction
+  const canQuoteMessage =
+    kind === "message" &&
+    !interaction &&
+    !messageId.startsWith("local:") &&
+    Boolean(onQuoteMessage)
+  const canOpenMessageMenu = canCopyMessage || canQuoteMessage
+
+  useEffect(() => {
+    if (!contextMenu) {
+      return
+    }
+
+    function handlePointerDown(event: MouseEvent) {
+      if (contextMenuRef.current?.contains(event.target as Node)) {
+        return
+      }
+      setContextMenu(null)
+    }
+
+    function handleEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setContextMenu(null)
+      }
+    }
+
+    function handleScroll() {
+      setContextMenu(null)
+    }
+
+    window.addEventListener("pointerdown", handlePointerDown)
+    window.addEventListener("keydown", handleEscape)
+    window.addEventListener("scroll", handleScroll, true)
+
+    return () => {
+      window.removeEventListener("pointerdown", handlePointerDown)
+      window.removeEventListener("keydown", handleEscape)
+      window.removeEventListener("scroll", handleScroll, true)
+    }
+  }, [contextMenu])
+
+  function openContextMenu(event: ReactMouseEvent<HTMLDivElement>) {
+    if (!canOpenMessageMenu) {
+      return
+    }
+
+    event.preventDefault()
+
+    const selectedText = getSelectedTextWithinContainer(event.currentTarget)
+
+    const menuWidth = 176
+    const optionCount =
+      (selectedText ? 1 : 0) + (canCopyMessage ? 1 : 0) + (canQuoteMessage ? 1 : 0)
+    const menuHeight = Math.max(52, optionCount * 40 + 8)
+    const nextX = Math.max(
+      12,
+      Math.min(event.clientX, window.innerWidth - menuWidth - 12)
+    )
+    const nextY = Math.max(
+      12,
+      Math.min(event.clientY, window.innerHeight - menuHeight - 12)
+    )
+
+    setContextMenu({
+      x: nextX,
+      y: nextY,
+      selectedText,
+    })
+  }
+
+  async function copyText(text: string) {
+    try {
+      await navigator.clipboard.writeText(text)
+      toast.success("Copied")
+    } catch {
+      toast.error("Failed to copy")
+    } finally {
+      setContextMenu(null)
+    }
+  }
+
+  async function handleCopyMessage() {
+    const text = buildReplyPreviewText(
+      buildMessageReplyRef({
+        messageId,
+        messageType,
+        author,
+        content: textContent,
+        contentBlocks,
+        createdAt: timestamp,
+      })
+    )
+
+    if (!text) {
+      setContextMenu(null)
+      return
+    }
+
+    await copyText(text)
+  }
+
+  async function handleCopySelection() {
+    const text = contextMenu?.selectedText?.trim()
+    if (!text) {
+      setContextMenu(null)
+      return
+    }
+
+    await copyText(text)
+  }
+
+  function handleQuoteMessage() {
+    if (!canQuoteMessage || !onQuoteMessage) {
+      setContextMenu(null)
+      return
+    }
+
+    onQuoteMessage(
+      buildMessageReplyRef({
+        messageId,
+        messageType,
+        author,
+        content: textContent,
+        contentBlocks,
+        createdAt: timestamp,
+      })
+    )
+    setContextMenu(null)
+  }
+
+  const contextMenuNode =
+    contextMenu && typeof document !== "undefined"
+      ? createPortal(
+          <div
+            ref={contextMenuRef}
+            className="fixed z-[140] min-w-44 overflow-hidden rounded-2xl border border-border bg-popover p-1 shadow-2xl"
+            style={{
+              left: contextMenu.x,
+              top: contextMenu.y,
+            }}
+          >
+            {contextMenu?.selectedText ? (
+              <button
+                type="button"
+                onClick={() => void handleCopySelection()}
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
+              >
+                <Copy className="size-4" />
+                Copy selection
+              </button>
+            ) : null}
+            {canCopyMessage ? (
+              <button
+                type="button"
+                onClick={() => void handleCopyMessage()}
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
+              >
+                <Copy className="size-4" />
+                Copy
+              </button>
+            ) : null}
+            {canQuoteMessage ? (
+              <button
+                type="button"
+                onClick={handleQuoteMessage}
+                className="flex w-full items-center gap-2 rounded-xl px-3 py-2 text-left text-sm text-foreground transition-colors hover:bg-muted"
+              >
+                <CornerUpLeft className="size-4" />
+                Quote
+              </button>
+            ) : null}
+          </div>,
+          document.body
+        )
+      : null
 
   if (isError) {
     return (
@@ -2352,169 +2664,163 @@ export default function MessageBubble({
   const hasToolsUsed = toolsUsed && toolsUsed.length > 0
   const hasCitations = sources.length > 0
   const isRetrying = isUser && status === "retrying"
-  const viewerParticipantId = useMemo(
-    () => viewerUserMember?.participantId,
-    [viewerUserMember]
-  )
-  const isDirectToViewer = Boolean(
-    viewerParticipantId && targetParticipantIds?.includes(viewerParticipantId)
-  )
+  const viewerParticipantId = viewerUserMember?.participantId
   const canRetryModelError = Boolean(
     messageType === "model_error_notice" &&
     viewerParticipantId &&
-    targetParticipantIds?.includes(viewerParticipantId) &&
+    restrictedAudienceParticipantIds?.includes(viewerParticipantId) &&
     onRetryModelError
   )
-  const shouldRenderCompact =
-    !interaction &&
-    !isUser &&
-    (coordination || (hasExplicitTargets && !isDirectToViewer))
+  const shouldRenderCompact = !interaction && !isUser && coordination
 
-  // Non-direct actor traffic stays compact so the main thread focuses on viewer-facing messages.
+  // Coordination traffic stays compact so the main thread focuses on the main exchange.
   if (shouldRenderCompact) {
     return (
-      <div className="ml-10 flex w-[calc(100%-2.5rem)] max-w-full min-w-0 gap-2 opacity-70">
-        <div className="flex w-full max-w-[70%] min-w-0 items-start gap-2">
-          <AtSign className="mt-1 h-3 w-3 shrink-0 text-primary/60" />
-          <div className="min-w-0 flex-1">
-            <div className="flex items-start gap-1.5 text-xs text-muted-foreground/70">
-              <div className="min-w-0 flex-1">
-                {compactExpanded ? (
-                  <div className="mb-0.5 flex flex-wrap items-center gap-1.5">
-                    {authorMember && !isMobile ? (
-                      <ChatParticipantHoverCard
-                        member={authorMember}
-                        contactBasePath={contactBasePath}
-                      >
-                        <span
-                          className="text-[11px] font-medium text-muted-foreground/80 transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
-                          tabIndex={0}
+      <>
+        <div className="ml-10 flex w-[calc(100%-2.5rem)] max-w-full min-w-0 gap-2 opacity-70">
+          <div
+            className="flex w-full max-w-[70%] min-w-0 items-start gap-2"
+            onContextMenu={canOpenMessageMenu ? openContextMenu : undefined}
+          >
+            <AtSign className="mt-1 h-3 w-3 shrink-0 text-primary/60" />
+            <div className="min-w-0 flex-1">
+              <div className="flex items-start gap-1.5 text-xs text-muted-foreground/70">
+                <div className="min-w-0 flex-1">
+                  {compactExpanded ? (
+                    <div className="mb-0.5 flex flex-wrap items-center gap-1.5">
+                      {authorMember && !isMobile ? (
+                        <ChatParticipantHoverCard
+                          member={authorMember}
+                          contactBasePath={contactBasePath}
+                        >
+                          <span
+                            className="text-[11px] font-medium text-muted-foreground/80 transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
+                            tabIndex={0}
+                          >
+                            {resolvedAuthorName}
+                          </span>
+                        </ChatParticipantHoverCard>
+                      ) : canOpenAuthorDetails ? (
+                        <button
+                          type="button"
+                          onClick={() => onParticipantClick?.(authorMember!)}
+                          className="text-[11px] font-medium text-muted-foreground/80 transition-colors hover:text-foreground"
                         >
                           {resolvedAuthorName}
+                        </button>
+                      ) : (
+                        <span className="text-[11px] font-medium text-muted-foreground/80">
+                          {resolvedAuthorName}
                         </span>
-                      </ChatParticipantHoverCard>
-                    ) : canOpenAuthorDetails ? (
+                      )}
+                      {resolvedAuthorSubtitle ? (
+                        <span className="text-[10px] text-muted-foreground/55">
+                          {resolvedAuthorSubtitle}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <div className="flex min-w-0 items-center gap-1">
+                      {authorMember && !isMobile ? (
+                        <ChatParticipantHoverCard
+                          member={authorMember}
+                          contactBasePath={contactBasePath}
+                        >
+                          <span
+                            className="shrink-0 font-medium text-muted-foreground/80 transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
+                            tabIndex={0}
+                          >
+                            {resolvedAuthorName}
+                          </span>
+                        </ChatParticipantHoverCard>
+                      ) : canOpenAuthorDetails ? (
+                        <button
+                          type="button"
+                          onClick={() => onParticipantClick?.(authorMember!)}
+                          className="shrink-0 font-medium text-muted-foreground/80 transition-colors hover:text-foreground"
+                        >
+                          {resolvedAuthorName}
+                        </button>
+                      ) : (
+                        <span className="shrink-0 font-medium text-muted-foreground/80">
+                          {resolvedAuthorName}
+                        </span>
+                      )}
+                      <span className="shrink-0 text-muted-foreground/40">·</span>
                       <button
                         type="button"
-                        onClick={() => onParticipantClick?.(authorMember!)}
-                        className="text-[11px] font-medium text-muted-foreground/80 transition-colors hover:text-foreground"
+                        onClick={() => setCompactExpanded((current) => !current)}
+                        className="min-w-0 flex-1 text-left transition-colors hover:text-foreground/80"
+                        aria-expanded={compactExpanded}
                       >
-                        {resolvedAuthorName}
+                        <TwemojiScope as="span" className="block truncate">
+                          {compactPreview}
+                        </TwemojiScope>
                       </button>
-                    ) : (
-                      <span className="text-[11px] font-medium text-muted-foreground/80">
-                        {resolvedAuthorName}
-                      </span>
-                    )}
-                    {resolvedAuthorSubtitle ? (
-                      <span className="text-[10px] text-muted-foreground/55">
-                        {resolvedAuthorSubtitle}
+                    </div>
+                  )}
+                </div>
+                <button
+                  type="button"
+                  className="shrink-0 text-muted-foreground/45 transition-colors hover:text-foreground/70"
+                  onClick={() => setCompactExpanded((current) => !current)}
+                  aria-expanded={compactExpanded}
+                  aria-label={
+                    compactExpanded ? "Collapse message" : "Expand message"
+                  }
+                >
+                  {compactExpanded ? (
+                    <ChevronDown className="mt-0.5 h-3 w-3" />
+                  ) : (
+                    <ChevronRight className="mt-0.5 h-3 w-3" />
+                  )}
+                </button>
+              </div>
+
+              {compactExpanded ? (
+                <>
+                  <div className="text-xs leading-relaxed text-muted-foreground/70">
+                    {replyTo ? (
+                      <MessageReplyPreview replyTo={replyTo} isUser={false} />
+                    ) : null}
+                    <MessageContentBlocks
+                      blocks={renderedBlocks}
+                      isUser={false}
+                      enableTablePreview={enableTablePreview}
+                      conversationMembers={conversationMembers}
+                      workspaceActors={workspaceActors}
+                      contactBasePath={contactBasePath}
+                    />
+                  </div>
+                  <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[9px] text-muted-foreground/30">
+                    {timestamp ? (
+                      <span>
+                        {new Date(timestamp).toLocaleTimeString([], {
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        })}
                       </span>
                     ) : null}
+                    <TransportSummary
+                      transport={transport}
+                      transportDeliveries={transportDeliveries}
+                    />
                   </div>
-                ) : (
-                  <div className="flex min-w-0 items-center gap-1">
-                    {authorMember && !isMobile ? (
-                      <ChatParticipantHoverCard
-                        member={authorMember}
-                        contactBasePath={contactBasePath}
-                      >
-                        <span
-                          className="shrink-0 font-medium text-muted-foreground/80 transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
-                          tabIndex={0}
-                        >
-                          {resolvedAuthorName}
-                        </span>
-                      </ChatParticipantHoverCard>
-                    ) : canOpenAuthorDetails ? (
-                      <button
-                        type="button"
-                        onClick={() => onParticipantClick?.(authorMember!)}
-                        className="shrink-0 font-medium text-muted-foreground/80 transition-colors hover:text-foreground"
-                      >
-                        {resolvedAuthorName}
-                      </button>
-                    ) : (
-                      <span className="shrink-0 font-medium text-muted-foreground/80">
-                        {resolvedAuthorName}
-                      </span>
-                    )}
-                    <span className="shrink-0 text-muted-foreground/40">·</span>
-                    <button
-                      type="button"
-                      onClick={() => setCompactExpanded((current) => !current)}
-                      className="min-w-0 flex-1 text-left transition-colors hover:text-foreground/80"
-                      aria-expanded={compactExpanded}
-                    >
-                      <TwemojiScope as="span" className="block truncate">
-                        {compactPreview}
-                      </TwemojiScope>
-                    </button>
-                  </div>
-                )}
-              </div>
-              <button
-                type="button"
-                className="shrink-0 text-muted-foreground/45 transition-colors hover:text-foreground/70"
-                onClick={() => setCompactExpanded((current) => !current)}
-                aria-expanded={compactExpanded}
-                aria-label={
-                  compactExpanded ? "Collapse message" : "Expand message"
-                }
-              >
-                {compactExpanded ? (
-                  <ChevronDown className="mt-0.5 h-3 w-3" />
-                ) : (
-                  <ChevronRight className="mt-0.5 h-3 w-3" />
-                )}
-              </button>
+                </>
+              ) : null}
             </div>
-
-            {compactExpanded ? (
-              <>
-                <div className="text-xs leading-relaxed text-muted-foreground/70">
-                  <MessageContentBlocks
-                    blocks={renderedBlocks}
-                    isUser={false}
-                    enableTablePreview={enableTablePreview}
-                    conversationMembers={conversationMembers}
-                    workspaceActors={workspaceActors}
-                    contactBasePath={contactBasePath}
-                  />
-                </div>
-                <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[9px] text-muted-foreground/30">
-                  {timestamp ? (
-                    <span>
-                      {new Date(timestamp).toLocaleTimeString([], {
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </span>
-                  ) : null}
-                  <TransportSummary
-                    transport={transport}
-                    transportDeliveries={transportDeliveries}
-                  />
-                  <RecipientSummary
-                    recipients={recipients}
-                    hasExplicitTargets={hasExplicitTargets}
-                    onRecipientClick={onParticipantClick}
-                    isMobile={isMobile}
-                    contactBasePath={contactBasePath}
-                  />
-                </div>
-              </>
-            ) : null}
           </div>
         </div>
-      </div>
+        {contextMenuNode}
+      </>
     )
   }
 
   return (
-    <div
-      className={`flex w-full max-w-full min-w-0 gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
-    >
+    <>
+      <div
+        className={`flex w-full max-w-full min-w-0 gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
+      >
       {isUser ? (
         <ChatAvatar
           name={viewerUserMember?.name || resolvedAuthorName}
@@ -2615,9 +2921,9 @@ export default function MessageBubble({
         />
       )}
 
-      <div
-        className={`flex w-full max-w-[75%] min-w-0 flex-col ${isUser ? "items-end" : "items-start"}`}
-      >
+        <div
+          className={`flex w-full max-w-[75%] min-w-0 flex-col ${isUser ? "items-end" : "items-start"}`}
+        >
         {!isUser && resolvedAuthorName && (
           <div className="mb-1 ml-1 self-start text-xs text-muted-foreground/70">
             {authorMember && !isMobile ? (
@@ -2658,9 +2964,9 @@ export default function MessageBubble({
             ) : null}
           </div>
         )}
-        <div
-          className={`flex w-full max-w-full min-w-0 items-end gap-2 ${isUser ? "justify-end" : "justify-start"}`}
-        >
+          <div
+            className={`flex w-full max-w-full min-w-0 items-end gap-2 ${isUser ? "justify-end" : "justify-start"}`}
+          >
           {isRetrying ? (
             <span className="mb-2 inline-flex size-6 items-center justify-center rounded-full border border-destructive/25 bg-destructive/10 text-destructive shadow-sm">
               <AlertTriangle className="size-3.5" />
@@ -2676,22 +2982,27 @@ export default function MessageBubble({
                   ? "rounded-tl-sm border-amber-500/20 bg-amber-500/10 text-foreground"
                   : "rounded-tl-sm border-border bg-background text-foreground"
             } `}
+            onContextMenu={canOpenMessageMenu ? openContextMenu : undefined}
           >
             {interaction ? (
               <InteractionCard
                 interaction={interaction}
-                viewerWorkspaceMemberId={viewerWorkspaceMemberId}
                 onResolveInteraction={onResolveInteraction}
               />
             ) : (
-              <MessageContentBlocks
-                blocks={renderedBlocks}
-                isUser={isUser}
-                enableTablePreview={enableTablePreview}
-                conversationMembers={conversationMembers}
-                workspaceActors={workspaceActors}
-                contactBasePath={contactBasePath}
-              />
+              <>
+                {replyTo ? (
+                  <MessageReplyPreview replyTo={replyTo} isUser={isUser} />
+                ) : null}
+                <MessageContentBlocks
+                  blocks={renderedBlocks}
+                  isUser={isUser}
+                  enableTablePreview={enableTablePreview}
+                  conversationMembers={conversationMembers}
+                  workspaceActors={workspaceActors}
+                  contactBasePath={contactBasePath}
+                />
+              </>
             )}
 
             {/* Citation sources footer */}
@@ -2705,9 +3016,9 @@ export default function MessageBubble({
             )}
           </div>
         </div>
-        <div
-          className={`mt-1 inline-flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${isUser ? "flex-row-reverse justify-start self-end" : "justify-start self-start"}`}
-        >
+          <div
+            className={`mt-1 inline-flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${isUser ? "flex-row-reverse justify-start self-end" : "justify-start self-start"}`}
+          >
           {timestamp && (
             <span className="text-[10px] text-muted-foreground/50">
               {new Date(timestamp).toLocaleTimeString([], {
@@ -2742,13 +3053,6 @@ export default function MessageBubble({
               </TooltipContent>
             </Tooltip>
           ) : null}
-          <RecipientSummary
-            recipients={recipients}
-            hasExplicitTargets={hasExplicitTargets}
-            onRecipientClick={onParticipantClick}
-            isMobile={isMobile}
-            contactBasePath={contactBasePath}
-          />
           <TransportSummary
             transport={transport}
             transportDeliveries={transportDeliveries}
@@ -2767,8 +3071,10 @@ export default function MessageBubble({
               {formatToolsUsed(toolsUsed)}
             </span>
           )}
+          </div>
         </div>
       </div>
-    </div>
+      {contextMenuNode}
+    </>
   )
 }

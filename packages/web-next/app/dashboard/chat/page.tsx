@@ -1,16 +1,15 @@
 "use client"
 
 import { useEffect, useRef, useState } from "react"
-import { type CanonicalContentBlock } from "@synapse/shared"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useWorkspace } from "../workspace-provider"
-import { useChatRealtimeSync } from "@/hooks/use-chat-realtime-sync"
 import { useChatStore } from "@/stores/chat-store"
 import ConversationList from "./conversation-list"
 import ConversationChat, {
   ConversationChatSkeleton,
 } from "./conversation-chat"
 import NewConversationDialog from "./new-conversation-dialog"
+import type { ChatComposerSubmitPayload } from "@/components/chat-composer"
 import { MessageSquare } from "lucide-react"
 
 export default function ChatPage() {
@@ -34,17 +33,27 @@ export default function ChatPage() {
     sendMessage,
     createWorkspaceThread,
     markConversationRead,
+    setVisibleConversation,
   } = useChatStore()
 
   const [dialogOpen, setDialogOpen] = useState(false)
   const lastReportedReadRef = useRef<string>("")
-  useChatRealtimeSync({ workspaceId, selectedConversationId })
 
   useEffect(() => {
     if (!conversationParam) return
-    if (!conversations.some((conversation) => conversation.id === conversationParam)) return
+    if (
+      !conversations.some((conversation) => conversation.id === conversationParam)
+    )
+      return
     selectConversation(conversationParam)
   }, [conversationParam, conversations, selectConversation])
+
+  useEffect(() => {
+    setVisibleConversation(selectedConversationId)
+    return () => {
+      setVisibleConversation(null)
+    }
+  }, [selectedConversationId, setVisibleConversation])
 
   useEffect(() => {
     if (workspaceId && selectedConversationId) {
@@ -92,19 +101,17 @@ export default function ChatPage() {
     updateConversationRoute(id)
   }
 
-  async function handleSend(
-    contentBlocks: CanonicalContentBlock[],
-    targetParticipantIds?: string[],
-    targetActorIds?: string[]
-  ) {
+  async function handleSend({
+    contentBlocks,
+    replyToItemId,
+    replyTo,
+  }: ChatComposerSubmitPayload) {
     if (!workspaceId || !selectedConversationId) return
-    await sendMessage(
-      workspaceId,
-      selectedConversationId,
+    await sendMessage(workspaceId, selectedConversationId, {
       contentBlocks,
-      targetParticipantIds,
-      targetActorIds
-    )
+      replyToItemId,
+      replyTo,
+    })
   }
 
   async function handleCreateConversation(actorIds: string[]) {
@@ -137,17 +144,6 @@ export default function ChatPage() {
     })
   }
 
-  function handleBackToList() {
-    const nextParams = new URLSearchParams(searchParams.toString())
-    nextParams.delete("conversation")
-    const nextQuery = nextParams.toString()
-    router.replace(nextQuery ? `${pathname}?${nextQuery}` : pathname, {
-      scroll: false,
-    })
-  }
-
-  const mobileView = conversationParam ? "chat" : "list"
-
   if (!workspaceId) {
     return (
       <div className="flex h-[60vh] items-center justify-center">
@@ -158,12 +154,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full min-h-0 w-full max-w-full min-w-0 overflow-hidden">
-      {/* Desktop: side-by-side. Mobile: toggle */}
-
-      {/* Conversation List */}
-      <div
-        className={`w-[22rem] shrink-0 ${mobileView === "list" ? "flex" : "hidden"} min-h-0 min-w-0 flex-col lg:flex`}
-      >
+      <div className="flex min-h-0 min-w-0 w-[22rem] shrink-0 flex-col">
         <ConversationList
           conversations={conversations}
           loading={loadingConversations}
@@ -174,10 +165,7 @@ export default function ChatPage() {
         />
       </div>
 
-      {/* Chat Area */}
-      <div
-        className={`flex-1 ${mobileView === "chat" ? "flex" : "hidden"} min-h-0 min-w-0 flex-col lg:flex`}
-      >
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col">
         {selectedConversation ? (
           <ConversationChat
             conversation={selectedConversation}
@@ -189,7 +177,6 @@ export default function ChatPage() {
                 : undefined
             }
             onSend={handleSend}
-            onBack={handleBackToList}
             workspaceId={workspaceId}
             onRefreshConversation={() => loadConversations(workspaceId)}
             contactBasePath="/dashboard/contacts"

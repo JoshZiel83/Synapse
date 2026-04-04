@@ -119,7 +119,7 @@ function MentionPreview({ block }: { block: MentionBlock }) {
     <div className="inline-flex items-center gap-2 rounded-full border border-border bg-muted/30 px-3 py-1.5 text-sm text-foreground">
       <span className="font-medium">@{name}</span>
       <span className="text-xs text-muted-foreground">
-        {block.mention.memberType}
+        {block.mention.participantType}
       </span>
     </div>
   )

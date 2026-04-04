@@ -4,6 +4,7 @@ import { useEffect, type ReactNode } from "react"
 import { usePathname, useRouter } from "next/navigation"
 import { buildLoginRedirect } from "@/lib/auth"
 import { WorkspaceLoadingScreen } from "@/components/workspace-loading-screen"
+import { ChatSyncClient } from "@/components/chat-sync-client"
 import { useAuthStore } from "@/stores/auth-store"
 import { WorkspaceProvider, useWorkspace } from "./workspace-provider"
 import { AppSidebar } from "@/components/app-sidebar"
@@ -130,6 +131,7 @@ export default function DashboardLayoutClient({
 
   return (
     <WorkspaceProvider>
+      <ChatSyncClient />
       <DashboardInner>{children}</DashboardInner>
     </WorkspaceProvider>
   )

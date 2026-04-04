@@ -4,9 +4,9 @@ import type {
   Actor,
   ActorRuntimeState,
   InteractionRequestSummary,
+  ConversationReplyRef,
 } from "@synapse/shared"
 import { useEffect, useMemo, useRef, useState } from "react"
-import { type CanonicalContentBlock } from "@synapse/shared"
 import { toast } from "sonner"
 import ChatComposer, {
   type ChatComposerParticipant,
@@ -24,7 +24,7 @@ import type {
   ConversationSummary,
   FeedMessage,
 } from "@/stores/chat-store"
-import { api } from "@/lib/api"
+import { api, type ChatInteractionResponseInput } from "@/lib/api"
 import ChatAvatar from "./chat-avatar"
 import ChatMemberStrip from "./chat-member-strip"
 import ChatParticipantDetailDialog from "./chat-participant-detail-dialog"
@@ -39,11 +39,7 @@ interface ConversationChatProps {
   messages: FeedMessage[]
   loading: boolean
   actorRuntimes?: Record<string, ActorRuntimeState>
-  onSend: (
-    contentBlocks: CanonicalContentBlock[],
-    targetParticipantIds?: string[],
-    targetActorIds?: string[]
-  ) => Promise<void> | void
+  onSend: (payload: ChatComposerSubmitPayload) => Promise<void> | void
   onBack?: () => void
   workspaceId?: string
   onRefreshConversation?: () => Promise<void> | void
@@ -260,6 +256,7 @@ export default function ConversationChat({
     useState<ConversationMember | null>(null)
   const [retryingMessageIds, setRetryingMessageIds] = useState<string[]>([])
   const [workspaceActors, setWorkspaceActors] = useState<Actor[]>([])
+  const [replyTo, setReplyTo] = useState<ConversationReplyRef | null>(null)
   const prevMsgCount = useRef(messages.length)
   const mentionableParticipants = useMemo<ChatComposerParticipant[]>(() => {
     const inConversationActorIds = new Set(
@@ -274,7 +271,6 @@ export default function ConversationChat({
         name: member.name,
         type: "actor" as const,
         targetType: "actor" as const,
-        memberId: member.memberId,
         participantId: member.participantId,
         actorId: member.id,
         inGroup: true,
@@ -292,7 +288,6 @@ export default function ConversationChat({
         name: member.name,
         type: member.type,
         targetType: "participant" as const,
-        memberId: member.memberId,
         participantId: member.participantId,
         actorId: member.type === "actor" ? member.id : undefined,
         workspaceMemberId:
@@ -378,8 +373,8 @@ export default function ConversationChat({
           runtime.activeWakeups.some(
             (wakeup) =>
               wakeup.status === "attached" &&
-              wakeup.sourceMemberType === "workspace_member" &&
-              wakeup.sourceMemberId === currentViewerWorkspaceMemberId
+              wakeup.sourceParticipantType === "workspace_member" &&
+              wakeup.sourceParticipantId === currentViewerWorkspaceMemberId
           )
       ),
     [activeRuntimes, currentViewerWorkspaceMemberId]
@@ -448,6 +443,7 @@ export default function ConversationChat({
     setParticipantDetailOpen(false)
     setSelectedParticipantMember(null)
     setConversationDetailsOpen(false)
+    setReplyTo(null)
   }, [conversation.id])
 
   useEffect(() => {
@@ -583,18 +579,7 @@ export default function ConversationChat({
 
   async function handleResolveInteraction(
     interactionId: string,
-    data: {
-      answers?: {
-        fieldId: string
-        selectedOptionIds?: string[]
-        otherText?: string
-        text?: string
-      }[]
-      selectedOptionId?: string
-      decision?: "approve" | "reject"
-      preset?: "once" | "actor" | "conversation" | "workspace"
-      note?: string
-    }
+    data: ChatInteractionResponseInput
   ): Promise<InteractionRequestSummary> {
     if (!workspaceId) {
       throw new Error(
@@ -617,12 +602,9 @@ export default function ConversationChat({
     return result.interaction
   }
 
-  async function handleComposerSubmit({
-    contentBlocks,
-    targetParticipantIds,
-    targetActorIds,
-  }: ChatComposerSubmitPayload) {
-    await onSend(contentBlocks, targetParticipantIds, targetActorIds)
+  async function handleComposerSubmit(payload: ChatComposerSubmitPayload) {
+    await onSend(payload)
+    setReplyTo(null)
     setTimeout(() => {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     }, 50)
@@ -821,10 +803,10 @@ export default function ConversationChat({
               messages.map((msg) => (
                 <MessageBubble
                   key={msg.id}
+                  kind={msg.kind}
                   messageId={msg.id}
                   role={msg.role}
                   messageType={msg.messageType}
-                  metadata={msg.metadata}
                   author={msg.author}
                   contentBlocks={msg.contentBlocks}
                   actorName={msg.actorName}
@@ -843,7 +825,7 @@ export default function ConversationChat({
                   timestamp={msg.createdAt}
                   isUser={
                     msg.author
-                      ? msg.author.memberType === "workspace_member" &&
+                      ? msg.author.participantType === "workspace_member" &&
                         msg.author.workspaceMemberId === currentViewerWorkspaceMemberId
                       : msg.role === "user"
                   }
@@ -853,8 +835,10 @@ export default function ConversationChat({
                   citationSources={msg.citationSources}
                   coordination={msg.coordination}
                   conversationMembers={conversation.members}
-                  targetParticipantIds={msg.targetParticipantIds}
-                  targetActorIds={msg.targetActorIds}
+                  restrictedAudienceParticipantIds={
+                    msg.restrictedAudienceParticipantIds
+                  }
+                  replyTo={msg.replyTo}
                   workspaceActors={workspaceActorDirectory}
                   transport={msg.transport}
                   transportDeliveries={msg.transportDeliveries}
@@ -868,6 +852,7 @@ export default function ConversationChat({
                   onResolveInteraction={handleResolveInteraction}
                   retryPending={retryingMessageIds.includes(msg.id)}
                   onRetryModelError={handleRetryModelError}
+                  onQuoteMessage={setReplyTo}
                 />
               ))
             )}
@@ -901,6 +886,8 @@ export default function ConversationChat({
           workspaceId={workspaceId || null}
           participants={mentionableParticipants}
           placeholder="Type a message..."
+          replyTo={replyTo}
+          onCancelReply={() => setReplyTo(null)}
           onSubmit={handleComposerSubmit}
         />
       </div>

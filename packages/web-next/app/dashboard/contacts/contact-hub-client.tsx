@@ -5,7 +5,6 @@ import { buildMobileScanUrl } from "@synapse/shared"
 import QRCode from "qrcode"
 import { useRouter } from "next/navigation"
 import {
-  Camera,
   Cpu,
   Inbox,
   MessageCircle,
@@ -897,13 +896,6 @@ export function ContactHubClient() {
                         : selectedEntry.directState.status === "approval_required"
                           ? "Request access and DM"
                           : "Start DM"}
-                    </Button>
-                    <Button
-                      variant="outline"
-                      onClick={() => router.push("/m/scan?intent=relationship")}
-                    >
-                      <Camera className="mr-2 size-4" />
-                      Scan QR on mobile
                     </Button>
                   </div>
                 </div>

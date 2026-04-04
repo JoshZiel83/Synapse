@@ -184,10 +184,6 @@ export default function DashboardHomePage() {
     }
   }, [])
 
-  const availableActorMap = useMemo(
-    () => new Map(availableActors.map((actor) => [actor.id, actor])),
-    [availableActors]
-  )
   const composerParticipants = useMemo<ChatComposerParticipant[]>(
     () =>
       availableActors.map((actor) => ({
@@ -206,24 +202,8 @@ export default function DashboardHomePage() {
     [availableActors]
   )
 
-  function resolveLaunchActors(
-    payload: ChatComposerSubmitPayload,
-    primaryActor?: LaunchActor | null
-  ) {
-    const actorIds = Array.from(
-      new Set([
-        ...(primaryActor ? [primaryActor.id] : []),
-        ...(payload.targetActorIds || []),
-      ])
-    )
-
-    return actorIds
-      .map((actorId) =>
-        primaryActor && primaryActor.id === actorId
-          ? primaryActor
-          : availableActorMap.get(actorId)
-      )
-      .filter((actor): actor is LaunchActor => Boolean(actor))
+  function resolveLaunchActors(primaryActor?: LaunchActor | null) {
+    return primaryActor ? [primaryActor] : []
   }
 
   function handlePickerOpenChange(nextOpen: boolean) {
@@ -294,7 +274,6 @@ export default function DashboardHomePage() {
           "group",
           actorIds,
           message || undefined,
-          actorIds,
           launchPayload.contentBlocks,
           threadTitle || undefined
         ),
@@ -344,7 +323,7 @@ export default function DashboardHomePage() {
     setErrorMessage(null)
     setPendingLaunchPayload(payload)
 
-    const launchActors = resolveLaunchActors(payload, launchActor)
+    const launchActors = resolveLaunchActors(launchActor)
     if (launchActors.length > 0) {
       return handleLaunch(launchActor, launchActors, false, payload)
     }
@@ -506,13 +485,7 @@ export default function DashboardHomePage() {
             return
           }
 
-          const groupedActors = resolveLaunchActors(
-            pendingLaunchPayload || {
-              plainText: "",
-              contentBlocks: [],
-            },
-            payload.actor
-          )
+          const groupedActors = resolveLaunchActors(payload.actor)
           await handleLaunch(
             payload.actor,
             groupedActors,
