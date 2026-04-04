@@ -70,7 +70,7 @@ function parseSizeBytes(value: unknown): number {
   return 0;
 }
 
-function blocksToDraftParts(
+export function canonicalContentBlocksToDraftParts(
   blocks: CanonicalContentBlock[],
 ): DraftConversationPart[] {
   const parts: DraftConversationPart[] = [];
@@ -296,7 +296,7 @@ export async function buildNormalizedMessageContent(params: {
       : await buildBlocksFromContent(content, inlineReferences);
   const baseBlocks = built.blocks;
 
-  const parts = blocksToDraftParts(baseBlocks);
+  const parts = canonicalContentBlocksToDraftParts(baseBlocks);
 
   if (parts.length === 0) {
     parts.push({ type: "text", text: "" });

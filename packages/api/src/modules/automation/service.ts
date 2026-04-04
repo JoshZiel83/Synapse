@@ -38,8 +38,14 @@ import {
 import { decrypt, encrypt } from '../../infrastructure/crypto/index.js';
 import { transaction } from '../../infrastructure/database/index.js';
 import { executeSql, executeSqlOn } from '../../infrastructure/database/kysely.js';
-import { createConversationEvent, getConversation, listConversationMembers } from '../conversation/service.js';
-import { buildNormalizedMessageContent } from '../conversation/message-content.js';
+import {
+  addConversationParticipants,
+  createConversationEvent,
+  createConversationForWorkspaceMember,
+  getConversation,
+  listConversationParticipants,
+} from '../chat/service.js';
+import { buildNormalizedMessageContent } from '../chat/message-content.js';
 import {
   buildIntegrationEventSourceTemplate,
   getIntegrationInstallation,
@@ -53,14 +59,9 @@ import {
 import { enqueueSessionWakeup } from '../session/runtime.js';
 import { getSession } from '../session/service.js';
 import {
-  addMembersToConversation,
-  createThread,
-  getConversationMembers,
-} from '../conversation/chat-service.js';
-import {
   getWorkspaceMemberIdentityById,
   requireWorkspaceMemberIdentity,
-} from '../conversation/workspace-identity.js';
+} from '../chat/workspace-identity.js';
 
 type AutomationRuleRow = {
   id: string;
@@ -2500,7 +2501,7 @@ async function resolveOperatorUserId(rule: AutomationRule) {
   }
 
   if (rule.ownerConversationId) {
-    const members = await listConversationMembers(rule.ownerConversationId);
+    const members = await listConversationParticipants(rule.ownerConversationId);
     const firstUser = members.find(
       (member: any) =>
         member.state === 'active' && member.workspace_member_id,
@@ -2590,23 +2591,19 @@ async function resolveExistingConversationId(rule: AutomationRule) {
     }
   }
 
-  const created = await createThread({
+  const created = await createConversationForWorkspaceMember({
     workspaceId: rule.workspaceId,
     kind: 'group',
-    createdByWorkspaceMemberId: operatorWorkspaceMember.workspaceMemberId,
+    creatorWorkspaceMemberId: operatorWorkspaceMember.workspaceMemberId,
     title: rule.delivery.conversationTitle || rule.name,
     actorIds: participantActorIds,
   });
 
   if (participantWorkspaceMemberIds.length > 0) {
-    await addMembersToConversation({
-      conversationId: created.conversation.id,
+    await addConversationParticipants({
+      conversationId: created.id as string,
       workspaceId: rule.workspaceId,
       workspaceMemberIds: participantWorkspaceMemberIds,
-      initiator: {
-        memberType: 'workspace_member',
-        memberId: operatorWorkspaceMember.workspaceMemberId,
-      },
     });
   }
 
@@ -2616,23 +2613,23 @@ async function resolveExistingConversationId(rule: AutomationRule) {
        SET reused_conversation_id = $2,
            updated_at = NOW()
        WHERE rule_id = $1`,
-      [rule.id, created.conversation.id],
+      [rule.id, created.id],
     );
-    rule.delivery.reusedConversationId = created.conversation.id;
+    rule.delivery.reusedConversationId = created.id as string;
   }
 
   return {
-    conversationId: created.conversation.id as string,
+    conversationId: created.id as string,
     sessionId: undefined,
-    createdConversationId: created.conversation.id as string,
+    createdConversationId: created.id as string,
   };
 }
 
 async function resolveRecipientMembers(rule: AutomationRule, conversationId: string) {
-  const members = await listConversationMembers(conversationId);
+  const members = await listConversationParticipants(conversationId);
   if (rule.delivery.targetPolicy === 'all_members') {
     return {
-      targetMemberIds: members.filter((member: any) => member.state === 'active').map((member: any) => member.id as string),
+      restrictedAudienceParticipantIds: members.filter((member: any) => member.state === 'active').map((member: any) => member.id as string),
       actorRecipientIds: members
         .filter((member: any) => member.state === 'active' && member.actor_id)
         .map((member: any) => member.actor_id as string),
@@ -2650,7 +2647,7 @@ async function resolveRecipientMembers(rule: AutomationRule, conversationId: str
       .map((entry) => entry.entityId),
   );
 
-  const targetMemberIds = members
+  const restrictedAudienceParticipantIds = members
     .filter((member: any) => member.state === 'active')
     .filter((member: any) => {
       if (member.actor_id) return recipientActors.has(member.actor_id);
@@ -2665,7 +2662,7 @@ async function resolveRecipientMembers(rule: AutomationRule, conversationId: str
     .map((member: any) => member.actor_id as string);
 
   return {
-    targetMemberIds,
+    restrictedAudienceParticipantIds,
     actorRecipientIds,
   };
 }
@@ -2675,7 +2672,7 @@ async function createAutomationNotice(params: {
   executionId: string;
   occurrence: AutomationOccurrence;
   conversationId: string;
-  targetMemberIds: string[];
+  restrictedAudienceParticipantIds: string[];
 }) {
   const payload = buildAutomationNoticePayload(params);
   const timelinePolicy = params.rule.delivery.targetPolicy === 'specified_members' ? 'targeted_members' : 'all_members';
@@ -2692,8 +2689,14 @@ async function createAutomationNotice(params: {
       occurrenceId: params.occurrence.id,
     },
     eventPayload: payload,
-    targetMemberIds: timelinePolicy === 'targeted_members' ? params.targetMemberIds : undefined,
-    contextTargetMemberIds: contextPolicy === 'targeted_members' ? params.targetMemberIds : undefined,
+    restrictedAudienceParticipantIds:
+      timelinePolicy === 'targeted_members'
+        ? params.restrictedAudienceParticipantIds
+        : undefined,
+    contextTargetParticipantIds:
+      contextPolicy === 'targeted_members'
+        ? params.restrictedAudienceParticipantIds
+        : undefined,
   });
   return created.item.id as string;
 }
@@ -2706,7 +2709,7 @@ async function wakeAutomationTargets(params: {
   createdItemId: string;
   actorRecipientIds: string[];
 }) {
-  const memberRows = await getConversationMembers(params.conversationId).catch(
+  const memberRows = await listConversationParticipants(params.conversationId).catch(
     () => [] as any[]
   );
   const sessionsByActor = new Map<string, { sessionId: string }>();
@@ -2738,7 +2741,7 @@ async function wakeAutomationTargets(params: {
       workspaceId: params.rule.workspaceId,
       sourceType: 'automation',
       sourceItemId: params.createdItemId,
-      sourceMemberType: 'system',
+      sourceParticipantType: 'system',
       sourceName: params.rule.name,
       summary: params.rule.delivery.messageText || params.rule.name,
       reasonText: params.rule.delivery.wakeReasonText || params.rule.delivery.messageText || params.rule.name,
@@ -2771,7 +2774,7 @@ async function wakeAutomationTargets(params: {
       workspaceId: params.rule.workspaceId,
       sourceType: 'automation',
       sourceItemId: params.createdItemId,
-      sourceMemberType: 'system',
+      sourceParticipantType: 'system',
       sourceName: params.rule.name,
       summary: params.rule.delivery.messageText || params.rule.name,
       reasonText: params.rule.delivery.wakeReasonText || params.rule.delivery.messageText || params.rule.name,
@@ -3670,13 +3673,13 @@ export async function processAutomationExecution(executionId: string): Promise<P
 
   try {
     const resolved = await resolveExistingConversationId(rule);
-    const { targetMemberIds, actorRecipientIds } = await resolveRecipientMembers(rule, resolved.conversationId);
+    const { restrictedAudienceParticipantIds, actorRecipientIds } = await resolveRecipientMembers(rule, resolved.conversationId);
     const createdItemId = await createAutomationNotice({
       rule,
       executionId,
       occurrence,
       conversationId: resolved.conversationId,
-      targetMemberIds,
+      restrictedAudienceParticipantIds,
     });
 
     const wakeupCount = await wakeAutomationTargets({

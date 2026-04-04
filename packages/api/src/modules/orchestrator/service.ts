@@ -5,7 +5,7 @@ import { createMemory } from '../memory/service.js';
 import { createGeneratedActorPixelArtAvatarFile, type PixelArtAvatarOptionsInput } from '../avatar/service.js';
 import { getActor, updateActor, type ActorUpdateSourceInput } from '../organization/service.js';
 import { getSession } from '../session/service.js';
-import { createConversationEvent, listConversationMembers } from '../conversation/service.js';
+import { createConversationEvent, listConversationParticipants } from '../chat/service.js';
 
 const ACTOR_MEMORY_SPACE_TYPES = new Set(['participant_private', 'conversation_shared', 'actor_private']);
 const PIXEL_ART_OPTION_KEYS = [
@@ -78,7 +78,7 @@ async function emitUserVisibleSystemNotice<T extends 'memory_saved' | 'memory_up
   const session = await getSession(params.sessionId);
   if (!session) return;
 
-  const members = await listConversationMembers(session.conversation_id);
+  const members = await listConversationParticipants(session.conversation_id);
   const targetUserMembers = members.filter((member: any) => member.state === 'active' && member.user_id);
   if (targetUserMembers.length === 0) return;
 
@@ -93,7 +93,7 @@ async function emitUserVisibleSystemNotice<T extends 'memory_saved' | 'memory_up
       ...(params.metadata || {}),
     },
     eventPayload: params.eventPayload,
-    targetMemberIds: targetUserMembers.map((member: any) => member.id),
+    restrictedAudienceParticipantIds: targetUserMembers.map((member: any) => member.id),
   });
 }
 
@@ -204,7 +204,7 @@ async function handleCreateMemory(
     eventType: action.metadata?.supersedesMemoryId ? 'memory_updated' : 'memory_saved',
     eventPayload: {
       actor: {
-        memberType: 'actor',
+        participantType: 'actor',
         actorId,
       },
       memoryId: memory.id,
@@ -298,7 +298,7 @@ async function handleChangeAvatar(
         eventType: 'actor_avatar_changed',
         eventPayload: {
           actor: {
-            memberType: 'actor',
+            participantType: 'actor',
             actorId,
             name: updatedActor.definition.name,
             title: updatedActor.definition.title,
@@ -347,7 +347,7 @@ async function handleChangeAvatar(
     eventType: 'actor_avatar_changed',
     eventPayload: {
       actor: {
-        memberType: 'actor',
+        participantType: 'actor',
         actorId,
         name: updatedActor.definition.name,
         title: updatedActor.definition.title,

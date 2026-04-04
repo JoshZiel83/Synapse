@@ -2,6 +2,7 @@ import { textBlocks } from "@synapse/shared";
 import { v4 as uuidv4 } from "uuid";
 import type {
   ConversationFeedItem,
+  ConversationFeedEventPayloadMap,
   ConversationEntityRef,
   InteractionDecision,
   InteractionChoiceOption,
@@ -37,7 +38,7 @@ import {
   createConversationEvent,
   listConversationRealtimeRecipients,
   updateConversationItemEventPayload,
-} from "../conversation/service.js";
+} from "../chat/service.js";
 import { getFileUrlById } from "../files/service.js";
 import { sql } from "kysely";
 import {
@@ -61,13 +62,13 @@ type RawInteractionRow = {
   expires_at: string | Date | null;
   created_at: string | Date;
   updated_at: string | Date;
-  requester_member_id: string | null;
+  requester_participant_id: string | null;
   requester_workspace_member_id: string | null;
   requester_actor_id: string | null;
   target_workspace_member_id: string | null;
-  target_member_id: string | null;
+  target_participant_id: string | null;
   resolved_by_workspace_member_id: string | null;
-  resolved_by_member_id: string | null;
+  resolved_by_participant_id: string | null;
   relay_capability_id: string | null;
   relay_device_id: string | null;
   relay_exposure_id: string | null;
@@ -77,21 +78,21 @@ type RawInteractionRow = {
   device_display_name: string | null;
   exposure_display_name: string | null;
   exposure_stable_key: string | null;
-  requester_member_type: string | null;
+  requester_participant_kind: string | null;
   requester_name: string | null;
   requester_title: string | null;
   requester_role: string | null;
   requester_actor_avatar_file_id: string | null;
   requester_user_avatar_file_id: string | null;
   requester_avatar_emoji: string | null;
-  target_member_type: string | null;
+  target_participant_kind: string | null;
   target_name: string | null;
   target_title: string | null;
   target_role: string | null;
   target_actor_avatar_file_id: string | null;
   target_user_avatar_file_id: string | null;
   target_avatar_emoji: string | null;
-  resolved_by_member_type: string | null;
+  resolved_by_participant_kind: string | null;
   resolved_by_name: string | null;
   resolved_by_title: string | null;
   resolved_by_role: string | null;
@@ -109,10 +110,10 @@ export interface CreateQuestionInteractionParams {
   workspaceId: string;
   conversationId: string;
   taskId: string;
-  requesterMemberId: string;
+  requesterParticipantId: string;
   requesterActorId?: string;
   requesterWorkspaceMemberId?: string;
-  targetMemberId: string;
+  targetParticipantId: string;
   targetWorkspaceMemberId: string;
   prompt: string;
   instructions?: string;
@@ -124,7 +125,7 @@ export interface CreateRuntimeAuthorizationInteractionParams {
   workspaceId: string;
   conversationId: string;
   taskId: string;
-  requesterMemberId: string;
+  requesterParticipantId: string;
   requesterActorId?: string;
   requesterWorkspaceMemberId?: string;
   relayCapabilityId: string;
@@ -145,7 +146,7 @@ export interface CreateRuntimeAuthorizationInteractionParams {
 export interface ResolveInteractionRequestParams {
   interactionId: string;
   resolverWorkspaceMemberId: string;
-  resolverMemberId: string;
+  resolverParticipantId: string;
   answers?: InteractionQuestionFieldAnswer[];
   selectedOptionId?: string;
   decision?: InteractionDecision;
@@ -161,7 +162,7 @@ export interface ResolveInteractionRequestResult {
 export interface FindOpenRuntimeAuthorizationInteractionParams {
   workspaceId: string;
   conversationId: string;
-  requesterMemberId: string;
+  requesterParticipantId: string;
   relayCapabilityId: string;
   relayDeviceId: string;
   relayExposureId: string;
@@ -535,11 +536,13 @@ function mapEntityRefFromRow(
   prefix: "requester" | "target" | "resolved_by",
   row: RawInteractionRow,
 ): ConversationEntityRef | undefined {
-  const memberType = row[`${prefix}_member_type` as keyof RawInteractionRow];
-  if (typeof memberType !== "string" || !memberType.trim()) {
+  const participantKind =
+    row[`${prefix}_participant_kind` as keyof RawInteractionRow];
+  if (typeof participantKind !== "string" || !participantKind.trim()) {
     return undefined;
   }
-  const memberId = row[`${prefix}_member_id` as keyof RawInteractionRow];
+  const participantId =
+    row[`${prefix}_participant_id` as keyof RawInteractionRow];
   const workspaceMemberId =
     prefix === "requester"
       ? row.requester_workspace_member_id
@@ -559,9 +562,8 @@ function mapEntityRefFromRow(
     row[`${prefix}_avatar_emoji` as keyof RawInteractionRow];
 
   return {
-    memberId: typeof memberId === "string" ? memberId : undefined,
-    participantId: typeof memberId === "string" ? memberId : undefined,
-    memberType: memberType as ConversationEntityRef["memberType"],
+    participantId: typeof participantId === "string" ? participantId : undefined,
+    participantType: participantKind as ConversationEntityRef["participantType"],
     actorId: typeof actorId === "string" ? actorId : undefined,
     workspaceMemberId:
       typeof workspaceMemberId === "string" ? workspaceMemberId : undefined,
@@ -679,21 +681,21 @@ async function getInteractionRowById(
             auth.relay_tool_stable_key,
             auth.contract_key,
             auth.display_payload,
-            requester.member_type AS requester_member_type,
+            requester.participant_kind AS requester_participant_kind,
             COALESCE(requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
             requester_actor.title AS requester_title,
             requester_actor.role AS requester_role,
             requester_actor.avatar_file_id AS requester_actor_avatar_file_id,
             requester_user.avatar_file_id AS requester_user_avatar_file_id,
             requester_actor.avatar_emoji AS requester_avatar_emoji,
-            target.member_type AS target_member_type,
+            target.participant_kind AS target_participant_kind,
             COALESCE(target_actor.name, target_user.name, target.display_name) AS target_name,
             target_actor.title AS target_title,
             target_actor.role AS target_role,
             target_actor.avatar_file_id AS target_actor_avatar_file_id,
             target_user.avatar_file_id AS target_user_avatar_file_id,
             target_actor.avatar_emoji AS target_avatar_emoji,
-            resolver.member_type AS resolved_by_member_type,
+            resolver.participant_kind AS resolved_by_participant_kind,
             COALESCE(resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
             resolver_actor.title AS resolved_by_title,
             resolver_actor.role AS resolved_by_role,
@@ -708,24 +710,30 @@ async function getInteractionRowById(
        ON question.interaction_id = ir.id
      LEFT JOIN interaction_runtime_authorization_requests auth
        ON auth.interaction_id = ir.id
-     LEFT JOIN conversation_members requester
-       ON requester.id = ir.requester_member_id
+     LEFT JOIN conversation_participants requester
+       ON requester.id = ir.requester_participant_id
      LEFT JOIN actors requester_actor
        ON requester_actor.id = requester.actor_id
+     LEFT JOIN workspace_members requester_wm
+       ON requester_wm.id = requester.workspace_member_id
      LEFT JOIN users requester_user
-       ON requester_user.id = requester.user_id
-     LEFT JOIN conversation_members target
-       ON target.id = ir.target_member_id
+       ON requester_user.id = requester_wm.user_id
+     LEFT JOIN conversation_participants target
+       ON target.id = ir.target_participant_id
      LEFT JOIN actors target_actor
        ON target_actor.id = target.actor_id
+     LEFT JOIN workspace_members target_wm
+       ON target_wm.id = target.workspace_member_id
      LEFT JOIN users target_user
-       ON target_user.id = target.user_id
-     LEFT JOIN conversation_members resolver
-       ON resolver.id = ir.resolved_by_member_id
+       ON target_user.id = target_wm.user_id
+     LEFT JOIN conversation_participants resolver
+       ON resolver.id = ir.resolved_by_participant_id
      LEFT JOIN actors resolver_actor
        ON resolver_actor.id = resolver.actor_id
+     LEFT JOIN workspace_members resolver_wm
+       ON resolver_wm.id = resolver.workspace_member_id
      LEFT JOIN users resolver_user
-       ON resolver_user.id = resolver.user_id
+       ON resolver_user.id = resolver_wm.user_id
      LEFT JOIN relay_devices device
        ON device.id = auth.relay_device_id
      LEFT JOIN relay_exposures exposure
@@ -914,39 +922,53 @@ async function insertInteractionRequest(
   workspaceId: string;
   conversationId: string;
   taskId: string;
-  requesterMemberId: string;
+  requesterParticipantId: string;
   requesterWorkspaceMemberId?: string;
   requesterActorId?: string;
   kind: InteractionRequestKind;
-  targetMemberId?: string;
+  targetParticipantId?: string;
   targetWorkspaceMemberId?: string;
   expiresAt?: string;
 }) {
   const interactionId = uuidv4();
-  const created = await executeTakeFirst<{ id: string }>(
+  const created = await executeCompiledSql<{ id: string }>(
     client,
-    db
-      .insertInto("interaction_requests")
-      .values({
-        id: interactionId,
-        workspace_id: params.workspaceId,
-        conversation_id: params.conversationId,
-        task_id: params.taskId,
-        requester_member_id: params.requesterMemberId,
-        requester_workspace_member_id: params.requesterWorkspaceMemberId || null,
-        requester_actor_id: params.requesterActorId || null,
-        kind: params.kind,
-        status: "pending",
-        target_member_id: params.targetMemberId || null,
-        target_workspace_member_id: params.targetWorkspaceMemberId || null,
-        expires_at: params.expiresAt || null,
-      })
-      .returning("id"),
+    sql<{ id: string }>`
+      INSERT INTO interaction_requests (
+        id,
+        workspace_id,
+        conversation_id,
+        task_id,
+        requester_participant_id,
+        requester_workspace_member_id,
+        requester_actor_id,
+        kind,
+        status,
+        target_participant_id,
+        target_workspace_member_id,
+        expires_at
+      )
+      VALUES (
+        ${interactionId},
+        ${params.workspaceId},
+        ${params.conversationId},
+        ${params.taskId},
+        ${params.requesterParticipantId},
+        ${params.requesterWorkspaceMemberId || null},
+        ${params.requesterActorId || null},
+        ${params.kind},
+        'pending',
+        ${params.targetParticipantId || null},
+        ${params.targetWorkspaceMemberId || null},
+        ${params.expiresAt || null}
+      )
+      RETURNING id
+    `.compile(db),
   );
-  if (!created?.id) {
+  if (!created.rows[0]?.id) {
     throw new Error("Failed to create interaction request");
   }
-  return created.id;
+  return created.rows[0]!.id;
 }
 
 async function insertQuestionInteractionDetails(
@@ -1074,11 +1096,11 @@ export async function createQuestionInteractionRequest(
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
-      requesterMemberId: params.requesterMemberId,
+      requesterParticipantId: params.requesterParticipantId,
       requesterActorId: params.requesterActorId,
       requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
       kind: "question_choice",
-      targetMemberId: params.targetMemberId,
+      targetParticipantId: params.targetParticipantId,
       targetWorkspaceMemberId: params.targetWorkspaceMemberId,
       expiresAt: params.expiresAt,
     });
@@ -1101,12 +1123,12 @@ export async function createQuestionInteractionRequest(
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       eventType: "interaction_requested",
-      authorMemberId: params.requesterMemberId,
+      authorParticipantId: params.requesterParticipantId,
       eventPayload: { interaction },
       timelinePolicy: "targeted_members",
       contextPolicy: "targeted_members",
-      targetMemberIds: [params.targetMemberId],
-      contextTargetMemberIds: [params.targetMemberId],
+      restrictedAudienceParticipantIds: [params.targetParticipantId],
+      contextTargetParticipantIds: [params.targetParticipantId],
       queryable: client,
     });
 
@@ -1133,7 +1155,7 @@ export async function createRuntimeAuthorizationInteractionRequest(
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
-      requesterMemberId: params.requesterMemberId,
+      requesterParticipantId: params.requesterParticipantId,
       requesterActorId: params.requesterActorId,
       requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
       kind: "runtime_authorization",
@@ -1172,7 +1194,7 @@ export async function createRuntimeAuthorizationInteractionRequest(
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       eventType: "interaction_requested",
-      authorMemberId: params.requesterMemberId,
+      authorParticipantId: params.requesterParticipantId,
       eventPayload: { interaction },
       timelinePolicy: "all_members",
       contextPolicy: "shared",
@@ -1207,7 +1229,7 @@ export async function findOpenRuntimeAuthorizationInteraction(
     .select("ir.id")
     .where("ir.workspace_id", "=", params.workspaceId)
     .where("ir.conversation_id", "=", params.conversationId)
-    .where("ir.requester_member_id", "=", params.requesterMemberId)
+    .where(sql<boolean>`ir.requester_participant_id = ${params.requesterParticipantId}`)
     .where("ir.kind", "=", "runtime_authorization")
     .where("ir.status", "=", "pending")
     .where((eb) =>
@@ -1355,7 +1377,7 @@ export async function canUserViewInteraction(params: {
           eb("ir.kind", "=", "runtime_authorization"),
           sql<boolean>`EXISTS (
             SELECT 1
-            FROM conversation_members cm
+            FROM conversation_participants cm
             JOIN workspace_members wm
               ON wm.id = cm.workspace_member_id
             WHERE cm.conversation_id = ir.conversation_id
@@ -1433,16 +1455,11 @@ export async function enrichFeedItemInteractionsForUser(
   item: ConversationFeedItem,
   userId?: string,
 ): Promise<ConversationFeedItem> {
-  if (
-    item.kind !== "event" ||
-    item.eventType !== "interaction_requested" ||
-    !item.payload ||
-    typeof item.payload !== "object"
-  ) {
+  if (item.kind !== "event" || item.eventType !== "interaction_requested") {
     return item;
   }
 
-  const payload = item.payload as Record<string, unknown>;
+  const payload = item.payload as ConversationFeedEventPayloadMap["interaction_requested"];
   const interaction =
     payload.interaction && typeof payload.interaction === "object"
       ? (payload.interaction as InteractionRequestSummary)
@@ -1733,7 +1750,7 @@ export async function resolveInteractionRequest(
 
     await updateInteractionRequestRow(client, params.interactionId, {
       status: nextStatus,
-      resolved_by_member_id: params.resolverMemberId,
+      resolved_by_participant_id: params.resolverParticipantId,
       resolved_by_workspace_member_id: params.resolverWorkspaceMemberId,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,

@@ -24,18 +24,18 @@ import {
   workspaceMemberSubject,
 } from "../access/service.js";
 import {
-  createThread,
-  getThreadsForWorkspaceMember,
-} from "../conversation/chat-service.js";
-import { getWorkspaceMemberIdentity } from "../conversation/workspace-identity.js";
+  createChatConversation,
+  listWorkspaceConversationViews,
+} from "../chat/service.js";
+import { getWorkspaceMemberIdentity } from "../chat/workspace-identity.js";
 import {
   canonicalizeDirectConversationPair,
   directConversationBindingPeer,
   directConversationBindingValues,
   directConversationIdentityKey,
   type DirectConversationIdentity,
-} from "../conversation/direct-binding.js";
-import { mapConversationSummaryView } from "../conversation/summary-view.js";
+} from "../chat/direct-binding.js";
+import { mapConversationSummaryView } from "../chat/summary-view.js";
 
 export const CONTACT_HUB_KINDS = [
   "workspace-actor",
@@ -2272,7 +2272,7 @@ export async function getContactHub(params: {
       listActorAccessRequests(params),
       buildContactHubEntryMap(params),
     ]);
-  const threads = await getThreadsForWorkspaceMember({
+  const threads = await listWorkspaceConversationViews({
     workspaceId: params.workspaceId,
     workspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
   });
@@ -2280,7 +2280,15 @@ export async function getContactHub(params: {
     threads
       .filter((thread) => thread.kind === "group")
       .map((thread) =>
-        mapConversationSummaryView(thread, {
+        mapConversationSummaryView({
+          id: thread.conversationId,
+          kind: thread.kind,
+          boundary: thread.boundary,
+          title: thread.title,
+          unread_count: thread.unreadCount,
+          created_at: thread.createdAt,
+          transport_kind: undefined,
+        }, {
           workspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
         }),
       ),
@@ -2322,15 +2330,17 @@ export async function getContactHubDetail(params: {
 
   const relatedGroups = hub.groups.filter((conversation) => {
     if (entry.actorId) {
-      return conversation.members.some(
-        (member) => member.type === "actor" && member.actorId === entry.actorId,
+      return conversation.participants.some(
+        (participant) =>
+          participant.type === "actor" &&
+          participant.actorId === entry.actorId,
       );
     }
     if (entry.workspaceMemberId) {
-      return conversation.members.some(
-        (member) =>
-          member.type === "workspace_member" &&
-          member.workspaceMemberId === entry.workspaceMemberId,
+      return conversation.participants.some(
+        (participant) =>
+          participant.type === "workspace_member" &&
+          participant.workspaceMemberId === entry.workspaceMemberId,
       );
     }
     return false;
@@ -2420,23 +2430,33 @@ export async function openDirectConversation(params: {
     if (resolved.peerIdentity.kind === "member" && !targetWorkspaceMemberId) {
       throw new Error("Peer workspace membership not found");
     }
-    const created = await createThread({
+    const created = await createChatConversation({
       workspaceId: params.workspaceId,
+      userId: params.userId,
+      clientRequestId: uuidv4(),
       kind: "private",
-      createdByWorkspaceMemberId: requesterIdentity.workspaceMemberId,
       actorIds: resolved.peerIdentity.kind === "actor" ? [resolved.peerIdentity.actorId] : [],
       workspaceMemberIds:
         targetWorkspaceMemberId ? [targetWorkspaceMemberId] : [],
-      directBindingPair: canonicalizeDirectConversationPair(
-        requesterIdentity,
-        resolved.peerIdentity,
-      ),
     });
+
+    await db
+      .insertInto("direct_conversation_bindings")
+      .values({
+        conversation_id: created.conversation.conversationId,
+        ...directConversationBindingValues(
+          canonicalizeDirectConversationPair(
+            requesterIdentity,
+            resolved.peerIdentity,
+          ),
+        ),
+      })
+      .execute();
 
     return {
       status: "ready" as const,
       created: true,
-      conversationId: created.conversation.id as string,
+      conversationId: created.conversation.conversationId as string,
     };
   } catch (error) {
     if (!isUniqueViolation(error)) {

@@ -7,7 +7,6 @@ import {
 import type {
   ChatSocketEvent,
   ChatSocketEventPayloadMap,
-  ConversationFeedItem,
   SystemEvent,
 } from "@synapse/shared";
 import { onEvent } from "../events/index.js";
@@ -15,13 +14,11 @@ import { handleRelayConnection } from "../../modules/mcp-plugins/relay-manager.j
 import { isShuttingDown } from "../shutdown/state.js";
 import { authenticateSessionToken } from "../../modules/auth/service.js";
 import {
-  getConversationMember,
-  isFeedItemVisibleToWorkspaceMember,
-} from "../../modules/conversation/service.js";
-import { getWorkspaceMemberIdentity } from "../../modules/conversation/workspace-identity.js";
+  getConversationParticipant,
+} from "../../modules/chat/service.js";
+import { getWorkspaceMemberIdentity } from "../../modules/chat/workspace-identity.js";
 import {
   canUserViewInteraction,
-  enrichFeedItemInteractionsForUser,
   enrichInteractionForUser,
 } from "../../modules/interactions/service.js";
 import {
@@ -81,38 +78,27 @@ async function canWorkspaceMemberAccessConversation(
   conversationId: string,
   workspaceMemberId: string,
 ) {
-  const member = await getConversationMember({
+  const participant = await getConversationParticipant({
     conversationId,
     workspaceMemberId,
   });
-  return Boolean(member && member.state === "active");
+  return Boolean(participant && participant.state === "active");
 }
 
 function mapInternalEventToSocketEvent(
   event: SystemEvent,
 ): ChatSocketEvent | SystemEvent | null {
   switch (event.type) {
-    case "feed.item.created":
+    case "chat.sync.event":
       return {
-        type: "conversation.item.created",
-        payload: event.payload as unknown as ConversationFeedItem,
-      };
-    case "conversation.read.updated":
-      return {
-        type: "conversation.read.updated",
+        type: "chat.sync.event",
         payload:
-          event.payload as ChatSocketEventPayloadMap["conversation.read.updated"],
+          event.payload as unknown as ChatSocketEventPayloadMap["chat.sync.event"],
       };
     case "runtime.updated":
       return {
         type: "runtime.updated",
         payload: event.payload as ChatSocketEventPayloadMap["runtime.updated"],
-      };
-    case "conversation.updated":
-      return {
-        type: "conversation.updated",
-        payload:
-          event.payload as ChatSocketEventPayloadMap["conversation.updated"],
       };
     case "interaction.updated":
       return {
@@ -124,6 +110,7 @@ function mapInternalEventToSocketEvent(
     case "session.status.changed":
     case "session.thinking":
     case "actor.version_changed":
+    case "feed.item.created":
       return null;
     default:
       return event;
@@ -134,11 +121,11 @@ function getConversationIdFromSocketEvent(
   event: ChatSocketEvent | SystemEvent,
 ) {
   switch (event.type) {
-    case "conversation.item.created":
-      return (event.payload as ConversationFeedItem).conversationId;
-    case "conversation.read.updated":
+    case "chat.sync.event":
+      return (
+        event.payload as ChatSocketEventPayloadMap["chat.sync.event"]
+      ).conversationId;
     case "runtime.updated":
-    case "conversation.updated":
     case "interaction.updated":
       return (event.payload as { conversationId: string }).conversationId;
     default:
@@ -487,40 +474,12 @@ export function setupWebSocket(app: FastifyInstance) {
             )
           : false;
 
-      if (outbound.type === "conversation.read.updated") {
-        const payload =
-          outbound.payload as ChatSocketEventPayloadMap["conversation.read.updated"];
-        if (payload.workspaceMemberId !== client.workspaceMemberId) {
-          continue;
-        }
+      if (outbound.type === "chat.sync.event") {
         if (
-          (inboxSubscriptions.length > 0 && payload.conversationId) ||
-          hasConversationTopic
+          inboxSubscriptions.length > 0 ||
+          (conversationId && hasConversationTopic && isConversationAllowed)
         ) {
           safeSendSocketEvent(clientId, outbound);
-        }
-        continue;
-      }
-
-      if (outbound.type === "conversation.item.created") {
-        if (!isConversationAllowed || !conversationId) {
-          continue;
-        }
-
-        const item = await enrichFeedItemInteractionsForUser(
-          outbound.payload as ConversationFeedItem,
-          client.userId,
-        );
-        if (
-          !isFeedItemVisibleToWorkspaceMember(item, client.workspaceMemberId)
-        ) {
-          continue;
-        }
-        if (inboxSubscriptions.length > 0 || hasConversationTopic) {
-          safeSendSocketEvent(clientId, {
-            type: "conversation.item.created",
-            payload: item,
-          });
         }
         continue;
       }
@@ -556,16 +515,6 @@ export function setupWebSocket(app: FastifyInstance) {
           safeSendSocketEvent(clientId, outbound);
         }
         continue;
-      }
-
-      if (outbound.type === "conversation.updated") {
-        if (
-          conversationId &&
-          ((hasConversationTopic && isConversationAllowed) ||
-            (inboxSubscriptions.length > 0 && isConversationAllowed))
-        ) {
-          safeSendSocketEvent(clientId, outbound);
-        }
       }
     }
   });

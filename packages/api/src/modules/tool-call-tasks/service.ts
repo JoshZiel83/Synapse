@@ -22,8 +22,8 @@ import {
 } from "../../infrastructure/database/kysely.js";
 import {
   createConversationEvent,
-  getConversationMember,
-} from "../conversation/service.js";
+  getConversationParticipant,
+} from "../chat/service.js";
 import { enqueueSessionWakeup } from "../session/runtime.js";
 
 export type ToolCallTaskStatus = ToolCallTasksStatus;
@@ -514,7 +514,7 @@ async function emitTaskNotice(
     });
   }
 
-  const actorMember = await getConversationMember({
+  const actorMember = await getConversationParticipant({
     conversationId: record.conversationId,
     actorId: record.actorId,
   });
@@ -546,7 +546,7 @@ async function emitTaskNotice(
       },
       timelinePolicy: "none",
       contextPolicy: "actor_private",
-      contextTargetMemberIds: [actorMember.id],
+      contextTargetParticipantIds: [actorMember.id],
       metadata: {
         taskId: record.id,
         sourceToolName: record.sourceToolName,
@@ -570,7 +570,7 @@ async function emitTaskNotice(
     workspaceId: record.workspaceId,
     sourceType: "system_interrupt",
     sourceItemId: completionItemId,
-    sourceMemberType: "system",
+    sourceParticipantType: "system",
     sourceName: record.sourceToolName,
     summary: params.summary,
     reasonText: message || params.summary,

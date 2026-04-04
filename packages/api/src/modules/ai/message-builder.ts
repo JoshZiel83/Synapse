@@ -3,13 +3,12 @@
  * for structured multi-turn conversation passing to AI providers.
  */
 import type { ConversationMessage, CanonicalContentBlock, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory } from '@synapse/shared';
-import { textBlocks } from '@synapse/shared';
+import { extractText, textBlocks } from '@synapse/shared';
 
 interface SessionMessageRow {
   id: string;
   role: string;
-  content: string;
-  contentBlocks?: CanonicalContentBlock[];
+  contentBlocks: CanonicalContentBlock[];
   metadata: Record<string, unknown> | string;
   created_at: string;
 }
@@ -31,11 +30,11 @@ export function buildConversationMessages(
 
   for (const msg of sessionMessages) {
     const meta = typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : (msg.metadata || {});
+    const messageText = extractText(msg.contentBlocks || []);
 
     switch (msg.role) {
       case 'user': {
-        const blocks: CanonicalContentBlock[] = Array.isArray(msg.contentBlocks) ? msg.contentBlocks : textBlocks(msg.content);
-        messages.push({ role: 'user', content: blocks });
+        messages.push({ role: 'user', content: msg.contentBlocks });
         break;
       }
 
@@ -43,26 +42,26 @@ export function buildConversationMessages(
         // If crossTurnToolHistory is enabled and message has tool history, expand it
         if (options.crossTurnToolHistory && meta.toolHistory) {
           const toolHistory = meta.toolHistory as AssistantToolHistory;
-          expandToolHistory(messages, msg.content, toolHistory);
+          expandToolHistory(messages, messageText, toolHistory);
         } else {
           messages.push({
             role: 'assistant',
-            content: Array.isArray(msg.contentBlocks) ? msg.contentBlocks : textBlocks(msg.content),
+            content: msg.contentBlocks,
           });
         }
         break;
       }
 
       case 'system':
-        messages.push({ role: 'user', content: textBlocks(`[Task Instruction]: ${msg.content}`) });
+        messages.push({ role: 'user', content: textBlocks(`[Task Instruction]: ${messageText}`) });
         break;
 
       case 'child_result':
-        messages.push({ role: 'user', content: textBlocks(msg.content) });
+        messages.push({ role: 'user', content: textBlocks(messageText) });
         break;
 
       case 'tool_result':
-        messages.push({ role: 'user', content: textBlocks(`[Tool Result]: ${msg.content}`) });
+        messages.push({ role: 'user', content: textBlocks(`[Tool Result]: ${messageText}`) });
         break;
     }
   }

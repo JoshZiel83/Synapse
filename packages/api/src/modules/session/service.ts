@@ -18,17 +18,22 @@ import { queueConversationTransportProjection } from '../im/service.js';
 import {
   createConversation,
   createConversationItem,
-  ensureConversationMember,
+  ensureConversationParticipant,
   getConversation,
-} from '../conversation/service.js';
+} from '../chat/service.js';
 import {
   getWorkspaceMemberIdentityById,
-} from '../conversation/workspace-identity.js';
+} from '../chat/workspace-identity.js';
 import {
   buildNormalizedMessageContent,
   itemPartsToCanonicalContentBlocks,
-} from '../conversation/message-content.js';
-import type { UUID } from '@synapse/shared';
+} from '../chat/message-content.js';
+import type {
+  UUID,
+  ConversationMessageSubtype,
+  CanonicalContentBlock,
+  SessionMessage,
+} from '@synapse/shared';
 import {
   type SessionInterruptType,
   type SessionStatus,
@@ -38,6 +43,17 @@ import {
   nowISO,
 } from '@synapse/shared';
 import { sql } from 'kysely';
+
+type SessionConversationMessageRole =
+  | 'user'
+  | 'assistant'
+  | 'system'
+  | 'tool_result';
+
+type SessionConversationMessageSubtype = Exclude<
+  ConversationMessageSubtype,
+  'chat.message'
+>;
 import { v4 as uuidv4 } from 'uuid';
 import type { SessionsChannelType } from '../../infrastructure/database/generated/db.js';
 
@@ -245,18 +261,18 @@ async function resolveSessionMessageAuthor(params: {
 }) {
   if (params.fromActorId) {
     const actorJoinVersionId = await getActorJoinVersionId(params.fromActorId);
-    return ensureConversationMember({
+    return ensureConversationParticipant({
       conversationId: params.conversationId,
-      memberType: 'actor',
+      participantKind: 'actor',
       actorId: params.fromActorId,
       actorJoinVersionId,
     });
   }
 
   if (params.fromWorkspaceMemberId) {
-    return ensureConversationMember({
+    return ensureConversationParticipant({
       conversationId: params.conversationId,
-      memberType: 'workspace_member',
+      participantKind: 'workspace_member',
       workspaceMemberId: params.fromWorkspaceMemberId,
     });
   }
@@ -264,7 +280,10 @@ async function resolveSessionMessageAuthor(params: {
   return null;
 }
 
-function getSurfaceForSessionMessage(conversationKind: string, role: string) {
+function getSurfaceForSessionMessage(
+  conversationKind: string,
+  role: SessionConversationMessageRole | 'child_result',
+) {
   if (isGroupConversationKind(conversationKind)) {
     return { scope: 'private' as const, surface: 'internal' as const };
   }
@@ -274,13 +293,6 @@ function getSurfaceForSessionMessage(conversationKind: string, role: string) {
   }
 
   return { scope: 'shared' as const, surface: 'visible' as const };
-}
-
-function buildContentFromItemParts(item: any) {
-  return (item.parts || [])
-    .filter((part: any) => part.part_type === 'text')
-    .map((part: any) => part.text_value || '')
-    .join('\n');
 }
 
 function buildMetadataFromItem(item: any) {
@@ -326,9 +338,10 @@ export async function createSession(params: {
     const conversation = await createConversation({
       kind: 'private',
       boundary: 'internal',
+      workspaceId,
       metadata: { channelType, trigger },
     });
-    resolvedConversationId = conversation.id;
+    resolvedConversationId = conversation.id as string;
     privateConversationCreated = true;
   } else {
     const conversation = await getConversation(resolvedConversationId);
@@ -338,9 +351,9 @@ export async function createSession(params: {
   }
   const finalConversationId = resolvedConversationId as string;
 
-  await ensureConversationMember({
+  await ensureConversationParticipant({
     conversationId: finalConversationId,
-    memberType: 'actor',
+    participantKind: 'actor',
     actorId,
     actorJoinVersionId: await getActorJoinVersionId(actorId),
   });
@@ -354,9 +367,9 @@ export async function createSession(params: {
       throw new Error('Workspace member not found for session creator');
     }
     resolvedWorkspaceMemberId = workspaceMember.workspaceMemberId;
-    await ensureConversationMember({
+    await ensureConversationParticipant({
       conversationId: finalConversationId,
-      memberType: 'workspace_member',
+      participantKind: 'workspace_member',
       workspaceMemberId: resolvedWorkspaceMemberId,
     });
   }
@@ -486,34 +499,41 @@ export async function updateSessionStatus(
 export async function addSessionMessage(params: {
   sessionId: UUID;
   workspaceId: UUID;
-  role: string;
-  content: string;
-  contentBlocks?: import('@synapse/shared').CanonicalContentBlock[];
+  role: SessionConversationMessageRole;
+  contentBlocks: CanonicalContentBlock[];
   fromActorId?: UUID;
   fromWorkspaceMemberId?: UUID;
-  subtype?: string;
+  subtype?: SessionConversationMessageSubtype;
   visibility?: 'default' | 'shared_visible' | 'private_internal';
   metadata?: Record<string, unknown>;
-  targetMemberIds?: UUID[];
+  replyToItemId?: UUID;
+  restrictedAudienceParticipantIds?: UUID[];
   projectTransportOutbound?: boolean;
-}): Promise<any> {
+}): Promise<SessionMessage> {
   const {
     sessionId,
     workspaceId,
     role,
-    content,
     contentBlocks,
     fromActorId,
     fromWorkspaceMemberId,
     subtype,
     visibility = 'default',
     metadata = {},
-    targetMemberIds,
+    replyToItemId,
+    restrictedAudienceParticipantIds,
     projectTransportOutbound = false,
   } = params;
   const session = await getSession(sessionId);
   if (!session) throw new Error(`Session ${sessionId} not found`);
-  const normalizedMessage = await buildNormalizedMessageContent({ content, contentBlocks, metadata });
+  if (!Array.isArray(contentBlocks) || contentBlocks.length === 0) {
+    throw new Error('contentBlocks is required');
+  }
+  const normalizedMessage = await buildNormalizedMessageContent({
+    content: '',
+    contentBlocks,
+    metadata,
+  });
 
   const authorMember = await resolveSessionMessageAuthor({
     conversationId: session.conversation_id,
@@ -539,18 +559,17 @@ export async function addSessionMessage(params: {
     itemType,
     subtype: resolvedSubtype,
     role: role === 'tool_result' ? 'tool' : role === 'system' ? 'system' : role === 'assistant' ? 'assistant' : 'user',
-    authorMemberId: authorMember?.id,
+    authorParticipantId: authorMember?.id,
+    replyToItemId,
     metadata: normalizedMessage.normalizedMetadata,
     parts: normalizedMessage.parts,
-    targetMemberIds,
+    restrictedAudienceParticipantIds,
   });
 
   if (
     projectTransportOutbound &&
     scope === 'shared' &&
-    surface === 'visible' &&
-    Array.isArray(targetMemberIds) &&
-    targetMemberIds.length > 0
+    surface === 'visible'
   ) {
     await queueConversationTransportProjection({
       workspaceId,
@@ -562,7 +581,7 @@ export async function addSessionMessage(params: {
           fromActorId ? 'actor' : fromWorkspaceMemberId ? 'workspace_member' : 'system',
         senderActorId: fromActorId || undefined,
         senderWorkspaceMemberId: fromWorkspaceMemberId || undefined,
-        targetMemberIds,
+        restrictedAudienceParticipantIds,
       },
     }).catch((error) => {
       console.error(
@@ -595,13 +614,12 @@ export async function addSessionMessage(params: {
         sessionId,
         messageId: item.id,
         role,
-        content: normalizedMessage.normalizedContent,
         contentBlocks: normalizedMessage.contentBlocks,
         fromActorId,
         actorName,
         fromWorkspaceMemberId,
         metadata: normalizedMessage.normalizedMetadata,
-        createdAt: item.created_at,
+        createdAt: item.createdAt,
       },
       timestamp: nowISO(),
     });
@@ -612,22 +630,21 @@ export async function addSessionMessage(params: {
     sessionId,
     workspaceId,
     role,
-    content: normalizedMessage.normalizedContent,
     contentBlocks: normalizedMessage.contentBlocks,
-    fromActorId: fromActorId || null,
-    fromWorkspaceMemberId: fromWorkspaceMemberId || null,
+    fromActorId: fromActorId || undefined,
+    fromWorkspaceMemberId: fromWorkspaceMemberId || undefined,
     metadata: normalizedMessage.normalizedMetadata,
-    createdAt: item.created_at,
+    createdAt: item.createdAt,
   };
 }
 
-export async function getSessionMessages(sessionId: UUID): Promise<any[]> {
+export async function getSessionMessages(sessionId: UUID): Promise<SessionMessage[]> {
   const items = await db
     .selectFrom("conversation_items as ci")
     .innerJoin("sessions as s", "s.id", "ci.session_id")
-    .leftJoin("conversation_members as cm", "cm.id", "ci.author_member_id")
-    .leftJoin("actors as a", "a.id", "cm.actor_id")
-    .leftJoin("workspace_members as wm", "wm.id", "cm.workspace_member_id")
+    .leftJoin("conversation_participants as cp", "cp.id", "ci.author_participant_id")
+    .leftJoin("actors as a", "a.id", "cp.actor_id")
+    .leftJoin("workspace_members as wm", "wm.id", "cp.workspace_member_id")
     .leftJoin("users as u", "u.id", "wm.user_id")
     .select([
       "ci.id",
@@ -638,12 +655,12 @@ export async function getSessionMessages(sessionId: UUID): Promise<any[]> {
       "ci.subtype",
       "ci.metadata",
       "ci.event_payload",
-      "ci.author_member_id",
+      "ci.author_participant_id",
       "ci.created_at",
       "s.workspace_id",
-      "cm.actor_id as from_actor_id",
-      "cm.workspace_member_id as from_workspace_member_id",
-      sql<string | null>`COALESCE(a.name, u.name, cm.display_name)`.as(
+      "cp.actor_id as from_actor_id",
+      "cp.workspace_member_id as from_workspace_member_id",
+      sql<string | null>`COALESCE(a.name, u.name, cp.display_name)`.as(
         "author_name",
       ),
     ])
@@ -693,10 +710,9 @@ export async function getSessionMessages(sessionId: UUID): Promise<any[]> {
       sequence: row.sequence,
       workspaceId: row.workspace_id,
       role: row.subtype || row.role,
-      content: buildContentFromItemParts(item),
       contentBlocks: itemPartsToCanonicalContentBlocks(item.parts || []),
-      fromActorId: row.from_actor_id || null,
-      fromWorkspaceMemberId: row.from_workspace_member_id || null,
+      fromActorId: row.from_actor_id || undefined,
+      fromWorkspaceMemberId: row.from_workspace_member_id || undefined,
       metadata: buildMetadataFromItem(item),
       createdAt: row.created_at,
     };

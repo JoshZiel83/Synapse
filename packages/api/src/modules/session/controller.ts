@@ -3,6 +3,7 @@ import { z } from 'zod';
 import {
   SESSION_CHANNEL_INPUTS,
   SESSION_STATUSES,
+  extractText,
   type CanonicalContentBlock,
   type SessionChannelInput,
   type SessionStatus,
@@ -24,21 +25,13 @@ import {
 import { enqueueSessionWakeup } from './runtime.js';
 
 const createSessionSchema = z.object({
-  content: z.string().max(10000).optional().default(''),
-  contentBlocks: z.array(z.any()).optional(),
+  contentBlocks: z.array(z.any()).min(1),
   channelType: z.enum(SESSION_CHANNEL_INPUTS).optional().default('web'),
-}).refine(
-  (body) => body.content.trim().length > 0 || (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
-  { message: 'content or contentBlocks is required' },
-);
+});
 
 const sendMessageSchema = z.object({
-  content: z.string().max(10000).optional().default(''),
-  contentBlocks: z.array(z.any()).optional(),
-}).refine(
-  (body) => body.content.trim().length > 0 || (Array.isArray(body.contentBlocks) && body.contentBlocks.length > 0),
-  { message: 'content or contentBlocks is required' },
-);
+  contentBlocks: z.array(z.any()).min(1),
+});
 
 const retrySessionSchema = z.object({
   itemId: z.string().uuid().optional(),
@@ -97,12 +90,11 @@ export async function sessionController(app: FastifyInstance) {
   // POST /workspaces/:wsId/actors/:actorId/sessions — start a session with an actor in a private conversation
   app.post<{
     Params: { workspaceId: string; actorId: string };
-    Body: { content: string; channelType?: 'web' | 'im' | 'api' };
+    Body: { contentBlocks: CanonicalContentBlock[]; channelType?: 'web' | 'im' | 'api' };
   }>('/workspaces/:workspaceId/actors/:actorId/sessions', async (request, reply) => {
     const { workspaceId, actorId } = request.params;
-    const { content, contentBlocks, channelType } = createSessionSchema.parse(request.body) as {
-      content: string;
-      contentBlocks?: CanonicalContentBlock[];
+    const { contentBlocks, channelType } = createSessionSchema.parse(request.body) as {
+      contentBlocks: CanonicalContentBlock[];
       channelType?: SessionChannelInput;
     };
     const normalizedChannelType: SessionsChannelType = channelType === 'im' ? 'bridge' : (channelType ?? 'web');
@@ -131,7 +123,6 @@ export async function sessionController(app: FastifyInstance) {
       sessionId: session.id,
       workspaceId,
       role: 'user',
-      content,
       contentBlocks,
       fromWorkspaceMemberId: workspaceMemberId,
     });
@@ -142,9 +133,9 @@ export async function sessionController(app: FastifyInstance) {
       actorId,
       workspaceId,
       sourceType: 'user_message',
-      sourceMemberType: 'workspace_member',
-      sourceMemberId: workspaceMemberId,
-      summary: content.trim().slice(0, 96) || 'New message',
+      sourceParticipantType: 'workspace_member',
+      sourceParticipantId: workspaceMemberId,
+      summary: extractText(contentBlocks).trim().slice(0, 96) || 'New message',
       trigger: 'user_message',
     });
 
@@ -157,12 +148,11 @@ export async function sessionController(app: FastifyInstance) {
   // POST /workspaces/:wsId/sessions/:sessionId/messages — send a message in an existing session
   app.post<{
     Params: { workspaceId: string; sessionId: string };
-    Body: { content: string };
+    Body: { contentBlocks: CanonicalContentBlock[] };
   }>('/workspaces/:workspaceId/sessions/:sessionId/messages', async (request, reply) => {
     const { workspaceId, sessionId } = request.params;
-    const { content, contentBlocks } = sendMessageSchema.parse(request.body) as {
-      content: string;
-      contentBlocks?: CanonicalContentBlock[];
+    const { contentBlocks } = sendMessageSchema.parse(request.body) as {
+      contentBlocks: CanonicalContentBlock[];
     };
     const workspaceMemberId = (request as any).workspaceMember!.id as string;
 
@@ -183,7 +173,6 @@ export async function sessionController(app: FastifyInstance) {
       sessionId,
       workspaceId,
       role: 'user',
-      content,
       contentBlocks,
       fromWorkspaceMemberId: workspaceMemberId,
     });
@@ -193,9 +182,9 @@ export async function sessionController(app: FastifyInstance) {
       actorId: session.actor_id,
       workspaceId,
       sourceType: 'user_message',
-      sourceMemberType: 'workspace_member',
-      sourceMemberId: workspaceMemberId,
-      summary: content.trim().slice(0, 96) || 'New message',
+      sourceParticipantType: 'workspace_member',
+      sourceParticipantId: workspaceMemberId,
+      summary: extractText(contentBlocks).trim().slice(0, 96) || 'New message',
       trigger: 'user_message',
     });
 
@@ -262,8 +251,8 @@ export async function sessionController(app: FastifyInstance) {
       workspaceId,
       sourceType: 'retry',
       sourceItemId: itemId,
-      sourceMemberType: 'workspace_member',
-      sourceMemberId: workspaceMemberId,
+      sourceParticipantType: 'workspace_member',
+      sourceParticipantId: workspaceMemberId,
       summary: 'Retry requested',
       reasonText: 'User requested a retry after a model error.',
       trigger: 'retry',

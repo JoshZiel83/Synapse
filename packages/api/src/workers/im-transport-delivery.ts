@@ -7,7 +7,7 @@ import type {
   TransportAccountSummary,
 } from "@synapse/shared/types";
 import { redis } from "../infrastructure/redis/index.js";
-import { getConversationFeedItemById } from "../modules/conversation/service.js";
+import { getConversationFeedItemById } from "../modules/chat/service.js";
 import {
   getConversationTransportBinding,
   getPrimaryTransportAddressForParticipant,
@@ -126,7 +126,7 @@ async function postWeixinMessage(params: {
   };
 }
 
-async function resolveTransportRecipients(params: {
+async function resolveTransportMentionRecipients(params: {
   transportKind: "feishu" | "weixin";
   transportAccountId: string;
   endpointType: "direct" | "group";
@@ -135,8 +135,11 @@ async function resolveTransportRecipients(params: {
 }) {
   const recipients = new Map<string, { externalId: string; displayName?: string }>();
 
-  for (const target of params.item.targets) {
-    const participantId = target.participantId || target.memberId || "";
+  for (const block of params.item.contentBlocks) {
+    if (block.type !== "mention") {
+      continue;
+    }
+    const participantId = block.mention.participantId || "";
     if (!participantId) continue;
 
     const useAttachedAddressOnly =
@@ -144,11 +147,11 @@ async function resolveTransportRecipients(params: {
       (params.endpointType === "direct" && params.transportKind === "feishu");
     const address = useAttachedAddressOnly
         ? await getPrimaryTransportAddressForParticipant({
-            conversationMemberId: participantId,
+            conversationParticipantId: participantId,
             transportAccountId: params.transportAccountId,
           })
         : await getReachableTransportAddressForParticipant({
-            conversationMemberId: participantId,
+            conversationParticipantId: participantId,
             transportAccountId: params.transportAccountId,
           });
     const externalId = nonEmptyString(address?.external_id);
@@ -165,7 +168,9 @@ async function resolveTransportRecipients(params: {
       recipients.set(externalId, {
         externalId,
         displayName:
-          nonEmptyString(address?.display_name) || target.name || externalId,
+          nonEmptyString(address?.display_name) ||
+          block.mention.name ||
+          externalId,
       });
     }
   }
@@ -184,7 +189,7 @@ async function deliverViaFeishu(params: {
   const client = createFeishuClient(params.account);
   const mentions =
     params.endpoint.endpointType === "group"
-      ? await resolveTransportRecipients({
+      ? await resolveTransportMentionRecipients({
           transportKind: "feishu",
           transportAccountId: params.account.id,
           endpointType: params.endpoint.endpointType,
@@ -327,7 +332,7 @@ export function startImTransportDeliveryWorker() {
         });
         return { success: true, reason: "item missing" };
       }
-      if (item.author?.memberType === "external") {
+      if (item.author?.participantType === "external") {
         await updateTransportMessageLinkStatus({
           linkId,
           status: "skipped",
@@ -335,22 +340,6 @@ export function startImTransportDeliveryWorker() {
         });
         return { success: true, reason: "external author" };
       }
-      const resolvedRecipients = await resolveTransportRecipients({
-        transportKind: link.transportKind,
-        transportAccountId: link.account.id,
-        endpointType: link.endpoint.endpointType,
-        endpointExternalId: link.endpoint.externalId,
-        item,
-      });
-      if (resolvedRecipients.length === 0) {
-        await updateTransportMessageLinkStatus({
-          linkId,
-          status: "skipped",
-          metadata: { skippedReason: "no_reachable_transport_target" },
-        });
-        return { success: true, reason: "no reachable transport target" };
-      }
-
       try {
         const deliveryResult =
           link.transportKind === "feishu"

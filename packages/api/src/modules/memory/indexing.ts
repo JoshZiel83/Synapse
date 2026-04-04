@@ -7,7 +7,7 @@ import {
   withDbTransaction,
 } from '../../infrastructure/database/kysely.js';
 import { config } from '../../config/index.js';
-import { itemPartsToCanonicalContentBlocks } from '../conversation/message-content.js';
+import { itemPartsToCanonicalContentBlocks } from '../chat/message-content.js';
 import { embedMemoryPassages } from './embedding-runtime.js';
 import { memoryIndexingQueue } from '../../workers/queues.js';
 import { hashMemoryEmbeddingText } from './embedding-input.js';

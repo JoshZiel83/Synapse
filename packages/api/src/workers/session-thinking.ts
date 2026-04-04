@@ -11,7 +11,7 @@ import {
   nowISO,
   textBlocks,
 } from '@synapse/shared';
-import type { ActorAction, ConversationMemberEntry, ProviderContextWindow } from '@synapse/shared';
+import type { ActorAction, ConversationParticipantEntry, ProviderContextWindow } from '@synapse/shared';
 import type { CanonicalContextItem } from '@synapse/shared/types';
 import { actorThink } from '../modules/ai/index.js';
 import { buildActorPrompt } from '../modules/ai/prompt-builder.js';
@@ -33,9 +33,10 @@ import {
   consumeInterrupts,
 } from '../modules/session/service.js';
 import {
-  getConversationMembers,
-  sleepActor,
-} from '../modules/conversation/chat-service.js';
+  getConversationParticipant,
+  getContextConversationItemsForParticipant,
+  listConversationParticipants,
+} from '../modules/chat/service.js';
 import {
   attachPendingWakeupsToTurn,
   getPendingWakeupCount,
@@ -44,11 +45,6 @@ import {
   markTurnWakeupsProcessed,
   publishSessionRuntime,
 } from '../modules/session/runtime.js';
-import {
-  getConversationMember,
-  getLastVisibleConversationItem,
-  getContextConversationItemsForMember,
-} from '../modules/conversation/service.js';
 import { createTurn, updateTurnStatus } from '../modules/execution/service.js';
 import { buildMemoryRecallQuery, recallMemories } from '../modules/memory/service.js';
 import { resolveActorCapabilitySurface } from '../modules/capabilities/surface.js';
@@ -85,13 +81,13 @@ async function runCleanupStep(label: string, operation: () => Promise<unknown>) 
 
 async function loadNewContextItems(params: {
   conversationId: string;
-  memberId: string;
+  participantId: string;
   actorId: string;
   sinceSequence: number;
 }) {
-  const visibleItems = await getContextConversationItemsForMember({
+  const visibleItems = await getContextConversationItemsForParticipant({
     conversationId: params.conversationId,
-    memberId: params.memberId,
+    participantId: params.participantId,
     limit: 200,
   });
 
@@ -101,7 +97,7 @@ async function loadNewContextItems(params: {
 
   for (const item of newItems) {
     maxSequence = Math.max(maxSequence, item.sequence);
-    if (item.author_actor_id === params.actorId) continue;
+    if (item.authorParticipant?.actor_id === params.actorId) continue;
     const contextItem = conversationItemToContextItem(item, params.actorId);
     if (contextItem) {
       items.push(contextItem);
@@ -109,6 +105,32 @@ async function loadNewContextItems(params: {
   }
 
   return { items, maxSequence };
+}
+
+async function putSessionToIdle(sessionId: string) {
+  const session = await getSession(sessionId);
+  if (!session || session.status !== 'running') {
+    return;
+  }
+
+  await updateSessionStatus(sessionId, 'idle', { errorMessage: null });
+  await publishSessionRuntime(session.workspace_id, sessionId, {
+    laneState: 'idle',
+    phase: 'idle',
+  });
+
+  await emitEvent({
+    type: 'session.status.changed',
+    workspaceId: session.workspace_id,
+    payload: {
+      conversationId: session.conversation_id,
+      sessionId,
+      actorId: session.actor_id,
+      status: 'idle',
+      previousStatus: 'running',
+    },
+    timestamp: nowISO(),
+  });
 }
 
 export function startSessionThinkingWorker() {
@@ -245,51 +267,61 @@ export function startSessionThinkingWorker() {
         const interrupts = await consumeInterrupts(sessionId);
         pendingWakeups = await getPendingWakeups(sessionId);
         if (pendingWakeups.length === 0) {
-          await sleepActor(sessionId);
+          await putSessionToIdle(sessionId);
           return { success: true, reason: 'wakeup already handled' };
         }
 
-        let conversationMembers: any[] | undefined;
-        let promptConversationMembers: any[] | undefined;
-        let memberEntries: ConversationMemberEntry[] = [];
-        let actorMemberId: string | undefined;
+        let conversationParticipants: any[] | undefined;
+        let promptConversationParticipants: any[] | undefined;
+        let participantEntries: ConversationParticipantEntry[] = [];
+        let actorParticipantId: string | undefined;
         let lastKnownConversationSequence = 0;
         let contextItems: CanonicalContextItem[];
         let contextWindow: ProviderContextWindow;
         if (conversationId) {
-          conversationMembers = await getConversationMembers(conversationId);
-          promptConversationMembers = await getConversationMembers(
+          conversationParticipants = await listConversationParticipants(conversationId);
+          promptConversationParticipants = await listConversationParticipants(
             conversationId,
             {
               useProfileSnapshot: true,
             },
           );
-          actorMemberId = conversationMembers.find((member: any) => member.actor_id === actorId && member.state === 'active')?.id;
-          if (!actorMemberId) {
+          actorParticipantId = conversationParticipants.find((member: any) => member.actor_id === actorId && member.state === 'active')?.id;
+          if (!actorParticipantId) {
             throw new Error(
-              `Actor ${actorId} is not an active member of conversation ${conversationId}`,
+              `Actor ${actorId} is not an active participant of conversation ${conversationId}`,
             );
           }
 
-          for (const member of conversationMembers) {
+          for (const member of conversationParticipants) {
             if (member.actor_id && member.actor_id !== actorId && member.state === 'active') {
-              memberEntries.push({
+              participantEntries.push({
                 type: 'actor',
                 id: member.actor_id,
                 name: member.actor_name,
                 title: member.actor_title,
               });
             } else if (member.user_id && member.state === 'active') {
-              memberEntries.push({
+              const workspaceMemberId =
+                typeof member.workspace_member_id === 'string' &&
+                member.workspace_member_id.trim().length > 0
+                  ? member.workspace_member_id
+                  : null;
+              if (!workspaceMemberId) {
+                throw new Error(
+                  `Conversation ${conversationId} has workspace participant ${member.id} without workspace_member_id`,
+                );
+              }
+              participantEntries.push({
                 type: 'workspace_member',
-                id: member.workspace_member_id,
+                id: workspaceMemberId,
                 participantId: member.id,
                 name: member.user_name || 'User',
               });
-            } else if (member.member_type === 'external' && member.state === 'active') {
+            } else if (member.participant_kind === 'external' && member.state === 'active') {
               const linkedUserName =
                 (member.linked_user_name as string | null) || undefined;
-              memberEntries.push({
+              participantEntries.push({
                 type: 'external',
                 id:
                   (member.linked_user_id as string | null) ||
@@ -313,9 +345,9 @@ export function startSessionThinkingWorker() {
             }
           }
 
-          const visibleItems = await getContextConversationItemsForMember({
+          const visibleItems = await getContextConversationItemsForParticipant({
             conversationId,
-            memberId: actorMemberId,
+            participantId: actorParticipantId,
             limit: 200,
           });
           const built = buildConversationContextItems({
@@ -430,8 +462,8 @@ export function startSessionThinkingWorker() {
         }
 
         const actorPromptSource = (() => {
-          if (!promptConversationMembers) return actor;
-          const selfMember = promptConversationMembers.find(
+          if (!promptConversationParticipants) return actor;
+          const selfMember = promptConversationParticipants.find(
             (member: any) => member.actor_id === actorId && member.state === 'active',
           );
           if (!selfMember) return actor;
@@ -464,7 +496,7 @@ export function startSessionThinkingWorker() {
           undefined,
           undefined,
           mcpTools.tools.length > 0 ? mcpTools.tools : undefined,
-          promptConversationMembers || conversationMembers,
+          promptConversationParticipants || conversationParticipants,
           session.conversation_kind,
           availableSkills,
         );
@@ -516,7 +548,7 @@ export function startSessionThinkingWorker() {
               conversationKind: session.conversation_kind,
               conversationBoundary:
                 session.conversationBoundary || session.conversation_boundary,
-              conversationMembers: memberEntries,
+              conversationParticipants: participantEntries,
               userId,
               availableSkills,
               onStatus: emitThinkingStatus,
@@ -526,10 +558,10 @@ export function startSessionThinkingWorker() {
               mcpRefresh: mcpTools.refresh,
               mcpSetTurnId: mcpTools.setTurnId,
               system,
-              checkNewMessages: conversationId && actorMemberId ? async () => {
+              checkNewMessages: conversationId && actorParticipantId ? async () => {
                 const update = await loadNewContextItems({
                   conversationId,
-                  memberId: actorMemberId!,
+                  participantId: actorParticipantId!,
                   actorId,
                   sinceSequence: lastKnownConversationSequence,
                 });
@@ -580,8 +612,10 @@ export function startSessionThinkingWorker() {
               sessionId,
               workspaceId,
               role: 'assistant',
-              content: action.content,
-              contentBlocks: action.contentBlocks ?? result.contentBlocks,
+              contentBlocks:
+                action.contentBlocks && action.contentBlocks.length > 0
+                  ? action.contentBlocks
+                  : textBlocks(action.content),
               fromActorId: actorId,
               metadata: hasMeta,
             });
@@ -592,8 +626,10 @@ export function startSessionThinkingWorker() {
             workspaceId,
             role: 'assistant',
             visibility: 'private_internal',
-            content: result.reasoning,
-            contentBlocks: result.contentBlocks,
+            contentBlocks:
+              result.contentBlocks && result.contentBlocks.length > 0
+                ? result.contentBlocks
+                : textBlocks(result.reasoning),
             fromActorId: actorId,
             metadata: {
               ...hasMeta,
@@ -607,7 +643,7 @@ export function startSessionThinkingWorker() {
             sessionId,
             workspaceId,
             role: 'assistant',
-            content: `[executed: ${actionNames}]`,
+            contentBlocks: textBlocks(`[executed: ${actionNames}]`),
             fromActorId: actorId,
             metadata: { ...hasMeta, silentActions: true },
           });
@@ -670,7 +706,7 @@ export function startSessionThinkingWorker() {
             timestamp: nowISO(),
           });
         } else {
-          await sleepActor(sessionId);
+          await putSessionToIdle(sessionId);
         }
 
         await mcpTools.shutdown().catch(() => {});
@@ -728,39 +764,35 @@ export function startSessionThinkingWorker() {
 
         const wakeupTargets = pendingWakeups.filter(
           (wakeup) =>
-            (wakeup.sourceMemberType === 'workspace_member' || wakeup.sourceMemberType === 'external') &&
-            wakeup.sourceMemberId,
+            (wakeup.sourceParticipantType === 'workspace_member' ||
+              wakeup.sourceParticipantType === 'external') &&
+            wakeup.sourceParticipantId,
         );
 
         if (failedSession?.conversation_id && wakeupTargets.length > 0) {
           await runCleanupStep(`publish model error notice for session ${sessionId}`, async () => {
-            const targetMembers = await Promise.all(
+            const targetParticipants = await Promise.all(
               wakeupTargets.map(async (wakeup) => {
-                if (wakeup.sourceMemberType === 'workspace_member') {
-                  return getConversationMember({
+                if (wakeup.sourceParticipantType === 'workspace_member') {
+                  return getConversationParticipant({
                     conversationId: failedSession.conversation_id,
-                    workspaceMemberId: wakeup.sourceMemberId as string,
+                    workspaceMemberId: wakeup.sourceParticipantId as string,
                   });
                 }
 
-                return (
-                  (await db
-                    .selectFrom('conversation_members')
-                    .selectAll()
-                    .where('conversation_id', '=', failedSession.conversation_id)
-                    .where('id', '=', wakeup.sourceMemberId as string)
-                    .limit(1)
-                    .executeTakeFirst()) ?? null
-                );
+                return getConversationParticipant({
+                  conversationId: failedSession.conversation_id,
+                  participantId: wakeup.sourceParticipantId as string,
+                });
               }),
             );
-            const targetMemberIds = [...new Set(
-              targetMembers
-                .map((member: any) => member?.id as string | undefined)
-                .filter((memberId): memberId is string => Boolean(memberId)),
+            const restrictedAudienceParticipantIds = [...new Set(
+              targetParticipants
+                .map((participant: any) => participant?.id as string | undefined)
+                .filter((participantId): participantId is string => Boolean(participantId)),
             )];
 
-            if (targetMemberIds.length === 0) {
+            if (restrictedAudienceParticipantIds.length === 0) {
               return;
             }
 
@@ -770,9 +802,9 @@ export function startSessionThinkingWorker() {
               role: 'assistant',
               subtype: 'model_error_notice',
               visibility: 'shared_visible',
-              content: '出错了',
+              contentBlocks: textBlocks('出错了'),
               fromActorId: actorId,
-              targetMemberIds,
+              restrictedAudienceParticipantIds,
               projectTransportOutbound: true,
               metadata: {
                 excludeFromContext: true,

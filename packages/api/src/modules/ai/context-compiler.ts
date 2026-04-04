@@ -56,6 +56,7 @@ function buildMessageHeader(params: {
   timestamp?: string;
   author: string;
   targets?: CanonicalContextTarget[];
+  replyToLabel?: string;
 }) {
   const segments: string[] = [];
   const formattedTime = formatContextTimestamp(params.timestamp);
@@ -64,7 +65,10 @@ function buildMessageHeader(params: {
   }
 
   const targets = targetLabel(params.targets);
-  segments.push(`${params.author}${targets ? ` → ${targets}` : ""}`);
+  const replyToLabel = params.replyToLabel?.trim();
+  segments.push(
+    `${params.author}${targets ? ` → ${targets}` : ""}${replyToLabel ? ` ↩ ${replyToLabel}` : ""}`,
+  );
 
   return `[${segments.join(" | ")}]: `;
 }
@@ -202,6 +206,7 @@ export async function compileContextItemsToConversationMessages(
           timestamp: item.createdAt,
           author: authorLabel(item),
           targets: item.targets,
+          replyToLabel: item.replyTo?.author?.name || item.replyTo?.previewText,
         });
         messages.push({
           role: "user",

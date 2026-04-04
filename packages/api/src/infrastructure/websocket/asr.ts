@@ -7,7 +7,7 @@ import {
   type RealtimeAsrSocketEvent,
 } from "@synapse/shared";
 import { authenticateSessionToken } from "../../modules/auth/service.js";
-import { getWorkspaceMemberIdentity } from "../../modules/conversation/workspace-identity.js";
+import { getWorkspaceMemberIdentity } from "../../modules/chat/workspace-identity.js";
 import { VolcengineRealtimeAsrSession } from "../../modules/asr/service.js";
 import { isShuttingDown } from "../shutdown/state.js";
 import {

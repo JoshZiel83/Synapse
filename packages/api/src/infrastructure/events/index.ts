@@ -21,8 +21,7 @@ export type Queryable = {
 
 export type TransactionalRealtimeEventType =
   | 'feed.item.created'
-  | 'conversation.read.updated'
-  | 'conversation.updated'
+  | 'chat.sync.event'
   | 'interaction.updated';
 
 type TransactionalRealtimeEvent = SystemEvent & {
@@ -50,8 +49,7 @@ type RealtimeEventOutboxRow = Pick<
 const handlers: Map<string, Set<EventHandler>> = new Map();
 const TRANSACTIONAL_REALTIME_EVENT_TYPES = new Set<TransactionalRealtimeEventType>([
   'feed.item.created',
-  'conversation.read.updated',
-  'conversation.updated',
+  'chat.sync.event',
   'interaction.updated',
 ]);
 
@@ -173,7 +171,7 @@ async function materializeRealtimeOutboxEvent(
         throw new Error(`Outbox entry ${entry.id} is missing itemId`);
       }
       const { getConversationFeedItemById } = await import(
-        '../../modules/conversation/service.js'
+        '../../modules/chat/service.js'
       );
       const item = await getConversationFeedItemById(itemId);
       if (!item) {
@@ -219,8 +217,7 @@ async function materializeRealtimeOutboxEvent(
         timestamp,
       };
     }
-    case 'conversation.read.updated':
-    case 'conversation.updated':
+    case 'chat.sync.event':
       return {
         type: entry.event_type,
         workspaceId: entry.workspace_id,

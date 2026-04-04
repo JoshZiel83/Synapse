@@ -42,7 +42,7 @@ import {
   SESSION_INTERRUPT_TYPES,
   SESSION_STATUSES,
   SESSION_TRIGGERS,
-  SESSION_WAKEUP_SOURCE_MEMBER_TYPES,
+  SESSION_WAKEUP_SOURCE_PARTICIPANT_TYPES,
   SESSION_WAKEUP_SOURCE_TYPES,
   SESSION_WAKEUP_STATUSES,
   TASK_NOTICE_STATUSES,
@@ -814,9 +814,8 @@ export type EventType =
   | "session.status.changed"
   | "session.thinking"
   | "feed.item.created"
-  | "conversation.read.updated"
+  | "chat.sync.event"
   | "runtime.updated"
-  | "conversation.updated"
   | "interaction.updated"
   | "actor.version_changed"
   | "mcp.config.changed"
@@ -844,8 +843,8 @@ export type SessionMessageRole =
   | "system"
   | "tool_result";
 export type SessionInterruptType = typeof SESSION_INTERRUPT_TYPES[number];
-export type SessionWakeupSourceMemberType =
-  typeof SESSION_WAKEUP_SOURCE_MEMBER_TYPES[number];
+export type SessionWakeupSourceParticipantType =
+  typeof SESSION_WAKEUP_SOURCE_PARTICIPANT_TYPES[number];
 export type SessionWakeupSourceType = typeof SESSION_WAKEUP_SOURCE_TYPES[number];
 export type SessionWakeupStatus = typeof SESSION_WAKEUP_STATUSES[number];
 export type ActorRuntimeHealth = "ok" | "error";
@@ -883,8 +882,8 @@ export interface SessionWakeup {
   sourceType: SessionWakeupSourceType;
   sourceItemId?: UUID;
   sourceSessionId?: UUID;
-  sourceMemberType?: SessionWakeupSourceMemberType;
-  sourceMemberId?: UUID;
+  sourceParticipantType?: SessionWakeupSourceParticipantType;
+  sourceParticipantId?: UUID;
   sourceName?: string;
   summary: string;
   reasonText?: string;
@@ -902,8 +901,8 @@ export interface ActorRuntimeWakeup {
   sourceType: SessionWakeupSourceType;
   sourceItemId?: UUID;
   sourceSessionId?: UUID;
-  sourceMemberType?: SessionWakeupSourceMemberType;
-  sourceMemberId?: UUID;
+  sourceParticipantType?: SessionWakeupSourceParticipantType;
+  sourceParticipantId?: UUID;
   sourceName?: string;
   summary: string;
   reasonText?: string;
@@ -939,7 +938,6 @@ export interface SessionMessage {
   sessionId: UUID;
   workspaceId: UUID;
   role: SessionMessageRole;
-  content: string;
   contentBlocks: CanonicalContentBlock[];
   fromActorId?: UUID;
   fromWorkspaceMemberId?: UUID;
@@ -1370,11 +1368,10 @@ export interface AssistantToolHistory {
 export type CanonicalContextScope = "shared" | "private";
 export type CanonicalContextSurface = "visible" | "internal";
 export type CanonicalContextRole = "user" | "assistant" | "system" | "tool";
-export type CanonicalContextMemberType =
+export type CanonicalContextParticipantType =
   | "actor"
   | "workspace_member"
   | "external"
-  | "remote_agent"
   | "system"
   | "unknown";
 export type ConversationEventTimelinePolicy =
@@ -1390,8 +1387,8 @@ export type ConversationEventContextPolicy =
   | "targeted_members";
 
 export interface CanonicalContextAuthor {
-  memberId?: string;
-  memberType: CanonicalContextMemberType;
+  participantId?: string;
+  participantType: CanonicalContextParticipantType;
   actorId?: string;
   userId?: string;
   sessionId?: string;
@@ -1400,8 +1397,8 @@ export interface CanonicalContextAuthor {
 }
 
 export interface CanonicalContextTarget {
-  memberId?: string;
-  memberType: Exclude<CanonicalContextMemberType, "unknown">;
+  participantId?: string;
+  participantType: Exclude<CanonicalContextParticipantType, "unknown">;
   actorId?: string;
   userId?: string;
   name?: string;
@@ -1446,8 +1443,21 @@ export interface CanonicalMessageContextItem extends CanonicalContextItemBase {
   role: CanonicalContextRole;
   author?: CanonicalContextAuthor;
   targets?: CanonicalContextTarget[];
+  replyTo?: ConversationReplyRef;
   parts: CanonicalContentBlock[];
 }
+
+export type ConversationMessageSubtype =
+  | "chat.message"
+  | "user"
+  | "assistant"
+  | "system"
+  | "tool_result"
+  | "model_error_notice";
+
+export type ConversationFeedMessageType =
+  | ConversationMessageSubtype
+  | "summary";
 
 export interface CanonicalToolCallBatchContextItem extends CanonicalContextItemBase {
   kind: "tool_call_batch";
@@ -1603,7 +1613,7 @@ export interface NormalizedMcpToolResult {
 
 // ============ Tool Plugin System ============
 
-export interface ConversationMemberEntry {
+export interface ConversationParticipantEntry {
   type: "actor" | "workspace_member" | "external";
   id: string;
   name: string;
@@ -1621,7 +1631,7 @@ export interface ToolResolveContext {
   conversationId?: string;
   conversationKind?: "private" | "group" | "virtual";
   conversationBoundary?: ConversationBoundary;
-  conversationMembers?: ConversationMemberEntry[];
+  conversationParticipants?: ConversationParticipantEntry[];
   workspaceMemberId?: string;
   availableSkills?: AvailableSkillSummary[];
 }
@@ -2502,10 +2512,7 @@ export type ConversationParticipantType =
   | "actor"
   | "workspace_member"
   | "external"
-  | "remote_agent"
   | "system";
-
-export type ConversationMemberType = ConversationParticipantType;
 
 export type TransportKind = typeof TRANSPORT_KINDS[number];
 export type TransportConnectionMode = typeof TRANSPORT_CONNECTION_MODES[number];
@@ -2514,9 +2521,8 @@ export type TransportAccountStatus = typeof TRANSPORT_ACCOUNT_STATUSES[number];
 export type TransportDeliveryStatus = typeof TRANSPORT_DELIVERY_STATUSES[number];
 
 export interface ConversationEntityRef {
-  memberId?: UUID;
   participantId?: UUID;
-  memberType: ConversationMemberType;
+  participantType: ConversationParticipantType;
   workspaceMemberId?: UUID;
   actorId?: UUID;
   externalUserKey?: string;
@@ -2529,10 +2535,20 @@ export interface ConversationEntityRef {
   avatarEmoji?: string;
 }
 
-export type ConversationMemberRef = ConversationEntityRef & {
-  memberId: UUID;
+export interface ConversationReplyRef {
+  itemId: UUID;
+  itemType: "message" | "event" | "summary" | "control";
+  subtype: string;
+  author?: ConversationEntityRef;
+  previewText: string;
+  previewBlocks: CanonicalContentBlock[];
+  createdAt?: Timestamp;
+  isUnavailable?: boolean;
+}
+
+export type ConversationParticipantRef = ConversationEntityRef & {
   participantId: UUID;
-  memberType: "actor" | "workspace_member" | "external";
+  participantType: "actor" | "workspace_member" | "external";
 };
 
 export interface TransportConnectorCapability {
@@ -2904,9 +2920,9 @@ export interface TaskNoticeSummary {
 }
 
 export type ConversationFeedEventType =
-  | "member_joined"
-  | "member_kicked"
-  | "member_left"
+  | "participant_joined"
+  | "participant_kicked"
+  | "participant_left"
   | "memory_saved"
   | "memory_updated"
   | "actor_renamed"
@@ -2917,23 +2933,23 @@ export type ConversationFeedEventType =
   | "task_notice";
 
 export interface ConversationFeedEventPayloadMap {
-  member_joined: {
+  participant_joined: {
     batchId: UUID;
     initiator?: ConversationEntityRef;
-    members: ConversationMemberRef[];
+    participants: ConversationParticipantRef[];
     focusItemId?: UUID;
   };
-  member_kicked: {
+  participant_kicked: {
     batchId: UUID;
     initiator?: ConversationEntityRef;
-    members: ConversationMemberRef[];
+    participants: ConversationParticipantRef[];
     focusItemId?: UUID;
     reason?: string;
   };
-  member_left: {
+  participant_left: {
     batchId: UUID;
     initiator?: ConversationEntityRef;
-    members: ConversationMemberRef[];
+    participants: ConversationParticipantRef[];
     focusItemId?: UUID;
   };
   memory_saved: {
@@ -3013,9 +3029,11 @@ export interface ConversationFeedMessageItem {
   sessionId?: UUID;
   turnId?: UUID;
   role: "user" | "assistant" | "system";
-  messageType: string;
+  messageType: ConversationFeedMessageType;
   author?: ConversationEntityRef;
-  targets: ConversationEntityRef[];
+  replyToItemId?: UUID;
+  replyTo?: ConversationReplyRef;
+  restrictedAudience?: ConversationEntityRef[];
   content: string;
   contentBlocks: CanonicalContentBlock[];
   metadata: Record<string, unknown>;
@@ -3025,9 +3043,7 @@ export interface ConversationFeedMessageItem {
   clientMessageId?: string;
 }
 
-export interface ConversationFeedEventItem<
-  T extends ConversationFeedEventType = ConversationFeedEventType,
-> {
+interface ConversationFeedEventItemBase {
   kind: "event";
   itemId: UUID;
   conversationId: UUID;
@@ -3035,12 +3051,21 @@ export interface ConversationFeedEventItem<
   sessionId?: UUID;
   turnId?: UUID;
   author?: ConversationEntityRef;
-  targets: ConversationEntityRef[];
+  restrictedAudience?: ConversationEntityRef[];
   causedByItemId?: UUID;
-  eventType: T;
-  payload: ConversationFeedEventPayloadMap[T];
   createdAt: Timestamp;
 }
+
+type ConversationFeedEventItemMap = {
+  [T in ConversationFeedEventType]: ConversationFeedEventItemBase & {
+    eventType: T;
+    payload: ConversationFeedEventPayloadMap[T];
+  };
+};
+
+export type ConversationFeedEventItem<
+  T extends ConversationFeedEventType = ConversationFeedEventType,
+> = ConversationFeedEventItemMap[T];
 
 function formatConversationEntityName(
   entity: Partial<ConversationEntityRef> | undefined,
@@ -3063,55 +3088,70 @@ function formatConversationEntityList(
   return `${names.slice(0, -1).join(", ")}, and ${names[names.length - 1]}`;
 }
 
-function summarizeMembershipEvent(
+function summarizeParticipantEvent(
   eventType: Extract<
     ConversationFeedEventType,
-    "member_joined" | "member_kicked" | "member_left"
+    "participant_joined" | "participant_kicked" | "participant_left"
   >,
   payload:
-    | ConversationFeedEventPayloadMap["member_joined"]
-    | ConversationFeedEventPayloadMap["member_kicked"]
-    | ConversationFeedEventPayloadMap["member_left"],
+    | ConversationFeedEventPayloadMap["participant_joined"]
+    | ConversationFeedEventPayloadMap["participant_kicked"]
+    | ConversationFeedEventPayloadMap["participant_left"],
 ) {
   const initiator = payload.initiator;
-  const members = Array.isArray(payload.members) ? payload.members : [];
+  const participants = Array.isArray(payload.participants)
+    ? payload.participants
+    : [];
   const initiatorName = formatConversationEntityName(initiator, "");
-  const initiatorMemberId = initiator?.memberId;
-  const memberList = formatConversationEntityList(members);
-  const nonInitiatorMembers = initiatorMemberId
-    ? members.filter((member) => member.memberId !== initiatorMemberId)
-    : members;
+  const initiatorParticipantId = initiator?.participantId;
+  const participantList = formatConversationEntityList(participants);
+  const nonInitiatorParticipants = initiatorParticipantId
+    ? participants.filter(
+        (participant) =>
+          participant.participantId !== initiatorParticipantId,
+      )
+    : participants;
 
-  if (eventType === "member_joined") {
+  if (eventType === "participant_joined") {
     if (initiatorName) {
       if (
-        initiatorMemberId &&
-        members.some((member) => member.memberId === initiatorMemberId)
+        initiatorParticipantId &&
+        participants.some(
+          (participant) =>
+            participant.participantId === initiatorParticipantId,
+        )
       ) {
-        if (nonInitiatorMembers.length === 0) {
+        if (nonInitiatorParticipants.length === 0) {
           return `${initiatorName} joined the conversation`;
         }
-        return `${initiatorName} started the conversation with ${formatConversationEntityList(nonInitiatorMembers)}`;
+        return `${initiatorName} started the conversation with ${formatConversationEntityList(nonInitiatorParticipants)}`;
       }
-      return `${initiatorName} invited ${memberList} to the conversation`;
+      return `${initiatorName} invited ${participantList} to the conversation`;
     }
-    return `${memberList} joined the conversation`;
+    return `${participantList} joined the conversation`;
   }
 
-  if (eventType === "member_kicked") {
+  if (eventType === "participant_kicked") {
     if (initiatorName) {
-      return `${initiatorName} removed ${memberList} from the conversation`;
+      return `${initiatorName} removed ${participantList} from the conversation`;
     }
-    return `${memberList} was removed from the conversation`;
+    return `${participantList} was removed from the conversation`;
   }
 
-  if (initiatorName && initiatorMemberId && members.length === 1) {
-    const leftMember = members[0];
-    if (leftMember && leftMember.memberId === initiatorMemberId) {
+  if (
+    initiatorName &&
+    initiatorParticipantId &&
+    participants.length === 1
+  ) {
+    const leavingParticipant = participants[0];
+    if (
+      leavingParticipant &&
+      leavingParticipant.participantId === initiatorParticipantId
+    ) {
       return `${initiatorName} left the conversation`;
     }
   }
-  return `${memberList} left the conversation`;
+  return `${participantList} left the conversation`;
 }
 
 export function summarizeConversationEvent(
@@ -3123,24 +3163,24 @@ export function summarizeConversationEvent(
       ? (payload as Record<string, unknown>)
       : {};
 
-  if (eventType === "member_joined") {
-    return summarizeMembershipEvent(
-      "member_joined",
-      eventPayload as ConversationFeedEventPayloadMap["member_joined"],
+  if (eventType === "participant_joined") {
+    return summarizeParticipantEvent(
+      "participant_joined",
+      eventPayload as ConversationFeedEventPayloadMap["participant_joined"],
     );
   }
 
-  if (eventType === "member_kicked") {
-    return summarizeMembershipEvent(
-      "member_kicked",
-      eventPayload as ConversationFeedEventPayloadMap["member_kicked"],
+  if (eventType === "participant_kicked") {
+    return summarizeParticipantEvent(
+      "participant_kicked",
+      eventPayload as ConversationFeedEventPayloadMap["participant_kicked"],
     );
   }
 
-  if (eventType === "member_left") {
-    return summarizeMembershipEvent(
-      "member_left",
-      eventPayload as ConversationFeedEventPayloadMap["member_left"],
+  if (eventType === "participant_left") {
+    return summarizeParticipantEvent(
+      "participant_left",
+      eventPayload as ConversationFeedEventPayloadMap["participant_left"],
     );
   }
 
@@ -3376,6 +3416,258 @@ export interface ConversationFeedPage {
   readWatermarkSequence?: number;
 }
 
+export interface ChatParticipantSummary
+  extends Omit<ConversationEntityRef, "participantId" | "participantType" | "name"> {
+  participantId: UUID;
+  conversationId: UUID;
+  participantType: ConversationParticipantType;
+  name: string;
+  roleKey: string;
+  state: "active" | "left" | "removed";
+  metadata: Record<string, unknown>;
+  joinedAt: Timestamp;
+  leftAt?: Timestamp;
+  sessionId?: UUID;
+  sessionStatus?: string;
+}
+
+interface ChatConversationItemBase {
+  id: UUID;
+  conversationId: UUID;
+  sequence: number;
+  sessionId?: UUID;
+  turnId?: UUID;
+  clientMessageId?: UUID;
+  itemType: "message" | "event" | "summary" | "control";
+  role: "user" | "assistant" | "system" | "tool";
+  scope: "shared" | "private";
+  surface: "visible" | "internal";
+  authorParticipantId?: UUID;
+  author?: ConversationEntityRef;
+  replyToItemId?: UUID;
+  replyTo?: ConversationReplyRef;
+  causedByItemId?: UUID;
+  content: string;
+  contentBlocks: CanonicalContentBlock[];
+  metadata: Record<string, unknown>;
+  restrictedAudienceParticipantIds?: UUID[];
+  restrictedAudience?: ConversationEntityRef[];
+  createdAt: Timestamp;
+}
+
+export interface ChatConversationMessageItem extends ChatConversationItemBase {
+  itemType: "message" | "summary" | "control";
+  subtype: ConversationFeedMessageType;
+  transport?: ConversationMessageTransportContext;
+  transportDeliveries?: ConversationMessageTransportDelivery[];
+}
+
+type ChatConversationEventItemMap = {
+  [T in ConversationFeedEventType]: ChatConversationItemBase & {
+    itemType: "event";
+    subtype: T;
+    eventPayload: ConversationFeedEventPayloadMap[T];
+    eventTimelinePolicy?: ConversationEventTimelinePolicy;
+    eventContextPolicy?: ConversationEventContextPolicy;
+  };
+};
+
+export type ChatConversationEventItem<
+  T extends ConversationFeedEventType = ConversationFeedEventType,
+> = ChatConversationEventItemMap[T];
+
+export type ChatConversationItem =
+  | ChatConversationMessageItem
+  | ChatConversationEventItem;
+
+export interface ChatConversationPresentation {
+  chatType: "direct" | "group" | "virtual";
+  subtitle?: string;
+  avatarParticipantIds: UUID[];
+  peerParticipantId?: UUID;
+  avatarUrl?: string;
+  avatarEmoji?: string;
+}
+
+export interface ChatConversationPermissions {
+  canManageConversation: boolean;
+  canManageParticipants: boolean;
+  canRename: boolean;
+}
+
+export interface ChatConversationView {
+  conversationId: UUID;
+  workspaceId: UUID;
+  title: string;
+  kind: "group" | "private" | "virtual";
+  boundary: "internal" | "external";
+  status: "active" | "completed";
+  unreadCount: number;
+  muted: boolean;
+  archived: boolean;
+  pinnedSortKey?: Timestamp;
+  updatedAt: Timestamp;
+  createdAt: Timestamp;
+  participants: ChatParticipantSummary[];
+  presentation: ChatConversationPresentation;
+  permissions: ChatConversationPermissions;
+  viewerParticipantId?: UUID;
+  lastItem?: {
+    itemId: UUID;
+    sequence: number;
+    itemType: ChatConversationItem["itemType"];
+    subtype: string;
+    previewText: string;
+    authorParticipantId?: UUID;
+    author?: ConversationEntityRef;
+    createdAt: Timestamp;
+  };
+}
+
+export interface ChatDeviceState {
+  clientInstanceId: UUID;
+  conversationId: UUID;
+  lastVisibleSequence: number;
+  lastInboxSeq: number;
+  lastOpenedAt?: Timestamp;
+  draftPayload: Record<string, unknown>;
+}
+
+export interface ChatSyncEventPayloadMap {
+  "conversation.upsert": {
+    conversation: ChatConversationView;
+  };
+  "conversation.item.created": {
+    conversationId: UUID;
+    item: ChatConversationItem;
+  };
+  "conversation.read.updated": {
+    conversationId: UUID;
+    workspaceMemberId: UUID;
+    participantId: UUID;
+    readWatermarkSequence: number;
+    lastReadAt: Timestamp;
+  };
+}
+
+export type ChatSyncEventType = keyof ChatSyncEventPayloadMap;
+
+export type ChatSyncEvent<
+  T extends ChatSyncEventType = ChatSyncEventType,
+> = {
+  syncSeq: number;
+  workspaceId: UUID;
+  workspaceMemberId: UUID;
+  conversationId?: UUID;
+  itemId?: UUID;
+  eventType: T;
+  payload: ChatSyncEventPayloadMap[T];
+  occurredAt: Timestamp;
+};
+
+export interface ChatBootstrapResponse {
+  workspaceMemberId: UUID;
+  clientInstanceRequired: true;
+  conversations: ChatConversationView[];
+  nextInboxCursor: number;
+}
+
+export interface ChatSyncResponse {
+  events: ChatSyncEvent[];
+  nextCursor: number;
+  hasMore: boolean;
+}
+
+export interface ChatSyncQuery {
+  cursor?: number;
+  limit?: number;
+}
+
+export interface ChatConversationMessagesQuery {
+  afterSequence?: number;
+  beforeSequence?: number;
+  limit?: number;
+  clientInstanceId?: UUID;
+}
+
+export interface ChatConversationMessagesPage {
+  conversation: ChatConversationView;
+  items: ChatConversationItem[];
+  participantReadWatermarkSequence: number;
+  deviceState?: ChatDeviceState;
+  hasMoreBefore: boolean;
+  hasMoreAfter: boolean;
+}
+
+export interface ChatClientInstanceRegistrationRequest {
+  platform?: string;
+  deviceLabel?: string;
+  metadata?: Record<string, unknown>;
+}
+
+export type ChatClientInstanceRegistrationInput =
+  ChatClientInstanceRegistrationRequest;
+
+export interface ChatClientInstanceRegistrationResponse {
+  clientInstanceId: UUID;
+  workspaceMemberId: UUID;
+}
+
+export interface ChatConversationCreateExternalParticipantRequest {
+  displayName: string;
+  metadata?: Record<string, unknown>;
+  transportAddressIds?: UUID[];
+}
+
+export interface ChatConversationCreateRequest {
+  clientRequestId: UUID;
+  kind: "group" | "private" | "virtual";
+  boundary?: "internal" | "external";
+  title?: string;
+  workspaceMemberIds?: UUID[];
+  actorIds?: UUID[];
+  externalParticipants?: ChatConversationCreateExternalParticipantRequest[];
+  metadata?: Record<string, unknown>;
+}
+
+export type ChatConversationCreateInput = ChatConversationCreateRequest;
+
+export interface ChatConversationCreateResponse {
+  conversation: ChatConversationView;
+}
+
+export interface ChatConversationSendMessageRequest {
+  contentBlocks: CanonicalContentBlock[];
+  clientMessageId: UUID;
+  replyToItemId?: UUID;
+  clientInstanceId?: UUID;
+  metadata?: Record<string, unknown>;
+}
+
+export type ChatConversationSendMessageInput =
+  ChatConversationSendMessageRequest;
+
+export interface ChatConversationSendMessageResponse {
+  item: ChatConversationItem;
+}
+
+export interface ChatConversationReadWatermarkRequest {
+  readUpToSequence: number;
+  lastVisibleSequence?: number;
+  clientInstanceId?: UUID;
+}
+
+export type ChatConversationReadWatermarkInput =
+  ChatConversationReadWatermarkRequest;
+
+export interface ChatConversationReadWatermarkResponse {
+  conversationId: UUID;
+  workspaceMemberId: UUID;
+  participantId: UUID;
+  readWatermarkSequence: number;
+  lastReadAt: Timestamp;
+}
+
 export type RealtimeAsrAudioFormat = "pcm" | "ogg";
 export type RealtimeAsrAudioCodec = "raw" | "opus";
 
@@ -3478,10 +3770,8 @@ export type ChatSocketEventType =
   | "auth.error"
   | "ping"
   | "server.shutdown"
-  | "conversation.item.created"
-  | "conversation.read.updated"
+  | "chat.sync.event"
   | "runtime.updated"
-  | "conversation.updated"
   | "interaction.updated";
 
 export interface ChatSocketEventPayloadMap {
@@ -3499,23 +3789,11 @@ export interface ChatSocketEventPayloadMap {
     message: string;
     retryable: boolean;
   };
-  "conversation.item.created": ConversationFeedItem;
-  "conversation.read.updated": {
-    conversationId: UUID;
-    workspaceMemberId: UUID;
-    readWatermarkSequence: number;
-    lastReadAt: Timestamp;
-  };
+  "chat.sync.event": ChatSyncEvent;
   "runtime.updated": {
     conversationId: UUID;
     runtimeSeq: number;
     snapshot: ActorRuntimeState;
-  };
-  "conversation.updated": {
-    conversationId: UUID;
-    action: "created" | "profile_updated" | "cancelled";
-    title?: string | null;
-    avatarUrl?: string | null;
   };
   "interaction.updated": {
     conversationId: UUID;
@@ -3702,9 +3980,8 @@ function isConversationEntityRef(
   if (!value || typeof value !== "object") return false;
   const entity = value as Record<string, unknown>;
   return (
-    typeof entity.memberType === "string" &&
-    entity.memberType.trim().length > 0 &&
-    (entity.memberId === undefined || typeof entity.memberId === "string") &&
+    typeof entity.participantType === "string" &&
+    entity.participantType.trim().length > 0 &&
     (entity.participantId === undefined ||
       typeof entity.participantId === "string") &&
     (entity.workspaceMemberId === undefined ||

@@ -40,7 +40,7 @@ import {
 } from "../../infrastructure/authz/index.js";
 import { transaction } from "../../infrastructure/database/index.js";
 import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
-import { createConversationEvent } from "../conversation/service.js";
+import { createConversationEvent } from "../chat/service.js";
 import { getFileUrlById } from "../files/service.js";
 import { listAuthorizedResourceIds, type AccessSubject } from "../access/service.js";
 
@@ -821,11 +821,11 @@ async function emitActorVersionChangedEvents(params: {
   delta: ActorVersionDelta;
 }) {
   const memberships = await runQuery<{ conversation_id: string }>(
-    `SELECT DISTINCT cm.conversation_id
-     FROM conversation_members cm
-     JOIN conversations c ON c.id = cm.conversation_id
-     WHERE cm.actor_id = $1
-       AND cm.state = 'active'
+    `SELECT DISTINCT cp.conversation_id
+     FROM conversation_participants cp
+     JOIN conversations c ON c.id = cp.conversation_id
+     WHERE cp.actor_id = $1
+       AND cp.state = 'active'
        AND c.kind = $2`,
     [params.actorId, GROUP_CONVERSATION_KIND],
   );
@@ -849,7 +849,7 @@ async function emitActorVersionChangedEvents(params: {
         },
         eventPayload: {
           actor: {
-            memberType: "actor",
+            participantType: "actor",
             actorId: params.actorId,
             name: params.actorName,
             title: params.actorTitle,

@@ -9,10 +9,11 @@ import type {
 import { emitEvent } from "../../infrastructure/events/index.js";
 import { redis } from "../../infrastructure/redis/index.js";
 import {
+  createConversation,
   createConversationItem,
-  ensureConversationMember,
-} from "../conversation/service.js";
-import { createThread, wakeActor } from "../conversation/chat-service.js";
+  enqueueActorWakeupsForConversationMessage,
+  ensureConversationParticipant,
+} from "../chat/service.js";
 import { getWorkspaceChiefActorPreference } from "../workspace/service.js";
 import {
   consumeTransportAccountAutoLink,
@@ -23,7 +24,7 @@ import {
   getTransportAccountByKindAndId,
   listActiveTransportAccounts,
   queueConversationTransportProjection,
-  syncTransportAddressConversationMember,
+  syncTransportAddressConversationParticipant,
   updateTransportAddressMetadata,
   updateTransportEndpointMetadata,
   updateTransportMessageLinkStatus,
@@ -458,21 +459,20 @@ async function ensureTransportConversationBinding(params: {
     return existing;
   }
 
-  const ownerId = await getWorkspaceOwnerId(params.account.workspaceId);
-  const created = await createThread({
+  await getWorkspaceOwnerId(params.account.workspaceId);
+  const created = await createConversation({
     workspaceId: params.account.workspaceId,
     kind: "virtual",
+    boundary: "external",
     title:
       params.endpointDisplayName ||
       `${params.account.displayName} ${params.endpointType === "group" ? "群聊" : "私聊"}`,
-    actorIds: [],
-    includeCreatorMember: false,
   });
 
   try {
     return await upsertConversationTransportBinding({
       workspaceId: params.account.workspaceId,
-      conversationId: created.conversation.id,
+      conversationId: created.id as string,
       transportAccountId: params.account.id,
       endpointType: params.endpointType,
       endpointExternalId: params.endpointExternalId,
@@ -520,9 +520,9 @@ async function resolveDefaultWakeTarget(
 
   if (!actorId) return null;
 
-  const target = await ensureConversationMember({
+  const target = await ensureConversationParticipant({
     conversationId: binding.conversationId,
-    memberType: "actor",
+    participantKind: "actor",
     actorId,
   });
 
@@ -592,7 +592,7 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
       linkedWorkspaceMemberId = pendingAutoLinkWorkspaceMemberId;
     }
   }
-  const senderMember = await syncTransportAddressConversationMember({
+  const senderParticipant = await syncTransportAddressConversationParticipant({
     conversationId: binding.conversationId,
     transportAddressId: senderAddress.id,
     workspaceMemberId: linkedWorkspaceMemberId,
@@ -621,9 +621,9 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
     scope: "shared",
     surface: "visible",
     itemType: "message",
-    subtype: "chat",
+    subtype: "chat.message",
     role: "user",
-    authorMemberId: senderMember.id,
+    authorParticipantId: senderParticipant.id,
     metadata: {
       transport: {
         direction: "inbound",
@@ -643,7 +643,6 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
         text: normalizedContent,
       },
     ],
-    targetMemberIds: wakeTarget ? [wakeTarget.participantId] : [],
   });
 
   const link = await queueConversationTransportProjection({
@@ -666,25 +665,11 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
     });
   }
 
-  if (wakeTarget) {
-    await wakeActor({
-      conversationId: binding.conversationId,
-      actorId: wakeTarget.actorId,
-      sourceType: "user_message",
-      sourceItemId: item.id,
-      sourceMemberType: linkedWorkspaceMemberId
-        ? "workspace_member"
-        : "external",
-      sourceMemberId: linkedWorkspaceMemberId || senderMember.id,
-      sourceName: params.senderDisplayName || params.senderExternalId,
-      summary: normalizedContent.replace(/\s+/g, " ").trim().slice(0, 96),
-      metadata: {
-        transportKind: params.account.transportKind,
-        transportAccountId: params.account.id,
-        transportAddressId: senderAddress.id,
-      },
-    });
-  }
+  await enqueueActorWakeupsForConversationMessage({
+    workspaceId: binding.workspaceId,
+    conversationId: binding.conversationId,
+    itemId: item.id,
+  });
 
   return link;
 }

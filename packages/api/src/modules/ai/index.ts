@@ -10,7 +10,7 @@ import type {
   CanonicalToolCall,
   CanonicalToolResult,
   AssistantToolHistory,
-  ConversationMemberEntry,
+  ConversationParticipantEntry,
   ToolResolveContext,
   CanonicalContentBlock,
   ProviderContextWindow,
@@ -55,7 +55,7 @@ import { getMcpVersion } from "../mcp-plugins/runtime-version.js";
 import { ingestResponseMedia } from "./content-ingest.js";
 import {
   buildDefaultUserMention,
-  conversationMemberEntryToEntityRef,
+  conversationParticipantEntryToEntityRef,
   parseInlineReferenceSegments,
   resolveInlineReferenceSegments,
   type InlineReferenceResolveOptions,
@@ -70,7 +70,7 @@ import {
   shouldRebuildBranchState,
 } from "./engine-branches.js";
 import { DEFAULT_MODEL_ATTEMPT_POLICY } from "../model-groups/defaults.js";
-import { getConversationMembers as getLiveConversationMembers } from "../conversation/chat-service.js";
+import { listConversationParticipants as getLiveConversationParticipants } from "../chat/service.js";
 import {
   createToolCall,
   createToolExecutionAttempt,
@@ -289,12 +289,12 @@ async function buildMergedResponseContentBlocks(
 }
 
 function buildInlineReferenceOptions(params: {
-  conversationMembers?: ConversationMemberEntry[];
+  conversationParticipants?: ConversationParticipantEntry[];
   workspaceMemberId?: string;
   userName?: string;
 }): InlineReferenceResolveOptions | undefined {
-  const mentionCandidates = (params.conversationMembers || []).map(
-    conversationMemberEntryToEntityRef,
+  const mentionCandidates = (params.conversationParticipants || []).map(
+    conversationParticipantEntryToEntityRef,
   );
   const defaultUser = buildDefaultUserMention({
     workspaceMemberId: params.workspaceMemberId,
@@ -317,17 +317,17 @@ interface Subordinate {
   summary: string;
 }
 
-async function loadToolResolveConversationMembers(params: {
+async function loadToolResolveConversationParticipants(params: {
   conversationId?: string;
   actorId: string;
-  fallback?: ConversationMemberEntry[];
-}): Promise<ConversationMemberEntry[] | undefined> {
+  fallback?: ConversationParticipantEntry[];
+}): Promise<ConversationParticipantEntry[] | undefined> {
   if (!params.conversationId) {
     return params.fallback;
   }
 
-  const members = await getLiveConversationMembers(params.conversationId);
-  const entries: ConversationMemberEntry[] = [];
+  const members = await getLiveConversationParticipants(params.conversationId);
+  const entries: ConversationParticipantEntry[] = [];
 
   for (const member of members) {
     if (member.state !== "active") continue;
@@ -342,13 +342,23 @@ async function loadToolResolveConversationMembers(params: {
       continue;
     }
     if (member.user_id) {
+      const workspaceMemberId =
+        typeof member.workspace_member_id === "string" &&
+        member.workspace_member_id.trim().length > 0
+          ? member.workspace_member_id
+          : null;
+      if (!workspaceMemberId) {
+        throw new Error(
+          `Conversation ${params.conversationId} has workspace participant ${member.id} without workspace_member_id`,
+        );
+      }
       const transportKind =
         member.transport_kind === "feishu" || member.transport_kind === "weixin"
           ? member.transport_kind
           : undefined;
       entries.push({
         type: "workspace_member",
-        id: member.workspace_member_id,
+        id: workspaceMemberId,
         participantId: member.id,
         name: member.user_name || "User",
         title: transportKind
@@ -357,7 +367,7 @@ async function loadToolResolveConversationMembers(params: {
       });
       continue;
     }
-    if (member.member_type === "external") {
+    if (member.participant_kind === "external") {
       const linkedWorkspaceMemberName =
         (member.linked_user_name as string | null) || undefined;
       entries.push({
@@ -423,11 +433,11 @@ function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
 
 function buildSleepWithoutSendToReminder(params: {
   semantics: ReturnType<typeof resolveThreadSemantics>;
-  otherMembers: ConversationMemberEntry[];
+  otherParticipants: ConversationParticipantEntry[];
   allowConfirmSleepWithoutReply: boolean;
 }): CanonicalContextItem {
   const otherMemberName =
-    params.otherMembers[0]?.name || "the other participant";
+    params.otherParticipants[0]?.name || "the other participant";
 
   if (params.semantics.addressingMode === "implicit_peer") {
     return {
@@ -450,9 +460,9 @@ function buildSleepWithoutSendToReminder(params: {
     surface: "internal",
     parts: textBlocks(
       params.allowConfirmSleepWithoutReply
-        ? `You called \`sleep\` before using \`send_to\` in this wakeup. Your reasoning and tool calls are invisible to other conversation members unless you use \`send_to\`. ` +
-            `Before sleeping, either send a visible update, result, handoff, clarification, or explicit "no action needed" message to the relevant member(s), or if the wakeup is truly unrelated to you and the message already reached the correct assignee, call \`sleep\` again now to confirm that no visible reply from you is needed.`
-        : `You called \`sleep\` again without using \`send_to\`. Your reasoning and tool calls are still invisible to other conversation members. ` +
+        ? `You called \`sleep\` before using \`send_to\` in this wakeup. Your reasoning and tool calls are invisible to other conversation participants unless you use \`send_to\`. ` +
+            `Before sleeping, either send a visible update, result, handoff, clarification, or explicit "no action needed" message to the relevant participant(s), or if the wakeup is truly unrelated to you and the message already reached the correct assignee, call \`sleep\` again now to confirm that no visible reply from you is needed.`
+        : `You called \`sleep\` again without using \`send_to\`. Your reasoning and tool calls are still invisible to other conversation participants. ` +
             `If no visible reply from you is genuinely needed because the wakeup is entirely unrelated to you and the correct assignee already received it, you may remain asleep. Otherwise, use \`send_to\` now before sleeping.`,
     ),
   };
@@ -560,7 +570,7 @@ export async function actorThink(
     conversationId?: string;
     conversationKind?: "private" | "group" | "virtual";
     conversationBoundary?: "internal" | "external";
-    conversationMembers?: ConversationMemberEntry[];
+    conversationParticipants?: ConversationParticipantEntry[];
     userId?: string;
     workspaceMemberId?: string;
     availableSkills?: AvailableSkillSummary[];
@@ -643,11 +653,11 @@ export async function actorThink(
   // MCP tools (already resolved and authorized by tool-resolver.ts)
   let mcpToolDefs = options?.mcpTools || [];
   let mcpToolNames = new Set(mcpToolDefs.map((t) => t.name));
-  let currentToolConversationMembers = options?.conversationMembers;
+  let currentToolConversationParticipants = options?.conversationParticipants;
   const getThreadSemantics = () =>
     resolveThreadSemantics({
       kind: options?.conversationKind,
-      otherParticipantCount: currentToolConversationMembers?.length || 0,
+      otherParticipantCount: currentToolConversationParticipants?.length || 0,
     });
   const buildResolveCtx = (): ToolResolveContext => ({
     sessionId: options?.sessionId || "",
@@ -656,22 +666,22 @@ export async function actorThink(
     conversationId: options?.conversationId,
     conversationKind: options?.conversationKind,
     conversationBoundary: options?.conversationBoundary,
-    conversationMembers: currentToolConversationMembers,
+    conversationParticipants: currentToolConversationParticipants,
     workspaceMemberId: options?.workspaceMemberId,
     availableSkills: options?.availableSkills,
   });
   const getInlineReferenceOptions = () =>
     buildInlineReferenceOptions({
-      conversationMembers: currentToolConversationMembers,
+      conversationParticipants: currentToolConversationParticipants,
       workspaceMemberId: options?.workspaceMemberId,
     });
   const refreshBuiltinTools = async (): Promise<
     import("@synapse/shared").ToolDefinition[]
   > => {
-    currentToolConversationMembers = await loadToolResolveConversationMembers({
+    currentToolConversationParticipants = await loadToolResolveConversationParticipants({
       conversationId: options?.conversationId,
       actorId: actor.id,
-      fallback: currentToolConversationMembers,
+      fallback: currentToolConversationParticipants,
     });
     const resolvedBuiltin = await resolveBuiltinTools(buildResolveCtx());
     const filteredBuiltin = resolvedBuiltin.filter(
@@ -1463,7 +1473,7 @@ export async function actorThink(
             role: "assistant",
             bundleId: roundBundleId,
             author: {
-              memberType: "actor",
+              participantType: "actor",
               actorId: actor.id,
               sessionId: options?.sessionId,
               name: actorDefinition.name,
@@ -1580,7 +1590,7 @@ export async function actorThink(
             appendPrivateTailItems([
               buildSleepWithoutSendToReminder({
                 semantics: threadSemantics,
-                otherMembers: currentToolConversationMembers || [],
+                otherParticipants: currentToolConversationParticipants || [],
                 allowConfirmSleepWithoutReply:
                   threadSemantics.allowsSleepWithoutReplyConfirmation,
               }),

@@ -24,8 +24,8 @@ import {
 } from "../../infrastructure/database/kysely.js";
 import { v4 as uuidv4 } from "uuid";
 import { enqueueTransportDeliveryJobs } from "../../workers/queues.js";
-import { ensureConversationMember } from "../conversation/service.js";
-import { activateConversationParticipant } from "../conversation/participant-activation.js";
+import { ensureConversationParticipant } from "../chat/service.js";
+import { activateConversationParticipant } from "../chat/participant-activation.js";
 import {
   assertSupportedConnectionMode,
   assertSupportedEndpointType,
@@ -442,20 +442,20 @@ async function loadWorkspaceMemberDisplayName(params: {
   return readTrimmedString((row || {}) as Record<string, unknown>, "name");
 }
 
-async function assertConversationMembers(params: {
+async function assertConversationParticipants(params: {
   conversationId: string;
-  memberIds: string[];
+  participantIds: string[];
 }) {
-  if (params.memberIds.length === 0) return;
+  if (params.participantIds.length === 0) return;
   const rows = await db
-    .selectFrom("conversation_members")
+    .selectFrom("conversation_participants")
     .select("id")
     .where("conversation_id", "=", params.conversationId)
-    .where("id", "in", params.memberIds)
+    .where("id", "in", params.participantIds)
     .execute();
   const existing = new Set(rows.map((row) => row.id as string));
-  const missing = params.memberIds.filter(
-    (memberId) => !existing.has(memberId),
+  const missing = params.participantIds.filter(
+    (participantId) => !existing.has(participantId),
   );
   if (missing.length > 0) {
     throw new Error(
@@ -464,30 +464,30 @@ async function assertConversationMembers(params: {
   }
 }
 
-async function assertConversationMemberType(params: {
+async function assertConversationParticipantType(params: {
   conversationId: string;
-  memberId?: string | null;
+  participantId?: string | null;
   allowedTypes: Array<"actor" | "user" | "external">;
   label: string;
 }) {
-  if (!params.memberId) return;
+  if (!params.participantId) return;
 
   const row = await db
-    .selectFrom("conversation_members")
-    .select("member_type")
+    .selectFrom("conversation_participants")
+    .select("participant_kind")
     .where("conversation_id", "=", params.conversationId)
-    .where("id", "=", params.memberId)
+    .where("id", "=", params.participantId)
     .limit(1)
     .executeTakeFirst();
-  const memberType = row?.member_type as
+  const participantType = row?.participant_kind as
     | "actor"
     | "user"
     | "external"
     | undefined;
-  if (!memberType) {
+  if (!participantType) {
     throw new Error(`${params.label} does not belong to this conversation`);
   }
-  if (!params.allowedTypes.includes(memberType)) {
+  if (!params.allowedTypes.includes(participantType)) {
     throw new Error(
       `${params.label} must be one of: ${params.allowedTypes.join(", ")}`,
     );
@@ -877,9 +877,9 @@ export async function listTransportExternalUsers(params: {
   const activity = db
     .selectFrom("conversation_participant_addresses as cpa_activity")
     .innerJoin(
-      "conversation_members as cm_activity",
+      "conversation_participants as cm_activity",
       "cm_activity.id",
-      "cpa_activity.conversation_member_id",
+      "cpa_activity.conversation_participant_id",
     )
     .innerJoin(
       "transport_message_links as tml",
@@ -905,7 +905,7 @@ export async function listTransportExternalUsers(params: {
       "cpa.transport_address_id",
       "ta.id",
     )
-    .leftJoin("conversation_members as cm", "cm.id", "cpa.conversation_member_id")
+    .leftJoin("conversation_participants as cm", "cm.id", "cpa.conversation_participant_id")
     .leftJoin("conversations as c", "c.id", "cm.conversation_id")
     .leftJoin(
       "conversation_transport_bindings as ctb",
@@ -1519,14 +1519,14 @@ export async function getTransportAddressById(transportAddressId: string) {
 }
 
 export async function getPrimaryTransportAddressForParticipant(params: {
-  conversationMemberId: string;
+  conversationParticipantId: string;
   transportAccountId?: string;
 }) {
   let builder = db
     .selectFrom("conversation_participant_addresses as cpa")
     .innerJoin("transport_addresses as ta", "ta.id", "cpa.transport_address_id")
     .selectAll("ta")
-    .where("cpa.conversation_member_id", "=", params.conversationMemberId);
+    .where("cpa.conversation_participant_id", "=", params.conversationParticipantId);
 
   if (params.transportAccountId) {
     builder = builder.where(
@@ -1544,7 +1544,7 @@ export async function getPrimaryTransportAddressForParticipant(params: {
 }
 
 export async function getReachableTransportAddressForParticipant(params: {
-  conversationMemberId: string;
+  conversationParticipantId: string;
   transportAccountId: string;
 }) {
   const result = await db.executeQuery(
@@ -1556,7 +1556,7 @@ export async function getReachableTransportAddressForParticipant(params: {
                cpa.created_at AS binding_created_at
         FROM conversation_participant_addresses cpa
         JOIN transport_addresses ta ON ta.id = cpa.transport_address_id
-        WHERE cpa.conversation_member_id = ${params.conversationMemberId}
+        WHERE cpa.conversation_participant_id = ${params.conversationParticipantId}
           AND ta.transport_account_id = ${params.transportAccountId}
 
         UNION ALL
@@ -1565,11 +1565,11 @@ export async function getReachableTransportAddressForParticipant(params: {
                FALSE AS is_attached,
                FALSE AS is_primary,
                ta.created_at AS binding_created_at
-        FROM conversation_members cm
+        FROM conversation_participants cm
         JOIN transport_addresses ta
           ON ta.workspace_member_id = cm.workspace_member_id
          AND ta.address_type = 'user'
-        WHERE cm.id = ${params.conversationMemberId}
+        WHERE cm.id = ${params.conversationParticipantId}
           AND cm.workspace_member_id IS NOT NULL
           AND ta.transport_account_id = ${params.transportAccountId}
       ) candidate
@@ -1582,36 +1582,36 @@ export async function getReachableTransportAddressForParticipant(params: {
 }
 
 async function removeConversationParticipantTransportAddress(params: {
-  conversationMemberId: string;
+  conversationParticipantId: string;
   transportAddressId: string;
 }) {
   await db
     .deleteFrom("conversation_participant_addresses")
-    .where("conversation_member_id", "=", params.conversationMemberId)
+    .where("conversation_participant_id", "=", params.conversationParticipantId)
     .where("transport_address_id", "=", params.transportAddressId)
     .execute();
 }
 
-async function archiveConversationMemberIfOrphaned(
-  conversationMemberId: string,
+async function archiveConversationParticipantIfOrphaned(
+  conversationParticipantId: string,
 ) {
   const row = await db
-    .selectFrom("conversation_members as cm")
+    .selectFrom("conversation_participants as cm")
     .select([
-      "cm.member_type",
+      "cm.participant_kind",
       "cm.state",
       sql<boolean>`EXISTS (
         SELECT 1
         FROM conversation_participant_addresses cpa
-        WHERE cpa.conversation_member_id = cm.id
+        WHERE cpa.conversation_participant_id = cm.id
       )`.as("has_addresses"),
     ])
-    .where("cm.id", "=", conversationMemberId)
+    .where("cm.id", "=", conversationParticipantId)
     .limit(1)
     .executeTakeFirst();
   if (!row) return;
   if (
-    row.member_type !== "external" ||
+    row.participant_kind !== "external" ||
     row.state !== "active" ||
     row.has_addresses
   ) {
@@ -1619,17 +1619,17 @@ async function archiveConversationMemberIfOrphaned(
   }
 
   await db
-    .updateTable("conversation_members")
+    .updateTable("conversation_participants")
     .set({
       state: "left",
       left_at: sql`COALESCE(left_at, NOW())`,
       metadata: sql`COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify({ retiredByTransportLink: true })}::jsonb`,
     })
-    .where("id", "=", conversationMemberId)
+    .where("id", "=", conversationParticipantId)
     .execute();
 }
 
-export async function syncTransportAddressConversationMember(params: {
+export async function syncTransportAddressConversationParticipant(params: {
   conversationId: string;
   transportAddressId: string;
   workspaceMemberId?: string | null;
@@ -1646,7 +1646,7 @@ export async function syncTransportAddressConversationMember(params: {
         await activateConversationParticipant({
           workspaceId: address.workspace_id,
           conversationId: params.conversationId,
-          memberType: "workspace_member",
+          participantKind: "workspace_member",
           workspaceMemberId: params.workspaceMemberId,
           recordJoinEvent: params.recordJoinEvent,
         })
@@ -1655,7 +1655,7 @@ export async function syncTransportAddressConversationMember(params: {
         await activateConversationParticipant({
           workspaceId: address.workspace_id,
           conversationId: params.conversationId,
-          memberType: "external",
+          participantKind: "external",
           displayName:
             params.displayName ||
             address.display_name ||
@@ -1669,15 +1669,15 @@ export async function syncTransportAddressConversationMember(params: {
       ).member;
 
   await ensureConversationParticipantTransportAddress({
-    conversationMemberId: desiredMember.id,
+    conversationParticipantId: desiredMember.id,
     transportAddressId: address.id,
     isPrimary: true,
   });
 
   const attachedMembers = await db
     .selectFrom("conversation_participant_addresses as cpa")
-    .innerJoin("conversation_members as cm", "cm.id", "cpa.conversation_member_id")
-    .select(["cm.id", "cm.member_type"])
+    .innerJoin("conversation_participants as cm", "cm.id", "cpa.conversation_participant_id")
+    .select(["cm.id", "cm.participant_kind"])
     .where("cpa.transport_address_id", "=", address.id)
     .where("cm.conversation_id", "=", params.conversationId)
     .where("cm.id", "<>", desiredMember.id)
@@ -1685,10 +1685,10 @@ export async function syncTransportAddressConversationMember(params: {
 
   for (const row of attachedMembers) {
     await removeConversationParticipantTransportAddress({
-      conversationMemberId: row.id,
+      conversationParticipantId: row.id,
       transportAddressId: address.id,
     });
-    await archiveConversationMemberIfOrphaned(row.id);
+    await archiveConversationParticipantIfOrphaned(row.id);
   }
 
   return desiredMember;
@@ -1699,7 +1699,7 @@ async function listConversationIdsForTransportAddress(
 ) {
   const rows = await db
     .selectFrom("conversation_participant_addresses as cpa")
-    .innerJoin("conversation_members as cm", "cm.id", "cpa.conversation_member_id")
+    .innerJoin("conversation_participants as cm", "cm.id", "cpa.conversation_participant_id")
     .select("cm.conversation_id")
     .distinct()
     .where("cpa.transport_address_id", "=", transportAddressId)
@@ -1717,7 +1717,7 @@ async function syncTransportAddressLinkedUserMemberships(params: {
     params.transportAddressId,
   );
   for (const conversationId of conversationIds) {
-    await syncTransportAddressConversationMember({
+    await syncTransportAddressConversationParticipant({
       conversationId,
       transportAddressId: params.transportAddressId,
       workspaceMemberId: params.workspaceMemberId || null,
@@ -1726,26 +1726,26 @@ async function syncTransportAddressLinkedUserMemberships(params: {
   }
 }
 
-async function loadConversationExternalMemberPrimaryAddress(params: {
+async function loadConversationExternalParticipantPrimaryAddress(params: {
   workspaceId: string;
   conversationId: string;
-  conversationMemberId: string;
+  conversationParticipantId: string;
 }) {
   return db
-    .selectFrom("conversation_members as cm")
+    .selectFrom("conversation_participants as cm")
     .leftJoin(
       "conversation_participant_addresses as cpa",
-      "cpa.conversation_member_id",
+      "cpa.conversation_participant_id",
       "cm.id",
     )
     .leftJoin("transport_addresses as ta", "ta.id", "cpa.transport_address_id")
     .select([
-      "cm.id as conversation_member_id",
+      "cm.id as conversation_participant_id",
       "ta.id as transport_address_id",
     ])
     .where("cm.conversation_id", "=", params.conversationId)
-    .where("cm.id", "=", params.conversationMemberId)
-    .where("cm.member_type", "=", "external")
+    .where("cm.id", "=", params.conversationParticipantId)
+    .where("cm.participant_kind", "=", "external")
     .where("ta.workspace_id", "=", params.workspaceId)
     .orderBy("cpa.is_primary", "desc")
     .orderBy("cpa.created_at", "asc")
@@ -1767,27 +1767,27 @@ async function assertWorkspaceMember(params: {
   return Boolean(row);
 }
 
-export async function setConversationExternalMemberLinkedUser(params: {
+export async function setConversationExternalParticipantLinkedUser(params: {
   workspaceId: string;
   conversationId: string;
-  conversationMemberId: string;
+  conversationParticipantId: string;
   workspaceMemberId?: string | null;
 }) {
-  const memberAddress = await loadConversationExternalMemberPrimaryAddress({
+  const participantAddress = await loadConversationExternalParticipantPrimaryAddress({
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
-    conversationMemberId: params.conversationMemberId,
+    conversationParticipantId: params.conversationParticipantId,
   });
-  if (!memberAddress) {
+  if (!participantAddress) {
     throw new Error("External participant not found in this conversation");
   }
-  if (!memberAddress.transport_address_id) {
+  if (!participantAddress.transport_address_id) {
     throw new Error("External participant does not have a transport address");
   }
 
   return setTransportAddressLinkedUser({
     workspaceId: params.workspaceId,
-    transportAddressId: memberAddress.transport_address_id as string,
+    transportAddressId: participantAddress.transport_address_id as string,
     workspaceMemberId: params.workspaceMemberId,
   });
 }
@@ -1832,7 +1832,7 @@ export async function setTransportAddressLinkedUser(params: {
 }
 
 export async function ensureConversationParticipantTransportAddress(params: {
-  conversationMemberId: string;
+  conversationParticipantId: string;
   transportAddressId: string;
   isPrimary?: boolean;
   metadata?: Record<string, unknown>;
@@ -1844,14 +1844,14 @@ export async function ensureConversationParticipantTransportAddress(params: {
         is_primary: false,
         updated_at: sql`NOW()`,
       })
-      .where("conversation_member_id", "=", params.conversationMemberId)
+      .where("conversation_participant_id", "=", params.conversationParticipantId)
       .execute();
   }
 
   return db
     .insertInto("conversation_participant_addresses")
     .values({
-      conversation_member_id: params.conversationMemberId,
+      conversation_participant_id: params.conversationParticipantId,
       transport_address_id: params.transportAddressId,
       is_primary: params.isPrimary ?? false,
       metadata: (params.metadata || {}) as TableInsert<"conversation_participant_addresses">["metadata"],
@@ -1860,7 +1860,7 @@ export async function ensureConversationParticipantTransportAddress(params: {
     })
     .onConflict((oc) =>
       oc
-        .columns(["conversation_member_id", "transport_address_id"])
+        .columns(["conversation_participant_id", "transport_address_id"])
         .doUpdateSet({
           is_primary: sql`CASE
             WHEN excluded.is_primary THEN TRUE

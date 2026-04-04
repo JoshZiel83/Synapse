@@ -50,7 +50,7 @@ import {
   buildNormalizedMessageContent,
   itemPartsToCanonicalContentBlocks,
   type DraftConversationPart,
-} from '../conversation/message-content.js';
+} from '../chat/message-content.js';
 import { ensureConversationActorSessionContext } from '../session/service.js';
 import {
   actorSubject,
@@ -561,11 +561,11 @@ async function assertActorInWorkspace(workspaceId: string, actorId: string) {
 
 async function assertConversationInWorkspace(workspaceId: string, conversationId: string) {
   const row = await db
-    .selectFrom('conversation_members as cm')
-    .leftJoin('workspace_members as wm', 'wm.id', 'cm.workspace_member_id')
-    .leftJoin('actors as a', 'a.id', 'cm.actor_id')
-    .select('cm.id')
-    .where('cm.conversation_id', '=', conversationId)
+    .selectFrom('conversation_participants as cp')
+    .leftJoin('workspace_members as wm', 'wm.id', 'cp.workspace_member_id')
+    .leftJoin('actors as a', 'a.id', 'cp.actor_id')
+    .select('cp.id')
+    .where('cp.conversation_id', '=', conversationId)
     .where((eb) =>
       eb.or([
         eb('wm.workspace_id', '=', workspaceId),
@@ -581,7 +581,7 @@ async function assertConversationInWorkspace(workspaceId: string, conversationId
 
 async function assertActorInConversation(conversationId: string, actorId: string) {
   const row = await db
-    .selectFrom('conversation_members')
+    .selectFrom('conversation_participants')
     .select('id')
     .where('conversation_id', '=', conversationId)
     .where('actor_id', '=', actorId)
@@ -589,7 +589,7 @@ async function assertActorInConversation(conversationId: string, actorId: string
     .limit(1)
     .executeTakeFirst();
   if (!row) {
-    throw new MemoryError('Actor is not an active member of this conversation', 400);
+    throw new MemoryError('Actor is not an active participant of this conversation', 400);
   }
 }
 

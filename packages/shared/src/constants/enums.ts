@@ -216,7 +216,7 @@ export const SESSION_WAKEUP_SOURCE_TYPES = [
   'system_interrupt',
   'retry',
 ] as const;
-export const SESSION_WAKEUP_SOURCE_MEMBER_TYPES = [
+export const SESSION_WAKEUP_SOURCE_PARTICIPANT_TYPES = [
   'workspace_member',
   'actor',
   'external',

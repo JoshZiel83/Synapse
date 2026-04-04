@@ -12,6 +12,8 @@ import {
   resolveThreadSemantics,
   SEND_TO_INTENTS,
   summarizeActorForRole,
+  mentionBlock,
+  textBlock,
   textBlocks,
   type ActorDoc,
   type ToolDefinition,
@@ -19,7 +21,7 @@ import {
 } from "@synapse/shared";
 import type {
   CapabilityInvocationContext,
-  ConversationMemberEntry,
+  ConversationParticipantEntry,
   ConversationEntityRef,
   InteractionQuestionFieldDefinition,
   InteractionQuestionFieldType,
@@ -36,11 +38,11 @@ import { db } from "../../infrastructure/database/kysely.js";
 import { sql } from "kysely";
 import { getSession } from "../session/service.js";
 import {
-  sendConversationMessage,
-  addMembersToConversation,
-  getConversationMembers,
-} from "../conversation/chat-service.js";
-import { buildNormalizedMessageContent } from "../conversation/message-content.js";
+  addConversationParticipants,
+  listConversationParticipants,
+  sendConversationMessageFromParticipant,
+} from "../chat/service.js";
+import { buildNormalizedMessageContent } from "../chat/message-content.js";
 import { buildDefaultUserMention } from "./inline-ref-resolver.js";
 import { runMemorySearch } from "../memory/service.js";
 import { readVisibleSkill } from "../skills/service.js";
@@ -88,7 +90,6 @@ type InviteableActor = {
 
 type SendToCandidate = {
   type: "actor" | "workspace_member" | "external";
-  memberId: string;
   participantId: string;
   actorId?: string;
   workspaceMemberId?: string;
@@ -102,7 +103,7 @@ type SendToCandidate = {
 };
 
 type UserInteractionCandidate = {
-  memberId: string;
+  participantId: string;
   workspaceMemberId: string;
   name: string;
   label: string;
@@ -155,8 +156,8 @@ function getToolContextConversationBoundary(ctx: ToolResolveContext) {
   return ctx.conversationBoundary;
 }
 
-function getToolContextConversationMembers(ctx: ToolResolveContext) {
-  return ctx.conversationMembers;
+function getToolContextConversationParticipants(ctx: ToolResolveContext) {
+  return ctx.conversationParticipants;
 }
 
 function getThreadConversationId(session: {
@@ -188,12 +189,12 @@ function formatUtcTimestamp(date: Date) {
 
 function buildSendToDefinition(params: {
   conversationKind?: string;
-  otherMembers: ConversationMemberEntry[];
+  otherParticipants: ConversationParticipantEntry[];
 }): ToolDefinition {
   const recipientNames = Array.from(
-    new Set(params.otherMembers.map((member) => member.name)),
+    new Set(params.otherParticipants.map((member) => member.name)),
   );
-  const rosterDesc = params.otherMembers
+  const rosterDesc = params.otherParticipants
     .map((member) =>
       member.type === "workspace_member"
         ? `"${member.name}" (workspace member)`
@@ -204,14 +205,14 @@ function buildSendToDefinition(params: {
     .join(", ");
   const semantics = resolveThreadSemantics({
     kind: params.conversationKind,
-    otherParticipantCount: params.otherMembers.length,
+    otherParticipantCount: params.otherParticipants.length,
   });
 
   if (
     semantics.addressingMode === "implicit_peer" &&
-    params.otherMembers.length === 1
+    params.otherParticipants.length === 1
   ) {
-    const peerName = params.otherMembers[0]!.name;
+    const peerName = params.otherParticipants[0]!.name;
     return {
       name: "send_to",
       description: `Send a visible message to the other participant in this private thread. The recipient is implicit, so do not supply a recipients list unless you need to disambiguate a malformed roster. Current peer: ${rosterDesc}.`,
@@ -231,7 +232,7 @@ function buildSendToDefinition(params: {
           message: {
             type: "string",
             description:
-              `The visible message content sent directly to ${peerName}. To render a member reference clearly in the UI, use <Mention name="${peerName}"/> or an explicit id form like <Mention type="actor" id="..."/> whenever the sentence explicitly points to that person, such as ownership, responsibility, follow-up, or who to contact. Mention does not decide who the message is sent to. If a name is ambiguous, you must disambiguate with type+id or an explicit id attribute.`,
+              `The visible message content sent in this private thread with ${peerName}. The system already knows who the peer is, so use <Mention name="${peerName}"/> only when the sentence itself explicitly points to that person, such as ownership, responsibility, follow-up, or who to contact. If a name is ambiguous, you must disambiguate with type+id or an explicit id attribute.`,
           },
         },
         required: ["intent", "summary", "message"],
@@ -241,13 +242,13 @@ function buildSendToDefinition(params: {
 
   return {
     name: "send_to",
-    description: `Send a visible conversation message to one or more members in the current conversation. Mark whether it is a reply or a request, and provide a short summary for UI rendering. Recipients are the addressees. Inline mentions are rich body references for UI rendering and sentence clarity: use them when the message text explicitly points to a member, but do not add them mechanically just because someone is a recipient. Available recipients: ${rosterDesc}.`,
+    description: `Send a visible conversation message in the current conversation. Group messages stay visible to everyone; recipients tell the system who you are addressing so it can add recipient mentions and route wakeups correctly. Inline mentions inside the body are still only for sentence-level references. Available recipients: ${rosterDesc}.`,
     parameters: {
       type: "object",
       properties: {
         recipients: {
           type: "array",
-          description: "One or more member names to send the message to.",
+          description: "One or more participant names you are addressing. The message still remains visible to the whole conversation.",
           items: { type: "string", enum: recipientNames },
         },
         intent: {
@@ -264,7 +265,7 @@ function buildSendToDefinition(params: {
         message: {
           type: "string",
           description:
-            'The visible message content. To render a member reference clearly in the UI, use <Mention name="Alice"/> with the exact roster display name, or use an explicit id form like <Mention type="actor" id="..."/> whenever the sentence explicitly points to that person, such as ownership, responsibility, follow-up, or who to contact. Mention does not decide who the message is sent to, so do not add a mention only to mirror the recipient list. If a name matches multiple members, you must disambiguate with type+id or an explicit id attribute.',
+            'The visible message content. The system will automatically prepend mentions for the selected recipients, so do not manually duplicate them at the start of the message. Use inline <Mention .../> only when the sentence itself explicitly points to a participant, such as ownership, responsibility, follow-up, or who to contact. If a name matches multiple participants, you must disambiguate with type+id or an explicit id attribute.',
         },
       },
       required: ["recipients", "intent", "summary", "message"],
@@ -300,9 +301,8 @@ function formatWeekdayInZone(date: Date, timeZone: string) {
 
 function buildSendToMention(candidate: SendToCandidate): ConversationEntityRef {
   return {
-    memberId: candidate.memberId,
     participantId: candidate.participantId,
-    memberType: candidate.type,
+    participantType: candidate.type,
     actorId: candidate.actorId,
     workspaceMemberId: candidate.workspaceMemberId,
     externalUserKey: candidate.externalUserKey,
@@ -356,25 +356,24 @@ function normalizeRecipientAlias(value: string) {
 }
 
 function buildSendToCandidates(
-  members: any[],
+  participants: any[],
   currentActorId?: string,
 ): SendToCandidate[] {
   const candidates: SendToCandidate[] = [];
 
-  for (const member of members) {
-    if (member.state !== "active") continue;
+  for (const participant of participants) {
+    if (participant.state !== "active") continue;
 
-    if (member.actor_id) {
-      if (member.actor_id === currentActorId) continue;
-      const name = member.actor_name || "Unknown actor";
-      const title = member.actor_title || member.actor_role || "Actor";
+    if (participant.actor_id) {
+      if (participant.actor_id === currentActorId) continue;
+      const name = participant.actor_name || "Unknown actor";
+      const title = participant.actor_title || participant.actor_role || "Actor";
       candidates.push({
         type: "actor",
-        memberId: member.id,
-        participantId: member.id,
-        actorId: member.actor_id,
-        title: member.actor_title || undefined,
-        role: member.actor_role || undefined,
+        participantId: participant.id,
+        actorId: participant.actor_id,
+        title: participant.actor_title || undefined,
+        role: participant.actor_role || undefined,
         name,
         label: `"${name}" (actor${title ? `, ${title}` : ""})`,
         aliases: [name],
@@ -382,20 +381,19 @@ function buildSendToCandidates(
       continue;
     }
 
-    if (member.user_id) {
-      const name = member.user_name || "User";
+    if (participant.user_id) {
+      const name = participant.user_name || "User";
       const transportKind =
-        member.transport_kind === "feishu" || member.transport_kind === "weixin"
-          ? member.transport_kind
+        participant.transport_kind === "feishu" || participant.transport_kind === "weixin"
+          ? participant.transport_kind
           : undefined;
       const transportLabel = transportKind
         ? `, reachable via ${transportKind === "feishu" ? "Feishu" : "WeChat"}`
         : "";
       candidates.push({
         type: "workspace_member",
-        memberId: member.id,
-        participantId: member.id,
-        workspaceMemberId: member.workspace_member_id,
+        participantId: participant.id,
+        workspaceMemberId: participant.workspace_member_id,
         name,
         title: "Workspace member",
         label: `"${name}" (workspace member${transportLabel})`,
@@ -404,12 +402,12 @@ function buildSendToCandidates(
       continue;
     }
 
-    if (member.member_type === "external") {
+    if (participant.participant_kind === "external") {
       const linkedWorkspaceMemberName =
-        (member.linked_user_name as string | null) || undefined;
+        (participant.linked_user_name as string | null) || undefined;
       const name =
-        (member.transport_display_name as string | null) ||
-        (member.display_name as string | null) ||
+        (participant.transport_display_name as string | null) ||
+        (participant.display_name as string | null) ||
         linkedWorkspaceMemberName ||
         "External participant";
       const aliases = Array.from(
@@ -422,10 +420,9 @@ function buildSendToCandidates(
       );
       candidates.push({
         type: "external",
-        memberId: member.id,
-        participantId: member.id,
+        participantId: participant.id,
         externalUserKey:
-          (member.transport_external_id as string | null) || undefined,
+          (participant.transport_external_id as string | null) || undefined,
         name,
         title: linkedWorkspaceMemberName
           ? `Linked workspace user: ${linkedWorkspaceMemberName}`
@@ -443,44 +440,48 @@ function buildSendToCandidates(
 }
 
 function buildUserInteractionCandidates(
-  members: any[],
+  participants: any[],
 ): UserInteractionCandidate[] {
   const candidates: UserInteractionCandidate[] = [];
 
-  for (const member of members) {
+  for (const participant of participants) {
     const state =
-      typeof member.state === "string" && member.state.trim().length > 0
-        ? member.state
+      typeof participant.state === "string" &&
+      participant.state.trim().length > 0
+        ? participant.state
         : "active";
     if (state !== "active") continue;
 
     const workspaceMemberId =
-      typeof member.user_id === "string" && member.user_id.trim().length > 0
-        ? member.user_id
-        : typeof member.workspaceMemberId === "string" && member.workspaceMemberId.trim().length > 0
-          ? member.workspaceMemberId
-          : member.type === "workspace_member" &&
-              typeof member.id === "string" &&
-              member.id.trim().length > 0
-            ? member.id
+      typeof participant.user_id === "string" &&
+      participant.user_id.trim().length > 0
+        ? participant.user_id
+        : typeof participant.workspaceMemberId === "string" &&
+            participant.workspaceMemberId.trim().length > 0
+          ? participant.workspaceMemberId
+          : participant.type === "workspace_member" &&
+              typeof participant.id === "string" &&
+              participant.id.trim().length > 0
+            ? participant.id
             : null;
     if (!workspaceMemberId) continue;
 
-    const memberId =
-      typeof member.participantId === "string" &&
-      member.participantId.trim().length > 0
-        ? member.participantId
-        : typeof member.id === "string" && member.id.trim().length > 0
-          ? member.id
+    const participantId =
+      typeof participant.participantId === "string" &&
+      participant.participantId.trim().length > 0
+        ? participant.participantId
+        : typeof participant.id === "string" && participant.id.trim().length > 0
+          ? participant.id
           : null;
-    if (!memberId) continue;
+    if (!participantId) continue;
 
     const name =
-      (typeof member.user_name === "string" && member.user_name.trim()) ||
-      (typeof member.name === "string" && member.name.trim()) ||
+      (typeof participant.user_name === "string" &&
+        participant.user_name.trim()) ||
+      (typeof participant.name === "string" && participant.name.trim()) ||
       "User";
     candidates.push({
-      memberId,
+      participantId,
       workspaceMemberId,
       name,
       label: `"${name}" (user)`,
@@ -492,23 +493,24 @@ function buildUserInteractionCandidates(
 
 function buildUserInteractionDirectory(candidates: UserInteractionCandidate[]) {
   return candidates
-    .map((candidate) => `\`${candidate.memberId}\`: ${candidate.label}`)
+    .map((candidate) => `\`${candidate.participantId}\`: ${candidate.label}`)
     .join(", ");
 }
 
 function resolveUserInteractionCandidate(
-  requestedMemberId: string,
+  requestedParticipantId: string,
   candidates: UserInteractionCandidate[],
 ) {
   const candidate =
-    candidates.find((entry) => entry.memberId === requestedMemberId) || null;
+    candidates.find((entry) => entry.participantId === requestedParticipantId) ||
+    null;
   if (candidate) {
     return { candidate, error: null };
   }
 
   return {
     candidate: null,
-    error: `targetMemberId must be one of: ${candidates.map((entry) => entry.memberId).join(", ")}`,
+    error: `targetParticipantId must be one of: ${candidates.map((entry) => entry.participantId).join(", ")}`,
   };
 }
 
@@ -641,7 +643,7 @@ async function hasNewUserFacingConversationMessage(
 ) {
   const row = await db
     .selectFrom("conversation_items as ci")
-    .leftJoin("conversation_members as cm", "cm.id", "ci.author_member_id")
+    .leftJoin("conversation_participants as cp", "cp.id", "ci.author_participant_id")
     .select("ci.id")
     .where("ci.conversation_id", "=", conversationId)
     .where("ci.item_type", "=", "message")
@@ -649,7 +651,7 @@ async function hasNewUserFacingConversationMessage(
     .where((eb) =>
       eb.or([
         eb("ci.role", "=", "user"),
-        eb("cm.member_type", "in", ["workspace_member", "external"]),
+        eb("cp.participant_kind", "in", ["workspace_member", "external"]),
       ]),
     )
     .limit(1)
@@ -1011,10 +1013,10 @@ async function listInviteableActors(params: {
     .where("a.id", "<>", params.actorId)
     .where(sql<boolean>`NOT EXISTS (
       SELECT 1
-      FROM conversation_members cm
-      WHERE cm.conversation_id = ${params.conversationId}
-        AND cm.actor_id = a.id
-        AND cm.state = 'active'
+      FROM conversation_participants cp
+      WHERE cp.conversation_id = ${params.conversationId}
+        AND cp.actor_id = a.id
+        AND cp.state = 'active'
     )`)
     .orderBy("a.name", "asc")
     .orderBy("a.id", "asc")
@@ -1239,14 +1241,14 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "send_to",
       description:
-        "Send a visible conversation message in the current thread. In private threads the recipient is implicit; in group threads you must specify recipients. Always include whether this is a reply or a request, and include a short structured summary for UI rendering.",
+        "Send a visible conversation message in the current thread. In private threads the peer is implicit. In group threads you must specify who you are addressing, but the message remains visible to the whole conversation. Always include whether this is a reply or a request, and include a short structured summary for UI rendering.",
       parameters: {
         type: "object",
         properties: {
           recipients: {
             type: "array",
             description:
-              "Optional in private threads. Required in group threads. Member names to send to.",
+              "Optional in private threads. Required in group threads. These are the addressees, not a private visibility filter.",
             items: { type: "string" },
           },
           intent: {
@@ -1262,29 +1264,29 @@ export function registerCallableToolPlugins(): void {
           message: {
             type: "string",
             description:
-              'The visible message content. To render a member reference clearly in the UI, use <Mention name="Alice"/> or an explicit id form like <Mention type="actor" id="..."/> whenever the sentence explicitly points to that person, such as ownership, responsibility, follow-up, or who to contact. Mention does not decide who the message is sent to; recipients and mentions have different meanings. If a name is ambiguous, you must disambiguate with type+id or an explicit id attribute.',
+              'The visible message content. In group threads the system will automatically prepend mentions for the selected recipients, so do not manually repeat them at the start of the message. Use inline <Mention .../> only when the sentence itself needs an explicit participant reference, such as ownership, responsibility, follow-up, or who to contact. If a name is ambiguous, you must disambiguate with type+id or an explicit id attribute.',
           },
         },
-        required: ["recipients", "intent", "summary", "message"],
+        required: ["intent", "summary", "message"],
       },
     },
     resolve: (ctx) => {
       const conversationId = getToolContextConversationId(ctx);
-      const conversationMembers = getToolContextConversationMembers(ctx);
-      if (!conversationId || !conversationMembers?.length) {
+      const conversationParticipants = getToolContextConversationParticipants(ctx);
+      if (!conversationId || !conversationParticipants?.length) {
         return { active: false, definition: null as any };
       }
-      const otherMembers = conversationMembers.filter(
+      const otherParticipants = conversationParticipants.filter(
         (m) => m.type === "workspace_member" || m.id !== ctx.actorId,
       );
-      if (otherMembers.length === 0) {
+      if (otherParticipants.length === 0) {
         return { active: false, definition: null as any };
       }
       return {
         active: true,
         definition: buildSendToDefinition({
           conversationKind: getToolContextConversationKind(ctx),
-          otherMembers,
+          otherParticipants,
         }),
       };
     },
@@ -1316,8 +1318,15 @@ export function registerCallableToolPlugins(): void {
         );
       }
 
-      const allMembers = await getConversationMembers(conversationId);
+      const allMembers = await listConversationParticipants(conversationId);
       const candidates = buildSendToCandidates(allMembers, context.actorId);
+      const senderParticipant = allMembers.find(
+        (member: any) =>
+          member.actor_id === context.actorId && member.state === "active",
+      );
+      if (!senderParticipant?.id) {
+        throwToolError("Current actor is not an active participant in this conversation.");
+      }
       const threadSemantics = resolveThreadSemantics({
         kind: session.conversation_kind,
         otherParticipantCount: candidates.length,
@@ -1333,8 +1342,8 @@ export function registerCallableToolPlugins(): void {
         }
       }
 
-      const targetParticipantIds: string[] = [];
       const resolved: string[] = [];
+      const resolvedRecipients: SendToCandidate[] = [];
       const errors: string[] = [];
       let hasNonActorRecipients = false;
       const parsedRecipientNames = parsed.data.recipients ?? [];
@@ -1401,17 +1410,15 @@ export function registerCallableToolPlugins(): void {
               `"${name}" not found. Did you mean ${bestMatch.candidate.label}?`,
             );
           } else {
-            errors.push(`"${name}" is not a member of this conversation.`);
+            errors.push(`"${name}" is not a participant of this conversation.`);
           }
           continue;
         }
 
-        if (!targetParticipantIds.includes(candidate.participantId)) {
-          targetParticipantIds.push(candidate.participantId);
-        }
         if (candidate.type !== "actor") {
           hasNonActorRecipients = true;
         }
+        resolvedRecipients.push(candidate);
         resolved.push(candidate.label);
       }
 
@@ -1440,14 +1447,20 @@ export function registerCallableToolPlugins(): void {
         });
       }
 
-      await sendConversationMessage({
+      const mentionPrelude = resolvedRecipients.flatMap((candidate, index) => {
+        const blocks = [mentionBlock({ mention: buildSendToMention(candidate) })];
+        const needsSpacer =
+          index < resolvedRecipients.length - 1 || normalizedMessage.contentBlocks.length > 0;
+        return needsSpacer ? [...blocks, textBlock(" ")] : blocks;
+      });
+
+      await sendConversationMessageFromParticipant({
+        workspaceId: session.workspace_id,
         conversationId,
-        senderType: "actor",
-        senderActorId: context.actorId,
-        senderSessionId: context.sessionId,
-        targetParticipantIds,
-        content: message,
-        contentBlocks: normalizedMessage.contentBlocks,
+        senderParticipantId: senderParticipant.id,
+        sessionId: context.sessionId,
+        role: "assistant",
+        contentBlocks: [...mentionPrelude, ...normalizedMessage.contentBlocks],
         metadata: {
           ...(isCoordination ? { coordination: true } : {}),
           sendToIntent: intent,
@@ -1479,10 +1492,10 @@ export function registerCallableToolPlugins(): void {
       parameters: {
         type: "object",
         properties: {
-          targetMemberId: {
+          targetParticipantId: {
             type: "string",
             description:
-              "The exact conversation member ID of the target user in the current conversation.",
+              "The exact conversation participant ID of the target user in the current conversation.",
           },
           question: {
             type: "string",
@@ -1528,15 +1541,15 @@ export function registerCallableToolPlugins(): void {
               "Maximum number of selections when selectionMode is multi_select.",
           },
         },
-        required: ["targetMemberId", "question", "options"],
+        required: ["targetParticipantId", "question", "options"],
       },
     },
     resolve: (ctx) => {
-      const conversationMembers = getToolContextConversationMembers(ctx);
-      if (!getToolContextConversationId(ctx) || !conversationMembers?.length) {
+      const conversationParticipants = getToolContextConversationParticipants(ctx);
+      if (!getToolContextConversationId(ctx) || !conversationParticipants?.length) {
         return { active: false, definition: null as any };
       }
-      const candidates = buildUserInteractionCandidates(conversationMembers);
+      const candidates = buildUserInteractionCandidates(conversationParticipants);
       if (candidates.length === 0) {
         return { active: false, definition: null as any };
       }
@@ -1545,15 +1558,15 @@ export function registerCallableToolPlugins(): void {
         active: true,
         definition: {
           name: "ask_user_question",
-          description: `Ask exactly one user in this conversation a structured question. Supports single-select, multi-select, and optional other input. Only the targeted user can answer it. Available targetMemberId values: ${candidateDirectory}.`,
+          description: `Ask exactly one user in this conversation a structured question. Supports single-select, multi-select, and optional other input. Only the targeted user can answer it. Available targetParticipantId values: ${candidateDirectory}.`,
           parameters: {
             type: "object",
             properties: {
-              targetMemberId: {
+              targetParticipantId: {
                 type: "string",
                 description:
-                  "The exact conversation member ID of the target user in the current conversation.",
-                enum: candidates.map((candidate) => candidate.memberId),
+                  "The exact conversation participant ID of the target user in the current conversation.",
+                enum: candidates.map((candidate) => candidate.participantId),
               },
               question: {
                 type: "string",
@@ -1600,7 +1613,7 @@ export function registerCallableToolPlugins(): void {
                   "Maximum number of selections when selectionMode is multi_select.",
               },
             },
-            required: ["targetMemberId", "question", "options"],
+            required: ["targetParticipantId", "question", "options"],
           },
         },
       };
@@ -1619,25 +1632,25 @@ export function registerCallableToolPlugins(): void {
         );
       }
 
-      const allMembers = await getConversationMembers(conversationId);
+      const allMembers = await listConversationParticipants(conversationId);
       const requesterMember = allMembers.find(
         (member) =>
           member.actor_id === context.actorId && member.state === "active",
       );
       if (!requesterMember) {
         throwToolError(
-          "Current actor is not an active member of this conversation",
+          "Current actor is not an active participant of this conversation",
         );
       }
 
       const candidates = buildUserInteractionCandidates(allMembers);
       if (candidates.length === 0) {
-        throwToolError("There are no active user members in this conversation");
+        throwToolError("There are no active user participants in this conversation");
       }
 
-      const targetMemberId = String((input as any).targetMemberId || "").trim();
+      const targetParticipantId = String((input as any).targetParticipantId || "").trim();
       const resolution = resolveUserInteractionCandidate(
-        targetMemberId,
+        targetParticipantId,
         candidates,
       );
       if (!resolution.candidate) {
@@ -1723,7 +1736,7 @@ export function registerCallableToolPlugins(): void {
         deliveryPolicy: "human_interaction",
         supportsCancel: true,
         requestPayload: {
-          targetMemberId: resolution.candidate.memberId,
+          targetParticipantId: resolution.candidate.participantId,
           targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
           question,
           instructions: instructions || undefined,
@@ -1738,10 +1751,10 @@ export function registerCallableToolPlugins(): void {
           workspaceId: context.workspaceId,
           conversationId,
           taskId: task.id,
-          requesterMemberId: requesterMember.id,
+          requesterParticipantId: requesterMember.id,
           requesterActorId: context.actorId,
           requesterWorkspaceMemberId: context.workspaceMemberId,
-          targetMemberId: resolution.candidate.memberId,
+          targetParticipantId: resolution.candidate.participantId,
           targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
           prompt: question,
           instructions: instructions || undefined,
@@ -1763,7 +1776,7 @@ export function registerCallableToolPlugins(): void {
         taskId: task.id,
         interactionId: interaction.id,
         targetMember: resolution.candidate.name,
-        message: `Question sent to ${resolution.candidate.name}. Only that member can answer it.`,
+        message: `Question sent to ${resolution.candidate.name}. Only that participant can answer it.`,
       });
     },
   });
@@ -1778,10 +1791,10 @@ export function registerCallableToolPlugins(): void {
       parameters: {
         type: "object",
         properties: {
-          targetMemberId: {
+          targetParticipantId: {
             type: "string",
             description:
-              "The exact conversation member ID of the target user in the current conversation.",
+              "The exact conversation participant ID of the target user in the current conversation.",
           },
           title: {
             type: "string",
@@ -1820,15 +1833,15 @@ export function registerCallableToolPlugins(): void {
             } as any,
           },
         },
-        required: ["targetMemberId", "title", "fields"],
+        required: ["targetParticipantId", "title", "fields"],
       },
     },
     resolve: (ctx) => {
-      const conversationMembers = getToolContextConversationMembers(ctx);
-      if (!getToolContextConversationId(ctx) || !conversationMembers?.length) {
+      const conversationParticipants = getToolContextConversationParticipants(ctx);
+      if (!getToolContextConversationId(ctx) || !conversationParticipants?.length) {
         return { active: false, definition: null as any };
       }
-      const candidates = buildUserInteractionCandidates(conversationMembers);
+      const candidates = buildUserInteractionCandidates(conversationParticipants);
       if (candidates.length === 0) {
         return { active: false, definition: null as any };
       }
@@ -1837,15 +1850,15 @@ export function registerCallableToolPlugins(): void {
         active: true,
         definition: {
           name: "ask_user_form",
-          description: `Ask exactly one user in this conversation a structured form with one or more fields. Only the targeted user can answer it. Available targetMemberId values: ${candidateDirectory}.`,
+          description: `Ask exactly one user in this conversation a structured form with one or more fields. Only the targeted user can answer it. Available targetParticipantId values: ${candidateDirectory}.`,
           parameters: {
             type: "object",
             properties: {
-              targetMemberId: {
+              targetParticipantId: {
                 type: "string",
                 description:
-                  "The exact conversation member ID of the target user in the current conversation.",
-                enum: candidates.map((candidate) => candidate.memberId),
+                  "The exact conversation participant ID of the target user in the current conversation.",
+                enum: candidates.map((candidate) => candidate.participantId),
               },
               title: {
                 type: "string",
@@ -1886,7 +1899,7 @@ export function registerCallableToolPlugins(): void {
                 } as any,
               },
             },
-            required: ["targetMemberId", "title", "fields"],
+            required: ["targetParticipantId", "title", "fields"],
           },
         },
       };
@@ -1905,25 +1918,25 @@ export function registerCallableToolPlugins(): void {
         );
       }
 
-      const allMembers = await getConversationMembers(conversationId);
+      const allMembers = await listConversationParticipants(conversationId);
       const requesterMember = allMembers.find(
         (member) =>
           member.actor_id === context.actorId && member.state === "active",
       );
       if (!requesterMember) {
         throwToolError(
-          "Current actor is not an active member of this conversation",
+          "Current actor is not an active participant of this conversation",
         );
       }
 
       const candidates = buildUserInteractionCandidates(allMembers);
       if (candidates.length === 0) {
-        throwToolError("There are no active user members in this conversation");
+        throwToolError("There are no active user participants in this conversation");
       }
 
-      const targetMemberId = String((input as any).targetMemberId || "").trim();
+      const targetParticipantId = String((input as any).targetParticipantId || "").trim();
       const resolution = resolveUserInteractionCandidate(
-        targetMemberId,
+        targetParticipantId,
         candidates,
       );
       if (!resolution.candidate) {
@@ -1953,7 +1966,7 @@ export function registerCallableToolPlugins(): void {
         deliveryPolicy: "human_interaction",
         supportsCancel: true,
         requestPayload: {
-          targetMemberId: resolution.candidate.memberId,
+          targetParticipantId: resolution.candidate.participantId,
           targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
           title,
           instructions: instructions || undefined,
@@ -1968,10 +1981,10 @@ export function registerCallableToolPlugins(): void {
           workspaceId: context.workspaceId,
           conversationId,
           taskId: task.id,
-          requesterMemberId: requesterMember.id,
+          requesterParticipantId: requesterMember.id,
           requesterActorId: context.actorId,
           requesterWorkspaceMemberId: context.workspaceMemberId,
-          targetMemberId: resolution.candidate.memberId,
+          targetParticipantId: resolution.candidate.participantId,
           targetWorkspaceMemberId: resolution.candidate.workspaceMemberId,
           prompt: title,
           instructions: instructions || undefined,
@@ -1993,7 +2006,7 @@ export function registerCallableToolPlugins(): void {
         taskId: task.id,
         interactionId: interaction.id,
         targetMember: resolution.candidate.name,
-        message: `Form sent to ${resolution.candidate.name}. Only that member can answer it.`,
+        message: `Form sent to ${resolution.candidate.name}. Only that participant can answer it.`,
       });
     },
   });
@@ -2033,11 +2046,11 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => {
-      const conversationMembers = getToolContextConversationMembers(ctx);
-      if (!getToolContextConversationId(ctx) || !conversationMembers?.length) {
+      const conversationParticipants = getToolContextConversationParticipants(ctx);
+      if (!getToolContextConversationId(ctx) || !conversationParticipants?.length) {
         return { active: false, definition: null as any };
       }
-      const candidates = buildUserInteractionCandidates(conversationMembers);
+      const candidates = buildUserInteractionCandidates(conversationParticipants);
       if (candidates.length === 0) {
         return { active: false, definition: null as any };
       }
@@ -2090,14 +2103,14 @@ export function registerCallableToolPlugins(): void {
         );
       }
 
-      const allMembers = await getConversationMembers(conversationId);
+      const allMembers = await listConversationParticipants(conversationId);
       const requesterMember = allMembers.find(
         (member) =>
           member.actor_id === context.actorId && member.state === "active",
       );
       if (!requesterMember) {
         throwToolError(
-          "Current actor is not an active member of this conversation",
+          "Current actor is not an active participant of this conversation",
         );
       }
 
@@ -2176,7 +2189,7 @@ export function registerCallableToolPlugins(): void {
           ? await findOpenRuntimeAuthorizationInteraction({
               workspaceId: context.workspaceId,
               conversationId,
-              requesterMemberId: requesterMember.id,
+              requesterParticipantId: requesterMember.id,
               relayCapabilityId: relayTarget.capabilityId,
               relayDeviceId: relayTarget.deviceId,
               relayExposureId: relayTarget.exposureId,
@@ -2254,7 +2267,7 @@ export function registerCallableToolPlugins(): void {
           workspaceId: context.workspaceId,
           conversationId,
           taskId: task.id,
-          requesterMemberId: requesterMember.id,
+          requesterParticipantId: requesterMember.id,
           requesterActorId: context.actorId,
           requesterWorkspaceMemberId: context.workspaceMemberId,
           relayCapabilityId: relayTarget.capabilityId,
@@ -2687,7 +2700,7 @@ export function registerCallableToolPlugins(): void {
         resourceId: conversationId,
       });
       if (!requesterAllowed) {
-        throwToolError("Actor is not allowed to manage conversation members.");
+        throwToolError("Actor is not allowed to manage conversation participants.");
       }
 
       const reason =
@@ -2796,26 +2809,22 @@ export function registerCallableToolPlugins(): void {
       );
 
       try {
-        const inviterMember = (await getConversationMembers(conversationId)).find(
+        const inviterMember = (await listConversationParticipants(conversationId)).find(
           (member: any) =>
             member.actor_id === context.actorId && member.state === "active",
         );
-        const inviterName = inviterMember?.actor_name || "Unknown";
-        const addResult = await addMembersToConversation({
+        if (!inviterMember?.id) {
+          throwToolError("Current actor is not an active participant in this conversation.");
+        }
+        const addResult = await addConversationParticipants({
           conversationId,
           workspaceId: session.workspace_id,
           actorIds: uniqueActors.map((candidate) => candidate.id),
-          initiator: {
-            memberType: "actor",
-            memberId: inviterMember?.id,
-            actorId: context.actorId,
-            name: inviterName,
-          },
         });
         const invitedActorIds = new Set(
-          (addResult.members || [])
-            .filter((member: any) => member.type === "actor" && member.actorId)
-            .map((member: any) => member.actorId as string),
+          addResult
+            .filter((member: any) => member.actor_id)
+            .map((member: any) => member.actor_id as string),
         );
         const invitedActors = uniqueActors.filter((candidate) =>
           invitedActorIds.has(candidate.id),
@@ -2834,21 +2843,36 @@ export function registerCallableToolPlugins(): void {
           });
         }
 
-        await sendConversationMessage({
+        await sendConversationMessageFromParticipant({
+          workspaceId: session.workspace_id,
           conversationId,
-          senderType: "actor",
-          senderActorId: context.actorId,
-          senderSessionId: context.sessionId,
-          targetParticipantIds: invitedActors
-            .map(
-              (candidate) =>
-                (addResult.members || []).find(
-                  (member: any) =>
-                    member.type === "actor" && member.actorId === candidate.id,
-                )?.memberId,
-            )
-            .filter((memberId): memberId is string => Boolean(memberId)),
-          content: reason,
+          senderParticipantId: inviterMember?.id,
+          sessionId: context.sessionId,
+          role: "assistant",
+          contentBlocks: [
+            ...invitedActors.flatMap((candidate, index) => {
+              const participant = addResult.find(
+                (member: any) => member.actor_id === candidate.id,
+              );
+              if (!participant?.id) {
+                return [];
+              }
+              const mention = mentionBlock({
+                mention: {
+                  participantId: participant.id,
+                  participantType: 'actor',
+                  actorId: candidate.id,
+                  name: candidate.name,
+                  title: candidate.title,
+                  role: candidate.role,
+                },
+              });
+              const needsSpacer =
+                index < invitedActors.length - 1 || reason.trim().length > 0;
+              return needsSpacer ? [mention, textBlock(' ')] : [mention];
+            }),
+            ...textBlocks(reason),
+          ],
         });
 
         return JSON.stringify({

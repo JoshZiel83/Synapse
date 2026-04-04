@@ -5,7 +5,7 @@ import {
   type CanonicalContentBlock,
   type CanonicalFileCategory,
   type ConversationEntityRef,
-  type ConversationMemberEntry,
+  type ConversationParticipantEntry,
 } from "@synapse/shared";
 import { getFileRecord } from "../files/service.js";
 
@@ -117,59 +117,49 @@ function normalizeMentionType(
 
 function matchesMentionTypeAndId(
   candidate: ConversationEntityRef,
-  memberType: "actor" | "workspace_member" | "external",
+  participantType: "actor" | "workspace_member" | "external",
   id: string,
 ): boolean {
-  if (candidate.memberType !== memberType) return false;
+  if (candidate.participantType !== participantType) return false;
 
-  if (memberType === "actor") {
-    return (
-      candidate.actorId === id ||
-      candidate.memberId === id ||
-      candidate.participantId === id
-    );
+  if (participantType === "actor") {
+    return candidate.actorId === id || candidate.participantId === id;
   }
-  if (memberType === "workspace_member") {
-    return (
-      candidate.workspaceMemberId === id ||
-      candidate.memberId === id ||
-      candidate.participantId === id
-    );
+  if (participantType === "workspace_member") {
+    return candidate.workspaceMemberId === id || candidate.participantId === id;
   }
   return (
     candidate.participantId === id ||
     candidate.externalUserKey === id ||
-    candidate.workspaceMemberId === id ||
-    candidate.memberId === id
+    candidate.workspaceMemberId === id
   );
 }
 
 function preferredMentionId(candidate: ConversationEntityRef): string | null {
-  if (candidate.memberType === "actor") {
-    return candidate.actorId || candidate.memberId || candidate.participantId || null;
+  if (candidate.participantType === "actor") {
+    return candidate.actorId || candidate.participantId || null;
   }
-  if (candidate.memberType === "workspace_member") {
-    return candidate.workspaceMemberId || candidate.memberId || candidate.participantId || null;
+  if (candidate.participantType === "workspace_member") {
+    return candidate.workspaceMemberId || candidate.participantId || null;
   }
   return (
     candidate.participantId ||
     candidate.externalUserKey ||
     candidate.workspaceMemberId ||
-    candidate.memberId ||
     null
   );
 }
 
 function describeMentionCandidate(candidate: ConversationEntityRef): string {
-  const memberType = candidate.memberType;
+  const participantType = candidate.participantType;
   const name = candidate.name?.trim() || "Unknown";
   const title = candidate.title?.trim() || candidate.role?.trim() || "";
   const preferredId = preferredMentionId(candidate);
   const titleSuffix = title ? ` (${title})` : "";
   const idSuffix = preferredId
-    ? ` via type="${memberType}" id="${preferredId}"`
+    ? ` via type="${participantType}" id="${preferredId}"`
     : "";
-  return `${memberType} "${name}"${titleSuffix}${idSuffix}`;
+  return `${participantType} "${name}"${titleSuffix}${idSuffix}`;
 }
 
 function resolveMentionFromName(
@@ -195,14 +185,14 @@ function resolveMentionFromName(
       mention: null,
       warning:
         `Ambiguous mention name "${rawName}". Matches: ${described}${moreSuffix}. ` +
-        `Use <Mention type="..." id="..."/> or an explicit id attribute such as actorId, userId, participantId, memberId, or externalUserKey.`,
+        `Use <Mention type="..." id="..."/> or an explicit id attribute such as actorId, userId, participantId, or externalUserKey.`,
     };
   }
 
   if (GENERIC_USER_KEYS.has(normalized)) {
     if (options.defaultUser) return { mention: options.defaultUser };
     const userMatches = candidates.filter(
-      (candidate) => candidate.memberType === "workspace_member",
+      (candidate) => candidate.participantType === "workspace_member",
     );
     const match = uniqueMatch(userMatches);
     if (match) {
@@ -251,12 +241,6 @@ function resolveMentionReference(
     );
     if (match) return { mention: match };
   }
-  if (attrs.memberId) {
-    const match = uniqueMatch(
-      candidates.filter((candidate) => candidate.memberId === attrs.memberId),
-    );
-    if (match) return { mention: match };
-  }
   if (attrs.actorId) {
     const match = uniqueMatch(
       candidates.filter((candidate) => candidate.actorId === attrs.actorId),
@@ -278,7 +262,7 @@ function resolveMentionReference(
     if (match) return { mention: match };
   }
 
-  const typeLike = attrs.type || attrs.memberType;
+  const typeLike = attrs.type || attrs.participantType;
   const genericId = attrs.id;
   if (typeLike || genericId) {
     if (!typeLike || !genericId) {
@@ -288,8 +272,8 @@ function resolveMentionReference(
       };
     }
 
-    const memberType = normalizeMentionType(typeLike);
-    if (!memberType) {
+    const participantType = normalizeMentionType(typeLike);
+    if (!participantType) {
       return {
         mention: null,
         warning: `Unsupported mention type "${typeLike}" in ${rawTag}. Use type="actor", type="workspace_member", or type="external".`,
@@ -297,7 +281,7 @@ function resolveMentionReference(
     }
 
     const typedMatches = candidates.filter((candidate) =>
-      matchesMentionTypeAndId(candidate, memberType, genericId),
+      matchesMentionTypeAndId(candidate, participantType, genericId),
     );
     const typedMatch = uniqueMatch(typedMatches);
     if (typedMatch) {
@@ -314,14 +298,14 @@ function resolveMentionReference(
         mention: null,
         warning:
           `Ambiguous mention reference ${rawTag}. Matches: ${described}${moreSuffix}. ` +
-          `Use a more specific explicit id attribute such as actorId, userId, participantId, memberId, or externalUserKey.`,
+          `Use a more specific explicit id attribute such as actorId, userId, participantId, or externalUserKey.`,
       };
     }
 
     return {
       mention: null,
       warning:
-        `Unknown mention target ${rawTag}. No ${memberType} member matched id "${genericId}". ` +
+        `Unknown mention target ${rawTag}. No ${participantType} participant matched id "${genericId}". ` +
         `Use a valid id from the roster or an explicit id attribute.`,
     };
   }
@@ -338,7 +322,7 @@ function resolveMentionReference(
   return {
     mention: null,
     warning:
-      `Unresolved mention reference: ${rawTag}. Provide name="..." or an explicit id reference such as type="..." id="...", actorId, userId, participantId, memberId, or externalUserKey.`,
+      `Unresolved mention reference: ${rawTag}. Provide name="..." or an explicit id reference such as type="..." id="...", actorId, userId, participantId, or externalUserKey.`,
   };
 }
 
@@ -400,39 +384,39 @@ export async function resolveInlineReferenceSegments(
   return { blocks, warnings };
 }
 
-export function conversationMemberEntryToEntityRef(
-  member: ConversationMemberEntry,
+export function conversationParticipantEntryToEntityRef(
+  participant: ConversationParticipantEntry,
 ): ConversationEntityRef {
-  if (member.type === "actor") {
+  if (participant.type === "actor") {
     return {
-      memberType: "actor",
-      actorId: member.id,
-      participantId: member.participantId,
-      name: member.name,
-      title: member.title,
-      role: member.title,
+      participantType: "actor",
+      actorId: participant.id,
+      participantId: participant.participantId,
+      name: participant.name,
+      title: participant.title,
+      role: participant.title,
     };
   }
 
-  if (member.type === "workspace_member") {
+  if (participant.type === "workspace_member") {
     return {
-      memberType: "workspace_member",
-      workspaceMemberId: member.id,
-      participantId: member.participantId,
-      name: member.name,
-      title: member.title,
-      role: member.title,
+      participantType: "workspace_member",
+      workspaceMemberId: participant.id,
+      participantId: participant.participantId,
+      name: participant.name,
+      title: participant.title,
+      role: participant.title,
     };
   }
 
   return {
-    memberType: "external",
-    workspaceMemberId: member.linkedWorkspaceMemberId,
-    participantId: member.participantId,
-    externalUserKey: member.externalUserKey,
-    name: member.name,
-    title: member.title,
-    role: member.title,
+    participantType: "external",
+    workspaceMemberId: participant.linkedWorkspaceMemberId,
+    participantId: participant.participantId,
+    externalUserKey: participant.externalUserKey,
+    name: participant.name,
+    title: participant.title,
+    role: participant.title,
   };
 }
 
@@ -442,7 +426,7 @@ export function buildDefaultUserMention(params: {
 }): ConversationEntityRef | undefined {
   if (!params.workspaceMemberId) return undefined;
   return {
-    memberType: "workspace_member",
+    participantType: "workspace_member",
     workspaceMemberId: params.workspaceMemberId,
     name: params.userName || "User",
   };

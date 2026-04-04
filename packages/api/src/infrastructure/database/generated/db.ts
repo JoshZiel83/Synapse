@@ -89,6 +89,8 @@ export type CatalogVersionFilesFileRole = "binary" | "document" | "image" | "jso
 
 export type CatalogVersionsStatus = "active" | "archived" | "deprecated" | "draft";
 
+export type ChatClientInstancesStatus = "active" | "revoked";
+
 export type ContextArchiveFramePartsPartType = "file_ref" | "json" | "text";
 
 export type ContextArchiveFramesRole = "assistant" | "system" | "tool" | "user";
@@ -123,11 +125,9 @@ export type ConversationItemsSurface = "internal" | "visible";
 
 export type ConversationItemTargetsTargetKind = "cc" | "to" | "visible";
 
-export type ConversationMembersMemberType = "actor" | "external" | "remote_agent" | "system" | "workspace_member";
+export type ConversationParticipantsKind = "actor" | "external" | "system" | "workspace_member";
 
-export type ConversationMembersRole = "admin" | "member" | "owner";
-
-export type ConversationMembersState = "active" | "kicked" | "left";
+export type ConversationParticipantsState = "active" | "left" | "removed";
 
 export type ConversationsBoundary = "external" | "internal";
 
@@ -281,7 +281,7 @@ export type SessionsChannelType = "api" | "bridge" | "web";
 
 export type SessionsStatus = "blocked" | "closed" | "idle" | "queued" | "running";
 
-export type SessionWakeupsSourceMemberType = "actor" | "external" | "system" | "workspace_member";
+export type SessionWakeupsSourceParticipantType = "actor" | "external" | "system" | "workspace_member";
 
 export type SessionWakeupsSourceType = "actor_message" | "api_call" | "automation" | "broadcast" | "invite" | "retry" | "system_interrupt" | "user_message";
 
@@ -768,6 +768,27 @@ export interface CatalogVersions {
   version: string;
 }
 
+export interface ChatClientInstances {
+  created_at: Generated<Timestamp>;
+  device_label: string | null;
+  id: string;
+  last_seen_at: Generated<Timestamp>;
+  metadata: Generated<Json>;
+  platform: string | null;
+  status: Generated<ChatClientInstancesStatus>;
+  updated_at: Generated<Timestamp>;
+  workspace_id: string;
+  workspace_member_id: string;
+}
+
+export interface ChatConversationCreateRequests {
+  client_request_id: string;
+  conversation_id: string;
+  created_at: Generated<Timestamp>;
+  workspace_id: string;
+  workspace_member_id: string;
+}
+
 export interface ContextArchiveFrameParts {
   archive_frame_id: string;
   file_id: string | null;
@@ -845,6 +866,17 @@ export interface ConversationContextStates {
   updated_at: Generated<Timestamp | null>;
 }
 
+export interface ConversationDeviceStates {
+  client_instance_id: string;
+  conversation_id: string;
+  created_at: Generated<Timestamp>;
+  draft_payload: Generated<Json>;
+  last_inbox_seq: Generated<Int8>;
+  last_opened_at: Timestamp | null;
+  last_visible_sequence: Generated<Int8>;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface ConversationGrants {
   actor_id: string | null;
   conversation_id: string;
@@ -862,7 +894,13 @@ export interface ConversationGrants {
 
 export interface ConversationItemContextTargets {
   item_id: string;
-  target_member_id: string;
+  target_participant_id: string;
+}
+
+export interface ConversationItemMentions {
+  item_id: string;
+  mentioned_participant_id: string;
+  ordinal: number;
 }
 
 export interface ConversationItemParts {
@@ -879,7 +917,7 @@ export interface ConversationItemParts {
 }
 
 export interface ConversationItems {
-  author_member_id: string | null;
+  author_participant_id: string | null;
   bundle_id: string | null;
   caused_by_item_id: string | null;
   client_message_id: string | null;
@@ -904,30 +942,40 @@ export interface ConversationItems {
 export interface ConversationItemTargets {
   item_id: string;
   target_kind: Generated<ConversationItemTargetsTargetKind>;
-  target_member_id: string;
+  target_participant_id: string;
 }
 
-export interface ConversationMembers {
+export interface ConversationParticipantAddresses {
+  conversation_participant_id: string;
+  created_at: Generated<Timestamp>;
+  is_primary: Generated<boolean>;
+  metadata: Generated<Json>;
+  transport_address_id: string;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface ConversationParticipants {
   actor_id: string | null;
   actor_join_version_id: string | null;
   conversation_id: string;
   display_name: string | null;
   id: Generated<string>;
-  joined_at: Generated<Timestamp | null>;
+  joined_at: Generated<Timestamp>;
   left_at: Timestamp | null;
-  member_type: ConversationMembersMemberType;
-  metadata: Generated<Json | null>;
-  role: Generated<ConversationMembersRole>;
-  state: Generated<ConversationMembersState>;
+  metadata: Generated<Json>;
+  participant_kind: ConversationParticipantsKind;
+  role_key: Generated<string>;
+  state: Generated<ConversationParticipantsState>;
   workspace_member_id: string | null;
 }
 
-export interface ConversationParticipantAddresses {
-  conversation_member_id: string;
+export interface ConversationParticipantStates {
+  conversation_id: string;
   created_at: Generated<Timestamp>;
-  is_primary: Generated<boolean>;
-  metadata: Generated<Json>;
-  transport_address_id: string;
+  last_read_at: Timestamp | null;
+  last_read_item_id: string | null;
+  participant_id: string;
+  read_watermark_sequence: Generated<Int8>;
   updated_at: Generated<Timestamp>;
 }
 
@@ -955,15 +1003,6 @@ export interface ConversationTransportBindings {
   transport_endpoint_id: string;
   updated_at: Generated<Timestamp>;
   workspace_id: string;
-}
-
-export interface ConversationUserStates {
-  conversation_id: string;
-  created_at: Generated<Timestamp>;
-  last_read_at: Timestamp | null;
-  read_watermark_sequence: Generated<Int8>;
-  updated_at: Generated<Timestamp>;
-  workspace_member_id: string;
 }
 
 export interface DirectConversationBindings {
@@ -1038,13 +1077,13 @@ export interface InteractionRequests {
   id: Generated<string>;
   kind: InteractionRequestsKind;
   requester_actor_id: string | null;
-  requester_member_id: string | null;
+  requester_participant_id: string | null;
   requester_workspace_member_id: string | null;
   resolved_at: Timestamp | null;
-  resolved_by_member_id: string | null;
+  resolved_by_participant_id: string | null;
   resolved_by_workspace_member_id: string | null;
   status: Generated<InteractionRequestsStatus>;
-  target_member_id: string | null;
+  target_participant_id: string | null;
   target_workspace_member_id: string | null;
   task_id: string;
   updated_at: Generated<Timestamp | null>;
@@ -1741,9 +1780,9 @@ export interface SessionWakeups {
   reason_text: string | null;
   session_id: string;
   source_item_id: string | null;
-  source_member_id: string | null;
-  source_member_type: SessionWakeupsSourceMemberType | null;
   source_name: string | null;
+  source_participant_id: string | null;
+  source_participant_type: SessionWakeupsSourceParticipantType | null;
   source_session_id: string | null;
   source_type: SessionWakeupsSourceType;
   status: Generated<SessionWakeupsStatus>;
@@ -2076,6 +2115,21 @@ export interface WorkspaceInvites {
   workspace_id: string;
 }
 
+export interface WorkspaceMemberConversationViews {
+  archived: Generated<boolean>;
+  conversation_id: string;
+  created_at: Generated<Timestamp>;
+  last_visible_at: Timestamp | null;
+  last_visible_item_id: string | null;
+  last_visible_sequence: Generated<Int8>;
+  muted: Generated<boolean>;
+  pinned_sort_key: Timestamp | null;
+  summary: Generated<Json>;
+  unread_count: Generated<number>;
+  updated_at: Generated<Timestamp>;
+  workspace_member_id: string;
+}
+
 export interface WorkspaceMemberPreferences {
   chief_actor_id: string | null;
   created_at: Generated<Timestamp | null>;
@@ -2089,6 +2143,18 @@ export interface WorkspaceMembers {
   trust_level: Generated<WorkspaceMembersTrustLevel>;
   user_id: string;
   workspace_id: string;
+}
+
+export interface WorkspaceMemberSyncEvents {
+  conversation_id: string | null;
+  created_at: Generated<Timestamp>;
+  event_type: string;
+  item_id: string | null;
+  occurred_at: Generated<Timestamp>;
+  payload: Generated<Json>;
+  sync_seq: Generated<Int8>;
+  workspace_id: string;
+  workspace_member_id: string;
 }
 
 export interface WorkspaceRelationshipProfiles {
@@ -2146,6 +2212,8 @@ export interface DB {
   catalog_items: CatalogItems;
   catalog_version_files: CatalogVersionFiles;
   catalog_versions: CatalogVersions;
+  chat_client_instances: ChatClientInstances;
+  chat_conversation_create_requests: ChatConversationCreateRequests;
   context_archive_frame_parts: ContextArchiveFrameParts;
   context_archive_frames: ContextArchiveFrames;
   context_archive_points: ContextArchivePoints;
@@ -2153,15 +2221,17 @@ export interface DB {
   context_compaction_runs: ContextCompactionRuns;
   conversation_actor_contexts: ConversationActorContexts;
   conversation_context_states: ConversationContextStates;
+  conversation_device_states: ConversationDeviceStates;
   conversation_grants: ConversationGrants;
   conversation_item_context_targets: ConversationItemContextTargets;
+  conversation_item_mentions: ConversationItemMentions;
   conversation_item_parts: ConversationItemParts;
   conversation_item_targets: ConversationItemTargets;
   conversation_items: ConversationItems;
-  conversation_members: ConversationMembers;
   conversation_participant_addresses: ConversationParticipantAddresses;
+  conversation_participant_states: ConversationParticipantStates;
+  conversation_participants: ConversationParticipants;
   conversation_transport_bindings: ConversationTransportBindings;
-  conversation_user_states: ConversationUserStates;
   conversations: Conversations;
   direct_conversation_bindings: DirectConversationBindings;
   engine_branch_checkpoints: EngineBranchCheckpoints;
@@ -2237,7 +2307,9 @@ export interface DB {
   workspace_friend_entries: WorkspaceFriendEntries;
   workspace_friend_requests: WorkspaceFriendRequests;
   workspace_invites: WorkspaceInvites;
+  workspace_member_conversation_views: WorkspaceMemberConversationViews;
   workspace_member_preferences: WorkspaceMemberPreferences;
+  workspace_member_sync_events: WorkspaceMemberSyncEvents;
   workspace_members: WorkspaceMembers;
   workspace_relationship_profiles: WorkspaceRelationshipProfiles;
   workspaces: Workspaces;

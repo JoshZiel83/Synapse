@@ -43,9 +43,9 @@ function summarizeAudience(
   recipients?: AutomationTargetEntityRef[],
 ) {
   if (targetPolicy !== "specified_members") {
-    return "All members";
+    return "All participants";
   }
-  return formatEntityRefs(recipients) || "Specified members";
+  return formatEntityRefs(recipients) || "Specified participants";
 }
 
 function describeMode(mode: AutomationDeliveryMode) {

@@ -1,13 +1,15 @@
 import type {
   CanonicalContentBlock,
+  ConversationFeedEventPayloadMap,
+  ConversationFeedEventType,
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
 } from '@synapse/shared/types';
 import { summarizeConversationEvent, textBlocks } from '@synapse/shared';
 
 export interface ConversationEventRenderContext {
-  eventType: string;
-  payload: Record<string, unknown>;
+  eventType: ConversationFeedEventType;
+  payload: ConversationFeedEventPayloadMap[ConversationFeedEventType];
 }
 
 export interface ConversationEventSpec {
@@ -26,7 +28,12 @@ function noContext(): null {
 }
 
 function noticeBlocks(
-  payload: Record<string, unknown>,
+  payload: {
+    messageBlocks?: unknown;
+    message?: unknown;
+    sourceTitle?: unknown;
+    sourceDescription?: unknown;
+  },
   fallback: string,
 ): CanonicalContentBlock[] {
   const messageBlocks = Array.isArray(payload.messageBlocks)
@@ -53,20 +60,20 @@ function noticeBlocks(
   return textBlocks(fallback);
 }
 
-const EVENT_SPECS: Record<string, ConversationEventSpec> = {
-  member_joined: {
+const EVENT_SPECS: Record<ConversationFeedEventType, ConversationEventSpec> = {
+  participant_joined: {
     timelinePolicy: 'all_members',
     contextPolicy: 'shared',
     renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
     renderContext: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
   },
-  member_kicked: {
+  participant_kicked: {
     timelinePolicy: 'all_members',
     contextPolicy: 'shared',
     renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
     renderContext: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
   },
-  member_left: {
+  participant_left: {
     timelinePolicy: 'all_members',
     contextPolicy: 'shared',
     renderTimeline: ({ eventType, payload }) => textBlocks(summarizeConversationEvent(eventType, payload)),
@@ -105,8 +112,16 @@ const EVENT_SPECS: Record<string, ConversationEventSpec> = {
   automation_notice: {
     timelinePolicy: 'all_members',
     contextPolicy: 'shared',
-    renderTimeline: ({ payload }) => noticeBlocks(payload, 'Automation notice'),
-    renderContext: ({ payload }) => noticeBlocks(payload, 'Automation notice'),
+    renderTimeline: ({ payload }) =>
+      noticeBlocks(
+        payload as ConversationFeedEventPayloadMap["automation_notice"],
+        'Automation notice',
+      ),
+    renderContext: ({ payload }) =>
+      noticeBlocks(
+        payload as ConversationFeedEventPayloadMap["automation_notice"],
+        'Automation notice',
+      ),
   },
   interaction_requested: {
     timelinePolicy: 'targeted_members',
@@ -117,49 +132,49 @@ const EVENT_SPECS: Record<string, ConversationEventSpec> = {
   task_notice: {
     timelinePolicy: 'none',
     contextPolicy: 'actor_private',
-    renderTimeline: ({ payload }) => noticeBlocks(payload, 'Task update'),
-    renderContext: ({ payload }) => noticeBlocks(payload, 'Task update'),
+    renderTimeline: ({ payload }) =>
+      noticeBlocks(
+        payload as ConversationFeedEventPayloadMap["task_notice"],
+        'Task update',
+      ),
+    renderContext: ({ payload }) =>
+      noticeBlocks(
+        payload as ConversationFeedEventPayloadMap["task_notice"],
+        'Task update',
+      ),
   },
 };
 
-const DEFAULT_EVENT_SPEC: ConversationEventSpec = {
-  timelinePolicy: 'all_members',
-  contextPolicy: 'shared',
-  renderTimeline: ({ eventType }) => textBlocks(genericSummary(eventType)),
-  renderContext: ({ eventType }) => textBlocks(genericSummary(eventType)),
-};
+const EVENT_TYPE_SET = new Set<ConversationFeedEventType>(
+  Object.keys(EVENT_SPECS) as ConversationFeedEventType[],
+);
 
-function normalizePayload(payload: unknown): Record<string, unknown> {
-  if (!payload) return {};
-  if (typeof payload === 'string') {
-    try {
-      return JSON.parse(payload) as Record<string, unknown>;
-    } catch {
-      return {};
-    }
-  }
-  return payload as Record<string, unknown>;
+export function isConversationEventType(value: string): value is ConversationFeedEventType {
+  return EVENT_TYPE_SET.has(value as ConversationFeedEventType);
 }
 
-export function getConversationEventSpec(eventType: string): ConversationEventSpec {
-  return EVENT_SPECS[eventType] || DEFAULT_EVENT_SPEC;
+export function getConversationEventSpec(
+  eventType: ConversationFeedEventType,
+): ConversationEventSpec {
+  return EVENT_SPECS[eventType];
 }
 
-export function renderConversationEventTimelineBlocks(
-  eventType: string,
-  payload: unknown,
+export function renderConversationEventTimelineBlocks<T extends ConversationFeedEventType>(
+  eventType: T,
+  payload: ConversationFeedEventPayloadMap[T],
 ): CanonicalContentBlock[] {
-  const eventPayload = normalizePayload(payload);
-  return getConversationEventSpec(eventType).renderTimeline({ eventType, payload: eventPayload });
+  return getConversationEventSpec(eventType).renderTimeline({
+    eventType,
+    payload,
+  });
 }
 
-export function renderConversationEventContextBlocks(
-  eventType: string,
-  payload: unknown,
+export function renderConversationEventContextBlocks<T extends ConversationFeedEventType>(
+  eventType: T,
+  payload: ConversationFeedEventPayloadMap[T],
 ): CanonicalContentBlock[] | null {
-  const eventPayload = normalizePayload(payload);
   const spec = getConversationEventSpec(eventType);
   return spec.renderContext
-    ? spec.renderContext({ eventType, payload: eventPayload })
-    : spec.renderTimeline({ eventType, payload: eventPayload });
+    ? spec.renderContext({ eventType, payload })
+    : spec.renderTimeline({ eventType, payload });
 }

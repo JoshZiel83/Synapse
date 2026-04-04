@@ -51,8 +51,8 @@ function mapWakeupRow(row: any): ActorRuntimeWakeup {
     sourceType: row.source_type,
     sourceItemId: row.source_item_id || undefined,
     sourceSessionId: row.source_session_id || undefined,
-    sourceMemberType: row.source_member_type || undefined,
-    sourceMemberId: row.source_member_id || undefined,
+    sourceParticipantType: row.source_participant_type || undefined,
+    sourceParticipantId: row.source_participant_id || undefined,
     sourceName: row.source_name || undefined,
     summary: row.summary,
     reasonText: row.reason_text || undefined,
@@ -81,8 +81,8 @@ function dedupeRuntimeWakeups(wakeups: ActorRuntimeWakeup[]) {
   for (const wakeup of wakeups) {
     const key = [
       wakeup.sourceType,
-      wakeup.sourceMemberType || '',
-      wakeup.sourceMemberId || '',
+      wakeup.sourceParticipantType || '',
+      wakeup.sourceParticipantId || '',
       wakeup.sourceSessionId || '',
       wakeup.activationKind || '',
       wakeup.delivery || '',
@@ -275,8 +275,8 @@ export async function enqueueSessionWakeup(params: {
   sourceType: SessionWakeupSourceType;
   sourceItemId?: string;
   sourceSessionId?: string;
-  sourceMemberType?: 'workspace_member' | 'actor' | 'external' | 'system';
-  sourceMemberId?: string;
+  sourceParticipantType?: 'workspace_member' | 'actor' | 'external' | 'system';
+  sourceParticipantId?: string;
   sourceName?: string;
   summary: string;
   reasonText?: string;
@@ -293,28 +293,98 @@ export async function enqueueSessionWakeup(params: {
     throw new Error(`Session ${params.sessionId} is closed`);
   }
 
-  const created = await db
-    .insertInto('session_wakeups')
-    .values({
-      id: crypto.randomUUID(),
-      session_id: params.sessionId,
-      source_type: params.sourceType,
-      source_item_id: params.sourceItemId || null,
-      source_session_id: params.sourceSessionId || null,
-      source_member_type: params.sourceMemberType || null,
-      source_member_id: params.sourceMemberId || null,
-      source_name: params.sourceName || null,
-      summary: params.summary,
-      reason_text: params.reasonText || null,
-      automation_execution_id: params.automationExecutionId || null,
-      automation_occurrence_id: params.automationOccurrenceId || null,
-      status: 'pending',
-      metadata: (params.metadata || {}) as TableInsert<'session_wakeups'>['metadata'],
-    })
-    .returningAll()
-    .executeTakeFirst();
+  let created: any;
+  let reusedExistingWakeup = false;
+
+  if (params.sourceItemId) {
+    const insertResult = await query(
+      `
+        INSERT INTO session_wakeups (
+          id,
+          session_id,
+          source_type,
+          source_item_id,
+          source_session_id,
+          source_participant_type,
+          source_participant_id,
+          source_name,
+          summary,
+          reason_text,
+          automation_execution_id,
+          automation_occurrence_id,
+          status,
+          metadata
+        )
+        VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 'pending', $13::jsonb
+        )
+        ON CONFLICT (session_id, source_type, source_item_id)
+        WHERE source_item_id IS NOT NULL
+        DO NOTHING
+        RETURNING *
+      `,
+      [
+        crypto.randomUUID(),
+        params.sessionId,
+        params.sourceType,
+        params.sourceItemId,
+        params.sourceSessionId || null,
+        params.sourceParticipantType || null,
+        params.sourceParticipantId || null,
+        params.sourceName || null,
+        params.summary,
+        params.reasonText || null,
+        params.automationExecutionId || null,
+        params.automationOccurrenceId || null,
+        JSON.stringify(params.metadata || {}),
+      ],
+    );
+    created = insertResult.rows[0];
+
+    if (!created) {
+      const existing = await query(
+        `
+          SELECT *
+          FROM session_wakeups
+          WHERE session_id = $1
+            AND source_type = $2
+            AND source_item_id = $3
+          ORDER BY created_at DESC
+          LIMIT 1
+        `,
+        [params.sessionId, params.sourceType, params.sourceItemId],
+      );
+      created = existing.rows[0];
+      reusedExistingWakeup = Boolean(created);
+    }
+  } else {
+    created = await db
+      .insertInto('session_wakeups')
+      .values({
+        id: crypto.randomUUID(),
+        session_id: params.sessionId,
+        source_type: params.sourceType,
+        source_item_id: null,
+        source_session_id: params.sourceSessionId || null,
+        source_participant_type: params.sourceParticipantType || null,
+        source_participant_id: params.sourceParticipantId || null,
+        source_name: params.sourceName || null,
+        summary: params.summary,
+        reason_text: params.reasonText || null,
+        automation_execution_id: params.automationExecutionId || null,
+        automation_occurrence_id: params.automationOccurrenceId || null,
+        status: 'pending',
+        metadata: (params.metadata || {}) as TableInsert<'session_wakeups'>['metadata'],
+      })
+      .returningAll()
+      .executeTakeFirst();
+  }
   if (!created) {
     throw new Error('Failed to enqueue session wakeup');
+  }
+
+  if (reusedExistingWakeup) {
+    return created;
   }
 
   if (session.status === 'idle' || session.status === 'blocked') {
