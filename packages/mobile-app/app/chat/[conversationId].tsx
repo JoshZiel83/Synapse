@@ -39,6 +39,7 @@ export default function ChatDetailScreen() {
     loadOlderMessages,
     markConversationRead,
     refreshConversation,
+    respondInteraction,
     sendMessage,
     status,
     workspaceMemberId,
@@ -113,6 +114,13 @@ export default function ChatDetailScreen() {
           key={item.id}
           item={item}
           viewerParticipantId={viewerParticipantId}
+          viewerWorkspaceMemberId={workspaceMemberId}
+          onResolveInteraction={
+            conversation
+              ? (interactionId, input) =>
+                  respondInteraction(conversation.conversationId, interactionId, input)
+              : undefined
+          }
           onLongPress={
             item.itemType === "message" && !item.localOnly
               ? (event) =>
@@ -126,7 +134,7 @@ export default function ChatDetailScreen() {
           }
         />
       )),
-    [conversation, items, viewerParticipantId],
+    [conversation, items, respondInteraction, viewerParticipantId, workspaceMemberId],
   );
 
   async function handleRefresh() {

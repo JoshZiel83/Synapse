@@ -13,6 +13,7 @@ import type {
   ChatConversationSendMessageInput,
   ChatConversationSendMessageResponse,
   ChatSyncResponse,
+  InteractionRequestSummary,
 } from "@shared";
 import { Platform } from "react-native";
 
@@ -71,6 +72,18 @@ export class ApiError extends Error {
 interface UploadAssetOptions {
   onProgress?: (progress: number) => void;
   signal?: AbortSignal;
+}
+
+export interface ChatInteractionResponseInput {
+  answers?: {
+    questionId: string;
+    selectedOptionIds?: string[];
+    otherText?: string;
+    text?: string;
+  }[];
+  decision?: "approve" | "reject" | "revise";
+  preset?: "once" | "actor" | "conversation" | "workspace";
+  note?: string;
 }
 
 function notifyUnauthorizedStatus(status: number) {
@@ -611,6 +624,21 @@ class ApiClient {
           clientInstanceId: input.clientInstanceId,
           metadata: input.metadata,
         }),
+      },
+    );
+  }
+
+  respondToChatInteraction(
+    workspaceId: string,
+    conversationId: string,
+    interactionId: string,
+    input: ChatInteractionResponseInput,
+  ): Promise<{ interaction: InteractionRequestSummary }> {
+    return this.request<{ interaction: InteractionRequestSummary }>(
+      `/workspaces/${workspaceId}/conversations/${conversationId}/interactions/${interactionId}/respond`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
       },
     );
   }

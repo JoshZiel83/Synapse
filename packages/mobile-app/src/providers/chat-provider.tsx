@@ -13,6 +13,7 @@ import {
 import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
 import { syncChatBackgroundTaskRegistration } from "@/lib/chat-background-task";
 import type { ChatComposerSendPayload } from "@/lib/chat-compose";
+import { api, type ChatInteractionResponseInput } from "@/lib/api";
 import {
   chatRuntime,
   type ChatRuntimeState,
@@ -38,6 +39,7 @@ import {
   type ChatConversationCreateResponse,
   type ChatConversationMessagesPage,
   type ChatConversationView,
+  type InteractionRequestSummary,
   type ChatSocketEvent,
 } from "@shared";
 
@@ -66,6 +68,11 @@ interface ChatContextValue {
     conversationId: string,
     input: ChatComposerSendPayload,
   ) => Promise<void>;
+  respondInteraction: (
+    conversationId: string,
+    interactionId: string,
+    input: ChatInteractionResponseInput,
+  ) => Promise<InteractionRequestSummary>;
   createConversation: (input: {
     kind: "group" | "private" | "virtual";
     title?: string;
@@ -314,6 +321,28 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const respondInteraction = useCallback(
+    async (
+      conversationId: string,
+      interactionId: string,
+      input: ChatInteractionResponseInput,
+    ) => {
+      if (!workspaceId) {
+        throw new Error("Workspace context is required to respond.");
+      }
+
+      const result = await api.respondToChatInteraction(
+        workspaceId,
+        conversationId,
+        interactionId,
+        input,
+      );
+      await chatRuntime.refreshConversation(conversationId);
+      return result.interaction;
+    },
+    [workspaceId],
+  );
+
   const createConversation = useCallback(
     (input: {
       kind: "group" | "private" | "virtual";
@@ -344,6 +373,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       loadOlderMessages,
       markConversationRead,
       sendMessage,
+      respondInteraction,
       createConversation,
       clearLocalState,
     }),
@@ -358,6 +388,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       markConversationRead,
       refreshConversation,
       refreshInbox,
+      respondInteraction,
       runtimeState.error,
       runtimeState.snapshot?.clientInstanceId,
       runtimeState.snapshot?.workspaceMemberId,

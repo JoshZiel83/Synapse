@@ -9,8 +9,10 @@ import {
   type GestureResponderEvent,
 } from "react-native";
 
+import { ChatQuestionInteractionCard } from "@/components/chat-question-interaction-card";
 import { ChatMarkdown } from "@/components/chat-markdown";
 import { Avatar } from "@/components/ui";
+import type { ChatInteractionResponseInput } from "@/lib/api";
 import {
   buildChatFilePreviewHref,
   getAttachmentLabel,
@@ -25,8 +27,10 @@ import {
 } from "@/lib/chat-data";
 import { theme } from "@/theme/tokens";
 import {
+  INTERACTION_REQUEST_KIND,
   extractText,
   summarizeConversationEvent,
+  type InteractionRequestSummary,
 } from "@shared";
 
 function formatTimestamp(timestamp: string) {
@@ -269,13 +273,44 @@ function MessageBlocks({
 export function MessageItem({
   item,
   viewerParticipantId,
+  viewerWorkspaceMemberId,
+  onResolveInteraction,
   onLongPress,
 }: {
   item: MobileChatItem;
   viewerParticipantId?: string;
+  viewerWorkspaceMemberId?: string | null;
+  onResolveInteraction?: (
+    interactionId: string,
+    input: ChatInteractionResponseInput,
+  ) => Promise<InteractionRequestSummary>;
   onLongPress?: (event: GestureResponderEvent) => void;
 }) {
   if (item.itemType === "event") {
+    const interaction =
+      item.subtype === "interaction_requested" &&
+      item.eventPayload &&
+      typeof item.eventPayload === "object" &&
+      "interaction" in item.eventPayload
+        ? ((item.eventPayload as { interaction?: unknown }).interaction as
+            | InteractionRequestSummary
+            | undefined)
+        : undefined;
+
+    if (
+      interaction?.kind === INTERACTION_REQUEST_KIND.USER_INPUT &&
+      interaction.userInput
+    ) {
+      return (
+        <ChatQuestionInteractionCard
+          interaction={interaction}
+          viewerParticipantId={viewerParticipantId}
+          viewerWorkspaceMemberId={viewerWorkspaceMemberId}
+          onResolveInteraction={onResolveInteraction}
+        />
+      );
+    }
+
     const eventText =
       summarizeConversationEvent(item.subtype, item.eventPayload) ||
       extractText(item.contentBlocks).trim() ||
