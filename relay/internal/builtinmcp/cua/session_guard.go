@@ -10,7 +10,6 @@ import (
 	"strings"
 	"sync"
 
-	deskact "github.com/PekingSpades/DeskAct"
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/desktopdiag"
 )
@@ -230,16 +229,16 @@ func (g *sessionGuard) BeforeToolCall(runtimeSessionID string) *core.CallResult 
 	return nil
 }
 
-func (g *sessionGuard) CaptureOptions() (deskact.CaptureOptions, error) {
+func (g *sessionGuard) CaptureOptions() (desktopCaptureOptions, error) {
 	g.mu.Lock()
 	defer g.mu.Unlock()
 
-	options := deskact.DefaultCaptureOptions()
+	options := defaultDesktopCaptureOptions()
 	switch sessionGuardGOOS {
 	case "windows":
-		options.Backend = deskact.CaptureBackendDXGI
+		options.Backend = desktopCaptureBackendDXGI
 	case "darwin":
-		options.Backend = deskact.CaptureBackendCGDisplay
+		options.Backend = desktopCaptureBackendCGDisplay
 		if strings.TrimSpace(g.activeRuntimeSessionID) != "" {
 			if g.overlay == nil {
 				return options, errCUAPrivacyScreenUnavailable
@@ -248,7 +247,7 @@ func (g *sessionGuard) CaptureOptions() (deskact.CaptureOptions, error) {
 			if len(info.ExcludedWindowIDs) == 0 {
 				return options, errCUAPrivacyScreenUnavailable
 			}
-			options.Backend = deskact.CaptureBackendScreenCaptureKit
+			options.Backend = desktopCaptureBackendScreenCaptureKit
 			options.ExcludedWindowIDs = append([]uint64(nil), info.ExcludedWindowIDs...)
 		}
 	}

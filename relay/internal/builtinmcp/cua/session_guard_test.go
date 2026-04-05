@@ -4,7 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	deskact "github.com/PekingSpades/DeskAct"
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 )
 
@@ -90,7 +89,7 @@ func TestSessionGuardCaptureOptionsWindowsUseDXGI(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capture options: %v", err)
 	}
-	if options.Backend != deskact.CaptureBackendDXGI {
+	if options.Backend != desktopCaptureBackendDXGI {
 		t.Fatalf("expected DXGI backend, got %q", options.Backend)
 	}
 }
@@ -106,7 +105,7 @@ func TestSessionGuardCaptureOptionsDarwinDefaultToCGDisplay(t *testing.T) {
 	if err != nil {
 		t.Fatalf("capture options: %v", err)
 	}
-	if options.Backend != deskact.CaptureBackendCGDisplay {
+	if options.Backend != desktopCaptureBackendCGDisplay {
 		t.Fatalf("expected CGDisplay backend, got %q", options.Backend)
 	}
 	if len(options.ExcludedWindowIDs) != 0 {
@@ -137,7 +136,7 @@ func TestSessionGuardCaptureOptionsDarwinUseScreenCaptureKitForActiveSession(t *
 	if err != nil {
 		t.Fatalf("capture options: %v", err)
 	}
-	if options.Backend != deskact.CaptureBackendScreenCaptureKit {
+	if options.Backend != desktopCaptureBackendScreenCaptureKit {
 		t.Fatalf("expected ScreenCaptureKit backend, got %q", options.Backend)
 	}
 	if len(options.ExcludedWindowIDs) != 2 || options.ExcludedWindowIDs[0] != 17 || options.ExcludedWindowIDs[1] != 23 {

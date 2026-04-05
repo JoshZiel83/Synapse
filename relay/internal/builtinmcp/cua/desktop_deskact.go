@@ -16,7 +16,7 @@ import (
 type deskactDesktop struct {
 	displayOptions         deskact.DisplayOptions
 	defaultCaptureOptions  deskact.CaptureOptions
-	captureOptionsProvider func() (deskact.CaptureOptions, error)
+	captureOptionsProvider func() (desktopCaptureOptions, error)
 	mouseSettings          deskact.MouseSettings
 	keyboardSettings       deskact.KeyboardSettings
 	windowOptions          deskact.WindowOptions
@@ -36,7 +36,7 @@ func newDefaultDesktop() (Desktop, error) {
 	}, nil
 }
 
-func (d *deskactDesktop) SetCaptureOptionsProvider(provider func() (deskact.CaptureOptions, error)) {
+func (d *deskactDesktop) SetCaptureOptionsProvider(provider func() (desktopCaptureOptions, error)) {
 	d.captureOptionsProvider = provider
 }
 
