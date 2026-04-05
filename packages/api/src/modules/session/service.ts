@@ -571,7 +571,7 @@ export async function addSessionMessage(params: {
   fromActorId?: UUID;
   fromWorkspaceMemberId?: UUID;
   subtype?: SessionConversationMessageSubtype;
-  visibility?: 'default' | 'shared_visible' | 'private_internal';
+  visibility?: 'default' | 'shared_visible';
   metadata?: Record<string, unknown>;
   replyToItemId?: UUID;
   restrictedAudienceParticipantIds?: UUID[];
@@ -611,9 +611,7 @@ export async function addSessionMessage(params: {
   const { scope, surface } =
     visibility === 'shared_visible'
       ? { scope: 'shared' as const, surface: 'visible' as const }
-      : visibility === 'private_internal'
-        ? { scope: 'private' as const, surface: 'internal' as const }
-        : getSurfaceForSessionMessage(session.conversation_kind, role);
+      : getSurfaceForSessionMessage(session.conversation_kind, role);
   const itemType = role === 'tool_result' ? 'control' : 'message';
   const resolvedSubtype = subtype || role;
 

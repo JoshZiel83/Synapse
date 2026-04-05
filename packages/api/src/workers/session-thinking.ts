@@ -13,7 +13,6 @@ import {
 } from '@synapse/shared';
 import { isPlanCollaborationMode } from '@synapse/shared/utils';
 import type {
-  ActorAction,
   ConversationParticipantEntry,
   ProviderContextManifest,
   ProviderContextWindow,
@@ -57,6 +56,7 @@ import { buildMemoryRecallQuery, recallMemories } from '../modules/memory/servic
 import { resolveActorCapabilitySurface } from '../modules/capabilities/surface.js';
 import { sessionThinkingQueue } from './queues.js';
 import { registerWorker } from './registry.js';
+import { getAssistantSessionMessagePersistence } from './session-message-persistence.js';
 import { sql } from 'kysely';
 
 type ThinkingPhase = 'thinking' | 'tool';
@@ -665,15 +665,15 @@ export function startSessionThinkingWorker() {
           conversationId: session.conversation_id,
         });
 
-        const respondActions = result.actions.filter((action: ActorAction) => action.type === 'respond');
         const msgMetadata: Record<string, unknown> = {};
         if (result.toolsUsed && result.toolsUsed.length > 0) msgMetadata.toolsUsed = result.toolsUsed;
         if (result.serverToolCalls && result.serverToolCalls.length > 0) msgMetadata.serverToolCalls = result.serverToolCalls;
         if (result.citationSources && Object.keys(result.citationSources).length > 0) msgMetadata.citationSources = result.citationSources;
         if (result.toolHistory) msgMetadata.toolHistory = result.toolHistory;
         const hasMeta = Object.keys(msgMetadata).length > 0 ? msgMetadata : undefined;
+        const messagePersistence = getAssistantSessionMessagePersistence(result);
 
-        if (respondActions.length > 0) {
+        if (messagePersistence.kind === 'respond') {
           await publishSessionRuntime(workspaceId, sessionId, {
             laneState: 'running',
             health: 'ok',
@@ -681,7 +681,7 @@ export function startSessionThinkingWorker() {
             statusText: 'Responding...',
             currentTurnId: turn.id,
           });
-          for (const action of respondActions) {
+          for (const action of messagePersistence.actions) {
             await addSessionMessage({
               sessionId,
               workspaceId,
@@ -694,25 +694,8 @@ export function startSessionThinkingWorker() {
               metadata: hasMeta,
             });
           }
-        } else if (result.reasoning) {
-          await addSessionMessage({
-            sessionId,
-            workspaceId,
-            role: 'assistant',
-            visibility: 'private_internal',
-            contentBlocks:
-              result.contentBlocks && result.contentBlocks.length > 0
-                ? result.contentBlocks
-                : textBlocks(result.reasoning),
-            fromActorId: actorId,
-            metadata: {
-              ...hasMeta,
-              reasoningOnly: true,
-              excludeFromContext: true,
-            },
-          });
-        } else if (result.actions.length > 0) {
-          const actionNames = result.actions.map((action: ActorAction) => action.type).join(', ');
+        } else if (messagePersistence.kind === 'silent_actions') {
+          const actionNames = messagePersistence.actionNames.join(', ');
           await addSessionMessage({
             sessionId,
             workspaceId,
