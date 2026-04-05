@@ -297,11 +297,7 @@ export const PLAN_CHECKLIST_STEP_STATUSES = [
 ] as const;
 export const SESSION_TRIGGERS = [
   'user_message',
-  'group_message',
   'actor_message',
-  'broadcast',
-  'api_call',
-  'actor_invite',
   'automation',
   'system_interrupt',
   'retry',
@@ -311,9 +307,6 @@ export const SESSION_INTERRUPT_TYPES = ['remote_control_terminated'] as const;
 export const SESSION_WAKEUP_SOURCE_TYPES = [
   'user_message',
   'actor_message',
-  'broadcast',
-  'invite',
-  'api_call',
   'automation',
   'system_interrupt',
   'retry',

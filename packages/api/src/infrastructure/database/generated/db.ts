@@ -293,7 +293,7 @@ export type SessionsStatus = "blocked" | "closed" | "idle" | "queued" | "running
 
 export type SessionWakeupsSourceParticipantType = "actor" | "external" | "system" | "workspace_member";
 
-export type SessionWakeupsSourceType = "actor_message" | "api_call" | "automation" | "broadcast" | "invite" | "retry" | "system_interrupt" | "user_message";
+export type SessionWakeupsSourceType = "actor_message" | "automation" | "retry" | "system_interrupt" | "user_message";
 
 export type SessionWakeupsStatus = "attached" | "dropped" | "pending" | "processed";
 

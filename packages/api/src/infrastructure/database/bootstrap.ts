@@ -7,9 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const __filename = fileURLToPath(import.meta.url);
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8");
 
-const CURRENT_SCHEMA_VERSION = "2026-04-05-01";
+const CURRENT_SCHEMA_VERSION = "2026-04-05-02";
 const CURRENT_SCHEMA_DESCRIPTION =
-  "remove unused session interrupt enum values";
+  "remove dead session trigger and wakeup source enum values";
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

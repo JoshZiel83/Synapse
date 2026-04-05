@@ -90,7 +90,7 @@ CREATE TYPE tool_call_task_output_chunks_stream AS ENUM ('stdout', 'stderr', 'sy
 CREATE TYPE tool_execution_attempts_executor_kind AS ENUM ('builtin', 'callable', 'action', 'mcp_plugin', 'mcp_relay', 'provider_builtin', 'a2a_proxy');
 CREATE TYPE tool_execution_attempts_status AS ENUM ('success', 'error', 'timeout');
 CREATE TYPE tool_result_parts_part_type AS ENUM ('text', 'file_ref', 'json');
-CREATE TYPE session_wakeups_source_type AS ENUM ('user_message', 'actor_message', 'broadcast', 'invite', 'api_call', 'automation', 'system_interrupt', 'retry');
+CREATE TYPE session_wakeups_source_type AS ENUM ('user_message', 'actor_message', 'automation', 'system_interrupt', 'retry');
 CREATE TYPE session_wakeups_source_participant_type AS ENUM ('workspace_member', 'actor', 'external', 'system');
 CREATE TYPE session_wakeups_status AS ENUM ('pending', 'attached', 'processed', 'dropped');
 CREATE TYPE automation_rules_category AS ENUM ('schedule', 'event_subscription');

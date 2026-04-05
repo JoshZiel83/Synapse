@@ -41,7 +41,7 @@ function parseMetadata(value: unknown): Record<string, unknown> {
 }
 
 function mapWakeupSourceTypeToTrigger(sourceType: SessionWakeupSourceType): SessionTrigger {
-  return sourceType === 'invite' ? 'actor_invite' : sourceType;
+  return sourceType;
 }
 
 function mapWakeupRow(row: any): ActorRuntimeWakeup {
