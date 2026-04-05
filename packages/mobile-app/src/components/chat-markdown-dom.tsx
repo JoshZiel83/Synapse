@@ -114,103 +114,103 @@ export default function ChatMarkdownDom({
         .markdown-root-mine {
           color: #ffffff;
         }
-        .markdown-root > *:first-child {
+        .markdown-content > *:first-child {
           margin-top: 0;
         }
-        .markdown-root > *:last-child {
+        .markdown-content > *:last-child {
           margin-bottom: 0;
         }
-        .markdown-root p,
-        .markdown-root ul,
-        .markdown-root ol,
-        .markdown-root blockquote,
-        .markdown-root .code-block-scroll,
-        .markdown-root .table-scroll,
-        .markdown-root .mermaid-shell,
-        .markdown-root h1,
-        .markdown-root h2,
-        .markdown-root h3,
-        .markdown-root h4 {
+        .markdown-content p,
+        .markdown-content ul,
+        .markdown-content ol,
+        .markdown-content blockquote,
+        .markdown-content .code-block-scroll,
+        .markdown-content .table-scroll,
+        .markdown-content .mermaid-shell,
+        .markdown-content h1,
+        .markdown-content h2,
+        .markdown-content h3,
+        .markdown-content h4 {
           margin: 0 0 10px 0;
         }
-        .markdown-root a {
+        .markdown-content a {
           color: inherit;
           text-decoration: underline;
         }
-        .markdown-root code {
+        .markdown-content code {
           background: ${mine ? "rgba(255,255,255,0.18)" : "rgba(37,99,235,0.10)"};
           border-radius: 8px;
           padding: 2px 6px;
           font-size: 0.9em;
         }
-        .markdown-root .code-block-scroll,
-        .markdown-root .table-scroll {
+        .markdown-content .code-block-scroll,
+        .markdown-content .table-scroll {
           width: 100%;
           max-width: 100%;
           overflow-x: auto;
           overflow-y: hidden;
           -webkit-overflow-scrolling: touch;
         }
-        .markdown-root pre,
-        .markdown-root .code-block,
-        .markdown-root .mermaid-shell {
+        .markdown-content pre,
+        .markdown-content .code-block,
+        .markdown-content .mermaid-shell {
           background: ${mine ? "rgba(15,23,42,0.22)" : "#f8fafc"};
           border: 1px solid ${mine ? "rgba(255,255,255,0.16)" : "rgba(148,163,184,0.3)"};
           border-radius: 16px;
           padding: 12px;
           box-sizing: border-box;
         }
-        .markdown-root pre,
-        .markdown-root .code-block {
+        .markdown-content pre,
+        .markdown-content .code-block {
           margin: 0;
           display: block;
           min-width: max-content;
           white-space: pre;
           overflow-x: auto;
         }
-        .markdown-root pre code,
-        .markdown-root .code-block code {
+        .markdown-content pre code,
+        .markdown-content .code-block code {
           background: transparent;
           padding: 0;
         }
-        .markdown-root blockquote {
+        .markdown-content blockquote {
           border-left: 3px solid ${mine ? "rgba(255,255,255,0.55)" : "#2563eb"};
           padding-left: 10px;
           opacity: 0.9;
         }
-        .markdown-root table {
+        .markdown-content table {
           width: max-content;
           min-width: 100%;
           border-collapse: collapse;
           border-radius: 14px;
           border: 1px solid ${mine ? "rgba(255,255,255,0.16)" : "rgba(148,163,184,0.3)"};
         }
-        .markdown-root th,
-        .markdown-root td {
+        .markdown-content th,
+        .markdown-content td {
           border-bottom: 1px solid ${mine ? "rgba(255,255,255,0.16)" : "rgba(148,163,184,0.3)"};
           padding: 8px 10px;
           text-align: left;
           vertical-align: top;
         }
-        .markdown-root th {
+        .markdown-content th {
           background: ${mine ? "rgba(255,255,255,0.12)" : "rgba(148,163,184,0.12)"};
         }
-        .markdown-root tr:last-child td {
+        .markdown-content tr:last-child td {
           border-bottom: 0;
         }
-        .markdown-root img {
+        .markdown-content img {
           max-width: 100%;
           border-radius: 14px;
         }
-        .markdown-root hr {
+        .markdown-content hr {
           border: 0;
           border-top: 1px solid ${mine ? "rgba(255,255,255,0.16)" : "rgba(148,163,184,0.3)"};
           margin: 12px 0;
         }
-        .markdown-root .katex {
+        .markdown-content .katex {
           color: inherit;
         }
-        .markdown-root .katex-display {
+        .markdown-content .katex-display {
           overflow-x: auto;
           overflow-y: hidden;
           padding: 6px 0;
@@ -234,7 +234,7 @@ export default function ChatMarkdownDom({
           height: auto;
         }
       `}</style>
-      <div dangerouslySetInnerHTML={{ __html: html }} />
+      <div className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />
     </div>
   );
 }

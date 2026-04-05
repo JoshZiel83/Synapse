@@ -235,6 +235,12 @@ export default function FilePreviewDom({
         .preview-body {
           padding: 20px;
         }
+        .preview-markdown > *:first-child {
+          margin-top: 0;
+        }
+        .preview-markdown > *:last-child {
+          margin-bottom: 0;
+        }
         .preview-body img,
         .preview-body video,
         .preview-body audio,
@@ -386,7 +392,10 @@ export default function FilePreviewDom({
           {!loading && !errorMessage && isTextLike && textContent !== null ? (
             <div className="text-shell">
               {isMarkdown && markdownHtml ? (
-                <div dangerouslySetInnerHTML={{ __html: markdownHtml }} />
+                <div
+                  className="preview-markdown"
+                  dangerouslySetInnerHTML={{ __html: markdownHtml }}
+                />
               ) : (
                 <pre>{textContent}</pre>
               )}

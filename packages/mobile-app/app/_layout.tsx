@@ -86,6 +86,12 @@ function ProtectedNavigation() {
   const segments = useSegments();
   const { status } = useSession();
   const { loading: workspaceLoading, needsOnboarding } = useWorkspace();
+  const defaultAnimation =
+    process.env.EXPO_OS === "web"
+      ? "none"
+      : process.env.EXPO_OS === "ios"
+        ? "default"
+        : "slide_from_right";
 
   useEffect(() => {
     if (status === "loading") return;
@@ -123,10 +129,41 @@ function ProtectedNavigation() {
     <Stack
       screenOptions={{
         headerShown: false,
+        animation: defaultAnimation,
+        animationMatchesGesture: process.env.EXPO_OS === "ios",
         contentStyle: {
           backgroundColor: theme.colors.background,
         },
+        fullScreenGestureEnabled: process.env.EXPO_OS === "ios",
+        gestureEnabled: true,
       }}
-    />
+    >
+      <Stack.Screen
+        name="(tabs)"
+        options={{
+          animation: "none",
+          gestureEnabled: false,
+        }}
+      />
+      <Stack.Screen
+        name="login"
+        options={{
+          animation: process.env.EXPO_OS === "web" ? "none" : "fade",
+          gestureEnabled: false,
+        }}
+      />
+      <Stack.Screen
+        name="register"
+        options={{
+          animation: defaultAnimation,
+        }}
+      />
+      <Stack.Screen
+        name="workspace/create"
+        options={{
+          animation: defaultAnimation,
+        }}
+      />
+    </Stack>
   );
 }
