@@ -267,6 +267,22 @@ definition plugin_installation {
     permission delete = owner + workspace->manage_plugins
 }
 
+definition automation_event_source {
+    relation workspace: workspace
+    relation owner: workspace_member | actor
+    relation editor: workspace_member | actor
+    relation use_actor: actor
+    relation use_conversation: conversation
+    relation use_actor_in_conversation: conversation_actor_context
+    relation use_workspace: workspace
+
+    permission use = owner + editor + workspace->manage_relays + use_actor + use_conversation->principal + use_actor_in_conversation->principal + use_workspace->principal
+    permission view = use
+    permission edit = owner + editor + workspace->manage_relays
+    permission grant = edit
+    permission delete = owner + workspace->manage_relays
+}
+
 definition relay_device {
     relation workspace: workspace
     relation owner: workspace_member | actor

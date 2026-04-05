@@ -14,7 +14,7 @@ import { ensureConversationActorSessionContext } from "../session/service.js";
 
 export type AccessBindableResourceType = Extract<
   AuthzObjectType,
-  "installed_skill" | "plugin_installation" | "relay_capability"
+  "installed_skill" | "plugin_installation" | "relay_capability" | "automation_event_source"
 >;
 
 export type ResourceAccessBindingStorageRow = {
@@ -22,6 +22,7 @@ export type ResourceAccessBindingStorageRow = {
   installed_skill_id: string | null;
   plugin_installation_id: string | null;
   relay_capability_id: string | null;
+  automation_event_source_id: string | null;
 };
 
 export type AccessBindingTargetType =
@@ -63,6 +64,7 @@ export function readAccessBindingResourceId(
     | "installed_skill_id"
     | "plugin_installation_id"
     | "relay_capability_id"
+    | "automation_event_source_id"
   >,
 ) {
   switch (row.resource_type) {
@@ -83,6 +85,13 @@ export function readAccessBindingResourceId(
         throw new Error("relay_capability_id is required for relay_capability bindings");
       }
       return row.relay_capability_id;
+    case "automation_event_source":
+      if (!row.automation_event_source_id) {
+        throw new Error(
+          "automation_event_source_id is required for automation_event_source bindings",
+        );
+      }
+      return row.automation_event_source_id;
     default:
       throw new Error(`Unsupported access binding resource type: ${String(row.resource_type)}`);
   }
@@ -100,6 +109,8 @@ export function buildResourceAccessBindingRef(input: {
       input.resourceType === "plugin_installation" ? input.resourceId : null,
     relay_capability_id:
       input.resourceType === "relay_capability" ? input.resourceId : null,
+    automation_event_source_id:
+      input.resourceType === "automation_event_source" ? input.resourceId : null,
   };
 }
 

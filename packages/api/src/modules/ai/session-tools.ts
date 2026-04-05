@@ -62,6 +62,7 @@ import {
 } from "../session/collaboration-state.js";
 import {
   addConversationParticipants,
+  getConversationParticipant,
   listConversationParticipants,
   resolveConversationReplyRef,
   sendConversationMessageFromParticipant,
@@ -205,6 +206,43 @@ function normalizeRawSendToInput(input: Record<string, unknown>) {
 
 function formatUtcTimestamp(date: Date) {
   return `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+}
+
+async function requireCurrentAutomationParticipant(params: {
+  conversationId: string;
+  actorId?: string;
+}) {
+  if (!params.actorId) {
+    throwToolError("Automation tools require an actor session");
+  }
+
+  const participant = await getConversationParticipant({
+    conversationId: params.conversationId,
+    actorId: params.actorId,
+  });
+  if (!participant || participant.state !== "active") {
+    throwToolError("Current actor is not an active participant in this conversation");
+  }
+  return participant;
+}
+
+async function listCurrentSessionAutomationRules(params: {
+  workspaceId: string;
+  sessionId: string;
+  actorId?: string;
+}) {
+  const session = await getSession(params.sessionId);
+  if (!session) {
+    throwToolError("Session not found");
+  }
+  const participant = await requireCurrentAutomationParticipant({
+    conversationId: session.conversation_id,
+    actorId: params.actorId,
+  });
+  const rules = await listAutomationRules(params.workspaceId, {
+    conversationId: session.conversation_id,
+  });
+  return rules.filter((rule) => rule.createdByParticipantId === participant.id);
 }
 
 function buildSendToDefinition(params: {
@@ -1254,6 +1292,10 @@ export function registerCallableToolPlugins(): void {
       if (!session) {
         throwToolError("Session not found");
       }
+      const actorParticipant = await requireCurrentAutomationParticipant({
+        conversationId: session.conversation_id,
+        actorId: context.actorId,
+      });
 
       const skillName = String((input as any).skillName || "").trim();
       const path =
@@ -3282,6 +3324,10 @@ export function registerCallableToolPlugins(): void {
       if (!session) {
         throwToolError("Session not found");
       }
+      const actorParticipant = await requireCurrentAutomationParticipant({
+        conversationId: session.conversation_id,
+        actorId: context.actorId,
+      });
 
       const name = String((input as any).name || "").trim();
       const scheduleKind = String((input as any).scheduleKind || "").trim();
@@ -3327,8 +3373,7 @@ export function registerCallableToolPlugins(): void {
           {
             name,
             description: `Self-scheduled wakeup for session ${context.sessionId}`,
-            ownerConversationId: session.conversation_id,
-            ownerSessionId: context.sessionId,
+            conversationId: session.conversation_id,
             trigger: {
               triggerKind: "schedule",
               scheduleKind: scheduleKind as any,
@@ -3349,10 +3394,10 @@ export function registerCallableToolPlugins(): void {
                   : undefined,
             },
             delivery: {
-              deliveryMode: "wake_session",
-              sessionId: context.sessionId,
               message,
               wakeReason,
+              targetPolicy: "specified_members",
+              targetParticipantIds: [actorParticipant.id],
             },
           },
         );
@@ -3388,6 +3433,9 @@ export function registerCallableToolPlugins(): void {
       }
       const sources = await listAutomationEventSources(ctx.workspaceId, {
         status: "active",
+      }, {
+        conversationId: ctx.conversationId!,
+        actorId: ctx.actorId,
       });
       if (sources.length === 0) {
         return { active: false, definition: null as any };
@@ -3410,9 +3458,16 @@ export function registerCallableToolPlugins(): void {
       if (!context?.sessionId) {
         throwToolError("No session context available");
       }
+      const session = await getSession(context.sessionId);
+      if (!session) {
+        throwToolError("Session not found");
+      }
 
       const sources = await listAutomationEventSources(context.workspaceId, {
         status: "active",
+      }, {
+        conversationId: session.conversation_id,
+        actorId: context.actorId,
       });
       return JSON.stringify({
         success: true,
@@ -3484,6 +3539,9 @@ export function registerCallableToolPlugins(): void {
       }
       const sources = await listAutomationEventSources(ctx.workspaceId, {
         status: "active",
+      }, {
+        conversationId: ctx.conversationId!,
+        actorId: ctx.actorId,
       });
       if (sources.length === 0) {
         return { active: false, definition: null as any };
@@ -3557,6 +3615,10 @@ export function registerCallableToolPlugins(): void {
       if (!session) {
         throwToolError("Session not found");
       }
+      const actorParticipant = await requireCurrentAutomationParticipant({
+        conversationId: session.conversation_id,
+        actorId: context.actorId,
+      });
 
       const name = String((input as any).name || "").trim();
       const eventSourceId = String((input as any).eventSourceId || "").trim();
@@ -3608,8 +3670,7 @@ export function registerCallableToolPlugins(): void {
           {
             name,
             description: `Self event subscription for session ${context.sessionId}`,
-            ownerConversationId: session.conversation_id,
-            ownerSessionId: context.sessionId,
+            conversationId: session.conversation_id,
             trigger: {
               triggerKind: "event",
               eventSourceId,
@@ -3625,10 +3686,10 @@ export function registerCallableToolPlugins(): void {
                   : undefined,
             },
             delivery: {
-              deliveryMode: "wake_session",
-              sessionId: context.sessionId,
               message,
               wakeReason,
+              targetPolicy: "specified_members",
+              targetParticipantIds: [actorParticipant.id],
             },
           },
         );
@@ -3667,7 +3728,10 @@ export function registerCallableToolPlugins(): void {
       if (!ctx.sessionId) {
         return { active: false, definition: null as any };
       }
-      const sources = await listAutomationEventSources(ctx.workspaceId);
+      const sources = await listAutomationEventSources(ctx.workspaceId, undefined, {
+        conversationId: ctx.conversationId!,
+        actorId: ctx.actorId,
+      });
       if (sources.length === 0) {
         return { active: false, definition: null as any };
       }
@@ -3754,8 +3818,10 @@ export function registerCallableToolPlugins(): void {
         throwToolError("No session context available");
       }
 
-      const rules = await listAutomationRules(context.workspaceId, {
-        ownerSessionId: context.sessionId,
+      const rules = await listCurrentSessionAutomationRules({
+        workspaceId: context.workspaceId,
+        sessionId: context.sessionId,
+        actorId: context.actorId,
       });
       return JSON.stringify({
         success: true,
@@ -3785,7 +3851,8 @@ export function registerCallableToolPlugins(): void {
             sourceKind: rule.trigger.sourceKind,
             matchKey: rule.trigger.matchKey,
             nextFireAt: rule.trigger.nextFireAt,
-            deliveryMode: rule.delivery.deliveryMode,
+            conversationId: rule.conversationId,
+            targetParticipantIds: rule.delivery.targetParticipantIds,
           };
         }),
       });
@@ -3814,8 +3881,10 @@ export function registerCallableToolPlugins(): void {
       if (!ctx.sessionId) {
         return { active: false, definition: null as any };
       }
-      const rules = await listAutomationRules(ctx.workspaceId, {
-        ownerSessionId: ctx.sessionId,
+      const rules = await listCurrentSessionAutomationRules({
+        workspaceId: ctx.workspaceId,
+        sessionId: ctx.sessionId,
+        actorId: ctx.actorId,
       });
       if (rules.length === 0) {
         return { active: false, definition: null as any };
@@ -3850,8 +3919,10 @@ export function registerCallableToolPlugins(): void {
         throwToolError("automationId is required");
       }
 
-      const rules = await listAutomationRules(context.workspaceId, {
-        ownerSessionId: context.sessionId,
+      const rules = await listCurrentSessionAutomationRules({
+        workspaceId: context.workspaceId,
+        sessionId: context.sessionId,
+        actorId: context.actorId,
       });
       const rule = rules.find((entry) => entry.id === automationId);
       if (!rule) {

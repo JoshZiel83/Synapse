@@ -1,9 +1,8 @@
 import type {
   AutomationCompletionStatus,
   AutomationRule,
-  AutomationSourceKind,
-  AutomationDeliveryMode,
   AutomationScheduleKind,
+  AutomationSourceKind,
   AutomationStatus,
   AutomationTargetPolicy,
   AutomationTriggerKind,
@@ -32,26 +31,18 @@ export interface AutomationRuleCreatePolicyPayload {
 }
 
 export interface AutomationRuleCreateDeliveryPayload {
-  deliveryMode: AutomationDeliveryMode;
-  conversationId?: string;
-  sessionId?: string;
-  conversationTitle?: string;
   message?: string;
   wakeReason?: string;
   messageBlocks?: CanonicalContentBlock[];
   targetPolicy?: AutomationTargetPolicy;
-  participantActorIds?: string[];
-  participantWorkspaceMemberIds?: string[];
-  recipientActorIds?: string[];
-  recipientWorkspaceMemberIds?: string[];
+  targetParticipantIds?: string[];
 }
 
 export interface AutomationRuleCreatePayload {
   name: string;
   description?: string;
   status?: AutomationStatus;
-  ownerConversationId?: string;
-  ownerSessionId?: string;
+  conversationId: string;
   trigger: AutomationRuleCreateTriggerPayload;
   policy?: AutomationRuleCreatePolicyPayload;
   delivery: AutomationRuleCreateDeliveryPayload;
@@ -68,8 +59,7 @@ export interface AutomationRuleUpdatePayload
 export interface AutomationRuleDraft {
   name: string;
   description: string;
-  ownerConversationId: string;
-  ownerSessionId: string;
+  conversationId: string;
   triggerKind: AutomationTriggerKind;
   scheduleKind: AutomationScheduleKind;
   scheduleExpr: string;
@@ -82,17 +72,10 @@ export interface AutomationRuleDraft {
   eventSourceId: string;
   matcherText: string;
   completionStatus: AutomationCompletionStatus;
-  deliveryMode: AutomationDeliveryMode;
-  conversationId: string;
-  sessionId: string;
-  conversationTitle: string;
   message: string;
   wakeReason: string;
   targetPolicy: AutomationTargetPolicy;
-  participantActorIds: string;
-  participantWorkspaceMemberIds: string;
-  recipientActorIds: string;
-  recipientWorkspaceMemberIds: string;
+  targetParticipantIds: string;
 }
 
 export interface AutomationRuleContractIssue {
@@ -141,18 +124,6 @@ function toDateTimeLocalInput(value: string | undefined) {
   return `${year}-${month}-${day}T${hours}:${minutes}`;
 }
 
-function extractEntityIds(
-  rule: AutomationRule,
-  entityKind: "actor" | "workspace_member",
-  targetKind: "participants" | "recipients",
-) {
-  const entries =
-    targetKind === "participants" ? rule.delivery.participants : rule.delivery.recipients;
-  return entries
-    .filter((entry) => entry.entityKind === entityKind)
-    .map((entry) => entry.entityId);
-}
-
 function toIsoString(value: string | undefined, label: string) {
   const trimmed = trimString(value);
   if (!trimmed) return undefined;
@@ -191,8 +162,7 @@ export function createEmptyAutomationRuleDraft(
   return {
     name: "",
     description: "",
-    ownerConversationId: "",
-    ownerSessionId: "",
+    conversationId: "",
     triggerKind: "schedule",
     scheduleKind: "at",
     scheduleExpr: "",
@@ -205,17 +175,10 @@ export function createEmptyAutomationRuleDraft(
     eventSourceId: "",
     matcherText: "{}",
     completionStatus: "completed",
-    deliveryMode: "wake_session",
-    conversationId: "",
-    sessionId: "",
-    conversationTitle: "",
     message: "",
     wakeReason: "",
     targetPolicy: "all_members",
-    participantActorIds: "",
-    participantWorkspaceMemberIds: "",
-    recipientActorIds: "",
-    recipientWorkspaceMemberIds: "",
+    targetParticipantIds: "",
   };
 }
 
@@ -226,8 +189,7 @@ export function buildAutomationRuleCreatePayloadFromRule(
     name: rule.name,
     description: rule.description,
     status: rule.status,
-    ownerConversationId: rule.ownerConversationId,
-    ownerSessionId: rule.ownerSessionId,
+    conversationId: rule.conversationId,
     trigger: {
       triggerKind: rule.trigger.triggerKind,
       eventSourceId: rule.trigger.eventSourceId,
@@ -248,26 +210,11 @@ export function buildAutomationRuleCreatePayloadFromRule(
       completionStatus: rule.policy.completionStatus,
     },
     delivery: {
-      deliveryMode: rule.delivery.deliveryMode,
-      conversationId: rule.delivery.conversationId,
-      sessionId: rule.delivery.sessionId,
-      conversationTitle: rule.delivery.conversationTitle,
       message: rule.delivery.messageText,
       wakeReason: rule.delivery.wakeReasonText,
       messageBlocks: cloneContentBlocks(rule.delivery.messageBlocks),
       targetPolicy: rule.delivery.targetPolicy,
-      participantActorIds: extractEntityIds(rule, "actor", "participants"),
-      participantWorkspaceMemberIds: extractEntityIds(
-        rule,
-        "workspace_member",
-        "participants",
-      ),
-      recipientActorIds: extractEntityIds(rule, "actor", "recipients"),
-      recipientWorkspaceMemberIds: extractEntityIds(
-        rule,
-        "workspace_member",
-        "recipients",
-      ),
+      targetParticipantIds: [...rule.delivery.targetParticipantIds],
     },
     metadata: cloneRecord(rule.metadata),
   };
@@ -279,8 +226,7 @@ export function buildAutomationRuleDraftFromRule(
   return {
     name: rule.name,
     description: rule.description,
-    ownerConversationId: rule.ownerConversationId || "",
-    ownerSessionId: rule.ownerSessionId || "",
+    conversationId: rule.conversationId,
     triggerKind: rule.trigger.triggerKind,
     scheduleKind: rule.trigger.scheduleKind || "at",
     scheduleExpr: rule.trigger.scheduleExpr || "",
@@ -297,25 +243,10 @@ export function buildAutomationRuleDraftFromRule(
     eventSourceId: rule.trigger.eventSourceId || "",
     matcherText: JSON.stringify(rule.trigger.matcher || {}, null, 2),
     completionStatus: rule.policy.completionStatus,
-    deliveryMode: rule.delivery.deliveryMode,
-    conversationId: rule.delivery.conversationId || "",
-    sessionId: rule.delivery.sessionId || "",
-    conversationTitle: rule.delivery.conversationTitle || "",
     message: rule.delivery.messageText || "",
     wakeReason: rule.delivery.wakeReasonText || "",
     targetPolicy: rule.delivery.targetPolicy,
-    participantActorIds: extractEntityIds(rule, "actor", "participants").join("\n"),
-    participantWorkspaceMemberIds: extractEntityIds(
-      rule,
-      "workspace_member",
-      "participants",
-    ).join("\n"),
-    recipientActorIds: extractEntityIds(rule, "actor", "recipients").join("\n"),
-    recipientWorkspaceMemberIds: extractEntityIds(
-      rule,
-      "workspace_member",
-      "recipients",
-    ).join("\n"),
+    targetParticipantIds: rule.delivery.targetParticipantIds.join("\n"),
   };
 }
 
@@ -330,14 +261,10 @@ export function mergeAutomationRuleUpdatePayload(
     description:
       patch.description !== undefined ? patch.description : base.description,
     status: patch.status !== undefined ? patch.status : base.status,
-    ownerConversationId:
-      patch.ownerConversationId !== undefined
-        ? patch.ownerConversationId
-        : base.ownerConversationId,
-    ownerSessionId:
-      patch.ownerSessionId !== undefined
-        ? patch.ownerSessionId
-        : base.ownerSessionId,
+    conversationId:
+      patch.conversationId !== undefined
+        ? patch.conversationId
+        : base.conversationId,
     trigger: {
       triggerKind:
         patch.trigger?.triggerKind !== undefined
@@ -403,22 +330,6 @@ export function mergeAutomationRuleUpdatePayload(
           : base.policy?.completionStatus,
     },
     delivery: {
-      deliveryMode:
-        patch.delivery?.deliveryMode !== undefined
-          ? patch.delivery.deliveryMode
-          : base.delivery.deliveryMode,
-      conversationId:
-        patch.delivery?.conversationId !== undefined
-          ? patch.delivery.conversationId
-          : base.delivery.conversationId,
-      sessionId:
-        patch.delivery?.sessionId !== undefined
-          ? patch.delivery.sessionId
-          : base.delivery.sessionId,
-      conversationTitle:
-        patch.delivery?.conversationTitle !== undefined
-          ? patch.delivery.conversationTitle
-          : base.delivery.conversationTitle,
       message:
         patch.delivery?.message !== undefined
           ? patch.delivery.message
@@ -435,22 +346,10 @@ export function mergeAutomationRuleUpdatePayload(
         patch.delivery?.targetPolicy !== undefined
           ? patch.delivery.targetPolicy
           : base.delivery.targetPolicy,
-      participantActorIds:
-        patch.delivery?.participantActorIds !== undefined
-          ? [...patch.delivery.participantActorIds]
-          : base.delivery.participantActorIds,
-      participantWorkspaceMemberIds:
-        patch.delivery?.participantWorkspaceMemberIds !== undefined
-          ? [...patch.delivery.participantWorkspaceMemberIds]
-          : base.delivery.participantWorkspaceMemberIds,
-      recipientActorIds:
-        patch.delivery?.recipientActorIds !== undefined
-          ? [...patch.delivery.recipientActorIds]
-          : base.delivery.recipientActorIds,
-      recipientWorkspaceMemberIds:
-        patch.delivery?.recipientWorkspaceMemberIds !== undefined
-          ? [...patch.delivery.recipientWorkspaceMemberIds]
-          : base.delivery.recipientWorkspaceMemberIds,
+      targetParticipantIds:
+        patch.delivery?.targetParticipantIds !== undefined
+          ? [...patch.delivery.targetParticipantIds]
+          : base.delivery.targetParticipantIds,
     },
     metadata:
       patch.metadata !== undefined ? cloneRecord(patch.metadata) : base.metadata,
@@ -465,8 +364,17 @@ export function validateAutomationRuleCreatePayload(
   if (!trimString(payload.name)) {
     issues.push({ path: "name", message: "Name is required" });
   }
+  if (!trimString(payload.conversationId)) {
+    issues.push({
+      path: "conversationId",
+      message: "conversationId is required",
+    });
+  }
   if (!trimString(payload.delivery.message)) {
-    issues.push({ path: "delivery.message", message: "Visible system message is required" });
+    issues.push({
+      path: "delivery.message",
+      message: "Visible system message is required",
+    });
   }
 
   if (payload.trigger.triggerKind === "event") {
@@ -499,10 +407,7 @@ export function validateAutomationRuleCreatePayload(
         message: "Interval triggers require a positive interval in seconds",
       });
     }
-    if (
-      scheduleKind === "at" &&
-      !trimString(payload.trigger.startsAt)
-    ) {
+    if (scheduleKind === "at" && !trimString(payload.trigger.startsAt)) {
       issues.push({
         path: "trigger.startsAt",
         message: "Point-in-time schedules require a fire time",
@@ -562,34 +467,12 @@ export function validateAutomationRuleCreatePayload(
   }
 
   if (
-    payload.delivery.deliveryMode === "wake_session" &&
-    !trimString(payload.delivery.sessionId)
-  ) {
-    issues.push({
-      path: "delivery.sessionId",
-      message: "wake_session requires a target session ID",
-    });
-  }
-
-  if (
-    payload.delivery.deliveryMode === "conversation_notice" &&
-    !trimString(payload.delivery.conversationId)
-  ) {
-    issues.push({
-      path: "delivery.conversationId",
-      message: "conversation_notice requires a target conversation ID",
-    });
-  }
-
-  if (
     payload.delivery.targetPolicy === "specified_members" &&
-    (payload.delivery.recipientActorIds?.length || 0) +
-      (payload.delivery.recipientWorkspaceMemberIds?.length || 0) ===
-      0
+    (payload.delivery.targetParticipantIds?.length || 0) === 0
   ) {
     issues.push({
-      path: "delivery.recipients",
-      message: "specified_members requires at least one recipient",
+      path: "delivery.targetParticipantIds",
+      message: "specified_members requires at least one target participant",
     });
   }
 
@@ -628,8 +511,7 @@ export function buildAutomationRuleCreatePayloadFromDraft(
     const payload: AutomationRuleCreatePayload = {
       name: draft.name.trim(),
       description: draft.description.trim(),
-      ownerConversationId: trimString(draft.ownerConversationId),
-      ownerSessionId: trimString(draft.ownerSessionId),
+      conversationId: trimString(draft.conversationId) || "",
       trigger,
       policy: {
         activeFrom: toIsoString(draft.activeFrom, "Active from"),
@@ -640,21 +522,10 @@ export function buildAutomationRuleCreatePayloadFromDraft(
         completionStatus: draft.completionStatus,
       },
       delivery: {
-        deliveryMode: draft.deliveryMode,
-        conversationId: trimString(draft.conversationId),
-        sessionId: trimString(draft.sessionId),
-        conversationTitle: trimString(draft.conversationTitle),
         message: draft.message.trim(),
         wakeReason: trimString(draft.wakeReason),
         targetPolicy: draft.targetPolicy,
-        participantActorIds: parseAutomationIdList(draft.participantActorIds),
-        participantWorkspaceMemberIds: parseAutomationIdList(
-          draft.participantWorkspaceMemberIds,
-        ),
-        recipientActorIds: parseAutomationIdList(draft.recipientActorIds),
-        recipientWorkspaceMemberIds: parseAutomationIdList(
-          draft.recipientWorkspaceMemberIds,
-        ),
+        targetParticipantIds: parseAutomationIdList(draft.targetParticipantIds),
       },
     };
 
@@ -672,7 +543,8 @@ export function buildAutomationRuleCreatePayloadFromDraft(
       data: payload,
     };
   } catch (error) {
-    const message = error instanceof Error ? error.message : "Invalid trigger configuration";
+    const message =
+      error instanceof Error ? error.message : "Invalid trigger configuration";
     return {
       ok: false,
       error: message,

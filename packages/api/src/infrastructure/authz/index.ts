@@ -38,6 +38,7 @@ export type AuthzObjectType =
   | "actor"
   | "installed_skill"
   | "plugin_installation"
+  | "automation_event_source"
   | "relay_device"
   | "relay_exposure"
   | "relay_capability"
@@ -74,6 +75,7 @@ const AUTHZ_RESOURCE_TYPES: AuthzObjectType[] = [
   "actor",
   "installed_skill",
   "plugin_installation",
+  "automation_event_source",
   "relay_device",
   "relay_exposure",
   "relay_capability",

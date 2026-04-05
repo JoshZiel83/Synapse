@@ -2023,14 +2023,14 @@ class ApiClient {
     filters?: {
       status?: "active" | "paused" | "error" | "archived"
       category?: "schedule" | "event_subscription"
-      ownerSessionId?: string
+      conversationId?: string
     }
   ): Promise<AutomationRule[]> {
     const params = new URLSearchParams()
     if (filters?.status) params.set("status", filters.status)
     if (filters?.category) params.set("category", filters.category)
-    if (filters?.ownerSessionId)
-      params.set("ownerSessionId", filters.ownerSessionId)
+    if (filters?.conversationId)
+      params.set("conversationId", filters.conversationId)
     const qs = params.toString()
     return this.fetch(`/workspaces/${wsId}/automations${qs ? `?${qs}` : ""}`)
   }

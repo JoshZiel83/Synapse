@@ -2,11 +2,12 @@ import crypto from 'node:crypto';
 import cronParser from 'cron-parser';
 import { v4 as uuidv4 } from 'uuid';
 import type {
+  AccessGrant,
+  CapabilityAccessTarget,
   AutomationCategory,
   AutomationCompletionStatus,
   AutomationCreatorKind,
   AutomationDelivery,
-  AutomationDeliveryMode,
   AutomationExecution,
   AutomationEventProviderKind,
   AutomationPolicy,
@@ -21,8 +22,6 @@ import type {
   AutomationRule,
   AutomationSourceKind,
   AutomationStatus,
-  AutomationTargetEntityKind,
-  AutomationTargetEntityRef,
   AutomationTargetPolicy,
   AutomationTrigger,
   AutomationTriggerKind,
@@ -30,7 +29,14 @@ import type {
   AutomationWebhookEndpointCreateResult,
   CanonicalContentBlock,
 } from '@synapse/shared';
-import { extractText, nowISO, resolveAutomationOccurrenceDisplay } from '@synapse/shared';
+import {
+  DEFAULT_CONVERSATION_TYPE_MASK,
+  extractText,
+  maskAllowsConversationType,
+  nowISO,
+  resolveAutomationOccurrenceDisplay,
+  resolveNarrowedConversationTypeMask,
+} from '@synapse/shared';
 import {
   mergeAutomationRuleUpdatePayload,
   validateAutomationRuleCreatePayload,
@@ -39,10 +45,9 @@ import { decrypt, encrypt } from '../../infrastructure/crypto/index.js';
 import { transaction } from '../../infrastructure/database/index.js';
 import { executeSql, executeSqlOn } from '../../infrastructure/database/kysely.js';
 import {
-  addConversationParticipants,
   createConversationEvent,
-  createConversationForWorkspaceMember,
   getConversation,
+  getConversationParticipant,
   listConversationParticipants,
 } from '../chat/service.js';
 import { buildNormalizedMessageContent } from '../chat/message-content.js';
@@ -60,22 +65,29 @@ import { enqueueSessionWakeup } from '../session/runtime.js';
 import { getSession } from '../session/service.js';
 import {
   getWorkspaceMemberIdentityById,
-  requireWorkspaceMemberIdentity,
 } from '../chat/workspace-identity.js';
+import {
+  accessBindingHasTarget,
+  buildResourceAccessAuthzMutations,
+  buildResourceAccessBindingRef,
+  mapAccessBindingToGrant,
+  normalizeAccessBindingRow,
+  readAccessBindingTarget,
+  resolveAccessGrantTarget,
+  type AccessBindingRow,
+} from '../access/bindings.js';
+import { flushAuthzOutboxEntries, queueAuthzRelationships } from '../../infrastructure/authz/index.js';
 
 type AutomationRuleRow = {
   id: string;
   workspace_id: string;
+  conversation_id: string;
   category: AutomationCategory;
   status: AutomationStatus;
   name: string;
   description: string;
-  created_by_kind: AutomationCreatorKind;
-  created_by_workspace_member_id: string | null;
-  created_by_actor_id: string | null;
+  created_by_participant_id: string;
   created_by_session_id: string | null;
-  owner_conversation_id: string | null;
-  owner_session_id: string | null;
   last_triggered_at: string | null;
   last_error_at: string | null;
   last_error_message: string | null;
@@ -130,11 +142,6 @@ type AutomationPolicyRow = {
 
 type AutomationDeliveryRow = {
   rule_id: string;
-  delivery_mode: AutomationDeliveryMode;
-  conversation_id: string | null;
-  session_id: string | null;
-  reused_conversation_id: string | null;
-  conversation_title: string | null;
   message_text: string;
   wake_reason_text: string | null;
   message_blocks: unknown;
@@ -226,9 +233,9 @@ type AutomationTargetRow = {
   id: string;
   execution_id: string;
   conversation_id: string | null;
+  target_participant_id: string | null;
   session_id: string | null;
   target_actor_id: string | null;
-  target_workspace_member_id: string | null;
   created_item_id: string | null;
   wakeup_id: string | null;
   status: AutomationExecutionStatus;
@@ -237,10 +244,16 @@ type AutomationTargetRow = {
   updated_at: string;
 };
 
-type TargetEntityRow = {
+type TargetParticipantRow = {
   rule_id: string;
-  entity_kind: AutomationTargetEntityKind;
-  entity_id: string;
+  target_participant_id: string;
+};
+
+type AutomationEventSourceAccessRow = AccessBindingRow;
+
+type AutomationEventSourceAccessContext = {
+  conversationId: string;
+  actorId?: string | null;
 };
 
 type AutomationWebhookEndpointRow = {
@@ -361,26 +374,18 @@ export interface AutomationPolicyInput {
 }
 
 export interface AutomationDeliveryInput {
-  deliveryMode: AutomationDeliveryMode;
-  conversationId?: string;
-  sessionId?: string;
-  conversationTitle?: string;
   message?: string;
   wakeReason?: string;
   messageBlocks?: CanonicalContentBlock[];
   targetPolicy?: AutomationTargetPolicy;
-  participantActorIds?: string[];
-  participantWorkspaceMemberIds?: string[];
-  recipientActorIds?: string[];
-  recipientWorkspaceMemberIds?: string[];
+  targetParticipantIds?: string[];
 }
 
 export interface CreateAutomationRuleInput {
   name: string;
   description?: string;
   status?: AutomationStatus;
-  ownerConversationId?: string;
-  ownerSessionId?: string;
+  conversationId: string;
   trigger: AutomationTriggerInput;
   policy?: AutomationPolicyInput;
   delivery: AutomationDeliveryInput;
@@ -441,7 +446,6 @@ export interface ScheduleDueRulesResult {
 
 export interface ProcessAutomationExecutionResult {
   executionId: string;
-  createdConversationId?: string;
   createdItemId?: string;
   wakeupCount: number;
 }
@@ -512,17 +516,14 @@ function mapRuleRow(
   return {
     id: row.id,
     workspaceId: row.workspace_id,
+    authorityWorkspaceId: row.workspace_id,
+    conversationId: row.conversation_id,
     category: row.category,
     status: row.status,
     name: row.name,
     description: row.description,
-    createdByKind: row.created_by_kind,
-    createdByWorkspaceMemberId:
-      row.created_by_workspace_member_id || undefined,
-    createdByActorId: row.created_by_actor_id || undefined,
+    createdByParticipantId: row.created_by_participant_id,
     createdBySessionId: row.created_by_session_id || undefined,
-    ownerConversationId: row.owner_conversation_id || undefined,
-    ownerSessionId: row.owner_session_id || undefined,
     trigger,
     policy,
     delivery,
@@ -591,22 +592,15 @@ function mapPolicyRow(row: AutomationPolicyRow): AutomationPolicy {
 
 function mapDeliveryRow(
   row: AutomationDeliveryRow,
-  participants: AutomationTargetEntityRef[],
-  recipients: AutomationTargetEntityRef[],
+  targetParticipantIds: string[],
 ): AutomationDelivery {
   return {
     ruleId: row.rule_id,
-    deliveryMode: row.delivery_mode,
-    conversationId: row.conversation_id || undefined,
-    sessionId: row.session_id || undefined,
-    reusedConversationId: row.reused_conversation_id || undefined,
-    conversationTitle: row.conversation_title || undefined,
     messageText: row.message_text || '',
     wakeReasonText: row.wake_reason_text || undefined,
     messageBlocks: normalizeContentBlocks(row.message_blocks),
     targetPolicy: row.target_policy,
-    participants,
-    recipients,
+    targetParticipantIds,
     metadata: parseJsonObject(row.metadata),
   };
 }
@@ -763,10 +757,6 @@ function automationEventSourceSelectClause(eventSourceAlias = 'aes', bindingAlia
           ${bindingAlias}.external_subscription_id AS integration_external_subscription_id`;
 }
 
-function targetEntityRef(entityKind: AutomationTargetEntityKind, entityId: string): AutomationTargetEntityRef {
-  return { entityKind, entityId };
-}
-
 function mergeUniqueIds(values: string[] | undefined) {
   return Array.from(new Set((values || []).filter(Boolean)));
 }
@@ -907,11 +897,16 @@ function computeNextFireAt(input: {
 }
 
 async function normalizeTriggerInput(
-  workspaceId: string,
-  input: AutomationTriggerInput,
-  policy?: AutomationPolicyInput,
+  params: {
+    workspaceId: string;
+    input: AutomationTriggerInput;
+    policy?: AutomationPolicyInput;
+    conversation: Record<string, unknown>;
+    creatorActorId?: string | null;
+  },
 ): Promise<Omit<AutomationTriggerRow, 'rule_id'>> {
-  if (input.triggerKind === 'schedule') {
+  if (params.input.triggerKind === 'schedule') {
+    const input = params.input;
     const scheduleKind = input.scheduleKind || (input.startsAt ? 'at' : input.intervalSeconds ? 'interval' : 'cron');
     const nextFireAt = computeNextFireAt({
       scheduleKind,
@@ -919,8 +914,8 @@ async function normalizeTriggerInput(
       scheduleTimezone: input.scheduleTimezone,
       intervalSeconds: input.intervalSeconds,
       startsAt: input.startsAt || null,
-      activeFrom: policy?.activeFrom || null,
-      activeUntil: policy?.activeUntil || null,
+      activeFrom: params.policy?.activeFrom || null,
+      activeUntil: params.policy?.activeUntil || null,
     });
     return {
       trigger_kind: 'schedule',
@@ -940,14 +935,24 @@ async function normalizeTriggerInput(
     };
   }
 
+  const input = params.input;
   if (!input.eventSourceId?.trim()) {
     throw new Error('event trigger requires eventSourceId');
   }
-  const eventSource = await getAutomationEventSource(workspaceId, input.eventSourceId.trim());
+  const eventSource = await getAutomationEventSource(
+    params.workspaceId,
+    input.eventSourceId.trim(),
+  );
   if (!eventSource) {
     throw new Error(`Event source ${input.eventSourceId} not found`);
   }
   ensureEventSourceIsSubscribable(eventSource);
+  await assertAutomationEventSourceAccessible({
+    workspaceId: params.workspaceId,
+    eventSourceId: eventSource.id,
+    conversation: params.conversation,
+    actorId: params.creatorActorId || null,
+  });
 
   return {
     trigger_kind: 'event',
@@ -970,71 +975,49 @@ async function normalizeTriggerInput(
 async function normalizeDeliveryInput(
   input: AutomationDeliveryInput,
 ): Promise<Omit<AutomationDeliveryRow, 'rule_id'> & {
-  participants: AutomationTargetEntityRef[];
-  recipients: AutomationTargetEntityRef[];
+  targetParticipantIds: string[];
 }> {
   const normalizedMessage = await buildNormalizedMessageContent({
     content: input.message || '',
     contentBlocks: input.messageBlocks || [],
   });
-  const participants = [
-    ...mergeUniqueIds(input.participantActorIds).map((entityId) => targetEntityRef('actor', entityId)),
-    ...mergeUniqueIds(input.participantWorkspaceMemberIds).map((entityId) =>
-      targetEntityRef('workspace_member', entityId),
-    ),
-  ];
-  const recipients = [
-    ...mergeUniqueIds(input.recipientActorIds).map((entityId) => targetEntityRef('actor', entityId)),
-    ...mergeUniqueIds(input.recipientWorkspaceMemberIds).map((entityId) =>
-      targetEntityRef('workspace_member', entityId),
-    ),
-  ];
+  const targetParticipantIds = mergeUniqueIds(input.targetParticipantIds);
 
-  const targetPolicy = input.targetPolicy || (recipients.length > 0 ? 'specified_members' : 'all_members');
-  if (targetPolicy === 'specified_members' && recipients.length === 0) {
-    throw new Error('specified_members requires at least one recipient');
-  }
-  if (input.deliveryMode === 'conversation_notice' && !input.conversationId) {
-    throw new Error('conversation_notice requires conversationId');
-  }
-  if (input.deliveryMode === 'wake_session' && !input.sessionId) {
-    throw new Error('wake_session requires sessionId');
+  const targetPolicy =
+    input.targetPolicy ||
+    (targetParticipantIds.length > 0 ? 'specified_members' : 'all_members');
+  if (targetPolicy === 'specified_members' && targetParticipantIds.length === 0) {
+    throw new Error('specified_members requires at least one target participant');
   }
 
   return {
-    delivery_mode: input.deliveryMode,
-    conversation_id: input.conversationId || null,
-    session_id: input.sessionId || null,
-    reused_conversation_id: null,
-    conversation_title: input.conversationTitle?.trim() || null,
     message_text: normalizedMessage.normalizedContent,
     wake_reason_text: input.wakeReason?.trim() || normalizedMessage.normalizedContent || null,
     message_blocks: normalizedMessage.contentBlocks,
     target_policy: targetPolicy,
     metadata: normalizedMessage.normalizedMetadata,
-    participants,
-    recipients,
+    targetParticipantIds,
   };
 }
 
 async function loadAutomationTargets(
-  tableName: 'automation_delivery_participants' | 'automation_delivery_recipients',
+  tableName: 'automation_delivery_targets',
   ruleIds: string[],
 ) {
   if (ruleIds.length === 0) {
-    return new Map<string, AutomationTargetEntityRef[]>();
+    return new Map<string, string[]>();
   }
-  const result = await executeSql<TargetEntityRow>(
-    `SELECT rule_id, entity_kind, entity_id
+  const result = await executeSql<TargetParticipantRow>(
+    `SELECT rule_id, target_participant_id
      FROM ${tableName}
      WHERE rule_id = ANY($1)
      ORDER BY created_at ASC`,
     [ruleIds],
   );
-  const mapped = new Map<string, AutomationTargetEntityRef[]>();
+  const mapped = new Map<string, string[]>();
   for (const row of result.rows) {
     const existing = mapped.get(row.rule_id) || [];
-    existing.push(targetEntityRef(row.entity_kind, row.entity_id));
+    existing.push(row.target_participant_id);
     mapped.set(row.rule_id, existing);
   }
   return mapped;
@@ -1042,7 +1025,7 @@ async function loadAutomationTargets(
 
 async function loadAutomationRulesByIds(workspaceId: string, ruleIds: string[]) {
   if (ruleIds.length === 0) return [] as AutomationRule[];
-  const [rulesResult, triggersResult, policiesResult, deliveriesResult, participantsByRule, recipientsByRule] = await Promise.all([
+  const [rulesResult, triggersResult, policiesResult, deliveriesResult, targetsByRule] = await Promise.all([
     executeSql<AutomationRuleRow>(
       `SELECT *
        FROM automation_rules
@@ -1087,8 +1070,7 @@ async function loadAutomationRulesByIds(workspaceId: string, ruleIds: string[]) 
        WHERE rule_id = ANY($1)`,
       [ruleIds],
     ),
-    loadAutomationTargets('automation_delivery_participants', ruleIds),
-    loadAutomationTargets('automation_delivery_recipients', ruleIds),
+    loadAutomationTargets('automation_delivery_targets', ruleIds),
   ]);
 
   const triggerByRule = new Map(triggersResult.rows.map((row) => [row.rule_id, mapTriggerRow(row)]));
@@ -1098,8 +1080,7 @@ async function loadAutomationRulesByIds(workspaceId: string, ruleIds: string[]) 
       row.rule_id,
       mapDeliveryRow(
         row,
-        participantsByRule.get(row.rule_id) || [],
-        recipientsByRule.get(row.rule_id) || [],
+        targetsByRule.get(row.rule_id) || [],
       ),
     ]),
   );
@@ -1244,6 +1225,559 @@ async function pauseAutomationRulesForEventSource(
   }
 }
 
+function resolveAutomationEventSourceConversationMask(
+  conversationTypeMaskOverride?: number | null,
+) {
+  return resolveNarrowedConversationTypeMask(
+    DEFAULT_CONVERSATION_TYPE_MASK,
+    conversationTypeMaskOverride,
+  );
+}
+
+function bindingAllowsConversationType(params: {
+  conversation: Record<string, unknown>;
+  conversationTypeMaskOverride?: number | null;
+}) {
+  return maskAllowsConversationType(
+    resolveAutomationEventSourceConversationMask(
+      params.conversationTypeMaskOverride,
+    ),
+    typeof params.conversation.kind === 'string' ? params.conversation.kind : null,
+    typeof params.conversation.boundary === 'string'
+      ? params.conversation.boundary
+      : null,
+  );
+}
+
+function assertBindingMaskAllowsConversation(params: {
+  conversation: Record<string, unknown>;
+  conversationTypeMaskOverride?: number | null;
+  errorMessage: string;
+}) {
+  if (
+    params.conversationTypeMaskOverride !== undefined &&
+    params.conversationTypeMaskOverride !== null &&
+    !bindingAllowsConversationType(params)
+  ) {
+    throw new Error(params.errorMessage);
+  }
+}
+
+async function loadAutomationEventSourceAccessRows(
+  workspaceId: string,
+  eventSourceIds: string[],
+  includeRevoked = false,
+) {
+  const uniqueIds = Array.from(new Set(eventSourceIds.filter(Boolean)));
+  if (uniqueIds.length === 0) {
+    return new Map<string, AutomationEventSourceAccessRow[]>();
+  }
+
+  const result = await executeSql<AccessBindingRow>(
+    `SELECT
+       binding.id,
+       binding.workspace_id,
+       binding.resource_type,
+       binding.installed_skill_id,
+       binding.plugin_installation_id,
+       binding.relay_capability_id,
+       binding.automation_event_source_id,
+       binding.automation_event_source_id::text AS resource_id,
+       binding.target_type,
+       binding.subject_workspace_id,
+       binding.subject_workspace_member_id,
+       COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
+       COALESCE(binding.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
+       binding.subject_conversation_actor_context_id,
+       binding.conversation_type_mask_override,
+       binding.granted_permissions,
+       binding.status,
+       binding.created_by_workspace_member_id,
+       binding.reason,
+       binding.created_at,
+       binding.revoked_at
+     FROM resource_access_bindings binding
+     LEFT JOIN conversation_actor_contexts cac
+       ON cac.id = binding.subject_conversation_actor_context_id
+     WHERE binding.workspace_id = $1
+       AND binding.automation_event_source_id = ANY($2::uuid[])
+       ${includeRevoked ? '' : "AND binding.status = 'active'"}
+     ORDER BY binding.automation_event_source_id, binding.created_at ASC`,
+    [workspaceId, uniqueIds],
+  );
+
+  const rowsBySource = new Map<string, AutomationEventSourceAccessRow[]>();
+  for (const row of result.rows) {
+    const normalized = normalizeAccessBindingRow(row);
+    const existing = rowsBySource.get(normalized.resource_id) || [];
+    existing.push(normalized);
+    rowsBySource.set(normalized.resource_id, existing);
+  }
+  return rowsBySource;
+}
+
+async function listAutomationEventSourceAccessRows(
+  workspaceId: string,
+  eventSourceId: string,
+  includeRevoked = false,
+) {
+  const rowsBySource = await loadAutomationEventSourceAccessRows(
+    workspaceId,
+    [eventSourceId],
+    includeRevoked,
+  );
+  return rowsBySource.get(eventSourceId) || [];
+}
+
+function automationEventSourceGrantApplies(params: {
+  row: AutomationEventSourceAccessRow;
+  context: AutomationEventSourceAccessContext;
+  conversation: Record<string, unknown>;
+}) {
+  if (!bindingAllowsConversationType({
+    conversation: params.conversation,
+    conversationTypeMaskOverride: params.row.conversation_type_mask_override,
+  })) {
+    return false;
+  }
+
+  const target = readAccessBindingTarget(params.row);
+  switch (target.targetType) {
+    case 'workspace':
+      return (params.row.subject_workspace_id || null) ===
+        ((params.conversation.internal_workspace_id as string | null | undefined) || null)
+        || (params.row.subject_workspace_id || null) ===
+          (params.row.workspace_id || null);
+    case 'conversation':
+      return (target.conversationId || null) === params.context.conversationId;
+    case 'actor':
+      return Boolean(params.context.actorId) && (target.actorId || null) === (params.context.actorId || null);
+    case 'actor_in_conversation':
+      return (
+        Boolean(params.context.actorId) &&
+        (target.actorId || null) === (params.context.actorId || null) &&
+        (target.conversationId || null) === params.context.conversationId
+      );
+    default:
+      return false;
+  }
+}
+
+async function canAccessAutomationEventSource(params: {
+  workspaceId: string;
+  eventSourceId: string;
+  conversation: Record<string, unknown>;
+  actorId?: string | null;
+}) {
+  const rows = await listAutomationEventSourceAccessRows(
+    params.workspaceId,
+    params.eventSourceId,
+  );
+  return rows.some((row) =>
+    automationEventSourceGrantApplies({
+      row,
+      context: {
+        conversationId: params.conversation.id as string,
+        actorId: params.actorId || null,
+      },
+      conversation: params.conversation,
+    }),
+  );
+}
+
+async function assertAutomationEventSourceAccessible(params: {
+  workspaceId: string;
+  eventSourceId: string;
+  conversation: Record<string, unknown>;
+  actorId?: string | null;
+}) {
+  const allowed = await canAccessAutomationEventSource(params);
+  if (!allowed) {
+    throw new Error(
+      `Event source ${params.eventSourceId} is not authorized for this conversation and creator context`,
+    );
+  }
+}
+
+function mapAutomationEventSourceAccessGrant(
+  row: AutomationEventSourceAccessRow,
+) {
+  return mapAccessBindingToGrant(
+    row,
+    ['use'],
+    'Automation event sources require explicit use access.',
+    {
+      effectiveConversationTypeMask:
+        resolveAutomationEventSourceConversationMask(
+          row.conversation_type_mask_override,
+        ),
+    },
+  );
+}
+
+export async function listAutomationEventSourceAccessState(
+  workspaceId: string,
+  eventSourceId: string,
+) {
+  const source = await getAutomationEventSource(workspaceId, eventSourceId);
+  if (!source) {
+    throw new Error('Automation event source not found');
+  }
+
+  const rows = await listAutomationEventSourceAccessRows(workspaceId, eventSourceId);
+  const grants = rows.map(mapAutomationEventSourceAccessGrant);
+  const effectiveConversationTypeMask =
+    resolveAutomationEventSourceConversationMask(null);
+
+  return {
+    grants,
+    summary: {
+      requiredPermissions: ['use'],
+      suggestedAccessTargetType: 'workspace' as const,
+      reason:
+        'Automation event source access controls which conversations and actors may create subscriptions.',
+      conversationTypeMaskOverride: null,
+      effectiveConversationTypeMask,
+      effectivePermissions: grants.length > 0 ? ['use'] : [],
+      isVisible: grants.length > 0,
+      isAuthorized: grants.length > 0,
+      matchingGrantIds: grants.map((grant) => grant.id),
+      eventSourceId: source.id,
+    },
+  };
+}
+
+async function getBindingTargetConversation(
+  target: CapabilityAccessTarget,
+) {
+  if (target.type !== 'conversation' && target.type !== 'actor_in_conversation') {
+    return null;
+  }
+  if (!target.conversationId) {
+    throw new Error('conversationId is required for the selected access target');
+  }
+  const conversation = await getConversation(target.conversationId);
+  if (!conversation) {
+    throw new Error(`Conversation ${target.conversationId} not found`);
+  }
+  return conversation;
+}
+
+export async function grantAutomationEventSourceAccess(input: {
+  workspaceId: string;
+  eventSourceId: string;
+  accessTarget?: CapabilityAccessTarget;
+  conversationTypeMaskOverride?: number | null;
+  grantedByWorkspaceMemberId?: string;
+  reason?: string;
+}) {
+  const source = await getAutomationEventSource(input.workspaceId, input.eventSourceId);
+  if (!source) {
+    throw new Error('Automation event source not found');
+  }
+
+  const target = await resolveAccessGrantTarget({
+    workspaceId: input.workspaceId,
+    target: input.accessTarget || { type: 'workspace' },
+  });
+  const targetConversation = await getBindingTargetConversation(
+    input.accessTarget || { type: 'workspace' },
+  );
+  if (targetConversation) {
+    assertBindingMaskAllowsConversation({
+      conversation: targetConversation,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride,
+      errorMessage:
+        'Access grant conversation policy must allow the selected conversation type.',
+    });
+  }
+
+  const existingRows = await listAutomationEventSourceAccessRows(
+    input.workspaceId,
+    input.eventSourceId,
+  );
+  const existing = existingRows.find((row) => accessBindingHasTarget(row, target));
+  if (existing) {
+    return mapAutomationEventSourceAccessGrant(existing);
+  }
+
+  const inserted = await transaction(async (client) => {
+    const binding = await executeSqlOn<AccessBindingRow>(
+      client,
+      `INSERT INTO resource_access_bindings (
+         workspace_id,
+         resource_type,
+         installed_skill_id,
+         plugin_installation_id,
+         relay_capability_id,
+         automation_event_source_id,
+         target_type,
+         subject_workspace_id,
+         subject_workspace_member_id,
+         subject_actor_id,
+         subject_conversation_id,
+         subject_conversation_actor_context_id,
+         conversation_type_mask_override,
+         granted_permissions,
+         status,
+         created_by_workspace_member_id,
+         reason
+       )
+       VALUES (
+         $1,
+         'automation_event_source',
+         NULL,
+         NULL,
+         NULL,
+         $2,
+         $3,
+         $4,
+         $5,
+         $6,
+         $7,
+         $8,
+         $9,
+         ARRAY['use']::text[],
+         'active',
+         $10,
+         $11
+       )
+       RETURNING *, automation_event_source_id::text AS resource_id`,
+      [
+        input.workspaceId,
+        input.eventSourceId,
+        target.targetType,
+        target.subjectWorkspaceId,
+        target.subjectWorkspaceMemberId,
+        target.subjectActorId,
+        target.subjectConversationId,
+        target.subjectConversationActorContextId,
+        input.conversationTypeMaskOverride ?? null,
+        input.grantedByWorkspaceMemberId || null,
+        input.reason || 'Automation event source access grant',
+      ],
+    );
+
+    const authzEntryIds = await queueAuthzRelationships(
+      client,
+      buildResourceAccessAuthzMutations({
+        resourceType: 'automation_event_source',
+        resourceId: input.eventSourceId,
+        workspaceId: input.workspaceId,
+        target,
+        operation: 'touch',
+      }),
+      {
+        source: 'automation.event_source.access.grant',
+        workspaceId: input.workspaceId,
+        eventSourceId: input.eventSourceId,
+        bindingId: binding.rows[0]!.id,
+      },
+    );
+
+    return {
+      binding: binding.rows[0]!,
+      authzEntryIds,
+    };
+  });
+
+  await flushAuthzOutboxEntries(inserted.authzEntryIds);
+  return mapAutomationEventSourceAccessGrant(
+    normalizeAccessBindingRow(inserted.binding),
+  );
+}
+
+export async function updateAutomationEventSourceAccessGrant(input: {
+  workspaceId: string;
+  eventSourceId: string;
+  bindingId: string;
+  conversationTypeMaskOverride?: number | null;
+}) {
+  const accessRows = await listAutomationEventSourceAccessRows(
+    input.workspaceId,
+    input.eventSourceId,
+    true,
+  );
+  const existing = accessRows.find((row) => row.id === input.bindingId);
+  if (!existing) {
+    throw new Error('Automation event source access binding not found');
+  }
+
+  if (input.conversationTypeMaskOverride !== undefined) {
+    const targetConversation = await getBindingTargetConversation(
+      mapAutomationEventSourceAccessGrant(existing).target,
+    );
+    if (targetConversation) {
+      assertBindingMaskAllowsConversation({
+        conversation: targetConversation,
+        conversationTypeMaskOverride: input.conversationTypeMaskOverride,
+        errorMessage:
+          'Access grant conversation policy must allow the selected conversation type.',
+      });
+    }
+
+    await executeSql(
+      `UPDATE resource_access_bindings
+       SET conversation_type_mask_override = $2
+       WHERE id = $1
+         AND workspace_id = $3
+         AND automation_event_source_id = $4::uuid`,
+      [
+        input.bindingId,
+        input.conversationTypeMaskOverride ?? null,
+        input.workspaceId,
+        input.eventSourceId,
+      ],
+    );
+  }
+
+  const updatedRows = await listAutomationEventSourceAccessRows(
+    input.workspaceId,
+    input.eventSourceId,
+  );
+  const updated = updatedRows.find((row) => row.id === input.bindingId);
+  if (!updated) {
+    throw new Error('Automation event source access binding not found');
+  }
+  return mapAutomationEventSourceAccessGrant(updated);
+}
+
+async function pauseAutomationRule(params: {
+  ruleId: string;
+  workspaceId: string;
+  reason: string;
+  operator: AutomationOperatorInput;
+}) {
+  const auditUserId = await resolveAutomationAuditUserId(params.operator);
+  const updated = await executeSql<{ id: string }>(
+    `UPDATE automation_rules
+     SET status = 'paused',
+         last_error_at = NOW(),
+         last_error_message = $2,
+         updated_at = NOW()
+     WHERE id = $1
+       AND status = 'active'
+     RETURNING id`,
+    [params.ruleId, params.reason],
+  );
+  if (!updated.rows[0]) {
+    return;
+  }
+
+  await executeSql(
+    `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
+     VALUES ($1, $2, $3, 'automation_rule.pause', 'automation_rule', $4, $5)`,
+    [
+      params.workspaceId,
+      auditUserId,
+      params.operator.actorId || null,
+      params.ruleId,
+      JSON.stringify({ reason: params.reason }),
+    ],
+  );
+}
+
+async function pauseAutomationRulesMissingEventSourceAccess(
+  eventSourceId: string,
+  operator: AutomationOperatorInput,
+  reason: string,
+) {
+  const result = await executeSql<AutomationRuleRow>(
+    `SELECT ar.*
+     FROM automation_rules ar
+     JOIN automation_triggers at
+       ON at.rule_id = ar.id
+     WHERE at.event_source_id = $1
+       AND ar.category = 'event_subscription'
+       AND ar.status = 'active'`,
+    [eventSourceId],
+  );
+
+  for (const row of result.rows) {
+    const conversation = await getConversation(row.conversation_id);
+    const creatorParticipant = await getConversationParticipant({
+      conversationId: row.conversation_id,
+      participantId: row.created_by_participant_id,
+    });
+    const creatorActorId =
+      creatorParticipant?.actor_id && creatorParticipant.state === 'active'
+        ? (creatorParticipant.actor_id as string)
+        : null;
+    const stillAllowed =
+      Boolean(conversation) &&
+      (await canAccessAutomationEventSource({
+        workspaceId: row.workspace_id,
+        eventSourceId,
+        conversation: conversation!,
+        actorId: creatorActorId,
+      }));
+    if (!stillAllowed) {
+      await pauseAutomationRule({
+        ruleId: row.id,
+        workspaceId: row.workspace_id,
+        reason,
+        operator,
+      });
+    }
+  }
+}
+
+export async function revokeAutomationEventSourceAccess(input: {
+  workspaceId: string;
+  eventSourceId: string;
+  bindingId: string;
+  operator: AutomationOperatorInput;
+}) {
+  const accessRows = await listAutomationEventSourceAccessRows(
+    input.workspaceId,
+    input.eventSourceId,
+    true,
+  );
+  const existing = accessRows.find((row) => row.id === input.bindingId);
+  if (!existing) {
+    throw new Error('Automation event source access binding not found');
+  }
+
+  const authzEntryIds = await transaction(async (client) => {
+    const entryIds = await queueAuthzRelationships(
+      client,
+      buildResourceAccessAuthzMutations({
+        resourceType: 'automation_event_source',
+        resourceId: input.eventSourceId,
+        workspaceId: input.workspaceId,
+        target: readAccessBindingTarget(existing),
+        operation: 'delete',
+      }),
+      {
+        source: 'automation.event_source.access.revoke',
+        workspaceId: input.workspaceId,
+        eventSourceId: input.eventSourceId,
+        bindingId: existing.id,
+      },
+    );
+
+    await executeSqlOn(
+      client,
+      `UPDATE resource_access_bindings
+       SET status = 'revoked',
+           revoked_at = NOW()
+       WHERE id = $1
+         AND workspace_id = $2
+         AND automation_event_source_id = $3::uuid`,
+      [input.bindingId, input.workspaceId, input.eventSourceId],
+    );
+
+    return entryIds;
+  });
+
+  await flushAuthzOutboxEntries(authzEntryIds);
+  await pauseAutomationRulesMissingEventSourceAccess(
+    input.eventSourceId,
+    input.operator,
+    `Event source access binding ${input.bindingId} was revoked`,
+  );
+}
+
 export async function getAutomationEventSource(workspaceId: string, eventSourceId: string) {
   const result = await executeSql<AutomationEventSourceRow>(
     `SELECT ${automationEventSourceSelectClause('aes', 'aib')}
@@ -1265,6 +1799,7 @@ export async function listAutomationEventSources(
     providerRef?: string;
     sourceKey?: string;
   },
+  accessContext?: AutomationEventSourceAccessContext,
 ) {
   const values: unknown[] = [workspaceId];
   let where = 'aes.workspace_id = $1';
@@ -1294,7 +1829,29 @@ export async function listAutomationEventSources(
      ORDER BY aes.created_at DESC`,
     values,
   );
-  return result.rows.map(mapEventSourceRow);
+  const sources = result.rows.map(mapEventSourceRow);
+  if (!accessContext) {
+    return sources;
+  }
+
+  const conversation = await getConversation(accessContext.conversationId);
+  if (!conversation) {
+    return [];
+  }
+  const accessRowsBySource = await loadAutomationEventSourceAccessRows(
+    workspaceId,
+    sources.map((source) => source.id),
+  );
+
+  return sources.filter((source) =>
+    (accessRowsBySource.get(source.id) || []).some((row) =>
+      automationEventSourceGrantApplies({
+        row,
+        context: accessContext,
+        conversation,
+      }),
+    ),
+  );
 }
 
 async function loadAutomationWebhookEndpointSecret(endpointId: string) {
@@ -2151,16 +2708,16 @@ async function listIntegrationEventSourcesByWebhookPathToken(pathToken: string) 
 
 async function persistAutomationTargets(
   client: { query: (text: string, params?: any[]) => Promise<any> },
-  tableName: 'automation_delivery_participants' | 'automation_delivery_recipients',
+  tableName: 'automation_delivery_targets',
   ruleId: string,
-  values: AutomationTargetEntityRef[],
+  targetParticipantIds: string[],
 ) {
   await executeSqlOn(client, `DELETE FROM ${tableName} WHERE rule_id = $1`, [ruleId]);
-  for (const value of values) {
+  for (const targetParticipantId of targetParticipantIds) {
     await executeSqlOn(client, 
-      `INSERT INTO ${tableName} (id, rule_id, entity_kind, entity_id, created_at)
-       VALUES ($1, $2, $3, $4, NOW())`,
-      [uuidv4(), ruleId, value.entityKind, value.entityId],
+      `INSERT INTO ${tableName} (id, rule_id, target_participant_id, created_at)
+       VALUES ($1, $2, $3, NOW())`,
+      [uuidv4(), ruleId, targetParticipantId],
     );
   }
 }
@@ -2222,8 +2779,57 @@ async function expireAutomationRules(params: {
           }),
         ],
       ),
+      ),
+  );
+}
+
+async function pauseAutomationRulesForInactiveCreators(params: {
+  workspaceId?: string;
+  client?: QueryRunnerLike;
+}) {
+  const runner = resolveQueryRunner(params.client);
+  const result = await runner.run<{ id: string; workspace_id: string }>(
+    `UPDATE automation_rules ar
+     SET status = 'paused',
+         last_error_at = NOW(),
+         last_error_message = 'Creator participant is no longer active',
+         updated_at = NOW()
+     FROM conversation_participants cp
+     WHERE cp.id = ar.created_by_participant_id
+       AND ar.status = 'active'
+       AND cp.state <> 'active'
+       ${params.workspaceId ? 'AND ar.workspace_id = $1' : ''}
+     RETURNING ar.id, ar.workspace_id`,
+    params.workspaceId ? [params.workspaceId] : [],
+  );
+
+  await Promise.all(
+    result.rows.map((row) =>
+      runner.run(
+        `INSERT INTO audit_logs (workspace_id, action, resource_type, resource_id, details)
+         VALUES ($1, 'automation_rule.pause', 'automation_rule', $2, $3)`,
+        [
+          row.workspace_id,
+          row.id,
+          JSON.stringify({
+            reason: 'Creator participant is no longer active',
+          }),
+        ],
+      ),
     ),
   );
+}
+
+async function syncAutomationRuleLiveness(params: {
+  referenceTime?: string;
+  workspaceId?: string;
+  client?: QueryRunnerLike;
+}) {
+  await expireAutomationRules(params);
+  await pauseAutomationRulesForInactiveCreators({
+    workspaceId: params.workspaceId,
+    client: params.client,
+  });
 }
 
 async function applyAutomationPolicyAfterTrigger(params: {
@@ -2433,9 +3039,9 @@ async function createAutomationExecution(params: {
 async function recordExecutionTarget(params: {
   executionId: string;
   conversationId?: string;
+  targetParticipantId?: string;
   sessionId?: string;
   targetActorId?: string;
-  targetWorkspaceMemberId?: string;
   createdItemId?: string;
   wakeupId?: string;
   status: AutomationExecutionStatus;
@@ -2443,7 +3049,7 @@ async function recordExecutionTarget(params: {
 }) {
   const result = await executeSql<AutomationTargetRow>(
     `INSERT INTO automation_execution_targets
-       (id, execution_id, conversation_id, session_id, target_actor_id, target_workspace_member_id, created_item_id, wakeup_id,
+       (id, execution_id, conversation_id, target_participant_id, session_id, target_actor_id, created_item_id, wakeup_id,
         status, metadata, created_at, updated_at)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())
      RETURNING *`,
@@ -2451,9 +3057,9 @@ async function recordExecutionTarget(params: {
       uuidv4(),
       params.executionId,
       params.conversationId || null,
+      params.targetParticipantId || null,
       params.sessionId || null,
       params.targetActorId || null,
-      params.targetWorkspaceMemberId || null,
       params.createdItemId || null,
       params.wakeupId || null,
       params.status,
@@ -2486,33 +3092,33 @@ function buildAutomationNoticePayload(params: {
     sourceSummary: params.occurrence.displaySummary,
     sourceDescription: params.occurrence.displayDescription,
     occurredAt: params.occurrence.occurredAt,
-    deliveryMode: params.rule.delivery.deliveryMode,
     message: params.rule.delivery.messageText,
     messageBlocks: params.rule.delivery.messageBlocks,
   };
 }
 
 async function resolveOperatorUserId(rule: AutomationRule) {
-  if (rule.createdByWorkspaceMemberId) {
+  const creatorParticipant = await getConversationParticipant({
+    conversationId: rule.conversationId,
+    participantId: rule.createdByParticipantId,
+  });
+  if (creatorParticipant?.workspace_member_id) {
     const identity = await getWorkspaceMemberIdentityById(
-      rule.createdByWorkspaceMemberId,
+      creatorParticipant.workspace_member_id as string,
     );
     if (identity?.userId) return identity.userId;
   }
 
-  if (rule.ownerConversationId) {
-    const members = await listConversationParticipants(rule.ownerConversationId);
-    const firstUser = members.find(
-      (member: any) =>
-        member.state === 'active' && member.workspace_member_id,
+  const members = await listConversationParticipants(rule.conversationId);
+  const firstUser = members.find(
+    (member: any) => member.state === 'active' && member.workspace_member_id,
+  );
+  if (firstUser?.workspace_member_id) {
+    const workspaceMember = await getWorkspaceMemberIdentityById(
+      firstUser.workspace_member_id as string,
     );
-    if (firstUser?.workspace_member_id) {
-      const workspaceMember = await getWorkspaceMemberIdentityById(
-        firstUser.workspace_member_id as string,
-      );
-      if (workspaceMember) {
-        return workspaceMember.userId;
-      }
+    if (workspaceMember) {
+      return workspaceMember.userId;
     }
   }
 
@@ -2526,144 +3132,31 @@ async function resolveOperatorUserId(rule: AutomationRule) {
   return result.rows[0]?.owner_id || null;
 }
 
-async function resolveExistingConversationId(rule: AutomationRule) {
-  if (rule.delivery.deliveryMode === 'wake_session') {
-    const sessionId = rule.delivery.sessionId || rule.ownerSessionId;
-    if (!sessionId) {
-      throw new Error('wake_session delivery requires a target session');
-    }
-    const session = await getSession(sessionId);
-    if (!session || session.status === 'closed') {
-      throw new Error(`Target session ${sessionId} is unavailable`);
-    }
-    return {
-      conversationId: session.conversation_id as string,
-      sessionId,
-      createdConversationId: undefined as string | undefined,
-    };
-  }
-
-  if (rule.delivery.deliveryMode === 'conversation_notice') {
-    const conversationId = rule.delivery.conversationId || rule.ownerConversationId;
-    if (!conversationId) {
-      throw new Error('conversation_notice delivery requires conversationId');
-    }
-    const conversation = await getConversation(conversationId);
-    if (!conversation) {
-      throw new Error(`Conversation ${conversationId} not found`);
-    }
-    return {
-      conversationId,
-      sessionId: undefined,
-      createdConversationId: undefined as string | undefined,
-    };
-  }
-
-  const operatorUserId = await resolveOperatorUserId(rule);
-  if (!operatorUserId) {
-    throw new Error('No operator user is available to create a conversation for this automation');
-  }
-  const operatorWorkspaceMember = await requireWorkspaceMemberIdentity(
-    rule.workspaceId,
-    operatorUserId,
-  );
-
-  const participantActorIds = rule.delivery.participants
-    .filter((entry) => entry.entityKind === 'actor')
-    .map((entry) => entry.entityId);
-  const participantWorkspaceMemberIds = rule.delivery.participants
-    .filter((entry) => entry.entityKind === 'workspace_member')
-    .map((entry) => entry.entityId)
-    .filter(Boolean);
-
-  const reuseExisting =
-    rule.delivery.deliveryMode === 'create_conversation_once'
-      ? rule.delivery.reusedConversationId
-      : undefined;
-  if (reuseExisting) {
-    const existingConversation = await getConversation(reuseExisting);
-    if (existingConversation) {
-      return {
-        conversationId: reuseExisting,
-        sessionId: undefined,
-        createdConversationId: undefined as string | undefined,
-      };
-    }
-  }
-
-  const created = await createConversationForWorkspaceMember({
-    workspaceId: rule.workspaceId,
-    kind: 'group',
-    creatorWorkspaceMemberId: operatorWorkspaceMember.workspaceMemberId,
-    title: rule.delivery.conversationTitle || rule.name,
-    actorIds: participantActorIds,
+async function resolveCreatorParticipant(rule: AutomationRule) {
+  return getConversationParticipant({
+    conversationId: rule.conversationId,
+    participantId: rule.createdByParticipantId,
   });
-
-  if (participantWorkspaceMemberIds.length > 0) {
-    await addConversationParticipants({
-      conversationId: created.id as string,
-      workspaceId: rule.workspaceId,
-      workspaceMemberIds: participantWorkspaceMemberIds,
-    });
-  }
-
-  if (rule.delivery.deliveryMode === 'create_conversation_once') {
-    await executeSql(
-      `UPDATE automation_deliveries
-       SET reused_conversation_id = $2,
-           updated_at = NOW()
-       WHERE rule_id = $1`,
-      [rule.id, created.id],
-    );
-    rule.delivery.reusedConversationId = created.id as string;
-  }
-
-  return {
-    conversationId: created.id as string,
-    sessionId: undefined,
-    createdConversationId: created.id as string,
-  };
 }
 
-async function resolveRecipientMembers(rule: AutomationRule, conversationId: string) {
-  const members = await listConversationParticipants(conversationId);
+async function resolveDeliveryTargets(rule: AutomationRule) {
+  const members = await listConversationParticipants(rule.conversationId);
+  const activeParticipants = members.filter((member: any) => member.state === 'active');
   if (rule.delivery.targetPolicy === 'all_members') {
     return {
-      restrictedAudienceParticipantIds: members.filter((member: any) => member.state === 'active').map((member: any) => member.id as string),
-      actorRecipientIds: members
-        .filter((member: any) => member.state === 'active' && member.actor_id)
-        .map((member: any) => member.actor_id as string),
+      restrictedAudienceParticipantIds: activeParticipants.map((member: any) => member.id as string),
+      targetParticipants: activeParticipants,
     };
   }
 
-  const recipientActors = new Set(
-    rule.delivery.recipients
-      .filter((entry) => entry.entityKind === 'actor')
-      .map((entry) => entry.entityId),
+  const configuredTargetIds = new Set(rule.delivery.targetParticipantIds);
+  const targetParticipants = activeParticipants.filter((member: any) =>
+    configuredTargetIds.has(member.id as string),
   );
-  const recipientWorkspaceMembers = new Set(
-    rule.delivery.recipients
-      .filter((entry) => entry.entityKind === 'workspace_member')
-      .map((entry) => entry.entityId),
-  );
-
-  const restrictedAudienceParticipantIds = members
-    .filter((member: any) => member.state === 'active')
-    .filter((member: any) => {
-      if (member.actor_id) return recipientActors.has(member.actor_id);
-      if (member.workspace_member_id) {
-        return recipientWorkspaceMembers.has(member.workspace_member_id);
-      }
-      return false;
-    })
-    .map((member: any) => member.id as string);
-  const actorRecipientIds = members
-    .filter((member: any) => member.state === 'active' && member.actor_id && recipientActors.has(member.actor_id))
-    .map((member: any) => member.actor_id as string);
 
   return {
-    restrictedAudienceParticipantIds,
-    actorRecipientIds,
+    restrictedAudienceParticipantIds: targetParticipants.map((member: any) => member.id as string),
+    targetParticipants,
   };
 }
 
@@ -2671,7 +3164,6 @@ async function createAutomationNotice(params: {
   rule: AutomationRule;
   executionId: string;
   occurrence: AutomationOccurrence;
-  conversationId: string;
   restrictedAudienceParticipantIds: string[];
 }) {
   const payload = buildAutomationNoticePayload(params);
@@ -2679,7 +3171,7 @@ async function createAutomationNotice(params: {
   const contextPolicy = params.rule.delivery.targetPolicy === 'specified_members' ? 'targeted_members' : 'shared';
   const created = await createConversationEvent({
     workspaceId: params.rule.workspaceId,
-    conversationId: params.conversationId,
+    conversationId: params.rule.conversationId,
     eventType: 'automation_notice',
     timelinePolicy,
     contextPolicy,
@@ -2705,96 +3197,57 @@ async function wakeAutomationTargets(params: {
   rule: AutomationRule;
   executionId: string;
   occurrence: AutomationOccurrence;
-  conversationId: string;
   createdItemId: string;
-  actorRecipientIds: string[];
+  targetParticipants: any[];
 }) {
-  const memberRows = await listConversationParticipants(params.conversationId).catch(
-    () => [] as any[]
-  );
-  const sessionsByActor = new Map<string, { sessionId: string }>();
-  for (const member of memberRows) {
-    if (member.actor_id && member.session_id && member.state === 'active') {
-      sessionsByActor.set(member.actor_id, { sessionId: member.session_id });
-    }
-  }
-
-  const targetActorIds =
-    params.rule.delivery.deliveryMode === 'wake_session' && params.rule.ownerSessionId
-      ? [params.rule.createdByActorId || ''].filter(Boolean)
-      : params.actorRecipientIds;
   let wakeupCount = 0;
 
-  if (params.rule.delivery.deliveryMode === 'wake_session') {
-    const sessionId = params.rule.delivery.sessionId || params.rule.ownerSessionId;
-    if (!sessionId) {
-      throw new Error('wake_session delivery requires a target session');
-    }
-    const session = await getSession(sessionId);
-    if (!session || session.status === 'closed') {
-      throw new Error(`Target session ${sessionId} is unavailable`);
+  for (const participant of params.targetParticipants) {
+    let wakeupId: string | undefined;
+    const actorId = participant.actor_id as string | undefined;
+    const sessionId =
+      participant.session_id && participant.state === 'active'
+        ? (participant.session_id as string)
+        : undefined;
+
+    if (actorId && sessionId) {
+      const wakeup = await enqueueSessionWakeup({
+        sessionId,
+        actorId,
+        workspaceId: params.rule.workspaceId,
+        sourceType: 'automation',
+        sourceItemId: params.createdItemId,
+        sourceParticipantType: 'system',
+        sourceName: params.rule.name,
+        summary: params.rule.delivery.messageText || params.rule.name,
+        reasonText:
+          params.rule.delivery.wakeReasonText ||
+          params.rule.delivery.messageText ||
+          params.rule.name,
+        automationExecutionId: params.executionId,
+        automationOccurrenceId: params.occurrence.id,
+        trigger: 'automation',
+        metadata: {
+          automationId: params.rule.id,
+        },
+      });
+      wakeupId = wakeup.id as string;
+      wakeupCount += 1;
     }
 
-    const wakeup = await enqueueSessionWakeup({
-      sessionId,
-      actorId: session.actor_id as string,
-      workspaceId: params.rule.workspaceId,
-      sourceType: 'automation',
-      sourceItemId: params.createdItemId,
-      sourceParticipantType: 'system',
-      sourceName: params.rule.name,
-      summary: params.rule.delivery.messageText || params.rule.name,
-      reasonText: params.rule.delivery.wakeReasonText || params.rule.delivery.messageText || params.rule.name,
-      automationExecutionId: params.executionId,
-      automationOccurrenceId: params.occurrence.id,
-      trigger: 'automation',
-      metadata: {
-        automationId: params.rule.id,
-        deliveryMode: params.rule.delivery.deliveryMode,
-      },
-    });
     await recordExecutionTarget({
       executionId: params.executionId,
-      conversationId: params.conversationId,
+      conversationId: params.rule.conversationId,
+      targetParticipantId: participant.id as string,
       sessionId,
-      targetActorId: session.actor_id as string,
-      createdItemId: params.createdItemId,
-      wakeupId: wakeup.id as string,
-      status: 'completed',
-    });
-    return 1;
-  }
-
-  for (const actorId of targetActorIds) {
-    const sessionEntry = sessionsByActor.get(actorId);
-    if (!sessionEntry?.sessionId) continue;
-    const wakeup = await enqueueSessionWakeup({
-      sessionId: sessionEntry.sessionId,
-      actorId,
-      workspaceId: params.rule.workspaceId,
-      sourceType: 'automation',
-      sourceItemId: params.createdItemId,
-      sourceParticipantType: 'system',
-      sourceName: params.rule.name,
-      summary: params.rule.delivery.messageText || params.rule.name,
-      reasonText: params.rule.delivery.wakeReasonText || params.rule.delivery.messageText || params.rule.name,
-      automationExecutionId: params.executionId,
-      automationOccurrenceId: params.occurrence.id,
-      trigger: 'automation',
-      metadata: {
-        automationId: params.rule.id,
-        deliveryMode: params.rule.delivery.deliveryMode,
-      },
-    });
-    wakeupCount += 1;
-    await recordExecutionTarget({
-      executionId: params.executionId,
-      conversationId: params.conversationId,
-      sessionId: sessionEntry.sessionId,
       targetActorId: actorId,
       createdItemId: params.createdItemId,
-      wakeupId: wakeup.id as string,
+      wakeupId,
       status: 'completed',
+      metadata: {
+        targetActive: participant.state === 'active',
+        wakeupScheduled: Boolean(wakeupId),
+      },
     });
   }
 
@@ -2805,37 +3258,116 @@ export function getAutomationSchedulerIntervalMs() {
   return AUTOMATION_SCHEDULER_INTERVAL_MS;
 }
 
+async function resolveConversationCreatorParticipant(
+  creator: AutomationCreatorInput | AutomationOperatorInput,
+  conversationId: string,
+) {
+  if (creator.actorId) {
+    const actorParticipant = await getConversationParticipant({
+      conversationId,
+      actorId: creator.actorId,
+    });
+    if (actorParticipant?.id && actorParticipant.state === 'active') {
+      return actorParticipant;
+    }
+  }
+
+  if (creator.workspaceMemberId) {
+    const memberParticipant = await getConversationParticipant({
+      conversationId,
+      workspaceMemberId: creator.workspaceMemberId,
+    });
+    if (memberParticipant?.id && memberParticipant.state === 'active') {
+      return memberParticipant;
+    }
+  }
+
+  throw new Error('Creator must be an active participant in the target conversation');
+}
+
+async function validateAutomationDeliveryTargets(params: {
+  conversationId: string;
+  creatorParticipant: any;
+  delivery: Awaited<ReturnType<typeof normalizeDeliveryInput>>;
+}) {
+  const activeParticipants = (await listConversationParticipants(
+    params.conversationId,
+  )).filter((participant: any) => participant.state === 'active');
+  const participantsById = new Map(
+    activeParticipants.map((participant: any) => [participant.id as string, participant]),
+  );
+
+  for (const targetParticipantId of params.delivery.targetParticipantIds) {
+    if (!participantsById.has(targetParticipantId)) {
+      throw new Error(`Target participant ${targetParticipantId} is not in conversation ${params.conversationId}`);
+    }
+  }
+
+  if (params.creatorParticipant.participant_kind === 'actor') {
+    if (params.delivery.target_policy !== 'specified_members') {
+      throw new Error('Actor-created automations must target the creator actor only');
+    }
+    if (
+      params.delivery.targetParticipantIds.length !== 1 ||
+      params.delivery.targetParticipantIds[0] !== params.creatorParticipant.id
+    ) {
+      throw new Error('Actor-created automations must target the creator actor only');
+    }
+  }
+}
+
 export async function createAutomationRule(
   workspaceId: string,
   creator: AutomationCreatorInput,
   input: CreateAutomationRuleInput,
 ) {
+  const issues = validateAutomationRuleCreatePayload(input as any);
+  if (issues.length > 0) {
+    throw createAutomationValidationError(issues);
+  }
+
+  const conversation = await getConversation(input.conversationId);
+  if (!conversation) {
+    throw new Error(`Conversation ${input.conversationId} not found`);
+  }
+  const creatorParticipant = await resolveConversationCreatorParticipant(
+    creator,
+    input.conversationId,
+  );
   const auditUserId = await resolveAutomationAuditUserId(creator);
   const ruleId = uuidv4();
   const category: AutomationCategory = input.trigger.triggerKind === 'schedule' ? 'schedule' : 'event_subscription';
   const normalizedPolicy = normalizePolicyInput(input.policy);
-  const normalizedTrigger = await normalizeTriggerInput(workspaceId, input.trigger, input.policy);
   const normalizedDelivery = await normalizeDeliveryInput(input.delivery);
+  await validateAutomationDeliveryTargets({
+    conversationId: input.conversationId,
+    creatorParticipant,
+    delivery: normalizedDelivery,
+  });
+  const normalizedTrigger = await normalizeTriggerInput({
+    workspaceId,
+    input: input.trigger,
+    policy: input.policy,
+    conversation,
+    creatorActorId: creatorParticipant.actor_id as string | null | undefined,
+  });
 
   await transaction(async (client) => {
     await executeSqlOn(client, 
       `INSERT INTO automation_rules
-         (id, workspace_id, category, status, name, description, created_by_kind, created_by_workspace_member_id, created_by_actor_id,
-          created_by_session_id, owner_conversation_id, owner_session_id, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, NOW(), NOW())`,
+         (id, workspace_id, conversation_id, category, status, name, description, created_by_participant_id,
+          created_by_session_id, metadata, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())`,
       [
         ruleId,
         workspaceId,
+        input.conversationId,
         category,
         input.status || 'active',
         input.name.trim(),
         (input.description || '').trim(),
-        creator.kind,
-        creator.workspaceMemberId || null,
-        creator.actorId || null,
+        creatorParticipant.id,
         creator.sessionId || null,
-        input.ownerConversationId || null,
-        input.ownerSessionId || null,
         JSON.stringify(input.metadata || {}),
       ],
     );
@@ -2883,16 +3415,10 @@ export async function createAutomationRule(
 
     await executeSqlOn(client, 
       `INSERT INTO automation_deliveries
-         (rule_id, delivery_mode, conversation_id, session_id, reused_conversation_id, conversation_title,
-          message_text, wake_reason_text, message_blocks, target_policy, metadata, created_at, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())`,
+         (rule_id, message_text, wake_reason_text, message_blocks, target_policy, metadata, created_at, updated_at)
+       VALUES ($1, $2, $3, $4, $5, $6, NOW(), NOW())`,
       [
         ruleId,
-        normalizedDelivery.delivery_mode,
-        normalizedDelivery.conversation_id,
-        normalizedDelivery.session_id,
-        normalizedDelivery.reused_conversation_id,
-        normalizedDelivery.conversation_title,
         normalizedDelivery.message_text,
         normalizedDelivery.wake_reason_text,
         JSON.stringify(normalizedDelivery.message_blocks),
@@ -2901,8 +3427,12 @@ export async function createAutomationRule(
       ],
     );
 
-    await persistAutomationTargets(client, 'automation_delivery_participants', ruleId, normalizedDelivery.participants);
-    await persistAutomationTargets(client, 'automation_delivery_recipients', ruleId, normalizedDelivery.recipients);
+    await persistAutomationTargets(
+      client,
+      'automation_delivery_targets',
+      ruleId,
+      normalizedDelivery.targetParticipantIds,
+    );
 
     await executeSqlOn(client, 
       `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
@@ -2923,7 +3453,9 @@ export async function createAutomationRule(
           },
           sourceKind: normalizedTrigger.source_kind,
           eventSourceId: normalizedTrigger.event_source_id,
-          deliveryMode: normalizedDelivery.delivery_mode,
+          conversationId: input.conversationId,
+          targetPolicy: normalizedDelivery.target_policy,
+          targetCount: normalizedDelivery.targetParticipantIds.length,
         }),
       ],
     );
@@ -2938,10 +3470,10 @@ export async function createAutomationRule(
 
 export async function listAutomationRules(workspaceId: string, filters?: {
   status?: AutomationStatus;
-  ownerSessionId?: string;
   category?: AutomationCategory;
+  conversationId?: string;
 }) {
-  await expireAutomationRules({ workspaceId });
+  await syncAutomationRuleLiveness({ workspaceId });
 
   const values: unknown[] = [workspaceId];
   let where = 'workspace_id = $1';
@@ -2950,13 +3482,13 @@ export async function listAutomationRules(workspaceId: string, filters?: {
     values.push(filters.status);
     where += ` AND status = $${values.length}`;
   }
-  if (filters?.ownerSessionId) {
-    values.push(filters.ownerSessionId);
-    where += ` AND owner_session_id = $${values.length}`;
-  }
   if (filters?.category) {
     values.push(filters.category);
     where += ` AND category = $${values.length}`;
+  }
+  if (filters?.conversationId) {
+    values.push(filters.conversationId);
+    where += ` AND conversation_id = $${values.length}`;
   }
 
   const result = await executeSql<{ id: string }>(
@@ -2970,7 +3502,7 @@ export async function listAutomationRules(workspaceId: string, filters?: {
 }
 
 export async function getAutomationRule(workspaceId: string, ruleId: string) {
-  await expireAutomationRules({ workspaceId });
+  await syncAutomationRuleLiveness({ workspaceId });
   const [rule] = await loadAutomationRulesByIds(workspaceId, [ruleId]);
   return rule || null;
 }
@@ -2992,10 +3524,37 @@ export async function updateAutomationRule(
   if (issues.length > 0) {
     throw createAutomationValidationError(issues);
   }
+  if (mergedInput.conversationId !== existing.conversationId) {
+    throw createAutomationValidationError([
+      {
+        path: 'conversationId',
+        message: 'Automation rules cannot be moved to another conversation',
+      },
+    ]);
+  }
 
+  const creatorParticipant = await resolveCreatorParticipant(existing);
+  if (!creatorParticipant?.id) {
+    throw new Error('Automation creator participant no longer exists');
+  }
+  const conversation = await getConversation(existing.conversationId);
+  if (!conversation) {
+    throw new Error(`Conversation ${existing.conversationId} not found`);
+  }
   const normalizedPolicy = normalizePolicyInput(mergedInput.policy);
-  const normalizedTrigger = await normalizeTriggerInput(workspaceId, mergedInput.trigger, mergedInput.policy);
   const normalizedDelivery = await normalizeDeliveryInput(mergedInput.delivery);
+  await validateAutomationDeliveryTargets({
+    conversationId: existing.conversationId,
+    creatorParticipant,
+    delivery: normalizedDelivery,
+  });
+  const normalizedTrigger = await normalizeTriggerInput({
+    workspaceId,
+    input: mergedInput.trigger,
+    policy: mergedInput.policy,
+    conversation,
+    creatorActorId: creatorParticipant.actor_id as string | null | undefined,
+  });
 
   await transaction(async (client) => {
     await executeSqlOn(client, 
@@ -3003,9 +3562,7 @@ export async function updateAutomationRule(
        SET status = $2,
            name = $3,
            description = $4,
-           owner_conversation_id = $5,
-           owner_session_id = $6,
-           metadata = $7,
+           metadata = $5,
            updated_at = NOW()
        WHERE id = $1`,
       [
@@ -3013,8 +3570,6 @@ export async function updateAutomationRule(
         mergedInput.status || existing.status,
         mergedInput.name.trim(),
         (mergedInput.description || '').trim(),
-        mergedInput.ownerConversationId || null,
-        mergedInput.ownerSessionId || null,
         JSON.stringify(mergedInput.metadata || {}),
       ],
     );
@@ -3077,23 +3632,15 @@ export async function updateAutomationRule(
 
     await executeSqlOn(client, 
       `UPDATE automation_deliveries
-       SET delivery_mode = $2,
-           conversation_id = $3,
-           session_id = $4,
-           conversation_title = $5,
-           message_text = $6,
-           wake_reason_text = $7,
-           message_blocks = $8,
-           target_policy = $9,
-           metadata = $10,
+       SET message_text = $2,
+           wake_reason_text = $3,
+           message_blocks = $4,
+           target_policy = $5,
+           metadata = $6,
            updated_at = NOW()
        WHERE rule_id = $1`,
       [
         ruleId,
-        normalizedDelivery.delivery_mode,
-        normalizedDelivery.conversation_id,
-        normalizedDelivery.session_id,
-        normalizedDelivery.conversation_title,
         normalizedDelivery.message_text,
         normalizedDelivery.wake_reason_text,
         JSON.stringify(normalizedDelivery.message_blocks),
@@ -3102,8 +3649,12 @@ export async function updateAutomationRule(
       ],
     );
 
-    await persistAutomationTargets(client, 'automation_delivery_participants', ruleId, normalizedDelivery.participants);
-    await persistAutomationTargets(client, 'automation_delivery_recipients', ruleId, normalizedDelivery.recipients);
+    await persistAutomationTargets(
+      client,
+      'automation_delivery_targets',
+      ruleId,
+      normalizedDelivery.targetParticipantIds,
+    );
 
     await executeSqlOn(client, 
       `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
@@ -3123,7 +3674,8 @@ export async function updateAutomationRule(
           },
           sourceKind: normalizedTrigger.source_kind,
           eventSourceId: normalizedTrigger.event_source_id,
-          deliveryMode: normalizedDelivery.delivery_mode,
+          targetPolicy: normalizedDelivery.target_policy,
+          targetCount: normalizedDelivery.targetParticipantIds.length,
         }),
       ],
     );
@@ -3335,7 +3887,7 @@ export async function ingestAutomationEvent(input: AutomationEventEnvelope) {
     eventProviderRef: eventSource.providerRef,
   });
 
-  await expireAutomationRules({
+  await syncAutomationRuleLiveness({
     workspaceId: input.workspaceId,
     referenceTime: occurrence.occurredAt,
   });
@@ -3356,13 +3908,6 @@ export async function ingestAutomationEvent(input: AutomationEventEnvelope) {
     if (!isNew) {
       continue;
     }
-    await applyAutomationPolicyAfterTrigger({
-      ruleId: match.ruleId,
-      workspaceId: input.workspaceId,
-      occurrenceId: occurrence.id,
-      executionId: execution.id,
-      completionReason: 'max_trigger_count',
-    });
     executions.push(execution);
   }
 
@@ -3516,7 +4061,7 @@ export async function scheduleDueAutomationExecutions(limit = MAX_SCHEDULER_BATC
   const batchSize = Math.max(1, Math.min(limit, MAX_SCHEDULER_BATCH_SIZE));
 
   await transaction(async (client) => {
-    await expireAutomationRules({ client });
+    await syncAutomationRuleLiveness({ client });
 
     const dueResult = await executeSqlOn<{
       rule_id: string;
@@ -3601,15 +4146,6 @@ export async function scheduleDueAutomationExecutions(limit = MAX_SCHEDULER_BATC
         [row.rule_id, row.next_fire_at, nextFireAt],
       );
       if (isNew) {
-        await applyAutomationPolicyAfterTrigger({
-          ruleId: row.rule_id,
-          workspaceId: row.workspace_id,
-          occurrenceId: occurrence.id,
-          executionId: execution.id,
-          completeNow: nextFireAt === null,
-          completionReason: 'schedule_exhausted',
-          client,
-        });
         scheduledExecutions.push(execution.id);
       }
     }
@@ -3666,19 +4202,60 @@ export async function processAutomationExecution(executionId: string): Promise<P
     throw new Error(`Automation occurrence ${execution.occurrenceId} not found`);
   }
 
+  await syncAutomationRuleLiveness({ workspaceId: execution.workspaceId });
   const rule = await getAutomationRule(execution.workspaceId, execution.ruleId);
   if (!rule) {
     throw new Error(`Automation rule ${execution.ruleId} not found`);
   }
 
   try {
-    const resolved = await resolveExistingConversationId(rule);
-    const { restrictedAudienceParticipantIds, actorRecipientIds } = await resolveRecipientMembers(rule, resolved.conversationId);
+    if (rule.status !== 'active') {
+      await executeSql(
+        `UPDATE automation_executions
+         SET status = 'skipped',
+             error_message = $2,
+             completed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [executionId, `Automation rule is ${rule.status}`],
+      );
+      return {
+        executionId,
+        wakeupCount: 0,
+      };
+    }
+
+    const creatorParticipant = await resolveCreatorParticipant(rule);
+    const { restrictedAudienceParticipantIds, targetParticipants } =
+      await resolveDeliveryTargets(rule);
+    if (targetParticipants.length === 0) {
+      await executeSql(
+        `UPDATE automation_executions
+         SET status = 'skipped',
+             error_message = $2,
+             completed_at = NOW(),
+             updated_at = NOW()
+         WHERE id = $1`,
+        [executionId, 'No active target participants matched this automation'],
+      );
+      await executeSql(
+        `UPDATE automation_rules
+         SET last_error_at = NULL,
+             last_error_message = NULL,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [rule.id],
+      );
+      return {
+        executionId,
+        wakeupCount: 0,
+      };
+    }
+
     const createdItemId = await createAutomationNotice({
       rule,
       executionId,
       occurrence,
-      conversationId: resolved.conversationId,
       restrictedAudienceParticipantIds,
     });
 
@@ -3686,9 +4263,8 @@ export async function processAutomationExecution(executionId: string): Promise<P
       rule,
       executionId,
       occurrence,
-      conversationId: resolved.conversationId,
       createdItemId,
-      actorRecipientIds,
+      targetParticipants,
     });
 
     await executeSql(
@@ -3709,27 +4285,39 @@ export async function processAutomationExecution(executionId: string): Promise<P
        WHERE id = $1`,
       [rule.id],
     );
+    await applyAutomationPolicyAfterTrigger({
+      ruleId: rule.id,
+      workspaceId: rule.workspaceId,
+      occurrenceId: occurrence.id,
+      executionId,
+      completeNow:
+        rule.trigger.triggerKind === 'schedule' &&
+        !rule.trigger.nextFireAt,
+      completionReason:
+        rule.trigger.triggerKind === 'schedule'
+          ? 'schedule_exhausted'
+          : 'max_trigger_count',
+    });
     await executeSql(
       `INSERT INTO audit_logs (workspace_id, user_id, actor_id, action, resource_type, resource_id, details)
        VALUES ($1, $2, $3, 'automation_rule.trigger', 'automation_rule', $4, $5)`,
       [
         rule.workspaceId,
         (await resolveOperatorUserId(rule)) || null,
-        rule.createdByActorId || null,
+        creatorParticipant?.actor_id || null,
         rule.id,
         JSON.stringify({
           executionId,
           occurrenceId: occurrence.id,
-          deliveryMode: rule.delivery.deliveryMode,
           createdItemId,
           wakeupCount,
+          targetCount: targetParticipants.length,
         }),
       ],
     );
 
     return {
       executionId,
-      createdConversationId: resolved.createdConversationId,
       createdItemId,
       wakeupCount,
     };

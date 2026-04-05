@@ -21,7 +21,7 @@ CREATE TYPE file_parse_run_status AS ENUM ('pending', 'running', 'succeeded', 'f
 CREATE TYPE file_parse_output_kind AS ENUM ('text', 'structured_json', 'derived_file');
 CREATE TYPE resource_access_bindings_status AS ENUM ('active', 'revoked');
 CREATE TYPE resource_access_bindings_target_type AS ENUM ('workspace', 'conversation', 'actor', 'actor_in_conversation');
-CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'plugin_installation', 'relay_capability');
+CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'plugin_installation', 'relay_capability', 'automation_event_source');
 CREATE TYPE authz_outbox_operation AS ENUM ('touch', 'delete');
 CREATE TYPE authz_outbox_status AS ENUM ('pending', 'processing', 'applied', 'failed');
 CREATE TYPE realtime_event_outbox_status AS ENUM ('pending', 'processing', 'dispatched', 'failed');
@@ -95,7 +95,6 @@ CREATE TYPE session_wakeups_source_participant_type AS ENUM ('workspace_member',
 CREATE TYPE session_wakeups_status AS ENUM ('pending', 'attached', 'processed', 'dropped');
 CREATE TYPE automation_rules_category AS ENUM ('schedule', 'event_subscription');
 CREATE TYPE automation_rules_status AS ENUM ('active', 'paused', 'error', 'archived', 'completed', 'expired');
-CREATE TYPE automation_rules_created_by_kind AS ENUM ('workspace_member', 'session', 'system');
 CREATE TYPE automation_policies_completion_status AS ENUM ('completed', 'archived');
 CREATE TYPE automation_event_sources_provider_kind AS ENUM ('relay', 'webhook', 'internal', 'integration');
 CREATE TYPE automation_event_sources_status AS ENUM ('active', 'deprecated', 'disabled', 'archived');
@@ -103,10 +102,7 @@ CREATE TYPE automation_event_sources_created_by_kind AS ENUM ('workspace_member'
 CREATE TYPE automation_triggers_trigger_kind AS ENUM ('schedule', 'event');
 CREATE TYPE automation_triggers_source_kind AS ENUM ('clock', 'relay', 'webhook', 'internal', 'integration');
 CREATE TYPE automation_triggers_schedule_kind AS ENUM ('cron', 'at', 'interval');
-CREATE TYPE automation_deliveries_delivery_mode AS ENUM ('wake_session', 'conversation_notice', 'create_conversation_once', 'create_conversation_each_time');
 CREATE TYPE automation_deliveries_target_policy AS ENUM ('all_members', 'specified_members');
-CREATE TYPE automation_delivery_participants_entity_kind AS ENUM ('actor', 'workspace_member');
-CREATE TYPE automation_delivery_recipients_entity_kind AS ENUM ('actor', 'workspace_member');
 CREATE TYPE automation_webhook_endpoints_status AS ENUM ('active', 'disabled', 'archived');
 CREATE TYPE automation_occurrences_source_kind AS ENUM ('clock', 'relay', 'webhook', 'internal', 'integration');
 CREATE TYPE automation_executions_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
@@ -1723,16 +1719,13 @@ CREATE UNIQUE INDEX idx_session_wakeups_source_item_unique
 CREATE TABLE automation_rules (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   category automation_rules_category NOT NULL,
   status automation_rules_status NOT NULL DEFAULT 'active',
   name VARCHAR(255) NOT NULL,
   description TEXT NOT NULL DEFAULT '',
-  created_by_kind automation_rules_created_by_kind NOT NULL,
-  created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  created_by_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
+  created_by_participant_id UUID NOT NULL REFERENCES conversation_participants(id) ON DELETE RESTRICT,
   created_by_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
-  owner_conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
-  owner_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   last_triggered_at TIMESTAMPTZ,
   last_error_at TIMESTAMPTZ,
   last_error_message TEXT,
@@ -1745,10 +1738,12 @@ CREATE INDEX idx_automation_rules_workspace
   ON automation_rules(workspace_id, created_at DESC);
 CREATE INDEX idx_automation_rules_workspace_status
   ON automation_rules(workspace_id, status, created_at DESC);
-CREATE INDEX idx_automation_rules_owner_session
-  ON automation_rules(owner_session_id, created_at DESC) WHERE owner_session_id IS NOT NULL;
-CREATE INDEX idx_automation_rules_owner_conversation
-  ON automation_rules(owner_conversation_id, created_at DESC) WHERE owner_conversation_id IS NOT NULL;
+CREATE INDEX idx_automation_rules_conversation
+  ON automation_rules(conversation_id, created_at DESC);
+CREATE INDEX idx_automation_rules_conversation_status
+  ON automation_rules(conversation_id, status, created_at DESC);
+CREATE INDEX idx_automation_rules_created_by_participant
+  ON automation_rules(created_by_participant_id, created_at DESC);
 
 CREATE TABLE automation_policies (
   rule_id UUID PRIMARY KEY REFERENCES automation_rules(id) ON DELETE CASCADE,
@@ -1882,11 +1877,6 @@ CREATE INDEX idx_automation_triggers_event_match
 
 CREATE TABLE automation_deliveries (
   rule_id UUID PRIMARY KEY REFERENCES automation_rules(id) ON DELETE CASCADE,
-  delivery_mode automation_deliveries_delivery_mode NOT NULL,
-  conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
-  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
-  reused_conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
-  conversation_title VARCHAR(500),
   message_text TEXT NOT NULL DEFAULT '',
   wake_reason_text TEXT,
   message_blocks JSONB NOT NULL DEFAULT '[]',
@@ -1896,29 +1886,16 @@ CREATE TABLE automation_deliveries (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE TABLE automation_delivery_participants (
+CREATE TABLE automation_delivery_targets (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   rule_id UUID NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE,
-  entity_kind automation_delivery_participants_entity_kind NOT NULL,
-  entity_id UUID NOT NULL,
+  target_participant_id UUID NOT NULL REFERENCES conversation_participants(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(rule_id, entity_kind, entity_id)
+  UNIQUE(rule_id, target_participant_id)
 );
 
-CREATE INDEX idx_automation_delivery_participants_rule
-  ON automation_delivery_participants(rule_id, created_at);
-
-CREATE TABLE automation_delivery_recipients (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  rule_id UUID NOT NULL REFERENCES automation_rules(id) ON DELETE CASCADE,
-  entity_kind automation_delivery_recipients_entity_kind NOT NULL,
-  entity_id UUID NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(rule_id, entity_kind, entity_id)
-);
-
-CREATE INDEX idx_automation_delivery_recipients_rule
-  ON automation_delivery_recipients(rule_id, created_at);
+CREATE INDEX idx_automation_delivery_targets_rule
+  ON automation_delivery_targets(rule_id, created_at);
 
 CREATE TABLE automation_webhook_endpoints (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1998,9 +1975,9 @@ CREATE TABLE automation_execution_targets (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   execution_id UUID NOT NULL REFERENCES automation_executions(id) ON DELETE CASCADE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  target_participant_id UUID REFERENCES conversation_participants(id) ON DELETE SET NULL,
   session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   target_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  target_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_item_id UUID REFERENCES conversation_items(id) ON DELETE SET NULL,
   wakeup_id UUID REFERENCES session_wakeups(id) ON DELETE SET NULL,
   status automation_execution_targets_status NOT NULL DEFAULT 'pending',
@@ -2705,6 +2682,7 @@ CREATE TABLE resource_access_bindings (
   installed_skill_id UUID REFERENCES installed_skills(id) ON DELETE CASCADE,
   plugin_installation_id UUID REFERENCES plugin_installations(id) ON DELETE CASCADE,
   relay_capability_id UUID REFERENCES relay_capabilities(id) ON DELETE CASCADE,
+  automation_event_source_id UUID REFERENCES automation_event_sources(id) ON DELETE CASCADE,
   target_type resource_access_bindings_target_type NOT NULL,
   subject_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
   subject_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
@@ -2720,9 +2698,10 @@ CREATE TABLE resource_access_bindings (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
   CONSTRAINT chk_resource_access_bindings_resource CHECK (
-    (resource_type = 'installed_skill' AND installed_skill_id IS NOT NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL) OR
-    (resource_type = 'plugin_installation' AND installed_skill_id IS NULL AND plugin_installation_id IS NOT NULL AND relay_capability_id IS NULL) OR
-    (resource_type = 'relay_capability' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NOT NULL)
+    (resource_type = 'installed_skill' AND installed_skill_id IS NOT NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NULL) OR
+    (resource_type = 'plugin_installation' AND installed_skill_id IS NULL AND plugin_installation_id IS NOT NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NULL) OR
+    (resource_type = 'relay_capability' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NOT NULL AND automation_event_source_id IS NULL) OR
+    (resource_type = 'automation_event_source' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NOT NULL)
   ),
   CONSTRAINT chk_resource_access_bindings_target CHECK (
     (target_type = 'workspace' AND subject_workspace_id IS NOT NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL) OR
@@ -2738,6 +2717,7 @@ CREATE UNIQUE INDEX uq_resource_access_bindings_active
     COALESCE(installed_skill_id::text, ''),
     COALESCE(plugin_installation_id::text, ''),
     COALESCE(relay_capability_id::text, ''),
+    COALESCE(automation_event_source_id::text, ''),
     target_type,
     COALESCE(subject_workspace_id::text, ''),
     COALESCE(subject_workspace_member_id::text, ''),
@@ -2757,6 +2737,9 @@ CREATE INDEX idx_resource_access_bindings_plugin_installation
 CREATE INDEX idx_resource_access_bindings_relay_capability
   ON resource_access_bindings(relay_capability_id, created_at DESC)
   WHERE relay_capability_id IS NOT NULL;
+CREATE INDEX idx_resource_access_bindings_automation_event_source
+  ON resource_access_bindings(automation_event_source_id, created_at DESC)
+  WHERE automation_event_source_id IS NOT NULL;
 CREATE INDEX idx_resource_access_bindings_subject_lookup
   ON resource_access_bindings(
     target_type,

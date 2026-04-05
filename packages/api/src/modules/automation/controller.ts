@@ -1,8 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { validateAutomationRuleCreatePayload } from '@synapse/shared/automation';
 import {
+  ACCESS_TARGET_TYPES,
   AUTOMATION_COMPLETION_STATUSES,
-  AUTOMATION_DELIVERY_MODES,
   AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
   AUTOMATION_EVENT_SOURCE_STATUSES,
   AUTOMATION_INTEGRATION_INGRESS_KINDS,
@@ -31,10 +31,14 @@ import {
   ingestAutomationWebhookEvent,
   listAutomationOccurrences,
   listAutomationEventSources,
+  listAutomationEventSourceAccessState,
   listAutomationExecutions,
   listAutomationRules,
   listAutomationWebhookEndpoints,
+  grantAutomationEventSourceAccess,
+  revokeAutomationEventSourceAccess,
   updateAutomationEventSource,
+  updateAutomationEventSourceAccessGrant,
   updateAutomationRule,
 } from './service.js';
 import { enqueueAutomationExecutionJobs } from '../../workers/queues.js';
@@ -63,41 +67,26 @@ const policySchema = z.object({
 });
 
 const deliverySchema = z.object({
-  deliveryMode: z.enum(AUTOMATION_DELIVERY_MODES),
-  conversationId: z.string().uuid().optional(),
-  sessionId: z.string().uuid().optional(),
-  conversationTitle: z.string().trim().min(1).max(500).optional(),
   message: z.string().default(''),
   wakeReason: z.string().optional(),
   messageBlocks: contentBlocksSchema,
   targetPolicy: z.enum(AUTOMATION_TARGET_POLICIES).optional(),
-  participantActorIds: z.array(z.string().uuid()).optional(),
-  participantWorkspaceMemberIds: z.array(z.string().uuid()).optional(),
-  recipientActorIds: z.array(z.string().uuid()).optional(),
-  recipientWorkspaceMemberIds: z.array(z.string().uuid()).optional(),
+  targetParticipantIds: z.array(z.string().uuid()).optional(),
 });
 
 const updateDeliverySchema = z.object({
-  deliveryMode: z.enum(AUTOMATION_DELIVERY_MODES).optional(),
-  conversationId: z.string().uuid().optional(),
-  sessionId: z.string().uuid().optional(),
-  conversationTitle: z.string().trim().min(1).max(500).optional(),
   message: z.string().optional(),
   wakeReason: z.string().optional(),
   messageBlocks: contentBlocksSchema,
   targetPolicy: z.enum(AUTOMATION_TARGET_POLICIES).optional(),
-  participantActorIds: z.array(z.string().uuid()).optional(),
-  participantWorkspaceMemberIds: z.array(z.string().uuid()).optional(),
-  recipientActorIds: z.array(z.string().uuid()).optional(),
-  recipientWorkspaceMemberIds: z.array(z.string().uuid()).optional(),
+  targetParticipantIds: z.array(z.string().uuid()).optional(),
 });
 
 const createAutomationSchema = z.object({
   name: z.string().trim().min(1).max(255),
   description: z.string().default(''),
   status: z.enum(AUTOMATION_RULE_STATUSES).optional(),
-  ownerConversationId: z.string().uuid().optional(),
-  ownerSessionId: z.string().uuid().optional(),
+  conversationId: z.string().uuid(),
   trigger: triggerSchema,
   policy: policySchema.optional(),
   delivery: deliverySchema,
@@ -108,12 +97,44 @@ const updateAutomationSchema = z.object({
   name: z.string().trim().min(1).max(255).optional(),
   description: z.string().optional(),
   status: z.enum(AUTOMATION_RULE_STATUSES).optional(),
-  ownerConversationId: z.string().uuid().optional(),
-  ownerSessionId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
   trigger: triggerSchema.partial().optional(),
   policy: policySchema.partial().optional(),
   delivery: updateDeliverySchema.optional(),
   metadata: z.record(z.unknown()).optional(),
+});
+
+const conversationTypeMaskSchema = z.number().int().min(1).max(31);
+const accessTargetSchema = z.object({
+  type: z.enum(ACCESS_TARGET_TYPES),
+  conversationId: z.string().uuid().optional(),
+  actorId: z.string().uuid().optional(),
+}).superRefine((value, ctx) => {
+  if (
+    (value.type === 'conversation' || value.type === 'actor_in_conversation') &&
+    !value.conversationId
+  ) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['conversationId'],
+      message: 'conversationId is required for this access target',
+    });
+  }
+  if ((value.type === 'actor' || value.type === 'actor_in_conversation') && !value.actorId) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['actorId'],
+      message: 'actorId is required for this access target',
+    });
+  }
+});
+const accessGrantSchema = z.object({
+  accessTarget: accessTargetSchema.optional(),
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
+  reason: z.string().trim().min(1).max(500).optional(),
+});
+const accessGrantUpdateSchema = z.object({
+  conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
 });
 
 const createWebhookEndpointSchema = z.object({
@@ -275,6 +296,94 @@ export default async function automationController(app: FastifyInstance) {
     return source;
   });
 
+  app.get('/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, eventSourceId } = request.params as { workspaceId: string; eventSourceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_relays',
+      workspaceId,
+      'Not allowed to manage automation event source access',
+    );
+    if (!allowed) return;
+
+    return listAutomationEventSourceAccessState(workspaceId, eventSourceId);
+  });
+
+  app.post('/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, eventSourceId } = request.params as { workspaceId: string; eventSourceId: string };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_relays',
+      workspaceId,
+      'Not allowed to manage automation event source access',
+    );
+    if (!allowed) return;
+
+    const body = accessGrantSchema.parse(request.body || {});
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
+    const grant = await grantAutomationEventSourceAccess({
+      workspaceId,
+      eventSourceId,
+      accessTarget: body.accessTarget,
+      conversationTypeMaskOverride: body.conversationTypeMaskOverride,
+      grantedByWorkspaceMemberId: workspaceMemberId,
+      reason: body.reason,
+    });
+    return reply.status(201).send({ grant });
+  });
+
+  app.put('/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access/:bindingId', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, eventSourceId, bindingId } = request.params as {
+      workspaceId: string;
+      eventSourceId: string;
+      bindingId: string;
+    };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_relays',
+      workspaceId,
+      'Not allowed to manage automation event source access',
+    );
+    if (!allowed) return;
+
+    const body = accessGrantUpdateSchema.parse(request.body || {});
+    const grant = await updateAutomationEventSourceAccessGrant({
+      workspaceId,
+      eventSourceId,
+      bindingId,
+      conversationTypeMaskOverride: body.conversationTypeMaskOverride,
+    });
+    return { grant };
+  });
+
+  app.delete('/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/access/:bindingId', { preHandler: protectedPreHandler }, async (request, reply) => {
+    const { workspaceId, eventSourceId, bindingId } = request.params as {
+      workspaceId: string;
+      eventSourceId: string;
+      bindingId: string;
+    };
+    const allowed = await requireRequestAction(
+      request as any,
+      reply as any,
+      'workspace.manage_relays',
+      workspaceId,
+      'Not allowed to manage automation event source access',
+    );
+    if (!allowed) return;
+
+    const workspaceMemberId = (request as any).workspaceMember!.id as string;
+    await revokeAutomationEventSourceAccess({
+      workspaceId,
+      eventSourceId,
+      bindingId,
+      operator: { workspaceMemberId },
+    });
+    return { success: true };
+  });
+
   app.get('/api/v1/workspaces/:workspaceId/automation-event-sources/:eventSourceId/occurrences', { preHandler: protectedPreHandler }, async (request, reply) => {
     const { workspaceId, eventSourceId } = request.params as { workspaceId: string; eventSourceId: string };
     const allowed = await requireRequestAction(
@@ -364,12 +473,12 @@ export default async function automationController(app: FastifyInstance) {
     const query = request.query as {
       status?: 'active' | 'paused' | 'error' | 'archived' | 'completed' | 'expired';
       category?: 'schedule' | 'event_subscription';
-      ownerSessionId?: string;
+      conversationId?: string;
     };
     return listAutomationRules(workspaceId, {
       status: query.status,
       category: query.category,
-      ownerSessionId: query.ownerSessionId,
+      conversationId: query.conversationId,
     });
   });
 

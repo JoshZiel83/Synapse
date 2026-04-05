@@ -11,7 +11,6 @@ import {
   parseAutomationJsonObjectText,
 } from "@synapse/shared";
 import type {
-  AutomationDeliveryMode,
   AutomationEventSource,
   AutomationRuleCreatePayload,
   AutomationRuleDraft,
@@ -168,45 +167,15 @@ export function AutomationRuleEditor({
   const deliveryPreview = useMemo(
     () =>
       describeAutomationDelivery({
-        deliveryMode: formState.deliveryMode,
         targetPolicy: formState.targetPolicy,
-        conversationId: formState.conversationId.trim() || undefined,
-        sessionId: formState.sessionId.trim() || undefined,
-        conversationTitle: formState.conversationTitle.trim() || undefined,
+        targetParticipantIds: parseAutomationIdList(formState.targetParticipantIds),
         messageText: formState.message.trim() || undefined,
         wakeReasonText: formState.wakeReason.trim() || undefined,
-        participants: [
-          ...parseAutomationIdList(formState.participantActorIds).map((entityId) => ({
-            entityKind: "actor" as const,
-            entityId,
-          })),
-          ...parseAutomationIdList(formState.participantWorkspaceMemberIds).map((entityId) => ({
-            entityKind: "workspace_member" as const,
-            entityId,
-          })),
-        ],
-        recipients: [
-          ...parseAutomationIdList(formState.recipientActorIds).map((entityId) => ({
-            entityKind: "actor" as const,
-            entityId,
-          })),
-          ...parseAutomationIdList(formState.recipientWorkspaceMemberIds).map((entityId) => ({
-            entityKind: "workspace_member" as const,
-            entityId,
-          })),
-        ],
       }),
     [
-      formState.conversationId,
-      formState.conversationTitle,
-      formState.deliveryMode,
       formState.message,
-      formState.participantActorIds,
-      formState.participantWorkspaceMemberIds,
-      formState.recipientActorIds,
-      formState.recipientWorkspaceMemberIds,
-      formState.sessionId,
       formState.targetPolicy,
+      formState.targetParticipantIds,
       formState.wakeReason,
     ],
   );
@@ -340,7 +309,7 @@ export function AutomationRuleEditor({
         <AppCardHeader className="gap-3">
           <AppCardTitle>Trigger Definition</AppCardTitle>
           <AppCardDescription>
-            Triggers can be schedule-based or event-based. Delivery currently exposes the same four backend modes.
+            Triggers can be schedule-based or event-based. Fired automations now always write a notice in the owner conversation and optionally target specific participants.
           </AppCardDescription>
         </AppCardHeader>
         <AppCardContent className="grid gap-5">
@@ -447,33 +416,18 @@ export function AutomationRuleEditor({
             />
           </div>
 
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="grid gap-2">
-              <label className="text-sm font-medium text-foreground" htmlFor="trigger-owner-conversation">
-                Owner conversation ID
-              </label>
-              <Input
-                id="trigger-owner-conversation"
-                value={formState.ownerConversationId}
-                onChange={(event) =>
-                  setFormState((current) => ({ ...current, ownerConversationId: event.target.value }))
-                }
-                placeholder="Optional owner conversation"
-              />
-            </div>
-            <div className="grid gap-2">
-              <label className="text-sm font-medium text-foreground" htmlFor="trigger-owner-session">
-                Owner session ID
-              </label>
-              <Input
-                id="trigger-owner-session"
-                value={formState.ownerSessionId}
-                onChange={(event) =>
-                  setFormState((current) => ({ ...current, ownerSessionId: event.target.value }))
-                }
-                placeholder="Optional owner session"
-              />
-            </div>
+          <div className="grid gap-2">
+            <label className="text-sm font-medium text-foreground" htmlFor="trigger-conversation-id">
+              Conversation ID
+            </label>
+            <Input
+              id="trigger-conversation-id"
+              value={formState.conversationId}
+              onChange={(event) =>
+                setFormState((current) => ({ ...current, conversationId: event.target.value }))
+              }
+              placeholder="Conversation that owns and receives this automation"
+            />
           </div>
 
           <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
@@ -674,87 +628,24 @@ export function AutomationRuleEditor({
           <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
             <div className="text-sm font-medium text-foreground">Action / Delivery</div>
             <div className="mt-4 grid gap-4">
-              <div className="grid gap-4 md:grid-cols-3">
-                <div className="grid gap-2">
-                  <label className="text-sm font-medium text-foreground" htmlFor="trigger-delivery-mode">
-                    Delivery mode
-                  </label>
-                  <Select
-                    value={formState.deliveryMode}
-                    onValueChange={(value) =>
-                      setFormState((current) => ({ ...current, deliveryMode: value as AutomationDeliveryMode }))
-                    }
-                  >
-                    <SelectTrigger id="trigger-delivery-mode" className="w-full">
-                      <SelectValue placeholder="Delivery mode" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="wake_session">wake_session</SelectItem>
-                      <SelectItem value="conversation_notice">conversation_notice</SelectItem>
-                      <SelectItem value="create_conversation_once">create_conversation_once</SelectItem>
-                      <SelectItem value="create_conversation_each_time">create_conversation_each_time</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid gap-2">
-                  <label className="text-sm font-medium text-foreground" htmlFor="trigger-target-policy">
-                    Target policy
-                  </label>
-                  <Select
-                    value={formState.targetPolicy}
-                    onValueChange={(value) =>
-                      setFormState((current) => ({ ...current, targetPolicy: value as AutomationTargetPolicy }))
-                    }
-                  >
-                    <SelectTrigger id="trigger-target-policy" className="w-full">
-                      <SelectValue placeholder="Target policy" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all_members">all_members</SelectItem>
-                      <SelectItem value="specified_members">specified_members</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="grid gap-2">
-                  <label className="text-sm font-medium text-foreground" htmlFor="trigger-session-id">
-                    Target session ID
-                  </label>
-                  <Input
-                    id="trigger-session-id"
-                    value={formState.sessionId}
-                    onChange={(event) => setFormState((current) => ({ ...current, sessionId: event.target.value }))}
-                    placeholder="Required for wake_session"
-                  />
-                </div>
-              </div>
-
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="grid gap-2">
-                  <label className="text-sm font-medium text-foreground" htmlFor="trigger-conversation-id">
-                    Conversation ID
-                  </label>
-                  <Input
-                    id="trigger-conversation-id"
-                    value={formState.conversationId}
-                    onChange={(event) =>
-                      setFormState((current) => ({ ...current, conversationId: event.target.value }))
-                    }
-                    placeholder="Required for conversation_notice"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <label className="text-sm font-medium text-foreground" htmlFor="trigger-conversation-title">
-                    Conversation title
-                  </label>
-                  <Input
-                    id="trigger-conversation-title"
-                    value={formState.conversationTitle}
-                    onChange={(event) =>
-                      setFormState((current) => ({ ...current, conversationTitle: event.target.value }))
-                    }
-                    placeholder="Used when creating a conversation"
-                  />
-                </div>
+              <div className="grid gap-2 md:max-w-sm">
+                <label className="text-sm font-medium text-foreground" htmlFor="trigger-target-policy">
+                  Target policy
+                </label>
+                <Select
+                  value={formState.targetPolicy}
+                  onValueChange={(value) =>
+                    setFormState((current) => ({ ...current, targetPolicy: value as AutomationTargetPolicy }))
+                  }
+                >
+                  <SelectTrigger id="trigger-target-policy" className="w-full">
+                    <SelectValue placeholder="Target policy" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all_members">all_members</SelectItem>
+                    <SelectItem value="specified_members">specified_members</SelectItem>
+                  </SelectContent>
+                </Select>
               </div>
 
               <div className="grid gap-2">
@@ -783,70 +674,26 @@ export function AutomationRuleEditor({
                 />
               </div>
 
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="grid gap-2">
-                  <label className="text-sm font-medium text-foreground" htmlFor="trigger-recipient-actors">
-                    Recipient actor IDs
-                  </label>
-                  <Textarea
-                    id="trigger-recipient-actors"
-                    value={formState.recipientActorIds}
-                    onChange={(event) =>
-                      setFormState((current) => ({ ...current, recipientActorIds: event.target.value }))
-                    }
-                    rows={4}
-                    placeholder="Comma, space, or newline separated"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <label className="text-sm font-medium text-foreground" htmlFor="trigger-recipient-users">
-                    Recipient workspace member IDs
-                  </label>
-                  <Textarea
-                    id="trigger-recipient-users"
-                    value={formState.recipientWorkspaceMemberIds}
-                    onChange={(event) =>
-                      setFormState((current) => ({ ...current, recipientWorkspaceMemberIds: event.target.value }))
-                    }
-                    rows={4}
-                    placeholder="Comma, space, or newline separated"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <label className="text-sm font-medium text-foreground" htmlFor="trigger-participant-actors">
-                    Conversation participant actor IDs
-                  </label>
-                  <Textarea
-                    id="trigger-participant-actors"
-                    value={formState.participantActorIds}
-                    onChange={(event) =>
-                      setFormState((current) => ({ ...current, participantActorIds: event.target.value }))
-                    }
-                    rows={4}
-                    placeholder="Used for conversation creation modes"
-                  />
-                </div>
-                <div className="grid gap-2">
-                  <label className="text-sm font-medium text-foreground" htmlFor="trigger-participant-users">
-                    Conversation participant workspace member IDs
-                  </label>
-                  <Textarea
-                    id="trigger-participant-users"
-                    value={formState.participantWorkspaceMemberIds}
-                    onChange={(event) =>
-                      setFormState((current) => ({ ...current, participantWorkspaceMemberIds: event.target.value }))
-                    }
-                    rows={4}
-                    placeholder="Used for conversation creation modes"
-                  />
-                </div>
+              <div className="grid gap-2">
+                <label className="text-sm font-medium text-foreground" htmlFor="trigger-target-participants">
+                  Target participant IDs
+                </label>
+                <Textarea
+                  id="trigger-target-participants"
+                  value={formState.targetParticipantIds}
+                  onChange={(event) =>
+                    setFormState((current) => ({ ...current, targetParticipantIds: event.target.value }))
+                  }
+                  rows={4}
+                  placeholder="Comma, space, or newline separated conversation_participant IDs"
+                />
               </div>
             </div>
           </div>
 
           <div className="rounded-[22px] border border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
-            `wakeReason` is stored separately from the visible system notice and is injected into the woken session
-            context when the trigger fires.
+            Automations now always deliver inside the owner conversation. `wakeReason` is stored separately from the
+            visible notice, and `specified_members` expects conversation participant IDs.
           </div>
         </AppCardContent>
       </AppCard>

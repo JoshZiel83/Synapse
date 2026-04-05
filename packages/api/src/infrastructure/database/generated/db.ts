@@ -35,13 +35,7 @@ export type AuthzOutboxOperation = "delete" | "touch";
 
 export type AuthzOutboxStatus = "applied" | "failed" | "pending" | "processing";
 
-export type AutomationDeliveriesDeliveryMode = "conversation_notice" | "create_conversation_each_time" | "create_conversation_once" | "wake_session";
-
 export type AutomationDeliveriesTargetPolicy = "all_members" | "specified_members";
-
-export type AutomationDeliveryParticipantsEntityKind = "actor" | "workspace_member";
-
-export type AutomationDeliveryRecipientsEntityKind = "actor" | "workspace_member";
 
 export type AutomationEventSourcesCreatedByKind = "session" | "system" | "workspace_member";
 
@@ -64,8 +58,6 @@ export type AutomationOccurrencesSourceKind = "clock" | "integration" | "interna
 export type AutomationPoliciesCompletionStatus = "archived" | "completed";
 
 export type AutomationRulesCategory = "event_subscription" | "schedule";
-
-export type AutomationRulesCreatedByKind = "session" | "system" | "workspace_member";
 
 export type AutomationRulesStatus = "active" | "archived" | "completed" | "error" | "expired" | "paused";
 
@@ -265,7 +257,7 @@ export type RelaySyncSourcesSyncMode = "follow" | "snapshot";
 
 export type RelayToolsStatus = "active" | "removed";
 
-export type ResourceAccessBindingResourceType = "installed_skill" | "plugin_installation" | "relay_capability";
+export type ResourceAccessBindingResourceType = "automation_event_source" | "installed_skill" | "plugin_installation" | "relay_capability";
 
 export type ResourceAccessBindingsStatus = "active" | "revoked";
 
@@ -529,35 +521,21 @@ export interface AuthzOutbox {
 }
 
 export interface AutomationDeliveries {
-  conversation_id: string | null;
-  conversation_title: string | null;
   created_at: Generated<Timestamp | null>;
-  delivery_mode: AutomationDeliveriesDeliveryMode;
   message_blocks: Generated<Json>;
   message_text: Generated<string>;
   metadata: Generated<Json>;
-  reused_conversation_id: string | null;
   rule_id: string;
-  session_id: string | null;
   target_policy: Generated<AutomationDeliveriesTargetPolicy>;
   updated_at: Generated<Timestamp | null>;
   wake_reason_text: string | null;
 }
 
-export interface AutomationDeliveryParticipants {
+export interface AutomationDeliveryTargets {
   created_at: Generated<Timestamp | null>;
-  entity_id: string;
-  entity_kind: AutomationDeliveryParticipantsEntityKind;
   id: Generated<string>;
   rule_id: string;
-}
-
-export interface AutomationDeliveryRecipients {
-  created_at: Generated<Timestamp | null>;
-  entity_id: string;
-  entity_kind: AutomationDeliveryRecipientsEntityKind;
-  id: Generated<string>;
-  rule_id: string;
+  target_participant_id: string;
 }
 
 export interface AutomationEventSources {
@@ -608,7 +586,7 @@ export interface AutomationExecutionTargets {
   session_id: string | null;
   status: Generated<AutomationExecutionTargetsStatus>;
   target_actor_id: string | null;
-  target_workspace_member_id: string | null;
+  target_participant_id: string | null;
   updated_at: Generated<Timestamp | null>;
   wakeup_id: string | null;
 }
@@ -658,11 +636,10 @@ export interface AutomationPolicies {
 
 export interface AutomationRules {
   category: AutomationRulesCategory;
+  conversation_id: string;
   created_at: Generated<Timestamp | null>;
-  created_by_actor_id: string | null;
-  created_by_kind: AutomationRulesCreatedByKind;
+  created_by_participant_id: string;
   created_by_session_id: string | null;
-  created_by_workspace_member_id: string | null;
   description: Generated<string>;
   id: Generated<string>;
   last_error_at: Timestamp | null;
@@ -670,8 +647,6 @@ export interface AutomationRules {
   last_triggered_at: Timestamp | null;
   metadata: Generated<Json>;
   name: string;
-  owner_conversation_id: string | null;
-  owner_session_id: string | null;
   status: Generated<AutomationRulesStatus>;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -1710,6 +1685,7 @@ export interface RelayTools {
 }
 
 export interface ResourceAccessBindings {
+  automation_event_source_id: string | null;
   conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
@@ -2262,8 +2238,7 @@ export interface DB {
   auth_sessions: AuthSessions;
   authz_outbox: AuthzOutbox;
   automation_deliveries: AutomationDeliveries;
-  automation_delivery_participants: AutomationDeliveryParticipants;
-  automation_delivery_recipients: AutomationDeliveryRecipients;
+  automation_delivery_targets: AutomationDeliveryTargets;
   automation_event_sources: AutomationEventSources;
   automation_execution_targets: AutomationExecutionTargets;
   automation_executions: AutomationExecutions;

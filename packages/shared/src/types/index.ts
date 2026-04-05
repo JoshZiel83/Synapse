@@ -567,11 +567,6 @@ export type AutomationIntegrationIngressKind = "webhook" | "polling";
 export type AutomationIntegrationTargetKind = "repository" | "project";
 export type AutomationScheduleKind = "cron" | "at" | "interval";
 export type AutomationCompletionStatus = "completed" | "archived";
-export type AutomationDeliveryMode =
-  | "wake_session"
-  | "conversation_notice"
-  | "create_conversation_once"
-  | "create_conversation_each_time";
 export type AutomationTargetPolicy = "all_members" | "specified_members";
 export type AutomationExecutionStatus =
   | "pending"
@@ -579,7 +574,6 @@ export type AutomationExecutionStatus =
   | "completed"
   | "failed"
   | "skipped";
-export type AutomationTargetEntityKind = "actor" | "workspace_member";
 export type AutomationWebhookStatus = "active" | "disabled" | "archived";
 export type AutomationEventSourceStatus =
   | "active"
@@ -625,16 +619,14 @@ export interface AutomationEventSource {
 export interface AutomationRule {
   id: UUID;
   workspaceId: UUID;
+  authorityWorkspaceId: UUID;
+  conversationId: UUID;
   category: AutomationCategory;
   status: AutomationStatus;
   name: string;
   description: string;
-  createdByKind: AutomationCreatorKind;
-  createdByWorkspaceMemberId?: UUID;
-  createdByActorId?: UUID;
+  createdByParticipantId: UUID;
   createdBySessionId?: UUID;
-  ownerConversationId?: UUID;
-  ownerSessionId?: UUID;
   trigger: AutomationTrigger;
   policy: AutomationPolicy;
   delivery: AutomationDelivery;
@@ -683,23 +675,12 @@ export interface AutomationPolicy {
 
 export interface AutomationDelivery {
   ruleId: UUID;
-  deliveryMode: AutomationDeliveryMode;
-  conversationId?: UUID;
-  sessionId?: UUID;
-  reusedConversationId?: UUID;
-  conversationTitle?: string;
   messageText: string;
   wakeReasonText?: string;
   messageBlocks: CanonicalContentBlock[];
   targetPolicy: AutomationTargetPolicy;
-  participants: AutomationTargetEntityRef[];
-  recipients: AutomationTargetEntityRef[];
+  targetParticipantIds: UUID[];
   metadata: Record<string, unknown>;
-}
-
-export interface AutomationTargetEntityRef {
-  entityKind: AutomationTargetEntityKind;
-  entityId: UUID;
 }
 
 export interface AutomationOccurrence {
@@ -745,9 +726,9 @@ export interface AutomationExecutionTarget {
   id: UUID;
   executionId: UUID;
   conversationId?: UUID;
+  targetParticipantId?: UUID;
   sessionId?: UUID;
   targetActorId?: UUID;
-  targetWorkspaceMemberId?: UUID;
   createdItemId?: UUID;
   wakeupId?: UUID;
   status: AutomationExecutionStatus;
@@ -3159,7 +3140,6 @@ export interface ConversationFeedEventPayloadMap {
     sourceSummary?: string;
     sourceDescription?: string;
     occurredAt?: Timestamp;
-    deliveryMode: AutomationDeliveryMode;
     message: string;
     messageBlocks?: CanonicalContentBlock[];
   };
@@ -4525,7 +4505,8 @@ export type AccessBindingStatus = "active" | "revoked";
 export type ResourceAccessBindingResourceType =
   | "installed_skill"
   | "plugin_installation"
-  | "relay_capability";
+  | "relay_capability"
+  | "automation_event_source";
 export type AccessResourceType = ResourceAccessBindingResourceType;
 export type AccessSubjectType =
   | "platform"

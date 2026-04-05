@@ -34,7 +34,6 @@ import type {
 } from '@synapse/shared';
 import {
   AUTOMATION_COMPLETION_STATUSES,
-  AUTOMATION_DELIVERY_MODES,
   AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
   AUTOMATION_EVENT_SOURCE_STATUSES,
   AUTOMATION_INTEGRATION_INGRESS_KINDS,
@@ -64,7 +63,6 @@ import type {
   CatalogVersionFilesFileRole,
   ActorsRole,
   ActorVersionDocsVisibility,
-  AutomationDeliveriesDeliveryMode,
   AutomationDeliveriesTargetPolicy,
   AutomationEventSourcesProviderKind,
   AutomationEventSourcesStatus,
@@ -168,9 +166,6 @@ type _AutomationScheduleKindMatchesDb = Assert<
 >;
 type _AutomationCompletionStatusMatchesDb = Assert<
   IsEqual<(typeof AUTOMATION_COMPLETION_STATUSES)[number], AutomationPoliciesCompletionStatus>
->;
-type _AutomationDeliveryModeMatchesDb = Assert<
-  IsEqual<(typeof AUTOMATION_DELIVERY_MODES)[number], AutomationDeliveriesDeliveryMode>
 >;
 type _AutomationTargetPolicyMatchesDb = Assert<
   IsEqual<(typeof AUTOMATION_TARGET_POLICIES)[number], AutomationDeliveriesTargetPolicy>

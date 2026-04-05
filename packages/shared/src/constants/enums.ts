@@ -474,13 +474,6 @@ export const AUTOMATION_TRIGGER_SOURCE_KINDS = [
 
 export const AUTOMATION_SCHEDULE_KINDS = ['cron', 'at', 'interval'] as const;
 export const AUTOMATION_COMPLETION_STATUSES = ['completed', 'archived'] as const;
-export const AUTOMATION_DELIVERY_MODES = [
-  'wake_session',
-  'conversation_notice',
-  'create_conversation_once',
-  'create_conversation_each_time',
-] as const;
-
 export const AUTOMATION_TARGET_POLICIES = ['all_members', 'specified_members'] as const;
 export const AUTOMATION_RULE_STATUSES = [
   'active',

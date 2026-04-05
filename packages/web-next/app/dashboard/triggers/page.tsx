@@ -526,12 +526,12 @@ export default function TriggersPage() {
                         </div>
                       ))}
                       <div>
-                        <dt className="text-muted-foreground">Owner session</dt>
-                        <dd className="font-medium text-foreground">{selectedRule.ownerSessionId || "None"}</dd>
+                        <dt className="text-muted-foreground">Conversation</dt>
+                        <dd className="font-medium text-foreground">{selectedRule.conversationId}</dd>
                       </div>
                       <div>
-                        <dt className="text-muted-foreground">Owner conversation</dt>
-                        <dd className="font-medium text-foreground">{selectedRule.ownerConversationId || "None"}</dd>
+                        <dt className="text-muted-foreground">Created by participant</dt>
+                        <dd className="font-medium text-foreground">{selectedRule.createdByParticipantId}</dd>
                       </div>
                       {selectedDeliveryDisplay?.description ? (
                         <div>
