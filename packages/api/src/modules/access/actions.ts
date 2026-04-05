@@ -75,7 +75,7 @@ export const ACCESS_ACTIONS = {
   'relay_exposure.delete': { resourceType: 'relay_exposure', permission: 'delete' },
   'relay_capability.view': { resourceType: 'relay_capability', permission: 'view' },
   'relay_capability.use': { resourceType: 'relay_capability', permission: 'use' },
-  'relay_capability.request_runtime_authorization': { resourceType: 'relay_capability', permission: 'request_runtime_authorization' },
+  'relay_capability.request_relay_authorization': { resourceType: 'relay_capability', permission: 'request_relay_authorization' },
   'relay_capability.edit': { resourceType: 'relay_capability', permission: 'edit' },
   'relay_capability.grant': { resourceType: 'relay_capability', permission: 'grant' },
   'relay_capability.delete': { resourceType: 'relay_capability', permission: 'delete' },

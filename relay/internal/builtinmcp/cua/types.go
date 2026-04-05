@@ -6,19 +6,18 @@ import (
 )
 
 type Config struct {
-	StableKey                string
-	Enabled                  bool
-	TrustRemoteAuthorization bool
-	ReadOnly                 bool
-	RelativeCoordinate       bool
-	ImageSize                [2]int
-	RelativeSize             [2]int
-	ScrollMultiplier         float64
-	LogDir                   string
-	StateDir                 string
-	AllowDisplayOverride     bool
-	IncludeOverviewTool      bool
-	DisplaySelector          DisplaySelector
+	StableKey            string
+	Enabled              bool
+	ReadOnly             bool
+	RelativeCoordinate   bool
+	ImageSize            [2]int
+	RelativeSize         [2]int
+	ScrollMultiplier     float64
+	LogDir               string
+	StateDir             string
+	AllowDisplayOverride bool
+	IncludeOverviewTool  bool
+	DisplaySelector      DisplaySelector
 }
 
 type DisplaySelector struct {

@@ -12,7 +12,7 @@ import type {
 } from "@synapse/shared"
 import { INTERACTION_REQUEST_KIND } from "@synapse/shared"
 import type {
-  RuntimeGrantEffect,
+  RelayAuthorizationGrantSpec,
 } from "@synapse/shared/types"
 import { useRouter } from "next/navigation"
 import { createPortal } from "react-dom"
@@ -501,40 +501,60 @@ function getInteractionStatusBadgeClassName(
   }
 }
 
-function describeRuntimeGrantEffect(scope: RuntimeGrantEffect) {
-  if (scope.capability === "filesystem") {
-    const accessLabel =
-      scope.access === "read_write"
-        ? "read and write"
-        : scope.access === "write"
-          ? "write only"
-          : "read only"
+function describeRelayAuthorizationSpec(scope: RelayAuthorizationGrantSpec) {
+  if (scope.kind.startsWith("filesystem.")) {
     return {
       icon: FolderOpen,
-      summary: `${accessLabel} access`,
-      detail: scope.path,
+      summary:
+        scope.kind === "filesystem.directory"
+          ? "directory access"
+          : scope.kind === "filesystem.write"
+            ? "write access"
+            : "read access",
+      detail: scope.pathPrefix || "filesystem-wide",
     }
   }
 
-  if (scope.capability === "browser") {
+  if (scope.kind.startsWith("browser.")) {
     return {
       icon: Globe,
-      summary: "browser automation",
-      detail: "Chrome DevTools MCP",
+      summary:
+        scope.kind === "browser.site"
+          ? "browser site access"
+          : scope.kind === "browser.write"
+            ? "browser write access"
+            : scope.kind === "browser.read"
+              ? "browser read access"
+              : "browser tool access",
+      detail:
+        scope.browserHost ||
+        scope.browserRegistrableDomain ||
+        scope.browserOrigin ||
+        "browser-wide",
     }
   }
 
-  if (scope.capability === "commandline") {
+  if (scope.kind.startsWith("commandline.")) {
     return {
       icon: Wrench,
-      summary: `${scope.executor} execution`,
-      detail: scope.cwdPrefix || "default working directory",
+      summary:
+        scope.kind === "commandline.command"
+          ? `${scope.commandMatchType || "exact"} command`
+          : scope.kind === "commandline.directory"
+            ? "working directory access"
+            : "commandline tool access",
+      detail: scope.commandText || scope.pathPrefix || "default working directory",
     }
   }
 
   return {
     icon: MousePointerClick,
-    summary: "control access",
+    summary:
+      scope.kind === "cua.write"
+        ? "desktop input access"
+        : scope.kind === "cua.read"
+          ? "desktop observation access"
+          : "desktop tool access",
     detail: "Computer Use / CUA",
   }
 }
@@ -704,6 +724,9 @@ function InteractionCard({
   const [draftAnswers, setDraftAnswers] = useState<
     Record<string, DraftQuestionAnswer>
   >(() => buildDraftQuestionAnswers(interaction))
+  const [relayApprovalOptionIds, setRelayApprovalOptionIds] = useState<string[]>(
+    []
+  )
 
   const isTargetUser =
     (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT ||
@@ -732,6 +755,7 @@ function InteractionCard({
     setSubmitError(null)
     setResolutionNoteDraft("")
     setDraftAnswers(buildDraftQuestionAnswers(interaction))
+    setRelayApprovalOptionIds([])
   }, [interaction.id, interaction.status])
 
   async function submitResolution(
@@ -1285,18 +1309,13 @@ function InteractionCard({
 
   if (
     interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
-    interaction.runtimeAuthorization
+    (interaction.relayAuthorization || interaction.runtimeAuthorization)
   ) {
-    const requestedScope = describeRuntimeGrantEffect(
-      interaction.runtimeAuthorization.requestedEffect
-    )
-    const approvedScope = interaction.runtimeAuthorization.approvedGrant
-      ? describeRuntimeGrantEffect(
-          interaction.runtimeAuthorization.approvedGrant.effect
-        )
-      : null
-    const ScopeIcon = requestedScope.icon
-    const ApprovedScopeIcon = approvedScope?.icon
+    const relayAuthorization =
+      interaction.relayAuthorization || interaction.runtimeAuthorization
+    if (!relayAuthorization) {
+      return null
+    }
 
     return (
       <div className="space-y-3">
@@ -1306,7 +1325,7 @@ function InteractionCard({
             className="rounded-full border-primary/20 bg-primary/5 text-primary"
           >
             <Shield className="mr-1 h-3 w-3" />
-            Runtime Authorization
+            Relay Authorization
           </Badge>
           <Badge
             variant="outline"
@@ -1321,10 +1340,10 @@ function InteractionCard({
 
         <div className="space-y-1.5">
           <p className="text-sm leading-6 font-medium text-foreground">
-            {`Authorize ${interaction.runtimeAuthorization.relayToolStableKey} on ${interaction.runtimeAuthorization.deviceDisplayName}`}
+            {`Authorize ${relayAuthorization.relayToolStableKey} on ${relayAuthorization.deviceDisplayName}`}
           </p>
           <p className="text-xs leading-5 text-muted-foreground">
-            {interaction.runtimeAuthorization.reason}
+            {relayAuthorization.reason}
           </p>
         </div>
 
@@ -1334,46 +1353,66 @@ function InteractionCard({
               Exposure
             </div>
             <div className="mt-1 text-sm text-foreground">
-              {interaction.runtimeAuthorization.exposureDisplayName}
+              {relayAuthorization.exposureDisplayName}
             </div>
           </div>
           <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
             <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
-              Requested Scope
+              Required Requirements
             </div>
-            <div className="mt-1 flex items-start gap-2 text-sm text-foreground">
-              <ScopeIcon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
-              <div className="min-w-0">
-                <div>{requestedScope.summary}</div>
-                <div className="mt-0.5 text-xs break-all text-muted-foreground">
-                  {requestedScope.detail}
-                </div>
-              </div>
+            <div className="mt-2 space-y-2">
+              {relayAuthorization.requiredRequirements.map((requirement) => {
+                const described = describeRelayAuthorizationSpec(requirement)
+                const RequirementIcon = described.icon
+                return (
+                  <div
+                    key={requirement.id}
+                    className="flex items-start gap-2 text-sm text-foreground"
+                  >
+                    <RequirementIcon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <div className="min-w-0">
+                      <div>{requirement.summary || described.summary}</div>
+                      <div className="mt-0.5 text-xs break-all text-muted-foreground">
+                        {requirement.detail || described.detail}
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
             </div>
           </div>
-          {approvedScope ? (
+          {relayAuthorization.approvedGrants?.length ? (
             <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3">
               <div className="text-[11px] font-medium tracking-[0.08em] text-emerald-700/80 uppercase">
-                Approved Grant
+                Approved Grants
               </div>
-              <div className="mt-1 flex items-start gap-2 text-sm text-foreground">
-                {ApprovedScopeIcon ? (
-                  <ApprovedScopeIcon className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
-                ) : null}
-                <div className="min-w-0">
-                  <div>{approvedScope.summary}</div>
-                  <div className="mt-0.5 text-xs break-all text-muted-foreground">
-                    {approvedScope.detail}
-                  </div>
-                  <div className="mt-1 text-[11px] text-emerald-700/80">
-                    {interaction.runtimeAuthorization.approvedPreset === "workspace"
-                      ? "Always allow"
-                      : interaction.runtimeAuthorization.approvedPreset === "conversation"
-                        ? "Allow this conversation"
-                        : interaction.runtimeAuthorization.approvedPreset === "actor"
-                          ? "Allow this actor"
-                          : "Allow once"}
-                  </div>
+              <div className="mt-2 space-y-2">
+                {relayAuthorization.approvedGrants.map((grant) => {
+                  const described = describeRelayAuthorizationSpec(grant)
+                  const ApprovedIcon = described.icon
+                  return (
+                    <div
+                      key={grant.id}
+                      className="flex items-start gap-2 text-sm text-foreground"
+                    >
+                      <ApprovedIcon className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700" />
+                      <div className="min-w-0">
+                        <div>{described.summary}</div>
+                        <div className="mt-0.5 text-xs break-all text-muted-foreground">
+                          {described.detail}
+                        </div>
+                      </div>
+                    </div>
+                  )
+                })}
+                <div className="text-[11px] text-emerald-700/80">
+                  {relayAuthorization.approvedPreset === "workspace"
+                    ? "Always allow"
+                    : relayAuthorization.approvedPreset === "conversation"
+                      ? "Allow this conversation"
+                      : relayAuthorization.approvedPreset === "actor"
+                        ? "Allow this actor"
+                        : "Allow once"}
                 </div>
               </div>
             </div>
@@ -1381,98 +1420,146 @@ function InteractionCard({
         </div>
 
         {canResolve ? (
-          <div className="flex flex-wrap items-center gap-2">
-            <Button
-              type="button"
-              disabled={Boolean(submittingAction)}
-              onClick={() =>
-                void submitResolution("approve_once", {
-                  decision: "approve",
-                  preset: "once",
-                })
-              }
-              className="rounded-full"
-            >
-              {submittingAction === "approve_once" ? (
-                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle2 className="mr-1 h-4 w-4" />
-              )}
-              Allow Once
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={Boolean(submittingAction)}
-              onClick={() =>
-                void submitResolution("approve_actor", {
-                  decision: "approve",
-                  preset: "actor",
-                })
-              }
-              className="rounded-full"
-            >
-              {submittingAction === "approve_actor" ? (
-                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle2 className="mr-1 h-4 w-4" />
-              )}
-              Allow This Actor
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={Boolean(submittingAction)}
-              onClick={() =>
-                void submitResolution("approve_conversation", {
-                  decision: "approve",
-                  preset: "conversation",
-                })
-              }
-              className="rounded-full"
-            >
-              {submittingAction === "approve_conversation" ? (
-                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle2 className="mr-1 h-4 w-4" />
-              )}
-              Allow This Conversation
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={Boolean(submittingAction)}
-              onClick={() =>
-                void submitResolution("approve_workspace", {
-                  decision: "approve",
-                  preset: "workspace",
-                })
-              }
-              className="rounded-full"
-            >
-              {submittingAction === "approve_workspace" ? (
-                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle2 className="mr-1 h-4 w-4" />
-              )}
-              Always Allow
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={Boolean(submittingAction)}
-              onClick={() =>
-                void submitResolution("reject", { decision: "reject" })
-              }
-              className="rounded-full"
-            >
-              {submittingAction === "reject" ? (
-                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-              ) : (
-                <XCircle className="mr-1 h-4 w-4" />
-              )}
-              Reject
-            </Button>
+          <div className="space-y-3">
+            <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
+              <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
+                Approval Options
+              </div>
+              <div className="mt-2 flex flex-wrap gap-2">
+                {relayAuthorization.approvalOptions.map((option) => {
+                  const selected = relayApprovalOptionIds.includes(option.id)
+                  return (
+                    <Button
+                      key={option.id}
+                      type="button"
+                      variant={selected ? "default" : "outline"}
+                      size="sm"
+                      disabled={Boolean(submittingAction)}
+                      onClick={() =>
+                        setRelayApprovalOptionIds((current) =>
+                          current.includes(option.id)
+                            ? current.filter((id) => id !== option.id)
+                            : [...current, option.id]
+                        )
+                      }
+                      className="rounded-full"
+                    >
+                      {selected ? (
+                        <CheckCircle2 className="mr-1 h-4 w-4" />
+                      ) : (
+                        <ChevronRight className="mr-1 h-4 w-4" />
+                      )}
+                      {option.summary}
+                    </Button>
+                  )
+                })}
+              </div>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                type="button"
+                disabled={Boolean(submittingAction) || relayApprovalOptionIds.length === 0}
+                onClick={() =>
+                  void submitResolution("approve_once", {
+                    decision: "approve",
+                    preset: "once",
+                    selectedOptionIds: relayApprovalOptionIds,
+                    note: resolutionNoteDraft.trim() || undefined,
+                  })
+                }
+                className="rounded-full"
+              >
+                {submittingAction === "approve_once" ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-1 h-4 w-4" />
+                )}
+                Allow Once
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={Boolean(submittingAction) || relayApprovalOptionIds.length === 0}
+                onClick={() =>
+                  void submitResolution("approve_actor", {
+                    decision: "approve",
+                    preset: "actor",
+                    selectedOptionIds: relayApprovalOptionIds,
+                    note: resolutionNoteDraft.trim() || undefined,
+                  })
+                }
+                className="rounded-full"
+              >
+                {submittingAction === "approve_actor" ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-1 h-4 w-4" />
+                )}
+                Allow This Actor
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={Boolean(submittingAction) || relayApprovalOptionIds.length === 0}
+                onClick={() =>
+                  void submitResolution("approve_conversation", {
+                    decision: "approve",
+                    preset: "conversation",
+                    selectedOptionIds: relayApprovalOptionIds,
+                    note: resolutionNoteDraft.trim() || undefined,
+                  })
+                }
+                className="rounded-full"
+              >
+                {submittingAction === "approve_conversation" ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-1 h-4 w-4" />
+                )}
+                Allow This Conversation
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={Boolean(submittingAction) || relayApprovalOptionIds.length === 0}
+                onClick={() =>
+                  void submitResolution("approve_workspace", {
+                    decision: "approve",
+                    preset: "workspace",
+                    selectedOptionIds: relayApprovalOptionIds,
+                    note: resolutionNoteDraft.trim() || undefined,
+                  })
+                }
+                className="rounded-full"
+              >
+                {submittingAction === "approve_workspace" ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <CheckCircle2 className="mr-1 h-4 w-4" />
+                )}
+                Always Allow
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={Boolean(submittingAction)}
+                onClick={() =>
+                  void submitResolution("reject", {
+                    decision: "reject",
+                    note: resolutionNoteDraft.trim() || undefined,
+                  })
+                }
+                className="rounded-full"
+              >
+                {submittingAction === "reject" ? (
+                  <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                ) : (
+                  <XCircle className="mr-1 h-4 w-4" />
+                )}
+                Reject
+              </Button>
+            </div>
           </div>
         ) : null}
 

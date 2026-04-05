@@ -8,7 +8,7 @@
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
     "start": "node dist/index.js",
-    "test": "tsx --test src/**/*.test.ts",
+    "test": "tsx --test \"src/**/*.test.ts\"",
     "db:bootstrap": "tsx src/infrastructure/database/bootstrap.ts && npm run db:codegen",
     "db:seed": "tsx src/infrastructure/database/seed.ts",
     "db:seed:builtin-mcp": "tsx src/infrastructure/database/seed-builtin-mcp-plugins.ts",

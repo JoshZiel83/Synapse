@@ -312,8 +312,6 @@ func (m *Manager) attemptServerStart(ctx context.Context, cfg config.ServerConfi
 	}
 	if cfg.Transport == "builtin" && cfg.Builtin != nil {
 		metadata["builtinKind"] = normalizedBuiltinKind(cfg.Builtin.Kind)
-		metadata["trustRemoteAuthorization"] = true
-		metadata["authorizationMode"] = "server_trust"
 	}
 	if provider, ok := srv.(metadataProvider); ok {
 		for key, value := range provider.Metadata() {

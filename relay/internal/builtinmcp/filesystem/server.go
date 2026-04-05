@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 	"github.com/bmatcuk/doublestar/v4"
 	"github.com/djherbis/times"
 	"github.com/fsnotify/fsnotify"
@@ -59,6 +60,19 @@ type toolError struct {
 	Capability            string
 	Access                string
 	AuthorizationDuration string
+}
+
+const serverAuthorizedRuntimeSessionPrefix = "__server_authorized__:"
+
+func decorateRuntimeSessionID(runtimeSessionID string, serverAuthorized bool) string {
+	if !serverAuthorized {
+		return runtimeSessionID
+	}
+	return serverAuthorizedRuntimeSessionPrefix + runtimeSessionID
+}
+
+func isServerAuthorizedRuntimeSession(runtimeSessionID string) bool {
+	return strings.HasPrefix(runtimeSessionID, serverAuthorizedRuntimeSessionPrefix)
 }
 
 func (e *toolError) Error() string {
@@ -142,7 +156,7 @@ func (s *Server) Shutdown() {
 }
 
 func (s *Server) shouldStart(runtimeSessionID string) bool {
-	return s.cfg.Enabled || s.cfg.TrustRemoteAuthorization || len(s.effectiveRootsForSession(runtimeSessionID)) > 0
+	return s.cfg.Enabled || isServerAuthorizedRuntimeSession(runtimeSessionID) || len(s.effectiveRootsForSession(runtimeSessionID)) > 0
 }
 
 func (s *Server) ensureStarted() error {
@@ -169,7 +183,10 @@ func (s *Server) ensureStarted() error {
 }
 
 func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
-	runtimeSessionID := ""
+	runtimeSessionID := decorateRuntimeSessionID(
+		runtimeauth.RuntimeSessionIDFromContext(ctx),
+		runtimeauth.HasServerAuthorization(ctx),
+	)
 	switch toolName {
 	case "ListAllowedDirectories":
 		return s.listAllowedDirectories(runtimeSessionID), nil
@@ -264,11 +281,23 @@ func (s *Server) effectiveRoots() []Root {
 }
 
 func (s *Server) effectiveRootsForSession(runtimeSessionID string) []Root {
-	roots := make([]Root, 0, len(s.roots))
-	if s.cfg.Enabled || s.cfg.TrustRemoteAuthorization {
-		for _, root := range s.roots {
+	serverAuthorized := isServerAuthorizedRuntimeSession(runtimeSessionID)
+	baseRoots := s.roots
+	if serverAuthorized && len(baseRoots) == 0 {
+		baseRoots = make([]Root, 0, len(globalRootPaths()))
+		for index, rootPath := range globalRootPaths() {
+			baseRoots = append(baseRoots, Root{
+				ID:     fmt.Sprintf("server_authorized_%d", index),
+				Path:   filepath.Clean(rootPath),
+				Access: "rw",
+			})
+		}
+	}
+	roots := make([]Root, 0, len(baseRoots))
+	if s.cfg.Enabled || serverAuthorized {
+		for _, root := range baseRoots {
 			access := root.Access
-			if s.cfg.TrustRemoteAuthorization {
+			if serverAuthorized {
 				access = "rw"
 			}
 			roots = append(roots, Root{
@@ -409,7 +438,7 @@ func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMi
 		}
 	}
 	if write {
-		if s.cfg.ReadOnly && !s.cfg.TrustRemoteAuthorization {
+		if s.cfg.ReadOnly && !isServerAuthorizedRuntimeSession(runtimeSessionID) {
 			return resolvedPath{}, &toolError{
 				Code:                 "read_only_mode",
 				Message:              "This built-in filesystem server is currently in read-only mode. Read and search tools remain available, but write actions require manual approval in the Synapse Relay client. Ask the user to disable read-only mode there, then retry.",
@@ -418,7 +447,7 @@ func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMi
 				ClientHint:           "Disable read-only mode in the Synapse Relay client, then retry the write action.",
 			}
 		}
-		if root.Access != "rw" && !s.cfg.TrustRemoteAuthorization {
+		if root.Access != "rw" && !isServerAuthorizedRuntimeSession(runtimeSessionID) {
 			return resolvedPath{}, &toolError{
 				Code:                 "write_permission_required",
 				Message:              fmt.Sprintf("The path %q is currently configured read-only in the Synapse Relay client. Ask the user to grant write access for this location, then retry.", absPath),

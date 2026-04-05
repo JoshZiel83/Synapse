@@ -6,10 +6,14 @@ type runtimeSessionContextKey struct{}
 type runtimeAuthorizationContextKey struct{}
 
 type RuntimeAuthorization struct {
-	GrantID    string
+	GrantIDs   []string
 	GrantScope string
 	RetryNonce string
-	Effect     map[string]interface{}
+	GrantSpecs []map[string]interface{}
+}
+
+func (authorization RuntimeAuthorization) IsServerAuthorized() bool {
+	return len(authorization.GrantIDs) > 0 || len(authorization.GrantSpecs) > 0
 }
 
 func ContextWithRuntimeSessionID(ctx context.Context, runtimeSessionID string) context.Context {
@@ -31,7 +35,7 @@ func ContextWithRuntimeAuthorization(
 	ctx context.Context,
 	authorization RuntimeAuthorization,
 ) context.Context {
-	if authorization.GrantID == "" && authorization.GrantScope == "" && authorization.RetryNonce == "" && len(authorization.Effect) == 0 {
+	if len(authorization.GrantIDs) == 0 && authorization.GrantScope == "" && authorization.RetryNonce == "" && len(authorization.GrantSpecs) == 0 {
 		return ctx
 	}
 	return context.WithValue(ctx, runtimeAuthorizationContextKey{}, authorization)
@@ -43,4 +47,8 @@ func RuntimeAuthorizationFromContext(ctx context.Context) RuntimeAuthorization {
 	}
 	value, _ := ctx.Value(runtimeAuthorizationContextKey{}).(RuntimeAuthorization)
 	return value
+}
+
+func HasServerAuthorization(ctx context.Context) bool {
+	return RuntimeAuthorizationFromContext(ctx).IsServerAuthorized()
 }

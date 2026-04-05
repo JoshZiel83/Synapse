@@ -6,7 +6,10 @@ import type {
   RelayOperationError,
   RelayVisibleToolDefinition,
 } from '@synapse/shared';
-import type { RuntimeGrantEffect, RuntimeGrantScope } from '@synapse/shared/types';
+import type {
+  RelayAuthorizationGrantSpec,
+  RelayAuthorizationGrantScope,
+} from '@synapse/shared/types';
 import {
   extractText,
   RELAY_AUTH_TIMEOUT,
@@ -47,9 +50,9 @@ import {
   cancelToolCallTask,
   type ToolCallTaskDeliveryPolicy,
 } from '../tool-call-tasks/service.js';
-import { findMatchingRuntimeGrant } from '../runtime-grants/service.js';
+import { findMatchingRelayAuthorizationGrants } from '../runtime-grants/service.js';
 import { normalizeMcpToolResult } from './result-normalizer.js';
-import { inferRelaySpecialAuthorizationRequirement } from './relay-special-mcp.js';
+import { inferRelaySpecialAuthorizationPlan } from './relay-special-mcp.js';
 
 interface RelayToolRegistration {
   stableKey: string;
@@ -173,9 +176,9 @@ interface RelayExposureCatalog {
 }
 
 interface RelayRuntimeAuthorizationEnvelope {
-  grantId?: string;
-  grantScope?: RuntimeGrantScope;
-  effect?: RuntimeGrantEffect;
+  grantIds?: string[];
+  grantScope?: RelayAuthorizationGrantScope;
+  grantSpecs?: RelayAuthorizationGrantSpec[];
   retryNonce?: string;
 }
 
@@ -686,30 +689,35 @@ async function validateRelayCallTargetLocal(params: RelayCallParams) {
   };
 }
 
-function buildAuthorizationRequiredResult(params: {
-  relayToolName: string;
-  runtimeSessionId: string;
-  requirement: ReturnType<typeof inferRelaySpecialAuthorizationRequirement>;
-}) {
-  const requirement = params.requirement;
+function relayAuthorizationGrantToSpec(
+  grant: {
+    kind: RelayAuthorizationGrantSpec["kind"];
+    pathPrefix?: string;
+    browserScopeType?: RelayAuthorizationGrantSpec["browserScopeType"];
+    browserOrigin?: string;
+    browserHost?: string;
+    browserRegistrableDomain?: string;
+    commandExecutor?: RelayAuthorizationGrantSpec["commandExecutor"];
+    commandMatchType?: RelayAuthorizationGrantSpec["commandMatchType"];
+    commandText?: string;
+  },
+): RelayAuthorizationGrantSpec {
   return {
-    content: textBlocks(requirement?.reason || "User authorization is required."),
-    structuredContent: {
-      authorization_required: true,
-      relayToolName: params.relayToolName,
-      relayToolStableKey: requirement?.toolStableKey,
-      contractKey: requirement?.contractKey,
-      runtimeSessionId: params.runtimeSessionId,
-      effect: requirement?.effect,
-      displayPayload: requirement?.displayPayload || {},
-      available_presets: ["once", "actor", "conversation", "workspace"],
-    },
-    isError: true,
+    kind: grant.kind,
+    pathPrefix: grant.pathPrefix,
+    browserScopeType: grant.browserScopeType,
+    browserOrigin: grant.browserOrigin,
+    browserHost: grant.browserHost,
+    browserRegistrableDomain: grant.browserRegistrableDomain,
+    commandExecutor: grant.commandExecutor,
+    commandMatchType: grant.commandMatchType,
+    commandText: grant.commandText,
   };
 }
 
 export async function resolveRelayToolAuthorization(params: {
   workspaceId: string;
+  relayDeviceId: string;
   relayCapabilityId: string;
   relayExposureId: string;
   conversationId?: string | null;
@@ -721,47 +729,46 @@ export async function resolveRelayToolAuthorization(params: {
   exposureMetadata: Record<string, unknown>;
   authorization?: RelayRuntimeAuthorizationEnvelope;
 }) {
-  const requirement = inferRelaySpecialAuthorizationRequirement({
+  const plan = inferRelaySpecialAuthorizationPlan({
     toolStableKey: params.relayToolStableKey,
     visibleToolName: params.relayToolName,
     toolInput: params.toolArguments,
     exposureMetadata: params.exposureMetadata,
   });
-  if (!requirement) {
+  if (!plan) {
     return {
       authorization: params.authorization,
     };
   }
 
-  const grant = await findMatchingRuntimeGrant({
+  const matched = await findMatchingRelayAuthorizationGrants({
     workspaceId: params.workspaceId,
+    relayDeviceId: params.relayDeviceId,
     relayCapabilityId: params.relayCapabilityId,
     relayExposureId: params.relayExposureId,
     conversationId: params.conversationId || undefined,
     actorId: params.actorId || undefined,
-    relayToolStableKey: requirement.toolStableKey,
-    contractKey: requirement.contractKey,
-    effect: requirement.effect,
     retryNonce: params.authorization?.retryNonce,
+    requirements: plan.requiredRequirements,
     consumeOnce: true,
   });
-  if (!grant) {
+  if (matched.missingRequirements.length > 0) {
     return {
-      denialResult: buildAuthorizationRequiredResult({
-        relayToolName: params.relayToolName,
-        runtimeSessionId: params.runtimeSessionId,
-        requirement,
-      }),
+      authorization: undefined,
+      authorizationPlan: plan,
     };
   }
 
   return {
     authorization: {
-      grantId: grant.id,
-      grantScope: grant.scope,
-      effect: grant.effect,
+      grantIds: matched.matchedGrants.map((grant) => grant.id),
+      grantScope: matched.matchedGrants[0]?.scope,
+      grantSpecs: matched.matchedGrants.map((grant) =>
+        relayAuthorizationGrantToSpec(grant),
+      ),
       retryNonce: params.authorization?.retryNonce,
     } satisfies RelayRuntimeAuthorizationEnvelope,
+    authorizationPlan: plan,
   };
 }
 
@@ -870,6 +877,7 @@ async function callRelayToolLocal(params: RelayCallParams): Promise<unknown> {
     await validateRelayCallTargetLocal(params);
   const authorizationState = await resolveRelayToolAuthorization({
     workspaceId: connected.workspaceId,
+    relayDeviceId: params.deviceId,
     relayCapabilityId: params.relayCapabilityId,
     relayExposureId: params.exposureId,
     conversationId: params.conversationId,
@@ -881,9 +889,6 @@ async function callRelayToolLocal(params: RelayCallParams): Promise<unknown> {
     exposureMetadata: exposure.metadata,
     authorization: params.authorization,
   });
-  if (authorizationState.denialResult) {
-    return authorizationState.denialResult;
-  }
 
   const operationId = crypto.randomUUID();
   const inputHash = hashValue(params.args);
@@ -1002,6 +1007,7 @@ async function enqueueRelayToolTaskLocal(
     await validateRelayCallTargetLocal(params);
   const authorizationState = await resolveRelayToolAuthorization({
     workspaceId: params.workspaceId,
+    relayDeviceId: params.deviceId,
     relayCapabilityId: params.relayCapabilityId,
     relayExposureId: params.exposureId,
     conversationId: params.conversationId,
@@ -1013,16 +1019,6 @@ async function enqueueRelayToolTaskLocal(
     exposureMetadata: exposure.metadata,
     authorization: params.authorization,
   });
-  if (authorizationState.denialResult) {
-    throw buildRelayExecutionError({
-      code: 'authorization_required' as RelayOperationError['code'],
-      message: extractText(
-        (authorizationState.denialResult as { content?: ReturnType<typeof textBlocks> })
-          .content || textBlocks('User authorization is required.'),
-      ),
-      retryable: false,
-    });
-  }
 
   const operationId = crypto.randomUUID();
   const inputHash = hashValue(params.args);

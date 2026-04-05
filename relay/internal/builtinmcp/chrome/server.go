@@ -11,6 +11,7 @@ import (
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/chromemcpbundle"
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 type Server struct {
@@ -43,7 +44,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
 	s.startCtx = childCtx
 	s.cancel = cancel
-	shouldActivate := s.isAuthorized()
+	shouldActivate := s.isAuthorized(false)
 	s.mu.Unlock()
 
 	if !shouldActivate {
@@ -54,7 +55,7 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 func (s *Server) Initialize() error {
-	if !s.isAuthorized() {
+	if !s.isAuthorized(false) {
 		return nil
 	}
 	return s.ensureReady(nil)
@@ -67,7 +68,7 @@ func (s *Server) ListTools() ([]core.Tool, error) {
 }
 
 func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
-	if !s.isAuthorized() {
+	if !s.isAuthorized(runtimeauth.HasServerAuthorization(ctx)) {
 		return disabledResult(toolName), nil
 	}
 	if err := s.ensureReady(ctx); err != nil {
@@ -100,8 +101,8 @@ func (s *Server) Shutdown() {
 	}
 }
 
-func (s *Server) isAuthorized() bool {
-	return s.cfg.Enabled || s.cfg.TrustRemoteAuthorization
+func (s *Server) isAuthorized(serverAuthorized bool) bool {
+	return s.cfg.Enabled || serverAuthorized
 }
 
 func (s *Server) ensureReady(ctx context.Context) error {

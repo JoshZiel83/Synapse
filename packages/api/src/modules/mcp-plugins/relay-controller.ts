@@ -10,7 +10,7 @@ import type {
   RelaySyncSourceView,
   RelayToolView,
 } from '@synapse/shared';
-import type { RuntimeGrantView } from '@synapse/shared/types';
+import type { RelayAuthorizationGrantView } from '@synapse/shared/types';
 import {
   CAPABILITY_ACCESS_TARGET_TYPES,
   RELAY_MANAGEABLE_TRUST_STATUSES,
@@ -44,10 +44,10 @@ import {
   resolveRelayDeviceConversationTypeMask,
 } from './relay-policy.js';
 import {
-  getRuntimeGrant,
-  listActiveRuntimeGrantsForExposure,
-  revokeRuntimeGrant,
-  type RuntimeGrantRecord,
+  getRelayAuthorizationGrant,
+  listActiveRelayAuthorizationGrantsForExposure,
+  revokeRelayAuthorizationGrant,
+  type RelayAuthorizationGrantRecord,
 } from '../runtime-grants/service.js';
 
 const createPairingSchema = z.object({
@@ -911,12 +911,20 @@ async function assertRelayExposureInWorkspaceDevice(
   }
 }
 
-function mapRuntimeGrantView(record: RuntimeGrantRecord): RuntimeGrantView {
+function mapRelayAuthorizationGrantView(
+  record: RelayAuthorizationGrantRecord,
+): RelayAuthorizationGrantView {
   return {
     id: record.id,
-    relayToolStableKey: record.relayToolStableKey,
-    contractKey: record.contractKey,
-    displayPayload: record.displayPayload,
+    kind: record.kind,
+    pathPrefix: record.pathPrefix,
+    browserScopeType: record.browserScopeType,
+    browserOrigin: record.browserOrigin,
+    browserHost: record.browserHost,
+    browserRegistrableDomain: record.browserRegistrableDomain,
+    commandExecutor: record.commandExecutor,
+    commandMatchType: record.commandMatchType,
+    commandText: record.commandText,
     workspaceId: record.workspaceId,
     deviceId: record.relayDeviceId,
     relayCapabilityId: record.relayCapabilityId,
@@ -926,7 +934,6 @@ function mapRuntimeGrantView(record: RuntimeGrantRecord): RuntimeGrantView {
     scope: record.scope,
     retention: record.retention,
     status: record.status,
-    effect: record.effect,
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     consumedAt: record.consumedAt,
@@ -1608,42 +1615,42 @@ export function registerRelayRoutes(app: FastifyInstance) {
     }
   });
 
-  app.get('/api/v1/workspaces/:workspaceId/mcp/relays/:id/exposures/:exposureId/runtime-grants', { preHandler: workspacePreHandler }, async (request, reply) => {
+  app.get('/api/v1/workspaces/:workspaceId/mcp/relays/:id/exposures/:exposureId/relay-authorizations', { preHandler: workspacePreHandler }, async (request, reply) => {
     try {
       const allowed = await requireWorkspacePermission(
         request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
         'workspace.manage_relays',
-        'Not allowed to view relay runtime grants in this workspace',
+        'Not allowed to view relay authorizations in this workspace',
       );
       if (!allowed) return;
 
       const { workspaceId, id, exposureId } = request.params as RelayExposureParams;
       await assertRelayExposureInWorkspaceDevice(workspaceId, id, exposureId);
-      const grants = await listActiveRuntimeGrantsForExposure(exposureId);
-      reply.send({ grants: grants.map(mapRuntimeGrantView) });
+      const grants = await listActiveRelayAuthorizationGrantsForExposure(exposureId);
+      reply.send({ grants: grants.map(mapRelayAuthorizationGrantView) });
     } catch (error) {
       handleError(reply, error);
     }
   });
 
-  app.post('/api/v1/workspaces/:workspaceId/mcp/relays/:id/exposures/:exposureId/runtime-grants/:grantId/revoke', { preHandler: workspacePreHandler }, async (request, reply) => {
+  app.post('/api/v1/workspaces/:workspaceId/mcp/relays/:id/exposures/:exposureId/relay-authorizations/:grantId/revoke', { preHandler: workspacePreHandler }, async (request, reply) => {
     try {
       const allowed = await requireWorkspacePermission(
         request as FastifyRequest<{ Params: WorkspaceParams }>,
         reply,
         'workspace.manage_relays',
-        'Not allowed to revoke relay runtime grants in this workspace',
+        'Not allowed to revoke relay authorizations in this workspace',
       );
       if (!allowed) return;
 
       const { workspaceId, id, exposureId, grantId } = request.params as RelayExposureParams & { grantId: string };
       await assertRelayExposureInWorkspaceDevice(workspaceId, id, exposureId);
-      const grant = await getRuntimeGrant(grantId);
+      const grant = await getRelayAuthorizationGrant(grantId);
       if (!grant || grant.workspaceId !== workspaceId || grant.relayExposureId !== exposureId) {
-        throw createNotFoundError('RUNTIME_GRANT_NOT_FOUND', 'Runtime grant not found');
+        throw createNotFoundError('RELAY_AUTHORIZATION_GRANT_NOT_FOUND', 'Relay authorization grant not found');
       }
-      await revokeRuntimeGrant(grantId);
+      await revokeRelayAuthorizationGrant(grantId);
       reply.send({ success: true });
     } catch (error) {
       handleError(reply, error);

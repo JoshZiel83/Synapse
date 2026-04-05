@@ -245,10 +245,10 @@ func bindDispatchCallContext(
 		callCtx = runtimeauth.ContextWithRuntimeAuthorization(
 			callCtx,
 			runtimeauth.RuntimeAuthorization{
-				GrantID:    dispatch.Payload.Authorization.GrantID,
+				GrantIDs:   dispatch.Payload.Authorization.GrantIDs,
 				GrantScope: dispatch.Payload.Authorization.GrantScope,
 				RetryNonce: dispatch.Payload.Authorization.RetryNonce,
-				Effect:     dispatch.Payload.Authorization.Effect,
+				GrantSpecs: dispatch.Payload.Authorization.GrantSpecs,
 			},
 		)
 	}

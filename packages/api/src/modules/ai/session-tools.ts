@@ -27,9 +27,8 @@ import type {
   InteractionInputQuestionDefinition,
   InteractionInputQuestionType,
   PlanChecklistStep,
-  RuntimeAuthorizationPreset,
-  RuntimeAuthorizationRequestMode,
-  RuntimeGrantEffect,
+  RelayAuthorizationPreset,
+  RelayAuthorizationRequestMode,
 } from "@synapse/shared/types";
 import {
   rethrowToolExecutionError,
@@ -91,9 +90,9 @@ import {
 import {
   cancelInteractionRequestByTaskId,
   createPlanApprovalInteractionRequest,
-  createRuntimeAuthorizationInteractionRequest,
+  createRelayAuthorizationInteractionRequest,
   createUserInputInteractionRequest,
-  findOpenRuntimeAuthorizationInteraction,
+  findOpenRelayAuthorizationInteraction,
   getInteractionRequestSummaryByTaskId,
   getInteractionRequestSummary,
   markRuntimeAuthorizationInteractionSuperseded,
@@ -104,7 +103,7 @@ import {
   cancelRelayToolTask,
   loadRelayExposureCatalogSnapshot,
 } from "../mcp-plugins/relay-manager.js";
-import { inferRelaySpecialAuthorizationRequirement } from "../mcp-plugins/relay-special-mcp.js";
+import { inferRelaySpecialAuthorizationPlan } from "../mcp-plugins/relay-special-mcp.js";
 import { normalizeMcpToolResult } from "../mcp-plugins/result-normalizer.js";
 
 type InviteableActor = {
@@ -617,7 +616,7 @@ async function createGovernedToolCallTask(params: {
   executorKind:
     | "interaction_user_input"
     | "plan_approval"
-    | "runtime_authorization";
+    | "relay_authorization";
   deliveryPolicy: "human_interaction";
   requestPayload: Record<string, unknown>;
   summary: string;
@@ -757,7 +756,7 @@ async function hasNewUserFacingConversationMessage(
   return Boolean(row);
 }
 
-async function resolveRelayAuthorizationRequirementOrThrow(params: {
+async function resolveRelayAuthorizationPlanOrThrow(params: {
   actorId: string;
   workspaceId: string;
   sessionId: string;
@@ -792,22 +791,22 @@ async function resolveRelayAuthorizationRequirementOrThrow(params: {
     throwToolError("The relay exposure is not currently available.");
   }
 
-  const requirement = inferRelaySpecialAuthorizationRequirement({
+  const authorizationPlan = inferRelaySpecialAuthorizationPlan({
     toolStableKey: relayTarget.relayToolStableKey,
     visibleToolName: relayTarget.visibleToolName,
     toolInput: params.toolArguments,
     exposureMetadata: relayCatalog.metadata,
   });
-  if (!requirement) {
+  if (!authorizationPlan) {
     throwToolError(
-      "This relay tool call does not require runtime authorization, or Synapse could not infer the required authorization effect.",
+      "This relay tool call does not produce a relay authorization plan, or Synapse could not infer the required requirements.",
     );
   }
 
   return {
     relayTarget,
     relayCatalog,
-    requirement,
+    authorizationPlan,
   };
 }
 
@@ -817,7 +816,7 @@ async function retryAuthorizedRelayTool(params: {
   toolArguments: Record<string, unknown>;
   retryNonce: string;
 }) {
-  const resolved = await resolveRelayAuthorizationRequirementOrThrow({
+  const resolved = await resolveRelayAuthorizationPlanOrThrow({
     actorId: params.context.actorId,
     workspaceId: params.context.workspaceId,
     sessionId: params.context.sessionId,
@@ -2254,12 +2253,12 @@ export function registerCallableToolPlugins(): void {
   });
 
   registerToolPlugin({
-    name: "request_runtime_authorization",
+    name: "request_relay_authorization",
     kind: "callable",
     definition: {
-      name: "request_runtime_authorization",
+      name: "request_relay_authorization",
       description:
-        "Create a runtime authorization request for a relay special MCP tool. Use this only when you must keep going with that exact relay action.",
+        "Create a relay authorization request for a relay special MCP tool. Use this only when you need a server-side override for that exact relay action.",
       parameters: {
         type: "object",
         properties: {
@@ -2301,9 +2300,9 @@ export function registerCallableToolPlugins(): void {
       return {
         active: true,
         definition: {
-          name: "request_runtime_authorization",
+          name: "request_relay_authorization",
           description:
-            "Create a runtime authorization request for a relay special MCP tool. If you choose blocking mode, Synapse will wait for approval and retry the original relay tool automatically.",
+            "Create a relay authorization request for a relay special MCP tool. If you choose blocking mode, Synapse will wait for approval and retry the original relay tool automatically.",
           parameters: {
             type: "object",
             properties: {
@@ -2361,7 +2360,7 @@ export function registerCallableToolPlugins(): void {
       const candidates = buildUserInteractionCandidatesFromRows(allMembers);
       if (candidates.length === 0) {
         throwToolError(
-          "This conversation has no active user who could receive a runtime authorization request",
+          "This conversation has no active user who could receive a relay authorization request",
         );
       }
 
@@ -2373,7 +2372,7 @@ export function registerCallableToolPlugins(): void {
       if (!reason) {
         throwToolError("reason is required");
       }
-      const mode: RuntimeAuthorizationRequestMode =
+      const mode: RelayAuthorizationRequestMode =
         (input as any).mode === "blocking" ? "blocking" : "background";
       const toolArguments =
         (input as any).toolArguments &&
@@ -2385,8 +2384,8 @@ export function registerCallableToolPlugins(): void {
         throwToolError("toolArguments must be an object");
       }
 
-      const { relayTarget, requirement } =
-        await resolveRelayAuthorizationRequirementOrThrow({
+      const { relayTarget, authorizationPlan } =
+        await resolveRelayAuthorizationPlanOrThrow({
           actorId: context.actorId,
           workspaceId: context.workspaceId,
           sessionId: context.sessionId,
@@ -2398,7 +2397,7 @@ export function registerCallableToolPlugins(): void {
 
       const requesterAllowed = await authorizeAction({
         subject: actorSubject(context.actorId),
-        action: "relay_capability.request_runtime_authorization",
+        action: "relay_capability.request_relay_authorization",
         resourceId: relayTarget.capabilityId,
       });
       if (!requesterAllowed) {
@@ -2430,16 +2429,16 @@ export function registerCallableToolPlugins(): void {
 
       const existing =
         mode === "background"
-          ? await findOpenRuntimeAuthorizationInteraction({
+          ? await findOpenRelayAuthorizationInteraction({
               workspaceId: context.workspaceId,
               conversationId,
               requesterParticipantId: requesterMember.id,
               relayCapabilityId: relayTarget.capabilityId,
               relayDeviceId: relayTarget.deviceId,
               relayExposureId: relayTarget.exposureId,
-              relayToolStableKey: requirement.toolStableKey,
-              contractKey: requirement.contractKey,
-              requestedEffect: requirement.effect,
+              requestedToolName: relayTarget.visibleToolName,
+              relayToolStableKey: authorizationPlan.toolStableKey,
+              requiredRequirements: authorizationPlan.requiredRequirements,
               requestMode: mode,
             })
           : null;
@@ -2466,10 +2465,10 @@ export function registerCallableToolPlugins(): void {
           }
           throwToolError(
             waited.status === "superseded"
-              ? "Authorization request was superseded by a newer user message."
+              ? "Relay authorization request was superseded by a newer user message."
               : waited.status === "rejected"
-                ? "Authorization request was rejected."
-                : "Authorization request did not complete successfully.",
+                ? "Relay authorization request was rejected."
+                : "Relay authorization request did not complete successfully.",
           );
         }
 
@@ -2479,13 +2478,13 @@ export function registerCallableToolPlugins(): void {
           relayDevice: relayTarget.deviceDisplayName,
           relayExposure: relayTarget.exposureDisplayName,
           message:
-            "A matching runtime authorization request is already pending in this conversation.",
+            "A matching relay authorization request is already pending in this conversation.",
         });
       }
 
       const task = await createGovernedToolCallTask({
         context,
-        executorKind: "runtime_authorization",
+        executorKind: "relay_authorization",
         deliveryPolicy: "human_interaction",
         supportsCancel: true,
         requestPayload: {
@@ -2493,12 +2492,12 @@ export function registerCallableToolPlugins(): void {
           relayDeviceId: relayTarget.deviceId,
           relayExposureId: relayTarget.exposureId,
           runtimeSessionId: relayTarget.runtimeSessionId,
-          relayToolStableKey: requirement.toolStableKey,
-          contractKey: requirement.contractKey,
-          displayPayload: requirement.displayPayload,
+          requestedToolName: relayTarget.visibleToolName,
+          relayToolStableKey: authorizationPlan.toolStableKey,
           reason,
           requestMode: mode,
-          requestedEffect: requirement.effect,
+          requiredRequirements: authorizationPlan.requiredRequirements,
+          approvalOptions: authorizationPlan.approvalOptions,
           sourceRetryNonce: retryNonce,
           sourceRequestArgs: toolArguments,
         },
@@ -2507,7 +2506,7 @@ export function registerCallableToolPlugins(): void {
 
       let interaction;
       try {
-        interaction = await createRuntimeAuthorizationInteractionRequest({
+        interaction = await createRelayAuthorizationInteractionRequest({
           workspaceId: context.workspaceId,
           conversationId,
           taskId: task.id,
@@ -2515,19 +2514,19 @@ export function registerCallableToolPlugins(): void {
           relayCapabilityId: relayTarget.capabilityId,
           relayDeviceId: relayTarget.deviceId,
           relayExposureId: relayTarget.exposureId,
+          requestedToolName: relayTarget.visibleToolName,
           runtimeSessionId: relayTarget.runtimeSessionId || "",
-          relayToolStableKey: requirement.toolStableKey,
-          contractKey: requirement.contractKey,
-          displayPayload: requirement.displayPayload,
+          relayToolStableKey: authorizationPlan.toolStableKey,
           reason,
-          requestedEffect: requirement.effect,
+          requiredRequirements: authorizationPlan.requiredRequirements,
+          approvalOptions: authorizationPlan.approvalOptions,
           requestMode: mode,
           sourceRetryNonce: retryNonce,
           sourceRequestArgs: toolArguments,
         });
       } catch (error) {
         await cancelToolCallTask(task.id, {
-          summary: `Runtime authorization request for ${relayTarget.deviceDisplayName} failed before dispatch.`,
+          summary: `Relay authorization request for ${relayTarget.deviceDisplayName} failed before dispatch.`,
           finalErrorPayload: {
             message: error instanceof Error ? error.message : String(error),
           },
@@ -2561,10 +2560,10 @@ export function registerCallableToolPlugins(): void {
         }
         throwToolError(
           waited.status === "superseded"
-            ? "Authorization request was superseded by a newer user message."
+            ? "Relay authorization request was superseded by a newer user message."
             : waited.status === "rejected"
-              ? "Authorization request was rejected."
-              : "Authorization request did not complete successfully.",
+              ? "Relay authorization request was rejected."
+              : "Relay authorization request did not complete successfully.",
         );
       }
 
@@ -2577,8 +2576,8 @@ export function registerCallableToolPlugins(): void {
         relayExposure: relayTarget.exposureDisplayName,
         message:
           availableAuthorizers.length === 1
-            ? `Runtime authorization request created. ${availableAuthorizers[0]!.name} can approve or reject it.`
-            : `Runtime authorization request created. ${availableAuthorizers.length} current conversation users can approve or reject it.`,
+            ? `Relay authorization request created. ${availableAuthorizers[0]!.name} can approve or reject it.`
+            : `Relay authorization request created. ${availableAuthorizers.length} current conversation users can approve or reject it.`,
       });
     },
   });
@@ -2675,7 +2674,7 @@ export function registerCallableToolPlugins(): void {
       const interaction =
         task.executorKind === "interaction_user_input" ||
         task.executorKind === "plan_approval" ||
-        task.executorKind === "runtime_authorization"
+        task.executorKind === "relay_authorization"
           ? await getInteractionRequestSummaryByTaskId(task.id)
           : null;
 
@@ -2750,7 +2749,7 @@ export function registerCallableToolPlugins(): void {
       const interaction =
         current.executorKind === "interaction_user_input" ||
         current.executorKind === "plan_approval" ||
-        current.executorKind === "runtime_authorization"
+        current.executorKind === "relay_authorization"
           ? await getInteractionRequestSummaryByTaskId(current.id)
           : null;
 

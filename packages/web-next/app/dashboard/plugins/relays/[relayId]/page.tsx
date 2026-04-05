@@ -10,8 +10,7 @@ import type {
 } from '@synapse/shared';
 import type {
   ConversationTypeKey,
-  RuntimeGrantEffect,
-  RuntimeGrantView,
+  RelayAuthorizationGrantView,
 } from '@synapse/shared/types';
 import {
   CONVERSATION_TYPE_MASK_PRESETS,
@@ -165,7 +164,7 @@ function syncSourceVariant(status: NonNullable<RelayExposureView['syncSource']>[
   }
 }
 
-function formatRuntimeGrantScope(scope: RuntimeGrantView['scope']) {
+function formatRelayAuthorizationScope(scope: RelayAuthorizationGrantView['scope']) {
   switch (scope) {
     case 'once':
       return 'Allow once';
@@ -180,36 +179,57 @@ function formatRuntimeGrantScope(scope: RuntimeGrantView['scope']) {
   }
 }
 
-function describeRuntimeGrantEffect(effect: RuntimeGrantEffect) {
-  if (effect.capability === 'filesystem') {
+function describeRelayAuthorizationGrant(grant: RelayAuthorizationGrantView) {
+  if (grant.kind.startsWith('filesystem.')) {
     return {
       icon: FolderOpen,
       summary:
-        effect.access === 'read_write'
-          ? 'Filesystem read and write'
-          : effect.access === 'write'
+        grant.kind === 'filesystem.directory'
+          ? 'Filesystem directory'
+          : grant.kind === 'filesystem.write'
             ? 'Filesystem write'
             : 'Filesystem read',
-      detail: effect.path,
+      detail: grant.pathPrefix || 'No directory constraint',
     };
   }
-  if (effect.capability === 'commandline') {
+  if (grant.kind.startsWith('commandline.')) {
     return {
       icon: Terminal,
-      summary: `Command line: ${effect.executor}`,
-      detail: effect.cwdPrefix || 'Any working directory',
+      summary:
+        grant.kind === 'commandline.command'
+          ? `Command line: ${grant.commandMatchType || 'exact'}`
+          : grant.kind === 'commandline.directory'
+            ? 'Command line directory'
+            : 'Command line access',
+      detail: grant.commandText || grant.pathPrefix || 'Any command or directory',
     };
   }
-  if (effect.capability === 'browser') {
+  if (grant.kind.startsWith('browser.')) {
     return {
       icon: Globe,
-      summary: 'Browser automation',
-      detail: 'Chrome DevTools MCP',
+      summary:
+        grant.kind === 'browser.site'
+          ? 'Browser site access'
+          : grant.kind === 'browser.write'
+            ? 'Browser write actions'
+            : grant.kind === 'browser.read'
+              ? 'Browser read actions'
+              : 'Browser tool access',
+      detail:
+        grant.browserHost ||
+        grant.browserRegistrableDomain ||
+        grant.browserOrigin ||
+        'Browser-wide',
     };
   }
   return {
     icon: MousePointerClick,
-    summary: 'Computer control',
+    summary:
+      grant.kind === 'cua.write'
+        ? 'Desktop input actions'
+        : grant.kind === 'cua.read'
+          ? 'Desktop observation'
+          : 'Desktop tool access',
     detail: 'CUA automation',
   };
 }
@@ -227,8 +247,8 @@ export default function RelayDevicePage() {
   const [saving, setSaving] = useState(false);
   const [loadingRelayEventSources, setLoadingRelayEventSources] = useState(true);
   const [togglingRelaySourceKey, setTogglingRelaySourceKey] = useState<string | null>(null);
-  const [runtimeGrants, setRuntimeGrants] = useState<RuntimeGrantView[]>([]);
-  const [loadingRuntimeGrants, setLoadingRuntimeGrants] = useState(false);
+  const [relayAuthorizations, setRelayAuthorizations] = useState<RelayAuthorizationGrantView[]>([]);
+  const [loadingRelayAuthorizations, setLoadingRelayAuthorizations] = useState(false);
   const [revokingGrantId, setRevokingGrantId] = useState<string | null>(null);
   const [draftName, setDraftName] = useState('');
   const [savingDevicePolicy, setSavingDevicePolicy] = useState(false);
@@ -370,18 +390,18 @@ export default function RelayDevicePage() {
     }
   }
 
-  async function loadRuntimeGrants(targetExposureId: string) {
+  async function loadRelayAuthorizations(targetExposureId: string) {
     if (!workspaceId || !relayId || !targetExposureId) return;
 
-    setLoadingRuntimeGrants(true);
+    setLoadingRelayAuthorizations(true);
     try {
-      const result = await api.listRelayRuntimeGrants(workspaceId, relayId, targetExposureId);
-      setRuntimeGrants(result.grants);
+      const result = await api.listRelayAuthorizations(workspaceId, relayId, targetExposureId);
+      setRelayAuthorizations(result.grants);
     } catch (error) {
-      console.error('Failed to load relay runtime grants:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to load runtime grants');
+      console.error('Failed to load relay authorizations:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to load relay authorizations');
     } finally {
-      setLoadingRuntimeGrants(false);
+      setLoadingRelayAuthorizations(false);
     }
   }
 
@@ -404,10 +424,10 @@ export default function RelayDevicePage() {
 
   useEffect(() => {
     if (!activeExposure?.id) {
-      setRuntimeGrants([]);
+      setRelayAuthorizations([]);
       return;
     }
-    void loadRuntimeGrants(activeExposure.id);
+    void loadRelayAuthorizations(activeExposure.id);
   }, [activeExposure?.id, relayId, workspaceId]);
 
   useEffect(() => {
@@ -495,23 +515,23 @@ export default function RelayDevicePage() {
     }
   }
 
-  async function handleRevokeRuntimeGrant(grantId: string) {
+  async function handleRevokeRelayAuthorization(grantId: string) {
     if (!workspaceId || !activeExposure) return;
-    if (!window.confirm('Revoke this runtime grant?')) return;
+    if (!window.confirm('Revoke this relay authorization?')) return;
 
     setRevokingGrantId(grantId);
     try {
-      await api.revokeRelayRuntimeGrant(
+      await api.revokeRelayAuthorizationGrant(
         workspaceId,
         relayId,
         activeExposure.id,
         grantId,
       );
-      await loadRuntimeGrants(activeExposure.id);
-      toast.success('Runtime grant revoked');
+      await loadRelayAuthorizations(activeExposure.id);
+      toast.success('Relay authorization revoked');
     } catch (error) {
-      console.error('Failed to revoke runtime grant:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to revoke runtime grant');
+      console.error('Failed to revoke relay authorization:', error);
+      toast.error(error instanceof Error ? error.message : 'Failed to revoke relay authorization');
     } finally {
       setRevokingGrantId(null);
     }
@@ -1037,22 +1057,22 @@ export default function RelayDevicePage() {
                 <AppCardHeader>
                   <div className="flex items-center gap-2">
                     <Shield className="h-4 w-4 text-primary" />
-                    <AppCardTitle>Runtime Grants</AppCardTitle>
+                    <AppCardTitle>Relay Authorizations</AppCardTitle>
                   </div>
                   <AppCardDescription>
                     Fine-grained approvals for special relay MCP actions. These grants are independent from MCP session lifecycle and stay active until consumed or revoked.
                   </AppCardDescription>
                 </AppCardHeader>
                 <AppCardContent className="space-y-3">
-                  {loadingRuntimeGrants ? (
+                  {loadingRelayAuthorizations ? (
                     <div className="flex items-center gap-2 rounded-2xl border border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" />
-                      Loading runtime grants...
+                      Loading relay authorizations...
                     </div>
-                  ) : runtimeGrants.length > 0 ? (
-                    runtimeGrants.map((grant) => {
-                      const effect = describeRuntimeGrantEffect(grant.effect);
-                      const EffectIcon = effect.icon;
+                  ) : relayAuthorizations.length > 0 ? (
+                    relayAuthorizations.map((grant) => {
+                      const described = describeRelayAuthorizationGrant(grant);
+                      const EffectIcon = described.icon;
                       const isRevoking = revokingGrantId === grant.id;
                       return (
                         <div
@@ -1062,15 +1082,15 @@ export default function RelayDevicePage() {
                           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                             <div className="min-w-0 space-y-2">
                               <div className="flex flex-wrap items-center gap-2">
-                                <Badge variant="secondary">{formatRuntimeGrantScope(grant.scope)}</Badge>
-                                <Badge variant="outline">{grant.relayToolStableKey}</Badge>
+                                <Badge variant="secondary">{formatRelayAuthorizationScope(grant.scope)}</Badge>
+                                <Badge variant="outline">{grant.kind}</Badge>
                                 <Badge variant="outline">{grant.status}</Badge>
                               </div>
                               <div className="flex items-start gap-2">
                                 <EffectIcon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                                 <div className="min-w-0">
-                                  <div className="text-sm font-medium text-foreground">{effect.summary}</div>
-                                  <div className="text-xs break-all text-muted-foreground">{effect.detail}</div>
+                                  <div className="text-sm font-medium text-foreground">{described.summary}</div>
+                                  <div className="text-xs break-all text-muted-foreground">{described.detail}</div>
                                 </div>
                               </div>
                               <div className="text-xs text-muted-foreground">
@@ -1080,7 +1100,7 @@ export default function RelayDevicePage() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => void handleRevokeRuntimeGrant(grant.id)}
+                              onClick={() => void handleRevokeRelayAuthorization(grant.id)}
                               disabled={isRevoking}
                             >
                               {isRevoking ? (
@@ -1096,7 +1116,7 @@ export default function RelayDevicePage() {
                     })
                   ) : (
                     <div className="rounded-2xl border border-dashed border-border/70 px-4 py-6 text-sm text-muted-foreground">
-                      No active runtime grants for this exposure.
+                      No active relay authorizations for this exposure.
                     </div>
                   )}
                 </AppCardContent>

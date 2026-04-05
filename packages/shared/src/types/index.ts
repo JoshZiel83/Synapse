@@ -45,14 +45,16 @@ import {
   PLAN_APPROVAL_DECISIONS,
   TARGETED_INTERACTION_REQUEST_KINDS,
   REUSE_SCOPES,
-  RUNTIME_AUTHORIZATION_CAPABILITIES,
-  RUNTIME_AUTHORIZATION_PRESETS,
-  RUNTIME_AUTHORIZATION_REQUEST_MODES,
-  RUNTIME_COMMANDLINE_EXECUTORS,
-  RUNTIME_FILESYSTEM_AUTHORIZATION_ACCESSES,
-  RUNTIME_GRANT_RETENTIONS,
-  RUNTIME_GRANT_SCOPES,
-  RUNTIME_GRANT_STATUSES,
+  RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES,
+  RELAY_AUTHORIZATION_CAPABILITIES,
+  RELAY_AUTHORIZATION_COMMAND_EXECUTORS,
+  RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES,
+  RELAY_AUTHORIZATION_GRANT_RETENTIONS,
+  RELAY_AUTHORIZATION_GRANT_SCOPES,
+  RELAY_AUTHORIZATION_GRANT_STATUSES,
+  RELAY_AUTHORIZATION_KINDS,
+  RELAY_AUTHORIZATION_PRESETS,
+  RELAY_AUTHORIZATION_REQUEST_MODES,
   SESSION_CHANNEL_INPUTS,
   SESSION_CHANNELS,
   SESSION_COLLABORATION_MODES,
@@ -2930,71 +2932,78 @@ export interface PlanApprovalInteractionSummary {
 export type InteractionDecision = typeof INTERACTION_DECISIONS[number];
 export type PlanApprovalDecision = typeof PLAN_APPROVAL_DECISIONS[number];
 
-export type RuntimeAuthorizationPreset =
-  typeof RUNTIME_AUTHORIZATION_PRESETS[number];
+export type RelayAuthorizationPreset =
+  typeof RELAY_AUTHORIZATION_PRESETS[number];
 
-export type RuntimeAuthorizationRequestMode =
-  typeof RUNTIME_AUTHORIZATION_REQUEST_MODES[number];
+export type RelayAuthorizationRequestMode =
+  typeof RELAY_AUTHORIZATION_REQUEST_MODES[number];
 
-export type RuntimeGrantScope = typeof RUNTIME_GRANT_SCOPES[number];
+export type RelayAuthorizationGrantScope =
+  typeof RELAY_AUTHORIZATION_GRANT_SCOPES[number];
 
-export type RuntimeGrantRetention = typeof RUNTIME_GRANT_RETENTIONS[number];
+export type RelayAuthorizationGrantRetention =
+  typeof RELAY_AUTHORIZATION_GRANT_RETENTIONS[number];
 
-export type RuntimeGrantStatus = typeof RUNTIME_GRANT_STATUSES[number];
+export type RelayAuthorizationGrantStatus =
+  typeof RELAY_AUTHORIZATION_GRANT_STATUSES[number];
 
-export type RuntimeAuthorizationCapability =
-  typeof RUNTIME_AUTHORIZATION_CAPABILITIES[number];
+export type RelayAuthorizationCapability =
+  typeof RELAY_AUTHORIZATION_CAPABILITIES[number];
 
-export type RuntimeFilesystemAuthorizationAccess =
-  typeof RUNTIME_FILESYSTEM_AUTHORIZATION_ACCESSES[number];
+export type RelayAuthorizationKind =
+  typeof RELAY_AUTHORIZATION_KINDS[number];
 
-export type RuntimeCommandlineExecutor =
-  typeof RUNTIME_COMMANDLINE_EXECUTORS[number];
+export type RelayAuthorizationBrowserScopeType =
+  typeof RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES[number];
 
-export interface RuntimeFilesystemGrantEffect {
-  capability: "filesystem";
-  path: string;
-  access: RuntimeFilesystemAuthorizationAccess;
+export type RelayAuthorizationCommandExecutor =
+  typeof RELAY_AUTHORIZATION_COMMAND_EXECUTORS[number];
+
+export type RelayAuthorizationCommandMatchType =
+  typeof RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES[number];
+
+export interface RelayAuthorizationGrantSpec {
+  kind: RelayAuthorizationKind;
+  pathPrefix?: string;
+  browserScopeType?: RelayAuthorizationBrowserScopeType;
+  browserOrigin?: string;
+  browserHost?: string;
+  browserRegistrableDomain?: string;
+  commandExecutor?: RelayAuthorizationCommandExecutor;
+  commandMatchType?: RelayAuthorizationCommandMatchType;
+  commandText?: string;
 }
 
-export interface RuntimeCuaGrantEffect {
-  capability: "cua";
-  mode: "control";
+export interface RelayAuthorizationRequirement
+  extends RelayAuthorizationGrantSpec {
+  id: string;
+  summary: string;
+  detail?: string;
 }
 
-export interface RuntimeBrowserGrantEffect {
-  capability: "browser";
-  mode: "automation";
+export interface RelayAuthorizationApprovalOption {
+  id: string;
+  kind: RelayAuthorizationKind;
+  summary: string;
+  detail?: string;
+  coversRequirementIds: string[];
+  grantSpec: RelayAuthorizationGrantSpec;
 }
 
-export interface RuntimeCommandlineGrantEffect {
-  capability: "commandline";
-  executor: RuntimeCommandlineExecutor;
-  cwdPrefix?: string;
-}
-
-export type RuntimeGrantEffect =
-  | RuntimeFilesystemGrantEffect
-  | RuntimeCuaGrantEffect
-  | RuntimeBrowserGrantEffect
-  | RuntimeCommandlineGrantEffect;
-
-export interface RuntimeGrantSummary {
+export interface RelayAuthorizationGrantSummary
+  extends RelayAuthorizationGrantSpec {
   id: UUID;
-  scope: RuntimeGrantScope;
-  retention: RuntimeGrantRetention;
-  status: RuntimeGrantStatus;
-  effect: RuntimeGrantEffect;
+  scope: RelayAuthorizationGrantScope;
+  retention: RelayAuthorizationGrantRetention;
+  status: RelayAuthorizationGrantStatus;
   createdAt: Timestamp;
   updatedAt: Timestamp;
   consumedAt?: Timestamp;
   revokedAt?: Timestamp;
 }
 
-export interface RuntimeGrantView extends RuntimeGrantSummary {
-  relayToolStableKey: string;
-  contractKey: string;
-  displayPayload: Record<string, unknown>;
+export interface RelayAuthorizationGrantView
+  extends RelayAuthorizationGrantSummary {
   workspaceId: UUID;
   deviceId: UUID;
   relayCapabilityId: UUID;
@@ -3003,21 +3012,35 @@ export interface RuntimeGrantView extends RuntimeGrantSummary {
   actorId?: UUID;
 }
 
-export interface RuntimeAuthorizationInteractionSummary {
+export interface RelayAuthorizationInteractionSummary {
+  requestedToolName: string;
   relayToolStableKey: string;
   reason: string;
-  contractKey: string;
-  displayPayload: Record<string, unknown>;
   deviceId: UUID;
   deviceDisplayName: string;
   relayCapabilityId: UUID;
   exposureId: UUID;
   exposureDisplayName: string;
-  requestedEffect: RuntimeGrantEffect;
-  approvedPreset?: RuntimeAuthorizationPreset;
-  approvedGrant?: RuntimeGrantSummary;
-  requestMode: RuntimeAuthorizationRequestMode;
+  requiredRequirements: RelayAuthorizationRequirement[];
+  approvalOptions: RelayAuthorizationApprovalOption[];
+  approvedPreset?: RelayAuthorizationPreset;
+  approvedGrants?: RelayAuthorizationGrantSummary[];
+  requestMode: RelayAuthorizationRequestMode;
 }
+
+// Deprecated aliases kept for in-repo transition.
+export type RuntimeAuthorizationPreset = RelayAuthorizationPreset;
+export type RuntimeAuthorizationRequestMode = RelayAuthorizationRequestMode;
+export type RuntimeGrantScope = RelayAuthorizationGrantScope;
+export type RuntimeGrantRetention = RelayAuthorizationGrantRetention;
+export type RuntimeGrantStatus = RelayAuthorizationGrantStatus;
+export type RuntimeAuthorizationCapability = RelayAuthorizationCapability;
+export type RuntimeCommandlineExecutor = RelayAuthorizationCommandExecutor;
+export type RuntimeGrantEffect = RelayAuthorizationGrantSpec;
+export type RuntimeGrantSummary = RelayAuthorizationGrantSummary;
+export type RuntimeGrantView = RelayAuthorizationGrantView;
+export type RuntimeAuthorizationInteractionSummary =
+  RelayAuthorizationInteractionSummary;
 
 export interface InteractionRequestSummary {
   id: UUID;
@@ -3033,6 +3056,7 @@ export interface InteractionRequestSummary {
   resolutionNote?: string;
   userInput?: UserInputInteractionSummary;
   planApproval?: PlanApprovalInteractionSummary;
+  relayAuthorization?: RelayAuthorizationInteractionSummary;
   runtimeAuthorization?: RuntimeAuthorizationInteractionSummary;
   createdAt: Timestamp;
   updatedAt: Timestamp;

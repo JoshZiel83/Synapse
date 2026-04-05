@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 func newTestServer(t *testing.T, cfg Config) *Server {
@@ -835,6 +836,82 @@ func TestDisabledFilesystemViewRejectsAccess(t *testing.T) {
 	}
 	if structured["code"] != "path_not_allowed" {
 		t.Fatalf("expected path_not_allowed code, got %#v", structured["code"])
+	}
+}
+
+func TestServerAuthorizationBypassesDisabledFilesystemLocalGuards(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(target, []byte("hello from server authorized filesystem"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	server, err := New(Config{
+		StableKey: "server-auth-fs",
+		Name:      "filesystem",
+		Enabled:   false,
+		ReadOnly:  true,
+		Scope:     "roots",
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   false,
+			FileTypes:        []string{".txt"},
+			MaxFileSizeBytes: 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+		},
+	})
+	if err != nil {
+		t.Fatalf("new filesystem server: %v", err)
+	}
+	if err := server.Start(context.Background()); err != nil {
+		t.Fatalf("start filesystem server: %v", err)
+	}
+	t.Cleanup(server.Shutdown)
+
+	serverAuthorizedCtx := runtimeauth.ContextWithRuntimeAuthorization(
+		context.Background(),
+		runtimeauth.RuntimeAuthorization{
+			GrantIDs: []string{"grant-fs-1"},
+		},
+	)
+
+	viewed, err := server.CallTool(serverAuthorizedCtx, "View", map[string]interface{}{
+		"file_path": target,
+	})
+	if err != nil {
+		t.Fatalf("call View: %v", err)
+	}
+	if viewed.IsError {
+		t.Fatalf("expected server-authorized view to succeed, got %+v", viewed.StructuredContent)
+	}
+	content, ok := viewed.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", viewed.Content[0])
+	}
+	if !strings.Contains(content.Text, "hello from server authorized filesystem") {
+		t.Fatalf("expected viewed content to include file contents, got %q", content.Text)
+	}
+
+	replaced, err := server.CallTool(serverAuthorizedCtx, "Replace", map[string]interface{}{
+		"file_path": target,
+		"content":   "updated by server authorization",
+	})
+	if err != nil {
+		t.Fatalf("call Replace: %v", err)
+	}
+	if replaced.IsError {
+		t.Fatalf("expected server-authorized replace to succeed, got %+v", replaced.StructuredContent)
+	}
+	updatedBytes, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatalf("read updated file: %v", err)
+	}
+	if string(updatedBytes) != "updated by server authorization" {
+		t.Fatalf("expected server-authorized replace to update file, got %q", string(updatedBytes))
 	}
 }
 

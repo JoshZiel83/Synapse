@@ -56,7 +56,7 @@ func (s *Server) Start(ctx context.Context) error {
 	if err := s.guard.Start(); err != nil {
 		return err
 	}
-	if !s.canOperate("") {
+	if !s.canOperate(false, "") {
 		return nil
 	}
 	return s.ensureReady("")
@@ -66,7 +66,7 @@ func (s *Server) Initialize() error {
 	if err := s.guard.Start(); err != nil {
 		return err
 	}
-	if !s.canOperate("") {
+	if !s.canOperate(false, "") {
 		return nil
 	}
 	return s.ensureReady("")
@@ -140,13 +140,14 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 		return errorResult("desktop integration is not available in this build"), nil
 	}
 	runtimeSessionID := runtimeauth.RuntimeSessionIDFromContext(ctx)
-	if !s.canOperate(runtimeSessionID) {
+	serverAuthorized := runtimeauth.HasServerAuthorization(ctx)
+	if !s.canOperate(serverAuthorized, runtimeSessionID) {
 		return disabledResult(toolName), nil
 	}
 	if err := s.ensureReady(runtimeSessionID); err != nil {
 		return errorResult(err.Error()), nil
 	}
-	if blocked, operation := s.readOnlyBlock(runtimeSessionID, toolName, args); blocked {
+	if blocked, operation := s.readOnlyBlock(serverAuthorized, runtimeSessionID, toolName, args); blocked {
 		return readOnlyResult(toolName, operation), nil
 	}
 	if s.guard != nil {
@@ -289,8 +290,8 @@ func disabledResult(toolName string) core.CallResult {
 	}
 }
 
-func (s *Server) readOnlyBlock(runtimeSessionID, toolName string, args map[string]interface{}) (bool, string) {
-	if s.cfg.TrustRemoteAuthorization {
+func (s *Server) readOnlyBlock(serverAuthorized bool, runtimeSessionID, toolName string, args map[string]interface{}) (bool, string) {
+	if serverAuthorized {
 		return false, ""
 	}
 	if !s.cfg.ReadOnly {
@@ -305,8 +306,8 @@ func (s *Server) readOnlyBlock(runtimeSessionID, toolName string, args map[strin
 	return false, ""
 }
 
-func (s *Server) canOperate(runtimeSessionID string) bool {
-	return s.cfg.Enabled || s.cfg.TrustRemoteAuthorization
+func (s *Server) canOperate(serverAuthorized bool, runtimeSessionID string) bool {
+	return s.cfg.Enabled || serverAuthorized
 }
 
 func (s *Server) ensureReady(runtimeSessionID string) error {

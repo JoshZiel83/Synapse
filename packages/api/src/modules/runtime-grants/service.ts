@@ -1,10 +1,14 @@
-import crypto from "node:crypto";
+import path from "node:path";
 import type {
-  RuntimeAuthorizationPreset,
+  RelayAuthorizationGrantSpec,
+  RelayAuthorizationKind,
+  RelayAuthorizationPreset,
+  RelayAuthorizationRequirement,
+  RelayAuthorizationGrantRetention,
+  RelayAuthorizationGrantScope,
+  RelayAuthorizationGrantStatus,
   RuntimeGrantEffect,
-  RuntimeGrantRetention,
-  RuntimeGrantScope,
-  RuntimeGrantStatus,
+  RuntimeAuthorizationPreset,
 } from "@synapse/shared/types";
 import { sql } from "kysely";
 import {
@@ -28,14 +32,16 @@ function parseJsonObject(value: unknown): Record<string, unknown> {
   if (typeof value === "string") {
     try {
       const parsed = JSON.parse(value);
-      return parsed && typeof parsed === "object"
+      return parsed && typeof parsed === "object" && !Array.isArray(parsed)
         ? (parsed as Record<string, unknown>)
         : {};
     } catch {
       return {};
     }
   }
-  return typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : {};
 }
 
 function toIsoString(value: string | Date | null | undefined) {
@@ -45,24 +51,7 @@ function toIsoString(value: string | Date | null | undefined) {
   return value instanceof Date ? value.toISOString() : value;
 }
 
-function normalizeFilesystemAccess(access: unknown) {
-  const normalized =
-    typeof access === "string" ? access.trim().toLowerCase() : "";
-  if (
-    normalized === "read" ||
-    normalized === "write" ||
-    normalized === "read_write"
-  ) {
-    return normalized;
-  }
-  return null;
-}
-
-function hashRequestPayload(value: unknown) {
-  return crypto.createHash("sha256").update(JSON.stringify(value || {})).digest("hex");
-}
-
-function runtimeGrantScopeRank(scope: RuntimeGrantScope) {
+function relayAuthorizationScopeRank(scope: RelayAuthorizationGrantScope) {
   switch (scope) {
     case "once":
       return 0;
@@ -77,7 +66,45 @@ function runtimeGrantScopeRank(scope: RuntimeGrantScope) {
   }
 }
 
-export interface RuntimeGrantRecord {
+function normalizePathPrefix(value: unknown) {
+  if (typeof value !== "string" || value.trim().length === 0) {
+    return null;
+  }
+  return path.resolve(path.normalize(value.trim()));
+}
+
+function pathSeparatorForMatch(value: string) {
+  return value.endsWith(path.sep) ? "" : path.sep;
+}
+
+function pathWithinPrefix(target: string, prefix: string) {
+  return target === prefix || target.startsWith(`${prefix}${pathSeparatorForMatch(prefix)}`);
+}
+
+function normalizeCommandText(value: unknown) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const normalized = value.trim();
+  return normalized.length > 0 ? normalized : null;
+}
+
+function hasCompoundShellOperators(command: string) {
+  return (
+    command.includes("&&") ||
+    command.includes("||") ||
+    command.includes(";") ||
+    command.includes("|") ||
+    command.includes("\n")
+  );
+}
+
+function commandPrefixMatches(prefix: string, command: string) {
+  return command === prefix || command.startsWith(`${prefix} `);
+}
+
+export interface RelayAuthorizationGrantRecord
+  extends RelayAuthorizationGrantSpec {
   id: string;
   workspaceId: string;
   relayDeviceId: string;
@@ -88,17 +115,12 @@ export interface RuntimeGrantRecord {
   createdByWorkspaceMemberId?: string;
   sourceInteractionId?: string;
   sourceTaskId?: string;
-  scope: RuntimeGrantScope;
-  retention: RuntimeGrantRetention;
-  status: RuntimeGrantStatus;
-  relayToolStableKey: string;
-  contractKey: string;
   sourceRetryNonce?: string;
   sourceRuntimeSessionId?: string;
   sourceRequestArgs: Record<string, unknown>;
-  sourceRequestHash?: string;
-  effect: RuntimeGrantEffect;
-  displayPayload: Record<string, unknown>;
+  scope: RelayAuthorizationGrantScope;
+  retention: RelayAuthorizationGrantRetention;
+  status: RelayAuthorizationGrantStatus;
   createdAt: string;
   updatedAt: string;
   consumedAt?: string;
@@ -106,7 +128,9 @@ export interface RuntimeGrantRecord {
   supersededAt?: string;
 }
 
-export interface CreateRuntimeGrantParams {
+export type RuntimeGrantRecord = RelayAuthorizationGrantRecord;
+
+export interface CreateRelayAuthorizationGrantParams {
   workspaceId: string;
   relayDeviceId: string;
   relayCapabilityId: string;
@@ -116,30 +140,26 @@ export interface CreateRuntimeGrantParams {
   createdByWorkspaceMemberId?: string;
   sourceInteractionId?: string;
   sourceTaskId?: string;
-  preset: RuntimeAuthorizationPreset;
-  relayToolStableKey: string;
-  contractKey: string;
+  preset: RelayAuthorizationPreset;
+  grantSpec: RelayAuthorizationGrantSpec;
   sourceRetryNonce?: string;
   sourceRuntimeSessionId?: string;
-  sourceRequestArgs: Record<string, unknown>;
-  effect: RuntimeGrantEffect;
-  displayPayload?: Record<string, unknown>;
+  sourceRequestArgs?: Record<string, unknown>;
 }
 
-export interface FindMatchingRuntimeGrantParams {
+export interface FindMatchingRelayAuthorizationGrantsParams {
   workspaceId: string;
+  relayDeviceId: string;
   relayCapabilityId: string;
   relayExposureId: string;
   conversationId?: string;
   actorId?: string;
-  relayToolStableKey: string;
-  contractKey: string;
-  effect: RuntimeGrantEffect;
   retryNonce?: string;
+  requirements: RelayAuthorizationRequirement[];
   consumeOnce?: boolean;
 }
 
-function mapRuntimeGrantRow(row: any): RuntimeGrantRecord {
+function mapRelayAuthorizationGrantRow(row: any): RelayAuthorizationGrantRecord {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -152,17 +172,21 @@ function mapRuntimeGrantRow(row: any): RuntimeGrantRecord {
       row.created_by_workspace_member_id || undefined,
     sourceInteractionId: row.source_interaction_id || undefined,
     sourceTaskId: row.source_task_id || undefined,
-    scope: row.scope,
-    retention: row.retention,
-    status: row.status,
-    relayToolStableKey: row.relay_tool_stable_key,
-    contractKey: row.contract_key,
     sourceRetryNonce: row.source_retry_nonce || undefined,
     sourceRuntimeSessionId: row.source_runtime_session_id || undefined,
     sourceRequestArgs: parseJsonObject(row.source_request_args),
-    sourceRequestHash: row.source_request_hash || undefined,
-    effect: parseJsonObject(row.effect) as unknown as RuntimeGrantEffect,
-    displayPayload: parseJsonObject(row.display_payload),
+    scope: row.scope,
+    retention: row.retention,
+    status: row.status,
+    kind: row.kind,
+    pathPrefix: row.path_prefix || undefined,
+    browserScopeType: row.browser_scope_type || undefined,
+    browserOrigin: row.browser_origin || undefined,
+    browserHost: row.browser_host || undefined,
+    browserRegistrableDomain: row.browser_registrable_domain || undefined,
+    commandExecutor: row.command_executor || undefined,
+    commandMatchType: row.command_match_type || undefined,
+    commandText: row.command_text || undefined,
     createdAt: toIsoString(row.created_at) || new Date().toISOString(),
     updatedAt: toIsoString(row.updated_at) || new Date().toISOString(),
     consumedAt: toIsoString(row.consumed_at),
@@ -171,9 +195,9 @@ function mapRuntimeGrantRow(row: any): RuntimeGrantRecord {
   };
 }
 
-export function runtimeAuthorizationPresetToGrant(
-  preset: RuntimeAuthorizationPreset,
-): { scope: RuntimeGrantScope; retention: RuntimeGrantRetention } {
+export function relayAuthorizationPresetToGrant(
+  preset: RelayAuthorizationPreset,
+): { scope: RelayAuthorizationGrantScope; retention: RelayAuthorizationGrantRetention } {
   switch (preset) {
     case "once":
       return { scope: "once", retention: "consume_once" };
@@ -188,13 +212,40 @@ export function runtimeAuthorizationPresetToGrant(
   }
 }
 
-export async function createRuntimeGrant(
-  params: CreateRuntimeGrantParams,
+function normalizeGrantSpecForInsert(
+  grantSpec: RelayAuthorizationGrantSpec,
+): RelayAuthorizationGrantSpec {
+  return {
+    kind: grantSpec.kind,
+    pathPrefix: normalizePathPrefix(grantSpec.pathPrefix) || undefined,
+    browserScopeType: grantSpec.browserScopeType,
+    browserOrigin:
+      typeof grantSpec.browserOrigin === "string" && grantSpec.browserOrigin.trim()
+        ? grantSpec.browserOrigin.trim()
+        : undefined,
+    browserHost:
+      typeof grantSpec.browserHost === "string" && grantSpec.browserHost.trim()
+        ? grantSpec.browserHost.trim().toLowerCase()
+        : undefined,
+    browserRegistrableDomain:
+      typeof grantSpec.browserRegistrableDomain === "string" &&
+      grantSpec.browserRegistrableDomain.trim()
+        ? grantSpec.browserRegistrableDomain.trim().toLowerCase()
+        : undefined,
+    commandExecutor: grantSpec.commandExecutor,
+    commandMatchType: grantSpec.commandMatchType,
+    commandText: normalizeCommandText(grantSpec.commandText) || undefined,
+  };
+}
+
+export async function createRelayAuthorizationGrant(
+  params: CreateRelayAuthorizationGrantParams,
   queryable?: Queryable,
 ) {
-  const { scope, retention } = runtimeAuthorizationPresetToGrant(params.preset);
+  const { scope, retention } = relayAuthorizationPresetToGrant(params.preset);
+  const grantSpec = normalizeGrantSpecForInsert(params.grantSpec);
   const statement = db
-    .insertInto("runtime_grants")
+    .insertInto("relay_authorization_grants")
     .values({
       workspace_id: params.workspaceId,
       relay_device_id: params.relayDeviceId,
@@ -209,45 +260,73 @@ export async function createRuntimeGrant(
       scope,
       retention,
       status: "active",
-      relay_tool_stable_key: params.relayToolStableKey,
-      contract_key: params.contractKey,
+      kind: grantSpec.kind,
+      path_prefix: grantSpec.pathPrefix || null,
+      browser_scope_type: grantSpec.browserScopeType || null,
+      browser_origin: grantSpec.browserOrigin || null,
+      browser_host: grantSpec.browserHost || null,
+      browser_registrable_domain: grantSpec.browserRegistrableDomain || null,
+      command_executor: grantSpec.commandExecutor || null,
+      command_match_type: grantSpec.commandMatchType || null,
+      command_text: grantSpec.commandText || null,
       source_retry_nonce: params.sourceRetryNonce || null,
       source_runtime_session_id: params.sourceRuntimeSessionId || null,
       source_request_args:
-        params.sourceRequestArgs as TableInsert<"runtime_grants">["source_request_args"],
-      source_request_hash: hashRequestPayload(params.sourceRequestArgs),
-      effect: params.effect as unknown as TableInsert<"runtime_grants">["effect"],
-      display_payload:
-        (params.displayPayload || {}) as TableInsert<"runtime_grants">["display_payload"],
+        (params.sourceRequestArgs || {}) as TableInsert<"relay_authorization_grants">["source_request_args"],
     })
     .returningAll();
+
   const row = isQueryExecutor(queryable)
     ? await executeTakeFirst<any>(queryable, statement)
     : await statement.executeTakeFirst();
   if (!row) {
-    throw new Error("Failed to create runtime grant");
+    throw new Error("Failed to create relay authorization grant");
   }
-  return mapRuntimeGrantRow(row);
+  return mapRelayAuthorizationGrantRow(row);
 }
 
-export async function getRuntimeGrant(id: string, queryable?: Queryable) {
+export async function createRelayAuthorizationGrants(
+  params: Omit<CreateRelayAuthorizationGrantParams, "grantSpec"> & {
+    grantSpecs: RelayAuthorizationGrantSpec[];
+  },
+  queryable?: Queryable,
+) {
+  const created: RelayAuthorizationGrantRecord[] = [];
+  for (const grantSpec of params.grantSpecs) {
+    created.push(
+      await createRelayAuthorizationGrant(
+        {
+          ...params,
+          grantSpec,
+        },
+        queryable,
+      ),
+    );
+  }
+  return created;
+}
+
+export async function getRelayAuthorizationGrant(
+  id: string,
+  queryable?: Queryable,
+) {
   const statement = db
-    .selectFrom("runtime_grants")
+    .selectFrom("relay_authorization_grants")
     .selectAll()
     .where("id", "=", id)
     .limit(1);
   const row = isQueryExecutor(queryable)
     ? await executeTakeFirst<any>(queryable, statement)
     : await statement.executeTakeFirst();
-  return row ? mapRuntimeGrantRow(row) : null;
+  return row ? mapRelayAuthorizationGrantRow(row) : null;
 }
 
-export async function revokeRuntimeGrant(
+export async function revokeRelayAuthorizationGrant(
   id: string,
   queryable?: Queryable,
 ) {
   const statement = db
-    .updateTable("runtime_grants")
+    .updateTable("relay_authorization_grants")
     .set({
       status: "revoked",
       revoked_at: sql`NOW()`,
@@ -262,12 +341,12 @@ export async function revokeRuntimeGrant(
   await statement.execute();
 }
 
-export async function supersedeRuntimeGrant(
+export async function supersedeRelayAuthorizationGrant(
   id: string,
   queryable?: Queryable,
 ) {
   const statement = db
-    .updateTable("runtime_grants")
+    .updateTable("relay_authorization_grants")
     .set({
       status: "superseded",
       superseded_at: sql`NOW()`,
@@ -282,12 +361,12 @@ export async function supersedeRuntimeGrant(
   await statement.execute();
 }
 
-export async function consumeRuntimeGrant(
+export async function consumeRelayAuthorizationGrant(
   id: string,
   queryable?: Queryable,
 ) {
   const statement = db
-    .updateTable("runtime_grants")
+    .updateTable("relay_authorization_grants")
     .set({
       status: "consumed",
       consumed_at: sql`NOW()`,
@@ -302,95 +381,85 @@ export async function consumeRuntimeGrant(
   await statement.execute();
 }
 
-function filesystemGrantCovers(
-  granted: RuntimeGrantEffect,
-  requested: RuntimeGrantEffect,
+function relayAuthorizationGrantMatches(
+  grant: RelayAuthorizationGrantRecord,
+  requirement: RelayAuthorizationRequirement,
 ) {
-  if (granted.capability !== "filesystem" || requested.capability !== "filesystem") {
+  if (grant.kind !== requirement.kind) {
     return false;
   }
-  const grantedAccess = normalizeFilesystemAccess(granted.access);
-  const requestedAccess = normalizeFilesystemAccess(requested.access);
-  if (!grantedAccess || !requestedAccess) {
-    return false;
+
+  switch (grant.kind) {
+    case "filesystem.directory":
+    case "commandline.directory": {
+      const grantedPrefix = normalizePathPrefix(grant.pathPrefix);
+      const requestedPrefix = normalizePathPrefix(requirement.pathPrefix);
+      if (!grantedPrefix || !requestedPrefix) {
+        return false;
+      }
+      return pathWithinPrefix(requestedPrefix, grantedPrefix);
+    }
+    case "browser.site": {
+      switch (grant.browserScopeType) {
+        case "origin":
+          return Boolean(
+            grant.browserOrigin &&
+              requirement.browserOrigin &&
+              grant.browserOrigin === requirement.browserOrigin,
+          );
+        case "host":
+          return Boolean(
+            grant.browserHost &&
+              requirement.browserHost &&
+              grant.browserHost === requirement.browserHost,
+          );
+        case "domain":
+          return Boolean(
+            grant.browserRegistrableDomain &&
+              requirement.browserRegistrableDomain &&
+              grant.browserRegistrableDomain ===
+                requirement.browserRegistrableDomain,
+          );
+        default:
+          return false;
+      }
+    }
+    case "commandline.command": {
+      if (grant.commandExecutor !== requirement.commandExecutor) {
+        return false;
+      }
+      const grantedText = normalizeCommandText(grant.commandText);
+      const requestedText = normalizeCommandText(requirement.commandText);
+      if (!grantedText || !requestedText) {
+        return false;
+      }
+      if (grant.commandMatchType === "exact") {
+        return grantedText === requestedText;
+      }
+      if (grant.commandMatchType === "prefix") {
+        if (hasCompoundShellOperators(requestedText)) {
+          return false;
+        }
+        return commandPrefixMatches(grantedText, requestedText);
+      }
+      return false;
+    }
+    default:
+      return true;
   }
-  if (
-    grantedAccess !== "read_write" &&
-    grantedAccess !== requestedAccess
-  ) {
-    return false;
-  }
-  return (
-    requested.path === granted.path ||
-    requested.path.startsWith(`${granted.path}${pathSeparatorForMatch(granted.path)}`)
-  );
 }
 
-function pathSeparatorForMatch(value: string) {
-  return value.endsWith("/") ? "" : "/";
-}
-
-function commandlineGrantCovers(
-  granted: RuntimeGrantEffect,
-  requested: RuntimeGrantEffect,
-) {
-  if (
-    granted.capability !== "commandline" ||
-    requested.capability !== "commandline"
-  ) {
-    return false;
-  }
-  if (granted.executor !== requested.executor) {
-    return false;
-  }
-  if (!granted.cwdPrefix) {
-    return true;
-  }
-  if (!requested.cwdPrefix) {
-    return false;
-  }
-  return (
-    requested.cwdPrefix === granted.cwdPrefix ||
-    requested.cwdPrefix.startsWith(
-      `${granted.cwdPrefix}${pathSeparatorForMatch(granted.cwdPrefix)}`,
-    )
-  );
-}
-
-export function runtimeGrantEffectMatches(
-  granted: RuntimeGrantEffect,
-  requested: RuntimeGrantEffect,
-) {
-  if (granted.capability !== requested.capability) {
-    return false;
-  }
-  if (granted.capability === "filesystem") {
-    return filesystemGrantCovers(granted, requested);
-  }
-  if (granted.capability === "commandline") {
-    return commandlineGrantCovers(granted, requested);
-  }
-  if (granted.capability === "cua" && requested.capability === "cua") {
-    return granted.mode === requested.mode;
-  }
-  if (granted.capability === "browser" && requested.capability === "browser") {
-    return granted.mode === requested.mode;
-  }
-  return false;
-}
-
-export async function findMatchingRuntimeGrant(
-  params: FindMatchingRuntimeGrantParams,
+export async function findMatchingRelayAuthorizationGrants(
+  params: FindMatchingRelayAuthorizationGrantsParams,
   queryable?: Queryable,
 ) {
   const statement = db
-    .selectFrom("runtime_grants")
+    .selectFrom("relay_authorization_grants")
     .selectAll()
     .where("workspace_id", "=", params.workspaceId)
+    .where("relay_device_id", "=", params.relayDeviceId)
     .where("relay_capability_id", "=", params.relayCapabilityId)
     .where("relay_exposure_id", "=", params.relayExposureId)
-    .where("relay_tool_stable_key", "=", params.relayToolStableKey)
-    .where("contract_key", "=", params.contractKey)
     .where("status", "=", "active")
     .where((eb) =>
       eb.or([
@@ -421,39 +490,68 @@ export async function findMatchingRuntimeGrant(
           : []),
       ]),
     );
+
   const rows = isQueryExecutor(queryable)
     ? (await executeCompiledQuery<any>(queryable, statement)).rows
     : await statement.execute();
-  const grants = rows
-    .map((row) => mapRuntimeGrantRow(row))
-    .filter((grant) => runtimeGrantEffectMatches(grant.effect, params.effect))
+  const candidates = rows
+    .map((row) => mapRelayAuthorizationGrantRow(row))
     .sort((left, right) => {
       const byScope =
-        runtimeGrantScopeRank(left.scope) - runtimeGrantScopeRank(right.scope);
+        relayAuthorizationScopeRank(left.scope) -
+        relayAuthorizationScopeRank(right.scope);
       if (byScope !== 0) {
         return byScope;
       }
       return right.createdAt.localeCompare(left.createdAt);
     });
 
-  const match = grants[0];
-  if (!match) {
-    return null;
+  const matchedGrants: RelayAuthorizationGrantRecord[] = [];
+  const missingRequirements: RelayAuthorizationRequirement[] = [];
+
+  for (const requirement of params.requirements) {
+    const match = candidates.find((grant) =>
+      relayAuthorizationGrantMatches(grant, requirement),
+    );
+    if (!match) {
+      missingRequirements.push(requirement);
+      continue;
+    }
+    matchedGrants.push(match);
   }
-  if (params.consumeOnce && match.scope === "once") {
-    await consumeRuntimeGrant(match.id, queryable);
-    match.status = "consumed";
-    match.consumedAt = new Date().toISOString();
+
+  if (missingRequirements.length === 0 && params.consumeOnce) {
+    const onceGrantIds = Array.from(
+      new Set(
+        matchedGrants
+          .filter((grant) => grant.scope === "once")
+          .map((grant) => grant.id),
+      ),
+    );
+    for (const grantId of onceGrantIds) {
+      await consumeRelayAuthorizationGrant(grantId, queryable);
+    }
+    const consumedAt = new Date().toISOString();
+    for (const grant of matchedGrants) {
+      if (grant.scope === "once") {
+        grant.status = "consumed";
+        grant.consumedAt = consumedAt;
+      }
+    }
   }
-  return match;
+
+  return {
+    matchedGrants,
+    missingRequirements,
+  };
 }
 
-export async function listActiveRuntimeGrantsForExposure(
+export async function listActiveRelayAuthorizationGrantsForExposure(
   relayCapabilityId: string,
   queryable?: Queryable,
 ) {
   const statement = db
-    .selectFrom("runtime_grants")
+    .selectFrom("relay_authorization_grants")
     .selectAll()
     .where("relay_capability_id", "=", relayCapabilityId)
     .where("status", "=", "active")
@@ -461,5 +559,68 @@ export async function listActiveRuntimeGrantsForExposure(
   const rows = isQueryExecutor(queryable)
     ? (await executeCompiledQuery<any>(queryable, statement)).rows
     : await statement.execute();
-  return rows.map((row) => mapRuntimeGrantRow(row));
+  return rows.map((row) => mapRelayAuthorizationGrantRow(row));
 }
+
+// Deprecated in-repo wrappers kept until all call sites move over.
+export const runtimeAuthorizationPresetToGrant = relayAuthorizationPresetToGrant;
+
+export async function createRuntimeGrant(
+  params: Omit<CreateRelayAuthorizationGrantParams, "grantSpec" | "preset"> & {
+    preset: RuntimeAuthorizationPreset;
+    effect: RuntimeGrantEffect;
+    displayPayload?: Record<string, unknown>;
+    relayToolStableKey?: string;
+    contractKey?: string;
+  },
+  queryable?: Queryable,
+) {
+  return createRelayAuthorizationGrant(
+    {
+      ...params,
+      preset: params.preset,
+      grantSpec: params.effect,
+    },
+    queryable,
+  );
+}
+
+export const getRuntimeGrant = getRelayAuthorizationGrant;
+export const revokeRuntimeGrant = revokeRelayAuthorizationGrant;
+export const supersedeRuntimeGrant = supersedeRelayAuthorizationGrant;
+export const consumeRuntimeGrant = consumeRelayAuthorizationGrant;
+
+export async function findMatchingRuntimeGrant(
+  params: Omit<FindMatchingRelayAuthorizationGrantsParams, "requirements"> & {
+    effect: RuntimeGrantEffect;
+  },
+  queryable?: Queryable,
+) {
+  const result = await findMatchingRelayAuthorizationGrants(
+    {
+      ...params,
+      requirements: [
+        {
+          id: "legacy",
+          kind: params.effect.kind as RelayAuthorizationKind,
+          summary: "Legacy runtime authorization requirement",
+          pathPrefix: params.effect.pathPrefix,
+          browserScopeType: params.effect.browserScopeType,
+          browserOrigin: params.effect.browserOrigin,
+          browserHost: params.effect.browserHost,
+          browserRegistrableDomain: params.effect.browserRegistrableDomain,
+          commandExecutor: params.effect.commandExecutor,
+          commandMatchType: params.effect.commandMatchType,
+          commandText: params.effect.commandText,
+        },
+      ],
+    },
+    queryable,
+  );
+  return result.missingRequirements.length === 0
+    ? result.matchedGrants[0] || null
+    : null;
+}
+
+export const listActiveRuntimeGrantsForExposure =
+  listActiveRelayAuthorizationGrantsForExposure;

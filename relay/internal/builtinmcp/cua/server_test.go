@@ -238,6 +238,54 @@ func TestDisabledCUARequestsPersistentAuthorization(t *testing.T) {
 	}
 }
 
+func TestServerAuthorizationBypassesDisabledCUAAndReadOnly(t *testing.T) {
+	server := NewWithDesktop(Config{
+		Enabled:         false,
+		StableKey:       "server-auth-cua",
+		ReadOnly:        true,
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+	}, &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	})
+
+	serverAuthorizedCtx := runtimeauth.ContextWithRuntimeAuthorization(
+		context.Background(),
+		runtimeauth.RuntimeAuthorization{
+			GrantIDs: []string{"grant-cua-1"},
+		},
+	)
+
+	captured, err := server.CallTool(serverAuthorizedCtx, "desktop_capture_display", nil)
+	if err != nil {
+		t.Fatalf("call desktop_capture_display: %v", err)
+	}
+	if captured.IsError {
+		t.Fatalf("expected server-authorized screenshot to succeed, got %+v", captured.StructuredContent)
+	}
+
+	pressed, err := server.CallTool(serverAuthorizedCtx, "desktop_press_keys", map[string]interface{}{
+		"keys": []string{"enter"},
+	})
+	if err != nil {
+		t.Fatalf("call desktop_press_keys: %v", err)
+	}
+	if pressed.IsError {
+		t.Fatalf("expected server-authorized desktop write to succeed, got %+v", pressed.StructuredContent)
+	}
+}
+
 func TestListDisplaysReturnsStructuredContent(t *testing.T) {
 	server := NewWithDesktop(Config{
 		Enabled:              true,

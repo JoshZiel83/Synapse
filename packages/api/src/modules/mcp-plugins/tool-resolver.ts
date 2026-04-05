@@ -465,6 +465,7 @@ function buildRelayScopedInstance(params: {
 
         const authorizationState = await resolveRelayToolAuthorization({
           workspaceId: params.baseInstance.workspaceId || "",
+          relayDeviceId: params.deviceId,
           relayCapabilityId: params.capabilityId,
           relayExposureId: params.exposureId,
           conversationId: executionContext.conversationId,
@@ -475,9 +476,6 @@ function buildRelayScopedInstance(params: {
           runtimeSessionId,
           exposureMetadata: params.exposureMetadata,
         });
-        if (authorizationState.denialResult) {
-          return authorizationState.denialResult as any;
-        }
 
         const accepted = await enqueueRelayToolTask({
           workspaceId: params.baseInstance.workspaceId || "",

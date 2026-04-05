@@ -17,6 +17,7 @@ import (
 
 	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/commandlinebundle"
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 type Server struct {
@@ -67,11 +68,35 @@ func (s *Server) ListTools() ([]core.Tool, error) {
 }
 
 func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
+	if !s.isAuthorized(runtimeauth.HasServerAuthorization(ctx)) {
+		return disabledResult(toolName), nil
+	}
 	switch toolName {
 	case "bash":
 		return s.callBash(ctx, args), nil
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", toolName)), nil
+	}
+}
+
+func (s *Server) isAuthorized(serverAuthorized bool) bool {
+	return s.cfg.Enabled || serverAuthorized
+}
+
+func disabledResult(toolName string) core.CallResult {
+	message := "This built-in commandline server is currently disabled. Ask the user to enable command execution in the Synapse Relay client, then retry."
+	return core.CallResult{
+		Content: []interface{}{core.Text(message)},
+		StructuredContent: map[string]interface{}{
+			"code":                   "server_disabled",
+			"tool":                   toolName,
+			"capability":             "commandline",
+			"requires_user_approval": true,
+			"authorization_duration": "persistent",
+			"client_hint":            "Enable command execution in the Synapse Relay client, then retry the tool.",
+			"message":                message,
+		},
+		IsError: true,
 	}
 }
 

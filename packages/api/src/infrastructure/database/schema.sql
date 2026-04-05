@@ -82,7 +82,7 @@ CREATE TYPE provider_steps_request_type AS ENUM ('actor_think', 'ai_complete');
 CREATE TYPE provider_steps_status AS ENUM ('success', 'error', 'timeout');
 CREATE TYPE tool_calls_tool_kind AS ENUM ('builtin', 'callable', 'action', 'mcp_plugin', 'mcp_relay', 'provider_builtin', 'a2a_proxy');
 CREATE TYPE tool_calls_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
-CREATE TYPE tool_call_tasks_executor_kind AS ENUM ('interaction_user_input', 'plan_approval', 'runtime_authorization', 'relay_mcp');
+CREATE TYPE tool_call_tasks_executor_kind AS ENUM ('interaction_user_input', 'plan_approval', 'relay_authorization', 'relay_mcp');
 CREATE TYPE tool_call_tasks_delivery_policy AS ENUM ('online_only', 'store_and_forward', 'human_interaction');
 CREATE TYPE tool_call_tasks_status AS ENUM ('working', 'input_required', 'completed', 'failed', 'cancelled');
 CREATE TYPE tool_call_tasks_dispatch_status AS ENUM ('accepted', 'queued', 'dispatched', 'received', 'started', 'input_requested', 'cancel_requested');
@@ -156,11 +156,30 @@ CREATE TYPE relay_capabilities_status AS ENUM ('active', 'unavailable', 'archive
 CREATE TYPE relay_operations_delivery_policy AS ENUM ('online_only', 'store_and_forward');
 CREATE TYPE relay_operations_status AS ENUM ('created', 'dispatched', 'received', 'started', 'cancel_requested', 'completed', 'failed', 'cancelled', 'aborted', 'expired');
 CREATE TYPE relay_operation_deliveries_status AS ENUM ('queued', 'sent', 'acked', 'nacked', 'timed_out', 'cancelled');
-CREATE TYPE interaction_requests_kind AS ENUM ('user_input', 'plan_approval', 'runtime_authorization');
+CREATE TYPE interaction_requests_kind AS ENUM ('user_input', 'plan_approval', 'relay_authorization');
 CREATE TYPE interaction_requests_status AS ENUM ('pending', 'answered', 'approved', 'rejected', 'cancelled', 'expired', 'superseded');
-CREATE TYPE runtime_grants_scope AS ENUM ('once', 'actor', 'conversation', 'workspace');
-CREATE TYPE runtime_grants_retention AS ENUM ('consume_once', 'until_revoked');
-CREATE TYPE runtime_grants_status AS ENUM ('active', 'consumed', 'revoked', 'superseded');
+CREATE TYPE relay_authorization_request_mode AS ENUM ('background', 'blocking');
+CREATE TYPE relay_authorization_grants_scope AS ENUM ('once', 'actor', 'conversation', 'workspace');
+CREATE TYPE relay_authorization_grants_retention AS ENUM ('consume_once', 'until_revoked');
+CREATE TYPE relay_authorization_grants_status AS ENUM ('active', 'consumed', 'revoked', 'superseded');
+CREATE TYPE relay_authorization_grants_kind AS ENUM (
+  'filesystem.read',
+  'filesystem.write',
+  'filesystem.directory',
+  'cua.tool',
+  'cua.read',
+  'cua.write',
+  'browser.tool',
+  'browser.read',
+  'browser.write',
+  'browser.site',
+  'commandline.tool',
+  'commandline.directory',
+  'commandline.command'
+);
+CREATE TYPE relay_authorization_grants_browser_scope_type AS ENUM ('host', 'domain', 'origin');
+CREATE TYPE relay_authorization_grants_command_executor AS ENUM ('bash');
+CREATE TYPE relay_authorization_grants_command_match_type AS ENUM ('exact', 'prefix');
 
 -- ============ Users ============
 CREATE TABLE users (
@@ -2891,7 +2910,7 @@ CREATE TABLE interaction_requests (
       AND target_participant_id IS NOT NULL
     )
     OR (
-      kind = 'runtime_authorization'
+      kind = 'relay_authorization'
       AND target_participant_id IS NULL
     )
   )
@@ -2909,17 +2928,22 @@ CREATE TABLE interaction_plan_approval_requests (
   resolution_payload JSONB NOT NULL DEFAULT '{}'
 );
 
-CREATE TABLE interaction_runtime_authorization_requests (
+CREATE TABLE interaction_relay_authorization_requests (
   interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE CASCADE,
   relay_device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
   relay_capability_id UUID NOT NULL REFERENCES relay_capabilities(id) ON DELETE CASCADE,
   relay_exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
+  requested_tool_name TEXT NOT NULL,
   relay_tool_stable_key TEXT NOT NULL,
-  contract_key TEXT NOT NULL,
-  requested_effect JSONB NOT NULL DEFAULT '{}',
-  display_payload JSONB NOT NULL DEFAULT '{}',
-  request_payload JSONB NOT NULL DEFAULT '{}',
-  resolution_payload JSONB NOT NULL DEFAULT '{}'
+  reason TEXT NOT NULL DEFAULT '',
+  request_mode relay_authorization_request_mode NOT NULL,
+  source_runtime_session_id TEXT,
+  source_retry_nonce TEXT,
+  source_request_args JSONB NOT NULL DEFAULT '{}',
+  required_requirements JSONB NOT NULL DEFAULT '[]',
+  approval_options JSONB NOT NULL DEFAULT '[]',
+  resolution_payload JSONB NOT NULL DEFAULT '{}',
+  dedupe_key TEXT NOT NULL
 );
 
 -- This FK cannot be declared inline on sessions because interaction_requests
@@ -2929,7 +2953,7 @@ ALTER TABLE sessions ADD CONSTRAINT fk_sessions_active_plan_approval_interaction
   REFERENCES interaction_requests(id)
   ON DELETE SET NULL;
 
-CREATE TABLE runtime_grants (
+CREATE TABLE relay_authorization_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   relay_device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
@@ -2940,17 +2964,21 @@ CREATE TABLE runtime_grants (
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
   source_task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
-  scope runtime_grants_scope NOT NULL,
-  retention runtime_grants_retention NOT NULL,
-  status runtime_grants_status NOT NULL DEFAULT 'active',
-  relay_tool_stable_key TEXT NOT NULL,
-  contract_key TEXT NOT NULL,
+  scope relay_authorization_grants_scope NOT NULL,
+  retention relay_authorization_grants_retention NOT NULL,
+  status relay_authorization_grants_status NOT NULL DEFAULT 'active',
+  kind relay_authorization_grants_kind NOT NULL,
+  path_prefix TEXT,
+  browser_scope_type relay_authorization_grants_browser_scope_type,
+  browser_origin TEXT,
+  browser_host TEXT,
+  browser_registrable_domain TEXT,
+  command_executor relay_authorization_grants_command_executor,
+  command_match_type relay_authorization_grants_command_match_type,
+  command_text TEXT,
   source_retry_nonce TEXT,
   source_runtime_session_id TEXT,
   source_request_args JSONB NOT NULL DEFAULT '{}',
-  source_request_hash TEXT,
-  effect JSONB NOT NULL DEFAULT '{}',
-  display_payload JSONB NOT NULL DEFAULT '{}',
   consumed_at TIMESTAMPTZ,
   revoked_at TIMESTAMPTZ,
   superseded_at TIMESTAMPTZ,
@@ -2964,11 +2992,13 @@ CREATE INDEX idx_interaction_requests_task
   ON interaction_requests(task_id);
 CREATE INDEX idx_interaction_requests_target
   ON interaction_requests(target_participant_id, status, created_at DESC);
-CREATE INDEX idx_interaction_runtime_authorization_requests_device
-  ON interaction_runtime_authorization_requests(relay_device_id, interaction_id);
-CREATE INDEX idx_runtime_grants_exposure
-  ON runtime_grants(relay_capability_id, status, scope, created_at DESC);
-CREATE INDEX idx_runtime_grants_actor
-  ON runtime_grants(actor_id, relay_capability_id, status, created_at DESC);
-CREATE INDEX idx_runtime_grants_conversation
-  ON runtime_grants(conversation_id, relay_capability_id, status, created_at DESC);
+CREATE INDEX idx_interaction_relay_authorization_requests_device
+  ON interaction_relay_authorization_requests(relay_device_id, interaction_id);
+CREATE INDEX idx_interaction_relay_authorization_requests_dedupe
+  ON interaction_relay_authorization_requests(dedupe_key);
+CREATE INDEX idx_relay_authorization_grants_exposure
+  ON relay_authorization_grants(relay_capability_id, status, scope, kind, created_at DESC);
+CREATE INDEX idx_relay_authorization_grants_actor
+  ON relay_authorization_grants(actor_id, relay_capability_id, status, created_at DESC);
+CREATE INDEX idx_relay_authorization_grants_conversation
+  ON relay_authorization_grants(conversation_id, relay_capability_id, status, created_at DESC);

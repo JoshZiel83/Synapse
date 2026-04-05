@@ -45,7 +45,7 @@ import type {
   SkillMarketplaceEntry,
   WorkspaceCapabilityConversationTypePoliciesView,
 } from "@synapse/shared"
-import type { FileRecordView, RuntimeGrantView } from "@synapse/shared/types"
+import type { FileRecordView, RelayAuthorizationGrantView } from "@synapse/shared/types"
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
 
@@ -89,6 +89,7 @@ export interface ChatInteractionResponseInput {
   }[]
   decision?: "approve" | "reject" | "revise"
   preset?: "once" | "actor" | "conversation" | "workspace"
+  selectedOptionIds?: string[]
   note?: string
 }
 
@@ -1765,23 +1766,23 @@ class ApiClient {
       }
     )
   }
-  listRelayRuntimeGrants(
+  listRelayAuthorizations(
     wsId: string,
     relayId: string,
     exposureId: string
-  ): Promise<{ grants: RuntimeGrantView[] }> {
+  ): Promise<{ grants: RelayAuthorizationGrantView[] }> {
     return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/runtime-grants`
+      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/relay-authorizations`
     )
   }
-  revokeRelayRuntimeGrant(
+  revokeRelayAuthorizationGrant(
     wsId: string,
     relayId: string,
     exposureId: string,
     grantId: string
   ) {
     return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/runtime-grants/${grantId}/revoke`,
+      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/relay-authorizations/${grantId}/revoke`,
       {
         method: "POST",
         body: "{}",

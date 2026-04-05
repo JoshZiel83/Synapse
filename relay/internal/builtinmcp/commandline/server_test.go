@@ -7,6 +7,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
 func TestListToolsDescriptionsPreferDedicatedTools(t *testing.T) {
@@ -114,6 +116,70 @@ func TestTimeoutSchemaUsesConfiguredMaximum(t *testing.T) {
 	}
 	if !strings.Contains(description, "90 seconds") {
 		t.Fatalf("expected schema description to mention 90 seconds, got %q", description)
+	}
+}
+
+func TestDisabledCommandlineRequestsApprovalWithoutServerAuthorization(t *testing.T) {
+	server := &Server{
+		cfg: Config{
+			Enabled: false,
+		},
+	}
+
+	result, err := server.CallTool(context.Background(), "bash", map[string]interface{}{
+		"command": "printf hello",
+	})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected disabled commandline server to require approval")
+	}
+
+	structured, ok := result.StructuredContent.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected structured content map, got %T", result.StructuredContent)
+	}
+	if structured["code"] != "server_disabled" {
+		t.Fatalf("expected server_disabled code, got %#v", structured["code"])
+	}
+}
+
+func TestServerAuthorizationBypassesDisabledCommandline(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("bash execution test is Unix-only")
+	}
+
+	server := &Server{
+		cfg: Config{
+			Enabled:    false,
+			MaxTimeout: 5 * time.Second,
+		},
+	}
+
+	serverAuthorizedCtx := runtimeauth.ContextWithRuntimeAuthorization(
+		context.Background(),
+		runtimeauth.RuntimeAuthorization{
+			GrantIDs: []string{"grant-cmd-1"},
+		},
+	)
+
+	result, err := server.CallTool(serverAuthorizedCtx, "bash", map[string]interface{}{
+		"command": "printf hello",
+	})
+	if err != nil {
+		t.Fatalf("call tool: %v", err)
+	}
+	if result.IsError {
+		t.Fatalf("expected server-authorized commandline call to succeed, got %+v", result.StructuredContent)
+	}
+
+	structured, ok := result.StructuredContent.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected structured content map, got %T", result.StructuredContent)
+	}
+	if structured["stdout"] != "hello" {
+		t.Fatalf("expected stdout hello, got %#v", structured["stdout"])
 	}
 }
 

@@ -28,21 +28,28 @@ func TestContextWithRuntimeSessionIDIgnoresEmptyValue(t *testing.T) {
 
 func TestContextWithRuntimeAuthorizationRoundTripsValue(t *testing.T) {
 	authorization := RuntimeAuthorization{
-		GrantID:    "grant-1",
+		GrantIDs:   []string{"grant-1", "grant-2"},
 		GrantScope: "persistent",
 		RetryNonce: "nonce-1",
-		Effect: map[string]interface{}{
-			"capability": "cua",
-			"mode":       "control",
+		GrantSpecs: []map[string]interface{}{
+			{
+				"kind": "cua.tool",
+			},
+			{
+				"kind": "cua.write",
+			},
 		},
 	}
 	ctx := ContextWithRuntimeAuthorization(context.Background(), authorization)
 	got := RuntimeAuthorizationFromContext(ctx)
-	if got.GrantID != authorization.GrantID || got.GrantScope != authorization.GrantScope || got.RetryNonce != authorization.RetryNonce {
+	if len(got.GrantIDs) != len(authorization.GrantIDs) || got.GrantScope != authorization.GrantScope || got.RetryNonce != authorization.RetryNonce {
 		t.Fatalf("expected runtime authorization metadata to round-trip, got %+v", got)
 	}
-	if got.Effect["capability"] != "cua" || got.Effect["mode"] != "control" {
-		t.Fatalf("expected runtime authorization effect to round-trip, got %+v", got.Effect)
+	if len(got.GrantSpecs) != 2 || got.GrantSpecs[1]["kind"] != "cua.write" {
+		t.Fatalf("expected runtime authorization grant specs to round-trip, got %+v", got.GrantSpecs)
+	}
+	if !got.IsServerAuthorized() {
+		t.Fatalf("expected runtime authorization to report server authorization")
 	}
 }
 
@@ -53,10 +60,10 @@ func TestContextWithRuntimeAuthorizationIgnoresEmptyValue(t *testing.T) {
 		t.Fatalf("expected empty runtime authorization to leave context unchanged")
 	}
 	got := RuntimeAuthorizationFromContext(ctx)
-	if got.GrantID != "" || got.GrantScope != "" || got.RetryNonce != "" || len(got.Effect) != 0 {
+	if len(got.GrantIDs) != 0 || got.GrantScope != "" || got.RetryNonce != "" || len(got.GrantSpecs) != 0 {
 		t.Fatalf("expected empty runtime authorization, got %+v", got)
 	}
-	if got := RuntimeAuthorizationFromContext(nil); got.GrantID != "" || got.GrantScope != "" || got.RetryNonce != "" || len(got.Effect) != 0 {
+	if got := RuntimeAuthorizationFromContext(nil); len(got.GrantIDs) != 0 || got.GrantScope != "" || got.RetryNonce != "" || len(got.GrantSpecs) != 0 {
 		t.Fatalf("expected nil context to return empty runtime authorization, got %+v", got)
 	}
 }

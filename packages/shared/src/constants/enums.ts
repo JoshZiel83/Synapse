@@ -190,12 +190,14 @@ export const CONVERSATION_GRANT_PERMISSIONS = [
 export const INTERACTION_REQUEST_KIND = {
   USER_INPUT: 'user_input',
   PLAN_APPROVAL: 'plan_approval',
-  RUNTIME_AUTHORIZATION: 'runtime_authorization',
+  RELAY_AUTHORIZATION: 'relay_authorization',
+  // Deprecated alias kept for in-repo transition.
+  RUNTIME_AUTHORIZATION: 'relay_authorization',
 } as const;
 export const INTERACTION_REQUEST_KINDS = [
   INTERACTION_REQUEST_KIND.USER_INPUT,
   INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
-  INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
+  INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
 ] as const;
 export const TARGETED_INTERACTION_REQUEST_KINDS = [
   INTERACTION_REQUEST_KIND.USER_INPUT,
@@ -394,38 +396,72 @@ export const RELAY_SYNC_SOURCE_KINDS = [
 
 export const RELAY_SYNC_MODES = ['snapshot', 'follow'] as const;
 export const RELAY_SYNC_STATUSES = ['unknown', 'idle', 'syncing', 'error', 'disabled'] as const;
-export const RUNTIME_AUTHORIZATION_PRESETS = [
+export const RELAY_AUTHORIZATION_PRESETS = [
   'once',
   'actor',
   'conversation',
   'workspace',
 ] as const;
-export const RUNTIME_GRANT_SCOPES = ['once', 'actor', 'conversation', 'workspace'] as const;
-export const RUNTIME_GRANT_RETENTIONS = ['consume_once', 'until_revoked'] as const;
-export const RUNTIME_GRANT_STATUSES = [
+export const RELAY_AUTHORIZATION_GRANT_SCOPES = ['once', 'actor', 'conversation', 'workspace'] as const;
+export const RELAY_AUTHORIZATION_GRANT_RETENTIONS = ['consume_once', 'until_revoked'] as const;
+export const RELAY_AUTHORIZATION_GRANT_STATUSES = [
   'active',
   'consumed',
   'revoked',
   'superseded',
 ] as const;
-export const RUNTIME_AUTHORIZATION_REQUEST_MODES = [
+export const RELAY_AUTHORIZATION_REQUEST_MODES = [
   'background',
   'blocking',
 ] as const;
-export const RUNTIME_AUTHORIZATION_CAPABILITIES = [
+export const RELAY_AUTHORIZATION_CAPABILITIES = [
   'filesystem',
   'cua',
   'browser',
   'commandline',
 ] as const;
+export const RELAY_AUTHORIZATION_KINDS = [
+  'filesystem.read',
+  'filesystem.write',
+  'filesystem.directory',
+  'cua.tool',
+  'cua.read',
+  'cua.write',
+  'browser.tool',
+  'browser.read',
+  'browser.write',
+  'browser.site',
+  'commandline.tool',
+  'commandline.directory',
+  'commandline.command',
+] as const;
+export const RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES = [
+  'host',
+  'domain',
+  'origin',
+] as const;
+export const RELAY_AUTHORIZATION_COMMAND_EXECUTORS = ['bash'] as const;
+export const RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES = [
+  'exact',
+  'prefix',
+] as const;
+
+// Deprecated aliases kept for in-repo transition.
+export const RUNTIME_AUTHORIZATION_PRESETS = RELAY_AUTHORIZATION_PRESETS;
+export const RUNTIME_GRANT_SCOPES = RELAY_AUTHORIZATION_GRANT_SCOPES;
+export const RUNTIME_GRANT_RETENTIONS = RELAY_AUTHORIZATION_GRANT_RETENTIONS;
+export const RUNTIME_GRANT_STATUSES = RELAY_AUTHORIZATION_GRANT_STATUSES;
+export const RUNTIME_AUTHORIZATION_REQUEST_MODES =
+  RELAY_AUTHORIZATION_REQUEST_MODES;
+export const RUNTIME_AUTHORIZATION_CAPABILITIES =
+  RELAY_AUTHORIZATION_CAPABILITIES;
 export const RUNTIME_FILESYSTEM_AUTHORIZATION_ACCESSES = [
   'read',
   'write',
   'read_write',
 ] as const;
-export const RUNTIME_COMMANDLINE_EXECUTORS = [
-  'bash',
-] as const;
+export const RUNTIME_COMMANDLINE_EXECUTORS =
+  RELAY_AUTHORIZATION_COMMAND_EXECUTORS;
 
 export const RELAY_EXPOSURE_RUNTIME_STATUSES = [
   'discovered',
