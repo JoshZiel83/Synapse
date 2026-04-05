@@ -17,9 +17,13 @@ import {
   resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js";
+import {
+  assertConversationTypeMaskWithinParent,
+  assertGrantConversationTypeOverrideAllowed,
+  validateConversationScopedAccessTarget,
+} from "../access/conversation-type-validation.js";
 import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js";
 import {
-  assertRelayConversationTypeMaskWithinParent,
   resolveRelayCapabilityConversationTypeMask,
   resolveRelayDeviceConversationTypeMask,
   resolveRelayGrantConversationTypeMask,
@@ -33,6 +37,15 @@ const RELAY_CAPABILITY_PERMISSION_SUMMARY = {
   suggestedAccessTargetType: "workspace" as const,
   reason: "Relay capability access controls who can use tools from this relay exposure.",
 };
+
+function buildRelayGrantPolicyError(
+  code: string,
+  message: string,
+) {
+  const error = new Error(message) as Error & { code: string };
+  error.code = code;
+  return error;
+}
 
 export function buildRelayDeviceAuthzMutations(params: {
   deviceId: string;
@@ -415,6 +428,29 @@ export async function grantRelayExposureAccess(input: {
     workspaceId: input.workspaceId,
     target: input.accessTarget || { type: "workspace" },
   });
+  assertGrantConversationTypeOverrideAllowed({
+    targetType: target.targetType,
+    parentConversationTypeMask: effectiveConversationTypeMask,
+    conversationTypeMaskOverride: input.conversationTypeMaskOverride,
+    buildError: (message) =>
+      buildRelayGrantPolicyError(
+        "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
+        message,
+      ),
+    invalidMaskMessage:
+      "Relay exposure grant conversation policy must allow at least one conversation type from the exposure policy.",
+  });
+  await validateConversationScopedAccessTarget({
+    targetType: target.targetType,
+    conversationId: target.conversationId,
+    actorId: target.actorId,
+    effectiveConversationTypeMask,
+    buildError: (message) =>
+      buildRelayGrantPolicyError(
+        "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
+        message,
+      ),
+  });
 
   const existing = (await listRelayExposureAccessRows(
     input.workspaceId,
@@ -440,17 +476,6 @@ export async function grantRelayExposureAccess(input: {
       ),
     });
   }
-
-  assertRelayConversationTypeMaskWithinParent(
-    effectiveConversationTypeMask,
-    input.conversationTypeMaskOverride,
-    {
-      errorCode: "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
-      errorMessage:
-        "Relay exposure grant conversation policy must allow at least one conversation type from the exposure policy.",
-    },
-  );
-
   const inserted = await transaction(async (client) => {
     const binding = await executeSqlOn<AccessBindingRow>(client, 
         `INSERT INTO resource_access_bindings (
@@ -619,15 +644,35 @@ export async function updateRelayExposurePolicy(input: {
     workspaceConversationTypeMask,
     exposure.device_conversation_type_mask_override,
   );
-  assertRelayConversationTypeMaskWithinParent(
-    parentConversationTypeMask,
-    input.conversationTypeMaskOverride,
-    {
-      errorCode: "RELAY_EXPOSURE_CONVERSATION_POLICY_INVALID",
-      errorMessage:
+  const nextEffectiveConversationTypeMask =
+    assertConversationTypeMaskWithinParent({
+      parentConversationTypeMask,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride,
+      buildError: (message) =>
+        buildRelayGrantPolicyError(
+          "RELAY_EXPOSURE_CONVERSATION_POLICY_INVALID",
+          message,
+        ),
+      invalidMaskMessage:
         "Relay exposure conversation policy must allow at least one conversation type from the device policy.",
-    },
+    });
+  const accessRows = await listRelayExposureAccessRows(
+    input.workspaceId,
+    exposure.capability_id,
   );
+  for (const accessRow of accessRows) {
+    await validateConversationScopedAccessTarget({
+      targetType: accessRow.target_type,
+      conversationId: accessRow.subject_conversation_id,
+      actorId: accessRow.subject_actor_id,
+      effectiveConversationTypeMask: nextEffectiveConversationTypeMask,
+      buildError: (message) =>
+        buildRelayGrantPolicyError(
+          "RELAY_EXPOSURE_CONVERSATION_POLICY_INVALID",
+          message,
+        ),
+    });
+  }
 
   await executeSql(
     `UPDATE relay_capabilities capability
@@ -689,15 +734,29 @@ export async function updateRelayExposureAccessGrant(input: {
     });
 
   if (input.conversationTypeMaskOverride !== undefined) {
-    assertRelayConversationTypeMaskWithinParent(
+    assertGrantConversationTypeOverrideAllowed({
+      targetType: existing.target_type,
+      parentConversationTypeMask: effectiveConversationTypeMask,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride,
+      buildError: (message) =>
+        buildRelayGrantPolicyError(
+          "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
+          message,
+        ),
+      invalidMaskMessage:
+        "Relay exposure grant conversation policy must allow at least one conversation type from the exposure policy.",
+    });
+    await validateConversationScopedAccessTarget({
+      targetType: existing.target_type,
+      conversationId: existing.subject_conversation_id,
+      actorId: existing.subject_actor_id,
       effectiveConversationTypeMask,
-      input.conversationTypeMaskOverride,
-      {
-        errorCode: "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
-        errorMessage:
-          "Relay exposure grant conversation policy must allow at least one conversation type from the exposure policy.",
-      },
-    );
+      buildError: (message) =>
+        buildRelayGrantPolicyError(
+          "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
+          message,
+        ),
+    });
   }
 
   if (input.conversationTypeMaskOverride !== undefined) {

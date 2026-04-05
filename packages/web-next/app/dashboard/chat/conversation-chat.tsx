@@ -14,10 +14,9 @@ import ChatComposer, {
 } from "@/components/chat-composer"
 import { normalizeChiefActorOption } from "@/app/dashboard/chief-actor-picker-shared"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
-import { ArrowDown, Pencil, Check, MoreHorizontal } from "lucide-react"
+import { ArrowDown, MoreHorizontal } from "lucide-react"
 import MessageBubble from "./message-bubble"
 import type {
   ConversationMember,
@@ -28,7 +27,6 @@ import { api, type ChatInteractionResponseInput } from "@/lib/api"
 import ChatAvatar from "./chat-avatar"
 import ChatMemberStrip from "./chat-member-strip"
 import ChatParticipantDetailDialog from "./chat-participant-detail-dialog"
-import ConversationMemberPickerDialog from "./conversation-member-picker-dialog"
 import MobileConversationDetailsDialog from "./mobile-conversation-details-dialog"
 import TransportKindIcon from "./transport-kind-icon"
 import { useChatStore } from "@/stores/chat-store"
@@ -228,7 +226,6 @@ export default function ConversationChat({
   onSend,
   onBack,
   workspaceId,
-  onRefreshConversation,
   viewportLocked = false,
   mobileMentionPickerWorkspaceId,
   contactBasePath = "/dashboard/contacts",
@@ -238,12 +235,6 @@ export default function ConversationChat({
     (state) => state.handleInteractionUpdated
   )
   const currentViewerWorkspaceMemberId = currentWorkspaceMemberId || ""
-  const [titleDraft, setTitleDraft] = useState(conversation.title || "")
-  const [editingTitle, setEditingTitle] = useState(false)
-  const [savingTitle, setSavingTitle] = useState(false)
-  const [avatarUploading, setAvatarUploading] = useState(false)
-  const [memberDialogOpen, setMemberDialogOpen] = useState(false)
-  const conversationAvatarInputRef = useRef<HTMLInputElement>(null)
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const initialScrollPendingRef = useRef(true)
@@ -435,11 +426,6 @@ export default function ConversationChat({
   }, [loading, messages.length])
 
   useEffect(() => {
-    setTitleDraft(conversation.title || "")
-    setEditingTitle(false)
-  }, [conversation.id, conversation.title])
-
-  useEffect(() => {
     setParticipantDetailOpen(false)
     setSelectedParticipantMember(null)
     setConversationDetailsOpen(false)
@@ -532,51 +518,6 @@ export default function ConversationChat({
     conversation.participants.map((participant) => participant.name).join(", ")
   const memberSummary = summarizeMemberCounts(conversation)
 
-  async function handleSaveTitle() {
-    if (!workspaceId || !conversation.permissions?.canManage) {
-      setEditingTitle(false)
-      setTitleDraft(conversation.title || "")
-      return
-    }
-
-    const nextTitle = titleDraft.trim()
-    if (!nextTitle || nextTitle === (conversation.title || "").trim()) {
-      setEditingTitle(false)
-      setTitleDraft(conversation.title || "")
-      return
-    }
-
-    setSavingTitle(true)
-    try {
-      await api.updateThread(workspaceId, conversation.id, {
-        title: nextTitle,
-      })
-      await onRefreshConversation?.()
-      setEditingTitle(false)
-    } catch (error) {
-      console.error("Failed to update conversation title:", error)
-      setTitleDraft(conversation.title || "")
-    } finally {
-      setSavingTitle(false)
-    }
-  }
-
-  async function handleConversationAvatarFile(file: File | null) {
-    if (!file || !workspaceId || !conversation.permissions?.canManage) return
-    setAvatarUploading(true)
-    try {
-      const uploaded = await api.uploadFile(workspaceId, file)
-      await api.updateThread(workspaceId, conversation.id, {
-        avatarFileId: uploaded.id,
-      })
-      await onRefreshConversation?.()
-    } catch (error) {
-      console.error("Failed to update conversation avatar:", error)
-    } finally {
-      setAvatarUploading(false)
-    }
-  }
-
   async function handleResolveInteraction(
     interactionId: string,
     data: ChatInteractionResponseInput
@@ -657,96 +598,24 @@ export default function ConversationChat({
                 <ArrowDown className="h-4 w-4 rotate-90" />
               </Button>
             )}
-            <div className="group relative">
-              <button
-                type="button"
-                className="relative rounded-full transition-opacity hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-70"
-                onClick={() => conversationAvatarInputRef.current?.click()}
-                disabled={!conversation.permissions?.canManage || avatarUploading}
-                title={
-                  conversation.permissions?.canManage
-                    ? "Change conversation avatar"
-                    : undefined
-                }
-              >
-                <ChatAvatar
-                  name={title}
-                  avatarUrl={conversation.avatarUrl}
-                  entityType="conversation"
-                  size="lg"
-                  className="size-12"
-                />
-                <TransportKindIcon
-                  kind={conversation.transportKind}
-                  size={14}
-                  className="absolute -right-1 -bottom-1 size-5 p-0.5"
-                />
-                {conversation.permissions?.canManage ? (
-                  <div className="absolute inset-0 flex items-center justify-center rounded-full bg-foreground/55 text-background opacity-0 transition-opacity group-hover:opacity-100">
-                    <Pencil className="size-4" />
-                  </div>
-                ) : null}
-              </button>
-              <input
-                ref={conversationAvatarInputRef}
-                type="file"
-                accept="image/*"
-                className="hidden"
-                onChange={(event) => {
-                  const file = event.target.files?.[0] || null
-                  void handleConversationAvatarFile(file)
-                  event.target.value = ""
-                }}
+            <div className="relative">
+              <ChatAvatar
+                name={title}
+                avatarUrl={conversation.avatarUrl}
+                entityType="conversation"
+                size="lg"
+                className="size-12"
+              />
+              <TransportKindIcon
+                kind={conversation.transportKind}
+                size={14}
+                className="absolute -right-1 -bottom-1 size-5 p-0.5"
               />
             </div>
             <div className="min-w-0">
-              <div className="flex items-center gap-2">
-                {editingTitle ? (
-                  <div className="flex items-center gap-2">
-                    <Input
-                      value={titleDraft}
-                      onChange={(event) => setTitleDraft(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Enter") {
-                          event.preventDefault()
-                          void handleSaveTitle()
-                        }
-                        if (event.key === "Escape") {
-                          setEditingTitle(false)
-                          setTitleDraft(conversation.title || "")
-                        }
-                      }}
-                      className="h-8 w-[220px]"
-                      autoFocus
-                    />
-                    <Button
-                      size="icon"
-                      variant="ghost"
-                      className="size-8"
-                      onClick={() => void handleSaveTitle()}
-                      disabled={savingTitle}
-                    >
-                      <Check className="size-4" />
-                    </Button>
-                  </div>
-                ) : (
-                  <>
-                    <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
-                      {title}
-                    </h2>
-                    {conversation.permissions?.canManage ? (
-                      <Button
-                        size="icon"
-                        variant="ghost"
-                        className="size-7 text-muted-foreground"
-                        onClick={() => setEditingTitle(true)}
-                      >
-                        <Pencil className="size-3.5" />
-                      </Button>
-                    ) : null}
-                  </>
-                )}
-              </div>
+              <h2 className="truncate text-sm font-semibold tracking-tight text-foreground">
+                {title}
+              </h2>
               <div className="mt-0.5 truncate text-[11px] text-muted-foreground">
                 {memberSummary ||
                   `${conversation.members.length} member${conversation.members.length > 1 ? "s" : ""}`}
@@ -761,11 +630,6 @@ export default function ConversationChat({
               size="lg"
               onMemberClick={participantInteractionHandler}
               contactBasePath={contactBasePath}
-              onAdd={
-                conversation.permissions?.canManageMembers
-                  ? () => setMemberDialogOpen(true)
-                  : undefined
-              }
             />
           </div>
         </div>
@@ -908,16 +772,6 @@ export default function ConversationChat({
           contactBasePath={contactBasePath}
         />
       ) : null}
-      <ConversationMemberPickerDialog
-        open={memberDialogOpen}
-        onOpenChange={setMemberDialogOpen}
-        workspaceId={workspaceId || ""}
-        conversationId={conversation.id}
-        existingMembers={conversation.members}
-        onAdded={async () => {
-          await onRefreshConversation?.()
-        }}
-      />
     </div>
   )
 }

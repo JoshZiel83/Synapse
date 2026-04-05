@@ -11,7 +11,7 @@ import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
 import InstallDialog from './install-dialog';
-import PluginAccessStep from './plugin-access-step';
+import ResourceAccessStep from './resource-access-step';
 import PluginAdvancedStep from './plugin-advanced-step';
 import { getPluginInstallationDetails, getPluginInstallationTitle } from './plugin-ui';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
@@ -300,7 +300,7 @@ export default function PluginInstallationWorkbench({
                 </TabsContent>
 
                 <TabsContent value="access" className="mt-0 min-h-0 flex-1">
-                  <PluginAccessStep installation={selectedInstallation} />
+                  <ResourceAccessStep installation={selectedInstallation} />
                 </TabsContent>
 
                 <TabsContent value="advanced" className="mt-0 min-h-0 flex-1">

@@ -47,7 +47,11 @@ export type AccessVisualConversation = {
   id: string;
   name?: string;
   title?: string;
-  participants?: Array<{ id: string; name: string }>;
+  participants?: Array<{
+    id?: string;
+    participantId?: string;
+    name: string;
+  }>;
 };
 
 export type AccessVisualUser = {

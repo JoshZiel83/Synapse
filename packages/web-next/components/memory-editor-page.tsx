@@ -34,6 +34,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api } from "@/lib/api"
+import { loadConversationCatalog } from "@/lib/conversation-catalog"
 import { useAuthStore } from "@/stores/auth-store"
 
 function isMemorySpaceType(value: string | null): value is MemorySpaceType {
@@ -78,12 +79,12 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
     try {
       const [actorData, conversationData, memoryData] = await Promise.all([
         api.getActors(workspaceId),
-        api.getThreads(workspaceId),
+        loadConversationCatalog(workspaceId),
         memoryId ? api.getMemory(workspaceId, memoryId) : Promise.resolve(null),
       ])
 
       const actorItems = (Array.isArray(actorData) ? actorData : []).map(normalizeActorOption)
-      const groupItems = (conversationData?.conversations || []).map(normalizeGroupOption)
+      const groupItems = conversationData.map(normalizeGroupOption)
       setActors(actorItems)
       setGroups(groupItems)
 

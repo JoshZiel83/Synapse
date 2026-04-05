@@ -85,7 +85,7 @@ export function normalizeGroupOption(group: any): GroupOption {
     title: group.title || group.name || "Untitled conversation",
     actorIds: Array.isArray(group.participants)
       ? group.participants
-          .map((participant: any) => participant.id)
+          .map((participant: any) => participant.actorId || participant.id)
           .filter(Boolean)
       : [],
   }

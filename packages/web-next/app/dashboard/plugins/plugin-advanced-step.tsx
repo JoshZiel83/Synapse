@@ -14,6 +14,7 @@ import {
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { api } from '@/lib/api';
+import { loadConversationCatalog } from '@/lib/conversation-catalog';
 import { toast } from 'sonner';
 
 type PluginAttachmentType = AttachmentTargetType;
@@ -79,12 +80,12 @@ export default function PluginAdvancedStep({
       try {
         const [actorData, conversationData] = await Promise.all([
           api.getActors(workspaceId),
-          api.getThreads(workspaceId),
+          loadConversationCatalog(workspaceId),
         ]);
 
         if (cancelled) return;
         setActors((Array.isArray(actorData) ? actorData : []).map(normalizeActorOption));
-        setConversations((conversationData?.conversations || []).map(normalizeConversationOption));
+        setConversations(conversationData.map(normalizeConversationOption));
       } catch (error) {
         if (!cancelled) {
           console.error('Failed to load advanced plugin options:', error);

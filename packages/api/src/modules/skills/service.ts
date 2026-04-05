@@ -46,6 +46,11 @@ import {
   type AccessBindingRow,
 } from "../access/bindings.js";
 import {
+  assertConversationTypeMaskWithinParent,
+  assertGrantConversationTypeOverrideAllowed,
+  validateConversationScopedAccessTarget,
+} from "../access/conversation-type-validation.js";
+import {
   buildSystemGeneratedOrigin,
   canUserAccessFileWorkspace,
   duplicateFileRecord,
@@ -2796,6 +2801,26 @@ export async function grantInstalledSkillAccess(input: {
     workspaceId: input.workspaceId,
     target: accessTargetInput,
   });
+  const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
+    workspaceConversationTypeMask,
+    skillRow.conversation_type_mask_override ?? null,
+  );
+  const effectiveConversationTypeMask =
+    assertGrantConversationTypeOverrideAllowed({
+      targetType: accessTarget.targetType,
+      parentConversationTypeMask: instanceConversationTypeMask,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride,
+      buildError: (message) => new SkillError(400, message),
+      invalidMaskMessage:
+        "Skill access grant conversation policy must allow at least one conversation type from the installed skill policy.",
+    });
+  await validateConversationScopedAccessTarget({
+    targetType: accessTarget.targetType,
+    conversationId: accessTarget.conversationId,
+    actorId: accessTarget.actorId,
+    effectiveConversationTypeMask,
+    buildError: (message) => new SkillError(400, message),
+  });
 
   const existing = accessRows.find(
     (row) =>
@@ -2945,8 +2970,28 @@ export async function updateInstalledSkillAccessGrant(input: {
   if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
     throw new SkillError(404, "Access grant not found");
   }
+  const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
+    workspaceConversationTypeMask,
+    skillRow.conversation_type_mask_override ?? null,
+  );
+  const effectiveConversationTypeMask =
+    assertGrantConversationTypeOverrideAllowed({
+      targetType: accessRow.target_type,
+      parentConversationTypeMask: instanceConversationTypeMask,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride,
+      buildError: (message) => new SkillError(400, message),
+      invalidMaskMessage:
+        "Skill access grant conversation policy must allow at least one conversation type from the installed skill policy.",
+    });
+  await validateConversationScopedAccessTarget({
+    targetType: accessRow.target_type,
+    conversationId: accessRow.conversation_id,
+    actorId: accessRow.actor_id,
+    effectiveConversationTypeMask,
+    buildError: (message) => new SkillError(400, message),
+  });
 
-    if (input.conversationTypeMaskOverride !== undefined) {
+  if (input.conversationTypeMaskOverride !== undefined) {
     await executeSql(
       `UPDATE resource_access_bindings
        SET conversation_type_mask_override = $2
@@ -3183,6 +3228,31 @@ export async function updateInstalledSkill(input: {
   );
   if (!existing) {
     throw new SkillError(404, "Installed skill not found");
+  }
+  if (input.conversationTypeMaskOverride !== undefined) {
+    const workspaceConversationTypeMask =
+      await getWorkspaceCapabilityConversationTypeMask(
+        existing.workspace_id,
+        "installed_skill",
+      );
+    const nextInstanceConversationTypeMask =
+      assertConversationTypeMaskWithinParent({
+        parentConversationTypeMask: workspaceConversationTypeMask,
+        conversationTypeMaskOverride: input.conversationTypeMaskOverride,
+        buildError: (message) => new SkillError(400, message),
+        invalidMaskMessage:
+          "Installed skill conversation policy must allow at least one workspace conversation type.",
+      });
+    const accessRows = await listSkillAccessRows(input.installedSkillId);
+    for (const accessRow of accessRows) {
+      await validateConversationScopedAccessTarget({
+        targetType: accessRow.target_type,
+        conversationId: accessRow.conversation_id,
+        actorId: accessRow.actor_id,
+        effectiveConversationTypeMask: nextInstanceConversationTypeMask,
+        buildError: (message) => new SkillError(400, message),
+      });
+    }
   }
 
   const currentFilesMap = await loadSkillSnapshotFilesMap([

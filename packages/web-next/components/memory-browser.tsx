@@ -41,6 +41,7 @@ import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { api } from "@/lib/api"
+import { loadConversationCatalog } from "@/lib/conversation-catalog"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
 
@@ -142,12 +143,12 @@ export default function MemoryBrowser() {
       const [memoryData, actorData, conversationData] = await Promise.all([
         api.getMemories(workspaceId),
         api.getActors(workspaceId),
-        api.getThreads(workspaceId),
+        loadConversationCatalog(workspaceId),
       ])
 
       setMemories(Array.isArray(memoryData) ? memoryData : memoryData?.memories || [])
       setActors((Array.isArray(actorData) ? actorData : []).map(normalizeActorOption))
-      setGroups((conversationData?.conversations || []).map(normalizeGroupOption))
+      setGroups(conversationData.map(normalizeGroupOption))
     } catch (error) {
       console.error("Failed to load memories:", error)
       toast.error(error instanceof Error ? error.message : "Failed to load memories")

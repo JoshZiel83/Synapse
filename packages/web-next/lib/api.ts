@@ -30,9 +30,6 @@ import type {
   ChatConversationSendMessageResponse,
   ChatSyncResponse,
   CurrentUserWeixinBindingSummary,
-  ConversationFeedItem,
-  ConversationFeedPage,
-  ConversationTransportBindingSummary,
   InstalledSkill,
   InteractionRequestSummary,
   TransportAccountSummary,
@@ -1344,86 +1341,6 @@ class ApiClient {
     )
   }
 
-  // Threads
-  getThreads(wsId: string): Promise<{
-    conversations: unknown[]
-    runtimeMap?: Record<string, unknown>
-  }> {
-    return this.fetch(`/workspaces/${wsId}/conversations`)
-  }
-  updateThread(
-    workspaceId: string,
-    threadId: string,
-    data: { title?: string; avatarFileId?: string | null }
-  ) {
-    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}`, {
-      method: "PATCH",
-      body: JSON.stringify(data),
-    })
-  }
-  createThread(workspaceId: string, data: {
-    kind: "private" | "group"
-    actorIds?: string[]
-    workspaceMemberIds?: string[]
-    title?: string
-    content?: string
-    contentBlocks?: CanonicalContentBlock[]
-  }): Promise<{ conversationId: string }> {
-    return this.fetch(`/workspaces/${workspaceId}/conversations`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
-  }
-  getThreadMessages(
-    workspaceId: string,
-    threadId: string,
-    limit?: number,
-    before?: string
-  ): Promise<ConversationFeedPage> {
-    const params = new URLSearchParams()
-    if (limit) params.set("limit", String(limit))
-    if (before) params.set("before", before)
-    const qs = params.toString()
-    return this.fetch(
-      `/workspaces/${workspaceId}/conversations/${threadId}/messages${qs ? "?" + qs : ""}`
-    )
-  }
-  getThread(workspaceId: string, threadId: string) {
-    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}`, {
-      credentials: "include",
-    })
-  }
-  getThreadMembers(workspaceId: string, threadId: string) {
-    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}/members`)
-  }
-  addThreadMembers(
-    workspaceId: string,
-    threadId: string,
-    data: { actorIds?: string[]; workspaceMemberIds?: string[] }
-  ) {
-    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}/members`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
-  }
-  sendThreadMessage(
-    workspaceId: string,
-    threadId: string,
-    contentBlocks: CanonicalContentBlock[],
-    clientMessageId: string
-  ): Promise<{ item: ConversationFeedItem }> {
-    const body: {
-      contentBlocks: CanonicalContentBlock[]
-      clientMessageId: string
-    } = {
-      contentBlocks,
-      clientMessageId,
-    }
-    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}/messages`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    })
-  }
   resolveThreadInteraction(
     workspaceId: string,
     threadId: string,
@@ -1559,12 +1476,6 @@ class ApiClient {
       body: JSON.stringify(data),
     })
   }
-  getThreadTransportBinding(
-    workspaceId: string,
-    threadId: string
-  ): Promise<{ binding: ConversationTransportBindingSummary | null }> {
-    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}/transport-binding`)
-  }
   updateTransportSessionSettings(
     wsId: string,
     sessionId: string,
@@ -1588,18 +1499,6 @@ class ApiClient {
       }
     )
   }
-  markThreadRead(workspaceId: string, threadId: string, readUpToSequence: number) {
-    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}/read`, {
-      method: "POST",
-      body: JSON.stringify({ readUpToSequence }),
-    })
-  }
-  cancelThread(workspaceId: string, threadId: string) {
-    return this.fetch(`/workspaces/${workspaceId}/conversations/${threadId}`, {
-      method: "DELETE",
-    })
-  }
-
   // MCP Marketplace
   getMarketplace(params?: string) {
     return this.fetch(`/mcp/marketplace${params ? "?" + params : ""}`)

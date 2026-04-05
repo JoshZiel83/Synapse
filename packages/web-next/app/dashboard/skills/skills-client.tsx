@@ -42,7 +42,7 @@ import {
 import { toast } from "sonner"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
-import PluginAccessStep from "@/app/dashboard/plugins/plugin-access-step"
+import ResourceAccessStep from "@/app/dashboard/plugins/resource-access-step"
 import { CanonicalContentEditor } from "@/components/canonical-content-editor"
 import { CanonicalContentRenderer } from "@/components/canonical-content-renderer"
 import { Badge } from "@/components/ui/badge"
@@ -91,6 +91,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { api } from "@/lib/api"
+import { loadConversationCatalog } from "@/lib/conversation-catalog"
 import { resolveFileUrl } from "@/lib/utils"
 
 type ActorOption = {
@@ -1986,7 +1987,7 @@ export function InstalledSkillConfigurationPage({
                   </div>
                 </div>
 
-                <PluginAccessStep
+                <ResourceAccessStep
                   installation={skill}
                   accessAdapter={skillAccessAdapter}
                   resourceLabel="skill"
@@ -2594,7 +2595,7 @@ export function WorkspaceSkillCreationPage() {
 
     Promise.all([
       api.getActors(workspaceId),
-      api.getThreads(workspaceId),
+      loadConversationCatalog(workspaceId),
       api.getWorkspaceMembers(workspaceId),
     ])
       .then(([actorsResponse, conversationsResponse, membersResponse]) => {
@@ -2605,11 +2606,7 @@ export function WorkspaceSkillCreationPage() {
             : []
         )
         setConversations(
-          Array.isArray(conversationsResponse?.conversations)
-            ? conversationsResponse.conversations.map(
-                normalizeConversationOption
-              )
-            : []
+          conversationsResponse.map(normalizeConversationOption)
         )
         setMembers(
           Array.isArray(membersResponse?.data)
@@ -3214,18 +3211,15 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
         await Promise.all([
           api.getSkillMarketplaceItem(skillId, workspaceId),
           api.getActors(workspaceId),
-          api.getThreads(workspaceId),
+          loadConversationCatalog(workspaceId),
           api.getWorkspaceMembers(workspaceId),
         ])
 
       const nextActors = Array.isArray(actorsResponse)
         ? actorsResponse.map(normalizeActorOption)
         : []
-      const nextConversations = Array.isArray(
-        conversationsResponse?.conversations
-      )
-        ? conversationsResponse.conversations.map(normalizeConversationOption)
-        : []
+      const nextConversations =
+        conversationsResponse.map(normalizeConversationOption)
       const nextMembers = Array.isArray(membersResponse?.data)
         ? membersResponse.data.map(normalizeMemberOption)
         : []

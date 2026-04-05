@@ -73,6 +73,11 @@ import {
   resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js";
+import {
+  assertConversationTypeMaskWithinParent,
+  assertGrantConversationTypeOverrideAllowed,
+  validateConversationScopedAccessTarget,
+} from "../access/conversation-type-validation.js";
 
 type QueryRow = pg.QueryResultRow;
 type QueryResultLike<T extends QueryRow> = { rows: T[] };
@@ -2145,7 +2150,8 @@ export async function updateInstallation(
   }
 
   const workspaceId = currentRow.workspace_id;
-  const { row, plugin } = await getInstallationPayload(workspaceId, installId);
+  const { row, plugin, workspaceConversationTypeMask } =
+    await getInstallationPayload(workspaceId, installId);
 
   const nextAttachmentType =
     data.attachmentTarget?.type || publicAttachmentScope(row.attachment_target_type);
@@ -2178,6 +2184,27 @@ export async function updateInstallation(
         plugin.config_fields || [],
       )
     : asObject(row.config_data);
+
+  if (data.conversationTypeMaskOverride !== undefined) {
+    const nextInstanceConversationTypeMask =
+      assertConversationTypeMaskWithinParent({
+        parentConversationTypeMask: workspaceConversationTypeMask,
+        conversationTypeMaskOverride: data.conversationTypeMaskOverride,
+        buildError: (message) => new McpPluginError(400, message),
+        invalidMaskMessage:
+          "Plugin installation conversation policy must allow at least one workspace conversation type.",
+      });
+    const accessRows = await listAccessRows(installId);
+    for (const accessRow of accessRows) {
+      await validateConversationScopedAccessTarget({
+        targetType: accessRow.access_target_type,
+        conversationId: accessRow.conversation_id,
+        actorId: accessRow.actor_id,
+        effectiveConversationTypeMask: nextInstanceConversationTypeMask,
+        buildError: (message) => new McpPluginError(400, message),
+      });
+    }
+  }
 
   async function validateResolvedConfigForUpdate(
     config: Record<string, unknown>,
@@ -2407,6 +2434,26 @@ export async function grantPluginInstallationAccess(input: {
     workspaceId: input.workspaceId,
     target: resolvedAccessTarget,
   });
+  const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
+    workspaceConversationTypeMask,
+    installation.conversation_type_mask_override ?? null,
+  );
+  const effectiveConversationTypeMask =
+    assertGrantConversationTypeOverrideAllowed({
+      targetType: accessTarget.targetType,
+      parentConversationTypeMask: instanceConversationTypeMask,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride,
+      buildError: (message) => new McpPluginError(400, message),
+      invalidMaskMessage:
+        "Plugin access grant conversation policy must allow at least one conversation type from the installation policy.",
+    });
+  await validateConversationScopedAccessTarget({
+    targetType: accessTarget.targetType,
+    conversationId: accessTarget.conversationId,
+    actorId: accessTarget.actorId,
+    effectiveConversationTypeMask,
+    buildError: (message) => new McpPluginError(400, message),
+  });
 
   const existing = accessRows.find(
     (entry) =>
@@ -2536,6 +2583,26 @@ export async function updatePluginInstallationAccessGrant(input: {
   if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
     throw new McpPluginError(404, "Access grant not found");
   }
+  const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
+    workspaceConversationTypeMask,
+    installation.conversation_type_mask_override ?? null,
+  );
+  const effectiveConversationTypeMask =
+    assertGrantConversationTypeOverrideAllowed({
+      targetType: accessRow.access_target_type,
+      parentConversationTypeMask: instanceConversationTypeMask,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride,
+      buildError: (message) => new McpPluginError(400, message),
+      invalidMaskMessage:
+        "Plugin access grant conversation policy must allow at least one conversation type from the installation policy.",
+    });
+  await validateConversationScopedAccessTarget({
+    targetType: accessRow.access_target_type,
+    conversationId: accessRow.conversation_id,
+    actorId: accessRow.actor_id,
+    effectiveConversationTypeMask,
+    buildError: (message) => new McpPluginError(400, message),
+  });
 
   await db
     .updateTable("resource_access_bindings")

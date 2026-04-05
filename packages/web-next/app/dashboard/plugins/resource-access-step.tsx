@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import type {
   CapabilityAccessTarget,
   CapabilityAccessTargetType,
@@ -8,6 +8,7 @@ import type {
 } from '@synapse/shared/types';
 import {
   CONVERSATION_TYPE_MASK_PRESETS,
+  maskAllowsConversationType,
   conversationTypeKeysToMask,
   conversationTypeMaskToKeys,
   normalizeConversationTypeMask,
@@ -35,14 +36,6 @@ import {
 } from '@/components/ui/field';
 import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import {
-  Select,
-  SelectContent,
-  SelectGroup,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select';
-import {
   Table,
   TableBody,
   TableCell,
@@ -52,6 +45,10 @@ import {
 } from '@/components/ui/table';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
+import {
+  loadConversationCatalog,
+  type ConversationCatalogEntry,
+} from '@/lib/conversation-catalog';
 
 type PluginGrantScope = CapabilityAccessTargetType;
 
@@ -106,7 +103,23 @@ type ConversationOption = {
   id: string;
   name: string;
   title?: string;
-  participants?: Array<{ id: string; name: string }>;
+  kind: 'group' | 'private' | 'virtual';
+  boundary: 'internal' | 'external';
+  conversationTypeKey: ConversationTypeKey | null;
+  participants: Array<{
+    participantId: string;
+    participantType: 'actor' | 'workspace_member' | 'external' | 'system';
+    actorId?: string;
+    workspaceMemberId?: string;
+    name: string;
+    state: 'active' | 'left' | 'removed';
+  }>;
+};
+
+type SelectOption = {
+  id: string;
+  label: string;
+  disabled?: boolean;
 };
 
 type AccessPreviewScenario = {
@@ -123,7 +136,10 @@ type AccessPreviewScenario = {
 };
 
 type AccessAdapter = {
-  loadAccess: (workspaceId: string, resourceId: string) => Promise<any>;
+  loadAccess: (
+    workspaceId: string,
+    resourceId: string,
+  ) => Promise<ResourceAccessState>;
   grantAccess: (
     workspaceId: string,
     resourceId: string,
@@ -153,6 +169,45 @@ type AccessAdapter = {
       conversationTypeMaskOverride?: number | null;
     },
   ) => Promise<unknown>;
+};
+
+type ResourceAccessSummary = {
+  sourceDefaultConversationTypeMask?: number;
+  workspaceConversationTypeMask?: number;
+  conversationTypeMaskOverride?: number | null;
+  effectiveConversationTypeMask?: number;
+  parentPolicyLabel?: string | null;
+  parentConversationTypeMask?: number;
+  requiredPermissions?: string[];
+  suggestedAccessTargetType?: PluginGrantScope;
+};
+
+type ResourceAccessGrant = {
+  id: string;
+  target?: CapabilityAccessTarget;
+  conversationTypeMaskOverride?: number | null;
+  effectiveConversationTypeMask?: number;
+  createdAt?: string;
+  grantedAt?: string;
+};
+
+type ResourceAccessState = {
+  summary?: ResourceAccessSummary | null;
+  grants?: ResourceAccessGrant[];
+};
+
+type ActorRecord = {
+  id: string;
+  definition?: {
+    name?: string;
+    title?: string;
+  };
+  name?: string;
+  title?: string;
+};
+
+type ResourceAccessOwner = {
+  id?: string | null;
 };
 
 const pluginInstallationAccessAdapter: AccessAdapter = {
@@ -219,7 +274,7 @@ function formatConversationTypeKeys(keys: ConversationTypeKey[]) {
     .join(', ');
 }
 
-function normalizeActorOption(actor: any): ActorOption {
+function normalizeActorOption(actor: ActorRecord): ActorOption {
   const definition = actor?.definition || actor;
   return {
     id: actor.id,
@@ -227,13 +282,48 @@ function normalizeActorOption(actor: any): ActorOption {
   };
 }
 
-function normalizeConversationOption(group: any): ConversationOption {
+function normalizeConversationOption(
+  group: ConversationCatalogEntry,
+): ConversationOption {
   return {
     id: group.id,
-    name: group.name || group.title || 'Untitled conversation',
+    name: group.title || 'Untitled conversation',
     title: group.title,
+    kind: group.kind,
+    boundary: group.boundary,
+    conversationTypeKey: group.conversationTypeKey,
     participants: group.participants,
   };
+}
+
+function TargetSelect({
+  value,
+  onChange,
+  placeholder,
+  options,
+  disabled = false,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder: string;
+  options: SelectOption[];
+  disabled?: boolean;
+}) {
+  return (
+    <select
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      disabled={disabled}
+      className="block h-10 w-full rounded-xl border border-input bg-input/30 px-3 py-2 text-sm text-foreground outline-none transition-colors focus:border-ring focus:ring-[3px] focus:ring-ring/50"
+    >
+      <option value="">{placeholder}</option>
+      {options.map((option) => (
+        <option key={option.id} value={option.id} disabled={option.disabled}>
+          {option.label}
+        </option>
+      ))}
+    </select>
+  );
 }
 
 function getScopeLabel(scope: PluginGrantScope) {
@@ -252,7 +342,7 @@ function getScopeLabel(scope: PluginGrantScope) {
 }
 
 function formatGrantTarget(
-  grant: any,
+  grant: ResourceAccessGrant,
   actorsById: Map<string, string>,
   conversationsById: Map<string, string>,
 ) {
@@ -261,13 +351,34 @@ function formatGrantTarget(
     case 'workspace':
       return 'Entire workspace';
     case 'conversation':
-      return conversationsById.get(target.conversationId) || 'Selected conversation';
+      return (
+        (target.conversationId
+          ? conversationsById.get(target.conversationId)
+          : null) ||
+        (target.conversationId
+          ? `Conversation ${String(target.conversationId).slice(0, 8)}`
+          : 'Selected conversation')
+      );
     case 'actor':
-      return actorsById.get(target.actorId) || 'Selected actor';
+      return (
+        (target.actorId ? actorsById.get(target.actorId) : null) ||
+        (target.actorId
+          ? `Actor ${String(target.actorId).slice(0, 8)}`
+          : 'Selected actor')
+      );
     case 'actor_in_conversation': {
-      const actorName = actorsById.get(target.actorId) || 'Selected actor';
+      const actorName =
+        (target.actorId ? actorsById.get(target.actorId) : null) ||
+        (target.actorId
+          ? `Actor ${String(target.actorId).slice(0, 8)}`
+          : 'Selected actor');
       const conversationName =
-        conversationsById.get(target.conversationId) || 'Selected conversation';
+        (target.conversationId
+          ? conversationsById.get(target.conversationId)
+          : null) ||
+        (target.conversationId
+          ? `Conversation ${String(target.conversationId).slice(0, 8)}`
+          : 'Selected conversation');
       return `${actorName} in ${conversationName}`;
     }
     default:
@@ -300,6 +411,17 @@ function formatTimestamp(value?: string | null) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) return 'Just now';
   return date.toLocaleString();
+}
+
+function formatConversationTypeLabel(
+  key: ConversationTypeKey | null,
+) {
+  if (!key) return 'Unknown type';
+  return conversationTypeOptions.find((option) => option.key === key)?.label || key;
+}
+
+function supportsGrantConversationTypeOverride(scope: PluginGrantScope) {
+  return scope === 'workspace' || scope === 'actor';
 }
 
 function IdentityPill({
@@ -404,20 +526,20 @@ function AccessPreviewCard({
   );
 }
 
-export default function PluginAccessStep({
+export default function ResourceAccessStep({
   installation,
   resourceId,
   accessAdapter = pluginInstallationAccessAdapter,
   resourceLabel = 'installation',
-  title = 'Access',
+  title = 'Resource Access',
   description,
-  addAccessLabel = 'Add Access',
+  addAccessLabel = 'Add Resource Access',
   emptyMessage,
-  dialogTitle = 'Add use access',
+  dialogTitle = 'Add resource access',
   dialogDescription,
-  noAccessMessage = 'No use access has been granted yet.',
+  noAccessMessage = 'No resource access has been granted yet.',
 }: {
-  installation: any | null;
+  installation: ResourceAccessOwner | null;
   resourceId?: string | null;
   accessAdapter?: AccessAdapter;
   resourceLabel?: string;
@@ -430,20 +552,29 @@ export default function PluginAccessStep({
   noAccessMessage?: string;
 }) {
   const { workspaceId } = useWorkspace();
-  const [actors, setActors] = useState<any[]>([]);
-  const [conversations, setConversations] = useState<any[]>([]);
-  const [summary, setSummary] = useState<any>(null);
-  const [grants, setGrants] = useState<any[]>([]);
+  const [actors, setActors] = useState<ActorRecord[]>([]);
+  const [conversations, setConversations] = useState<ConversationCatalogEntry[]>([]);
+  const [summary, setSummary] = useState<ResourceAccessSummary | null>(null);
+  const [grants, setGrants] = useState<ResourceAccessGrant[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingActors, setLoadingActors] = useState(false);
+  const [loadingConversations, setLoadingConversations] = useState(false);
   const [saving, setSaving] = useState(false);
   const [savingPolicy, setSavingPolicy] = useState(false);
   const [savingGrantPolicy, setSavingGrantPolicy] = useState(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [grantPolicyDialogOpen, setGrantPolicyDialogOpen] = useState(false);
-  const [editingGrant, setEditingGrant] = useState<any | null>(null);
+  const [editingGrant, setEditingGrant] = useState<ResourceAccessGrant | null>(null);
   const [grantScope, setGrantScope] = useState<PluginGrantScope>('workspace');
   const [conversationId, setConversationId] = useState('');
   const [actorId, setActorId] = useState('');
+  const [actorsLoaded, setActorsLoaded] = useState(false);
+  const [conversationsLoaded, setConversationsLoaded] = useState(false);
+  const [actorsError, setActorsError] = useState<string | null>(null);
+  const [conversationsError, setConversationsError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [policyError, setPolicyError] = useState<string | null>(null);
+  const [grantPolicyError, setGrantPolicyError] = useState<string | null>(null);
   const [conversationTypeKeys, setConversationTypeKeys] = useState<ConversationTypeKey[]>(
     conversationTypeMaskToKeys(CONVERSATION_TYPE_MASK_PRESETS.ALL),
   );
@@ -467,27 +598,53 @@ export default function PluginAccessStep({
     () => buildGrantScopeOptions(resourceLabelLower),
     [resourceLabelLower],
   );
-  const actorOptions = useMemo(() => actors.map(normalizeActorOption), [actors]);
-  const conversationOptions = useMemo(() => conversations.map(normalizeConversationOption), [conversations]);
+  const allActorOptions = useMemo(
+    () => actors.map(normalizeActorOption),
+    [actors],
+  );
+  const allConversationOptions = useMemo(
+    () => conversations.map(normalizeConversationOption),
+    [conversations],
+  );
+  const conversationsById = useMemo(
+    () =>
+      new Map(
+        allConversationOptions.map((conversation) => [conversation.id, conversation] as const),
+      ),
+    [allConversationOptions],
+  );
 
   const actorNamesById = useMemo(
-    () => new Map(actorOptions.map((actor) => [actor.id, actor.name])),
-    [actorOptions],
+    () =>
+      new Map([
+        ...allActorOptions.map((actor) => [actor.id, actor.name] as const),
+        ...allConversationOptions.flatMap((conversation) =>
+          conversation.participants
+            .filter(
+              (participant) =>
+                participant.participantType === 'actor' &&
+                participant.actorId &&
+                participant.name,
+            )
+            .map((participant) => [participant.actorId!, participant.name] as const),
+        ),
+      ]),
+    [allActorOptions, allConversationOptions],
   );
   const conversationNamesById = useMemo(
     () =>
       new Map(
-        conversationOptions.map((conversation) => [
+        allConversationOptions.map((conversation) => [
           conversation.id,
           getConversationDisplayName(conversation),
         ]),
       ),
-    [conversationOptions],
+    [allConversationOptions],
   );
 
   const selectedScopeOption = useMemo(
     () => grantScopeOptions.find((option) => option.value === grantScope) || grantScopeOptions[0],
-    [grantScope],
+    [grantScope, grantScopeOptions],
   );
   const sourceDefaultConversationTypeMask = useMemo(
     () => normalizeConversationTypeMask(summary?.sourceDefaultConversationTypeMask),
@@ -598,6 +755,91 @@ export default function PluginAccessStep({
     editingGrant &&
       nextGrantConversationTypeMaskOverride !==
         (editingGrant?.conversationTypeMaskOverride ?? null),
+  );
+  const selectedConversation = useMemo(
+    () => (conversationId ? conversationsById.get(conversationId) || null : null),
+    [conversationId, conversationsById],
+  );
+  const selectedConversationAllowed = useMemo(
+    () =>
+      selectedConversation
+        ? maskAllowsConversationType(
+            currentGrantBaseMask,
+            selectedConversation.kind,
+            selectedConversation.boundary,
+          )
+        : false,
+    [currentGrantBaseMask, selectedConversation],
+  );
+  const selectedConversationLabel = useMemo(
+    () =>
+      selectedConversation
+        ? getConversationDisplayName(selectedConversation)
+        : null,
+    [selectedConversation],
+  );
+  const conversationOptions = useMemo<SelectOption[]>(
+    () =>
+      allConversationOptions.map((conversation) => {
+        const conversationLabel = getConversationDisplayName(conversation);
+        const typeLabel = formatConversationTypeLabel(conversation.conversationTypeKey);
+        const allowed = maskAllowsConversationType(
+          currentGrantBaseMask,
+          conversation.kind,
+          conversation.boundary,
+        );
+        return {
+          id: conversation.id,
+          label: allowed
+            ? `${conversationLabel} · ${typeLabel}`
+            : `${conversationLabel} · ${typeLabel} · blocked by instance policy`,
+          disabled: !allowed,
+        };
+      }),
+    [allConversationOptions, currentGrantBaseMask],
+  );
+  const actorInConversationOptions = useMemo<ActorOption[]>(() => {
+    if (!selectedConversation || !selectedConversationAllowed) {
+      return [];
+    }
+
+    const seenActorIds = new Set<string>();
+    return selectedConversation.participants
+      .filter(
+        (participant) =>
+          participant.participantType === 'actor' &&
+          participant.actorId &&
+          participant.state === 'active',
+      )
+      .map((participant) => participant.actorId ? {
+        id: participant.actorId,
+        name: participant.name,
+      } : null)
+      .filter((participant): participant is ActorOption => {
+        if (!participant) return false;
+        if (seenActorIds.has(participant.id)) return false;
+        seenActorIds.add(participant.id);
+        return true;
+      });
+  }, [selectedConversation, selectedConversationAllowed]);
+  const actorOptions = useMemo(
+    () => (grantScope === 'actor_in_conversation' ? actorInConversationOptions : allActorOptions),
+    [actorInConversationOptions, allActorOptions, grantScope],
+  );
+  const canGrantConversationTypesForScope = supportsGrantConversationTypeOverride(grantScope);
+  const selectedConversationBlockedReason = useMemo(() => {
+    if (!selectedConversation || selectedConversationAllowed) {
+      return null;
+    }
+    return `${selectedConversationLabel || 'Selected conversation'} is ${formatConversationTypeLabel(selectedConversation.conversationTypeKey)} and is blocked by the current instance policy.`;
+  }, [selectedConversation, selectedConversationAllowed, selectedConversationLabel]);
+  const hasConversationScopedGrants = useMemo(
+    () =>
+      grants.some((grant) => {
+        const targetType = grant.target?.type;
+        return targetType === 'conversation' || targetType === 'actor_in_conversation';
+      }),
+    [grants],
   );
 
   const previewTarget = useMemo(() => {
@@ -727,29 +969,103 @@ export default function PluginAccessStep({
   ]);
 
   const canCreateGrant = useMemo(() => {
-    if (grantScope === 'conversation') return Boolean(conversationId);
-    if (grantScope === 'actor') return Boolean(actorId);
-    if (grantScope === 'actor_in_conversation') return Boolean(actorId && conversationId);
+    if (grantScope === 'conversation') {
+      return Boolean(conversationId && selectedConversationAllowed && !loadingConversations);
+    }
+    if (grantScope === 'actor') {
+      return Boolean(actorId && !loadingActors);
+    }
+    if (grantScope === 'actor_in_conversation') {
+      return Boolean(
+        actorId &&
+          conversationId &&
+          selectedConversationAllowed &&
+          !loadingConversations &&
+          actorInConversationOptions.some((option) => option.id === actorId),
+      );
+    }
     return true;
-  }, [actorId, conversationId, grantScope]);
+  }, [
+    actorId,
+    actorInConversationOptions,
+    conversationId,
+    grantScope,
+    loadingActors,
+    loadingConversations,
+    selectedConversationAllowed,
+  ]);
 
-  const loadAccessState = async () => {
+  const loadAccessState = useCallback(async () => {
     if (!workspaceId || !resolvedResourceId) return;
-    const [accessData, actorData, conversationData] = await Promise.all([
-      accessAdapter.loadAccess(workspaceId, resolvedResourceId),
-      api.getActors(workspaceId),
-      api.getThreads(workspaceId),
-    ]);
-
+    const accessData = await accessAdapter.loadAccess(workspaceId, resolvedResourceId);
     setGrants(accessData.grants || []);
     setSummary(accessData.summary || null);
+    setPolicyError(null);
+    setGrantPolicyError(null);
     const suggestedGrantScope = accessData.summary?.suggestedAccessTargetType as PluginGrantScope | undefined;
     if (suggestedGrantScope && allowedGrantScopes.includes(suggestedGrantScope)) {
       setGrantScope(suggestedGrantScope);
     }
-    setActors(Array.isArray(actorData) ? actorData : actorData?.actors || []);
-    setConversations(conversationData?.conversations || []);
-  };
+  }, [accessAdapter, resolvedResourceId, workspaceId]);
+
+  const ensureActorsLoaded = useCallback(async () => {
+    if (!workspaceId) {
+      return [];
+    }
+    if (actorsLoaded) {
+      return actors;
+    }
+    if (loadingActors) {
+      return actors;
+    }
+
+    setLoadingActors(true);
+    setActorsError(null);
+    try {
+      const actorData = await api.getActors(workspaceId);
+      const nextActors = Array.isArray(actorData) ? actorData : actorData?.actors || [];
+      setActors(nextActors);
+      setActorsLoaded(true);
+      return nextActors;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to load actors.';
+      setActorsError(message);
+      setActors([]);
+      throw error;
+    } finally {
+      setLoadingActors(false);
+    }
+  }, [actors, actorsLoaded, loadingActors, workspaceId]);
+
+  const ensureConversationsLoaded = useCallback(async () => {
+    if (!workspaceId) {
+      return [];
+    }
+    if (conversationsLoaded) {
+      return conversations;
+    }
+    if (loadingConversations) {
+      return conversations;
+    }
+
+    setLoadingConversations(true);
+    setConversationsError(null);
+    try {
+      const nextConversations = await loadConversationCatalog(workspaceId);
+      setConversations(nextConversations);
+      setConversationsLoaded(true);
+      return nextConversations;
+    } catch (error) {
+      const message =
+        error instanceof Error ? error.message : 'Failed to load conversations.';
+      setConversationsError(message);
+      setConversations([]);
+      throw error;
+    } finally {
+      setLoadingConversations(false);
+    }
+  }, [conversations, conversationsLoaded, loadingConversations, workspaceId]);
 
   useEffect(() => {
     if (typeof summary?.effectiveConversationTypeMask !== 'number') {
@@ -763,6 +1079,15 @@ export default function PluginAccessStep({
   }, [
     summary?.effectiveConversationTypeMask,
   ]);
+
+  useEffect(() => {
+    setActors([]);
+    setConversations([]);
+    setActorsLoaded(false);
+    setConversationsLoaded(false);
+    setActorsError(null);
+    setConversationsError(null);
+  }, [workspaceId]);
 
   useEffect(() => {
     if (!dialogOpen) {
@@ -792,6 +1117,32 @@ export default function PluginAccessStep({
   ]);
 
   useEffect(() => {
+    if (!dialogOpen) {
+      return;
+    }
+    setSubmitError(null);
+    if (grantScope === 'actor') {
+      void ensureActorsLoaded().catch(() => {});
+      return;
+    }
+    if (grantScope === 'conversation' || grantScope === 'actor_in_conversation') {
+      void ensureConversationsLoaded().catch(() => {});
+    }
+  }, [dialogOpen, ensureActorsLoaded, ensureConversationsLoaded, grantScope]);
+
+  useEffect(() => {
+    if (grantScope !== 'actor_in_conversation') {
+      return;
+    }
+    if (!actorId) {
+      return;
+    }
+    if (!actorInConversationOptions.some((option) => option.id === actorId)) {
+      setActorId('');
+    }
+  }, [actorId, actorInConversationOptions, grantScope]);
+
+  useEffect(() => {
     if (!workspaceId || !resolvedResourceId) {
       setSummary(null);
       setGrants([]);
@@ -815,18 +1166,126 @@ export default function PluginAccessStep({
     return () => {
       cancelled = true;
     };
-  }, [accessAdapter, resolvedResourceId, workspaceId]);
+  }, [loadAccessState, resolvedResourceId, workspaceId]);
 
   const resetDialogState = () => {
     setConversationId('');
     setActorId('');
+    setSubmitError(null);
+  };
+
+  const validateConversationScopedGrants = async (nextMask: number) => {
+    if (!hasConversationScopedGrants) {
+      return null;
+    }
+
+    const catalogEntries = conversationsLoaded
+      ? conversations
+      : await ensureConversationsLoaded();
+    const catalogMap = new Map(
+      catalogEntries.map((conversation) => [
+        conversation.id,
+        normalizeConversationOption(conversation),
+      ]),
+    );
+    const invalidTargets: string[] = [];
+
+    for (const grant of grants) {
+      const target = grant.target;
+      if (
+        target?.type !== 'conversation' &&
+        target?.type !== 'actor_in_conversation'
+      ) {
+        continue;
+      }
+
+      if (!target.conversationId) {
+        invalidTargets.push('Unknown conversation target');
+        continue;
+      }
+
+      const catalogEntry = catalogMap.get(target.conversationId);
+      if (!catalogEntry) {
+        invalidTargets.push(
+          `Conversation ${String(target.conversationId).slice(0, 8)}`,
+        );
+        continue;
+      }
+
+      const allowed = maskAllowsConversationType(
+        nextMask,
+        catalogEntry.kind,
+        catalogEntry.boundary,
+      );
+      if (!allowed) {
+        invalidTargets.push(
+          `${getConversationDisplayName(catalogEntry)} (${formatConversationTypeLabel(catalogEntry.conversationTypeKey)})`,
+        );
+      }
+    }
+
+    if (invalidTargets.length === 0) {
+      return null;
+    }
+
+    const preview = invalidTargets.slice(0, 3).join(', ');
+    const suffix =
+      invalidTargets.length > 3 ? ` +${invalidTargets.length - 3} more` : '';
+    return `This policy would invalidate existing conversation-scoped resource access: ${preview}${suffix}.`;
+  };
+
+  const buildCreateGrantError = () => {
+    if (grantScope === 'actor' && !actorId) {
+      return 'Select an actor before creating resource access.';
+    }
+    if (grantScope === 'conversation') {
+      if (!conversationId) {
+        return 'Select a conversation before creating resource access.';
+      }
+      if (!selectedConversationAllowed) {
+        return (
+          selectedConversationBlockedReason ||
+          'The selected conversation is blocked by the current instance policy.'
+        );
+      }
+    }
+    if (grantScope === 'actor_in_conversation') {
+      if (!conversationId) {
+        return 'Select a conversation before choosing an actor.';
+      }
+      if (!selectedConversationAllowed) {
+        return (
+          selectedConversationBlockedReason ||
+          'The selected conversation is blocked by the current instance policy.'
+        );
+      }
+      if (!actorId) {
+        return actorInConversationOptions.length === 0
+          ? 'This conversation has no active actor participants to grant.'
+          : 'Select an actor from the chosen conversation.';
+      }
+      if (!actorInConversationOptions.some((option) => option.id === actorId)) {
+        return 'Select an active actor from the chosen conversation.';
+      }
+    }
+    return null;
   };
 
   const createGrant = async () => {
-    if (!workspaceId || !resolvedResourceId || !canCreateGrant) return;
+    if (!workspaceId || !resolvedResourceId) return;
+    const validationError = buildCreateGrantError();
+    if (validationError) {
+      setSubmitError(validationError);
+      return;
+    }
     setSaving(true);
+    setSubmitError(null);
     try {
-      await accessAdapter.grantAccess(workspaceId, resolvedResourceId, {
+      const payload: {
+        accessTarget?: CapabilityAccessTarget;
+        conversationTypeMaskOverride?: number | null;
+        permissions?: string[];
+      } = {
         accessTarget: {
           type: grantScope,
           actorId: grantScope === 'actor' || grantScope === 'actor_in_conversation' ? actorId : undefined,
@@ -835,12 +1294,19 @@ export default function PluginAccessStep({
               ? conversationId
               : undefined,
         },
-        conversationTypeMaskOverride: nextNewGrantConversationTypeMaskOverride,
         permissions: summary?.requiredPermissions?.length ? summary.requiredPermissions : ['use'],
-      });
+      };
+      if (canGrantConversationTypesForScope) {
+        payload.conversationTypeMaskOverride = nextNewGrantConversationTypeMaskOverride;
+      }
+      await accessAdapter.grantAccess(workspaceId, resolvedResourceId, payload);
       await loadAccessState();
       setDialogOpen(false);
       resetDialogState();
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error ? error.message : 'Failed to create resource access.',
+      );
     } finally {
       setSaving(false);
     }
@@ -890,11 +1356,25 @@ export default function PluginAccessStep({
     }
 
     setSavingPolicy(true);
+    setPolicyError(null);
     try {
+      const invalidGrantError = await validateConversationScopedGrants(
+        currentConversationTypeMask,
+      );
+      if (invalidGrantError) {
+        setPolicyError(invalidGrantError);
+        return;
+      }
       await accessAdapter.updatePolicy(workspaceId, resolvedResourceId, {
         conversationTypeMaskOverride: nextConversationTypeMaskOverride,
       });
       await loadAccessState();
+    } catch (error) {
+      setPolicyError(
+        error instanceof Error
+          ? error.message
+          : 'Failed to save conversation type policy.',
+      );
     } finally {
       setSavingPolicy(false);
     }
@@ -927,8 +1407,12 @@ export default function PluginAccessStep({
     );
   };
 
-  const openGrantConversationTypeDialog = (grant: any) => {
+  const openGrantConversationTypeDialog = (grant: ResourceAccessGrant) => {
+    if (!supportsGrantConversationTypeOverride(grant.target?.type || 'workspace')) {
+      return;
+    }
     setEditingGrant(grant);
+    setGrantPolicyError(null);
     setGrantPolicyDialogOpen(true);
   };
 
@@ -982,6 +1466,7 @@ export default function PluginAccessStep({
     }
 
     setSavingGrantPolicy(true);
+    setGrantPolicyError(null);
     try {
       await accessAdapter.updateGrant(workspaceId, resolvedResourceId, editingGrant.id, {
         conversationTypeMaskOverride: nextGrantConversationTypeMaskOverride,
@@ -989,6 +1474,12 @@ export default function PluginAccessStep({
       await loadAccessState();
       setGrantPolicyDialogOpen(false);
       setEditingGrant(null);
+    } catch (error) {
+      setGrantPolicyError(
+        error instanceof Error
+          ? error.message
+          : 'Failed to save grant conversation policy.',
+      );
     } finally {
       setSavingGrantPolicy(false);
     }
@@ -1001,20 +1492,29 @@ export default function PluginAccessStep({
       return (
         <Field>
           <FieldLabel>Conversation</FieldLabel>
-          <Select value={conversationId} onValueChange={setConversationId}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select a conversation" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {conversationOptions.map((conversation) => (
-                  <SelectItem key={conversation.id} value={conversation.id}>
-                    {getConversationDisplayName(conversation)}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <TargetSelect
+            value={conversationId}
+            onChange={setConversationId}
+            placeholder="Select a conversation"
+            options={conversationOptions}
+            disabled={loadingConversations}
+          />
+          {loadingConversations ? (
+            <FieldDescription>Loading conversations...</FieldDescription>
+          ) : null}
+          {conversationsError ? (
+            <FieldDescription className="text-destructive">
+              {conversationsError}
+            </FieldDescription>
+          ) : null}
+          {!loadingConversations && !conversationsError && conversationOptions.length === 0 ? (
+            <FieldDescription>No conversations are available yet.</FieldDescription>
+          ) : null}
+          {selectedConversationBlockedReason ? (
+            <FieldDescription className="text-destructive">
+              {selectedConversationBlockedReason}
+            </FieldDescription>
+          ) : null}
         </Field>
       );
     }
@@ -1023,20 +1523,27 @@ export default function PluginAccessStep({
       return (
         <Field>
           <FieldLabel>Actor</FieldLabel>
-          <Select value={actorId} onValueChange={setActorId}>
-            <SelectTrigger className="w-full">
-              <SelectValue placeholder="Select an actor" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectGroup>
-                {actorOptions.map((actor) => (
-                  <SelectItem key={actor.id} value={actor.id}>
-                    {actor.name}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            </SelectContent>
-          </Select>
+          <TargetSelect
+            value={actorId}
+            onChange={setActorId}
+            placeholder="Select an actor"
+            options={actorOptions.map((actor) => ({
+              id: actor.id,
+              label: actor.name,
+            }))}
+            disabled={loadingActors}
+          />
+          {loadingActors ? (
+            <FieldDescription>Loading actors...</FieldDescription>
+          ) : null}
+          {actorsError ? (
+            <FieldDescription className="text-destructive">
+              {actorsError}
+            </FieldDescription>
+          ) : null}
+          {!loadingActors && !actorsError && actorOptions.length === 0 ? (
+            <FieldDescription>No active actors are available yet.</FieldDescription>
+          ) : null}
         </Field>
       );
     }
@@ -1046,38 +1553,48 @@ export default function PluginAccessStep({
         <FieldGroup>
           <Field>
             <FieldLabel>Conversation</FieldLabel>
-            <Select value={conversationId} onValueChange={setConversationId}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select a conversation" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {conversationOptions.map((conversation) => (
-                    <SelectItem key={conversation.id} value={conversation.id}>
-                      {getConversationDisplayName(conversation)}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+            <TargetSelect
+              value={conversationId}
+              onChange={setConversationId}
+              placeholder="Select a conversation"
+              options={conversationOptions}
+              disabled={loadingConversations}
+            />
+            {loadingConversations ? (
+              <FieldDescription>Loading conversations...</FieldDescription>
+            ) : null}
+            {conversationsError ? (
+              <FieldDescription className="text-destructive">
+                {conversationsError}
+              </FieldDescription>
+            ) : null}
+            {selectedConversationBlockedReason ? (
+              <FieldDescription className="text-destructive">
+                {selectedConversationBlockedReason}
+              </FieldDescription>
+            ) : null}
           </Field>
 
           <Field>
             <FieldLabel>Actor</FieldLabel>
-            <Select value={actorId} onValueChange={setActorId}>
-              <SelectTrigger className="w-full">
-                <SelectValue placeholder="Select an actor" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectGroup>
-                  {actorOptions.map((actor) => (
-                    <SelectItem key={actor.id} value={actor.id}>
-                      {actor.name}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              </SelectContent>
-            </Select>
+            <TargetSelect
+              value={actorId}
+              onChange={setActorId}
+              placeholder="Select an actor"
+              options={actorOptions.map((actor) => ({
+                id: actor.id,
+                label: actor.name,
+              }))}
+              disabled={!selectedConversationAllowed || loadingConversations}
+            />
+            {!conversationId ? (
+              <FieldDescription>Select a conversation first.</FieldDescription>
+            ) : null}
+            {conversationId && selectedConversationAllowed && actorOptions.length === 0 ? (
+              <FieldDescription>
+                This conversation has no active actor participants.
+              </FieldDescription>
+            ) : null}
           </Field>
         </FieldGroup>
       );
@@ -1260,6 +1777,9 @@ export default function PluginAccessStep({
                 Override payload: {nextConversationTypeMaskOverride ?? `follow ${parentPolicyLabel}`}
               </div>
             </div>
+            {policyError ? (
+              <div className="text-sm text-destructive">{policyError}</div>
+            ) : null}
           </CardContent>
         </Card>
       ) : null}
@@ -1310,30 +1830,46 @@ export default function PluginAccessStep({
                       </div>
                     </TableCell>
                     <TableCell className="max-w-0">
-                      <div className="space-y-1">
-                        <div className="truncate">
-                          {formatConversationTypeKeys(
-                            conversationTypeMaskToKeys(
-                              normalizeConversationTypeMask(
-                                grant.effectiveConversationTypeMask,
-                                effectiveConversationTypeMask,
+                      {supportsGrantConversationTypeOverride(grant.target?.type || 'workspace') ? (
+                        <div className="space-y-1">
+                          <div className="truncate">
+                            {formatConversationTypeKeys(
+                              conversationTypeMaskToKeys(
+                                normalizeConversationTypeMask(
+                                  grant.effectiveConversationTypeMask,
+                                  effectiveConversationTypeMask,
+                                ),
                               ),
-                            ),
-                          )}
+                            )}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {grant.conversationTypeMaskOverride
+                              ? `Override ${grant.conversationTypeMaskOverride}`
+                              : 'Follow instance'}
+                          </div>
                         </div>
-                        <div className="text-xs text-muted-foreground">
-                          {grant.conversationTypeMaskOverride
-                            ? `Override ${grant.conversationTypeMaskOverride}`
-                            : 'Follow instance'}
+                      ) : (
+                        <div className="space-y-1">
+                          <div className="truncate">
+                            {grant.target?.conversationId && conversationsById.get(grant.target.conversationId)
+                              ? formatConversationTypeLabel(
+                                  conversationsById.get(grant.target.conversationId)?.conversationTypeKey || null,
+                                )
+                              : 'Selected conversation'}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            Fixed by the selected conversation
+                          </div>
                         </div>
-                      </div>
+                      )}
                     </TableCell>
                     <TableCell className="text-muted-foreground">
                       {formatTimestamp(grant.createdAt || grant.grantedAt)}
                     </TableCell>
                     <TableCell className="px-6 text-right">
                       <div className="flex justify-end gap-2">
-                        {canManageGrantConversationTypes ? (
+                        {canManageGrantConversationTypes &&
+                        supportsGrantConversationTypeOverride(grant.target?.type || 'workspace') ? (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -1380,7 +1916,12 @@ export default function PluginAccessStep({
             <div className="flex flex-col gap-5">
               <RadioGroup
                 value={grantScope}
-                onValueChange={(value) => setGrantScope(value as PluginGrantScope)}
+                onValueChange={(value) => {
+                  setGrantScope(value as PluginGrantScope);
+                  setConversationId('');
+                  setActorId('');
+                  setSubmitError(null);
+                }}
                 className="w-full"
               >
                 {grantScopeOptions.map((option) => (
@@ -1400,93 +1941,110 @@ export default function PluginAccessStep({
 
               {renderTargetSelector()}
 
-              <div className="rounded-3xl border border-border bg-muted/20 p-4">
-                <div className="flex flex-col gap-1">
-                  <div className="text-sm font-medium text-foreground">
-                    Grant conversation types
+              {canGrantConversationTypesForScope ? (
+                <div className="rounded-3xl border border-border bg-muted/20 p-4">
+                  <div className="flex flex-col gap-1">
+                    <div className="text-sm font-medium text-foreground">
+                      Grant conversation types
+                    </div>
+                    <div className="text-sm text-muted-foreground">
+                      Leave this aligned with the instance to follow the instance policy. A grant override can only narrow the instance scope.
+                    </div>
                   </div>
-                  <div className="text-sm text-muted-foreground">
-                    Leave this aligned with the instance to follow the instance policy. A grant override can only narrow the instance scope.
+
+                  <div className="mt-4 flex flex-wrap gap-2">
+                    {conversationTypePresets.map((preset) => (
+                      <Button
+                        key={preset.label}
+                        type="button"
+                        variant={
+                          currentNewGrantConversationTypeMask === preset.value ? 'default' : 'outline'
+                        }
+                        size="sm"
+                        onClick={() => applyNewGrantConversationTypePreset(preset.value)}
+                      >
+                        {preset.label}
+                      </Button>
+                    ))}
                   </div>
-                </div>
 
-                <div className="mt-4 flex flex-wrap gap-2">
-                  {conversationTypePresets.map((preset) => (
-                    <Button
-                      key={preset.label}
-                      type="button"
-                      variant={
-                        currentNewGrantConversationTypeMask === preset.value ? 'default' : 'outline'
-                      }
-                      size="sm"
-                      onClick={() => applyNewGrantConversationTypePreset(preset.value)}
-                    >
-                      {preset.label}
-                    </Button>
-                  ))}
-                </div>
-
-                <div className="mt-4 grid gap-3">
-                  {conversationTypeOptions.map((option) => (
-                    <Field key={`new-grant-${option.key}`} orientation="horizontal">
-                      <FieldContent>
-                        <div className="flex items-start gap-3">
-                          <Checkbox
-                            checked={newGrantConversationTypeKeys.includes(option.key)}
-                            disabled={!instanceAllowedConversationTypeKeys.has(option.key)}
-                            onCheckedChange={() => toggleNewGrantConversationTypeKey(option.key)}
-                          />
-                          <div className="space-y-1">
-                            <FieldLabel>{option.label}</FieldLabel>
-                            <FieldDescription>{option.description}</FieldDescription>
+                  <div className="mt-4 grid gap-3">
+                    {conversationTypeOptions.map((option) => (
+                      <Field key={`new-grant-${option.key}`} orientation="horizontal">
+                        <FieldContent>
+                          <div className="flex items-start gap-3">
+                            <Checkbox
+                              checked={newGrantConversationTypeKeys.includes(option.key)}
+                              disabled={!instanceAllowedConversationTypeKeys.has(option.key)}
+                              onCheckedChange={() => toggleNewGrantConversationTypeKey(option.key)}
+                            />
+                            <div className="space-y-1">
+                              <FieldLabel>{option.label}</FieldLabel>
+                              <FieldDescription>{option.description}</FieldDescription>
+                            </div>
                           </div>
+                        </FieldContent>
+                      </Field>
+                    ))}
+                  </div>
+
+                  <div className="mt-4 grid gap-3 md:grid-cols-2">
+                    <div className="rounded-2xl border border-border bg-background p-4">
+                      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Instance Effective
+                      </div>
+                      <div className="mt-2 text-sm font-medium text-foreground">
+                        {currentGrantBaseMask}
+                      </div>
+                      <div className="mt-1 text-sm text-muted-foreground">
+                        {formatConversationTypeKeys(
+                          conversationTypeMaskToKeys(currentGrantBaseMask),
+                        )}
+                      </div>
+                    </div>
+                    <div className="rounded-2xl border border-border bg-background p-4">
+                      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Grant Draft
+                      </div>
+                      <div className="mt-2 text-sm font-medium text-foreground">
+                        {currentNewGrantConversationTypeMask}
+                      </div>
+                      <div className="mt-1 text-sm text-muted-foreground">
+                        {selectedNewGrantConversationTypeLabels}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="mt-4 flex flex-wrap items-center gap-3">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={resetNewGrantConversationTypePolicy}
+                    >
+                      <RotateCcw data-icon="inline-start" />
+                      Follow instance
+                    </Button>
+                    <div className="text-sm text-muted-foreground">
+                      Override payload: {nextNewGrantConversationTypeMaskOverride ?? 'follow instance'}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="rounded-3xl border border-border bg-muted/20 p-4 text-sm text-muted-foreground">
+                  {grantScope === 'conversation' || grantScope === 'actor_in_conversation' ? (
+                    <>
+                      Grant conversation types are fixed by the selected conversation. This grant follows the instance policy and cannot narrow it further.
+                      {selectedConversation ? (
+                        <div className="mt-2 text-foreground">
+                          Selected conversation type: {formatConversationTypeLabel(selectedConversation.conversationTypeKey)}
                         </div>
-                      </FieldContent>
-                    </Field>
-                  ))}
+                      ) : null}
+                    </>
+                  ) : (
+                    'This grant follows the instance policy.'
+                  )}
                 </div>
-
-                <div className="mt-4 grid gap-3 md:grid-cols-2">
-                  <div className="rounded-2xl border border-border bg-background p-4">
-                    <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Instance Effective
-                    </div>
-                    <div className="mt-2 text-sm font-medium text-foreground">
-                      {currentGrantBaseMask}
-                    </div>
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      {formatConversationTypeKeys(
-                        conversationTypeMaskToKeys(currentGrantBaseMask),
-                      )}
-                    </div>
-                  </div>
-                  <div className="rounded-2xl border border-border bg-background p-4">
-                    <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                      Grant Draft
-                    </div>
-                    <div className="mt-2 text-sm font-medium text-foreground">
-                      {currentNewGrantConversationTypeMask}
-                    </div>
-                    <div className="mt-1 text-sm text-muted-foreground">
-                      {selectedNewGrantConversationTypeLabels}
-                    </div>
-                  </div>
-                </div>
-
-                <div className="mt-4 flex flex-wrap items-center gap-3">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    onClick={resetNewGrantConversationTypePolicy}
-                  >
-                    <RotateCcw data-icon="inline-start" />
-                    Follow instance
-                  </Button>
-                  <div className="text-sm text-muted-foreground">
-                    Override payload: {nextNewGrantConversationTypeMaskOverride ?? 'follow instance'}
-                  </div>
-                </div>
-              </div>
+              )}
             </div>
 
             <div className="rounded-3xl border border-border bg-muted/20 p-5">
@@ -1508,6 +2066,9 @@ export default function PluginAccessStep({
           </div>
 
           <DialogFooter>
+            {submitError ? (
+              <div className="mr-auto text-sm text-destructive">{submitError}</div>
+            ) : null}
             <Button variant="outline" onClick={() => setDialogOpen(false)}>
               Cancel
             </Button>
@@ -1652,6 +2213,9 @@ export default function PluginAccessStep({
                 Override payload: {nextGrantConversationTypeMaskOverride ?? 'follow instance'}
               </div>
             </div>
+            {grantPolicyError ? (
+              <div className="text-sm text-destructive">{grantPolicyError}</div>
+            ) : null}
           </div>
 
           <DialogFooter>

@@ -27,11 +27,12 @@ import { toast } from 'sonner';
 import { usePluginStore } from '@/stores/plugin-store';
 import { useWorkspace } from '@/app/dashboard/workspace-provider';
 import { api } from '@/lib/api';
+import { loadConversationCatalog } from '@/lib/conversation-catalog';
 import {
   createIntegrationEventSources,
   listIntegrationEventDefinitionOptions,
 } from '@/lib/integration-event-sources';
-import PluginAccessStep from './plugin-access-step';
+import ResourceAccessStep from './resource-access-step';
 import { PluginIcon } from './plugin-ui';
 import {
   AccessAttachmentTypeStep,
@@ -668,8 +669,8 @@ export default function InstallDialog({
       }).catch(() => {});
     }
     if (selectedAttachmentType === 'conversation' && workspaceId) {
-      api.getThreads(workspaceId).then((res) => setConversations(
-        ((res.conversations || []) as AccessVisualConversation[]).map((conversation) => ({
+      loadConversationCatalog(workspaceId).then((res) => setConversations(
+        (res as AccessVisualConversation[]).map((conversation) => ({
           ...conversation,
           name: getConversationDisplayName(conversation),
         })),
@@ -1578,7 +1579,7 @@ export default function InstallDialog({
         )}
 
         {currentStep?.kind === 'access' && (
-          <PluginAccessStep installation={currentInstallation} />
+          <ResourceAccessStep installation={currentInstallation} />
         )}
 
         {currentStep?.kind === 'integration_events' && integrationProvider && (

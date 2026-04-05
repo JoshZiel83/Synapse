@@ -61,7 +61,7 @@ import { Switch } from '@/components/ui/switch';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { cn } from '@/lib/utils';
-import PluginAccessStep from '../../plugin-access-step';
+import ResourceAccessStep from '../../resource-access-step';
 
 function formatDateTime(value?: string) {
   if (!value) return 'Never';
@@ -1019,16 +1019,16 @@ export default function RelayDevicePage() {
 
               <Separator />
 
-              <PluginAccessStep
+              <ResourceAccessStep
                 installation={null}
                 resourceId={activeExposure.id}
                 accessAdapter={relayAccessAdapter}
                 resourceLabel="relay exposure"
-                title="Authorization"
+                title="Resource Access"
                 description="Choose who can invoke this relay exposure. Device ownership and trust stay on the relay."
-                addAccessLabel="Add Authorization"
+                addAccessLabel="Add Resource Access"
                 emptyMessage="This relay exposure is not available yet."
-                dialogTitle="Add relay exposure access"
+                dialogTitle="Add relay exposure resource access"
                 dialogDescription="Choose who can invoke this relay exposure."
                 noAccessMessage="No one can invoke this relay exposure yet."
               />
