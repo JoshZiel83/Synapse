@@ -1378,7 +1378,7 @@ async function updateInteractionConversationItemId(
   interactionId: string,
   conversationItemId: string,
 ) {
-  await executeCompiledQuery(
+  const result = await executeCompiledQuery(
     client,
     db
       .updateTable("interaction_requests")
@@ -1388,6 +1388,11 @@ async function updateInteractionConversationItemId(
       })
       .where("id", "=", interactionId),
   );
+  if (result.rowCount !== 1) {
+    throw new Error(
+      `Expected to update conversation item for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`,
+    );
+  }
 }
 
 async function updateInteractionRequestRow(
@@ -1395,13 +1400,18 @@ async function updateInteractionRequestRow(
   interactionId: string,
   values: Record<string, unknown>,
 ) {
-  await executeCompiledQuery(
+  const result = await executeCompiledQuery(
     client,
     db
       .updateTable("interaction_requests")
       .set(values)
       .where("id", "=", interactionId),
   );
+  if (result.rowCount !== 1) {
+    throw new Error(
+      `Expected to update interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`,
+    );
+  }
 }
 
 async function updateInteractionResolutionPayload(
@@ -1411,7 +1421,7 @@ async function updateInteractionResolutionPayload(
   payload: Record<string, unknown>,
 ) {
   if (interactionKind === INTERACTION_REQUEST_KIND.USER_INPUT) {
-    await executeCompiledQuery(
+    const result = await executeCompiledQuery(
       client,
       db
         .updateTable("interaction_user_input_requests")
@@ -1421,11 +1431,16 @@ async function updateInteractionResolutionPayload(
         })
         .where("interaction_id", "=", interactionId),
     );
+    if (result.rowCount !== 1) {
+      throw new Error(
+        `Expected user_input details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`,
+      );
+    }
     return;
   }
 
   if (interactionKind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
-    await executeCompiledQuery(
+    const result = await executeCompiledQuery(
       client,
       db
         .updateTable("interaction_plan_approval_requests")
@@ -1435,10 +1450,15 @@ async function updateInteractionResolutionPayload(
         })
         .where("interaction_id", "=", interactionId),
     );
+    if (result.rowCount !== 1) {
+      throw new Error(
+        `Expected plan_approval details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`,
+      );
+    }
     return;
   }
 
-  await executeCompiledQuery(
+  const result = await executeCompiledQuery(
     client,
     db
       .updateTable("interaction_relay_authorization_requests")
@@ -1448,6 +1468,11 @@ async function updateInteractionResolutionPayload(
       })
       .where("interaction_id", "=", interactionId),
   );
+  if (result.rowCount !== 1) {
+    throw new Error(
+      `Expected relay_authorization details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`,
+    );
+  }
 }
 
 export async function createUserInputInteractionRequest(

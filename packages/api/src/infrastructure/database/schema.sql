@@ -2946,6 +2946,126 @@ CREATE TABLE interaction_relay_authorization_requests (
   dedupe_key TEXT NOT NULL
 );
 
+CREATE OR REPLACE FUNCTION validate_interaction_request_subtype_consistency()
+RETURNS trigger AS $$
+DECLARE
+  v_interaction_id UUID;
+  v_kind interaction_requests_kind;
+  v_has_user_input BOOLEAN;
+  v_has_plan_approval BOOLEAN;
+  v_has_relay_authorization BOOLEAN;
+  v_subtype_count INT;
+BEGIN
+  IF TG_OP = 'DELETE' THEN
+    IF TG_TABLE_NAME = 'interaction_requests' THEN
+      v_interaction_id := OLD.id;
+    ELSE
+      v_interaction_id := OLD.interaction_id;
+    END IF;
+  ELSE
+    IF TG_TABLE_NAME = 'interaction_requests' THEN
+      v_interaction_id := NEW.id;
+    ELSE
+      v_interaction_id := NEW.interaction_id;
+    END IF;
+  END IF;
+
+  SELECT ir.kind,
+         EXISTS (
+           SELECT 1
+           FROM interaction_user_input_requests user_input
+           WHERE user_input.interaction_id = ir.id
+         ) AS has_user_input,
+         EXISTS (
+           SELECT 1
+           FROM interaction_plan_approval_requests plan
+           WHERE plan.interaction_id = ir.id
+         ) AS has_plan_approval,
+         EXISTS (
+           SELECT 1
+           FROM interaction_relay_authorization_requests auth
+           WHERE auth.interaction_id = ir.id
+         ) AS has_relay_authorization
+    INTO
+      v_kind,
+      v_has_user_input,
+      v_has_plan_approval,
+      v_has_relay_authorization
+    FROM interaction_requests ir
+   WHERE ir.id = v_interaction_id;
+
+  IF NOT FOUND THEN
+    RETURN NULL;
+  END IF;
+
+  v_subtype_count :=
+    v_has_user_input::INT +
+    v_has_plan_approval::INT +
+    v_has_relay_authorization::INT;
+
+  IF v_subtype_count <> 1 THEN
+    RAISE EXCEPTION
+      'interaction_request % must have exactly one subtype row, found user_input=% plan_approval=% relay_authorization=%',
+      v_interaction_id,
+      v_has_user_input,
+      v_has_plan_approval,
+      v_has_relay_authorization
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'interaction_requests_exactly_one_subtype_chk';
+  END IF;
+
+  IF v_kind = 'user_input' AND NOT v_has_user_input THEN
+    RAISE EXCEPTION
+      'interaction_request % has kind=user_input but is missing interaction_user_input_requests row',
+      v_interaction_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'interaction_requests_kind_subtype_match_chk';
+  END IF;
+
+  IF v_kind = 'plan_approval' AND NOT v_has_plan_approval THEN
+    RAISE EXCEPTION
+      'interaction_request % has kind=plan_approval but is missing interaction_plan_approval_requests row',
+      v_interaction_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'interaction_requests_kind_subtype_match_chk';
+  END IF;
+
+  IF v_kind = 'relay_authorization' AND NOT v_has_relay_authorization THEN
+    RAISE EXCEPTION
+      'interaction_request % has kind=relay_authorization but is missing interaction_relay_authorization_requests row',
+      v_interaction_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'interaction_requests_kind_subtype_match_chk';
+  END IF;
+
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER interaction_requests_subtype_consistency_chk
+AFTER INSERT OR UPDATE OF kind OR DELETE ON interaction_requests
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_interaction_request_subtype_consistency();
+
+CREATE CONSTRAINT TRIGGER interaction_user_input_requests_parent_kind_chk
+AFTER INSERT OR UPDATE OR DELETE ON interaction_user_input_requests
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_interaction_request_subtype_consistency();
+
+CREATE CONSTRAINT TRIGGER interaction_plan_approval_requests_parent_kind_chk
+AFTER INSERT OR UPDATE OR DELETE ON interaction_plan_approval_requests
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_interaction_request_subtype_consistency();
+
+CREATE CONSTRAINT TRIGGER interaction_relay_authorization_requests_parent_kind_chk
+AFTER INSERT OR UPDATE OR DELETE ON interaction_relay_authorization_requests
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_interaction_request_subtype_consistency();
+
 -- This FK cannot be declared inline on sessions because interaction_requests
 -- depends on conversation_items, and conversation_items already depends on sessions.
 ALTER TABLE sessions ADD CONSTRAINT fk_sessions_active_plan_approval_interaction
