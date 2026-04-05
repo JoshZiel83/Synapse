@@ -51,7 +51,7 @@ import {
   Shield,
   XCircle,
 } from "lucide-react"
-import ReactMarkdown from "react-markdown"
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { extractText } from "@synapse/shared"
 import { toast } from "sonner"
@@ -303,7 +303,7 @@ function CitationFooter({
             href={s.url}
             target="_blank"
             rel="noopener noreferrer"
-            className="group/src flex items-start gap-1.5 text-[10px] text-muted-foreground/60 transition-colors hover:text-indigo-600 dark:hover:text-indigo-400"
+            className="group/src flex items-start gap-1.5 text-[10px] text-muted-foreground/60 transition-colors hover:text-primary"
           >
             <span className="w-3 shrink-0 text-right text-muted-foreground/40">
               {s.num}.
@@ -1779,8 +1779,8 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
               rel="noopener noreferrer"
               className="group/file flex items-center gap-2.5 rounded-lg bg-gray-50 p-2.5 ring-1 ring-gray-200 transition-colors hover:bg-gray-100 dark:bg-white/[0.03] dark:ring-white/[0.06] dark:hover:bg-white/[0.06]"
             >
-              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10">
-                <FileIcon className="h-4 w-4 text-indigo-500" />
+              <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                <FileIcon className="h-4 w-4 text-primary" />
               </div>
               <div className="min-w-0 flex-1">
                 <div className="truncate text-xs text-foreground/80">
@@ -1790,7 +1790,7 @@ function FileBlockPreview({ blocks }: { blocks: FileRefBlock[] }) {
                   {formatBytes(block.sizeBytes)}
                 </div>
               </div>
-              <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40 transition-colors group-hover/file:text-indigo-500" />
+              <Download className="h-3.5 w-3.5 shrink-0 text-muted-foreground/40 transition-colors group-hover/file:text-primary" />
             </a>
           )
         })}
@@ -1844,6 +1844,11 @@ function MarkdownTextBlock({
       <TwemojiScope className="prose prose-sm prose-p:my-1.5 prose-headings:text-foreground prose-code:rounded prose-code:bg-primary/10 prose-code:px-1.5 prose-code:py-0.5 prose-code:text-xs prose-code:text-primary prose-code:before:content-none prose-code:after:content-none prose-pre:rounded-2xl prose-pre:border prose-pre:border-border prose-pre:bg-muted prose-strong:text-foreground dark:prose-invert max-w-full min-w-0 break-words [&_a]:[overflow-wrap:anywhere] [&_a]:break-words [&_code]:[overflow-wrap:anywhere] [&_code]:break-words [&_li]:[overflow-wrap:anywhere] [&_p]:[overflow-wrap:anywhere] [&_pre]:max-w-full [&_pre]:overflow-x-auto">
         <ReactMarkdown
           remarkPlugins={[remarkGfm]}
+          urlTransform={(url) =>
+            url.startsWith(MENTION_MARKDOWN_PREFIX)
+              ? url
+              : defaultUrlTransform(url)
+          }
           components={{
             img: ({ src, alt, ...props }) => (
               <ExpandableImage src={src} alt={alt} {...props} />
@@ -2242,7 +2247,7 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
               key={`search-${i}`}
               className="rounded-lg bg-gray-50 p-2.5 ring-1 ring-gray-200 dark:bg-white/[0.03] dark:ring-white/[0.06]"
             >
-              <div className="flex items-center gap-1.5 text-[11px] text-indigo-600 dark:text-indigo-400/80">
+              <div className="flex items-center gap-1.5 text-[11px] text-primary">
                 <Search className="h-3 w-3" />
                 <span className="font-medium">Web Search</span>
               </div>
@@ -2259,11 +2264,11 @@ function ServerToolCallDisplay({ calls }: { calls: ServerToolCall[] }) {
                       href={r.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="group/link flex items-start gap-1.5 text-[10px] text-muted-foreground/60 transition-colors hover:text-indigo-600 dark:hover:text-indigo-400"
+                      className="group/link flex items-start gap-1.5 text-[10px] text-muted-foreground/60 transition-colors hover:text-primary"
                     >
                       <ExternalLink className="mt-0.5 h-2.5 w-2.5 shrink-0 opacity-0 transition-opacity group-hover/link:opacity-100" />
                       <span className="truncate">
-                        <span className="text-foreground/60 group-hover/link:text-indigo-500">
+                        <span className="text-foreground/60 group-hover/link:text-primary">
                           {r.title || r.url}
                         </span>
                         {r.pageAge && (

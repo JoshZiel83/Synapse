@@ -187,7 +187,7 @@ export default function NewConversationDialog({
                   placeholder="Search actors..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  className="block w-full rounded-md bg-white pl-9 pr-3 py-1.5 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-indigo-500"
+                  className="block w-full rounded-md bg-white pl-9 pr-3 py-1.5 text-sm text-gray-900 outline-1 -outline-offset-1 outline-gray-300 placeholder:text-gray-400 focus:outline-2 focus:-outline-offset-2 focus:outline-ring dark:bg-white/5 dark:text-white dark:outline-white/10 dark:placeholder:text-gray-500 dark:focus:outline-ring"
                   autoFocus
                 />
               </div>
@@ -213,7 +213,7 @@ export default function NewConversationDialog({
                             type="checkbox"
                             checked={selectedIds.has(actor.id)}
                             onChange={() => toggleActor(actor.id)}
-                            className="col-start-1 row-start-1 appearance-none rounded-sm border border-gray-300 bg-white checked:border-indigo-600 checked:bg-indigo-600 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-600 dark:border-white/10 dark:bg-white/5 dark:checked:border-indigo-500 dark:checked:bg-indigo-500 dark:focus-visible:outline-indigo-500"
+                            className="col-start-1 row-start-1 appearance-none rounded-sm border border-gray-300 bg-white checked:border-primary checked:bg-primary focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring dark:border-white/10 dark:bg-white/5 dark:checked:border-primary dark:checked:bg-primary dark:focus-visible:outline-ring"
                           />
                           <svg
                             fill="none"

@@ -1219,7 +1219,7 @@ export default function InstallDialog({
               className={`col-start-1 row-start-1 block w-full appearance-none rounded-md bg-white py-1.5 pl-3 text-base outline-1 -outline-offset-1 sm:text-sm/6 dark:bg-white/5 ${
                 error
                   ? 'pr-10 text-red-900 outline-red-300 focus:outline-2 focus:-outline-offset-2 focus:outline-red-600 dark:text-red-400 dark:outline-red-500/50 dark:focus:outline-red-400'
-                  : 'pr-8 text-gray-900 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:text-white dark:outline-white/10 dark:focus:outline-indigo-500'
+                  : 'pr-8 text-gray-900 outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-ring dark:text-white dark:outline-white/10 dark:focus:outline-ring'
               }`}
               value={typeof value === 'string' ? value : ''}
               onChange={(event) => handleFieldChange(field.key, event.target.value)}
@@ -1313,7 +1313,7 @@ export default function InstallDialog({
             className={`mt-2 block w-full rounded-md bg-white px-3 py-1.5 text-base text-gray-900 placeholder:text-gray-400 outline-1 -outline-offset-1 sm:text-sm/6 dark:bg-white/5 dark:text-white dark:placeholder:text-gray-500 ${
               error
                 ? 'outline-red-300 focus:outline-2 focus:-outline-offset-2 focus:outline-red-600 dark:outline-red-500/50 dark:text-red-400 dark:placeholder:text-red-400/70 dark:focus:outline-red-400'
-                : 'outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-indigo-600 dark:outline-white/10 dark:focus:outline-indigo-500'
+                : 'outline-gray-300 focus:outline-2 focus:-outline-offset-2 focus:outline-ring dark:outline-white/10 dark:focus:outline-ring'
             }`}
           />
           {error && <p className="mt-2 text-sm text-red-600 dark:text-red-400">{error}</p>}

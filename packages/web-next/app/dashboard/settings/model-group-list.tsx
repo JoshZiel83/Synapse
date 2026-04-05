@@ -157,7 +157,7 @@ export default function ModelGroupList({
           <Button variant="outline" size="sm" onClick={() => void loadGroups()} className="border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/5">
             <RefreshCw className="w-4 h-4 mr-1" /> Refresh
           </Button>
-          <Button size="sm" onClick={() => { setEditGroup(null); setDialogOpen(true); }} className="bg-indigo-600 hover:bg-indigo-500">
+          <Button size="sm" onClick={() => { setEditGroup(null); setDialogOpen(true); }} className="bg-primary hover:bg-primary/80">
             <Plus className="w-4 h-4 mr-1" /> New Group
           </Button>
         </div>
@@ -265,7 +265,7 @@ function GroupCard({
           >
             Edit
           </Button>
-          <Button asChild variant="ghost" size="icon-sm" className="text-muted-foreground/50 hover:text-indigo-600 dark:hover:text-indigo-400">
+          <Button asChild variant="ghost" size="icon-sm" className="text-muted-foreground/50 hover:text-primary">
             <Link href={`/models/group/${group.id}/setting?${params.toString()}`}>
               <ChevronRight className="w-4 h-4" />
             </Link>

@@ -49,7 +49,7 @@ export default function InviteClient({ token }: { token: string }) {
       <Card className="w-full max-w-md">
         <CardHeader className="text-center">
           <div className="flex justify-center mb-4">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-indigo-600 p-2">
+            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-primary p-2">
               <Image src="/synapse.svg" alt="Synapse" width={32} height={32} className="invert" />
             </div>
           </div>
@@ -58,7 +58,7 @@ export default function InviteClient({ token }: { token: string }) {
             <>
               <CardTitle>Loading invite...</CardTitle>
               <CardDescription>
-                <span className="inline-block h-4 w-4 rounded-full border-2 border-indigo-600 border-t-transparent animate-spin mt-2" />
+                <span className="inline-block h-4 w-4 rounded-full border-2 border-primary border-t-transparent animate-spin mt-2" />
               </CardDescription>
             </>
           ) : error && !invite ? (

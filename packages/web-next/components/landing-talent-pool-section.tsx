@@ -15,7 +15,7 @@ const firstRowTalents: TalentCard[] = [
   { name: "Orian", role: "推进协调员", initials: "OR", summary: "把目标拆成 owner、节点和 blocker", tone: "bg-amber-100 text-amber-950" },
   { name: "Lyra", role: "内容主笔", initials: "LY", summary: "根据你的语气快速起草对外文案", tone: "bg-cyan-100 text-cyan-950" },
   { name: "Kite", role: "数据分析师", initials: "KI", summary: "把指标波动翻译成可执行判断", tone: "bg-orange-100 text-orange-950" },
-  { name: "Nora", role: "用户研究员", initials: "NO", summary: "持续记住你的用户样本和访谈偏好", tone: "bg-indigo-100 text-indigo-950" },
+  { name: "Nora", role: "用户研究员", initials: "NO", summary: "持续记住你的用户样本和访谈偏好", tone: "bg-primary/10 text-primary" },
   { name: "Soren", role: "风险审阅官", initials: "SO", summary: "沿着你的标准补齐风险和边界提醒", tone: "bg-emerald-100 text-emerald-950" },
   { name: "Ivy", role: "项目 PMO", initials: "IV", summary: "跟住每个线程的状态、延期和责任人", tone: "bg-violet-100 text-violet-950" },
 ] as const
@@ -27,7 +27,7 @@ const secondRowTalents: TalentCard[] = [
   { name: "Elsa", role: "客服教练", initials: "EL", summary: "把高频问题沉淀成统一话术和 SOP", tone: "bg-cyan-100 text-cyan-950" },
   { name: "Rowan", role: "招聘助理", initials: "RO", summary: "沿着你的偏好筛人、约面、跟进", tone: "bg-orange-100 text-orange-950" },
   { name: "Quinn", role: "商务研究员", initials: "QU", summary: "快速补齐客户、市场和合作背景", tone: "bg-emerald-100 text-emerald-950" },
-  { name: "Cora", role: "运营指挥", initials: "CO", summary: "让复杂协作在一条线上持续推进", tone: "bg-indigo-100 text-indigo-950" },
+  { name: "Cora", role: "运营指挥", initials: "CO", summary: "让复杂协作在一条线上持续推进", tone: "bg-primary/10 text-primary" },
 ] as const
 
 const thirdRowTalents: TalentCard[] = [
@@ -35,7 +35,7 @@ const thirdRowTalents: TalentCard[] = [
   { name: "Theo", role: "财务参谋", initials: "TH", summary: "把数字拆成预算、风险和效率判断", tone: "bg-amber-100 text-amber-950" },
   { name: "June", role: "社媒编辑", initials: "JU", summary: "根据你的风格持续产出短内容", tone: "bg-cyan-100 text-cyan-950" },
   { name: "Sasha", role: "用户成功经理", initials: "SA", summary: "沿着用户目标持续追踪交付效果", tone: "bg-orange-100 text-orange-950" },
-  { name: "Finn", role: "销售研究员", initials: "FI", summary: "会先补齐客户背景再帮你准备沟通", tone: "bg-indigo-100 text-indigo-950" },
+  { name: "Finn", role: "销售研究员", initials: "FI", summary: "会先补齐客户背景再帮你准备沟通", tone: "bg-primary/10 text-primary" },
   { name: "Lumi", role: "创意导演", initials: "LU", summary: "把你的审美偏好沉淀成创意判断", tone: "bg-emerald-100 text-emerald-950" },
   { name: "Eden", role: "CEO 助理", initials: "ED", summary: "跟住优先级、会议和关键待办", tone: "bg-violet-100 text-violet-950" },
 ] as const

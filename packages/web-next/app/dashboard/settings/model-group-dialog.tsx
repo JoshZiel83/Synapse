@@ -196,7 +196,7 @@ export default function ModelGroupDialog({
               type="checkbox"
               checked={isDefault}
               onChange={(e) => setIsDefault(e.target.checked)}
-              className="accent-blue-500"
+              className="accent-primary"
             />
             <span className="text-sm">Set as default group for this scope</span>
           </label>
@@ -207,7 +207,7 @@ export default function ModelGroupDialog({
             Cancel
           </Button>
           <Button onClick={handleSave} disabled={saving || !name.trim()}
-            className="bg-indigo-600 hover:bg-indigo-500">
+            className="bg-primary hover:bg-primary/80">
             {saving ? 'Saving...' : group ? 'Update' : 'Create'}
           </Button>
         </DialogFooter>

@@ -468,7 +468,7 @@ export default function ModelItemDialog({
             Cancel
           </Button>
           <Button onClick={handleSave} disabled={saving || !isValid}
-            className="bg-indigo-600 hover:bg-indigo-500">
+            className="bg-primary hover:bg-primary/80">
             {saving ? 'Saving...' : item ? 'Update' : 'Add Model'}
           </Button>
         </DialogFooter>

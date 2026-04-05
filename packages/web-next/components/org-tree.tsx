@@ -128,7 +128,7 @@ function OrgTreeNode({ actor, depth = 0, onAddChild }: OrgTreeNodeProps) {
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-indigo-600 dark:hover:text-indigo-400"
+                  className="h-7 w-7 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-primary"
                   onClick={() => onAddChild(actor.id)}
                 >
                   <Plus className="w-3.5 h-3.5" />

@@ -271,7 +271,7 @@ export default function ModelGroupDetail({
               <Button variant="outline" size="sm" onClick={() => void loadGroup()} className="border-gray-200 dark:border-white/10 hover:bg-gray-50 dark:hover:bg-white/5">
                 <RefreshCw className="w-4 h-4 mr-1" /> Refresh
               </Button>
-              <Button size="sm" onClick={() => { setEditItem(null); setItemDialogOpen(true); }} className="bg-indigo-600 hover:bg-indigo-500">
+              <Button size="sm" onClick={() => { setEditItem(null); setItemDialogOpen(true); }} className="bg-primary hover:bg-primary/80">
                 <Plus className="w-4 h-4 mr-1" /> Add Model
               </Button>
             </div>
@@ -329,7 +329,7 @@ export default function ModelGroupDetail({
                         size="icon"
                         onClick={() => setVersionsItemId(item.id)}
                         title="Version history"
-                        className="text-muted-foreground hover:text-indigo-600 dark:hover:text-indigo-400"
+                        className="text-muted-foreground hover:text-primary"
                       >
                         <History className="w-4 h-4" />
                       </Button>

@@ -295,7 +295,7 @@ export default function ActorAssignment() {
               Cancel
             </Button>
             <Button onClick={handleSave} disabled={saving}
-              className="bg-indigo-600 hover:bg-indigo-500">
+              className="bg-primary hover:bg-primary/80">
               {saving ? 'Saving...' : 'Save Assignment'}
             </Button>
           </DialogFooter>
