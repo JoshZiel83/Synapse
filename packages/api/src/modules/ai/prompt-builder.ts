@@ -16,6 +16,7 @@ import {
   isPlanCollaborationMode,
   isPlanDraftingCollaborationMode,
 } from "@synapse/shared/utils";
+import { buildReplyToRefUsageGuidance } from "./session-tool-guidance.js";
 
 export interface ConversationParticipantInfo {
   id?: string;
@@ -465,7 +466,7 @@ export function buildActorPrompt(
           `Parameters:\n` +
           `- \`intent\`: \`reply\` when you are replying with information or a result; \`request\` when you are delegating, asking, or requesting action\n` +
           `- \`summary\`: a short structured summary of what you replied with or what you want the other participant to do; this is used for UI rendering\n` +
-          `- \`replyToRef\`: optional short message reference such as \`m_1775264233848001\` from the XML context when you are replying to a specific visible message\n` +
+          `- ${buildReplyToRefUsageGuidance("private")}\n` +
           `- \`message\`: your visible message content\n` +
           `- The recipient is implicit. In this private thread, \`send_to\` goes directly to ${exampleRecipient} or whoever is currently the other participant.\n` +
           `- Prefer \`<mention participantId="..."/>\`. You may also use \`<mention name="${exampleRecipient}"/>\` when the roster name is unique.\n` +
@@ -474,7 +475,7 @@ export function buildActorPrompt(
           `Parameters:\n` +
           `- \`intent\`: \`reply\` when you are replying with information or a result; \`request\` when you are delegating, asking, or requesting action\n` +
           `- \`summary\`: a short structured summary of what you replied with or what you want someone to do; this is used for UI rendering\n` +
-          `- \`replyToRef\`: optional short message reference such as \`m_1775264233848001\` from the XML context when you are replying to a specific visible message\n` +
+          `- ${buildReplyToRefUsageGuidance("group")}\n` +
           `- \`message\`: your visible message content\n` +
           `- The message remains visible to the whole conversation. There is no recipient or target parameter for ordinary messages.\n` +
           `- Prefer \`<mention participantId="..."/>\`. You may also use \`<mention name="${exampleRecipient}"/>\` when the roster name is unique.\n` +
@@ -512,7 +513,7 @@ export function buildActorPrompt(
         `Visible conversation context is provided as XML-wrapped messages.\n` +
         `- Every visible message has an \`itemId\` and usually a short \`ref\` such as \`m_1775264233848001\`.\n` +
         `- Use \`participantId\` values from \`<conversation_manifest>\` for inline mentions. You do not need raw actorId, userId, or workspaceMemberId.\n` +
-        `- Use \`replyToRef\` with \`send_to\` when you are replying to a specific visible message.\n` +
+        `- Use \`replyToRef\` only when the reply target needs to be anchored explicitly; do not add it mechanically just because refs are available.\n` +
         `- Inside message bodies, prefer \`<mention participantId="..."/>\`. You may use \`<mention name="..."/>\` only when the roster name is unique.\n` +
         `- Message bodies may include real file or image blocks. Do not assume every attachment was flattened to text.\n\n` +
         `# Communication\n\n` +

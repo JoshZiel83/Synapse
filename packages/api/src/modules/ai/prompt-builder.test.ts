@@ -75,6 +75,29 @@ test("buildActorPrompt injects stronger plan mode guidance", () => {
   assert.match(prompt.system, /Do not request plan approval through normal assistant text or `request_user_input`/i);
 });
 
+test("buildActorPrompt teaches private threads not to overuse replyToRef", () => {
+  const prompt = buildActorPrompt(
+    { id: "actor-1", definition: { name: "Planner", title: "Engineer" }, currentVersion: 1 },
+    undefined,
+    undefined,
+    undefined,
+    [
+      {
+        id: "participant-user",
+        participant_kind: "workspace_member",
+        user_id: "user-1",
+        user_name: "Ada",
+      },
+    ],
+    "private",
+    undefined,
+    "default",
+  );
+
+  assert.match(prompt.system, /omit `replyToRef` by default/i);
+  assert.match(prompt.system, /Do not add `replyToRef` mechanically/i);
+});
+
 test("buildActorPrompt rejects plan mode in group conversations", () => {
   assert.throws(
     () =>

@@ -37,6 +37,7 @@ import {
 } from "./tool-errors.js";
 import { registerToolPlugin } from "./tool-plugins.js";
 import {
+  buildReplyToRefUsageGuidance,
   buildEnterPlanModeToolDescription,
   buildExitPlanModeToolDescription,
   buildRequestUserInputToolDescription,
@@ -286,8 +287,7 @@ function buildSendToDefinition(params: {
           },
           replyToRef: {
             type: "string",
-            description:
-              'Optional short message reference such as "m_1775264233848001" from the XML context when you are replying to a specific message.',
+            description: buildReplyToRefUsageGuidance("private"),
           },
           message: {
             type: "string",
@@ -319,8 +319,7 @@ function buildSendToDefinition(params: {
         },
         replyToRef: {
           type: "string",
-          description:
-            'Optional short message reference such as "m_1775264233848001" from the XML context when you are replying to a specific message.',
+          description: buildReplyToRefUsageGuidance("group"),
         },
         message: {
           type: "string",

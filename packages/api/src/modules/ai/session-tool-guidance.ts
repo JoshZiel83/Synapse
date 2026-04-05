@@ -3,8 +3,30 @@ type RequestUserInputDescriptionVariant =
   | { kind: "private"; recipientLabel: string }
   | { kind: "group"; candidateDirectory: string };
 
+type ReplyToRefGuidanceVariant = "private" | "group";
+
 function joinSentences(...sentences: string[]): string {
   return sentences.join(" ");
+}
+
+export function buildReplyToRefUsageGuidance(
+  variant: ReplyToRefGuidanceVariant,
+): string {
+  if (variant === "private") {
+    return joinSentences(
+      "`replyToRef` is optional and should be used only when it adds clarity.",
+      "In a private conversation, if you are replying to the immediately preceding visible message and no other recent message could plausibly be the target, omit `replyToRef` by default.",
+      "Use it when replying to an older message, when multiple recent messages or questions could be the target, when newer messages may have shifted the context, or when the explicit reply preview itself would be useful.",
+      "Do not add `replyToRef` mechanically just because the XML shows message refs.",
+    );
+  }
+
+  return joinSentences(
+    "`replyToRef` is for replying to a specific visible message or sub-thread in the group conversation.",
+    "Use it when the reply target matters for routing or clarity.",
+    "General group updates can omit it.",
+    "Body mentions do not replace `replyToRef`.",
+  );
 }
 
 export function buildRequestUserInputToolDescription(
