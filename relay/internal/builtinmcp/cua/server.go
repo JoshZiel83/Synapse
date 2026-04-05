@@ -244,48 +244,44 @@ func errorResult(text string) core.CallResult {
 func displayChangedResult(displays []DisplayInfo) core.CallResult {
 	return core.CallResult{
 		Content: []interface{}{core.Text("Detected a display configuration change during this CUA session. Take a fresh screenshot and retry the action.")},
-		StructuredContent: map[string]interface{}{
+		StructuredContent: core.WithRelayAccessDenial(map[string]interface{}{
 			"code":                      "display_changed",
 			"requires_retry":            true,
 			"requires_fresh_screenshot": true,
 			"displays":                  cloneDisplays(displays),
-		},
+		}, core.RelayAccessDenialKindRuntimeConstraint, core.RelayAccessDenialResolutionUnresolvable),
 		IsError: true,
 	}
 }
 
 func readOnlyResult(toolName, operation string) core.CallResult {
-	message := "This built-in CUA server is currently in read-only mode. Observation tools remain available, but this action requires manual approval in the Synapse Relay client. Ask the user to disable read-only mode there, then retry."
+	message := "This built-in CUA server is currently in read-only mode. Observation tools remain available, but input actions require relay authorization before retrying."
 	if operation != "" {
-		message = fmt.Sprintf("The requested action %q is blocked because this built-in CUA server is currently in read-only mode. Observation tools remain available, but input actions require manual approval in the Synapse Relay client. Ask the user to disable read-only mode there, then retry.", operation)
+		message = fmt.Sprintf("The requested action %q is blocked because this built-in CUA server is currently in read-only mode. Observation tools remain available, but input actions require relay authorization before retrying.", operation)
 	}
 	return core.CallResult{
 		Content: []interface{}{core.Text(message)},
-		StructuredContent: map[string]interface{}{
-			"code":                   "read_only_mode",
-			"read_only":              true,
-			"tool":                   toolName,
-			"operation":              operation,
-			"requires_user_approval": true,
-			"client_hint":            "Disable read-only mode in the Synapse Relay client, then retry the action.",
-		},
+		StructuredContent: core.WithRelayAccessDenial(map[string]interface{}{
+			"code":      "read_only_mode",
+			"read_only": true,
+			"tool":      toolName,
+			"operation": operation,
+			"message":   message,
+		}, core.RelayAccessDenialKindPermissionDenied, core.RelayAccessDenialResolutionServerGrant),
 		IsError: true,
 	}
 }
 
 func disabledResult(toolName string) core.CallResult {
-	message := "This built-in CUA server is currently disabled. Ask the user to enable desktop access in the Synapse Relay client, then retry."
+	message := "This built-in CUA server is currently blocked by the relay client's local policy. Synapse can continue after the matching relay authorization is approved."
 	return core.CallResult{
 		Content: []interface{}{core.Text(message)},
-		StructuredContent: map[string]interface{}{
-			"code":                   "server_disabled",
-			"tool":                   toolName,
-			"capability":             "cua",
-			"requires_user_approval": true,
-			"authorization_duration": "persistent",
-			"client_hint":            "Enable desktop access in the Synapse Relay client, then retry the action.",
-			"message":                message,
-		},
+		StructuredContent: core.WithRelayAccessDenial(map[string]interface{}{
+			"code":       "server_disabled",
+			"tool":       toolName,
+			"capability": "cua",
+			"message":    message,
+		}, core.RelayAccessDenialKindPermissionDenied, core.RelayAccessDenialResolutionServerGrant),
 		IsError: true,
 	}
 }

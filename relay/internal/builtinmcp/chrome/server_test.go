@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestDisabledChromeListsStaticToolsAndRequestsPersistentAuthorization(t *testing.T) {
+func TestDisabledChromeListsStaticToolsAndReturnsRelayAccessDenial(t *testing.T) {
 	server, err := New(Config{
 		StableKey:  "chrome-disabled",
 		InstanceID: "chrome_default",
@@ -52,8 +52,15 @@ func TestDisabledChromeListsStaticToolsAndRequestsPersistentAuthorization(t *tes
 	if structured["capability"] != "chrome" {
 		t.Fatalf("expected chrome capability, got %#v", structured["capability"])
 	}
-	if structured["authorization_duration"] != "persistent" {
-		t.Fatalf("expected persistent authorization hint, got %#v", structured["authorization_duration"])
+	denial, ok := structured["relay_access_denial"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected relay_access_denial map, got %#v", structured["relay_access_denial"])
+	}
+	if denial["kind"] != "permission_denied" {
+		t.Fatalf("expected permission_denied kind, got %#v", denial["kind"])
+	}
+	if denial["resolution"] != "server_grant" {
+		t.Fatalf("expected server_grant resolution, got %#v", denial["resolution"])
 	}
 }
 

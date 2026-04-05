@@ -68,7 +68,7 @@ export const ACCESS_ACTIONS = {
 
   'relay_device.view': { resourceType: 'relay_device', permission: 'view' },
   'relay_device.manage': { resourceType: 'relay_device', permission: 'manage' },
-  'relay_device.authorize_runtime_access': { resourceType: 'relay_device', permission: 'authorize_runtime_access' },
+  'relay_device.authorize_relay_authorization': { resourceType: 'relay_device', permission: 'authorize_relay_authorization' },
   'relay_device.delete': { resourceType: 'relay_device', permission: 'delete' },
   'relay_exposure.view': { resourceType: 'relay_exposure', permission: 'view' },
   'relay_exposure.edit': { resourceType: 'relay_exposure', permission: 'edit' },

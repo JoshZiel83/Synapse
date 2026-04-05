@@ -400,11 +400,10 @@ func remoteControlDisabledResult() core.CallResult {
 	message := "This computer will not accept more remote desktop actions until the next reboot."
 	return core.CallResult{
 		Content: []interface{}{core.Text(message)},
-		StructuredContent: map[string]interface{}{
-			"code":                   "cua_remote_control_disabled",
-			"requires_user_approval": true,
-			"message":                message,
-		},
+		StructuredContent: core.WithRelayAccessDenial(map[string]interface{}{
+			"code":    "cua_remote_control_disabled",
+			"message": message,
+		}, core.RelayAccessDenialKindRuntimeConstraint, core.RelayAccessDenialResolutionUnresolvable),
 		IsError: true,
 	}
 }
@@ -413,10 +412,10 @@ func busySessionResult() core.CallResult {
 	message := "其他Agent正在使用电脑，请稍后重试。"
 	return core.CallResult{
 		Content: []interface{}{core.Text(message)},
-		StructuredContent: map[string]interface{}{
+		StructuredContent: core.WithRelayAccessDenial(map[string]interface{}{
 			"code":    "cua_device_busy",
 			"message": message,
-		},
+		}, core.RelayAccessDenialKindRuntimeConstraint, core.RelayAccessDenialResolutionUnresolvable),
 		IsError: true,
 	}
 }
@@ -440,10 +439,10 @@ func privacyScreenUnavailableResult(err error) core.CallResult {
 	}
 	return core.CallResult{
 		Content: []interface{}{core.Text(message)},
-		StructuredContent: map[string]interface{}{
+		StructuredContent: core.WithRelayAccessDenial(map[string]interface{}{
 			"code":    "cua_privacy_screen_unavailable",
 			"message": message,
-		},
+		}, core.RelayAccessDenialKindRuntimeConstraint, core.RelayAccessDenialResolutionUnresolvable),
 		IsError: true,
 	}
 }

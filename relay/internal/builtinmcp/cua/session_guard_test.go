@@ -164,6 +164,23 @@ func TestSessionGuardCaptureOptionsDarwinRequireOverlayExclusionForActiveSession
 	}
 }
 
+func TestRemoteControlDisabledResultIsUnresolvableRuntimeConstraint(t *testing.T) {
+	result := remoteControlDisabledResult()
+	if !result.IsError {
+		t.Fatalf("expected disabled result to be an error")
+	}
+	if got := structuredContentCode(&result); got != "cua_remote_control_disabled" {
+		t.Fatalf("unexpected result code: %q", got)
+	}
+	denial := structuredContentRelayAccessDenial(t, &result)
+	if denial["kind"] != core.RelayAccessDenialKindRuntimeConstraint {
+		t.Fatalf("expected runtime_constraint kind, got %#v", denial["kind"])
+	}
+	if denial["resolution"] != core.RelayAccessDenialResolutionUnresolvable {
+		t.Fatalf("expected unresolvable resolution, got %#v", denial["resolution"])
+	}
+}
+
 func structuredContentCode(result *core.CallResult) string {
 	if result == nil {
 		return ""
@@ -174,6 +191,22 @@ func structuredContentCode(result *core.CallResult) string {
 	}
 	code, _ := content["code"].(string)
 	return code
+}
+
+func structuredContentRelayAccessDenial(t *testing.T, result *core.CallResult) map[string]interface{} {
+	t.Helper()
+	if result == nil {
+		t.Fatalf("expected result")
+	}
+	content, ok := result.StructuredContent.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected structured content map, got %T", result.StructuredContent)
+	}
+	denial, ok := content["relay_access_denial"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected relay_access_denial map, got %#v", content["relay_access_denial"])
+	}
+	return denial
 }
 
 func setSessionGuardGOOSForTest(t *testing.T, goos string) func() {

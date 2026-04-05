@@ -52,14 +52,13 @@ type resolvedPath struct {
 }
 
 type toolError struct {
-	Code                  string
-	Message               string
-	Path                  string
-	RequiresUserApproval  bool
-	ClientHint            string
-	Capability            string
-	Access                string
-	AuthorizationDuration string
+	Code             string
+	Message          string
+	Path             string
+	Capability       string
+	Access           string
+	DenialKind       string
+	DenialResolution string
 }
 
 const serverAuthorizedRuntimeSessionPrefix = "__server_authorized__:"
@@ -89,20 +88,18 @@ func (e *toolError) result(toolName, operation string) core.CallResult {
 	if operation != "" {
 		structured["operation"] = operation
 	}
-	if e.RequiresUserApproval {
-		structured["requires_user_approval"] = true
-	}
 	if strings.TrimSpace(e.Capability) != "" {
 		structured["capability"] = e.Capability
 	}
 	if strings.TrimSpace(e.Access) != "" {
 		structured["access"] = e.Access
 	}
-	if strings.TrimSpace(e.AuthorizationDuration) != "" {
-		structured["authorization_duration"] = e.AuthorizationDuration
-	}
-	if strings.TrimSpace(e.ClientHint) != "" {
-		structured["client_hint"] = e.ClientHint
+	if strings.TrimSpace(e.DenialKind) != "" && strings.TrimSpace(e.DenialResolution) != "" {
+		structured = core.WithRelayAccessDenial(
+			structured,
+			e.DenialKind,
+			e.DenialResolution,
+		)
 	}
 	return core.CallResult{
 		Content:           []interface{}{core.Text(e.Message)},
@@ -375,7 +372,12 @@ func (s *Server) matchRootForSession(runtimeSessionID, path string) (Root, bool)
 func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMissing bool) (resolvedPath, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
-		return resolvedPath{}, &toolError{Code: "invalid_arguments", Message: "A non-empty path is required."}
+		return resolvedPath{}, &toolError{
+			Code:             "invalid_arguments",
+			Message:          "A non-empty path is required.",
+			DenialKind:       core.RelayAccessDenialKindInvalidRequest,
+			DenialResolution: core.RelayAccessDenialResolutionUnresolvable,
+		}
 	}
 
 	if !filepath.IsAbs(input) {
@@ -384,85 +386,118 @@ func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMi
 			input = filepath.Join(effectiveRoots[0].Path, input)
 		} else {
 			return resolvedPath{}, &toolError{
-				Code:    "invalid_arguments",
-				Message: "Use an absolute path when more than one root is configured or when the filesystem server is in global mode.",
+				Code:             "invalid_arguments",
+				Message:          "Use an absolute path when more than one root is configured or when the filesystem server is in global mode.",
+				DenialKind:       core.RelayAccessDenialKindInvalidRequest,
+				DenialResolution: core.RelayAccessDenialResolutionUnresolvable,
 			}
 		}
 	}
 
 	absPath, err := filepath.Abs(input)
 	if err != nil {
-		return resolvedPath{}, &toolError{Code: "invalid_arguments", Message: fmt.Sprintf("Failed to resolve path %q: %v", input, err), Path: input}
+		return resolvedPath{}, &toolError{
+			Code:             "invalid_arguments",
+			Message:          fmt.Sprintf("Failed to resolve path %q: %v", input, err),
+			Path:             input,
+			DenialKind:       core.RelayAccessDenialKindInvalidRequest,
+			DenialResolution: core.RelayAccessDenialResolutionUnresolvable,
+		}
 	}
 	absPath = filepath.Clean(absPath)
 
 	if blockedPath, blocked := s.blockedSystemPath(absPath); blocked {
 		return resolvedPath{}, &toolError{
-			Code:    "system_path_blocked",
-			Message: fmt.Sprintf("Access to %q is blocked because Synapse Relay never exposes system-managed paths such as %q.", absPath, blockedPath),
-			Path:    absPath,
+			Code:             "system_path_blocked",
+			Message:          fmt.Sprintf("Access to %q is blocked because Synapse Relay never exposes system-managed paths such as %q.", absPath, blockedPath),
+			Path:             absPath,
+			DenialKind:       core.RelayAccessDenialKindRuntimeConstraint,
+			DenialResolution: core.RelayAccessDenialResolutionUnresolvable,
 		}
 	}
 
 	resolved := absPath
-	info, statErr := os.Stat(absPath)
+	info, statErr := os.Lstat(absPath)
 	exists := statErr == nil
 	if exists {
+		if info != nil && info.Mode()&os.ModeSymlink != 0 {
+			return resolvedPath{}, &toolError{
+				Code:             "symlink_not_allowed",
+				Message:          fmt.Sprintf("The path %q is a symbolic link and cannot be accessed directly by the filesystem server.", absPath),
+				Path:             absPath,
+				DenialKind:       core.RelayAccessDenialKindRuntimeConstraint,
+				DenialResolution: core.RelayAccessDenialResolutionUnresolvable,
+			}
+		}
 		resolved, err = filepath.EvalSymlinks(absPath)
 		if err != nil {
-			return resolvedPath{}, &toolError{Code: "path_resolution_failed", Message: fmt.Sprintf("Failed to resolve symlinks for %q: %v", absPath, err), Path: absPath}
+			return resolvedPath{}, &toolError{
+				Code:             "path_resolution_failed",
+				Message:          fmt.Sprintf("Failed to resolve symlinks for %q: %v", absPath, err),
+				Path:             absPath,
+				DenialKind:       core.RelayAccessDenialKindInvalidRequest,
+				DenialResolution: core.RelayAccessDenialResolutionUnresolvable,
+			}
 		}
 	} else if allowMissing && os.IsNotExist(statErr) {
 		resolved, err = resolveMissingPath(absPath)
 		if err != nil {
-			return resolvedPath{}, &toolError{Code: "path_resolution_failed", Message: fmt.Sprintf("Failed to resolve target path %q: %v", absPath, err), Path: absPath}
+			return resolvedPath{}, &toolError{
+				Code:             "path_resolution_failed",
+				Message:          fmt.Sprintf("Failed to resolve target path %q: %v", absPath, err),
+				Path:             absPath,
+				DenialKind:       core.RelayAccessDenialKindInvalidRequest,
+				DenialResolution: core.RelayAccessDenialResolutionUnresolvable,
+			}
 		}
 	} else if statErr != nil {
-		return resolvedPath{}, &toolError{Code: "path_not_found", Message: fmt.Sprintf("The path %q does not exist.", absPath), Path: absPath}
+		return resolvedPath{}, &toolError{
+			Code:             "path_not_found",
+			Message:          fmt.Sprintf("The path %q does not exist.", absPath),
+			Path:             absPath,
+			DenialKind:       core.RelayAccessDenialKindInvalidRequest,
+			DenialResolution: core.RelayAccessDenialResolutionUnresolvable,
+		}
 	}
 
 	if blockedPath, blocked := s.blockedSystemPath(resolved); blocked {
 		return resolvedPath{}, &toolError{
-			Code:    "system_path_blocked",
-			Message: fmt.Sprintf("Access to %q is blocked because it resolves into the system-managed path %q.", absPath, blockedPath),
-			Path:    absPath,
+			Code:             "system_path_blocked",
+			Message:          fmt.Sprintf("Access to %q is blocked because it resolves into the system-managed path %q.", absPath, blockedPath),
+			Path:             absPath,
+			DenialKind:       core.RelayAccessDenialKindRuntimeConstraint,
+			DenialResolution: core.RelayAccessDenialResolutionUnresolvable,
 		}
 	}
 
 	root, ok := s.matchRootForSession(runtimeSessionID, resolved)
 	if !ok {
 		return resolvedPath{}, &toolError{
-			Code:    "path_not_allowed",
-			Message: fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server.", absPath),
-			Path:    absPath,
+			Code:             "directory_permission_required",
+			Message:          fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server.", absPath),
+			Path:             absPath,
+			DenialKind:       core.RelayAccessDenialKindPermissionDenied,
+			DenialResolution: core.RelayAccessDenialResolutionServerGrant,
 		}
 	}
 	if write {
 		if s.cfg.ReadOnly && !isServerAuthorizedRuntimeSession(runtimeSessionID) {
 			return resolvedPath{}, &toolError{
-				Code:                 "read_only_mode",
-				Message:              "This built-in filesystem server is currently in read-only mode. Read and search tools remain available, but write actions require manual approval in the Synapse Relay client. Ask the user to disable read-only mode there, then retry.",
-				Path:                 absPath,
-				RequiresUserApproval: true,
-				ClientHint:           "Disable read-only mode in the Synapse Relay client, then retry the write action.",
+				Code:             "read_only_mode",
+				Message:          "This built-in filesystem server is currently in read-only mode. Read and search tools remain available, but write actions require relay authorization before retrying.",
+				Path:             absPath,
+				DenialKind:       core.RelayAccessDenialKindPermissionDenied,
+				DenialResolution: core.RelayAccessDenialResolutionServerGrant,
 			}
 		}
 		if root.Access != "rw" && !isServerAuthorizedRuntimeSession(runtimeSessionID) {
 			return resolvedPath{}, &toolError{
-				Code:                 "write_permission_required",
-				Message:              fmt.Sprintf("The path %q is currently configured read-only in the Synapse Relay client. Ask the user to grant write access for this location, then retry.", absPath),
-				Path:                 absPath,
-				RequiresUserApproval: true,
-				ClientHint:           "Grant write access for this location in the Synapse Relay client, then retry.",
+				Code:             "write_permission_required",
+				Message:          fmt.Sprintf("The path %q is currently configured read-only by the relay client's local policy. Relay authorization is required before retrying the write action.", absPath),
+				Path:             absPath,
+				DenialKind:       core.RelayAccessDenialKindPermissionDenied,
+				DenialResolution: core.RelayAccessDenialResolutionServerGrant,
 			}
-		}
-	}
-
-	if exists && info != nil && info.Mode()&os.ModeSymlink != 0 {
-		return resolvedPath{}, &toolError{
-			Code:    "path_not_allowed",
-			Message: fmt.Sprintf("The path %q is a symbolic link and cannot be accessed directly by the filesystem server.", absPath),
-			Path:    absPath,
 		}
 	}
 
@@ -522,9 +557,11 @@ func requireAbsolutePath(fieldName, value string) error {
 		return nil
 	}
 	return &toolError{
-		Code:    "invalid_arguments",
-		Message: fmt.Sprintf("%s must be an absolute path.", fieldName),
-		Path:    value,
+		Code:             "invalid_arguments",
+		Message:          fmt.Sprintf("%s must be an absolute path.", fieldName),
+		Path:             value,
+		DenialKind:       core.RelayAccessDenialKindInvalidRequest,
+		DenialResolution: core.RelayAccessDenialResolutionUnresolvable,
 	}
 }
 
@@ -595,8 +632,10 @@ func (s *Server) resolveOptionalSearchPath(runtimeSessionID, input string) (reso
 		wd, err := currentWorkingDirectory()
 		if err != nil {
 			return resolvedPath{}, &toolError{
-				Code:    "invalid_arguments",
-				Message: fmt.Sprintf("Failed to resolve current working directory: %v", err),
+				Code:             "invalid_arguments",
+				Message:          fmt.Sprintf("Failed to resolve current working directory: %v", err),
+				DenialKind:       core.RelayAccessDenialKindInvalidRequest,
+				DenialResolution: core.RelayAccessDenialResolutionUnresolvable,
 			}
 		}
 		input = wd

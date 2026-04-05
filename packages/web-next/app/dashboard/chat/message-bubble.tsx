@@ -675,7 +675,7 @@ function InteractionStatusNote({
     return (
       <p className="text-xs text-muted-foreground">
         {viewerCanResolve
-          ? "You can choose how broadly to allow this runtime action if you have relay authorization permission."
+          ? "You can choose how broadly to allow this relay action if you have relay authorization permission."
           : "Waiting for an authorized user to approve or reject."}
       </p>
     )
@@ -683,7 +683,7 @@ function InteractionStatusNote({
   if (interaction.status === "approved") {
     return (
       <p className="text-xs text-muted-foreground">
-        The runtime grant is active and the blocked action can continue.
+        The relay authorization is active and the blocked action can continue.
       </p>
     )
   }
@@ -743,7 +743,7 @@ function InteractionCard({
     interaction.viewerCanResolve === true &&
     interaction.status === "pending"
   const canResolveRelayAuthorization =
-    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
     Boolean(onResolveInteraction) &&
     interaction.viewerCanResolve === true &&
     interaction.status === "pending"
@@ -1308,11 +1308,10 @@ function InteractionCard({
   }
 
   if (
-    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
-    (interaction.relayAuthorization || interaction.runtimeAuthorization)
+    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+    interaction.relayAuthorization
   ) {
-    const relayAuthorization =
-      interaction.relayAuthorization || interaction.runtimeAuthorization
+    const relayAuthorization = interaction.relayAuthorization
     if (!relayAuthorization) {
       return null
     }

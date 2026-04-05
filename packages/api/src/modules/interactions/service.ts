@@ -58,7 +58,7 @@ import { sql } from "kysely";
 import {
   createRelayAuthorizationGrants,
   type RelayAuthorizationGrantRecord,
-} from "../runtime-grants/service.js";
+} from "../relay-authorizations/service.js";
 import {
   buildSessionPlanDraftState,
   parseSessionCollaborationState,
@@ -207,11 +207,6 @@ export interface FindOpenRelayAuthorizationInteractionParams {
   requiredRequirements: RelayAuthorizationRequirement[];
   requestMode: RelayAuthorizationRequestMode;
 }
-
-export type CreateRuntimeAuthorizationInteractionParams =
-  CreateRelayAuthorizationInteractionParams;
-export type FindOpenRuntimeAuthorizationInteractionParams =
-  FindOpenRelayAuthorizationInteractionParams;
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
   if (!value) return {};
@@ -888,7 +883,6 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
     userInput,
     planApproval,
     relayAuthorization,
-    runtimeAuthorization: relayAuthorization,
     createdAt: requireIsoString(row.created_at, `Interaction ${row.id} created_at`),
     updatedAt: requireIsoString(row.updated_at, `Interaction ${row.id} updated_at`),
     resolvedAt: toIsoString(row.resolved_at),
@@ -1005,7 +999,7 @@ async function queueInteractionUpdatedEvent(
     queryable,
   );
   const recipients =
-    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
+    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION
       ? allRecipients
       : allRecipients.filter((recipient) =>
           recipient.workspaceMemberId === interaction.target?.workspaceMemberId ||
@@ -1134,14 +1128,12 @@ function buildPlanApprovalRevisionNotice(interaction: InteractionRequestSummary)
   };
 }
 
-function buildRuntimeAuthorizationRejectedNotice(
+function buildRelayAuthorizationRejectedNotice(
   interaction: InteractionRequestSummary,
 ) {
   const resolverName = interaction.resolvedBy?.name || "An authorized user";
   const deviceName =
-    interaction.relayAuthorization?.deviceDisplayName ||
-    interaction.runtimeAuthorization?.deviceDisplayName ||
-    "relay device";
+    interaction.relayAuthorization?.deviceDisplayName || "relay device";
   const summary = `${resolverName} rejected access for ${deviceName}.`;
   const lines = [
     summary,
@@ -1174,18 +1166,14 @@ function buildRuntimeAuthorizationRejectedNotice(
   };
 }
 
-function buildRuntimeAuthorizationApprovedNotice(
+function buildRelayAuthorizationApprovedNotice(
   interaction: InteractionRequestSummary,
 ) {
   const resolverName = interaction.resolvedBy?.name || "An authorized user";
   const deviceName =
-    interaction.relayAuthorization?.deviceDisplayName ||
-    interaction.runtimeAuthorization?.deviceDisplayName ||
-    "relay device";
+    interaction.relayAuthorization?.deviceDisplayName || "relay device";
   const approvedPreset =
-    interaction.relayAuthorization?.approvedPreset ||
-    interaction.runtimeAuthorization?.approvedPreset ||
-    "conversation";
+    interaction.relayAuthorization?.approvedPreset || "conversation";
   const summary = `${resolverName} approved ${approvedPreset} access for ${deviceName}.`;
   const lines = [
     summary,
@@ -1214,7 +1202,7 @@ function buildRuntimeAuthorizationApprovedNotice(
   };
 }
 
-function buildRuntimeAuthorizationSupersededNotice(
+function buildRelayAuthorizationSupersededNotice(
   interaction: InteractionRequestSummary,
 ) {
   const summary =
@@ -1614,7 +1602,7 @@ export async function createRelayAuthorizationInteractionRequest(
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
-      kind: INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
+      kind: INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
       expiresAt: params.expiresAt,
     });
 
@@ -1697,7 +1685,7 @@ export async function findOpenRelayAuthorizationInteraction(
     .where("ir.workspace_id", "=", params.workspaceId)
     .where("ir.conversation_id", "=", params.conversationId)
     .where(sql<boolean>`ir.requester_participant_id = ${params.requesterParticipantId}`)
-    .where("ir.kind", "=", INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION)
+    .where("ir.kind", "=", INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION)
     .where("ir.status", "=", "pending")
     .where((eb) =>
       eb.or([
@@ -1724,11 +1712,6 @@ export async function findOpenRelayAuthorizationInteraction(
   }
   return getInteractionRequestSummary(interactionId);
 }
-
-export const createRuntimeAuthorizationInteractionRequest =
-  createRelayAuthorizationInteractionRequest;
-export const findOpenRuntimeAuthorizationInteraction =
-  findOpenRelayAuthorizationInteraction;
 
 export async function getInteractionRequestSummary(
   interactionId: string,
@@ -1849,7 +1832,7 @@ export async function canUserViewInteraction(params: {
           )`,
         ]),
         eb.and([
-          eb("ir.kind", "=", INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION),
+          eb("ir.kind", "=", INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM conversation_participants cm
@@ -1895,16 +1878,14 @@ export async function canUserResolveInteraction(params: {
     return Boolean(viewerParticipant?.id);
   }
 
-  const deviceId =
-    interaction.relayAuthorization?.deviceId ||
-    interaction.runtimeAuthorization?.deviceId;
+  const deviceId = interaction.relayAuthorization?.deviceId;
   if (!deviceId) {
     return false;
   }
 
   return authorizeAction({
     subject: userSubject(userId),
-    action: "relay_device.authorize_runtime_access",
+    action: "relay_device.authorize_relay_authorization",
     resourceId: deviceId,
   });
 }
@@ -2265,7 +2246,7 @@ export async function resolveInteractionRequest(
     }
 
     if (
-      existing.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+      existing.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
       params.decision === "approve"
     ) {
       const selectedOptionIds = Array.from(
@@ -2386,12 +2367,12 @@ export async function resolveInteractionRequest(
   } else if (interaction.status === "rejected") {
     await failToolCallTask(
       interaction.taskId,
-      buildRuntimeAuthorizationRejectedNotice(interaction),
+      buildRelayAuthorizationRejectedNotice(interaction),
     );
   } else {
     await completeToolCallTask(
       interaction.taskId,
-      buildRuntimeAuthorizationApprovedNotice(interaction),
+      buildRelayAuthorizationApprovedNotice(interaction),
     );
   }
 
@@ -2402,7 +2383,7 @@ export async function resolveInteractionRequest(
   };
 }
 
-export async function markRuntimeAuthorizationInteractionSuperseded(
+export async function markRelayAuthorizationInteractionSuperseded(
   interactionId: string,
   note?: string,
 ) {
@@ -2411,7 +2392,7 @@ export async function markRuntimeAuthorizationInteractionSuperseded(
     throw new Error("Interaction request not found");
   }
   if (
-    existing.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION ||
+    existing.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION ||
     existing.status !== "pending"
   ) {
     const current = await getInteractionRequestSummary(interactionId);
@@ -2430,7 +2411,7 @@ export async function markRuntimeAuthorizationInteractionSuperseded(
     });
     await updateInteractionResolutionPayload(
       client,
-      INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
+      INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
       interactionId,
       {
         ...resolutionPayload,
@@ -2452,7 +2433,7 @@ export async function markRuntimeAuthorizationInteractionSuperseded(
   if (interaction.taskId) {
     await failToolCallTask(
       interaction.taskId,
-      buildRuntimeAuthorizationSupersededNotice(interaction),
+      buildRelayAuthorizationSupersededNotice(interaction),
     );
   }
   return interaction;

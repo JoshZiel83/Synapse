@@ -1,14 +1,11 @@
 import path from "node:path";
 import type {
   RelayAuthorizationGrantSpec,
-  RelayAuthorizationKind,
   RelayAuthorizationPreset,
   RelayAuthorizationRequirement,
   RelayAuthorizationGrantRetention,
   RelayAuthorizationGrantScope,
   RelayAuthorizationGrantStatus,
-  RuntimeGrantEffect,
-  RuntimeAuthorizationPreset,
 } from "@synapse/shared/types";
 import { sql } from "kysely";
 import {
@@ -127,8 +124,6 @@ export interface RelayAuthorizationGrantRecord
   revokedAt?: string;
   supersededAt?: string;
 }
-
-export type RuntimeGrantRecord = RelayAuthorizationGrantRecord;
 
 export interface CreateRelayAuthorizationGrantParams {
   workspaceId: string;
@@ -561,66 +556,3 @@ export async function listActiveRelayAuthorizationGrantsForExposure(
     : await statement.execute();
   return rows.map((row) => mapRelayAuthorizationGrantRow(row));
 }
-
-// Deprecated in-repo wrappers kept until all call sites move over.
-export const runtimeAuthorizationPresetToGrant = relayAuthorizationPresetToGrant;
-
-export async function createRuntimeGrant(
-  params: Omit<CreateRelayAuthorizationGrantParams, "grantSpec" | "preset"> & {
-    preset: RuntimeAuthorizationPreset;
-    effect: RuntimeGrantEffect;
-    displayPayload?: Record<string, unknown>;
-    relayToolStableKey?: string;
-    contractKey?: string;
-  },
-  queryable?: Queryable,
-) {
-  return createRelayAuthorizationGrant(
-    {
-      ...params,
-      preset: params.preset,
-      grantSpec: params.effect,
-    },
-    queryable,
-  );
-}
-
-export const getRuntimeGrant = getRelayAuthorizationGrant;
-export const revokeRuntimeGrant = revokeRelayAuthorizationGrant;
-export const supersedeRuntimeGrant = supersedeRelayAuthorizationGrant;
-export const consumeRuntimeGrant = consumeRelayAuthorizationGrant;
-
-export async function findMatchingRuntimeGrant(
-  params: Omit<FindMatchingRelayAuthorizationGrantsParams, "requirements"> & {
-    effect: RuntimeGrantEffect;
-  },
-  queryable?: Queryable,
-) {
-  const result = await findMatchingRelayAuthorizationGrants(
-    {
-      ...params,
-      requirements: [
-        {
-          id: "legacy",
-          kind: params.effect.kind as RelayAuthorizationKind,
-          summary: "Legacy runtime authorization requirement",
-          pathPrefix: params.effect.pathPrefix,
-          browserScopeType: params.effect.browserScopeType,
-          browserOrigin: params.effect.browserOrigin,
-          browserHost: params.effect.browserHost,
-          browserRegistrableDomain: params.effect.browserRegistrableDomain,
-          commandExecutor: params.effect.commandExecutor,
-          commandMatchType: params.effect.commandMatchType,
-          commandText: params.effect.commandText,
-        },
-      ],
-    },
-    queryable,
-  );
-  return result.missingRequirements.length === 0
-    ? result.matchedGrants[0] || null
-    : null;
-}
-
-export const listActiveRuntimeGrantsForExposure =
-  listActiveRelayAuthorizationGrantsForExposure;

@@ -199,8 +199,15 @@ func TestRootReadOnlyBlocksWriteTool(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected text content, got %T", result.Content[0])
 	}
-	if !strings.Contains(strings.ToLower(content.Text), "grant write access") {
-		t.Fatalf("expected client authorization hint, got %q", content.Text)
+	if !strings.Contains(strings.ToLower(content.Text), "relay authorization is required") {
+		t.Fatalf("expected relay authorization hint, got %q", content.Text)
+	}
+	denial := structuredRelayAccessDenial(t, result.StructuredContent)
+	if denial["kind"] != "permission_denied" {
+		t.Fatalf("expected permission_denied kind, got %#v", denial["kind"])
+	}
+	if denial["resolution"] != "server_grant" {
+		t.Fatalf("expected server_grant resolution, got %#v", denial["resolution"])
 	}
 }
 
@@ -834,8 +841,73 @@ func TestDisabledFilesystemViewRejectsAccess(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected structured content map, got %T", blocked.StructuredContent)
 	}
-	if structured["code"] != "path_not_allowed" {
-		t.Fatalf("expected path_not_allowed code, got %#v", structured["code"])
+	if structured["code"] != "directory_permission_required" {
+		t.Fatalf("expected directory_permission_required code, got %#v", structured["code"])
+	}
+	denial := structuredRelayAccessDenial(t, blocked.StructuredContent)
+	if denial["kind"] != "permission_denied" {
+		t.Fatalf("expected permission_denied kind, got %#v", denial["kind"])
+	}
+	if denial["resolution"] != "server_grant" {
+		t.Fatalf("expected server_grant resolution, got %#v", denial["resolution"])
+	}
+}
+
+func TestFilesystemSymlinkAccessReturnsUnresolvableConstraint(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink setup is not reliable on Windows CI")
+	}
+
+	root := t.TempDir()
+	target := filepath.Join(root, "target.txt")
+	link := filepath.Join(root, "linked.txt")
+	if err := os.WriteFile(target, []byte("hello through symlink"), 0o644); err != nil {
+		t.Fatalf("write target: %v", err)
+	}
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	server := newTestServer(t, Config{
+		StableKey: "symlink-fs",
+		Name:      "filesystem",
+		Scope:     "roots",
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   false,
+			FileTypes:        []string{".txt"},
+			MaxFileSizeBytes: 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+		},
+	})
+
+	result, err := server.CallTool(context.Background(), "View", map[string]interface{}{
+		"file_path": link,
+	})
+	if err != nil {
+		t.Fatalf("call View: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected symlink access to be rejected")
+	}
+
+	structured, ok := result.StructuredContent.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected structured content map, got %T", result.StructuredContent)
+	}
+	if structured["code"] != "symlink_not_allowed" {
+		t.Fatalf("expected symlink_not_allowed code, got %#v", structured["code"])
+	}
+	denial := structuredRelayAccessDenial(t, result.StructuredContent)
+	if denial["kind"] != "runtime_constraint" {
+		t.Fatalf("expected runtime_constraint kind, got %#v", denial["kind"])
+	}
+	if denial["resolution"] != "unresolvable" {
+		t.Fatalf("expected unresolvable resolution, got %#v", denial["resolution"])
 	}
 }
 
@@ -1910,4 +1982,17 @@ func TestSearchToolsSupportExcludeAndGitignore(t *testing.T) {
 	if results[0].Path != filepath.Join(root, "sub", "keep.tmp") {
 		t.Fatalf("expected only keep.tmp to remain, got %+v", results)
 	}
+}
+
+func structuredRelayAccessDenial(t *testing.T, structuredContent interface{}) map[string]interface{} {
+	t.Helper()
+	structured, ok := structuredContent.(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected structured content map, got %T", structuredContent)
+	}
+	denial, ok := structured["relay_access_denial"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("expected relay_access_denial map, got %#v", structured["relay_access_denial"])
+	}
+	return denial
 }

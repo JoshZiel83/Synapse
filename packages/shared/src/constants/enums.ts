@@ -191,8 +191,6 @@ export const INTERACTION_REQUEST_KIND = {
   USER_INPUT: 'user_input',
   PLAN_APPROVAL: 'plan_approval',
   RELAY_AUTHORIZATION: 'relay_authorization',
-  // Deprecated alias kept for in-repo transition.
-  RUNTIME_AUTHORIZATION: 'relay_authorization',
 } as const;
 export const INTERACTION_REQUEST_KINDS = [
   INTERACTION_REQUEST_KIND.USER_INPUT,
@@ -414,6 +412,16 @@ export const RELAY_AUTHORIZATION_REQUEST_MODES = [
   'background',
   'blocking',
 ] as const;
+export const RELAY_ACCESS_DENIAL_KINDS = [
+  'permission_denied',
+  'runtime_constraint',
+  'invalid_request',
+] as const;
+export const RELAY_ACCESS_DENIAL_RESOLUTIONS = [
+  'server_grant',
+  'local_setting',
+  'unresolvable',
+] as const;
 export const RELAY_AUTHORIZATION_CAPABILITIES = [
   'filesystem',
   'cua',
@@ -446,22 +454,6 @@ export const RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES = [
   'prefix',
 ] as const;
 
-// Deprecated aliases kept for in-repo transition.
-export const RUNTIME_AUTHORIZATION_PRESETS = RELAY_AUTHORIZATION_PRESETS;
-export const RUNTIME_GRANT_SCOPES = RELAY_AUTHORIZATION_GRANT_SCOPES;
-export const RUNTIME_GRANT_RETENTIONS = RELAY_AUTHORIZATION_GRANT_RETENTIONS;
-export const RUNTIME_GRANT_STATUSES = RELAY_AUTHORIZATION_GRANT_STATUSES;
-export const RUNTIME_AUTHORIZATION_REQUEST_MODES =
-  RELAY_AUTHORIZATION_REQUEST_MODES;
-export const RUNTIME_AUTHORIZATION_CAPABILITIES =
-  RELAY_AUTHORIZATION_CAPABILITIES;
-export const RUNTIME_FILESYSTEM_AUTHORIZATION_ACCESSES = [
-  'read',
-  'write',
-  'read_write',
-] as const;
-export const RUNTIME_COMMANDLINE_EXECUTORS =
-  RELAY_AUTHORIZATION_COMMAND_EXECUTORS;
 
 export const RELAY_EXPOSURE_RUNTIME_STATUSES = [
   'discovered',

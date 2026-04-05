@@ -724,7 +724,3 @@ export function inferRelaySpecialAuthorizationPlan(params: {
 
   return null;
 }
-
-// Deprecated alias kept while call sites are migrated.
-export const inferRelaySpecialAuthorizationRequirement =
-  inferRelaySpecialAuthorizationPlan;

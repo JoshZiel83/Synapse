@@ -166,6 +166,37 @@ function buildToolRoutingGuidance(
       "GlobTool",
       "GrepTool",
       "SearchFiles",
+      "bash",
+      "desktop_capture_display",
+      "desktop_capture_overview",
+      "desktop_click",
+      "desktop_drag",
+      "desktop_move_pointer",
+      "desktop_scroll",
+      "desktop_type_text",
+      "list_pages",
+      "select_page",
+      "take_snapshot",
+      "take_screenshot",
+      "navigate_page",
+      "click",
+      "navigate",
+      "screenshot",
+    ])
+  ) {
+    lines.push(
+      "- Relay builtin filesystem, browser, desktop, and commandline tools accept `request_authorization`. Synapse handles this option on the server and does not send it to the relay client. Use `background` to create a user authorization request only if the relay client locally denies the action. Use `blocking` only when the current step must wait for approval and retry immediately.",
+    );
+  }
+
+  if (
+    hasToolBaseName(tools, [
+      "View",
+      "ViewMany",
+      "GetFile",
+      "GlobTool",
+      "GrepTool",
+      "SearchFiles",
     ])
   ) {
     lines.push(
@@ -179,6 +210,9 @@ function buildToolRoutingGuidance(
     );
     lines.push(
       "- Relay `bash` accepts `execution_mode`. Use `execution_mode: \"async\"` for long-running shell or CLI jobs when you do not need the final output in the current reasoning step. Synapse will create a background task now and wake you later with the result.",
+    );
+    lines.push(
+      "- Do not combine relay `bash` `execution_mode: \"async\"` with `request_authorization: \"blocking\"`. Use `background` or omit `request_authorization` for async command execution.",
     );
   }
 

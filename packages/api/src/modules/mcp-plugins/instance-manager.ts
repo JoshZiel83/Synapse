@@ -118,6 +118,10 @@ export interface McpInstance {
     binding: unknown,
     executionContext?: McpExecutionContext,
   ) => Promise<unknown>;
+  sanitizeInputForLogging?: (
+    toolName: string,
+    input: Record<string, unknown>,
+  ) => Record<string, unknown>;
   ensureRuntimeSession?: () => Promise<string>;
   getRuntimeSessionId?: () => string | undefined;
   shutdown: () => Promise<void>;

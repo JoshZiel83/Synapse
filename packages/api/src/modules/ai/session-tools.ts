@@ -90,12 +90,8 @@ import {
 import {
   cancelInteractionRequestByTaskId,
   createPlanApprovalInteractionRequest,
-  createRelayAuthorizationInteractionRequest,
   createUserInputInteractionRequest,
-  findOpenRelayAuthorizationInteraction,
   getInteractionRequestSummaryByTaskId,
-  getInteractionRequestSummary,
-  markRuntimeAuthorizationInteractionSuperseded,
 } from "../interactions/service.js";
 import { resolveRelayTargetForNamespacedTool } from "../mcp-plugins/tool-resolver.js";
 import {
@@ -103,6 +99,10 @@ import {
   cancelRelayToolTask,
   loadRelayExposureCatalogSnapshot,
 } from "../mcp-plugins/relay-manager.js";
+import {
+  createRelayAuthorizationRequest,
+  waitForRelayAuthorizationResolution,
+} from "../mcp-plugins/relay-authorization-requests.js";
 import { inferRelaySpecialAuthorizationPlan } from "../mcp-plugins/relay-special-mcp.js";
 import { normalizeMcpToolResult } from "../mcp-plugins/result-normalizer.js";
 
@@ -726,36 +726,6 @@ async function cancelHumanInteractionTask(task: ToolCallTaskRecord, reason?: str
   });
 }
 
-function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function buildRuntimeAuthorizationRetryNonce() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
-}
-
-async function hasNewUserFacingConversationMessage(
-  conversationId: string,
-  afterIso: string,
-) {
-  const row = await db
-    .selectFrom("conversation_items as ci")
-    .leftJoin("conversation_participants as cp", "cp.id", "ci.author_participant_id")
-    .select("ci.id")
-    .where("ci.conversation_id", "=", conversationId)
-    .where("ci.item_type", "=", "message")
-    .where("ci.created_at", ">", new Date(afterIso))
-    .where((eb) =>
-      eb.or([
-        eb("ci.role", "=", "user"),
-        eb("cp.participant_kind", "in", ["workspace_member", "external"]),
-      ]),
-    )
-    .limit(1)
-    .executeTakeFirst();
-  return Boolean(row);
-}
-
 async function resolveRelayAuthorizationPlanOrThrow(params: {
   actorId: string;
   workspaceId: string;
@@ -851,73 +821,6 @@ async function retryAuthorizedRelayTool(params: {
   });
 
   return normalizeMcpToolResult(rawResult, params.context.workspaceId);
-}
-
-async function waitForRuntimeAuthorizationResolution(params: {
-  interactionId: string;
-  conversationId: string;
-  createdAt: string;
-  relayToolName: string;
-  toolArguments: Record<string, unknown>;
-  retryNonce: string;
-}) {
-  const context = getToolExecutionContext();
-  if (!context) {
-    throwToolError("No session context available");
-  }
-
-  const startedAt = Date.now();
-  const maxWaitMs = 10 * 60 * 1000;
-
-  while (Date.now() - startedAt < maxWaitMs) {
-    if (
-      await hasNewUserFacingConversationMessage(
-        params.conversationId,
-        params.createdAt,
-      )
-    ) {
-      const superseded =
-        await markRuntimeAuthorizationInteractionSuperseded(
-          params.interactionId,
-          "Superseded by a newer user message.",
-        );
-      return {
-        status: "superseded" as const,
-        interaction: superseded,
-      };
-    }
-
-    const interaction = await getInteractionRequestSummary(params.interactionId);
-    if (!interaction) {
-      throwToolError("Authorization interaction could not be reloaded.");
-    }
-    if (interaction.status === "pending") {
-      await sleep(1000);
-      continue;
-    }
-    if (interaction.status === "approved") {
-      const retriedResult = await retryAuthorizedRelayTool({
-        context,
-        relayToolName: params.relayToolName,
-        toolArguments: params.toolArguments,
-        retryNonce: params.retryNonce,
-      });
-      return {
-        status: "approved" as const,
-        interaction,
-        retriedResult,
-      };
-    }
-    return {
-      status: interaction.status,
-      interaction,
-    };
-  }
-
-  return {
-    status: "expired" as const,
-    interaction: await getInteractionRequestSummary(params.interactionId),
-  };
 }
 
 function normalizeUserInputQuestionType(
@@ -2346,24 +2249,6 @@ export function registerCallableToolPlugins(): void {
         );
       }
 
-      const allMembers = await listConversationParticipants(conversationId);
-      const requesterMember = allMembers.find(
-        (member) =>
-          member.actor_id === context.actorId && member.state === "active",
-      );
-      if (!requesterMember) {
-        throwToolError(
-          "Current actor is not an active participant of this conversation",
-        );
-      }
-
-      const candidates = buildUserInteractionCandidatesFromRows(allMembers);
-      if (candidates.length === 0) {
-        throwToolError(
-          "This conversation has no active user who could receive a relay authorization request",
-        );
-      }
-
       const relayToolName = String((input as any).relayToolName || "").trim();
       if (!relayToolName) {
         throwToolError("relayToolName is required");
@@ -2395,167 +2280,65 @@ export function registerCallableToolPlugins(): void {
           toolArguments,
         });
 
-      const requesterAllowed = await authorizeAction({
-        subject: actorSubject(context.actorId),
-        action: "relay_capability.request_relay_authorization",
-        resourceId: relayTarget.capabilityId,
-      });
-      if (!requesterAllowed) {
-        throwToolError(
-          "Current actor is not allowed to request authorization for this relay capability",
-        );
-      }
-
-      const authorizerCandidates = await Promise.all(
-        candidates.map(async (candidate) => ({
-          candidate,
-          allowed: await authorizeAction({
-            subject: { type: "workspace_member", id: candidate.workspaceMemberId },
-            action: "relay_device.authorize_runtime_access",
-            resourceId: relayTarget.deviceId,
-          }),
-        })),
-      );
-      const availableAuthorizers = authorizerCandidates
-        .filter((entry) => entry.allowed)
-        .map((entry) => entry.candidate);
-      if (availableAuthorizers.length === 0) {
-        throwToolError(
-          "No active user in this conversation is currently allowed to authorize runtime access for this relay device",
-        );
-      }
-
-      const retryNonce = buildRuntimeAuthorizationRetryNonce();
-
-      const existing =
-        mode === "background"
-          ? await findOpenRelayAuthorizationInteraction({
-              workspaceId: context.workspaceId,
-              conversationId,
-              requesterParticipantId: requesterMember.id,
-              relayCapabilityId: relayTarget.capabilityId,
-              relayDeviceId: relayTarget.deviceId,
-              relayExposureId: relayTarget.exposureId,
-              requestedToolName: relayTarget.visibleToolName,
-              relayToolStableKey: authorizationPlan.toolStableKey,
-              requiredRequirements: authorizationPlan.requiredRequirements,
-              requestMode: mode,
-            })
-          : null;
-
-      if (existing) {
-        if (mode === "blocking") {
-          const waited = await waitForRuntimeAuthorizationResolution({
-            interactionId: existing.id,
-            conversationId,
-            createdAt: existing.createdAt,
-            relayToolName,
-            toolArguments,
-            retryNonce,
-          });
-          if (waited.status === "approved" && waited.retriedResult) {
-            return JSON.stringify({
-              success: true,
-              interactionId: existing.id,
-              authorized: true,
-              retried: true,
-              relayToolName,
-              result: waited.retriedResult,
-            });
-          }
-          throwToolError(
-            waited.status === "superseded"
-              ? "Relay authorization request was superseded by a newer user message."
-              : waited.status === "rejected"
-                ? "Relay authorization request was rejected."
-                : "Relay authorization request did not complete successfully.",
-          );
-        }
-
-        return JSON.stringify({
-          success: true,
-          interactionId: existing.id,
-          relayDevice: relayTarget.deviceDisplayName,
-          relayExposure: relayTarget.exposureDisplayName,
-          message:
-            "A matching relay authorization request is already pending in this conversation.",
-        });
-      }
-
-      const task = await createGovernedToolCallTask({
-        context,
-        executorKind: "relay_authorization",
-        deliveryPolicy: "human_interaction",
-        supportsCancel: true,
-        requestPayload: {
-          relayCapabilityId: relayTarget.capabilityId,
-          relayDeviceId: relayTarget.deviceId,
-          relayExposureId: relayTarget.exposureId,
-          runtimeSessionId: relayTarget.runtimeSessionId,
-          requestedToolName: relayTarget.visibleToolName,
-          relayToolStableKey: authorizationPlan.toolStableKey,
-          reason,
-          requestMode: mode,
-          requiredRequirements: authorizationPlan.requiredRequirements,
-          approvalOptions: authorizationPlan.approvalOptions,
-          sourceRetryNonce: retryNonce,
-          sourceRequestArgs: toolArguments,
-        },
-        summary: `Waiting for a user to authorize ${relayTarget.deviceDisplayName}.`,
-      });
-
-      let interaction;
+      let created;
       try {
-        interaction = await createRelayAuthorizationInteractionRequest({
-          workspaceId: context.workspaceId,
-          conversationId,
-          taskId: task.id,
-          requesterParticipantId: requesterMember.id,
-          relayCapabilityId: relayTarget.capabilityId,
-          relayDeviceId: relayTarget.deviceId,
-          relayExposureId: relayTarget.exposureId,
-          requestedToolName: relayTarget.visibleToolName,
-          runtimeSessionId: relayTarget.runtimeSessionId || "",
-          relayToolStableKey: authorizationPlan.toolStableKey,
-          reason,
-          requiredRequirements: authorizationPlan.requiredRequirements,
-          approvalOptions: authorizationPlan.approvalOptions,
+        created = await createRelayAuthorizationRequest({
+          source: {
+            workspaceId: context.workspaceId,
+            conversationId,
+            sessionId: context.sessionId,
+            actorId: context.actorId,
+            workspaceMemberId: context.workspaceMemberId,
+            turnId: context.turnId,
+            sourceToolCallId: context.toolCallId,
+            sourceToolName: context.toolName || "request_relay_authorization",
+          },
+          relayTarget: {
+            relayCapabilityId: relayTarget.capabilityId,
+            relayDeviceId: relayTarget.deviceId,
+            relayExposureId: relayTarget.exposureId,
+            requestedToolName: relayTarget.visibleToolName,
+            relayToolStableKey: authorizationPlan.toolStableKey,
+            runtimeSessionId: relayTarget.runtimeSessionId || "",
+            relayDeviceDisplayName: relayTarget.deviceDisplayName,
+            relayExposureDisplayName: relayTarget.exposureDisplayName,
+          },
+          authorizationPlan,
           requestMode: mode,
-          sourceRetryNonce: retryNonce,
+          reason,
           sourceRequestArgs: toolArguments,
         });
       } catch (error) {
-        await cancelToolCallTask(task.id, {
-          summary: `Relay authorization request for ${relayTarget.deviceDisplayName} failed before dispatch.`,
-          finalErrorPayload: {
-            message: error instanceof Error ? error.message : String(error),
-          },
-          notifyActor: false,
-        });
-        throw error;
+        throwToolError(
+          error instanceof Error ? error.message : String(error),
+        );
       }
 
       if (mode === "blocking") {
-        const waited = await waitForRuntimeAuthorizationResolution({
-          interactionId: interaction.id,
+        const waited = await waitForRelayAuthorizationResolution({
+          interactionId: created.interaction.id,
           conversationId,
-          createdAt: interaction.createdAt,
-          relayToolName,
-          toolArguments,
-          retryNonce,
+          createdAt: created.interaction.createdAt,
+          onApproved: async () =>
+            retryAuthorizedRelayTool({
+              context,
+              relayToolName,
+              toolArguments,
+              retryNonce: created.retryNonce,
+            }),
         });
-        if (waited.status === "approved" && waited.retriedResult) {
+        if (waited.status === "approved") {
           return JSON.stringify({
             success: true,
-            taskId: task.id,
-            interactionId: interaction.id,
-            approverCount: availableAuthorizers.length,
+            taskId: created.task?.id,
+            interactionId: created.interaction.id,
+            approverCount: created.availableAuthorizerCount,
             relayDevice: relayTarget.deviceDisplayName,
             relayExposure: relayTarget.exposureDisplayName,
             authorized: true,
             retried: true,
             relayToolName,
-            result: waited.retriedResult,
+            result: waited.approvedValue,
           });
         }
         throwToolError(
@@ -2563,21 +2346,34 @@ export function registerCallableToolPlugins(): void {
             ? "Relay authorization request was superseded by a newer user message."
             : waited.status === "rejected"
               ? "Relay authorization request was rejected."
-              : "Relay authorization request did not complete successfully.",
+              : waited.status === "cancelled"
+                ? "Relay authorization request was cancelled."
+                : "Relay authorization request did not complete successfully.",
         );
+      }
+
+      if (created.reused) {
+        return JSON.stringify({
+          success: true,
+          interactionId: created.interaction.id,
+          relayDevice: relayTarget.deviceDisplayName,
+          relayExposure: relayTarget.exposureDisplayName,
+          message:
+            "A matching relay authorization request is already pending in this conversation.",
+        });
       }
 
       return JSON.stringify({
         success: true,
-        taskId: task.id,
-        interactionId: interaction.id,
-        approverCount: availableAuthorizers.length,
+        taskId: created.task?.id,
+        interactionId: created.interaction.id,
+        approverCount: created.availableAuthorizerCount,
         relayDevice: relayTarget.deviceDisplayName,
         relayExposure: relayTarget.exposureDisplayName,
         message:
-          availableAuthorizers.length === 1
-            ? `Relay authorization request created. ${availableAuthorizers[0]!.name} can approve or reject it.`
-            : `Relay authorization request created. ${availableAuthorizers.length} current conversation users can approve or reject it.`,
+          created.availableAuthorizerCount === 1
+            ? `Relay authorization request created. ${created.availableAuthorizers[0]!.name} can approve or reject it.`
+            : `Relay authorization request created. ${created.availableAuthorizerCount} current conversation users can approve or reject it.`,
       });
     },
   });

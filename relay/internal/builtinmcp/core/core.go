@@ -53,6 +53,35 @@ type ResourceContent struct {
 	Resource ResourceDescriptor `json:"resource"`
 }
 
+const (
+	RelayAccessDenialKindPermissionDenied  = "permission_denied"
+	RelayAccessDenialKindRuntimeConstraint = "runtime_constraint"
+	RelayAccessDenialKindInvalidRequest    = "invalid_request"
+
+	RelayAccessDenialResolutionServerGrant  = "server_grant"
+	RelayAccessDenialResolutionLocalSetting = "local_setting"
+	RelayAccessDenialResolutionUnresolvable = "unresolvable"
+)
+
+func RelayAccessDenial(kind string, resolution string) map[string]interface{} {
+	return map[string]interface{}{
+		"kind":       kind,
+		"resolution": resolution,
+	}
+}
+
+func WithRelayAccessDenial(
+	structured map[string]interface{},
+	kind string,
+	resolution string,
+) map[string]interface{} {
+	if structured == nil {
+		structured = map[string]interface{}{}
+	}
+	structured["relay_access_denial"] = RelayAccessDenial(kind, resolution)
+	return structured
+}
+
 func Text(text string) TextContent {
 	return TextContent{
 		Type: "text",

@@ -49,10 +49,17 @@ import {
   requestToolCallTaskCancel,
   cancelToolCallTask,
   type ToolCallTaskDeliveryPolicy,
+  type ToolCallTaskRecord,
 } from '../tool-call-tasks/service.js';
-import { findMatchingRelayAuthorizationGrants } from '../runtime-grants/service.js';
+import { findMatchingRelayAuthorizationGrants } from '../relay-authorizations/service.js';
 import { normalizeMcpToolResult } from './result-normalizer.js';
 import { inferRelaySpecialAuthorizationPlan } from './relay-special-mcp.js';
+import { createRelayAuthorizationRequest } from './relay-authorization-requests.js';
+import {
+  classifyRelayLocalPermissionDenial,
+  normalizeRelayRequestAuthorizationMode,
+  type RelayRequestAuthorizationMode,
+} from './relay-invoke-options.js';
 
 interface RelayToolRegistration {
   stableKey: string;
@@ -123,7 +130,7 @@ interface PendingRelayOperation {
   toolRevisionId: string;
   catalogRevisionId: string;
   args: Record<string, unknown>;
-  authorization?: RelayRuntimeAuthorizationEnvelope;
+  authorization?: RelayAuthorizationEnvelope;
   inputHash: string;
   taskId: string | null;
   operationTimeoutMs: number;
@@ -175,7 +182,7 @@ interface RelayExposureCatalog {
   tools: RelayCatalogToolSnapshot[];
 }
 
-interface RelayRuntimeAuthorizationEnvelope {
+interface RelayAuthorizationEnvelope {
   grantIds?: string[];
   grantScope?: RelayAuthorizationGrantScope;
   grantSpecs?: RelayAuthorizationGrantSpec[];
@@ -194,7 +201,7 @@ interface RelayCallParams {
   binding: RelayHiddenToolBinding;
   args: Record<string, unknown>;
   runtimeSessionId: string;
-  authorization?: RelayRuntimeAuthorizationEnvelope;
+  authorization?: RelayAuthorizationEnvelope;
 }
 
 interface RelayAsyncCallParams extends RelayCallParams {
@@ -207,6 +214,9 @@ interface RelayAsyncCallParams extends RelayCallParams {
   turnId?: string;
   requestedByWorkspaceMemberId?: string;
   deliveryPolicy: ToolCallTaskDeliveryPolicy;
+  serverInvokeOptions?: {
+    requestAuthorization?: RelayRequestAuthorizationMode;
+  };
 }
 
 type RelayOperationLifecycleStatus =
@@ -727,7 +737,7 @@ export async function resolveRelayToolAuthorization(params: {
   toolArguments: Record<string, unknown>;
   runtimeSessionId: string;
   exposureMetadata: Record<string, unknown>;
-  authorization?: RelayRuntimeAuthorizationEnvelope;
+  authorization?: RelayAuthorizationEnvelope;
 }) {
   const plan = inferRelaySpecialAuthorizationPlan({
     toolStableKey: params.relayToolStableKey,
@@ -767,9 +777,120 @@ export async function resolveRelayToolAuthorization(params: {
         relayAuthorizationGrantToSpec(grant),
       ),
       retryNonce: params.authorization?.retryNonce,
-    } satisfies RelayRuntimeAuthorizationEnvelope,
+    } satisfies RelayAuthorizationEnvelope,
     authorizationPlan: plan,
   };
+}
+
+function readAsyncRelayRequestAuthorizationMode(
+  task: ToolCallTaskRecord | null,
+): RelayRequestAuthorizationMode {
+  return (
+    normalizeRelayRequestAuthorizationMode(
+      task?.requestPayload?.serverInvokeOptions &&
+        typeof task.requestPayload.serverInvokeOptions === 'object'
+        ? (task.requestPayload.serverInvokeOptions as Record<string, unknown>)
+            .requestAuthorization
+        : undefined,
+    ) || 'none'
+  );
+}
+
+async function createAsyncRelayAuthorizationRequestFromLocalDenial(params: {
+  operation: RelayTaskOperationRecord;
+  task: ToolCallTaskRecord;
+  relayResult: unknown;
+}) {
+  const localDenial = classifyRelayLocalPermissionDenial(params.relayResult);
+  if (!localDenial) {
+    return null;
+  }
+  if (
+    !params.operation.conversation_id ||
+    !params.operation.requested_by_session_id ||
+    !params.operation.requested_by_actor_id
+  ) {
+    throw new Error(
+      'Async relay authorization request requires a conversation-backed actor task.',
+    );
+  }
+
+  const requestPayload =
+    params.task.requestPayload &&
+    typeof params.task.requestPayload === 'object'
+      ? params.task.requestPayload
+      : {};
+  const relayCapabilityId =
+    typeof requestPayload.relayCapabilityId === 'string'
+      ? requestPayload.relayCapabilityId
+      : '';
+  if (!relayCapabilityId) {
+    throw new Error('Async relay task is missing relay capability metadata.');
+  }
+
+  const relayCatalog = await loadRelayExposureCatalogSnapshot(
+    params.operation.device_id,
+    params.operation.exposure_id,
+  );
+  if (!relayCatalog) {
+    throw new Error('The relay exposure is not currently available.');
+  }
+  const relayTool = relayCatalog.tools.find(
+    (tool) => tool.visible.name === params.operation.visible_tool_name,
+  );
+  if (!relayTool) {
+    throw new Error('The relay tool definition is no longer available.');
+  }
+
+  const toolArguments =
+    params.operation.input_payload &&
+    typeof params.operation.input_payload === 'object' &&
+    !Array.isArray(params.operation.input_payload)
+      ? (params.operation.input_payload as Record<string, unknown>)
+      : {};
+  const authorizationPlan = inferRelaySpecialAuthorizationPlan({
+    toolStableKey: relayTool.binding.stableKey,
+    visibleToolName: params.operation.visible_tool_name,
+    toolInput: toolArguments,
+    exposureMetadata: relayCatalog.metadata,
+  });
+  if (!authorizationPlan) {
+    throw new Error(
+      'Synapse could not infer a relay authorization request for this async tool call.',
+    );
+  }
+
+  return createRelayAuthorizationRequest({
+    source: {
+      workspaceId: params.operation.workspace_id,
+      conversationId: params.operation.conversation_id,
+      sessionId: params.operation.requested_by_session_id,
+      actorId: params.operation.requested_by_actor_id,
+      workspaceMemberId:
+        params.operation.requested_by_workspace_member_id || undefined,
+      turnId: params.task.turnId,
+      sourceToolCallId: params.task.sourceToolCallId,
+      sourceToolName:
+        params.task.sourceToolName || params.operation.source_tool_name || params.operation.visible_tool_name,
+    },
+    relayTarget: {
+      relayCapabilityId,
+      relayDeviceId: params.operation.device_id,
+      relayExposureId: params.operation.exposure_id,
+      requestedToolName: params.operation.visible_tool_name,
+      relayToolStableKey: authorizationPlan.toolStableKey,
+      runtimeSessionId: params.operation.runtime_session_id || '',
+      relayDeviceDisplayName: params.operation.device_display_name || undefined,
+      relayExposureDisplayName:
+        params.operation.exposure_display_name || undefined,
+    },
+    authorizationPlan,
+    requestMode: 'background',
+    reason: localDenial.message?.trim()
+      ? `The relay client locally denied ${params.operation.visible_tool_name}. ${localDenial.message.trim()}`
+      : `The relay client locally denied ${params.operation.visible_tool_name}, so Synapse is requesting user authorization for the same async action.`,
+    sourceRequestArgs: toolArguments,
+  });
 }
 
 async function insertRelayOperation(params: {
@@ -790,7 +911,7 @@ async function insertRelayOperation(params: {
   deliveryPolicy: 'online_only' | 'store_and_forward';
   status?: RelayOperationLifecycleStatus;
   inputPayload: Record<string, unknown>;
-  authorizationPayload?: RelayRuntimeAuthorizationEnvelope;
+  authorizationPayload?: RelayAuthorizationEnvelope;
   inputHash: string;
   operationTimeoutMs: number;
   expiresAt: string | null;
@@ -1046,11 +1167,13 @@ async function enqueueRelayToolTaskLocal(
       supportsCancel: true,
       supportsOutputTail: true,
       requestPayload: {
+        relayCapabilityId: params.relayCapabilityId,
         deviceId: params.deviceId,
         exposureId: params.exposureId,
         runtimeSessionId: params.runtimeSessionId,
         visibleToolName: params.visibleToolName,
         args: params.args,
+        serverInvokeOptions: params.serverInvokeOptions || {},
       },
       immediateResultPayload: {
         content: textBlocks(acceptedSummary),
@@ -3299,6 +3422,82 @@ async function finalizeAsyncRelayOperation(
   });
 
   if (normalizedResult.isError) {
+    const task = await getToolCallTask(taskId);
+    const requestAuthorizationMode = readAsyncRelayRequestAuthorizationMode(task);
+    const localDenial = classifyRelayLocalPermissionDenial(msg.result);
+
+    if (
+      task &&
+      requestAuthorizationMode === 'background' &&
+      localDenial
+    ) {
+      try {
+        const created = await createAsyncRelayAuthorizationRequestFromLocalDenial({
+          operation,
+          task,
+          relayResult: msg.result,
+        });
+        if (created) {
+          const summary = `Async ${namespacedToolName} was denied by the relay client's local permissions. Synapse created a background authorization request and failed the original async task.`;
+          await failToolCallTask(taskId, {
+            summary,
+            finalResultPayload: {
+              content: textBlocks(summary),
+              structuredContent: {
+                code: 'relay_authorization_requested',
+                requestMode: 'background',
+                interactionId: created.interaction.id,
+                executed: false,
+                relayToolName: operation.visible_tool_name,
+                originalStructuredContent: localDenial.structuredContent,
+              },
+              isError: true,
+            },
+            finalErrorPayload: {
+              operationId: operation.operation_id,
+              relayResult: msg.result ?? {},
+              interactionId: created.interaction.id,
+            },
+            metadata: {
+              operationId: operation.operation_id,
+              interactionId: created.interaction.id,
+            },
+          });
+          return;
+        }
+      } catch (error) {
+        const message =
+          error instanceof Error
+            ? error.message
+            : 'Failed to create a relay authorization request.';
+        const summary = `Async ${namespacedToolName} was denied by the relay client's local permissions, and Synapse failed to create a background authorization request.`;
+        await failToolCallTask(taskId, {
+          summary,
+          finalResultPayload: {
+            content: textBlocks(summary),
+            structuredContent: {
+              code: 'relay_authorization_request_failed',
+              requestMode: 'background',
+              executed: false,
+              relayToolName: operation.visible_tool_name,
+              originalStructuredContent: localDenial.structuredContent,
+              requestError: message,
+            },
+            isError: true,
+          },
+          finalErrorPayload: {
+            operationId: operation.operation_id,
+            relayResult: msg.result ?? {},
+            requestError: message,
+          },
+          metadata: {
+            operationId: operation.operation_id,
+          },
+        });
+        return;
+      }
+    }
+
     await failToolCallTask(taskId, {
       summary: `Async ${namespacedToolName} completed with an error.`,
       messageBlocks: normalizedResult.content,
@@ -3724,7 +3923,7 @@ async function redrivePendingRelayOperations(connected: ConnectedRelay) {
       catalogRevisionId: row.catalog_revision_id,
       args: (row.input_payload as Record<string, unknown>) || {},
       authorization:
-        (row.authorization_payload as RelayRuntimeAuthorizationEnvelope | null) ||
+        (row.authorization_payload as RelayAuthorizationEnvelope | null) ||
         undefined,
       inputHash: row.input_hash,
       taskId: row.task_id,

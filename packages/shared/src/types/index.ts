@@ -45,6 +45,8 @@ import {
   PLAN_APPROVAL_DECISIONS,
   TARGETED_INTERACTION_REQUEST_KINDS,
   REUSE_SCOPES,
+  RELAY_ACCESS_DENIAL_KINDS,
+  RELAY_ACCESS_DENIAL_RESOLUTIONS,
   RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES,
   RELAY_AUTHORIZATION_CAPABILITIES,
   RELAY_AUTHORIZATION_COMMAND_EXECUTORS,
@@ -2938,6 +2940,17 @@ export type RelayAuthorizationPreset =
 export type RelayAuthorizationRequestMode =
   typeof RELAY_AUTHORIZATION_REQUEST_MODES[number];
 
+export type RelayAccessDenialKind =
+  typeof RELAY_ACCESS_DENIAL_KINDS[number];
+
+export type RelayAccessDenialResolution =
+  typeof RELAY_ACCESS_DENIAL_RESOLUTIONS[number];
+
+export interface RelayAccessDenialDescriptor {
+  kind: RelayAccessDenialKind;
+  resolution: RelayAccessDenialResolution;
+}
+
 export type RelayAuthorizationGrantScope =
   typeof RELAY_AUTHORIZATION_GRANT_SCOPES[number];
 
@@ -3028,20 +3041,6 @@ export interface RelayAuthorizationInteractionSummary {
   requestMode: RelayAuthorizationRequestMode;
 }
 
-// Deprecated aliases kept for in-repo transition.
-export type RuntimeAuthorizationPreset = RelayAuthorizationPreset;
-export type RuntimeAuthorizationRequestMode = RelayAuthorizationRequestMode;
-export type RuntimeGrantScope = RelayAuthorizationGrantScope;
-export type RuntimeGrantRetention = RelayAuthorizationGrantRetention;
-export type RuntimeGrantStatus = RelayAuthorizationGrantStatus;
-export type RuntimeAuthorizationCapability = RelayAuthorizationCapability;
-export type RuntimeCommandlineExecutor = RelayAuthorizationCommandExecutor;
-export type RuntimeGrantEffect = RelayAuthorizationGrantSpec;
-export type RuntimeGrantSummary = RelayAuthorizationGrantSummary;
-export type RuntimeGrantView = RelayAuthorizationGrantView;
-export type RuntimeAuthorizationInteractionSummary =
-  RelayAuthorizationInteractionSummary;
-
 export interface InteractionRequestSummary {
   id: UUID;
   taskId?: UUID;
@@ -3057,7 +3056,6 @@ export interface InteractionRequestSummary {
   userInput?: UserInputInteractionSummary;
   planApproval?: PlanApprovalInteractionSummary;
   relayAuthorization?: RelayAuthorizationInteractionSummary;
-  runtimeAuthorization?: RuntimeAuthorizationInteractionSummary;
   createdAt: Timestamp;
   updatedAt: Timestamp;
   resolvedAt?: Timestamp;
@@ -3535,9 +3533,9 @@ export function summarizeConversationEvent(
       return `Plan approval requested from ${targetName}: ${title}`;
     }
     const deviceName =
-      interaction.runtimeAuthorization?.deviceDisplayName?.trim() || "relay";
+      interaction.relayAuthorization?.deviceDisplayName?.trim() || "relay";
     if (interaction.status === "cancelled") {
-      return `Runtime authorization request was cancelled for ${deviceName}`;
+      return `Relay authorization request was cancelled for ${deviceName}`;
     }
     if (interaction.status === "rejected") {
       const resolverName = interaction.resolvedBy?.name?.trim() || "A user";
@@ -3548,9 +3546,9 @@ export function summarizeConversationEvent(
       return `${resolverName} approved access for ${deviceName}`;
     }
     if (interaction.status === "superseded") {
-      return `Runtime authorization request was superseded for ${deviceName}`;
+      return `Relay authorization request was superseded for ${deviceName}`;
     }
-    return `Runtime authorization requested for ${deviceName}`;
+    return `Relay authorization requested for ${deviceName}`;
   }
 
   return `[Event: ${eventType}]`;

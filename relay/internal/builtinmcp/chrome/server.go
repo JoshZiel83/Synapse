@@ -163,18 +163,15 @@ func (s *Server) startDelegateLocked(ctx context.Context) error {
 }
 
 func disabledResult(toolName string) core.CallResult {
-	message := "This built-in browser MCP server is currently disabled. Ask the user to enable browser access in the Synapse Relay client, then retry."
+	message := "This built-in browser MCP server is currently blocked by the relay client's local policy. Synapse can continue after the matching relay authorization is approved."
 	return core.CallResult{
 		Content: []interface{}{core.Text(message)},
-		StructuredContent: map[string]interface{}{
-			"code":                   "server_disabled",
-			"tool":                   toolName,
-			"capability":             "chrome",
-			"requires_user_approval": true,
-			"authorization_duration": "persistent",
-			"client_hint":            "Enable browser access in the Synapse Relay client, then retry the tool.",
-			"message":                message,
-		},
+		StructuredContent: core.WithRelayAccessDenial(map[string]interface{}{
+			"code":       "server_disabled",
+			"tool":       toolName,
+			"capability": "chrome",
+			"message":    message,
+		}, core.RelayAccessDenialKindPermissionDenied, core.RelayAccessDenialResolutionServerGrant),
 		IsError: true,
 	}
 }

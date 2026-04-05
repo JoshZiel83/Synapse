@@ -28,6 +28,7 @@ import {
 import { getMcpVersion } from "./runtime-version.js";
 import { logToolCall } from "./audit.js";
 import {
+  callRelayTool,
   enqueueRelayToolTask,
   loadRelayExposureCatalogSnapshot,
   resolveRelayToolAuthorization,
@@ -38,6 +39,17 @@ import {
   resolveRelayGrantConversationTypeMask,
 } from "./relay-policy.js";
 import { normalizeMcpToolResult } from "./result-normalizer.js";
+import { inferRelaySpecialAuthorizationPlan } from "./relay-special-mcp.js";
+import {
+  createRelayAuthorizationRequest,
+  waitForRelayAuthorizationResolution,
+} from "./relay-authorization-requests.js";
+import {
+  classifyRelayLocalPermissionDenial,
+  injectRelayAuthorizationToolParameter,
+  normalizeRelayBuiltinAuthorizationKind,
+  parseRelayServerInvokeOptions,
+} from "./relay-invoke-options.js";
 
 const MCP_TOOL_NAMESPACE_SEPARATOR = "__";
 const RELAY_ASYNC_COMMANDLINE_TOOL_NAMES = new Set(["bash"]);
@@ -163,10 +175,6 @@ function getRelayToolRuntimeContext(
   );
 }
 
-function normalizeBuiltinKind(value: unknown) {
-  return typeof value === "string" ? value.trim().toLowerCase() : "";
-}
-
 function clearRelayToolRuntimeContexts(sessionId: string) {
   const prefix = `${sessionId}:`;
   for (const key of activeRelayToolContexts.keys()) {
@@ -195,6 +203,46 @@ function buildRelayBinaryMetadata(
       namespacedToolName,
     },
   };
+}
+
+function buildRelayErrorResult(
+  code: string,
+  message: string,
+  extra?: Record<string, unknown>,
+) {
+  return {
+    content: textBlocks(message),
+    isError: true,
+    structuredContent: {
+      code,
+      message,
+      ...(extra || {}),
+    },
+  };
+}
+
+function buildAutoRelayAuthorizationReason(params: {
+  visibleToolName: string;
+  denialMessage?: string;
+}) {
+  const denialMessage = params.denialMessage?.trim();
+  if (denialMessage) {
+    return `The relay client locally denied ${params.visibleToolName}. ${denialMessage}`;
+  }
+  return `The relay client locally denied ${params.visibleToolName}, so Synapse is requesting user authorization for the same action.`;
+}
+
+function buildBlockingAuthorizationFailureMessage(status: string) {
+  switch (status) {
+    case "superseded":
+      return "Relay authorization request was superseded by a newer user message.";
+    case "rejected":
+      return "Relay authorization request was rejected.";
+    case "cancelled":
+      return "Relay authorization request was cancelled.";
+    default:
+      return "Relay authorization request did not complete successfully.";
+  }
 }
 
 function wantsAsyncRelayCommandlineExecution(
@@ -359,7 +407,7 @@ function manifestToolToDefinition(tool: {
   name: string;
   description?: string;
   inputSchema?: Record<string, unknown>;
-}): ToolDefinition {
+}, exposureMetadata?: Record<string, unknown>): ToolDefinition {
   const inputSchema = tool.inputSchema as Record<string, unknown> | undefined;
   const properties =
     inputSchema && typeof inputSchema === "object" && !Array.isArray(inputSchema)
@@ -370,7 +418,7 @@ function manifestToolToDefinition(tool: {
       ? ((inputSchema.required as string[] | undefined) || [])
       : [];
 
-  return {
+  return injectRelayAuthorizationToolParameter({
     name: tool.name,
     description: tool.description || "",
     parameters: {
@@ -378,7 +426,7 @@ function manifestToolToDefinition(tool: {
       properties: properties as ToolDefinition["parameters"]["properties"],
       required,
     },
-  };
+  }, exposureMetadata);
 }
 
 function sanitizeNamespaceSegment(value: string, fallback: string) {
@@ -425,10 +473,44 @@ function buildRelayScopedInstance(params: {
   return {
     ...params.baseInstance,
     tools: params.tools,
+    sanitizeInputForLogging: (_toolName, input) =>
+      parseRelayServerInvokeOptions(input, params.exposureMetadata).clientToolArgs,
     execute: async (toolName, input, executionContext) => {
       const toolBinding = params.bindingMap.get(toolName);
       if (!toolBinding) {
         throw new Error(`Relay binding missing for tool ${toolName}`);
+      }
+      const invokeOptions = parseRelayServerInvokeOptions(
+        input,
+        params.exposureMetadata,
+      );
+      if (invokeOptions.validationError) {
+        return buildRelayErrorResult(
+          "invalid_request_authorization",
+          invokeOptions.validationError,
+          {
+            parameter: "request_authorization",
+          },
+        );
+      }
+      const clientToolArgs = invokeOptions.clientToolArgs;
+      const requestAuthorizationMode =
+        invokeOptions.serverInvokeOptions.requestAuthorization;
+      if (
+        requestAuthorizationMode === "blocking" &&
+        wantsAsyncRelayCommandlineExecution(
+          toolBinding.visibleToolName,
+          clientToolArgs,
+        )
+      ) {
+        return buildRelayErrorResult(
+          "invalid_request_authorization",
+          "`request_authorization: \"blocking\"` cannot be combined with `execution_mode: \"async\"`.",
+          {
+            parameter: "request_authorization",
+            executionMode: clientToolArgs.execution_mode,
+          },
+        );
       }
       const runtimeSessionId = params.baseInstance.ensureRuntimeSession
         ? await params.baseInstance.ensureRuntimeSession()
@@ -450,7 +532,12 @@ function buildRelayScopedInstance(params: {
           },
         );
       }
-      if (wantsAsyncRelayCommandlineExecution(toolBinding.visibleToolName, input)) {
+      if (
+        wantsAsyncRelayCommandlineExecution(
+          toolBinding.visibleToolName,
+          clientToolArgs,
+        )
+      ) {
         if (
           !executionContext?.sessionId ||
           !executionContext.conversationId ||
@@ -472,7 +559,7 @@ function buildRelayScopedInstance(params: {
           actorId: executionContext.actorId,
           relayToolStableKey: toolBinding.binding.stableKey,
           relayToolName: toolBinding.visibleToolName,
-          toolArguments: input,
+          toolArguments: clientToolArgs,
           runtimeSessionId,
           exposureMetadata: params.exposureMetadata,
         });
@@ -492,10 +579,13 @@ function buildRelayScopedInstance(params: {
           exposureId: params.exposureId,
           visibleToolName: toolBinding.visibleToolName,
           binding: toolBinding.binding,
-          args: input,
+          args: clientToolArgs,
           runtimeSessionId,
           authorization: authorizationState.authorization,
           deliveryPolicy: "online_only",
+          serverInvokeOptions: {
+            requestAuthorization: requestAuthorizationMode,
+          },
         });
 
         return {
@@ -514,15 +604,173 @@ function buildRelayScopedInstance(params: {
           },
         };
       }
+      let rawResult: unknown;
       if (params.baseInstance.executeWithBinding) {
-        return params.baseInstance.executeWithBinding(
+        rawResult = await params.baseInstance.executeWithBinding(
           toolName,
-          input,
+          clientToolArgs,
           toolBinding.binding,
           executionContext,
         );
+      } else {
+        rawResult = await params.baseInstance.execute(
+          toolName,
+          clientToolArgs,
+          executionContext,
+        );
       }
-      return params.baseInstance.execute(toolName, input, executionContext);
+
+      const localDenial =
+        requestAuthorizationMode === "none"
+          ? null
+          : classifyRelayLocalPermissionDenial(rawResult);
+      if (!localDenial) {
+        return rawResult;
+      }
+      const authorizationRequestMode =
+        requestAuthorizationMode === "blocking" ? "blocking" : "background";
+
+      if (
+        !executionContext?.conversationId ||
+        !executionContext.sessionId ||
+        !executionContext.actorId ||
+        !runtimeSessionId
+      ) {
+        return buildRelayErrorResult(
+          "relay_authorization_request_failed",
+          "Synapse could not create a relay authorization request because this tool call has no conversation-backed actor context.",
+          {
+            requestMode: authorizationRequestMode,
+            executed: false,
+            originalStructuredContent: localDenial.structuredContent,
+          },
+        );
+      }
+
+      const authorizationPlan = inferRelaySpecialAuthorizationPlan({
+        toolStableKey: toolBinding.binding.stableKey,
+        visibleToolName: toolBinding.visibleToolName,
+        toolInput: clientToolArgs,
+        exposureMetadata: params.exposureMetadata,
+      });
+      if (!authorizationPlan) {
+        return buildRelayErrorResult(
+          "relay_authorization_request_failed",
+          "Synapse could not infer a relay authorization request for this tool call.",
+          {
+            requestMode: authorizationRequestMode,
+            executed: false,
+            originalStructuredContent: localDenial.structuredContent,
+          },
+        );
+      }
+
+      try {
+        const created = await createRelayAuthorizationRequest({
+          source: {
+            workspaceId: params.baseInstance.workspaceId || "",
+            conversationId: executionContext.conversationId,
+            sessionId: executionContext.sessionId,
+            actorId: executionContext.actorId,
+            workspaceMemberId: executionContext.workspaceMemberId,
+            turnId: executionContext.turnId,
+            sourceToolCallId: executionContext.toolCallId,
+            sourceToolName:
+              executionContext.toolName ||
+              executionContext.namespacedToolName ||
+              toolName,
+          },
+          relayTarget: {
+            relayCapabilityId: params.capabilityId,
+            relayDeviceId: params.deviceId,
+            relayExposureId: params.exposureId,
+            requestedToolName: toolBinding.visibleToolName,
+            relayToolStableKey: authorizationPlan.toolStableKey,
+            runtimeSessionId,
+            relayDeviceDisplayName: params.deviceDisplayName,
+            relayExposureDisplayName: params.exposureDisplayName,
+          },
+          authorizationPlan,
+          requestMode: authorizationRequestMode,
+          reason: buildAutoRelayAuthorizationReason({
+            visibleToolName: toolBinding.visibleToolName,
+            denialMessage: localDenial.message,
+          }),
+          sourceRequestArgs: clientToolArgs,
+        });
+
+        if (authorizationRequestMode === "background") {
+          return buildRelayErrorResult(
+            "relay_authorization_requested",
+            created.reused
+              ? "The relay action was denied by the relay client. A matching authorization request is already pending."
+              : "The relay action was denied by the relay client. Synapse created a background authorization request.",
+            {
+              interactionId: created.interaction.id,
+              requestMode: authorizationRequestMode,
+              relayToolName: toolBinding.visibleToolName,
+              executed: false,
+              originalStructuredContent: localDenial.structuredContent,
+            },
+          );
+        }
+
+        const waited = await waitForRelayAuthorizationResolution({
+          interactionId: created.interaction.id,
+          conversationId: executionContext.conversationId,
+          createdAt: created.interaction.createdAt,
+          onApproved: async () => {
+            const retryRuntimeSessionId = params.baseInstance.ensureRuntimeSession
+              ? await params.baseInstance.ensureRuntimeSession()
+              : runtimeSessionId;
+            return callRelayTool({
+              conversationId: executionContext.conversationId,
+              sessionId: executionContext.sessionId,
+              requestedByWorkspaceMemberId: executionContext.workspaceMemberId,
+              requestedByActorId: executionContext.actorId,
+              relayCapabilityId: params.capabilityId,
+              deviceId: params.deviceId,
+              exposureId: params.exposureId,
+              visibleToolName: toolBinding.visibleToolName,
+              binding: toolBinding.binding,
+              args: clientToolArgs,
+              runtimeSessionId: retryRuntimeSessionId || runtimeSessionId,
+              authorization: {
+                retryNonce: created.retryNonce,
+              },
+            });
+          },
+        });
+
+        if (waited.status === "approved") {
+          return waited.approvedValue;
+        }
+
+        return buildRelayErrorResult(
+          `relay_authorization_${waited.status}`,
+          buildBlockingAuthorizationFailureMessage(waited.status),
+          {
+            interactionId: created.interaction.id,
+            requestMode: authorizationRequestMode,
+            relayToolName: toolBinding.visibleToolName,
+            executed: false,
+            originalStructuredContent: localDenial.structuredContent,
+          },
+        );
+      } catch (error) {
+        return buildRelayErrorResult(
+          "relay_authorization_request_failed",
+          error instanceof Error
+            ? error.message
+            : "Failed to create a relay authorization request.",
+          {
+            requestMode: authorizationRequestMode,
+            relayToolName: toolBinding.visibleToolName,
+            executed: false,
+            originalStructuredContent: localDenial.structuredContent,
+          },
+        );
+      }
     },
   };
 }
@@ -720,7 +968,10 @@ export async function listVisibleHealthyRelayCommandlineExposureMetadata(
     if (!relayCatalog || relayCatalog.runtimeStatus !== "healthy") {
       continue;
     }
-    if (normalizeBuiltinKind(relayCatalog.metadata?.builtinKind) !== "commandline") {
+    if (
+      normalizeRelayBuiltinAuthorizationKind(relayCatalog.metadata?.builtinKind) !==
+      "commandline"
+    ) {
       continue;
     }
     metadata.push(relayCatalog.metadata || {});
@@ -786,7 +1037,7 @@ async function resolveTools(
             name: tool.visible.name,
             description: tool.visible.description,
             inputSchema: tool.visible.inputSchema,
-          });
+          }, relayCatalog.metadata);
         });
 
         const reuseScope = publicReuseScope(plugin.reuse_scope);
@@ -856,7 +1107,7 @@ async function resolveTools(
       const namespacedTools = (
         runtimeInstance.tools.length > 0
           ? runtimeInstance.tools
-          : manifest.map(manifestToolToDefinition)
+          : manifest.map((tool) => manifestToolToDefinition(tool))
       ).map((tool) => ({
         ...tool,
         name: `${namespace}${MCP_TOOL_NAMESPACE_SEPARATOR}${tool.name}`,
@@ -886,7 +1137,9 @@ async function resolveTools(
       exposure.exposure_stable_key,
       `exposure_${exposure.exposure_id.slice(0, 8)}`,
     );
-    const builtinKind = normalizeBuiltinKind(relayCatalog.metadata?.builtinKind);
+    const builtinKind = normalizeRelayBuiltinAuthorizationKind(
+      relayCatalog.metadata?.builtinKind,
+    );
     const relayScope = builtinKind === "cua" ? "turn" : "conversation";
     const relayScopeId =
       relayScope === "turn" ? turnOwnerKey : params.conversationId;
@@ -896,7 +1149,7 @@ async function resolveTools(
         name: tool.visible.name,
         description: tool.visible.description,
         inputSchema: tool.visible.inputSchema,
-      }),
+      }, relayCatalog.metadata),
     );
     const bindingMap = new Map<string, { binding: RelayHiddenToolBinding; visibleToolName: string }>();
     for (const tool of relayCatalog.tools) {
@@ -1033,7 +1286,10 @@ export async function resolveMcpToolsForActor(
         pluginId: instance.pluginId,
         toolName: namespacedToolName,
         toolType: instance.transport === "relay" ? "relay" : "mcp_plugin",
-        input,
+        input:
+          instance.transport === "relay" && instance.sanitizeInputForLogging
+            ? instance.sanitizeInputForLogging(toolName, input)
+            : input,
         output,
         isError,
         errorMessage,

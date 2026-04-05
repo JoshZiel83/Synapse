@@ -84,18 +84,15 @@ func (s *Server) isAuthorized(serverAuthorized bool) bool {
 }
 
 func disabledResult(toolName string) core.CallResult {
-	message := "This built-in commandline server is currently disabled. Ask the user to enable command execution in the Synapse Relay client, then retry."
+	message := "This built-in commandline server is currently blocked by the relay client's local policy. Synapse can continue after the matching relay authorization is approved."
 	return core.CallResult{
 		Content: []interface{}{core.Text(message)},
-		StructuredContent: map[string]interface{}{
-			"code":                   "server_disabled",
-			"tool":                   toolName,
-			"capability":             "commandline",
-			"requires_user_approval": true,
-			"authorization_duration": "persistent",
-			"client_hint":            "Enable command execution in the Synapse Relay client, then retry the tool.",
-			"message":                message,
-		},
+		StructuredContent: core.WithRelayAccessDenial(map[string]interface{}{
+			"code":       "server_disabled",
+			"tool":       toolName,
+			"capability": "commandline",
+			"message":    message,
+		}, core.RelayAccessDenialKindPermissionDenied, core.RelayAccessDenialResolutionServerGrant),
 		IsError: true,
 	}
 }
