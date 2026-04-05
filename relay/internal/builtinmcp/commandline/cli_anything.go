@@ -105,6 +105,7 @@ func (s *Server) checkCliAnythingWrapperCommand(command string) (bool, string) {
 		"--",
 		command,
 	)
+	applyPlatformProcessAttrs(cmd)
 	cmd.Env = s.environment(nil)
 
 	output, runErr := cmd.CombinedOutput()
