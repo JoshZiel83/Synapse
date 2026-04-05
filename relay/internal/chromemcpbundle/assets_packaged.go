@@ -9,7 +9,7 @@ import (
 )
 
 func loadManifestBytes() ([]byte, error) {
-	data, err := runtimebundle.ReadPackagedManifest("chrome-devtools-mcp")
+	data, err := runtimebundle.ReadPackagedManifest(packagedBundleDir)
 	if err != nil {
 		return nil, fmt.Errorf("read packaged chrome-devtools bundle manifest: %w", err)
 	}

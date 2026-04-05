@@ -9,7 +9,7 @@ import (
 )
 
 func loadManifestBytes() ([]byte, error) {
-	data, err := runtimebundle.ReadPackagedManifest("commandline")
+	data, err := runtimebundle.ReadPackagedManifest(packagedBundleDir)
 	if err != nil {
 		return nil, fmt.Errorf("read packaged commandline bundle manifest: %w", err)
 	}

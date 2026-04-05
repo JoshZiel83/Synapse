@@ -166,11 +166,11 @@ async function stageRuntimeBundles(runtimeRoot) {
     sourceDir: join(relayRoot, "internal", "nodebundle", "assets"),
   }, runtimeRoot);
   await stageRuntimeBundle({
-    name: "commandline",
+    name: "cl",
     sourceDir: join(relayRoot, "internal", "commandlinebundle", "assets"),
   }, runtimeRoot);
   await stageRuntimeBundle({
-    name: "chrome-devtools-mcp",
+    name: "cdm",
     sourceDir: join(relayRoot, "internal", "chromemcpbundle", "assets"),
   }, runtimeRoot);
 }

@@ -23,6 +23,8 @@ type Manifest struct {
 	PackageVersion   string `json:"packageVersion"`
 }
 
+const packagedBundleDir = "cdm"
+
 type Installation struct {
 	RootDir        string
 	NodeBinaryPath string
@@ -60,10 +62,10 @@ func EnsureInstalled() (*Installation, error) {
 	}
 
 	nodeInstallation, nodeErr := nodebundle.EnsureInstalled()
-	userRootDir := filepath.Join(relaypaths.Current().SharedRuntimeRoot, "chrome-devtools-mcp", manifest.AssetVersion)
+	userRootDir := filepath.Join(relaypaths.Current().SharedRuntimeRoot, packagedBundleDir, manifest.AssetVersion)
 	rootDir, installed := runtimebundle.ResolveRoot(userRootDir, func(dir string) bool {
 		return installationReady(dir, manifest)
-	}, "runtime", "chrome-devtools-mcp", manifest.AssetVersion)
+	}, "runtime", packagedBundleDir, manifest.AssetVersion)
 	rootErr := error(nil)
 	if !installed {
 		if !runtimeExtractionSupported() {

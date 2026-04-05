@@ -33,6 +33,8 @@ type Manifest struct {
 	Executables             []string                `json:"executables"`
 }
 
+const packagedBundleDir = "cl"
+
 type CliAnythingProbe struct {
 	Type       string   `json:"type"`
 	EnvPathVar string   `json:"envPathVar"`
@@ -94,10 +96,10 @@ func EnsureInstalled() (*Installation, error) {
 	}
 
 	nodeInstallation, nodeErr := nodebundle.EnsureInstalled()
-	userRootDir := filepath.Join(relaypaths.Current().SharedRuntimeRoot, "commandline", manifest.AssetVersion)
+	userRootDir := filepath.Join(relaypaths.Current().SharedRuntimeRoot, packagedBundleDir, manifest.AssetVersion)
 	rootDir, installed := runtimebundle.ResolveRoot(userRootDir, func(dir string) bool {
 		return installationReady(dir, manifest)
-	}, "runtime", "commandline", manifest.AssetVersion)
+	}, "runtime", packagedBundleDir, manifest.AssetVersion)
 	rootErr := error(nil)
 	if !installed {
 		if !runtimeExtractionSupported() {

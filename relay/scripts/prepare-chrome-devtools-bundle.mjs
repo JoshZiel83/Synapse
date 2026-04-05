@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from 'node:crypto'
 import { cp, mkdir, mkdtemp, readFile, stat, rm, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -8,6 +9,9 @@ import { fileURLToPath } from 'node:url'
 
 const DEFAULT_NODE_VERSION = '20.19.5'
 const DEFAULT_PACKAGE_VERSION = '0.20.0'
+const CHROME_DEVTOOLS_ASSET_SCHEMA_VERSION = 1
+const CHROME_DEVTOOLS_ASSET_PREFIX = 'cdm'
+const CHROME_DEVTOOLS_PACKAGE_DIR = 'p'
 
 function parseArgs(argv) {
   const options = {
@@ -40,6 +44,19 @@ function parseArgs(argv) {
 
 function getSharedNodeAssetVersion(targetPlatform, nodeVersion) {
   return `node-${nodeVersion}-${targetPlatform}`
+}
+
+function shortHash(value) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 12)
+}
+
+function getChromeDevtoolsAssetVersion(options, nodeAssetVersion) {
+  return `${CHROME_DEVTOOLS_ASSET_PREFIX}-${shortHash({
+    schemaVersion: CHROME_DEVTOOLS_ASSET_SCHEMA_VERSION,
+    targetPlatform: options.targetPlatform,
+    packageVersion: options.packageVersion,
+    nodeAssetVersion,
+  })}`
 }
 
 function runCommand(command, args, options = {}) {
@@ -164,20 +181,20 @@ async function main() {
     await extractArchive(packageArchivePath, packageExtractDir, 'tar')
 
     const packageSourceDir = join(packageExtractDir, 'package')
-    const entryScript = 'package/build/src/bin/chrome-devtools-mcp.js'
+    const entryScript = `${CHROME_DEVTOOLS_PACKAGE_DIR}/build/src/bin/chrome-devtools-mcp.js`
 
     await ensureExists(join(packageSourceDir, 'build', 'src', 'bin', 'chrome-devtools-mcp.js'))
 
     await rm(assetsDir, { recursive: true, force: true })
     await mkdir(assetsDir, { recursive: true })
-    await cp(packageSourceDir, join(assetsDir, 'package'), { recursive: true })
+    await cp(packageSourceDir, join(assetsDir, CHROME_DEVTOOLS_PACKAGE_DIR), { recursive: true })
 
     const manifest = {
       prepared: true,
-      assetVersion: `chrome-devtools-mcp-${options.packageVersion}-${options.targetPlatform}`,
+      assetVersion: getChromeDevtoolsAssetVersion(options, sharedNodeManifest.assetVersion),
       platform: options.targetPlatform,
       nodeAssetVersion: sharedNodeManifest.assetVersion,
-      packageDir: 'package',
+      packageDir: CHROME_DEVTOOLS_PACKAGE_DIR,
       entryScript,
       packageVersion: options.packageVersion,
     }

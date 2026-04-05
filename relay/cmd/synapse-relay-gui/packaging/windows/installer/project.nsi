@@ -15,6 +15,7 @@ Unicode true
 !define PRODUCT_EXECUTABLE "synapse-relay-gui.exe"
 !define INSTALL_SCOPE_MARKER "install.scope"
 !define REQUEST_EXECUTION_LEVEL "user"
+!define PRODUCT_INSTALL_DIRNAME "Relay"
 !define SYNAPSE_RUNTIME_STAGE "__SYNAPSE_RUNTIME_STAGE__"
 
 !include "wails_tools.nsh"
@@ -30,6 +31,7 @@ VIAddVersionKey "LegalCopyright"  "${INFO_COPYRIGHT}"
 VIAddVersionKey "ProductName"     "${INFO_PRODUCTNAME}"
 
 ManifestDPIAware true
+ManifestLongPathAware true
 
 !include "LogicLib.nsh"
 !include "FileFunc.nsh"
@@ -39,7 +41,7 @@ UninstallIcon "..\icon.ico"
 
 Name "${INFO_PRODUCTNAME}"
 OutFile "..\..\bin\${INFO_PROJECTNAME}-${ARCH}-installer.exe"
-InstallDir "$LOCALAPPDATA\Programs\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}"
+InstallDir "$LOCALAPPDATA\Programs\${INFO_COMPANYNAME}\${PRODUCT_INSTALL_DIRNAME}"
 ShowInstDetails nevershow
 AutoCloseWindow true
 SilentInstall normal
@@ -102,13 +104,13 @@ Function SelectInstallScope
             ${If} $R3 != ""
                 StrCpy $INSTDIR $R3
             ${Else}
-                StrCpy $INSTDIR "$PROGRAMFILES64\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}"
+                StrCpy $INSTDIR "$PROGRAMFILES64\${INFO_COMPANYNAME}\${PRODUCT_INSTALL_DIRNAME}"
             ${EndIf}
         ${Else}
             ${If} $R4 != ""
                 StrCpy $INSTDIR $R4
             ${Else}
-                StrCpy $INSTDIR "$LOCALAPPDATA\Programs\${INFO_COMPANYNAME}\${INFO_PRODUCTNAME}"
+                StrCpy $INSTDIR "$LOCALAPPDATA\Programs\${INFO_COMPANYNAME}\${PRODUCT_INSTALL_DIRNAME}"
             ${EndIf}
         ${EndIf}
 FunctionEnd

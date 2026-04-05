@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { createHash } from 'node:crypto'
 import { createWriteStream } from 'node:fs'
 import { copyFile, cp, mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
@@ -16,6 +17,15 @@ const DEFAULT_PYTHON_STANDALONE_RELEASE = '20251010'
 const DEFAULT_WINDOWS_GIT_VERSION = '2.49.0.windows.1'
 const DEFAULT_FFMPEG_RELEASE_TAG = 'n7.1-2'
 const DEFAULT_PACKAGE_PROFILE = 'default-data-v5'
+
+const COMMANDLINE_ASSET_SCHEMA_VERSION = 1
+const COMMANDLINE_ASSET_PREFIX = 'cl'
+const COMMANDLINE_NODE_MODULES_DIR = 'nm'
+const COMMANDLINE_PYTHON_HOME_DIR = 'py'
+const COMMANDLINE_PYTHON_SITE_PACKAGES_DIR = 'sp'
+const COMMANDLINE_MANAGED_BIN_DIR = 'bin'
+const COMMANDLINE_FFMPEG_DIR = 'ff'
+const COMMANDLINE_GIT_DIR = 'git'
 
 const PYTHON_DISTRIBUTIONS = {
   'linux-amd64': {
@@ -208,6 +218,33 @@ function parseArgs(argv) {
 
 function getSharedNodeAssetVersion(targetPlatform, nodeVersion) {
   return `node-${nodeVersion}-${targetPlatform}`
+}
+
+function shortHash(value) {
+  return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 12)
+}
+
+function getCommandlineAssetVersion(options, nodeAssetVersion, capabilities) {
+  return `${COMMANDLINE_ASSET_PREFIX}-${shortHash({
+    schemaVersion: COMMANDLINE_ASSET_SCHEMA_VERSION,
+    targetPlatform: options.targetPlatform,
+    packageProfile: options.packageProfile,
+    pythonVersion: options.pythonVersion,
+    pythonStandaloneRelease: options.pythonStandaloneRelease,
+    windowsGitVersion: options.targetPlatform === 'windows-amd64' ? options.windowsGitVersion : '',
+    ffmpegReleaseTag: options.ffmpegReleaseTag,
+    nodeAssetVersion,
+    nodeDependencies: NODE_DEPENDENCIES,
+    pythonRequirements: PYTHON_REQUIREMENTS,
+    capabilities: capabilities.map((capability) => ({
+      slug: capability.slug,
+      command: capability.command,
+      module: capability.module,
+      version: capability.version,
+      entryPointTarget: capability.entryPointTarget,
+      probe: capability.probe,
+    })),
+  })}`
 }
 
 async function loadSharedNodeManifest(relayRoot, targetPlatform, nodeVersion) {
@@ -626,11 +663,11 @@ function buildCliAnythingWrapperContent(pythonBinaryRelative, capability) {
     'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
     'ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"',
     `PYTHON_BIN="${'$'}ROOT_DIR/${pythonBinaryRelative}"`,
-    'export PYTHONHOME="${ROOT_DIR}/python"',
+    `export PYTHONHOME="${'$'}{ROOT_DIR}/${COMMANDLINE_PYTHON_HOME_DIR}"`,
     'if [ -n "${PYTHONPATH:-}" ]; then',
-    '  export PYTHONPATH="${ROOT_DIR}/python-site-packages:${PYTHONPATH}"',
+    `  export PYTHONPATH="${'$'}{ROOT_DIR}/${COMMANDLINE_PYTHON_SITE_PACKAGES_DIR}:${'$'}{PYTHONPATH}"`,
     'else',
-    '  export PYTHONPATH="${ROOT_DIR}/python-site-packages"',
+    `  export PYTHONPATH="${'$'}{ROOT_DIR}/${COMMANDLINE_PYTHON_SITE_PACKAGES_DIR}"`,
     'fi',
     'export PYTHONUTF8=1',
     `exec "${'$'}PYTHON_BIN" -c '${pythonCode}' "${'$'}@"`,
@@ -639,7 +676,7 @@ function buildCliAnythingWrapperContent(pythonBinaryRelative, capability) {
 }
 
 async function writeCliAnythingWrappers(assetsDir, pythonBinaryRelative, capabilities, targetPlatform) {
-  const managedBinDir = join(assetsDir, 'managed-bin')
+  const managedBinDir = join(assetsDir, COMMANDLINE_MANAGED_BIN_DIR)
   await mkdir(managedBinDir, { recursive: true })
 
   const wrapperPaths = []
@@ -657,7 +694,7 @@ async function writeCliAnythingWrappers(assetsDir, pythonBinaryRelative, capabil
   }
 
   return {
-    managedBinDir: 'managed-bin',
+    managedBinDir: COMMANDLINE_MANAGED_BIN_DIR,
     wrapperPaths,
   }
 }
@@ -713,13 +750,13 @@ async function main() {
     await rm(assetsDir, { recursive: true, force: true })
     await mkdir(assetsDir, { recursive: true })
 
-    await copyDirectory(join(nodePackageDir, 'node_modules'), join(assetsDir, 'node-modules'))
-    await copyFile(join(nodePackageDir, 'package.json'), join(assetsDir, 'node-modules', 'package.json'))
+    await copyDirectory(join(nodePackageDir, 'node_modules'), join(assetsDir, COMMANDLINE_NODE_MODULES_DIR))
+    await copyFile(join(nodePackageDir, 'package.json'), join(assetsDir, COMMANDLINE_NODE_MODULES_DIR, 'package.json'))
     const nodeLockPath = join(nodePackageDir, 'package-lock.json')
     if (await stat(nodeLockPath).then(() => true).catch(() => false)) {
-      await copyFile(nodeLockPath, join(assetsDir, 'node-modules', 'package-lock.json'))
+      await copyFile(nodeLockPath, join(assetsDir, COMMANDLINE_NODE_MODULES_DIR, 'package-lock.json'))
     }
-    const prunedNodeDirs = await pruneDirectories(join(assetsDir, 'node-modules'), NODE_MODULE_PRUNE_DIRS)
+    const prunedNodeDirs = await pruneDirectories(join(assetsDir, COMMANDLINE_NODE_MODULES_DIR), NODE_MODULE_PRUNE_DIRS)
     if (prunedNodeDirs > 0) {
       console.log(`Pruned ${prunedNodeDirs} non-runtime Node module directories`)
     }
@@ -730,27 +767,27 @@ async function main() {
       binaryRelativePath: pythonBinaryPathInsideRuntime,
     } = await findPythonRuntime(pythonExtractDir, options.targetPlatform)
     await ensureExists(sourcePythonBinary)
-    await copyDirectory(pythonRuntimeRoot, join(assetsDir, 'python'))
-    await copyDirectory(pythonPackageDir, join(assetsDir, 'python-site-packages'))
-    const prunedPythonDirs = await pruneDirectories(join(assetsDir, 'python-site-packages'), PYTHON_PACKAGE_PRUNE_DIRS)
+    await copyDirectory(pythonRuntimeRoot, join(assetsDir, COMMANDLINE_PYTHON_HOME_DIR))
+    await copyDirectory(pythonPackageDir, join(assetsDir, COMMANDLINE_PYTHON_SITE_PACKAGES_DIR))
+    const prunedPythonDirs = await pruneDirectories(join(assetsDir, COMMANDLINE_PYTHON_SITE_PACKAGES_DIR), PYTHON_PACKAGE_PRUNE_DIRS)
     if (prunedPythonDirs > 0) {
       console.log(`Pruned ${prunedPythonDirs} non-runtime Python package directories`)
     }
     console.log(`Bundling CLI-Anything wave1 packages (${cliAnythingCapabilities.length} capabilities)`)
     const bundledCliAnythingCapabilities = await copyCliAnythingPackages(
       cliAnythingRoot,
-      join(assetsDir, 'python-site-packages'),
+      join(assetsDir, COMMANDLINE_PYTHON_SITE_PACKAGES_DIR),
       cliAnythingCapabilities,
     )
-    await rm(join(assetsDir, 'python', 'share', 'terminfo'), { recursive: true, force: true })
+    await rm(join(assetsDir, COMMANDLINE_PYTHON_HOME_DIR, 'share', 'terminfo'), { recursive: true, force: true })
 
-    const ffmpegBinary = options.targetPlatform.startsWith('windows-') ? 'ffmpeg/ffmpeg.exe' : 'ffmpeg/ffmpeg'
-    const ffprobeBinary = options.targetPlatform.startsWith('windows-') ? 'ffmpeg/ffprobe.exe' : 'ffmpeg/ffprobe'
-    await mkdir(join(assetsDir, 'ffmpeg'), { recursive: true })
+    const ffmpegBinary = options.targetPlatform.startsWith('windows-') ? `${COMMANDLINE_FFMPEG_DIR}/ffmpeg.exe` : `${COMMANDLINE_FFMPEG_DIR}/ffmpeg`
+    const ffprobeBinary = options.targetPlatform.startsWith('windows-') ? `${COMMANDLINE_FFMPEG_DIR}/ffprobe.exe` : `${COMMANDLINE_FFMPEG_DIR}/ffprobe`
+    await mkdir(join(assetsDir, COMMANDLINE_FFMPEG_DIR), { recursive: true })
     await copyFile(ffmpegDownloadPath, join(assetsDir, ffmpegBinary))
     await copyFile(ffprobeDownloadPath, join(assetsDir, ffprobeBinary))
 
-    const pythonBinaryTarget = join(assetsDir, 'python', pythonBinaryPathInsideRuntime.split('/').join(process.platform === 'win32' ? '\\' : '/'))
+    const pythonBinaryTarget = join(assetsDir, COMMANDLINE_PYTHON_HOME_DIR, pythonBinaryPathInsideRuntime.split('/').join(process.platform === 'win32' ? '\\' : '/'))
     if (!pythonBinaryTarget) {
       throw new Error('failed to locate bundled Python executable after copying runtime')
     }
@@ -780,9 +817,9 @@ async function main() {
       }
 
       const portableRoot = dirname(dirname(sourceGitBinary))
-      await copyDirectory(portableRoot, join(assetsDir, 'git'))
-      gitBinary = 'git/cmd/git.exe'
-      bashBinary = 'git/bin/bash.exe'
+      await copyDirectory(portableRoot, join(assetsDir, COMMANDLINE_GIT_DIR))
+      gitBinary = `${COMMANDLINE_GIT_DIR}/cmd/git.exe`
+      bashBinary = `${COMMANDLINE_GIT_DIR}/bin/bash.exe`
     }
 
     const executables = [pythonBinaryRelative, ffmpegBinary, ffprobeBinary, ...wrapperPaths]
@@ -793,14 +830,20 @@ async function main() {
       executables.push(bashBinary)
     }
 
+    const assetVersion = getCommandlineAssetVersion(
+      options,
+      sharedNodeManifest.assetVersion,
+      bundledCliAnythingCapabilities,
+    )
+
     const manifest = {
       prepared: true,
       platform: options.targetPlatform,
       nodeAssetVersion: sharedNodeManifest.assetVersion,
-      nodeModulesDir: 'node-modules',
-      pythonHomeDir: 'python',
+      nodeModulesDir: COMMANDLINE_NODE_MODULES_DIR,
+      pythonHomeDir: COMMANDLINE_PYTHON_HOME_DIR,
       pythonBinary: pythonBinaryRelative,
-      pythonSitePackagesDir: 'python-site-packages',
+      pythonSitePackagesDir: COMMANDLINE_PYTHON_SITE_PACKAGES_DIR,
       managedBinDir,
       ffmpegBinary,
       ffprobeBinary,
@@ -816,7 +859,7 @@ async function main() {
       })),
       packageProfile: options.packageProfile,
       ffmpegReleaseTag: options.ffmpegReleaseTag,
-      assetVersion: `commandline-${options.packageProfile}-python-${options.pythonVersion}-${options.pythonStandaloneRelease}-ffmpeg-${options.ffmpegReleaseTag}-${options.targetPlatform}`,
+      assetVersion,
       executables,
     }
 
