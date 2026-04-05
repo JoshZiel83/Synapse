@@ -15,6 +15,7 @@ type Server struct {
 	desktop       Desktop
 	tools         []core.Tool
 	system        string
+	guard         *sessionGuard
 	startCtx      context.Context
 	cancel        context.CancelFunc
 	started       bool
@@ -38,7 +39,11 @@ func NewWithDesktop(cfg Config, desktop Desktop) *Server {
 		cfg:           cfg,
 		desktop:       desktop,
 		system:        detectSystemDescription(),
+		guard:         newSessionGuard(cfg.StateDir),
 		sessionStates: make(map[string]sessionState),
+	}
+	if aware, ok := desktop.(captureOptionsAwareDesktop); ok && server.guard != nil {
+		aware.SetCaptureOptionsProvider(server.guard.CaptureOptions)
 	}
 	server.tools = server.buildTools()
 	return server
@@ -48,6 +53,9 @@ func (s *Server) Start(ctx context.Context) error {
 	childCtx, cancel := context.WithCancel(ctx)
 	s.startCtx = childCtx
 	s.cancel = cancel
+	if err := s.guard.Start(); err != nil {
+		return err
+	}
 	if !s.canOperate("") {
 		return nil
 	}
@@ -55,6 +63,9 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 func (s *Server) Initialize() error {
+	if err := s.guard.Start(); err != nil {
+		return err
+	}
 	if !s.canOperate("") {
 		return nil
 	}
@@ -71,6 +82,9 @@ func (s *Server) Shutdown() {
 	if s.cancel != nil {
 		s.cancel()
 	}
+	if s.guard != nil {
+		_ = s.guard.Close()
+	}
 	if s.desktop != nil {
 		_ = s.desktop.Close()
 	}
@@ -78,10 +92,34 @@ func (s *Server) Shutdown() {
 	s.initialized = false
 }
 
+func (s *Server) SetEventEmitter(handler func(string, string, map[string]interface{})) {
+	if s.guard == nil {
+		return
+	}
+	s.guard.SetEventEmitter(handler)
+}
+
+func (s *Server) SetCUASessionTerminator(handler func(string, string)) {
+	if s.guard == nil {
+		return
+	}
+	s.guard.SetTerminator(handler)
+}
+
+func (s *Server) OpenRuntimeSession(runtimeSessionID string) error {
+	if s.guard == nil {
+		return nil
+	}
+	return s.guard.OpenRuntimeSession(runtimeSessionID)
+}
+
 func (s *Server) CloseRuntimeSession(runtimeSessionID string) {
 	sessionKey := runtimeSessionStateKey(runtimeSessionID)
 	if sessionKey == defaultRuntimeSessionKey {
 		return
+	}
+	if s.guard != nil {
+		s.guard.CloseRuntimeSession(runtimeSessionID)
 	}
 	s.mu.Lock()
 	delete(s.sessionStates, sessionKey)
@@ -89,6 +127,9 @@ func (s *Server) CloseRuntimeSession(runtimeSessionID string) {
 }
 
 func (s *Server) ResetRuntimeSessions() {
+	if s.guard != nil {
+		s.guard.Reset()
+	}
 	s.mu.Lock()
 	s.sessionStates = make(map[string]sessionState)
 	s.mu.Unlock()
@@ -108,10 +149,15 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 	if blocked, operation := s.readOnlyBlock(runtimeSessionID, toolName, args); blocked {
 		return readOnlyResult(toolName, operation), nil
 	}
+	if s.guard != nil {
+		if guardResult := s.guard.BeforeToolCall(runtimeSessionID); guardResult != nil {
+			return *guardResult, nil
+		}
+	}
 
 	switch toolName {
 	case "desktop_list_displays":
-		return s.listDisplays(), nil
+		return s.listDisplays(runtimeSessionID), nil
 	case "desktop_capture_display":
 		return s.captureDisplay(runtimeSessionID, args)
 	case "desktop_capture_overview":
@@ -131,11 +177,11 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 	case "desktop_get_keyboard_state":
 		return s.keyboardState(), nil
 	case "desktop_list_windows":
-		return s.listWindows(), nil
+		return s.listWindows(runtimeSessionID), nil
 	case "desktop_list_apps":
-		return s.listApps(args)
+		return s.listApps(runtimeSessionID, args)
 	case "desktop_wait":
-		return s.wait(args)
+		return s.wait(runtimeSessionID, args)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", toolName)), nil
 	}

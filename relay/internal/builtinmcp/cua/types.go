@@ -15,6 +15,7 @@ type Config struct {
 	RelativeSize             [2]int
 	ScrollMultiplier         float64
 	LogDir                   string
+	StateDir                 string
 	AllowDisplayOverride     bool
 	IncludeOverviewTool      bool
 	DisplaySelector          DisplaySelector

@@ -5,7 +5,7 @@ go 1.24.1
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/Microsoft/go-winio v0.6.2
-	github.com/PekingSpades/DeskAct v0.0.0-20260228104223-b1be287e5b22
+	github.com/PekingSpades/DeskAct v0.0.0-20260404161542-190569c48603
 	github.com/adrg/xdg v0.5.3
 	github.com/bmatcuk/doublestar/v4 v4.9.1
 	github.com/djherbis/times v1.6.0

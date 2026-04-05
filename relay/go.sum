@@ -4,6 +4,8 @@ github.com/Microsoft/go-winio v0.6.2 h1:F2VQgta7ecxGYO8k3ZZz3RS8fVIXVxONVUPlNERo
 github.com/Microsoft/go-winio v0.6.2/go.mod h1:yd8OoFMLzJbo9gZq8j5qaps8bJ9aShtEA8Ipt1oGCvU=
 github.com/PekingSpades/DeskAct v0.0.0-20260228104223-b1be287e5b22 h1:r8E0EQBY3un5TVnZ/QcbqE2k4jA0Rm5daP1J8tGqxMA=
 github.com/PekingSpades/DeskAct v0.0.0-20260228104223-b1be287e5b22/go.mod h1:/D8RSJZqqQ/tvWnk9VImwax2YN56ZHizXcX8AGPpsBA=
+github.com/PekingSpades/DeskAct v0.0.0-20260404161542-190569c48603 h1:rNTDM5MDsZaJnR6GZ+J5S8uEZXyqDM/jLSY5k8nmGeA=
+github.com/PekingSpades/DeskAct v0.0.0-20260404161542-190569c48603/go.mod h1:/D8RSJZqqQ/tvWnk9VImwax2YN56ZHizXcX8AGPpsBA=
 github.com/adrg/xdg v0.5.3 h1:xRnxJXne7+oWDatRhR1JLnvuccuIeCoBu2rtuLqQB78=
 github.com/adrg/xdg v0.5.3/go.mod h1:nlTsY+NNiCBGCK2tpm09vRqfVzrc2fLmXGpBLF0zlTQ=
 github.com/bep/debounce v1.2.1 h1:v67fRdBA9UQu2NhLFXrSg0Brw7CexQekrBwDMM8bzeY=

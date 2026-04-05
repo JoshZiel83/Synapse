@@ -2,6 +2,8 @@ package cloud
 
 // Relay WebSocket protocol v2
 
+const RelayProtocolVersion = 2
+
 type AuthBeginMessage struct {
 	Type                 string `json:"type"`
 	DeviceID             string `json:"deviceId"`
@@ -107,6 +109,14 @@ type RelayRuntimeSessionCloseMessage struct {
 	SessionID        string `json:"sessionId"`
 	RuntimeSessionID string `json:"runtimeSessionId"`
 	DeliveryID       string `json:"deliveryId"`
+}
+
+type RelayCUATerminateMessage struct {
+	Type             string `json:"type"`
+	ProtocolVersion  int    `json:"protocolVersion"`
+	SessionID        string `json:"sessionId"`
+	RuntimeSessionID string `json:"runtimeSessionId"`
+	Reason           string `json:"reason"`
 }
 
 type OperationReceivedMessage struct {

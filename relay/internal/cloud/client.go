@@ -136,6 +136,34 @@ func (c *Client) SetClientVersion(version string) {
 	c.clientVersion = version
 }
 
+func (c *Client) RequestCUATermination(runtimeSessionID, reason string) error {
+	runtimeSessionID = strings.TrimSpace(runtimeSessionID)
+	if runtimeSessionID == "" {
+		return fmt.Errorf("runtime session id is required")
+	}
+
+	conn := c.getConnection()
+	if conn == nil {
+		return fmt.Errorf("relay is not connected")
+	}
+
+	c.emitLog(
+		fmt.Sprintf("Requesting CUA termination for runtime session %s.", runtimeSessionID),
+		map[string]interface{}{
+			"runtimeSessionId": runtimeSessionID,
+			"reason":           reason,
+		},
+	)
+
+	return c.writeJSON(conn, RelayCUATerminateMessage{
+		Type:             "relay.cua.terminate",
+		ProtocolVersion:  RelayProtocolVersion,
+		RuntimeSessionID: runtimeSessionID,
+		SessionID:        "",
+		Reason:           strings.TrimSpace(reason),
+	})
+}
+
 func (c *Client) emit(evtType, msg string, data map[string]interface{}) {
 	if c.OnEvent != nil {
 		c.OnEvent(evtType, msg, data)

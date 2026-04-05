@@ -22,6 +22,8 @@ const (
 	EventServerFailed   EventType = "server_failed"
 	EventCatalogHint    EventType = "catalog_hint"
 	EventCatalogChanged EventType = "catalog_changed"
+	EventCUASession     EventType = "cua_session"
+	EventCUAAction      EventType = "cua_action"
 )
 
 // Event is emitted by the relay engine and its components

@@ -157,6 +157,16 @@ func (e *Engine) run(ctx context.Context) {
 	client.SetExposures(servers)
 	client.BeforeConnect = e.beforeConnect
 	client.SetClientVersion(e.clientVersion)
+	mgr.SetCUASessionTerminator(func(runtimeSessionID, reason string) {
+		if err := client.RequestCUATermination(runtimeSessionID, reason); err != nil {
+			evt := NewEvent(EventError, err.Error())
+			evt.Data = map[string]interface{}{
+				"runtimeSessionId": runtimeSessionID,
+				"reason":           reason,
+			}
+			e.emit(evt)
+		}
+	})
 
 	// Wire event callback to client
 	client.OnEvent = func(evtType string, msg string, data map[string]interface{}) {

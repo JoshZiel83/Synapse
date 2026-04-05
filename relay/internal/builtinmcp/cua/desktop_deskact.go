@@ -14,11 +14,12 @@ import (
 )
 
 type deskactDesktop struct {
-	displayOptions   deskact.DisplayOptions
-	captureOptions   deskact.CaptureOptions
-	mouseSettings    deskact.MouseSettings
-	keyboardSettings deskact.KeyboardSettings
-	windowOptions    deskact.WindowOptions
+	displayOptions         deskact.DisplayOptions
+	defaultCaptureOptions  deskact.CaptureOptions
+	captureOptionsProvider func() (deskact.CaptureOptions, error)
+	mouseSettings          deskact.MouseSettings
+	keyboardSettings       deskact.KeyboardSettings
+	windowOptions          deskact.WindowOptions
 }
 
 func newDefaultDesktop() (Desktop, error) {
@@ -27,12 +28,16 @@ func newDefaultDesktop() (Desktop, error) {
 	}
 
 	return &deskactDesktop{
-		displayOptions:   deskact.DefaultDisplayOptions(),
-		captureOptions:   deskact.DefaultCaptureOptions(),
-		mouseSettings:    deskact.DefaultMouseSettings(),
-		keyboardSettings: deskact.DefaultKeyboardSettings(),
-		windowOptions:    deskact.DefaultWindowOptions(),
+		displayOptions:        deskact.DefaultDisplayOptions(),
+		defaultCaptureOptions: deskact.DefaultCaptureOptions(),
+		mouseSettings:         deskact.DefaultMouseSettings(),
+		keyboardSettings:      deskact.DefaultKeyboardSettings(),
+		windowOptions:         deskact.DefaultWindowOptions(),
 	}, nil
+}
+
+func (d *deskactDesktop) SetCaptureOptionsProvider(provider func() (deskact.CaptureOptions, error)) {
+	d.captureOptionsProvider = provider
 }
 
 func (d *deskactDesktop) Start(context.Context) error {
@@ -91,7 +96,16 @@ func (d *deskactDesktop) CaptureDisplay(target DisplayInfo) (*image.RGBA, error)
 	if err != nil {
 		return nil, err
 	}
-	return display.CaptureRect(0, 0, target.Size.W, target.Size.H, d.captureOptions)
+
+	options := d.defaultCaptureOptions
+	if d.captureOptionsProvider != nil {
+		options, err = d.captureOptionsProvider()
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	return display.CaptureRect(0, 0, target.Size.W, target.Size.H, options)
 }
 
 func (d *deskactDesktop) MovePointer(target DisplayInfo, x, y int, smooth bool) error {

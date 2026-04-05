@@ -888,6 +888,10 @@ async function resolveTools(
       exposure.exposure_stable_key,
       `exposure_${exposure.exposure_id.slice(0, 8)}`,
     );
+    const builtinKind = normalizeBuiltinKind(relayCatalog.metadata?.builtinKind);
+    const relayScope = builtinKind === "cua" ? "turn" : "conversation";
+    const relayScopeId =
+      relayScope === "turn" ? turnOwnerKey : params.conversationId;
     const namespace = `relay${MCP_TOOL_NAMESPACE_SEPARATOR}${exposureSlug}_${exposure.exposure_id.slice(0, 8)}`;
     const relayTools = relayCatalog.tools.map((tool) =>
       manifestToolToDefinition({
@@ -913,8 +917,8 @@ async function resolveTools(
         deviceId: exposure.device_id,
         exposureId: exposure.exposure_id,
       }),
-      scope: "conversation",
-      scopeId: params.conversationId,
+      scope: relayScope,
+      scopeId: relayScopeId,
       config: {
         deviceId: exposure.device_id,
         exposureId: exposure.exposure_id,

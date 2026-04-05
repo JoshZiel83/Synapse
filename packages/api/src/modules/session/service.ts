@@ -817,6 +817,24 @@ export async function createInterrupt(params: {
     .execute();
 }
 
+export async function hasPendingInterrupt(
+  sessionId: UUID,
+  type?: SessionInterruptType,
+): Promise<boolean> {
+  let query = db
+    .selectFrom('session_interrupts')
+    .select('id')
+    .where('target_session_id', '=', sessionId)
+    .where('is_consumed', '=', false);
+
+  if (type) {
+    query = query.where('type', '=', type);
+  }
+
+  const row = await query.limit(1).executeTakeFirst();
+  return Boolean(row?.id);
+}
+
 // ============ Cancel Session ============
 
 export async function cancelSession(sessionId: UUID): Promise<void> {

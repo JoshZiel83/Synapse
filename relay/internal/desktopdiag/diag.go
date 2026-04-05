@@ -25,6 +25,10 @@ var now = time.Now
 var defaultBaseDir = config.DefaultDir
 var currentBootID = systemBootID
 
+func CurrentBootID() (string, error) {
+	return currentBootID()
+}
+
 type Logging struct {
 	file    *os.File
 	LogFile string

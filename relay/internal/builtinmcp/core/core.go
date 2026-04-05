@@ -23,6 +23,7 @@ type Server interface {
 }
 
 type RuntimeSessionAware interface {
+	OpenRuntimeSession(runtimeSessionID string) error
 	CloseRuntimeSession(runtimeSessionID string)
 	ResetRuntimeSessions()
 }

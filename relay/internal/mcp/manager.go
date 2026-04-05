@@ -260,6 +260,11 @@ func (m *Manager) attemptServerStart(ctx context.Context, cfg config.ServerConfi
 			retryable: isRetryableServerError(err),
 		}
 	}
+	if aware, ok := srv.(interface {
+		SetEventEmitter(func(string, string, map[string]interface{}))
+	}); ok {
+		aware.SetEventEmitter(m.emit)
+	}
 
 	serverName := cfg.Name
 	stableKey := cfg.StableKey
@@ -543,17 +548,20 @@ func (m *Manager) OpenRuntimeSession(_ context.Context, request cloud.RuntimeSes
 	}
 
 	m.mu.RLock()
-	exists := false
+	var target Server
 	for _, s := range m.servers {
 		if s.stableKey == request.ExposureStableKey {
-			exists = true
+			target = s.server
 			break
 		}
 	}
 	m.mu.RUnlock()
 
-	if !exists {
+	if target == nil {
 		return fmt.Errorf("relay exposure %q not found", request.ExposureStableKey)
+	}
+	if aware, ok := target.(interface{ OpenRuntimeSession(string) error }); ok {
+		return aware.OpenRuntimeSession(request.RuntimeSessionID)
 	}
 	return nil
 }
@@ -584,6 +592,36 @@ func (m *Manager) ResetRuntimeSessions(_ context.Context) error {
 		}
 	}
 	return nil
+}
+
+func (m *Manager) SetBuiltinEventEmitter(handler func(string, string, map[string]interface{})) {
+	m.mu.RLock()
+	servers := make([]serverEntry, len(m.servers))
+	copy(servers, m.servers)
+	m.mu.RUnlock()
+
+	for _, server := range servers {
+		if aware, ok := server.server.(interface {
+			SetEventEmitter(func(string, string, map[string]interface{}))
+		}); ok {
+			aware.SetEventEmitter(handler)
+		}
+	}
+}
+
+func (m *Manager) SetCUASessionTerminator(handler func(string, string)) {
+	m.mu.RLock()
+	servers := make([]serverEntry, len(m.servers))
+	copy(servers, m.servers)
+	m.mu.RUnlock()
+
+	for _, server := range servers {
+		if aware, ok := server.server.(interface {
+			SetCUASessionTerminator(func(string, string))
+		}); ok {
+			aware.SetCUASessionTerminator(handler)
+		}
+	}
 }
 
 // ShutdownAll stops all MCP servers

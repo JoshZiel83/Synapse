@@ -6,6 +6,8 @@ import (
 	"encoding/base64"
 	"image"
 	"image/png"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -458,7 +460,8 @@ func TestDisplayStabilityIsTrackedPerRuntimeSession(t *testing.T) {
 	}
 
 	sessionA := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "display-session-a")
-	initialA, err := server.CallTool(sessionA, "desktop_capture_display", nil)
+	_ = sessionA
+	initialA, err := server.captureDisplay("display-session-a", nil)
 	if err != nil {
 		t.Fatalf("capture display for session-a: %v", err)
 	}
@@ -469,8 +472,7 @@ func TestDisplayStabilityIsTrackedPerRuntimeSession(t *testing.T) {
 	desktop.displays[0].Origin = Rect{X: 0, Y: 0, W: 2560, H: 1440}
 	desktop.displays[0].Size = Size{W: 2560, H: 1440}
 
-	sessionB := runtimeauth.ContextWithRuntimeSessionID(context.Background(), "display-session-b")
-	initialB, err := server.CallTool(sessionB, "desktop_capture_display", nil)
+	initialB, err := server.captureDisplay("display-session-b", nil)
 	if err != nil {
 		t.Fatalf("capture display for session-b: %v", err)
 	}
@@ -478,7 +480,7 @@ func TestDisplayStabilityIsTrackedPerRuntimeSession(t *testing.T) {
 		t.Fatalf("expected new runtime session to establish a fresh display baseline")
 	}
 
-	revisitA, err := server.CallTool(sessionA, "desktop_capture_display", nil)
+	revisitA, err := server.captureDisplay("display-session-a", nil)
 	if err != nil {
 		t.Fatalf("capture display for session-a after change: %v", err)
 	}
@@ -491,6 +493,155 @@ func TestDisplayStabilityIsTrackedPerRuntimeSession(t *testing.T) {
 	}
 	if !strings.Contains(content.Text, "display configuration change") {
 		t.Fatalf("expected display change error, got %q", content.Text)
+	}
+}
+
+func TestRuntimeSessionsAllowMultipleInitializedButOnlyOneActive(t *testing.T) {
+	server := NewWithDesktop(Config{
+		Enabled:         true,
+		StateDir:        t.TempDir(),
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+	}, &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	})
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+	if err := server.OpenRuntimeSession("session-a"); err != nil {
+		t.Fatalf("open session-a: %v", err)
+	}
+	if err := server.OpenRuntimeSession("session-b"); err != nil {
+		t.Fatalf("open session-b: %v", err)
+	}
+
+	resultA, err := server.CallTool(runtimeauth.ContextWithRuntimeSessionID(context.Background(), "session-a"), "desktop_list_displays", nil)
+	if err != nil {
+		t.Fatalf("call session-a: %v", err)
+	}
+	if resultA.IsError {
+		t.Fatalf("expected session-a activation to succeed")
+	}
+
+	resultB, err := server.CallTool(runtimeauth.ContextWithRuntimeSessionID(context.Background(), "session-b"), "desktop_list_displays", nil)
+	if err != nil {
+		t.Fatalf("call session-b: %v", err)
+	}
+	if !resultB.IsError {
+		t.Fatalf("expected session-b to be rejected while session-a is active")
+	}
+	content, ok := resultB.Content[0].(core.TextContent)
+	if !ok {
+		t.Fatalf("expected text content, got %T", resultB.Content[0])
+	}
+	if !strings.Contains(content.Text, "其他Agent正在使用电脑") {
+		t.Fatalf("unexpected busy-session message: %q", content.Text)
+	}
+}
+
+func TestHotkeyTerminationMarksCurrentSessionTerminatedAndAllowsNextSession(t *testing.T) {
+	server := NewWithDesktop(Config{
+		Enabled:         true,
+		StateDir:        t.TempDir(),
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+	}, &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	})
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+	if err := server.OpenRuntimeSession("session-a"); err != nil {
+		t.Fatalf("open session-a: %v", err)
+	}
+	if err := server.OpenRuntimeSession("session-b"); err != nil {
+		t.Fatalf("open session-b: %v", err)
+	}
+
+	if _, err := server.CallTool(runtimeauth.ContextWithRuntimeSessionID(context.Background(), "session-a"), "desktop_list_displays", nil); err != nil {
+		t.Fatalf("activate session-a: %v", err)
+	}
+
+	server.guard.handleHotkey(overlayHotkeyTerminate)
+
+	resultA, err := server.CallTool(runtimeauth.ContextWithRuntimeSessionID(context.Background(), "session-a"), "desktop_list_displays", nil)
+	if err != nil {
+		t.Fatalf("call terminated session-a: %v", err)
+	}
+	if !resultA.IsError {
+		t.Fatalf("expected terminated session-a to stay blocked")
+	}
+
+	resultB, err := server.CallTool(runtimeauth.ContextWithRuntimeSessionID(context.Background(), "session-b"), "desktop_list_displays", nil)
+	if err != nil {
+		t.Fatalf("call session-b after terminate: %v", err)
+	}
+	if resultB.IsError {
+		t.Fatalf("expected session-b to activate after session-a termination")
+	}
+}
+
+func TestDisableForBootRejectsFutureCUAToolCalls(t *testing.T) {
+	stateDir := t.TempDir()
+	server := NewWithDesktop(Config{
+		Enabled:         true,
+		StateDir:        stateDir,
+		ImageSize:       [2]int{1280, 800},
+		RelativeSize:    [2]int{1000, 1000},
+		DisplaySelector: DisplaySelector{Mode: "main"},
+	}, &fakeDesktop{
+		displays: []DisplayInfo{
+			{
+				ID:         1,
+				Index:      0,
+				ElectronID: 11,
+				IsMain:     true,
+				Origin:     Rect{X: 0, Y: 0, W: 1920, H: 1080},
+				Size:       Size{W: 1920, H: 1080},
+				Scale:      1,
+			},
+		},
+	})
+	if err := server.Initialize(); err != nil {
+		t.Fatalf("initialize server: %v", err)
+	}
+	if err := server.OpenRuntimeSession("session-a"); err != nil {
+		t.Fatalf("open runtime session: %v", err)
+	}
+
+	server.guard.handleHotkey(overlayHotkeyDisableBoot)
+
+	result, err := server.CallTool(runtimeauth.ContextWithRuntimeSessionID(context.Background(), "session-a"), "desktop_list_displays", nil)
+	if err != nil {
+		t.Fatalf("call disabled session: %v", err)
+	}
+	if !result.IsError {
+		t.Fatalf("expected disabled boot state to reject tool calls")
+	}
+	if _, err := os.Stat(filepath.Join(stateDir, cuaBootDisableStateFile)); err != nil {
+		t.Fatalf("expected boot disable marker to be persisted: %v", err)
 	}
 }
 

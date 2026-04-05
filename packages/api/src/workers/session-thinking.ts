@@ -37,6 +37,7 @@ import {
   updateSessionStatus,
   addSessionMessage,
   consumeInterrupts,
+  hasPendingInterrupt,
 } from '../modules/session/service.js';
 import {
   getConversationParticipant,
@@ -139,6 +140,10 @@ async function putSessionToIdle(sessionId: string) {
   });
 }
 
+function isTurnInterruptedError(error: unknown) {
+  return error instanceof Error && error.name === 'TurnInterruptedError';
+}
+
 export function startSessionThinkingWorker() {
   const worker = new Worker(
     QUEUE_NAMES.SESSION_THINKING,
@@ -166,6 +171,7 @@ export function startSessionThinkingWorker() {
       let turn: any = null;
       let thinkingActorName = 'Unknown';
       let requeueAfterUnlock = false;
+      let requeueTrigger = trigger;
       let currentStatusText: string | undefined;
       let currentPhase: ThinkingPhase | 'error' = 'thinking';
       let threadConversationId: string | undefined;
@@ -610,6 +616,8 @@ export function startSessionThinkingWorker() {
               mcpVersion: mcpTools.mcpVersion,
               mcpRefresh: mcpTools.refresh,
               mcpSetTurnId: mcpTools.setTurnId,
+              shouldAbortTurn: () =>
+                hasPendingInterrupt(sessionId, 'remote_control_terminated'),
               system,
               refreshCollaborationContext: async () => {
                 const refreshedSession = await getSession(sessionId);
@@ -779,16 +787,67 @@ export function startSessionThinkingWorker() {
         return { success: true, actions: result.actions.length, requeued: requeueAfterUnlock };
       } catch (err: any) {
         const errorMessage = err?.message || 'Unknown error';
-        console.error(`[session-thinking] Session ${sessionId} failed:`, errorMessage);
+        const turnInterrupted = isTurnInterruptedError(err);
+        if (!turnInterrupted) {
+          console.error(`[session-thinking] Session ${sessionId} failed:`, errorMessage);
+        }
         const failedSession = await getSession(sessionId).catch(() => null);
 
         if (turn?.id) {
           await runCleanupStep(`drop wakeups for turn ${turn.id}`, () => markTurnWakeupsDropped(turn.id));
-          await runCleanupStep(`mark turn ${turn.id} failed`, () => updateTurnStatus(
-            turn.id,
-            'failed',
-            { metadata: { errorMessage } },
-          ));
+          await runCleanupStep(
+            `mark turn ${turn.id} ${turnInterrupted ? 'cancelled' : 'failed'}`,
+            () => updateTurnStatus(
+              turn.id,
+              turnInterrupted ? 'cancelled' : 'failed',
+              { metadata: { errorMessage } },
+            ),
+          );
+        }
+
+        if (turnInterrupted) {
+          const remainingPendingWakeups = await getPendingWakeupCount(sessionId).catch(() => 0);
+          if (remainingPendingWakeups > 0) {
+            requeueAfterUnlock = true;
+            requeueTrigger = 'system_interrupt';
+            await runCleanupStep(`mark session ${sessionId} queued`, () => updateSessionStatus(
+              sessionId,
+              'queued',
+              { errorMessage: null },
+            ));
+            await runCleanupStep(`publish queued runtime for session ${sessionId}`, () => publishSessionRuntime(
+              workspaceId,
+              sessionId,
+              {
+                laneState: 'queued',
+                health: 'ok',
+                phase: 'idle',
+                statusText: 'Queued follow-up messages',
+              },
+            ));
+            await runCleanupStep(`emit queued event for session ${sessionId}`, () => emitEvent({
+              type: 'session.status.changed',
+              workspaceId,
+              payload: {
+                conversationId:
+                  threadConversationId
+                  || (isThreadConversationKind(failedSession?.conversation_kind)
+                    ? failedSession.conversation_id
+                    : undefined),
+                sessionId,
+                actorId,
+                actorName: thinkingActorName,
+                status: 'queued',
+                previousStatus: 'running',
+              },
+              timestamp: nowISO(),
+            }));
+          } else {
+            await runCleanupStep(`put session ${sessionId} idle`, () => putSessionToIdle(sessionId));
+          }
+
+          await runCleanupStep(`shutdown MCP tools for session ${sessionId}`, () => mcpTools.shutdown());
+          return { success: true, reason: 'turn interrupted', requeued: requeueAfterUnlock };
         }
 
         await runCleanupStep(`mark session ${sessionId} blocked`, () => updateSessionStatus(
@@ -892,7 +951,7 @@ export function startSessionThinkingWorker() {
             sessionId,
             actorId,
             workspaceId,
-            trigger,
+            trigger: requeueTrigger,
             userId,
           });
         }

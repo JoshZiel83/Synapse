@@ -307,7 +307,7 @@ export const SESSION_TRIGGERS = [
   'retry',
 ] as const;
 
-export const SESSION_INTERRUPT_TYPES = ['progress_check', 'priority_override'] as const;
+export const SESSION_INTERRUPT_TYPES = ['progress_check', 'priority_override', 'remote_control_terminated'] as const;
 export const SESSION_WAKEUP_SOURCE_TYPES = [
   'user_message',
   'actor_message',

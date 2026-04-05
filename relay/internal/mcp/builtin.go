@@ -19,6 +19,14 @@ type builtinAdapter struct {
 	inner core.Server
 }
 
+type eventEmitterAware interface {
+	SetEventEmitter(func(string, string, map[string]interface{}))
+}
+
+type cuaTerminatorAware interface {
+	SetCUASessionTerminator(func(string, string))
+}
+
 func newBuiltinServer(cfg config.ServerConfig) (Server, error) {
 	if cfg.Builtin == nil {
 		return nil, fmt.Errorf("builtin config is required")
@@ -75,6 +83,7 @@ func newBuiltinServer(cfg config.ServerConfig) (Server, error) {
 			RelativeSize:             cfg.Builtin.CUA.RelativeSize,
 			ScrollMultiplier:         cfg.Builtin.CUA.ScrollMultiplier,
 			LogDir:                   cfg.Builtin.CUA.LogDir,
+			StateDir:                 relaypaths.Current().StateDir,
 			AllowDisplayOverride:     cfg.Builtin.CUA.AllowDisplayOverride == nil || *cfg.Builtin.CUA.AllowDisplayOverride,
 			IncludeOverviewTool:      cfg.Builtin.CUA.IncludeOverviewTool == nil || *cfg.Builtin.CUA.IncludeOverviewTool,
 			DisplaySelector: cua.DisplaySelector{
@@ -255,8 +264,27 @@ func (b *builtinAdapter) CloseRuntimeSession(runtimeSessionID string) {
 	}
 }
 
+func (b *builtinAdapter) OpenRuntimeSession(runtimeSessionID string) error {
+	if aware, ok := b.inner.(core.RuntimeSessionAware); ok {
+		return aware.OpenRuntimeSession(runtimeSessionID)
+	}
+	return nil
+}
+
 func (b *builtinAdapter) ResetRuntimeSessions() {
 	if aware, ok := b.inner.(core.RuntimeSessionAware); ok {
 		aware.ResetRuntimeSessions()
+	}
+}
+
+func (b *builtinAdapter) SetEventEmitter(handler func(string, string, map[string]interface{})) {
+	if aware, ok := b.inner.(eventEmitterAware); ok {
+		aware.SetEventEmitter(handler)
+	}
+}
+
+func (b *builtinAdapter) SetCUASessionTerminator(handler func(string, string)) {
+	if aware, ok := b.inner.(cuaTerminatorAware); ok {
+		aware.SetCUASessionTerminator(handler)
 	}
 }

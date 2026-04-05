@@ -62,7 +62,8 @@ type waitArgs struct {
 	Duration float64 `json:"duration"`
 }
 
-func (s *Server) listDisplays() core.CallResult {
+func (s *Server) listDisplays(runtimeSessionID string) core.CallResult {
+	s.recordCaptureAction(runtimeSessionID, "list_displays", "Enumerate displays")
 	displays, err := s.desktop.ListDisplays()
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to list displays: %v", err))
@@ -85,6 +86,7 @@ func (s *Server) captureDisplay(runtimeSessionID string, raw map[string]interfac
 	if err != nil {
 		return errorResult(err.Error()), nil
 	}
+	s.recordCaptureAction(runtimeSessionID, "capture_display", fmt.Sprintf("Display %d", display.Index))
 
 	img, err := s.desktop.CaptureDisplay(display)
 	if err != nil {
@@ -131,6 +133,7 @@ func (s *Server) captureOverview(runtimeSessionID string, raw map[string]interfa
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to list displays: %v", err)), nil
 	}
+	s.recordCaptureAction(runtimeSessionID, "capture_overview", fmt.Sprintf("%d displays", len(displays)))
 	captures := make(map[int]*image.RGBA, len(displays))
 	for _, display := range displays {
 		img, captureErr := s.desktop.CaptureDisplay(display)
@@ -180,6 +183,7 @@ func (s *Server) movePointer(runtimeSessionID string, raw map[string]interface{}
 		return errorResult(err.Error()), nil
 	}
 	smooth := args.Smooth != nil && *args.Smooth
+	s.recordPointerAction(runtimeSessionID, "pointer_move", display, x, y, "Move pointer")
 	if err := s.desktop.MovePointer(display, x, y, smooth); err != nil {
 		return errorResult(fmt.Sprintf("failed to move pointer: %v", err)), nil
 	}
@@ -223,6 +227,27 @@ func (s *Server) click(runtimeSessionID string, raw map[string]interface{}) (cor
 	if count <= 0 {
 		count = 1
 	}
+	screenX, screenY := displayLocalToScreenPoint(display, x, y)
+	s.recordHUDAction(actionHUDState{
+		RuntimeSessionID: runtimeSessionID,
+		Action:           "click",
+		Label:            formatHUDLabel("click", fmt.Sprintf("%s x%d", button, count)),
+		DisplayIndex:     display.Index,
+		X:                x,
+		Y:                y,
+		ScreenX:          screenX,
+		ScreenY:          screenY,
+		StartX:           unsetHUDCoordinate,
+		StartY:           unsetHUDCoordinate,
+		EndX:             unsetHUDCoordinate,
+		EndY:             unsetHUDCoordinate,
+		StartScreenX:     unsetHUDCoordinate,
+		StartScreenY:     unsetHUDCoordinate,
+		EndScreenX:       unsetHUDCoordinate,
+		EndScreenY:       unsetHUDCoordinate,
+		Button:           button,
+		ClickCount:       count,
+	})
 	if err := s.desktop.Click(button, count); err != nil {
 		return errorResult(fmt.Sprintf("failed to click: %v", err)), nil
 	}
@@ -265,6 +290,27 @@ func (s *Server) drag(runtimeSessionID string, raw map[string]interface{}) (core
 	if button == "" {
 		button = "left"
 	}
+	startScreenX, startScreenY := displayLocalToScreenPoint(display, startX, startY)
+	endScreenX, endScreenY := displayLocalToScreenPoint(display, endX, endY)
+	s.recordHUDAction(actionHUDState{
+		RuntimeSessionID: runtimeSessionID,
+		Action:           "drag",
+		Label:            formatHUDLabel("drag", fmt.Sprintf("%s drag", button)),
+		DisplayIndex:     display.Index,
+		X:                endX,
+		Y:                endY,
+		ScreenX:          endScreenX,
+		ScreenY:          endScreenY,
+		StartX:           startX,
+		StartY:           startY,
+		EndX:             endX,
+		EndY:             endY,
+		StartScreenX:     startScreenX,
+		StartScreenY:     startScreenY,
+		EndScreenX:       endScreenX,
+		EndScreenY:       endScreenY,
+		Button:           button,
+	})
 	if err := s.desktop.Drag(display, startX, startY, endX, endY, button); err != nil {
 		return errorResult(fmt.Sprintf("failed to drag: %v", err)), nil
 	}
@@ -328,6 +374,27 @@ func (s *Server) scroll(runtimeSessionID string, raw map[string]interface{}) (co
 	if err := validateScrollUnit(unit); err != nil {
 		return errorResult(err.Error()), nil
 	}
+	screenX, screenY := displayLocalToScreenPoint(display, x, y)
+	s.recordHUDAction(actionHUDState{
+		RuntimeSessionID: runtimeSessionID,
+		Action:           "scroll",
+		Label:            formatHUDLabel("scroll", strings.TrimSpace(args.Direction)),
+		DisplayIndex:     display.Index,
+		X:                x,
+		Y:                y,
+		ScreenX:          screenX,
+		ScreenY:          screenY,
+		StartX:           unsetHUDCoordinate,
+		StartY:           unsetHUDCoordinate,
+		EndX:             unsetHUDCoordinate,
+		EndY:             unsetHUDCoordinate,
+		StartScreenX:     unsetHUDCoordinate,
+		StartScreenY:     unsetHUDCoordinate,
+		EndScreenX:       unsetHUDCoordinate,
+		EndScreenY:       unsetHUDCoordinate,
+		Direction:        strings.TrimSpace(args.Direction),
+		Amount:           float64(value),
+	})
 	if err := s.desktop.Scroll(deltaX, deltaY, unit); err != nil {
 		return errorResult(fmt.Sprintf("failed to scroll: %v", err)), nil
 	}
@@ -396,6 +463,7 @@ func (s *Server) typeText(runtimeSessionID string, raw map[string]interface{}) (
 		display = &resolvedDisplay
 	}
 
+	s.recordTextAction(runtimeSessionID, len([]rune(args.Text)))
 	if err := s.desktop.TypeText(args.Text); err != nil {
 		return errorResult(fmt.Sprintf("failed to type text: %v", err)), nil
 	}
@@ -409,7 +477,7 @@ func (s *Server) typeText(runtimeSessionID string, raw map[string]interface{}) (
 	), nil
 }
 
-func (s *Server) pressKeys(_ string, raw map[string]interface{}) (core.CallResult, error) {
+func (s *Server) pressKeys(runtimeSessionID string, raw map[string]interface{}) (core.CallResult, error) {
 	var args pressKeysArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
@@ -425,6 +493,7 @@ func (s *Server) pressKeys(_ string, raw map[string]interface{}) (core.CallResul
 		if len(chord) == 0 {
 			continue
 		}
+		s.recordKeyAction(runtimeSessionID, chord)
 		if err := s.desktop.PressKeys(chord); err != nil {
 			return errorResult(fmt.Sprintf("failed to press keys %v: %v", chord, err)), nil
 		}
@@ -446,7 +515,8 @@ func (s *Server) keyboardState() core.CallResult {
 	return textResult("Read keyboard state.", state)
 }
 
-func (s *Server) listWindows() core.CallResult {
+func (s *Server) listWindows(runtimeSessionID string) core.CallResult {
+	s.recordCaptureAction(runtimeSessionID, "list_windows", "Enumerate windows")
 	windows, err := s.desktop.ListWindows()
 	if err != nil {
 		return errorResult(fmt.Sprintf("failed to list windows: %v", err))
@@ -459,7 +529,7 @@ func (s *Server) listWindows() core.CallResult {
 	)
 }
 
-func (s *Server) listApps(raw map[string]interface{}) (core.CallResult, error) {
+func (s *Server) listApps(runtimeSessionID string, raw map[string]interface{}) (core.CallResult, error) {
 	var args listAppsArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
@@ -483,6 +553,7 @@ func (s *Server) listApps(raw map[string]interface{}) (core.CallResult, error) {
 	}
 
 	search := strings.TrimSpace(args.Search)
+	s.recordCaptureAction(runtimeSessionID, "list_apps", source)
 	groups := make([]ApplicationGroup, 0, len(requestedSources))
 	total := 0
 	for _, requestedSource := range requestedSources {
@@ -556,7 +627,7 @@ func describeAppListing(groups []ApplicationGroup, search string) string {
 	return fmt.Sprintf("Matched %s for search %q.", strings.Join(parts, " and "), search)
 }
 
-func (s *Server) wait(raw map[string]interface{}) (core.CallResult, error) {
+func (s *Server) wait(runtimeSessionID string, raw map[string]interface{}) (core.CallResult, error) {
 	var args waitArgs
 	if err := decodeArgs(raw, &args); err != nil {
 		return errorResult(fmt.Sprintf("invalid args: %v", err)), nil
@@ -564,7 +635,14 @@ func (s *Server) wait(raw map[string]interface{}) (core.CallResult, error) {
 	if args.Duration < 0 || args.Duration > 30 {
 		return errorResult("duration must be between 0 and 30 seconds"), nil
 	}
-	time.Sleep(time.Duration(args.Duration * float64(time.Second)))
+	s.recordCaptureAction(runtimeSessionID, "wait", fmt.Sprintf("%.2fs", args.Duration))
+	waitUntil := time.Now().Add(time.Duration(args.Duration * float64(time.Second)))
+	for time.Now().Before(waitUntil) {
+		if s.guard != nil && s.guard.IsTerminated(runtimeSessionID) {
+			return terminatedSessionResult(), nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
 	return textResult(fmt.Sprintf("Waited %.2f second(s).", args.Duration), map[string]interface{}{
 		"duration": args.Duration,
 	}), nil

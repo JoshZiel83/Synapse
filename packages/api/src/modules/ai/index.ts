@@ -88,6 +88,13 @@ export { buildActorPrompt } from "./prompt-builder.js";
 const MAX_TOOL_ROUNDS = 100;
 const DEFAULT_ATTEMPT_POLICY: ModelAttemptPolicy = DEFAULT_MODEL_ATTEMPT_POLICY;
 
+class TurnInterruptedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "TurnInterruptedError";
+  }
+}
+
 // Cache providers by config fingerprint to avoid recreating
 const providerCache = new Map<string, AIProvider>();
 
@@ -599,6 +606,7 @@ export async function actorThink(
       collaborationMode?: SessionCollaborationMode;
       system?: string;
     }>;
+    shouldAbortTurn?: () => Promise<boolean>;
   },
 ): Promise<ThinkingResult> {
   const actorDefinition = actor.definition ?? actor;
@@ -792,6 +800,15 @@ export async function actorThink(
   return _actorThinkInner();
 
   async function _actorThinkInner(): Promise<ThinkingResult> {
+    const abortIfRequested = async () => {
+      if (!(await options?.shouldAbortTurn?.())) {
+        return;
+      }
+      throw new TurnInterruptedError(
+        "Current turn was interrupted because the user terminated remote desktop control.",
+      );
+    };
+
     const recordProviderRound = async (params: {
       round: number;
       attempt: number;
@@ -1037,6 +1054,8 @@ export async function actorThink(
 
       // Set turn+round context for MCP executor
       if (options?.mcpSetTurnId) options.mcpSetTurnId(turnId, currentRound);
+
+      await abortIfRequested();
 
       if (onStatus) {
         await onStatus("Calling AI model...");
@@ -1553,6 +1572,8 @@ export async function actorThink(
             buildCallableInternalErrorNotice(callableInternalErrorToolNames),
           ]);
         }
+
+        await abortIfRequested();
 
         if (mcpReplanRequired && !options?.mcpRefresh) {
           throw new Error(

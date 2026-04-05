@@ -283,7 +283,7 @@ export type RuntimeGrantsStatus = "active" | "consumed" | "revoked" | "supersede
 
 export type SessionEngineBranchesStatus = "active" | "archived" | "superseded";
 
-export type SessionInterruptsType = "priority_override" | "progress_check";
+export type SessionInterruptsType = "priority_override" | "progress_check" | "remote_control_terminated";
 
 export type SessionsChannelType = "api" | "bridge" | "web";
 

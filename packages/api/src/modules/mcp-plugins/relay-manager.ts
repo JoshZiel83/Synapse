@@ -32,7 +32,7 @@ import { logEvent } from './audit.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { touchRelayExposureAuthzState } from './relay-access.js';
 import { ingestAutomationProviderEvent } from '../automation/service.js';
-import { enqueueAutomationExecutionJobs } from '../../workers/queues.js';
+import { enqueueAutomationExecutionJobs, sessionThinkingQueue } from '../../workers/queues.js';
 import {
   appendToolCallTaskOutput,
   completeToolCallTask,
@@ -540,6 +540,13 @@ export function handleRelayConnection(socket: any, _req: any, _app: FastifyInsta
         console.error('[Relay Manager] catalog sync error:', error.message);
         socket.send(JSON.stringify({ type: 'catalog.sync_error', code: 'catalog_sync_internal_error', message: 'Internal error during catalog sync', retryable: true }));
       }
+      return;
+    }
+
+    if (msg.type === 'relay.cua.terminate') {
+      await handleRelayCUATermination(connected, msg).catch((error: any) => {
+        console.error('[Relay Manager] cua termination error:', error?.message || String(error));
+      });
       return;
     }
 
@@ -1551,6 +1558,191 @@ async function finalizePendingRelayCancellation(
       operationId: pending.operationId,
     },
   }).catch(() => {});
+}
+
+async function abortRelayRuntimeSessionOperations(
+  runtimeSessionId: string,
+  reason: string,
+) {
+  const matches = [...pendingRelayOperations.values()].filter(
+    (pending) => pending.runtimeSessionId === runtimeSessionId,
+  );
+
+  for (const pending of matches) {
+    pending.cancelRequested = true;
+    pending.cancelReason = reason;
+
+    if (pending.operationStatus === 'created') {
+      await finalizePendingRelayCancellation(pending, reason);
+      continue;
+    }
+
+    pending.operationStatus = 'cancel_requested';
+    await executeSql(
+      `UPDATE relay_operations
+       SET status = 'cancel_requested',
+           updated_at = NOW()
+       WHERE id = $1
+         AND status IN ('dispatched', 'received', 'started', 'cancel_requested')`,
+      [pending.operationId],
+    ).catch(() => {});
+
+    const connected = connectedRelays.get(pending.deviceId);
+    if (connected) {
+      sendRelayOperationCancel(connected, pending);
+    }
+  }
+}
+
+async function enqueueRemoteControlTerminationWakeup(params: {
+  sessionId: string;
+  actorId?: string | null;
+  workspaceId: string;
+  summary: string;
+  reasonText: string;
+  runtimeSessionId: string;
+  reason: string;
+}) {
+  const sessionRows = await executeSql<{
+    status: string;
+  }>(
+    `SELECT status
+     FROM sessions
+     WHERE id = $1
+     LIMIT 1`,
+    [params.sessionId],
+  );
+  const session = sessionRows.rows[0];
+  if (!session || session.status === 'closed') {
+    return;
+  }
+
+  await executeSql(
+    `INSERT INTO session_wakeups (
+       id,
+       session_id,
+       source_type,
+       source_item_id,
+       source_session_id,
+       source_participant_type,
+       source_participant_id,
+       source_name,
+       summary,
+       reason_text,
+       status,
+       metadata
+     )
+     VALUES (
+       $1,
+       $2,
+       'system_interrupt',
+       NULL,
+       NULL,
+       'system',
+       NULL,
+       $3,
+       $4,
+       $5,
+       'pending',
+       $6::jsonb
+     )`,
+    [
+      crypto.randomUUID(),
+      params.sessionId,
+      'Remote desktop control',
+      params.summary,
+      params.reasonText,
+      JSON.stringify({
+        runtimeSessionId: params.runtimeSessionId,
+        reason: params.reason,
+        source: 'relay_cua_termination',
+      }),
+    ],
+  ).catch(() => {});
+
+  if (session.status === 'idle' || session.status === 'blocked') {
+    await executeSql(
+      `UPDATE sessions
+       SET status = 'queued',
+           updated_at = NOW(),
+           error_message = NULL
+       WHERE id = $1`,
+      [params.sessionId],
+    ).catch(() => {});
+
+    await sessionThinkingQueue.add('think', {
+      sessionId: params.sessionId,
+      actorId: params.actorId,
+      workspaceId: params.workspaceId,
+      trigger: 'system_interrupt',
+    }).catch(() => {});
+  }
+}
+
+async function handleRelayCUATermination(connected: ConnectedRelay, msg: Record<string, unknown>) {
+  const runtimeSessionId =
+    typeof msg.runtimeSessionId === 'string' ? msg.runtimeSessionId.trim() : '';
+  const reason =
+    msg.reason === 'boot_disabled' ? 'boot_disabled' : 'user_terminated';
+  if (!runtimeSessionId) {
+    return;
+  }
+
+  const reasonText =
+    reason === 'boot_disabled'
+      ? 'User terminated remote desktop control and disabled further CUA control until the next reboot.'
+      : 'User terminated the current remote desktop session.';
+
+  await abortRelayRuntimeSessionOperations(runtimeSessionId, reasonText);
+
+  const operationRows = await executeSql<{
+    requested_by_session_id: string | null;
+    requested_by_actor_id: string | null;
+    workspace_id: string;
+  }>(
+    `SELECT requested_by_session_id, requested_by_actor_id, workspace_id
+     FROM relay_operations
+     WHERE runtime_session_id = $1
+       AND device_id = $2
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [runtimeSessionId, connected.deviceId],
+  );
+  const operation = operationRows.rows[0];
+  if (!operation?.requested_by_session_id) {
+    return;
+  }
+
+  const interruptContent =
+    reason === 'boot_disabled'
+      ? '用户终止了本次远程操作，并禁用了本次开机期间的后续远程控制。请先与用户确认设备状态，并确认任务是否继续。'
+      : '用户终止了本次远程操作，请先与用户确认设备状态，并确认任务是否继续。';
+
+  await executeSql(
+    `INSERT INTO session_interrupts (
+       id,
+       target_session_id,
+       type,
+       content,
+       from_session_id
+     )
+     VALUES ($1, $2, 'remote_control_terminated', $3, NULL)`,
+    [
+      crypto.randomUUID(),
+      operation.requested_by_session_id,
+      interruptContent,
+    ],
+  ).catch(() => {});
+
+  await enqueueRemoteControlTerminationWakeup({
+    sessionId: operation.requested_by_session_id,
+    actorId: operation.requested_by_actor_id,
+    workspaceId: operation.workspace_id,
+    summary: 'Remote desktop control was terminated by the user.',
+    reasonText,
+    runtimeSessionId,
+    reason,
+  });
 }
 
 function getRelayExposureCatalogLocal(deviceId: string, exposureId: string): RelayExposureCatalog | null {
