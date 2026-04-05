@@ -13,7 +13,6 @@ export {
   addSessionMessage,
   updateSessionStatus,
   consumeInterrupts,
-  createInterrupt,
   cancelSession,
   getActiveSessionCount,
   getMaxConcurrentSessions,

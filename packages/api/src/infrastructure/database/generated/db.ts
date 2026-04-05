@@ -283,11 +283,11 @@ export type RuntimeGrantsStatus = "active" | "consumed" | "revoked" | "supersede
 
 export type SessionEngineBranchesStatus = "active" | "archived" | "superseded";
 
-export type SessionInterruptsType = "priority_override" | "progress_check" | "remote_control_terminated";
+export type SessionInterruptsType = "remote_control_terminated";
 
 export type SessionsChannelType = "api" | "bridge" | "web";
 
-export type SessionsCollaborationMode = "default" | "plan_drafting" | "plan_awaiting_approval";
+export type SessionsCollaborationMode = "default" | "plan_awaiting_approval" | "plan_drafting";
 
 export type SessionsStatus = "blocked" | "closed" | "idle" | "queued" | "running";
 

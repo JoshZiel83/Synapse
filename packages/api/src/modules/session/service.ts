@@ -799,24 +799,6 @@ export async function consumeInterrupts(sessionId: UUID): Promise<any[]> {
     .execute();
 }
 
-export async function createInterrupt(params: {
-  targetSessionId: UUID;
-  type: SessionInterruptType;
-  content: string;
-  fromSessionId?: UUID;
-}): Promise<void> {
-  await db
-    .insertInto('session_interrupts')
-    .values({
-      id: uuidv4(),
-      target_session_id: params.targetSessionId,
-      type: params.type,
-      content: params.content,
-      from_session_id: params.fromSessionId || null,
-    })
-    .execute();
-}
-
 export async function hasPendingInterrupt(
   sessionId: UUID,
   type?: SessionInterruptType,
