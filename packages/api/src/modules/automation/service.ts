@@ -3557,17 +3557,24 @@ export async function updateAutomationRule(
   });
 
   await transaction(async (client) => {
+    const nextCategory: AutomationCategory =
+      normalizedTrigger.trigger_kind === 'schedule'
+        ? 'schedule'
+        : 'event_subscription';
+
     await executeSqlOn(client, 
       `UPDATE automation_rules
        SET status = $2,
-           name = $3,
-           description = $4,
-           metadata = $5,
+           category = $3,
+           name = $4,
+           description = $5,
+           metadata = $6,
            updated_at = NOW()
        WHERE id = $1`,
       [
         ruleId,
         mergedInput.status || existing.status,
+        nextCategory,
         mergedInput.name.trim(),
         (mergedInput.description || '').trim(),
         JSON.stringify(mergedInput.metadata || {}),

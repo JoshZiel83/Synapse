@@ -7,9 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const __filename = fileURLToPath(import.meta.url);
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8");
 
-const CURRENT_SCHEMA_VERSION = "2026-04-05-03";
+const CURRENT_SCHEMA_VERSION = "2026-04-05-05";
 const CURRENT_SCHEMA_DESCRIPTION =
-  "enforce interaction request subtype consistency";
+  "enforce automation delivery target policy consistency";
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

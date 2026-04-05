@@ -696,6 +696,160 @@ CREATE TABLE plugin_package_version_specs (
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
+CREATE OR REPLACE FUNCTION validate_catalog_version_spec_consistency_for_version(
+  v_catalog_version_id UUID
+)
+RETURNS void AS $$
+DECLARE
+  v_item_kind catalog_items_item_kind;
+  v_has_actor_template_spec BOOLEAN;
+  v_has_skill_package_spec BOOLEAN;
+  v_has_plugin_package_spec BOOLEAN;
+  v_spec_count INT;
+BEGIN
+  SELECT item.item_kind,
+         EXISTS (
+           SELECT 1
+           FROM actor_template_version_specs actor_spec
+           WHERE actor_spec.catalog_version_id = version.id
+         ) AS has_actor_template_spec,
+         EXISTS (
+           SELECT 1
+           FROM skill_package_version_specs skill_spec
+           WHERE skill_spec.catalog_version_id = version.id
+         ) AS has_skill_package_spec,
+         EXISTS (
+           SELECT 1
+           FROM plugin_package_version_specs plugin_spec
+           WHERE plugin_spec.catalog_version_id = version.id
+         ) AS has_plugin_package_spec
+    INTO
+      v_item_kind,
+      v_has_actor_template_spec,
+      v_has_skill_package_spec,
+      v_has_plugin_package_spec
+    FROM catalog_versions version
+    JOIN catalog_items item
+      ON item.id = version.catalog_item_id
+   WHERE version.id = v_catalog_version_id;
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  v_spec_count :=
+    v_has_actor_template_spec::INT +
+    v_has_skill_package_spec::INT +
+    v_has_plugin_package_spec::INT;
+
+  IF v_spec_count <> 1 THEN
+    RAISE EXCEPTION
+      'catalog_version % must have exactly one spec row, found actor_template=% skill_package=% plugin_package=%',
+      v_catalog_version_id,
+      v_has_actor_template_spec,
+      v_has_skill_package_spec,
+      v_has_plugin_package_spec
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'catalog_versions_exactly_one_spec_chk';
+  END IF;
+
+  IF v_item_kind = 'actor_template' AND NOT v_has_actor_template_spec THEN
+    RAISE EXCEPTION
+      'catalog_version % belongs to actor_template item but is missing actor_template_version_specs row',
+      v_catalog_version_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'catalog_versions_item_kind_spec_match_chk';
+  END IF;
+
+  IF v_item_kind = 'skill_package' AND NOT v_has_skill_package_spec THEN
+    RAISE EXCEPTION
+      'catalog_version % belongs to skill_package item but is missing skill_package_version_specs row',
+      v_catalog_version_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'catalog_versions_item_kind_spec_match_chk';
+  END IF;
+
+  IF v_item_kind = 'plugin_package' AND NOT v_has_plugin_package_spec THEN
+    RAISE EXCEPTION
+      'catalog_version % belongs to plugin_package item but is missing plugin_package_version_specs row',
+      v_catalog_version_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'catalog_versions_item_kind_spec_match_chk';
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION validate_catalog_version_spec_consistency()
+RETURNS trigger AS $$
+DECLARE
+  v_catalog_version_id UUID;
+  version_row RECORD;
+BEGIN
+  IF TG_TABLE_NAME = 'catalog_items' THEN
+    IF TG_OP <> 'UPDATE' OR NEW.item_kind = OLD.item_kind THEN
+      RETURN NULL;
+    END IF;
+
+    FOR version_row IN
+      SELECT version.id
+      FROM catalog_versions version
+      WHERE version.catalog_item_id = NEW.id
+    LOOP
+      PERFORM validate_catalog_version_spec_consistency_for_version(version_row.id);
+    END LOOP;
+
+    RETURN NULL;
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    IF TG_TABLE_NAME = 'catalog_versions' THEN
+      v_catalog_version_id := OLD.id;
+    ELSE
+      v_catalog_version_id := OLD.catalog_version_id;
+    END IF;
+  ELSE
+    IF TG_TABLE_NAME = 'catalog_versions' THEN
+      v_catalog_version_id := NEW.id;
+    ELSE
+      v_catalog_version_id := NEW.catalog_version_id;
+    END IF;
+  END IF;
+
+  PERFORM validate_catalog_version_spec_consistency_for_version(v_catalog_version_id);
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER catalog_versions_spec_consistency_chk
+AFTER INSERT OR UPDATE OF catalog_item_id OR DELETE ON catalog_versions
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_catalog_version_spec_consistency();
+
+CREATE CONSTRAINT TRIGGER actor_template_version_specs_parent_kind_chk
+AFTER INSERT OR UPDATE OR DELETE ON actor_template_version_specs
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_catalog_version_spec_consistency();
+
+CREATE CONSTRAINT TRIGGER skill_package_version_specs_parent_kind_chk
+AFTER INSERT OR UPDATE OR DELETE ON skill_package_version_specs
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_catalog_version_spec_consistency();
+
+CREATE CONSTRAINT TRIGGER plugin_package_version_specs_parent_kind_chk
+AFTER INSERT OR UPDATE OR DELETE ON plugin_package_version_specs
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_catalog_version_spec_consistency();
+
+CREATE CONSTRAINT TRIGGER catalog_items_version_spec_kind_chk
+AFTER UPDATE OF item_kind ON catalog_items
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_catalog_version_spec_consistency();
+
 CREATE TABLE plugin_version_runtime_permissions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   catalog_version_id UUID NOT NULL REFERENCES catalog_versions(id) ON DELETE CASCADE,
@@ -1912,6 +2066,86 @@ CREATE TABLE automation_delivery_targets (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(rule_id, target_participant_id)
 );
+
+CREATE OR REPLACE FUNCTION validate_automation_delivery_target_policy_for_rule(
+  v_rule_id UUID
+)
+RETURNS void AS $$
+DECLARE
+  v_target_policy automation_deliveries_target_policy;
+  v_target_count INT;
+BEGIN
+  SELECT delivery.target_policy
+    INTO v_target_policy
+    FROM automation_deliveries delivery
+   WHERE delivery.rule_id = v_rule_id;
+
+  IF NOT FOUND THEN
+    RETURN;
+  END IF;
+
+  SELECT COUNT(*)
+    INTO v_target_count
+    FROM automation_delivery_targets target
+   WHERE target.rule_id = v_rule_id;
+
+  IF v_target_policy = 'specified_members' AND v_target_count = 0 THEN
+    RAISE EXCEPTION
+      'automation delivery % uses specified_members but has no automation_delivery_targets rows',
+      v_rule_id
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'automation_deliveries_target_policy_targets_chk';
+  END IF;
+
+  IF v_target_policy = 'all_members' AND v_target_count <> 0 THEN
+    RAISE EXCEPTION
+      'automation delivery % uses all_members but still has % automation_delivery_targets rows',
+      v_rule_id,
+      v_target_count
+      USING ERRCODE = '23514',
+            CONSTRAINT = 'automation_deliveries_target_policy_targets_chk';
+  END IF;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE OR REPLACE FUNCTION validate_automation_delivery_target_policy()
+RETURNS trigger AS $$
+BEGIN
+  IF TG_TABLE_NAME = 'automation_deliveries' THEN
+    IF TG_OP = 'DELETE' THEN
+      PERFORM validate_automation_delivery_target_policy_for_rule(OLD.rule_id);
+    ELSE
+      PERFORM validate_automation_delivery_target_policy_for_rule(NEW.rule_id);
+    END IF;
+    RETURN NULL;
+  END IF;
+
+  IF TG_OP = 'DELETE' THEN
+    PERFORM validate_automation_delivery_target_policy_for_rule(OLD.rule_id);
+    RETURN NULL;
+  END IF;
+
+  PERFORM validate_automation_delivery_target_policy_for_rule(NEW.rule_id);
+
+  IF TG_OP = 'UPDATE' AND OLD.rule_id IS DISTINCT FROM NEW.rule_id THEN
+    PERFORM validate_automation_delivery_target_policy_for_rule(OLD.rule_id);
+  END IF;
+
+  RETURN NULL;
+END;
+$$ LANGUAGE plpgsql;
+
+CREATE CONSTRAINT TRIGGER automation_deliveries_target_policy_chk
+AFTER INSERT OR UPDATE OF target_policy OR DELETE ON automation_deliveries
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_automation_delivery_target_policy();
+
+CREATE CONSTRAINT TRIGGER automation_delivery_targets_policy_chk
+AFTER INSERT OR UPDATE OR DELETE ON automation_delivery_targets
+DEFERRABLE INITIALLY DEFERRED
+FOR EACH ROW
+EXECUTE FUNCTION validate_automation_delivery_target_policy();
 
 CREATE INDEX idx_automation_delivery_targets_rule
   ON automation_delivery_targets(rule_id, created_at);
