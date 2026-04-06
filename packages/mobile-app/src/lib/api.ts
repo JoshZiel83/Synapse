@@ -1,5 +1,8 @@
 import Constants from "expo-constants";
-import { FILE_ORIGIN_SYSTEMS } from "@shared";
+import {
+  FILE_ORIGIN_SYSTEMS,
+  isChatInteractionResolveConflictResponse,
+} from "@shared";
 import type {
   AuthSessionPersistence,
   CanonicalContentBlock,
@@ -12,6 +15,9 @@ import type {
   ChatConversationReadWatermarkResponse,
   ChatConversationSendMessageInput,
   ChatConversationSendMessageResponse,
+  ChatInteractionResolveInput,
+  ChatInteractionResolvePayload,
+  ChatInteractionResolveResponse,
   ChatSyncResponse,
   InteractionRequestSummary,
 } from "@shared";
@@ -50,6 +56,11 @@ let authToken: string | null = null;
 let unauthorizedHandler: (() => void | Promise<void>) | null = null;
 let unauthorizedHandlerPending = false;
 
+export type {
+  ChatInteractionResolveInput,
+  ChatInteractionResolvePayload,
+  ChatInteractionResolveResponse,
+};
 export class ApiError extends Error {
   status: number;
   code?: string;
@@ -72,19 +83,6 @@ export class ApiError extends Error {
 interface UploadAssetOptions {
   onProgress?: (progress: number) => void;
   signal?: AbortSignal;
-}
-
-export interface ChatInteractionResponseInput {
-  answers?: {
-    questionId: string;
-    selectedOptionIds?: string[];
-    otherText?: string;
-    text?: string;
-  }[];
-  decision?: "approve" | "reject" | "revise";
-  preset?: "once" | "actor" | "conversation" | "workspace";
-  selectedGrantOptionId?: string;
-  note?: string;
 }
 
 function notifyUnauthorizedStatus(status: number) {
@@ -629,19 +627,28 @@ class ApiClient {
     );
   }
 
-  respondToChatInteraction(
+  resolveChatInteraction(
     workspaceId: string,
     conversationId: string,
     interactionId: string,
-    input: ChatInteractionResponseInput,
-  ): Promise<{ interaction: InteractionRequestSummary }> {
-    return this.request<{ interaction: InteractionRequestSummary }>(
+    input: ChatInteractionResolveInput,
+  ): Promise<ChatInteractionResolveResponse> {
+    return this.request<ChatInteractionResolveResponse>(
       `/workspaces/${workspaceId}/conversations/${conversationId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(input),
       },
-    );
+    ).catch((error) => {
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        isChatInteractionResolveConflictResponse(error.details)
+      ) {
+        return error.details;
+      }
+      throw error;
+    });
   }
 
   updateChatConversationReadWatermark(

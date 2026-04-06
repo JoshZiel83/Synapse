@@ -15,6 +15,7 @@ import {
 } from "./service.js";
 import {
   canUserViewInteraction,
+  enrichInteractionForUser,
   getInteractionRequestSummary,
   resolveInteractionRequest,
 } from "../interactions/service.js";
@@ -92,13 +93,42 @@ const interactionAnswerSchema = z.object({
   text: z.string().trim().optional(),
 });
 
-const resolveInteractionSchema = z.object({
-  answers: z.array(interactionAnswerSchema).optional(),
-  decision: z.enum(["approve", "reject", "revise"]).optional(),
-  preset: z.enum(["once", "actor", "conversation", "workspace"]).optional(),
-  selectedGrantOptionId: z.string().trim().min(1).optional(),
-  note: z.string().trim().optional(),
+const resolveInteractionCommandSchema = z.object({
+  commandId: z.string().uuid(),
+  baseRevision: z.number().int().min(1),
 });
+
+const resolveInteractionUserInputSchema = resolveInteractionCommandSchema.extend({
+  answers: z.array(interactionAnswerSchema).min(1),
+  note: z.string().trim().optional(),
+}).strict();
+
+const resolveInteractionPlanApprovalSchema =
+  resolveInteractionCommandSchema.extend({
+    decision: z.enum(["approve", "revise"]),
+    note: z.string().trim().optional(),
+  }).strict();
+
+const resolveInteractionRelayApproveSchema =
+  resolveInteractionCommandSchema.extend({
+    decision: z.literal("approve"),
+    preset: z.enum(["once", "actor", "conversation", "workspace"]),
+    selectedGrantOptionId: z.string().trim().min(1),
+    note: z.string().trim().optional(),
+  }).strict();
+
+const resolveInteractionRelayRejectSchema =
+  resolveInteractionCommandSchema.extend({
+    decision: z.literal("reject"),
+    note: z.string().trim().optional(),
+  }).strict();
+
+const resolveInteractionSchema = z.union([
+  resolveInteractionUserInputSchema,
+  resolveInteractionPlanApprovalSchema,
+  resolveInteractionRelayApproveSchema,
+  resolveInteractionRelayRejectSchema,
+]);
 
 function getRequestUserId(request: any) {
   return (request as any).user!.userId as string;
@@ -329,17 +359,57 @@ export default async function chatController(app: FastifyInstance) {
       }
 
       try {
-        const result = await resolveInteractionRequest({
+        const resolveParamsBase = {
           interactionId: interaction.id,
           resolverWorkspaceMemberId: workspaceMemberId,
           resolverParticipantId: resolverParticipant.id,
-          answers: body.answers,
-          decision: body.decision,
-          preset: body.preset,
-          selectedGrantOptionId: body.selectedGrantOptionId,
-          note: body.note,
+          commandId: body.commandId,
+          baseRevision: body.baseRevision,
+        };
+        const resolveParams =
+          "answers" in body
+            ? {
+                ...resolveParamsBase,
+                answers: body.answers,
+                note: body.note,
+              }
+            : body.decision === "reject"
+              ? {
+                  ...resolveParamsBase,
+                  decision: body.decision,
+                  note: body.note,
+                }
+              : "preset" in body && "selectedGrantOptionId" in body
+                ? {
+                    ...resolveParamsBase,
+                    decision: body.decision,
+                    preset: body.preset,
+                    selectedGrantOptionId: body.selectedGrantOptionId,
+                    note: body.note,
+                  }
+              : {
+                  ...resolveParamsBase,
+                  decision: body.decision,
+                  note: body.note,
+                };
+
+        const result = await resolveInteractionRequest(resolveParams);
+        const interactionForViewer = await enrichInteractionForUser(
+          result.interaction,
+          getRequestUserId(request),
+        );
+        if (result.outcome === "conflict") {
+          return reply.status(409).send({
+            error: "Interaction state changed before this submission was applied",
+            code: "interaction_conflict",
+            outcome: result.outcome,
+            interaction: interactionForViewer,
+          });
+        }
+        return reply.send({
+          outcome: result.outcome,
+          interaction: interactionForViewer,
         });
-        return reply.send({ interaction: result.interaction });
       } catch (error) {
         const message =
           error instanceof Error ? error.message : "Failed to resolve interaction";

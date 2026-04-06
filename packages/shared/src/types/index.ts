@@ -821,7 +821,6 @@ export type EventType =
   | "feed.item.created"
   | "chat.sync.event"
   | "runtime.updated"
-  | "interaction.updated"
   | "actor.version_changed"
   | "mcp.config.changed"
   | "relay.connected"
@@ -3074,27 +3073,55 @@ export interface RelayAuthorizationInteractionSummary {
   requestMode: RelayAuthorizationRequestMode;
 }
 
-export interface InteractionRequestSummary {
+export interface InteractionRequestSummaryBase {
   id: UUID;
   taskId?: UUID;
   workspaceId: UUID;
   conversationId: UUID;
   itemId?: UUID;
-  kind: InteractionRequestKind;
   status: InteractionRequestStatus;
+  revision: number;
   requester?: ConversationEntityRef;
-  target?: ConversationEntityRef;
   resolvedBy?: ConversationEntityRef;
   resolutionNote?: string;
-  userInput?: UserInputInteractionSummary;
-  planApproval?: PlanApprovalInteractionSummary;
-  relayAuthorization?: RelayAuthorizationInteractionSummary;
   createdAt: Timestamp;
   updatedAt: Timestamp;
   resolvedAt?: Timestamp;
   expiresAt?: Timestamp;
-  viewerCanResolve?: boolean;
+  viewerCanResolve: boolean;
 }
+
+export interface UserInputInteractionRequestSummary
+  extends InteractionRequestSummaryBase {
+  kind: "user_input";
+  target: ConversationEntityRef;
+  userInput: UserInputInteractionSummary;
+  planApproval?: never;
+  relayAuthorization?: never;
+}
+
+export interface PlanApprovalInteractionRequestSummary
+  extends InteractionRequestSummaryBase {
+  kind: "plan_approval";
+  target: ConversationEntityRef;
+  userInput?: never;
+  planApproval: PlanApprovalInteractionSummary;
+  relayAuthorization?: never;
+}
+
+export interface RelayAuthorizationInteractionRequestSummary
+  extends InteractionRequestSummaryBase {
+  kind: "relay_authorization";
+  target?: never;
+  userInput?: never;
+  planApproval?: never;
+  relayAuthorization: RelayAuthorizationInteractionSummary;
+}
+
+export type InteractionRequestSummary =
+  | UserInputInteractionRequestSummary
+  | PlanApprovalInteractionRequestSummary
+  | RelayAuthorizationInteractionRequestSummary;
 
 export type TaskNoticeStatus = typeof TASK_NOTICE_STATUSES[number];
 
@@ -3749,6 +3776,12 @@ export interface ChatSyncEventPayloadMap {
     readWatermarkSequence: number;
     lastReadAt: Timestamp;
   };
+  "interaction.updated": {
+    conversationId: UUID;
+    interactionId: UUID;
+    itemId?: UUID;
+    interaction: InteractionRequestSummary;
+  };
 }
 
 export type ChatSyncEventType = keyof ChatSyncEventPayloadMap;
@@ -3869,6 +3902,94 @@ export interface ChatConversationReadWatermarkResponse {
   lastReadAt: Timestamp;
 }
 
+export interface ChatInteractionAnswerInput {
+  questionId: string;
+  selectedOptionIds?: string[];
+  otherText?: string;
+  text?: string;
+}
+
+export interface ChatInteractionResolveCommandMetadata {
+  commandId: UUID;
+  baseRevision: number;
+}
+
+export interface ChatInteractionResolveUserInputPayload {
+  answers: ChatInteractionAnswerInput[];
+  decision?: never;
+  preset?: never;
+  selectedGrantOptionId?: never;
+  note?: string;
+}
+
+export interface ChatInteractionResolvePlanApprovalPayload {
+  answers?: never;
+  decision: "approve" | "revise";
+  preset?: never;
+  selectedGrantOptionId?: never;
+  note?: string;
+}
+
+export interface ChatInteractionResolveRelayAuthorizationApprovePayload {
+  answers?: never;
+  decision: "approve";
+  preset: RelayAuthorizationPreset;
+  selectedGrantOptionId: string;
+  note?: string;
+}
+
+export interface ChatInteractionResolveRelayAuthorizationRejectPayload {
+  answers?: never;
+  decision: "reject";
+  preset?: never;
+  selectedGrantOptionId?: never;
+  note?: string;
+}
+
+export type ChatInteractionResolvePayload =
+  | ChatInteractionResolveUserInputPayload
+  | ChatInteractionResolvePlanApprovalPayload
+  | ChatInteractionResolveRelayAuthorizationApprovePayload
+  | ChatInteractionResolveRelayAuthorizationRejectPayload;
+
+export type ChatInteractionResolveInput =
+  ChatInteractionResolveCommandMetadata & ChatInteractionResolvePayload;
+
+export type ChatInteractionResolveOutcome =
+  | "applied"
+  | "duplicate"
+  | "conflict";
+
+export interface ChatInteractionResolveAppliedResponse {
+  outcome: "applied" | "duplicate";
+  interaction: InteractionRequestSummary;
+}
+
+export interface ChatInteractionResolveConflictResponse {
+  outcome: "conflict";
+  code: "interaction_conflict";
+  error: string;
+  interaction: InteractionRequestSummary;
+}
+
+export type ChatInteractionResolveResponse =
+  | ChatInteractionResolveAppliedResponse
+  | ChatInteractionResolveConflictResponse;
+
+export function isChatInteractionResolveConflictResponse(
+  value: unknown,
+): value is ChatInteractionResolveConflictResponse {
+  return Boolean(
+    value &&
+      typeof value === "object" &&
+      (value as { outcome?: unknown }).outcome === "conflict" &&
+      (value as { code?: unknown }).code === "interaction_conflict" &&
+      typeof (value as { error?: unknown }).error === "string" &&
+      (value as { interaction?: unknown }).interaction &&
+      typeof (value as { interaction?: unknown }).interaction === "object",
+  );
+}
+
 export type RealtimeAsrAudioFormat = "pcm" | "ogg";
 export type RealtimeAsrAudioCodec = "raw" | "opus";
 
@@ -3972,8 +4093,7 @@ export type ChatSocketEventType =
   | "ping"
   | "server.shutdown"
   | "chat.sync.event"
-  | "runtime.updated"
-  | "interaction.updated";
+  | "runtime.updated";
 
 export interface ChatSocketEventPayloadMap {
   "auth.ok": {
@@ -3995,12 +4115,6 @@ export interface ChatSocketEventPayloadMap {
     conversationId: UUID;
     runtimeSeq: number;
     snapshot: ActorRuntimeState;
-  };
-  "interaction.updated": {
-    conversationId: UUID;
-    interactionId: UUID;
-    itemId?: UUID;
-    interaction: InteractionRequestSummary;
   };
 }
 

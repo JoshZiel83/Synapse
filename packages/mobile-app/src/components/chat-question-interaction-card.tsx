@@ -14,14 +14,22 @@ import {
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
+import { ChatMarkdown } from "@/components/chat-markdown";
 import { Button } from "@/components/ui";
-import type { ChatInteractionResponseInput } from "@/lib/api";
+import type {
+  ChatInteractionResolveInput,
+  ChatInteractionResolvePayload,
+} from "@/lib/api";
 import { theme } from "@/theme/tokens";
 import {
   INTERACTION_REQUEST_KIND,
   type InteractionInputQuestionSummary,
   type InteractionRequestSummary,
+  type RelayAuthorizationGrantSpec,
+  type RelayAuthorizationRequestedAction,
 } from "@shared";
+
+type InteractionResolutionDraftPayload = ChatInteractionResolvePayload;
 
 type DraftQuestionAnswer = {
   selectedOptionIds: string[];
@@ -168,34 +176,149 @@ function getStatusMeta(status: InteractionRequestSummary["status"]) {
 
 function getStatusNote(
   interaction: InteractionRequestSummary,
-  isTargetUser: boolean,
+  viewerCanResolve: boolean,
   canResolve: boolean,
 ) {
   const targetName = interaction.target?.name?.trim() || "指定用户";
 
+  if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
+    if (interaction.status === "pending") {
+      return canResolve || viewerCanResolve
+        ? "点击开始逐题作答"
+        : `等待 ${targetName} 回答`;
+    }
+    if (interaction.status === "answered") {
+      return "点击查看答题结果";
+    }
+    if (interaction.status === "expired") {
+      return "此问答已过期";
+    }
+    if (interaction.status === "cancelled") {
+      return "此问答已被取消";
+    }
+    if (interaction.status === "superseded") {
+      return "此问答已被后续操作覆盖";
+    }
+    return "点击查看详情";
+  }
+
+  if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+    if (interaction.status === "pending") {
+      return canResolve || viewerCanResolve
+        ? "点击审批或要求修改"
+        : `等待 ${targetName} 审批`;
+    }
+    if (interaction.status === "approved") {
+      return "计划已批准";
+    }
+    if (interaction.status === "rejected") {
+      return "计划需要修改";
+    }
+    if (interaction.status === "cancelled") {
+      return "该审批已被取消";
+    }
+    return "点击查看计划详情";
+  }
+
   if (interaction.status === "pending") {
-    return canResolve || isTargetUser
-      ? "点击开始逐题作答"
-      : `等待 ${targetName} 回答`;
+    return canResolve ? "点击选择授权范围" : "等待有权限的成员处理";
   }
-
-  if (interaction.status === "answered") {
-    return "点击查看答题结果";
+  if (interaction.status === "approved") {
+    return "授权已批准";
   }
-
-  if (interaction.status === "expired") {
-    return "此问答已过期";
+  if (interaction.status === "rejected") {
+    return "授权已拒绝";
   }
-
-  if (interaction.status === "cancelled") {
-    return "此问答已被取消";
-  }
-
   if (interaction.status === "superseded") {
-    return "此问答已被后续操作覆盖";
+    return "授权请求已被更新的请求覆盖";
+  }
+  if (interaction.status === "cancelled") {
+    return "授权请求已取消";
+  }
+  return "点击查看详情";
+}
+
+function formatRelayAuthorizationPresetLabel(preset: string) {
+  switch (preset) {
+    case "once":
+      return "仅本次";
+    case "actor":
+      return "当前 Actor";
+    case "conversation":
+      return "当前会话";
+    case "workspace":
+      return "整个工作区";
+    default:
+      return preset;
+  }
+}
+
+function describeRelayAuthorizationSpec(scope: RelayAuthorizationGrantSpec) {
+  if (scope.capability === "filesystem" && scope.filesystem) {
+    return {
+      summary:
+        scope.filesystem.access === "write"
+          ? "文件系统写入权限"
+          : "文件系统只读权限",
+      detailLines:
+        scope.filesystem.pathPrefixes.length > 0
+          ? scope.filesystem.pathPrefixes
+          : ["整个文件系统"],
+    };
   }
 
-  return "点击查看详情";
+  if (scope.capability === "browser" && scope.browser) {
+    const target =
+      scope.browser.scopeType === "host"
+        ? scope.browser.host
+        : scope.browser.scopeType === "domain"
+          ? scope.browser.registrableDomain
+          : scope.browser.scopeType === "origin"
+            ? scope.browser.origin
+            : undefined;
+    return {
+      summary:
+        scope.browser.action === "write"
+          ? "浏览器写入操作"
+          : "浏览器只读访问",
+      detailLines: [target || "整个浏览器环境"],
+    };
+  }
+
+  if (scope.capability === "commandline" && scope.commandline) {
+    return {
+      summary:
+        scope.commandline.commandMatchType === "exact"
+          ? "精确命令授权"
+          : scope.commandline.commandMatchType === "prefix"
+            ? "命令前缀授权"
+            : "命令行访问",
+      detailLines: [
+        scope.commandline.commandText || "bash",
+        scope.commandline.workingDirectory
+          ? `工作目录：${scope.commandline.workingDirectory}`
+          : null,
+      ].filter((value): value is string => Boolean(value)),
+    };
+  }
+
+  return {
+    summary:
+      scope.cua?.access === "write" ? "桌面输入控制权限" : "桌面观察权限",
+    detailLines: ["Computer Use / CUA"],
+  };
+}
+
+function describeRelayAuthorizationRequestedAction(
+  action: RelayAuthorizationRequestedAction,
+) {
+  const describedScope = describeRelayAuthorizationSpec(action);
+  return {
+    summary: action.summary,
+    detailLines: action.detail
+      ? [action.detail, ...describedScope.detailLines]
+      : describedScope.detailLines,
+  };
 }
 
 function isFieldComplete(
@@ -237,7 +360,7 @@ function isFieldComplete(
 function buildAnswersPayload(
   questions: InteractionInputQuestionSummary[],
   draftAnswers: Record<string, DraftQuestionAnswer>,
-): ChatInteractionResponseInput {
+): InteractionResolutionDraftPayload {
   return {
     answers: questions.map((question) => {
       const draft = draftAnswers[question.id] || EMPTY_DRAFT;
@@ -249,6 +372,22 @@ function buildAnswersPayload(
         text: draft.text.trim() || undefined,
       };
     }),
+  };
+}
+
+function withInteractionCommandMetadata(
+  interaction: InteractionRequestSummary,
+  payload: InteractionResolutionDraftPayload,
+): ChatInteractionResolveInput {
+  return {
+    ...payload,
+    commandId:
+      typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+        ? crypto.randomUUID()
+        : `interaction-${Date.now().toString(36)}-${Math.random()
+            .toString(16)
+            .slice(2)}`,
+    baseRevision: interaction.revision,
   };
 }
 
@@ -298,18 +437,114 @@ function FieldOptionButton({
   );
 }
 
+function ReadOnlyUserInputQuestion({
+  question,
+  index,
+}: {
+  question: InteractionInputQuestionSummary;
+  index: number;
+}) {
+  const answer = question.answer;
+  const selectedOptionIds = new Set(answer?.selectedOptionIds || []);
+  const fallbackSelectionSummary =
+    (!question.options || question.options.length === 0) &&
+    answer?.selectedOptionLabels?.length
+      ? answer.selectedOptionLabels.join(", ")
+      : "";
+  const hasVisibleAnswer =
+    selectedOptionIds.size > 0 ||
+    Boolean(fallbackSelectionSummary) ||
+    Boolean(answer?.otherText?.trim()) ||
+    Boolean(answer?.text?.trim());
+
+  return (
+    <View style={styles.summarySection}>
+      <Text style={styles.summaryIndex}>{`题目 ${index + 1}`}</Text>
+      <Text style={styles.summaryTitle}>{question.prompt}</Text>
+      {question.description ? (
+        <Text style={styles.summaryDescription}>{question.description}</Text>
+      ) : null}
+
+      {question.type === "text" ? (
+        <Text style={styles.summaryAnswer}>{answer?.text || "暂无回答"}</Text>
+      ) : (
+        <>
+          {(question.options || []).length ? (
+            <View style={styles.optionList}>
+              {(question.options || []).map((option) => (
+                <FieldOptionButton
+                  key={option.id}
+                  selected={selectedOptionIds.has(option.id)}
+                  label={option.label}
+                  description={option.description}
+                  preview={option.preview}
+                  disabled
+                  onPress={() => {}}
+                />
+              ))}
+            </View>
+          ) : null}
+
+          {fallbackSelectionSummary ? (
+            <View style={styles.otherAnswerWrap}>
+              <Text style={styles.otherAnswerLabel}>已选答案</Text>
+              <Text style={styles.summaryAnswer}>{fallbackSelectionSummary}</Text>
+            </View>
+          ) : null}
+
+          {answer?.otherText ? (
+            <View style={styles.otherAnswerWrap}>
+              <Text style={styles.otherAnswerLabel}>其他</Text>
+              <Text style={styles.summaryAnswer}>{answer.otherText}</Text>
+            </View>
+          ) : null}
+
+          {answer?.text ? (
+            <View style={styles.otherAnswerWrap}>
+              <Text style={styles.otherAnswerLabel}>补充说明</Text>
+              <Text style={styles.summaryAnswer}>{answer.text}</Text>
+            </View>
+          ) : null}
+
+          {!hasVisibleAnswer ? (
+            <Text style={styles.summaryAnswer}>暂无回答</Text>
+          ) : null}
+        </>
+      )}
+    </View>
+  );
+}
+
+function RelaySpecSection({
+  eyebrow,
+  summary,
+  detailLines,
+}: {
+  eyebrow: string;
+  summary: string;
+  detailLines: string[];
+}) {
+  return (
+    <View style={styles.summarySection}>
+      <Text style={styles.summaryIndex}>{eyebrow}</Text>
+      <Text style={styles.summaryTitle}>{summary}</Text>
+      {detailLines.map((line, index) => (
+        <Text key={`${eyebrow}-${index}`} style={styles.summaryAnswer}>
+          {line}
+        </Text>
+      ))}
+    </View>
+  );
+}
+
 export function ChatQuestionInteractionCard({
   interaction,
-  viewerParticipantId,
-  viewerWorkspaceMemberId,
   onResolveInteraction,
 }: {
   interaction: InteractionRequestSummary;
-  viewerParticipantId?: string;
-  viewerWorkspaceMemberId?: string | null;
   onResolveInteraction?: (
     interactionId: string,
-    input: ChatInteractionResponseInput,
+    input: ChatInteractionResolveInput,
   ) => Promise<InteractionRequestSummary>;
 }) {
   const insets = useSafeAreaInsets();
@@ -320,20 +555,32 @@ export function ChatQuestionInteractionCard({
   >(() => buildDraftQuestionAnswers(interaction));
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [resolutionNoteDraft, setResolutionNoteDraft] = useState("");
+  const [selectedRelayGrantOptionId, setSelectedRelayGrantOptionId] = useState<
+    string | null
+  >(interaction.relayAuthorization?.grantOptions[0]?.id || null);
   const draftAnswersRef = useRef(draftAnswers);
   const questionCardOffset = useRef(new Animated.Value(0)).current;
   const userInput = interaction.userInput;
 
-  const isTargetUser =
-    interaction.target?.participantId === viewerParticipantId ||
-    (Boolean(viewerWorkspaceMemberId) &&
-      interaction.target?.workspaceMemberId === viewerWorkspaceMemberId);
+  const viewerCanResolve = interaction.viewerCanResolve === true;
   const canResolveUserInput =
     interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT &&
     Boolean(onResolveInteraction) &&
-    isTargetUser &&
+    viewerCanResolve &&
     interaction.status === "pending";
-  const canResolve = canResolveUserInput;
+  const canResolvePlanApproval =
+    interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL &&
+    Boolean(onResolveInteraction) &&
+    viewerCanResolve &&
+    interaction.status === "pending";
+  const canResolveRelayAuthorization =
+    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+    Boolean(onResolveInteraction) &&
+    viewerCanResolve &&
+    interaction.status === "pending";
+  const canResolve =
+    canResolveUserInput || canResolvePlanApproval || canResolveRelayAuthorization;
   const statusMeta = getStatusMeta(interaction.status);
 
   useEffect(() => {
@@ -343,7 +590,11 @@ export function ChatQuestionInteractionCard({
     setCurrentIndex(0);
     setSubmitting(false);
     setSubmitError(null);
-  }, [interaction]);
+    setResolutionNoteDraft("");
+    setSelectedRelayGrantOptionId(
+      interaction.relayAuthorization?.grantOptions[0]?.id || null,
+    );
+  }, [interaction.id, interaction.revision, interaction.status]);
 
   useEffect(() => {
     if (!open || !canResolve) {
@@ -400,12 +651,40 @@ export function ChatQuestionInteractionCard({
     try {
       await onResolveInteraction(
         interaction.id,
-        buildAnswersPayload(userInput.questions, answers),
+        withInteractionCommandMetadata(
+          interaction,
+          buildAnswersPayload(userInput.questions, answers),
+        ),
       );
       setOpen(false);
     } catch (error) {
       setSubmitError(
         error instanceof Error ? error.message : "提交答题结果失败。",
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  }
+
+  async function submitInteractionResolution(
+    payload: InteractionResolutionDraftPayload,
+    fallbackErrorMessage: string,
+  ) {
+    if (!onResolveInteraction) {
+      return;
+    }
+
+    setSubmitting(true);
+    setSubmitError(null);
+    try {
+      await onResolveInteraction(
+        interaction.id,
+        withInteractionCommandMetadata(interaction, payload),
+      );
+      setOpen(false);
+    } catch (error) {
+      setSubmitError(
+        error instanceof Error ? error.message : fallbackErrorMessage,
       );
     } finally {
       setSubmitting(false);
@@ -476,9 +755,46 @@ export function ChatQuestionInteractionCard({
     }
   }
 
-  if (interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT) {
-    return null;
-  }
+  const kindMeta =
+    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
+      ? {
+          label: "表单",
+          icon: "help-circle" as const,
+        }
+      : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
+        ? {
+            label: "计划审批",
+            icon: "git-branch" as const,
+          }
+        : {
+            label: "授权",
+            icon: "shield" as const,
+          };
+
+  const cardTitle =
+    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
+      ? interaction.userInput?.title || "表单"
+      : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
+        ? interaction.planApproval?.title || "计划审批"
+        : interaction.relayAuthorization
+          ? `授权 ${interaction.relayAuthorization.relayToolStableKey}`
+          : "授权请求";
+
+  const cardDescription =
+    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
+      ? interaction.userInput?.instructions
+      : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
+        ? interaction.planApproval?.summary
+        : interaction.relayAuthorization?.reason;
+
+  const cardSummary =
+    interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
+      ? answerSummary
+      : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
+        ? interaction.resolutionNote
+        : interaction.relayAuthorization?.approvedGrant
+          ? "已生成授权范围"
+          : interaction.relayAuthorization?.exposureDisplayName;
 
   return (
     <View style={styles.eventWrap}>
@@ -492,8 +808,12 @@ export function ChatQuestionInteractionCard({
       >
         <View style={styles.cardHeader}>
           <View style={styles.kindBadge}>
-            <Feather name="help-circle" size={14} color={theme.colors.primary} />
-            <Text style={styles.kindBadgeText}>表单</Text>
+            <Feather
+              name={kindMeta.icon}
+              size={14}
+              color={theme.colors.primary}
+            />
+            <Text style={styles.kindBadgeText}>{kindMeta.label}</Text>
           </View>
           <View
             style={[
@@ -511,21 +831,21 @@ export function ChatQuestionInteractionCard({
           </View>
         </View>
 
-        <Text style={styles.cardTitle}>{userInput?.title}</Text>
-        {userInput?.instructions ? (
+        <Text style={styles.cardTitle}>{cardTitle}</Text>
+        {cardDescription ? (
           <Text style={styles.cardDescription}>
-            {userInput.instructions}
+            {cardDescription}
           </Text>
         ) : null}
-        {answerSummary ? (
+        {cardSummary ? (
           <Text numberOfLines={2} style={styles.cardSummary}>
-            {answerSummary}
+            {cardSummary}
           </Text>
         ) : null}
 
         <View style={styles.cardFooter}>
           <Text style={styles.cardFooterText}>
-            {getStatusNote(interaction, isTargetUser, canResolve)}
+            {getStatusNote(interaction, viewerCanResolve, canResolve)}
           </Text>
           <Feather
             name="chevron-up"
@@ -566,10 +886,10 @@ export function ChatQuestionInteractionCard({
                   ? `第 ${currentIndex + 1} / ${userInput.questions.length} 题`
                   : statusMeta.label}
               </Text>
-              <Text style={styles.sheetTitle}>{userInput?.title}</Text>
-              {userInput?.instructions ? (
+              <Text style={styles.sheetTitle}>{cardTitle}</Text>
+              {cardDescription ? (
                 <Text style={styles.sheetDescription}>
-                  {userInput.instructions}
+                  {cardDescription}
                 </Text>
               ) : null}
             </View>
@@ -716,23 +1036,169 @@ export function ChatQuestionInteractionCard({
                   style={styles.sheetScroll}
                   contentContainerStyle={styles.sheetScrollContent}
                 >
-                  {(userInput?.questions || []).map((question, index) => {
-                    const answer = summarizeQuestionFieldAnswer(question);
-                    return (
-                      <View key={question.id} style={styles.summarySection}>
-                        <Text style={styles.summaryIndex}>{`题目 ${index + 1}`}</Text>
-                        <Text style={styles.summaryTitle}>{question.prompt}</Text>
-                        {question.description ? (
-                          <Text style={styles.summaryDescription}>
-                            {question.description}
+                  {interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT ? (
+                    (userInput?.questions || []).map((question, index) => {
+                      return (
+                        <ReadOnlyUserInputQuestion
+                          key={question.id}
+                          question={question}
+                          index={index}
+                        />
+                      );
+                    })
+                  ) : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL ? (
+                    <>
+                      <View style={styles.summarySection}>
+                        <Text style={styles.summaryIndex}>计划内容</Text>
+                        {interaction.planApproval?.planMarkdown ? (
+                          <View style={styles.summaryMarkdownWrap}>
+                            <ChatMarkdown
+                              markdown={interaction.planApproval.planMarkdown}
+                              mine={false}
+                            />
+                          </View>
+                        ) : (
+                          <Text style={styles.summaryAnswer}>暂无计划内容</Text>
+                        )}
+                      </View>
+                      {(interaction.planApproval?.checklist || []).map((step, index) => (
+                        <View
+                          key={`${step.step}-${index}`}
+                          style={styles.summarySection}
+                        >
+                          <Text style={styles.summaryIndex}>{`检查项 ${index + 1}`}</Text>
+                          <Text style={styles.summaryTitle}>{step.step}</Text>
+                          <Text style={styles.summaryAnswer}>{step.status}</Text>
+                        </View>
+                      ))}
+                      {interaction.resolutionNote ? (
+                        <View style={styles.summarySection}>
+                          <Text style={styles.summaryIndex}>备注</Text>
+                          <Text style={styles.summaryAnswer}>
+                            {interaction.resolutionNote}
                           </Text>
-                        ) : null}
-                        <Text style={styles.summaryAnswer}>
-                          {answer || "暂无回答"}
+                        </View>
+                      ) : null}
+                      {canResolvePlanApproval ? (
+                        <View style={styles.summarySection}>
+                          <Text style={styles.summaryIndex}>审批备注</Text>
+                          <TextInput
+                            multiline
+                            value={resolutionNoteDraft}
+                            onChangeText={setResolutionNoteDraft}
+                            placeholder="可选：填写审批意见或修改建议"
+                            placeholderTextColor={theme.colors.textSoft}
+                            style={styles.otherAnswerInput}
+                            editable={!submitting}
+                          />
+                        </View>
+                      ) : null}
+                    </>
+                  ) : (
+                    <>
+                      <View style={styles.summarySection}>
+                        <Text style={styles.summaryIndex}>设备</Text>
+                        <Text style={styles.summaryTitle}>
+                          {interaction.relayAuthorization?.deviceDisplayName || "Relay"}
+                        </Text>
+                        <Text style={styles.summaryDescription}>
+                          {interaction.relayAuthorization?.reason || "等待授权"}
                         </Text>
                       </View>
-                    );
-                  })}
+                      <View style={styles.summarySection}>
+                        <Text style={styles.summaryIndex}>暴露能力</Text>
+                        <Text style={styles.summaryAnswer}>
+                          {interaction.relayAuthorization?.exposureDisplayName || "未提供"}
+                        </Text>
+                      </View>
+                      {interaction.relayAuthorization?.requestedAction ? (
+                        <RelaySpecSection
+                          eyebrow="请求操作"
+                          summary={
+                            describeRelayAuthorizationRequestedAction(
+                              interaction.relayAuthorization.requestedAction,
+                            ).summary
+                          }
+                          detailLines={describeRelayAuthorizationRequestedAction(
+                            interaction.relayAuthorization.requestedAction,
+                          ).detailLines}
+                        />
+                      ) : null}
+                      {(interaction.relayAuthorization?.grantOptions || []).map((option) => (
+                        <FieldOptionButton
+                          key={option.id}
+                          selected={selectedRelayGrantOptionId === option.id}
+                          label={option.summary}
+                          description={option.detail}
+                          disabled={!canResolveRelayAuthorization || submitting}
+                          onPress={() => setSelectedRelayGrantOptionId(option.id)}
+                        />
+                      ))}
+                      {(interaction.relayAuthorization?.availablePresets || []).length ? (
+                        <View style={styles.summarySection}>
+                          <Text style={styles.summaryIndex}>授权范围</Text>
+                          <Text style={styles.summaryAnswer}>
+                            {(interaction.relayAuthorization?.availablePresets || [])
+                              .map((preset) =>
+                                formatRelayAuthorizationPresetLabel(preset),
+                              )
+                              .join(" / ")}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {interaction.relayAuthorization?.approvedPreset ? (
+                        <View style={styles.summarySection}>
+                          <Text style={styles.summaryIndex}>已批准范围</Text>
+                          <Text style={styles.summaryAnswer}>
+                            {formatRelayAuthorizationPresetLabel(
+                              interaction.relayAuthorization.approvedPreset,
+                            )}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {interaction.relayAuthorization?.approvedGrant ? (
+                        <>
+                          <RelaySpecSection
+                            eyebrow="已批准授权"
+                            summary={
+                              describeRelayAuthorizationSpec(
+                                interaction.relayAuthorization.approvedGrant,
+                              ).summary
+                            }
+                            detailLines={[
+                              ...describeRelayAuthorizationSpec(
+                                interaction.relayAuthorization.approvedGrant,
+                              ).detailLines,
+                              `scope: ${interaction.relayAuthorization.approvedGrant.scope}`,
+                              `retention: ${interaction.relayAuthorization.approvedGrant.retention}`,
+                            ]}
+                          />
+                        </>
+                      ) : null}
+                      {interaction.resolutionNote ? (
+                        <View style={styles.summarySection}>
+                          <Text style={styles.summaryIndex}>备注</Text>
+                          <Text style={styles.summaryAnswer}>
+                            {interaction.resolutionNote}
+                          </Text>
+                        </View>
+                      ) : null}
+                      {canResolveRelayAuthorization ? (
+                        <View style={styles.summarySection}>
+                          <Text style={styles.summaryIndex}>审批备注</Text>
+                          <TextInput
+                            multiline
+                            value={resolutionNoteDraft}
+                            onChangeText={setResolutionNoteDraft}
+                            placeholder="可选：填写授权说明"
+                            placeholderTextColor={theme.colors.textSoft}
+                            style={styles.otherAnswerInput}
+                            editable={!submitting}
+                          />
+                        </View>
+                      ) : null}
+                    </>
+                  )}
                   {submitError ? (
                     <View style={styles.errorCard}>
                       <Text style={styles.errorText}>{submitError}</Text>
@@ -741,12 +1207,93 @@ export function ChatQuestionInteractionCard({
                 </ScrollView>
 
                 <View style={styles.sheetActions}>
-                  <Button
-                    label="关闭"
-                    variant="secondary"
-                    onPress={() => setOpen(false)}
-                    style={styles.singleActionButton}
-                  />
+                  {canResolvePlanApproval ? (
+                    <>
+                      <Button
+                        label={submitting ? "处理中..." : "要求修改"}
+                        variant="secondary"
+                        onPress={() =>
+                          void submitInteractionResolution(
+                            {
+                              decision: "revise",
+                              note: resolutionNoteDraft.trim() || undefined,
+                            },
+                            "提交审批结果失败。",
+                          )
+                        }
+                        style={styles.actionButton}
+                        disabled={submitting}
+                      />
+                      <Button
+                        label={submitting ? "处理中..." : "批准计划"}
+                        onPress={() =>
+                          void submitInteractionResolution(
+                            {
+                              decision: "approve",
+                              note: resolutionNoteDraft.trim() || undefined,
+                            },
+                            "提交审批结果失败。",
+                          )
+                        }
+                        style={styles.actionButton}
+                        disabled={submitting}
+                      />
+                    </>
+                  ) : canResolveRelayAuthorization ? (
+                    <View style={styles.multiActionWrap}>
+                      {(interaction.relayAuthorization?.availablePresets || []).map(
+                        (preset) => (
+                          <Button
+                            key={preset}
+                            label={
+                              submitting
+                                ? "处理中..."
+                                : formatRelayAuthorizationPresetLabel(preset)
+                            }
+                            onPress={() =>
+                              selectedRelayGrantOptionId
+                                ? void submitInteractionResolution(
+                                    {
+                                      decision: "approve",
+                                      preset,
+                                      selectedGrantOptionId:
+                                        selectedRelayGrantOptionId,
+                                      note:
+                                        resolutionNoteDraft.trim() || undefined,
+                                    },
+                                    "提交授权结果失败。",
+                                  )
+                                : undefined
+                            }
+                            style={styles.singleActionButton}
+                            disabled={submitting || !selectedRelayGrantOptionId}
+                          />
+                        ),
+                      )}
+                      <Button
+                        label={submitting ? "处理中..." : "拒绝"}
+                        variant="secondary"
+                        onPress={() =>
+                          void submitInteractionResolution(
+                            {
+                              decision: "reject",
+                              note: resolutionNoteDraft.trim() || undefined,
+                            },
+                            "提交授权结果失败。",
+                          )
+                        }
+                        style={styles.singleActionButton}
+                        disabled={submitting}
+                      />
+                    </View>
+                  ) : (
+                    <Button
+                      label="关闭"
+                      variant="secondary"
+                      onPress={() => setOpen(false)}
+                      style={styles.singleActionButton}
+                    />
+                  )}
                 </View>
               </>
             )}
@@ -1050,6 +1597,12 @@ const styles = StyleSheet.create({
   singleActionButton: {
     flex: 1,
   },
+  multiActionWrap: {
+    flex: 1,
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  },
   summarySection: {
     gap: 6,
     paddingBottom: 14,
@@ -1080,5 +1633,12 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     paddingHorizontal: 10,
     paddingVertical: 9,
+  },
+  summaryMarkdownWrap: {
+    borderRadius: 14,
+    backgroundColor: theme.colors.backgroundAlt,
+    paddingHorizontal: 10,
+    paddingVertical: 9,
+    overflow: "hidden",
   },
 });

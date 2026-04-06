@@ -18,6 +18,7 @@ import { getDeviceLabel } from "@/lib/config";
 import { createId } from "@/lib/ids";
 import {
   extractText,
+  summarizeConversationEvent,
   type ChatConversationCreateResponse,
   type ChatConversationItem,
   type ChatConversationMessagesPage,
@@ -68,6 +69,42 @@ function shouldIncrementUnreadCount(
     item.surface === "visible" &&
     item.authorParticipantId !== conversation.viewerParticipantId
   );
+}
+
+function patchInteractionInConversationItem(
+  item: ChatConversationItem,
+  payload: ChatSyncEvent<"interaction.updated">["payload"],
+) {
+  if (
+    item.itemType !== "event" ||
+    item.subtype !== "interaction_requested" ||
+    !item.eventPayload ||
+    typeof item.eventPayload !== "object"
+  ) {
+    return item;
+  }
+
+  const currentInteraction =
+    "interaction" in item.eventPayload
+      ? ((item.eventPayload as { interaction?: unknown }).interaction as
+          | { id?: string }
+          | undefined)
+      : undefined;
+
+  if (
+    item.id !== payload.itemId &&
+    currentInteraction?.id !== payload.interactionId
+  ) {
+    return item;
+  }
+
+  return {
+    ...item,
+    eventPayload: {
+      ...(item.eventPayload as Record<string, unknown>),
+      interaction: payload.interaction,
+    },
+  };
 }
 
 export class ChatRuntime {
@@ -740,6 +777,45 @@ export class ChatRuntime {
             (conversation) => ({
               ...conversation,
               unreadCount: 0,
+            }),
+          );
+          break;
+        }
+        case "interaction.updated": {
+          const payload =
+            event.payload as ChatSyncEvent<"interaction.updated">["payload"];
+          const currentItems =
+            nextSnapshot.itemsByConversationId[payload.conversationId] ?? [];
+          const nextItems = currentItems.map((item) =>
+            patchInteractionInConversationItem(item, payload),
+          );
+
+          nextSnapshot = {
+            ...nextSnapshot,
+            itemsByConversationId: {
+              ...nextSnapshot.itemsByConversationId,
+              [payload.conversationId]: nextItems,
+            },
+          };
+
+          nextSnapshot = updateConversationInSnapshot(
+            nextSnapshot,
+            payload.conversationId,
+            (conversation) => ({
+              ...conversation,
+              lastItem:
+                payload.itemId &&
+                conversation.lastItem?.itemId === payload.itemId
+                  ? {
+                      ...conversation.lastItem,
+                      previewText: summarizeConversationEvent(
+                        "interaction_requested",
+                        {
+                          interaction: payload.interaction,
+                        },
+                      ),
+                    }
+                  : conversation.lastItem,
             }),
           );
           break;

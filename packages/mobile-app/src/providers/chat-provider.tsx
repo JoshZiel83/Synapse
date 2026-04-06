@@ -13,7 +13,10 @@ import {
 import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
 import { syncChatBackgroundTaskRegistration } from "@/lib/chat-background-task";
 import type { ChatComposerSendPayload } from "@/lib/chat-compose";
-import { api, type ChatInteractionResponseInput } from "@/lib/api";
+import {
+  api,
+  type ChatInteractionResolveInput,
+} from "@/lib/api";
 import {
   chatRuntime,
   type ChatRuntimeState,
@@ -71,7 +74,7 @@ interface ChatContextValue {
   respondInteraction: (
     conversationId: string,
     interactionId: string,
-    input: ChatInteractionResponseInput,
+    input: ChatInteractionResolveInput,
   ) => Promise<InteractionRequestSummary>;
   createConversation: (input: {
     kind: "group" | "private" | "virtual";
@@ -325,13 +328,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     async (
       conversationId: string,
       interactionId: string,
-      input: ChatInteractionResponseInput,
+      input: ChatInteractionResolveInput,
     ) => {
       if (!workspaceId) {
         throw new Error("Workspace context is required to respond.");
       }
 
-      const result = await api.respondToChatInteraction(
+      const result = await api.resolveChatInteraction(
         workspaceId,
         conversationId,
         interactionId,

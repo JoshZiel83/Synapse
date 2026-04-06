@@ -438,18 +438,29 @@ async function enrichChatSyncEventPayloadForViewer<T extends ChatSyncEventType>(
   payload: ChatSyncEventPayloadMap[T],
   userId: string,
 ): Promise<ChatSyncEventPayloadMap[T]> {
-  if (eventType !== "conversation.item.created") {
-    return payload;
+  if (eventType === "conversation.item.created") {
+    const eventPayload = payload as ChatSyncEventPayloadMap["conversation.item.created"];
+    return {
+      ...eventPayload,
+      item: await enrichChatConversationItemForViewer(
+        eventPayload.item,
+        userId,
+      ),
+    } as ChatSyncEventPayloadMap[T];
   }
 
-  const eventPayload = payload as ChatSyncEventPayloadMap["conversation.item.created"];
-  return {
-    ...eventPayload,
-    item: await enrichChatConversationItemForViewer(
-      eventPayload.item,
-      userId,
-    ),
-  } as ChatSyncEventPayloadMap[T];
+  if (eventType === "interaction.updated") {
+    const eventPayload = payload as ChatSyncEventPayloadMap["interaction.updated"];
+    return {
+      ...eventPayload,
+      interaction: await enrichInteractionForUser(
+        eventPayload.interaction,
+        userId,
+      ),
+    } as ChatSyncEventPayloadMap[T];
+  }
+
+  return payload;
 }
 
 function asParticipantTransportKind(
@@ -1400,7 +1411,7 @@ async function upsertConversationView(
   );
 }
 
-async function appendWorkspaceMemberSyncEvent<T extends ChatSyncEventType>(
+export async function appendWorkspaceMemberSyncEvent<T extends ChatSyncEventType>(
   queryable: Queryable,
   params: {
     workspaceId: string;

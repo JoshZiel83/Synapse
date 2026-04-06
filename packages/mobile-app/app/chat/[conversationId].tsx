@@ -114,7 +114,6 @@ export default function ChatDetailScreen() {
           key={item.id}
           item={item}
           viewerParticipantId={viewerParticipantId}
-          viewerWorkspaceMemberId={workspaceMemberId}
           onResolveInteraction={
             conversation
               ? (interactionId, input) =>
@@ -134,7 +133,7 @@ export default function ChatDetailScreen() {
           }
         />
       )),
-    [conversation, items, respondInteraction, viewerParticipantId, workspaceMemberId],
+    [conversation, items, respondInteraction, viewerParticipantId],
   );
 
   async function handleRefresh() {

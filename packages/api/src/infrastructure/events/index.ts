@@ -21,8 +21,7 @@ export type Queryable = {
 
 export type TransactionalRealtimeEventType =
   | 'feed.item.created'
-  | 'chat.sync.event'
-  | 'interaction.updated';
+  | 'chat.sync.event';
 
 type TransactionalRealtimeEvent = SystemEvent & {
   type: TransactionalRealtimeEventType;
@@ -50,7 +49,6 @@ const handlers: Map<string, Set<EventHandler>> = new Map();
 const TRANSACTIONAL_REALTIME_EVENT_TYPES = new Set<TransactionalRealtimeEventType>([
   'feed.item.created',
   'chat.sync.event',
-  'interaction.updated',
 ]);
 
 let realtimeOutboxDispatcherRunning = false;
@@ -184,36 +182,6 @@ async function materializeRealtimeOutboxEvent(
         workspaceId: entry.workspace_id,
         recipientWorkspaceMemberId: entry.recipient_workspace_member_id,
         payload: item as unknown as Record<string, unknown>,
-        timestamp,
-      };
-    }
-    case 'interaction.updated': {
-      const interactionId =
-        typeof payload.interactionId === 'string'
-          ? payload.interactionId.trim()
-          : '';
-      if (!interactionId) {
-        throw new Error(`Outbox entry ${entry.id} is missing interactionId`);
-      }
-      const { getInteractionRequestSummary } = await import(
-        '../../modules/interactions/service.js'
-      );
-      const interaction = await getInteractionRequestSummary(interactionId);
-      if (!interaction) {
-        throw new Error(
-          `Interaction ${interactionId} not found for outbox entry ${entry.id}`,
-        );
-      }
-      return {
-        type: 'interaction.updated',
-        workspaceId: entry.workspace_id,
-        recipientWorkspaceMemberId: entry.recipient_workspace_member_id,
-        payload: {
-          conversationId: interaction.conversationId,
-          interactionId: interaction.id,
-          itemId: interaction.itemId,
-          interaction,
-        } as unknown as Record<string, unknown>,
         timestamp,
       };
     }

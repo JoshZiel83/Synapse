@@ -333,6 +333,81 @@ function mergeRawItems(
   })
 }
 
+function patchInteractionInRawItem(
+  item: ChatConversationItem,
+  payload: ChatSyncEvent<"interaction.updated">["payload"]
+) {
+  if (
+    item.itemType !== "event" ||
+    item.subtype !== "interaction_requested" ||
+    !item.eventPayload ||
+    typeof item.eventPayload !== "object"
+  ) {
+    return item
+  }
+
+  const currentInteraction =
+    "interaction" in item.eventPayload
+      ? (item.eventPayload.interaction as InteractionRequestSummary | undefined)
+      : undefined
+
+  if (
+    item.id !== payload.itemId &&
+    currentInteraction?.id !== payload.interactionId
+  ) {
+    return item
+  }
+
+  return {
+    ...item,
+    eventPayload: {
+      ...(item.eventPayload as ConversationFeedEventPayloadMap["interaction_requested"]),
+      interaction: payload.interaction,
+    },
+  }
+}
+
+function patchInteractionInRawItems(
+  items: ChatConversationItem[],
+  payload: ChatSyncEvent<"interaction.updated">["payload"]
+) {
+  return mergeRawItems(
+    [],
+    items.map((item) => patchInteractionInRawItem(item, payload))
+  )
+}
+
+function applyInteractionUpdatedToSnapshot(
+  snapshot: StoredChatSnapshot,
+  payload: ChatSyncEvent<"interaction.updated">["payload"]
+) {
+  const currentConversation = snapshot.conversations.find(
+    (conversation) => conversation.conversationId === payload.conversationId
+  )
+  if (!currentConversation) {
+    return snapshot
+  }
+
+  const nextLastItem =
+    payload.itemId &&
+    currentConversation.lastItem?.itemId === payload.itemId
+      ? {
+          ...currentConversation.lastItem,
+          previewText: summarizeConversationEvent("interaction_requested", {
+            interaction: payload.interaction,
+          }),
+        }
+      : currentConversation.lastItem
+
+  return {
+    ...snapshot,
+    conversations: upsertRawConversation(snapshot.conversations, {
+      ...currentConversation,
+      lastItem: nextLastItem,
+    }),
+  }
+}
+
 function sortMessages(messages: FeedMessage[]) {
   return [...messages].sort((left, right) => {
     if (left.sequence !== right.sequence) {
@@ -1069,6 +1144,12 @@ function applySyncEventToSnapshot(
       })
       break
     }
+    case "interaction.updated": {
+      const payload =
+        event.payload as ChatSyncEvent<"interaction.updated">["payload"]
+      nextSnapshot = applyInteractionUpdatedToSnapshot(nextSnapshot, payload)
+      break
+    }
   }
 
   return nextSnapshot
@@ -1597,6 +1678,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
             workingLoadedItems = mergeRawItems(workingLoadedItems, [
               payload.item,
             ])
+            continue
+          }
+
+          if (event.eventType === "interaction.updated") {
+            const payload =
+              event.payload as ChatSyncEvent<"interaction.updated">["payload"]
+            if (payload.conversationId !== get().selectedConversationId) {
+              continue
+            }
+            workingLoadedItems = patchInteractionInRawItems(
+              workingLoadedItems,
+              payload
+            )
           }
         }
 
@@ -1776,6 +1870,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
         nextLoadedItems = mergeRawItems(state.loadedMessageItems, [
           payload.item,
         ])
+      } else if (event.eventType === "interaction.updated") {
+        const payload =
+          event.payload as ChatSyncEvent<"interaction.updated">["payload"]
+        if (payload.conversationId === state.selectedConversationId) {
+          nextLoadedItems = patchInteractionInRawItems(
+            state.loadedMessageItems,
+            payload
+          )
+        }
       }
 
       void queuePersistSnapshot(nextSnapshot)
@@ -1820,47 +1923,23 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   handleInteractionUpdated: (payload) => {
     set((state) => {
-      if (state.selectedConversationId !== payload.conversationId) {
+      if (!state.snapshot) {
         return state
       }
 
-      const messages = state.messages.map((message) => {
-        const currentInteractionId =
-          message.interaction?.id ||
-          (message.eventType === "interaction_requested" &&
-          message.eventPayload &&
-          typeof message.eventPayload === "object" &&
-          "interaction" in message.eventPayload
-            ? (message.eventPayload.interaction as InteractionRequestSummary).id
-            : undefined)
+      const nextSnapshot = applyInteractionUpdatedToSnapshot(
+        state.snapshot,
+        payload
+      )
+      const nextLoadedItems =
+        payload.conversationId === state.selectedConversationId
+          ? patchInteractionInRawItems(state.loadedMessageItems, payload)
+          : state.loadedMessageItems
 
-        if (
-          message.id !== payload.itemId &&
-          currentInteractionId !== payload.interactionId
-        ) {
-          return message
-        }
-
-        const nextPayload = {
-          interaction: payload.interaction,
-        } as ConversationFeedEventPayloadMap["interaction_requested"]
-
-        const content = summarizeConversationEvent(
-          "interaction_requested",
-          nextPayload
-        )
-
-        return {
-          ...message,
-          content,
-          contentBlocks: textBlocks(content),
-          eventType: "interaction_requested" as const,
-          eventPayload: nextPayload,
-          interaction: payload.interaction,
-        }
+      void queuePersistSnapshot(nextSnapshot)
+      return createStateFromSnapshot(state, nextSnapshot, {
+        loadedMessageItems: nextLoadedItems,
       })
-
-      return { messages }
     })
   },
 }))

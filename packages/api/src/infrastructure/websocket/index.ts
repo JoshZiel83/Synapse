@@ -20,7 +20,6 @@ import {
 } from "../../modules/chat/service.js";
 import { getWorkspaceMemberIdentity } from "../../modules/chat/workspace-identity.js";
 import {
-  canUserViewInteraction,
   enrichInteractionForUser,
 } from "../../modules/interactions/service.js";
 import {
@@ -102,12 +101,6 @@ function mapInternalEventToSocketEvent(
         type: "runtime.updated",
         payload: event.payload as ChatSocketEventPayloadMap["runtime.updated"],
       };
-    case "interaction.updated":
-      return {
-        type: "interaction.updated",
-        payload:
-          event.payload as ChatSocketEventPayloadMap["interaction.updated"],
-      };
     case "session.message.new":
     case "session.status.changed":
     case "session.thinking":
@@ -123,47 +116,61 @@ async function enrichChatSyncSocketEventForViewer(
   payload: ChatSocketEventPayloadMap["chat.sync.event"],
   viewerUserId: string,
 ): Promise<ChatSocketEventPayloadMap["chat.sync.event"]> {
-  if (payload.eventType !== "conversation.item.created") {
-    return payload;
+  if (payload.eventType === "conversation.item.created") {
+    const eventPayload =
+      payload.payload as ChatSyncEventPayloadMap["conversation.item.created"];
+    const item = eventPayload.item;
+    if (
+      item.itemType !== "event" ||
+      item.subtype !== "interaction_requested"
+    ) {
+      return payload;
+    }
+
+    const eventItem = item as Extract<
+      ChatSyncEventPayloadMap["conversation.item.created"]["item"],
+      { itemType: "event"; subtype: "interaction_requested" }
+    >;
+    const itemPayload = eventItem.eventPayload as ConversationFeedEventPayloadMap["interaction_requested"];
+    const interaction =
+      itemPayload &&
+      typeof itemPayload === "object" &&
+      "interaction" in itemPayload
+        ? (itemPayload as ConversationFeedEventPayloadMap["interaction_requested"]).interaction
+        : undefined;
+
+    if (!interaction) {
+      return payload;
+    }
+
+    return {
+      ...payload,
+      payload: {
+        ...eventPayload,
+        item: {
+          ...eventItem,
+          eventPayload: {
+            ...itemPayload,
+            interaction: await enrichInteractionForUser(interaction, viewerUserId),
+          },
+        },
+      },
+    };
   }
 
-  const eventPayload =
-    payload.payload as ChatSyncEventPayloadMap["conversation.item.created"];
-  const item = eventPayload.item;
-  if (
-    item.itemType !== "event" ||
-    item.subtype !== "interaction_requested"
-  ) {
-    return payload;
-  }
-
-  const eventItem = item as Extract<
-    ChatSyncEventPayloadMap["conversation.item.created"]["item"],
-    { itemType: "event"; subtype: "interaction_requested" }
-  >;
-  const itemPayload = eventItem.eventPayload as ConversationFeedEventPayloadMap["interaction_requested"];
-  const interaction =
-    itemPayload &&
-    typeof itemPayload === "object" &&
-    "interaction" in itemPayload
-      ? (itemPayload as ConversationFeedEventPayloadMap["interaction_requested"]).interaction
-      : undefined;
-
-  if (!interaction) {
+  if (payload.eventType !== "interaction.updated") {
     return payload;
   }
 
   return {
     ...payload,
     payload: {
-      ...eventPayload,
-      item: {
-        ...eventItem,
-        eventPayload: {
-          ...itemPayload,
-          interaction: await enrichInteractionForUser(interaction, viewerUserId),
-        },
-      },
+      ...(payload.payload as ChatSyncEventPayloadMap["interaction.updated"]),
+      interaction: await enrichInteractionForUser(
+        (payload.payload as ChatSyncEventPayloadMap["interaction.updated"])
+          .interaction,
+        viewerUserId,
+      ),
     },
   };
 }
@@ -177,7 +184,6 @@ function getConversationIdFromSocketEvent(
         event.payload as ChatSocketEventPayloadMap["chat.sync.event"]
       ).conversationId;
     case "runtime.updated":
-    case "interaction.updated":
       return (event.payload as { conversationId: string }).conversationId;
     default:
       return undefined;
@@ -540,32 +546,6 @@ export function setupWebSocket(app: FastifyInstance) {
             payload: enrichedPayload,
           });
         }
-        continue;
-      }
-
-      if (outbound.type === "interaction.updated") {
-        if (!conversationId || !isConversationAllowed) {
-          continue;
-        }
-        const payload =
-          outbound.payload as ChatSocketEventPayloadMap["interaction.updated"];
-        const canView = await canUserViewInteraction({
-          interactionId: payload.interactionId,
-          userId: client.userId,
-        });
-        if (!canView) {
-          continue;
-        }
-        safeSendSocketEvent(clientId, {
-          type: "interaction.updated",
-          payload: {
-            ...payload,
-            interaction: await enrichInteractionForUser(
-              payload.interaction,
-              client.userId,
-            ),
-          },
-        });
         continue;
       }
 

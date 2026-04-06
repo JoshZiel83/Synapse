@@ -1124,6 +1124,19 @@ export interface InteractionRelayAuthorizationRequests {
   source_runtime_session_id: string | null;
 }
 
+export interface InteractionResponseCommands {
+  base_revision: Int8;
+  command_id: string;
+  created_at: Generated<Timestamp>;
+  created_by_workspace_member_id: string | null;
+  id: Generated<string>;
+  interaction_id: string;
+  outcome: string;
+  request_payload: Generated<Json>;
+  response_payload: Generated<Json>;
+  updated_at: Generated<Timestamp>;
+}
+
 export interface InteractionRequests {
   conversation_id: string;
   conversation_item_id: string | null;
@@ -1131,7 +1144,9 @@ export interface InteractionRequests {
   expires_at: Timestamp | null;
   id: Generated<string>;
   kind: InteractionRequestsKind;
+  request_key: string;
   requester_participant_id: string;
+  revision: Generated<Int8>;
   resolved_at: Timestamp | null;
   resolved_by_participant_id: string | null;
   status: Generated<InteractionRequestsStatus>;
@@ -2283,6 +2298,7 @@ export interface DB {
   installed_skills: InstalledSkills;
   interaction_plan_approval_requests: InteractionPlanApprovalRequests;
   interaction_relay_authorization_requests: InteractionRelayAuthorizationRequests;
+  interaction_response_commands: InteractionResponseCommands;
   interaction_requests: InteractionRequests;
   interaction_user_input_requests: InteractionUserInputRequests;
   memory_embedding_cache: MemoryEmbeddingCache;

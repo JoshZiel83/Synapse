@@ -23,7 +23,10 @@ import type {
   ConversationSummary,
   FeedMessage,
 } from "@/stores/chat-store"
-import { api, type ChatInteractionResponseInput } from "@/lib/api"
+import {
+  api,
+  type ChatInteractionResolveInput,
+} from "@/lib/api"
 import ChatAvatar from "./chat-avatar"
 import ChatMemberStrip from "./chat-member-strip"
 import ChatParticipantDetailDialog from "./chat-participant-detail-dialog"
@@ -520,7 +523,7 @@ export default function ConversationChat({
 
   async function handleResolveInteraction(
     interactionId: string,
-    data: ChatInteractionResponseInput
+    data: ChatInteractionResolveInput
   ): Promise<InteractionRequestSummary> {
     if (!workspaceId) {
       throw new Error(
@@ -528,7 +531,7 @@ export default function ConversationChat({
       )
     }
 
-    const result = await api.resolveThreadInteraction(
+    const result = await api.resolveChatInteraction(
       workspaceId,
       conversation.id,
       interactionId,
@@ -536,7 +539,7 @@ export default function ConversationChat({
     )
     handleInteractionUpdated({
       conversationId: conversation.id,
-      interactionId,
+      interactionId: result.interaction.id,
       itemId: result.interaction.itemId,
       interaction: result.interaction,
     })
