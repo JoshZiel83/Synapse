@@ -1,7 +1,7 @@
 {
   "prepared": true,
   "platform": "windows-amd64",
-  "nodeAssetVersion": "node-20.19.5-windows-amd64",
+  "nodeAssetVersion": "node-24.14.1-windows-amd64",
   "nodeModulesDir": "nm",
   "pythonHomeDir": "py",
   "pythonBinary": "py/python.exe",
@@ -42,6 +42,9 @@
         "type": "executable_any",
         "candidates": [
           "blender"
+        ],
+        "paths": [
+          "/Applications/Blender.app/Contents/MacOS/Blender"
         ]
       }
     },
@@ -56,6 +59,9 @@
         "candidates": [
           "CloudCompare",
           "cloudcompare"
+        ],
+        "paths": [
+          "/Applications/CloudCompare.app/Contents/MacOS/CloudCompare"
         ]
       }
     },
@@ -129,6 +135,9 @@
           "gimp",
           "gimp-2.10",
           "gimp-2.99"
+        ],
+        "paths": [
+          "/Applications/GIMP.app/Contents/MacOS/gimp"
         ]
       }
     },
@@ -142,6 +151,9 @@
         "type": "executable_any",
         "candidates": [
           "inkscape"
+        ],
+        "paths": [
+          "/Applications/Inkscape.app/Contents/MacOS/inkscape"
         ]
       }
     },
@@ -179,6 +191,9 @@
         "envPathVar": "KRITA_PATH",
         "candidates": [
           "krita"
+        ],
+        "paths": [
+          "/Applications/krita.app/Contents/MacOS/krita"
         ]
       }
     },
@@ -233,6 +248,10 @@
         "candidates": [
           "mscore",
           "musescore"
+        ],
+        "paths": [
+          "/Applications/MuseScore 4.app/Contents/MacOS/mscore",
+          "~/Applications/MuseScore 4.app/Contents/MacOS/mscore"
         ]
       }
     },
@@ -345,7 +364,7 @@
   ],
   "packageProfile": "default-data-v5",
   "ffmpegReleaseTag": "n7.1-2",
-  "assetVersion": "cl-61a5b071907b",
+  "assetVersion": "cl-48682c08e03d",
   "executables": [
     "py/python.exe",
     "ff/ffmpeg.exe",

@@ -9,7 +9,7 @@ import { Readable } from 'node:stream'
 import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
 
-const DEFAULT_NODE_VERSION = '20.19.5'
+const DEFAULT_NODE_VERSION = '24.14.1'
 
 const NODE_DISTRIBUTIONS = {
   'linux-amd64': { archiveType: 'tar', distName: 'linux-x64', extension: 'tar.xz' },

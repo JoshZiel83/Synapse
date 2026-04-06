@@ -11,9 +11,9 @@ import { pipeline } from 'node:stream/promises'
 import { fileURLToPath } from 'node:url'
 import { resolveRequiredSubprojectRoot } from './lib/subprojects.mjs'
 
-const DEFAULT_NODE_VERSION = '20.19.5'
-const DEFAULT_PYTHON_VERSION = '3.12.12'
-const DEFAULT_PYTHON_STANDALONE_RELEASE = '20251010'
+const DEFAULT_NODE_VERSION = '24.14.1'
+const DEFAULT_PYTHON_VERSION = '3.14.1'
+const DEFAULT_PYTHON_STANDALONE_RELEASE = '20251202'
 const DEFAULT_WINDOWS_GIT_VERSION = '2.49.0.windows.1'
 const DEFAULT_FFMPEG_RELEASE_TAG = 'n7.1-2'
 const DEFAULT_PACKAGE_PROFILE = 'default-data-v5'
@@ -108,20 +108,20 @@ const NODE_DEPENDENCIES = {
 }
 
 const PYTHON_REQUIREMENTS = [
-  'aiohttp==3.10.11',
+  'aiohttp==3.13.5',
   'beautifulsoup4==4.12.3',
   'click==8.1.8',
   'httpx==0.28.1',
   'imageio==2.36.0',
   'imageio-ffmpeg==0.6.0',
-  'lxml==5.3.0',
+  'lxml==6.0.2',
   'mutagen==1.47.0',
   'openpyxl==3.1.5',
-  'pandas==2.2.3',
+  'pandas==3.0.2',
   'pdfplumber==0.11.4',
-  'Pillow==11.0.0',
+  'Pillow==12.2.0',
   'pydub==0.25.1',
-  'py7zr==0.22.0',
+  'py7zr==1.1.0',
   'pyzipper==0.3.6',
   'pypdf==5.1.0',
   'pyxlsb==1.0.10',
@@ -129,7 +129,7 @@ const PYTHON_REQUIREMENTS = [
   'qrcode==8.0',
   'python-docx==1.1.2',
   'python-pptx==1.0.2',
-  'PyYAML==6.0.2',
+  'PyYAML==6.0.3',
   'requests==2.32.3',
   'tinytag==2.0.0',
   'xlrd==2.0.1',

@@ -7,7 +7,7 @@ import { dirname, join, resolve } from 'node:path'
 import { spawn } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
-const DEFAULT_NODE_VERSION = '20.19.5'
+const DEFAULT_NODE_VERSION = '24.14.1'
 const DEFAULT_PACKAGE_VERSION = '0.20.0'
 const CHROME_DEVTOOLS_ASSET_SCHEMA_VERSION = 1
 const CHROME_DEVTOOLS_ASSET_PREFIX = 'cdm'
