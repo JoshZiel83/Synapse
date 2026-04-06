@@ -45,8 +45,9 @@ type commandTask struct {
 	completedAt     time.Time
 	lastOutputSeq   int64
 	output          []core.TaskOutputChunk
-	stdoutLines     []string
-	stderrLines     []string
+	droppedStdout   int
+	droppedStderr   int
+	droppedSystem   int
 	result          *core.CallResult
 	cancelReason    string
 	cancelRequested bool
@@ -280,6 +281,8 @@ func (s *Server) runTask(ctx context.Context, task *commandTask, invocation comm
 	waitErr := <-waitDone
 	readerWG.Wait()
 
+	stdoutText, stdoutTruncated := task.outputText("stdout")
+	stderrText, stderrTruncated := task.outputText("stderr")
 	status, message, result := buildTaskResult(
 		invocation.runtimeName,
 		invocation.binaryPath,
@@ -289,8 +292,10 @@ func (s *Server) runTask(ctx context.Context, task *commandTask, invocation comm
 		task.cancelWasRequested(),
 		ctx.Err(),
 		waitErr,
-		task.outputText("stdout"),
-		task.outputText("stderr"),
+		stdoutText,
+		stderrText,
+		stdoutTruncated,
+		stderrTruncated,
 	)
 	task.complete(status, message, pointerCallResult(result))
 }
@@ -332,7 +337,7 @@ func (t *commandTask) captureOutput(wg *sync.WaitGroup, reader io.ReadCloser, st
 	scanner := bufio.NewScanner(reader)
 	scanner.Buffer(make([]byte, 0, 64*1024), taskOutputScannerBufSize)
 	for scanner.Scan() {
-		text := normalizeOutput(scanner.Text())
+		text := truncateOutputChunkText(normalizeOutput(scanner.Text()))
 		if text == "" {
 			continue
 		}
@@ -356,6 +361,8 @@ func (t *commandTask) appendOutput(stream, text string) core.TaskOutputChunk {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
+	text = truncateOutputChunkText(normalizeOutput(text))
+
 	now := time.Now().UTC()
 	t.lastOutputSeq++
 	chunk := core.TaskOutputChunk{
@@ -366,13 +373,16 @@ func (t *commandTask) appendOutput(stream, text string) core.TaskOutputChunk {
 	}
 	t.output = append(t.output, chunk)
 	if len(t.output) > maxTaskOutputChunks {
-		t.output = append([]core.TaskOutputChunk(nil), t.output[len(t.output)-maxTaskOutputChunks:]...)
-	}
-	switch stream {
-	case "stdout":
-		t.stdoutLines = append(t.stdoutLines, text)
-	case "stderr":
-		t.stderrLines = append(t.stderrLines, text)
+		dropped := t.output[0]
+		t.output = append([]core.TaskOutputChunk(nil), t.output[1:]...)
+		switch dropped.Stream {
+		case "stdout":
+			t.droppedStdout++
+		case "stderr":
+			t.droppedStderr++
+		default:
+			t.droppedSystem++
+		}
 	}
 	t.updatedAt = now
 	return chunk
@@ -407,17 +417,27 @@ func (t *commandTask) cancelWasRequested() bool {
 	return t.cancelRequested
 }
 
-func (t *commandTask) outputText(stream string) string {
+func (t *commandTask) outputText(stream string) (string, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
+
+	writer := newCappedOutputWriter(maxCommandOutputBytes)
+	droppedChunks := 0
 	switch stream {
 	case "stdout":
-		return normalizeOutput(strings.Join(t.stdoutLines, "\n"))
+		droppedChunks = t.droppedStdout
 	case "stderr":
-		return normalizeOutput(strings.Join(t.stderrLines, "\n"))
+		droppedChunks = t.droppedStderr
 	default:
-		return ""
+		return "", false
 	}
+	for _, chunk := range t.output {
+		if chunk.Stream != stream {
+			continue
+		}
+		writer.appendLine(chunk.Text)
+	}
+	return writer.textWithNotice(droppedChunks), writer.truncated() || droppedChunks > 0
 }
 
 func (t *commandTask) complete(status core.TaskStatus, message string, result *core.CallResult) {
@@ -436,14 +456,14 @@ func (t *commandTask) complete(status core.TaskStatus, message string, result *c
 	}
 	logCommandTaskf(
 		t.id,
-		"completed tool=%s status=%s resultError=%t outputSeq=%d message=%q stdoutLines=%d stderrLines=%d resultPreview=%q",
+		"completed tool=%s status=%s resultError=%t outputSeq=%d message=%q stdoutDropped=%d stderrDropped=%d resultPreview=%q",
 		t.toolName,
 		status,
 		resultError,
 		t.lastOutputSeq,
 		message,
-		len(t.stdoutLines),
-		len(t.stderrLines),
+		t.droppedStdout,
+		t.droppedStderr,
 		previewTaskLogText(previewLogResult(result), 600),
 	)
 }
@@ -532,6 +552,8 @@ func buildTaskResult(
 	runErr error,
 	stdoutText string,
 	stderrText string,
+	stdoutTruncated bool,
+	stderrTruncated bool,
 ) (core.TaskStatus, string, core.CallResult) {
 	exitCode := 0
 	if runErr != nil {
@@ -573,7 +595,9 @@ func buildTaskResult(
 		"cwd":                 cwd,
 		"exitCode":            exitCode,
 		"stdout":              stdoutText,
+		"stdoutTruncated":     stdoutTruncated,
 		"stderr":              stderrText,
+		"stderrTruncated":     stderrTruncated,
 		"timedOut":            errors.Is(ctxErr, context.DeadlineExceeded),
 		"canceled":            cancelRequested || errors.Is(ctxErr, context.Canceled),
 		"requestedTimeoutSec": timeout.Requested.Seconds(),

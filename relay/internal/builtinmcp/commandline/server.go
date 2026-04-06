@@ -1,7 +1,6 @@
 package commandline
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -195,10 +194,10 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 	cmd.Dir = cwd
 	cmd.Env = s.environment(extraEnv)
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := newCappedOutputWriter(maxCommandOutputBytes)
+	stderr := newCappedOutputWriter(maxCommandOutputBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
 	runErr := cmd.Run()
 	exitCode := 0
@@ -213,8 +212,8 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 		}
 	}
 
-	stdoutText := normalizeOutput(stdout.String())
-	stderrText := normalizeOutput(stderr.String())
+	stdoutText := stdout.textWithNotice(0)
+	stderrText := stderr.textWithNotice(0)
 
 	statusText := fmt.Sprintf("%s exited with code %d.", runtimeName, exitCode)
 	if ctx.Err() == context.DeadlineExceeded {
@@ -245,7 +244,9 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 		"cwd":                 cwd,
 		"exitCode":            exitCode,
 		"stdout":              stdoutText,
+		"stdoutTruncated":     stdout.truncated(),
 		"stderr":              stderrText,
+		"stderrTruncated":     stderr.truncated(),
 		"timedOut":            ctx.Err() == context.DeadlineExceeded,
 		"canceled":            ctx.Err() == context.Canceled,
 		"requestedTimeoutSec": timeout.Requested.Seconds(),

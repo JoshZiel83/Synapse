@@ -1344,7 +1344,7 @@ func (c *Client) mirrorAsyncTaskToConnection(
 						"taskId":    binding.taskID,
 						"outputSeq": chunk.Seq,
 						"stream":    chunk.Stream,
-						"text":      chunk.Text,
+						"text":      previewLogText(chunk.Text, 240),
 						"createdAt": chunk.CreatedAt,
 					}),
 				)
