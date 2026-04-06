@@ -53,6 +53,7 @@ type commandTask struct {
 	cancelRequested bool
 	cancel          context.CancelFunc
 	cmd             *exec.Cmd
+	processControl  managedProcessController
 }
 
 func previewTaskLogText(value string, limit int) string {
@@ -246,19 +247,28 @@ func (s *Server) runTask(ctx context.Context, task *commandTask, invocation comm
 		return
 	}
 
-	task.markStarted(invocation.runtimeName, cmd)
+	controller, bindErr := bindManagedProcess(cmd)
+	processControl := processControlMode(controller)
+	processControlFallback := ""
+	if bindErr != nil {
+		processControlFallback = bindErr.Error()
+		logCommandTaskf(task.id, "process control fallback tool=%s runtime=%s mode=%s err=%v", task.toolName, invocation.runtimeName, processControl, bindErr)
+	}
+
+	task.markStarted(invocation.runtimeName, cmd, controller)
 	pid := -1
 	if cmd.Process != nil {
 		pid = cmd.Process.Pid
 	}
 	logCommandTaskf(
 		task.id,
-		"started tool=%s runtime=%s pid=%d cwd=%q timeout=%s command=%q",
+		"started tool=%s runtime=%s pid=%d cwd=%q timeout=%s processControl=%s command=%q",
 		task.toolName,
 		invocation.runtimeName,
 		pid,
 		invocation.cwd,
 		invocation.timeout.Effective,
+		processControl,
 		taskCommandPreview(invocation.binaryPath, invocation.args),
 	)
 
@@ -272,13 +282,15 @@ func (s *Server) runTask(ctx context.Context, task *commandTask, invocation comm
 		waitDone <- cmd.Wait()
 	}()
 
+	var waitErr error
 	select {
 	case <-ctx.Done():
-		terminateManagedProcess(cmd)
-	case <-waitDone:
+		terminateManagedProcess(cmd, controller)
+		waitErr = <-waitDone
+	case waitErr = <-waitDone:
 	}
 
-	waitErr := <-waitDone
+	releaseManagedProcess(task.detachProcessController())
 	readerWG.Wait()
 
 	stdoutText, stdoutTruncated := task.outputText("stdout")
@@ -296,6 +308,8 @@ func (s *Server) runTask(ctx context.Context, task *commandTask, invocation comm
 		stderrText,
 		stdoutTruncated,
 		stderrTruncated,
+		processControl,
+		processControlFallback,
 	)
 	task.complete(status, message, pointerCallResult(result))
 }
@@ -319,10 +333,11 @@ func (s *Server) pruneFinishedTasksLocked() {
 	}
 }
 
-func (t *commandTask) markStarted(runtimeName string, cmd *exec.Cmd) {
+func (t *commandTask) markStarted(runtimeName string, cmd *exec.Cmd, controller managedProcessController) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.cmd = cmd
+	t.processControl = controller
 	now := time.Now().UTC()
 	t.startedAt = now
 	t.updatedAt = now
@@ -423,6 +438,22 @@ func (t *commandTask) currentCmd() *exec.Cmd {
 	return t.cmd
 }
 
+func (t *commandTask) terminateProcess() {
+	t.mu.RLock()
+	cmd := t.cmd
+	controller := t.processControl
+	t.mu.RUnlock()
+	terminateManagedProcess(cmd, controller)
+}
+
+func (t *commandTask) detachProcessController() managedProcessController {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	controller := t.processControl
+	t.processControl = managedProcessController{}
+	return controller
+}
+
 func (t *commandTask) isTerminal() bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -464,6 +495,7 @@ func (t *commandTask) complete(status core.TaskStatus, message string, result *c
 	t.completedAt = now
 	t.result = result
 	t.cmd = nil
+	t.processControl = managedProcessController{}
 	resultError := false
 	if result != nil {
 		resultError = result.IsError
@@ -568,6 +600,8 @@ func buildTaskResult(
 	stderrText string,
 	stdoutTruncated bool,
 	stderrTruncated bool,
+	processControl string,
+	processControlFallback string,
 ) (core.TaskStatus, string, core.CallResult) {
 	exitCode := 0
 	if runErr != nil {
@@ -619,7 +653,11 @@ func buildTaskResult(
 		"maxTimeoutSec":       timeout.Max.Seconds(),
 		"usedDefaultTimeout":  timeout.UsedDefault,
 		"timeoutCapped":       timeout.Capped,
+		"processControl":      processControl,
 		"assetVersion":        "",
+	}
+	if processControlFallback != "" {
+		structured["processControlFallbackError"] = processControlFallback
 	}
 	if runErr != nil {
 		structured["error"] = runErr.Error()

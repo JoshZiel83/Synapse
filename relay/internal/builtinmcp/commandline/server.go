@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -141,9 +142,7 @@ func (s *Server) Shutdown() {
 
 	for _, task := range tasks {
 		task.requestCancel("Relay shutdown requested.")
-		if cmd := task.currentCmd(); cmd != nil {
-			terminateManagedProcess(cmd)
-		}
+		task.terminateProcess()
 	}
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -222,7 +221,7 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 	}
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binaryPath, args...)
+	cmd := exec.Command(binaryPath, args...)
 	applyPlatformProcessAttrs(cmd)
 	cmd.Dir = cwd
 	cmd.Env = s.environment(extraEnv)
@@ -232,7 +231,35 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
 
-	runErr := cmd.Run()
+	controller := managedProcessController{}
+	processControl := processControlMode(controller)
+	processControlFallback := ""
+
+	runErr := cmd.Start()
+	if runErr == nil {
+		var bindErr error
+		controller, bindErr = bindManagedProcess(cmd)
+		processControl = processControlMode(controller)
+		if bindErr != nil {
+			processControlFallback = bindErr.Error()
+			log.Printf("[commandline] runtime=%s processControl=%s fallback=%v", runtimeName, processControl, bindErr)
+		}
+
+		waitDone := make(chan error, 1)
+		go func() {
+			waitDone <- cmd.Wait()
+		}()
+
+		select {
+		case <-ctx.Done():
+			terminateManagedProcess(cmd, controller)
+			runErr = <-waitDone
+		case runErr = <-waitDone:
+		}
+
+		releaseManagedProcess(controller)
+	}
+
 	exitCode := 0
 	if runErr != nil {
 		var exitErr *exec.ExitError
@@ -287,7 +314,11 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 		"maxTimeoutSec":       timeout.Max.Seconds(),
 		"usedDefaultTimeout":  timeout.UsedDefault,
 		"timeoutCapped":       timeout.Capped,
+		"processControl":      processControl,
 		"assetVersion":        "",
+	}
+	if processControlFallback != "" {
+		structured["processControlFallbackError"] = processControlFallback
 	}
 	if s.installation != nil {
 		structured["assetVersion"] = s.installation.AssetVersion
