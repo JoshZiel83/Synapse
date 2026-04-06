@@ -65,6 +65,7 @@
       "appDisplayName": "Synapse Mobile"
     },
     "experiments": {
+      "baseUrl": "/mobile",
       "typedRoutes": true
     }
   }

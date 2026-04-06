@@ -1,10 +1,11 @@
 import { API_BASE } from "@/lib/config";
 import {
   CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL,
-  CHAT_WEB_SERVICE_WORKER_PATH,
+  CHAT_WEB_SERVICE_WORKER_FILENAME,
   CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG,
   CHAT_WEB_SERVICE_WORKER_SYNC_TAG,
 } from "@/lib/storage-keys";
+import { getExpoWebBaseScope, withExpoWebBasePath } from "@/lib/web-base-path";
 
 type ChatWorkerMessage =
   | {
@@ -108,9 +109,11 @@ async function getRegistration() {
   }
 
   if (!registrationPromise) {
+    const workerPath = withExpoWebBasePath(CHAT_WEB_SERVICE_WORKER_FILENAME);
+    const workerScope = getExpoWebBaseScope();
     registrationPromise = navigator.serviceWorker
-      .register(CHAT_WEB_SERVICE_WORKER_PATH, {
-        scope: "/",
+      .register(workerPath, {
+        scope: workerScope,
         updateViaCache: "none",
       })
       .then((registration) => {
