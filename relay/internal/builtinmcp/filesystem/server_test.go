@@ -4,6 +4,7 @@ import (
 	"archive/zip"
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -292,6 +293,39 @@ func TestSearchFindsIndexedContent(t *testing.T) {
 	}
 	if !strings.Contains(content.Text, target) {
 		t.Fatalf("expected search results to contain %q, got %q", target, content.Text)
+	}
+}
+
+func TestSyncDirectoryTreeReturnsCanceledWhenServerContextStops(t *testing.T) {
+	root := t.TempDir()
+	target := filepath.Join(root, "note.txt")
+	if err := os.WriteFile(target, []byte("plain text"), 0o644); err != nil {
+		t.Fatalf("write fixture: %v", err)
+	}
+
+	server := newIndexOnlyTestServer(t, Config{
+		StableKey: "test-sync-cancel",
+		Name:      "filesystem",
+		Scope:     "roots",
+		Roots: []Root{
+			{ID: "root_0", Path: root, Access: "ro"},
+		},
+		Index: IndexConfig{
+			Dir:              filepath.Join(t.TempDir(), "index"),
+			ContentEnabled:   false,
+			FileTypes:        []string{".txt"},
+			MaxFileSizeBytes: 1024 * 1024,
+			ParsePDF:         true,
+			ParseOffice:      true,
+		},
+	})
+
+	server.startCtx, server.cancel = context.WithCancel(context.Background())
+	server.cancel()
+
+	err := server.syncDirectoryTree(root)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected sync to stop with context.Canceled, got %v", err)
 	}
 }
 
