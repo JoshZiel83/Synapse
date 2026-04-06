@@ -150,6 +150,7 @@ func (e *Engine) run(ctx context.Context) {
 	for _, s := range servers {
 		log.Printf("  - %s (%s): %d tools", s.Name, s.Transport, len(s.Tools))
 	}
+	e.emitCLIAnythingCapabilityLogs(servers)
 
 	// Connect to cloud
 	client := cloud.NewClient(e.cfg.Relay, mgr, mgr)
@@ -308,6 +309,7 @@ func (e *Engine) refreshCatalog(ctx context.Context, mgr *mcp.Manager, client *c
 	}
 
 	client.SetExposures(servers)
+	e.emitCLIAnythingCapabilityLogs(servers)
 	syncCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	err = client.SyncCatalog(syncCtx)
 	cancel()
