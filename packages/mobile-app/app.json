@@ -38,7 +38,9 @@
     "web": {
       "bundler": "metro",
       "output": "static",
-      "favicon": "./assets/images/favicon.png"
+      "favicon": "./public/favicon.ico",
+      "name": "Synapse Mobile",
+      "shortName": "Synapse"
     },
     "plugins": [
       "expo-router",

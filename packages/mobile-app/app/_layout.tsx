@@ -2,6 +2,7 @@ import Feather from "@expo/vector-icons/Feather";
 import { ThemeProvider, type Theme } from "@react-navigation/native";
 import { useFonts } from "expo-font";
 import { ErrorBoundary, Stack, useRouter, useSegments } from "expo-router";
+import Head from "expo-router/head";
 import * as SplashScreen from "expo-splash-screen";
 import { StatusBar } from "expo-status-bar";
 import { useEffect } from "react";
@@ -72,12 +73,18 @@ export default function RootLayout() {
   }
 
   return (
-    <AppProviders>
-      <ThemeProvider value={navigationTheme}>
-        <StatusBar style="dark" />
-        <ProtectedNavigation />
-      </ThemeProvider>
-    </AppProviders>
+    <>
+      <Head>
+        <title>Synapse Mobile</title>
+        <meta property="og:title" content="Synapse Mobile" />
+      </Head>
+      <AppProviders>
+        <ThemeProvider value={navigationTheme}>
+          <StatusBar style="dark" />
+          <ProtectedNavigation />
+        </ThemeProvider>
+      </AppProviders>
+    </>
   );
 }
 
@@ -134,6 +141,7 @@ function ProtectedNavigation() {
         contentStyle: {
           backgroundColor: theme.colors.background,
         },
+        title: "Synapse Mobile",
         fullScreenGestureEnabled: process.env.EXPO_OS === "ios",
         gestureEnabled: true,
       }}
