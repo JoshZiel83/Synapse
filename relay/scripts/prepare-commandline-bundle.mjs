@@ -371,6 +371,11 @@ async function extractArchive(archivePath, destinationPath, archiveType) {
   }
 
   if (archiveType === '7z') {
+    if (process.platform === 'win32' && archivePath.toLowerCase().endsWith('.exe')) {
+      await runCommand(archivePath, [`-o${destinationPath}`, '-y'])
+      return
+    }
+
     await runCommand('7z', ['x', archivePath, `-o${destinationPath}`, '-y'], {
       shell: process.platform === 'win32',
     })
