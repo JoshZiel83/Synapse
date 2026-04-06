@@ -13,6 +13,7 @@ import {
   type TableInsert,
   type TableRow,
 } from "../database/kysely.js";
+import { assertAccessActionsMatchAuthzSchema } from "./schema-validation.js";
 
 export const AUTHZ_PLATFORM_ID = "synapse";
 
@@ -713,6 +714,10 @@ export async function syncAuthzSchema() {
   ensureAuthzEnabled();
 
   const { schemaPath, schemaText } = await readSchemaText();
+  assertAccessActionsMatchAuthzSchema({
+    schemaPath,
+    schemaText,
+  });
   const normalizedDesired = normalizeSchemaText(schemaText);
   const client = getAuthzClient();
 

@@ -287,12 +287,12 @@ definition relay_device {
     relation workspace: workspace
     relation owner: workspace_member | actor
     relation operator: workspace_member | actor
-    relation runtime_authorizer: workspace_member
+    relation relay_authorizer: workspace_member
 
     permission view = owner + operator + workspace->manage_relays
     permission manage = owner + operator + workspace->manage_relays
     permission invoke = view
-    permission authorize_runtime_access = owner + operator + runtime_authorizer + workspace->manage_relays
+    permission authorize_relay_authorization = owner + operator + relay_authorizer + workspace->manage_relays
     permission grant = manage
     permission delete = owner + workspace->manage_relays
 }
@@ -316,7 +316,7 @@ definition relay_capability {
     relation use_workspace: workspace
 
     permission use = workspace->manage_relays + use_actor + use_conversation->principal + use_actor_in_conversation->principal + use_workspace->principal
-    permission request_runtime_authorization = use
+    permission request_relay_authorization = use
     permission view = use + workspace->manage_relays
     permission edit = workspace->manage_relays
     permission grant = edit

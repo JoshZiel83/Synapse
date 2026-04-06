@@ -1736,50 +1736,54 @@ async function enqueueRemoteControlTerminationWakeup(params: {
     return;
   }
 
-  await executeSql(
-    `INSERT INTO session_wakeups (
-       id,
-       session_id,
-       source_type,
-       source_item_id,
-       source_session_id,
-       source_participant_type,
-       source_participant_id,
-       source_name,
-       summary,
-       reason_text,
-       status,
-       metadata
-     )
-     VALUES (
-       $1,
-       $2,
-       'system_interrupt',
-       NULL,
-       NULL,
-       'system',
-       NULL,
-       $3,
-       $4,
-       $5,
-       'pending',
-       $6::jsonb
-     )`,
-    [
-      crypto.randomUUID(),
-      params.sessionId,
-      'Remote desktop control',
-      params.summary,
-      params.reasonText,
-      JSON.stringify({
-        runtimeSessionId: params.runtimeSessionId,
-        reason: params.reason,
-        source: 'relay_cua_termination',
-      }),
-    ],
-  ).catch(() => {});
-
+  // A running session already observes the interrupt through `session_interrupts`
+  // and aborts its current turn. Re-enqueueing an extra wakeup here makes the
+  // same session immediately continue and can reopen a new CUA overlay after the
+  // user explicitly terminated remote control.
   if (session.status === 'idle' || session.status === 'blocked') {
+    await executeSql(
+      `INSERT INTO session_wakeups (
+         id,
+         session_id,
+         source_type,
+         source_item_id,
+         source_session_id,
+         source_participant_type,
+         source_participant_id,
+         source_name,
+         summary,
+         reason_text,
+         status,
+         metadata
+       )
+       VALUES (
+         $1,
+         $2,
+         'system_interrupt',
+         NULL,
+         NULL,
+         'system',
+         NULL,
+         $3,
+         $4,
+         $5,
+         'pending',
+         $6::jsonb
+       )`,
+      [
+        crypto.randomUUID(),
+        params.sessionId,
+        'Remote desktop control',
+        params.summary,
+        params.reasonText,
+        JSON.stringify({
+          runtimeSessionId: params.runtimeSessionId,
+          reason: params.reason,
+          source: 'relay_cua_termination',
+        }),
+      ],
+    ).catch(() => {});
+
     await executeSql(
       `UPDATE sessions
        SET status = 'queued',

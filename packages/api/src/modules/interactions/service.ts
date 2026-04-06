@@ -313,6 +313,10 @@ function stableJsonStringify(value: unknown): string {
   return JSON.stringify(value);
 }
 
+function jsonbValue<T>(value: T) {
+  return sql<T>`${JSON.stringify(value ?? null)}::jsonb`;
+}
+
 function buildRelayAuthorizationDedupeKey(params: {
   relayDeviceId: string;
   relayCapabilityId: string;
@@ -1290,9 +1294,9 @@ async function insertUserInputInteractionDetails(
     db.insertInto("interaction_user_input_requests").values({
       interaction_id: params.interactionId,
       prompt_payload:
-        params.promptPayload as TableInsert<"interaction_user_input_requests">["prompt_payload"],
+        jsonbValue(params.promptPayload) as unknown as TableInsert<"interaction_user_input_requests">["prompt_payload"],
       resolution_payload:
-        {} as TableInsert<"interaction_user_input_requests">["resolution_payload"],
+        jsonbValue({}) as unknown as TableInsert<"interaction_user_input_requests">["resolution_payload"],
     }),
   );
 }
@@ -1309,9 +1313,9 @@ async function insertPlanApprovalInteractionDetails(
     db.insertInto("interaction_plan_approval_requests").values({
       interaction_id: params.interactionId,
       plan_payload:
-        params.planPayload as TableInsert<"interaction_plan_approval_requests">["plan_payload"],
+        jsonbValue(params.planPayload) as unknown as TableInsert<"interaction_plan_approval_requests">["plan_payload"],
       resolution_payload:
-        {} as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
+        jsonbValue({}) as unknown as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
     }),
   );
 }
@@ -1349,13 +1353,13 @@ async function insertRelayAuthorizationInteractionDetails(
       source_runtime_session_id: params.sourceRuntimeSessionId || null,
       source_retry_nonce: params.sourceRetryNonce || null,
       source_request_args:
-        params.sourceRequestArgs as TableInsert<"interaction_relay_authorization_requests">["source_request_args"],
+        jsonbValue(params.sourceRequestArgs) as unknown as TableInsert<"interaction_relay_authorization_requests">["source_request_args"],
       required_requirements:
-        params.requiredRequirements as unknown as TableInsert<"interaction_relay_authorization_requests">["required_requirements"],
+        jsonbValue(params.requiredRequirements) as unknown as TableInsert<"interaction_relay_authorization_requests">["required_requirements"],
       approval_options:
-        params.approvalOptions as unknown as TableInsert<"interaction_relay_authorization_requests">["approval_options"],
+        jsonbValue(params.approvalOptions) as unknown as TableInsert<"interaction_relay_authorization_requests">["approval_options"],
       resolution_payload:
-        {} as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
+        jsonbValue({}) as unknown as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
       dedupe_key: params.dedupeKey,
     }),
   );
@@ -1415,7 +1419,7 @@ async function updateInteractionResolutionPayload(
         .updateTable("interaction_user_input_requests")
         .set({
           resolution_payload:
-            payload as TableInsert<"interaction_user_input_requests">["resolution_payload"],
+            jsonbValue(payload) as unknown as TableInsert<"interaction_user_input_requests">["resolution_payload"],
         })
         .where("interaction_id", "=", interactionId),
     );
@@ -1434,7 +1438,7 @@ async function updateInteractionResolutionPayload(
         .updateTable("interaction_plan_approval_requests")
         .set({
           resolution_payload:
-            payload as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
+            jsonbValue(payload) as unknown as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
         })
         .where("interaction_id", "=", interactionId),
     );
@@ -1452,7 +1456,7 @@ async function updateInteractionResolutionPayload(
       .updateTable("interaction_relay_authorization_requests")
       .set({
         resolution_payload:
-          payload as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
+          jsonbValue(payload) as unknown as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
       })
       .where("interaction_id", "=", interactionId),
   );
