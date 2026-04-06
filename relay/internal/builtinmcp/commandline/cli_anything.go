@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"time"
 
@@ -122,29 +123,128 @@ func (s *Server) checkCliAnythingWrapperCommand(wrapperPath string) (bool, strin
 func resolveProbeExecutable(probe commandlinebundle.CliAnythingProbe) string {
 	if envVar := strings.TrimSpace(probe.EnvPathVar); envVar != "" {
 		if value := strings.TrimSpace(os.Getenv(envVar)); value != "" {
-			if _, err := os.Stat(value); err == nil {
-				return value
+			if resolved := resolveExistingPath(value); resolved != "" {
+				return resolved
 			}
 		}
 	}
 
 	for _, candidate := range probe.Candidates {
-		if path, err := exec.LookPath(candidate); err == nil {
-			return path
+		if resolved := resolveExecutableFromPATH(candidate); resolved != "" {
+			return resolved
+		}
+	}
+
+	for _, candidate := range probe.Candidates {
+		if resolved := resolveExecutableFromAugmentedSearchPaths(candidate); resolved != "" {
+			return resolved
 		}
 	}
 
 	for _, candidate := range probe.Paths {
-		candidate = strings.TrimSpace(candidate)
-		if candidate == "" {
-			continue
-		}
-		if _, err := os.Stat(candidate); err == nil {
-			return candidate
+		if resolved := resolveExistingPath(candidate); resolved != "" {
+			return resolved
 		}
 	}
 
 	return ""
+}
+
+func resolveExecutableFromPATH(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return ""
+	}
+	if path, err := exec.LookPath(candidate); err == nil {
+		return path
+	}
+	return ""
+}
+
+func resolveExecutableFromAugmentedSearchPaths(candidate string) string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" {
+		return ""
+	}
+	for _, dir := range augmentedProbeSearchPaths() {
+		if resolved := resolveExistingPath(filepath.Join(dir, candidate)); resolved != "" {
+			return resolved
+		}
+	}
+	return ""
+}
+
+func augmentedProbeSearchPaths() []string {
+	if runtime.GOOS != "darwin" {
+		return nil
+	}
+
+	var entries []string
+	if home, err := os.UserHomeDir(); err == nil && strings.TrimSpace(home) != "" {
+		entries = append(entries,
+			filepath.Join(home, "bin"),
+			filepath.Join(home, ".local", "bin"),
+		)
+	}
+	entries = append(entries,
+		"/opt/homebrew/bin",
+		"/usr/local/bin",
+		"/opt/local/bin",
+	)
+	return uniqueNonEmptyStrings(entries)
+}
+
+func resolveExistingPath(candidate string) string {
+	candidate = expandUserPath(strings.TrimSpace(candidate))
+	if candidate == "" {
+		return ""
+	}
+	if info, err := os.Stat(candidate); err == nil && !info.IsDir() {
+		return candidate
+	}
+	return ""
+}
+
+func expandUserPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" || !strings.HasPrefix(value, "~") {
+		return value
+	}
+
+	home, err := os.UserHomeDir()
+	if err != nil || strings.TrimSpace(home) == "" {
+		return value
+	}
+
+	switch value {
+	case "~":
+		return home
+	case "~/":
+		return home + string(os.PathSeparator)
+	}
+
+	if strings.HasPrefix(value, "~/") || strings.HasPrefix(value, "~\\") {
+		return filepath.Join(home, value[2:])
+	}
+
+	return value
+}
+
+func uniqueNonEmptyStrings(values []string) []string {
+	seen := make(map[string]struct{}, len(values))
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		if _, ok := seen[value]; ok {
+			continue
+		}
+		seen[value] = struct{}{}
+		result = append(result, value)
+	}
+	return result
 }
 
 func missingExecutableReason(probe commandlinebundle.CliAnythingProbe) string {
