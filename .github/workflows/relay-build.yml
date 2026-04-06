@@ -18,10 +18,10 @@ permissions:
   contents: write
 
 env:
-  BUNDLED_NODE_VERSION: '20.19.5'
+  BUNDLED_NODE_VERSION: '24.14.1'
   CHROME_DEVTOOLS_MCP_VERSION: '0.20.0'
-  BUNDLED_PYTHON_VERSION: '3.12.12'
-  BUNDLED_PYTHON_STANDALONE_RELEASE: '20251010'
+  BUNDLED_PYTHON_VERSION: '3.14.1'
+  BUNDLED_PYTHON_STANDALONE_RELEASE: '20251202'
   BUNDLED_WINDOWS_GIT_VERSION: '2.49.0.windows.1'
   BUNDLED_FFMPEG_RELEASE_TAG: 'n7.1-2'
   COMMANDLINE_PACKAGE_PROFILE: 'default-data-v5'
@@ -29,7 +29,35 @@ env:
   ENABLE_COS_UPLOAD: ${{ vars.ENABLE_COS_UPLOAD || '' }}
 
 jobs:
+  relay-change-gate:
+    runs-on: ubuntu-latest
+    outputs:
+      should_run: ${{ steps.gate.outputs.should_run }}
+    steps:
+      - uses: actions/checkout@v4
+        if: github.event_name != 'workflow_dispatch'
+        with:
+          fetch-depth: 2
+
+      - name: Check whether tagged commit changed relay/
+        id: gate
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git diff-tree --root --no-commit-id --name-only -r "$GITHUB_SHA" | grep -q '^relay/'; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+            echo "No relay/ changes in tagged commit $GITHUB_SHA; skipping workflow."
+          fi
+
   prepare-matrix:
+    needs: relay-change-gate
+    if: needs.relay-change-gate.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.select.outputs.matrix }}
@@ -54,7 +82,10 @@ jobs:
         run: python3 .github/scripts/filter-platform-matrix.py
 
   build:
-    needs: prepare-matrix
+    needs:
+      - relay-change-gate
+      - prepare-matrix
+    if: needs.relay-change-gate.outputs.should_run == 'true'
     runs-on: ubuntu-latest
     strategy:
       matrix: ${{ fromJSON(needs.prepare-matrix.outputs.matrix) }}
@@ -74,7 +105,7 @@ jobs:
 
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: ${{ env.BUNDLED_PYTHON_VERSION }}
 
       - name: Install bundle prerequisites
         run: |
