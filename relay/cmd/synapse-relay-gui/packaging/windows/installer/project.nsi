@@ -20,6 +20,13 @@ Unicode true
 
 !include "wails_tools.nsh"
 
+!ifndef WAILS_ARCHITECTURE_NOT_SUPPORTED
+    !define WAILS_ARCHITECTURE_NOT_SUPPORTED "This product can't be installed on the current Windows architecture. Supports: ${ARCH}"
+!endif
+!ifndef SYNAPSE_LEGACY_WINDOWS_WARNING
+    !define SYNAPSE_LEGACY_WINDOWS_WARNING "You're installing ${INFO_PRODUCTNAME} on a Windows version older than Windows 10.$\r$\n$\r$\nInstallation is allowed, but ${INFO_PRODUCTNAME} depends on Microsoft Edge WebView2. Microsoft ended current Edge/WebView2 Runtime support for Windows 7, Windows 8, Windows 8.1, Windows Server 2012, and Windows Server 2012 R2 after Edge version 109, so launch or runtime updates may fail unless a compatible WebView2 Runtime is already installed.$\r$\n$\r$\nContinue anyway?"
+!endif
+
 VIProductVersion "${INFO_PRODUCTVERSION}.0"
 VIFileVersion    "${INFO_PRODUCTVERSION}.0"
 
@@ -104,6 +111,40 @@ Function un.EnsureProductNotRunning
             SetErrorLevel 32
             Abort
         ${EndIf}
+FunctionEnd
+
+Function EnsureSupportedArchitecture
+    !ifdef SUPPORTS_AMD64
+        ${If} ${IsNativeAMD64}
+            Return
+        ${EndIf}
+    !endif
+
+    !ifdef SUPPORTS_ARM64
+        ${If} ${IsNativeARM64}
+            Return
+        ${EndIf}
+    !endif
+
+    IfSilent silentArch notSilentArch
+    silentArch:
+        SetErrorLevel 65
+        Abort
+    notSilentArch:
+        MessageBox MB_OK "${WAILS_ARCHITECTURE_NOT_SUPPORTED}"
+        Quit
+FunctionEnd
+
+Function WarnAboutLegacyWindows
+    ${IfNot} ${AtLeastWin10}
+        IfSilent skipLegacyWarning promptLegacyWarning
+        promptLegacyWarning:
+            MessageBox MB_ICONEXCLAMATION|MB_OKCANCEL|MB_DEFBUTTON2 \
+                "${SYNAPSE_LEGACY_WINDOWS_WARNING}" \
+                IDOK skipLegacyWarning
+            Abort
+        skipLegacyWarning:
+    ${EndIf}
 FunctionEnd
 
 Function SelectInstallScope
@@ -346,7 +387,8 @@ Function .onInit
             ${EndIf}
         ${EndIf}
 
-        !insertmacro wails.checkArchitecture
+        Call EnsureSupportedArchitecture
+        Call WarnAboutLegacyWindows
 
         SetRegView 64
         Call SelectInstallScope
