@@ -127,7 +127,40 @@ func disabledResult(toolName string, resolution string) core.CallResult {
 	}
 }
 
-func (s *Server) Shutdown() {}
+func (s *Server) Shutdown() {
+	s.taskMu.RLock()
+	tasks := make([]*commandTask, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		tasks = append(tasks, task)
+	}
+	s.taskMu.RUnlock()
+
+	if len(tasks) == 0 {
+		return
+	}
+
+	for _, task := range tasks {
+		task.requestCancel("Relay shutdown requested.")
+		if cmd := task.currentCmd(); cmd != nil {
+			terminateManagedProcess(cmd)
+		}
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		allDone := true
+		for _, task := range tasks {
+			if !task.isTerminal() {
+				allDone = false
+				break
+			}
+		}
+		if allDone {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
 
 func (s *Server) callBash(ctx context.Context, args map[string]interface{}) core.CallResult {
 	binaryPath, err := s.resolveBashBinary()

@@ -417,6 +417,20 @@ func (t *commandTask) cancelWasRequested() bool {
 	return t.cancelRequested
 }
 
+func (t *commandTask) currentCmd() *exec.Cmd {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.cmd
+}
+
+func (t *commandTask) isTerminal() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.status == core.TaskStatusCompleted ||
+		t.status == core.TaskStatusFailed ||
+		t.status == core.TaskStatusCancelled
+}
+
 func (t *commandTask) outputText(stream string) (string, bool) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()

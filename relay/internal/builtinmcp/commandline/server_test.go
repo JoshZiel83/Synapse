@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/PekingSpades/Synapse/relay/internal/builtinmcp/core"
 	"github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
 )
 
@@ -245,5 +246,41 @@ func TestRunCommandRespectsEffectiveTimeout(t *testing.T) {
 	}
 	if effective, ok := structured["effectiveTimeoutSec"].(float64); !ok || effective <= 0 || effective > 0.25 {
 		t.Fatalf("expected short effective timeout, got %#v", structured["effectiveTimeoutSec"])
+	}
+}
+
+func TestShutdownCancelsActiveTasks(t *testing.T) {
+	cancelCalled := make(chan struct{}, 1)
+	task := &commandTask{
+		id:       "cmd-test",
+		toolName: "bash",
+		status:   core.TaskStatusWorking,
+		cancel: func() {
+			select {
+			case cancelCalled <- struct{}{}:
+			default:
+			}
+		},
+		cmd: &exec.Cmd{},
+	}
+
+	go func() {
+		<-cancelCalled
+		task.complete(core.TaskStatusCancelled, "Relay shutdown requested.", pointerCallResult(errorResult("cancelled")))
+	}()
+
+	server := &Server{
+		tasks: map[string]*commandTask{
+			task.id: task,
+		},
+	}
+
+	server.Shutdown()
+
+	if !task.cancelWasRequested() {
+		t.Fatalf("expected shutdown to request task cancellation")
+	}
+	if !task.isTerminal() {
+		t.Fatalf("expected task to reach terminal state after shutdown")
 	}
 }
