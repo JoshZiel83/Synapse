@@ -18,7 +18,7 @@ const DEFAULT_WINDOWS_GIT_VERSION = '2.49.0.windows.1'
 const DEFAULT_FFMPEG_RELEASE_TAG = 'n7.1-2'
 const DEFAULT_PACKAGE_PROFILE = 'default-data-v5'
 
-const COMMANDLINE_ASSET_SCHEMA_VERSION = 1
+const COMMANDLINE_ASSET_SCHEMA_VERSION = 2
 const COMMANDLINE_ASSET_PREFIX = 'cl'
 const COMMANDLINE_NODE_MODULES_DIR = 'nm'
 const COMMANDLINE_PYTHON_HOME_DIR = 'py'
@@ -653,8 +653,13 @@ async function copyCliAnythingPackages(cliAnythingRoot, targetDirectory, capabil
   return copied
 }
 
-function buildCliAnythingWrapperContent(pythonBinaryRelative, capability) {
+function cliAnythingWrapperPathListSeparator(targetPlatform) {
+  return targetPlatform.startsWith('windows-') ? ';' : ':'
+}
+
+export function buildCliAnythingWrapperContent(pythonBinaryRelative, capability, targetPlatform) {
   const [modulePath, functionName] = String(capability.entryPointTarget || '').split(':', 2)
+  const pathListSeparator = cliAnythingWrapperPathListSeparator(targetPlatform)
   const pythonCode = [
     'import importlib, sys',
     `sys.argv[0] = ${JSON.stringify(capability.command)}`,
@@ -670,7 +675,7 @@ function buildCliAnythingWrapperContent(pythonBinaryRelative, capability) {
     `PYTHON_BIN="${'$'}ROOT_DIR/${pythonBinaryRelative}"`,
     `export PYTHONHOME="${'$'}{ROOT_DIR}/${COMMANDLINE_PYTHON_HOME_DIR}"`,
     'if [ -n "${PYTHONPATH:-}" ]; then',
-    `  export PYTHONPATH="${'$'}{ROOT_DIR}/${COMMANDLINE_PYTHON_SITE_PACKAGES_DIR}:${'$'}{PYTHONPATH}"`,
+    `  export PYTHONPATH="${'$'}{ROOT_DIR}/${COMMANDLINE_PYTHON_SITE_PACKAGES_DIR}${pathListSeparator}${'$'}{PYTHONPATH}"`,
     'else',
     `  export PYTHONPATH="${'$'}{ROOT_DIR}/${COMMANDLINE_PYTHON_SITE_PACKAGES_DIR}"`,
     'fi',
@@ -689,7 +694,7 @@ async function writeCliAnythingWrappers(assetsDir, pythonBinaryRelative, capabil
     const wrapperPath = join(managedBinDir, capability.command)
     await writeFile(
       wrapperPath,
-      buildCliAnythingWrapperContent(pythonBinaryRelative, capability),
+      buildCliAnythingWrapperContent(pythonBinaryRelative, capability, targetPlatform),
       'utf8',
     )
     if (!targetPlatform.startsWith('windows-')) {
@@ -875,7 +880,11 @@ async function main() {
   }
 }
 
-main().catch((error) => {
-  console.error(error instanceof Error ? error.message : String(error))
-  process.exitCode = 1
-})
+const isMainModule = process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)
+
+if (isMainModule) {
+  main().catch((error) => {
+    console.error(error instanceof Error ? error.message : String(error))
+    process.exitCode = 1
+  })
+}

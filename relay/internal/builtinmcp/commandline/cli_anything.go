@@ -46,7 +46,7 @@ func (s *Server) probeCliAnythingCapability(capability commandlinebundle.CliAnyt
 		return report
 	}
 
-	if ok, reason := s.checkCliAnythingWrapperCommand(capability.Command); !ok {
+	if ok, reason := s.checkCliAnythingWrapperCommand(wrapperPath); !ok {
 		report["reason"] = reason
 		return report
 	}
@@ -85,12 +85,12 @@ func (s *Server) resolveCliAnythingWrapperPath(command string) string {
 	return ""
 }
 
-func (s *Server) checkCliAnythingWrapperCommand(command string) (bool, string) {
+func (s *Server) checkCliAnythingWrapperCommand(wrapperPath string) (bool, string) {
 	bashBinary, err := s.resolveBashBinary()
 	if err != nil {
 		return false, err.Error()
 	}
-	if strings.TrimSpace(command) == "" {
+	if strings.TrimSpace(wrapperPath) == "" {
 		return false, "cli-anything command is not configured"
 	}
 
@@ -101,9 +101,9 @@ func (s *Server) checkCliAnythingWrapperCommand(command string) (bool, string) {
 		ctx,
 		bashBinary,
 		"-lc",
-		`command -v "$1" >/dev/null && "$1" --help >/dev/null`,
+		`"$1" --help >/dev/null`,
 		"--",
-		command,
+		wrapperPath,
 	)
 	applyPlatformProcessAttrs(cmd)
 	cmd.Env = s.environment(nil)
