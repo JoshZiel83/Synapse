@@ -54,6 +54,58 @@ Var AutoLaunch
 Var InstallScope
 Var un.InstallScope
 
+Function IsProductRunning
+    nsExec::ExecToStack 'cmd /C tasklist /FI "IMAGENAME eq ${PRODUCT_EXECUTABLE}" | find /I "${PRODUCT_EXECUTABLE}" >nul'
+    Pop $0
+    Pop $1
+    Push $0
+FunctionEnd
+
+Function EnsureProductNotRunning
+    checkRunning:
+        Call IsProductRunning
+        Pop $0
+        ${If} $0 == "0"
+            IfSilent silentBusy promptBusy
+
+        promptBusy:
+            MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL|MB_DEFBUTTON1 \
+                "${INFO_PRODUCTNAME} is currently running.$\r$\n$\r$\nClose it and click Retry to continue installation." \
+                IDRETRY checkRunning
+            Abort
+
+        silentBusy:
+            SetErrorLevel 32
+            Abort
+        ${EndIf}
+FunctionEnd
+
+Function un.IsProductRunning
+    nsExec::ExecToStack 'cmd /C tasklist /FI "IMAGENAME eq ${PRODUCT_EXECUTABLE}" | find /I "${PRODUCT_EXECUTABLE}" >nul'
+    Pop $0
+    Pop $1
+    Push $0
+FunctionEnd
+
+Function un.EnsureProductNotRunning
+    checkRunning:
+        Call un.IsProductRunning
+        Pop $0
+        ${If} $0 == "0"
+            IfSilent silentBusy promptBusy
+
+        promptBusy:
+            MessageBox MB_ICONEXCLAMATION|MB_RETRYCANCEL|MB_DEFBUTTON1 \
+                "${INFO_PRODUCTNAME} is currently running.$\r$\n$\r$\nClose it and click Retry to continue uninstalling." \
+                IDRETRY checkRunning
+            Abort
+
+        silentBusy:
+            SetErrorLevel 32
+            Abort
+        ${EndIf}
+FunctionEnd
+
 Function SelectInstallScope
     ReadRegStr $R3 HKLM "${UNINST_KEY}" "InstallLocation"
     ReadRegStr $R4 HKCU "${UNINST_KEY}" "InstallLocation"
@@ -242,6 +294,7 @@ Function un.onInit
 
     applyContext:
         Call un.ApplyShellContext
+        Call un.EnsureProductNotRunning
 FunctionEnd
 
 Function .onInit
@@ -311,6 +364,7 @@ Function .onInit
         Abort
 
     continueInstall:
+        Call EnsureProductNotRunning
 FunctionEnd
 
 Section
