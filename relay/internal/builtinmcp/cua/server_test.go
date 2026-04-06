@@ -240,19 +240,20 @@ func TestDisabledCUAReturnsRelayAccessDenial(t *testing.T) {
 	if denial["kind"] != "permission_denied" {
 		t.Fatalf("expected permission_denied kind, got %#v", denial["kind"])
 	}
-	if denial["resolution"] != "server_grant" {
-		t.Fatalf("expected server_grant resolution, got %#v", denial["resolution"])
+	if denial["resolution"] != "local_setting" {
+		t.Fatalf("expected local_setting resolution, got %#v", denial["resolution"])
 	}
 }
 
 func TestServerAuthorizationBypassesDisabledCUAAndReadOnly(t *testing.T) {
 	server := NewWithDesktop(Config{
-		Enabled:         false,
-		StableKey:       "server-auth-cua",
-		ReadOnly:        true,
-		ImageSize:       [2]int{1280, 800},
-		RelativeSize:    [2]int{1000, 1000},
-		DisplaySelector: DisplaySelector{Mode: "main"},
+		Enabled:                  false,
+		AllowServerAuthorization: true,
+		StableKey:                "server-auth-cua",
+		ReadOnly:                 true,
+		ImageSize:                [2]int{1280, 800},
+		RelativeSize:             [2]int{1000, 1000},
+		DisplaySelector:          DisplaySelector{Mode: "main"},
 	}, &fakeDesktop{
 		displays: []DisplayInfo{
 			{
@@ -271,6 +272,20 @@ func TestServerAuthorizationBypassesDisabledCUAAndReadOnly(t *testing.T) {
 		context.Background(),
 		runtimeauth.RuntimeAuthorization{
 			GrantIDs: []string{"grant-cua-1"},
+			GrantSpecs: []map[string]interface{}{
+				{
+					"capability": "cua",
+					"cua": map[string]interface{}{
+						"access": "read",
+					},
+				},
+				{
+					"capability": "cua",
+					"cua": map[string]interface{}{
+						"access": "write",
+					},
+				},
+			},
 		},
 	)
 

@@ -8,11 +8,20 @@ import {
   FieldLabel,
 } from '../components/ui/field'
 import { Separator } from '../components/ui/separator'
-import type { NotificationSettings, RelayConfig, StartupSettings } from '../types'
+import type {
+  NotificationSettings,
+  RelayConfig,
+  SecuritySettings,
+  StartupSettings,
+} from '../types'
 
 interface SettingsPanelProps {
   config: RelayConfig
-  onSaveDesktopSettings: (startup: StartupSettings, notifications: NotificationSettings) => Promise<void>
+  onSaveDesktopSettings: (
+    startup: StartupSettings,
+    notifications: NotificationSettings,
+    security: SecuritySettings,
+  ) => Promise<void>
 }
 
 type SettingKey =
@@ -21,6 +30,7 @@ type SettingKey =
   | 'launchHidden'
   | 'closeBehavior'
   | 'backgroundEnabled'
+  | 'serverAuthorizationEnabled'
 
 function SettingToggle({
   label,
@@ -65,6 +75,8 @@ export function SettingsPanel({ config, onSaveDesktopSettings }: SettingsPanelPr
         ...nextStartup,
       }, {
         ...config.notifications,
+      }, {
+        ...config.security,
       })
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -81,6 +93,27 @@ export function SettingsPanel({ config, onSaveDesktopSettings }: SettingsPanelPr
         ...config.startup,
       }, {
         ...config.notifications,
+        [key]: value,
+      }, {
+        ...config.security,
+      })
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : String(cause))
+    } finally {
+      setSaving(null)
+    }
+  }
+
+  async function updateSecurity(key: keyof SecuritySettings, value: boolean) {
+    setSaving(key)
+    setError('')
+    try {
+      await onSaveDesktopSettings({
+        ...config.startup,
+      }, {
+        ...config.notifications,
+      }, {
+        ...config.security,
         [key]: value,
       })
     } catch (cause) {
@@ -151,6 +184,16 @@ export function SettingsPanel({ config, onSaveDesktopSettings }: SettingsPanelPr
           checked={Boolean(config.notifications?.backgroundEnabled)}
           disabled={saving === 'backgroundEnabled'}
           onChange={(checked) => void updateNotifications('backgroundEnabled', checked)}
+        />
+        <Separator />
+        <SettingToggle
+          label="Trust server authorizations"
+          description="Allow approved Synapse relay authorization policies to unlock locally blocked built-in tools."
+          checked={Boolean(config.security?.serverAuthorizationEnabled)}
+          disabled={saving === 'serverAuthorizationEnabled'}
+          onChange={(checked) =>
+            void updateSecurity('serverAuthorizationEnabled', checked)
+          }
         />
       </FieldGroup>
     </section>

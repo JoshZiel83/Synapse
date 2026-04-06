@@ -47,14 +47,16 @@ import {
   REUSE_SCOPES,
   RELAY_ACCESS_DENIAL_KINDS,
   RELAY_ACCESS_DENIAL_RESOLUTIONS,
+  RELAY_AUTHORIZATION_BROWSER_ACTIONS,
   RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES,
   RELAY_AUTHORIZATION_CAPABILITIES,
   RELAY_AUTHORIZATION_COMMAND_EXECUTORS,
   RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES,
+  RELAY_AUTHORIZATION_CUA_ACCESSES,
+  RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES,
   RELAY_AUTHORIZATION_GRANT_RETENTIONS,
   RELAY_AUTHORIZATION_GRANT_SCOPES,
   RELAY_AUTHORIZATION_GRANT_STATUSES,
-  RELAY_AUTHORIZATION_KINDS,
   RELAY_AUTHORIZATION_PRESETS,
   RELAY_AUTHORIZATION_REQUEST_MODES,
   SESSION_CHANNEL_INPUTS,
@@ -2963,9 +2965,6 @@ export type RelayAuthorizationGrantStatus =
 export type RelayAuthorizationCapability =
   typeof RELAY_AUTHORIZATION_CAPABILITIES[number];
 
-export type RelayAuthorizationKind =
-  typeof RELAY_AUTHORIZATION_KINDS[number];
-
 export type RelayAuthorizationBrowserScopeType =
   typeof RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES[number];
 
@@ -2975,31 +2974,64 @@ export type RelayAuthorizationCommandExecutor =
 export type RelayAuthorizationCommandMatchType =
   typeof RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES[number];
 
-export interface RelayAuthorizationGrantSpec {
-  kind: RelayAuthorizationKind;
-  pathPrefix?: string;
-  browserScopeType?: RelayAuthorizationBrowserScopeType;
-  browserOrigin?: string;
-  browserHost?: string;
-  browserRegistrableDomain?: string;
-  commandExecutor?: RelayAuthorizationCommandExecutor;
-  commandMatchType?: RelayAuthorizationCommandMatchType;
+export type RelayAuthorizationFilesystemAccess =
+  typeof RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES[number];
+
+export type RelayAuthorizationCUAAccess =
+  typeof RELAY_AUTHORIZATION_CUA_ACCESSES[number];
+
+export type RelayAuthorizationBrowserAction =
+  typeof RELAY_AUTHORIZATION_BROWSER_ACTIONS[number];
+
+export interface RelayAuthorizationFilesystemPolicy {
+  access: RelayAuthorizationFilesystemAccess;
+  pathPrefixes: string[];
+}
+
+export interface RelayAuthorizationCUAPolicy {
+  access: RelayAuthorizationCUAAccess;
+}
+
+export interface RelayAuthorizationBrowserPolicy {
+  action: RelayAuthorizationBrowserAction;
+  scopeType?: RelayAuthorizationBrowserScopeType;
+  origin?: string;
+  host?: string;
+  registrableDomain?: string;
+}
+
+export interface RelayAuthorizationCommandlinePolicy {
+  executor: RelayAuthorizationCommandExecutor;
+  commandMatchType: RelayAuthorizationCommandMatchType;
   commandText?: string;
+  workingDirectory?: string;
 }
 
-export interface RelayAuthorizationRequirement
-  extends RelayAuthorizationGrantSpec {
+export interface RelayAuthorizationRequestedAction {
+  capability: RelayAuthorizationCapability;
+  toolName: string;
+  summary: string;
+  detail?: string;
+  filesystem?: RelayAuthorizationFilesystemPolicy;
+  cua?: RelayAuthorizationCUAPolicy;
+  browser?: RelayAuthorizationBrowserPolicy;
+  commandline?: RelayAuthorizationCommandlinePolicy & {
+    commandText: string;
+  };
+}
+
+export interface RelayAuthorizationGrantSpec {
+  capability: RelayAuthorizationCapability;
+  filesystem?: RelayAuthorizationFilesystemPolicy;
+  cua?: RelayAuthorizationCUAPolicy;
+  browser?: RelayAuthorizationBrowserPolicy;
+  commandline?: RelayAuthorizationCommandlinePolicy;
+}
+
+export interface RelayAuthorizationGrantOption {
   id: string;
   summary: string;
   detail?: string;
-}
-
-export interface RelayAuthorizationApprovalOption {
-  id: string;
-  kind: RelayAuthorizationKind;
-  summary: string;
-  detail?: string;
-  coversRequirementIds: string[];
   grantSpec: RelayAuthorizationGrantSpec;
 }
 
@@ -3028,16 +3060,17 @@ export interface RelayAuthorizationGrantView
 export interface RelayAuthorizationInteractionSummary {
   requestedToolName: string;
   relayToolStableKey: string;
+  requestedAction: RelayAuthorizationRequestedAction;
   reason: string;
   deviceId: UUID;
   deviceDisplayName: string;
   relayCapabilityId: UUID;
   exposureId: UUID;
   exposureDisplayName: string;
-  requiredRequirements: RelayAuthorizationRequirement[];
-  approvalOptions: RelayAuthorizationApprovalOption[];
+  grantOptions: RelayAuthorizationGrantOption[];
+  availablePresets: RelayAuthorizationPreset[];
   approvedPreset?: RelayAuthorizationPreset;
-  approvedGrants?: RelayAuthorizationGrantSummary[];
+  approvedGrant?: RelayAuthorizationGrantSummary;
   requestMode: RelayAuthorizationRequestMode;
 }
 
@@ -4790,7 +4823,6 @@ export interface RelayDeviceRecord {
   description?: string;
   deviceType: string;
   platform?: string;
-  authorizationMode: "server_trust" | "client_local";
   publicKeyFingerprint: string;
   trustStatus: "pending" | "active" | "revoked" | "blocked";
   createdAt: string;

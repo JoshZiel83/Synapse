@@ -19,6 +19,10 @@ export interface NotificationSettings {
   backgroundEnabled?: boolean
 }
 
+export interface SecuritySettings {
+  serverAuthorizationEnabled?: boolean
+}
+
 export interface UpdateSettings {
   channel?: string
   lastCheckedAt?: string
@@ -138,6 +142,7 @@ export interface RelayConfig {
   relay?: RelaySettings
   startup?: StartupSettings
   notifications?: NotificationSettings
+  security?: SecuritySettings
   update?: UpdateSettings
   logLevel?: string
   syncSources?: SyncSourceConfig[]

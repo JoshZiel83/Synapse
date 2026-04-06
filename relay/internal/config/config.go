@@ -48,6 +48,10 @@ type NotificationConfig struct {
 	BackgroundEnabled bool `yaml:"background_enabled" json:"backgroundEnabled"`
 }
 
+type SecurityConfig struct {
+	ServerAuthorizationEnabled bool `yaml:"server_authorization_enabled" json:"serverAuthorizationEnabled"`
+}
+
 type UpdateConfig struct {
 	Channel          string `yaml:"channel" json:"channel"`
 	LastCheckedAt    string `yaml:"last_checked_at" json:"lastCheckedAt,omitempty"`
@@ -153,6 +157,7 @@ type Config struct {
 	Relay         RelayConfig        `yaml:"relay" json:"relay"`
 	Startup       StartupConfig      `yaml:"startup" json:"startup"`
 	Notifications NotificationConfig `yaml:"notifications" json:"notifications"`
+	Security      SecurityConfig     `yaml:"security" json:"security"`
 	Update        UpdateConfig       `yaml:"update" json:"update"`
 	LogLevel      string             `yaml:"log_level" json:"logLevel"`
 	SyncSources   []SyncSourceConfig `yaml:"sync_sources" json:"syncSources"`
@@ -196,6 +201,9 @@ func Clone(cfg *Config) *Config {
 		},
 		Notifications: NotificationConfig{
 			BackgroundEnabled: cfg.Notifications.BackgroundEnabled,
+		},
+		Security: SecurityConfig{
+			ServerAuthorizationEnabled: cfg.Security.ServerAuthorizationEnabled,
 		},
 		Update: UpdateConfig{
 			Channel:          cfg.Update.Channel,

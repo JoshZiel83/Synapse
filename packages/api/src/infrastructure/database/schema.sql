@@ -141,7 +141,6 @@ CREATE TYPE plugin_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'fol
 CREATE TYPE relay_devices_trust_status AS ENUM ('pending', 'active', 'revoked', 'blocked');
 CREATE TYPE relay_devices_automation_lifecycle_state AS ENUM ('online', 'offline');
 CREATE TYPE relay_devices_device_type AS ENUM ('desktop_computer', 'laptop_computer', 'mobile_phone', 'tablet', 'server', 'virtual_machine', 'custom');
-CREATE TYPE relay_authorization_mode AS ENUM ('server_trust', 'client_local');
 CREATE TYPE relay_pairing_sessions_status AS ENUM ('pending', 'confirmed', 'consumed', 'expired', 'cancelled', 'rejected');
 CREATE TYPE relay_device_sessions_status AS ENUM ('connecting', 'active', 'closing', 'closed', 'rejected');
 CREATE TYPE relay_device_sessions_transport AS ENUM ('websocket');
@@ -162,24 +161,6 @@ CREATE TYPE relay_authorization_request_mode AS ENUM ('background', 'blocking');
 CREATE TYPE relay_authorization_grants_scope AS ENUM ('once', 'actor', 'conversation', 'workspace');
 CREATE TYPE relay_authorization_grants_retention AS ENUM ('consume_once', 'until_revoked');
 CREATE TYPE relay_authorization_grants_status AS ENUM ('active', 'consumed', 'revoked', 'superseded');
-CREATE TYPE relay_authorization_grants_kind AS ENUM (
-  'filesystem.read',
-  'filesystem.write',
-  'filesystem.directory',
-  'cua.tool',
-  'cua.read',
-  'cua.write',
-  'browser.tool',
-  'browser.read',
-  'browser.write',
-  'browser.site',
-  'commandline.tool',
-  'commandline.directory',
-  'commandline.command'
-);
-CREATE TYPE relay_authorization_grants_browser_scope_type AS ENUM ('host', 'domain', 'origin');
-CREATE TYPE relay_authorization_grants_command_executor AS ENUM ('bash');
-CREATE TYPE relay_authorization_grants_command_match_type AS ENUM ('exact', 'prefix');
 
 -- ============ Users ============
 CREATE TABLE users (
@@ -2820,7 +2801,6 @@ CREATE TABLE relay_devices (
   description TEXT,
   device_type relay_devices_device_type NOT NULL DEFAULT 'desktop_computer',
   platform VARCHAR(40),
-  authorization_mode relay_authorization_mode NOT NULL DEFAULT 'server_trust',
   conversation_type_mask_override INT
     CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
   public_key TEXT NOT NULL,
@@ -2850,7 +2830,6 @@ CREATE TABLE relay_pairing_sessions (
   requested_title VARCHAR(255),
   requested_description TEXT,
   requested_device_type relay_devices_device_type,
-  requested_authorization_mode relay_authorization_mode,
   pairing_code VARCHAR(32) NOT NULL UNIQUE,
   verification_uri TEXT NOT NULL,
   verification_uri_complete TEXT,
@@ -2867,7 +2846,6 @@ CREATE TABLE relay_device_sessions (
   device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
   protocol_version INT NOT NULL DEFAULT 2,
   client_version VARCHAR(64),
-  authorization_mode relay_authorization_mode NOT NULL DEFAULT 'server_trust',
   status relay_device_sessions_status NOT NULL DEFAULT 'connecting',
   transport relay_device_sessions_transport NOT NULL DEFAULT 'websocket',
   remote_addr TEXT,
@@ -3174,8 +3152,9 @@ CREATE TABLE interaction_relay_authorization_requests (
   source_runtime_session_id TEXT,
   source_retry_nonce TEXT,
   source_request_args JSONB NOT NULL DEFAULT '{}',
-  required_requirements JSONB NOT NULL DEFAULT '[]',
-  approval_options JSONB NOT NULL DEFAULT '[]',
+  requested_action JSONB NOT NULL DEFAULT '{}',
+  grant_options JSONB NOT NULL DEFAULT '[]',
+  available_presets JSONB NOT NULL DEFAULT '[]',
   resolution_payload JSONB NOT NULL DEFAULT '{}',
   dedupe_key TEXT NOT NULL
 );
@@ -3321,15 +3300,7 @@ CREATE TABLE relay_authorization_grants (
   scope relay_authorization_grants_scope NOT NULL,
   retention relay_authorization_grants_retention NOT NULL,
   status relay_authorization_grants_status NOT NULL DEFAULT 'active',
-  kind relay_authorization_grants_kind NOT NULL,
-  path_prefix TEXT,
-  browser_scope_type relay_authorization_grants_browser_scope_type,
-  browser_origin TEXT,
-  browser_host TEXT,
-  browser_registrable_domain TEXT,
-  command_executor relay_authorization_grants_command_executor,
-  command_match_type relay_authorization_grants_command_match_type,
-  command_text TEXT,
+  policy JSONB NOT NULL DEFAULT '{}',
   source_retry_nonce TEXT,
   source_runtime_session_id TEXT,
   source_request_args JSONB NOT NULL DEFAULT '{}',
@@ -3351,7 +3322,7 @@ CREATE INDEX idx_interaction_relay_authorization_requests_device
 CREATE INDEX idx_interaction_relay_authorization_requests_dedupe
   ON interaction_relay_authorization_requests(dedupe_key);
 CREATE INDEX idx_relay_authorization_grants_exposure
-  ON relay_authorization_grants(relay_capability_id, status, scope, kind, created_at DESC);
+  ON relay_authorization_grants(relay_capability_id, status, scope, created_at DESC);
 CREATE INDEX idx_relay_authorization_grants_actor
   ON relay_authorization_grants(actor_id, relay_capability_id, status, created_at DESC);
 CREATE INDEX idx_relay_authorization_grants_conversation

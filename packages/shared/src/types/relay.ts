@@ -7,7 +7,6 @@ import {
   RELAY_EXPOSURE_TRANSPORTS,
   RELAY_OPERATION_STATUSES,
   RELAY_PAIRING_STATUSES,
-  RELAY_AUTHORIZATION_MODES,
   RELAY_SESSION_STATUSES,
   RELAY_SYNC_MODES,
   RELAY_SYNC_SOURCE_KINDS,
@@ -19,7 +18,6 @@ export type RelayProtocolVersion = 2;
 
 export type RelayDeviceTrustStatus = typeof RELAY_DEVICE_TRUST_STATUSES[number];
 export type RelayDeviceType = typeof RELAY_DEVICE_TYPES[number];
-export type RelayAuthorizationMode = typeof RELAY_AUTHORIZATION_MODES[number];
 
 export type RelayPairingStatus = typeof RELAY_PAIRING_STATUSES[number];
 
@@ -180,7 +178,6 @@ export interface RelayDeviceSummaryView {
   description?: string;
   deviceType: RelayDeviceType;
   platform?: string;
-  authorizationMode: RelayAuthorizationMode;
   publicKeyFingerprint: string;
   trustStatus: RelayDeviceTrustStatus;
   isConnected: boolean;

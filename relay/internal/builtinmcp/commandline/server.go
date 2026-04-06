@@ -68,23 +68,54 @@ func (s *Server) ListTools() ([]core.Tool, error) {
 }
 
 func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
-	if !s.isAuthorized(runtimeauth.HasServerAuthorization(ctx)) {
-		return disabledResult(toolName), nil
-	}
 	switch toolName {
 	case "bash":
+		command, err := stringArg(args, "command", true)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		cwd, err := s.resolveWorkingDir(args)
+		if err != nil {
+			return errorResult(err.Error()), nil
+		}
+		if !s.isAuthorized(ctx, command, cwd) {
+			return disabledResult(toolName, s.denialResolution()), nil
+		}
 		return s.callBash(ctx, args), nil
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", toolName)), nil
 	}
 }
 
-func (s *Server) isAuthorized(serverAuthorized bool) bool {
-	return s.cfg.Enabled || serverAuthorized
+func (s *Server) isAuthorized(ctx context.Context, command, cwd string) bool {
+	if s.cfg.Enabled {
+		return true
+	}
+	if !s.cfg.AllowServerAuthorization {
+		return false
+	}
+	return runtimeauth.MatchesCommandlinePolicy(
+		runtimeauth.PoliciesForCapability(ctx, "commandline"),
+		"bash",
+		command,
+		cwd,
+	)
 }
 
-func disabledResult(toolName string) core.CallResult {
-	message := "This built-in commandline server is currently blocked by the relay client's local policy. Synapse can continue after the matching relay authorization is approved."
+func (s *Server) denialResolution() string {
+	if s.cfg.AllowServerAuthorization {
+		return core.RelayAccessDenialResolutionServerGrant
+	}
+	return core.RelayAccessDenialResolutionLocalSetting
+}
+
+func disabledResult(toolName string, resolution string) core.CallResult {
+	message := "This built-in commandline server is currently blocked by the relay client's local policy."
+	if resolution == core.RelayAccessDenialResolutionServerGrant {
+		message += " Synapse can continue after the matching relay authorization is approved."
+	} else {
+		message += " This relay client is not configured to trust server-issued relay authorizations."
+	}
 	return core.CallResult{
 		Content: []interface{}{core.Text(message)},
 		StructuredContent: core.WithRelayAccessDenial(map[string]interface{}{
@@ -92,7 +123,7 @@ func disabledResult(toolName string) core.CallResult {
 			"tool":       toolName,
 			"capability": "commandline",
 			"message":    message,
-		}, core.RelayAccessDenialKindPermissionDenied, core.RelayAccessDenialResolutionServerGrant),
+		}, core.RelayAccessDenialKindPermissionDenied, resolution),
 		IsError: true,
 	}
 }

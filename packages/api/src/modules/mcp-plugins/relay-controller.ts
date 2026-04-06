@@ -66,7 +66,6 @@ const updateRelayDeviceSchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),
   description: z.string().trim().max(4000).nullable().optional(),
   deviceType: z.string().trim().min(1).max(64).optional(),
-  authorizationMode: z.string().trim().min(1).max(64).optional(),
   conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
 }).refine((value) => Object.keys(value).length > 0, {
   message: 'At least one relay device field must be updated',
@@ -101,7 +100,6 @@ const claimPairingSchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),
   description: z.string().trim().max(4000).optional(),
   deviceType: z.string().trim().min(1).max(64).optional(),
-  authorizationMode: z.string().trim().min(1).max(64).optional(),
   platform: z.string().trim().min(1).max(40).optional(),
   publicKey: z.string().trim().min(1),
   publicKeyFingerprint: z.string().trim().min(8).max(128),
@@ -141,7 +139,6 @@ type RelayDeviceSummaryRow = {
   description: string | null;
   device_type: string;
   platform: string | null;
-  authorization_mode: string;
   conversation_type_mask_override: number | null;
   public_key_fingerprint: string;
   trust_status: RelayDeviceSummaryView['trustStatus'];
@@ -169,7 +166,6 @@ type RelayPairingRow = {
   requested_title: string | null;
   requested_description: string | null;
   requested_device_type: string | null;
-  requested_authorization_mode: string | null;
   pairing_code: string;
   verification_uri: string;
   verification_uri_complete: string | null;
@@ -339,8 +335,6 @@ function mapRelayDeviceSummary(
     description: row.description || undefined,
     deviceType: row.device_type as RelayDeviceSummaryView['deviceType'],
     platform: row.platform || undefined,
-    authorizationMode:
-      row.authorization_mode as RelayDeviceSummaryView['authorizationMode'],
     publicKeyFingerprint: row.public_key_fingerprint,
     trustStatus: row.trust_status,
     isConnected: Boolean(row.is_connected),
@@ -713,7 +707,6 @@ async function listRelayDeviceSummaries(workspaceId: string) {
         d.description,
         d.device_type,
         d.platform,
-        d.authorization_mode,
         d.conversation_type_mask_override,
         d.public_key_fingerprint,
         d.trust_status,
@@ -803,7 +796,6 @@ async function getRelayDeviceSummary(workspaceId: string, deviceId: string) {
         d.description,
         d.device_type,
         d.platform,
-        d.authorization_mode,
         d.conversation_type_mask_override,
         d.public_key_fingerprint,
         d.trust_status,
@@ -916,15 +908,11 @@ function mapRelayAuthorizationGrantView(
 ): RelayAuthorizationGrantView {
   return {
     id: record.id,
-    kind: record.kind,
-    pathPrefix: record.pathPrefix,
-    browserScopeType: record.browserScopeType,
-    browserOrigin: record.browserOrigin,
-    browserHost: record.browserHost,
-    browserRegistrableDomain: record.browserRegistrableDomain,
-    commandExecutor: record.commandExecutor,
-    commandMatchType: record.commandMatchType,
-    commandText: record.commandText,
+    capability: record.capability,
+    filesystem: record.filesystem,
+    cua: record.cua,
+    browser: record.browser,
+    commandline: record.commandline,
     workspaceId: record.workspaceId,
     deviceId: record.relayDeviceId,
     relayCapabilityId: record.relayCapabilityId,
@@ -1245,12 +1233,11 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
          description,
          device_type,
          platform,
-         authorization_mode,
          public_key,
          public_key_fingerprint,
          trust_status
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active')
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active')
        RETURNING id, workspace_id, title`,
       [
         pairing.workspace_id,
@@ -1259,9 +1246,6 @@ async function claimRelayPairingSession(input: z.infer<typeof claimPairingSchema
         input.description || pairing.requested_description || null,
         input.deviceType || pairing.requested_device_type || 'desktop_computer',
         input.platform || null,
-        input.authorizationMode ||
-          pairing.requested_authorization_mode ||
-          'server_trust',
         input.publicKey,
         computedFingerprint,
       ],
@@ -1672,7 +1656,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
       const hasTitle = 'title' in body;
       const hasDescription = 'description' in body;
       const hasDeviceType = 'deviceType' in body;
-      const hasAuthorizationMode = 'authorizationMode' in body;
       const hasConversationTypeMaskOverride =
         'conversationTypeMaskOverride' in body;
       if (hasConversationTypeMaskOverride) {
@@ -1697,9 +1680,8 @@ export function registerRelayRoutes(app: FastifyInstance) {
          SET title = CASE WHEN $3 THEN $4 ELSE title END,
              description = CASE WHEN $5 THEN $6 ELSE description END,
              device_type = CASE WHEN $7 THEN $8 ELSE device_type END,
-             authorization_mode = CASE WHEN $9 THEN $10 ELSE authorization_mode END,
              conversation_type_mask_override = CASE
-               WHEN $11 THEN $12
+               WHEN $9 THEN $10
                ELSE conversation_type_mask_override
              END,
              updated_at = NOW()
@@ -1715,8 +1697,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
           body.description ?? null,
           hasDeviceType,
           body.deviceType ?? null,
-          hasAuthorizationMode,
-          body.authorizationMode ?? null,
           hasConversationTypeMaskOverride,
           body.conversationTypeMaskOverride ?? null,
         ],
@@ -1747,7 +1727,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
             hasTitle ? 'title' : null,
             hasDescription ? 'description' : null,
             hasDeviceType ? 'deviceType' : null,
-            hasAuthorizationMode ? 'authorizationMode' : null,
             hasConversationTypeMaskOverride
               ? 'conversationTypeMaskOverride'
               : null,
@@ -1809,7 +1788,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
              updated_at = NOW()
          WHERE id = $1
            AND workspace_id = $2
-         RETURNING
+        RETURNING
            id,
            workspace_id,
            owner_workspace_member_id,
@@ -1817,7 +1796,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
            description,
            device_type,
            platform,
-           authorization_mode,
+           conversation_type_mask_override,
            public_key_fingerprint,
            trust_status,
            EXISTS(

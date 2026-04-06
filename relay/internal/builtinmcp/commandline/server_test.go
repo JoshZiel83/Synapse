@@ -150,8 +150,8 @@ func TestDisabledCommandlineRequestsApprovalWithoutServerAuthorization(t *testin
 	if denial["kind"] != "permission_denied" {
 		t.Fatalf("expected permission_denied kind, got %#v", denial["kind"])
 	}
-	if denial["resolution"] != "server_grant" {
-		t.Fatalf("expected server_grant resolution, got %#v", denial["resolution"])
+	if denial["resolution"] != "local_setting" {
+		t.Fatalf("expected local_setting resolution, got %#v", denial["resolution"])
 	}
 }
 
@@ -162,8 +162,9 @@ func TestServerAuthorizationBypassesDisabledCommandline(t *testing.T) {
 
 	server := &Server{
 		cfg: Config{
-			Enabled:    false,
-			MaxTimeout: 5 * time.Second,
+			Enabled:                  false,
+			AllowServerAuthorization: true,
+			MaxTimeout:               5 * time.Second,
 		},
 	}
 
@@ -171,6 +172,16 @@ func TestServerAuthorizationBypassesDisabledCommandline(t *testing.T) {
 		context.Background(),
 		runtimeauth.RuntimeAuthorization{
 			GrantIDs: []string{"grant-cmd-1"},
+			GrantSpecs: []map[string]interface{}{
+				{
+					"capability": "commandline",
+					"commandline": map[string]interface{}{
+						"executor":         "bash",
+						"commandMatchType": "exact",
+						"commandText":      "printf hello",
+					},
+				},
+			},
 		},
 	)
 

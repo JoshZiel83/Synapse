@@ -63,7 +63,7 @@ type pendingServerEntry struct {
 	nextRetryAt time.Time
 }
 
-type serverFactory func(config.ServerConfig) (Server, error)
+type serverFactory func(config.ServerConfig, config.SecurityConfig) (Server, error)
 
 type serverAttemptError struct {
 	phase     string
@@ -88,6 +88,7 @@ type metadataProvider interface {
 
 type Manager struct {
 	configs   []config.ServerConfig
+	security  config.SecurityConfig
 	servers   []serverEntry
 	pending   map[string]*pendingServerEntry
 	newServer serverFactory
@@ -98,9 +99,10 @@ type Manager struct {
 	OnEvent func(evtType string, msg string, data map[string]interface{})
 }
 
-func NewManager(configs []config.ServerConfig) *Manager {
+func NewManager(configs []config.ServerConfig, security config.SecurityConfig) *Manager {
 	return &Manager{
 		configs:   configs,
+		security:  security,
 		pending:   make(map[string]*pendingServerEntry),
 		newServer: defaultServerFactory,
 		hints:     make(chan struct{}, 1),
@@ -129,14 +131,17 @@ func shouldInitializeServer(cfg config.ServerConfig) bool {
 	}
 }
 
-func defaultServerFactory(cfg config.ServerConfig) (Server, error) {
+func defaultServerFactory(
+	cfg config.ServerConfig,
+	security config.SecurityConfig,
+) (Server, error) {
 	switch cfg.Transport {
 	case "stdio":
 		return NewStdioServer(cfg.Command, cfg.Args, cfg.Env), nil
 	case "http":
 		return NewHTTPServer(cfg.Endpoint), nil
 	case "builtin":
-		return newBuiltinServer(cfg)
+		return newBuiltinServer(cfg, security)
 	default:
 		return nil, fmt.Errorf("unsupported transport %q", cfg.Transport)
 	}
@@ -252,7 +257,7 @@ func (m *Manager) attemptServerStart(ctx context.Context, cfg config.ServerConfi
 		"transport": cfg.Transport,
 	})
 
-	srv, err := m.newServer(cfg)
+	srv, err := m.newServer(cfg, m.security)
 	if err != nil {
 		return nil, &serverAttemptError{
 			phase:     "builtin init",

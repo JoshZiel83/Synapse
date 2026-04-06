@@ -330,7 +330,9 @@ export default function App() {
             {view === 'settings' ? (
               <SettingsPanel
                 config={config}
-                onSaveDesktopSettings={(startup, notifications) => actions.saveDesktopPreferences(startup, notifications)}
+                onSaveDesktopSettings={(startup, notifications, security) =>
+                  actions.saveDesktopPreferences(startup, notifications, security)
+                }
               />
             ) : null}
           </section>

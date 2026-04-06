@@ -221,21 +221,11 @@ export type RelationshipRequestStatus = "approved" | "pending" | "rejected";
 
 export type RelationshipTargetType = "actor" | "member";
 
-export type RelayAuthorizationGrantsBrowserScopeType = "domain" | "host" | "origin";
-
-export type RelayAuthorizationGrantsCommandExecutor = "bash";
-
-export type RelayAuthorizationGrantsCommandMatchType = "exact" | "prefix";
-
-export type RelayAuthorizationGrantsKind = "browser.read" | "browser.site" | "browser.tool" | "browser.write" | "commandline.command" | "commandline.directory" | "commandline.tool" | "cua.read" | "cua.tool" | "cua.write" | "filesystem.directory" | "filesystem.read" | "filesystem.write";
-
 export type RelayAuthorizationGrantsRetention = "consume_once" | "until_revoked";
 
 export type RelayAuthorizationGrantsScope = "actor" | "conversation" | "once" | "workspace";
 
 export type RelayAuthorizationGrantsStatus = "active" | "consumed" | "revoked" | "superseded";
-
-export type RelayAuthorizationMode = "client_local" | "server_trust";
 
 export type RelayAuthorizationRequestMode = "background" | "blocking";
 
@@ -1116,8 +1106,9 @@ export interface InteractionPlanApprovalRequests {
 }
 
 export interface InteractionRelayAuthorizationRequests {
-  approval_options: Generated<Json>;
+  available_presets: Generated<Json>;
   dedupe_key: string;
+  grant_options: Generated<Json>;
   interaction_id: string;
   reason: Generated<string>;
   relay_capability_id: string;
@@ -1125,8 +1116,8 @@ export interface InteractionRelayAuthorizationRequests {
   relay_exposure_id: string;
   relay_tool_stable_key: string;
   request_mode: RelayAuthorizationRequestMode;
+  requested_action: Generated<Json>;
   requested_tool_name: string;
-  required_requirements: Generated<Json>;
   resolution_payload: Generated<Json>;
   source_request_args: Generated<Json>;
   source_retry_nonce: string | null;
@@ -1506,20 +1497,12 @@ export interface RealtimeEventOutbox {
 
 export interface RelayAuthorizationGrants {
   actor_id: string | null;
-  browser_host: string | null;
-  browser_origin: string | null;
-  browser_registrable_domain: string | null;
-  browser_scope_type: RelayAuthorizationGrantsBrowserScopeType | null;
-  command_executor: RelayAuthorizationGrantsCommandExecutor | null;
-  command_match_type: RelayAuthorizationGrantsCommandMatchType | null;
-  command_text: string | null;
   consumed_at: Timestamp | null;
   conversation_id: string | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
   id: Generated<string>;
-  kind: RelayAuthorizationGrantsKind;
-  path_prefix: string | null;
+  policy: Generated<Json>;
   relay_capability_id: string;
   relay_device_id: string;
   relay_exposure_id: string;
@@ -1560,7 +1543,6 @@ export interface RelayCatalogRevisions {
 }
 
 export interface RelayDevices {
-  authorization_mode: Generated<RelayAuthorizationMode>;
   automation_lifecycle_event_at: Timestamp | null;
   automation_lifecycle_grace_until: Timestamp | null;
   automation_lifecycle_state: RelayDevicesAutomationLifecycleState | null;
@@ -1583,7 +1565,6 @@ export interface RelayDevices {
 }
 
 export interface RelayDeviceSessions {
-  authorization_mode: Generated<RelayAuthorizationMode>;
   client_version: string | null;
   close_reason: string | null;
   created_at: Generated<Timestamp | null>;
@@ -1679,7 +1660,6 @@ export interface RelayPairingSessions {
   expires_at: Timestamp;
   id: Generated<string>;
   pairing_code: string;
-  requested_authorization_mode: RelayAuthorizationMode | null;
   requested_by_workspace_member_id: string | null;
   requested_description: string | null;
   requested_device_type: RelayDevicesDeviceType | null;

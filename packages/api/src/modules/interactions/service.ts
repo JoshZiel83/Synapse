@@ -23,11 +23,12 @@ import type {
   InteractionRequestSummary,
   PlanApprovalDecision,
   PlanChecklistStep,
-  RelayAuthorizationApprovalOption,
+  RelayAuthorizationGrantOption,
+  RelayAuthorizationGrantSpec,
   RelayAuthorizationInteractionSummary,
   RelayAuthorizationPreset,
   RelayAuthorizationRequestMode,
-  RelayAuthorizationRequirement,
+  RelayAuthorizationRequestedAction,
   SessionCollaborationState,
 } from "@synapse/shared/types";
 import {
@@ -56,7 +57,7 @@ import {
 import { getFileUrlById } from "../files/service.js";
 import { sql } from "kysely";
 import {
-  createRelayAuthorizationGrants,
+  createRelayAuthorizationGrant,
   type RelayAuthorizationGrantRecord,
 } from "../relay-authorizations/service.js";
 import {
@@ -77,8 +78,9 @@ type RawInteractionRow = {
   requested_tool_name: string | null;
   reason: string | null;
   request_mode: string | null;
-  required_requirements: unknown;
-  approval_options: unknown;
+  requested_action: unknown;
+  grant_options: unknown;
+  available_presets: unknown;
   source_request_args: unknown;
   source_runtime_session_id: string | null;
   source_retry_nonce: string | null;
@@ -170,8 +172,9 @@ export interface CreateRelayAuthorizationInteractionParams {
   runtimeSessionId: string;
   relayToolStableKey: string;
   reason: string;
-  requiredRequirements: RelayAuthorizationRequirement[];
-  approvalOptions: RelayAuthorizationApprovalOption[];
+  requestedAction: RelayAuthorizationRequestedAction;
+  grantOptions: RelayAuthorizationGrantOption[];
+  availablePresets: RelayAuthorizationPreset[];
   requestMode: RelayAuthorizationRequestMode;
   sourceRetryNonce?: string;
   sourceRequestArgs?: Record<string, unknown>;
@@ -185,7 +188,7 @@ export interface ResolveInteractionRequestParams {
   answers?: InteractionInputAnswer[];
   decision?: InteractionDecision | PlanApprovalDecision;
   preset?: RelayAuthorizationPreset;
-  selectedOptionIds?: string[];
+  selectedGrantOptionId?: string;
   note?: string;
 }
 
@@ -204,7 +207,9 @@ export interface FindOpenRelayAuthorizationInteractionParams {
   relayExposureId: string;
   requestedToolName: string;
   relayToolStableKey: string;
-  requiredRequirements: RelayAuthorizationRequirement[];
+  requestedAction: RelayAuthorizationRequestedAction;
+  grantOptions: RelayAuthorizationGrantOption[];
+  availablePresets: RelayAuthorizationPreset[];
   requestMode: RelayAuthorizationRequestMode;
 }
 
@@ -324,7 +329,9 @@ function buildRelayAuthorizationDedupeKey(params: {
   requestedToolName: string;
   relayToolStableKey: string;
   requestMode: RelayAuthorizationRequestMode;
-  requiredRequirements: RelayAuthorizationRequirement[];
+  requestedAction: RelayAuthorizationRequestedAction;
+  grantOptions: RelayAuthorizationGrantOption[];
+  availablePresets: RelayAuthorizationPreset[];
 }) {
   return stableJsonStringify({
     relayDeviceId: params.relayDeviceId,
@@ -333,7 +340,9 @@ function buildRelayAuthorizationDedupeKey(params: {
     requestedToolName: params.requestedToolName,
     relayToolStableKey: params.relayToolStableKey,
     requestMode: params.requestMode,
-    requiredRequirements: params.requiredRequirements,
+    requestedAction: params.requestedAction,
+    grantOptions: params.grantOptions,
+    availablePresets: params.availablePresets,
   });
 }
 
@@ -806,13 +815,17 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
         : undefined,
     };
   } else {
-    const requiredRequirements = parseJsonArray<RelayAuthorizationRequirement>(
-      row.required_requirements,
-      `Interaction ${row.id} required_requirements`,
+    const requestedAction = requireJsonObject(
+      row.requested_action,
+      `Interaction ${row.id} requested_action`,
+    ) as unknown as RelayAuthorizationRequestedAction;
+    const grantOptions = parseJsonArray<RelayAuthorizationGrantOption>(
+      row.grant_options,
+      `Interaction ${row.id} grant_options`,
     );
-    const approvalOptions = parseJsonArray<RelayAuthorizationApprovalOption>(
-      row.approval_options,
-      `Interaction ${row.id} approval_options`,
+    const availablePresets = parseJsonArray<RelayAuthorizationPreset>(
+      row.available_presets,
+      `Interaction ${row.id} available_presets`,
     );
     relayAuthorization = {
       requestedToolName: requireTrimmedString(
@@ -823,6 +836,7 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
         row.relay_tool_stable_key,
         `Interaction ${row.id} relay_tool_stable_key`,
       ),
+      requestedAction,
       reason: requireTrimmedString(
         row.reason,
         `Interaction ${row.id} relay_authorization.reason`,
@@ -847,15 +861,17 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
         row.exposure_display_name,
         `Interaction ${row.id} exposure_display_name`,
       ),
-      requiredRequirements,
-      approvalOptions,
+      grantOptions,
+      availablePresets,
       approvedPreset:
         typeof resolutionPayload.approvedPreset === "string"
           ? (resolutionPayload.approvedPreset as RelayAuthorizationPreset)
           : undefined,
-      approvedGrants:
-        Array.isArray(resolutionPayload.approvedGrants)
-          ? (resolutionPayload.approvedGrants as RelayAuthorizationInteractionSummary["approvedGrants"])
+      approvedGrant:
+        resolutionPayload.approvedGrant &&
+        typeof resolutionPayload.approvedGrant === "object" &&
+        !Array.isArray(resolutionPayload.approvedGrant)
+          ? (resolutionPayload.approvedGrant as RelayAuthorizationInteractionSummary["approvedGrant"])
           : undefined,
       requestMode:
         row.request_mode === "blocking" ||
@@ -905,8 +921,9 @@ async function getInteractionRowById(
             auth.requested_tool_name AS requested_tool_name,
             auth.reason AS reason,
             auth.request_mode AS request_mode,
-            auth.required_requirements AS required_requirements,
-            auth.approval_options AS approval_options,
+            auth.requested_action AS requested_action,
+            auth.grant_options AS grant_options,
+            auth.available_presets AS available_presets,
             auth.source_request_args AS source_request_args,
             auth.source_runtime_session_id AS source_runtime_session_id,
             auth.source_retry_nonce AS source_retry_nonce,
@@ -1334,8 +1351,9 @@ async function insertRelayAuthorizationInteractionDetails(
     sourceRuntimeSessionId?: string;
     sourceRetryNonce?: string;
     sourceRequestArgs: Record<string, unknown>;
-    requiredRequirements: RelayAuthorizationRequirement[];
-    approvalOptions: RelayAuthorizationApprovalOption[];
+    requestedAction: RelayAuthorizationRequestedAction;
+    grantOptions: RelayAuthorizationGrantOption[];
+    availablePresets: RelayAuthorizationPreset[];
     dedupeKey: string;
   },
 ) {
@@ -1354,10 +1372,12 @@ async function insertRelayAuthorizationInteractionDetails(
       source_retry_nonce: params.sourceRetryNonce || null,
       source_request_args:
         jsonbValue(params.sourceRequestArgs) as unknown as TableInsert<"interaction_relay_authorization_requests">["source_request_args"],
-      required_requirements:
-        jsonbValue(params.requiredRequirements) as unknown as TableInsert<"interaction_relay_authorization_requests">["required_requirements"],
-      approval_options:
-        jsonbValue(params.approvalOptions) as unknown as TableInsert<"interaction_relay_authorization_requests">["approval_options"],
+      requested_action:
+        jsonbValue(params.requestedAction) as unknown as TableInsert<"interaction_relay_authorization_requests">["requested_action"],
+      grant_options:
+        jsonbValue(params.grantOptions) as unknown as TableInsert<"interaction_relay_authorization_requests">["grant_options"],
+      available_presets:
+        jsonbValue(params.availablePresets) as unknown as TableInsert<"interaction_relay_authorization_requests">["available_presets"],
       resolution_payload:
         jsonbValue({}) as unknown as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
       dedupe_key: params.dedupeKey,
@@ -1622,8 +1642,9 @@ export async function createRelayAuthorizationInteractionRequest(
       sourceRuntimeSessionId: params.runtimeSessionId,
       sourceRetryNonce: params.sourceRetryNonce,
       sourceRequestArgs: params.sourceRequestArgs || {},
-      requiredRequirements: params.requiredRequirements,
-      approvalOptions: params.approvalOptions,
+      requestedAction: params.requestedAction,
+      grantOptions: params.grantOptions,
+      availablePresets: params.availablePresets,
       dedupeKey: buildRelayAuthorizationDedupeKey({
         relayDeviceId: params.relayDeviceId,
         relayCapabilityId: params.relayCapabilityId,
@@ -1631,7 +1652,9 @@ export async function createRelayAuthorizationInteractionRequest(
         requestedToolName: params.requestedToolName,
         relayToolStableKey: params.relayToolStableKey,
         requestMode: params.requestMode,
-        requiredRequirements: params.requiredRequirements,
+        requestedAction: params.requestedAction,
+        grantOptions: params.grantOptions,
+        availablePresets: params.availablePresets,
       }),
     });
 
@@ -1676,7 +1699,9 @@ export async function findOpenRelayAuthorizationInteraction(
     requestedToolName: params.requestedToolName,
     relayToolStableKey: params.relayToolStableKey,
     requestMode: params.requestMode,
-    requiredRequirements: params.requiredRequirements,
+    requestedAction: params.requestedAction,
+    grantOptions: params.grantOptions,
+    availablePresets: params.availablePresets,
   });
   const row = await db
     .selectFrom("interaction_requests as ir")
@@ -2103,7 +2128,7 @@ export async function resolveInteractionRequest(
   const promptPayload = parseJsonObject(existing.prompt_payload);
   let nextStatus: InteractionRequestStatus;
   let resolutionPayload: Record<string, unknown>;
-  let createdGrants: RelayAuthorizationGrantRecord[] | undefined;
+  let createdGrant: RelayAuthorizationGrantRecord | undefined;
 
   if (existing.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
     const questions = parseUserInputQuestionDefinitions(promptPayload);
@@ -2144,11 +2169,11 @@ export async function resolveInteractionRequest(
         params.decision === "approve"
           ? params.preset
           : undefined,
-      approvedOptionIds:
+      selectedGrantOptionId:
         params.decision === "approve" &&
-        Array.isArray(params.selectedOptionIds) &&
-        params.selectedOptionIds.length > 0
-          ? Array.from(new Set(params.selectedOptionIds.map((id) => String(id).trim()).filter(Boolean)))
+        typeof params.selectedGrantOptionId === "string" &&
+        params.selectedGrantOptionId.trim().length > 0
+          ? params.selectedGrantOptionId.trim()
           : undefined,
       note: params.note?.trim() || undefined,
     };
@@ -2253,45 +2278,37 @@ export async function resolveInteractionRequest(
       existing.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
       params.decision === "approve"
     ) {
-      const selectedOptionIds = Array.from(
-        new Set(
-          (Array.isArray(params.selectedOptionIds) ? params.selectedOptionIds : [])
-            .map((value) => String(value).trim())
-            .filter(Boolean),
-        ),
-      );
-      if (selectedOptionIds.length === 0) {
-        throw new Error("selectedOptionIds is required when approving relay authorization");
+      const selectedGrantOptionId =
+        typeof params.selectedGrantOptionId === "string"
+          ? params.selectedGrantOptionId.trim()
+          : "";
+      if (!selectedGrantOptionId) {
+        throw new Error("selectedGrantOptionId is required when approving relay authorization");
       }
 
-      const requiredRequirements = parseJsonArray<RelayAuthorizationRequirement>(
-        existing.required_requirements,
-        `Interaction ${existing.id} required_requirements`,
+      const grantOptions = parseJsonArray<RelayAuthorizationGrantOption>(
+        existing.grant_options,
+        `Interaction ${existing.id} grant_options`,
       );
-      const approvalOptions = parseJsonArray<RelayAuthorizationApprovalOption>(
-        existing.approval_options,
-        `Interaction ${existing.id} approval_options`,
+      const availablePresets = parseJsonArray<RelayAuthorizationPreset>(
+        existing.available_presets,
+        `Interaction ${existing.id} available_presets`,
       );
-      const selectedOptions = selectedOptionIds.map((optionId) => {
-        const option = approvalOptions.find((candidate) => candidate.id === optionId);
-        if (!option) {
-          throw new Error(`Unknown relay authorization option "${optionId}"`);
-        }
-        return option;
-      });
-      const coveredRequirementIds = new Set(
-        selectedOptions.flatMap((option) => option.coversRequirementIds || []),
-      );
-      const missingRequirementIds = requiredRequirements
-        .map((requirement) => requirement.id)
-        .filter((requirementId) => !coveredRequirementIds.has(requirementId));
-      if (missingRequirementIds.length > 0) {
+      if (!availablePresets.includes(params.preset || "once")) {
         throw new Error(
-          `selectedOptionIds do not cover required relay authorization requirements: ${missingRequirementIds.join(", ")}`,
+          `preset ${(params.preset || "once")} is not allowed for this relay authorization request`,
+        );
+      }
+      const selectedOption = grantOptions.find(
+        (candidate) => candidate.id === selectedGrantOptionId,
+      );
+      if (!selectedOption) {
+        throw new Error(
+          `Unknown relay authorization option "${selectedGrantOptionId}"`,
         );
       }
 
-      createdGrants = await createRelayAuthorizationGrants(
+      createdGrant = await createRelayAuthorizationGrant(
         {
           workspaceId: existing.workspace_id,
           relayDeviceId: existing.relay_device_id || "",
@@ -2310,13 +2327,13 @@ export async function resolveInteractionRequest(
             typeof existing.source_request_args === "object"
               ? (existing.source_request_args as Record<string, unknown>)
               : {},
-          grantSpecs: selectedOptions.map((option) => option.grantSpec),
+          grantSpec: selectedOption.grantSpec,
         },
         client,
       );
       resolutionPayload = {
         ...resolutionPayload,
-        approvedGrants: createdGrants,
+        approvedGrant: createdGrant,
       };
     }
 
@@ -2382,8 +2399,8 @@ export async function resolveInteractionRequest(
 
   return {
     interaction,
-    createdGrant: createdGrants?.[0],
-    createdGrants,
+    createdGrant,
+    createdGrants: createdGrant ? [createdGrant] : undefined,
   };
 }
 

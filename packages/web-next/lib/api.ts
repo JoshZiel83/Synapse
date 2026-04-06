@@ -89,7 +89,7 @@ export interface ChatInteractionResponseInput {
   }[]
   decision?: "approve" | "reject" | "revise"
   preset?: "once" | "actor" | "conversation" | "workspace"
-  selectedOptionIds?: string[]
+  selectedGrantOptionId?: string
   note?: string
 }
 
@@ -1680,7 +1680,6 @@ class ApiClient {
     title?: string
     description?: string
     deviceType?: string
-    authorizationMode?: string
     platform?: string
     publicKey: string
     publicKeyFingerprint: string
@@ -1796,7 +1795,6 @@ class ApiClient {
       title?: string
       description?: string | null
       deviceType?: string
-      authorizationMode?: string
       conversationTypeMaskOverride?: number | null
     }
   ): Promise<RelayDeviceSummaryView> {

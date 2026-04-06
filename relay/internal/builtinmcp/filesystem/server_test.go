@@ -199,15 +199,15 @@ func TestRootReadOnlyBlocksWriteTool(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected text content, got %T", result.Content[0])
 	}
-	if !strings.Contains(strings.ToLower(content.Text), "relay authorization is required") {
-		t.Fatalf("expected relay authorization hint, got %q", content.Text)
+	if !strings.Contains(strings.ToLower(content.Text), "not configured to trust server-issued relay authorizations") {
+		t.Fatalf("expected local setting hint, got %q", content.Text)
 	}
 	denial := structuredRelayAccessDenial(t, result.StructuredContent)
 	if denial["kind"] != "permission_denied" {
 		t.Fatalf("expected permission_denied kind, got %#v", denial["kind"])
 	}
-	if denial["resolution"] != "server_grant" {
-		t.Fatalf("expected server_grant resolution, got %#v", denial["resolution"])
+	if denial["resolution"] != "local_setting" {
+		t.Fatalf("expected local_setting resolution, got %#v", denial["resolution"])
 	}
 }
 
@@ -848,8 +848,8 @@ func TestDisabledFilesystemViewRejectsAccess(t *testing.T) {
 	if denial["kind"] != "permission_denied" {
 		t.Fatalf("expected permission_denied kind, got %#v", denial["kind"])
 	}
-	if denial["resolution"] != "server_grant" {
-		t.Fatalf("expected server_grant resolution, got %#v", denial["resolution"])
+	if denial["resolution"] != "local_setting" {
+		t.Fatalf("expected local_setting resolution, got %#v", denial["resolution"])
 	}
 }
 
@@ -919,11 +919,12 @@ func TestServerAuthorizationBypassesDisabledFilesystemLocalGuards(t *testing.T) 
 	}
 
 	server, err := New(Config{
-		StableKey: "server-auth-fs",
-		Name:      "filesystem",
-		Enabled:   false,
-		ReadOnly:  true,
-		Scope:     "roots",
+		StableKey:                "server-auth-fs",
+		Name:                     "filesystem",
+		Enabled:                  false,
+		AllowServerAuthorization: true,
+		ReadOnly:                 true,
+		Scope:                    "roots",
 		Roots: []Root{
 			{ID: "root_0", Path: root, Access: "ro"},
 		},
@@ -948,6 +949,22 @@ func TestServerAuthorizationBypassesDisabledFilesystemLocalGuards(t *testing.T) 
 		context.Background(),
 		runtimeauth.RuntimeAuthorization{
 			GrantIDs: []string{"grant-fs-1"},
+			GrantSpecs: []map[string]interface{}{
+				{
+					"capability": "filesystem",
+					"filesystem": map[string]interface{}{
+						"access":       "read",
+						"pathPrefixes": []string{root},
+					},
+				},
+				{
+					"capability": "filesystem",
+					"filesystem": map[string]interface{}{
+						"access":       "write",
+						"pathPrefixes": []string{root},
+					},
+				},
+			},
 		},
 	)
 

@@ -96,7 +96,7 @@ const resolveInteractionSchema = z.object({
   answers: z.array(interactionAnswerSchema).optional(),
   decision: z.enum(["approve", "reject", "revise"]).optional(),
   preset: z.enum(["once", "actor", "conversation", "workspace"]).optional(),
-  selectedOptionIds: z.array(z.string().trim().min(1)).optional(),
+  selectedGrantOptionId: z.string().trim().min(1).optional(),
   note: z.string().trim().optional(),
 });
 
@@ -336,7 +336,7 @@ export default async function chatController(app: FastifyInstance) {
           answers: body.answers,
           decision: body.decision,
           preset: body.preset,
-          selectedOptionIds: body.selectedOptionIds,
+          selectedGrantOptionId: body.selectedGrantOptionId,
           note: body.note,
         });
         return reply.send({ interaction: result.interaction });

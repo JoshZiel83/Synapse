@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"sync"
 
@@ -23,6 +25,46 @@ type Server struct {
 	mu       sync.Mutex
 	ready    bool
 }
+
+var browserReadToolNames = map[string]struct{}{
+	"list_pages":                  {},
+	"select_page":                 {},
+	"get_console_message":         {},
+	"get_network_request":         {},
+	"list_console_messages":       {},
+	"list_network_requests":       {},
+	"lighthouse_audit":            {},
+	"performance_analyze_insight": {},
+	"take_memory_snapshot":        {},
+	"take_screenshot":             {},
+	"take_snapshot":               {},
+	"wait_for":                    {},
+	"screenshot":                  {},
+}
+
+var browserWriteToolNames = map[string]struct{}{
+	"click":                   {},
+	"close_page":              {},
+	"drag":                    {},
+	"emulate":                 {},
+	"evaluate":                {},
+	"evaluate_script":         {},
+	"fill":                    {},
+	"fill_form":               {},
+	"handle_dialog":           {},
+	"hover":                   {},
+	"navigate":                {},
+	"navigate_page":           {},
+	"new_page":                {},
+	"performance_start_trace": {},
+	"performance_stop_trace":  {},
+	"press_key":               {},
+	"resize_page":             {},
+	"type_text":               {},
+	"upload_file":             {},
+}
+
+var ipv4Pattern = regexp.MustCompile(`^\d{1,3}(?:\.\d{1,3}){3}$`)
 
 func New(cfg Config) (*Server, error) {
 	if cfg.ConnectionMode == "" {
@@ -68,8 +110,8 @@ func (s *Server) ListTools() ([]core.Tool, error) {
 }
 
 func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
-	if !s.isAuthorized(runtimeauth.HasServerAuthorization(ctx)) {
-		return disabledResult(toolName), nil
+	if !s.isAuthorizedForTool(ctx, toolName, args) {
+		return disabledResult(toolName, s.denialResolution()), nil
 	}
 	if err := s.ensureReady(ctx); err != nil {
 		return core.CallResult{}, err
@@ -102,7 +144,78 @@ func (s *Server) Shutdown() {
 }
 
 func (s *Server) isAuthorized(serverAuthorized bool) bool {
-	return s.cfg.Enabled || serverAuthorized
+	return s.cfg.Enabled || (s.cfg.AllowServerAuthorization && serverAuthorized)
+}
+
+func (s *Server) denialResolution() string {
+	if s.cfg.AllowServerAuthorization {
+		return core.RelayAccessDenialResolutionServerGrant
+	}
+	return core.RelayAccessDenialResolutionLocalSetting
+}
+
+func browserActionForTool(toolName string) string {
+	if _, ok := browserReadToolNames[toolName]; ok {
+		return "read"
+	}
+	if _, ok := browserWriteToolNames[toolName]; ok {
+		return "write"
+	}
+	return "write"
+}
+
+func registrableDomainForHost(host string) string {
+	normalized := strings.TrimSpace(strings.ToLower(host))
+	if normalized == "" || normalized == "localhost" || ipv4Pattern.MatchString(normalized) {
+		return ""
+	}
+	labels := strings.Split(normalized, ".")
+	if len(labels) < 2 {
+		return ""
+	}
+	return strings.Join(labels[len(labels)-2:], ".")
+}
+
+func browserSiteForArgs(args map[string]interface{}) (origin string, host string, registrableDomain string) {
+	candidates := []string{"url", "page_url", "pageUrl", "browser_url", "browserUrl"}
+	for _, key := range candidates {
+		raw, ok := args[key].(string)
+		if !ok || strings.TrimSpace(raw) == "" {
+			continue
+		}
+		parsed, err := url.Parse(strings.TrimSpace(raw))
+		if err != nil {
+			continue
+		}
+		host = strings.TrimSpace(strings.ToLower(parsed.Hostname()))
+		if parsed.Scheme != "" && host != "" {
+			origin = parsed.Scheme + "://" + host
+		}
+		return origin, host, registrableDomainForHost(host)
+	}
+	return "", "", ""
+}
+
+func (s *Server) isAuthorizedForTool(
+	ctx context.Context,
+	toolName string,
+	args map[string]interface{},
+) bool {
+	if s.cfg.Enabled {
+		return true
+	}
+	if !s.cfg.AllowServerAuthorization {
+		return false
+	}
+	action := browserActionForTool(toolName)
+	origin, host, registrableDomain := browserSiteForArgs(args)
+	return runtimeauth.MatchesBrowserPolicy(
+		runtimeauth.PoliciesForCapability(ctx, "browser"),
+		action,
+		origin,
+		host,
+		registrableDomain,
+	)
 }
 
 func (s *Server) ensureReady(ctx context.Context) error {
@@ -162,8 +275,13 @@ func (s *Server) startDelegateLocked(ctx context.Context) error {
 	return nil
 }
 
-func disabledResult(toolName string) core.CallResult {
-	message := "This built-in browser MCP server is currently blocked by the relay client's local policy. Synapse can continue after the matching relay authorization is approved."
+func disabledResult(toolName string, resolution string) core.CallResult {
+	message := "This built-in browser MCP server is currently blocked by the relay client's local policy."
+	if resolution == core.RelayAccessDenialResolutionServerGrant {
+		message += " Synapse can continue after the matching relay authorization is approved."
+	} else {
+		message += " This relay client is not configured to trust server-issued relay authorizations."
+	}
 	return core.CallResult{
 		Content: []interface{}{core.Text(message)},
 		StructuredContent: core.WithRelayAccessDenial(map[string]interface{}{
@@ -171,7 +289,7 @@ func disabledResult(toolName string) core.CallResult {
 			"tool":       toolName,
 			"capability": "chrome",
 			"message":    message,
-		}, core.RelayAccessDenialKindPermissionDenied, core.RelayAccessDenialResolutionServerGrant),
+		}, core.RelayAccessDenialKindPermissionDenied, resolution),
 		IsError: true,
 	}
 }

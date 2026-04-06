@@ -180,56 +180,62 @@ function formatRelayAuthorizationScope(scope: RelayAuthorizationGrantView['scope
 }
 
 function describeRelayAuthorizationGrant(grant: RelayAuthorizationGrantView) {
-  if (grant.kind.startsWith('filesystem.')) {
+  if (grant.capability === 'filesystem' && grant.filesystem) {
     return {
       icon: FolderOpen,
       summary:
-        grant.kind === 'filesystem.directory'
-          ? 'Filesystem directory'
-          : grant.kind === 'filesystem.write'
-            ? 'Filesystem write'
-            : 'Filesystem read',
-      detail: grant.pathPrefix || 'No directory constraint',
+        grant.filesystem.access === 'write'
+          ? 'Filesystem write access'
+          : 'Filesystem read access',
+      detail:
+        grant.filesystem.pathPrefixes.length > 0
+          ? grant.filesystem.pathPrefixes.join('\n')
+          : 'No directory constraint',
     };
   }
-  if (grant.kind.startsWith('commandline.')) {
+  if (grant.capability === 'commandline' && grant.commandline) {
     return {
       icon: Terminal,
       summary:
-        grant.kind === 'commandline.command'
-          ? `Command line: ${grant.commandMatchType || 'exact'}`
-          : grant.kind === 'commandline.directory'
-            ? 'Command line directory'
+        grant.commandline.commandMatchType === 'exact'
+          ? 'Exact command'
+          : grant.commandline.commandMatchType === 'prefix'
+            ? 'Command prefix'
             : 'Command line access',
-      detail: grant.commandText || grant.pathPrefix || 'Any command or directory',
+      detail: [
+        grant.commandline.commandText || 'bash',
+        grant.commandline.workingDirectory
+          ? `Working directory: ${grant.commandline.workingDirectory}`
+          : null,
+      ]
+        .filter(Boolean)
+        .join('\n'),
     };
   }
-  if (grant.kind.startsWith('browser.')) {
+  if (grant.capability === 'browser' && grant.browser) {
+    const detail =
+      grant.browser.scopeType === 'host'
+        ? grant.browser.host
+        : grant.browser.scopeType === 'domain'
+          ? grant.browser.registrableDomain
+          : grant.browser.scopeType === 'origin'
+            ? grant.browser.origin
+            : undefined;
     return {
       icon: Globe,
       summary:
-        grant.kind === 'browser.site'
-          ? 'Browser site access'
-          : grant.kind === 'browser.write'
-            ? 'Browser write actions'
-            : grant.kind === 'browser.read'
-              ? 'Browser read actions'
-              : 'Browser tool access',
-      detail:
-        grant.browserHost ||
-        grant.browserRegistrableDomain ||
-        grant.browserOrigin ||
-        'Browser-wide',
+        grant.browser.action === 'write'
+          ? 'Browser write actions'
+          : 'Browser read actions',
+      detail: detail || 'Browser-wide',
     };
   }
   return {
     icon: MousePointerClick,
     summary:
-      grant.kind === 'cua.write'
+      grant.cua?.access === 'write'
         ? 'Desktop input actions'
-        : grant.kind === 'cua.read'
-          ? 'Desktop observation'
-          : 'Desktop tool access',
+        : 'Desktop observation',
     detail: 'CUA automation',
   };
 }
@@ -659,7 +665,6 @@ export default function RelayDevicePage() {
                   <span className="inline-flex items-center gap-1.5">
                     <Wrench className="size-4" />
                     {relayDetail.device.deviceType}
-                    {relayDetail.device.authorizationMode ? ` · ${relayDetail.device.authorizationMode}` : ''}
                     {relayDetail.device.platform ? ` on ${relayDetail.device.platform}` : ''}
                   </span>
                   <span className="inline-flex items-center gap-1.5">
@@ -1083,14 +1088,14 @@ export default function RelayDevicePage() {
                             <div className="min-w-0 space-y-2">
                               <div className="flex flex-wrap items-center gap-2">
                                 <Badge variant="secondary">{formatRelayAuthorizationScope(grant.scope)}</Badge>
-                                <Badge variant="outline">{grant.kind}</Badge>
+                                <Badge variant="outline">{grant.capability}</Badge>
                                 <Badge variant="outline">{grant.status}</Badge>
                               </div>
                               <div className="flex items-start gap-2">
                                 <EffectIcon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                                 <div className="min-w-0">
                                   <div className="text-sm font-medium text-foreground">{described.summary}</div>
-                                  <div className="text-xs break-all text-muted-foreground">{described.detail}</div>
+                                  <div className="text-xs whitespace-pre-wrap break-all text-muted-foreground">{described.detail}</div>
                                 </div>
                               </div>
                               <div className="text-xs text-muted-foreground">

@@ -1,8 +1,9 @@
 import type {
   InteractionRequestSummary,
-  RelayAuthorizationApprovalOption,
+  RelayAuthorizationGrantOption,
+  RelayAuthorizationPreset,
   RelayAuthorizationRequestMode,
-  RelayAuthorizationRequirement,
+  RelayAuthorizationRequestedAction,
 } from "@synapse/shared/types";
 import { textBlocks } from "@synapse/shared";
 import { db } from "../../infrastructure/database/kysely.js";
@@ -44,8 +45,8 @@ export interface RelayAuthorizationRequestTarget {
 }
 
 export interface RelayAuthorizationRequestPlanSnapshot {
-  requiredRequirements: RelayAuthorizationRequirement[];
-  approvalOptions: RelayAuthorizationApprovalOption[];
+  requestedAction: RelayAuthorizationRequestedAction;
+  grantOptions: RelayAuthorizationGrantOption[];
 }
 
 export interface CreateRelayAuthorizationRequestParams {
@@ -53,6 +54,7 @@ export interface CreateRelayAuthorizationRequestParams {
   relayTarget: RelayAuthorizationRequestTarget;
   authorizationPlan: RelayAuthorizationRequestPlanSnapshot;
   requestMode: RelayAuthorizationRequestMode;
+  availablePresets: RelayAuthorizationPreset[];
   reason: string;
   sourceRequestArgs: Record<string, unknown>;
   retryNonce?: string;
@@ -190,7 +192,9 @@ export async function createRelayAuthorizationRequest(
       relayExposureId: params.relayTarget.relayExposureId,
       requestedToolName: params.relayTarget.requestedToolName,
       relayToolStableKey: params.relayTarget.relayToolStableKey,
-      requiredRequirements: params.authorizationPlan.requiredRequirements,
+      requestedAction: params.authorizationPlan.requestedAction,
+      grantOptions: params.authorizationPlan.grantOptions,
+      availablePresets: params.availablePresets,
       requestMode: params.requestMode,
     });
 
@@ -232,8 +236,9 @@ export async function createRelayAuthorizationRequest(
       relayToolStableKey: params.relayTarget.relayToolStableKey,
       reason: params.reason,
       requestMode: params.requestMode,
-      requiredRequirements: params.authorizationPlan.requiredRequirements,
-      approvalOptions: params.authorizationPlan.approvalOptions,
+      requestedAction: params.authorizationPlan.requestedAction,
+      grantOptions: params.authorizationPlan.grantOptions,
+      availablePresets: params.availablePresets,
       sourceRetryNonce: retryNonce,
       sourceRequestArgs: params.sourceRequestArgs,
     },
@@ -252,8 +257,9 @@ export async function createRelayAuthorizationRequest(
       runtimeSessionId: params.relayTarget.runtimeSessionId,
       relayToolStableKey: params.relayTarget.relayToolStableKey,
       reason: params.reason,
-      requiredRequirements: params.authorizationPlan.requiredRequirements,
-      approvalOptions: params.authorizationPlan.approvalOptions,
+      requestedAction: params.authorizationPlan.requestedAction,
+      grantOptions: params.authorizationPlan.grantOptions,
+      availablePresets: params.availablePresets,
       requestMode: params.requestMode,
       sourceRetryNonce: retryNonce,
       sourceRequestArgs: params.sourceRequestArgs,

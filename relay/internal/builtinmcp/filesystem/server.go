@@ -63,15 +63,56 @@ type toolError struct {
 
 const serverAuthorizedRuntimeSessionPrefix = "__server_authorized__:"
 
-func decorateRuntimeSessionID(runtimeSessionID string, serverAuthorized bool) string {
-	if !serverAuthorized {
+type runtimeSessionAuthorizationEnvelope struct {
+	RuntimeSessionID   string                         `json:"runtimeSessionId,omitempty"`
+	FilesystemPolicies []runtimeauth.FilesystemPolicy `json:"filesystemPolicies,omitempty"`
+}
+
+func decorateRuntimeSessionID(
+	runtimeSessionID string,
+	authorization runtimeauth.RuntimeAuthorization,
+	allowServerAuthorization bool,
+) string {
+	if !allowServerAuthorization {
 		return runtimeSessionID
 	}
-	return serverAuthorizedRuntimeSessionPrefix + runtimeSessionID
+	policies := runtimeauth.FilesystemRootsFromPolicies(authorization.Policies())
+	if len(policies) == 0 {
+		return runtimeSessionID
+	}
+	encoded, err := json.Marshal(runtimeSessionAuthorizationEnvelope{
+		RuntimeSessionID:   runtimeSessionID,
+		FilesystemPolicies: policies,
+	})
+	if err != nil {
+		return runtimeSessionID
+	}
+	return serverAuthorizedRuntimeSessionPrefix + base64.RawURLEncoding.EncodeToString(encoded)
+}
+
+func parseRuntimeSessionAuthorizationEnvelope(
+	runtimeSessionID string,
+) runtimeSessionAuthorizationEnvelope {
+	if !strings.HasPrefix(runtimeSessionID, serverAuthorizedRuntimeSessionPrefix) {
+		return runtimeSessionAuthorizationEnvelope{RuntimeSessionID: runtimeSessionID}
+	}
+	encoded := strings.TrimPrefix(runtimeSessionID, serverAuthorizedRuntimeSessionPrefix)
+	payload, err := base64.RawURLEncoding.DecodeString(encoded)
+	if err != nil {
+		return runtimeSessionAuthorizationEnvelope{RuntimeSessionID: runtimeSessionID}
+	}
+	var envelope runtimeSessionAuthorizationEnvelope
+	if err := json.Unmarshal(payload, &envelope); err != nil {
+		return runtimeSessionAuthorizationEnvelope{RuntimeSessionID: runtimeSessionID}
+	}
+	if envelope.RuntimeSessionID == "" {
+		envelope.RuntimeSessionID = runtimeSessionID
+	}
+	return envelope
 }
 
 func isServerAuthorizedRuntimeSession(runtimeSessionID string) bool {
-	return strings.HasPrefix(runtimeSessionID, serverAuthorizedRuntimeSessionPrefix)
+	return len(parseRuntimeSessionAuthorizationEnvelope(runtimeSessionID).FilesystemPolicies) > 0
 }
 
 func (e *toolError) Error() string {
@@ -153,7 +194,7 @@ func (s *Server) Shutdown() {
 }
 
 func (s *Server) shouldStart(runtimeSessionID string) bool {
-	return s.cfg.Enabled || isServerAuthorizedRuntimeSession(runtimeSessionID) || len(s.effectiveRootsForSession(runtimeSessionID)) > 0
+	return s.cfg.Enabled || len(s.effectiveRootsForSession(runtimeSessionID)) > 0
 }
 
 func (s *Server) ensureStarted() error {
@@ -180,9 +221,11 @@ func (s *Server) ensureStarted() error {
 }
 
 func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
+	authorization := runtimeauth.RuntimeAuthorizationFromContext(ctx)
 	runtimeSessionID := decorateRuntimeSessionID(
 		runtimeauth.RuntimeSessionIDFromContext(ctx),
-		runtimeauth.HasServerAuthorization(ctx),
+		authorization,
+		s.cfg.AllowServerAuthorization,
 	)
 	switch toolName {
 	case "ListAllowedDirectories":
@@ -278,29 +321,34 @@ func (s *Server) effectiveRoots() []Root {
 }
 
 func (s *Server) effectiveRootsForSession(runtimeSessionID string) []Root {
-	serverAuthorized := isServerAuthorizedRuntimeSession(runtimeSessionID)
-	baseRoots := s.roots
-	if serverAuthorized && len(baseRoots) == 0 {
-		baseRoots = make([]Root, 0, len(globalRootPaths()))
-		for index, rootPath := range globalRootPaths() {
-			baseRoots = append(baseRoots, Root{
-				ID:     fmt.Sprintf("server_authorized_%d", index),
-				Path:   filepath.Clean(rootPath),
-				Access: "rw",
+	envelope := parseRuntimeSessionAuthorizationEnvelope(runtimeSessionID)
+	roots := make([]Root, 0, len(s.roots)+len(envelope.FilesystemPolicies))
+	if s.cfg.Enabled {
+		for _, root := range s.roots {
+			access := root.Access
+			roots = append(roots, Root{
+				ID:               root.ID,
+				Path:             root.Path,
+				Access:           access,
+				ServerAuthorized: false,
 			})
 		}
 	}
-	roots := make([]Root, 0, len(baseRoots))
-	if s.cfg.Enabled || serverAuthorized {
-		for _, root := range baseRoots {
-			access := root.Access
-			if serverAuthorized {
+	for policyIndex, policy := range envelope.FilesystemPolicies {
+		for pathIndex, pathPrefix := range policy.PathPrefixes {
+			normalizedPath := normalizePathForMatch(pathPrefix)
+			if normalizedPath == "" {
+				continue
+			}
+			access := "ro"
+			if policy.Access == "write" {
 				access = "rw"
 			}
 			roots = append(roots, Root{
-				ID:     root.ID,
-				Path:   root.Path,
-				Access: access,
+				ID:               fmt.Sprintf("server_authorized_%d_%d", policyIndex, pathIndex),
+				Path:             normalizedPath,
+				Access:           access,
+				ServerAuthorized: true,
 			})
 		}
 	}
@@ -314,6 +362,9 @@ func (s *Server) effectiveRootsForSession(runtimeSessionID string) []Root {
 		rightRank := rootAccessRank(roots[j].Access)
 		if leftRank != rightRank {
 			return leftRank > rightRank
+		}
+		if roots[i].ServerAuthorized != roots[j].ServerAuthorized {
+			return roots[i].ServerAuthorized
 		}
 		return roots[i].ID < roots[j].ID
 	})
@@ -472,31 +523,51 @@ func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMi
 
 	root, ok := s.matchRootForSession(runtimeSessionID, resolved)
 	if !ok {
+		resolution := core.RelayAccessDenialResolutionLocalSetting
+		if s.cfg.AllowServerAuthorization {
+			resolution = core.RelayAccessDenialResolutionServerGrant
+		}
+		message := fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server.", absPath)
+		if resolution == core.RelayAccessDenialResolutionLocalSetting {
+			message = fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server, and this relay client is not configured to trust server-issued relay authorizations.", absPath)
+		}
 		return resolvedPath{}, &toolError{
 			Code:             "directory_permission_required",
-			Message:          fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server.", absPath),
+			Message:          message,
 			Path:             absPath,
 			DenialKind:       core.RelayAccessDenialKindPermissionDenied,
-			DenialResolution: core.RelayAccessDenialResolutionServerGrant,
+			DenialResolution: resolution,
 		}
 	}
 	if write {
-		if s.cfg.ReadOnly && !isServerAuthorizedRuntimeSession(runtimeSessionID) {
+		resolution := core.RelayAccessDenialResolutionLocalSetting
+		if s.cfg.AllowServerAuthorization {
+			resolution = core.RelayAccessDenialResolutionServerGrant
+		}
+		if s.cfg.ReadOnly && !root.ServerAuthorized {
+			message := "This built-in filesystem server is currently in read-only mode. Read and search tools remain available, but write actions require relay authorization before retrying."
+			if resolution == core.RelayAccessDenialResolutionLocalSetting {
+				message = "This built-in filesystem server is currently in read-only mode, and this relay client is not configured to trust server-issued relay authorizations for write actions."
+			}
 			return resolvedPath{}, &toolError{
 				Code:             "read_only_mode",
-				Message:          "This built-in filesystem server is currently in read-only mode. Read and search tools remain available, but write actions require relay authorization before retrying.",
+				Message:          message,
 				Path:             absPath,
 				DenialKind:       core.RelayAccessDenialKindPermissionDenied,
-				DenialResolution: core.RelayAccessDenialResolutionServerGrant,
+				DenialResolution: resolution,
 			}
 		}
-		if root.Access != "rw" && !isServerAuthorizedRuntimeSession(runtimeSessionID) {
+		if root.Access != "rw" {
+			message := fmt.Sprintf("The path %q is currently configured read-only by the relay client's local policy. Relay authorization is required before retrying the write action.", absPath)
+			if resolution == core.RelayAccessDenialResolutionLocalSetting {
+				message = fmt.Sprintf("The path %q is currently configured read-only by the relay client's local policy, and this relay client is not configured to trust server-issued relay authorizations for write actions.", absPath)
+			}
 			return resolvedPath{}, &toolError{
 				Code:             "write_permission_required",
-				Message:          fmt.Sprintf("The path %q is currently configured read-only by the relay client's local policy. Relay authorization is required before retrying the write action.", absPath),
+				Message:          message,
 				Path:             absPath,
 				DenialKind:       core.RelayAccessDenialKindPermissionDenied,
-				DenialResolution: core.RelayAccessDenialResolutionServerGrant,
+				DenialResolution: resolution,
 			}
 		}
 	}

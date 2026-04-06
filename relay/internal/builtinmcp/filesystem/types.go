@@ -1,22 +1,24 @@
 package filesystem
 
 type Config struct {
-	StableKey           string
-	Name                string
-	Enabled             bool
-	ReadOnly            bool
-	Scope               string
-	GlobalAccess        string
-	MaxGetFileSizeBytes int64
-	Roots               []Root
-	Index               IndexConfig
-	Backup              BackupConfig
+	StableKey                string
+	Name                     string
+	Enabled                  bool
+	AllowServerAuthorization bool
+	ReadOnly                 bool
+	Scope                    string
+	GlobalAccess             string
+	MaxGetFileSizeBytes      int64
+	Roots                    []Root
+	Index                    IndexConfig
+	Backup                   BackupConfig
 }
 
 type Root struct {
-	ID     string
-	Path   string
-	Access string
+	ID               string
+	Path             string
+	Access           string
+	ServerAuthorized bool
 }
 
 type IndexConfig struct {

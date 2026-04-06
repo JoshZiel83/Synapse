@@ -692,6 +692,10 @@ function buildRelayScopedInstance(params: {
           },
           authorizationPlan,
           requestMode: authorizationRequestMode,
+          availablePresets:
+            authorizationRequestMode === "blocking"
+              ? ["once", "actor", "conversation", "workspace"]
+              : ["actor", "conversation", "workspace"],
           reason: buildAutoRelayAuthorizationReason({
             visibleToolName: toolBinding.visibleToolName,
             denialMessage: localDenial.message,

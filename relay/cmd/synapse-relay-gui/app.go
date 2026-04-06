@@ -361,7 +361,11 @@ func (a *App) SaveConfig(cfg config.Config) error {
 	return nil
 }
 
-func (a *App) SaveDesktopPreferences(startupCfg config.StartupConfig, notificationCfg config.NotificationConfig) error {
+func (a *App) SaveDesktopPreferences(
+	startupCfg config.StartupConfig,
+	notificationCfg config.NotificationConfig,
+	securityCfg config.SecurityConfig,
+) error {
 	cfg := a.getConfigSnapshot()
 	if cfg == nil {
 		cfg = &config.Config{}
@@ -369,6 +373,7 @@ func (a *App) SaveDesktopPreferences(startupCfg config.StartupConfig, notificati
 
 	cfg.Startup = startupCfg
 	cfg.Notifications = notificationCfg
+	cfg.Security = securityCfg
 
 	if err := config.EnsureDir(); err != nil {
 		return err

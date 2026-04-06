@@ -17,6 +17,7 @@ import type {
   NotificationSettings,
   RelayConfig,
   RelayEventPayload,
+  SecuritySettings,
   ServerConfig,
   StatusInfo,
   StartupSettings,
@@ -30,6 +31,7 @@ function normalizeConfig(cfg?: RelayConfig | null): RelayConfig {
     relay: cfg?.relay || {},
     startup: cfg?.startup || {},
     notifications: cfg?.notifications || {},
+    security: cfg?.security || {},
     update: cfg?.update || {},
     logLevel: cfg?.logLevel || 'info',
     syncSources: cfg?.syncSources || [],
@@ -104,8 +106,12 @@ export function useRelayDesktop() {
     await loadConfig()
   })
 
-  const saveDesktopPreferences = useEffectEvent(async (startup: StartupSettings, notifications: NotificationSettings) => {
-    await callGo('SaveDesktopPreferences', startup, notifications)
+  const saveDesktopPreferences = useEffectEvent(async (
+    startup: StartupSettings,
+    notifications: NotificationSettings,
+    security: SecuritySettings,
+  ) => {
+    await callGo('SaveDesktopPreferences', startup, notifications, security)
     await loadConfig()
   })
 

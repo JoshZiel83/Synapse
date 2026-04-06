@@ -51,7 +51,7 @@ import {
   type ToolCallTaskDeliveryPolicy,
   type ToolCallTaskRecord,
 } from '../tool-call-tasks/service.js';
-import { findMatchingRelayAuthorizationGrants } from '../relay-authorizations/service.js';
+import { findMatchingRelayAuthorizationGrant } from '../relay-authorizations/service.js';
 import { normalizeMcpToolResult } from './result-normalizer.js';
 import { inferRelaySpecialAuthorizationPlan } from './relay-special-mcp.js';
 import { createRelayAuthorizationRequest } from './relay-authorization-requests.js';
@@ -700,29 +700,9 @@ async function validateRelayCallTargetLocal(params: RelayCallParams) {
 }
 
 function relayAuthorizationGrantToSpec(
-  grant: {
-    kind: RelayAuthorizationGrantSpec["kind"];
-    pathPrefix?: string;
-    browserScopeType?: RelayAuthorizationGrantSpec["browserScopeType"];
-    browserOrigin?: string;
-    browserHost?: string;
-    browserRegistrableDomain?: string;
-    commandExecutor?: RelayAuthorizationGrantSpec["commandExecutor"];
-    commandMatchType?: RelayAuthorizationGrantSpec["commandMatchType"];
-    commandText?: string;
-  },
+  grant: RelayAuthorizationGrantSpec,
 ): RelayAuthorizationGrantSpec {
-  return {
-    kind: grant.kind,
-    pathPrefix: grant.pathPrefix,
-    browserScopeType: grant.browserScopeType,
-    browserOrigin: grant.browserOrigin,
-    browserHost: grant.browserHost,
-    browserRegistrableDomain: grant.browserRegistrableDomain,
-    commandExecutor: grant.commandExecutor,
-    commandMatchType: grant.commandMatchType,
-    commandText: grant.commandText,
-  };
+  return JSON.parse(JSON.stringify(grant)) as RelayAuthorizationGrantSpec;
 }
 
 export async function resolveRelayToolAuthorization(params: {
@@ -751,7 +731,7 @@ export async function resolveRelayToolAuthorization(params: {
     };
   }
 
-  const matched = await findMatchingRelayAuthorizationGrants({
+  const matched = await findMatchingRelayAuthorizationGrant({
     workspaceId: params.workspaceId,
     relayDeviceId: params.relayDeviceId,
     relayCapabilityId: params.relayCapabilityId,
@@ -759,10 +739,10 @@ export async function resolveRelayToolAuthorization(params: {
     conversationId: params.conversationId || undefined,
     actorId: params.actorId || undefined,
     retryNonce: params.authorization?.retryNonce,
-    requirements: plan.requiredRequirements,
+    requestedAction: plan.requestedAction,
     consumeOnce: true,
   });
-  if (matched.missingRequirements.length > 0) {
+  if (!matched.matchedGrant) {
     return {
       authorization: undefined,
       authorizationPlan: plan,
@@ -771,11 +751,9 @@ export async function resolveRelayToolAuthorization(params: {
 
   return {
     authorization: {
-      grantIds: matched.matchedGrants.map((grant) => grant.id),
-      grantScope: matched.matchedGrants[0]?.scope,
-      grantSpecs: matched.matchedGrants.map((grant) =>
-        relayAuthorizationGrantToSpec(grant),
-      ),
+      grantIds: [matched.matchedGrant.id],
+      grantScope: matched.matchedGrant.scope,
+      grantSpecs: [relayAuthorizationGrantToSpec(matched.matchedGrant)],
       retryNonce: params.authorization?.retryNonce,
     } satisfies RelayAuthorizationEnvelope,
     authorizationPlan: plan,
@@ -886,6 +864,7 @@ async function createAsyncRelayAuthorizationRequestFromLocalDenial(params: {
     },
     authorizationPlan,
     requestMode: 'background',
+    availablePresets: ['actor', 'conversation', 'workspace'],
     reason: localDenial.message?.trim()
       ? `The relay client locally denied ${params.operation.visible_tool_name}. ${localDenial.message.trim()}`
       : `The relay client locally denied ${params.operation.visible_tool_name}, so Synapse is requesting user authorization for the same async action.`,

@@ -3,7 +3,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { inferRelaySpecialAuthorizationPlan } from './relay-special-mcp.js';
 
-test('inferRelaySpecialAuthorizationPlan infers filesystem read and directory requirements', () => {
+test('inferRelaySpecialAuthorizationPlan infers a filesystem read action and a single range option', () => {
   const directory = path.resolve('/tmp/synapse-relay-special-mcp');
   const filePath = path.join(directory, 'note.txt');
 
@@ -19,21 +19,17 @@ test('inferRelaySpecialAuthorizationPlan infers filesystem read and directory re
 
   assert.ok(plan);
   assert.equal(plan.kind, 'filesystem');
-  assert.deepEqual(
-    plan.requiredRequirements.map((requirement) => requirement.kind),
-    ['filesystem.read', 'filesystem.directory'],
-  );
-  assert.equal(
-    plan.approvalOptions.some(
-      (option) =>
-        option.kind === 'filesystem.directory' &&
-        option.grantSpec.pathPrefix === directory,
-    ),
-    true,
-  );
+  assert.equal(plan.requestedAction.capability, 'filesystem');
+  assert.equal(plan.requestedAction.filesystem?.access, 'read');
+  assert.deepEqual(plan.requestedAction.filesystem?.pathPrefixes, [directory]);
+  assert.equal(plan.grantOptions.length, 1);
+  assert.deepEqual(plan.grantOptions[0]?.grantSpec.filesystem, {
+    access: 'read',
+    pathPrefixes: [directory],
+  });
 });
 
-test('inferRelaySpecialAuthorizationPlan adds browser host and domain options', () => {
+test('inferRelaySpecialAuthorizationPlan adds browser host, domain, and global options', () => {
   const plan = inferRelaySpecialAuthorizationPlan({
     visibleToolName: 'navigate',
     toolInput: {
@@ -46,31 +42,37 @@ test('inferRelaySpecialAuthorizationPlan adds browser host and domain options', 
 
   assert.ok(plan);
   assert.equal(plan.kind, 'browser');
-  assert.deepEqual(
-    plan.requiredRequirements.map((requirement) => requirement.kind),
-    ['browser.tool', 'browser.write', 'browser.site'],
-  );
+  assert.equal(plan.requestedAction.capability, 'browser');
+  assert.equal(plan.requestedAction.browser?.action, 'write');
+  assert.equal(plan.requestedAction.browser?.scopeType, 'host');
+  assert.equal(plan.requestedAction.browser?.host, 'sub.example.com');
   assert.equal(
-    plan.approvalOptions.some(
+    plan.grantOptions.some(
       (option) =>
-        option.kind === 'browser.site' &&
-        option.grantSpec.browserScopeType === 'host' &&
-        option.grantSpec.browserHost === 'sub.example.com',
+        option.grantSpec.browser?.scopeType === 'host' &&
+        option.grantSpec.browser?.host === 'sub.example.com',
     ),
     true,
   );
   assert.equal(
-    plan.approvalOptions.some(
+    plan.grantOptions.some(
       (option) =>
-        option.kind === 'browser.site' &&
-        option.grantSpec.browserScopeType === 'domain' &&
-        option.grantSpec.browserRegistrableDomain === 'example.com',
+        option.grantSpec.browser?.scopeType === 'domain' &&
+        option.grantSpec.browser?.registrableDomain === 'example.com',
+    ),
+    true,
+  );
+  assert.equal(
+    plan.grantOptions.some(
+      (option) =>
+        option.grantSpec.browser?.scopeType === undefined &&
+        option.grantSpec.browser?.action === 'write',
     ),
     true,
   );
 });
 
-test('inferRelaySpecialAuthorizationPlan adds exact and prefix commandline options', () => {
+test('inferRelaySpecialAuthorizationPlan adds exact, prefix, and tool commandline options', () => {
   const plan = inferRelaySpecialAuthorizationPlan({
     visibleToolName: 'bash',
     toolInput: {
@@ -84,31 +86,36 @@ test('inferRelaySpecialAuthorizationPlan adds exact and prefix commandline optio
 
   assert.ok(plan);
   assert.equal(plan.kind, 'commandline');
-  assert.deepEqual(
-    plan.requiredRequirements.map((requirement) => requirement.kind),
-    ['commandline.tool', 'commandline.command', 'commandline.directory'],
-  );
+  assert.equal(plan.requestedAction.capability, 'commandline');
+  assert.equal(plan.requestedAction.commandline?.commandText, 'python manage.py migrate');
+  assert.equal(plan.requestedAction.commandline?.workingDirectory, '/workspace/app');
   assert.equal(
-    plan.approvalOptions.some(
+    plan.grantOptions.some(
       (option) =>
-        option.kind === 'commandline.command' &&
-        option.grantSpec.commandMatchType === 'exact' &&
-        option.grantSpec.commandText === 'python manage.py migrate',
+        option.grantSpec.commandline?.commandMatchType === 'exact' &&
+        option.grantSpec.commandline?.commandText === 'python manage.py migrate',
     ),
     true,
   );
   assert.equal(
-    plan.approvalOptions.some(
+    plan.grantOptions.some(
       (option) =>
-        option.kind === 'commandline.command' &&
-        option.grantSpec.commandMatchType === 'prefix' &&
-        option.grantSpec.commandText === 'python',
+        option.grantSpec.commandline?.commandMatchType === 'prefix' &&
+        option.grantSpec.commandline?.commandText === 'python',
+    ),
+    true,
+  );
+  assert.equal(
+    plan.grantOptions.some(
+      (option) =>
+        option.grantSpec.commandline?.commandMatchType === 'tool' &&
+        option.grantSpec.commandline?.commandText === 'bash',
     ),
     true,
   );
 });
 
-test('inferRelaySpecialAuthorizationPlan suppresses prefix option for compound commands', () => {
+test('inferRelaySpecialAuthorizationPlan suppresses prefix options for compound commands', () => {
   const plan = inferRelaySpecialAuthorizationPlan({
     visibleToolName: 'bash',
     toolInput: {
@@ -120,9 +127,16 @@ test('inferRelaySpecialAuthorizationPlan suppresses prefix option for compound c
   });
 
   assert.ok(plan);
-  const commandOptions = plan.approvalOptions.filter(
-    (option) => option.kind === 'commandline.command',
+  assert.equal(
+    plan.grantOptions.some(
+      (option) => option.grantSpec.commandline?.commandMatchType === 'prefix',
+    ),
+    false,
   );
-  assert.equal(commandOptions.length, 1);
-  assert.equal(commandOptions[0]?.grantSpec.commandMatchType, 'exact');
+  assert.equal(
+    plan.grantOptions.some(
+      (option) => option.grantSpec.commandline?.commandMatchType === 'tool',
+    ),
+    true,
+  );
 });

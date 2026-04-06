@@ -140,15 +140,16 @@ func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]
 		return errorResult("desktop integration is not available in this build"), nil
 	}
 	runtimeSessionID := runtimeauth.RuntimeSessionIDFromContext(ctx)
-	serverAuthorized := runtimeauth.HasServerAuthorization(ctx)
+	access := cuaAccessForTool(toolName)
+	serverAuthorized := s.hasMatchingServerAuthorization(ctx, access)
 	if !s.canOperate(serverAuthorized, runtimeSessionID) {
-		return disabledResult(toolName), nil
+		return disabledResult(toolName, s.denialResolution()), nil
 	}
 	if err := s.ensureReady(runtimeSessionID); err != nil {
 		return errorResult(err.Error()), nil
 	}
 	if blocked, operation := s.readOnlyBlock(serverAuthorized, runtimeSessionID, toolName, args); blocked {
-		return readOnlyResult(toolName, operation), nil
+		return readOnlyResult(toolName, operation, s.denialResolution()), nil
 	}
 	if s.guard != nil {
 		if guardResult := s.guard.BeforeToolCall(runtimeSessionID); guardResult != nil {
@@ -254,10 +255,16 @@ func displayChangedResult(displays []DisplayInfo) core.CallResult {
 	}
 }
 
-func readOnlyResult(toolName, operation string) core.CallResult {
+func readOnlyResult(toolName, operation string, resolution string) core.CallResult {
 	message := "This built-in CUA server is currently in read-only mode. Observation tools remain available, but input actions require relay authorization before retrying."
 	if operation != "" {
 		message = fmt.Sprintf("The requested action %q is blocked because this built-in CUA server is currently in read-only mode. Observation tools remain available, but input actions require relay authorization before retrying.", operation)
+	}
+	if resolution == core.RelayAccessDenialResolutionLocalSetting {
+		message = "This built-in CUA server is currently in read-only mode. Observation tools remain available, and this relay client is not configured to trust server-issued relay authorizations for input actions."
+		if operation != "" {
+			message = fmt.Sprintf("The requested action %q is blocked because this built-in CUA server is currently in read-only mode, and this relay client is not configured to trust server-issued relay authorizations for input actions.", operation)
+		}
 	}
 	return core.CallResult{
 		Content: []interface{}{core.Text(message)},
@@ -267,13 +274,18 @@ func readOnlyResult(toolName, operation string) core.CallResult {
 			"tool":      toolName,
 			"operation": operation,
 			"message":   message,
-		}, core.RelayAccessDenialKindPermissionDenied, core.RelayAccessDenialResolutionServerGrant),
+		}, core.RelayAccessDenialKindPermissionDenied, resolution),
 		IsError: true,
 	}
 }
 
-func disabledResult(toolName string) core.CallResult {
-	message := "This built-in CUA server is currently blocked by the relay client's local policy. Synapse can continue after the matching relay authorization is approved."
+func disabledResult(toolName string, resolution string) core.CallResult {
+	message := "This built-in CUA server is currently blocked by the relay client's local policy."
+	if resolution == core.RelayAccessDenialResolutionServerGrant {
+		message += " Synapse can continue after the matching relay authorization is approved."
+	} else {
+		message += " This relay client is not configured to trust server-issued relay authorizations."
+	}
 	return core.CallResult{
 		Content: []interface{}{core.Text(message)},
 		StructuredContent: core.WithRelayAccessDenial(map[string]interface{}{
@@ -281,9 +293,35 @@ func disabledResult(toolName string) core.CallResult {
 			"tool":       toolName,
 			"capability": "cua",
 			"message":    message,
-		}, core.RelayAccessDenialKindPermissionDenied, core.RelayAccessDenialResolutionServerGrant),
+		}, core.RelayAccessDenialKindPermissionDenied, resolution),
 		IsError: true,
 	}
+}
+
+func cuaAccessForTool(toolName string) string {
+	switch toolName {
+	case "desktop_move_pointer", "desktop_click", "desktop_drag", "desktop_scroll", "desktop_type_text", "desktop_press_keys":
+		return "write"
+	default:
+		return "read"
+	}
+}
+
+func (s *Server) denialResolution() string {
+	if s.cfg.AllowServerAuthorization {
+		return core.RelayAccessDenialResolutionServerGrant
+	}
+	return core.RelayAccessDenialResolutionLocalSetting
+}
+
+func (s *Server) hasMatchingServerAuthorization(ctx context.Context, access string) bool {
+	if !s.cfg.AllowServerAuthorization {
+		return false
+	}
+	return runtimeauth.MatchesCUAPolicy(
+		runtimeauth.PoliciesForCapability(ctx, "cua"),
+		access,
+	)
 }
 
 func (s *Server) readOnlyBlock(serverAuthorized bool, runtimeSessionID, toolName string, args map[string]interface{}) (bool, string) {

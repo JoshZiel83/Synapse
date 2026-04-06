@@ -10,7 +10,7 @@ import (
 )
 
 func TestManagerNotifyCatalogHintEmitsEventAndSignal(t *testing.T) {
-	manager := NewManager(nil)
+	manager := NewManager(nil, config.SecurityConfig{})
 	eventCh := make(chan struct {
 		evtType string
 		msg     string
@@ -127,7 +127,7 @@ func (s *scriptedServer) Shutdown() {
 func TestRefreshToolCatalogsRemovesPermanentlyClosedServer(t *testing.T) {
 	dead := &failingServer{listToolsErr: errors.New("send tools/list: write |1: file already closed")}
 	live := &failingServer{}
-	manager := NewManager(nil)
+	manager := NewManager(nil, config.SecurityConfig{})
 	manager.servers = []serverEntry{
 		{
 			stableKey: "dead",
@@ -182,9 +182,9 @@ func TestInitAllKeepsRetryableServerPendingUntilRefreshActivatesIt(t *testing.T)
 		Transport: "builtin",
 	}
 
-	manager := NewManager([]config.ServerConfig{cfg})
+	manager := NewManager([]config.ServerConfig{cfg}, config.SecurityConfig{})
 	attempts := 0
-	manager.newServer = func(cfg config.ServerConfig) (Server, error) {
+	manager.newServer = func(cfg config.ServerConfig, _ config.SecurityConfig) (Server, error) {
 		return &scriptedServer{
 			startFn: func(context.Context) error {
 				attempts++

@@ -83,6 +83,7 @@ export interface ChatInteractionResponseInput {
   }[];
   decision?: "approve" | "reject" | "revise";
   preset?: "once" | "actor" | "conversation" | "workspace";
+  selectedGrantOptionId?: string;
   note?: string;
 }
 

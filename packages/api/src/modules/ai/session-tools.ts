@@ -769,7 +769,7 @@ async function resolveRelayAuthorizationPlanOrThrow(params: {
   });
   if (!authorizationPlan) {
     throwToolError(
-      "This relay tool call does not produce a relay authorization plan, or Synapse could not infer the required requirements.",
+      "This relay tool call does not produce a relay authorization plan, or Synapse could not infer an authorization range for the requested action.",
     );
   }
 
@@ -778,49 +778,6 @@ async function resolveRelayAuthorizationPlanOrThrow(params: {
     relayCatalog,
     authorizationPlan,
   };
-}
-
-async function retryAuthorizedRelayTool(params: {
-  context: NonNullable<ReturnType<typeof getToolExecutionContext>>;
-  relayToolName: string;
-  toolArguments: Record<string, unknown>;
-  retryNonce: string;
-}) {
-  const resolved = await resolveRelayAuthorizationPlanOrThrow({
-    actorId: params.context.actorId,
-    workspaceId: params.context.workspaceId,
-    sessionId: params.context.sessionId,
-    conversationId: params.context.conversationId || "",
-    workspaceMemberId: params.context.workspaceMemberId,
-    relayToolName: params.relayToolName,
-    toolArguments: params.toolArguments,
-  });
-
-  const tool = resolved.relayCatalog.tools.find(
-    (candidate) => candidate.visible.name === resolved.relayTarget.visibleToolName,
-  );
-  if (!tool) {
-    throwToolError("The relay tool definition is no longer available.");
-  }
-
-  const rawResult = await callRelayTool({
-    conversationId: params.context.conversationId,
-    sessionId: params.context.sessionId,
-    requestedByWorkspaceMemberId: params.context.workspaceMemberId,
-    requestedByActorId: params.context.actorId,
-    relayCapabilityId: resolved.relayTarget.capabilityId,
-    deviceId: resolved.relayTarget.deviceId,
-    exposureId: resolved.relayTarget.exposureId,
-    visibleToolName: resolved.relayTarget.visibleToolName,
-    binding: tool.binding,
-    args: params.toolArguments,
-    runtimeSessionId: resolved.relayTarget.runtimeSessionId || "",
-    authorization: {
-      retryNonce: params.retryNonce,
-    },
-  });
-
-  return normalizeMcpToolResult(rawResult, params.context.workspaceId);
 }
 
 function normalizeUserInputQuestionType(
@@ -2178,12 +2135,12 @@ export function registerCallableToolPlugins(): void {
             type: "string",
             enum: ["background", "blocking"],
             description:
-              "Use blocking only when the actor must wait for approval and then retry the original relay tool call automatically.",
+              "Use blocking only when the actor must wait for approval or rejection before continuing. This tool does not execute the relay tool for you.",
           },
           toolArguments: {
             type: "object",
             description:
-              "The exact arguments for the relay tool call that should be retried after approval.",
+              "The exact relay tool arguments to authorize on the server.",
           },
         },
         required: ["relayToolName", "reason", "mode", "toolArguments"],
@@ -2205,7 +2162,7 @@ export function registerCallableToolPlugins(): void {
         definition: {
           name: "request_relay_authorization",
           description:
-            "Create a relay authorization request for a relay special MCP tool. If you choose blocking mode, Synapse will wait for approval and retry the original relay tool automatically.",
+            "Create a relay authorization request for a relay special MCP tool. If you choose blocking mode, Synapse will wait for approval or rejection before returning.",
           parameters: {
             type: "object",
             properties: {
@@ -2222,12 +2179,12 @@ export function registerCallableToolPlugins(): void {
                 type: "string",
                 enum: ["background", "blocking"],
                 description:
-                  "Use blocking only when the actor must wait for approval and then retry the original relay tool call automatically.",
+                  "Use blocking only when the actor must wait for approval or rejection before continuing. This tool does not execute the relay tool for you.",
               },
               toolArguments: {
                 type: "object",
                 description:
-                  "The exact arguments for the relay tool call that should be retried after approval.",
+                  "The exact relay tool arguments to authorize on the server.",
               },
             },
             required: ["relayToolName", "reason", "mode", "toolArguments"],
@@ -2305,6 +2262,7 @@ export function registerCallableToolPlugins(): void {
           },
           authorizationPlan,
           requestMode: mode,
+          availablePresets: ["actor", "conversation", "workspace"],
           reason,
           sourceRequestArgs: toolArguments,
         });
@@ -2319,13 +2277,7 @@ export function registerCallableToolPlugins(): void {
           interactionId: created.interaction.id,
           conversationId,
           createdAt: created.interaction.createdAt,
-          onApproved: async () =>
-            retryAuthorizedRelayTool({
-              context,
-              relayToolName,
-              toolArguments,
-              retryNonce: created.retryNonce,
-            }),
+          onApproved: async (interaction) => interaction,
         });
         if (waited.status === "approved") {
           return JSON.stringify({
@@ -2336,9 +2288,9 @@ export function registerCallableToolPlugins(): void {
             relayDevice: relayTarget.deviceDisplayName,
             relayExposure: relayTarget.exposureDisplayName,
             authorized: true,
-            retried: true,
+            retried: false,
             relayToolName,
-            result: waited.approvedValue,
+            authorization: waited.approvedValue.relayAuthorization,
           });
         }
         throwToolError(

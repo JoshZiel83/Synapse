@@ -111,7 +111,7 @@ func (e *Engine) run(ctx context.Context) {
 
 	// Initialize MCP servers
 	e.emit(NewEvent(EventLog, "Initializing MCP servers..."))
-	mgr := mcp.NewManager(e.cfg.Servers)
+	mgr := mcp.NewManager(e.cfg.Servers, e.cfg.Security)
 
 	// Wire event callback to manager
 	mgr.OnEvent = func(evtType string, msg string, data map[string]interface{}) {

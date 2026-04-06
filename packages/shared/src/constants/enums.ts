@@ -364,7 +364,6 @@ export const RELAY_DEVICE_TYPES = [
   'virtual_machine',
   'custom',
 ] as const;
-export const RELAY_AUTHORIZATION_MODES = ['server_trust', 'client_local'] as const;
 export const RELAY_PAIRING_STATUSES = [
   'pending',
   'confirmed',
@@ -428,21 +427,9 @@ export const RELAY_AUTHORIZATION_CAPABILITIES = [
   'browser',
   'commandline',
 ] as const;
-export const RELAY_AUTHORIZATION_KINDS = [
-  'filesystem.read',
-  'filesystem.write',
-  'filesystem.directory',
-  'cua.tool',
-  'cua.read',
-  'cua.write',
-  'browser.tool',
-  'browser.read',
-  'browser.write',
-  'browser.site',
-  'commandline.tool',
-  'commandline.directory',
-  'commandline.command',
-] as const;
+export const RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES = ['read', 'write'] as const;
+export const RELAY_AUTHORIZATION_CUA_ACCESSES = ['read', 'write'] as const;
+export const RELAY_AUTHORIZATION_BROWSER_ACTIONS = ['read', 'write'] as const;
 export const RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES = [
   'host',
   'domain',
@@ -452,6 +439,7 @@ export const RELAY_AUTHORIZATION_COMMAND_EXECUTORS = ['bash'] as const;
 export const RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES = [
   'exact',
   'prefix',
+  'tool',
 ] as const;
 
 
