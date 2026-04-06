@@ -237,6 +237,14 @@ func (g *sessionGuard) CaptureOptions() (desktopCaptureOptions, error) {
 	switch sessionGuardGOOS {
 	case "windows":
 		options.Backend = desktopCaptureBackendDXGI
+		if strings.TrimSpace(g.activeRuntimeSessionID) != "" {
+			// The Windows privacy overlay is a full-screen layered window marked
+			// WDA_EXCLUDEFROMCAPTURE. DXGI/Desktop Duplication sees that as a
+			// protected full-screen surface and returns black frames, while the GDI
+			// path BitBlts the desktop without CAPTUREBLT and avoids sampling the
+			// overlay.
+			options.Backend = desktopCaptureBackendGDI
+		}
 	case "darwin":
 		options.Backend = desktopCaptureBackendCGDisplay
 		if strings.TrimSpace(g.activeRuntimeSessionID) != "" {
