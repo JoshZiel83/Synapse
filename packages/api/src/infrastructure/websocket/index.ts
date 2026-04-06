@@ -6,6 +6,8 @@ import {
 } from "@synapse/shared";
 import type {
   ChatSocketEvent,
+  ConversationFeedEventPayloadMap,
+  ChatSyncEventPayloadMap,
   ChatSocketEventPayloadMap,
   SystemEvent,
 } from "@synapse/shared";
@@ -115,6 +117,55 @@ function mapInternalEventToSocketEvent(
     default:
       return event;
   }
+}
+
+async function enrichChatSyncSocketEventForViewer(
+  payload: ChatSocketEventPayloadMap["chat.sync.event"],
+  viewerUserId: string,
+): Promise<ChatSocketEventPayloadMap["chat.sync.event"]> {
+  if (payload.eventType !== "conversation.item.created") {
+    return payload;
+  }
+
+  const eventPayload =
+    payload.payload as ChatSyncEventPayloadMap["conversation.item.created"];
+  const item = eventPayload.item;
+  if (
+    item.itemType !== "event" ||
+    item.subtype !== "interaction_requested"
+  ) {
+    return payload;
+  }
+
+  const eventItem = item as Extract<
+    ChatSyncEventPayloadMap["conversation.item.created"]["item"],
+    { itemType: "event"; subtype: "interaction_requested" }
+  >;
+  const itemPayload = eventItem.eventPayload as ConversationFeedEventPayloadMap["interaction_requested"];
+  const interaction =
+    itemPayload &&
+    typeof itemPayload === "object" &&
+    "interaction" in itemPayload
+      ? (itemPayload as ConversationFeedEventPayloadMap["interaction_requested"]).interaction
+      : undefined;
+
+  if (!interaction) {
+    return payload;
+  }
+
+  return {
+    ...payload,
+    payload: {
+      ...eventPayload,
+      item: {
+        ...eventItem,
+        eventPayload: {
+          ...itemPayload,
+          interaction: await enrichInteractionForUser(interaction, viewerUserId),
+        },
+      },
+    },
+  };
 }
 
 function getConversationIdFromSocketEvent(
@@ -475,11 +526,19 @@ export function setupWebSocket(app: FastifyInstance) {
           : false;
 
       if (outbound.type === "chat.sync.event") {
+        const chatSyncPayload = outbound.payload as ChatSocketEventPayloadMap["chat.sync.event"];
+        const enrichedPayload = await enrichChatSyncSocketEventForViewer(
+          chatSyncPayload,
+          client.userId,
+        );
         if (
           inboxSubscriptions.length > 0 ||
           (conversationId && hasConversationTopic && isConversationAllowed)
         ) {
-          safeSendSocketEvent(clientId, outbound);
+          safeSendSocketEvent(clientId, {
+            ...outbound,
+            payload: enrichedPayload,
+          });
         }
         continue;
       }

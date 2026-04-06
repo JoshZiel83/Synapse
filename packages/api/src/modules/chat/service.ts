@@ -35,6 +35,7 @@ import type {
   ConversationFeedMessageItem,
   ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
+  InteractionRequestSummary,
 } from "@synapse/shared/types";
 import { transaction } from "../../infrastructure/database/index.js";
 import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
@@ -57,6 +58,9 @@ import {
   requireWorkspaceMemberIdentity,
   type WorkspaceMemberIdentity,
 } from "./workspace-identity.js";
+import {
+  enrichInteractionForUser,
+} from "../interactions/service.js";
 
 export interface ChatServiceError extends Error {
   code: string;
@@ -383,6 +387,69 @@ function asChatSyncEventPayload<T extends ChatSyncEventType>(
   payload: unknown,
 ): ChatSyncEventPayloadMap[T] {
   return asJsonRecord(payload) as unknown as ChatSyncEventPayloadMap[T];
+}
+
+async function enrichChatConversationItemForViewer(
+  item: ChatConversationItem,
+  userId: string,
+): Promise<ChatConversationItem> {
+  if (
+    item.itemType !== "event" ||
+    item.subtype !== "interaction_requested"
+  ) {
+    return item;
+  }
+
+  const payload = item.eventPayload;
+  const interaction =
+    payload && typeof payload === "object" && "interaction" in payload
+      ? (payload as ConversationFeedEventPayloadMap["interaction_requested"])
+          .interaction
+      : undefined;
+
+  if (!interaction) {
+    return item;
+  }
+
+  return {
+    ...item,
+    eventPayload: {
+      ...payload,
+      interaction: await enrichInteractionForUser(
+        interaction as InteractionRequestSummary,
+        userId,
+      ),
+    },
+  } as ChatConversationItem;
+}
+
+async function enrichChatConversationItemsForViewer(
+  items: ChatConversationItem[],
+  userId: string,
+) {
+  const enriched = await Promise.all(
+    items.map((item) => enrichChatConversationItemForViewer(item, userId)),
+  );
+  return enriched;
+}
+
+async function enrichChatSyncEventPayloadForViewer<T extends ChatSyncEventType>(
+  eventType: T,
+  payload: ChatSyncEventPayloadMap[T],
+  userId: string,
+): Promise<ChatSyncEventPayloadMap[T]> {
+  if (eventType !== "conversation.item.created") {
+    return payload;
+  }
+
+  const eventPayload = payload as ChatSyncEventPayloadMap["conversation.item.created"];
+  return {
+    ...eventPayload,
+    item: await enrichChatConversationItemForViewer(
+      eventPayload.item,
+      userId,
+    ),
+  } as ChatSyncEventPayloadMap[T];
 }
 
 function asParticipantTransportKind(
@@ -4062,19 +4129,27 @@ export async function getChatSync(params: {
 
   const hasMore = result.rows.length > limit;
   const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
-  const events: ChatSyncEvent[] = rows.map((row) => {
-    const eventType = row.event_type;
-    return {
-      syncSeq: toNumber(row.sync_seq),
-      workspaceId: row.workspace_id,
-      workspaceMemberId: row.workspace_member_id,
-      conversationId: row.conversation_id ?? undefined,
-      itemId: row.item_id ?? undefined,
-      eventType,
-      payload: asChatSyncEventPayload(eventType, row.payload),
-      occurredAt: toIso(row.occurred_at),
-    };
-  });
+  const events: ChatSyncEvent[] = await Promise.all(
+    rows.map(async (row) => {
+      const eventType = row.event_type;
+      const payload = asChatSyncEventPayload(eventType, row.payload);
+      const enrichedPayload = await enrichChatSyncEventPayloadForViewer(
+        eventType,
+        payload,
+        identity.userId,
+      );
+      return {
+        syncSeq: toNumber(row.sync_seq),
+        workspaceId: row.workspace_id,
+        workspaceMemberId: row.workspace_member_id,
+        conversationId: row.conversation_id ?? undefined,
+        itemId: row.item_id ?? undefined,
+        eventType,
+        payload: enrichedPayload,
+        occurredAt: toIso(row.occurred_at),
+      };
+    }),
+  );
 
   return {
     events,
@@ -4267,6 +4342,10 @@ export async function getChatConversationMessages(params: {
   const items = await buildChatConversationItems(rootQueryable(), rows, {
     includeTransportDeliveries: true,
   });
+  const enrichedItems = await enrichChatConversationItemsForViewer(
+    items,
+    identity.userId,
+  );
 
   const conversation = await loadConversationView(
     rootQueryable(),
@@ -4337,7 +4416,7 @@ export async function getChatConversationMessages(params: {
 
   return {
     conversation,
-    items,
+    items: enrichedItems,
     participantReadWatermarkSequence: toNumber(readState.rows[0]?.read_watermark_sequence),
     deviceState,
     hasMoreBefore,

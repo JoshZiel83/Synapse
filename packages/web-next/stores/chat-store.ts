@@ -600,6 +600,14 @@ function outboxEntryToMessage(
 function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
   if (item.itemType === "event") {
     const content = summarizeConversationEvent(item.subtype, item.eventPayload)
+    const interaction =
+      item.subtype === "interaction_requested" &&
+      item.eventPayload &&
+      typeof item.eventPayload === "object" &&
+      "interaction" in item.eventPayload
+        ? (item.eventPayload.interaction as InteractionRequestSummary)
+        : undefined
+
     return {
       id: item.id,
       kind: "event",
@@ -621,13 +629,7 @@ function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
       deliveryStatus: "sent",
       eventType: item.subtype,
       eventPayload: item.eventPayload,
-      interaction:
-        item.subtype === "interaction_requested" &&
-        item.eventPayload &&
-        typeof item.eventPayload === "object" &&
-        "interaction" in item.eventPayload
-          ? (item.eventPayload.interaction as InteractionRequestSummary)
-          : undefined,
+      interaction,
     }
   }
 
@@ -673,7 +675,9 @@ function mergeMessagesWithOutbox(
   snapshot: StoredChatSnapshot,
   conversationId: string
 ) {
-  let nextMessages = sortMessages(loadedItems.map(chatItemToFeedMessage))
+  let nextMessages = sortMessages(
+    loadedItems.map(chatItemToFeedMessage)
+  )
   const conversation = snapshot.conversations.find(
     (entry) => entry.conversationId === conversationId
   )
