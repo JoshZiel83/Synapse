@@ -60,9 +60,13 @@ import { toast } from "sonner"
 import { runtimeToAvatarStatus } from "@/stores/chat-store"
 import type { ServerToolCall } from "@/stores/chat-store"
 import type { ConversationMember } from "@/stores/chat-store"
-import type { ChatInteractionResponseInput } from "@/lib/api"
+import type {
+  ChatInteractionResolveInput,
+  ChatInteractionResolvePayload,
+} from "@/lib/api"
 import { cn, resolveFileUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
+import { getRuntimeDetail, getRuntimeLabel } from "./runtime-ui"
 import {
   buildReplyPreviewText,
   getEntityDisplayName,
@@ -78,6 +82,8 @@ import {
   TablePreviewOverlay,
   type TablePreviewContent,
 } from "./table-preview-overlay"
+
+type InteractionResolutionDraftPayload = ChatInteractionResolvePayload
 
 interface MessageBubbleProps {
   kind?: "message" | "event"
@@ -121,7 +127,7 @@ interface MessageBubbleProps {
   onRetryModelError?: (itemId: string) => Promise<void> | void
   onResolveInteraction?: (
     interactionId: string,
-    payload: ChatInteractionResponseInput
+    payload: ChatInteractionResolveInput
   ) =>
     | Promise<InteractionRequestSummary | void>
     | InteractionRequestSummary
@@ -142,37 +148,6 @@ function formatToolsUsed(tools: string[]): string {
     return `Used ${names.join(", ")} (${total} tool call${total > 1 ? "s" : ""})`
   }
   return `Used ${names.slice(0, 2).join(", ")} + ${names.length - 2} more (${total} tool call${total > 1 ? "s" : ""})`
-}
-
-function getRuntimeLabel(runtime?: ActorRuntimeState) {
-  if (!runtime) return undefined
-  if (runtime.health === "error" || runtime.laneState === "blocked")
-    return "Error"
-  if (runtime.laneState === "running") return "Working"
-  if (runtime.laneState === "queued") return "Queued"
-  return "Idle"
-}
-
-function getRuntimeDetail(runtime?: ActorRuntimeState) {
-  if (!runtime) return undefined
-  if (runtime.lastError?.message) return runtime.lastError.message
-  if (
-    runtime.laneState === "running" &&
-    runtime.activeWakeups.some((wakeup) => wakeup.status === "attached")
-  ) {
-    return runtime.activeWakeups
-      .filter((wakeup) => wakeup.status === "attached")
-      .slice(0, 2)
-      .map(
-        (wakeup) => wakeup.sourceName || wakeup.sourceType.replace(/_/g, " ")
-      )
-      .join(", ")
-  }
-  if (runtime.statusText) return runtime.statusText
-  if (runtime.pendingWakeupCount > 0) {
-    return `${runtime.pendingWakeupCount} queued wakeup${runtime.pendingWakeupCount === 1 ? "" : "s"}`
-  }
-  return undefined
 }
 
 function getCompactMessagePreview(
@@ -653,11 +628,9 @@ function summarizeQuestionFieldAnswer(
 
 function InteractionStatusNote({
   interaction,
-  isTargetUser,
   viewerCanResolve,
 }: {
   interaction: InteractionRequestSummary
-  isTargetUser: boolean
   viewerCanResolve: boolean
 }) {
   const targetName = interaction.target?.name || "the selected user"
@@ -666,7 +639,7 @@ function InteractionStatusNote({
     if (interaction.status === "pending") {
       return (
         <p className="text-xs text-muted-foreground">
-          {isTargetUser
+          {viewerCanResolve
             ? "Only you can answer this input request."
             : `Waiting for ${targetName} to answer.`}
         </p>
@@ -696,7 +669,7 @@ function InteractionStatusNote({
     if (interaction.status === "pending") {
       return (
         <p className="text-xs text-muted-foreground">
-          {isTargetUser
+          {viewerCanResolve
             ? "Approve the plan or request revisions."
             : `Waiting for ${targetName} to review the plan.`}
         </p>
@@ -776,24 +749,21 @@ function InteractionCard({
     string | null
   >(interaction.relayAuthorization?.grantOptions[0]?.id || null)
 
-  const isTargetUser =
-    (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT ||
-      interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) &&
-    interaction.viewerCanResolve === true
+  const viewerCanResolve = interaction.viewerCanResolve === true
   const canResolveUserInput =
     interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT &&
     Boolean(onResolveInteraction) &&
-    interaction.viewerCanResolve === true &&
+    viewerCanResolve &&
     interaction.status === "pending"
   const canResolvePlanApproval =
     interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL &&
     Boolean(onResolveInteraction) &&
-    interaction.viewerCanResolve === true &&
+    viewerCanResolve &&
     interaction.status === "pending"
   const canResolveRelayAuthorization =
     interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
     Boolean(onResolveInteraction) &&
-    interaction.viewerCanResolve === true &&
+    viewerCanResolve &&
     interaction.status === "pending"
   const canResolve =
     canResolveUserInput || canResolvePlanApproval || canResolveRelayAuthorization
@@ -806,19 +776,28 @@ function InteractionCard({
     setSelectedRelayGrantOptionId(
       interaction.relayAuthorization?.grantOptions[0]?.id || null
     )
-  }, [interaction.id, interaction.status])
+  }, [interaction.id, interaction.revision, interaction.status])
 
   async function submitResolution(
     actionKey: string,
-    payload: Parameters<
-      NonNullable<MessageBubbleProps["onResolveInteraction"]>
-    >[1]
+    payload: InteractionResolutionDraftPayload
   ) {
     if (!onResolveInteraction || !canResolve) return
     setSubmittingAction(actionKey)
     setSubmitError(null)
     try {
-      await onResolveInteraction(interaction.id, payload)
+      const commandId =
+        typeof crypto !== "undefined" &&
+        typeof crypto.randomUUID === "function"
+          ? crypto.randomUUID()
+          : `interaction-${Date.now().toString(36)}-${Math.random()
+              .toString(16)
+              .slice(2)}`
+      await onResolveInteraction(interaction.id, {
+        ...payload,
+        commandId,
+        baseRevision: interaction.revision,
+      })
     } catch (error) {
       setSubmitError(
         error instanceof Error ? error.message : "Failed to submit response."
@@ -1205,8 +1184,7 @@ function InteractionCard({
 
         <InteractionStatusNote
           interaction={interaction}
-          isTargetUser={Boolean(isTargetUser)}
-          viewerCanResolve={canResolve}
+          viewerCanResolve={viewerCanResolve}
         />
         {interaction.resolutionNote ? (
           <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
@@ -1340,8 +1318,7 @@ function InteractionCard({
 
         <InteractionStatusNote
           interaction={interaction}
-          isTargetUser={Boolean(isTargetUser)}
-          viewerCanResolve={canResolve}
+          viewerCanResolve={viewerCanResolve}
         />
         {interaction.resolutionNote ? (
           <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
@@ -1521,13 +1498,14 @@ function InteractionCard({
                   variant={preset === "once" ? "default" : "outline"}
                   disabled={Boolean(submittingAction) || !selectedRelayGrantOptionId}
                   onClick={() =>
-                    void submitResolution(`approve_${preset}`, {
-                      decision: "approve",
-                      preset,
-                      selectedGrantOptionId:
-                        selectedRelayGrantOptionId || undefined,
-                      note: resolutionNoteDraft.trim() || undefined,
-                    })
+                    selectedRelayGrantOptionId
+                      ? void submitResolution(`approve_${preset}`, {
+                          decision: "approve",
+                          preset,
+                          selectedGrantOptionId: selectedRelayGrantOptionId,
+                          note: resolutionNoteDraft.trim() || undefined,
+                        })
+                      : undefined
                   }
                   className="rounded-full"
                 >
@@ -1564,8 +1542,7 @@ function InteractionCard({
 
         <InteractionStatusNote
           interaction={interaction}
-          isTargetUser={Boolean(isTargetUser)}
-          viewerCanResolve={canResolve}
+          viewerCanResolve={viewerCanResolve}
         />
         {interaction.resolutionNote ? (
           <div className="rounded-xl border border-border/70 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">

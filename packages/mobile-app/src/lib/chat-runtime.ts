@@ -17,7 +17,9 @@ import type { ChatComposerSendPayload } from "@/lib/chat-compose";
 import { getDeviceLabel } from "@/lib/config";
 import { createId } from "@/lib/ids";
 import {
+  type ActorRuntimeState,
   extractText,
+  summarizeConversationEvent,
   type ChatConversationCreateResponse,
   type ChatConversationItem,
   type ChatConversationMessagesPage,
@@ -34,6 +36,7 @@ export interface ChatRuntimeState {
   error: string | null;
   activeWorkspaceId: string | null;
   snapshot: ChatWorkspaceSnapshot | null;
+  runtimeByConversationId: Record<string, Record<string, ActorRuntimeState>>;
 }
 
 type ChatRuntimeListener = (state: ChatRuntimeState) => void;
@@ -70,6 +73,42 @@ function shouldIncrementUnreadCount(
   );
 }
 
+function patchInteractionInConversationItem(
+  item: ChatConversationItem,
+  payload: ChatSyncEvent<"interaction.updated">["payload"],
+) {
+  if (
+    item.itemType !== "event" ||
+    item.subtype !== "interaction_requested" ||
+    !item.eventPayload ||
+    typeof item.eventPayload !== "object"
+  ) {
+    return item;
+  }
+
+  const currentInteraction =
+    "interaction" in item.eventPayload
+      ? ((item.eventPayload as { interaction?: unknown }).interaction as
+          | { id?: string }
+          | undefined)
+      : undefined;
+
+  if (
+    item.id !== payload.itemId &&
+    currentInteraction?.id !== payload.interactionId
+  ) {
+    return item;
+  }
+
+  return {
+    ...item,
+    eventPayload: {
+      ...(item.eventPayload as Record<string, unknown>),
+      interaction: payload.interaction,
+    },
+  };
+}
+
 export class ChatRuntime {
   private readonly persistence = createChatPersistence();
   private readonly listeners = new Set<ChatRuntimeListener>();
@@ -82,6 +121,7 @@ export class ChatRuntime {
     error: null,
     activeWorkspaceId: null,
     snapshot: null,
+    runtimeByConversationId: {},
   };
 
   subscribe(listener: ChatRuntimeListener) {
@@ -109,6 +149,7 @@ export class ChatRuntime {
       error: null,
       activeWorkspaceId: null,
       snapshot: null,
+      runtimeByConversationId: {},
     });
   }
 
@@ -230,6 +271,21 @@ export class ChatRuntime {
   handleSocketEvent(event: ChatSocketEvent | Record<string, unknown>) {
     if (event.type === "chat.sync.event") {
       this.applyChatEvent((event as ChatSocketEvent<"chat.sync.event">).payload);
+      return;
+    }
+
+    if (event.type === "runtime.updated") {
+      const payload = (event as ChatSocketEvent<"runtime.updated">).payload;
+      this.replaceState({
+        ...this.state,
+        runtimeByConversationId: {
+          ...this.state.runtimeByConversationId,
+          [payload.conversationId]: {
+            ...(this.state.runtimeByConversationId[payload.conversationId] ?? {}),
+            [payload.snapshot.actorId]: payload.snapshot,
+          },
+        },
+      });
     }
   }
 
@@ -272,6 +328,14 @@ export class ChatRuntime {
         },
       },
     }));
+
+    this.replaceState({
+      ...this.state,
+      runtimeByConversationId: {
+        ...this.state.runtimeByConversationId,
+        [conversationId]: response.runtimeByActor ?? {},
+      },
+    });
 
     return response;
   }
@@ -326,6 +390,17 @@ export class ChatRuntime {
         },
       },
     }));
+
+    this.replaceState({
+      ...this.state,
+      runtimeByConversationId: {
+        ...this.state.runtimeByConversationId,
+        [conversationId]:
+          response.runtimeByActor
+            ?? this.state.runtimeByConversationId[conversationId]
+            ?? {},
+      },
+    });
   }
 
   async markConversationRead(
@@ -520,6 +595,7 @@ export class ChatRuntime {
       activeWorkspaceId: workspaceId,
       status: "loading",
       error: null,
+      runtimeByConversationId: {},
     });
 
     const persisted = await this.persistence.loadWorkspaceSnapshot(workspaceId);
@@ -533,6 +609,7 @@ export class ChatRuntime {
       status: "ready",
       error: null,
       snapshot: persisted ?? createEmptyChatWorkspaceSnapshot(workspaceId),
+      runtimeByConversationId: {},
     });
 
     if (this.state.snapshot) {
@@ -740,6 +817,45 @@ export class ChatRuntime {
             (conversation) => ({
               ...conversation,
               unreadCount: 0,
+            }),
+          );
+          break;
+        }
+        case "interaction.updated": {
+          const payload =
+            event.payload as ChatSyncEvent<"interaction.updated">["payload"];
+          const currentItems =
+            nextSnapshot.itemsByConversationId[payload.conversationId] ?? [];
+          const nextItems = currentItems.map((item) =>
+            patchInteractionInConversationItem(item, payload),
+          );
+
+          nextSnapshot = {
+            ...nextSnapshot,
+            itemsByConversationId: {
+              ...nextSnapshot.itemsByConversationId,
+              [payload.conversationId]: nextItems,
+            },
+          };
+
+          nextSnapshot = updateConversationInSnapshot(
+            nextSnapshot,
+            payload.conversationId,
+            (conversation) => ({
+              ...conversation,
+              lastItem:
+                payload.itemId &&
+                conversation.lastItem?.itemId === payload.itemId
+                  ? {
+                      ...conversation.lastItem,
+                      previewText: summarizeConversationEvent(
+                        "interaction_requested",
+                        {
+                          interaction: payload.interaction,
+                        },
+                      ),
+                    }
+                  : conversation.lastItem,
             }),
           );
           break;

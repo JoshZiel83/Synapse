@@ -211,6 +211,8 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
       "requester_participant_id",
       "kind",
       "status",
+      "revision",
+      "request_key",
     ],
     reason: "interaction requests linked to task governance",
   },
@@ -235,6 +237,18 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
       "dedupe_key",
     ],
     reason: "relay authorization interaction subtype storage",
+  },
+  {
+    table: "interaction_response_commands",
+    requiredColumns: [
+      "interaction_id",
+      "command_id",
+      "base_revision",
+      "outcome",
+      "request_payload",
+      "response_payload",
+    ],
+    reason: "interaction resolution command dedupe and replay",
   },
   {
     table: "relay_authorization_grants",

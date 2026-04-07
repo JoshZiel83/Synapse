@@ -1,6 +1,6 @@
 "use client"
 
-import { startTransition, useEffect, useMemo, useRef, useState } from "react"
+import { startTransition, useEffect, useMemo, useState } from "react"
 import {
   APP_NAME,
   type Actor,
@@ -27,7 +27,6 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { api, ApiError } from "@/lib/api"
-import { cn } from "@/lib/utils"
 import { useChatStore } from "@/stores/chat-store"
 
 type PickerMode = "launch"
@@ -70,13 +69,10 @@ function toLaunchActor(
   }
 }
 
-const SEND_BUTTON_ANIMATION_MS = 1280
-
 export default function DashboardHomePage() {
   const router = useRouter()
   const { workspaceId, workspaceName } = useWorkspace()
   const { createWorkspaceThread, selectConversation } = useChatStore()
-  const sendAnimationTimerRef = useRef<number | null>(null)
 
   const [pendingLaunchPayload, setPendingLaunchPayload] =
     useState<ChatComposerSubmitPayload | null>(null)
@@ -90,7 +86,6 @@ export default function DashboardHomePage() {
   const [pickerIntent, setPickerIntent] = useState<PickerIntent>("submit")
   const [launchActor, setLaunchActor] = useState<LaunchActor | null>(null)
   const [availableActors, setAvailableActors] = useState<LaunchActor[]>([])
-  const [sendAnimating, setSendAnimating] = useState(false)
   const [composerResetSignal, setComposerResetSignal] = useState(0)
 
   useEffect(() => {
@@ -176,14 +171,6 @@ export default function DashboardHomePage() {
     setLaunchActor(toLaunchActor(preference?.chiefActor))
   }, [preference])
 
-  useEffect(() => {
-    return () => {
-      if (sendAnimationTimerRef.current !== null) {
-        window.clearTimeout(sendAnimationTimerRef.current)
-      }
-    }
-  }, [])
-
   const composerParticipants = useMemo<ChatComposerParticipant[]>(
     () =>
       availableActors.map((actor) => ({
@@ -208,31 +195,6 @@ export default function DashboardHomePage() {
 
   function handlePickerOpenChange(nextOpen: boolean) {
     setPickerOpen(nextOpen)
-  }
-
-  function playSendFlight(): Promise<void> {
-    if (typeof window === "undefined") {
-      return Promise.resolve()
-    }
-
-    if (window.matchMedia("(prefers-reduced-motion: reduce)").matches) {
-      setSendAnimating(false)
-      return Promise.resolve()
-    }
-
-    if (sendAnimationTimerRef.current !== null) {
-      window.clearTimeout(sendAnimationTimerRef.current)
-    }
-
-    setSendAnimating(true)
-
-    return new Promise((resolve) => {
-      sendAnimationTimerRef.current = window.setTimeout(() => {
-        setSendAnimating(false)
-        sendAnimationTimerRef.current = null
-        resolve()
-      }, SEND_BUTTON_ANIMATION_MS)
-    })
   }
 
   async function handleLaunch(
@@ -265,25 +227,21 @@ export default function DashboardHomePage() {
 
     setSubmitting(true)
     setErrorMessage(null)
-    const flightPromise = playSendFlight()
 
-    const [[groupResult, preferenceResult]] = await Promise.all([
-      Promise.allSettled([
-        createWorkspaceThread(
-          workspaceId,
-          "group",
-          actorIds,
-          message || undefined,
-          launchPayload.contentBlocks,
-          threadTitle || undefined
-        ),
-        saveAsDefault && primaryActor
-          ? api.updateWorkspaceChiefActorPreference(workspaceId, {
-              chiefActorId: primaryActor.id,
-            })
-          : Promise.resolve(null),
-      ]),
-      flightPromise,
+    const [groupResult, preferenceResult] = await Promise.allSettled([
+      createWorkspaceThread(
+        workspaceId,
+        "group",
+        actorIds,
+        message || undefined,
+        launchPayload.contentBlocks,
+        threadTitle || undefined
+      ),
+      saveAsDefault && primaryActor
+        ? api.updateWorkspaceChiefActorPreference(workspaceId, {
+            chiefActorId: primaryActor.id,
+          })
+        : Promise.resolve(null),
     ])
 
     setSubmitting(false)
@@ -444,10 +402,7 @@ export default function DashboardHomePage() {
                         type="submit"
                         size="sm"
                         disabled={disabled}
-                        data-flight={sendAnimating ? "true" : "false"}
-                        className={cn(
-                          "home-send-button min-w-[112px] rounded-full px-4 pr-11 shadow-sm"
-                        )}
+                        className="home-send-button min-w-[112px] rounded-full px-4 pr-11 shadow-sm"
                       >
                         <span className="home-send-button__label">Send</span>
                         <span

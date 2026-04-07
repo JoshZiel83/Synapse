@@ -4,6 +4,7 @@ import {
   parseConversationMessageRef,
   extractText,
   type CanonicalContentBlock,
+  type ActorRuntimeTurnActivityDetail,
   type ChatBootstrapResponse,
   type ChatClientInstanceRegistrationResponse,
   type ChatConversationEventItem,
@@ -61,6 +62,10 @@ import {
 import {
   enrichInteractionForUser,
 } from "../interactions/service.js";
+import {
+  getConversationRuntimeMap,
+  getSessionRuntimeTurnActivityDetail,
+} from "../session/runtime.js";
 
 export interface ChatServiceError extends Error {
   code: string;
@@ -438,18 +443,29 @@ async function enrichChatSyncEventPayloadForViewer<T extends ChatSyncEventType>(
   payload: ChatSyncEventPayloadMap[T],
   userId: string,
 ): Promise<ChatSyncEventPayloadMap[T]> {
-  if (eventType !== "conversation.item.created") {
-    return payload;
+  if (eventType === "conversation.item.created") {
+    const eventPayload = payload as ChatSyncEventPayloadMap["conversation.item.created"];
+    return {
+      ...eventPayload,
+      item: await enrichChatConversationItemForViewer(
+        eventPayload.item,
+        userId,
+      ),
+    } as ChatSyncEventPayloadMap[T];
   }
 
-  const eventPayload = payload as ChatSyncEventPayloadMap["conversation.item.created"];
-  return {
-    ...eventPayload,
-    item: await enrichChatConversationItemForViewer(
-      eventPayload.item,
-      userId,
-    ),
-  } as ChatSyncEventPayloadMap[T];
+  if (eventType === "interaction.updated") {
+    const eventPayload = payload as ChatSyncEventPayloadMap["interaction.updated"];
+    return {
+      ...eventPayload,
+      interaction: await enrichInteractionForUser(
+        eventPayload.interaction,
+        userId,
+      ),
+    } as ChatSyncEventPayloadMap[T];
+  }
+
+  return payload;
 }
 
 function asParticipantTransportKind(
@@ -1400,7 +1416,7 @@ async function upsertConversationView(
   );
 }
 
-async function appendWorkspaceMemberSyncEvent<T extends ChatSyncEventType>(
+export async function appendWorkspaceMemberSyncEvent<T extends ChatSyncEventType>(
   queryable: Queryable,
   params: {
     workspaceId: string;
@@ -4414,14 +4430,50 @@ export async function getChatConversationMessages(params: {
         };
   }
 
+  const runtimeMap = await getConversationRuntimeMap([params.conversationId]);
+
   return {
     conversation,
     items: enrichedItems,
+    runtimeByActor: runtimeMap[params.conversationId] || {},
     participantReadWatermarkSequence: toNumber(readState.rows[0]?.read_watermark_sequence),
     deviceState,
     hasMoreBefore,
     hasMoreAfter,
   };
+}
+
+export async function getChatConversationActorRuntimeTurnDetail(params: {
+  workspaceId: string;
+  userId: string;
+  conversationId: string;
+  actorId: string;
+  turnId: string;
+}): Promise<ActorRuntimeTurnActivityDetail> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId,
+  );
+  await requireConversationAccess(
+    rootQueryable(),
+    params.conversationId,
+    identity.workspaceMemberId,
+  );
+
+  const detail = await getSessionRuntimeTurnActivityDetail({
+    conversationId: params.conversationId,
+    actorId: params.actorId,
+    turnId: params.turnId,
+  });
+  if (!detail) {
+    throw createChatError(
+      404,
+      "runtime_turn_not_found",
+      "Current turn activity not found",
+    );
+  }
+
+  return detail;
 }
 
 export async function sendChatConversationMessage(

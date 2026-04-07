@@ -9,19 +9,12 @@ import { PlusIcon } from 'lucide-react';
 import { runtimeToAvatarStatus } from '@/stores/chat-store';
 import type { ConversationMember } from '@/stores/chat-store';
 import ChatAvatar from './chat-avatar';
+import { getRuntimeDetail, getRuntimeLabel, getActorRuntimePriority } from './runtime-ui';
 import ChatParticipantHoverCard from './chat-participant-hover-card';
 import {
   getConversationMemberContactHref,
   getConversationMemberSubtitle,
 } from './member-utils';
-
-function getRuntimePriority(runtime?: ActorRuntimeState) {
-  if (!runtime) return 3;
-  if (runtime.health === 'error' || runtime.laneState === 'blocked') return 0;
-  if (runtime.laneState === 'running') return 1;
-  if (runtime.laneState === 'queued') return 2;
-  return 3;
-}
 
 function orderMembers(members: ConversationMember[], runtimeByActor?: Record<string, ActorRuntimeState>) {
   return [...members].sort((left, right) => {
@@ -30,33 +23,8 @@ function orderMembers(members: ConversationMember[], runtimeByActor?: Record<str
       return left.type === 'actor' ? -1 : 1;
     }
 
-    return getRuntimePriority(runtimeByActor?.[left.id]) - getRuntimePriority(runtimeByActor?.[right.id]);
+    return getActorRuntimePriority(runtimeByActor?.[left.id]) - getActorRuntimePriority(runtimeByActor?.[right.id]);
   });
-}
-
-function getRuntimeLabel(runtime?: ActorRuntimeState) {
-  if (!runtime) return undefined;
-  if (runtime.health === 'error' || runtime.laneState === 'blocked') return 'Error';
-  if (runtime.laneState === 'running') return 'Working';
-  if (runtime.laneState === 'queued') return 'Queued';
-  return 'Idle';
-}
-
-function getRuntimeDetail(runtime?: ActorRuntimeState) {
-  if (!runtime) return undefined;
-  if (runtime.lastError?.message) return runtime.lastError.message;
-  if (runtime.laneState === 'running' && runtime.activeWakeups.some((wakeup) => wakeup.status === 'attached')) {
-    return runtime.activeWakeups
-      .filter((wakeup) => wakeup.status === 'attached')
-      .slice(0, 2)
-      .map((wakeup) => wakeup.sourceName || wakeup.sourceType.replace(/_/g, ' '))
-      .join(', ');
-  }
-  if (runtime.statusText) return runtime.statusText;
-  if (runtime.pendingWakeupCount > 0) {
-    return `${runtime.pendingWakeupCount} queued wakeup${runtime.pendingWakeupCount === 1 ? '' : 's'}`;
-  }
-  return undefined;
 }
 
 interface ChatMemberStripProps {

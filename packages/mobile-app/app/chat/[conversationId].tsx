@@ -14,9 +14,11 @@ import {
 } from "react-native";
 
 import { ChatComposer } from "@/components/chat-composer";
+import { ActorActivityBubble } from "@/components/actor-activity-bubble";
 import { ChatMessageActionSheet } from "@/components/chat-message-action-sheet";
 import { MessageItem } from "@/components/message-item";
 import { Button, EmptyState, LoadingBlock, ScreenView } from "@/components/ui";
+import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
 import {
   buildReplyPreviewText,
   getConversationDisplayName,
@@ -24,8 +26,14 @@ import {
   type MobileChatItem,
 } from "@/lib/chat-data";
 import { useChat } from "@/providers/chat-provider";
+import { useWorkspace } from "@/providers/workspace-provider";
 import { theme } from "@/theme/tokens";
-import type { ConversationReplyRef } from "@shared";
+import {
+  getActorRuntimePriority,
+  isActorRuntimeActive,
+  isActorRuntimeProcessingWorkspaceMember,
+  type ConversationReplyRef,
+} from "@shared";
 
 export default function ChatDetailScreen() {
   const router = useRouter();
@@ -36,6 +44,7 @@ export default function ChatDetailScreen() {
     getConversation,
     getConversationItems,
     getConversationMeta,
+    getConversationRuntimes,
     loadOlderMessages,
     markConversationRead,
     refreshConversation,
@@ -44,6 +53,7 @@ export default function ChatDetailScreen() {
     status,
     workspaceMemberId,
   } = useChat();
+  const { workspaceId } = useWorkspace();
   const [refreshing, setRefreshing] = useState(false);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [replyTo, setReplyTo] = useState<ConversationReplyRef | null>(null);
@@ -56,6 +66,7 @@ export default function ChatDetailScreen() {
 
   const conversation = conversationId ? getConversation(conversationId) : null;
   const items = conversationId ? getConversationItems(conversationId) : [];
+  const actorRuntimes = conversationId ? getConversationRuntimes(conversationId) : {};
   const meta = conversationId ? getConversationMeta(conversationId) : null;
   const viewerParticipantId = getConversationViewerParticipant(
     conversation,
@@ -65,6 +76,45 @@ export default function ChatDetailScreen() {
   const headerTitle = conversation
     ? getConversationDisplayName(conversation, workspaceMemberId)
     : "聊天";
+  const directActorParticipant =
+    conversation?.kind === "private"
+      ? (conversation.participants.find(
+          (participant) => participant.participantType === "actor",
+        ) ?? null)
+      : null;
+  const directActorRuntime =
+    directActorParticipant?.actorId
+      ? actorRuntimes[directActorParticipant.actorId] ?? null
+      : null;
+  const showTypingHint = Boolean(
+    workspaceMemberId &&
+      directActorRuntime?.laneState === "running" &&
+      isActorRuntimeProcessingWorkspaceMember(
+        directActorRuntime,
+        workspaceMemberId,
+      ),
+  );
+  const activeRuntimes = Object.values(actorRuntimes)
+    .filter((runtime) => isActorRuntimeActive(runtime))
+    .sort((left, right) => getActorRuntimePriority(left) - getActorRuntimePriority(right));
+  const currentTurnRuntimes = activeRuntimes.filter((runtime) =>
+    Boolean(runtime.currentTurnPreview?.turnId),
+  );
+
+  useWorkspaceWebSocket({
+    workspaceId: workspaceId || undefined,
+    enabled: Boolean(workspaceId && conversationId),
+    subscriptions:
+      workspaceId && conversationId
+        ? [
+            {
+              key: `chat-conversation:${workspaceId}:${conversationId}`,
+              topic: "conversation",
+              conversationId,
+            },
+          ]
+        : [],
+  });
 
   useEffect(() => {
     setReplyTo(null);
@@ -114,7 +164,6 @@ export default function ChatDetailScreen() {
           key={item.id}
           item={item}
           viewerParticipantId={viewerParticipantId}
-          viewerWorkspaceMemberId={workspaceMemberId}
           onResolveInteraction={
             conversation
               ? (interactionId, input) =>
@@ -134,7 +183,7 @@ export default function ChatDetailScreen() {
           }
         />
       )),
-    [conversation, items, respondInteraction, viewerParticipantId, workspaceMemberId],
+    [conversation, items, respondInteraction, viewerParticipantId],
   );
 
   async function handleRefresh() {
@@ -187,9 +236,16 @@ export default function ChatDetailScreen() {
             <Pressable onPress={() => router.back()} style={styles.headerButton}>
               <Feather name="chevron-left" size={20} color={theme.colors.text} />
             </Pressable>
-            <Text numberOfLines={1} style={styles.headerTitle}>
-              {headerTitle}
-            </Text>
+            <View style={styles.headerTitleWrap}>
+              <Text numberOfLines={1} style={styles.headerTitle}>
+                {headerTitle}
+              </Text>
+              {showTypingHint ? (
+                <Text numberOfLines={1} style={styles.headerSubtitle}>
+                  对方正在输入中...
+                </Text>
+              ) : null}
+            </View>
             <Pressable
               onPress={() =>
                 router.push({
@@ -254,13 +310,43 @@ export default function ChatDetailScreen() {
               ) : null}
 
               {messageNodes.length > 0 ? (
-                messageNodes
+                <>
+                  {messageNodes}
+                  {currentTurnRuntimes.map((runtime) => (
+                    <ActorActivityBubble
+                      key={`${runtime.actorId}:${runtime.currentTurnPreview!.turnId}`}
+                      conversationId={conversationId}
+                      workspaceId={workspaceId || undefined}
+                      runtime={runtime}
+                      participant={conversation.participants.find(
+                        (participant) =>
+                          participant.participantType === "actor" &&
+                          participant.actorId === runtime.actorId,
+                      )}
+                    />
+                  ))}
+                </>
               ) : (
-                <EmptyState
-                  icon="message-circle"
-                  title="还没有消息"
-                  description="发一条消息开始对话。"
-                />
+                <>
+                  <EmptyState
+                    icon="message-circle"
+                    title="还没有消息"
+                    description="发一条消息开始对话。"
+                  />
+                  {currentTurnRuntimes.map((runtime) => (
+                    <ActorActivityBubble
+                      key={`${runtime.actorId}:${runtime.currentTurnPreview!.turnId}`}
+                      conversationId={conversationId}
+                      workspaceId={workspaceId || undefined}
+                      runtime={runtime}
+                      participant={conversation.participants.find(
+                        (participant) =>
+                          participant.participantType === "actor" &&
+                          participant.actorId === runtime.actorId,
+                      )}
+                    />
+                  ))}
+                </>
               )}
             </ScrollView>
 
@@ -338,6 +424,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     gap: 10,
   },
+  headerTitleWrap: {
+    flex: 1,
+    minWidth: 0,
+    alignItems: "center",
+    justifyContent: "center",
+  },
   headerButton: {
     width: 32,
     height: 32,
@@ -345,10 +437,15 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   headerTitle: {
-    flex: 1,
     fontSize: 18,
     fontWeight: "800",
     color: theme.colors.text,
+    textAlign: "center",
+  },
+  headerSubtitle: {
+    marginTop: 2,
+    fontSize: 11,
+    color: theme.colors.textMuted,
     textAlign: "center",
   },
   placeholder: {

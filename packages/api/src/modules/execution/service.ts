@@ -21,6 +21,53 @@ function asNullableUuid(value: unknown) {
   return typeof value === 'string' && UUID_PATTERN.test(value) ? value : null;
 }
 
+async function getRuntimeTargetByTurnId(turnId: string) {
+  const row = await db
+    .selectFrom('turns as t')
+    .innerJoin('sessions as s', 's.id', 't.session_id')
+    .select(['s.workspace_id as workspace_id', 's.id as session_id'])
+    .where('t.id', '=', turnId)
+    .limit(1)
+    .executeTakeFirst();
+
+  return row
+    ? {
+        workspaceId: row.workspace_id,
+        sessionId: row.session_id,
+      }
+    : null;
+}
+
+async function getRuntimeTargetByToolCallId(toolCallId: string) {
+  const row = await db
+    .selectFrom('tool_calls as tc')
+    .innerJoin('turns as t', 't.id', 'tc.turn_id')
+    .innerJoin('sessions as s', 's.id', 't.session_id')
+    .select(['s.workspace_id as workspace_id', 's.id as session_id'])
+    .where('tc.id', '=', toolCallId)
+    .limit(1)
+    .executeTakeFirst();
+
+  return row
+    ? {
+        workspaceId: row.workspace_id,
+        sessionId: row.session_id,
+      }
+    : null;
+}
+
+async function publishRuntimeForTurn(turnId: string) {
+  const runtimeTarget = await getRuntimeTargetByTurnId(turnId);
+  if (!runtimeTarget) return;
+  await publishSessionRuntime(runtimeTarget.workspaceId, runtimeTarget.sessionId);
+}
+
+async function publishRuntimeForToolCall(toolCallId: string) {
+  const runtimeTarget = await getRuntimeTargetByToolCallId(toolCallId);
+  if (!runtimeTarget) return;
+  await publishSessionRuntime(runtimeTarget.workspaceId, runtimeTarget.sessionId);
+}
+
 async function storePayloadBlobInternal(
   contentType: 'json' | 'text',
   payload: unknown,
@@ -214,7 +261,7 @@ export async function createToolCall(params: {
   relayId?: string;
   normalizedInput: Record<string, unknown>;
 }) {
-  return db
+  const row = await db
     .insertInto('tool_calls')
     .values({
       id: params.id || uuidv4(),
@@ -235,6 +282,12 @@ export async function createToolCall(params: {
     })
     .returningAll()
     .executeTakeFirst();
+
+  if (row) {
+    await publishRuntimeForTurn(params.turnId);
+  }
+
+  return row;
 }
 
 export async function updateToolCallStatus(toolCallId: string, status: 'running' | 'completed' | 'failed' | 'skipped') {
@@ -249,6 +302,8 @@ export async function updateToolCallStatus(toolCallId: string, status: 'running'
     })
     .where('id', '=', toolCallId)
     .execute();
+
+  await publishRuntimeForToolCall(toolCallId);
 }
 
 export async function createToolExecutionAttempt(params: {
@@ -370,6 +425,8 @@ export async function createToolResult(params: {
       )
       .execute();
   }
+
+  await publishRuntimeForToolCall(params.toolCallId);
 
   return result;
 }
@@ -560,7 +617,7 @@ export async function recoverInterruptedExecutions(params?: {
         health: 'error',
         phase: 'error',
         statusText: errorMessage,
-        currentTurnId: sessionInfo.turnId,
+        activeTurnId: sessionInfo.turnId,
         lastError: {
           message: errorMessage,
           at: new Date().toISOString(),

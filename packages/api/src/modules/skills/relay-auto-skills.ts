@@ -1,11 +1,12 @@
 import { readFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import {
   textBlocks,
   type AvailableSkillSummary,
   type CanonicalContentBlock,
   type CapabilityAccessTarget,
 } from "@synapse/shared";
+import { resolveRepoPath } from "../../config/repo-paths.js";
 import { resolveRepoSubprojectPath } from "../../config/subprojects.js";
 import { listVisibleHealthyRelayCommandlineExposureMetadata } from "../mcp-plugins/tool-resolver.js";
 
@@ -29,8 +30,10 @@ type RelayAutoSkillDefinition = {
 const SKILL_DESCRIPTION_ASSET_PATH = "(description)";
 const SKILL_FILE_NAME = "SKILL.md";
 const RELAY_AUTO_SKILL_SOURCE = "relay_auto_loaded";
-const relayRoot = resolve(process.cwd(), "relay");
-const relayAutoSkillManifestPath = join(relayRoot, "cli-anything-wave1.json");
+const relayAutoSkillManifestPath = resolveRepoPath(
+  "relay",
+  "cli-anything-wave1.json",
+);
 
 let relayAutoSkillIndexPromise:
   | Promise<Map<string, RelayAutoSkillDefinition>>

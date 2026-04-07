@@ -10,6 +10,8 @@ import {
 } from "@synapse/shared/utils";
 import { v4 as uuidv4 } from "uuid";
 import type {
+  ChatInteractionResolveInput,
+  ChatInteractionResolveOutcome,
   ConversationFeedItem,
   ConversationFeedEventPayloadMap,
   ConversationEntityRef,
@@ -31,10 +33,7 @@ import type {
   RelayAuthorizationRequestedAction,
   SessionCollaborationState,
 } from "@synapse/shared/types";
-import {
-  enqueueTransactionalEventDeliveries,
-  type Queryable,
-} from "../../infrastructure/events/index.js";
+import { type Queryable } from "../../infrastructure/events/index.js";
 import { transaction } from "../../infrastructure/database/index.js";
 import {
   db,
@@ -48,8 +47,13 @@ import {
   failToolCallTask,
 } from "../tool-call-tasks/service.js";
 import { updateSessionCollaboration } from "../session/service.js";
-import { authorizeAction, userSubject } from "../access/service.js";
 import {
+  authorizeAction,
+  userSubject,
+  workspaceMemberSubject,
+} from "../access/service.js";
+import {
+  appendWorkspaceMemberSyncEvent,
   createConversationEvent,
   listConversationRealtimeRecipients,
   updateConversationItemEventPayload,
@@ -73,6 +77,7 @@ type RawInteractionRow = {
   conversation_item_id: string | null;
   kind: InteractionRequestKind;
   status: InteractionRequestStatus;
+  revision: string | number;
   prompt_payload: unknown;
   plan_payload: unknown;
   requested_tool_name: string | null;
@@ -128,9 +133,35 @@ type RawInteractionRow = {
   resolved_by_avatar_emoji: string | null;
 };
 
+type RawInteractionCommandRow = {
+  id: string;
+  interaction_id: string;
+  command_id: string;
+  base_revision: string | number;
+  outcome: ChatInteractionResolveOutcome;
+  request_payload: unknown;
+  response_payload: unknown;
+  created_by_workspace_member_id: string | null;
+  created_at: string | Date;
+  updated_at: string | Date;
+};
+
 function toIsoString(value: string | Date | null | undefined) {
   if (!value) return undefined;
   return value instanceof Date ? value.toISOString() : value;
+}
+
+function toRevisionNumber(value: string | number | null | undefined, label: string) {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return Math.trunc(value);
+  }
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return Math.trunc(parsed);
+    }
+  }
+  throw new Error(`${label} must be a finite revision number`);
 }
 
 export interface CreateUserInputInteractionParams {
@@ -181,18 +212,14 @@ export interface CreateRelayAuthorizationInteractionParams {
   expiresAt?: string;
 }
 
-export interface ResolveInteractionRequestParams {
+export type ResolveInteractionRequestParams = ChatInteractionResolveInput & {
   interactionId: string;
   resolverWorkspaceMemberId: string;
   resolverParticipantId: string;
-  answers?: InteractionInputAnswer[];
-  decision?: InteractionDecision | PlanApprovalDecision;
-  preset?: RelayAuthorizationPreset;
-  selectedGrantOptionId?: string;
-  note?: string;
-}
+};
 
 export interface ResolveInteractionRequestResult {
+  outcome: ChatInteractionResolveOutcome;
   interaction: InteractionRequestSummary;
   createdGrant?: RelayAuthorizationGrantRecord;
   createdGrants?: RelayAuthorizationGrantRecord[];
@@ -343,6 +370,23 @@ function buildRelayAuthorizationDedupeKey(params: {
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
     availablePresets: params.availablePresets,
+  });
+}
+
+function buildTaskInteractionRequestKey(taskId: string) {
+  return `task:${taskId}`;
+}
+
+function buildRelayAuthorizationInteractionRequestKey(params: {
+  conversationId: string;
+  requesterParticipantId: string;
+  dedupeKey: string;
+}) {
+  return stableJsonStringify({
+    conversationId: params.conversationId,
+    requesterParticipantId: params.requesterParticipantId,
+    kind: INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
+    dedupeKey: params.dedupeKey,
   });
 }
 
@@ -770,64 +814,101 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
     `Interaction ${row.id} resolution_payload`,
   );
 
-  let userInput: InteractionRequestSummary["userInput"];
-  let planApproval: InteractionRequestSummary["planApproval"];
-  let relayAuthorization:
-    | RelayAuthorizationInteractionSummary
-    | undefined;
+  const baseInteraction = {
+    id: row.id,
+    taskId: row.task_id || undefined,
+    workspaceId: row.workspace_id,
+    conversationId: row.conversation_id,
+    itemId: row.conversation_item_id || undefined,
+    status: row.status,
+    revision: toRevisionNumber(row.revision, `Interaction ${row.id} revision`),
+    requester,
+    resolvedBy,
+    resolutionNote:
+      typeof resolutionPayload.note === "string"
+        ? resolutionPayload.note.trim() || undefined
+        : undefined,
+    createdAt: requireIsoString(row.created_at, `Interaction ${row.id} created_at`),
+    updatedAt: requireIsoString(row.updated_at, `Interaction ${row.id} updated_at`),
+    resolvedAt: toIsoString(row.resolved_at),
+    expiresAt: toIsoString(row.expires_at),
+    viewerCanResolve: false,
+  };
 
   if (row.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
     const promptPayload = requireJsonObject(
       row.prompt_payload,
       `Interaction ${row.id} prompt_payload`,
     );
-    userInput = {
-      title: requireTrimmedString(
-        promptPayload.title,
-        `Interaction ${row.id} user_input.title`,
-      ),
-      instructions:
-        typeof promptPayload.instructions === "string"
-          ? promptPayload.instructions.trim() || undefined
-          : undefined,
-      questions: buildUserInputQuestionSummaries(promptPayload, resolutionPayload),
+    if (!target) {
+      throw new Error(`Interaction ${row.id} user_input is missing target`);
+    }
+    return {
+      ...baseInteraction,
+      kind: INTERACTION_REQUEST_KIND.USER_INPUT,
+      target,
+      userInput: {
+        title: requireTrimmedString(
+          promptPayload.title,
+          `Interaction ${row.id} user_input.title`,
+        ),
+        instructions:
+          typeof promptPayload.instructions === "string"
+            ? promptPayload.instructions.trim() || undefined
+            : undefined,
+        questions: buildUserInputQuestionSummaries(
+          promptPayload,
+          resolutionPayload,
+        ),
+      },
     };
-  } else if (row.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+  }
+
+  if (row.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
     const planPayload = requireJsonObject(
       row.plan_payload,
       `Interaction ${row.id} plan_payload`,
     );
-    planApproval = {
-      title: requireTrimmedString(
-        planPayload.title,
-        `Interaction ${row.id} plan_approval.title`,
-      ),
-      summary:
-        typeof planPayload.summary === "string"
-          ? planPayload.summary.trim() || undefined
+    if (!target) {
+      throw new Error(`Interaction ${row.id} plan_approval is missing target`);
+    }
+    return {
+      ...baseInteraction,
+      kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
+      target,
+      planApproval: {
+        title: requireTrimmedString(
+          planPayload.title,
+          `Interaction ${row.id} plan_approval.title`,
+        ),
+        summary:
+          typeof planPayload.summary === "string"
+            ? planPayload.summary.trim() || undefined
+            : undefined,
+        planMarkdown: requireTrimmedString(
+          planPayload.planMarkdown,
+          `Interaction ${row.id} plan_approval.planMarkdown`,
+        ),
+        checklist: Array.isArray(planPayload.checklist)
+          ? (planPayload.checklist as PlanChecklistStep[])
           : undefined,
-      planMarkdown: requireTrimmedString(
-        planPayload.planMarkdown,
-        `Interaction ${row.id} plan_approval.planMarkdown`,
-      ),
-      checklist: Array.isArray(planPayload.checklist)
-        ? (planPayload.checklist as PlanChecklistStep[])
-        : undefined,
+      },
     };
-  } else {
-    const requestedAction = requireJsonObject(
-      row.requested_action,
-      `Interaction ${row.id} requested_action`,
-    ) as unknown as RelayAuthorizationRequestedAction;
-    const grantOptions = parseJsonArray<RelayAuthorizationGrantOption>(
-      row.grant_options,
-      `Interaction ${row.id} grant_options`,
-    );
-    const availablePresets = parseJsonArray<RelayAuthorizationPreset>(
-      row.available_presets,
-      `Interaction ${row.id} available_presets`,
-    );
-    relayAuthorization = {
+  }
+
+  const requestedAction = requireJsonObject(
+    row.requested_action,
+    `Interaction ${row.id} requested_action`,
+  ) as unknown as RelayAuthorizationRequestedAction;
+  const grantOptions = parseJsonArray<RelayAuthorizationGrantOption>(
+    row.grant_options,
+    `Interaction ${row.id} grant_options`,
+  );
+  const availablePresets = parseJsonArray<RelayAuthorizationPreset>(
+    row.available_presets,
+    `Interaction ${row.id} available_presets`,
+  );
+  const relayAuthorization: RelayAuthorizationInteractionSummary = {
       requestedToolName: requireTrimmedString(
         row.requested_tool_name,
         `Interaction ${row.id} requested_tool_name`,
@@ -882,31 +963,12 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
                 `Interaction ${row.id} relay_authorization.requestMode is invalid`,
               );
             })(),
-    };
-  }
+  };
 
   return {
-    id: row.id,
-    taskId: row.task_id || undefined,
-    workspaceId: row.workspace_id,
-    conversationId: row.conversation_id,
-    itemId: row.conversation_item_id || undefined,
-    kind: row.kind,
-    status: row.status,
-    requester,
-    ...(target ? { target } : {}),
-    resolvedBy,
-    resolutionNote:
-      typeof resolutionPayload.note === "string"
-        ? resolutionPayload.note.trim() || undefined
-        : undefined,
-    userInput,
-    planApproval,
+    ...baseInteraction,
+    kind: INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
     relayAuthorization,
-    createdAt: requireIsoString(row.created_at, `Interaction ${row.id} created_at`),
-    updatedAt: requireIsoString(row.updated_at, `Interaction ${row.id} updated_at`),
-    resolvedAt: toIsoString(row.resolved_at),
-    expiresAt: toIsoString(row.expires_at),
   };
 }
 
@@ -1011,7 +1073,186 @@ async function getInteractionRowById(
   return result.rows[0] || null;
 }
 
-async function queueInteractionUpdatedEvent(
+type StoredInteractionResolveResponse = {
+  outcome: ChatInteractionResolveOutcome;
+  interaction: InteractionRequestSummary;
+};
+
+function requireInteractionResolveOutcome(
+  value: unknown,
+  label: string,
+): ChatInteractionResolveOutcome {
+  if (value === "applied" || value === "duplicate" || value === "conflict") {
+    return value;
+  }
+  throw new Error(`${label} is invalid`);
+}
+
+function parseStoredInteractionResolveResponse(
+  value: unknown,
+  label: string,
+): StoredInteractionResolveResponse {
+  const payload = requireJsonObject(value, label);
+  const outcome = requireInteractionResolveOutcome(
+    payload.outcome,
+    `${label}.outcome`,
+  );
+  if (!payload.interaction || typeof payload.interaction !== "object") {
+    throw new Error(`${label}.interaction is required`);
+  }
+  return {
+    outcome,
+    interaction: payload.interaction as InteractionRequestSummary,
+  };
+}
+
+async function getInteractionCommandRow(
+  interactionId: string,
+  commandId: string,
+  queryable?: Queryable,
+) {
+  const compiled = db
+    .selectFrom("interaction_response_commands")
+    .selectAll()
+    .where("interaction_id", "=", interactionId)
+    .where("command_id", "=", commandId)
+    .limit(1)
+    .compile();
+  const result = queryable
+    ? await executeCompiledSql<RawInteractionCommandRow>(queryable, compiled)
+    : await db.executeQuery(compiled);
+  return result.rows[0] || null;
+}
+
+async function getInteractionRowByIdForUpdate(
+  interactionId: string,
+  queryable: Queryable,
+) {
+  const compiled = sql<RawInteractionRow>`
+    SELECT ir.*,
+            user_input.prompt_payload AS prompt_payload,
+            plan.plan_payload AS plan_payload,
+            auth.requested_tool_name AS requested_tool_name,
+            auth.reason AS reason,
+            auth.request_mode AS request_mode,
+            auth.requested_action AS requested_action,
+            auth.grant_options AS grant_options,
+            auth.available_presets AS available_presets,
+            auth.source_request_args AS source_request_args,
+            auth.source_runtime_session_id AS source_runtime_session_id,
+            auth.source_retry_nonce AS source_retry_nonce,
+            COALESCE(
+              user_input.resolution_payload,
+              plan.resolution_payload,
+              auth.resolution_payload,
+              '{}'::jsonb
+            ) AS resolution_payload,
+            auth.relay_device_id,
+            auth.relay_capability_id,
+            auth.relay_exposure_id,
+            auth.relay_tool_stable_key,
+            requester.workspace_member_id AS requester_workspace_member_id,
+            requester.actor_id AS requester_actor_id,
+            requester.participant_kind AS requester_participant_kind,
+            COALESCE(requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
+            requester_actor.title AS requester_title,
+            requester_actor.role AS requester_role,
+            requester_actor.avatar_file_id AS requester_actor_avatar_file_id,
+            requester_user.avatar_file_id AS requester_user_avatar_file_id,
+            requester_actor.avatar_emoji AS requester_avatar_emoji,
+            target.workspace_member_id AS target_workspace_member_id,
+            target.actor_id AS target_actor_id,
+            target.participant_kind AS target_participant_kind,
+            COALESCE(target_actor.name, target_user.name, target.display_name) AS target_name,
+            target_actor.title AS target_title,
+            target_actor.role AS target_role,
+            target_actor.avatar_file_id AS target_actor_avatar_file_id,
+            target_user.avatar_file_id AS target_user_avatar_file_id,
+            target_actor.avatar_emoji AS target_avatar_emoji,
+            resolver.workspace_member_id AS resolved_by_workspace_member_id,
+            resolver.actor_id AS resolved_by_actor_id,
+            resolver.participant_kind AS resolved_by_participant_kind,
+            COALESCE(resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
+            resolver_actor.title AS resolved_by_title,
+            resolver_actor.role AS resolved_by_role,
+            resolver_actor.avatar_file_id AS resolved_by_actor_avatar_file_id,
+            resolver_user.avatar_file_id AS resolved_by_user_avatar_file_id,
+            resolver_actor.avatar_emoji AS resolved_by_avatar_emoji,
+            device.title AS device_display_name,
+            exposure.display_name AS exposure_display_name,
+            exposure.stable_key AS exposure_stable_key
+     FROM interaction_requests ir
+     LEFT JOIN interaction_user_input_requests user_input
+       ON user_input.interaction_id = ir.id
+     LEFT JOIN interaction_plan_approval_requests plan
+       ON plan.interaction_id = ir.id
+     LEFT JOIN interaction_relay_authorization_requests auth
+       ON auth.interaction_id = ir.id
+     LEFT JOIN conversation_participants requester
+       ON requester.id = ir.requester_participant_id
+     LEFT JOIN actors requester_actor
+       ON requester_actor.id = requester.actor_id
+     LEFT JOIN workspace_members requester_wm
+       ON requester_wm.id = requester.workspace_member_id
+     LEFT JOIN users requester_user
+       ON requester_user.id = requester_wm.user_id
+     LEFT JOIN conversation_participants target
+       ON target.id = ir.target_participant_id
+     LEFT JOIN actors target_actor
+       ON target_actor.id = target.actor_id
+     LEFT JOIN workspace_members target_wm
+       ON target_wm.id = target.workspace_member_id
+     LEFT JOIN users target_user
+       ON target_user.id = target_wm.user_id
+     LEFT JOIN conversation_participants resolver
+       ON resolver.id = ir.resolved_by_participant_id
+     LEFT JOIN actors resolver_actor
+       ON resolver_actor.id = resolver.actor_id
+     LEFT JOIN workspace_members resolver_wm
+       ON resolver_wm.id = resolver.workspace_member_id
+     LEFT JOIN users resolver_user
+       ON resolver_user.id = resolver_wm.user_id
+     LEFT JOIN relay_devices device
+       ON device.id = auth.relay_device_id
+     LEFT JOIN relay_exposures exposure
+       ON exposure.id = auth.relay_exposure_id
+     WHERE ir.id = ${interactionId}
+     LIMIT 1
+     FOR UPDATE OF ir
+  `.compile(db);
+  const result = await executeCompiledSql<RawInteractionRow>(queryable, compiled);
+  return result.rows[0] || null;
+}
+
+async function insertInteractionCommandRow(
+  client: Queryable,
+  params: {
+    interactionId: string;
+    commandId: string;
+    baseRevision: number;
+    outcome: ChatInteractionResolveOutcome;
+    requestPayload: Record<string, unknown>;
+    responsePayload: StoredInteractionResolveResponse;
+    createdByWorkspaceMemberId: string;
+  },
+) {
+  await executeCompiledQuery(
+    client,
+    db.insertInto("interaction_response_commands").values({
+      interaction_id: params.interactionId,
+      command_id: params.commandId,
+      base_revision: params.baseRevision as unknown as TableInsert<"interaction_response_commands">["base_revision"],
+      outcome: params.outcome,
+      request_payload:
+        jsonbValue(params.requestPayload) as unknown as TableInsert<"interaction_response_commands">["request_payload"],
+      response_payload:
+        jsonbValue(params.responsePayload) as unknown as TableInsert<"interaction_response_commands">["response_payload"],
+      created_by_workspace_member_id: params.createdByWorkspaceMemberId,
+    }),
+  );
+}
+
+async function appendInteractionUpdatedSyncEvent(
   queryable: Queryable,
   interaction: InteractionRequestSummary,
 ) {
@@ -1026,17 +1267,21 @@ async function queueInteractionUpdatedEvent(
           recipient.workspaceMemberId === interaction.target?.workspaceMemberId ||
           recipient.workspaceMemberId === interaction.requester?.workspaceMemberId,
         );
-  await enqueueTransactionalEventDeliveries(queryable, {
-    type: "interaction.updated",
-    payload: {
+  for (const recipient of recipients) {
+    await appendWorkspaceMemberSyncEvent(queryable, {
+      workspaceId: recipient.workspaceId,
+      workspaceMemberId: recipient.workspaceMemberId,
       conversationId: interaction.conversationId,
-      interactionId: interaction.id,
       itemId: interaction.itemId,
-      interaction,
-    },
-    timestamp: interaction.updatedAt,
-    recipients,
-  });
+      eventType: "interaction.updated",
+      payload: {
+        conversationId: interaction.conversationId,
+        interactionId: interaction.id,
+        itemId: interaction.itemId,
+        interaction,
+      },
+    });
+  }
 }
 
 async function syncInteractionEventPayload(
@@ -1261,6 +1506,7 @@ async function insertInteractionRequest(
   taskId: string;
   requesterParticipantId: string;
   kind: InteractionRequestKind;
+  requestKey: string;
   targetParticipantId?: string;
   expiresAt?: string;
 }) {
@@ -1276,6 +1522,7 @@ async function insertInteractionRequest(
         requester_participant_id,
         kind,
         status,
+        request_key,
         target_participant_id,
         expires_at
       )
@@ -1287,6 +1534,7 @@ async function insertInteractionRequest(
         ${params.requesterParticipantId},
         ${params.kind},
         'pending',
+        ${params.requestKey},
         ${params.targetParticipantId || null},
         ${params.expiresAt || null}
       )
@@ -1297,6 +1545,41 @@ async function insertInteractionRequest(
     throw new Error("Failed to create interaction request");
   }
   return created.rows[0]!.id;
+}
+
+async function findInteractionIdByTaskId(
+  taskId: string,
+  queryable?: Queryable,
+) {
+  const compiled = db
+    .selectFrom("interaction_requests")
+    .select("id")
+    .where("task_id", "=", taskId)
+    .limit(1)
+    .compile();
+  const result = queryable
+    ? await executeCompiledSql<{ id: string }>(queryable, compiled)
+    : await db.executeQuery(compiled);
+  return result.rows[0]?.id || null;
+}
+
+async function findPendingInteractionIdByRequestKey(
+  workspaceId: string,
+  requestKey: string,
+  queryable?: Queryable,
+) {
+  const compiled = db
+    .selectFrom("interaction_requests")
+    .select("id")
+    .where("workspace_id", "=", workspaceId)
+    .where("request_key", "=", requestKey)
+    .where("status", "=", "pending")
+    .limit(1)
+    .compile();
+  const result = queryable
+    ? await executeCompiledSql<{ id: string }>(queryable, compiled)
+    : await db.executeQuery(compiled);
+  return result.rows[0]?.id || null;
 }
 
 async function insertUserInputInteractionDetails(
@@ -1491,12 +1774,31 @@ export async function createUserInputInteractionRequest(
   params: CreateUserInputInteractionParams,
 ) {
   return transaction(async (client) => {
+    const requestKey = buildTaskInteractionRequestKey(params.taskId);
+    const existingInteractionId =
+      (await findInteractionIdByTaskId(params.taskId, client)) ||
+      (await findPendingInteractionIdByRequestKey(
+        params.workspaceId,
+        requestKey,
+        client,
+      ));
+    if (existingInteractionId) {
+      const existing = await getInteractionRequestSummary(
+        existingInteractionId,
+        client,
+      );
+      if (existing) {
+        return existing;
+      }
+    }
+
     const interactionId = await insertInteractionRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
       kind: INTERACTION_REQUEST_KIND.USER_INPUT,
+      requestKey,
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     });
@@ -1539,6 +1841,7 @@ export async function createUserInputInteractionRequest(
       throw new Error("Failed to reload created interaction request");
     }
     await syncInteractionEventPayload(interaction, client);
+    await appendInteractionUpdatedSyncEvent(client, interaction);
     return interaction;
   });
 }
@@ -1547,12 +1850,31 @@ export async function createPlanApprovalInteractionRequest(
   params: CreatePlanApprovalInteractionParams,
 ) {
   return transaction(async (client) => {
+    const requestKey = buildTaskInteractionRequestKey(params.taskId);
+    const existingInteractionId =
+      (await findInteractionIdByTaskId(params.taskId, client)) ||
+      (await findPendingInteractionIdByRequestKey(
+        params.workspaceId,
+        requestKey,
+        client,
+      ));
+    if (existingInteractionId) {
+      const existing = await getInteractionRequestSummary(
+        existingInteractionId,
+        client,
+      );
+      if (existing) {
+        return existing;
+      }
+    }
+
     const interactionId = await insertInteractionRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
       kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
+      requestKey,
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
     });
@@ -1613,6 +1935,7 @@ export async function createPlanApprovalInteractionRequest(
       client,
     );
     await syncInteractionEventPayload(interaction, client);
+    await appendInteractionUpdatedSyncEvent(client, interaction);
     return interaction;
   });
 }
@@ -1621,12 +1944,46 @@ export async function createRelayAuthorizationInteractionRequest(
   params: CreateRelayAuthorizationInteractionParams,
 ) {
   return transaction(async (client) => {
+    const dedupeKey = buildRelayAuthorizationDedupeKey({
+      relayDeviceId: params.relayDeviceId,
+      relayCapabilityId: params.relayCapabilityId,
+      relayExposureId: params.relayExposureId,
+      requestedToolName: params.requestedToolName,
+      relayToolStableKey: params.relayToolStableKey,
+      requestMode: params.requestMode,
+      requestedAction: params.requestedAction,
+      grantOptions: params.grantOptions,
+      availablePresets: params.availablePresets,
+    });
+    const requestKey = buildRelayAuthorizationInteractionRequestKey({
+      conversationId: params.conversationId,
+      requesterParticipantId: params.requesterParticipantId,
+      dedupeKey,
+    });
+    const existingInteractionId =
+      (await findInteractionIdByTaskId(params.taskId, client)) ||
+      (await findPendingInteractionIdByRequestKey(
+        params.workspaceId,
+        requestKey,
+        client,
+      ));
+    if (existingInteractionId) {
+      const existing = await getInteractionRequestSummary(
+        existingInteractionId,
+        client,
+      );
+      if (existing) {
+        return existing;
+      }
+    }
+
     const interactionId = await insertInteractionRequest(client, {
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
       kind: INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
+      requestKey,
       expiresAt: params.expiresAt,
     });
 
@@ -1645,17 +2002,7 @@ export async function createRelayAuthorizationInteractionRequest(
       requestedAction: params.requestedAction,
       grantOptions: params.grantOptions,
       availablePresets: params.availablePresets,
-      dedupeKey: buildRelayAuthorizationDedupeKey({
-        relayDeviceId: params.relayDeviceId,
-        relayCapabilityId: params.relayCapabilityId,
-        relayExposureId: params.relayExposureId,
-        requestedToolName: params.requestedToolName,
-        relayToolStableKey: params.relayToolStableKey,
-        requestMode: params.requestMode,
-        requestedAction: params.requestedAction,
-        grantOptions: params.grantOptions,
-        availablePresets: params.availablePresets,
-      }),
+      dedupeKey,
     });
 
     let interaction = await getInteractionRequestSummary(interactionId, client);
@@ -1685,6 +2032,7 @@ export async function createRelayAuthorizationInteractionRequest(
       throw new Error("Failed to reload created interaction request");
     }
     await syncInteractionEventPayload(interaction, client);
+    await appendInteractionUpdatedSyncEvent(client, interaction);
     return interaction;
   });
 }
@@ -1800,6 +2148,7 @@ export async function cancelInteractionRequest(
   const interaction = await transaction(async (client) => {
     await updateInteractionRequestRow(client, interactionId, {
       status: "cancelled",
+      revision: sql`revision + 1`,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     });
@@ -1821,7 +2170,7 @@ export async function cancelInteractionRequest(
       throw new Error("Failed to reload cancelled interaction");
     }
     await syncInteractionEventPayload(nextInteraction, client);
-    await queueInteractionUpdatedEvent(client, nextInteraction);
+    await appendInteractionUpdatedSyncEvent(client, nextInteraction);
     return nextInteraction;
   });
 
@@ -1924,11 +2273,10 @@ export async function enrichInteractionForUser(
   userId?: string,
 ): Promise<InteractionRequestSummary> {
   if (!userId) {
-    if (interaction.viewerCanResolve === undefined) {
-      return interaction;
-    }
-    const { viewerCanResolve, ...rest } = interaction;
-    return rest;
+    return {
+      ...interaction,
+      viewerCanResolve: interaction.viewerCanResolve ?? false,
+    };
   }
 
   return {
@@ -2108,82 +2456,185 @@ function validateUserInputAnswers(
   return normalized;
 }
 
+function normalizeInteractionCommandAnswers(
+  answers?: InteractionInputAnswer[],
+): InteractionInputAnswer[] | undefined {
+  if (!Array.isArray(answers) || answers.length === 0) {
+    return undefined;
+  }
+  return answers
+    .map((answer) => ({
+      questionId: String(answer.questionId || "").trim(),
+      selectedOptionIds: Array.isArray(answer.selectedOptionIds)
+        ? Array.from(
+            new Set(
+              answer.selectedOptionIds
+                .map((optionId) => String(optionId || "").trim())
+                .filter((optionId) => optionId.length > 0),
+            ),
+          ).sort()
+        : undefined,
+      otherText:
+        typeof answer.otherText === "string"
+          ? answer.otherText.trim() || undefined
+          : undefined,
+      text:
+        typeof answer.text === "string"
+          ? answer.text.trim() || undefined
+          : undefined,
+    }))
+    .sort((left, right) => left.questionId.localeCompare(right.questionId));
+}
+
+function buildNormalizedInteractionCommandPayload(
+  params: ResolveInteractionRequestParams,
+): Record<string, unknown> {
+  return {
+    answers: normalizeInteractionCommandAnswers(params.answers),
+    decision: params.decision,
+    preset: params.preset,
+    selectedGrantOptionId:
+      typeof params.selectedGrantOptionId === "string"
+        ? params.selectedGrantOptionId.trim() || undefined
+        : undefined,
+    note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
+  };
+}
+
 export async function resolveInteractionRequest(
   params: ResolveInteractionRequestParams,
 ): Promise<ResolveInteractionRequestResult> {
-  const existing = await getInteractionRowById(params.interactionId);
-  if (!existing) {
-    throw new Error("Interaction request not found");
-  }
-  if (
-    isTargetedInteractionKind(existing.kind) &&
-    existing.target_participant_id !== params.resolverParticipantId
-  ) {
-    throw new Error("Only the targeted user can resolve this interaction");
-  }
-  if (existing.status !== "pending") {
-    throw new Error("Interaction request is no longer pending");
-  }
+  const normalizedCommandPayload = buildNormalizedInteractionCommandPayload(params);
 
-  const promptPayload = parseJsonObject(existing.prompt_payload);
-  let nextStatus: InteractionRequestStatus;
-  let resolutionPayload: Record<string, unknown>;
-  let createdGrant: RelayAuthorizationGrantRecord | undefined;
-
-  if (existing.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
-    const questions = parseUserInputQuestionDefinitions(promptPayload);
-    if (questions.length === 0) {
-      throw new Error("User input request is invalid");
-    }
-    const submittedAnswers = buildSubmittedUserInputAnswers(params, questions);
-    const answers = validateUserInputAnswers(questions, submittedAnswers);
-    if (answers.length === 0) {
-      throw new Error("A valid response is required");
+  const result = await transaction(async (client) => {
+    const locked = await getInteractionRowByIdForUpdate(
+      params.interactionId,
+      client,
+    );
+    if (!locked) {
+      throw new Error("Interaction request not found");
     }
 
-    nextStatus = "answered";
-    resolutionPayload = {
-      answers,
-      note: params.note?.trim() || undefined,
-    };
-  } else if (existing.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
-    if (params.decision !== "approve" && params.decision !== "revise") {
-      throw new Error("decision must be approve or revise");
-    }
-    nextStatus = params.decision === "approve" ? "approved" : "rejected";
-    resolutionPayload = {
-      decision: params.decision,
-      note: params.note?.trim() || undefined,
-    };
-  } else {
-    if (params.decision !== "approve" && params.decision !== "reject") {
-      throw new Error("decision must be approve or reject");
-    }
-    if (params.decision === "approve" && !params.preset) {
-      throw new Error("preset is required when approving relay authorization");
-    }
-    nextStatus = params.decision === "approve" ? "approved" : "rejected";
-    resolutionPayload = {
-      decision: params.decision,
-      approvedPreset:
-        params.decision === "approve"
-          ? params.preset
-          : undefined,
-      selectedGrantOptionId:
-        params.decision === "approve" &&
-        typeof params.selectedGrantOptionId === "string" &&
-        params.selectedGrantOptionId.trim().length > 0
-          ? params.selectedGrantOptionId.trim()
-          : undefined,
-      note: params.note?.trim() || undefined,
-    };
-  }
-
-  const interaction = await transaction(async (client) => {
-    if (existing.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
-      if (!existing.task_id) {
+    const existingCommand = await getInteractionCommandRow(
+      params.interactionId,
+      params.commandId,
+      client,
+    );
+    if (existingCommand) {
+      const storedRequestPayload = requireJsonObject(
+        existingCommand.request_payload,
+        `Interaction command ${existingCommand.id} request_payload`,
+      );
+      if (
+        stableJsonStringify(storedRequestPayload) !==
+        stableJsonStringify(normalizedCommandPayload)
+      ) {
         throw new Error(
-          `Interaction ${existing.id} is missing task governance`,
+          `commandId ${params.commandId} was already used with a different interaction payload`,
+        );
+      }
+
+      const storedResponse = parseStoredInteractionResolveResponse(
+        existingCommand.response_payload,
+        `Interaction command ${existingCommand.id} response_payload`,
+      );
+      return {
+        outcome:
+          storedResponse.outcome === "applied"
+            ? ("duplicate" as const)
+            : storedResponse.outcome,
+        interaction: storedResponse.interaction,
+        createdGrant: undefined,
+      };
+    }
+
+    if (
+      isTargetedInteractionKind(locked.kind) &&
+      locked.target_participant_id !== params.resolverParticipantId
+    ) {
+      throw new Error("Only the targeted user can resolve this interaction");
+    }
+
+    if (locked.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION) {
+      const relayDeviceId = locked.relay_device_id || "";
+      if (!relayDeviceId) {
+        throw new Error(
+          `Interaction ${locked.id} is missing relay_device_id`,
+        );
+      }
+      const canResolveRelayAuthorization = await authorizeAction({
+        subject: workspaceMemberSubject(params.resolverWorkspaceMemberId),
+        action: "relay_device.authorize_relay_authorization",
+        resourceId: relayDeviceId,
+      });
+      if (!canResolveRelayAuthorization) {
+        throw new Error(
+          "You are not allowed to resolve this relay authorization interaction",
+        );
+      }
+    }
+
+    const lockedRevision = toRevisionNumber(
+      locked.revision,
+      `Interaction ${locked.id} revision`,
+    );
+    if (locked.status !== "pending" || lockedRevision !== params.baseRevision) {
+      const currentInteraction = buildInteractionSummary(locked);
+      const responsePayload: StoredInteractionResolveResponse = {
+        outcome: "conflict",
+        interaction: currentInteraction,
+      };
+      await insertInteractionCommandRow(client, {
+        interactionId: params.interactionId,
+        commandId: params.commandId,
+        baseRevision: params.baseRevision,
+        outcome: "conflict",
+        requestPayload: normalizedCommandPayload,
+        responsePayload,
+        createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
+      });
+      return {
+        outcome: "conflict" as const,
+        interaction: currentInteraction,
+        createdGrant: undefined,
+      };
+    }
+
+    let nextStatus: InteractionRequestStatus;
+    let resolutionPayload: Record<string, unknown>;
+    let createdGrant: RelayAuthorizationGrantRecord | undefined;
+
+    if (locked.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
+      const promptPayload = parseJsonObject(locked.prompt_payload);
+      const questions = parseUserInputQuestionDefinitions(promptPayload);
+      if (questions.length === 0) {
+        throw new Error("User input request is invalid");
+      }
+      const submittedAnswers = buildSubmittedUserInputAnswers(params, questions);
+      const answers = validateUserInputAnswers(questions, submittedAnswers);
+      if (answers.length === 0) {
+        throw new Error("A valid response is required");
+      }
+
+      nextStatus = "answered";
+      resolutionPayload = {
+        answers,
+        note: params.note?.trim() || undefined,
+      };
+    } else if (locked.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
+      if (params.decision !== "approve" && params.decision !== "revise") {
+        throw new Error("decision must be approve or revise");
+      }
+
+      nextStatus = params.decision === "approve" ? "approved" : "rejected";
+      resolutionPayload = {
+        decision: params.decision,
+        note: params.note?.trim() || undefined,
+      };
+
+      if (!locked.task_id) {
+        throw new Error(
+          `Interaction ${locked.id} is missing task governance`,
         );
       }
       const taskRow = await executeTakeFirst(
@@ -2191,12 +2642,12 @@ export async function resolveInteractionRequest(
         db
           .selectFrom("tool_call_tasks")
           .select("session_id")
-          .where("id", "=", existing.task_id)
+          .where("id", "=", locked.task_id)
           .limit(1),
       );
       if (!taskRow?.session_id) {
         throw new Error(
-          `Plan approval interaction ${existing.id} is missing a session`,
+          `Plan approval interaction ${locked.id} is missing a session`,
         );
       }
       const sessionRow = await executeTakeFirst(
@@ -2231,9 +2682,9 @@ export async function resolveInteractionRequest(
           `Session ${taskRow.session_id} is missing active_plan_approval_interaction_id`,
         );
       }
-      if (sessionRow.active_plan_approval_interaction_id !== existing.id) {
+      if (sessionRow.active_plan_approval_interaction_id !== locked.id) {
         throw new Error(
-          `Session ${taskRow.session_id} points to ${sessionRow.active_plan_approval_interaction_id}, not ${existing.id}`,
+          `Session ${taskRow.session_id} points to ${sessionRow.active_plan_approval_interaction_id}, not ${locked.id}`,
         );
       }
 
@@ -2272,73 +2723,96 @@ export async function resolveInteractionRequest(
         },
         client,
       );
-    }
-
-    if (
-      existing.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
-      params.decision === "approve"
-    ) {
-      const selectedGrantOptionId =
-        typeof params.selectedGrantOptionId === "string"
-          ? params.selectedGrantOptionId.trim()
-          : "";
-      if (!selectedGrantOptionId) {
-        throw new Error("selectedGrantOptionId is required when approving relay authorization");
+    } else {
+      if (params.decision !== "approve" && params.decision !== "reject") {
+        throw new Error("decision must be approve or reject");
       }
-
-      const grantOptions = parseJsonArray<RelayAuthorizationGrantOption>(
-        existing.grant_options,
-        `Interaction ${existing.id} grant_options`,
-      );
-      const availablePresets = parseJsonArray<RelayAuthorizationPreset>(
-        existing.available_presets,
-        `Interaction ${existing.id} available_presets`,
-      );
-      if (!availablePresets.includes(params.preset || "once")) {
+      if (params.decision === "approve" && !params.preset) {
         throw new Error(
-          `preset ${(params.preset || "once")} is not allowed for this relay authorization request`,
-        );
-      }
-      const selectedOption = grantOptions.find(
-        (candidate) => candidate.id === selectedGrantOptionId,
-      );
-      if (!selectedOption) {
-        throw new Error(
-          `Unknown relay authorization option "${selectedGrantOptionId}"`,
+          "preset is required when approving relay authorization",
         );
       }
 
-      createdGrant = await createRelayAuthorizationGrant(
-        {
-          workspaceId: existing.workspace_id,
-          relayDeviceId: existing.relay_device_id || "",
-          relayCapabilityId: existing.relay_capability_id || "",
-          relayExposureId: existing.relay_exposure_id || "",
-          conversationId: existing.conversation_id,
-          actorId: existing.requester_actor_id || undefined,
-          createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
-          sourceInteractionId: existing.id,
-          sourceTaskId: existing.task_id || undefined,
-          preset: params.preset || "once",
-          sourceRetryNonce: existing.source_retry_nonce || undefined,
-          sourceRuntimeSessionId: existing.source_runtime_session_id || undefined,
-          sourceRequestArgs:
-            existing.source_request_args &&
-            typeof existing.source_request_args === "object"
-              ? (existing.source_request_args as Record<string, unknown>)
-              : {},
-          grantSpec: selectedOption.grantSpec,
-        },
-        client,
-      );
+      nextStatus = params.decision === "approve" ? "approved" : "rejected";
       resolutionPayload = {
-        ...resolutionPayload,
-        approvedGrant: createdGrant,
+        decision: params.decision,
+        approvedPreset:
+          params.decision === "approve" ? params.preset : undefined,
+        selectedGrantOptionId:
+          params.decision === "approve" &&
+          typeof params.selectedGrantOptionId === "string" &&
+          params.selectedGrantOptionId.trim().length > 0
+            ? params.selectedGrantOptionId.trim()
+            : undefined,
+        note: params.note?.trim() || undefined,
       };
+
+      if (params.decision === "approve") {
+        const selectedGrantOptionId =
+          typeof params.selectedGrantOptionId === "string"
+            ? params.selectedGrantOptionId.trim()
+            : "";
+        if (!selectedGrantOptionId) {
+          throw new Error(
+            "selectedGrantOptionId is required when approving relay authorization",
+          );
+        }
+
+        const grantOptions = parseJsonArray<RelayAuthorizationGrantOption>(
+          locked.grant_options,
+          `Interaction ${locked.id} grant_options`,
+        );
+        const availablePresets = parseJsonArray<RelayAuthorizationPreset>(
+          locked.available_presets,
+          `Interaction ${locked.id} available_presets`,
+        );
+        if (!availablePresets.includes(params.preset || "once")) {
+          throw new Error(
+            `preset ${params.preset || "once"} is not allowed for this relay authorization request`,
+          );
+        }
+        const selectedOption = grantOptions.find(
+          (candidate) => candidate.id === selectedGrantOptionId,
+        );
+        if (!selectedOption) {
+          throw new Error(
+            `Unknown relay authorization option "${selectedGrantOptionId}"`,
+          );
+        }
+
+        createdGrant = await createRelayAuthorizationGrant(
+          {
+            workspaceId: locked.workspace_id,
+            relayDeviceId: locked.relay_device_id || "",
+            relayCapabilityId: locked.relay_capability_id || "",
+            relayExposureId: locked.relay_exposure_id || "",
+            conversationId: locked.conversation_id,
+            actorId: locked.requester_actor_id || undefined,
+            createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
+            sourceInteractionId: locked.id,
+            sourceTaskId: locked.task_id || undefined,
+            preset: params.preset || "once",
+            sourceRetryNonce: locked.source_retry_nonce || undefined,
+            sourceRuntimeSessionId: locked.source_runtime_session_id || undefined,
+            sourceRequestArgs:
+              locked.source_request_args &&
+              typeof locked.source_request_args === "object"
+                ? (locked.source_request_args as Record<string, unknown>)
+                : {},
+            grantSpec: selectedOption.grantSpec,
+          },
+          client,
+        );
+        resolutionPayload = {
+          ...resolutionPayload,
+          approvedGrant: createdGrant,
+        };
+      }
     }
 
     await updateInteractionRequestRow(client, params.interactionId, {
       status: nextStatus,
+      revision: sql`revision + 1`,
       resolved_by_participant_id: params.resolverParticipantId,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
@@ -2346,7 +2820,7 @@ export async function resolveInteractionRequest(
 
     await updateInteractionResolutionPayload(
       client,
-      existing.kind,
+      locked.kind,
       params.interactionId,
       resolutionPayload,
     );
@@ -2360,10 +2834,36 @@ export async function resolveInteractionRequest(
     }
 
     await syncInteractionEventPayload(nextInteraction, client);
-    await queueInteractionUpdatedEvent(client, nextInteraction);
-    return nextInteraction;
+    await appendInteractionUpdatedSyncEvent(client, nextInteraction);
+
+    await insertInteractionCommandRow(client, {
+      interactionId: params.interactionId,
+      commandId: params.commandId,
+      baseRevision: params.baseRevision,
+      outcome: "applied",
+      requestPayload: normalizedCommandPayload,
+      responsePayload: {
+        outcome: "applied",
+        interaction: nextInteraction,
+      },
+      createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
+    });
+
+    return {
+      outcome: "applied" as const,
+      interaction: nextInteraction,
+      createdGrant,
+    };
   });
 
+  if (result.outcome !== "applied") {
+    return {
+      outcome: result.outcome,
+      interaction: result.interaction,
+    };
+  }
+
+  const interaction = result.interaction;
   if (!interaction.taskId) {
     throw new Error(`Interaction ${interaction.id} is missing task governance`);
   }
@@ -2398,9 +2898,10 @@ export async function resolveInteractionRequest(
   }
 
   return {
+    outcome: result.outcome,
     interaction,
-    createdGrant,
-    createdGrants: createdGrant ? [createdGrant] : undefined,
+    createdGrant: result.createdGrant,
+    createdGrants: result.createdGrant ? [result.createdGrant] : undefined,
   };
 }
 
@@ -2427,6 +2928,7 @@ export async function markRelayAuthorizationInteractionSuperseded(
   const interaction = await transaction(async (client) => {
     await updateInteractionRequestRow(client, interactionId, {
       status: "superseded",
+      revision: sql`revision + 1`,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     });
@@ -2448,7 +2950,7 @@ export async function markRelayAuthorizationInteractionSuperseded(
       throw new Error("Failed to reload superseded interaction");
     }
     await syncInteractionEventPayload(nextInteraction, client);
-    await queueInteractionUpdatedEvent(client, nextInteraction);
+    await appendInteractionUpdatedSyncEvent(client, nextInteraction);
     return nextInteraction;
   });
   if (interaction.taskId) {

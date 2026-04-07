@@ -1,6 +1,7 @@
 import { FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
 import type {
   ActorPackageInstallResult,
+  ActorRuntimeTurnActivityDetail,
   CapabilityAccessTarget,
   AttachmentTarget,
   AuthClientType,
@@ -28,6 +29,8 @@ import type {
   ChatConversationReadWatermarkResponse,
   ChatConversationSendMessageInput,
   ChatConversationSendMessageResponse,
+  ChatInteractionResolveInput,
+  ChatInteractionResolveResponse,
   ChatSyncResponse,
   CurrentUserWeixinBindingSummary,
   InstalledSkill,
@@ -45,9 +48,20 @@ import type {
   SkillMarketplaceEntry,
   WorkspaceCapabilityConversationTypePoliciesView,
 } from "@synapse/shared"
-import type { FileRecordView, RelayAuthorizationGrantView } from "@synapse/shared/types"
+import {
+  isChatInteractionResolveConflictResponse,
+  type ChatInteractionResolvePayload,
+  type FileRecordView,
+  type RelayAuthorizationGrantView,
+} from "@synapse/shared/types"
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
+
+export type {
+  ChatInteractionResolveInput,
+  ChatInteractionResolvePayload,
+  ChatInteractionResolveResponse,
+}
 
 export class ApiError extends Error {
   constructor(
@@ -78,19 +92,6 @@ export interface WorkspaceListResponse {
     currentWorkspaceMemberId?: string
     trustLevel?: string
   }>
-}
-
-export interface ChatInteractionResponseInput {
-  answers?: {
-    questionId: string
-    selectedOptionIds?: string[]
-    otherText?: string
-    text?: string
-  }[]
-  decision?: "approve" | "reject" | "revise"
-  preset?: "once" | "actor" | "conversation" | "workspace"
-  selectedGrantOptionId?: string
-  note?: string
 }
 
 export interface RelationshipProfileView {
@@ -1304,6 +1305,17 @@ class ApiClient {
     )
   }
 
+  getChatConversationRuntimeTurnDetail(
+    workspaceId: string,
+    conversationId: string,
+    actorId: string,
+    turnId: string
+  ): Promise<ActorRuntimeTurnActivityDetail> {
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/actors/${actorId}/runtime-turns/${turnId}`
+    )
+  }
+
   sendChatConversationMessage(
     workspaceId: string,
     conversationId: string,
@@ -1342,19 +1354,28 @@ class ApiClient {
     )
   }
 
-  resolveThreadInteraction(
+  resolveChatInteraction(
     workspaceId: string,
     threadId: string,
     interactionId: string,
-    data: ChatInteractionResponseInput
-  ): Promise<{ interaction: InteractionRequestSummary }> {
+    data: ChatInteractionResolveInput
+  ): Promise<ChatInteractionResolveResponse> {
     return this.fetch(
       `/workspaces/${workspaceId}/conversations/${threadId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(data),
       }
-    )
+    ).catch((error) => {
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        isChatInteractionResolveConflictResponse(error.details)
+      ) {
+        return error.details
+      }
+      throw error
+    })
   }
   getTransportConnectors(
     wsId: string

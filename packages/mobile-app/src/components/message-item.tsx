@@ -12,7 +12,7 @@ import {
 import { ChatQuestionInteractionCard } from "@/components/chat-question-interaction-card";
 import { ChatMarkdown } from "@/components/chat-markdown";
 import { Avatar } from "@/components/ui";
-import type { ChatInteractionResponseInput } from "@/lib/api";
+import type { ChatInteractionResolveInput } from "@/lib/api";
 import {
   buildChatFilePreviewHref,
   getAttachmentLabel,
@@ -27,7 +27,6 @@ import {
 } from "@/lib/chat-data";
 import { theme } from "@/theme/tokens";
 import {
-  INTERACTION_REQUEST_KIND,
   extractText,
   summarizeConversationEvent,
   type InteractionRequestSummary,
@@ -273,16 +272,14 @@ function MessageBlocks({
 export function MessageItem({
   item,
   viewerParticipantId,
-  viewerWorkspaceMemberId,
   onResolveInteraction,
   onLongPress,
 }: {
   item: MobileChatItem;
   viewerParticipantId?: string;
-  viewerWorkspaceMemberId?: string | null;
   onResolveInteraction?: (
     interactionId: string,
-    input: ChatInteractionResponseInput,
+    input: ChatInteractionResolveInput,
   ) => Promise<InteractionRequestSummary>;
   onLongPress?: (event: GestureResponderEvent) => void;
 }) {
@@ -297,15 +294,10 @@ export function MessageItem({
             | undefined)
         : undefined;
 
-    if (
-      interaction?.kind === INTERACTION_REQUEST_KIND.USER_INPUT &&
-      interaction.userInput
-    ) {
+    if (interaction) {
       return (
         <ChatQuestionInteractionCard
           interaction={interaction}
-          viewerParticipantId={viewerParticipantId}
-          viewerWorkspaceMemberId={viewerWorkspaceMemberId}
           onResolveInteraction={onResolveInteraction}
         />
       );

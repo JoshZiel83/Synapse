@@ -24,7 +24,11 @@ import {
   createConversationEvent,
   getConversationParticipant,
 } from "../chat/service.js";
-import { enqueueSessionWakeup } from "../session/runtime.js";
+import {
+  enqueueSessionWakeup,
+  publishSessionRuntime,
+  scheduleSessionRuntimeRefresh,
+} from "../session/runtime.js";
 
 export type ToolCallTaskStatus = ToolCallTasksStatus;
 export type ToolCallTaskDispatchStatus = ToolCallTasksDispatchStatus;
@@ -267,7 +271,9 @@ export async function insertToolCallTask(
 }
 
 export async function createToolCallTask(params: CreateToolCallTaskParams) {
-  return transaction((client) => insertToolCallTask(client, params));
+  const record = await transaction((client) => insertToolCallTask(client, params));
+  await publishSessionRuntime(record.workspaceId, record.sessionId);
+  return record;
 }
 
 export async function getToolCallTask(taskId: string) {
@@ -496,7 +502,37 @@ async function updateToolCallTaskRecord(
     .returningAll()
     .executeTakeFirst();
 
-  return mapToolCallTaskRow(row || null);
+  const updated = mapToolCallTaskRow(row || null);
+  if (!updated) {
+    return updated;
+  }
+
+  const onlyOutputTailUpdate =
+    params.lastOutputSeq !== undefined
+    && params.lastOutputAt !== undefined
+    && params.status === undefined
+    && params.statusMessage === undefined
+    && params.dispatchStatus === undefined
+    && params.supportsCancel === undefined
+    && params.supportsOutputTail === undefined
+    && params.immediateResultPayload === undefined
+    && params.finalResultPayload === undefined
+    && params.finalErrorPayload === undefined
+    && params.metadata === undefined
+    && params.completionItemId === undefined
+    && params.deadlineAt === undefined
+    && params.retentionTtlMs === undefined
+    && params.retainUntil === undefined
+    && params.cancelRequestedAt === undefined
+    && params.cancelReason === undefined;
+
+  if (onlyOutputTailUpdate) {
+    scheduleSessionRuntimeRefresh(updated.workspaceId, updated.sessionId);
+  } else {
+    await publishSessionRuntime(updated.workspaceId, updated.sessionId);
+  }
+
+  return updated;
 }
 
 async function emitTaskNotice(

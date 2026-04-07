@@ -43,9 +43,6 @@ export function useChatRealtimeSync({
   const handleRuntimeUpdated = useChatStore(
     (state) => state.handleRuntimeUpdated
   )
-  const handleInteractionUpdated = useChatStore(
-    (state) => state.handleInteractionUpdated
-  )
 
   const onEvent = useCallback(
     (event: ChatSocketEvent | Record<string, unknown>) => {
@@ -83,17 +80,11 @@ export function useChatRealtimeSync({
             (event as ChatSocketEvent<"runtime.updated">).payload
           )
           break
-        case "interaction.updated":
-          handleInteractionUpdated(
-            (event as ChatSocketEvent<"interaction.updated">).payload
-          )
-          break
         default:
           break
       }
     },
     [
-      handleInteractionUpdated,
       handleRuntimeUpdated,
       handleSyncEvent,
       notify,

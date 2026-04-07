@@ -148,6 +148,77 @@ function buildPreviewText(item) {
   return "Attachment";
 }
 
+function buildInteractionPreview(interaction) {
+  if (!interaction || typeof interaction !== "object") {
+    return "Interaction requested";
+  }
+
+  if (interaction.kind === "user_input") {
+    const targetName =
+      interaction.target && typeof interaction.target.name === "string"
+        ? interaction.target.name.trim() || "a user"
+        : "a user";
+    const prompt =
+      interaction.userInput && typeof interaction.userInput.title === "string"
+        ? interaction.userInput.title.trim() || "A question"
+        : "A question";
+    if (interaction.status === "cancelled") {
+      return `Input request for ${targetName} was cancelled: ${prompt}`;
+    }
+    return interaction.status === "answered"
+      ? `${targetName} answered: ${prompt}`
+      : `Input requested from ${targetName}: ${prompt}`;
+  }
+
+  if (interaction.kind === "plan_approval") {
+    const targetName =
+      interaction.target && typeof interaction.target.name === "string"
+        ? interaction.target.name.trim() || "a user"
+        : "a user";
+    const title =
+      interaction.planApproval && typeof interaction.planApproval.title === "string"
+        ? interaction.planApproval.title.trim() || "Plan approval"
+        : "Plan approval";
+    if (interaction.status === "cancelled") {
+      return `Plan approval for ${targetName} was cancelled: ${title}`;
+    }
+    if (interaction.status === "approved") {
+      return `${targetName} approved: ${title}`;
+    }
+    if (interaction.status === "rejected") {
+      return `${targetName} requested changes: ${title}`;
+    }
+    return `Plan approval requested from ${targetName}: ${title}`;
+  }
+
+  const deviceName =
+    interaction.relayAuthorization &&
+    typeof interaction.relayAuthorization.deviceDisplayName === "string"
+      ? interaction.relayAuthorization.deviceDisplayName.trim() || "relay"
+      : "relay";
+  if (interaction.status === "cancelled") {
+    return `Relay authorization request was cancelled for ${deviceName}`;
+  }
+  if (interaction.status === "rejected") {
+    const resolverName =
+      interaction.resolvedBy && typeof interaction.resolvedBy.name === "string"
+        ? interaction.resolvedBy.name.trim() || "A user"
+        : "A user";
+    return `${resolverName} rejected access for ${deviceName}`;
+  }
+  if (interaction.status === "approved") {
+    const resolverName =
+      interaction.resolvedBy && typeof interaction.resolvedBy.name === "string"
+        ? interaction.resolvedBy.name.trim() || "A user"
+        : "A user";
+    return `${resolverName} approved access for ${deviceName}`;
+  }
+  if (interaction.status === "superseded") {
+    return `Relay authorization request was superseded for ${deviceName}`;
+  }
+  return `Relay authorization requested for ${deviceName}`;
+}
+
 function sortConversations(conversations) {
   return [...conversations].sort((left, right) => {
     const leftPinned = left.pinnedSortKey ? new Date(left.pinnedSortKey).getTime() : 0;
@@ -474,6 +545,28 @@ function applySyncEvent(snapshot, event) {
           unreadCount: 0,
         }),
       );
+      break;
+    }
+    case "interaction.updated": {
+      const payload = event.payload;
+      if (
+        payload.itemId &&
+        next.conversations.some(
+          (conversation) => conversation.conversationId === payload.conversationId,
+        )
+      ) {
+        next = updateConversation(next, payload.conversationId, (conversation) => ({
+          ...conversation,
+          lastItem:
+            conversation.lastItem &&
+            conversation.lastItem.itemId === payload.itemId
+              ? {
+                  ...conversation.lastItem,
+                  previewText: buildInteractionPreview(payload.interaction),
+                }
+              : conversation.lastItem,
+        }));
+      }
       break;
     }
   }

@@ -13,7 +13,10 @@ import {
 import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
 import { syncChatBackgroundTaskRegistration } from "@/lib/chat-background-task";
 import type { ChatComposerSendPayload } from "@/lib/chat-compose";
-import { api, type ChatInteractionResponseInput } from "@/lib/api";
+import {
+  api,
+  type ChatInteractionResolveInput,
+} from "@/lib/api";
 import {
   chatRuntime,
   type ChatRuntimeState,
@@ -36,6 +39,7 @@ import { reportApiUnauthorized } from "@/lib/api";
 import { useSession } from "@/providers/session-provider";
 import { useWorkspace } from "@/providers/workspace-provider";
 import {
+  type ActorRuntimeState,
   type ChatConversationCreateResponse,
   type ChatConversationMessagesPage,
   type ChatConversationView,
@@ -54,6 +58,9 @@ interface ChatContextValue {
   getConversation: (conversationId: string) => ChatConversationView | null;
   getConversationItems: (conversationId: string) => MobileChatItem[];
   getConversationMeta: (conversationId: string) => ChatConversationMeta | null;
+  getConversationRuntimes: (
+    conversationId: string,
+  ) => Record<string, ActorRuntimeState>;
   refreshInbox: () => Promise<void>;
   refreshConversation: (
     conversationId: string,
@@ -71,7 +78,7 @@ interface ChatContextValue {
   respondInteraction: (
     conversationId: string,
     interactionId: string,
-    input: ChatInteractionResponseInput,
+    input: ChatInteractionResolveInput,
   ) => Promise<InteractionRequestSummary>;
   createConversation: (input: {
     kind: "group" | "private" | "virtual";
@@ -289,6 +296,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return getConversationMetaOrDefault(runtimeState.snapshot, conversationId);
   }, [runtimeState.snapshot]);
 
+  const getConversationRuntimes = useCallback(
+    (conversationId: string) =>
+      runtimeState.runtimeByConversationId[conversationId] ?? {},
+    [runtimeState.runtimeByConversationId],
+  );
+
   const refreshInbox = useCallback(() => chatRuntime.refreshInbox(), []);
 
   const refreshConversation = useCallback(
@@ -325,13 +338,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     async (
       conversationId: string,
       interactionId: string,
-      input: ChatInteractionResponseInput,
+      input: ChatInteractionResolveInput,
     ) => {
       if (!workspaceId) {
         throw new Error("Workspace context is required to respond.");
       }
 
-      const result = await api.respondToChatInteraction(
+      const result = await api.resolveChatInteraction(
         workspaceId,
         conversationId,
         interactionId,
@@ -368,6 +381,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       getConversation,
       getConversationItems,
       getConversationMeta,
+      getConversationRuntimes,
       refreshInbox,
       refreshConversation,
       loadOlderMessages,
@@ -384,6 +398,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       getConversation,
       getConversationItems,
       getConversationMeta,
+      getConversationRuntimes,
       loadOlderMessages,
       markConversationRead,
       refreshConversation,

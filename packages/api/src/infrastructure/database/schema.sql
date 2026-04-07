@@ -3110,6 +3110,8 @@ CREATE TABLE interaction_requests (
   requester_participant_id UUID NOT NULL REFERENCES conversation_participants(id) ON DELETE RESTRICT,
   kind interaction_requests_kind NOT NULL,
   status interaction_requests_status NOT NULL DEFAULT 'pending',
+  revision BIGINT NOT NULL DEFAULT 1,
+  request_key TEXT NOT NULL,
   target_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
   resolved_by_participant_id UUID REFERENCES conversation_participants(id) ON DELETE RESTRICT,
   resolved_at TIMESTAMPTZ,
@@ -3157,6 +3159,21 @@ CREATE TABLE interaction_relay_authorization_requests (
   available_presets JSONB NOT NULL DEFAULT '[]',
   resolution_payload JSONB NOT NULL DEFAULT '{}',
   dedupe_key TEXT NOT NULL
+);
+
+CREATE TABLE interaction_response_commands (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  interaction_id UUID NOT NULL REFERENCES interaction_requests(id) ON DELETE CASCADE,
+  command_id UUID NOT NULL,
+  base_revision BIGINT NOT NULL,
+  outcome TEXT NOT NULL,
+  request_payload JSONB NOT NULL DEFAULT '{}',
+  response_payload JSONB NOT NULL DEFAULT '{}',
+  created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT interaction_response_commands_interaction_command_unique
+    UNIQUE (interaction_id, command_id)
 );
 
 CREATE OR REPLACE FUNCTION validate_interaction_request_subtype_consistency()
@@ -3313,14 +3330,19 @@ CREATE TABLE relay_authorization_grants (
 
 CREATE INDEX idx_interaction_requests_conversation
   ON interaction_requests(conversation_id, created_at DESC);
-CREATE INDEX idx_interaction_requests_task
+CREATE UNIQUE INDEX idx_interaction_requests_task
   ON interaction_requests(task_id);
 CREATE INDEX idx_interaction_requests_target
   ON interaction_requests(target_participant_id, status, created_at DESC);
+CREATE UNIQUE INDEX idx_interaction_requests_pending_request_key
+  ON interaction_requests(workspace_id, request_key)
+  WHERE status = 'pending';
 CREATE INDEX idx_interaction_relay_authorization_requests_device
   ON interaction_relay_authorization_requests(relay_device_id, interaction_id);
 CREATE INDEX idx_interaction_relay_authorization_requests_dedupe
   ON interaction_relay_authorization_requests(dedupe_key);
+CREATE INDEX idx_interaction_response_commands_interaction
+  ON interaction_response_commands(interaction_id, created_at DESC);
 CREATE INDEX idx_relay_authorization_grants_exposure
   ON relay_authorization_grants(relay_capability_id, status, scope, created_at DESC);
 CREATE INDEX idx_relay_authorization_grants_actor
