@@ -40,10 +40,12 @@ export default function HomeTabScreen() {
     setWorkspaceId,
   } = useWorkspace();
   const {
+    clientInstanceId,
     conversations,
     createConversation,
     refreshInbox,
     sendMessage,
+    status,
     workspaceMemberId,
   } = useChat();
   const [actors, setActors] = useState<Actor[]>([]);
@@ -115,6 +117,10 @@ export default function HomeTabScreen() {
   async function handleStartConversation(content: string) {
     const trimmed = content.trim();
     if (!workspaceId || !selectedActor || !trimmed) return;
+    if (status !== "ready" || !clientInstanceId) {
+      setError("聊天连接尚未完成，请稍后再试。");
+      return;
+    }
 
     setSubmitting(true);
     setError(null);
@@ -205,7 +211,11 @@ export default function HomeTabScreen() {
                 <HomeQuickComposer
                   actor={selectedActor}
                   sending={submitting}
-                  disabled={actors.length === 0}
+                  disabled={
+                    actors.length === 0 ||
+                    status !== "ready" ||
+                    !clientInstanceId
+                  }
                   onPressSelectActor={() => router.push("/actors/select")}
                   onSend={handleStartConversation}
                 />

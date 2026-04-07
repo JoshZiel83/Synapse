@@ -23,6 +23,7 @@ export default function ChatPage() {
   const {
     conversations,
     selectedConversationId,
+    clientInstanceId,
     messages,
     loadingConversations,
     loadingMessages,
@@ -41,6 +42,8 @@ export default function ChatPage() {
 
   useEffect(() => {
     if (!conversationParam) return
+    const currentSelection = useChatStore.getState().selectedConversationId
+    if (currentSelection === conversationParam) return
     if (
       !conversations.some((conversation) => conversation.id === conversationParam)
     )
@@ -56,10 +59,11 @@ export default function ChatPage() {
   }, [selectedConversationId, setVisibleConversation])
 
   useEffect(() => {
-    if (workspaceId && selectedConversationId) {
+    if (workspaceId && selectedConversationId && clientInstanceId) {
       loadMessages(workspaceId, selectedConversationId)
     }
   }, [
+    clientInstanceId,
     workspaceId,
     selectedConversationId,
     loadMessages,
@@ -89,6 +93,9 @@ export default function ChatPage() {
   const selectedConversation = conversations.find(
     (conversation) => conversation.id === selectedConversationId
   )
+  const composerDisabled = loadingConversations || !clientInstanceId
+  const conversationLoading =
+    loadingConversations || loadingMessages || !clientInstanceId
 
   function updateConversationRoute(conversationId: string) {
     const nextParams = new URLSearchParams(searchParams.toString())
@@ -98,6 +105,7 @@ export default function ChatPage() {
   }
 
   function handleSelectConversation(id: string) {
+    selectConversation(id)
     updateConversationRoute(id)
   }
 
@@ -170,7 +178,8 @@ export default function ChatPage() {
           <ConversationChat
             conversation={selectedConversation}
             messages={messages}
-            loading={loadingMessages}
+            loading={conversationLoading}
+            composerDisabled={composerDisabled}
             actorRuntimes={
               selectedConversationId
                 ? runtimeMap[selectedConversationId]

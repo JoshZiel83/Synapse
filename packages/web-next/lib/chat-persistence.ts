@@ -1,11 +1,7 @@
 "use client"
 
-import type {
-  CanonicalContentBlock,
-  ChatConversationView,
-  ConversationReplyRef,
-} from "@synapse/shared"
 import { isUuid } from "@/lib/uuid"
+import type { ConversationReplyRef, CanonicalContentBlock } from "@synapse/shared"
 
 export const CHAT_SNAPSHOT_DB_NAME = "synapse-web-next-chat"
 export const CHAT_SNAPSHOT_DB_VERSION = 1
@@ -33,14 +29,13 @@ export interface PendingOutboxMessage {
   lastErrorMessage?: string
 }
 
-export interface StoredChatSnapshot {
-  version: 2
+export interface StoredChatQueueState {
+  version: 3
   workspaceId: string
   workspaceMemberId?: string
   clientInstanceId?: string
   inboxCursor: number
   lastBootstrappedAt?: string
-  conversations: ChatConversationView[]
   pendingReads: Record<string, PendingConversationRead>
   outbox: Record<string, PendingOutboxMessage>
 }
@@ -93,57 +88,42 @@ async function withStore<T>(
   }
 }
 
-export function createEmptyStoredChatSnapshot(
+export function createEmptyStoredChatQueueState(
   workspaceId: string
-): StoredChatSnapshot {
+): StoredChatQueueState {
   return {
-    version: 2,
+    version: 3,
     workspaceId,
     inboxCursor: 0,
-    conversations: [],
     pendingReads: {},
     outbox: {},
   }
 }
 
-export function normalizeStoredChatSnapshot(
+export function normalizeStoredChatQueueState(
   workspaceId: string,
   value: unknown
-): StoredChatSnapshot {
+): StoredChatQueueState {
   if (!value || typeof value !== "object") {
-    return createEmptyStoredChatSnapshot(workspaceId)
+    return createEmptyStoredChatQueueState(workspaceId)
   }
 
-  const snapshot = value as Partial<StoredChatSnapshot>
-  if (snapshot.version !== 2 || snapshot.workspaceId !== workspaceId) {
-    return createEmptyStoredChatSnapshot(workspaceId)
+  const snapshot = value as Partial<StoredChatQueueState>
+  if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
+    return createEmptyStoredChatQueueState(workspaceId)
   }
-
-  const conversations = Array.isArray(snapshot.conversations)
-    ? snapshot.conversations.filter(
-        (conversation): conversation is ChatConversationView =>
-          Boolean(
-            conversation &&
-              typeof conversation === "object" &&
-              typeof conversation.conversationId === "string" &&
-              typeof conversation.workspaceId === "string"
-          )
-      )
-    : []
-
-  const validConversationIds = new Set(
-    conversations.map((conversation) => conversation.conversationId)
-  )
 
   const pendingReads =
     snapshot.pendingReads && typeof snapshot.pendingReads === "object"
       ? Object.fromEntries(
           Object.entries(snapshot.pendingReads).filter(
             ([conversationId, entry]) =>
-              validConversationIds.has(conversationId) &&
-              entry &&
-              typeof entry === "object" &&
-              typeof entry.conversationId === "string"
+              Boolean(
+                conversationId &&
+                  entry &&
+                  typeof entry === "object" &&
+                  typeof entry.conversationId === "string"
+              )
           )
         )
       : {}
@@ -153,16 +133,18 @@ export function normalizeStoredChatSnapshot(
       ? Object.fromEntries(
           Object.entries(snapshot.outbox).filter(
             ([, entry]) =>
-              entry &&
-              typeof entry === "object" &&
-              typeof entry.conversationId === "string" &&
-              validConversationIds.has(entry.conversationId)
+              Boolean(
+                entry &&
+                  typeof entry === "object" &&
+                  typeof entry.clientMessageId === "string" &&
+                  typeof entry.conversationId === "string"
+              )
           )
         )
       : {}
 
   return {
-    version: 2,
+    version: 3,
     workspaceId,
     workspaceMemberId:
       typeof snapshot.workspaceMemberId === "string"
@@ -182,39 +164,49 @@ export function normalizeStoredChatSnapshot(
       typeof snapshot.lastBootstrappedAt === "string"
         ? snapshot.lastBootstrappedAt
         : undefined,
-    conversations,
     pendingReads,
     outbox,
   }
 }
 
-export async function loadStoredChatSnapshot(workspaceId: string) {
+export async function loadStoredChatQueueState(workspaceId: string) {
   const row = await withStore("readonly", (store) =>
-    requestToPromise<{ workspaceId: string; payload: StoredChatSnapshot } | undefined>(
-      store.get(workspaceId)
-    )
+    requestToPromise<
+      { workspaceId: string; payload: StoredChatQueueState } | undefined
+    >(store.get(workspaceId))
   )
 
   if (!row?.payload) {
     return null
   }
 
-  return normalizeStoredChatSnapshot(workspaceId, row.payload)
+  return normalizeStoredChatQueueState(workspaceId, row.payload)
 }
 
-export async function saveStoredChatSnapshot(snapshot: StoredChatSnapshot) {
-  await withStore("readwrite", (store) =>
-    requestToPromise(
+export async function updateStoredChatQueueState(
+  workspaceId: string,
+  updater: (current: StoredChatQueueState) => StoredChatQueueState
+) {
+  await withStore("readwrite", async (store) => {
+    const currentRow = await requestToPromise<
+      { workspaceId: string; payload: StoredChatQueueState } | undefined
+    >(store.get(workspaceId))
+
+    const next = updater(
+      normalizeStoredChatQueueState(workspaceId, currentRow?.payload)
+    )
+
+    await requestToPromise(
       store.put({
-        workspaceId: snapshot.workspaceId,
-        payload: snapshot,
+        workspaceId,
+        payload: normalizeStoredChatQueueState(workspaceId, next),
         updatedAt: new Date().toISOString(),
       })
     )
-  )
+  })
 }
 
-export async function deleteStoredChatSnapshot(workspaceId: string) {
+export async function deleteStoredChatQueueState(workspaceId: string) {
   await withStore("readwrite", (store) =>
     requestToPromise(store.delete(workspaceId))
   )

@@ -1,14 +1,14 @@
 "use client"
 
 import { create } from "zustand"
-import { ApiError, api } from "@/lib/api"
+import { api } from "@/lib/api"
 import {
-  createEmptyStoredChatSnapshot,
-  loadStoredChatSnapshot,
-  saveStoredChatSnapshot,
+  createEmptyStoredChatQueueState,
+  loadStoredChatQueueState,
+  updateStoredChatQueueState,
   type PendingOutboxMessage as PersistedOutboxEntry,
   type PendingConversationRead,
-  type StoredChatSnapshot,
+  type StoredChatQueueState,
 } from "@/lib/chat-persistence"
 import { createUuid } from "@/lib/uuid"
 import type {
@@ -134,6 +134,9 @@ export type ConversationRuntimeMap = Record<
 >
 
 export type OutboxEntry = PersistedOutboxEntry
+export interface ChatWorkspaceSnapshot extends StoredChatQueueState {
+  conversations: ChatConversationView[]
+}
 
 interface ChatState {
   activeWorkspaceId: string | null
@@ -152,7 +155,7 @@ interface ChatState {
   runtimeSeqMap: Record<string, number>
   totalUnread: number
 
-  snapshot: StoredChatSnapshot | null
+  snapshot: ChatWorkspaceSnapshot | null
   loadedMessageItems: ChatConversationItem[]
 
   deactivate: () => void
@@ -212,13 +215,179 @@ let bootstrapWorkspaceId: string | null = null
 let syncPromise: Promise<void> | null = null
 let outboxRetryTimer: ReturnType<typeof setTimeout> | null = null
 
-function queuePersistSnapshot(snapshot: StoredChatSnapshot | null) {
-  if (!snapshot || typeof window === "undefined") {
+function createEmptyWorkspaceSnapshot(workspaceId: string): ChatWorkspaceSnapshot {
+  return {
+    ...createEmptyStoredChatQueueState(workspaceId),
+    conversations: [],
+  }
+}
+
+function toStoredChatQueueState(
+  snapshot: Pick<
+    ChatWorkspaceSnapshot,
+    | "workspaceId"
+    | "workspaceMemberId"
+    | "clientInstanceId"
+    | "inboxCursor"
+    | "lastBootstrappedAt"
+    | "pendingReads"
+    | "outbox"
+  > | null
+): StoredChatQueueState | null {
+  if (!snapshot) {
+    return null
+  }
+
+  return {
+    version: 3,
+    workspaceId: snapshot.workspaceId,
+    workspaceMemberId: snapshot.workspaceMemberId,
+    clientInstanceId: snapshot.clientInstanceId,
+    inboxCursor: snapshot.inboxCursor,
+    lastBootstrappedAt: snapshot.lastBootstrappedAt,
+    pendingReads: snapshot.pendingReads,
+    outbox: snapshot.outbox,
+  }
+}
+
+function mergeStoredQueueIntoSnapshot(
+  snapshot: ChatWorkspaceSnapshot | null,
+  queueState: StoredChatQueueState
+): ChatWorkspaceSnapshot {
+  const baseSnapshot =
+    snapshot && snapshot.workspaceId === queueState.workspaceId
+      ? snapshot
+      : createEmptyWorkspaceSnapshot(queueState.workspaceId)
+
+  return {
+    ...baseSnapshot,
+    version: queueState.version,
+    workspaceId: queueState.workspaceId,
+    workspaceMemberId:
+      queueState.workspaceMemberId ?? baseSnapshot.workspaceMemberId,
+    clientInstanceId:
+      queueState.clientInstanceId ?? baseSnapshot.clientInstanceId,
+    inboxCursor: Math.max(baseSnapshot.inboxCursor, queueState.inboxCursor),
+    lastBootstrappedAt: latestIsoTimestamp(
+      baseSnapshot.lastBootstrappedAt,
+      queueState.lastBootstrappedAt
+    ),
+    pendingReads: queueState.pendingReads,
+    outbox: queueState.outbox,
+    conversations: baseSnapshot.conversations,
+  }
+}
+
+function latestIsoTimestamp(
+  currentValue?: string,
+  nextValue?: string
+): string | undefined {
+  if (!currentValue) {
+    return nextValue
+  }
+  if (!nextValue) {
+    return currentValue
+  }
+  return new Date(currentValue).getTime() >= new Date(nextValue).getTime()
+    ? currentValue
+    : nextValue
+}
+
+function sameStoredEntry(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+function mergeStoredQueueTransition(
+  currentState: StoredChatQueueState,
+  previousState: StoredChatQueueState | null,
+  nextState: StoredChatQueueState
+) {
+  const nextWorkspaceState =
+    currentState.workspaceMemberId &&
+    nextState.workspaceMemberId &&
+    currentState.workspaceMemberId !== nextState.workspaceMemberId
+      ? createEmptyStoredChatQueueState(nextState.workspaceId)
+      : currentState.workspaceId === nextState.workspaceId
+        ? currentState
+        : createEmptyStoredChatQueueState(nextState.workspaceId)
+
+  const previousOutbox = previousState?.outbox ?? {}
+  const previousPendingReads = previousState?.pendingReads ?? {}
+  const nextOutbox = { ...nextWorkspaceState.outbox }
+  const nextPendingReads = { ...nextWorkspaceState.pendingReads }
+
+  for (const clientMessageId of Object.keys(previousOutbox)) {
+    if (!(clientMessageId in nextState.outbox)) {
+      delete nextOutbox[clientMessageId]
+    }
+  }
+  for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
+    if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
+      nextOutbox[clientMessageId] = entry
+    }
+  }
+
+  for (const conversationId of Object.keys(previousPendingReads)) {
+    if (!(conversationId in nextState.pendingReads)) {
+      const currentEntry = nextPendingReads[conversationId]
+      const previousEntry = previousPendingReads[conversationId]
+      if (
+        currentEntry &&
+        previousEntry &&
+        currentEntry.readUpToSequence > previousEntry.readUpToSequence
+      ) {
+        continue
+      }
+      delete nextPendingReads[conversationId]
+    }
+  }
+  for (const [conversationId, entry] of Object.entries(nextState.pendingReads)) {
+    if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
+      nextPendingReads[conversationId] = entry
+    }
+  }
+
+  return {
+    ...nextWorkspaceState,
+    workspaceId: nextState.workspaceId,
+    workspaceMemberId:
+      nextState.workspaceMemberId ?? nextWorkspaceState.workspaceMemberId,
+    clientInstanceId:
+      nextState.clientInstanceId ?? nextWorkspaceState.clientInstanceId,
+    inboxCursor: Math.max(nextWorkspaceState.inboxCursor, nextState.inboxCursor),
+    lastBootstrappedAt: latestIsoTimestamp(
+      nextWorkspaceState.lastBootstrappedAt,
+      nextState.lastBootstrappedAt
+    ),
+    pendingReads: nextPendingReads,
+    outbox: nextOutbox,
+  }
+}
+
+function queuePersistSnapshot(
+  previousSnapshot: ChatWorkspaceSnapshot | null,
+  nextSnapshot: ChatWorkspaceSnapshot | null
+) {
+  if (!nextSnapshot || typeof window === "undefined") {
+    return Promise.resolve()
+  }
+
+  const previousQueueState = toStoredChatQueueState(previousSnapshot)
+  const nextQueueState = toStoredChatQueueState(nextSnapshot)
+  if (!nextQueueState) {
     return Promise.resolve()
   }
 
   persistPromise = persistPromise
-    .then(() => saveStoredChatSnapshot(snapshot))
+    .then(() =>
+      updateStoredChatQueueState(nextQueueState.workspaceId, (currentState) =>
+        mergeStoredQueueTransition(
+          currentState,
+          previousQueueState,
+          nextQueueState
+        )
+      )
+    )
     .catch(() => undefined)
 
   return persistPromise
@@ -368,7 +537,7 @@ function patchInteractionInRawItems(
 }
 
 function applyInteractionUpdatedToSnapshot(
-  snapshot: StoredChatSnapshot,
+  snapshot: ChatWorkspaceSnapshot,
   payload: ChatSyncEvent<"interaction.updated">["payload"]
 ) {
   const currentConversation = snapshot.conversations.find(
@@ -558,7 +727,7 @@ function getAdjustedUnreadCount(
 
 function rawConversationToSummary(
   conversation: ChatConversationView,
-  snapshot: StoredChatSnapshot
+  snapshot: ChatWorkspaceSnapshot
 ): ConversationSummary {
   const activeParticipants = conversation.participants.filter(
     (participant) => participant.state === "active"
@@ -737,7 +906,7 @@ function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
 
 function mergeMessagesWithOutbox(
   loadedItems: ChatConversationItem[],
-  snapshot: StoredChatSnapshot,
+  snapshot: ChatWorkspaceSnapshot,
   conversationId: string
 ) {
   let nextMessages = sortMessages(
@@ -795,7 +964,7 @@ function applyFeedMessageToConversation(
 
 function applyOutboxToConversations(
   conversations: ConversationSummary[],
-  snapshot: StoredChatSnapshot,
+  snapshot: ChatWorkspaceSnapshot,
   runtimeMap: ConversationRuntimeMap
 ) {
   let nextConversations = conversations
@@ -920,7 +1089,7 @@ function applyRuntimeMapToConversation(
 }
 
 function deriveConversationSummaries(
-  snapshot: StoredChatSnapshot,
+  snapshot: ChatWorkspaceSnapshot,
   runtimeMap: ConversationRuntimeMap
 ) {
   const base = sortRawConversations(snapshot.conversations).map((conversation) =>
@@ -935,7 +1104,7 @@ function deriveConversationSummaries(
 
 function createStateFromSnapshot(
   currentState: ChatState,
-  snapshot: StoredChatSnapshot,
+  snapshot: ChatWorkspaceSnapshot,
   input?: {
     selectedConversationId?: string | null
     visibleConversationId?: string | null
@@ -1012,7 +1181,7 @@ function shouldIncrementUnreadCount(
 }
 
 function applyReadWatermarkAck(
-  snapshot: StoredChatSnapshot,
+  snapshot: ChatWorkspaceSnapshot,
   response: ChatConversationReadWatermarkResponse
 ) {
   const pendingReads = { ...snapshot.pendingReads }
@@ -1033,7 +1202,7 @@ function applyReadWatermarkAck(
 }
 
 function clearDeliveredOutbox(
-  outbox: StoredChatSnapshot["outbox"],
+  outbox: StoredChatQueueState["outbox"],
   items: ChatConversationItem[]
 ) {
   const deliveredClientIds = new Set(
@@ -1053,11 +1222,11 @@ function clearDeliveredOutbox(
 }
 
 function applySyncEventToSnapshot(
-  snapshot: StoredChatSnapshot,
+  snapshot: ChatWorkspaceSnapshot,
   event: ChatSyncEvent,
   visibleConversationId?: string | null
 ) {
-  let nextSnapshot: StoredChatSnapshot = {
+  let nextSnapshot: ChatWorkspaceSnapshot = {
     ...snapshot,
     inboxCursor: Math.max(snapshot.inboxCursor, event.syncSeq),
   }
@@ -1147,16 +1316,16 @@ function applySyncEventToSnapshot(
 
 async function bootstrapWorkspaceSnapshot(
   workspaceId: string,
-  snapshot: StoredChatSnapshot | null
+  snapshot: ChatWorkspaceSnapshot | null
 ) {
   const bootstrap = await api.getChatBootstrap(workspaceId)
 
-  let baseSnapshot = snapshot ?? createEmptyStoredChatSnapshot(workspaceId)
+  let baseSnapshot = snapshot ?? createEmptyWorkspaceSnapshot(workspaceId)
   if (
     baseSnapshot.workspaceMemberId &&
     baseSnapshot.workspaceMemberId !== bootstrap.workspaceMemberId
   ) {
-    baseSnapshot = createEmptyStoredChatSnapshot(workspaceId)
+    baseSnapshot = createEmptyWorkspaceSnapshot(workspaceId)
   }
 
   const clientInstanceInput = {
@@ -1169,28 +1338,12 @@ async function bootstrapWorkspaceSnapshot(
 
   let clientInstanceId = baseSnapshot.clientInstanceId || null
   if (clientInstanceId) {
-    try {
-      const response = await api.touchChatClientInstance(
-        workspaceId,
-        clientInstanceId,
-        clientInstanceInput
-      )
-      clientInstanceId = response.clientInstanceId
-    } catch (error) {
-      if (
-        !(
-          error instanceof ApiError &&
-          (error.status === 400 ||
-            error.status === 404 ||
-            error.code === "invalid_request" ||
-            error.code === "client_instance_not_found")
-        )
-      ) {
-        throw error
-      }
-
-      clientInstanceId = null
-    }
+    const response = await api.touchChatClientInstance(
+      workspaceId,
+      clientInstanceId,
+      clientInstanceInput
+    )
+    clientInstanceId = response.clientInstanceId
   }
 
   if (!clientInstanceId) {
@@ -1215,7 +1368,7 @@ async function bootstrapWorkspaceSnapshot(
   }
 }
 
-async function flushPendingReadsInternal(snapshot: StoredChatSnapshot) {
+async function flushPendingReadsInternal(snapshot: ChatWorkspaceSnapshot) {
   if (!snapshot.clientInstanceId) {
     return snapshot
   }
@@ -1246,7 +1399,7 @@ async function flushPendingReadsInternal(snapshot: StoredChatSnapshot) {
 }
 
 async function flushOutboxInternal(
-  snapshot: StoredChatSnapshot,
+  snapshot: ChatWorkspaceSnapshot,
   selectedConversationId: string | null,
   loadedMessageItems: ChatConversationItem[]
 ) {
@@ -1420,25 +1573,20 @@ export const useChatStore = create<ChatState>((set, get) => ({
         })
       }
 
-      const persisted =
-        (await loadStoredChatSnapshot(workspaceId).catch(() => null)) ||
-        createEmptyStoredChatSnapshot(workspaceId)
+      const persistedQueueState =
+        (await loadStoredChatQueueState(workspaceId).catch(() => null)) ||
+        createEmptyStoredChatQueueState(workspaceId)
 
       if (get().activeWorkspaceId && get().activeWorkspaceId !== workspaceId) {
         return
       }
 
-      set((state) => ({
-        ...createStateFromSnapshot(state, persisted),
-        loadingConversations: shouldShowLoading,
-        loadingMessages:
-          state.selectedConversationId !==
-          createStateFromSnapshot(state, persisted).selectedConversationId
-            ? false
-            : state.loadingMessages,
-      }))
+      const currentSnapshot = get().snapshot
+      const baseSnapshot =
+        currentSnapshot?.workspaceId === workspaceId
+          ? mergeStoredQueueIntoSnapshot(currentSnapshot, persistedQueueState)
+          : mergeStoredQueueIntoSnapshot(null, persistedQueueState)
 
-      const baseSnapshot = get().snapshot ?? persisted
       const nextSnapshot = await bootstrapWorkspaceSnapshot(
         workspaceId,
         baseSnapshot
@@ -1452,7 +1600,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         ...createStateFromSnapshot(state, nextSnapshot),
         loadingConversations: false,
       }))
-      void queuePersistSnapshot(nextSnapshot)
+      void queuePersistSnapshot(baseSnapshot, nextSnapshot)
       await get().syncFromServer(workspaceId)
     })()
       .catch((error) => {
@@ -1472,8 +1620,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
   },
 
   reloadPersistedSnapshot: async (workspaceId) => {
-    const persisted = await loadStoredChatSnapshot(workspaceId).catch(() => null)
-    if (!persisted) {
+    const persistedQueueState = await loadStoredChatQueueState(workspaceId).catch(
+      () => null
+    )
+    if (!persistedQueueState) {
       return
     }
 
@@ -1481,9 +1631,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
       return
     }
 
-    set((state) => ({
-      ...createStateFromSnapshot(state, persisted),
-    }))
+    set((state) => {
+      if (!state.snapshot || state.snapshot.workspaceId !== workspaceId) {
+        return state
+      }
+
+      const mergedSnapshot = mergeStoredQueueIntoSnapshot(
+        state.snapshot,
+        persistedQueueState
+      )
+      return {
+        ...createStateFromSnapshot(state, mergedSnapshot),
+      }
+    })
   },
 
   hydrateOutbox: async (workspaceId) => {
@@ -1500,7 +1660,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       selectedConversationId: conversationId,
       loadedMessageItems: [],
       messages: [],
-      loadingMessages: false,
+      loadingMessages: true,
     })
   },
 
@@ -1517,6 +1677,10 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
   loadMessages: async (workspaceId, conversationId) => {
     const currentSnapshot = get().snapshot
+    if (!currentSnapshot?.clientInstanceId) {
+      set({ loadingMessages: false })
+      return
+    }
     set({ loadingMessages: true })
 
     try {
@@ -1524,14 +1688,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         workspaceId,
         conversationId,
         {
-          clientInstanceId: currentSnapshot?.clientInstanceId ?? undefined,
+          clientInstanceId: currentSnapshot.clientInstanceId,
           limit: 100,
         }
       )
 
       set((state) => {
         const baseSnapshot =
-          state.snapshot ?? createEmptyStoredChatSnapshot(workspaceId)
+          state.snapshot ?? createEmptyWorkspaceSnapshot(workspaceId)
         const nextRuntimeMap = {
           ...state.runtimeMap,
           [conversationId]: response.runtimeByActor || {},
@@ -1539,7 +1703,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         if (state.selectedConversationId !== conversationId) {
           return {
-            loadingMessages: false,
             runtimeMap: nextRuntimeMap,
           }
         }
@@ -1553,7 +1716,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           outbox: clearDeliveredOutbox(baseSnapshot.outbox, response.items),
         }
 
-        void queuePersistSnapshot(nextSnapshot)
+        void queuePersistSnapshot(baseSnapshot, nextSnapshot)
 
         return {
           ...createStateFromSnapshot(
@@ -1569,7 +1732,11 @@ export const useChatStore = create<ChatState>((set, get) => ({
       })
     } catch (error) {
       console.error("Failed to load messages:", error)
-      set({ loadingMessages: false })
+      set((state) =>
+        state.selectedConversationId === conversationId
+          ? { loadingMessages: false }
+          : state
+      )
     }
   },
 
@@ -1581,6 +1748,9 @@ export const useChatStore = create<ChatState>((set, get) => ({
     const snapshot = get().snapshot
     if (!snapshot || snapshot.workspaceId !== workspaceId) {
       throw new Error("No active workspace")
+    }
+    if (!snapshot.clientInstanceId) {
+      throw new Error("Chat is still connecting")
     }
 
     const existingSequences = [
@@ -1622,7 +1792,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         },
       }
 
-      void queuePersistSnapshot(nextSnapshot)
+      void queuePersistSnapshot(currentSnapshot, nextSnapshot)
       return createStateFromSnapshot(state, nextSnapshot)
     })
 
@@ -1654,7 +1824,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
             : state.loadedMessageItems,
       }),
     }))
-    void queuePersistSnapshot(result.snapshot)
+    void queuePersistSnapshot(snapshot, result.snapshot)
 
     if (result.retryAttemptCount !== null) {
       scheduleOutboxRetry(result.retryAttemptCount)
@@ -1746,7 +1916,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           loadedMessageItems: workingLoadedItems,
         }),
       }))
-      void queuePersistSnapshot(workingSnapshot)
+      void queuePersistSnapshot(currentSnapshot, workingSnapshot)
 
       if (outboxResult.retryAttemptCount !== null) {
         scheduleOutboxRetry(outboxResult.retryAttemptCount)
@@ -1799,7 +1969,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ),
         }
 
-        void queuePersistSnapshot(nextSnapshot)
         return createStateFromSnapshot(state, nextSnapshot)
       })
     }
@@ -1823,7 +1992,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       Math.floor(lastVisibleSequence ?? normalizedReadUpToSequence)
     )
 
-    const nextSnapshot: StoredChatSnapshot = {
+    const nextSnapshot: ChatWorkspaceSnapshot = {
       ...snapshot,
       pendingReads: {
         ...snapshot.pendingReads,
@@ -1848,7 +2017,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
 
     set((state) => createStateFromSnapshot(state, nextSnapshot))
-    void queuePersistSnapshot(nextSnapshot)
+    void queuePersistSnapshot(snapshot, nextSnapshot)
 
     if (!nextSnapshot.clientInstanceId) {
       return
@@ -1870,7 +2039,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
           return state
         }
         const confirmedSnapshot = applyReadWatermarkAck(state.snapshot, response)
-        void queuePersistSnapshot(confirmedSnapshot)
+        void queuePersistSnapshot(state.snapshot, confirmedSnapshot)
         return createStateFromSnapshot(state, confirmedSnapshot)
       })
     } catch (error) {
@@ -1895,7 +2064,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         const payload =
           event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
         if (payload.conversationId !== state.selectedConversationId) {
-          void queuePersistSnapshot(nextSnapshot)
+          void queuePersistSnapshot(state.snapshot, nextSnapshot)
           return createStateFromSnapshot(state, nextSnapshot, {
             loadedMessageItems: nextLoadedItems,
           })
@@ -1914,7 +2083,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
         }
       }
 
-      void queuePersistSnapshot(nextSnapshot)
+      void queuePersistSnapshot(state.snapshot, nextSnapshot)
       return createStateFromSnapshot(state, nextSnapshot, {
         loadedMessageItems: nextLoadedItems,
       })
@@ -1969,7 +2138,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ? patchInteractionInRawItems(state.loadedMessageItems, payload)
           : state.loadedMessageItems
 
-      void queuePersistSnapshot(nextSnapshot)
       return createStateFromSnapshot(state, nextSnapshot, {
         loadedMessageItems: nextLoadedItems,
       })

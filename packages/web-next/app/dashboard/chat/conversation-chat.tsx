@@ -45,6 +45,7 @@ interface ConversationChatProps {
   conversation: ConversationSummary
   messages: FeedMessage[]
   loading: boolean
+  composerDisabled?: boolean
   actorRuntimes?: Record<string, ActorRuntimeState>
   onSend: (payload: ChatComposerSubmitPayload) => Promise<void> | void
   onBack?: () => void
@@ -224,6 +225,7 @@ export default function ConversationChat({
   conversation,
   messages,
   loading,
+  composerDisabled = false,
   actorRuntimes,
   onSend,
   onBack,
@@ -760,6 +762,7 @@ export default function ConversationChat({
         <ChatComposer
           workspaceId={workspaceId || null}
           participants={mentionableParticipants}
+          disabled={composerDisabled}
           placeholder="Type a message..."
           replyTo={replyTo}
           onCancelReply={() => setReplyTo(null)}

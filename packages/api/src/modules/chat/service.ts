@@ -288,7 +288,7 @@ type ReadWatermarkInput = {
   workspaceId: string;
   workspaceMemberId: string;
   conversationId: string;
-  clientInstanceId?: string;
+  clientInstanceId: string;
   readUpToSequence: number;
   lastVisibleSequence?: number;
 };
@@ -4238,7 +4238,7 @@ export async function getChatConversationMessages(params: {
   afterSequence?: number;
   beforeSequence?: number;
   limit?: number;
-  clientInstanceId?: string;
+  clientInstanceId: string;
 }): Promise<ChatConversationMessagesPage> {
   const identity = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
   const access = await requireConversationAccess(
@@ -4247,16 +4247,14 @@ export async function getChatConversationMessages(params: {
     identity.workspaceMemberId,
   );
 
-  if (params.clientInstanceId) {
-    await ensureClientInstance(
-      rootQueryable(),
-      {
-        workspaceId: params.workspaceId,
-        workspaceMemberId: identity.workspaceMemberId,
-        clientInstanceId: params.clientInstanceId,
-      },
-    );
-  }
+  await ensureClientInstance(
+    rootQueryable(),
+    {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
+      clientInstanceId: params.clientInstanceId,
+    },
+  );
 
   const limit = Math.min(Math.max(params.limit ?? 100, 1), 200);
   let rows: ItemRow[] = [];
@@ -4443,49 +4441,46 @@ export async function getChatConversationMessages(params: {
     [params.conversationId, access.participant.id],
   );
 
-  let deviceState: ChatDeviceState | undefined;
-  if (params.clientInstanceId) {
-    const deviceStateResult = await executeSql<{
-      client_instance_id: string;
-      conversation_id: string;
-      last_visible_sequence: string | number;
-      last_inbox_seq: string | number;
-      last_opened_at: string | Date | null;
-      draft_payload: unknown;
-    }>(
-      `
-        SELECT
-          client_instance_id,
-          conversation_id,
-          last_visible_sequence,
-          last_inbox_seq,
-          last_opened_at,
-          draft_payload
-        FROM conversation_device_states
-        WHERE conversation_id = $1
-          AND client_instance_id = $2
-        LIMIT 1
-      `,
-      [params.conversationId, params.clientInstanceId],
-    );
-    const row = deviceStateResult.rows[0];
-    deviceState = row
-      ? {
-          clientInstanceId: row.client_instance_id,
-          conversationId: row.conversation_id,
-          lastVisibleSequence: toNumber(row.last_visible_sequence),
-          lastInboxSeq: toNumber(row.last_inbox_seq),
-          lastOpenedAt: row.last_opened_at ? toIso(row.last_opened_at) : undefined,
-          draftPayload: asJsonRecord(row.draft_payload),
-        }
-      : {
-          clientInstanceId: params.clientInstanceId,
-          conversationId: params.conversationId,
-          lastVisibleSequence: 0,
-          lastInboxSeq: 0,
-          draftPayload: {},
-        };
-  }
+  const deviceStateResult = await executeSql<{
+    client_instance_id: string;
+    conversation_id: string;
+    last_visible_sequence: string | number;
+    last_inbox_seq: string | number;
+    last_opened_at: string | Date | null;
+    draft_payload: unknown;
+  }>(
+    `
+      SELECT
+        client_instance_id,
+        conversation_id,
+        last_visible_sequence,
+        last_inbox_seq,
+        last_opened_at,
+        draft_payload
+      FROM conversation_device_states
+      WHERE conversation_id = $1
+        AND client_instance_id = $2
+      LIMIT 1
+    `,
+    [params.conversationId, params.clientInstanceId],
+  );
+  const row = deviceStateResult.rows[0];
+  const deviceState: ChatDeviceState = row
+    ? {
+        clientInstanceId: row.client_instance_id,
+        conversationId: row.conversation_id,
+        lastVisibleSequence: toNumber(row.last_visible_sequence),
+        lastInboxSeq: toNumber(row.last_inbox_seq),
+        lastOpenedAt: row.last_opened_at ? toIso(row.last_opened_at) : undefined,
+        draftPayload: asJsonRecord(row.draft_payload),
+      }
+    : {
+        clientInstanceId: params.clientInstanceId,
+        conversationId: params.conversationId,
+        lastVisibleSequence: 0,
+        lastInboxSeq: 0,
+        draftPayload: {},
+      };
 
   const runtimeMap = await getConversationRuntimeMap([params.conversationId]);
 
@@ -4548,13 +4543,11 @@ export async function sendChatConversationMessage(
       params.workspaceMemberId,
     );
 
-    if (params.clientInstanceId) {
-      await ensureClientInstance(client, {
-        workspaceId: params.workspaceId,
-        workspaceMemberId: params.workspaceMemberId,
-        clientInstanceId: params.clientInstanceId,
-      });
-    }
+    await ensureClientInstance(client, {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: params.workspaceMemberId,
+      clientInstanceId: params.clientInstanceId,
+    });
 
     return sendConversationMessageFromParticipant({
       workspaceId: params.workspaceId,
@@ -4590,13 +4583,11 @@ export async function updateChatConversationReadWatermark(
       params.workspaceMemberId,
     );
 
-    if (params.clientInstanceId) {
-      await ensureClientInstance(client, {
-        workspaceId: params.workspaceId,
-        workspaceMemberId: params.workspaceMemberId,
-        clientInstanceId: params.clientInstanceId,
-      });
-    }
+    await ensureClientInstance(client, {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: params.workspaceMemberId,
+      clientInstanceId: params.clientInstanceId,
+    });
 
     const maxSequence = await getConversationSequenceMax(client, params.conversationId);
     const requestedSequence = Math.min(Math.max(params.readUpToSequence, 0), maxSequence);

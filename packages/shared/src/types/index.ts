@@ -3904,7 +3904,7 @@ export interface ChatConversationMessagesQuery {
   afterSequence?: number;
   beforeSequence?: number;
   limit?: number;
-  clientInstanceId?: UUID;
+  clientInstanceId: UUID;
 }
 
 export interface ChatConversationMessagesPage {
@@ -3970,7 +3970,7 @@ export interface ChatConversationSendMessageRequest {
   contentBlocks: CanonicalContentBlock[];
   clientMessageId: UUID;
   replyToItemId?: UUID;
-  clientInstanceId?: UUID;
+  clientInstanceId: UUID;
   metadata?: Record<string, unknown>;
 }
 
@@ -3984,7 +3984,7 @@ export interface ChatConversationSendMessageResponse {
 export interface ChatConversationReadWatermarkRequest {
   readUpToSequence: number;
   lastVisibleSequence?: number;
-  clientInstanceId?: UUID;
+  clientInstanceId: UUID;
 }
 
 export type ChatConversationReadWatermarkInput =

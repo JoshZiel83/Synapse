@@ -88,10 +88,9 @@ async function withStore(dbName, version, storeName, mode, onUpgrade, run) {
 
 function createEmptySnapshot(workspaceId) {
   return {
-    version: 2,
+    version: 3,
     workspaceId,
     inboxCursor: 0,
-    conversations: [],
     pendingReads: {},
     outbox: {},
   };
@@ -107,197 +106,140 @@ function normalizeSnapshot(workspaceId, value) {
   }
 
   const snapshot = value;
-  if (snapshot.version !== 2 || snapshot.workspaceId !== workspaceId) {
+  if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
     return createEmptySnapshot(workspaceId);
   }
 
+  const pendingReads =
+    snapshot.pendingReads && typeof snapshot.pendingReads === "object"
+      ? Object.fromEntries(
+          Object.entries(snapshot.pendingReads).filter(
+            ([conversationId, entry]) =>
+              Boolean(
+                conversationId &&
+                  entry &&
+                  typeof entry === "object" &&
+                  typeof entry.conversationId === "string",
+              ),
+          ),
+        )
+      : {};
+
+  const outbox =
+    snapshot.outbox && typeof snapshot.outbox === "object"
+      ? Object.fromEntries(
+          Object.entries(snapshot.outbox).filter(
+            ([, entry]) =>
+              Boolean(
+                entry &&
+                  typeof entry === "object" &&
+                  typeof entry.clientMessageId === "string" &&
+                  typeof entry.conversationId === "string",
+              ),
+          ),
+        )
+      : {};
+
   return {
-    ...createEmptySnapshot(workspaceId),
-    ...snapshot,
-    version: 2,
+    version: 3,
     workspaceId,
+    workspaceMemberId:
+      typeof snapshot.workspaceMemberId === "string"
+        ? snapshot.workspaceMemberId
+        : undefined,
     clientInstanceId: isUuid(snapshot.clientInstanceId)
       ? snapshot.clientInstanceId
       : undefined,
+    inboxCursor:
+      typeof snapshot.inboxCursor === "number" && Number.isFinite(snapshot.inboxCursor)
+        ? snapshot.inboxCursor
+        : 0,
+    lastBootstrappedAt:
+      typeof snapshot.lastBootstrappedAt === "string"
+        ? snapshot.lastBootstrappedAt
+        : undefined,
+    pendingReads,
+    outbox,
   };
 }
 
-function normalizeText(value) {
-  return typeof value === "string" ? value.trim() : "";
+function sameStoredEntry(left, right) {
+  return JSON.stringify(left) === JSON.stringify(right);
 }
 
-function extractText(contentBlocks) {
-  if (!Array.isArray(contentBlocks)) {
-    return "";
+function latestIsoTimestamp(currentValue, nextValue) {
+  if (!currentValue) {
+    return nextValue;
+  }
+  if (!nextValue) {
+    return currentValue;
+  }
+  return new Date(currentValue).getTime() >= new Date(nextValue).getTime()
+    ? currentValue
+    : nextValue;
+}
+
+function mergeStoredQueueTransition(currentState, previousState, nextState) {
+  const nextWorkspaceState =
+    currentState.workspaceMemberId &&
+    nextState.workspaceMemberId &&
+    currentState.workspaceMemberId !== nextState.workspaceMemberId
+      ? createEmptySnapshot(nextState.workspaceId)
+      : currentState.workspaceId === nextState.workspaceId
+        ? currentState
+        : createEmptySnapshot(nextState.workspaceId);
+
+  const previousOutbox = (previousState && previousState.outbox) || {};
+  const previousPendingReads = (previousState && previousState.pendingReads) || {};
+  const nextOutbox = { ...nextWorkspaceState.outbox };
+  const nextPendingReads = { ...nextWorkspaceState.pendingReads };
+
+  for (const clientMessageId of Object.keys(previousOutbox)) {
+    if (!(clientMessageId in nextState.outbox)) {
+      delete nextOutbox[clientMessageId];
+    }
+  }
+  for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
+    if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
+      nextOutbox[clientMessageId] = entry;
+    }
   }
 
-  const parts = [];
-  for (const block of contentBlocks) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-
-    if (typeof block.text === "string" && block.text.trim()) {
-      parts.push(block.text.trim());
-      continue;
-    }
-
-    if (typeof block.content === "string" && block.content.trim()) {
-      parts.push(block.content.trim());
-      continue;
-    }
-
-    if (Array.isArray(block.children)) {
-      const nested = extractText(block.children);
-      if (nested) {
-        parts.push(nested);
+  for (const conversationId of Object.keys(previousPendingReads)) {
+    if (!(conversationId in nextState.pendingReads)) {
+      const currentEntry = nextPendingReads[conversationId];
+      const previousEntry = previousPendingReads[conversationId];
+      if (
+        currentEntry &&
+        previousEntry &&
+        currentEntry.readUpToSequence > previousEntry.readUpToSequence
+      ) {
+        continue;
       }
+      delete nextPendingReads[conversationId];
     }
   }
-
-  return parts.join(" ").trim();
-}
-
-function buildPreviewText(item) {
-  if (!item) {
-    return "";
-  }
-
-  const text = extractText(item.contentBlocks) || normalizeText(item.content);
-  if (text) {
-    return text;
-  }
-
-  if (item.itemType === "event") {
-    return normalizeText(item.subtype) || "Event";
-  }
-
-  return "Attachment";
-}
-
-function buildInteractionPreview(interaction) {
-  if (!interaction || typeof interaction !== "object") {
-    return "Interaction requested";
-  }
-
-  if (interaction.kind === "user_input") {
-    const targetName =
-      interaction.target && typeof interaction.target.name === "string"
-        ? interaction.target.name.trim() || "a user"
-        : "a user";
-    const prompt =
-      interaction.userInput && typeof interaction.userInput.title === "string"
-        ? interaction.userInput.title.trim() || "A question"
-        : "A question";
-    if (interaction.status === "cancelled") {
-      return `Input request for ${targetName} was cancelled: ${prompt}`;
+  for (const [conversationId, entry] of Object.entries(nextState.pendingReads)) {
+    if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
+      nextPendingReads[conversationId] = entry;
     }
-    return interaction.status === "answered"
-      ? `${targetName} answered: ${prompt}`
-      : `Input requested from ${targetName}: ${prompt}`;
-  }
-
-  if (interaction.kind === "plan_approval") {
-    const targetName =
-      interaction.target && typeof interaction.target.name === "string"
-        ? interaction.target.name.trim() || "a user"
-        : "a user";
-    const title =
-      interaction.planApproval && typeof interaction.planApproval.title === "string"
-        ? interaction.planApproval.title.trim() || "Plan approval"
-        : "Plan approval";
-    if (interaction.status === "cancelled") {
-      return `Plan approval for ${targetName} was cancelled: ${title}`;
-    }
-    if (interaction.status === "approved") {
-      return `${targetName} approved: ${title}`;
-    }
-    if (interaction.status === "rejected") {
-      return `${targetName} requested changes: ${title}`;
-    }
-    return `Plan approval requested from ${targetName}: ${title}`;
-  }
-
-  const deviceName =
-    interaction.relayAuthorization &&
-    typeof interaction.relayAuthorization.deviceDisplayName === "string"
-      ? interaction.relayAuthorization.deviceDisplayName.trim() || "relay"
-      : "relay";
-  if (interaction.status === "cancelled") {
-    return `Relay authorization request was cancelled for ${deviceName}`;
-  }
-  if (interaction.status === "rejected") {
-    const resolverName =
-      interaction.resolvedBy && typeof interaction.resolvedBy.name === "string"
-        ? interaction.resolvedBy.name.trim() || "A user"
-        : "A user";
-    return `${resolverName} rejected access for ${deviceName}`;
-  }
-  if (interaction.status === "approved") {
-    const resolverName =
-      interaction.resolvedBy && typeof interaction.resolvedBy.name === "string"
-        ? interaction.resolvedBy.name.trim() || "A user"
-        : "A user";
-    return `${resolverName} approved access for ${deviceName}`;
-  }
-  if (interaction.status === "superseded") {
-    return `Relay authorization request was superseded for ${deviceName}`;
-  }
-  return `Relay authorization requested for ${deviceName}`;
-}
-
-function sortConversations(conversations) {
-  return [...conversations].sort((left, right) => {
-    const leftPinned = left.pinnedSortKey ? new Date(left.pinnedSortKey).getTime() : 0;
-    const rightPinned = right.pinnedSortKey ? new Date(right.pinnedSortKey).getTime() : 0;
-    if (leftPinned !== rightPinned) {
-      return rightPinned - leftPinned;
-    }
-
-    const leftAt =
-      (left.lastItem && left.lastItem.createdAt) || left.updatedAt || left.createdAt;
-    const rightAt =
-      (right.lastItem && right.lastItem.createdAt) || right.updatedAt || right.createdAt;
-
-    return new Date(rightAt).getTime() - new Date(leftAt).getTime();
-  });
-}
-
-function upsertConversation(conversations, incoming) {
-  return sortConversations(
-    conversations
-      .filter((conversation) => conversation.conversationId !== incoming.conversationId)
-      .concat(incoming),
-  );
-}
-
-function updateConversation(snapshot, conversationId, updater) {
-  const current = snapshot.conversations.find(
-    (conversation) => conversation.conversationId === conversationId,
-  );
-  if (!current) {
-    return snapshot;
   }
 
   return {
-    ...snapshot,
-    conversations: upsertConversation(snapshot.conversations, updater(current)),
+    ...nextWorkspaceState,
+    workspaceId: nextState.workspaceId,
+    workspaceMemberId:
+      nextState.workspaceMemberId || nextWorkspaceState.workspaceMemberId,
+    clientInstanceId:
+      nextState.clientInstanceId || nextWorkspaceState.clientInstanceId,
+    inboxCursor: Math.max(nextWorkspaceState.inboxCursor || 0, nextState.inboxCursor || 0),
+    lastBootstrappedAt: latestIsoTimestamp(
+      nextWorkspaceState.lastBootstrappedAt,
+      nextState.lastBootstrappedAt,
+    ),
+    pendingReads: nextPendingReads,
+    outbox: nextOutbox,
   };
-}
-
-function clearDeliveredOutbox(outbox, items) {
-  const deliveredClientIds = new Set(
-    (items || []).map((item) => item.clientMessageId).filter(Boolean),
-  );
-  if (deliveredClientIds.size === 0) {
-    return outbox;
-  }
-
-  const next = { ...outbox };
-  for (const clientMessageId of deliveredClientIds) {
-    delete next[clientMessageId];
-  }
-  return next;
 }
 
 function resolveApiUrl(apiBase, path) {
@@ -379,7 +321,7 @@ async function loadWorkspaceSnapshot(workspaceId) {
   return normalizeSnapshot(workspaceId, row && row.payload);
 }
 
-async function saveWorkspaceSnapshot(snapshot) {
+async function updateWorkspaceSnapshot(workspaceId, updater) {
   return withStore(
     CHAT_DB_NAME,
     CHAT_DB_VERSION,
@@ -390,14 +332,17 @@ async function saveWorkspaceSnapshot(snapshot) {
         db.createObjectStore(CHAT_SNAPSHOT_STORE, { keyPath: "workspaceId" });
       }
     },
-    (store) =>
-      requestToPromise(
+    async (store) => {
+      const currentRow = await requestToPromise(store.get(workspaceId));
+      const next = updater(normalizeSnapshot(workspaceId, currentRow && currentRow.payload));
+      await requestToPromise(
         store.put({
-          workspaceId: snapshot.workspaceId,
-          payload: snapshot,
+          workspaceId,
+          payload: normalizeSnapshot(workspaceId, next),
           updatedAt: new Date().toISOString(),
         }),
-      ),
+      );
+    },
   );
 }
 
@@ -419,47 +364,6 @@ async function fetchJson(auth, path, options) {
   return data;
 }
 
-async function bootstrapWorkspace(auth, snapshot) {
-  const bootstrap = await fetchJson(
-    auth,
-    `/workspaces/${auth.workspaceId}/chat/bootstrap`,
-  );
-
-  let next = snapshot || createEmptySnapshot(auth.workspaceId);
-  if (
-    next.workspaceMemberId &&
-    next.workspaceMemberId !== bootstrap.workspaceMemberId
-  ) {
-    next = createEmptySnapshot(auth.workspaceId);
-  }
-
-  const conversations = (bootstrap.conversations || []).reduce(
-    (current, conversation) => upsertConversation(current, conversation),
-    next.conversations || [],
-  );
-
-  return {
-    ...next,
-    workspaceId: auth.workspaceId,
-    workspaceMemberId: bootstrap.workspaceMemberId,
-    clientInstanceId: isUuid(next.clientInstanceId)
-      ? next.clientInstanceId
-      : undefined,
-    inboxCursor: Math.max(next.inboxCursor || 0, bootstrap.nextInboxCursor || 0),
-    lastBootstrappedAt: new Date().toISOString(),
-    conversations,
-  };
-}
-
-function shouldIncrementUnreadCount(conversation, item) {
-  return (
-    item.itemType === "message" &&
-    item.scope === "shared" &&
-    item.surface === "visible" &&
-    item.authorParticipantId !== conversation.viewerParticipantId
-  );
-}
-
 function applyReadWatermarkAck(snapshot, response) {
   const pendingReads = { ...(snapshot.pendingReads || {}) };
   const queued = pendingReads[response.conversationId];
@@ -467,116 +371,10 @@ function applyReadWatermarkAck(snapshot, response) {
     delete pendingReads[response.conversationId];
   }
 
-  return updateConversation(
-    {
-      ...snapshot,
-      pendingReads,
-    },
-    response.conversationId,
-    (conversation) => ({
-      ...conversation,
-      unreadCount: 0,
-    }),
-  );
-}
-
-function applySyncEvent(snapshot, event) {
-  let next = {
+  return {
     ...snapshot,
-    inboxCursor: Math.max(snapshot.inboxCursor || 0, event.syncSeq || 0),
+    pendingReads,
   };
-
-  switch (event.eventType) {
-    case "conversation.upsert":
-      next = {
-        ...next,
-        conversations: upsertConversation(
-          next.conversations || [],
-          event.payload.conversation,
-        ),
-      };
-      break;
-    case "conversation.item.created": {
-      const conversationId = event.payload.conversationId;
-      const item = event.payload.item;
-
-      next = updateConversation(
-        {
-          ...next,
-          outbox: clearDeliveredOutbox(next.outbox || {}, [item]),
-        },
-        conversationId,
-        (conversation) => ({
-          ...conversation,
-          unreadCount:
-            shouldIncrementUnreadCount(conversation, item)
-              ? (conversation.unreadCount || 0) + 1
-              : conversation.unreadCount || 0,
-          updatedAt: item.createdAt,
-          lastItem: {
-            itemId: item.id,
-            sequence: item.sequence,
-            itemType: item.itemType,
-            subtype: item.subtype,
-            previewText: buildPreviewText(item),
-            authorParticipantId: item.authorParticipantId,
-            author: item.author,
-            createdAt: item.createdAt,
-          },
-        }),
-      );
-      break;
-    }
-    case "conversation.read.updated": {
-      const payload = event.payload;
-      if (payload.workspaceMemberId !== next.workspaceMemberId) {
-        break;
-      }
-
-      const pendingReads = { ...(next.pendingReads || {}) };
-      const queued = pendingReads[payload.conversationId];
-      if (queued && queued.readUpToSequence <= payload.readWatermarkSequence) {
-        delete pendingReads[payload.conversationId];
-      }
-
-      next = updateConversation(
-        {
-          ...next,
-          pendingReads,
-        },
-        payload.conversationId,
-        (conversation) => ({
-          ...conversation,
-          unreadCount: 0,
-        }),
-      );
-      break;
-    }
-    case "interaction.updated": {
-      const payload = event.payload;
-      if (
-        payload.itemId &&
-        next.conversations.some(
-          (conversation) => conversation.conversationId === payload.conversationId,
-        )
-      ) {
-        next = updateConversation(next, payload.conversationId, (conversation) => ({
-          ...conversation,
-          lastItem:
-            conversation.lastItem &&
-            conversation.lastItem.itemId === payload.itemId
-              ? {
-                  ...conversation.lastItem,
-                  previewText: buildInteractionPreview(payload.interaction),
-                }
-              : conversation.lastItem,
-        }));
-      }
-      break;
-    }
-  }
-
-  return next;
 }
 
 async function flushPendingReads(auth, snapshot) {
@@ -636,7 +434,7 @@ async function flushOutbox(auth, snapshot) {
     };
 
     try {
-      const response = await fetchJson(
+      await fetchJson(
         auth,
         `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
         {
@@ -650,31 +448,13 @@ async function flushOutbox(auth, snapshot) {
         },
       );
 
-      const item = response.item;
       const nextOutbox = { ...next.outbox };
       delete nextOutbox[entry.clientMessageId];
 
-      next = updateConversation(
-        {
-          ...next,
-          outbox: nextOutbox,
-        },
-        entry.conversationId,
-        (conversation) => ({
-          ...conversation,
-          updatedAt: item.createdAt,
-          lastItem: {
-            itemId: item.id,
-            sequence: item.sequence,
-            itemType: item.itemType,
-            subtype: item.subtype,
-            previewText: buildPreviewText(item),
-            authorParticipantId: item.authorParticipantId,
-            author: item.author,
-            createdAt: item.createdAt,
-          },
-        }),
-      );
+      next = {
+        ...next,
+        outbox: nextOutbox,
+      };
     } catch (error) {
       next = {
         ...next,
@@ -729,44 +509,32 @@ async function runSyncPass(workspaceIdOverride, reason) {
       workspaceId: workspaceIdOverride || auth.workspaceId,
     };
 
-    let snapshot = await loadWorkspaceSnapshot(effectiveAuth.workspaceId);
-    snapshot = await bootstrapWorkspace(effectiveAuth, snapshot);
-
-    let cursor = snapshot.inboxCursor || 0;
-    let hasMore = true;
-
-    while (hasMore) {
-      const response = await fetchJson(
-        effectiveAuth,
-        `/workspaces/${effectiveAuth.workspaceId}/chat/sync?cursor=${encodeURIComponent(
-          String(cursor),
-        )}&limit=200`,
-      );
-
-      for (const event of response.events || []) {
-        snapshot = applySyncEvent(snapshot, event);
-      }
-
-      cursor = response.nextCursor;
-      hasMore = Boolean(response.hasMore);
+    const startingSnapshot = await loadWorkspaceSnapshot(effectiveAuth.workspaceId);
+    if (!startingSnapshot.clientInstanceId) {
+      return;
     }
 
-    snapshot = await flushPendingReads(effectiveAuth, snapshot);
-    snapshot = await flushOutbox(effectiveAuth, snapshot);
-    await saveWorkspaceSnapshot(snapshot);
+    let nextSnapshot = await flushPendingReads(effectiveAuth, startingSnapshot);
+    nextSnapshot = await flushOutbox(effectiveAuth, nextSnapshot);
+
+    if (!sameStoredEntry(startingSnapshot, nextSnapshot)) {
+      await updateWorkspaceSnapshot(effectiveAuth.workspaceId, (currentState) =>
+        mergeStoredQueueTransition(currentState, startingSnapshot, nextSnapshot),
+      );
+    }
 
     await broadcast({
-      type: "chat:snapshot-updated",
+      type: "chat:queue-updated",
       payload: {
         workspaceId: effectiveAuth.workspaceId,
-        reason: reason || "sync-pass",
+        reason: reason || "queue-sync",
       },
     });
   } catch {
     await broadcast({
-      type: "chat:sync-failed",
+      type: "chat:queue-sync-failed",
       payload: {
-        reason: reason || "sync-pass",
+        reason: reason || "queue-sync",
       },
     });
   }

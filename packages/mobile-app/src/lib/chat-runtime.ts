@@ -1,6 +1,6 @@
 import { Platform } from "react-native";
 
-import { ApiError, api } from "@/lib/api";
+import { api } from "@/lib/api";
 import {
   buildPreviewTextFromItem,
   createEmptyChatWorkspaceSnapshot,
@@ -291,7 +291,7 @@ export class ChatRuntime {
 
   async refreshConversation(conversationId: string) {
     const current = this.state.snapshot;
-    if (!current?.workspaceId) {
+    if (!current?.workspaceId || !current.clientInstanceId) {
       return null;
     }
 
@@ -299,7 +299,7 @@ export class ChatRuntime {
       current.workspaceId,
       conversationId,
       {
-        clientInstanceId: current.clientInstanceId ?? undefined,
+        clientInstanceId: current.clientInstanceId,
         limit: 100,
       },
     );
@@ -342,7 +342,7 @@ export class ChatRuntime {
 
   async loadOlderMessages(conversationId: string) {
     const current = this.state.snapshot;
-    if (!current?.workspaceId) {
+    if (!current?.workspaceId || !current.clientInstanceId) {
       return;
     }
 
@@ -357,7 +357,7 @@ export class ChatRuntime {
       current.workspaceId,
       conversationId,
       {
-        clientInstanceId: current.clientInstanceId ?? undefined,
+        clientInstanceId: current.clientInstanceId,
         beforeSequence: earliestSequence,
         limit: 100,
       },
@@ -482,6 +482,9 @@ export class ChatRuntime {
     const current = this.state.snapshot;
     if (!current?.workspaceId) {
       throw new Error("No active workspace");
+    }
+    if (!current.clientInstanceId) {
+      throw new Error("Chat is still connecting");
     }
 
     const existingItems = current.itemsByConversationId[conversationId] ?? [];
@@ -658,28 +661,12 @@ export class ChatRuntime {
 
     let clientInstanceId = baseSnapshot.clientInstanceId;
     if (clientInstanceId) {
-      try {
-        const response = await api.touchChatClientInstance(
-          workspaceId,
-          clientInstanceId,
-          clientInstanceInput,
-        );
-        clientInstanceId = response.clientInstanceId;
-      } catch (error) {
-        if (
-          !(
-            error instanceof ApiError &&
-            (error.status === 400 ||
-              error.status === 404 ||
-              error.code === "invalid_request" ||
-              error.code === "client_instance_not_found")
-          )
-        ) {
-          throw error;
-        }
-
-        clientInstanceId = undefined;
-      }
+      const response = await api.touchChatClientInstance(
+        workspaceId,
+        clientInstanceId,
+        clientInstanceInput,
+      );
+      clientInstanceId = response.clientInstanceId;
     }
 
     if (!clientInstanceId) {

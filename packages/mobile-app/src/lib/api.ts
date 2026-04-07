@@ -601,21 +601,19 @@ class ApiClient {
   getChatConversationMessages(
     workspaceId: string,
     conversationId: string,
-    input?: ChatConversationMessagesQuery,
+    input: ChatConversationMessagesQuery,
   ): Promise<ChatConversationMessagesPage> {
     const params = new URLSearchParams();
-    if (typeof input?.afterSequence === "number") {
+    if (typeof input.afterSequence === "number") {
       params.set("afterSequence", String(input.afterSequence));
     }
-    if (typeof input?.beforeSequence === "number") {
+    if (typeof input.beforeSequence === "number") {
       params.set("beforeSequence", String(input.beforeSequence));
     }
-    if (typeof input?.limit === "number") {
+    if (typeof input.limit === "number") {
       params.set("limit", String(input.limit));
     }
-    if (input?.clientInstanceId) {
-      params.set("clientInstanceId", input.clientInstanceId);
-    }
+    params.set("clientInstanceId", input.clientInstanceId);
     const query = params.toString();
 
     return this.request<ChatConversationMessagesPage>(

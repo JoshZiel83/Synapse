@@ -136,7 +136,6 @@ export function useChatRealtimeSync({
 
     void ensureChatServiceWorkerRegistered()
     void syncChatServiceWorkerAuthContext({ workspaceId })
-    void reloadPersistedSnapshot(workspaceId)
     void loadConversations(workspaceId)
 
     return () => {
@@ -145,7 +144,6 @@ export function useChatRealtimeSync({
   }, [
     deactivate,
     loadConversations,
-    reloadPersistedSnapshot,
     workspaceId,
   ])
 
@@ -179,13 +177,14 @@ export function useChatRealtimeSync({
     return subscribeToChatServiceWorker((message) => {
       if (
         workspaceId &&
-        message.type === "chat:snapshot-updated" &&
+        message.type === "chat:queue-updated" &&
         message.payload.workspaceId === workspaceId
       ) {
         void reloadPersistedSnapshot(workspaceId)
+        void syncFromServer(workspaceId)
       }
     })
-  }, [reloadPersistedSnapshot, workspaceId])
+  }, [reloadPersistedSnapshot, syncFromServer, workspaceId])
 
   useEffect(() => {
     if (

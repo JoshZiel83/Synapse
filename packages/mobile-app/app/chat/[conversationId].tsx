@@ -51,6 +51,7 @@ export default function ChatDetailScreen() {
     respondInteraction,
     sendMessage,
     status,
+    clientInstanceId,
     workspaceMemberId,
   } = useChat();
   const { workspaceId } = useWorkspace();
@@ -122,12 +123,12 @@ export default function ChatDetailScreen() {
   }, [conversationId]);
 
   useEffect(() => {
-    if (!conversationId) {
+    if (!conversationId || status !== "ready" || !clientInstanceId) {
       return;
     }
 
     void refreshConversation(conversationId).catch(() => undefined);
-  }, [conversationId, refreshConversation]);
+  }, [clientInstanceId, conversationId, refreshConversation, status]);
 
   useEffect(() => {
     requestAnimationFrame(() => {
@@ -187,7 +188,7 @@ export default function ChatDetailScreen() {
   );
 
   async function handleRefresh() {
-    if (!conversationId) {
+    if (!conversationId || status !== "ready" || !clientInstanceId) {
       return;
     }
 
@@ -200,7 +201,12 @@ export default function ChatDetailScreen() {
   }
 
   async function handleLoadOlder() {
-    if (!conversationId || !meta?.hasMoreBefore) {
+    if (
+      !conversationId ||
+      status !== "ready" ||
+      !clientInstanceId ||
+      !meta?.hasMoreBefore
+    ) {
       return;
     }
 
@@ -355,6 +361,7 @@ export default function ChatDetailScreen() {
               conversationId={conversationId}
               conversation={conversation}
               viewerParticipantId={viewerParticipantId}
+              disabled={status !== "ready" || !clientInstanceId}
               replyTo={replyTo}
               onCancelReply={() => setReplyTo(null)}
               onSend={(payload) => sendMessage(conversationId, payload)}

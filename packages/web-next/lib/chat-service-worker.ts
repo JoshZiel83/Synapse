@@ -27,14 +27,14 @@ type ChatWorkerMessage =
 
 type ChatWorkerBroadcast =
   | {
-      type: "chat:snapshot-updated"
+      type: "chat:queue-updated"
       payload: {
         workspaceId: string
         reason?: string
       }
     }
   | {
-      type: "chat:sync-failed"
+      type: "chat:queue-sync-failed"
       payload?: {
         reason?: string
       }

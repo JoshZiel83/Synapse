@@ -66,7 +66,7 @@ const conversationMessagesQuerySchema = z
     afterSequence: z.coerce.number().int().min(0).optional(),
     beforeSequence: z.coerce.number().int().min(0).optional(),
     limit: z.coerce.number().int().min(1).max(200).optional(),
-    clientInstanceId: chatUuidSchema.optional(),
+    clientInstanceId: chatUuidSchema,
   })
   .refine(
     (value) =>
@@ -86,14 +86,14 @@ const sendMessageSchema = z
     contentBlocks: z.array(z.any()).min(1),
     clientMessageId: chatUuidSchema,
     replyToItemId: chatUuidSchema.optional(),
-    clientInstanceId: chatUuidSchema.optional(),
+    clientInstanceId: chatUuidSchema,
     metadata: jsonRecordSchema,
   });
 
 const readWatermarkSchema = z.object({
   readUpToSequence: z.number().int().min(0),
   lastVisibleSequence: z.number().int().min(0).optional(),
-  clientInstanceId: chatUuidSchema.optional(),
+  clientInstanceId: chatUuidSchema,
 });
 
 const interactionAnswerSchema = z.object({
