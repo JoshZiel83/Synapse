@@ -93,8 +93,37 @@
       "command": "cli-anything-adguardhome",
       "module": "adguardhome",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
-        "type": "wrapper_only"
+        "type": "http_any",
+        "successStatuses": [
+          200,
+          401,
+          403
+        ],
+        "urls": [
+          "http://127.0.0.1:3000/control/status",
+          "http://localhost:3000/control/status"
+        ]
+      }
+    },
+    {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
+      "slug": "audacity",
+      "command": "cli-anything-audacity",
+      "module": "audacity",
+      "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
+      "probe": {
+        "type": "executable_any",
+        "candidates": [
+          "sox"
+        ]
       }
     },
     {
@@ -104,8 +133,14 @@
       "command": "cli-anything-anygen",
       "module": "anygen",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
-        "type": "wrapper_only"
+        "type": "env_any",
+        "envVars": [
+          "ANYGEN_API_KEY"
+        ]
       }
     },
     {
@@ -115,6 +150,9 @@
       "command": "cli-anything-blender",
       "module": "blender",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -132,6 +170,9 @@
       "command": "cli-anything-cloudcompare",
       "module": "cloudcompare",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -150,8 +191,15 @@
       "command": "cli-anything-comfyui",
       "module": "comfyui",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
-        "type": "wrapper_only"
+        "type": "http_any",
+        "urls": [
+          "http://127.0.0.1:8188/system_stats",
+          "http://localhost:8188/system_stats"
+        ]
       }
     },
     {
@@ -161,6 +209,9 @@
       "command": "cli-anything-drawio",
       "module": "drawio",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -180,6 +231,9 @@
       "command": "cli-anything-freecad",
       "module": "freecad",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "envPathVar": "FREECAD_PATH",
@@ -211,6 +265,9 @@
       "command": "cli-anything-gimp",
       "module": "gimp",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -230,6 +287,9 @@
       "command": "cli-anything-inkscape",
       "module": "inkscape",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -247,6 +307,9 @@
       "command": "cli-anything-intelwatch",
       "module": "intelwatch",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "wrapper_only"
       }
@@ -258,6 +321,9 @@
       "command": "cli-anything-kdenlive",
       "module": "kdenlive",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -272,6 +338,9 @@
       "command": "cli-anything-krita",
       "module": "krita",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "envPathVar": "KRITA_PATH",
@@ -290,6 +359,9 @@
       "command": "cli-anything-libreoffice",
       "module": "libreoffice",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -310,6 +382,9 @@
       "command": "cli-anything-mermaid",
       "module": "mermaid",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "wrapper_only"
       }
@@ -321,8 +396,16 @@
       "command": "cli-anything-mubu",
       "module": "mubu",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
-        "type": "wrapper_only"
+        "type": "path_any",
+        "envPathVar": "MUBU_DATA_ROOT",
+        "paths": [
+          "~/AppData/Roaming/Mubu/mubu_app_data/mubu_data",
+          "~/.config/mubu/mubu_data"
+        ]
       }
     },
     {
@@ -332,6 +415,9 @@
       "command": "cli-anything-musescore",
       "module": "musescore",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "envPathVar": "MUSESCORE_PATH",
@@ -352,6 +438,9 @@
       "command": "cli-anything-notebooklm",
       "module": "notebooklm",
       "version": "0.1.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -366,8 +455,14 @@
       "command": "cli-anything-novita",
       "module": "novita",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
-        "type": "wrapper_only"
+        "type": "env_any",
+        "envVars": [
+          "NOVITA_API_KEY"
+        ]
       }
     },
     {
@@ -377,6 +472,9 @@
       "command": "cli-anything-obs-studio",
       "module": "obs_studio",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "wrapper_only"
       }
@@ -388,8 +486,15 @@
       "command": "cli-anything-ollama",
       "module": "ollama",
       "version": "1.0.1",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
-        "type": "wrapper_only"
+        "type": "http_any",
+        "urls": [
+          "http://127.0.0.1:11434/api/version",
+          "http://localhost:11434/api/version"
+        ]
       }
     },
     {
@@ -399,8 +504,25 @@
       "command": "cli-anything-renderdoc",
       "module": "renderdoc",
       "version": "0.1.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [
+        "C:/Program Files/RenderDoc",
+        "C:/Program Files (x86)/RenderDoc",
+        "/opt/renderdoc/lib",
+        "/Applications/RenderDoc.app/Contents/MacOS"
+      ],
       "probe": {
-        "type": "wrapper_only"
+        "type": "python_import_any",
+        "candidates": [
+          "renderdoc"
+        ],
+        "paths": [
+          "C:/Program Files/RenderDoc",
+          "C:/Program Files (x86)/RenderDoc",
+          "/opt/renderdoc/lib",
+          "/Applications/RenderDoc.app/Contents/MacOS"
+        ]
       }
     },
     {
@@ -410,8 +532,14 @@
       "command": "cli-anything-rms",
       "module": "rms",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
-        "type": "wrapper_only"
+        "type": "env_any",
+        "envVars": [
+          "RMS_API_TOKEN"
+        ]
       }
     },
     {
@@ -421,6 +549,9 @@
       "command": "cli-anything-shotcut",
       "module": "shotcut",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -435,8 +566,15 @@
       "command": "cli-anything-sts2",
       "module": "slay_the_spire_ii",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
-        "type": "wrapper_only"
+        "type": "http_any",
+        "urls": [
+          "http://127.0.0.1:15526/api/v1/singleplayer?format=json",
+          "http://localhost:15526/api/v1/singleplayer?format=json"
+        ]
       }
     },
     {
@@ -446,6 +584,9 @@
       "command": "cli-anything-zoom",
       "module": "zoom",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
         "type": "wrapper_only"
       }
@@ -457,8 +598,23 @@
       "command": "cli-anything-zotero",
       "module": "zotero",
       "version": "1.0.0",
+      "supportedTargets": [],
+      "extraPythonRequirements": [],
+      "pythonPaths": [],
       "probe": {
-        "type": "wrapper_only"
+        "type": "executable_any",
+        "envPathVar": "ZOTERO_EXECUTABLE",
+        "candidates": [
+          "zotero",
+          "zotero.exe"
+        ],
+        "paths": [
+          "C:/Program Files/Zotero/zotero.exe",
+          "C:/Program Files (x86)/Zotero/zotero.exe",
+          "/Applications/Zotero.app/Contents/MacOS/zotero",
+          "/usr/lib/zotero/zotero",
+          "/usr/local/bin/zotero"
+        ]
       }
     },
     {
@@ -586,7 +742,7 @@
   ],
   "packageProfile": "default-data-v5",
   "ffmpegReleaseTag": "n7.1-2",
-  "assetVersion": "cl-e2de7a96e72b",
+  "assetVersion": "cl-978d7c697177",
   "executables": [
     "py/python.exe",
     "ff/ffmpeg.exe",
@@ -595,6 +751,7 @@
     "providers/github-cli/gh.exe",
     "providers/gitlab-cli/glab.exe",
     "bin/cli-anything-adguardhome",
+    "bin/cli-anything-audacity",
     "bin/cli-anything-anygen",
     "bin/cli-anything-blender",
     "bin/cli-anything-cloudcompare",

@@ -362,6 +362,12 @@ func (s *Server) environment(extraEnv map[string]string) []string {
 		if strings.TrimSpace(s.installation.PythonBinaryPath) != "" {
 			pathEntries = append(pathEntries, filepath.Dir(s.installation.PythonBinaryPath))
 		}
+		if strings.TrimSpace(s.installation.PythonHomeDir) != "" {
+			pathEntries = append(pathEntries,
+				filepath.Join(s.installation.PythonHomeDir, "Scripts"),
+				filepath.Join(s.installation.PythonHomeDir, "bin"),
+			)
+		}
 		if strings.TrimSpace(s.installation.GitBinaryPath) != "" {
 			pathEntries = append(pathEntries, filepath.Dir(s.installation.GitBinaryPath))
 		}

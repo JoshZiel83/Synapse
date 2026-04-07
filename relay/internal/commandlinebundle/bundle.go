@@ -37,10 +37,15 @@ type Manifest struct {
 const packagedBundleDir = "cl"
 
 type ManagedCapabilityProbe struct {
-	Type       string   `json:"type"`
-	EnvPathVar string   `json:"envPathVar"`
-	Candidates []string `json:"candidates"`
-	Paths      []string `json:"paths"`
+	Type            string                   `json:"type"`
+	EnvPathVar      string                   `json:"envPathVar"`
+	EnvVars         []string                 `json:"envVars"`
+	Candidates      []string                 `json:"candidates"`
+	Paths           []string                 `json:"paths"`
+	URLs            []string                 `json:"urls"`
+	SuccessStatuses []int                    `json:"successStatuses"`
+	AnyOf           []ManagedCapabilityProbe `json:"anyOf"`
+	AllOf           []ManagedCapabilityProbe `json:"allOf"`
 }
 
 type ManagedProvider struct {

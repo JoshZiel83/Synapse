@@ -254,9 +254,23 @@ function resolveManagedProviderVersion(versions) {
   return 'mixed'
 }
 
+function uniqueStrings(values) {
+  return [...new Set((values || []).map((value) => String(value || '').trim()).filter(Boolean))]
+}
+
 function runtimeSupportsTarget(runtime, targetPlatform) {
   const supportedTargets = Array.isArray(runtime?.supportedTargets)
     ? runtime.supportedTargets.map((value) => String(value || '').trim()).filter(Boolean)
+    : []
+  if (supportedTargets.length === 0) {
+    return true
+  }
+  return supportedTargets.includes(targetPlatform)
+}
+
+function capabilitySupportsTarget(capability, targetPlatform) {
+  const supportedTargets = Array.isArray(capability?.supportedTargets)
+    ? capability.supportedTargets.map((value) => String(value || '').trim()).filter(Boolean)
     : []
   if (supportedTargets.length === 0) {
     return true
@@ -341,6 +355,9 @@ function getCommandlineAssetVersion(options, nodeAssetVersion, managedProviders,
       version: capability.version,
       unavailableReason: capability.unavailableReason,
       probe: capability.probe,
+      supportedTargets: capability.supportedTargets,
+      extraPythonRequirements: capability.extraPythonRequirements,
+      pythonPaths: capability.pythonPaths,
     })),
   })}`
 }
@@ -649,6 +666,15 @@ async function loadManagedProviderManifest(relayRoot) {
         module: String(capability.module || '').trim(),
         command: String(capability.command || '').trim(),
         skillPath: String(capability.skillPath || '').trim(),
+        supportedTargets: Array.isArray(capability.supportedTargets)
+          ? capability.supportedTargets.map((value) => String(value || '').trim()).filter(Boolean)
+          : [],
+        extraPythonRequirements: Array.isArray(capability.extraPythonRequirements)
+          ? capability.extraPythonRequirements.map((value) => String(value || '').trim()).filter(Boolean)
+          : [],
+        pythonPaths: Array.isArray(capability.pythonPaths)
+          ? capability.pythonPaths.map((value) => String(value || '').trim()).filter(Boolean)
+          : [],
         probe: capability.probe && typeof capability.probe === 'object' ? capability.probe : { type: 'wrapper_only' },
       })).filter((capability) => capability.slug && capability.command)
       : [],
@@ -769,8 +795,14 @@ function cliAnythingWrapperPathListSeparator(targetPlatform) {
 export function buildCliAnythingWrapperContent(pythonBinaryRelative, capability, targetPlatform) {
   const [modulePath, functionName] = String(capability.entryPointTarget || '').split(':', 2)
   const pathListSeparator = cliAnythingWrapperPathListSeparator(targetPlatform)
+  const pythonPaths = Array.isArray(capability.pythonPaths)
+    ? capability.pythonPaths.map((value) => String(value || '').trim()).filter(Boolean)
+    : []
   const pythonCode = [
     'import importlib, sys',
+    ...(pythonPaths.length > 0
+      ? [`sys.path[:0] = [${pythonPaths.map((value) => JSON.stringify(value)).join(', ')}]`]
+      : []),
     `sys.argv[0] = ${JSON.stringify(capability.command)}`,
     `module = importlib.import_module(${JSON.stringify(modulePath || `cli_anything.${capability.module}`)})`,
     `raise SystemExit(getattr(module, ${JSON.stringify(functionName || 'main')})())`,
@@ -1016,6 +1048,52 @@ async function installManagedPythonPackages(targetPlatform, pythonVersion, targe
   }
 }
 
+async function installCliAnythingExtraPythonPackages(targetPlatform, pythonVersion, targetDirectory, capabilities) {
+  const pythonSpec = PYTHON_DISTRIBUTIONS[targetPlatform]
+  if (!pythonSpec) {
+    throw new Error(`unsupported target platform ${targetPlatform}`)
+  }
+
+  const requirements = uniqueStrings(
+    capabilities.flatMap((capability) => Array.isArray(capability.extraPythonRequirements) ? capability.extraPythonRequirements : []),
+  )
+  if (requirements.length === 0) {
+    return
+  }
+
+  const hostPython = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
+  const pipArgs = [
+    '-m',
+    'pip',
+    'install',
+    '--disable-pip-version-check',
+    '--no-compile',
+    '--upgrade',
+    '--target',
+    targetDirectory,
+  ]
+
+  if (targetPlatform !== getNativeTargetPlatform()) {
+    pipArgs.push(
+      '--only-binary=:all:',
+      '--implementation',
+      'cp',
+      '--python-version',
+      pythonVersion.split('.').slice(0, 2).join('.'),
+      '--abi',
+      `cp${pythonVersion.split('.').slice(0, 2).join('')}`,
+      '--platform',
+      pythonSpec.pipPlatform,
+    )
+  }
+
+  pipArgs.push(...requirements)
+  console.log(`Installing CLI-Anything extra Python packages for ${targetPlatform}: ${requirements.join(', ')}`)
+  await runCommand(hostPython, pipArgs, {
+    shell: process.platform === 'win32',
+  })
+}
+
 async function writeManagedPythonPackageWrappers(assetsDir, pythonBinaryRelative, providers, targetPlatform) {
   const managedBinDir = join(assetsDir, COMMANDLINE_MANAGED_BIN_DIR)
   await mkdir(managedBinDir, { recursive: true })
@@ -1239,6 +1317,7 @@ async function main() {
     const cliAnythingProvider = managedProviderManifest.find((provider) => provider.slug === 'cli-anything')
     const cliAnythingRoot = cliAnythingProvider ? providerRoots.get(cliAnythingProvider.slug) : ''
     const cliAnythingCapabilities = cliAnythingProvider?.capabilities || []
+    const activeCliAnythingCapabilities = cliAnythingCapabilities.filter((capability) => capabilitySupportsTarget(capability, options.targetPlatform))
     const pythonSpec = getPythonSpec(options.targetPlatform, options.pythonVersion, options.pythonStandaloneRelease)
     const ffmpegSpec = getFFmpegSpec(options.targetPlatform, options.ffmpegReleaseTag)
     const sharedNodeManifest = await loadSharedNodeManifest(relayRoot, options.targetPlatform, options.nodeVersion)
@@ -1267,6 +1346,7 @@ async function main() {
     console.log(`Installing bundled Python packages (${options.packageProfile})`)
     await installPythonPackages(options.targetPlatform, options.pythonVersion, pythonPackageDir)
     await installManagedPythonPackages(options.targetPlatform, options.pythonVersion, pythonPackageDir, managedProviderManifest, providerRoots)
+    await installCliAnythingExtraPythonPackages(options.targetPlatform, options.pythonVersion, pythonPackageDir, activeCliAnythingCapabilities)
 
     const ffmpegDownloadPath = join(ffmpegDownloadDir, ffmpegSpec.ffmpegFileName)
     const ffprobeDownloadPath = join(ffmpegDownloadDir, ffmpegSpec.ffprobeFileName)
@@ -1305,12 +1385,12 @@ async function main() {
       console.log(`Pruned ${prunedPythonDirs} non-runtime Python package directories`)
     }
     let bundledCliAnythingCapabilities = []
-    if (cliAnythingRoot && cliAnythingCapabilities.length > 0) {
-      console.log(`Bundling CLI-Anything packages (${cliAnythingCapabilities.length} capabilities)`)
+    if (cliAnythingRoot && activeCliAnythingCapabilities.length > 0) {
+      console.log(`Bundling CLI-Anything packages (${activeCliAnythingCapabilities.length} capabilities)`)
       bundledCliAnythingCapabilities = await copyCliAnythingPackages(
         cliAnythingRoot,
         join(assetsDir, COMMANDLINE_PYTHON_SITE_PACKAGES_DIR),
-        cliAnythingCapabilities,
+        activeCliAnythingCapabilities,
       )
     }
     await rm(join(assetsDir, COMMANDLINE_PYTHON_HOME_DIR, 'share', 'terminfo'), { recursive: true, force: true })
@@ -1381,6 +1461,9 @@ async function main() {
         command: capability.command,
         module: capability.module,
         version: capability.version,
+        supportedTargets: capability.supportedTargets,
+        extraPythonRequirements: capability.extraPythonRequirements,
+        pythonPaths: capability.pythonPaths,
         probe: capability.probe,
       })),
       ...managedNodeWrapperResult.managedCapabilities,
