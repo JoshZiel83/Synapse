@@ -22,6 +22,7 @@ export const PLATFORM_ACCESS_KEYS = [
 export const WORKSPACE_ACCESS_KEYS = [
   'model_admin',
   'actor_admin',
+  'remote_agent_admin',
   'skill_admin',
   'plugin_admin',
   'memory_admin',
@@ -29,7 +30,7 @@ export const WORKSPACE_ACCESS_KEYS = [
   'conversation_admin',
 ] as const;
 
-export const CONTACT_TARGET_TYPES = ['member', 'actor'] as const;
+export const CONTACT_TARGET_TYPES = ['member', 'actor', 'remote_agent'] as const;
 export const CANONICAL_FILE_CATEGORIES = ['image', 'audio', 'video', 'document'] as const;
 export const FILE_STORAGE_BACKENDS = ['local_fs'] as const;
 export const FILE_ORIGIN_FAMILIES = [
@@ -314,6 +315,7 @@ export const SESSION_WAKEUP_SOURCE_TYPES = [
 export const SESSION_WAKEUP_SOURCE_PARTICIPANT_TYPES = [
   'workspace_member',
   'actor',
+  'remote_agent',
   'external',
   'system',
 ] as const;

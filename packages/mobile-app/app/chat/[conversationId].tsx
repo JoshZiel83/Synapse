@@ -21,6 +21,7 @@ import { Button, EmptyState, LoadingBlock, ScreenView } from "@/components/ui";
 import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
 import {
   buildReplyPreviewText,
+  getConfirmedConversationMaxSequence,
   getConversationDisplayName,
   getConversationViewerParticipant,
   type MobileChatItem,
@@ -40,6 +41,11 @@ export default function ChatDetailScreen() {
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
   const scrollRef = useRef<ScrollView | null>(null);
   const lastReportedReadRef = useRef<string>("");
+  const previousMessageMetricsRef = useRef<{
+    conversationId: string;
+    firstSequence: number;
+    lastSequence: number;
+  } | null>(null);
   const {
     getConversation,
     getConversationItems,
@@ -69,6 +75,12 @@ export default function ChatDetailScreen() {
   const items = conversationId ? getConversationItems(conversationId) : [];
   const actorRuntimes = conversationId ? getConversationRuntimes(conversationId) : {};
   const meta = conversationId ? getConversationMeta(conversationId) : null;
+  const confirmedMaxSequence = useMemo(
+    () => getConfirmedConversationMaxSequence(items),
+    [items],
+  );
+  const firstSequence = items[0]?.sequence ?? 0;
+  const lastSequence = items[items.length - 1]?.sequence ?? 0;
   const viewerParticipantId = getConversationViewerParticipant(
     conversation,
     workspaceMemberId,
@@ -101,6 +113,18 @@ export default function ChatDetailScreen() {
   const currentTurnRuntimes = activeRuntimes.filter((runtime) =>
     Boolean(runtime.currentTurnPreview?.turnId),
   );
+  const loadingConversationHistory = Boolean(
+    conversation &&
+      items.length === 0 &&
+      (meta?.loadingLatest || (!meta?.hasLoadedLatest && !meta?.latestLoadError)),
+  );
+  const conversationHistoryLoadFailed = Boolean(
+    conversation &&
+      items.length === 0 &&
+      !meta?.loadingLatest &&
+      !meta?.hasLoadedLatest &&
+      meta?.latestLoadError,
+  );
 
   useWorkspaceWebSocket({
     workspaceId: workspaceId || undefined,
@@ -131,32 +155,58 @@ export default function ChatDetailScreen() {
   }, [clientInstanceId, conversationId, refreshConversation, status]);
 
   useEffect(() => {
+    if (!conversationId || items.length === 0) {
+      previousMessageMetricsRef.current = conversationId
+        ? {
+            conversationId,
+            firstSequence,
+            lastSequence,
+          }
+        : null;
+      return;
+    }
+
+    const previous = previousMessageMetricsRef.current;
+    const conversationChanged = previous?.conversationId !== conversationId;
+    const appendedAtTail = Boolean(
+      previous &&
+        !conversationChanged &&
+        lastSequence > previous.lastSequence &&
+        firstSequence >= previous.firstSequence,
+    );
+
+    previousMessageMetricsRef.current = {
+      conversationId,
+      firstSequence,
+      lastSequence,
+    };
+
+    if (!conversationChanged && !appendedAtTail) {
+      return;
+    }
+
     requestAnimationFrame(() => {
       scrollRef.current?.scrollToEnd({ animated: false });
     });
-  }, [items.length]);
+  }, [conversationId, firstSequence, items.length, lastSequence]);
 
   useEffect(() => {
-    if (!conversationId || !conversation || items.length === 0) {
+    if (!conversationId || !conversation || confirmedMaxSequence <= 0) {
       return;
     }
 
-    const maxSequence = items.reduce(
-      (max, item) => Math.max(max, Number(item.sequence || 0)),
-      0,
-    );
-    if (maxSequence <= 0) {
-      return;
-    }
-
-    const nextKey = `${conversationId}:${maxSequence}`;
+    const nextKey = `${conversationId}:${confirmedMaxSequence}`;
     if (lastReportedReadRef.current === nextKey) {
       return;
     }
 
     lastReportedReadRef.current = nextKey;
-    void markConversationRead(conversationId, maxSequence, maxSequence);
-  }, [conversation, conversationId, items, markConversationRead]);
+    void markConversationRead(
+      conversationId,
+      confirmedMaxSequence,
+      confirmedMaxSequence,
+    );
+  }, [confirmedMaxSequence, conversation, conversationId, markConversationRead]);
 
   const messageNodes = useMemo(
     () =>
@@ -332,6 +382,21 @@ export default function ChatDetailScreen() {
                     />
                   ))}
                 </>
+              ) : loadingConversationHistory ? (
+                <LoadingBlock label="正在加载聊天记录..." />
+              ) : conversationHistoryLoadFailed ? (
+                <EmptyState
+                  icon="alert-circle"
+                  title="聊天记录加载失败"
+                  description={meta?.latestLoadError || "下拉重试一次。"}
+                  action={
+                    <Button
+                      label="重试"
+                      icon="refresh-cw"
+                      onPress={() => void handleRefresh()}
+                    />
+                  }
+                />
               ) : (
                 <>
                   <EmptyState

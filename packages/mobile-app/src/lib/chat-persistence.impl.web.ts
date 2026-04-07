@@ -1,11 +1,13 @@
 import {
-  normalizeChatWorkspaceSnapshot,
-  type ChatWorkspaceSnapshot,
+  buildChatWorkspaceSnapshotFromQueueState,
+  normalizeChatWorkspaceQueueState,
+  toChatWorkspaceQueueState,
+  type ChatWorkspaceQueueState,
 } from "@/lib/chat-data";
 import type { ChatPersistence } from "@/lib/chat-persistence";
 
-const DB_NAME = "synapse-chat";
-const STORE_NAME = "workspace_snapshots";
+const DB_NAME = "synapse-chat-web-queue";
+const STORE_NAME = "workspace_queue_states";
 const VERSION = 1;
 
 function openDatabase() {
@@ -52,37 +54,44 @@ function requestToPromise<T>(request: IDBRequest<T>) {
 }
 
 export function createChatPersistence(): ChatPersistence {
+  async function loadWorkspaceQueueState(workspaceId: string) {
+    const row = await withStore("readonly", (store) =>
+      requestToPromise<
+        { workspaceId: string; payload: ChatWorkspaceQueueState } | undefined
+      >(store.get(workspaceId)),
+    );
+
+    if (!row?.payload) {
+      return null;
+    }
+
+    return normalizeChatWorkspaceQueueState(workspaceId, row.payload);
+  }
+
   return {
-    async loadWorkspaceSnapshot(workspaceId) {
-      const row = await withStore("readonly", (store) =>
-        requestToPromise<{ workspaceId: string; payload: ChatWorkspaceSnapshot } | undefined>(
-          store.get(workspaceId),
-        ),
-      );
-
-      if (!row?.payload) {
-        return null;
-      }
-
-      return normalizeChatWorkspaceSnapshot(workspaceId, row.payload);
+    loadWorkspaceQueueState,
+    async loadWorkspaceState(workspaceId) {
+      const queueState = await loadWorkspaceQueueState(workspaceId);
+      return buildChatWorkspaceSnapshotFromQueueState(workspaceId, queueState);
     },
-    async saveWorkspaceSnapshot(snapshot) {
+    async saveWorkspaceState(snapshot) {
+      const queueState = toChatWorkspaceQueueState(snapshot);
       await withStore("readwrite", (store) =>
         requestToPromise(
           store.put({
             workspaceId: snapshot.workspaceId,
-            payload: snapshot,
+            payload: queueState,
             updatedAt: new Date().toISOString(),
           }),
         ),
       );
     },
-    async deleteWorkspaceSnapshot(workspaceId) {
+    async deleteWorkspaceState(workspaceId) {
       await withStore("readwrite", (store) =>
         requestToPromise(store.delete(workspaceId)),
       );
     },
-    async clearAllWorkspaceSnapshots() {
+    async clearAllWorkspaceState() {
       await withStore("readwrite", (store) =>
         requestToPromise(store.clear()),
       );

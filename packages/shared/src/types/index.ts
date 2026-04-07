@@ -2698,6 +2698,7 @@ export interface McpSetupStep {
 
 export type ConversationParticipantType =
   | "actor"
+  | "remote_agent"
   | "workspace_member"
   | "external"
   | "system";
@@ -2713,6 +2714,7 @@ export interface ConversationEntityRef {
   participantType: ConversationParticipantType;
   workspaceMemberId?: UUID;
   actorId?: UUID;
+  remoteAgentId?: UUID;
   externalUserKey?: string;
   transportAddressId?: UUID;
   transportKind?: TransportKind;
@@ -2738,7 +2740,7 @@ export interface ConversationReplyRef {
 
 export type ConversationParticipantRef = ConversationEntityRef & {
   participantId: UUID;
-  participantType: "actor" | "workspace_member" | "external";
+  participantType: "actor" | "remote_agent" | "workspace_member" | "external";
 };
 
 export interface TransportConnectorCapability {
@@ -3956,6 +3958,7 @@ export interface ChatConversationCreateRequest {
   title?: string;
   workspaceMemberIds?: UUID[];
   actorIds?: UUID[];
+  remoteAgentIds?: UUID[];
   externalParticipants?: ChatConversationCreateExternalParticipantRequest[];
   metadata?: Record<string, unknown>;
 }

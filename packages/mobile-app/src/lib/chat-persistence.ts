@@ -1,12 +1,18 @@
 import { Platform } from "react-native";
 
-import type { ChatWorkspaceSnapshot } from "@/lib/chat-data";
+import type {
+  ChatWorkspaceQueueState,
+  ChatWorkspaceSnapshot,
+} from "@/lib/chat-data";
 
 export interface ChatPersistence {
-  loadWorkspaceSnapshot: (workspaceId: string) => Promise<ChatWorkspaceSnapshot | null>;
-  saveWorkspaceSnapshot: (snapshot: ChatWorkspaceSnapshot) => Promise<void>;
-  deleteWorkspaceSnapshot: (workspaceId: string) => Promise<void>;
-  clearAllWorkspaceSnapshots: () => Promise<void>;
+  loadWorkspaceState: (workspaceId: string) => Promise<ChatWorkspaceSnapshot | null>;
+  loadWorkspaceQueueState: (
+    workspaceId: string,
+  ) => Promise<ChatWorkspaceQueueState | null>;
+  saveWorkspaceState: (snapshot: ChatWorkspaceSnapshot) => Promise<void>;
+  deleteWorkspaceState: (workspaceId: string) => Promise<void>;
+  clearAllWorkspaceState: () => Promise<void>;
 }
 
 export function createChatPersistence(): ChatPersistence {
