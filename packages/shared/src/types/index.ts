@@ -940,6 +940,91 @@ export interface ActorRuntimeWakeup {
   attachedAt?: Timestamp;
 }
 
+export type ActorRuntimeActivityState =
+  | "pending"
+  | "running"
+  | "input_required"
+  | "completed"
+  | "failed"
+  | "skipped"
+  | "cancelled";
+
+export type ActorRuntimeToolKind =
+  | "builtin"
+  | "callable"
+  | "action"
+  | "mcp_plugin"
+  | "mcp_relay"
+  | "provider_builtin"
+  | "a2a_proxy";
+
+export type ActorRuntimeTaskStatus =
+  | "working"
+  | "input_required"
+  | "completed"
+  | "failed"
+  | "cancelled";
+
+export interface ActorRuntimeProcessingTarget {
+  wakeupId: UUID;
+  participantType?: SessionWakeupSourceParticipantType;
+  participantId?: UUID;
+  name: string;
+  summary?: string;
+  createdAt: Timestamp;
+  attachedAt?: Timestamp;
+}
+
+export interface ActorRuntimeTurnPreviewTool {
+  toolCallId: UUID;
+  toolKind: ActorRuntimeToolKind;
+  toolName: string;
+  state: ActorRuntimeActivityState;
+  displayTitle: string;
+  displayDetail?: string;
+  startedAt: Timestamp;
+  updatedAt: Timestamp;
+  completedAt?: Timestamp;
+}
+
+export interface ActorRuntimeTurnPreview {
+  turnId: UUID;
+  startedAt: Timestamp;
+  updatedAt: Timestamp;
+  processingTargets: ActorRuntimeProcessingTarget[];
+  activeTool?: ActorRuntimeTurnPreviewTool;
+  lastCompletedTool?: ActorRuntimeTurnPreviewTool;
+  totalToolCallCount: number;
+  completedToolCallCount: number;
+  failedToolCallCount: number;
+}
+
+export interface ActorRuntimeTurnActivityItem {
+  toolCallId: UUID;
+  toolKind: ActorRuntimeToolKind;
+  toolName: string;
+  state: ActorRuntimeActivityState;
+  displayTitle: string;
+  displayDetail?: string;
+  requestBlocks: CanonicalContentBlock[];
+  resultBlocks: CanonicalContentBlock[];
+  taskStatus?: ActorRuntimeTaskStatus;
+  startedAt: Timestamp;
+  updatedAt: Timestamp;
+  completedAt?: Timestamp;
+}
+
+export interface ActorRuntimeTurnActivityDetail {
+  conversationId: UUID;
+  actorId: UUID;
+  actorName: string;
+  turnId: UUID;
+  startedAt: Timestamp;
+  updatedAt: Timestamp;
+  processingTargets: ActorRuntimeProcessingTarget[];
+  items: ActorRuntimeTurnActivityItem[];
+}
+
 export interface ActorRuntimeState {
   conversationId: UUID;
   sessionId: UUID;
@@ -949,9 +1034,8 @@ export interface ActorRuntimeState {
   health: ActorRuntimeHealth;
   phase: ActorRuntimePhase;
   statusText?: string;
-  currentTurnId?: UUID;
   pendingWakeupCount: number;
-  activeWakeups: ActorRuntimeWakeup[];
+  currentTurnPreview?: ActorRuntimeTurnPreview;
   latestWakeupAt?: Timestamp;
   lastError?: {
     message: string;
@@ -3827,6 +3911,7 @@ export interface ChatConversationMessagesQuery {
 export interface ChatConversationMessagesPage {
   conversation: ChatConversationView;
   items: ChatConversationItem[];
+  runtimeByActor: Record<string, ActorRuntimeState>;
   participantReadWatermarkSequence: number;
   deviceState?: ChatDeviceState;
   hasMoreBefore: boolean;

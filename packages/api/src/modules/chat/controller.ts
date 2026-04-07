@@ -4,6 +4,7 @@ import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { requireWorkspaceMemberIdentity } from "./workspace-identity.js";
 import {
   createChatConversation,
+  getChatConversationActorRuntimeTurnDetail,
   getConversationParticipant,
   getChatBootstrap,
   getChatConversationMessages,
@@ -265,6 +266,31 @@ export default async function chatController(app: FastifyInstance) {
       return replyChatError(reply, error);
     }
   });
+
+  app.get<{
+    Params: {
+      workspaceId: string;
+      conversationId: string;
+      actorId: string;
+      turnId: string;
+    };
+  }>(
+    `${CHAT_BASE_PATH}/conversations/:conversationId/actors/:actorId/runtime-turns/:turnId`,
+    async (request, reply) => {
+      try {
+        const response = await getChatConversationActorRuntimeTurnDetail({
+          workspaceId: request.params.workspaceId,
+          userId: getRequestUserId(request),
+          conversationId: request.params.conversationId,
+          actorId: request.params.actorId,
+          turnId: request.params.turnId,
+        });
+        return reply.send(response);
+      } catch (error) {
+        return replyChatError(reply, error);
+      }
+    },
+  );
 
   app.post<{
     Params: { workspaceId: string; conversationId: string };

@@ -259,7 +259,7 @@ export function startSessionThinkingWorker() {
             health: 'ok',
             phase: currentPhase,
             statusText: status,
-            currentTurnId: turn?.id,
+            activeTurnId: turn?.id,
           });
           await emitEvent({
             type: 'session.thinking',
@@ -574,7 +574,7 @@ export function startSessionThinkingWorker() {
           health: 'ok',
           phase: currentPhase,
           statusText: currentStatusText,
-          currentTurnId: turn.id,
+          activeTurnId: turn.id,
         });
 
         const lockRefreshInterval = setInterval(async () => {
@@ -647,7 +647,7 @@ export function startSessionThinkingWorker() {
                     health: 'ok',
                     phase: currentPhase === 'error' ? 'thinking' : currentPhase,
                     statusText: currentStatusText,
-                    currentTurnId: turn.id,
+                    activeTurnId: turn.id,
                   });
                 }
                 return update.items.length > 0 ? update.items : null;
@@ -679,7 +679,7 @@ export function startSessionThinkingWorker() {
             health: 'ok',
             phase: 'responding',
             statusText: 'Responding...',
-            currentTurnId: turn.id,
+            activeTurnId: turn.id,
           });
           for (const action of messagePersistence.actions) {
             await addSessionMessage({
@@ -843,7 +843,7 @@ export function startSessionThinkingWorker() {
           health: 'error',
           phase: 'error',
           statusText: errorMessage,
-          currentTurnId: turn?.id,
+          activeTurnId: turn?.id,
           lastError: {
             message: errorMessage,
             at: nowISO(),

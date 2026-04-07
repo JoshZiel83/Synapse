@@ -1509,10 +1509,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
       set((state) => {
         const baseSnapshot =
           state.snapshot ?? createEmptyStoredChatSnapshot(workspaceId)
+        const nextRuntimeMap = {
+          ...state.runtimeMap,
+          [conversationId]: response.runtimeByActor || {},
+        }
 
         if (state.selectedConversationId !== conversationId) {
           return {
             loadingMessages: false,
+            runtimeMap: nextRuntimeMap,
           }
         }
 
@@ -1528,9 +1533,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
         void queuePersistSnapshot(nextSnapshot)
 
         return {
-          ...createStateFromSnapshot(state, nextSnapshot, {
-            loadedMessageItems: mergeRawItems([], response.items),
-          }),
+          ...createStateFromSnapshot(
+            { ...state, runtimeMap: nextRuntimeMap } as ChatState,
+            nextSnapshot,
+            {
+              loadedMessageItems: mergeRawItems([], response.items),
+            }
+          ),
+          runtimeMap: nextRuntimeMap,
           loadingMessages: false,
         }
       })

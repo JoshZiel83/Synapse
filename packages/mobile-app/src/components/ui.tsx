@@ -285,54 +285,75 @@ export function Avatar({
   uri,
   size = 44,
   icon,
+  status,
 }: {
   name?: string;
   uri?: string | null;
   size?: number;
   icon?: keyof typeof Feather.glyphMap;
+  status?: "idle" | "thinking" | "tool" | "responding" | "error";
 }) {
   const fallback = (name || "?").slice(0, 1).toUpperCase();
   const source = useAuthenticatedMediaSource(uri);
   const emojiSource = !source && !icon ? getTwemojiUrl(name) : null;
 
   return (
-    <View
-      style={[
-        styles.avatar,
-        {
-          width: size,
-          height: size,
-          borderRadius: size / 2,
-        },
-      ]}
-    >
-      {source ? (
-        <Image
-          source={source}
-          style={{
+    <View style={styles.avatarWrap}>
+      <View
+        style={[
+          styles.avatar,
+          {
             width: size,
             height: size,
             borderRadius: size / 2,
-          }}
-          contentFit="cover"
+          },
+        ]}
+      >
+        {source ? (
+          <Image
+            source={source}
+            style={{
+              width: size,
+              height: size,
+              borderRadius: size / 2,
+            }}
+            contentFit="cover"
+          />
+        ) : emojiSource ? (
+          <Image
+            source={{ uri: emojiSource }}
+            style={{
+              width: size,
+              height: size,
+              borderRadius: size / 2,
+            }}
+            contentFit="contain"
+          />
+        ) : icon ? (
+          <Feather name={icon} size={size * 0.45} color={theme.colors.primary} />
+        ) : (
+          <Text style={[styles.avatarLabel, { fontSize: size * 0.36 }]}>
+            {fallback}
+          </Text>
+        )}
+      </View>
+      {status ? (
+        <View
+          style={[
+            styles.avatarStatusDot,
+            {
+              width: Math.max(10, Math.round(size * 0.26)),
+              height: Math.max(10, Math.round(size * 0.26)),
+              borderRadius: Math.max(10, Math.round(size * 0.26)) / 2,
+            },
+            status === "idle" && styles.avatarStatusIdle,
+            status === "thinking" && styles.avatarStatusThinking,
+            status === "tool" && styles.avatarStatusTool,
+            status === "responding" && styles.avatarStatusResponding,
+            status === "error" && styles.avatarStatusError,
+          ]}
         />
-      ) : emojiSource ? (
-        <Image
-          source={{ uri: emojiSource }}
-          style={{
-            width: size,
-            height: size,
-            borderRadius: size / 2,
-          }}
-          contentFit="contain"
-        />
-      ) : icon ? (
-        <Feather name={icon} size={size * 0.45} color={theme.colors.primary} />
-      ) : (
-        <Text style={[styles.avatarLabel, { fontSize: size * 0.36 }]}>
-          {fallback}
-        </Text>
-      )}
+      ) : null}
     </View>
   );
 }
@@ -586,9 +607,34 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     overflow: "hidden",
   },
+  avatarWrap: {
+    position: "relative",
+  },
   avatarLabel: {
     color: theme.colors.primary,
     fontWeight: "800",
+  },
+  avatarStatusDot: {
+    position: "absolute",
+    right: -1,
+    bottom: -1,
+    borderWidth: 2,
+    borderColor: theme.colors.background,
+  },
+  avatarStatusIdle: {
+    backgroundColor: theme.colors.textSoft,
+  },
+  avatarStatusThinking: {
+    backgroundColor: "#0ea5e9",
+  },
+  avatarStatusTool: {
+    backgroundColor: "#f59e0b",
+  },
+  avatarStatusResponding: {
+    backgroundColor: "#10b981",
+  },
+  avatarStatusError: {
+    backgroundColor: theme.colors.danger,
   },
   emptyState: {
     alignItems: "center",

@@ -107,11 +107,6 @@ export interface ConversationSummaryView {
   viewerWorkspaceMemberId?: string;
 }
 
-export interface ConversationCollectionResponse {
-  conversations: ConversationSummaryView[];
-  runtimeMap?: Record<string, unknown>;
-}
-
 export interface ConversationMemberListResponse {
   members: ConversationParticipantView[];
 }

@@ -18,6 +18,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "@/lib/utils"
 import { ArrowDown, MoreHorizontal } from "lucide-react"
 import MessageBubble from "./message-bubble"
+import ActorActivityBubble from "./actor-activity-bubble"
 import type {
   ConversationMember,
   ConversationSummary,
@@ -32,8 +33,13 @@ import ChatMemberStrip from "./chat-member-strip"
 import ChatParticipantDetailDialog from "./chat-participant-detail-dialog"
 import MobileConversationDetailsDialog from "./mobile-conversation-details-dialog"
 import TransportKindIcon from "./transport-kind-icon"
+import {
+  getActorRuntimePriority,
+  isActorRuntimeActive,
+} from "./runtime-ui"
 import { useChatStore } from "@/stores/chat-store"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
+import { isActorRuntimeProcessingWorkspaceMember } from "@synapse/shared"
 
 interface ConversationChatProps {
   conversation: ConversationSummary
@@ -64,13 +70,6 @@ function summarizeMemberCounts(conversation: ConversationSummary) {
   if (externalCount === 0) return `${workspaceMemberLabel} · ${actorLabel}`
   const externalLabel = `${externalCount} external${externalCount === 1 ? "" : "s"}`
   return `${workspaceMemberLabel} · ${actorLabel} · ${externalLabel}`
-}
-
-function getRuntimePriority(runtime: ActorRuntimeState) {
-  if (runtime.health === "error" || runtime.laneState === "blocked") return 0
-  if (runtime.laneState === "running") return 1
-  if (runtime.laneState === "queued") return 2
-  return 3
 }
 
 function summarizeCurrentUserProcessingActors(runtimes: ActorRuntimeState[]) {
@@ -350,28 +349,25 @@ export default function ConversationChat({
   const activeRuntimes = useMemo(
     () =>
       Object.values(actorRuntimes || {})
-        .filter(
-          (runtime) =>
-            runtime.laneState !== "idle" && runtime.laneState !== "closed"
-        )
-        .sort(
-          (left, right) => getRuntimePriority(left) - getRuntimePriority(right)
-        ),
+        .filter((runtime) => isActorRuntimeActive(runtime))
+        .sort((left, right) => getActorRuntimePriority(left) - getActorRuntimePriority(right)),
     [actorRuntimes]
+  )
+  const currentTurnRuntimes = useMemo(
+    () => activeRuntimes.filter((runtime) => Boolean(runtime.currentTurnPreview?.turnId)),
+    [activeRuntimes]
   )
   const myProcessingRuntimes = useMemo(
     () =>
-      activeRuntimes.filter(
+      currentTurnRuntimes.filter(
         (runtime) =>
           runtime.laneState === "running" &&
-          runtime.activeWakeups.some(
-            (wakeup) =>
-              wakeup.status === "attached" &&
-              wakeup.sourceParticipantType === "workspace_member" &&
-              wakeup.sourceParticipantId === currentViewerWorkspaceMemberId
+          isActorRuntimeProcessingWorkspaceMember(
+            runtime,
+            currentViewerWorkspaceMemberId
           )
       ),
-    [activeRuntimes, currentViewerWorkspaceMemberId]
+    [currentTurnRuntimes, currentViewerWorkspaceMemberId]
   )
   const workingHint = useMemo(
     () => summarizeCurrentUserProcessingActors(myProcessingRuntimes),
@@ -723,6 +719,18 @@ export default function ConversationChat({
                 />
               ))
             )}
+
+            {!loading
+              ? currentTurnRuntimes.map((runtime) => (
+                  <ActorActivityBubble
+                    key={`${runtime.actorId}:${runtime.currentTurnPreview!.turnId}`}
+                    conversationId={conversation.id}
+                    workspaceId={workspaceId}
+                    runtime={runtime}
+                    member={actorMemberMap[runtime.actorId]}
+                  />
+                ))
+              : null}
 
             <div ref={bottomRef} />
           </div>

@@ -66,6 +66,7 @@ import type {
 } from "@/lib/api"
 import { cn, resolveFileUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
+import { getRuntimeDetail, getRuntimeLabel } from "./runtime-ui"
 import {
   buildReplyPreviewText,
   getEntityDisplayName,
@@ -147,37 +148,6 @@ function formatToolsUsed(tools: string[]): string {
     return `Used ${names.join(", ")} (${total} tool call${total > 1 ? "s" : ""})`
   }
   return `Used ${names.slice(0, 2).join(", ")} + ${names.length - 2} more (${total} tool call${total > 1 ? "s" : ""})`
-}
-
-function getRuntimeLabel(runtime?: ActorRuntimeState) {
-  if (!runtime) return undefined
-  if (runtime.health === "error" || runtime.laneState === "blocked")
-    return "Error"
-  if (runtime.laneState === "running") return "Working"
-  if (runtime.laneState === "queued") return "Queued"
-  return "Idle"
-}
-
-function getRuntimeDetail(runtime?: ActorRuntimeState) {
-  if (!runtime) return undefined
-  if (runtime.lastError?.message) return runtime.lastError.message
-  if (
-    runtime.laneState === "running" &&
-    runtime.activeWakeups.some((wakeup) => wakeup.status === "attached")
-  ) {
-    return runtime.activeWakeups
-      .filter((wakeup) => wakeup.status === "attached")
-      .slice(0, 2)
-      .map(
-        (wakeup) => wakeup.sourceName || wakeup.sourceType.replace(/_/g, " ")
-      )
-      .join(", ")
-  }
-  if (runtime.statusText) return runtime.statusText
-  if (runtime.pendingWakeupCount > 0) {
-    return `${runtime.pendingWakeupCount} queued wakeup${runtime.pendingWakeupCount === 1 ? "" : "s"}`
-  }
-  return undefined
 }
 
 function getCompactMessagePreview(

@@ -1,6 +1,7 @@
 import { FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
 import type {
   ActorPackageInstallResult,
+  ActorRuntimeTurnActivityDetail,
   CapabilityAccessTarget,
   AttachmentTarget,
   AuthClientType,
@@ -1301,6 +1302,17 @@ class ApiClient {
 
     return this.fetch(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages${query ? `?${query}` : ""}`
+    )
+  }
+
+  getChatConversationRuntimeTurnDetail(
+    workspaceId: string,
+    conversationId: string,
+    actorId: string,
+    turnId: string
+  ): Promise<ActorRuntimeTurnActivityDetail> {
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/actors/${actorId}/runtime-turns/${turnId}`
     )
   }
 

@@ -17,6 +17,7 @@ import type { ChatComposerSendPayload } from "@/lib/chat-compose";
 import { getDeviceLabel } from "@/lib/config";
 import { createId } from "@/lib/ids";
 import {
+  type ActorRuntimeState,
   extractText,
   summarizeConversationEvent,
   type ChatConversationCreateResponse,
@@ -35,6 +36,7 @@ export interface ChatRuntimeState {
   error: string | null;
   activeWorkspaceId: string | null;
   snapshot: ChatWorkspaceSnapshot | null;
+  runtimeByConversationId: Record<string, Record<string, ActorRuntimeState>>;
 }
 
 type ChatRuntimeListener = (state: ChatRuntimeState) => void;
@@ -119,6 +121,7 @@ export class ChatRuntime {
     error: null,
     activeWorkspaceId: null,
     snapshot: null,
+    runtimeByConversationId: {},
   };
 
   subscribe(listener: ChatRuntimeListener) {
@@ -146,6 +149,7 @@ export class ChatRuntime {
       error: null,
       activeWorkspaceId: null,
       snapshot: null,
+      runtimeByConversationId: {},
     });
   }
 
@@ -267,6 +271,21 @@ export class ChatRuntime {
   handleSocketEvent(event: ChatSocketEvent | Record<string, unknown>) {
     if (event.type === "chat.sync.event") {
       this.applyChatEvent((event as ChatSocketEvent<"chat.sync.event">).payload);
+      return;
+    }
+
+    if (event.type === "runtime.updated") {
+      const payload = (event as ChatSocketEvent<"runtime.updated">).payload;
+      this.replaceState({
+        ...this.state,
+        runtimeByConversationId: {
+          ...this.state.runtimeByConversationId,
+          [payload.conversationId]: {
+            ...(this.state.runtimeByConversationId[payload.conversationId] ?? {}),
+            [payload.snapshot.actorId]: payload.snapshot,
+          },
+        },
+      });
     }
   }
 
@@ -309,6 +328,14 @@ export class ChatRuntime {
         },
       },
     }));
+
+    this.replaceState({
+      ...this.state,
+      runtimeByConversationId: {
+        ...this.state.runtimeByConversationId,
+        [conversationId]: response.runtimeByActor ?? {},
+      },
+    });
 
     return response;
   }
@@ -363,6 +390,17 @@ export class ChatRuntime {
         },
       },
     }));
+
+    this.replaceState({
+      ...this.state,
+      runtimeByConversationId: {
+        ...this.state.runtimeByConversationId,
+        [conversationId]:
+          response.runtimeByActor
+            ?? this.state.runtimeByConversationId[conversationId]
+            ?? {},
+      },
+    });
   }
 
   async markConversationRead(
@@ -557,6 +595,7 @@ export class ChatRuntime {
       activeWorkspaceId: workspaceId,
       status: "loading",
       error: null,
+      runtimeByConversationId: {},
     });
 
     const persisted = await this.persistence.loadWorkspaceSnapshot(workspaceId);
@@ -570,6 +609,7 @@ export class ChatRuntime {
       status: "ready",
       error: null,
       snapshot: persisted ?? createEmptyChatWorkspaceSnapshot(workspaceId),
+      runtimeByConversationId: {},
     });
 
     if (this.state.snapshot) {

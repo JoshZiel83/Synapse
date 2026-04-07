@@ -4,6 +4,7 @@ import {
   isChatInteractionResolveConflictResponse,
 } from "@shared";
 import type {
+  ActorRuntimeTurnActivityDetail,
   AuthSessionPersistence,
   CanonicalContentBlock,
   ChatBootstrapResponse,
@@ -604,6 +605,17 @@ class ApiClient {
 
     return this.request<ChatConversationMessagesPage>(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages${query ? `?${query}` : ""}`,
+    );
+  }
+
+  getChatConversationRuntimeTurnDetail(
+    workspaceId: string,
+    conversationId: string,
+    actorId: string,
+    turnId: string,
+  ): Promise<ActorRuntimeTurnActivityDetail> {
+    return this.request<ActorRuntimeTurnActivityDetail>(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/actors/${actorId}/runtime-turns/${turnId}`,
     );
   }
 

@@ -5,6 +5,9 @@ import {
   DEFAULT_CONVERSATION_TYPE_MASK,
 } from '../constants/enums.js';
 import type {
+  ActorRuntimeProcessingTarget,
+  ActorRuntimeState,
+  ActorRuntimeTurnPreviewTool,
   ConversationTypeKey,
   ConversationTypeMask,
   WorkItemStatus,
@@ -241,6 +244,50 @@ export function resolveThreadSemantics(params: {
     requiresVisibleReplyBeforeSleep: hasAddressablePeer,
     allowsSleepWithoutReplyConfirmation: isGroupConversation && hasAddressablePeer,
   };
+}
+
+export function isActorRuntimeActive(
+  runtime: Pick<ActorRuntimeState, 'laneState'> | null | undefined,
+): boolean {
+  if (!runtime) return false;
+  return runtime.laneState !== 'idle' && runtime.laneState !== 'closed';
+}
+
+export function getActorRuntimePriority(
+  runtime: Pick<ActorRuntimeState, 'health' | 'laneState'> | null | undefined,
+): number {
+  if (!runtime) return 3;
+  if (runtime.health === 'error' || runtime.laneState === 'blocked') return 0;
+  if (runtime.laneState === 'running') return 1;
+  if (runtime.laneState === 'queued') return 2;
+  return 3;
+}
+
+export function getActorRuntimeProcessingTargets(
+  runtime: Pick<ActorRuntimeState, 'currentTurnPreview'> | null | undefined,
+): ActorRuntimeProcessingTarget[] {
+  return runtime?.currentTurnPreview?.processingTargets ?? [];
+}
+
+export function getActorRuntimeCurrentTool(
+  runtime: Pick<ActorRuntimeState, 'currentTurnPreview'> | null | undefined,
+): ActorRuntimeTurnPreviewTool | undefined {
+  return (
+    runtime?.currentTurnPreview?.activeTool
+    || runtime?.currentTurnPreview?.lastCompletedTool
+  );
+}
+
+export function isActorRuntimeProcessingWorkspaceMember(
+  runtime: Pick<ActorRuntimeState, 'currentTurnPreview'> | null | undefined,
+  workspaceMemberId: string | null | undefined,
+): boolean {
+  if (!workspaceMemberId) return false;
+  return getActorRuntimeProcessingTargets(runtime).some(
+    (target) =>
+      target.participantType === 'workspace_member'
+      && target.participantId === workspaceMemberId,
+  );
 }
 
 export function parseSynapseQrPayload(

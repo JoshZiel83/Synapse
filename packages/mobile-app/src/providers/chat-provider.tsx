@@ -39,6 +39,7 @@ import { reportApiUnauthorized } from "@/lib/api";
 import { useSession } from "@/providers/session-provider";
 import { useWorkspace } from "@/providers/workspace-provider";
 import {
+  type ActorRuntimeState,
   type ChatConversationCreateResponse,
   type ChatConversationMessagesPage,
   type ChatConversationView,
@@ -57,6 +58,9 @@ interface ChatContextValue {
   getConversation: (conversationId: string) => ChatConversationView | null;
   getConversationItems: (conversationId: string) => MobileChatItem[];
   getConversationMeta: (conversationId: string) => ChatConversationMeta | null;
+  getConversationRuntimes: (
+    conversationId: string,
+  ) => Record<string, ActorRuntimeState>;
   refreshInbox: () => Promise<void>;
   refreshConversation: (
     conversationId: string,
@@ -292,6 +296,12 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     return getConversationMetaOrDefault(runtimeState.snapshot, conversationId);
   }, [runtimeState.snapshot]);
 
+  const getConversationRuntimes = useCallback(
+    (conversationId: string) =>
+      runtimeState.runtimeByConversationId[conversationId] ?? {},
+    [runtimeState.runtimeByConversationId],
+  );
+
   const refreshInbox = useCallback(() => chatRuntime.refreshInbox(), []);
 
   const refreshConversation = useCallback(
@@ -371,6 +381,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       getConversation,
       getConversationItems,
       getConversationMeta,
+      getConversationRuntimes,
       refreshInbox,
       refreshConversation,
       loadOlderMessages,
@@ -387,6 +398,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       getConversation,
       getConversationItems,
       getConversationMeta,
+      getConversationRuntimes,
       loadOlderMessages,
       markConversationRead,
       refreshConversation,
