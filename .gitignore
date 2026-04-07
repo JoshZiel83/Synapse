@@ -38,6 +38,7 @@ relay/internal/commandlinebundle/assets/ff/
 relay/internal/commandlinebundle/assets/git/
 relay/internal/commandlinebundle/assets/nm/
 relay/internal/commandlinebundle/assets/py/
+relay/internal/commandlinebundle/assets/providers/
 relay/internal/commandlinebundle/assets/sp/
 
 # Local reference checkouts

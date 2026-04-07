@@ -3,6 +3,15 @@ import { stat } from 'node:fs/promises'
 
 const SUBPROJECT_DIRS = {
   'cli-anything': 'cli-anything',
+  'lark-cli': 'lark-cli',
+  'dingtalk-workspace-cli': 'dingtalk-workspace-cli',
+  'wecom-cli': 'wecom-cli',
+  'notion-skills': 'notion-skills',
+  'xiaohongshu-cli': 'xiaohongshu-cli',
+  'bilibili-cli': 'bilibili-cli',
+  'twitter-cli': 'twitter-cli',
+  'discord-cli': 'discord-cli',
+  'tg-cli': 'tg-cli',
 }
 
 export function resolveSubprojectRoot(repoRoot, name) {

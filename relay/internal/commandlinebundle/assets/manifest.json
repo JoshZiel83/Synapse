@@ -11,33 +11,104 @@
   "ffprobeBinary": "ff/ffprobe.exe",
   "gitBinary": "git/cmd/git.exe",
   "bashBinary": "git/bin/bash.exe",
-  "cliAnythingCapabilities": [
+  "managedProviders": [
     {
+      "slug": "cli-anything",
+      "displayName": "CLI-Anything",
+      "runtimeType": "python_source",
+      "version": "mixed"
+    },
+    {
+      "slug": "lark-cli",
+      "displayName": "Lark CLI",
+      "runtimeType": "npm_package",
+      "version": "1.0.4"
+    },
+    {
+      "slug": "wecom-cli",
+      "displayName": "WeCom CLI",
+      "runtimeType": "npm_package",
+      "version": "0.1.4"
+    },
+    {
+      "slug": "xiaohongshu-cli",
+      "displayName": "Xiaohongshu CLI",
+      "runtimeType": "python_package",
+      "version": "0.6.4"
+    },
+    {
+      "slug": "bilibili-cli",
+      "displayName": "Bilibili CLI",
+      "runtimeType": "python_package",
+      "version": "0.6.2"
+    },
+    {
+      "slug": "twitter-cli",
+      "displayName": "Twitter CLI",
+      "runtimeType": "python_package",
+      "version": "0.8.6"
+    },
+    {
+      "slug": "discord-cli",
+      "displayName": "Discord CLI",
+      "runtimeType": "python_package",
+      "version": "0.2.8"
+    },
+    {
+      "slug": "tg-cli",
+      "displayName": "Telegram CLI",
+      "runtimeType": "python_package",
+      "version": "0.6.0"
+    },
+    {
+      "slug": "dingtalk-workspace-cli",
+      "displayName": "DingTalk Workspace CLI",
+      "runtimeType": "github_release_binary",
+      "version": "v1.0.7"
+    },
+    {
+      "slug": "github-cli",
+      "displayName": "GitHub CLI",
+      "runtimeType": "github_release_binary",
+      "version": "v2.89.0"
+    },
+    {
+      "slug": "notion-skills",
+      "displayName": "Notion Skills",
+      "runtimeType": "npm_package",
+      "version": "0.5.6"
+    }
+  ],
+  "managedCapabilities": [
+    {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "adguardhome",
       "command": "cli-anything-adguardhome",
       "module": "adguardhome",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.adguardhome.adguardhome_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "anygen",
       "command": "cli-anything-anygen",
       "module": "anygen",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.anygen.anygen_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "blender",
       "command": "cli-anything-blender",
       "module": "blender",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.blender.blender_cli:main",
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -49,11 +120,12 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "cloudcompare",
       "command": "cli-anything-cloudcompare",
       "module": "cloudcompare",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.cloudcompare.cloudcompare_cli:main",
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -66,21 +138,23 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "comfyui",
       "command": "cli-anything-comfyui",
       "module": "comfyui",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.comfyui.comfyui_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "drawio",
       "command": "cli-anything-drawio",
       "module": "drawio",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.drawio.drawio_cli:cli",
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -94,11 +168,12 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "freecad",
       "command": "cli-anything-freecad",
       "module": "freecad",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.freecad.freecad_cli:main",
       "probe": {
         "type": "executable_any",
         "envPathVar": "FREECAD_PATH",
@@ -124,11 +199,12 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "gimp",
       "command": "cli-anything-gimp",
       "module": "gimp",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.gimp.gimp_cli:main",
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -142,11 +218,12 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "inkscape",
       "command": "cli-anything-inkscape",
       "module": "inkscape",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.inkscape.inkscape_cli:main",
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -158,21 +235,23 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "intelwatch",
       "command": "cli-anything-intelwatch",
       "module": "intelwatch",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.intelwatch.intelwatch_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "kdenlive",
       "command": "cli-anything-kdenlive",
       "module": "kdenlive",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.kdenlive.kdenlive_cli:main",
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -181,11 +260,12 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "krita",
       "command": "cli-anything-krita",
       "module": "krita",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.krita.krita_cli:main",
       "probe": {
         "type": "executable_any",
         "envPathVar": "KRITA_PATH",
@@ -198,11 +278,12 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "libreoffice",
       "command": "cli-anything-libreoffice",
       "module": "libreoffice",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.libreoffice.libreoffice_cli:main",
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -217,31 +298,34 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "mermaid",
       "command": "cli-anything-mermaid",
       "module": "mermaid",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.mermaid.mermaid_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "mubu",
       "command": "cli-anything-mubu",
       "module": "mubu",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.mubu.mubu_cli:entrypoint",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "musescore",
       "command": "cli-anything-musescore",
       "module": "musescore",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.musescore.musescore_cli:main",
       "probe": {
         "type": "executable_any",
         "envPathVar": "MUSESCORE_PATH",
@@ -256,11 +340,12 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "notebooklm",
       "command": "cli-anything-notebooklm",
       "module": "notebooklm",
       "version": "0.1.0",
-      "entryPointTarget": "cli_anything.notebooklm.notebooklm_cli:main",
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -269,61 +354,67 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "novita",
       "command": "cli-anything-novita",
       "module": "novita",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.novita.novita_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "obs-studio",
       "command": "cli-anything-obs-studio",
       "module": "obs_studio",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.obs_studio.obs_studio_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "ollama",
       "command": "cli-anything-ollama",
       "module": "ollama",
       "version": "1.0.1",
-      "entryPointTarget": "cli_anything.ollama.ollama_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "renderdoc",
       "command": "cli-anything-renderdoc",
       "module": "renderdoc",
       "version": "0.1.0",
-      "entryPointTarget": "cli_anything.renderdoc.renderdoc_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "rms",
       "command": "cli-anything-rms",
       "module": "rms",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.rms.rms_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "shotcut",
       "command": "cli-anything-shotcut",
       "module": "shotcut",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.shotcut.shotcut_cli:cli",
       "probe": {
         "type": "executable_any",
         "candidates": [
@@ -332,43 +423,159 @@
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "slay_the_spire_ii",
       "command": "cli-anything-sts2",
       "module": "slay_the_spire_ii",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.slay_the_spire_ii.slay_the_spire_ii_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "zoom",
       "command": "cli-anything-zoom",
       "module": "zoom",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.zoom.zoom_cli:main",
       "probe": {
         "type": "wrapper_only"
       }
     },
     {
+      "provider": "cli-anything",
+      "providerDisplayName": "CLI-Anything",
       "slug": "zotero",
       "command": "cli-anything-zotero",
       "module": "zotero",
       "version": "1.0.0",
-      "entryPointTarget": "cli_anything.zotero.zotero_cli:entrypoint",
       "probe": {
         "type": "wrapper_only"
+      }
+    },
+    {
+      "provider": "lark-cli",
+      "providerDisplayName": "Lark CLI",
+      "slug": "lark-cli",
+      "command": "lark-cli",
+      "module": "",
+      "version": "1.0.4",
+      "probe": {
+        "type": "command_help"
+      }
+    },
+    {
+      "provider": "wecom-cli",
+      "providerDisplayName": "WeCom CLI",
+      "slug": "wecom-cli",
+      "command": "wecom-cli",
+      "module": "",
+      "version": "0.1.4",
+      "probe": {
+        "type": "command_help"
+      }
+    },
+    {
+      "provider": "xiaohongshu-cli",
+      "providerDisplayName": "Xiaohongshu CLI",
+      "slug": "xhs",
+      "command": "xhs",
+      "module": "",
+      "version": "0.6.4",
+      "probe": {
+        "type": "command_help"
+      }
+    },
+    {
+      "provider": "bilibili-cli",
+      "providerDisplayName": "Bilibili CLI",
+      "slug": "bili",
+      "command": "bili",
+      "module": "",
+      "version": "0.6.2",
+      "probe": {
+        "type": "command_help"
+      }
+    },
+    {
+      "provider": "twitter-cli",
+      "providerDisplayName": "Twitter CLI",
+      "slug": "twitter",
+      "command": "twitter",
+      "module": "",
+      "version": "0.8.6",
+      "probe": {
+        "type": "command_help"
+      }
+    },
+    {
+      "provider": "discord-cli",
+      "providerDisplayName": "Discord CLI",
+      "slug": "discord",
+      "command": "discord",
+      "module": "",
+      "version": "0.2.8",
+      "probe": {
+        "type": "command_help"
+      }
+    },
+    {
+      "provider": "tg-cli",
+      "providerDisplayName": "Telegram CLI",
+      "slug": "tg",
+      "command": "tg",
+      "module": "",
+      "version": "0.6.0",
+      "probe": {
+        "type": "command_help"
+      }
+    },
+    {
+      "provider": "dingtalk-workspace-cli",
+      "providerDisplayName": "DingTalk Workspace CLI",
+      "slug": "dws",
+      "command": "dws",
+      "module": "",
+      "version": "v1.0.7",
+      "probe": {
+        "type": "command_help"
+      }
+    },
+    {
+      "provider": "github-cli",
+      "providerDisplayName": "GitHub CLI",
+      "slug": "gh",
+      "command": "gh",
+      "module": "",
+      "version": "v2.89.0",
+      "probe": {
+        "type": "command_help"
+      }
+    },
+    {
+      "provider": "notion-skills",
+      "providerDisplayName": "Notion Skills",
+      "slug": "ntn",
+      "command": "ntn",
+      "module": "",
+      "version": "0.5.6",
+      "unavailableReason": "Notion Skills is not officially supported on windows-amd64",
+      "probe": {
+        "type": "command_help"
       }
     }
   ],
   "packageProfile": "default-data-v5",
   "ffmpegReleaseTag": "n7.1-2",
-  "assetVersion": "cl-48682c08e03d",
+  "assetVersion": "cl-cc1040facce4",
   "executables": [
     "py/python.exe",
     "ff/ffmpeg.exe",
     "ff/ffprobe.exe",
+    "providers/dingtalk-workspace-cli/dws.exe",
+    "providers/github-cli/gh.exe",
     "bin/cli-anything-adguardhome",
     "bin/cli-anything-anygen",
     "bin/cli-anything-blender",
@@ -395,6 +602,15 @@
     "bin/cli-anything-sts2",
     "bin/cli-anything-zoom",
     "bin/cli-anything-zotero",
+    "bin/lark-cli",
+    "bin/wecom-cli",
+    "bin/xhs",
+    "bin/bili",
+    "bin/twitter",
+    "bin/discord",
+    "bin/tg",
+    "bin/dws",
+    "bin/gh",
     "git/cmd/git.exe",
     "git/bin/bash.exe"
   ]

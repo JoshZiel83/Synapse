@@ -8,18 +8,20 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/mcp"
 )
 
-type cliAnythingCapabilityStatus struct {
-	ServerName      string
-	ServerStableKey string
-	Command         string
-	Module          string
-	Version         string
-	Ready           bool
-	Reason          string
+type managedCapabilityStatus struct {
+	ServerName          string
+	ServerStableKey     string
+	Provider            string
+	ProviderDisplayName string
+	Command             string
+	Module              string
+	Version             string
+	Ready               bool
+	Reason              string
 }
 
 func (e *Engine) emitCLIAnythingCapabilityLogs(servers []mcp.ServerInfo) {
-	for _, group := range collectCLIAnythingCapabilityStatuses(servers) {
+	for _, group := range collectManagedCapabilityStatuses(servers) {
 		readyCount := 0
 		for _, capability := range group {
 			if capability.Ready {
@@ -27,35 +29,44 @@ func (e *Engine) emitCLIAnythingCapabilityLogs(servers []mcp.ServerInfo) {
 			}
 		}
 
+		providerDisplayName := group[0].ProviderDisplayName
+		if providerDisplayName == "" {
+			providerDisplayName = group[0].Provider
+		}
 		summary := NewEvent(
 			EventLog,
 			fmt.Sprintf(
-				"CLI-Anything readiness for %s: %d/%d ready.",
+				"Managed CLI readiness for %s / %s: %d/%d ready.",
 				group[0].ServerName,
+				providerDisplayName,
 				readyCount,
 				len(group),
 			),
 		)
 		summary.Data = map[string]interface{}{
-			"server":                 group[0].ServerName,
-			"stableKey":              group[0].ServerStableKey,
-			"phase":                  "cli_anything_readiness",
-			"cliAnythingTotalCount":  len(group),
-			"cliAnythingReadyCount":  readyCount,
-			"cliAnythingFailedCount": len(group) - readyCount,
+			"server":                group[0].ServerName,
+			"stableKey":             group[0].ServerStableKey,
+			"provider":              group[0].Provider,
+			"providerDisplayName":   providerDisplayName,
+			"phase":                 "managed_cli_readiness",
+			"managedCapabilityCount": len(group),
+			"managedReadyCount":     readyCount,
+			"managedFailedCount":    len(group) - readyCount,
 		}
 		e.emit(summary)
 
 		for _, capability := range group {
 			message := fmt.Sprintf(
-				"CLI-Anything ready on %s: %s",
+				"Managed CLI ready on %s / %s: %s",
 				capability.ServerName,
+				providerDisplayName,
 				capability.Command,
 			)
 			if !capability.Ready {
 				message = fmt.Sprintf(
-					"CLI-Anything failed on %s: %s (%s)",
+					"Managed CLI failed on %s / %s: %s (%s)",
 					capability.ServerName,
+					providerDisplayName,
 					capability.Command,
 					capability.Reason,
 				)
@@ -63,38 +74,55 @@ func (e *Engine) emitCLIAnythingCapabilityLogs(servers []mcp.ServerInfo) {
 
 			evt := NewEvent(EventLog, message)
 			evt.Data = map[string]interface{}{
-				"server":    capability.ServerName,
-				"stableKey": capability.ServerStableKey,
-				"phase":     "cli_anything_readiness",
-				"command":   capability.Command,
-				"module":    capability.Module,
-				"version":   capability.Version,
-				"ready":     capability.Ready,
-				"reason":    capability.Reason,
+				"server":              capability.ServerName,
+				"stableKey":           capability.ServerStableKey,
+				"provider":            capability.Provider,
+				"providerDisplayName": providerDisplayName,
+				"phase":               "managed_cli_readiness",
+				"command":             capability.Command,
+				"module":              capability.Module,
+				"version":             capability.Version,
+				"ready":               capability.Ready,
+				"reason":              capability.Reason,
 			}
 			e.emit(evt)
 		}
 	}
 }
 
-func collectCLIAnythingCapabilityStatuses(servers []mcp.ServerInfo) [][]cliAnythingCapabilityStatus {
-	grouped := make([][]cliAnythingCapabilityStatus, 0, len(servers))
+func collectManagedCapabilityStatuses(servers []mcp.ServerInfo) [][]managedCapabilityStatus {
+	grouped := make([][]managedCapabilityStatus, 0, len(servers))
 	for _, server := range servers {
-		capabilities := parseCLIAnythingCapabilityStatuses(server)
+		capabilities := parseManagedCapabilityStatuses(server)
 		if len(capabilities) == 0 {
 			continue
 		}
-		sort.Slice(capabilities, func(i, j int) bool {
-			return capabilities[i].Command < capabilities[j].Command
-		})
-		grouped = append(grouped, capabilities)
+
+		groupsByProvider := make(map[string][]managedCapabilityStatus)
+		for _, capability := range capabilities {
+			key := capability.Provider
+			if key == "" {
+				key = "_default"
+			}
+			groupsByProvider[key] = append(groupsByProvider[key], capability)
+		}
+
+		for _, providerGroup := range groupsByProvider {
+			sort.Slice(providerGroup, func(i, j int) bool {
+				return providerGroup[i].Command < providerGroup[j].Command
+			})
+			grouped = append(grouped, providerGroup)
+		}
 	}
 
 	sort.Slice(grouped, func(i, j int) bool {
 		left := grouped[i][0]
 		right := grouped[j][0]
 		if left.ServerName == right.ServerName {
-			return left.ServerStableKey < right.ServerStableKey
+			if left.Provider == right.Provider {
+				return left.Command < right.Command
+			}
+			return left.Provider < right.Provider
 		}
 		return left.ServerName < right.ServerName
 	})
@@ -102,19 +130,19 @@ func collectCLIAnythingCapabilityStatuses(servers []mcp.ServerInfo) [][]cliAnyth
 	return grouped
 }
 
-func parseCLIAnythingCapabilityStatuses(server mcp.ServerInfo) []cliAnythingCapabilityStatus {
+func parseManagedCapabilityStatuses(server mcp.ServerInfo) []managedCapabilityStatus {
 	if len(server.Metadata) == 0 {
 		return nil
 	}
 
-	rawCapabilities, ok := server.Metadata["cliAnythingCapabilities"]
+	rawCapabilities, ok := server.Metadata["managedCapabilities"]
 	if !ok {
 		return nil
 	}
 
 	switch typed := rawCapabilities.(type) {
 	case []map[string]interface{}:
-		return mapCLIAnythingCapabilities(server, typed)
+		return mapManagedCapabilities(server, typed)
 	case []interface{}:
 		normalized := make([]map[string]interface{}, 0, len(typed))
 		for _, item := range typed {
@@ -124,28 +152,30 @@ func parseCLIAnythingCapabilityStatuses(server mcp.ServerInfo) []cliAnythingCapa
 			}
 			normalized = append(normalized, capability)
 		}
-		return mapCLIAnythingCapabilities(server, normalized)
+		return mapManagedCapabilities(server, normalized)
 	default:
 		return nil
 	}
 }
 
-func mapCLIAnythingCapabilities(server mcp.ServerInfo, capabilities []map[string]interface{}) []cliAnythingCapabilityStatus {
-	statuses := make([]cliAnythingCapabilityStatus, 0, len(capabilities))
+func mapManagedCapabilities(server mcp.ServerInfo, capabilities []map[string]interface{}) []managedCapabilityStatus {
+	statuses := make([]managedCapabilityStatus, 0, len(capabilities))
 	for _, capability := range capabilities {
 		command := stringMetadataValue(capability, "command")
 		if command == "" {
 			continue
 		}
 
-		statuses = append(statuses, cliAnythingCapabilityStatus{
-			ServerName:      server.Name,
-			ServerStableKey: server.StableKey,
-			Command:         command,
-			Module:          stringMetadataValue(capability, "module"),
-			Version:         stringMetadataValue(capability, "version"),
-			Ready:           boolMetadataValue(capability, "ready"),
-			Reason:          stringMetadataValue(capability, "reason"),
+		statuses = append(statuses, managedCapabilityStatus{
+			ServerName:          server.Name,
+			ServerStableKey:     server.StableKey,
+			Provider:            stringMetadataValue(capability, "provider"),
+			ProviderDisplayName: stringMetadataValue(capability, "providerDisplayName"),
+			Command:             command,
+			Module:              stringMetadataValue(capability, "module"),
+			Version:             stringMetadataValue(capability, "version"),
+			Ready:               boolMetadataValue(capability, "ready"),
+			Reason:              stringMetadataValue(capability, "reason"),
 		})
 	}
 

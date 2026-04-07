@@ -18,12 +18,13 @@ const DEFAULT_WINDOWS_GIT_VERSION = '2.49.0.windows.1'
 const DEFAULT_FFMPEG_RELEASE_TAG = 'n7.1-2'
 const DEFAULT_PACKAGE_PROFILE = 'default-data-v5'
 
-const COMMANDLINE_ASSET_SCHEMA_VERSION = 2
+const COMMANDLINE_ASSET_SCHEMA_VERSION = 3
 const COMMANDLINE_ASSET_PREFIX = 'cl'
 const COMMANDLINE_NODE_MODULES_DIR = 'nm'
 const COMMANDLINE_PYTHON_HOME_DIR = 'py'
 const COMMANDLINE_PYTHON_SITE_PACKAGES_DIR = 'sp'
 const COMMANDLINE_MANAGED_BIN_DIR = 'bin'
+const COMMANDLINE_PROVIDER_DIR = 'providers'
 const COMMANDLINE_FFMPEG_DIR = 'ff'
 const COMMANDLINE_GIT_DIR = 'git'
 
@@ -220,11 +221,101 @@ function getSharedNodeAssetVersion(targetPlatform, nodeVersion) {
   return `node-${nodeVersion}-${targetPlatform}`
 }
 
+function getNativeTargetPlatform() {
+  const osMap = {
+    win32: 'windows',
+    linux: 'linux',
+    darwin: 'darwin',
+  }
+  const archMap = {
+    x64: 'amd64',
+    arm64: 'arm64',
+  }
+  const os = osMap[process.platform]
+  const arch = archMap[process.arch]
+  if (!os || !arch) {
+    return ''
+  }
+  return `${os}-${arch}`
+}
+
 function shortHash(value) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex').slice(0, 12)
 }
 
-function getCommandlineAssetVersion(options, nodeAssetVersion, capabilities) {
+function resolveManagedProviderVersion(versions) {
+  const normalized = [...new Set((versions || []).map((value) => String(value || '').trim()).filter(Boolean))]
+  if (normalized.length === 0) {
+    return 'bundled'
+  }
+  if (normalized.length === 1) {
+    return normalized[0]
+  }
+  return 'mixed'
+}
+
+function runtimeSupportsTarget(runtime, targetPlatform) {
+  const supportedTargets = Array.isArray(runtime?.supportedTargets)
+    ? runtime.supportedTargets.map((value) => String(value || '').trim()).filter(Boolean)
+    : []
+  if (supportedTargets.length === 0) {
+    return true
+  }
+  return supportedTargets.includes(targetPlatform)
+}
+
+function resolveDeclaredProviderVersion(provider) {
+  if (!provider?.runtime || typeof provider.runtime !== 'object') {
+    return 'bundled'
+  }
+  const packageVersion = String(provider.runtime.packageVersion || '').trim()
+  if (packageVersion) {
+    return packageVersion
+  }
+  const releaseVersion = String(provider.runtime.releaseVersion || '').trim()
+  if (releaseVersion) {
+    return releaseVersion
+  }
+  return 'bundled'
+}
+
+function collectUnsupportedManagedEntries(providers, targetPlatform) {
+  const managedProviders = []
+  const managedCapabilities = []
+
+  for (const provider of providers) {
+    if (runtimeSupportsTarget(provider.runtime, targetPlatform)) {
+      continue
+    }
+    const version = resolveDeclaredProviderVersion(provider)
+    const reason = `${provider.displayName} is not officially supported on ${targetPlatform}`
+    managedProviders.push({
+      slug: provider.slug,
+      displayName: provider.displayName,
+      runtimeType: String(provider.runtime?.type || 'unknown'),
+      version,
+    })
+    for (const capability of provider.capabilities) {
+      managedCapabilities.push({
+        provider: provider.slug,
+        providerDisplayName: provider.displayName,
+        slug: capability.slug,
+        command: capability.command,
+        module: capability.module,
+        version,
+        unavailableReason: reason,
+        probe: capability.probe,
+      })
+    }
+  }
+
+  return {
+    managedProviders,
+    managedCapabilities,
+  }
+}
+
+function getCommandlineAssetVersion(options, nodeAssetVersion, managedProviders, managedCapabilities) {
   return `${COMMANDLINE_ASSET_PREFIX}-${shortHash({
     schemaVersion: COMMANDLINE_ASSET_SCHEMA_VERSION,
     targetPlatform: options.targetPlatform,
@@ -236,12 +327,19 @@ function getCommandlineAssetVersion(options, nodeAssetVersion, capabilities) {
     nodeAssetVersion,
     nodeDependencies: NODE_DEPENDENCIES,
     pythonRequirements: PYTHON_REQUIREMENTS,
-    capabilities: capabilities.map((capability) => ({
+    managedProviders: managedProviders.map((provider) => ({
+      slug: provider.slug,
+      displayName: provider.displayName,
+      runtimeType: provider.runtimeType,
+      version: provider.version,
+    })),
+    managedCapabilities: managedCapabilities.map((capability) => ({
+      provider: capability.provider,
       slug: capability.slug,
       command: capability.command,
       module: capability.module,
       version: capability.version,
-      entryPointTarget: capability.entryPointTarget,
+      unavailableReason: capability.unavailableReason,
       probe: capability.probe,
     })),
   })}`
@@ -533,21 +631,32 @@ function normalizeRelativePath(baseDir, targetPath) {
   return relative(baseDir, targetPath).split('\\').join('/')
 }
 
-async function loadCliAnythingManifest(relayRoot) {
-  const manifestPath = join(relayRoot, 'cli-anything-wave1.json')
+async function loadManagedProviderManifest(relayRoot) {
+  const manifestPath = join(relayRoot, 'managed-command-providers.json')
   const manifest = JSON.parse(await readFile(manifestPath, 'utf8'))
-  const capabilities = Array.isArray(manifest?.capabilities) ? manifest.capabilities : []
-  return capabilities.map((capability) => ({
-    slug: String(capability.slug || '').trim(),
-    repoDir: String(capability.repoDir || '').trim(),
-    module: String(capability.module || '').trim(),
-    command: String(capability.command || '').trim(),
-    probe: capability.probe && typeof capability.probe === 'object' ? capability.probe : { type: 'wrapper_only' },
-  })).filter((capability) =>
-    capability.slug &&
-    capability.repoDir &&
-    capability.module &&
-    capability.command,
+  const providers = Array.isArray(manifest?.providers) ? manifest.providers : []
+
+  return providers.map((provider) => ({
+    slug: String(provider.slug || '').trim(),
+    displayName: String(provider.displayName || '').trim(),
+    subproject: String(provider.subproject || '').trim(),
+    runtime: provider.runtime && typeof provider.runtime === 'object' ? provider.runtime : {},
+    skillSource: provider.skillSource && typeof provider.skillSource === 'object' ? provider.skillSource : null,
+    capabilities: Array.isArray(provider.capabilities)
+      ? provider.capabilities.map((capability) => ({
+        slug: String(capability.slug || '').trim(),
+        repoDir: String(capability.repoDir || '').trim(),
+        module: String(capability.module || '').trim(),
+        command: String(capability.command || '').trim(),
+        skillPath: String(capability.skillPath || '').trim(),
+        probe: capability.probe && typeof capability.probe === 'object' ? capability.probe : { type: 'wrapper_only' },
+      })).filter((capability) => capability.slug && capability.command)
+      : [],
+  })).filter((provider) =>
+    provider.slug &&
+    provider.displayName &&
+    provider.runtime &&
+    provider.capabilities.length > 0,
   )
 }
 
@@ -709,6 +818,392 @@ async function writeCliAnythingWrappers(assetsDir, pythonBinaryRelative, capabil
   }
 }
 
+function packageNamePath(packageName) {
+  return packageName.split('/').filter(Boolean).join('/')
+}
+
+async function installManagedNodePackages(directory, providers, targetPlatform) {
+  const packageSpecs = providers
+    .filter((provider) => provider.runtime?.type === 'npm_package' && runtimeSupportsTarget(provider.runtime, targetPlatform))
+    .map((provider) => ({
+      packageName: String(provider.runtime.packageName || '').trim(),
+      packageVersion: String(provider.runtime.packageVersion || '').trim(),
+    }))
+    .filter((entry) => entry.packageName && entry.packageVersion)
+    .map((entry) => `${entry.packageName}@${entry.packageVersion}`)
+
+  if (packageSpecs.length === 0) {
+    return
+  }
+
+  await runCommand('npm', ['install', '--omit=dev', '--no-fund', '--no-audit', ...packageSpecs], {
+    cwd: directory,
+    shell: process.platform === 'win32',
+  })
+}
+
+function buildManagedNodeWrapperContent(scriptRelativePath, targetPlatform) {
+  const pathListSeparator = cliAnythingWrapperPathListSeparator(targetPlatform)
+  return [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+    'ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"',
+    'if [ -n "${NODE_PATH:-}" ]; then',
+    `  export NODE_PATH="${'$'}{ROOT_DIR}/${COMMANDLINE_NODE_MODULES_DIR}${pathListSeparator}${'$'}{NODE_PATH}"`,
+    'else',
+    `  export NODE_PATH="${'$'}{ROOT_DIR}/${COMMANDLINE_NODE_MODULES_DIR}"`,
+    'fi',
+    `exec node "${'$'}ROOT_DIR/${scriptRelativePath}" "${'$'}@"`,
+    '',
+  ].join('\n')
+}
+
+async function writeManagedNodeWrappers(assetsDir, providers, targetPlatform) {
+  const managedBinDir = join(assetsDir, COMMANDLINE_MANAGED_BIN_DIR)
+  await mkdir(managedBinDir, { recursive: true })
+
+  const wrapperPaths = []
+  const managedProviders = []
+  const managedCapabilities = []
+
+  for (const provider of providers) {
+    if (provider.runtime?.type !== 'npm_package' || !runtimeSupportsTarget(provider.runtime, targetPlatform)) {
+      continue
+    }
+    const packageName = String(provider.runtime.packageName || '').trim()
+    const packageVersion = String(provider.runtime.packageVersion || '').trim()
+    const runner = String(provider.runtime.runner || '').trim()
+    if (!packageName || !packageVersion || !runner) {
+      continue
+    }
+
+    const scriptRelativePath = `${COMMANDLINE_NODE_MODULES_DIR}/${packageNamePath(packageName)}/${runner}`
+    managedProviders.push({
+      slug: provider.slug,
+      displayName: provider.displayName,
+      runtimeType: provider.runtime.type,
+      version: packageVersion,
+    })
+
+    for (const capability of provider.capabilities) {
+      const wrapperPath = join(managedBinDir, capability.command)
+      await writeFile(
+        wrapperPath,
+        buildManagedNodeWrapperContent(scriptRelativePath, targetPlatform),
+        'utf8',
+      )
+      if (!targetPlatform.startsWith('windows-')) {
+        await runCommand('chmod', ['755', wrapperPath])
+      }
+      wrapperPaths.push(normalizeRelativePath(assetsDir, wrapperPath))
+      managedCapabilities.push({
+        provider: provider.slug,
+        providerDisplayName: provider.displayName,
+        slug: capability.slug,
+        command: capability.command,
+        module: capability.module,
+        version: packageVersion,
+        probe: capability.probe,
+      })
+    }
+  }
+
+  return {
+    wrapperPaths,
+    managedProviders,
+    managedCapabilities,
+  }
+}
+
+function buildManagedPythonEntrypointWrapperContent(pythonBinaryRelative, capability, targetPlatform) {
+  const [modulePath, functionName] = String(capability.entryPointTarget || '').split(':', 2)
+  const pathListSeparator = cliAnythingWrapperPathListSeparator(targetPlatform)
+  const pythonCode = [
+    'import importlib, sys',
+    `sys.argv[0] = ${JSON.stringify(capability.command)}`,
+    `module = importlib.import_module(${JSON.stringify(modulePath)})`,
+    `raise SystemExit(getattr(module, ${JSON.stringify(functionName || 'main')})())`,
+  ].join('; ')
+
+  return [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+    'ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"',
+    `PYTHON_BIN="${'$'}ROOT_DIR/${pythonBinaryRelative}"`,
+    `export PYTHONHOME="${'$'}{ROOT_DIR}/${COMMANDLINE_PYTHON_HOME_DIR}"`,
+    'if [ -n "${PYTHONPATH:-}" ]; then',
+    `  export PYTHONPATH="${'$'}{ROOT_DIR}/${COMMANDLINE_PYTHON_SITE_PACKAGES_DIR}${pathListSeparator}${'$'}{PYTHONPATH}"`,
+    'else',
+    `  export PYTHONPATH="${'$'}{ROOT_DIR}/${COMMANDLINE_PYTHON_SITE_PACKAGES_DIR}"`,
+    'fi',
+    'export PYTHONUTF8=1',
+    `exec "${'$'}PYTHON_BIN" -c '${pythonCode}' "${'$'}@"`,
+    '',
+  ].join('\n')
+}
+
+function resolveManagedPythonInstallSpec(provider, providerRoots) {
+  const packageName = String(provider.runtime.packageName || '').trim()
+  const packageVersion = String(provider.runtime.packageVersion || '').trim()
+  const source = String(provider.runtime.source || '').trim().toLowerCase()
+  if (source === 'subproject') {
+    const providerRoot = provider.subproject ? providerRoots.get(provider.slug) : ''
+    if (!providerRoot) {
+      throw new Error(`missing subproject checkout for python provider ${provider.slug}`)
+    }
+    return {
+      installSpec: providerRoot,
+      version: packageVersion || 'bundled',
+      allowSourceDists: true,
+    }
+  }
+  if (!packageName || !packageVersion) {
+    return null
+  }
+  return {
+    installSpec: `${packageName}==${packageVersion}`,
+    version: packageVersion,
+    allowSourceDists: false,
+  }
+}
+
+async function installManagedPythonPackages(targetPlatform, pythonVersion, targetDirectory, providers, providerRoots) {
+  const pythonSpec = PYTHON_DISTRIBUTIONS[targetPlatform]
+  if (!pythonSpec) {
+    throw new Error(`unsupported target platform ${targetPlatform}`)
+  }
+
+  const hostPython = process.env.PYTHON || (process.platform === 'win32' ? 'python' : 'python3')
+  for (const provider of providers) {
+    if (provider.runtime?.type !== 'python_package' || !runtimeSupportsTarget(provider.runtime, targetPlatform)) {
+      continue
+    }
+    const installSpec = resolveManagedPythonInstallSpec(provider, providerRoots)
+    if (!installSpec) {
+      continue
+    }
+    console.log(`Installing ${provider.displayName} ${installSpec.version} for ${targetPlatform}`)
+    const pipArgs = [
+      '-m',
+      'pip',
+      'install',
+      '--disable-pip-version-check',
+      '--no-compile',
+      '--upgrade',
+      '--target',
+      targetDirectory,
+    ]
+    const shouldAllowSourceDists = installSpec.allowSourceDists && targetPlatform === getNativeTargetPlatform()
+    if (!shouldAllowSourceDists) {
+      pipArgs.push(
+        '--only-binary=:all:',
+        '--implementation',
+        'cp',
+        '--python-version',
+        pythonVersion.split('.').slice(0, 2).join('.'),
+        '--abi',
+        `cp${pythonVersion.split('.').slice(0, 2).join('')}`,
+        '--platform',
+        pythonSpec.pipPlatform,
+      )
+    }
+    pipArgs.push(installSpec.installSpec)
+    await runCommand(hostPython, pipArgs, {
+      shell: process.platform === 'win32',
+    })
+  }
+}
+
+async function writeManagedPythonPackageWrappers(assetsDir, pythonBinaryRelative, providers, targetPlatform) {
+  const managedBinDir = join(assetsDir, COMMANDLINE_MANAGED_BIN_DIR)
+  await mkdir(managedBinDir, { recursive: true })
+
+  const wrapperPaths = []
+  const managedProviders = []
+  const managedCapabilities = []
+
+  for (const provider of providers) {
+    if (provider.runtime?.type !== 'python_package' || !runtimeSupportsTarget(provider.runtime, targetPlatform)) {
+      continue
+    }
+    const packageVersion = String(provider.runtime.packageVersion || '').trim()
+    const entryPointTarget = String(provider.runtime.entryPointTarget || '').trim()
+    if (!packageVersion || !entryPointTarget) {
+      continue
+    }
+
+    managedProviders.push({
+      slug: provider.slug,
+      displayName: provider.displayName,
+      runtimeType: provider.runtime.type,
+      version: packageVersion,
+    })
+
+    for (const capability of provider.capabilities) {
+      const wrapperPath = join(managedBinDir, capability.command)
+      await writeFile(
+        wrapperPath,
+        buildManagedPythonEntrypointWrapperContent(
+          pythonBinaryRelative,
+          {
+            ...capability,
+            entryPointTarget,
+          },
+          targetPlatform,
+        ),
+        'utf8',
+      )
+      if (!targetPlatform.startsWith('windows-')) {
+        await runCommand('chmod', ['755', wrapperPath])
+      }
+      wrapperPaths.push(normalizeRelativePath(assetsDir, wrapperPath))
+      managedCapabilities.push({
+        provider: provider.slug,
+        providerDisplayName: provider.displayName,
+        slug: capability.slug,
+        command: capability.command,
+        module: capability.module,
+        version: packageVersion,
+        probe: capability.probe,
+      })
+    }
+  }
+
+  return {
+    wrapperPaths,
+    managedProviders,
+    managedCapabilities,
+  }
+}
+
+function getReleaseArchiveExtension(targetPlatform) {
+  return targetPlatform.startsWith('windows-') ? 'zip' : 'tar.gz'
+}
+
+function getReleaseBinaryFileName(binaryName, targetPlatform) {
+  return targetPlatform.startsWith('windows-') ? `${binaryName}.exe` : binaryName
+}
+
+function inferArchiveType(archiveFileName) {
+  const normalized = String(archiveFileName || '').trim().toLowerCase()
+  if (normalized.endsWith('.zip')) {
+    return 'zip'
+  }
+  if (normalized.endsWith('.tar.gz') || normalized.endsWith('.tgz')) {
+    return 'tar'
+  }
+  throw new Error(`unsupported github release archive ${archiveFileName}`)
+}
+
+export function getGitHubReleaseBinarySpec(targetPlatform, runtime) {
+  const repository = String(runtime.repository || '').trim()
+  const releaseVersion = String(runtime.releaseVersion || '').trim()
+  const binaryName = String(runtime.binaryName || '').trim()
+  const [os, arch] = targetPlatform.split('-', 2)
+  if (!repository || !releaseVersion || !binaryName || !os || !arch) {
+    throw new Error(`invalid github release binary runtime definition for ${repository || binaryName || 'provider'}`)
+  }
+  const archiveFileNames = runtime.archiveFileNames && typeof runtime.archiveFileNames === 'object'
+    ? runtime.archiveFileNames
+    : {}
+  const overrideArchiveFileName = String(archiveFileNames[targetPlatform] || '').trim()
+  const archiveExt = getReleaseArchiveExtension(targetPlatform)
+  const archiveFileName = overrideArchiveFileName || `${binaryName}-${os}-${arch}.${archiveExt}`
+  return {
+    repository,
+    releaseVersion,
+    binaryName,
+    archiveType: inferArchiveType(archiveFileName),
+    archiveFileName,
+    binaryFileName: String(runtime.binaryFileName || '').trim() || getReleaseBinaryFileName(binaryName, targetPlatform),
+    url: `https://github.com/${repository}/releases/download/${releaseVersion}/${archiveFileName}`,
+  }
+}
+
+function buildManagedBinaryWrapperContent(binaryRelativePath) {
+  return [
+    '#!/usr/bin/env bash',
+    'set -euo pipefail',
+    'SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"',
+    'ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"',
+    `exec "${'$'}ROOT_DIR/${binaryRelativePath}" "${'$'}@"`,
+    '',
+  ].join('\n')
+}
+
+async function installManagedReleaseBinaryProviders(workDir, assetsDir, providers, targetPlatform) {
+  const managedBinDir = join(assetsDir, COMMANDLINE_MANAGED_BIN_DIR)
+  await mkdir(managedBinDir, { recursive: true })
+
+  const wrapperPaths = []
+  const bundledBinaryPaths = []
+  const managedProviders = []
+  const managedCapabilities = []
+
+  for (const provider of providers) {
+    if (provider.runtime?.type !== 'github_release_binary' || !runtimeSupportsTarget(provider.runtime, targetPlatform)) {
+      continue
+    }
+
+    const spec = getGitHubReleaseBinarySpec(targetPlatform, provider.runtime)
+    const archivePath = join(workDir, spec.archiveFileName)
+    const extractDir = join(workDir, `${provider.slug}-extract`)
+    await mkdir(extractDir, { recursive: true })
+
+    console.log(`Downloading ${provider.displayName} ${spec.releaseVersion} for ${targetPlatform}`)
+    await downloadFile(spec.url, archivePath)
+    await extractArchive(archivePath, extractDir, spec.archiveType)
+
+    const binaryCandidates = await findFiles(extractDir, (_entryPath, entryName) => entryName.toLowerCase() === spec.binaryFileName.toLowerCase())
+    const sourceBinary = binaryCandidates[0]
+    if (!sourceBinary) {
+      throw new Error(`failed to locate ${spec.binaryFileName} for ${provider.slug}`)
+    }
+
+    const providerDir = join(assetsDir, COMMANDLINE_PROVIDER_DIR, provider.slug)
+    await mkdir(providerDir, { recursive: true })
+    const targetBinaryPath = join(providerDir, spec.binaryFileName)
+    await copyFile(sourceBinary, targetBinaryPath)
+    const binaryRelativePath = normalizeRelativePath(assetsDir, targetBinaryPath)
+    bundledBinaryPaths.push(binaryRelativePath)
+
+    managedProviders.push({
+      slug: provider.slug,
+      displayName: provider.displayName,
+      runtimeType: provider.runtime.type,
+      version: spec.releaseVersion,
+    })
+
+    for (const capability of provider.capabilities) {
+      const wrapperPath = join(managedBinDir, capability.command)
+      await writeFile(wrapperPath, buildManagedBinaryWrapperContent(binaryRelativePath), 'utf8')
+      if (!targetPlatform.startsWith('windows-')) {
+        await runCommand('chmod', ['755', wrapperPath])
+        await runCommand('chmod', ['755', targetBinaryPath])
+      }
+      wrapperPaths.push(normalizeRelativePath(assetsDir, wrapperPath))
+      managedCapabilities.push({
+        provider: provider.slug,
+        providerDisplayName: provider.displayName,
+        slug: capability.slug,
+        command: capability.command,
+        module: capability.module,
+        version: spec.releaseVersion,
+        probe: capability.probe,
+      })
+    }
+  }
+
+  return {
+    wrapperPaths,
+    bundledBinaryPaths,
+    managedProviders,
+    managedCapabilities,
+  }
+}
+
 async function main() {
   const options = parseArgs(process.argv.slice(2))
   const scriptDir = dirname(fileURLToPath(import.meta.url))
@@ -718,8 +1213,20 @@ async function main() {
   const workDir = await mkdtemp(join(tmpdir(), 'commandlinebundle-'))
 
   try {
-    const cliAnythingRoot = await resolveRequiredSubprojectRoot(repoRoot, 'cli-anything')
-    const cliAnythingCapabilities = await loadCliAnythingManifest(relayRoot)
+    const managedProviderManifest = await loadManagedProviderManifest(relayRoot)
+    const providerRoots = new Map()
+    for (const provider of managedProviderManifest) {
+      if (!provider.subproject) {
+        continue
+      }
+      providerRoots.set(
+        provider.slug,
+        await resolveRequiredSubprojectRoot(repoRoot, provider.subproject),
+      )
+    }
+    const cliAnythingProvider = managedProviderManifest.find((provider) => provider.slug === 'cli-anything')
+    const cliAnythingRoot = cliAnythingProvider ? providerRoots.get(cliAnythingProvider.slug) : ''
+    const cliAnythingCapabilities = cliAnythingProvider?.capabilities || []
     const pythonSpec = getPythonSpec(options.targetPlatform, options.pythonVersion, options.pythonStandaloneRelease)
     const ffmpegSpec = getFFmpegSpec(options.targetPlatform, options.ffmpegReleaseTag)
     const sharedNodeManifest = await loadSharedNodeManifest(relayRoot, options.targetPlatform, options.nodeVersion)
@@ -739,6 +1246,7 @@ async function main() {
 
     console.log(`Preparing bundled Node packages (${options.packageProfile})`)
     await writeNodePackage(nodePackageDir)
+    await installManagedNodePackages(nodePackageDir, managedProviderManifest, options.targetPlatform)
 
     console.log(`Downloading Python ${options.pythonVersion} standalone runtime for ${options.targetPlatform}`)
     await downloadFile(pythonSpec.url, pythonArchivePath)
@@ -746,6 +1254,7 @@ async function main() {
 
     console.log(`Installing bundled Python packages (${options.packageProfile})`)
     await installPythonPackages(options.targetPlatform, options.pythonVersion, pythonPackageDir)
+    await installManagedPythonPackages(options.targetPlatform, options.pythonVersion, pythonPackageDir, managedProviderManifest, providerRoots)
 
     const ffmpegDownloadPath = join(ffmpegDownloadDir, ffmpegSpec.ffmpegFileName)
     const ffprobeDownloadPath = join(ffmpegDownloadDir, ffmpegSpec.ffprobeFileName)
@@ -783,12 +1292,15 @@ async function main() {
     if (prunedPythonDirs > 0) {
       console.log(`Pruned ${prunedPythonDirs} non-runtime Python package directories`)
     }
-    console.log(`Bundling CLI-Anything wave1 packages (${cliAnythingCapabilities.length} capabilities)`)
-    const bundledCliAnythingCapabilities = await copyCliAnythingPackages(
-      cliAnythingRoot,
-      join(assetsDir, COMMANDLINE_PYTHON_SITE_PACKAGES_DIR),
-      cliAnythingCapabilities,
-    )
+    let bundledCliAnythingCapabilities = []
+    if (cliAnythingRoot && cliAnythingCapabilities.length > 0) {
+      console.log(`Bundling CLI-Anything packages (${cliAnythingCapabilities.length} capabilities)`)
+      bundledCliAnythingCapabilities = await copyCliAnythingPackages(
+        cliAnythingRoot,
+        join(assetsDir, COMMANDLINE_PYTHON_SITE_PACKAGES_DIR),
+        cliAnythingCapabilities,
+      )
+    }
     await rm(join(assetsDir, COMMANDLINE_PYTHON_HOME_DIR, 'share', 'terminfo'), { recursive: true, force: true })
 
     const ffmpegBinary = options.targetPlatform.startsWith('windows-') ? `${COMMANDLINE_FFMPEG_DIR}/ffmpeg.exe` : `${COMMANDLINE_FFMPEG_DIR}/ffmpeg`
@@ -803,12 +1315,67 @@ async function main() {
     }
 
     const pythonBinaryRelative = normalizeRelativePath(assetsDir, pythonBinaryTarget)
-    const { managedBinDir, wrapperPaths } = await writeCliAnythingWrappers(
+    const cliAnythingWrapperResult = await writeCliAnythingWrappers(
       assetsDir,
       pythonBinaryRelative,
       bundledCliAnythingCapabilities,
       options.targetPlatform,
     )
+    const managedNodeWrapperResult = await writeManagedNodeWrappers(
+      assetsDir,
+      managedProviderManifest,
+      options.targetPlatform,
+    )
+    const managedPythonWrapperResult = await writeManagedPythonPackageWrappers(
+      assetsDir,
+      pythonBinaryRelative,
+      managedProviderManifest,
+      options.targetPlatform,
+    )
+    const managedReleaseBinaryResult = await installManagedReleaseBinaryProviders(
+      workDir,
+      assetsDir,
+      managedProviderManifest,
+      options.targetPlatform,
+    )
+    const unsupportedManagedEntries = collectUnsupportedManagedEntries(
+      managedProviderManifest,
+      options.targetPlatform,
+    )
+
+    const managedProviders = []
+    if (cliAnythingProvider) {
+      managedProviders.push({
+        slug: cliAnythingProvider.slug,
+        displayName: cliAnythingProvider.displayName,
+        runtimeType: String(cliAnythingProvider.runtime?.type || 'python_source'),
+        version: bundledCliAnythingCapabilities.length > 0
+          ? resolveManagedProviderVersion(bundledCliAnythingCapabilities.map((capability) => capability.version))
+          : 'bundled',
+      })
+    }
+    managedProviders.push(
+      ...managedNodeWrapperResult.managedProviders,
+      ...managedPythonWrapperResult.managedProviders,
+      ...managedReleaseBinaryResult.managedProviders,
+      ...unsupportedManagedEntries.managedProviders,
+    )
+
+    const managedCapabilities = [
+      ...bundledCliAnythingCapabilities.map((capability) => ({
+        provider: 'cli-anything',
+        providerDisplayName: cliAnythingProvider?.displayName || 'CLI-Anything',
+        slug: capability.slug,
+        command: capability.command,
+        module: capability.module,
+        version: capability.version,
+        probe: capability.probe,
+      })),
+      ...managedNodeWrapperResult.managedCapabilities,
+      ...managedPythonWrapperResult.managedCapabilities,
+      ...managedReleaseBinaryResult.managedCapabilities,
+      ...unsupportedManagedEntries.managedCapabilities,
+    ]
 
     if (options.targetPlatform === 'windows-amd64') {
       const gitSpec = getWindowsGitSpec(options.windowsGitVersion)
@@ -832,7 +1399,19 @@ async function main() {
       bashBinary = `${COMMANDLINE_GIT_DIR}/bin/bash.exe`
     }
 
-    const executables = [pythonBinaryRelative, ffmpegBinary, ffprobeBinary, ...wrapperPaths]
+    const wrapperPaths = [
+      ...cliAnythingWrapperResult.wrapperPaths,
+      ...managedNodeWrapperResult.wrapperPaths,
+      ...managedPythonWrapperResult.wrapperPaths,
+      ...managedReleaseBinaryResult.wrapperPaths,
+    ]
+    const executables = [
+      pythonBinaryRelative,
+      ffmpegBinary,
+      ffprobeBinary,
+      ...managedReleaseBinaryResult.bundledBinaryPaths,
+      ...wrapperPaths,
+    ]
     if (gitBinary) {
       executables.push(gitBinary)
     }
@@ -843,7 +1422,8 @@ async function main() {
     const assetVersion = getCommandlineAssetVersion(
       options,
       sharedNodeManifest.assetVersion,
-      bundledCliAnythingCapabilities,
+      managedProviders,
+      managedCapabilities,
     )
 
     const manifest = {
@@ -854,19 +1434,13 @@ async function main() {
       pythonHomeDir: COMMANDLINE_PYTHON_HOME_DIR,
       pythonBinary: pythonBinaryRelative,
       pythonSitePackagesDir: COMMANDLINE_PYTHON_SITE_PACKAGES_DIR,
-      managedBinDir,
+      managedBinDir: cliAnythingWrapperResult.managedBinDir,
       ffmpegBinary,
       ffprobeBinary,
       gitBinary,
       bashBinary,
-      cliAnythingCapabilities: bundledCliAnythingCapabilities.map((capability) => ({
-        slug: capability.slug,
-        command: capability.command,
-        module: capability.module,
-        version: capability.version,
-        entryPointTarget: capability.entryPointTarget,
-        probe: capability.probe,
-      })),
+      managedProviders,
+      managedCapabilities,
       packageProfile: options.packageProfile,
       ffmpegReleaseTag: options.ffmpegReleaseTag,
       assetVersion,

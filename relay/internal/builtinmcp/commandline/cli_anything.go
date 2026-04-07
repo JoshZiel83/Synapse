@@ -13,50 +13,82 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/commandlinebundle"
 )
 
-const commandlineProfile = "unified-bash-v1"
+const commandlineProfile = "unified-bash-v2"
 
 func (s *Server) buildMetadata() map[string]interface{} {
 	metadata := map[string]interface{}{
 		"commandlineProfile": commandlineProfile,
 	}
-	if s.installation == nil || len(s.installation.CliAnythingCapabilities) == 0 {
-		metadata["cliAnythingCapabilities"] = []map[string]interface{}{}
+	if s.installation == nil {
+		metadata["managedProviders"] = []map[string]interface{}{}
+		metadata["managedCapabilities"] = []map[string]interface{}{}
 		return metadata
 	}
 
-	capabilities := make([]map[string]interface{}, 0, len(s.installation.CliAnythingCapabilities))
-	for _, capability := range s.installation.CliAnythingCapabilities {
-		capabilities = append(capabilities, s.probeCliAnythingCapability(capability))
+	providerReadyCount := make(map[string]int, len(s.installation.ManagedProviders))
+	providerTotalCount := make(map[string]int, len(s.installation.ManagedProviders))
+	capabilities := make([]map[string]interface{}, 0, len(s.installation.ManagedCapabilities))
+	for _, capability := range s.installation.ManagedCapabilities {
+		report := s.probeManagedCapability(capability)
+		capabilities = append(capabilities, report)
+		providerTotalCount[capability.Provider]++
+		if ready, _ := report["ready"].(bool); ready {
+			providerReadyCount[capability.Provider]++
+		}
 	}
-	metadata["cliAnythingCapabilities"] = capabilities
+
+	providers := make([]map[string]interface{}, 0, len(s.installation.ManagedProviders))
+	for _, provider := range s.installation.ManagedProviders {
+		totalCount := providerTotalCount[provider.Slug]
+		readyCount := providerReadyCount[provider.Slug]
+		providers = append(providers, map[string]interface{}{
+			"slug":        provider.Slug,
+			"displayName": provider.DisplayName,
+			"runtimeType": provider.RuntimeType,
+			"version":     provider.Version,
+			"totalCount":  totalCount,
+			"readyCount":  readyCount,
+			"failedCount": totalCount - readyCount,
+		})
+	}
+
+	metadata["managedProviders"] = providers
+	metadata["managedCapabilities"] = capabilities
 	return metadata
 }
 
-func (s *Server) probeCliAnythingCapability(capability commandlinebundle.CliAnythingCapability) map[string]interface{} {
+func (s *Server) probeManagedCapability(capability commandlinebundle.ManagedCapability) map[string]interface{} {
 	report := map[string]interface{}{
-		"slug":    capability.Slug,
-		"command": capability.Command,
-		"module":  capability.Module,
-		"version": capability.Version,
-		"ready":   false,
-		"reason":  "cli-anything wrapper is unavailable",
+		"provider":            capability.Provider,
+		"providerDisplayName": capability.ProviderDisplayName,
+		"slug":                capability.Slug,
+		"command":             capability.Command,
+		"module":              capability.Module,
+		"version":             capability.Version,
+		"ready":               false,
+		"reason":              "managed command wrapper is unavailable",
 	}
 
-	wrapperPath := s.resolveCliAnythingWrapperPath(capability.Command)
+	if strings.TrimSpace(capability.UnavailableReason) != "" {
+		report["reason"] = capability.UnavailableReason
+		return report
+	}
+
+	wrapperPath := s.resolveManagedCommandPath(capability.Command)
 	if wrapperPath == "" {
 		return report
 	}
 
-	if ok, reason := s.checkCliAnythingWrapperCommand(wrapperPath); !ok {
+	if ok, reason := s.checkManagedCommandWrapper(wrapperPath); !ok {
 		report["reason"] = reason
 		return report
 	}
 
 	probe := capability.Probe
 	switch strings.TrimSpace(probe.Type) {
-	case "", "wrapper_only":
+	case "", "wrapper_only", "command_help":
 		report["ready"] = true
-		report["reason"] = "cli-anything wrapper is ready"
+		report["reason"] = "managed command is ready"
 		return report
 	case "executable_any":
 		resolved := resolveProbeExecutable(probe)
@@ -65,17 +97,17 @@ func (s *Server) probeCliAnythingCapability(capability commandlinebundle.CliAnyt
 			return report
 		}
 		report["ready"] = true
-		report["reason"] = fmt.Sprintf("cli-anything wrapper is ready; found dependency %s", resolved)
+		report["reason"] = fmt.Sprintf("managed command is ready; found dependency %s", resolved)
 		report["resolvedDependency"] = resolved
 		return report
 	default:
 		report["ready"] = true
-		report["reason"] = fmt.Sprintf("cli-anything wrapper is ready; unsupported probe type %q treated as wrapper-only", probe.Type)
+		report["reason"] = fmt.Sprintf("managed command is ready; unsupported probe type %q treated as wrapper-only", probe.Type)
 		return report
 	}
 }
 
-func (s *Server) resolveCliAnythingWrapperPath(command string) string {
+func (s *Server) resolveManagedCommandPath(command string) string {
 	if s.installation == nil || strings.TrimSpace(s.installation.ManagedBinDir) == "" || strings.TrimSpace(command) == "" {
 		return ""
 	}
@@ -83,16 +115,22 @@ func (s *Server) resolveCliAnythingWrapperPath(command string) string {
 	if _, err := os.Stat(path); err == nil {
 		return path
 	}
+	if runtime.GOOS == "windows" {
+		exePath := path + ".exe"
+		if _, err := os.Stat(exePath); err == nil {
+			return exePath
+		}
+	}
 	return ""
 }
 
-func (s *Server) checkCliAnythingWrapperCommand(wrapperPath string) (bool, string) {
+func (s *Server) checkManagedCommandWrapper(wrapperPath string) (bool, string) {
 	bashBinary, err := s.resolveBashBinary()
 	if err != nil {
 		return false, err.Error()
 	}
 	if strings.TrimSpace(wrapperPath) == "" {
-		return false, "cli-anything command is not configured"
+		return false, "managed command is not configured"
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
@@ -112,15 +150,15 @@ func (s *Server) checkCliAnythingWrapperCommand(wrapperPath string) (bool, strin
 	output, runErr := cmd.CombinedOutput()
 	if runErr != nil {
 		if ctx.Err() == context.DeadlineExceeded {
-			return false, "cli-anything wrapper help check timed out"
+			return false, "managed command help check timed out"
 		}
-		return false, fmt.Sprintf("cli-anything wrapper check failed: %s", summarizeCommandOutput(output, runErr))
+		return false, fmt.Sprintf("managed command check failed: %s", summarizeCommandOutput(output, runErr))
 	}
 
 	return true, ""
 }
 
-func resolveProbeExecutable(probe commandlinebundle.CliAnythingProbe) string {
+func resolveProbeExecutable(probe commandlinebundle.ManagedCapabilityProbe) string {
 	if envVar := strings.TrimSpace(probe.EnvPathVar); envVar != "" {
 		if value := strings.TrimSpace(os.Getenv(envVar)); value != "" {
 			if resolved := resolveExistingPath(value); resolved != "" {
@@ -219,12 +257,13 @@ func expandUserPath(value string) string {
 	switch value {
 	case "~":
 		return home
-	case "~/":
+	case "~/", "~\\":
 		return home + string(os.PathSeparator)
 	}
 
 	if strings.HasPrefix(value, "~/") || strings.HasPrefix(value, "~\\") {
-		return filepath.Join(home, value[2:])
+		remainder := strings.TrimLeft(value[1:], "/\\")
+		return filepath.Join(home, filepath.FromSlash(strings.ReplaceAll(remainder, "\\", "/")))
 	}
 
 	return value
@@ -247,30 +286,31 @@ func uniqueNonEmptyStrings(values []string) []string {
 	return result
 }
 
-func missingExecutableReason(probe commandlinebundle.CliAnythingProbe) string {
-	parts := make([]string, 0, 3)
+func missingExecutableReason(probe commandlinebundle.ManagedCapabilityProbe) string {
 	if envVar := strings.TrimSpace(probe.EnvPathVar); envVar != "" {
-		parts = append(parts, fmt.Sprintf("env %s", envVar))
+		return fmt.Sprintf("managed command wrapper is ready; dependency probe failed, set %s or install one of: %s", envVar, joinProbeCandidates(probe))
 	}
-	if len(probe.Candidates) > 0 {
-		parts = append(parts, fmt.Sprintf("PATH candidates [%s]", strings.Join(probe.Candidates, ", ")))
+	return fmt.Sprintf("managed command wrapper is ready; dependency probe failed, install one of: %s", joinProbeCandidates(probe))
+}
+
+func joinProbeCandidates(probe commandlinebundle.ManagedCapabilityProbe) string {
+	candidates := uniqueNonEmptyStrings(append(append([]string{}, probe.Candidates...), probe.Paths...))
+	if len(candidates) == 0 {
+		return "the required dependency"
 	}
-	if len(probe.Paths) > 0 {
-		parts = append(parts, fmt.Sprintf("known paths [%s]", strings.Join(probe.Paths, ", ")))
-	}
-	if len(parts) == 0 {
-		return "required local dependency is missing"
-	}
-	return fmt.Sprintf("required local dependency is missing (%s)", strings.Join(parts, "; "))
+	return strings.Join(candidates, ", ")
 }
 
 func summarizeCommandOutput(output []byte, runErr error) string {
-	trimmed := strings.TrimSpace(string(output))
-	if trimmed == "" {
+	text := strings.TrimSpace(string(output))
+	switch {
+	case text == "" && runErr != nil:
 		return runErr.Error()
+	case text == "":
+		return "unknown failure"
+	case runErr == nil:
+		return text
+	default:
+		return fmt.Sprintf("%v; %s", runErr, text)
 	}
-	if len(trimmed) > 240 {
-		trimmed = trimmed[:240] + "..."
-	}
-	return trimmed
 }

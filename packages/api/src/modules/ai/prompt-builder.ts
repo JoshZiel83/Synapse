@@ -206,7 +206,7 @@ function buildToolRoutingGuidance(
 
   if (hasToolBaseName(tools, ["bash"])) {
     lines.push(
-      "- Reserve relay `bash` for shell commands that dedicated tools cannot handle. The bundled commandline runtime already places git, node, python, ffmpeg, and cli-anything wrappers on PATH.",
+      "- Reserve relay `bash` for shell commands that dedicated tools cannot handle. The bundled commandline runtime already places git, gh, node, python, ffmpeg, and managed upstream CLI wrappers on PATH.",
     );
     lines.push(
       "- Relay `bash` accepts `execution_mode`. Use `execution_mode: \"async\"` for long-running shell or CLI jobs when you do not need the final output in the current reasoning step. Synapse will create a background task now and wake you later with the result.",

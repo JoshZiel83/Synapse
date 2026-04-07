@@ -36,11 +36,11 @@ func TestListToolsDescriptionsPreferDedicatedTools(t *testing.T) {
 	if !strings.Contains(description, "dedicated filesystem tools") {
 		t.Fatalf("expected bash description to prefer dedicated filesystem tools, got %q", description)
 	}
-	if !strings.Contains(description, "git, node, python") {
+	if !strings.Contains(description, "git, gh, node, python") {
 		t.Fatalf("expected bash description to mention bundled runtimes, got %q", description)
 	}
-	if !strings.Contains(description, "cli-anything wrappers") {
-		t.Fatalf("expected bash description to mention cli-anything wrappers, got %q", description)
+	if !strings.Contains(description, "upstream CLI wrappers") {
+		t.Fatalf("expected bash description to mention managed upstream wrappers, got %q", description)
 	}
 
 	schema := server.shellSchema()

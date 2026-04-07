@@ -1,3 +1,30 @@
 [submodule "subprojects/cli-anything"]
 	path = subprojects/cli-anything
 	url = https://github.com/HKUDS/CLI-Anything
+[submodule "subprojects/lark-cli"]
+	path = subprojects/lark-cli
+	url = https://github.com/larksuite/cli
+[submodule "subprojects/dingtalk-workspace-cli"]
+	path = subprojects/dingtalk-workspace-cli
+	url = https://github.com/DingTalk-Real-AI/dingtalk-workspace-cli
+[submodule "subprojects/wecom-cli"]
+	path = subprojects/wecom-cli
+	url = https://github.com/WecomTeam/wecom-cli
+[submodule "subprojects/notion-skills"]
+	path = subprojects/notion-skills
+	url = https://github.com/makenotion/skills
+[submodule "subprojects/xiaohongshu-cli"]
+	path = subprojects/xiaohongshu-cli
+	url = https://github.com/jackwener/xiaohongshu-cli
+[submodule "subprojects/bilibili-cli"]
+	path = subprojects/bilibili-cli
+	url = https://github.com/jackwener/bilibili-cli
+[submodule "subprojects/twitter-cli"]
+	path = subprojects/twitter-cli
+	url = https://github.com/jackwener/twitter-cli
+[submodule "subprojects/discord-cli"]
+	path = subprojects/discord-cli
+	url = https://github.com/jackwener/discord-cli
+[submodule "subprojects/tg-cli"]
+	path = subprojects/tg-cli
+	url = https://github.com/jackwener/tg-cli

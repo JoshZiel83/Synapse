@@ -6,26 +6,39 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/mcp"
 )
 
-func TestCollectCLIAnythingCapabilityStatusesParsesServerMetadata(t *testing.T) {
+func TestCollectManagedCapabilityStatusesParsesServerMetadata(t *testing.T) {
 	servers := []mcp.ServerInfo{
 		{
 			StableKey: "commandline",
 			Name:      "Command Line",
 			Metadata: map[string]interface{}{
-				"cliAnythingCapabilities": []interface{}{
+				"managedCapabilities": []interface{}{
 					map[string]interface{}{
-						"command": "cli-anything-b",
-						"module":  "demo-b",
-						"version": "1.0.0",
-						"ready":   false,
-						"reason":  "wrapper check failed",
+						"provider":            "cli-anything",
+						"providerDisplayName": "CLI-Anything",
+						"command":             "cli-anything-b",
+						"module":              "demo-b",
+						"version":             "1.0.0",
+						"ready":               false,
+						"reason":              "wrapper check failed",
 					},
 					map[string]interface{}{
-						"command": "cli-anything-a",
-						"module":  "demo-a",
-						"version": "1.0.0",
-						"ready":   true,
-						"reason":  "ready",
+						"provider":            "lark-cli",
+						"providerDisplayName": "Lark CLI",
+						"command":             "lark-cli",
+						"module":              "",
+						"version":             "1.0.4",
+						"ready":               true,
+						"reason":              "ready",
+					},
+					map[string]interface{}{
+						"provider":            "cli-anything",
+						"providerDisplayName": "CLI-Anything",
+						"command":             "cli-anything-a",
+						"module":              "demo-a",
+						"version":             "1.0.0",
+						"ready":               true,
+						"reason":              "ready",
 					},
 				},
 			},
@@ -37,12 +50,12 @@ func TestCollectCLIAnythingCapabilityStatusesParsesServerMetadata(t *testing.T) 
 		},
 	}
 
-	grouped := collectCLIAnythingCapabilityStatuses(servers)
-	if len(grouped) != 1 {
-		t.Fatalf("expected 1 grouped server, got %d", len(grouped))
+	grouped := collectManagedCapabilityStatuses(servers)
+	if len(grouped) != 2 {
+		t.Fatalf("expected 2 grouped providers, got %d", len(grouped))
 	}
 	if len(grouped[0]) != 2 {
-		t.Fatalf("expected 2 capability statuses, got %d", len(grouped[0]))
+		t.Fatalf("expected 2 cli-anything statuses, got %d", len(grouped[0]))
 	}
 
 	first := grouped[0][0]
@@ -65,5 +78,16 @@ func TestCollectCLIAnythingCapabilityStatusesParsesServerMetadata(t *testing.T) 
 	}
 	if second.Reason != "wrapper check failed" {
 		t.Fatalf("unexpected reason %q", second.Reason)
+	}
+
+	providerGroup := grouped[1]
+	if len(providerGroup) != 1 {
+		t.Fatalf("expected 1 lark-cli status, got %d", len(providerGroup))
+	}
+	if providerGroup[0].Provider != "lark-cli" {
+		t.Fatalf("expected lark-cli provider, got %q", providerGroup[0].Provider)
+	}
+	if providerGroup[0].Command != "lark-cli" {
+		t.Fatalf("expected lark-cli command, got %q", providerGroup[0].Command)
 	}
 }

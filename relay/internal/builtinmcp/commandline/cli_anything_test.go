@@ -22,7 +22,7 @@ func TestResolveCliAnythingWrapperPathFindsManagedWrapper(t *testing.T) {
 		},
 	}
 
-	got := server.resolveCliAnythingWrapperPath("cli-anything-demo")
+	got := server.resolveManagedCommandPath("cli-anything-demo")
 	if got != wrapperPath {
 		t.Fatalf("expected wrapper path %q, got %q", wrapperPath, got)
 	}
@@ -64,5 +64,25 @@ func TestResolveExecutableFromAugmentedSearchPathsFindsMacStyleTool(t *testing.T
 	}
 	if got != toolPath {
 		t.Fatalf("expected augmented search path %q, got %q", toolPath, got)
+	}
+}
+
+func TestProbeManagedCapabilityReturnsUnavailableReasonWithoutWrapper(t *testing.T) {
+	server := &Server{}
+
+	report := server.probeManagedCapability(commandlinebundle.ManagedCapability{
+		Provider:            "notion-skills",
+		ProviderDisplayName: "Notion Skills",
+		Slug:                "ntn",
+		Command:             "ntn",
+		Version:             "0.5.6",
+		UnavailableReason:   "Notion Skills is not officially supported on windows-amd64",
+	})
+
+	if ready, _ := report["ready"].(bool); ready {
+		t.Fatalf("expected unsupported capability to remain unready")
+	}
+	if got, _ := report["reason"].(string); got != "Notion Skills is not officially supported on windows-amd64" {
+		t.Fatalf("unexpected unavailable reason %q", got)
 	}
 }
