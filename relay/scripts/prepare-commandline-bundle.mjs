@@ -1094,16 +1094,17 @@ function inferArchiveType(archiveFileName) {
   if (normalized.endsWith('.tar.gz') || normalized.endsWith('.tgz')) {
     return 'tar'
   }
-  throw new Error(`unsupported github release archive ${archiveFileName}`)
+  throw new Error(`unsupported release archive ${archiveFileName}`)
 }
 
-export function getGitHubReleaseBinarySpec(targetPlatform, runtime) {
+export function getReleaseBinarySpec(targetPlatform, runtime) {
   const repository = String(runtime.repository || '').trim()
   const releaseVersion = String(runtime.releaseVersion || '').trim()
   const binaryName = String(runtime.binaryName || '').trim()
+  const runtimeType = String(runtime.type || '').trim()
   const [os, arch] = targetPlatform.split('-', 2)
-  if (!repository || !releaseVersion || !binaryName || !os || !arch) {
-    throw new Error(`invalid github release binary runtime definition for ${repository || binaryName || 'provider'}`)
+  if (!repository || !releaseVersion || !binaryName || !runtimeType || !os || !arch) {
+    throw new Error(`invalid release binary runtime definition for ${repository || binaryName || 'provider'}`)
   }
   const archiveFileNames = runtime.archiveFileNames && typeof runtime.archiveFileNames === 'object'
     ? runtime.archiveFileNames
@@ -1111,6 +1112,17 @@ export function getGitHubReleaseBinarySpec(targetPlatform, runtime) {
   const overrideArchiveFileName = String(archiveFileNames[targetPlatform] || '').trim()
   const archiveExt = getReleaseArchiveExtension(targetPlatform)
   const archiveFileName = overrideArchiveFileName || `${binaryName}-${os}-${arch}.${archiveExt}`
+  let url = ''
+  switch (runtimeType) {
+    case 'github_release_binary':
+      url = `https://github.com/${repository}/releases/download/${releaseVersion}/${archiveFileName}`
+      break
+    case 'gitlab_release_binary':
+      url = `https://gitlab.com/${repository}/-/releases/${releaseVersion}/downloads/${archiveFileName}`
+      break
+    default:
+      throw new Error(`unsupported release binary runtime type ${runtimeType}`)
+  }
   return {
     repository,
     releaseVersion,
@@ -1118,7 +1130,7 @@ export function getGitHubReleaseBinarySpec(targetPlatform, runtime) {
     archiveType: inferArchiveType(archiveFileName),
     archiveFileName,
     binaryFileName: String(runtime.binaryFileName || '').trim() || getReleaseBinaryFileName(binaryName, targetPlatform),
-    url: `https://github.com/${repository}/releases/download/${releaseVersion}/${archiveFileName}`,
+    url,
   }
 }
 
@@ -1143,11 +1155,11 @@ async function installManagedReleaseBinaryProviders(workDir, assetsDir, provider
   const managedCapabilities = []
 
   for (const provider of providers) {
-    if (provider.runtime?.type !== 'github_release_binary' || !runtimeSupportsTarget(provider.runtime, targetPlatform)) {
+    if (!['github_release_binary', 'gitlab_release_binary'].includes(String(provider.runtime?.type || '')) || !runtimeSupportsTarget(provider.runtime, targetPlatform)) {
       continue
     }
 
-    const spec = getGitHubReleaseBinarySpec(targetPlatform, provider.runtime)
+    const spec = getReleaseBinarySpec(targetPlatform, provider.runtime)
     const archivePath = join(workDir, spec.archiveFileName)
     const extractDir = join(workDir, `${provider.slug}-extract`)
     await mkdir(extractDir, { recursive: true })

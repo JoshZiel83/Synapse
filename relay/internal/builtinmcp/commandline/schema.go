@@ -13,7 +13,7 @@ func (s *Server) buildTools() []core.Tool {
 	if _, err := s.resolveBashBinary(); err == nil {
 		tools = append(tools, core.Tool{
 			Name:        "bash",
-			Description: "Execute one bash command with the relay commandline runtime. Prefer dedicated filesystem tools for path discovery, search, reads, and edits when available. Use cwd instead of relying on cd or shell state across calls. Returns stdout, stderr, exitCode, and timeout metadata. The bundled environment places bash, git, gh, node, python, ffmpeg, ffprobe, and managed upstream CLI wrappers on PATH.",
+			Description: "Execute one bash command with the relay commandline runtime. Prefer dedicated filesystem tools for path discovery, search, reads, and edits when available. Use cwd instead of relying on cd or shell state across calls. Returns stdout, stderr, exitCode, and timeout metadata. The bundled environment places bash, git, gh, glab, node, python, ffmpeg, ffprobe, and managed upstream CLI wrappers on PATH.",
 			InputSchema: s.shellSchema(),
 		})
 	}

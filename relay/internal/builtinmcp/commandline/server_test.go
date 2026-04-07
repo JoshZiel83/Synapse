@@ -36,7 +36,7 @@ func TestListToolsDescriptionsPreferDedicatedTools(t *testing.T) {
 	if !strings.Contains(description, "dedicated filesystem tools") {
 		t.Fatalf("expected bash description to prefer dedicated filesystem tools, got %q", description)
 	}
-	if !strings.Contains(description, "git, gh, node, python") {
+	if !strings.Contains(description, "git, gh, glab, node, python") {
 		t.Fatalf("expected bash description to mention bundled runtimes, got %q", description)
 	}
 	if !strings.Contains(description, "upstream CLI wrappers") {

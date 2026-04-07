@@ -591,6 +591,32 @@
           }
         }
       ]
+    },
+    {
+      "slug": "gitlab-cli",
+      "displayName": "GitLab CLI",
+      "runtime": {
+        "type": "gitlab_release_binary",
+        "repository": "gitlab-org/cli",
+        "releaseVersion": "v1.91.0",
+        "binaryName": "glab",
+        "archiveFileNames": {
+          "windows-amd64": "glab_1.91.0_windows_amd64.zip",
+          "linux-amd64": "glab_1.91.0_linux_amd64.tar.gz",
+          "linux-arm64": "glab_1.91.0_linux_arm64.tar.gz",
+          "darwin-amd64": "glab_1.91.0_darwin_amd64.tar.gz",
+          "darwin-arm64": "glab_1.91.0_darwin_arm64.tar.gz"
+        }
+      },
+      "capabilities": [
+        {
+          "slug": "glab",
+          "command": "glab",
+          "probe": {
+            "type": "command_help"
+          }
+        }
+      ]
     }
   ]
 }

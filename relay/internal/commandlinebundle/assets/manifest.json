@@ -73,6 +73,12 @@
       "version": "v2.89.0"
     },
     {
+      "slug": "gitlab-cli",
+      "displayName": "GitLab CLI",
+      "runtimeType": "gitlab_release_binary",
+      "version": "v1.91.0"
+    },
+    {
       "slug": "notion-skills",
       "displayName": "Notion Skills",
       "runtimeType": "npm_package",
@@ -555,6 +561,17 @@
       }
     },
     {
+      "provider": "gitlab-cli",
+      "providerDisplayName": "GitLab CLI",
+      "slug": "glab",
+      "command": "glab",
+      "module": "",
+      "version": "v1.91.0",
+      "probe": {
+        "type": "command_help"
+      }
+    },
+    {
       "provider": "notion-skills",
       "providerDisplayName": "Notion Skills",
       "slug": "ntn",
@@ -569,13 +586,14 @@
   ],
   "packageProfile": "default-data-v5",
   "ffmpegReleaseTag": "n7.1-2",
-  "assetVersion": "cl-cc1040facce4",
+  "assetVersion": "cl-e2de7a96e72b",
   "executables": [
     "py/python.exe",
     "ff/ffmpeg.exe",
     "ff/ffprobe.exe",
     "providers/dingtalk-workspace-cli/dws.exe",
     "providers/github-cli/gh.exe",
+    "providers/gitlab-cli/glab.exe",
     "bin/cli-anything-adguardhome",
     "bin/cli-anything-anygen",
     "bin/cli-anything-blender",
@@ -611,6 +629,7 @@
     "bin/tg",
     "bin/dws",
     "bin/gh",
+    "bin/glab",
     "git/cmd/git.exe",
     "git/bin/bash.exe"
   ]
