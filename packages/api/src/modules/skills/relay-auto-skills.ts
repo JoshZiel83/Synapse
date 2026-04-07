@@ -11,7 +11,6 @@ import {
   resolveRepoSubprojectPath,
   type RepoSubprojectName,
 } from "../../config/subprojects.js";
-import { listVisibleHealthyRelayCommandlineExposureMetadata } from "../mcp-plugins/tool-resolver.js";
 
 type ManagedCapabilityManifestEntry = {
   slug: string;
@@ -57,6 +56,24 @@ const relayAutoSkillManifestPath = resolveRepoPath(
 );
 
 let relayAutoSkillIndexPromise: Promise<RelayAutoSkillDefinition[]> | null = null;
+let relayAutoSkillManifestPathOverride: string | null = null;
+
+function getRelayAutoSkillManifestPath() {
+  return relayAutoSkillManifestPathOverride || relayAutoSkillManifestPath;
+}
+
+function resetRelayAutoSkillIndexCache() {
+  relayAutoSkillIndexPromise = null;
+}
+
+export function __resetRelayAutoSkillIndexCacheForTests() {
+  resetRelayAutoSkillIndexCache();
+}
+
+export function __setRelayAutoSkillManifestPathForTests(path?: string) {
+  relayAutoSkillManifestPathOverride = path?.trim() || null;
+  resetRelayAutoSkillIndexCache();
+}
 
 function parseManagedProviders(raw: unknown): ManagedProviderManifest[] {
   const providers = Array.isArray((raw as any)?.providers)
@@ -262,6 +279,51 @@ async function loadSkillDefinition(input: {
   } satisfies RelayAutoSkillDefinition;
 }
 
+function summarizeRelayAutoSkillError(error: unknown) {
+  if (!error) return "unknown error";
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  return String(error);
+}
+
+function logRelayAutoSkillWarning(
+  providerSlug: string,
+  context: string,
+  error: unknown,
+) {
+  console.warn(
+    `[relay-auto-skills] skipping ${providerSlug} ${context}: ${summarizeRelayAutoSkillError(error)}`,
+  );
+}
+
+async function tryLoadSkillDefinition(
+  provider: ManagedProviderManifest,
+  input: {
+    capabilitySlug: string;
+    rawSkillSlug: string;
+    skillsDir: string;
+    fallbackDescription: string;
+  },
+) {
+  try {
+    return await loadSkillDefinition({
+      providerSlug: provider.slug,
+      capabilitySlug: input.capabilitySlug,
+      rawSkillSlug: input.rawSkillSlug,
+      skillsDir: input.skillsDir,
+      fallbackDescription: input.fallbackDescription,
+    });
+  } catch (error) {
+    logRelayAutoSkillWarning(
+      provider.slug,
+      `skill ${input.rawSkillSlug}`,
+      error,
+    );
+    return null;
+  }
+}
+
 async function loadProviderSkillDefinitions(provider: ManagedProviderManifest) {
   const definitions: RelayAutoSkillDefinition[] = [];
 
@@ -276,15 +338,15 @@ async function loadProviderSkillDefinitions(provider: ManagedProviderManifest) {
       provider.subproject,
       ...capability.skillPath.split("/"),
     );
-    definitions.push(
-      await loadSkillDefinition({
-        providerSlug: provider.slug,
-        capabilitySlug: capability.slug,
-        rawSkillSlug: capability.slug,
-        skillsDir,
-        fallbackDescription: `Companion skill for ${capability.command} via relay bash.`,
-      }),
-    );
+    const definition = await tryLoadSkillDefinition(provider, {
+      capabilitySlug: capability.slug,
+      rawSkillSlug: capability.slug,
+      skillsDir,
+      fallbackDescription: `Companion skill for ${capability.command} via relay bash.`,
+    });
+    if (definition) {
+      definitions.push(definition);
+    }
   }
 
   if (!provider.skillSource || !provider.subproject) {
@@ -297,21 +359,27 @@ async function loadProviderSkillDefinitions(provider: ManagedProviderManifest) {
       provider.subproject,
       ...basePath.split("/"),
     );
-    const entries = await readdir(baseDir, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await readdir(baseDir, { withFileTypes: true });
+    } catch (error) {
+      logRelayAutoSkillWarning(provider.slug, `skill directory ${basePath}`, error);
+      return definitions;
+    }
     for (const entry of entries) {
       if (!entry.isDirectory()) {
         continue;
       }
       const skillsDir = join(baseDir, entry.name);
-      definitions.push(
-        await loadSkillDefinition({
-          providerSlug: provider.slug,
-          capabilitySlug: provider.skillSource.capabilitySlug,
-          rawSkillSlug: entry.name,
-          skillsDir,
-          fallbackDescription: `Companion skill for ${provider.displayName} via relay bash.`,
-        }),
-      );
+      const definition = await tryLoadSkillDefinition(provider, {
+        capabilitySlug: provider.skillSource.capabilitySlug,
+        rawSkillSlug: entry.name,
+        skillsDir,
+        fallbackDescription: `Companion skill for ${provider.displayName} via relay bash.`,
+      });
+      if (definition) {
+        definitions.push(definition);
+      }
     }
     return definitions;
   }
@@ -325,23 +393,23 @@ async function loadProviderSkillDefinitions(provider: ManagedProviderManifest) {
     provider.skillSource.skillSlug ||
     basename(skillsDir) ||
     provider.skillSource.capabilitySlug;
-  definitions.push(
-    await loadSkillDefinition({
-      providerSlug: provider.slug,
-      capabilitySlug: provider.skillSource.capabilitySlug,
-      rawSkillSlug,
-      skillsDir,
-      fallbackDescription: `Companion skill for ${provider.displayName} via relay bash.`,
-    }),
-  );
+  const definition = await tryLoadSkillDefinition(provider, {
+    capabilitySlug: provider.skillSource.capabilitySlug,
+    rawSkillSlug,
+    skillsDir,
+    fallbackDescription: `Companion skill for ${provider.displayName} via relay bash.`,
+  });
+  if (definition) {
+    definitions.push(definition);
+  }
   return definitions;
 }
 
 async function loadRelayAutoSkillIndex() {
   if (!relayAutoSkillIndexPromise) {
-    relayAutoSkillIndexPromise = (async () => {
+    const pending = (async () => {
       const manifest = JSON.parse(
-        await readFile(relayAutoSkillManifestPath, "utf8"),
+        await readFile(getRelayAutoSkillManifestPath(), "utf8"),
       );
       const providers = parseManagedProviders(manifest);
       const definitions: RelayAutoSkillDefinition[] = [];
@@ -352,6 +420,10 @@ async function loadRelayAutoSkillIndex() {
 
       return definitions.sort((left, right) => left.slug.localeCompare(right.slug));
     })();
+    relayAutoSkillIndexPromise = pending.catch((error) => {
+      resetRelayAutoSkillIndexCache();
+      throw error;
+    });
   }
 
   return relayAutoSkillIndexPromise;
@@ -438,6 +510,20 @@ function findRelayAutoSkillDefinition(
   );
 }
 
+async function loadVisibleHealthyRelayCommandlineExposureMetadata(input: {
+  workspaceId: string;
+  actorId: string;
+  sessionId: string;
+  conversationId: string;
+  conversationKind?: "private" | "group" | "virtual";
+  conversationBoundary?: "internal" | "external";
+}) {
+  const { listVisibleHealthyRelayCommandlineExposureMetadata } = await import(
+    "../mcp-plugins/tool-resolver.js"
+  );
+  return listVisibleHealthyRelayCommandlineExposureMetadata(input);
+}
+
 export async function listRelayAutoLoadedSkills(input: {
   workspaceId: string;
   actorId?: string;
@@ -455,7 +541,7 @@ export async function listRelayAutoLoadedSkills(input: {
   try {
     [definitions, exposureMetadata] = await Promise.all([
       loadRelayAutoSkillIndex(),
-      listVisibleHealthyRelayCommandlineExposureMetadata({
+      loadVisibleHealthyRelayCommandlineExposureMetadata({
         workspaceId: input.workspaceId,
         actorId: input.actorId,
         sessionId: input.sessionId,
