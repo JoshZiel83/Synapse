@@ -9,13 +9,6 @@ import { seedBuiltinMcpPlugins } from "../../modules/mcp-plugins/service.js";
 import { seedPlatformDefaultGroup } from "../../modules/model-groups/service.js";
 import { ensureSeedPlatformAdminForUser } from "../../modules/platform/admin-service.js";
 import { importSeededClawhubMarketplaceSkill } from "../../modules/skills/service.js";
-import {
-  AUTHZ_PLATFORM_ID,
-  enqueueAuthzRelationships,
-  flushAuthzOutboxEntries,
-  touchRelation,
-  touchWorkspaceMemberMembership,
-} from "../authz/index.js";
 import { ensureStorageDir } from "../storage/index.js";
 import { transaction } from "./index.js";
 import type { CatalogVersionFilesFileRole } from "./generated/db.js";
@@ -635,49 +628,6 @@ export async function seedDatabase() {
     countCatalogItems("skill_package"),
     countCatalogItems("plugin_package"),
   ]);
-
-  const authzEntryIds = await enqueueAuthzRelationships(
-    [
-      touchRelation("platform", AUTHZ_PLATFORM_ID, "workspace", "workspace", workspaceId),
-      touchRelation("workspace", workspaceId, "platform", "platform", AUTHZ_PLATFORM_ID),
-      ...touchWorkspaceMemberMembership({
-        workspaceId,
-        workspaceMemberId,
-        userId,
-        relation: "owner",
-      }),
-      ...touchWorkspaceMemberMembership({
-        workspaceId,
-        workspaceMemberId,
-        userId,
-        relation: "member",
-      }),
-      ...runtimeRefs.actorIds.flatMap((actorId) => [
-        touchRelation("workspace", workspaceId, "actor", "actor", actorId),
-        touchRelation("actor", actorId, "workspace", "workspace", workspaceId),
-        touchRelation("actor", actorId, "discover_workspace", "workspace", workspaceId),
-        touchRelation("actor", actorId, "invoke_workspace", "workspace", workspaceId),
-        touchRelation("actor", actorId, "receive_workspace", "workspace", workspaceId),
-        touchRelation("actor", actorId, "memory_reader_principal", "actor", actorId),
-        touchRelation("actor", actorId, "memory_editor_principal", "actor", actorId),
-        touchRelation("actor", actorId, "memory_retargeter_principal", "actor", actorId),
-        touchRelation("actor", actorId, "memory_deleter_principal", "actor", actorId),
-        touchRelation("actor", actorId, "owner", "workspace_member", workspaceMemberId),
-      ]),
-    ],
-    {
-      source: "db.seed.v2",
-      workspaceId,
-    },
-  );
-
-  if (authzEntryIds.length > 0) {
-    try {
-      await flushAuthzOutboxEntries(authzEntryIds);
-    } catch (error) {
-      console.error("[authz] Failed to flush v2 seed relationships:", error);
-    }
-  }
 
   console.log("Seed completed", {
     userId,

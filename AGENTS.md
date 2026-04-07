@@ -1,5 +1,16 @@
 当前系统处于初期设计实现阶段，不要考虑兼容旧数据。
 
+## Backend 更新与重启
+
+- 修改 `packages/api` 或任何会影响后端运行时行为、配置加载、数据库访问、权限逻辑的代码后，需要通过 `systemctl` 重启后端服务，不能只假设热更新或旧进程会自动生效。
+- 后端服务名为 `synapse-api.service`。
+- 重启命令：
+  - `sudo systemctl restart synapse-api.service`
+- 重启后必须检查服务状态，确认服务已经成功拉起且处于正常运行状态。
+- 状态检查命令：
+  - `systemctl is-active synapse-api.service`
+  - `systemctl --no-pager --full status synapse-api.service`
+
 ## Mobile Web 部署约定
 
 - `packages/mobile-app` 的 web 版本不是直接由 nginx 反代 dev server，而是作为静态站部署。

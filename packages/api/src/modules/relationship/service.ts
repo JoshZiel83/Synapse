@@ -6,15 +6,6 @@ import {
   executeCompiledQuery,
   executeTakeFirst,
 } from "../../infrastructure/database/kysely.js";
-import {
-  buildWorkspaceMemberContextId,
-  deleteRelation,
-  enqueueAuthzRelationships,
-  flushAuthzOutboxEntries,
-  queueAuthzRelationships,
-  touchRelation,
-  touchWorkspaceMemberContext,
-} from "../../infrastructure/authz/index.js";
 import { getFileUrlById } from "../files/service.js";
 import {
   authorizeAction,
@@ -156,15 +147,6 @@ function workspaceSummary(row: {
     name: row.workspace_name || row.name || "Unknown workspace",
     slug: row.workspace_slug || row.slug || "",
   };
-}
-
-async function flushAuthzEntries(entryIds: string[], source: string) {
-  if (entryIds.length === 0) return;
-  try {
-    await flushAuthzOutboxEntries(entryIds);
-  } catch (error) {
-    console.error(`[authz] Failed to flush ${source}:`, error);
-  }
 }
 
 async function getWorkspaceById(workspaceId: string): Promise<WorkspaceSummary | null> {
@@ -471,55 +453,9 @@ async function updateActorAccessPolicy(params: {
     if (!nextActor) {
       throw new Error("Actor not found");
     }
-
-    const operation =
-      params.accessPolicy === "workspace_open" ? touchRelation : deleteRelation;
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      [
-        operation(
-          "actor",
-          params.actorId,
-          "discover_workspace",
-          "workspace",
-          params.workspaceId,
-        ),
-        operation(
-          "actor",
-          params.actorId,
-          "invoke_workspace",
-          "workspace",
-          params.workspaceId,
-        ),
-        operation(
-          "actor",
-          params.actorId,
-          "receive_workspace",
-          "workspace",
-          params.workspaceId,
-        ),
-      ],
-      {
-        source: "relationship.actor_access_policy",
-        workspaceId: params.workspaceId,
-        actorId: params.actorId,
-        accessPolicy: params.accessPolicy,
-        updatedByWorkspaceMemberId: params.updatedByWorkspaceMemberId,
-      },
-    );
-
-    return {
-      actor: nextActor,
-      authzEntryIds,
-    };
+    return nextActor;
   });
-
-  await flushAuthzEntries(
-    result.authzEntryIds,
-    "relationship.actor_access_policy",
-  );
-
-  return result.actor;
+  return result;
 }
 
 async function grantActorAccess(params: {
@@ -534,47 +470,13 @@ async function grantActorAccess(params: {
   if (!requester || requester.workspace.id !== params.workspaceId) {
     throw new Error("Workspace member not found");
   }
-  const workspaceMemberContextId = buildWorkspaceMemberContextId(
-    requester.workspaceMemberId,
-  );
-  const entryIds = await enqueueAuthzRelationships(
-    [
-      ...touchWorkspaceMemberContext({
-        workspaceMemberId: requester.workspaceMemberId,
-        workspaceId: params.workspaceId,
-        userId: requester.userId,
-      }),
-      touchRelation(
-        "actor",
-        params.actorId,
-        "discover_workspace_member",
-        "workspace_member",
-        workspaceMemberContextId,
-      ),
-      touchRelation(
-        "actor",
-        params.actorId,
-        "invoke_workspace_member",
-        "workspace_member",
-        workspaceMemberContextId,
-      ),
-      touchRelation(
-        "actor",
-        params.actorId,
-        "receive_workspace_member",
-        "workspace_member",
-        workspaceMemberContextId,
-      ),
-    ],
-    {
-      source: "relationship.actor_access_grant",
-      workspaceId: params.workspaceId,
-      actorId: params.actorId,
-      requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
-      grantedByWorkspaceMemberId: params.grantedByWorkspaceMemberId,
-    },
-  );
-  await flushAuthzEntries(entryIds, "relationship.actor_access_grant");
+
+  await ensureFriendEntry({
+    workspaceId: params.workspaceId,
+    ownerWorkspaceMemberId: requester.workspaceMemberId,
+    peerType: "actor",
+    peerActorId: params.actorId,
+  });
 }
 
 async function ensureFriendEntry(params: {

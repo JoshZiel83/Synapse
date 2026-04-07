@@ -66,14 +66,12 @@ Relay runtime:
 
 Authorization is shared by mechanism, not by reusing one domain's grant table.
 
-- `authz_outbox` remains the SpiceDB write queue
-- `access_bindings` is the generic audit/share table
-- SpiceDB object types are explicit per runtime object:
+- `resource_access_bindings` is the generic audit/share table
+- access subjects are explicit per runtime object:
+  - `workspace`
+  - `conversation`
   - `actor`
-  - `installed_skill`
-  - `plugin_installation`
-  - `relay_device`
-  - `relay_exposure`
+  - `conversation_actor_context`
 
 Workspace-level administration is split instead of hiding behind `capability_admin`:
 
@@ -97,5 +95,5 @@ When migrating a feature:
 
 1. Move marketplace reads/writes to `catalog_*`.
 2. Move runtime state to the domain-specific runtime tables.
-3. Write explicit SpiceDB tuples for the runtime resource type.
+3. Write explicit Postgres access rows for the runtime resource type.
 4. Do not recreate generic `capability_instance` semantics under a new name.

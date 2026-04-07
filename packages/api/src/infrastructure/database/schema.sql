@@ -22,8 +22,6 @@ CREATE TYPE file_parse_output_kind AS ENUM ('text', 'structured_json', 'derived_
 CREATE TYPE resource_access_bindings_status AS ENUM ('active', 'revoked');
 CREATE TYPE resource_access_bindings_target_type AS ENUM ('workspace', 'conversation', 'actor', 'actor_in_conversation');
 CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'plugin_installation', 'relay_capability', 'automation_event_source');
-CREATE TYPE authz_outbox_operation AS ENUM ('touch', 'delete');
-CREATE TYPE authz_outbox_status AS ENUM ('pending', 'processing', 'applied', 'failed');
 CREATE TYPE realtime_event_outbox_status AS ENUM ('pending', 'processing', 'dispatched', 'failed');
 CREATE TYPE catalog_categories_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
 CREATE TYPE catalog_items_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
@@ -61,9 +59,6 @@ CREATE TYPE transport_endpoints_endpoint_type AS ENUM ('direct', 'group');
 CREATE TYPE conversation_transport_bindings_inbound_actor_mode AS ENUM ('inherit_account', 'none', 'specified_actor');
 CREATE TYPE transport_addresses_transport_kind AS ENUM ('feishu', 'weixin');
 CREATE TYPE transport_addresses_address_type AS ENUM ('user', 'bot', 'system');
-CREATE TYPE conversation_grants_permission AS ENUM ('send', 'moderate', 'manage', 'manage_members', 'attach_resources');
-CREATE TYPE conversation_grants_subject_type AS ENUM ('workspace_member', 'actor');
-CREATE TYPE conversation_grants_status AS ENUM ('active', 'revoked');
 CREATE TYPE conversation_items_scope AS ENUM ('shared', 'private');
 CREATE TYPE conversation_items_surface AS ENUM ('visible', 'internal');
 CREATE TYPE conversation_items_item_type AS ENUM ('message', 'event', 'summary', 'control');
@@ -413,28 +408,6 @@ CREATE INDEX idx_file_parse_outputs_run ON file_parse_outputs(run_id, created_at
 ALTER TABLE users
   ADD CONSTRAINT users_avatar_file_id_fkey
   FOREIGN KEY (avatar_file_id) REFERENCES files(id) ON DELETE SET NULL;
-
--- ============ Access Core ============
-CREATE TABLE authz_outbox (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  operation authz_outbox_operation NOT NULL,
-  resource_type VARCHAR(60) NOT NULL,
-  resource_id TEXT NOT NULL,
-  relation VARCHAR(60) NOT NULL,
-  subject_type VARCHAR(60) NOT NULL,
-  subject_id TEXT NOT NULL,
-  subject_relation VARCHAR(60),
-  status authz_outbox_status NOT NULL DEFAULT 'pending',
-  attempts INT NOT NULL DEFAULT 0,
-  last_error TEXT,
-  zed_token TEXT,
-  applied_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_authz_outbox_status ON authz_outbox(status, created_at);
-CREATE INDEX idx_authz_outbox_resource ON authz_outbox(resource_type, resource_id, created_at DESC);
 
 CREATE TABLE realtime_event_outbox (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1241,7 +1214,7 @@ CREATE TABLE conversation_actor_contexts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
   actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
-  session_id UUID NOT NULL UNIQUE REFERENCES sessions(id) ON DELETE CASCADE,
+  session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(conversation_id, actor_id)
@@ -1251,6 +1224,9 @@ CREATE INDEX idx_conversation_actor_contexts_conversation
   ON conversation_actor_contexts(conversation_id, created_at DESC);
 CREATE INDEX idx_conversation_actor_contexts_actor
   ON conversation_actor_contexts(actor_id, created_at DESC);
+CREATE UNIQUE INDEX uq_conversation_actor_contexts_session
+  ON conversation_actor_contexts(session_id)
+  WHERE session_id IS NOT NULL;
 
 CREATE TABLE transport_accounts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1349,30 +1325,6 @@ CREATE INDEX idx_transport_addresses_workspace
 CREATE INDEX idx_transport_addresses_workspace_member
   ON transport_addresses(workspace_member_id, transport_kind, created_at DESC)
   WHERE workspace_member_id IS NOT NULL;
-
-CREATE TABLE conversation_grants (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  permission conversation_grants_permission NOT NULL,
-  subject_type conversation_grants_subject_type NOT NULL,
-  workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  status conversation_grants_status NOT NULL DEFAULT 'active',
-  granted_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  reason TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ,
-  CONSTRAINT chk_conversation_grants_target CHECK (
-    (subject_type = 'workspace_member' AND workspace_member_id IS NOT NULL AND actor_id IS NULL) OR
-    (subject_type = 'actor' AND actor_id IS NOT NULL AND workspace_member_id IS NULL)
-  )
-);
-
-CREATE INDEX idx_conversation_grants_conversation ON conversation_grants(conversation_id, created_at DESC);
-CREATE INDEX idx_conversation_grants_workspace ON conversation_grants(workspace_id, created_at DESC);
-CREATE INDEX idx_conversation_grants_workspace_member ON conversation_grants(workspace_member_id, created_at DESC) WHERE workspace_member_id IS NOT NULL;
-CREATE INDEX idx_conversation_grants_actor ON conversation_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
 
 CREATE TABLE conversation_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -2916,13 +2868,11 @@ CREATE TABLE resource_access_bindings (
   automation_event_source_id UUID REFERENCES automation_event_sources(id) ON DELETE CASCADE,
   target_type resource_access_bindings_target_type NOT NULL,
   subject_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  subject_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
   subject_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   subject_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
   subject_conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
   conversation_type_mask_override INT
     CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
-  granted_permissions TEXT[] NOT NULL DEFAULT '{}',
   status resource_access_bindings_status NOT NULL DEFAULT 'active',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   reason TEXT,
@@ -2935,10 +2885,10 @@ CREATE TABLE resource_access_bindings (
     (resource_type = 'automation_event_source' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NOT NULL)
   ),
   CONSTRAINT chk_resource_access_bindings_target CHECK (
-    (target_type = 'workspace' AND subject_workspace_id IS NOT NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL) OR
-    (target_type = 'conversation' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NOT NULL AND subject_conversation_actor_context_id IS NULL) OR
-    (target_type = 'actor' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NOT NULL AND subject_conversation_id IS NULL) OR
-    (target_type = 'actor_in_conversation' AND subject_workspace_id IS NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL AND subject_conversation_actor_context_id IS NOT NULL)
+    (target_type = 'workspace' AND subject_workspace_id IS NOT NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL AND subject_conversation_actor_context_id IS NULL) OR
+    (target_type = 'conversation' AND subject_workspace_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NOT NULL AND subject_conversation_actor_context_id IS NULL) OR
+    (target_type = 'actor' AND subject_workspace_id IS NULL AND subject_actor_id IS NOT NULL AND subject_conversation_id IS NULL AND subject_conversation_actor_context_id IS NULL) OR
+    (target_type = 'actor_in_conversation' AND subject_workspace_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL AND subject_conversation_actor_context_id IS NOT NULL)
   )
 );
 
@@ -2951,7 +2901,6 @@ CREATE UNIQUE INDEX uq_resource_access_bindings_active
     COALESCE(automation_event_source_id::text, ''),
     target_type,
     COALESCE(subject_workspace_id::text, ''),
-    COALESCE(subject_workspace_member_id::text, ''),
     COALESCE(subject_actor_id::text, ''),
     COALESCE(subject_conversation_id::text, ''),
     COALESCE(subject_conversation_actor_context_id::text, '')
@@ -2975,7 +2924,6 @@ CREATE INDEX idx_resource_access_bindings_subject_lookup
   ON resource_access_bindings(
     target_type,
     subject_workspace_id,
-    subject_workspace_member_id,
     subject_actor_id,
     subject_conversation_id,
     subject_conversation_actor_context_id,
@@ -2987,7 +2935,6 @@ CREATE INDEX idx_resource_access_bindings_target_lookup
     subject_conversation_actor_context_id,
     subject_conversation_id,
     subject_actor_id,
-    subject_workspace_member_id,
     subject_workspace_id,
     created_at DESC
   );

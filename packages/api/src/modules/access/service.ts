@@ -1,18 +1,17 @@
 import type { FastifyRequest } from 'fastify';
 import {
-  buildWorkspaceMemberContextId,
   checkPermission,
   lookupResources,
-  type AuthzObjectType,
-  type AuthzSubject,
-} from '../../infrastructure/authz/index.js';
+  type AccessResourceType,
+  type PermissionSubject,
+} from './core.js';
 import { db } from '../../infrastructure/database/kysely.js';
 import {
   getAccessActionSpec,
   type AccessAction,
 } from './actions.js';
 
-export type AccessSubject = AuthzSubject & {
+export type AccessSubject = PermissionSubject & {
   type: 'user' | 'actor' | 'workspace_member';
 };
 
@@ -32,7 +31,7 @@ export function workspaceMemberSubject(
 ): AccessSubject {
   return {
     type: 'workspace_member',
-    id: buildWorkspaceMemberContextId(workspaceMemberId),
+    id: workspaceMemberId,
   };
 }
 
@@ -88,8 +87,8 @@ export async function authorizeAction(params: {
 }
 
 export async function authorizePermission(params: {
-  subject: AccessSubject;
-  resourceType: AuthzObjectType;
+  subject: PermissionSubject;
+  resourceType: AccessResourceType;
   resourceId: string;
   permission: string;
 }) {
@@ -99,6 +98,52 @@ export async function authorizePermission(params: {
     permission: params.permission,
     subject: params.subject,
   });
+}
+
+export async function authorizeAnyAction(params: {
+  subjects: readonly PermissionSubject[];
+  action: AccessAction;
+  resourceId: string;
+}) {
+  const uniqueSubjects = params.subjects.filter(Boolean);
+  if (uniqueSubjects.length === 0) {
+    return false;
+  }
+
+  const spec = getAccessActionSpec(params.action);
+  for (const subject of uniqueSubjects) {
+    // Keep checks sequential so we can short-circuit on the first allowed subject.
+    if (await checkPermission({
+      resourceType: spec.resourceType,
+      resourceId: params.resourceId,
+      permission: spec.permission,
+      subject,
+    })) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+export async function authorizeAnyPermission(params: {
+  subjects: readonly PermissionSubject[];
+  resourceType: AccessResourceType;
+  resourceId: string;
+  permission: string;
+}) {
+  for (const subject of params.subjects) {
+    if (await checkPermission({
+      resourceType: params.resourceType,
+      resourceId: params.resourceId,
+      permission: params.permission,
+      subject,
+    })) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 export async function listAuthorizedResourceIds(params: {
@@ -116,8 +161,8 @@ export async function listAuthorizedResourceIds(params: {
 }
 
 export async function listAuthorizedPermissionResourceIds(params: {
-  subject: AccessSubject;
-  resourceType: AuthzObjectType;
+  subject: PermissionSubject;
+  resourceType: AccessResourceType;
   permission: string;
   limit?: number;
 }) {
@@ -130,8 +175,8 @@ export async function listAuthorizedPermissionResourceIds(params: {
 }
 
 export async function filterAuthorizedPermissionResourceIds(params: {
-  subject: AccessSubject;
-  resourceType: AuthzObjectType;
+  subject: PermissionSubject;
+  resourceType: AccessResourceType;
   permission: string;
   resourceIds: string[];
 }) {

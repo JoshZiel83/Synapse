@@ -17,16 +17,6 @@ import {
   DEFAULT_MODEL_ATTEMPT_POLICY,
   DEFAULT_MODEL_ATTEMPT_TIMEOUT_MS,
 } from './defaults.js';
-import {
-  AUTHZ_PLATFORM_ID,
-  authzEnabled,
-  buildWorkspaceMemberContextId,
-  diffAuthzRelationships,
-  enqueueAuthzRelationships,
-  flushAuthzOutboxEntries,
-  touchRelation,
-  type AuthzRelationMutation,
-} from '../../infrastructure/authz/index.js';
 import { logProviderStep, logRuntimeEvent } from '../execution/service.js';
 import { sql } from 'kysely';
 
@@ -62,21 +52,6 @@ type ModelGroupGrantRow = {
   reason?: string | null;
   created_at?: string | Date;
   revoked_at?: string | Date | null;
-};
-
-type ModelGroupAuthzState = {
-  id: string;
-  owner_type: ModelGroupOwnerType;
-  owner_workspace_id: string | null;
-  owner_workspace_member_id: string | null;
-  is_enabled: boolean;
-  grants: ModelGroupGrantRow[];
-};
-
-type ModelProfileRelationState = {
-  profileId: string;
-  groupId: string;
-  isEnabled: boolean;
 };
 
 export class ModelGroupError extends Error {
@@ -125,72 +100,6 @@ function assertValidModelRevisionInput(input: {
   return {
     engineKind,
   };
-}
-
-async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (entryIds.length === 0) return;
-
-  try {
-    await flushAuthzOutboxEntries(entryIds);
-  } catch (error) {
-    console.error(`[authz] Failed to flush ${source} relationship updates:`, error);
-  }
-}
-
-function buildModelGroupGrantRelations(groupId: string, grant: ModelGroupGrantRow): AuthzRelationMutation[] {
-  switch (grant.grant_scope) {
-    case 'platform':
-      return [touchRelation('model_group', groupId, 'use_platform', 'platform', AUTHZ_PLATFORM_ID)];
-    case 'workspace':
-      return grant.workspace_id
-        ? [touchRelation('model_group', groupId, 'use_workspace', 'workspace', grant.workspace_id)]
-        : [];
-    case 'workspace_member':
-      return grant.workspace_member_id
-        ? [
-            touchRelation(
-              'model_group',
-              groupId,
-              'use_workspace_member',
-              'workspace_member',
-              buildWorkspaceMemberContextId(grant.workspace_member_id),
-            ),
-          ]
-        : [];
-    case 'actor':
-      return grant.actor_id
-        ? [touchRelation('model_group', groupId, 'use_actor', 'actor', grant.actor_id)]
-        : [];
-    default:
-      return [];
-  }
-}
-
-function buildModelGroupAuthzRelations(group: ModelGroupAuthzState): AuthzRelationMutation[] {
-  const ownerRelations =
-    group.owner_type === 'platform'
-      ? [touchRelation('model_group', group.id, 'owner_platform', 'platform', AUTHZ_PLATFORM_ID)]
-      : group.owner_type === 'workspace' && group.owner_workspace_id
-        ? [touchRelation('model_group', group.id, 'owner_workspace', 'workspace', group.owner_workspace_id)]
-        : group.owner_type === 'workspace_member' && group.owner_workspace_member_id
-          ? [touchRelation('model_group', group.id, 'owner_workspace_member', 'workspace_member', group.owner_workspace_member_id)]
-          : [];
-
-  return [
-    ...ownerRelations,
-    ...(group.is_enabled
-      ? group.grants
-          .filter((grant) => grant.status === 'active')
-          .flatMap((grant) => buildModelGroupGrantRelations(group.id, grant))
-      : []),
-  ];
-}
-
-function buildModelProfileAuthzRelations(state: ModelProfileRelationState): AuthzRelationMutation[] {
-  if (!state.isEnabled) {
-    return [];
-  }
-  return [touchRelation('model_profile', state.profileId, 'group', 'model_group', state.groupId)];
 }
 
 function mapGroupRow(row: ModelGroupRow) {
@@ -316,60 +225,6 @@ async function getGroupRow(groupId: string) {
     throw new ModelGroupError(404, 'Model group not found');
   }
   return row;
-}
-
-async function listActiveGroupGrants(groupIds: string[]) {
-  if (groupIds.length === 0) return new Map<string, ModelGroupGrantRow[]>();
-
-  const result = await db
-    .selectFrom('model_group_grants')
-    .selectAll()
-    .where('status', '=', 'active')
-    .where('group_id', 'in', groupIds)
-    .execute();
-
-  const byGroup = new Map<string, ModelGroupGrantRow[]>();
-  for (const row of result as Array<ModelGroupGrantRow & { group_id: string }>) {
-    const bucket = byGroup.get(row.group_id) || [];
-    bucket.push(row);
-    byGroup.set(row.group_id, bucket);
-  }
-  return byGroup;
-}
-
-async function loadGroupAuthzState(groupId: string) {
-  const group = await getGroupRow(groupId);
-  const grants = (await listActiveGroupGrants([groupId])).get(groupId) || [];
-  return {
-    id: group.id,
-    owner_type: group.owner_type,
-    owner_workspace_id: group.owner_workspace_id,
-    owner_workspace_member_id: group.owner_workspace_member_id,
-    is_enabled: Boolean(group.is_enabled),
-    grants,
-  } satisfies ModelGroupAuthzState;
-}
-
-async function listProfileRelationStates(groupId: string) {
-  const result = await db
-    .selectFrom('model_group_profiles as mgp')
-    .innerJoin('model_groups as mg', 'mg.id', 'mgp.group_id')
-    .innerJoin('model_profiles as mp', 'mp.id', 'mgp.profile_id')
-    .select([
-      'mp.id as profile_id',
-      'mgp.group_id',
-      sql<boolean>`(mg.is_enabled = TRUE AND mgp.is_enabled = TRUE AND mp.is_enabled = TRUE)`.as(
-        'relation_enabled',
-      ),
-    ])
-    .where('mgp.group_id', '=', groupId)
-    .execute();
-
-  return result.map((row) => ({
-    profileId: row.profile_id as string,
-    groupId: row.group_id as string,
-    isEnabled: row.relation_enabled === true,
-  }));
 }
 
 async function createProfileRevision(input: {
@@ -770,29 +625,13 @@ export async function createModelGroup(data: {
     })
     .returningAll()
     .executeTakeFirstOrThrow()) as ModelGroupRow;
-  const defaultGrant = await createDefaultGroupGrant(
+  await createDefaultGroupGrant(
     row.id,
     row.owner_type,
     row.owner_workspace_id,
     row.owner_workspace_member_id,
     data.createdByWorkspaceMemberId || null,
   );
-
-  const authzEntryIds = await enqueueAuthzRelationships(
-    buildModelGroupAuthzRelations({
-      id: row.id,
-      owner_type: row.owner_type,
-      owner_workspace_id: row.owner_workspace_id,
-      owner_workspace_member_id: row.owner_workspace_member_id,
-      is_enabled: Boolean(row.is_enabled),
-      grants: [defaultGrant],
-    }),
-    {
-      source: 'model_group.create',
-      groupId: row.id,
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, 'model_group.create');
 
   return mapGroupRow(row);
 }
@@ -805,13 +644,13 @@ export async function updateModelGroup(groupId: string, data: {
   isDefault?: boolean;
   isActive?: boolean;
 }) {
-  const previousState = await loadGroupAuthzState(groupId);
+  const group = await getGroupRow(groupId);
 
   if (data.isDefault === true && data.isActive !== false) {
     await clearExistingDefault(
-      previousState.owner_type,
-      previousState.owner_workspace_id,
-      previousState.owner_workspace_member_id,
+      group.owner_type,
+      group.owner_workspace_id,
+      group.owner_workspace_member_id,
     );
   }
 
@@ -855,46 +694,11 @@ export async function updateModelGroup(groupId: string, data: {
   if (!updatedRow) {
     throw new ModelGroupError(404, 'Model group not found');
   }
-  const nextState = await loadGroupAuthzState(groupId);
-  const authzEntryIds = await enqueueAuthzRelationships(
-    diffAuthzRelationships(
-      buildModelGroupAuthzRelations(previousState),
-      buildModelGroupAuthzRelations(nextState),
-    ),
-    {
-      source: 'model_group.update',
-      groupId,
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, 'model_group.update');
-
-  const previousProfileStates = await listProfileRelationStates(groupId);
-  if (data.isActive !== undefined) {
-    const nextProfileStates = await listProfileRelationStates(groupId);
-    const profileEntryIds = await enqueueAuthzRelationships(
-      previousProfileStates.flatMap((state) =>
-        diffAuthzRelationships(
-          buildModelProfileAuthzRelations(state),
-          buildModelProfileAuthzRelations(
-            nextProfileStates.find((candidate) => candidate.profileId === state.profileId) || state,
-          ),
-        ),
-      ),
-      {
-        source: 'model_group.profile_relations.update',
-        groupId,
-      },
-    );
-    await flushQueuedAuthzEntries(profileEntryIds, 'model_group.profile_relations.update');
-  }
 
   return mapGroupRow(updatedRow);
 }
 
 export async function deleteModelGroup(groupId: string) {
-  const previousGroupState = await loadGroupAuthzState(groupId);
-  const previousProfileStates = await listProfileRelationStates(groupId);
-
   await db
     .updateTable('model_groups')
     .set({
@@ -931,37 +735,6 @@ export async function deleteModelGroup(groupId: string) {
     .deleteFrom('actor_model_group_assignments')
     .where('group_id', '=', groupId)
     .execute();
-
-  const nextGroupState = await loadGroupAuthzState(groupId);
-  const nextProfileStates = await listProfileRelationStates(groupId);
-
-  const groupEntryIds = await enqueueAuthzRelationships(
-    diffAuthzRelationships(
-      buildModelGroupAuthzRelations(previousGroupState),
-      buildModelGroupAuthzRelations(nextGroupState),
-    ),
-    {
-      source: 'model_group.delete',
-      groupId,
-    },
-  );
-  await flushQueuedAuthzEntries(groupEntryIds, 'model_group.delete');
-
-  const profileEntryIds = await enqueueAuthzRelationships(
-    previousProfileStates.flatMap((state) =>
-      diffAuthzRelationships(
-        buildModelProfileAuthzRelations(state),
-        buildModelProfileAuthzRelations(
-          nextProfileStates.find((candidate) => candidate.profileId === state.profileId) || state,
-        ),
-      ),
-    ),
-    {
-      source: 'model_group.profile_relations.delete',
-      groupId,
-    },
-  );
-  await flushQueuedAuthzEntries(profileEntryIds, 'model_group.profile_relations.delete');
 }
 
 export async function addModelItem(groupId: string, data: {
@@ -1031,21 +804,6 @@ export async function addModelItem(groupId: string, data: {
     })
     .returningAll()
     .executeTakeFirstOrThrow();
-
-  const authzEntryIds = await enqueueAuthzRelationships(
-    buildModelProfileAuthzRelations({
-      profileId: profile.id as string,
-      groupId,
-      isEnabled: true,
-    }),
-    {
-      source: 'model_profile.create',
-      groupId,
-      profileId: profile.id,
-      profileRevisionId: revision.id,
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, 'model_profile.create');
 
   return mapGroupItem({
     ...item,
@@ -1117,12 +875,6 @@ export async function updateModelItem(groupId: string, itemId: string, data: {
   if (!item) {
     throw new ModelGroupError(404, 'Model group item not found');
   }
-  const previousProfileState: ModelProfileRelationState = {
-    profileId: item.profile_id as string,
-    groupId,
-    isEnabled: Boolean(item.group_enabled) && Boolean(item.item_enabled) && Boolean(item.profile_enabled),
-  };
-
   const itemUpdate: Record<string, unknown> = {};
   if (data.priority !== undefined) {
     itemUpdate.priority = data.priority;
@@ -1240,26 +992,6 @@ export async function updateModelItem(groupId: string, itemId: string, data: {
     .limit(1)
     .executeTakeFirstOrThrow();
 
-  const nextProfileState: ModelProfileRelationState = {
-    profileId: updated.profile_id as string,
-    groupId,
-    isEnabled: Boolean(updated.group_enabled) && Boolean(updated.item_enabled) && Boolean(updated.profile_enabled),
-  };
-
-  const authzEntryIds = await enqueueAuthzRelationships(
-    diffAuthzRelationships(
-      buildModelProfileAuthzRelations(previousProfileState),
-      buildModelProfileAuthzRelations(nextProfileState),
-    ),
-    {
-      source: 'model_profile.update',
-      groupId,
-      itemId,
-      profileId: updated.profile_id,
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, 'model_profile.update');
-
   return mapGroupItem(updated);
 }
 
@@ -1281,12 +1013,6 @@ export async function deleteModelItem(groupId: string, itemId: string) {
   if (!item) {
     throw new ModelGroupError(404, 'Model group item not found');
   }
-  const previousProfileState: ModelProfileRelationState = {
-    profileId: item.profile_id as string,
-    groupId,
-    isEnabled: Boolean(item.group_enabled) && Boolean(item.item_enabled) && Boolean(item.profile_enabled),
-  };
-
   await db
     .updateTable('model_group_profiles')
     .set({
@@ -1304,23 +1030,6 @@ export async function deleteModelItem(groupId: string, itemId: string) {
     })
     .where('id', '=', item.profile_id as string)
     .execute();
-
-  const authzEntryIds = await enqueueAuthzRelationships(
-    diffAuthzRelationships(
-      buildModelProfileAuthzRelations(previousProfileState),
-      buildModelProfileAuthzRelations({
-        ...previousProfileState,
-        isEnabled: false,
-      }),
-    ),
-    {
-      source: 'model_profile.delete',
-      groupId,
-      itemId,
-      profileId: item.profile_id,
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, 'model_profile.delete');
 }
 
 async function ensureAssignableModelGroups(workspaceId: string, groupIds: string[], actorId?: string) {
@@ -1552,7 +1261,6 @@ export async function issueModelGroupGrant(groupId: string, input: {
   grantedByWorkspaceMemberId?: string;
   reason?: string;
 }) {
-  const previousState = await loadGroupAuthzState(groupId);
   await validateGrantTarget(input);
   await ensureNoDuplicateActiveGrant(groupId, input);
 
@@ -1572,25 +1280,10 @@ export async function issueModelGroupGrant(groupId: string, input: {
     .returningAll()
     .executeTakeFirstOrThrow();
 
-  const nextState = await loadGroupAuthzState(groupId);
-  const authzEntryIds = await enqueueAuthzRelationships(
-    diffAuthzRelationships(
-      buildModelGroupAuthzRelations(previousState),
-      buildModelGroupAuthzRelations(nextState),
-    ),
-    {
-      source: 'model_group.grant.issue',
-      groupId,
-      grantId: result.id,
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, 'model_group.grant.issue');
-
   return mapGrantRow(result as ModelGroupGrantRow & { id: string; group_id: string });
 }
 
 export async function revokeModelGroupGrant(groupId: string, grantId: string) {
-  const previousState = await loadGroupAuthzState(groupId);
   const result = await db
     .updateTable('model_group_grants')
     .set({
@@ -1605,20 +1298,6 @@ export async function revokeModelGroupGrant(groupId: string, grantId: string) {
   if (!result) {
     throw new ModelGroupError(404, 'Model group grant not found');
   }
-
-  const nextState = await loadGroupAuthzState(groupId);
-  const authzEntryIds = await enqueueAuthzRelationships(
-    diffAuthzRelationships(
-      buildModelGroupAuthzRelations(previousState),
-      buildModelGroupAuthzRelations(nextState),
-    ),
-    {
-      source: 'model_group.grant.revoke',
-      groupId,
-      grantId,
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, 'model_group.grant.revoke');
 }
 
 export async function logAIRequest(data: {

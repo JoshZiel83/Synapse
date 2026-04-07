@@ -1,11 +1,3 @@
-import {
-  authzEnabled,
-  buildWorkspaceMemberContextId,
-  enqueueAuthzRelationships,
-  flushAuthzOutboxEntries,
-  touchConversationActorContext,
-  touchRelation,
-} from '../../infrastructure/authz/index.js';
 import { pool } from '../../infrastructure/database/index.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
 import {
@@ -183,6 +175,30 @@ async function getConversationActorSessionRow(
   );
 }
 
+async function requireActiveActorConversationParticipant(
+  conversationId: UUID,
+  actorId: UUID,
+  queryable: QueryExecutor = pool,
+) {
+  const participant = await executeTakeFirst(
+    queryable,
+    db
+      .selectFrom("conversation_participants")
+      .select("id")
+      .where("conversation_id", "=", conversationId)
+      .where("participant_kind", "=", "actor")
+      .where("actor_id", "=", actorId)
+      .where("state", "=", "active")
+      .limit(1),
+  );
+
+  if (!participant) {
+    throw new Error(
+      `Actor ${actorId} is not an active participant of conversation ${conversationId}`,
+    );
+  }
+}
+
 export async function ensureConversationActorSessionContext(
   params: {
     workspaceId?: UUID;
@@ -194,26 +210,37 @@ export async function ensureConversationActorSessionContext(
   },
   queryable: QueryExecutor = pool,
 ) {
+  await requireActiveActorConversationParticipant(
+    params.conversationId,
+    params.actorId,
+    queryable,
+  );
+
   const existingContext = await getConversationActorContextByPair(
     params.conversationId,
     params.actorId,
     queryable,
   );
-  if (existingContext) {
-    return {
-      conversationActorContextId: existingContext.id,
-      sessionId: existingContext.session_id,
-      conversationActorContextCreated: false,
-      sessionCreated: false,
-    };
-  }
 
-  let session = await getConversationActorSessionRow(
-    params.conversationId,
-    params.actorId,
-    queryable,
-  );
+  let session = existingContext?.session_id
+    ? await executeTakeFirst(
+        queryable,
+        db
+          .selectFrom('sessions')
+          .select('id')
+          .where('id', '=', existingContext.session_id)
+          .limit(1),
+      )
+    : null;
   let sessionCreated = false;
+
+  if (!session) {
+    session = await getConversationActorSessionRow(
+      params.conversationId,
+      params.actorId,
+      queryable,
+    );
+  }
 
   if (!session) {
     if (!params.workspaceId) {
@@ -254,6 +281,69 @@ export async function ensureConversationActorSessionContext(
     );
   }
 
+  if (existingContext?.session_id === session.id) {
+    return {
+      conversationActorContextId: existingContext.id,
+      sessionId: session.id,
+      conversationActorContextCreated: false,
+      sessionCreated,
+    };
+  }
+
+  const ensuredContext = await ensureConversationActorContext(
+    {
+      actorId: params.actorId,
+      conversationId: params.conversationId,
+    },
+    queryable,
+  );
+
+  await executeCompiledQuery(
+    queryable,
+    db
+      .updateTable('conversation_actor_contexts')
+      .set({
+        session_id: session.id,
+        updated_at: sql`NOW()`,
+      })
+      .where('id', '=', ensuredContext.conversationActorContextId)
+      .returning('id'),
+  );
+
+  return {
+    conversationActorContextId: ensuredContext.conversationActorContextId,
+    sessionId: session.id,
+    conversationActorContextCreated: ensuredContext.conversationActorContextCreated,
+    sessionCreated,
+  };
+}
+
+export async function ensureConversationActorContext(
+  params: {
+    actorId: UUID;
+    conversationId: UUID;
+  },
+  queryable: QueryExecutor = pool,
+) {
+  await requireActiveActorConversationParticipant(
+    params.conversationId,
+    params.actorId,
+    queryable,
+  );
+
+  const existingContext = await getConversationActorContextByPair(
+    params.conversationId,
+    params.actorId,
+    queryable,
+  );
+  if (existingContext) {
+    return {
+      conversationActorContextId: existingContext.id,
+      sessionId: existingContext.session_id || undefined,
+      conversationActorContextCreated: false,
+    };
+  }
+
   const insertedContext = await executeTakeFirst<{ id: string }>(
     queryable,
     db
@@ -262,7 +352,7 @@ export async function ensureConversationActorSessionContext(
         id: uuidv4(),
         conversation_id: params.conversationId,
         actor_id: params.actorId,
-        session_id: session.id,
+        session_id: null,
       })
       .onConflict((oc) => oc.columns(['conversation_id', 'actor_id']).doNothing())
       .returning('id'),
@@ -281,9 +371,8 @@ export async function ensureConversationActorSessionContext(
 
   return {
     conversationActorContextId: context.id,
-    sessionId: session.id,
+    sessionId: context.session_id || undefined,
     conversationActorContextCreated: Boolean(insertedContext),
-    sessionCreated,
   };
 }
 
@@ -334,16 +423,6 @@ function buildMetadataFromItem(item: any) {
   return typeof item.metadata === 'string'
     ? JSON.parse(item.metadata)
     : { ...(item.metadata || {}) };
-}
-
-async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (entryIds.length === 0) return;
-
-  try {
-    await flushAuthzOutboxEntries(entryIds);
-  } catch (error) {
-    console.error(`[authz] Failed to flush ${source} relationship updates:`, error);
-  }
 }
 
 // ============ Session CRUD ============
@@ -417,63 +496,6 @@ export async function createSession(params: {
     trigger,
     metadata,
   });
-
-  if (authzEnabled()) {
-    const authzEntryIds = await enqueueAuthzRelationships(
-      [
-        ...touchConversationActorContext({
-          conversationActorContextId:
-            ensuredContext.conversationActorContextId,
-          actorId,
-          conversationId: finalConversationId,
-        }),
-        ...(privateConversationCreated
-          ? [
-              touchRelation(
-                'conversation',
-                finalConversationId,
-                'participant',
-                'actor',
-                actorId,
-              ),
-            ]
-          : []),
-        ...(resolvedWorkspaceMemberId
-          ? [
-              touchRelation(
-                'conversation',
-                finalConversationId,
-                'participant',
-                'workspace_member',
-                buildWorkspaceMemberContextId(resolvedWorkspaceMemberId),
-              ),
-              touchRelation(
-                'conversation',
-                finalConversationId,
-                'admin',
-                'workspace_member',
-                buildWorkspaceMemberContextId(resolvedWorkspaceMemberId),
-              ),
-            ]
-          : []),
-      ],
-      {
-        source: privateConversationCreated
-          ? 'session.create_private_conversation'
-          : 'session.ensure_context',
-        workspaceId,
-        conversationId: finalConversationId,
-        actorId,
-        workspaceMemberId: resolvedWorkspaceMemberId,
-      },
-    );
-    await flushQueuedAuthzEntries(
-      authzEntryIds,
-      privateConversationCreated
-        ? 'session.create_private_conversation'
-        : 'session.ensure_context',
-    );
-  }
 
   return loadSession(ensuredContext.sessionId);
 }

@@ -21,14 +21,8 @@ import {
   textBlock,
 } from "@synapse/shared";
 import {
-  deleteRelation,
-  flushAuthzOutboxEntries,
   lookupResources,
-  queueAuthzRelationships,
-  touchRelation,
-  type AuthzRelationMutation,
-  type AuthzSubject,
-} from "../../infrastructure/authz/index.js";
+} from "../access/core.js";
 import { transaction } from "../../infrastructure/database/index.js";
 import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
 import {
@@ -37,7 +31,6 @@ import {
 } from "../capabilities/conversation-type-policies.js";
 import {
   buildResourceAccessBindingRef,
-  buildResourceAccessAuthzMutations,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   readAccessBindingTarget,
@@ -57,7 +50,7 @@ import {
   getFileAccessInfo,
   getFileUrlById,
 } from "../files/service.js";
-import { getConversationActorContextByPair } from "../session/service.js";
+import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js";
 import {
   listRelayAutoLoadedSkills,
   readRelayAutoLoadedSkill,
@@ -965,47 +958,6 @@ function buildAvailableSkillPayload(
   };
 }
 
-async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (entryIds.length === 0) return;
-  try {
-    await flushAuthzOutboxEntries(entryIds);
-  } catch (error) {
-    console.error(`[authz] Failed to flush ${source}:`, error);
-  }
-}
-
-function buildInstalledSkillAuthzMutations(params: {
-  skillId: string;
-  workspaceId: string;
-  ownerWorkspaceMemberId?: string | null;
-  operation: "touch" | "delete";
-}) {
-  const mutate = params.operation === "delete" ? deleteRelation : touchRelation;
-  const relations: AuthzRelationMutation[] = [
-    mutate(
-      "installed_skill",
-      params.skillId,
-      "workspace",
-      "workspace",
-      params.workspaceId,
-    ),
-  ];
-
-  if (params.ownerWorkspaceMemberId) {
-    relations.push(
-      mutate(
-        "installed_skill",
-        params.skillId,
-        "owner",
-        "workspace_member",
-        params.ownerWorkspaceMemberId,
-      ),
-    );
-  }
-
-  return relations;
-}
-
 async function ensureMarketplacePublisher(
   run: QueryRunner,
   options?: {
@@ -1512,7 +1464,7 @@ function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
     bind_scope: target.bindScope,
     conversation_id: target.conversationId,
     actor_id: target.actorId,
-    workspace_member_id: target.workspaceMemberId,
+    workspace_member_id: null,
   };
 }
 
@@ -1533,12 +1485,10 @@ async function loadAccessBindingsBySkillIds(
        binding.installed_skill_id::text AS resource_id,
        binding.target_type,
        binding.subject_workspace_id,
-       binding.subject_workspace_member_id,
        COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
        COALESCE(binding.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
        binding.subject_conversation_actor_context_id,
        binding.conversation_type_mask_override,
-       binding.granted_permissions,
        binding.status,
        binding.created_by_workspace_member_id,
        binding.reason,
@@ -1678,8 +1628,6 @@ async function findSkillIdsByBindingFilter(params: {
     );
     values.push(target.subjectWorkspaceId);
     conditions.push(`subject_workspace_id IS NOT DISTINCT FROM $${values.length}::uuid`);
-    values.push(target.subjectWorkspaceMemberId);
-    conditions.push(`subject_workspace_member_id IS NOT DISTINCT FROM $${values.length}::uuid`);
     values.push(target.subjectActorId);
     conditions.push(`subject_actor_id IS NOT DISTINCT FROM $${values.length}::uuid`);
     values.push(target.subjectConversationId);
@@ -1762,11 +1710,9 @@ async function ensureSkillBinding(
        binding.installed_skill_id::text AS resource_id,
        binding.target_type,
        binding.subject_workspace_id,
-       binding.subject_workspace_member_id,
        COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
        COALESCE(binding.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
        binding.subject_conversation_actor_context_id,
-       binding.granted_permissions,
        binding.status,
        binding.created_by_workspace_member_id,
        binding.reason,
@@ -1779,10 +1725,9 @@ async function ensureSkillBinding(
        AND binding.installed_skill_id = $2::uuid
        AND target_type = $3
        AND subject_workspace_id IS NOT DISTINCT FROM $4::uuid
-       AND subject_workspace_member_id IS NOT DISTINCT FROM $5::uuid
-       AND subject_actor_id IS NOT DISTINCT FROM $6::uuid
-       AND subject_conversation_id IS NOT DISTINCT FROM $7::uuid
-       AND subject_conversation_actor_context_id IS NOT DISTINCT FROM $8::uuid
+       AND subject_actor_id IS NOT DISTINCT FROM $5::uuid
+       AND subject_conversation_id IS NOT DISTINCT FROM $6::uuid
+       AND subject_conversation_actor_context_id IS NOT DISTINCT FROM $7::uuid
        AND status = 'active'
      ORDER BY binding.created_at DESC
      LIMIT 1`,
@@ -1791,7 +1736,6 @@ async function ensureSkillBinding(
       input.skillId,
       grantTarget.targetType,
       grantTarget.subjectWorkspaceId,
-      grantTarget.subjectWorkspaceMemberId,
       grantTarget.subjectActorId,
       grantTarget.subjectConversationId,
       grantTarget.subjectConversationActorContextId,
@@ -1802,7 +1746,6 @@ async function ensureSkillBinding(
     const row = existing.rows[0];
     return {
       bindingId: row.id,
-      authzEntryIds: [] as string[],
     };
   }
 
@@ -1813,11 +1756,9 @@ async function ensureSkillBinding(
        installed_skill_id,
        target_type,
        subject_workspace_id,
-       subject_workspace_member_id,
        subject_actor_id,
        subject_conversation_id,
        subject_conversation_actor_context_id,
-       granted_permissions,
        status,
        created_by_workspace_member_id
      )
@@ -1831,9 +1772,8 @@ async function ensureSkillBinding(
        $6,
        $7,
        $8,
-       $9::text[],
        'active',
-       $10
+       $9
      )
      RETURNING id`,
     [
@@ -1841,35 +1781,16 @@ async function ensureSkillBinding(
       input.skillId,
       grantTarget.targetType,
       grantTarget.subjectWorkspaceId,
-      grantTarget.subjectWorkspaceMemberId,
       grantTarget.subjectActorId,
       grantTarget.subjectConversationId,
       grantTarget.subjectConversationActorContextId,
-      ["use"],
       input.createdByWorkspaceMemberId || null,
     ],
   );
   const bindingId = inserted.rows[0]!.id;
 
-  const authzEntryIds = await queueAuthzRelationships(
-    { query: run } as Pick<pg.PoolClient, "query">,
-    buildResourceAccessAuthzMutations({
-      resourceType: "installed_skill",
-      resourceId: input.skillId,
-      target: grantTarget,
-      operation: "touch",
-    }),
-    {
-      source: "skill.access.grant",
-      workspaceId: input.workspaceId,
-      skillId: input.skillId,
-      bindingId,
-    },
-  );
-
   return {
     bindingId,
-    authzEntryIds,
   };
 }
 
@@ -2613,22 +2534,7 @@ export async function createWorkspaceSkill(input: {
         ],
       );
 
-    const installedSkillAuthzEntryIds = await queueAuthzRelationships(
-      client,
-      buildInstalledSkillAuthzMutations({
-        skillId,
-        workspaceId: input.workspaceId,
-        ownerWorkspaceMemberId: input.installedByWorkspaceMemberId,
-        operation: "touch",
-      }),
-      {
-        source: "skill.create",
-        workspaceId: input.workspaceId,
-        skillId,
-      },
-    );
-
-    const bindingResult = await ensureSkillBinding(clientRunner(client), {
+    await ensureSkillBinding(clientRunner(client), {
       skillId,
       workspaceId: input.workspaceId,
       target,
@@ -2637,14 +2543,9 @@ export async function createWorkspaceSkill(input: {
 
     return {
       skillId,
-      authzEntryIds: [
-        ...installedSkillAuthzEntryIds,
-        ...bindingResult.authzEntryIds,
-      ],
     };
   });
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, "skill.create");
   return getInstalledSkillResponse(input.workspaceId, result.skillId);
 }
 
@@ -2765,7 +2666,6 @@ export async function grantInstalledSkillAccess(input: {
   workspaceId: string;
   installedSkillId: string;
   accessTarget?: CapabilityAccessTarget;
-  permissions?: string[];
   conversationTypeMaskOverride?: number | null;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
@@ -2827,8 +2727,7 @@ export async function grantInstalledSkillAccess(input: {
       row.status === "active" &&
       row.target_type === accessTarget.targetType &&
       row.actor_id === accessTarget.actorId &&
-      row.conversation_id === accessTarget.conversationId &&
-      row.workspace_member_id === accessTarget.workspaceMemberId,
+      row.conversation_id === accessTarget.conversationId,
   );
   if (existing) {
     return mapSkillAccessRowToGrant(existing, {
@@ -2842,35 +2741,32 @@ export async function grantInstalledSkillAccess(input: {
     const inserted = await executeSqlOn<AccessBindingRow>(client, 
       `INSERT INTO resource_access_bindings (
          workspace_id,
-         resource_type,
-         installed_skill_id,
-         target_type,
-         subject_workspace_id,
-         subject_workspace_member_id,
-         subject_actor_id,
-         subject_conversation_id,
-         subject_conversation_actor_context_id,
-         conversation_type_mask_override,
-         granted_permissions,
-         status,
-         created_by_workspace_member_id,
-         reason
-       )
+       resource_type,
+       installed_skill_id,
+       target_type,
+       subject_workspace_id,
+       subject_actor_id,
+       subject_conversation_id,
+       subject_conversation_actor_context_id,
+       conversation_type_mask_override,
+       status,
+       created_by_workspace_member_id,
+       reason
+     )
        VALUES (
          $1,
-         'installed_skill',
-         $2,
-         $3,
-         $4,
-         $5,
-         $6,
-         $7,
-         $8,
-         $9,
-         $10::text[],
-         'active',
-         $11,
-         $12
+        'installed_skill',
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        $7,
+        $8,
+        $9,
+        'active',
+        $10,
+        $11
        )
        RETURNING
          id,
@@ -2882,12 +2778,10 @@ export async function grantInstalledSkillAccess(input: {
          installed_skill_id::text AS resource_id,
          target_type,
          subject_workspace_id,
-         subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
          subject_conversation_actor_context_id,
          conversation_type_mask_override,
-         granted_permissions,
          status,
          created_by_workspace_member_id,
          reason,
@@ -2898,12 +2792,10 @@ export async function grantInstalledSkillAccess(input: {
         input.installedSkillId,
         accessTarget.targetType,
         accessTarget.subjectWorkspaceId,
-        accessTarget.subjectWorkspaceMemberId,
         accessTarget.subjectActorId,
         accessTarget.subjectConversationId,
         accessTarget.subjectConversationActorContextId,
         input.conversationTypeMaskOverride ?? null,
-        input.permissions || ["use"],
         input.grantedByWorkspaceMemberId || null,
         input.reason || null,
       ],
@@ -2916,29 +2808,11 @@ export async function grantInstalledSkillAccess(input: {
       subject_conversation_actor_context_id:
         accessTarget.subjectConversationActorContextId,
     } as AccessBindingRow);
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      buildResourceAccessAuthzMutations({
-        resourceType: "installed_skill",
-        resourceId: input.installedSkillId,
-        target: accessTarget,
-        operation: "touch",
-      }),
-      {
-        source: "skill.access.grant",
-        workspaceId: input.workspaceId,
-        skillId: input.installedSkillId,
-        accessBindingId: accessRow.id,
-      },
-    );
-
     return {
       accessRow,
-      authzEntryIds,
     };
   });
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, "skill.access.grant");
   return mapSkillAccessRowToGrant(result.accessRow, {
     workspaceConversationTypeMask,
     instanceConversationTypeMaskOverride:
@@ -3028,23 +2902,7 @@ export async function revokeInstalledSkillAccess(input: {
     return mapSkillAccessRowToGrant(accessRow);
   }
 
-  const authzEntryIds = await transaction(async (client) => {
-    const ids = await queueAuthzRelationships(
-      client,
-      buildResourceAccessAuthzMutations({
-        resourceType: "installed_skill",
-        resourceId: input.installedSkillId,
-        target: readAccessBindingTarget(accessRow),
-        operation: "delete",
-      }),
-      {
-        source: "skill.access.revoke",
-        workspaceId: input.workspaceId,
-        skillId: input.installedSkillId,
-        accessBindingId: accessRow.id,
-      },
-    );
-
+  await transaction(async (client) => {
     await executeSqlOn(client, 
       `UPDATE resource_access_bindings
        SET status = 'revoked',
@@ -3052,11 +2910,8 @@ export async function revokeInstalledSkillAccess(input: {
        WHERE id = $1`,
       [accessRow.id],
     );
-
-    return ids;
   });
 
-  await flushQueuedAuthzEntries(authzEntryIds, "skill.access.revoke");
   return { success: true };
 }
 
@@ -3085,7 +2940,7 @@ export async function installMarketplaceSkill(input: {
     );
 
     if (existingSkillId) {
-      const bindingResult = await ensureSkillBinding(
+      await ensureSkillBinding(
         clientRunner(client),
         {
           skillId: existingSkillId,
@@ -3097,7 +2952,6 @@ export async function installMarketplaceSkill(input: {
 
       return {
         skillId: existingSkillId,
-        authzEntryIds: bindingResult.authzEntryIds,
       };
     }
 
@@ -3175,23 +3029,7 @@ export async function installMarketplaceSkill(input: {
       [marketplaceSkill.item_id],
     );
 
-    const installedSkillAuthzEntryIds = await queueAuthzRelationships(
-      client,
-      buildInstalledSkillAuthzMutations({
-        skillId,
-        workspaceId: input.workspaceId,
-        ownerWorkspaceMemberId: input.installedByWorkspaceMemberId,
-        operation: "touch",
-      }),
-      {
-        source: "skill.install",
-        workspaceId: input.workspaceId,
-        skillId,
-        sourceSkillId: input.marketSkillId,
-      },
-    );
-
-    const bindingResult = await ensureSkillBinding(clientRunner(client), {
+    await ensureSkillBinding(clientRunner(client), {
       skillId,
       workspaceId: input.workspaceId,
       target,
@@ -3200,14 +3038,9 @@ export async function installMarketplaceSkill(input: {
 
     return {
       skillId,
-      authzEntryIds: [
-        ...installedSkillAuthzEntryIds,
-        ...bindingResult.authzEntryIds,
-      ],
     };
   });
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, "skill.install");
   return getInstalledSkillResponse(input.workspaceId, result.skillId);
 }
 
@@ -3488,11 +3321,10 @@ export async function uninstallInstalledSkill(
     if (!skill) {
       return {
         deleted: false,
-        authzEntryIds: [] as string[],
       };
     }
 
-    const bindings = await executeSqlOn<AccessBindingRow>(client, 
+    await executeSqlOn<AccessBindingRow>(client,
       `SELECT
          id,
          workspace_id,
@@ -3503,19 +3335,17 @@ export async function uninstallInstalledSkill(
          installed_skill_id::text AS resource_id,
          target_type,
          subject_workspace_id,
-         subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
          subject_conversation_actor_context_id,
-         granted_permissions,
          status,
          created_by_workspace_member_id,
          reason,
-         metadata,
+         '{}'::jsonb AS metadata,
          created_at,
          revoked_at
-       FROM resource_access_bindings
-       WHERE installed_skill_id = $1::uuid`,
+      FROM resource_access_bindings
+      WHERE installed_skill_id = $1::uuid`,
       [installedSkillId],
     );
 
@@ -3526,49 +3356,17 @@ export async function uninstallInstalledSkill(
       [installedSkillId, workspaceId],
     );
 
-    const authzMutations = [
-      ...buildInstalledSkillAuthzMutations({
-        skillId: installedSkillId,
-        workspaceId,
-        ownerWorkspaceMemberId: skill.created_by_workspace_member_id,
-        operation: "delete",
-      }),
-      ...bindings.rows
-        .map((binding) => normalizeAccessBindingRow(binding))
-        .filter((binding) => binding.status === "active")
-        .flatMap((binding) =>
-          buildResourceAccessAuthzMutations({
-            resourceType: "installed_skill",
-            resourceId: installedSkillId,
-            target: readAccessBindingTarget(binding),
-            operation: "delete",
-          }),
-        ),
-    ];
-
     await executeSqlOn(client, 
       `DELETE FROM resource_access_bindings
        WHERE installed_skill_id = $1::uuid`,
       [installedSkillId],
     );
 
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      authzMutations,
-      {
-        source: "skill.delete",
-        workspaceId,
-        skillId: installedSkillId,
-      },
-    );
-
     return {
       deleted: true,
-      authzEntryIds,
     };
   });
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, "skill.delete");
   return result.deleted;
 }
 
@@ -3577,35 +3375,11 @@ async function buildVisibilitySubjects(input: {
   actorId?: string;
   conversationId?: string;
 }) {
-  const subjects: AuthzSubject[] = [];
-
-  if (input.actorId) {
-    subjects.push({
-      type: "actor",
-      id: input.actorId,
-    });
-  }
-  if (!input.actorId) {
-    subjects.push({
-      type: "workspace",
-      id: input.workspaceId,
-    });
-  }
-
-  if (input.actorId && input.conversationId) {
-    const context = await getConversationActorContextByPair(
-      input.conversationId,
-      input.actorId,
-    );
-    if (context) {
-    subjects.push({
-      type: "conversation_actor_context",
-      id: context.id,
-    });
-    }
-  }
-
-  return subjects;
+  return buildConversationCapabilitySubjects({
+    workspaceId: input.workspaceId,
+    actorId: input.actorId,
+    conversationId: input.conversationId,
+  });
 }
 
 function accessMatchesVisibilityContext(
@@ -3649,13 +3423,11 @@ function visibleRowToAccessRow(
     target_type: publicScope,
     relation,
     subject_workspace_id: publicScope === "workspace" ? workspaceId : null,
-    subject_workspace_member_id: null,
     subject_actor_id: publicScope === "actor" ? row.actor_id : null,
     subject_conversation_id:
       publicScope === "conversation" ? row.conversation_id : null,
     subject_conversation_actor_context_id: null,
     conversation_type_mask_override: null,
-    granted_permissions: ["use"],
     status: "active",
     created_by_workspace_member_id: null,
     reason: null,

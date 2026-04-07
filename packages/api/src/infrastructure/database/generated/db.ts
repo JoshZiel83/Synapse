@@ -31,10 +31,6 @@ export type AuthSessionsClientType = "android" | "api" | "cli" | "ios" | "web" |
 
 export type AuthSessionsTransport = "cookie" | "token";
 
-export type AuthzOutboxOperation = "delete" | "touch";
-
-export type AuthzOutboxStatus = "applied" | "failed" | "pending" | "processing";
-
 export type AutomationDeliveriesTargetPolicy = "all_members" | "specified_members";
 
 export type AutomationEventSourcesCreatedByKind = "session" | "system" | "workspace_member";
@@ -94,12 +90,6 @@ export type ContextCompactionRunInputsInputKind = "archive_point" | "item" | "se
 export type ContextCompactionRunsChainScope = "private" | "shared";
 
 export type ContextCompactionRunsStatus = "cancelled" | "completed" | "failed" | "pending" | "running";
-
-export type ConversationGrantsPermission = "attach_resources" | "manage" | "manage_members" | "moderate" | "send";
-
-export type ConversationGrantsStatus = "active" | "revoked";
-
-export type ConversationGrantsSubjectType = "actor" | "workspace_member";
 
 export type ConversationItemPartsPartType = "file_ref" | "json" | "text";
 
@@ -502,24 +492,6 @@ export interface AuthSessions {
   user_id: string;
 }
 
-export interface AuthzOutbox {
-  applied_at: Timestamp | null;
-  attempts: Generated<number>;
-  created_at: Generated<Timestamp | null>;
-  id: Generated<string>;
-  last_error: string | null;
-  operation: AuthzOutboxOperation;
-  relation: string;
-  resource_id: string;
-  resource_type: string;
-  status: Generated<AuthzOutboxStatus>;
-  subject_id: string;
-  subject_relation: string | null;
-  subject_type: string;
-  updated_at: Generated<Timestamp | null>;
-  zed_token: string | null;
-}
-
 export interface AutomationDeliveries {
   created_at: Generated<Timestamp | null>;
   message_blocks: Generated<Json>;
@@ -841,7 +813,7 @@ export interface ConversationActorContexts {
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
-  session_id: string;
+  session_id: string | null;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -860,21 +832,6 @@ export interface ConversationDeviceStates {
   last_opened_at: Timestamp | null;
   last_visible_sequence: Generated<Int8>;
   updated_at: Generated<Timestamp>;
-}
-
-export interface ConversationGrants {
-  actor_id: string | null;
-  conversation_id: string;
-  created_at: Generated<Timestamp | null>;
-  granted_by_workspace_member_id: string | null;
-  id: Generated<string>;
-  permission: ConversationGrantsPermission;
-  reason: string | null;
-  revoked_at: Timestamp | null;
-  status: Generated<ConversationGrantsStatus>;
-  subject_type: ConversationGrantsSubjectType;
-  workspace_id: string;
-  workspace_member_id: string | null;
 }
 
 export interface ConversationItemContextTargets {
@@ -1732,7 +1689,6 @@ export interface ResourceAccessBindings {
   conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
-  granted_permissions: Generated<string[]>;
   id: Generated<string>;
   installed_skill_id: string | null;
   plugin_installation_id: string | null;
@@ -1745,7 +1701,6 @@ export interface ResourceAccessBindings {
   subject_conversation_actor_context_id: string | null;
   subject_conversation_id: string | null;
   subject_workspace_id: string | null;
-  subject_workspace_member_id: string | null;
   target_type: ResourceAccessBindingsTargetType;
   workspace_id: string;
 }
@@ -2250,7 +2205,6 @@ export interface DB {
   audit_logs: AuditLogs;
   auth_qr_login_requests: AuthQrLoginRequests;
   auth_sessions: AuthSessions;
-  authz_outbox: AuthzOutbox;
   automation_deliveries: AutomationDeliveries;
   automation_delivery_targets: AutomationDeliveryTargets;
   automation_event_sources: AutomationEventSources;
@@ -2277,7 +2231,6 @@ export interface DB {
   conversation_actor_contexts: ConversationActorContexts;
   conversation_context_states: ConversationContextStates;
   conversation_device_states: ConversationDeviceStates;
-  conversation_grants: ConversationGrants;
   conversation_item_context_targets: ConversationItemContextTargets;
   conversation_item_mentions: ConversationItemMentions;
   conversation_item_parts: ConversationItemParts;

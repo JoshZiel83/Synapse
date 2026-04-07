@@ -45,7 +45,6 @@ import {
   AUTOMATION_TRIGGER_KINDS,
   AUTOMATION_TRIGGER_SOURCE_KINDS,
   CONTACT_TARGET_TYPES,
-  CONVERSATION_GRANT_PERMISSIONS,
   MEMORY_SPACE_TYPES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
@@ -77,7 +76,6 @@ import type {
   AuthQrLoginRequestsApprovedSessionPersistence,
   AuthSessionsClientType,
   AuthSessionsTransport,
-  ConversationGrantsPermission,
   InteractionRequestsStatus,
   MemoryItemsCategory,
   MemoryItemsIndexStatus,
@@ -151,9 +149,6 @@ type _MemorySpaceTypeListMatchesDb = Assert<
 >;
 type _ContactTargetTypeMatchesDb = Assert<
   IsEqual<(typeof CONTACT_TARGET_TYPES)[number], RelationshipTargetType>
->;
-type _ConversationGrantPermissionMatchesDb = Assert<
-  IsEqual<(typeof CONVERSATION_GRANT_PERMISSIONS)[number], ConversationGrantsPermission>
 >;
 type _AutomationTriggerKindMatchesDb = Assert<
   IsEqual<(typeof AUTOMATION_TRIGGER_KINDS)[number], AutomationTriggersTriggerKind>

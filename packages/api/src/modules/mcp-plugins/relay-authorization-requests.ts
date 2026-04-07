@@ -1,13 +1,21 @@
 import type {
+  ConversationBoundary,
   InteractionRequestSummary,
   RelayAuthorizationGrantOption,
   RelayAuthorizationPreset,
   RelayAuthorizationRequestMode,
   RelayAuthorizationRequestedAction,
 } from "@synapse/shared/types";
-import { textBlocks } from "@synapse/shared";
+import {
+  DEFAULT_CONVERSATION_TYPE_MASK,
+  maskAllowsConversationType,
+  textBlocks,
+} from "@synapse/shared";
+import { sql } from "kysely";
 import { db } from "../../infrastructure/database/kysely.js";
-import { actorSubject, authorizeAction } from "../access/service.js";
+import {
+  authorizeAction,
+} from "../access/service.js";
 import { buildUserInteractionCandidatesFromRows } from "../ai/session-tool-user-interactions.js";
 import { listConversationParticipants } from "../chat/service.js";
 import {
@@ -21,6 +29,7 @@ import {
   createToolCallTask,
   type ToolCallTaskRecord,
 } from "../tool-call-tasks/service.js";
+import { listRelayExposureAccessState } from "./relay-access.js";
 
 export interface RelayAuthorizationRequestSource {
   workspaceId: string;
@@ -28,6 +37,8 @@ export interface RelayAuthorizationRequestSource {
   sessionId: string;
   actorId: string;
   sourceToolName: string;
+  conversationKind?: "private" | "group" | "virtual";
+  conversationBoundary?: ConversationBoundary;
   workspaceMemberId?: string;
   turnId?: string;
   sourceToolCallId?: string;
@@ -102,6 +113,130 @@ function buildWaitingSummary(deviceDisplayName?: string) {
   return `Waiting for a user to authorize ${deviceDisplayName?.trim() || "the relay device"}.`;
 }
 
+async function loadConversationKindAndBoundary(
+  conversationId: string,
+  fallback?: Pick<
+    RelayAuthorizationRequestSource,
+    "conversationKind" | "conversationBoundary"
+  >,
+) {
+  if (fallback?.conversationKind && fallback?.conversationBoundary) {
+    return {
+      kind: fallback.conversationKind,
+      boundary: fallback.conversationBoundary,
+    };
+  }
+
+  return db
+    .selectFrom("conversations")
+    .select(["kind", "boundary"])
+    .where("id", "=", conversationId)
+    .limit(1)
+    .executeTakeFirst();
+}
+
+async function loadRelayCapabilityRequestState(capabilityId: string) {
+  return db
+    .selectFrom("relay_capabilities as capability")
+    .innerJoin("relay_exposures as exposure", "exposure.id", "capability.exposure_id")
+    .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
+    .select([
+      "capability.id as capability_id",
+      "capability.status as capability_status",
+      "exposure.id as exposure_id",
+      "exposure.runtime_status as exposure_runtime_status",
+      "device.workspace_id as owner_workspace_id",
+      sql<boolean>`EXISTS (
+        SELECT 1
+        FROM relay_device_sessions session_row
+        WHERE session_row.device_id = device.id
+          AND session_row.status = 'active'
+      )`.as("has_active_device_session"),
+    ])
+    .where("capability.id", "=", capabilityId)
+    .limit(1)
+    .executeTakeFirst();
+}
+
+function relayGrantMatchesCurrentActorConversation(params: {
+  target: CreateRelayAuthorizationRequestParams["source"];
+  ownerWorkspaceId: string;
+  grant: {
+    target: {
+      type: "workspace" | "conversation" | "actor" | "actor_in_conversation";
+      actorId?: string;
+      conversationId?: string;
+    };
+    effectiveConversationTypeMask?: number;
+  };
+  conversationKind: "private" | "group" | "virtual";
+  conversationBoundary: ConversationBoundary;
+}) {
+  const grantMask =
+    params.grant.effectiveConversationTypeMask ?? DEFAULT_CONVERSATION_TYPE_MASK;
+  if (
+    !maskAllowsConversationType(
+      grantMask,
+      params.conversationKind,
+      params.conversationBoundary,
+    )
+  ) {
+    return false;
+  }
+
+  switch (params.grant.target.type) {
+    case "workspace":
+      return params.target.workspaceId === params.ownerWorkspaceId;
+    case "conversation":
+      return params.grant.target.conversationId === params.target.conversationId;
+    case "actor":
+      return params.grant.target.actorId === params.target.actorId;
+    case "actor_in_conversation":
+      return (
+        params.grant.target.actorId === params.target.actorId &&
+        params.grant.target.conversationId === params.target.conversationId
+      );
+    default:
+      return false;
+  }
+}
+
+async function canActorRequestRelayAuthorization(
+  params: CreateRelayAuthorizationRequestParams,
+) {
+  const conversation =
+    await loadConversationKindAndBoundary(params.source.conversationId, params.source);
+  if (!conversation) {
+    return false;
+  }
+
+  const relayState = await loadRelayCapabilityRequestState(
+    params.relayTarget.relayCapabilityId,
+  );
+  if (
+    !relayState ||
+    relayState.capability_status !== "active" ||
+    relayState.exposure_runtime_status !== "healthy" ||
+    !relayState.has_active_device_session
+  ) {
+    return false;
+  }
+
+  const accessState = await listRelayExposureAccessState(
+    relayState.owner_workspace_id,
+    relayState.exposure_id,
+  );
+  return accessState.grants.some((grant) =>
+    relayGrantMatchesCurrentActorConversation({
+      target: params.source,
+      ownerWorkspaceId: relayState.owner_workspace_id,
+      grant,
+      conversationKind: conversation.kind,
+      conversationBoundary: conversation.boundary,
+    }),
+  );
+}
+
 async function hasNewUserFacingConversationMessage(
   conversationId: string,
   afterIso: string,
@@ -131,17 +266,6 @@ export function buildRelayAuthorizationRetryNonce() {
 export async function createRelayAuthorizationRequest(
   params: CreateRelayAuthorizationRequestParams,
 ): Promise<RelayAuthorizationRequestResult> {
-  const requesterAllowed = await authorizeAction({
-    subject: actorSubject(params.source.actorId),
-    action: "relay_capability.request_relay_authorization",
-    resourceId: params.relayTarget.relayCapabilityId,
-  });
-  if (!requesterAllowed) {
-    throw new Error(
-      "Current actor is not allowed to request authorization for this relay capability",
-    );
-  }
-
   const allMembers = await listConversationParticipants(params.source.conversationId);
   const requesterMember = allMembers.find(
     (member) =>
@@ -150,6 +274,13 @@ export async function createRelayAuthorizationRequest(
   if (!requesterMember) {
     throw new Error(
       "Current actor is not an active participant of this conversation",
+    );
+  }
+
+  const requesterAllowed = await canActorRequestRelayAuthorization(params);
+  if (!requesterAllowed) {
+    throw new Error(
+      "Current actor is not allowed to request authorization for this relay capability",
     );
   }
 

@@ -68,7 +68,6 @@ import {
 } from '../chat/workspace-identity.js';
 import {
   accessBindingHasTarget,
-  buildResourceAccessAuthzMutations,
   buildResourceAccessBindingRef,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
@@ -76,7 +75,6 @@ import {
   resolveAccessGrantTarget,
   type AccessBindingRow,
 } from '../access/bindings.js';
-import { flushAuthzOutboxEntries, queueAuthzRelationships } from '../../infrastructure/authz/index.js';
 
 type AutomationRuleRow = {
   id: string;
@@ -1285,12 +1283,10 @@ async function loadAutomationEventSourceAccessRows(
        binding.automation_event_source_id::text AS resource_id,
        binding.target_type,
        binding.subject_workspace_id,
-       binding.subject_workspace_member_id,
        COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
        COALESCE(binding.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
        binding.subject_conversation_actor_context_id,
        binding.conversation_type_mask_override,
-       binding.granted_permissions,
        binding.status,
        binding.created_by_workspace_member_id,
        binding.reason,
@@ -1513,12 +1509,10 @@ export async function grantAutomationEventSourceAccess(input: {
          automation_event_source_id,
          target_type,
          subject_workspace_id,
-         subject_workspace_member_id,
          subject_actor_id,
          subject_conversation_id,
          subject_conversation_actor_context_id,
          conversation_type_mask_override,
-         granted_permissions,
          status,
          created_by_workspace_member_id,
          reason
@@ -1536,11 +1530,9 @@ export async function grantAutomationEventSourceAccess(input: {
          $6,
          $7,
          $8,
-         $9,
-         ARRAY['use']::text[],
          'active',
-         $10,
-         $11
+         $9,
+         $10
        )
        RETURNING *, automation_event_source_id::text AS resource_id`,
       [
@@ -1548,7 +1540,6 @@ export async function grantAutomationEventSourceAccess(input: {
         input.eventSourceId,
         target.targetType,
         target.subjectWorkspaceId,
-        target.subjectWorkspaceMemberId,
         target.subjectActorId,
         target.subjectConversationId,
         target.subjectConversationActorContextId,
@@ -1558,30 +1549,11 @@ export async function grantAutomationEventSourceAccess(input: {
       ],
     );
 
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      buildResourceAccessAuthzMutations({
-        resourceType: 'automation_event_source',
-        resourceId: input.eventSourceId,
-        workspaceId: input.workspaceId,
-        target,
-        operation: 'touch',
-      }),
-      {
-        source: 'automation.event_source.access.grant',
-        workspaceId: input.workspaceId,
-        eventSourceId: input.eventSourceId,
-        bindingId: binding.rows[0]!.id,
-      },
-    );
-
     return {
       binding: binding.rows[0]!,
-      authzEntryIds,
     };
   });
 
-  await flushAuthzOutboxEntries(inserted.authzEntryIds);
   return mapAutomationEventSourceAccessGrant(
     normalizeAccessBindingRow(inserted.binding),
   );
@@ -1738,24 +1710,7 @@ export async function revokeAutomationEventSourceAccess(input: {
     throw new Error('Automation event source access binding not found');
   }
 
-  const authzEntryIds = await transaction(async (client) => {
-    const entryIds = await queueAuthzRelationships(
-      client,
-      buildResourceAccessAuthzMutations({
-        resourceType: 'automation_event_source',
-        resourceId: input.eventSourceId,
-        workspaceId: input.workspaceId,
-        target: readAccessBindingTarget(existing),
-        operation: 'delete',
-      }),
-      {
-        source: 'automation.event_source.access.revoke',
-        workspaceId: input.workspaceId,
-        eventSourceId: input.eventSourceId,
-        bindingId: existing.id,
-      },
-    );
-
+  await transaction(async (client) => {
     await executeSqlOn(
       client,
       `UPDATE resource_access_bindings
@@ -1766,11 +1721,7 @@ export async function revokeAutomationEventSourceAccess(input: {
          AND automation_event_source_id = $3::uuid`,
       [input.bindingId, input.workspaceId, input.eventSourceId],
     );
-
-    return entryIds;
   });
-
-  await flushAuthzOutboxEntries(authzEntryIds);
   await pauseAutomationRulesMissingEventSourceAccess(
     input.eventSourceId,
     input.operator,

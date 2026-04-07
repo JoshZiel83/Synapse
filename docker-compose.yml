@@ -38,40 +38,6 @@ services:
       timeout: 5s
       retries: 5
 
-  spicedb-migrate:
-    image: authzed/spicedb:v1.51.0
-    container_name: synapse-spicedb-migrate
-    restart: "no"
-    command:
-      - datastore
-      - migrate
-      - head
-      - --datastore-engine
-      - postgres
-      - --datastore-conn-uri
-      - postgres://${POSTGRES_USER:-synapse}:${POSTGRES_PASSWORD}@postgres:5432/spicedb?sslmode=disable
-    depends_on:
-      postgres:
-        condition: service_healthy
-
-  spicedb:
-    image: authzed/spicedb:v1.51.0
-    container_name: synapse-spicedb
-    restart: unless-stopped
-    command:
-      - serve
-      - --grpc-preshared-key
-      - ${SPICEDB_TOKEN:?SPICEDB_TOKEN is required. Run ./setup.sh first.}
-      - --datastore-engine
-      - postgres
-      - --datastore-conn-uri
-      - postgres://${POSTGRES_USER:-synapse}:${POSTGRES_PASSWORD}@postgres:5432/spicedb?sslmode=disable
-    ports:
-      - "127.0.0.1:50051:50051"
-    depends_on:
-      spicedb-migrate:
-        condition: service_completed_successfully
-
   api:
     build:
       context: .
@@ -90,10 +56,6 @@ services:
       NODE_ENV: production
       PORT: "3001"
       HOST: "0.0.0.0"
-      AUTHZ_ENABLED: "true"
-      SPICEDB_ENDPOINT: spicedb:50051
-      SPICEDB_TOKEN: ${SPICEDB_TOKEN:-synapse-dev-token}
-      SPICEDB_INSECURE: "true"
       PLATFORM_ADMIN_EMAILS: ${PLATFORM_ADMIN_EMAILS:-demo@synapse.dev}
     ports:
       - "127.0.0.1:3001:3001"
@@ -102,8 +64,6 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      spicedb:
-        condition: service_started
     profiles:
       - production
 

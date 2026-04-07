@@ -1,4 +1,4 @@
-import type { AuthzObjectType } from '../../infrastructure/authz/index.js';
+import type { AccessResourceType } from './core.js';
 
 export const ACCESS_ACTIONS = {
   'platform.manage': { resourceType: 'platform', permission: 'manage' },
@@ -93,7 +93,7 @@ export const ACCESS_ACTIONS = {
   'model_profile.attach': { resourceType: 'model_profile', permission: 'attach' },
   'model_profile.grant': { resourceType: 'model_profile', permission: 'grant' },
   'model_profile.delete': { resourceType: 'model_profile', permission: 'delete' },
-} as const satisfies Record<string, { resourceType: AuthzObjectType; permission: string }>;
+} as const satisfies Record<string, { resourceType: AccessResourceType; permission: string }>;
 
 export type AccessAction = keyof typeof ACCESS_ACTIONS;
 
