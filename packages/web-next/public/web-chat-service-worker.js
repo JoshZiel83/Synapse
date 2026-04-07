@@ -9,6 +9,8 @@ const CHAT_WORKER_STATE_STORE = "auth_context";
 const CHAT_BROADCAST_CHANNEL = "synapse.web.chat.worker";
 const CHAT_SYNC_TAG = "synapse-web-chat-sync";
 const CHAT_PERIODIC_SYNC_TAG = "synapse-web-chat-periodic-sync";
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
 self.addEventListener("install", (event) => {
   event.waitUntil(self.skipWaiting());
@@ -86,12 +88,37 @@ async function withStore(dbName, version, storeName, mode, onUpgrade, run) {
 
 function createEmptySnapshot(workspaceId) {
   return {
-    version: 1,
+    version: 2,
     workspaceId,
     inboxCursor: 0,
     conversations: [],
     pendingReads: {},
     outbox: {},
+  };
+}
+
+function isUuid(value) {
+  return typeof value === "string" && UUID_PATTERN.test(value);
+}
+
+function normalizeSnapshot(workspaceId, value) {
+  if (!value || typeof value !== "object") {
+    return createEmptySnapshot(workspaceId);
+  }
+
+  const snapshot = value;
+  if (snapshot.version !== 2 || snapshot.workspaceId !== workspaceId) {
+    return createEmptySnapshot(workspaceId);
+  }
+
+  return {
+    ...createEmptySnapshot(workspaceId),
+    ...snapshot,
+    version: 2,
+    workspaceId,
+    clientInstanceId: isUuid(snapshot.clientInstanceId)
+      ? snapshot.clientInstanceId
+      : undefined,
   };
 }
 
@@ -273,10 +300,6 @@ function clearDeliveredOutbox(outbox, items) {
   return next;
 }
 
-function randomId(prefix) {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
-}
-
 function resolveApiUrl(apiBase, path) {
   const base =
     typeof apiBase === "string" && apiBase.trim()
@@ -353,11 +376,7 @@ async function loadWorkspaceSnapshot(workspaceId) {
     (store) => requestToPromise(store.get(workspaceId)),
   );
 
-  if (!row || !row.payload || row.payload.version !== 1) {
-    return createEmptySnapshot(workspaceId);
-  }
-
-  return row.payload;
+  return normalizeSnapshot(workspaceId, row && row.payload);
 }
 
 async function saveWorkspaceSnapshot(snapshot) {
@@ -414,22 +433,6 @@ async function bootstrapWorkspace(auth, snapshot) {
     next = createEmptySnapshot(auth.workspaceId);
   }
 
-  const clientInstanceId = next.clientInstanceId || randomId("client");
-  await fetchJson(
-    auth,
-    `/workspaces/${auth.workspaceId}/chat/client-instances/${clientInstanceId}`,
-    {
-      method: "PUT",
-      body: JSON.stringify({
-        platform: "web-desktop",
-        deviceLabel: "Web Desktop Service Worker",
-        metadata: {
-          workspaceMemberId: bootstrap.workspaceMemberId,
-        },
-      }),
-    },
-  );
-
   const conversations = (bootstrap.conversations || []).reduce(
     (current, conversation) => upsertConversation(current, conversation),
     next.conversations || [],
@@ -439,7 +442,9 @@ async function bootstrapWorkspace(auth, snapshot) {
     ...next,
     workspaceId: auth.workspaceId,
     workspaceMemberId: bootstrap.workspaceMemberId,
-    clientInstanceId,
+    clientInstanceId: isUuid(next.clientInstanceId)
+      ? next.clientInstanceId
+      : undefined,
     inboxCursor: Math.max(next.inboxCursor || 0, bootstrap.nextInboxCursor || 0),
     lastBootstrappedAt: new Date().toISOString(),
     conversations,

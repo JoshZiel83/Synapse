@@ -1,7 +1,7 @@
 "use client"
 
 import { create } from "zustand"
-import { api } from "@/lib/api"
+import { ApiError, api } from "@/lib/api"
 import {
   createEmptyStoredChatSnapshot,
   loadStoredChatSnapshot,
@@ -10,6 +10,7 @@ import {
   type PendingConversationRead,
   type StoredChatSnapshot,
 } from "@/lib/chat-persistence"
+import { createUuid } from "@/lib/uuid"
 import type {
   ActorRuntimeState,
   CanonicalContentBlock,
@@ -244,17 +245,6 @@ function scheduleOutboxRetry(attemptCount: number) {
     outboxRetryTimer = null
     void useChatStore.getState().flushOutbox()
   }, delay)
-}
-
-function createId(prefix: string) {
-  if (
-    typeof crypto !== "undefined" &&
-    typeof crypto.randomUUID === "function"
-  ) {
-    return crypto.randomUUID()
-  }
-
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`
 }
 
 function buildDesktopDeviceLabel() {
@@ -1169,14 +1159,47 @@ async function bootstrapWorkspaceSnapshot(
     baseSnapshot = createEmptyStoredChatSnapshot(workspaceId)
   }
 
-  const clientInstanceId = baseSnapshot.clientInstanceId || createId("client")
-  await api.registerChatClientInstance(workspaceId, clientInstanceId, {
+  const clientInstanceInput = {
     platform: "web-desktop",
     deviceLabel: buildDesktopDeviceLabel(),
     metadata: {
       workspaceMemberId: bootstrap.workspaceMemberId,
     },
-  })
+  }
+
+  let clientInstanceId = baseSnapshot.clientInstanceId || null
+  if (clientInstanceId) {
+    try {
+      const response = await api.touchChatClientInstance(
+        workspaceId,
+        clientInstanceId,
+        clientInstanceInput
+      )
+      clientInstanceId = response.clientInstanceId
+    } catch (error) {
+      if (
+        !(
+          error instanceof ApiError &&
+          (error.status === 400 ||
+            error.status === 404 ||
+            error.code === "invalid_request" ||
+            error.code === "client_instance_not_found")
+        )
+      ) {
+        throw error
+      }
+
+      clientInstanceId = null
+    }
+  }
+
+  if (!clientInstanceId) {
+    const response = await api.createChatClientInstance(
+      workspaceId,
+      clientInstanceInput
+    )
+    clientInstanceId = response.clientInstanceId
+  }
 
   return {
     ...baseSnapshot,
@@ -1574,7 +1597,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       Math.max(Date.now() * 1000, ...existingSequences) + 1
 
     const entry: OutboxEntry = {
-      clientMessageId: createId("message"),
+      clientMessageId: createUuid("message"),
       conversationId,
       contentBlocks: input.contentBlocks,
       replyToItemId: input.replyToItemId,
@@ -1749,7 +1772,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
     title
   ) => {
     const response = await api.createChatConversation(workspaceId, {
-      clientRequestId: createId("conversation"),
+      clientRequestId: createUuid("conversation"),
       kind,
       title,
       actorIds,

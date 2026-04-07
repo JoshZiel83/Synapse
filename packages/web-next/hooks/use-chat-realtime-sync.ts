@@ -32,6 +32,7 @@ export function useChatRealtimeSync({
   const pendingReadCount = useChatStore(
     (state) => Object.keys(state.pendingReads).length
   )
+  const clientInstanceId = useChatStore((state) => state.clientInstanceId)
   const deactivate = useChatStore((state) => state.deactivate)
   const loadConversations = useChatStore((state) => state.loadConversations)
   const reloadPersistedSnapshot = useChatStore(
@@ -196,4 +197,12 @@ export function useChatRealtimeSync({
 
     void requestChatServiceWorkerSync("queue-updated")
   }, [outboxCount, pendingReadCount, workspaceId])
+
+  useEffect(() => {
+    if (!workspaceId || !clientInstanceId) {
+      return
+    }
+
+    void requestChatServiceWorkerSync("client-instance-ready")
+  }, [clientInstanceId, workspaceId])
 }

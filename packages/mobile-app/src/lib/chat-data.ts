@@ -1,5 +1,6 @@
 import Feather from "@expo/vector-icons/Feather";
 
+import { isUuid } from "@/lib/ids";
 import {
   extractText,
   summarizeConversationEvent,
@@ -43,7 +44,7 @@ export interface ChatConversationMeta {
 }
 
 export interface ChatWorkspaceSnapshot {
-  version: 3;
+  version: 4;
   workspaceId: string;
   workspaceMemberId?: string;
   clientInstanceId?: string;
@@ -66,7 +67,7 @@ export function createEmptyChatWorkspaceSnapshot(
   workspaceId: string,
 ): ChatWorkspaceSnapshot {
   return {
-    version: 3,
+    version: 4,
     workspaceId,
     inboxCursor: 0,
     conversations: [],
@@ -87,7 +88,7 @@ export function normalizeChatWorkspaceSnapshot(
 
   const snapshot = value as Partial<ChatWorkspaceSnapshot>;
 
-  if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
+  if (snapshot.version !== 4 || snapshot.workspaceId !== workspaceId) {
     return createEmptyChatWorkspaceSnapshot(workspaceId);
   }
 
@@ -112,14 +113,15 @@ export function normalizeChatWorkspaceSnapshot(
   );
 
   return {
-    version: 3,
+    version: 4,
     workspaceId,
     workspaceMemberId:
       typeof snapshot.workspaceMemberId === "string"
         ? snapshot.workspaceMemberId
         : undefined,
     clientInstanceId:
-      typeof snapshot.clientInstanceId === "string"
+      typeof snapshot.clientInstanceId === "string" &&
+      isUuid(snapshot.clientInstanceId)
         ? snapshot.clientInstanceId
         : undefined,
     inboxCursor:

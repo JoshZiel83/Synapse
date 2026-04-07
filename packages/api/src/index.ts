@@ -23,11 +23,6 @@ import { auditMiddleware } from "./infrastructure/middleware/audit.js";
 import { beginShutdown } from "./infrastructure/shutdown/state.js";
 import { ensureStorageDir } from "./infrastructure/storage/index.js";
 import {
-  closeAuthzClient,
-  initializeAuthz,
-  testAuthzConnection,
-} from "./infrastructure/authz/index.js";
-import {
   setupWebSocket,
   shutdownWebSockets,
 } from "./infrastructure/websocket/index.js";
@@ -79,6 +74,19 @@ import {
   warmMemoryEmbeddingRuntime,
 } from "./modules/memory/embedding-runtime.js";
 
+function isMalformedUuidDatabaseError(error: unknown) {
+  if (!error || typeof error !== "object") {
+    return false;
+  }
+
+  const candidate = error as { code?: unknown; message?: unknown };
+  return (
+    candidate.code === "22P02" &&
+    typeof candidate.message === "string" &&
+    /invalid input syntax for type uuid/i.test(candidate.message)
+  );
+}
+
 async function main() {
   const app = Fastify({
     logger: {
@@ -97,6 +105,36 @@ async function main() {
     } catch (error) {
       done(error as Error, undefined);
     }
+  });
+
+  app.setErrorHandler((error, request, reply) => {
+    if (isMalformedUuidDatabaseError(error)) {
+      return reply.status(400).send({
+        error: "Invalid request",
+        code: "invalid_request",
+      });
+    }
+
+    request.log.error(error);
+
+    const statusCode =
+      typeof (error as { statusCode?: unknown }).statusCode === "number" &&
+      (error as { statusCode: number }).statusCode >= 400
+        ? (error as { statusCode: number }).statusCode
+        : 500;
+
+    return reply.status(statusCode).send({
+      error:
+        statusCode >= 500
+          ? "Internal Server Error"
+          : error.message || "Request failed",
+      code:
+        statusCode >= 500
+          ? "internal_server_error"
+          : (typeof (error as { code?: unknown }).code === "string"
+              ? (error as { code: string }).code
+              : "request_error"),
+    });
   });
 
   // Plugins
@@ -126,21 +164,6 @@ async function main() {
   }
 
   await startRealtimeEventOutboxDispatcher();
-
-  // Initialize SpiceDB schema and replay pending relationship writes
-  try {
-    const authz = await initializeAuthz();
-    if (authz.enabled) {
-      console.log(
-        `SpiceDB initialized (schemaUpdated=${authz.schemaUpdated}, drainedOutboxEntries=${authz.drainedOutboxEntries})`,
-      );
-    } else {
-      console.warn("SpiceDB authorization is disabled");
-    }
-  } catch (err) {
-    console.error("Failed to initialize SpiceDB authorization:", err);
-    process.exit(1);
-  }
 
   try {
     const platformAdmins = await syncConfiguredPlatformAdmins();
@@ -179,23 +202,20 @@ async function main() {
 
   // Health check
   app.get("/api/v1/health", async () => {
-    const [db, dbSchema, rds, authz, memoryEmbeddings] = await Promise.all([
+    const [db, dbSchema, rds, memoryEmbeddings] = await Promise.all([
       testConnection(),
       testRequiredSchema(),
       testRedisConnection(),
-      testAuthzConnection(),
       Promise.resolve(getMemoryEmbeddingRuntimeHealth()),
     ]);
     return {
-      status: db && dbSchema && rds && authz && memoryEmbeddings.ready ? "healthy" : "degraded",
+      status: db && dbSchema && rds && memoryEmbeddings.ready ? "healthy" : "degraded",
       services: {
         database: db,
         databaseSchema: dbSchema,
         redis: rds,
-        authz,
         memoryEmbeddings,
       },
-      authzEnabled: config.authz.enabled,
       timestamp: new Date().toISOString(),
     };
   });
@@ -341,11 +361,6 @@ async function main() {
         app.log.error({ err }, "Fastify close timed out");
         app.server.closeAllConnections?.();
       });
-      await waitWithTimeout("authz shutdown", closeAuthzClient(), 3000).catch(
-        (err) => {
-          app.log.error({ err }, "Authz shutdown timed out");
-        },
-      );
       await waitWithTimeout(
         "database pool shutdown",
         closeDatabasePool(),

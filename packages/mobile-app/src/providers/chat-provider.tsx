@@ -230,6 +230,23 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     void requestChatServiceWorkerSync("queue-updated");
   }, [outboxCount, pendingReadCount, sessionStatus, workspaceId]);
 
+  useEffect(() => {
+    if (
+      Platform.OS !== "web" ||
+      sessionStatus !== "authenticated" ||
+      !workspaceId ||
+      !runtimeState.snapshot?.clientInstanceId
+    ) {
+      return;
+    }
+
+    void requestChatServiceWorkerSync("client-instance-ready");
+  }, [
+    runtimeState.snapshot?.clientInstanceId,
+    sessionStatus,
+    workspaceId,
+  ]);
+
   useWorkspaceWebSocket({
     workspaceId: workspaceId || undefined,
     enabled: Boolean(workspaceId && sessionStatus === "authenticated"),

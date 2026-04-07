@@ -21,7 +21,9 @@ import type {
   AutomationRuleUpdatePayload,
   CanonicalContentBlock,
   ChatBootstrapResponse,
+  ChatClientInstanceCreateInput,
   ChatClientInstanceRegistrationResponse,
+  ChatClientInstanceTouchInput,
   ChatConversationCreateResponse,
   ChatConversationMessagesPage,
   ChatConversationMessagesQuery,
@@ -1232,14 +1234,27 @@ class ApiClient {
     )
   }
 
-  registerChatClientInstance(
+  createChatClientInstance(
+    workspaceId: string,
+    input?: ChatClientInstanceCreateInput
+  ): Promise<ChatClientInstanceRegistrationResponse> {
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/client-instances`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          platform: input?.platform,
+          deviceLabel: input?.deviceLabel,
+          metadata: input?.metadata,
+        }),
+      }
+    )
+  }
+
+  touchChatClientInstance(
     workspaceId: string,
     clientInstanceId: string,
-    input?: {
-      platform?: string
-      deviceLabel?: string
-      metadata?: Record<string, unknown>
-    }
+    input?: ChatClientInstanceTouchInput
   ): Promise<ChatClientInstanceRegistrationResponse> {
     return this.fetch(
       `/workspaces/${workspaceId}/chat/client-instances/${clientInstanceId}`,

@@ -3,6 +3,15 @@ import { ZodError, z } from "zod";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
 import { requireWorkspaceMemberIdentity } from "./workspace-identity.js";
 import {
+  chatActorRuntimeParamsSchema,
+  chatClientInstanceParamsSchema,
+  chatConversationParamsSchema,
+  chatInteractionParamsSchema,
+  chatWorkspaceParamsSchema,
+  chatUuidSchema,
+} from "./request-schemas.js";
+import {
+  createChatClientInstance,
   createChatConversation,
   getChatConversationActorRuntimeTurnDetail,
   getConversationParticipant,
@@ -10,8 +19,8 @@ import {
   getChatConversationMessages,
   getChatSync,
   isChatServiceError,
-  registerChatClientInstance,
   sendChatConversationMessage,
+  touchChatClientInstance,
   updateChatConversationReadWatermark,
 } from "./service.js";
 import {
@@ -27,18 +36,18 @@ const CONVERSATION_BASE_PATH = "/api/v1/workspaces/:workspaceId/conversations";
 const jsonRecordSchema = z.record(z.any()).optional();
 
 const createConversationSchema = z.object({
-  clientRequestId: z.string().uuid(),
+  clientRequestId: chatUuidSchema,
   kind: z.enum(["group", "private", "virtual"]),
   boundary: z.enum(["internal", "external"]).optional(),
   title: z.string().trim().min(1).max(255).optional(),
-  workspaceMemberIds: z.array(z.string().uuid()).optional().default([]),
-  actorIds: z.array(z.string().uuid()).optional().default([]),
+  workspaceMemberIds: z.array(chatUuidSchema).optional().default([]),
+  actorIds: z.array(chatUuidSchema).optional().default([]),
   externalParticipants: z
     .array(
       z.object({
         displayName: z.string().trim().min(1).max(255),
         metadata: jsonRecordSchema,
-        transportAddressIds: z.array(z.string().uuid()).optional().default([]),
+        transportAddressIds: z.array(chatUuidSchema).optional().default([]),
       }),
     )
     .optional()
@@ -57,7 +66,7 @@ const conversationMessagesQuerySchema = z
     afterSequence: z.coerce.number().int().min(0).optional(),
     beforeSequence: z.coerce.number().int().min(0).optional(),
     limit: z.coerce.number().int().min(1).max(200).optional(),
-    clientInstanceId: z.string().uuid().optional(),
+    clientInstanceId: chatUuidSchema.optional(),
   })
   .refine(
     (value) =>
@@ -75,16 +84,16 @@ const syncQuerySchema = z.object({
 const sendMessageSchema = z
   .object({
     contentBlocks: z.array(z.any()).min(1),
-    clientMessageId: z.string().uuid(),
-    replyToItemId: z.string().uuid().optional(),
-    clientInstanceId: z.string().uuid().optional(),
+    clientMessageId: chatUuidSchema,
+    replyToItemId: chatUuidSchema.optional(),
+    clientInstanceId: chatUuidSchema.optional(),
     metadata: jsonRecordSchema,
   });
 
 const readWatermarkSchema = z.object({
   readUpToSequence: z.number().int().min(0),
   lastVisibleSequence: z.number().int().min(0).optional(),
-  clientInstanceId: z.string().uuid().optional(),
+  clientInstanceId: chatUuidSchema.optional(),
 });
 
 const interactionAnswerSchema = z.object({
@@ -95,7 +104,7 @@ const interactionAnswerSchema = z.object({
 });
 
 const resolveInteractionCommandSchema = z.object({
-  commandId: z.string().uuid(),
+  commandId: chatUuidSchema,
   baseRevision: z.number().int().min(1),
 });
 
@@ -135,10 +144,14 @@ function getRequestUserId(request: any) {
   return (request as any).user!.userId as string;
 }
 
-async function resolveRequestWorkspaceMemberId(request: any, reply: any) {
+async function resolveRequestWorkspaceMemberId(
+  workspaceId: string,
+  request: any,
+  reply: any,
+) {
   try {
     const identity = await requireWorkspaceMemberIdentity(
-      request.params.workspaceId,
+      workspaceId,
       getRequestUserId(request),
     );
     return identity.workspaceMemberId;
@@ -178,8 +191,9 @@ export default async function chatController(app: FastifyInstance) {
     Params: { workspaceId: string };
   }>(`${CHAT_BASE_PATH}/bootstrap`, async (request, reply) => {
     try {
+      const params = chatWorkspaceParamsSchema.parse(request.params);
       const response = await getChatBootstrap({
-        workspaceId: request.params.workspaceId,
+        workspaceId: params.workspaceId,
         userId: getRequestUserId(request),
       });
       return reply.send(response);
@@ -192,9 +206,10 @@ export default async function chatController(app: FastifyInstance) {
     Params: { workspaceId: string };
   }>(`${CHAT_BASE_PATH}/sync`, async (request, reply) => {
     try {
+      const params = chatWorkspaceParamsSchema.parse(request.params);
       const query = syncQuerySchema.parse(request.query);
       const response = await getChatSync({
-        workspaceId: request.params.workspaceId,
+        workspaceId: params.workspaceId,
         userId: getRequestUserId(request),
         cursor: query.cursor,
         limit: query.limit,
@@ -205,15 +220,35 @@ export default async function chatController(app: FastifyInstance) {
     }
   });
 
+  app.post<{
+    Params: { workspaceId: string };
+  }>(`${CHAT_BASE_PATH}/client-instances`, async (request, reply) => {
+    try {
+      const params = chatWorkspaceParamsSchema.parse(request.params);
+      const body = registerClientInstanceSchema.parse(request.body);
+      const response = await createChatClientInstance({
+        workspaceId: params.workspaceId,
+        userId: getRequestUserId(request),
+        platform: body.platform,
+        deviceLabel: body.deviceLabel,
+        metadata: body.metadata,
+      });
+      return reply.status(201).send(response);
+    } catch (error) {
+      return replyChatError(reply, error);
+    }
+  });
+
   app.put<{
     Params: { workspaceId: string; clientInstanceId: string };
   }>(`${CHAT_BASE_PATH}/client-instances/:clientInstanceId`, async (request, reply) => {
     try {
+      const params = chatClientInstanceParamsSchema.parse(request.params);
       const body = registerClientInstanceSchema.parse(request.body);
-      const response = await registerChatClientInstance({
-        workspaceId: request.params.workspaceId,
+      const response = await touchChatClientInstance({
+        workspaceId: params.workspaceId,
         userId: getRequestUserId(request),
-        clientInstanceId: request.params.clientInstanceId,
+        clientInstanceId: params.clientInstanceId,
         platform: body.platform,
         deviceLabel: body.deviceLabel,
         metadata: body.metadata,
@@ -228,9 +263,10 @@ export default async function chatController(app: FastifyInstance) {
     Params: { workspaceId: string };
   }>(`${CHAT_BASE_PATH}/conversations`, async (request, reply) => {
     try {
+      const params = chatWorkspaceParamsSchema.parse(request.params);
       const body = createConversationSchema.parse(request.body);
       const response = await createChatConversation({
-        workspaceId: request.params.workspaceId,
+        workspaceId: params.workspaceId,
         userId: getRequestUserId(request),
         clientRequestId: body.clientRequestId,
         kind: body.kind,
@@ -251,11 +287,12 @@ export default async function chatController(app: FastifyInstance) {
     Params: { workspaceId: string; conversationId: string };
   }>(`${CHAT_BASE_PATH}/conversations/:conversationId/messages`, async (request, reply) => {
     try {
+      const params = chatConversationParamsSchema.parse(request.params);
       const query = conversationMessagesQuerySchema.parse(request.query);
       const response = await getChatConversationMessages({
-        workspaceId: request.params.workspaceId,
+        workspaceId: params.workspaceId,
         userId: getRequestUserId(request),
-        conversationId: request.params.conversationId,
+        conversationId: params.conversationId,
         afterSequence: query.afterSequence,
         beforeSequence: query.beforeSequence,
         limit: query.limit,
@@ -278,12 +315,13 @@ export default async function chatController(app: FastifyInstance) {
     `${CHAT_BASE_PATH}/conversations/:conversationId/actors/:actorId/runtime-turns/:turnId`,
     async (request, reply) => {
       try {
+        const params = chatActorRuntimeParamsSchema.parse(request.params);
         const response = await getChatConversationActorRuntimeTurnDetail({
-          workspaceId: request.params.workspaceId,
+          workspaceId: params.workspaceId,
           userId: getRequestUserId(request),
-          conversationId: request.params.conversationId,
-          actorId: request.params.actorId,
-          turnId: request.params.turnId,
+          conversationId: params.conversationId,
+          actorId: params.actorId,
+          turnId: params.turnId,
         });
         return reply.send(response);
       } catch (error) {
@@ -296,13 +334,18 @@ export default async function chatController(app: FastifyInstance) {
     Params: { workspaceId: string; conversationId: string };
   }>(`${CHAT_BASE_PATH}/conversations/:conversationId/messages`, async (request, reply) => {
     try {
+      const params = chatConversationParamsSchema.parse(request.params);
       const body = sendMessageSchema.parse(request.body);
-      const workspaceMemberId = await resolveRequestWorkspaceMemberId(request, reply);
+      const workspaceMemberId = await resolveRequestWorkspaceMemberId(
+        params.workspaceId,
+        request,
+        reply,
+      );
       if (!workspaceMemberId) return;
       const response = await sendChatConversationMessage({
-        workspaceId: request.params.workspaceId,
+        workspaceId: params.workspaceId,
         workspaceMemberId,
-        conversationId: request.params.conversationId,
+        conversationId: params.conversationId,
         clientInstanceId: body.clientInstanceId,
         clientMessageId: body.clientMessageId,
         contentBlocks: body.contentBlocks,
@@ -319,13 +362,18 @@ export default async function chatController(app: FastifyInstance) {
     Params: { workspaceId: string; conversationId: string };
   }>(`${CHAT_BASE_PATH}/conversations/:conversationId/read-watermark`, async (request, reply) => {
     try {
+      const params = chatConversationParamsSchema.parse(request.params);
       const body = readWatermarkSchema.parse(request.body);
-      const workspaceMemberId = await resolveRequestWorkspaceMemberId(request, reply);
+      const workspaceMemberId = await resolveRequestWorkspaceMemberId(
+        params.workspaceId,
+        request,
+        reply,
+      );
       if (!workspaceMemberId) return;
       const response = await updateChatConversationReadWatermark({
-        workspaceId: request.params.workspaceId,
+        workspaceId: params.workspaceId,
         workspaceMemberId,
-        conversationId: request.params.conversationId,
+        conversationId: params.conversationId,
         clientInstanceId: body.clientInstanceId,
         readUpToSequence: body.readUpToSequence,
         lastVisibleSequence: body.lastVisibleSequence,
@@ -344,17 +392,22 @@ export default async function chatController(app: FastifyInstance) {
     };
   }>(`${CONVERSATION_BASE_PATH}/:conversationId/interactions/:interactionId/respond`, async (request, reply) => {
     try {
+      const params = chatInteractionParamsSchema.parse(request.params);
       const body = resolveInteractionSchema.parse(request.body);
-      const workspaceMemberId = await resolveRequestWorkspaceMemberId(request, reply);
+      const workspaceMemberId = await resolveRequestWorkspaceMemberId(
+        params.workspaceId,
+        request,
+        reply,
+      );
       if (!workspaceMemberId) return;
 
       const interaction = await getInteractionRequestSummary(
-        request.params.interactionId,
+        params.interactionId,
       );
       if (
         !interaction ||
-        interaction.workspaceId !== request.params.workspaceId ||
-        interaction.conversationId !== request.params.conversationId
+        interaction.workspaceId !== params.workspaceId ||
+        interaction.conversationId !== params.conversationId
       ) {
         return reply.status(404).send({
           error: "Interaction not found",
@@ -374,7 +427,7 @@ export default async function chatController(app: FastifyInstance) {
       }
 
       const resolverParticipant = await getConversationParticipant({
-        conversationId: request.params.conversationId,
+        conversationId: params.conversationId,
         workspaceMemberId,
       });
       if (!resolverParticipant?.id) {

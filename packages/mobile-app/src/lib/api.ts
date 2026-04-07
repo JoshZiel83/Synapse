@@ -8,7 +8,9 @@ import type {
   AuthSessionPersistence,
   CanonicalContentBlock,
   ChatBootstrapResponse,
+  ChatClientInstanceCreateInput,
   ChatClientInstanceRegistrationResponse,
+  ChatClientInstanceTouchInput,
   ChatConversationCreateResponse,
   ChatConversationMessagesQuery,
   ChatConversationMessagesPage,
@@ -532,14 +534,27 @@ class ApiClient {
     );
   }
 
-  registerChatClientInstance(
+  createChatClientInstance(
+    workspaceId: string,
+    input?: ChatClientInstanceCreateInput,
+  ): Promise<ChatClientInstanceRegistrationResponse> {
+    return this.request<ChatClientInstanceRegistrationResponse>(
+      `/workspaces/${workspaceId}/chat/client-instances`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          platform: input?.platform,
+          deviceLabel: input?.deviceLabel,
+          metadata: input?.metadata,
+        }),
+      },
+    );
+  }
+
+  touchChatClientInstance(
     workspaceId: string,
     clientInstanceId: string,
-    input?: {
-      platform?: string;
-      deviceLabel?: string;
-      metadata?: Record<string, unknown>;
-    },
+    input?: ChatClientInstanceTouchInput,
   ): Promise<ChatClientInstanceRegistrationResponse> {
     return this.request<ChatClientInstanceRegistrationResponse>(
       `/workspaces/${workspaceId}/chat/client-instances/${clientInstanceId}`,

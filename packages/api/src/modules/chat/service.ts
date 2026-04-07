@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import {
   buildConversationMessageRef,
   normalizeCanonicalContentBlocks,
@@ -268,10 +269,13 @@ type ConversationCreateInput = {
 type RegisterClientInstanceInput = {
   workspaceId: string;
   workspaceMemberId: string;
-  clientInstanceId: string;
   platform?: string;
   deviceLabel?: string;
   metadata?: Record<string, unknown>;
+};
+
+type UpdateClientInstanceInput = RegisterClientInstanceInput & {
+  clientInstanceId: string;
 };
 
 type SendMessageInput = {
@@ -649,14 +653,15 @@ async function getWorkspaceMemberIdentityOrThrow(
 
 async function ensureClientInstance(
   queryable: Queryable,
-  input: RegisterClientInstanceInput,
+  input: UpdateClientInstanceInput,
 ) {
   const existing = await executeSqlOn<{
+    workspace_id: string;
     workspace_member_id: string;
   }>(
     queryable,
     `
-      SELECT workspace_member_id
+      SELECT workspace_id, workspace_member_id
       FROM chat_client_instances
       WHERE id = $1
       LIMIT 1
@@ -664,14 +669,22 @@ async function ensureClientInstance(
     [input.clientInstanceId],
   );
   const owner = existing.rows[0];
+  if (!owner) {
+    throw createChatError(404, "client_instance_not_found", "Client instance not found");
+  }
   if (
-    owner &&
-    typeof owner.workspace_member_id === "string" &&
+    owner.workspace_id !== input.workspaceId ||
     owner.workspace_member_id !== input.workspaceMemberId
   ) {
     throw createChatError(403, "client_instance_forbidden", "Client instance belongs to another workspace member");
   }
+}
 
+async function createClientInstance(
+  queryable: Queryable,
+  input: RegisterClientInstanceInput,
+) {
+  const clientInstanceId = randomUUID();
   await executeSqlOn(
     queryable,
     `
@@ -688,20 +701,40 @@ async function ensureClientInstance(
         updated_at
       )
       VALUES ($1, $2, $3, $4, $5, 'active', $6::jsonb, NOW(), NOW(), NOW())
-      ON CONFLICT (id) DO UPDATE
-      SET workspace_id = EXCLUDED.workspace_id,
-          workspace_member_id = EXCLUDED.workspace_member_id,
-          platform = COALESCE(EXCLUDED.platform, chat_client_instances.platform),
-          device_label = COALESCE(EXCLUDED.device_label, chat_client_instances.device_label),
-          metadata = COALESCE(chat_client_instances.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+    `,
+    [
+      clientInstanceId,
+      input.workspaceId,
+      input.workspaceMemberId,
+      input.platform ?? null,
+      input.deviceLabel ?? null,
+      JSON.stringify(input.metadata ?? {}),
+    ],
+  );
+
+  return clientInstanceId;
+}
+
+async function touchClientInstance(
+  queryable: Queryable,
+  input: UpdateClientInstanceInput,
+) {
+  await ensureClientInstance(queryable, input);
+
+  await executeSqlOn(
+    queryable,
+    `
+      UPDATE chat_client_instances
+      SET platform = COALESCE($2, platform),
+          device_label = COALESCE($3, device_label),
+          metadata = COALESCE(metadata, '{}'::jsonb) || $4::jsonb,
           status = 'active',
           last_seen_at = NOW(),
           updated_at = NOW()
+      WHERE id = $1
     `,
     [
       input.clientInstanceId,
-      input.workspaceId,
-      input.workspaceMemberId,
       input.platform ?? null,
       input.deviceLabel ?? null,
       JSON.stringify(input.metadata ?? {}),
@@ -3897,7 +3930,31 @@ export async function listConversationRealtimeRecipients(
   }));
 }
 
-export async function registerChatClientInstance(params: {
+export async function createChatClientInstance(params: {
+  workspaceId: string;
+  userId: string;
+  platform?: string;
+  deviceLabel?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<ChatClientInstanceRegistrationResponse> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
+  const clientInstanceId = await transaction(async (client) =>
+    createClientInstance(client, {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
+      platform: params.platform,
+      deviceLabel: params.deviceLabel,
+      metadata: params.metadata,
+    }),
+  );
+
+  return {
+    clientInstanceId,
+    workspaceMemberId: identity.workspaceMemberId,
+  };
+}
+
+export async function touchChatClientInstance(params: {
   workspaceId: string;
   userId: string;
   clientInstanceId: string;
@@ -3907,7 +3964,7 @@ export async function registerChatClientInstance(params: {
 }): Promise<ChatClientInstanceRegistrationResponse> {
   const identity = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
   await transaction(async (client) => {
-    await ensureClientInstance(client, {
+    await touchClientInstance(client, {
       workspaceId: params.workspaceId,
       workspaceMemberId: identity.workspaceMemberId,
       clientInstanceId: params.clientInstanceId,

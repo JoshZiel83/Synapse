@@ -1,6 +1,6 @@
 import { Platform } from "react-native";
 
-import { api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api";
 import {
   buildPreviewTextFromItem,
   createEmptyChatWorkspaceSnapshot,
@@ -648,14 +648,47 @@ export class ChatRuntime {
       baseSnapshot = createEmptyChatWorkspaceSnapshot(workspaceId);
     }
 
-    const clientInstanceId = baseSnapshot.clientInstanceId ?? createId("client");
-    await api.registerChatClientInstance(workspaceId, clientInstanceId, {
+    const clientInstanceInput = {
       platform: Platform.OS,
       deviceLabel: getDeviceLabel(),
       metadata: {
         workspaceMemberId: bootstrap.workspaceMemberId,
       },
-    });
+    };
+
+    let clientInstanceId = baseSnapshot.clientInstanceId;
+    if (clientInstanceId) {
+      try {
+        const response = await api.touchChatClientInstance(
+          workspaceId,
+          clientInstanceId,
+          clientInstanceInput,
+        );
+        clientInstanceId = response.clientInstanceId;
+      } catch (error) {
+        if (
+          !(
+            error instanceof ApiError &&
+            (error.status === 400 ||
+              error.status === 404 ||
+              error.code === "invalid_request" ||
+              error.code === "client_instance_not_found")
+          )
+        ) {
+          throw error;
+        }
+
+        clientInstanceId = undefined;
+      }
+    }
+
+    if (!clientInstanceId) {
+      const response = await api.createChatClientInstance(
+        workspaceId,
+        clientInstanceInput,
+      );
+      clientInstanceId = response.clientInstanceId;
+    }
 
     this.replaceSnapshot({
       ...baseSnapshot,

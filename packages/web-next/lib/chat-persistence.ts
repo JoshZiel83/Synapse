@@ -5,6 +5,7 @@ import type {
   ChatConversationView,
   ConversationReplyRef,
 } from "@synapse/shared"
+import { isUuid } from "@/lib/uuid"
 
 export const CHAT_SNAPSHOT_DB_NAME = "synapse-web-next-chat"
 export const CHAT_SNAPSHOT_DB_VERSION = 1
@@ -33,7 +34,7 @@ export interface PendingOutboxMessage {
 }
 
 export interface StoredChatSnapshot {
-  version: 1
+  version: 2
   workspaceId: string
   workspaceMemberId?: string
   clientInstanceId?: string
@@ -96,7 +97,7 @@ export function createEmptyStoredChatSnapshot(
   workspaceId: string
 ): StoredChatSnapshot {
   return {
-    version: 1,
+    version: 2,
     workspaceId,
     inboxCursor: 0,
     conversations: [],
@@ -114,7 +115,7 @@ export function normalizeStoredChatSnapshot(
   }
 
   const snapshot = value as Partial<StoredChatSnapshot>
-  if (snapshot.version !== 1 || snapshot.workspaceId !== workspaceId) {
+  if (snapshot.version !== 2 || snapshot.workspaceId !== workspaceId) {
     return createEmptyStoredChatSnapshot(workspaceId)
   }
 
@@ -161,14 +162,15 @@ export function normalizeStoredChatSnapshot(
       : {}
 
   return {
-    version: 1,
+    version: 2,
     workspaceId,
     workspaceMemberId:
       typeof snapshot.workspaceMemberId === "string"
         ? snapshot.workspaceMemberId
         : undefined,
     clientInstanceId:
-      typeof snapshot.clientInstanceId === "string"
+      typeof snapshot.clientInstanceId === "string" &&
+      isUuid(snapshot.clientInstanceId)
         ? snapshot.clientInstanceId
         : undefined,
     inboxCursor:

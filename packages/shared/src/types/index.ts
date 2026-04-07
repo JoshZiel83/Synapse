@@ -2279,7 +2279,6 @@ export interface AccessGrant {
   resourceId: string;
   workspaceId: string;
   target: CapabilityAccessTarget;
-  permissions: string[];
   status: AccessGrantStatus;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
@@ -3927,6 +3926,18 @@ export interface ChatClientInstanceRegistrationRequest {
 export type ChatClientInstanceRegistrationInput =
   ChatClientInstanceRegistrationRequest;
 
+export interface ChatClientInstanceCreateRequest
+  extends ChatClientInstanceRegistrationRequest {}
+
+export type ChatClientInstanceCreateInput =
+  ChatClientInstanceCreateRequest;
+
+export interface ChatClientInstanceTouchRequest
+  extends ChatClientInstanceRegistrationRequest {}
+
+export type ChatClientInstanceTouchInput =
+  ChatClientInstanceTouchRequest;
+
 export interface ChatClientInstanceRegistrationResponse {
   clientInstanceId: UUID;
   workspaceMemberId: UUID;
@@ -4766,7 +4777,6 @@ export type AccessSubjectType =
   | "platform"
   | "workspace"
   | "conversation"
-  | "workspace_in_conversation"
   | "user"
   | "actor"
   | "workspace_member"
