@@ -58,13 +58,13 @@ import {
   normalizeFeishuFeatureKeys,
 } from "./feishu/features.js";
 import {
-  buildResourceAccessBindingRef,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   readAccessBindingTarget,
   resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js";
+import { buildResourceAccessBindingInsertValues } from "../access/binding-storage.js";
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
@@ -828,9 +828,9 @@ function buildInstallationAccessRow(row: AccessBindingRow): InstallationAccessRo
   return {
     ...row,
     installation_id: row.resource_id,
-    access_target_type: target.bindScope,
-    actor_id: target.actorId,
-    conversation_id: target.conversationId,
+    access_target_type: target.targetType,
+    actor_id: target.subjectActorId,
+    conversation_id: target.subjectConversationId,
     workspace_member_id: null,
   };
 }
@@ -1888,23 +1888,17 @@ export async function installPluginUnified(data: {
       client,
       db
         .insertInto("resource_access_bindings")
-        .values({
-          workspace_id: data.workspaceId,
-          ...buildResourceAccessBindingRef({
+        .values(
+          buildResourceAccessBindingInsertValues({
+            workspaceId: data.workspaceId,
             resourceType: "plugin_installation",
             resourceId: installationId,
+            target: initialAccessTarget,
+            createdByWorkspaceMemberId:
+              data.installedByWorkspaceMemberId || null,
+            reason: plugin.authorization?.reason || null,
           }),
-          target_type: initialAccessTarget.targetType,
-          subject_workspace_id: initialAccessTarget.subjectWorkspaceId,
-          subject_actor_id: initialAccessTarget.subjectActorId,
-          subject_conversation_id: initialAccessTarget.subjectConversationId,
-          subject_conversation_actor_context_id:
-            initialAccessTarget.subjectConversationActorContextId,
-          status: "active",
-          created_by_workspace_member_id:
-            data.installedByWorkspaceMemberId || null,
-          reason: plugin.authorization?.reason || null,
-        })
+        )
         .returning("id"),
     );
     await executeCompiledQuery(
@@ -2331,8 +2325,8 @@ export async function grantPluginInstallationAccess(input: {
     });
   await validateConversationScopedAccessTarget({
     targetType: accessTarget.targetType,
-    conversationId: accessTarget.conversationId,
-    actorId: accessTarget.actorId,
+    conversationId: accessTarget.subjectConversationId,
+    actorId: accessTarget.subjectActorId,
     effectiveConversationTypeMask,
     buildError: (message) => new McpPluginError(400, message),
   });
@@ -2341,8 +2335,8 @@ export async function grantPluginInstallationAccess(input: {
     (entry) =>
       entry.status === "active" &&
       entry.access_target_type === accessTarget.targetType &&
-      entry.actor_id === accessTarget.actorId &&
-      entry.conversation_id === accessTarget.conversationId,
+      entry.actor_id === accessTarget.subjectActorId &&
+      entry.conversation_id === accessTarget.subjectConversationId,
   );
   if (existing) {
     return mapAccessRowToGrant(
@@ -2362,25 +2356,19 @@ export async function grantPluginInstallationAccess(input: {
       client,
       db
         .insertInto("resource_access_bindings")
-        .values({
-          workspace_id: input.workspaceId,
-          ...buildResourceAccessBindingRef({
+        .values(
+          buildResourceAccessBindingInsertValues({
+            workspaceId: input.workspaceId,
             resourceType: "plugin_installation",
             resourceId: input.installationId,
+            target: accessTarget,
+            conversationTypeMaskOverride:
+              input.conversationTypeMaskOverride ?? null,
+            createdByWorkspaceMemberId:
+              input.grantedByWorkspaceMemberId || null,
+            reason: input.reason || plugin.authorization?.reason || null,
           }),
-          target_type: accessTarget.targetType,
-          subject_workspace_id: accessTarget.subjectWorkspaceId,
-          subject_actor_id: accessTarget.subjectActorId,
-          subject_conversation_id: accessTarget.subjectConversationId,
-          subject_conversation_actor_context_id:
-            accessTarget.subjectConversationActorContextId,
-          conversation_type_mask_override:
-            input.conversationTypeMaskOverride ?? null,
-          status: "active",
-          created_by_workspace_member_id:
-            input.grantedByWorkspaceMemberId || null,
-          reason: input.reason || plugin.authorization?.reason || null,
-        })
+        )
         .returningAll(),
     );
 

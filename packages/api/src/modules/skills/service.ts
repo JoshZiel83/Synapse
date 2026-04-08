@@ -24,7 +24,12 @@ import {
   lookupResources,
 } from "../access/core.js";
 import { transaction } from "../../infrastructure/database/index.js";
-import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
+import {
+  db,
+  executeSql,
+  executeSqlOn,
+  executeTakeFirst,
+} from "../../infrastructure/database/kysely.js";
 import {
   getWorkspaceCapabilityConversationTypeMask,
   getWorkspaceCapabilityConversationTypePolicyMap,
@@ -38,6 +43,10 @@ import {
   resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js";
+import {
+  buildAccessBindingStorageTarget,
+  buildResourceAccessBindingInsertValues,
+} from "../access/binding-storage.js";
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
@@ -1461,9 +1470,9 @@ function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
   return {
     ...row,
     skill_id: row.resource_id,
-    bind_scope: target.bindScope,
-    conversation_id: target.conversationId,
-    actor_id: target.actorId,
+    bind_scope: target.targetType,
+    conversation_id: target.subjectConversationId,
+    actor_id: target.subjectActorId,
     workspace_member_id: null,
   };
 }
@@ -1620,17 +1629,18 @@ async function findSkillIdsByBindingFilter(params: {
   ];
 
   if (target) {
-    values.push(target.targetType);
+    const storageTarget = buildAccessBindingStorageTarget(target);
+    values.push(storageTarget.target_type);
     conditions.push(`target_type = $${values.length}`);
-    values.push(target.subjectConversationActorContextId);
+    values.push(storageTarget.subject_conversation_actor_context_id);
     conditions.push(
       `subject_conversation_actor_context_id IS NOT DISTINCT FROM $${values.length}::uuid`,
     );
-    values.push(target.subjectWorkspaceId);
+    values.push(storageTarget.subject_workspace_id);
     conditions.push(`subject_workspace_id IS NOT DISTINCT FROM $${values.length}::uuid`);
-    values.push(target.subjectActorId);
+    values.push(storageTarget.subject_actor_id);
     conditions.push(`subject_actor_id IS NOT DISTINCT FROM $${values.length}::uuid`);
-    values.push(target.subjectConversationId);
+    values.push(storageTarget.subject_conversation_id);
     conditions.push(`subject_conversation_id IS NOT DISTINCT FROM $${values.length}::uuid`);
   } else {
     if (params.actorId) {
@@ -1682,7 +1692,7 @@ async function findInstalledSkillBySource(
 }
 
 async function ensureSkillBinding(
-  run: QueryRunner,
+  client: pg.PoolClient,
   input: {
     skillId: string;
     workspaceId: string;
@@ -1698,47 +1708,30 @@ async function ensureSkillBinding(
       conversationId: input.target.conversationId || undefined,
     },
   });
+  const storageTarget = buildAccessBindingStorageTarget(grantTarget);
 
-  const existing = await run<AccessBindingRow>(
-    `SELECT
-       binding.id,
-       binding.workspace_id,
-       binding.resource_type,
-       binding.installed_skill_id,
-       binding.plugin_installation_id,
-       binding.relay_capability_id,
-       binding.installed_skill_id::text AS resource_id,
-       binding.target_type,
-       binding.subject_workspace_id,
-       COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
-       COALESCE(binding.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
-       binding.subject_conversation_actor_context_id,
-       binding.status,
-       binding.created_by_workspace_member_id,
-       binding.reason,
-       binding.created_at,
-       binding.revoked_at
-     FROM resource_access_bindings binding
-     LEFT JOIN conversation_actor_contexts cac
-       ON cac.id = binding.subject_conversation_actor_context_id
-     WHERE binding.workspace_id = $1
-       AND binding.installed_skill_id = $2::uuid
+  const existing = await executeSqlOn<{ id: string }>(
+    client,
+    `SELECT id
+     FROM resource_access_bindings
+     WHERE workspace_id = $1
+       AND installed_skill_id = $2::uuid
        AND target_type = $3
        AND subject_workspace_id IS NOT DISTINCT FROM $4::uuid
        AND subject_actor_id IS NOT DISTINCT FROM $5::uuid
        AND subject_conversation_id IS NOT DISTINCT FROM $6::uuid
        AND subject_conversation_actor_context_id IS NOT DISTINCT FROM $7::uuid
        AND status = 'active'
-     ORDER BY binding.created_at DESC
+     ORDER BY created_at DESC
      LIMIT 1`,
     [
       input.workspaceId,
       input.skillId,
-      grantTarget.targetType,
-      grantTarget.subjectWorkspaceId,
-      grantTarget.subjectActorId,
-      grantTarget.subjectConversationId,
-      grantTarget.subjectConversationActorContextId,
+      storageTarget.target_type,
+      storageTarget.subject_workspace_id,
+      storageTarget.subject_actor_id,
+      storageTarget.subject_conversation_id,
+      storageTarget.subject_conversation_actor_context_id,
     ],
   );
 
@@ -1749,45 +1742,26 @@ async function ensureSkillBinding(
     };
   }
 
-  const inserted = await run<{ id: string }>(
-    `INSERT INTO resource_access_bindings (
-       workspace_id,
-       resource_type,
-       installed_skill_id,
-       target_type,
-       subject_workspace_id,
-       subject_actor_id,
-       subject_conversation_id,
-       subject_conversation_actor_context_id,
-       status,
-       created_by_workspace_member_id
-     )
-     VALUES (
-       $1,
-       'installed_skill',
-       $2,
-       $3,
-       $4,
-       $5,
-       $6,
-       $7,
-       $8,
-       'active',
-       $9
-     )
-     RETURNING id`,
-    [
-      input.workspaceId,
-      input.skillId,
-      grantTarget.targetType,
-      grantTarget.subjectWorkspaceId,
-      grantTarget.subjectActorId,
-      grantTarget.subjectConversationId,
-      grantTarget.subjectConversationActorContextId,
-      input.createdByWorkspaceMemberId || null,
-    ],
+  const inserted = await executeTakeFirst<{ id: string }>(
+    client,
+    db
+      .insertInto("resource_access_bindings")
+      .values(
+        buildResourceAccessBindingInsertValues({
+          workspaceId: input.workspaceId,
+          resourceType: "installed_skill",
+          resourceId: input.skillId,
+          target: grantTarget,
+          createdByWorkspaceMemberId:
+            input.createdByWorkspaceMemberId || null,
+        }),
+      )
+      .returning("id"),
   );
-  const bindingId = inserted.rows[0]!.id;
+  if (!inserted) {
+    throw new Error("Failed to create installed skill access binding");
+  }
+  const bindingId = inserted.id;
 
   return {
     bindingId,
@@ -2534,7 +2508,7 @@ export async function createWorkspaceSkill(input: {
         ],
       );
 
-    await ensureSkillBinding(clientRunner(client), {
+    await ensureSkillBinding(client, {
       skillId,
       workspaceId: input.workspaceId,
       target,
@@ -2716,8 +2690,8 @@ export async function grantInstalledSkillAccess(input: {
     });
   await validateConversationScopedAccessTarget({
     targetType: accessTarget.targetType,
-    conversationId: accessTarget.conversationId,
-    actorId: accessTarget.actorId,
+    conversationId: accessTarget.subjectConversationId,
+    actorId: accessTarget.subjectActorId,
     effectiveConversationTypeMask,
     buildError: (message) => new SkillError(400, message),
   });
@@ -2726,8 +2700,8 @@ export async function grantInstalledSkillAccess(input: {
     (row) =>
       row.status === "active" &&
       row.target_type === accessTarget.targetType &&
-      row.actor_id === accessTarget.actorId &&
-      row.conversation_id === accessTarget.conversationId,
+      row.actor_id === accessTarget.subjectActorId &&
+      row.conversation_id === accessTarget.subjectConversationId,
   );
   if (existing) {
     return mapSkillAccessRowToGrant(existing, {
@@ -2941,7 +2915,7 @@ export async function installMarketplaceSkill(input: {
 
     if (existingSkillId) {
       await ensureSkillBinding(
-        clientRunner(client),
+        client,
         {
           skillId: existingSkillId,
           workspaceId: input.workspaceId,
@@ -3029,7 +3003,7 @@ export async function installMarketplaceSkill(input: {
       [marketplaceSkill.item_id],
     );
 
-    await ensureSkillBinding(clientRunner(client), {
+    await ensureSkillBinding(client, {
       skillId,
       workspaceId: input.workspaceId,
       target,

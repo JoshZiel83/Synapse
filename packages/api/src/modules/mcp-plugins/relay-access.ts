@@ -1,13 +1,20 @@
 import type pg from "pg";
 import type { CapabilityAccessTarget } from "@synapse/shared/types";
 import { transaction } from "../../infrastructure/database/index.js";
-import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
 import {
+  db,
+  executeSql,
+  executeSqlOn,
+  executeTakeFirst,
+} from "../../infrastructure/database/kysely.js";
+import {
+  accessBindingHasTarget,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js";
+import { buildResourceAccessBindingInsertValues } from "../access/binding-storage.js";
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
@@ -298,8 +305,8 @@ export async function grantRelayExposureAccess(input: {
   });
   await validateConversationScopedAccessTarget({
     targetType: target.targetType,
-    conversationId: target.conversationId,
-    actorId: target.actorId,
+    conversationId: target.subjectConversationId,
+    actorId: target.subjectActorId,
     effectiveConversationTypeMask,
     buildError: (message) =>
       buildRelayGrantPolicyError(
@@ -311,16 +318,7 @@ export async function grantRelayExposureAccess(input: {
   const existing = (await listRelayExposureAccessRows(
     input.workspaceId,
     exposure.capability_id,
-  )).find(
-    (row) =>
-      row.target_type === target.targetType &&
-      (row.subject_workspace_id || null) === (target.subjectWorkspaceId || null) &&
-      (row.subject_actor_id || null) === (target.subjectActorId || null) &&
-      (row.subject_conversation_id || null) ===
-        (target.subjectConversationId || null) &&
-      (row.subject_conversation_actor_context_id || null) ===
-        (target.subjectConversationActorContextId || null),
-  );
+  )).find((row) => accessBindingHasTarget(row, target));
 
   if (existing) {
     return mapAccessBindingToGrant(existing, ["use"], undefined, {
@@ -331,41 +329,34 @@ export async function grantRelayExposureAccess(input: {
     });
   }
   const inserted = await transaction(async (client) => {
-    const binding = await executeSqlOn<AccessBindingRow>(client, 
-        `INSERT INTO resource_access_bindings (
-         workspace_id,
-         resource_type,
-         relay_capability_id,
-         target_type,
-         subject_workspace_id,
-         subject_actor_id,
-         subject_conversation_id,
-         subject_conversation_actor_context_id,
-         conversation_type_mask_override,
-         status,
-         created_by_workspace_member_id,
-         reason
-       )
-       VALUES (
-        $1, 'relay_capability', $2, $3, $4, $5, $6, $7, $8, 'active', $9, $10
-       )
-       RETURNING *, relay_capability_id::text AS resource_id`,
-      [
-        input.workspaceId,
-        exposure.capability_id,
-        target.targetType,
-        target.subjectWorkspaceId,
-        target.subjectActorId,
-        target.subjectConversationId,
-        target.subjectConversationActorContextId,
-        input.conversationTypeMaskOverride ?? null,
-        input.grantedByWorkspaceMemberId || null,
-        input.reason || RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
-      ],
+    const binding = await executeTakeFirst<AccessBindingRow>(
+      client,
+      db
+        .insertInto("resource_access_bindings")
+        .values(
+          buildResourceAccessBindingInsertValues({
+            workspaceId: input.workspaceId,
+            resourceType: "relay_capability",
+            resourceId: exposure.capability_id,
+            target,
+            conversationTypeMaskOverride:
+              input.conversationTypeMaskOverride ?? null,
+            createdByWorkspaceMemberId:
+              input.grantedByWorkspaceMemberId || null,
+            reason: input.reason || RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
+          }),
+        )
+        .returningAll(),
     );
+    if (!binding) {
+      throw new Error("Failed to create relay capability access binding");
+    }
 
     return {
-      binding: binding.rows[0]!,
+      binding: {
+        ...binding,
+        resource_id: binding.relay_capability_id!,
+      } as AccessBindingRow,
     };
   });
 

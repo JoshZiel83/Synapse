@@ -4769,21 +4769,12 @@ export type PluginReuseScopeV2 =
   | "workspace"
   | "conversation"
   | "actor";
-export type AccessBindingStatus = "active" | "revoked";
 export type ResourceAccessBindingResourceType =
   | "installed_skill"
   | "plugin_installation"
   | "relay_capability"
   | "automation_event_source";
 export type AccessResourceType = ResourceAccessBindingResourceType;
-export type AccessSubjectType =
-  | "platform"
-  | "workspace"
-  | "conversation"
-  | "user"
-  | "actor"
-  | "workspace_member"
-  | "conversation_actor_context";
 
 export interface CatalogPublisherRecord {
   id: string;
@@ -4890,23 +4881,6 @@ export interface PluginPackageVersionSpecRecord {
   requiresHandshake: boolean;
   metadata: Record<string, unknown>;
   createdAt: string;
-}
-
-export interface AccessBindingRecord {
-  id: string;
-  workspaceId?: string;
-  resourceType: AccessResourceType;
-  resourceId: string;
-  relation: string;
-  subjectType: AccessSubjectType;
-  subjectId: string;
-  subjectRelation?: string;
-  status: AccessBindingStatus;
-  createdByWorkspaceMemberId?: string;
-  reason?: string;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-  revokedAt?: string;
 }
 
 export interface InstalledSkillRecord {
