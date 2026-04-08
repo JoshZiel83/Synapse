@@ -8,17 +8,21 @@ import {
   bindRemoteAgent,
   checkRemoteAgentMessages,
   createRemoteAgent,
+  createRemoteAgentPlanApprovalInteraction,
   createRemoteAgentMachinePairingSession,
+  createRemoteAgentUserInputInteraction,
   deleteRemoteAgent,
   getMachineKeyFromHeaders,
   getRemoteAgent,
   getRemoteAgentConversationHistory,
   getRemoteAgentMachine,
+  listRemoteAgentGroupInteractionGrants,
   listRemoteAgentConversations,
   listRemoteAgentMachines,
   listRemoteAgents,
   searchRemoteAgentMessages,
   sendRemoteAgentConversationMessage,
+  updateRemoteAgentGroupInteractionGrants,
   updateRemoteAgent,
 } from "./service.js";
 
@@ -56,6 +60,10 @@ const bindRemoteAgentSchema = z.object({
   localRootPath: z.string().trim().min(1).optional(),
 });
 
+const groupInteractionGrantsSchema = z.object({
+  workspaceMemberIds: z.array(z.string().uuid()).max(200),
+});
+
 const historyQuerySchema = z.object({
   afterSequence: z.coerce.number().int().min(0).optional(),
   beforeSequence: z.coerce.number().int().min(0).optional(),
@@ -83,6 +91,27 @@ const sendMessageSchema = z.object({
 const ackDeliveriesSchema = z.object({
   remoteAgentId: z.string().uuid(),
   deliveryIds: z.array(z.string().uuid()).min(1),
+});
+
+const internalUserInputInteractionSchema = z.object({
+  conversationId: z.string().uuid(),
+  runKey: z.string().trim().min(1).max(255),
+  title: z.string().trim().min(1).max(255),
+  instructions: z.string().trim().max(5000).optional(),
+  questions: z.array(z.any()).min(1).max(4),
+  expiresAt: z.string().datetime().optional(),
+});
+
+const internalPlanApprovalInteractionSchema = z.object({
+  conversationId: z.string().uuid(),
+  runKey: z.string().trim().min(1).max(255),
+  title: z.string().trim().min(1).max(255),
+  summary: z.string().trim().max(5000).optional(),
+  planMarkdown: z.string().trim().min(1),
+  checklist: z.array(z.any()).optional(),
+  collaborationMode: z.string().trim().max(120).optional(),
+  collaborationState: z.record(z.any()).optional(),
+  expiresAt: z.string().datetime().optional(),
 });
 
 function getRequestUserId(request: any) {
@@ -250,6 +279,43 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     }
   });
 
+  app.get<{
+    Params: { workspaceId: string; remoteAgentId: string };
+  }>("/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-interaction-grants", { preHandler: workspacePreHandler }, async (request, reply) => {
+    if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return;
+    try {
+      return reply.send(
+        await listRemoteAgentGroupInteractionGrants({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId: getRequestUserId(request),
+        }),
+      );
+    } catch (error) {
+      return sendServiceError(reply, error);
+    }
+  });
+
+  app.put<{
+    Params: { workspaceId: string; remoteAgentId: string };
+    Body: unknown;
+  }>("/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/group-interaction-grants", { preHandler: workspacePreHandler }, async (request, reply) => {
+    if (!(await requireWorkspaceRemoteAgentAdmin(request, reply))) return;
+    try {
+      const body = groupInteractionGrantsSchema.parse(request.body);
+      return reply.send(
+        await updateRemoteAgentGroupInteractionGrants({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId: getRequestUserId(request),
+          workspaceMemberIds: body.workspaceMemberIds,
+        }),
+      );
+    } catch (error) {
+      return sendServiceError(reply, error);
+    }
+  });
+
   app.post<{
     Params: { workspaceId: string };
     Body: unknown;
@@ -302,6 +368,55 @@ export default async function remoteAgentsController(app: FastifyInstance) {
   });
 
   for (const prefix of internalPrefixes) {
+    app.post<{
+      Params: { remoteAgentId: string };
+      Body: unknown;
+    }>(`${prefix}/remote-agents/:remoteAgentId/interactions/user-input`, async (request, reply) => {
+      try {
+        const body = internalUserInputInteractionSchema.parse(request.body);
+        return reply.send(
+          await createRemoteAgentUserInputInteraction({
+            remoteAgentId: request.params.remoteAgentId,
+            machineKey: getMachineKeyFromHeaders(request),
+            conversationId: body.conversationId,
+            runKey: body.runKey,
+            title: body.title,
+            instructions: body.instructions,
+            questions: body.questions,
+            expiresAt: body.expiresAt,
+          }),
+        );
+      } catch (error) {
+        return sendServiceError(reply, error);
+      }
+    });
+
+    app.post<{
+      Params: { remoteAgentId: string };
+      Body: unknown;
+    }>(`${prefix}/remote-agents/:remoteAgentId/interactions/plan-approval`, async (request, reply) => {
+      try {
+        const body = internalPlanApprovalInteractionSchema.parse(request.body);
+        return reply.send(
+          await createRemoteAgentPlanApprovalInteraction({
+            remoteAgentId: request.params.remoteAgentId,
+            machineKey: getMachineKeyFromHeaders(request),
+            conversationId: body.conversationId,
+            runKey: body.runKey,
+            title: body.title,
+            summary: body.summary,
+            planMarkdown: body.planMarkdown,
+            checklist: body.checklist,
+            collaborationMode: body.collaborationMode,
+            collaborationState: body.collaborationState,
+            expiresAt: body.expiresAt,
+          }),
+        );
+      } catch (error) {
+        return sendServiceError(reply, error);
+      }
+    });
+
     app.get<{
       Params: { remoteAgentId: string };
     }>(`${prefix}/remote-agents/:remoteAgentId/conversations`, async (request, reply) => {

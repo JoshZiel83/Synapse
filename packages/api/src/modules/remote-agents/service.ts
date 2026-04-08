@@ -11,10 +11,27 @@ import {
   requireRemoteAgentConversationAccess,
   sendConversationMessageFromParticipant,
 } from "../chat/service.js";
+import { getFileUrlById } from "../files/service.js";
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js";
 
 type RemoteAgentRuntimeKind = "claude_code" | "codex";
 type RemoteAgentAccessPolicy = "workspace_open" | "approval_required";
+type RemoteAgentRuntimeState =
+  | "offline"
+  | "idle"
+  | "running"
+  | "waiting_user_input"
+  | "plan_drafting"
+  | "waiting_plan_approval"
+  | "error";
+
+type RuntimeCapabilities = {
+  supportsRequestUserInput?: boolean;
+  supportsPlanMode?: boolean;
+  supportsPersistentSession?: boolean;
+  supportsCodexAppServer?: boolean;
+  supportsStructuredIo?: boolean;
+};
 
 type MachineConnection = {
   machineId: string;
@@ -36,6 +53,19 @@ type RuntimeCatalogEntry = {
   version?: string;
   metadata?: Record<string, unknown>;
   lastError?: string;
+};
+
+type RuntimeStatusMessage = {
+  type: "agent:status";
+  remoteAgentId: string;
+  state: RemoteAgentRuntimeState;
+  statusText?: string;
+  conversationId?: string | null;
+  interactionId?: string | null;
+  sessionId?: string | null;
+  lastError?: string | null;
+  runKey?: string | null;
+  capabilities?: RuntimeCapabilities;
 };
 
 type DeliveryRow = {
@@ -213,6 +243,97 @@ async function startBoundRemoteAgents(machineId: string) {
   }
 }
 
+async function updateRemoteAgentRuntimeStatus(
+  machineId: string,
+  message: RuntimeStatusMessage,
+  queryable: Queryable = {
+    query: (text, params) => executeSql(text, params),
+  },
+) {
+  const runStatus =
+    message.state === "offline"
+      ? "cancelled"
+      : message.state === "error"
+        ? "failed"
+        : message.state === "idle"
+          ? "completed"
+          : "running";
+  const runId =
+    message.runKey && message.runKey.trim()
+      ? await ensureRemoteAgentRun({
+          remoteAgentId: message.remoteAgentId,
+          conversationId: message.conversationId ?? null,
+          runKey: message.runKey,
+          status: runStatus,
+          statusText: message.statusText,
+          lastError: message.lastError ?? null,
+          queryable,
+        })
+      : null;
+
+  await executeSqlOn(
+    queryable,
+    `
+      UPDATE remote_agent_bindings
+      SET runtime_state = $3::remote_agent_bindings_runtime_state,
+          status_text = $4,
+          active_conversation_id = $5,
+          active_interaction_id = $6,
+          last_session_id = COALESCE($7, last_session_id),
+          last_activity_at = NOW(),
+          last_run_started_at = CASE
+            WHEN $3::remote_agent_bindings_runtime_state IN (
+              'running',
+              'waiting_user_input',
+              'plan_drafting',
+              'waiting_plan_approval'
+            )
+              THEN COALESCE(last_run_started_at, NOW())
+            ELSE last_run_started_at
+          END,
+          last_run_finished_at = CASE
+            WHEN $3::remote_agent_bindings_runtime_state IN ('idle', 'error', 'offline')
+              THEN NOW()
+            ELSE last_run_finished_at
+          END,
+          last_error = $8,
+          capabilities = CASE
+            WHEN $9::jsonb IS NULL THEN capabilities
+            ELSE COALESCE(capabilities, '{}'::jsonb) || $9::jsonb
+          END,
+          updated_at = NOW()
+      WHERE remote_agent_id = $1
+        AND machine_id = $2
+    `,
+    [
+      message.remoteAgentId,
+      machineId,
+      message.state,
+      message.statusText ?? null,
+      message.conversationId ?? null,
+      message.interactionId ?? null,
+      message.sessionId ?? null,
+      message.lastError ?? null,
+      message.capabilities ? JSON.stringify(message.capabilities) : null,
+    ],
+  );
+
+  if (runId && message.interactionId) {
+    await executeSqlOn(
+      queryable,
+      `
+        UPDATE remote_agent_runs
+        SET interaction_id = $2,
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [runId, message.interactionId],
+    );
+  }
+
+  await emitRemoteAgentRuntimeUpdated(message.remoteAgentId, queryable);
+}
+
 async function loadPendingRemoteAgentDeliveries(params: {
   machineId?: string;
   conversationId?: string;
@@ -381,6 +502,273 @@ async function loadConversationHostWorkspaceId(
   return result.rows[0]?.workspace_id ?? null;
 }
 
+function mapRuntimeSummaryFromRow(row: {
+  runtime_kind: RemoteAgentRuntimeKind;
+  runtime_state?: RemoteAgentRuntimeState | null;
+  status_text?: string | null;
+  last_session_id?: string | null;
+  active_conversation_id?: string | null;
+  active_interaction_id?: string | null;
+  last_activity_at?: string | Date | null;
+  last_run_started_at?: string | Date | null;
+  last_run_finished_at?: string | Date | null;
+  last_error?: string | null;
+  capabilities?: unknown;
+  pending_conversation_count?: string | number | null;
+  unread_delivery_count?: string | number | null;
+}) {
+  return {
+    runtimeKind: row.runtime_kind,
+    state: row.runtime_state ?? "offline",
+    statusText: row.status_text ?? undefined,
+    sessionId: row.last_session_id ?? undefined,
+    activeConversationId: row.active_conversation_id ?? undefined,
+    activeInteractionId: row.active_interaction_id ?? undefined,
+    pendingConversationCount: Number(row.pending_conversation_count ?? 0),
+    unreadDeliveryCount: Number(row.unread_delivery_count ?? 0),
+    lastActivityAt: toIso(row.last_activity_at),
+    lastRunStartedAt: toIso(row.last_run_started_at),
+    lastRunFinishedAt: toIso(row.last_run_finished_at),
+    lastError: row.last_error ?? undefined,
+    capabilities:
+      row.capabilities && typeof row.capabilities === "object"
+        ? (row.capabilities as RuntimeCapabilities)
+        : {},
+  };
+}
+
+async function ensureRemoteAgentRun(params: {
+  remoteAgentId: string;
+  conversationId?: string | null;
+  runKey: string;
+  status: "queued" | "running" | "completed" | "failed" | "cancelled";
+  statusText?: string | null;
+  lastError?: string | null;
+  queryable?: Queryable;
+}) {
+  const queryable = params.queryable ?? {
+    query: (text: string, values?: any[]) => executeSql(text, values),
+  };
+  const existing = await executeSqlOn<{ id: string }>(
+    queryable,
+    `
+      SELECT id
+      FROM remote_agent_runs
+      WHERE run_key = $1
+      LIMIT 1
+    `,
+    [params.runKey],
+  );
+  if (existing.rows[0]?.id) {
+    await executeSqlOn(
+      queryable,
+      `
+        UPDATE remote_agent_runs
+        SET conversation_id = COALESCE($3, conversation_id),
+            status = $4,
+            status_text = $5,
+            last_error = $6,
+            started_at = COALESCE(started_at, CASE WHEN $4 = 'running' THEN NOW() ELSE NULL END),
+            ended_at = CASE
+              WHEN $4 IN ('completed', 'failed', 'cancelled') THEN NOW()
+              ELSE NULL
+            END,
+            updated_at = NOW()
+        WHERE id = $2
+      `,
+      [
+        params.runKey,
+        existing.rows[0].id,
+        params.conversationId ?? null,
+        params.status,
+        params.statusText ?? null,
+        params.lastError ?? null,
+      ],
+    );
+    return existing.rows[0].id;
+  }
+
+  const inserted = await executeSqlOn<{ id: string }>(
+    queryable,
+    `
+      INSERT INTO remote_agent_runs (
+        remote_agent_id,
+        run_key,
+        conversation_id,
+        status,
+        status_text,
+        last_error,
+        started_at,
+        ended_at,
+        created_at,
+        updated_at
+      )
+      VALUES (
+        $1,
+        $2,
+        $3,
+        $4,
+        $5,
+        $6,
+        CASE WHEN $4 = 'running' THEN NOW() ELSE NULL END,
+        CASE WHEN $4 IN ('completed', 'failed', 'cancelled') THEN NOW() ELSE NULL END,
+        NOW(),
+        NOW()
+      )
+      RETURNING id
+    `,
+    [
+      params.remoteAgentId,
+      params.runKey,
+      params.conversationId ?? null,
+      params.status,
+      params.statusText ?? null,
+      params.lastError ?? null,
+    ],
+  );
+  return inserted.rows[0]!.id;
+}
+
+export async function loadRemoteAgentRuntimeSnapshot(
+  remoteAgentId: string,
+  queryable: Queryable = {
+    query: (text, params) => executeSql(text, params),
+  },
+) {
+  const result = await executeSqlOn<{
+    remote_agent_id: string;
+    runtime_kind: RemoteAgentRuntimeKind;
+    runtime_state: RemoteAgentRuntimeState;
+    status_text: string | null;
+    active_conversation_id: string | null;
+    active_interaction_id: string | null;
+    last_session_id: string | null;
+    last_activity_at: string | Date | null;
+    last_run_started_at: string | Date | null;
+    last_run_finished_at: string | Date | null;
+    last_error: string | null;
+    updated_at: string | Date;
+    pending_conversation_count: string | number;
+    unread_delivery_count: string | number;
+    capabilities: unknown;
+  }>(
+    queryable,
+    `
+      SELECT
+        binding.remote_agent_id,
+        binding.runtime_kind,
+        binding.runtime_state,
+        binding.status_text,
+        binding.active_conversation_id,
+        binding.active_interaction_id,
+        binding.last_session_id,
+        binding.last_activity_at,
+        binding.last_run_started_at,
+        binding.last_run_finished_at,
+        binding.last_error,
+        binding.updated_at,
+        COALESCE(
+          (
+            SELECT COUNT(DISTINCT delivery.conversation_id)
+            FROM remote_agent_message_deliveries delivery
+            WHERE delivery.remote_agent_id = binding.remote_agent_id
+              AND delivery.status = 'pending'
+          ),
+          0
+        ) AS pending_conversation_count,
+        COALESCE(
+          (
+            SELECT COUNT(*)
+            FROM remote_agent_message_deliveries delivery
+            WHERE delivery.remote_agent_id = binding.remote_agent_id
+              AND delivery.status = 'pending'
+          ),
+          0
+        ) AS unread_delivery_count,
+        binding.capabilities
+      FROM remote_agent_bindings binding
+      WHERE binding.remote_agent_id = $1
+      LIMIT 1
+    `,
+    [remoteAgentId],
+  );
+  const row = result.rows[0];
+  if (!row) {
+    return null;
+  }
+  const updatedAt = toIso(row.updated_at) ?? new Date().toISOString();
+  const lastErrorAt = toIso(row.last_activity_at) || toIso(row.updated_at);
+  return {
+    remoteAgentId: row.remote_agent_id,
+    runtimeKind: row.runtime_kind,
+    state: row.runtime_state,
+    statusText: row.status_text ?? undefined,
+    activeConversationId: row.active_conversation_id ?? undefined,
+    activeInteractionId: row.active_interaction_id ?? undefined,
+    sessionId: row.last_session_id ?? undefined,
+    pendingConversationCount: Number(row.pending_conversation_count ?? 0),
+    unreadDeliveryCount: Number(row.unread_delivery_count ?? 0),
+    lastActivityAt: toIso(row.last_activity_at),
+    lastRunStartedAt: toIso(row.last_run_started_at),
+    lastRunFinishedAt: toIso(row.last_run_finished_at),
+    lastError: row.last_error && lastErrorAt
+      ? {
+          message: row.last_error,
+          at: lastErrorAt,
+        }
+      : undefined,
+    updatedAt,
+    capabilities:
+      row.capabilities && typeof row.capabilities === "object"
+        ? (row.capabilities as RuntimeCapabilities)
+        : {},
+  };
+}
+
+async function emitRemoteAgentRuntimeUpdated(
+  remoteAgentId: string,
+  queryable: Queryable = {
+    query: (text, params) => executeSql(text, params),
+  },
+) {
+  const snapshot = await loadRemoteAgentRuntimeSnapshot(remoteAgentId, queryable);
+  if (!snapshot) {
+    return null;
+  }
+  const recipients = await executeSqlOn<{
+    workspace_id: string;
+    workspace_member_id: string;
+  }>(
+    queryable,
+    `
+      SELECT DISTINCT member.workspace_id, viewer.workspace_member_id
+      FROM conversation_participants agent_cp
+      INNER JOIN conversation_participants viewer
+        ON viewer.conversation_id = agent_cp.conversation_id
+       AND viewer.state = 'active'
+       AND viewer.workspace_member_id IS NOT NULL
+      INNER JOIN workspace_members member
+        ON member.id = viewer.workspace_member_id
+      WHERE agent_cp.remote_agent_id = $1
+        AND agent_cp.state = 'active'
+    `,
+    [remoteAgentId],
+  );
+  const { appendWorkspaceMemberSyncEvent } = await import("../chat/service.js");
+  for (const recipient of recipients.rows) {
+    await appendWorkspaceMemberSyncEvent(queryable, {
+      workspaceId: recipient.workspace_id,
+      workspaceMemberId: recipient.workspace_member_id,
+      eventType: "remote_agent.runtime_updated",
+      payload: {
+        remoteAgentId,
+        snapshot,
+      },
+    });
+  }
+  return snapshot;
+}
+
 async function mapRemoteAgentRow(row: {
   id: string;
   workspace_id: string;
@@ -403,7 +791,22 @@ async function mapRemoteAgentRow(row: {
   runtime_path?: string | null;
   local_root_path?: string | null;
   machine_lifecycle_state?: string | null;
+  runtime_state?: RemoteAgentRuntimeState | null;
+  status_text?: string | null;
+  last_session_id?: string | null;
+  active_conversation_id?: string | null;
+  active_interaction_id?: string | null;
+  last_activity_at?: string | Date | null;
+  last_run_started_at?: string | Date | null;
+  last_run_finished_at?: string | Date | null;
+  last_error?: string | null;
+  capabilities?: unknown;
+  pending_conversation_count?: string | number | null;
+  unread_delivery_count?: string | number | null;
 }) {
+  const runtimeSummary = row.machine_id
+    ? mapRuntimeSummaryFromRow(row)
+    : undefined;
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -423,6 +826,7 @@ async function mapRemoteAgentRow(row: {
     createdByWorkspaceMemberId: row.created_by_workspace_member_id ?? undefined,
     createdAt: toIso(row.created_at),
     updatedAt: toIso(row.updated_at),
+    runtimeSummary,
     binding: row.machine_id
       ? {
           machineId: row.machine_id,
@@ -431,6 +835,7 @@ async function mapRemoteAgentRow(row: {
           runtimePath: row.runtime_path ?? undefined,
           localRootPath: row.local_root_path ?? undefined,
           machineLifecycleState: row.machine_lifecycle_state ?? undefined,
+          runtimeSummary,
         }
       : undefined,
   };
@@ -450,7 +855,29 @@ export async function listRemoteAgents(params: {
         binding.status AS binding_status,
         binding.runtime_path,
         binding.local_root_path,
-        machine.lifecycle_state AS machine_lifecycle_state
+        machine.lifecycle_state AS machine_lifecycle_state,
+        binding.runtime_state,
+        binding.status_text,
+        binding.last_session_id,
+        binding.active_conversation_id,
+        binding.active_interaction_id,
+        binding.last_activity_at,
+        binding.last_run_started_at,
+        binding.last_run_finished_at,
+        binding.last_error,
+        binding.capabilities,
+        (
+          SELECT COUNT(DISTINCT delivery.conversation_id)
+          FROM remote_agent_message_deliveries delivery
+          WHERE delivery.remote_agent_id = agent.id
+            AND delivery.status = 'pending'
+        ) AS pending_conversation_count,
+        (
+          SELECT COUNT(*)
+          FROM remote_agent_message_deliveries delivery
+          WHERE delivery.remote_agent_id = agent.id
+            AND delivery.status = 'pending'
+        ) AS unread_delivery_count
       FROM remote_agents agent
       LEFT JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = agent.id
@@ -481,7 +908,29 @@ export async function getRemoteAgent(params: {
         binding.status AS binding_status,
         binding.runtime_path,
         binding.local_root_path,
-        machine.lifecycle_state AS machine_lifecycle_state
+        machine.lifecycle_state AS machine_lifecycle_state,
+        binding.runtime_state,
+        binding.status_text,
+        binding.last_session_id,
+        binding.active_conversation_id,
+        binding.active_interaction_id,
+        binding.last_activity_at,
+        binding.last_run_started_at,
+        binding.last_run_finished_at,
+        binding.last_error,
+        binding.capabilities,
+        (
+          SELECT COUNT(DISTINCT delivery.conversation_id)
+          FROM remote_agent_message_deliveries delivery
+          WHERE delivery.remote_agent_id = agent.id
+            AND delivery.status = 'pending'
+        ) AS pending_conversation_count,
+        (
+          SELECT COUNT(*)
+          FROM remote_agent_message_deliveries delivery
+          WHERE delivery.remote_agent_id = agent.id
+            AND delivery.status = 'pending'
+        ) AS unread_delivery_count
       FROM remote_agents agent
       LEFT JOIN remote_agent_bindings binding
         ON binding.remote_agent_id = agent.id
@@ -760,7 +1209,29 @@ export async function getRemoteAgentMachine(params: {
           binding.runtime_path,
           binding.local_root_path,
           binding.status,
-          agent.name
+          binding.runtime_state,
+          binding.status_text,
+          binding.last_session_id,
+          binding.active_conversation_id,
+          binding.active_interaction_id,
+          binding.last_activity_at,
+          binding.last_run_started_at,
+          binding.last_run_finished_at,
+          binding.last_error,
+          binding.capabilities,
+          agent.name,
+          (
+            SELECT COUNT(DISTINCT delivery.conversation_id)
+            FROM remote_agent_message_deliveries delivery
+            WHERE delivery.remote_agent_id = binding.remote_agent_id
+              AND delivery.status = 'pending'
+          ) AS pending_conversation_count,
+          (
+            SELECT COUNT(*)
+            FROM remote_agent_message_deliveries delivery
+            WHERE delivery.remote_agent_id = binding.remote_agent_id
+              AND delivery.status = 'pending'
+          ) AS unread_delivery_count
         FROM remote_agent_bindings binding
         INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
         WHERE binding.machine_id = $1
@@ -806,6 +1277,7 @@ export async function getRemoteAgentMachine(params: {
       runtimePath: row.runtime_path ?? undefined,
       localRootPath: row.local_root_path ?? undefined,
       status: row.status,
+      runtimeSummary: mapRuntimeSummaryFromRow(row),
     })),
   };
 }
@@ -828,6 +1300,9 @@ export async function bindRemoteAgent(params: {
   if (!existing.remoteAgent.isActive) {
     throw new Error("Remote agent is inactive");
   }
+  if (existing.remoteAgent.runtimeKind !== params.runtimeKind) {
+    throw new Error("Binding runtime kind must match remote agent runtime kind");
+  }
 
   const machineResult = await executeSql<{ id: string }>(
     `
@@ -842,6 +1317,44 @@ export async function bindRemoteAgent(params: {
   if (!machineResult.rows[0]) {
     throw new Error("Machine not found");
   }
+
+  const catalogResult = await executeSql<{
+    executable_path: string | null;
+    status:
+      | "available"
+      | "missing_binary"
+      | "broken_path"
+      | "unsupported_platform"
+      | "runtime_error";
+    last_error: string | null;
+  }>(
+    `
+      SELECT executable_path, status, last_error
+      FROM remote_agent_runtime_catalog
+      WHERE machine_id = $1
+        AND runtime_kind = $2
+      LIMIT 1
+    `,
+    [params.machineId, params.runtimeKind],
+  );
+
+  const catalogEntry = catalogResult.rows[0] ?? null;
+  if (!params.runtimePath) {
+    if (!catalogEntry) {
+      throw new Error("Machine has not reported runtime availability yet");
+    }
+    if (catalogEntry.status !== "available") {
+      const detail = catalogEntry.last_error?.trim()
+        ? `: ${catalogEntry.last_error.trim()}`
+        : "";
+      throw new Error(
+        `Runtime ${params.runtimeKind} is not available on this machine (${catalogEntry.status})${detail}`,
+      );
+    }
+  }
+
+  const effectiveRuntimePath =
+    params.runtimePath ?? catalogEntry?.executable_path ?? null;
 
   await executeSql(
     `
@@ -868,7 +1381,7 @@ export async function bindRemoteAgent(params: {
       params.remoteAgentId,
       params.machineId,
       params.runtimeKind,
-      params.runtimePath ?? null,
+      effectiveRuntimePath,
       params.localRootPath ?? null,
     ],
   );
@@ -879,6 +1392,226 @@ export async function bindRemoteAgent(params: {
     remoteAgentId: params.remoteAgentId,
     userId: params.userId,
   });
+}
+
+export async function listRemoteAgentGroupInteractionGrants(params: {
+  workspaceId: string;
+  remoteAgentId: string;
+  userId: string;
+}) {
+  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  await getRemoteAgent({
+    workspaceId: params.workspaceId,
+    remoteAgentId: params.remoteAgentId,
+    userId: params.userId,
+  });
+  const result = await executeSql<{
+    workspace_member_id: string;
+    granted_by_workspace_member_id: string | null;
+    created_at: string | Date;
+    updated_at: string | Date;
+    user_id: string;
+    user_name: string | null;
+    user_avatar_file_id: string | null;
+  }>(
+    `
+      SELECT
+        grant_row.workspace_member_id,
+        grant_row.granted_by_workspace_member_id,
+        grant_row.created_at,
+        grant_row.updated_at,
+        wm.user_id,
+        u.name AS user_name,
+        u.avatar_file_id AS user_avatar_file_id
+      FROM remote_agent_group_interaction_grants grant_row
+      INNER JOIN workspace_members wm ON wm.id = grant_row.workspace_member_id
+      INNER JOIN users u ON u.id = wm.user_id
+      WHERE grant_row.remote_agent_id = $1
+      ORDER BY grant_row.created_at ASC
+    `,
+    [params.remoteAgentId],
+  );
+  return {
+    grants: result.rows.map((row) => ({
+      workspaceMemberId: row.workspace_member_id,
+      grantedByWorkspaceMemberId: row.granted_by_workspace_member_id ?? undefined,
+      createdAt: toIso(row.created_at),
+      updatedAt: toIso(row.updated_at),
+      userId: row.user_id,
+      name: row.user_name ?? "Unknown user",
+      avatarUrl: row.user_avatar_file_id
+        ? getFileUrlById(row.user_avatar_file_id)
+        : undefined,
+    })),
+  };
+}
+
+export async function updateRemoteAgentGroupInteractionGrants(params: {
+  workspaceId: string;
+  remoteAgentId: string;
+  userId: string;
+  workspaceMemberIds: string[];
+}) {
+  const identity = await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  await getRemoteAgent({
+    workspaceId: params.workspaceId,
+    remoteAgentId: params.remoteAgentId,
+    userId: params.userId,
+  });
+  const nextIds = [...new Set(params.workspaceMemberIds.filter(Boolean))];
+  if (nextIds.length > 0) {
+    const membership = await executeSql<{ id: string }>(
+      `
+        SELECT id
+        FROM workspace_members
+        WHERE workspace_id = $1
+          AND id = ANY($2::uuid[])
+      `,
+      [params.workspaceId, nextIds],
+    );
+    if (membership.rows.length !== nextIds.length) {
+      throw new Error("Some workspace members are invalid");
+    }
+  }
+
+  await transaction(async (client) => {
+    await executeSqlOn(
+      client,
+      `
+        DELETE FROM remote_agent_group_interaction_grants
+        WHERE remote_agent_id = $1
+      `,
+      [params.remoteAgentId],
+    );
+    for (const workspaceMemberId of nextIds) {
+      await executeSqlOn(
+        client,
+        `
+          INSERT INTO remote_agent_group_interaction_grants (
+            remote_agent_id,
+            workspace_member_id,
+            granted_by_workspace_member_id,
+            created_at,
+            updated_at
+          )
+          VALUES ($1, $2, $3, NOW(), NOW())
+        `,
+        [
+          params.remoteAgentId,
+          workspaceMemberId,
+          identity.workspaceMemberId,
+        ],
+      );
+    }
+  });
+
+  return listRemoteAgentGroupInteractionGrants(params);
+}
+
+export async function createRemoteAgentUserInputInteraction(params: {
+  remoteAgentId: string;
+  machineKey: string;
+  conversationId: string;
+  runKey: string;
+  title: string;
+  instructions?: string;
+  questions: Array<Record<string, unknown>>;
+  expiresAt?: string;
+}) {
+  const access = await authenticateMachineForRemoteAgent(params);
+  const conversationAccess = await requireRemoteAgentConversationAccess(
+    {
+      query: (text: string, values?: any[]) => executeSql(text, values),
+    },
+    params.conversationId,
+    params.remoteAgentId,
+  );
+  const runId = await ensureRemoteAgentRun({
+    remoteAgentId: params.remoteAgentId,
+    conversationId: params.conversationId,
+    runKey: params.runKey,
+    status: "running",
+    statusText: "Waiting for user input",
+  });
+  const { createRemoteAgentUserInputInteractionRequest } = await import(
+    "../interactions/service.js"
+  );
+  const interaction = await createRemoteAgentUserInputInteractionRequest({
+    workspaceId: access.workspaceId,
+    conversationId: params.conversationId,
+    remoteAgentRunId: runId,
+    requesterParticipantId: conversationAccess.participant.id,
+    title: params.title,
+    instructions: params.instructions,
+    questions: params.questions as any[],
+    expiresAt: params.expiresAt,
+  });
+  await updateRemoteAgentRuntimeStatus(access.machineId, {
+    type: "agent:status",
+    remoteAgentId: params.remoteAgentId,
+    state: "waiting_user_input",
+    statusText: params.title,
+    conversationId: params.conversationId,
+    interactionId: interaction.id,
+    runKey: params.runKey,
+  });
+  return { interaction };
+}
+
+export async function createRemoteAgentPlanApprovalInteraction(params: {
+  remoteAgentId: string;
+  machineKey: string;
+  conversationId: string;
+  runKey: string;
+  title: string;
+  summary?: string;
+  planMarkdown: string;
+  checklist?: Array<Record<string, unknown>>;
+  collaborationMode?: string;
+  collaborationState?: Record<string, unknown>;
+  expiresAt?: string;
+}) {
+  const access = await authenticateMachineForRemoteAgent(params);
+  const conversationAccess = await requireRemoteAgentConversationAccess(
+    {
+      query: (text: string, values?: any[]) => executeSql(text, values),
+    },
+    params.conversationId,
+    params.remoteAgentId,
+  );
+  const runId = await ensureRemoteAgentRun({
+    remoteAgentId: params.remoteAgentId,
+    conversationId: params.conversationId,
+    runKey: params.runKey,
+    status: "running",
+    statusText: "Waiting for plan approval",
+  });
+  const { createRemoteAgentPlanApprovalInteractionRequest } = await import(
+    "../interactions/service.js"
+  );
+  const interaction = await createRemoteAgentPlanApprovalInteractionRequest({
+    workspaceId: access.workspaceId,
+    conversationId: params.conversationId,
+    remoteAgentRunId: runId,
+    requesterParticipantId: conversationAccess.participant.id,
+    title: params.title,
+    summary: params.summary,
+    planMarkdown: params.planMarkdown,
+    checklist: params.checklist as any[],
+    collaborationMode: params.collaborationMode,
+    collaborationState: params.collaborationState,
+    expiresAt: params.expiresAt,
+  });
+  await updateRemoteAgentRuntimeStatus(access.machineId, {
+    type: "agent:status",
+    remoteAgentId: params.remoteAgentId,
+    state: "waiting_plan_approval",
+    statusText: params.title,
+    conversationId: params.conversationId,
+    interactionId: interaction.id,
+    runKey: params.runKey,
+  });
+  return { interaction };
 }
 
 export async function createRemoteAgentDeliveriesForItem(params: {
@@ -1276,6 +2009,47 @@ export async function searchRemoteAgentMessages(params: {
   };
 }
 
+export async function notifyRemoteAgentInteractionResolved(
+  interactionId: string,
+) {
+  const { getInteractionRequestSummary } = await import("../interactions/service.js");
+  const interaction = await getInteractionRequestSummary(interactionId);
+  if (
+    !interaction ||
+    interaction.requester?.participantType !== "remote_agent" ||
+    !interaction.requester.remoteAgentId
+  ) {
+    return false;
+  }
+
+  const binding = await executeSql<{
+    machine_id: string;
+  }>(
+    `
+      SELECT machine_id
+      FROM remote_agent_bindings
+      WHERE remote_agent_id = $1
+        AND status = 'active'
+      LIMIT 1
+    `,
+    [interaction.requester.remoteAgentId],
+  );
+  const machineId = binding.rows[0]?.machine_id;
+  if (!machineId) {
+    return false;
+  }
+  const connection = machineConnections.get(machineId);
+  if (!connection) {
+    return false;
+  }
+  return safeSend(connection, {
+    type: "agent:interaction:resolved",
+    remoteAgentId: interaction.requester.remoteAgentId,
+    interactionId,
+    interaction,
+  });
+}
+
 function closeMachineConnection(connection: MachineConnection, code = 1008, reason = "closing") {
   try {
     if (connection.socket.readyState === 0 || connection.socket.readyState === 1) {
@@ -1298,6 +2072,23 @@ async function finalizeMachineSession(connection: MachineConnection, closeReason
     [connection.sessionId, closeReason ?? null],
   );
   await setMachineLifecycleState(connection.machineId, "offline");
+  const bindings = await loadBoundRemoteAgentsForMachine(connection.machineId);
+  for (const binding of bindings) {
+    await executeSql(
+      `
+        UPDATE remote_agent_bindings
+        SET runtime_state = 'offline',
+            status_text = $2,
+            active_conversation_id = NULL,
+            active_interaction_id = NULL,
+            last_run_finished_at = NOW(),
+            updated_at = NOW()
+        WHERE remote_agent_id = $1
+      `,
+      [binding.remote_agent_id, closeReason ?? "Daemon disconnected"],
+    );
+    await emitRemoteAgentRuntimeUpdated(binding.remote_agent_id);
+  }
 }
 
 export async function handleRemoteAgentDaemonConnection(
@@ -1424,11 +2215,18 @@ export async function handleRemoteAgentDaemonConnection(
         `
           UPDATE remote_agent_bindings
           SET last_session_id = $2,
+              last_activity_at = NOW(),
               updated_at = NOW()
           WHERE remote_agent_id = $1
         `,
         [message.remoteAgentId, typeof message.sessionId === "string" ? message.sessionId : null],
       );
+      await emitRemoteAgentRuntimeUpdated(message.remoteAgentId);
+      return;
+    }
+
+    if (message?.type === "agent:status" && typeof message.remoteAgentId === "string") {
+      await updateRemoteAgentRuntimeStatus(machine.id, message as RuntimeStatusMessage);
       return;
     }
   });

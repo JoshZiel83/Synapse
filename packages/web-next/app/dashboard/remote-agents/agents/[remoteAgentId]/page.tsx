@@ -4,17 +4,20 @@ import Link from "next/link"
 import QRCode from "qrcode"
 import { useParams } from "next/navigation"
 import { useEffect, useState } from "react"
-import { ArrowLeft, Bot, RefreshCcw, Trash2 } from "lucide-react"
+import { ArrowLeft, Bot, RefreshCcw, Shield, Trash2 } from "lucide-react"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import type {
   RelationshipProfileView,
+  RemoteAgentGroupInteractionGrantView,
   RemoteAgentMachineView,
+  RemoteAgentRuntimeSummaryView,
   RemoteAgentView,
 } from "@/lib/api"
 import { api } from "@/lib/api"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Card,
   CardContent,
@@ -52,6 +55,43 @@ function runtimeLabel(value: string) {
   return value === "claude_code" ? "Claude Code" : "Codex CLI"
 }
 
+function sessionStateVariant(state?: RemoteAgentRuntimeSummaryView["state"]) {
+  switch (state) {
+    case "running":
+    case "plan_drafting":
+      return "secondary"
+    case "waiting_user_input":
+    case "waiting_plan_approval":
+      return "default"
+    case "error":
+      return "destructive"
+    default:
+      return "outline"
+  }
+}
+
+function sessionStateLabel(state?: RemoteAgentRuntimeSummaryView["state"]) {
+  switch (state) {
+    case "waiting_user_input":
+      return "waiting input"
+    case "waiting_plan_approval":
+      return "waiting approval"
+    case "plan_drafting":
+      return "planning"
+    default:
+      return state || "offline"
+  }
+}
+
+type WorkspaceMemberDirectoryEntry = {
+  id: string
+  userId: string
+  userName?: string
+  userEmail?: string
+  avatarUrl?: string | null
+  trustLevel?: string
+}
+
 type AgentDraft = {
   name: string
   title: string
@@ -79,9 +119,17 @@ export default function RemoteAgentDetailPage() {
   const [savingBinding, setSavingBinding] = useState(false)
   const [savingProfile, setSavingProfile] = useState(false)
   const [deletingAgent, setDeletingAgent] = useState(false)
+  const [savingGrants, setSavingGrants] = useState(false)
   const [agent, setAgent] = useState<RemoteAgentView | null>(null)
   const [machines, setMachines] = useState<RemoteAgentMachineView[]>([])
   const [profile, setProfile] = useState<RelationshipProfileView | null>(null)
+  const [groupGrants, setGroupGrants] = useState<
+    RemoteAgentGroupInteractionGrantView[]
+  >([])
+  const [workspaceMembers, setWorkspaceMembers] = useState<
+    WorkspaceMemberDirectoryEntry[]
+  >([])
+  const [selectedGrantIds, setSelectedGrantIds] = useState<string[]>([])
   const [qrImage, setQrImage] = useState<string | null>(null)
   const [agentDraft, setAgentDraft] = useState<AgentDraft>({
     name: "",
@@ -136,14 +184,32 @@ export default function RemoteAgentDetailPage() {
       setRefreshing(true)
     }
     try {
-      const [agentResponse, machinesResponse, profileResponse] = await Promise.all([
+      const [
+        agentResponse,
+        machinesResponse,
+        profileResponse,
+        grantsResponse,
+        workspaceMembersResponse,
+      ] = await Promise.all([
         api.getRemoteAgent(workspaceId, remoteAgentId),
         api.getRemoteAgentMachines(workspaceId),
         api.getRemoteAgentRelationshipProfile(workspaceId, remoteAgentId),
+        api.getRemoteAgentGroupInteractionGrants(workspaceId, remoteAgentId),
+        api.getWorkspaceMembers(workspaceId),
       ])
       setAgent(agentResponse.remoteAgent)
       setMachines(machinesResponse.machines)
       setProfile(profileResponse)
+      setGroupGrants(grantsResponse.grants)
+      setSelectedGrantIds(
+        grantsResponse.grants.map((grant) => grant.workspaceMemberId)
+      )
+      setWorkspaceMembers(
+        Array.isArray((workspaceMembersResponse as any)?.data)
+          ? (((workspaceMembersResponse as any).data ||
+              []) as WorkspaceMemberDirectoryEntry[])
+          : []
+      )
       syncAgentDraft(agentResponse.remoteAgent)
       setIdentityIdDraft(profileResponse.identityId)
       setIdentitySearchEnabled(profileResponse.identitySearchEnabled)
@@ -358,6 +424,29 @@ export default function RemoteAgentDetailPage() {
     }
   }
 
+  async function handleSaveGroupGrants() {
+    if (!workspaceId || !remoteAgentId) return
+    setSavingGrants(true)
+    try {
+      const result = await api.updateRemoteAgentGroupInteractionGrants(
+        workspaceId,
+        remoteAgentId,
+        {
+          workspaceMemberIds: selectedGrantIds,
+        }
+      )
+      setGroupGrants(result.grants)
+      setSelectedGrantIds(result.grants.map((grant) => grant.workspaceMemberId))
+      toast.success("Group interaction access updated")
+    } catch (error) {
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update group access"
+      )
+    } finally {
+      setSavingGrants(false)
+    }
+  }
+
   return (
     <div className="flex min-h-0 flex-col gap-6 px-4 py-4 lg:px-6">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -419,6 +508,11 @@ export default function RemoteAgentDetailPage() {
                   <Badge variant={agent.isPublicShared ? "secondary" : "outline"}>
                     {agent.isPublicShared ? "public" : "private"}
                   </Badge>
+                  {agent.runtimeSummary ? (
+                    <Badge variant={sessionStateVariant(agent.runtimeSummary.state)}>
+                      {sessionStateLabel(agent.runtimeSummary.state)}
+                    </Badge>
+                  ) : null}
                 </div>
                 <div className="grid gap-2 text-sm text-muted-foreground">
                   <div>ID: {agent.id}</div>
@@ -426,13 +520,57 @@ export default function RemoteAgentDetailPage() {
                   <div>Updated: {formatDateTime(agent.updatedAt)}</div>
                   <div>Machine: {agent.binding?.machineTitle || "Not bound yet"}</div>
                   <div>Root: {agent.binding?.localRootPath || "Not configured"}</div>
+                  {agent.runtimeSummary?.sessionId ? (
+                    <div>Session ID: {agent.runtimeSummary.sessionId}</div>
+                  ) : null}
                 </div>
               </div>
               <div className="rounded-[24px] border border-border/70 p-4 text-sm text-muted-foreground">
-                <div className="text-sm font-medium text-foreground">Session model</div>
-                <div className="mt-2">
-                  One RemoteAgent maps to one local CLI session. Multiple agents can
-                  share the same root path, but each keeps its own session state.
+                <div className="text-sm font-medium text-foreground">Runtime summary</div>
+                <div className="mt-2 grid gap-2">
+                  <div>
+                    Status: {agent.runtimeSummary?.statusText || sessionStateLabel(agent.runtimeSummary?.state)}
+                  </div>
+                  <div>
+                    Pending conversations: {agent.runtimeSummary?.pendingConversationCount || 0}
+                  </div>
+                  <div>
+                    Unread deliveries: {agent.runtimeSummary?.unreadDeliveryCount || 0}
+                  </div>
+                  <div>
+                    Last activity: {formatDateTime(agent.runtimeSummary?.lastActivityAt)}
+                  </div>
+                  {agent.runtimeSummary?.lastError ? (
+                    <div>Error: {agent.runtimeSummary.lastError}</div>
+                  ) : (
+                    <div>
+                      One RemoteAgent maps to one local CLI session, even if multiple agents share the same root path.
+                    </div>
+                  )}
+                  {agent.runtimeSummary?.capabilities ? (
+                    <div>
+                      Capabilities:{" "}
+                      {[
+                        agent.runtimeSummary.capabilities.supportsRequestUserInput
+                          ? "request_user_input"
+                          : null,
+                        agent.runtimeSummary.capabilities.supportsPlanMode
+                          ? "plan_mode"
+                          : null,
+                        agent.runtimeSummary.capabilities.supportsPersistentSession
+                          ? "persistent_session"
+                          : null,
+                        agent.runtimeSummary.capabilities.supportsStructuredIo
+                          ? "structured_io"
+                          : null,
+                        agent.runtimeSummary.capabilities.supportsCodexAppServer
+                          ? "codex_app_server"
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(", ") || "none reported"}
+                    </div>
+                  ) : null}
                 </div>
               </div>
             </div>
@@ -669,6 +807,79 @@ export default function RemoteAgentDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      <Card className="rounded-[28px] shadow-sm">
+        <CardHeader>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <CardTitle>Group interaction access</CardTitle>
+              <CardDescription>
+                Question and plan approval cards stay visible to the full group,
+                but only selected workspace members can resolve them.
+              </CardDescription>
+            </div>
+            <Shield className="mt-0.5 size-5 text-muted-foreground" />
+          </div>
+        </CardHeader>
+        <CardContent>
+          {loading ? (
+            <div className="space-y-3">
+              <Skeleton className="h-16 rounded-[24px]" />
+              <Skeleton className="h-16 rounded-[24px]" />
+            </div>
+          ) : workspaceMembers.length > 0 ? (
+            <div className="space-y-4">
+              <div className="grid gap-3 md:grid-cols-2">
+                {workspaceMembers.map((member) => {
+                  const checked = selectedGrantIds.includes(member.id)
+                  return (
+                    <label
+                      key={member.id}
+                      className="flex items-center gap-3 rounded-[24px] border border-border/70 px-4 py-3"
+                    >
+                      <Checkbox
+                        checked={checked}
+                        onCheckedChange={(value) => {
+                          setSelectedGrantIds((current) => {
+                            if (value) {
+                              return Array.from(new Set([...current, member.id]))
+                            }
+                            return current.filter((item) => item !== member.id)
+                          })
+                        }}
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-medium text-foreground">
+                          {member.userName || member.userEmail || member.id}
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {member.userEmail || member.trustLevel || "Workspace member"}
+                        </div>
+                      </div>
+                    </label>
+                  )
+                })}
+              </div>
+              <div className="flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-border/70 px-4 py-3 text-sm text-muted-foreground">
+                <div>
+                  Authorized members: {groupGrants.length}
+                </div>
+                <Button
+                  className="rounded-full"
+                  onClick={() => void handleSaveGroupGrants()}
+                  disabled={savingGrants}
+                >
+                  {savingGrants ? "Saving access..." : "Save group access"}
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <div className="rounded-[24px] border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
+              No workspace members available to grant yet.
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       <Card className="rounded-[28px] shadow-sm">
         <CardHeader>

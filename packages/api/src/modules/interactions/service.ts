@@ -1,7 +1,6 @@
 import {
   INTERACTION_INPUT_QUESTION_TYPES,
   INTERACTION_REQUEST_KIND,
-  isTargetedInteractionKind,
   textBlocks,
 } from "@synapse/shared";
 import {
@@ -39,6 +38,8 @@ import {
   db,
   executeCompiledQuery,
   executeCompiledSql,
+  executeSql,
+  executeSqlOn,
   executeTakeFirst,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js";
@@ -74,6 +75,7 @@ type RawInteractionRow = {
   workspace_id: string;
   conversation_id: string;
   task_id: string | null;
+  remote_agent_run_id: string | null;
   conversation_item_id: string | null;
   kind: InteractionRequestKind;
   status: InteractionRequestStatus;
@@ -97,11 +99,14 @@ type RawInteractionRow = {
   requester_participant_id: string | null;
   requester_workspace_member_id: string | null;
   requester_actor_id: string | null;
+  requester_remote_agent_id: string | null;
   target_actor_id: string | null;
   target_workspace_member_id: string | null;
+  target_remote_agent_id: string | null;
   target_participant_id: string | null;
   resolved_by_actor_id: string | null;
   resolved_by_workspace_member_id: string | null;
+  resolved_by_remote_agent_id: string | null;
   resolved_by_participant_id: string | null;
   relay_capability_id: string | null;
   relay_device_id: string | null;
@@ -116,6 +121,7 @@ type RawInteractionRow = {
   requester_role: string | null;
   requester_actor_avatar_file_id: string | null;
   requester_user_avatar_file_id: string | null;
+  requester_remote_agent_avatar_file_id: string | null;
   requester_avatar_emoji: string | null;
   target_participant_kind: string | null;
   target_name: string | null;
@@ -123,6 +129,7 @@ type RawInteractionRow = {
   target_role: string | null;
   target_actor_avatar_file_id: string | null;
   target_user_avatar_file_id: string | null;
+  target_remote_agent_avatar_file_id: string | null;
   target_avatar_emoji: string | null;
   resolved_by_participant_kind: string | null;
   resolved_by_name: string | null;
@@ -130,6 +137,7 @@ type RawInteractionRow = {
   resolved_by_role: string | null;
   resolved_by_actor_avatar_file_id: string | null;
   resolved_by_user_avatar_file_id: string | null;
+  resolved_by_remote_agent_avatar_file_id: string | null;
   resolved_by_avatar_emoji: string | null;
 };
 
@@ -176,6 +184,18 @@ export interface CreateUserInputInteractionParams {
   expiresAt?: string;
 }
 
+export interface CreateRemoteAgentUserInputInteractionParams {
+  workspaceId: string;
+  conversationId: string;
+  remoteAgentRunId: string;
+  requesterParticipantId: string;
+  targetParticipantId?: string;
+  title: string;
+  instructions?: string;
+  questions: InteractionInputQuestionDefinition[];
+  expiresAt?: string;
+}
+
 export interface CreatePlanApprovalInteractionParams {
   workspaceId: string;
   conversationId: string;
@@ -188,6 +208,21 @@ export interface CreatePlanApprovalInteractionParams {
   planMarkdown: string;
   checklist?: PlanChecklistStep[];
   collaborationState: SessionCollaborationState;
+  expiresAt?: string;
+}
+
+export interface CreateRemoteAgentPlanApprovalInteractionParams {
+  workspaceId: string;
+  conversationId: string;
+  remoteAgentRunId: string;
+  requesterParticipantId: string;
+  targetParticipantId?: string;
+  title: string;
+  summary?: string;
+  planMarkdown: string;
+  checklist?: PlanChecklistStep[];
+  collaborationMode?: string;
+  collaborationState?: Record<string, unknown>;
   expiresAt?: string;
 }
 
@@ -377,6 +412,13 @@ function buildTaskInteractionRequestKey(taskId: string) {
   return `task:${taskId}`;
 }
 
+function buildRemoteAgentInteractionRequestKey(params: {
+  remoteAgentRunId: string;
+  kind: InteractionRequestKind;
+}) {
+  return `remote-agent-run:${params.remoteAgentRunId}:${params.kind}`;
+}
+
 function buildRelayAuthorizationInteractionRequestKey(params: {
   conversationId: string;
   requesterParticipantId: string;
@@ -390,9 +432,14 @@ function buildRelayAuthorizationInteractionRequestKey(params: {
   });
 }
 
-function entityAvatarUrl(actorAvatarFileId?: string | null, userAvatarFileId?: string | null) {
-  if (actorAvatarFileId) return getFileUrlById(actorAvatarFileId);
-  if (userAvatarFileId) return getFileUrlById(userAvatarFileId);
+function entityAvatarUrl(
+  primaryAvatarFileId?: string | null,
+  secondaryAvatarFileId?: string | null,
+  tertiaryAvatarFileId?: string | null,
+) {
+  if (primaryAvatarFileId) return getFileUrlById(primaryAvatarFileId);
+  if (secondaryAvatarFileId) return getFileUrlById(secondaryAvatarFileId);
+  if (tertiaryAvatarFileId) return getFileUrlById(tertiaryAvatarFileId);
   return undefined;
 }
 
@@ -755,6 +802,12 @@ function mapEntityRefFromRow(
       : prefix === "target"
         ? row.target_actor_id
         : row.resolved_by_actor_id;
+  const remoteAgentId =
+    prefix === "requester"
+      ? row.requester_remote_agent_id
+      : prefix === "target"
+        ? row.target_remote_agent_id
+        : row.resolved_by_remote_agent_id;
   const name = row[`${prefix}_name` as keyof RawInteractionRow];
   const title = row[`${prefix}_title` as keyof RawInteractionRow];
   const role = row[`${prefix}_role` as keyof RawInteractionRow];
@@ -762,6 +815,8 @@ function mapEntityRefFromRow(
     row[`${prefix}_actor_avatar_file_id` as keyof RawInteractionRow];
   const userAvatarFileId =
     row[`${prefix}_user_avatar_file_id` as keyof RawInteractionRow];
+  const remoteAgentAvatarFileId =
+    row[`${prefix}_remote_agent_avatar_file_id` as keyof RawInteractionRow];
   const avatarEmoji =
     row[`${prefix}_avatar_emoji` as keyof RawInteractionRow];
 
@@ -769,12 +824,17 @@ function mapEntityRefFromRow(
     participantId: typeof participantId === "string" ? participantId : undefined,
     participantType: participantKind as ConversationEntityRef["participantType"],
     actorId: typeof actorId === "string" ? actorId : undefined,
+    remoteAgentId:
+      typeof remoteAgentId === "string" ? remoteAgentId : undefined,
     workspaceMemberId:
       typeof workspaceMemberId === "string" ? workspaceMemberId : undefined,
     name: typeof name === "string" ? name : undefined,
     title: typeof title === "string" ? title : undefined,
     role: typeof role === "string" ? role : undefined,
     avatarUrl: entityAvatarUrl(
+      typeof remoteAgentAvatarFileId === "string"
+        ? remoteAgentAvatarFileId
+        : null,
       typeof actorAvatarFileId === "string" ? actorAvatarFileId : null,
       typeof userAvatarFileId === "string" ? userAvatarFileId : null,
     ),
@@ -797,12 +857,7 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
     mapEntityRefFromRow("requester", row),
     `Interaction ${row.id} requester`,
   );
-  const target = isTargetedInteractionKind(row.kind)
-    ? requireEntityRef(
-        mapEntityRefFromRow("target", row),
-        `Interaction ${row.id} target`,
-      )
-    : undefined;
+  const target = mapEntityRefFromRow("target", row);
   const resolvedBy = row.resolved_by_participant_id
     ? requireEntityRef(
         mapEntityRefFromRow("resolved_by", row),
@@ -817,6 +872,7 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
   const baseInteraction = {
     id: row.id,
     taskId: row.task_id || undefined,
+    remoteAgentRunId: row.remote_agent_run_id || undefined,
     workspaceId: row.workspace_id,
     conversationId: row.conversation_id,
     itemId: row.conversation_item_id || undefined,
@@ -840,9 +896,6 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
       row.prompt_payload,
       `Interaction ${row.id} prompt_payload`,
     );
-    if (!target) {
-      throw new Error(`Interaction ${row.id} user_input is missing target`);
-    }
     return {
       ...baseInteraction,
       kind: INTERACTION_REQUEST_KIND.USER_INPUT,
@@ -869,9 +922,6 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
       row.plan_payload,
       `Interaction ${row.id} plan_payload`,
     );
-    if (!target) {
-      throw new Error(`Interaction ${row.id} plan_approval is missing target`);
-    }
     return {
       ...baseInteraction,
       kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
@@ -1001,31 +1051,37 @@ async function getInteractionRowById(
             auth.relay_tool_stable_key,
             requester.workspace_member_id AS requester_workspace_member_id,
             requester.actor_id AS requester_actor_id,
+            requester.remote_agent_id AS requester_remote_agent_id,
             requester.participant_kind AS requester_participant_kind,
-            COALESCE(requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
-            requester_actor.title AS requester_title,
-            requester_actor.role AS requester_role,
+            COALESCE(requester_remote_agent.name, requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
+            COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
+            COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS requester_role,
             requester_actor.avatar_file_id AS requester_actor_avatar_file_id,
             requester_user.avatar_file_id AS requester_user_avatar_file_id,
-            requester_actor.avatar_emoji AS requester_avatar_emoji,
+            requester_remote_agent.avatar_file_id AS requester_remote_agent_avatar_file_id,
+            COALESCE(requester_remote_agent.avatar_emoji, requester_actor.avatar_emoji) AS requester_avatar_emoji,
             target.workspace_member_id AS target_workspace_member_id,
             target.actor_id AS target_actor_id,
+            target.remote_agent_id AS target_remote_agent_id,
             target.participant_kind AS target_participant_kind,
-            COALESCE(target_actor.name, target_user.name, target.display_name) AS target_name,
-            target_actor.title AS target_title,
-            target_actor.role AS target_role,
+            COALESCE(target_remote_agent.name, target_actor.name, target_user.name, target.display_name) AS target_name,
+            COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
+            COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS target_role,
             target_actor.avatar_file_id AS target_actor_avatar_file_id,
             target_user.avatar_file_id AS target_user_avatar_file_id,
-            target_actor.avatar_emoji AS target_avatar_emoji,
+            target_remote_agent.avatar_file_id AS target_remote_agent_avatar_file_id,
+            COALESCE(target_remote_agent.avatar_emoji, target_actor.avatar_emoji) AS target_avatar_emoji,
             resolver.workspace_member_id AS resolved_by_workspace_member_id,
             resolver.actor_id AS resolved_by_actor_id,
+            resolver.remote_agent_id AS resolved_by_remote_agent_id,
             resolver.participant_kind AS resolved_by_participant_kind,
-            COALESCE(resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
-            resolver_actor.title AS resolved_by_title,
-            resolver_actor.role AS resolved_by_role,
+            COALESCE(resolver_remote_agent.name, resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
+            COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
+            COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS resolved_by_role,
             resolver_actor.avatar_file_id AS resolved_by_actor_avatar_file_id,
             resolver_user.avatar_file_id AS resolved_by_user_avatar_file_id,
-            resolver_actor.avatar_emoji AS resolved_by_avatar_emoji,
+            resolver_remote_agent.avatar_file_id AS resolved_by_remote_agent_avatar_file_id,
+            COALESCE(resolver_remote_agent.avatar_emoji, resolver_actor.avatar_emoji) AS resolved_by_avatar_emoji,
             device.title AS device_display_name,
             exposure.display_name AS exposure_display_name,
             exposure.stable_key AS exposure_stable_key
@@ -1040,6 +1096,8 @@ async function getInteractionRowById(
        ON requester.id = ir.requester_participant_id
      LEFT JOIN actors requester_actor
        ON requester_actor.id = requester.actor_id
+     LEFT JOIN remote_agents requester_remote_agent
+       ON requester_remote_agent.id = requester.remote_agent_id
      LEFT JOIN workspace_members requester_wm
        ON requester_wm.id = requester.workspace_member_id
      LEFT JOIN users requester_user
@@ -1048,6 +1106,8 @@ async function getInteractionRowById(
        ON target.id = ir.target_participant_id
      LEFT JOIN actors target_actor
        ON target_actor.id = target.actor_id
+     LEFT JOIN remote_agents target_remote_agent
+       ON target_remote_agent.id = target.remote_agent_id
      LEFT JOIN workspace_members target_wm
        ON target_wm.id = target.workspace_member_id
      LEFT JOIN users target_user
@@ -1056,6 +1116,8 @@ async function getInteractionRowById(
        ON resolver.id = ir.resolved_by_participant_id
      LEFT JOIN actors resolver_actor
        ON resolver_actor.id = resolver.actor_id
+     LEFT JOIN remote_agents resolver_remote_agent
+       ON resolver_remote_agent.id = resolver.remote_agent_id
      LEFT JOIN workspace_members resolver_wm
        ON resolver_wm.id = resolver.workspace_member_id
      LEFT JOIN users resolver_user
@@ -1153,31 +1215,37 @@ async function getInteractionRowByIdForUpdate(
             auth.relay_tool_stable_key,
             requester.workspace_member_id AS requester_workspace_member_id,
             requester.actor_id AS requester_actor_id,
+            requester.remote_agent_id AS requester_remote_agent_id,
             requester.participant_kind AS requester_participant_kind,
-            COALESCE(requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
-            requester_actor.title AS requester_title,
-            requester_actor.role AS requester_role,
+            COALESCE(requester_remote_agent.name, requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
+            COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
+            COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS requester_role,
             requester_actor.avatar_file_id AS requester_actor_avatar_file_id,
             requester_user.avatar_file_id AS requester_user_avatar_file_id,
-            requester_actor.avatar_emoji AS requester_avatar_emoji,
+            requester_remote_agent.avatar_file_id AS requester_remote_agent_avatar_file_id,
+            COALESCE(requester_remote_agent.avatar_emoji, requester_actor.avatar_emoji) AS requester_avatar_emoji,
             target.workspace_member_id AS target_workspace_member_id,
             target.actor_id AS target_actor_id,
+            target.remote_agent_id AS target_remote_agent_id,
             target.participant_kind AS target_participant_kind,
-            COALESCE(target_actor.name, target_user.name, target.display_name) AS target_name,
-            target_actor.title AS target_title,
-            target_actor.role AS target_role,
+            COALESCE(target_remote_agent.name, target_actor.name, target_user.name, target.display_name) AS target_name,
+            COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
+            COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS target_role,
             target_actor.avatar_file_id AS target_actor_avatar_file_id,
             target_user.avatar_file_id AS target_user_avatar_file_id,
-            target_actor.avatar_emoji AS target_avatar_emoji,
+            target_remote_agent.avatar_file_id AS target_remote_agent_avatar_file_id,
+            COALESCE(target_remote_agent.avatar_emoji, target_actor.avatar_emoji) AS target_avatar_emoji,
             resolver.workspace_member_id AS resolved_by_workspace_member_id,
             resolver.actor_id AS resolved_by_actor_id,
+            resolver.remote_agent_id AS resolved_by_remote_agent_id,
             resolver.participant_kind AS resolved_by_participant_kind,
-            COALESCE(resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
-            resolver_actor.title AS resolved_by_title,
-            resolver_actor.role AS resolved_by_role,
+            COALESCE(resolver_remote_agent.name, resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
+            COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
+            COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS resolved_by_role,
             resolver_actor.avatar_file_id AS resolved_by_actor_avatar_file_id,
             resolver_user.avatar_file_id AS resolved_by_user_avatar_file_id,
-            resolver_actor.avatar_emoji AS resolved_by_avatar_emoji,
+            resolver_remote_agent.avatar_file_id AS resolved_by_remote_agent_avatar_file_id,
+            COALESCE(resolver_remote_agent.avatar_emoji, resolver_actor.avatar_emoji) AS resolved_by_avatar_emoji,
             device.title AS device_display_name,
             exposure.display_name AS exposure_display_name,
             exposure.stable_key AS exposure_stable_key
@@ -1192,6 +1260,8 @@ async function getInteractionRowByIdForUpdate(
        ON requester.id = ir.requester_participant_id
      LEFT JOIN actors requester_actor
        ON requester_actor.id = requester.actor_id
+     LEFT JOIN remote_agents requester_remote_agent
+       ON requester_remote_agent.id = requester.remote_agent_id
      LEFT JOIN workspace_members requester_wm
        ON requester_wm.id = requester.workspace_member_id
      LEFT JOIN users requester_user
@@ -1200,6 +1270,8 @@ async function getInteractionRowByIdForUpdate(
        ON target.id = ir.target_participant_id
      LEFT JOIN actors target_actor
        ON target_actor.id = target.actor_id
+     LEFT JOIN remote_agents target_remote_agent
+       ON target_remote_agent.id = target.remote_agent_id
      LEFT JOIN workspace_members target_wm
        ON target_wm.id = target.workspace_member_id
      LEFT JOIN users target_user
@@ -1208,6 +1280,8 @@ async function getInteractionRowByIdForUpdate(
        ON resolver.id = ir.resolved_by_participant_id
      LEFT JOIN actors resolver_actor
        ON resolver_actor.id = resolver.actor_id
+     LEFT JOIN remote_agents resolver_remote_agent
+       ON resolver_remote_agent.id = resolver.remote_agent_id
      LEFT JOIN workspace_members resolver_wm
        ON resolver_wm.id = resolver.workspace_member_id
      LEFT JOIN users resolver_user
@@ -1261,7 +1335,9 @@ async function appendInteractionUpdatedSyncEvent(
     queryable,
   );
   const recipients =
-    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION
+    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION ||
+    (interaction.requester?.participantType === "remote_agent" &&
+      !interaction.target)
       ? allRecipients
       : allRecipients.filter((recipient) =>
           recipient.workspaceMemberId === interaction.target?.workspaceMemberId ||
@@ -1503,7 +1579,8 @@ async function insertInteractionRequest(
   params: {
   workspaceId: string;
   conversationId: string;
-  taskId: string;
+  taskId?: string;
+  remoteAgentRunId?: string;
   requesterParticipantId: string;
   kind: InteractionRequestKind;
   requestKey: string;
@@ -1519,6 +1596,7 @@ async function insertInteractionRequest(
         workspace_id,
         conversation_id,
         task_id,
+        remote_agent_run_id,
         requester_participant_id,
         kind,
         status,
@@ -1530,7 +1608,8 @@ async function insertInteractionRequest(
         ${interactionId},
         ${params.workspaceId},
         ${params.conversationId},
-        ${params.taskId},
+        ${params.taskId || null},
+        ${params.remoteAgentRunId || null},
         ${params.requesterParticipantId},
         ${params.kind},
         'pending',
@@ -1846,6 +1925,84 @@ export async function createUserInputInteractionRequest(
   });
 }
 
+export async function createRemoteAgentUserInputInteractionRequest(
+  params: CreateRemoteAgentUserInputInteractionParams,
+) {
+  return transaction(async (client) => {
+    const requestKey = buildRemoteAgentInteractionRequestKey({
+      remoteAgentRunId: params.remoteAgentRunId,
+      kind: INTERACTION_REQUEST_KIND.USER_INPUT,
+    });
+    const existingInteractionId = await findPendingInteractionIdByRequestKey(
+      params.workspaceId,
+      requestKey,
+      client,
+    );
+    if (existingInteractionId) {
+      const existing = await getInteractionRequestSummary(
+        existingInteractionId,
+        client,
+      );
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const interactionId = await insertInteractionRequest(client, {
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      remoteAgentRunId: params.remoteAgentRunId,
+      requesterParticipantId: params.requesterParticipantId,
+      kind: INTERACTION_REQUEST_KIND.USER_INPUT,
+      requestKey,
+      targetParticipantId: params.targetParticipantId,
+      expiresAt: params.expiresAt,
+    });
+
+    await insertUserInputInteractionDetails(client, {
+      interactionId,
+      promptPayload: {
+        title: params.title,
+        instructions: params.instructions,
+        questions: params.questions,
+      },
+    });
+
+    let interaction = await getInteractionRequestSummary(interactionId, client);
+    if (!interaction) {
+      throw new Error("Failed to load created remote agent input interaction");
+    }
+
+    const targeted = Boolean(params.targetParticipantId);
+    const created = await createConversationEvent({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      eventType: "interaction_requested",
+      authorParticipantId: params.requesterParticipantId,
+      eventPayload: { interaction },
+      timelinePolicy: targeted ? "targeted_members" : "all_members",
+      contextPolicy: targeted ? "targeted_members" : "shared",
+      restrictedAudienceParticipantIds: targeted
+        ? [params.targetParticipantId!]
+        : undefined,
+      contextTargetParticipantIds: targeted
+        ? [params.targetParticipantId!]
+        : undefined,
+      queryable: client,
+    });
+
+    await updateInteractionConversationItemId(client, interactionId, created.item.id);
+
+    interaction = await getInteractionRequestSummary(interactionId, client);
+    if (!interaction) {
+      throw new Error("Failed to reload created remote agent input interaction");
+    }
+    await syncInteractionEventPayload(interaction, client);
+    await appendInteractionUpdatedSyncEvent(client, interaction);
+    return interaction;
+  });
+}
+
 export async function createPlanApprovalInteractionRequest(
   params: CreatePlanApprovalInteractionParams,
 ) {
@@ -1934,6 +2091,122 @@ export async function createPlanApprovalInteractionRequest(
       },
       client,
     );
+    await syncInteractionEventPayload(interaction, client);
+    await appendInteractionUpdatedSyncEvent(client, interaction);
+    return interaction;
+  });
+}
+
+export async function createRemoteAgentPlanApprovalInteractionRequest(
+  params: CreateRemoteAgentPlanApprovalInteractionParams,
+) {
+  return transaction(async (client) => {
+    const requestKey = buildRemoteAgentInteractionRequestKey({
+      remoteAgentRunId: params.remoteAgentRunId,
+      kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
+    });
+    const existingInteractionId = await findPendingInteractionIdByRequestKey(
+      params.workspaceId,
+      requestKey,
+      client,
+    );
+    if (existingInteractionId) {
+      const existing = await getInteractionRequestSummary(
+        existingInteractionId,
+        client,
+      );
+      if (existing) {
+        return existing;
+      }
+    }
+
+    const interactionId = await insertInteractionRequest(client, {
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      remoteAgentRunId: params.remoteAgentRunId,
+      requesterParticipantId: params.requesterParticipantId,
+      kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
+      requestKey,
+      targetParticipantId: params.targetParticipantId,
+      expiresAt: params.expiresAt,
+    });
+
+    await insertPlanApprovalInteractionDetails(client, {
+      interactionId,
+      planPayload: {
+        title: params.title,
+        summary: params.summary,
+        planMarkdown: params.planMarkdown,
+        checklist: params.checklist,
+      },
+    });
+
+    let interaction = await getInteractionRequestSummary(interactionId, client);
+    if (!interaction) {
+      throw new Error("Failed to load created remote agent plan interaction");
+    }
+
+    const targeted = Boolean(params.targetParticipantId);
+    const created = await createConversationEvent({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      eventType: "interaction_requested",
+      authorParticipantId: params.requesterParticipantId,
+      eventPayload: { interaction },
+      timelinePolicy: targeted ? "targeted_members" : "all_members",
+      contextPolicy: targeted ? "targeted_members" : "shared",
+      restrictedAudienceParticipantIds: targeted
+        ? [params.targetParticipantId!]
+        : undefined,
+      contextTargetParticipantIds: targeted
+        ? [params.targetParticipantId!]
+        : undefined,
+      queryable: client,
+    });
+
+    await updateInteractionConversationItemId(client, interactionId, created.item.id);
+    const contextUpsert = await executeSqlOn<{ remote_agent_id: string }>(
+      client,
+      `
+        INSERT INTO remote_agent_conversation_contexts (
+          remote_agent_id,
+          conversation_id,
+          collaboration_mode,
+          collaboration_state,
+          active_plan_approval_interaction_id
+        )
+        SELECT
+          cp.remote_agent_id,
+          $1,
+          'plan_awaiting_approval',
+          $2::jsonb,
+          $3
+        FROM conversation_participants cp
+        WHERE cp.id = $4
+          AND cp.remote_agent_id IS NOT NULL
+        ON CONFLICT (remote_agent_id, conversation_id)
+        DO UPDATE SET
+          collaboration_mode = EXCLUDED.collaboration_mode,
+          collaboration_state = EXCLUDED.collaboration_state,
+          active_plan_approval_interaction_id = EXCLUDED.active_plan_approval_interaction_id,
+          updated_at = NOW()
+        RETURNING remote_agent_id
+      `,
+      [
+        params.conversationId,
+        JSON.stringify(params.collaborationState || {}),
+        interactionId,
+        params.requesterParticipantId,
+      ],
+    );
+    if (!contextUpsert.rows[0]?.remote_agent_id) {
+      throw new Error("Remote agent requester participant is invalid");
+    }
+
+    interaction = await getInteractionRequestSummary(interactionId, client);
+    if (!interaction) {
+      throw new Error("Failed to reload created remote agent plan interaction");
+    }
     await syncInteractionEventPayload(interaction, client);
     await appendInteractionUpdatedSyncEvent(client, interaction);
     return interaction;
@@ -2200,14 +2473,29 @@ export async function canUserViewInteraction(params: {
             INTERACTION_REQUEST_KIND.USER_INPUT,
             INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
           ]),
-          sql<boolean>`EXISTS (
-            SELECT 1
-            FROM conversation_participants cp
-            JOIN workspace_members wm
-              ON wm.id = cp.workspace_member_id
-            WHERE cp.id = ir.target_participant_id
-              AND wm.user_id = ${params.userId}
-          )`,
+          eb.or([
+            sql<boolean>`EXISTS (
+              SELECT 1
+              FROM conversation_participants cp
+              JOIN workspace_members wm
+                ON wm.id = cp.workspace_member_id
+              WHERE cp.id = ir.target_participant_id
+                AND wm.user_id = ${params.userId}
+            )`,
+            sql<boolean>`EXISTS (
+              SELECT 1
+              FROM conversation_participants requester_cp
+              JOIN conversation_participants viewer_cp
+                ON viewer_cp.conversation_id = requester_cp.conversation_id
+               AND viewer_cp.state = 'active'
+              JOIN workspace_members viewer_wm
+                ON viewer_wm.id = viewer_cp.workspace_member_id
+              WHERE requester_cp.id = ir.requester_participant_id
+                AND requester_cp.remote_agent_id IS NOT NULL
+                AND ir.remote_agent_run_id IS NOT NULL
+                AND viewer_wm.user_id = ${params.userId}
+            )`,
+          ]),
         ]),
         eb.and([
           eb("ir.kind", "=", INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION),
@@ -2237,12 +2525,11 @@ export async function canUserResolveInteraction(params: {
     return false;
   }
 
-  if (isTargetedInteractionKind(interaction.kind)) {
+  if (
+    interaction.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+    interaction.target?.participantId
+  ) {
     const targetParticipantId = interaction.target?.participantId;
-    if (!targetParticipantId) {
-      return false;
-    }
-
     const viewerParticipant = await db
       .selectFrom("conversation_participants as cp")
       .innerJoin("workspace_members as wm", "wm.id", "cp.workspace_member_id")
@@ -2254,6 +2541,47 @@ export async function canUserResolveInteraction(params: {
       .executeTakeFirst();
 
     return Boolean(viewerParticipant?.id);
+  }
+
+  if (
+    interaction.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+    interaction.requester?.participantType === "remote_agent" &&
+    interaction.requester.remoteAgentId
+  ) {
+    const viewerMembership = await db
+      .selectFrom("conversation_participants as cp")
+      .innerJoin("workspace_members as wm", "wm.id", "cp.workspace_member_id")
+      .innerJoin("conversations as c", "c.id", "cp.conversation_id")
+      .select([
+        "cp.workspace_member_id as workspace_member_id",
+        "c.kind as conversation_kind",
+      ])
+      .where("cp.conversation_id", "=", interaction.conversationId)
+      .where("cp.state", "=", "active")
+      .where("wm.user_id", "=", userId)
+      .limit(1)
+      .executeTakeFirst();
+
+    if (!viewerMembership?.workspace_member_id) {
+      return false;
+    }
+
+    if (viewerMembership.conversation_kind === "private") {
+      return true;
+    }
+
+    const grant = await executeSql<{ workspace_member_id: string }>(
+      `
+        SELECT workspace_member_id
+        FROM remote_agent_group_interaction_grants
+        WHERE remote_agent_id = $1
+          AND workspace_member_id = $2
+        LIMIT 1
+      `,
+      [interaction.requester.remoteAgentId, viewerMembership.workspace_member_id],
+    );
+
+    return Boolean(grant.rows[0]?.workspace_member_id);
   }
 
   const deviceId = interaction.relayAuthorization?.deviceId;
@@ -2549,10 +2877,45 @@ export async function resolveInteractionRequest(
     }
 
     if (
-      isTargetedInteractionKind(locked.kind) &&
+      locked.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+      locked.target_participant_id &&
       locked.target_participant_id !== params.resolverParticipantId
     ) {
       throw new Error("Only the targeted user can resolve this interaction");
+    }
+
+    if (
+      locked.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+      !locked.target_participant_id &&
+      locked.requester_remote_agent_id
+    ) {
+      const conversationRow = await executeTakeFirst(
+        client,
+        db
+          .selectFrom("conversations")
+          .select("kind")
+          .where("id", "=", locked.conversation_id)
+          .limit(1),
+      );
+      if (!conversationRow) {
+        throw new Error(`Conversation ${locked.conversation_id} not found`);
+      }
+      if (conversationRow.kind !== "private") {
+        const grantRow = await executeSqlOn<{ workspace_member_id: string }>(
+          client,
+          `
+            SELECT workspace_member_id
+            FROM remote_agent_group_interaction_grants
+            WHERE remote_agent_id = $1
+              AND workspace_member_id = $2
+            LIMIT 1
+          `,
+          [locked.requester_remote_agent_id, params.resolverWorkspaceMemberId],
+        );
+        if (!grantRow.rows[0]?.workspace_member_id) {
+          throw new Error("You are not allowed to resolve this remote agent interaction");
+        }
+      }
     }
 
     if (locked.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION) {
@@ -2632,97 +2995,118 @@ export async function resolveInteractionRequest(
         note: params.note?.trim() || undefined,
       };
 
-      if (!locked.task_id) {
-        throw new Error(
-          `Interaction ${locked.id} is missing task governance`,
-        );
-      }
-      const taskRow = await executeTakeFirst(
-        client,
-        db
-          .selectFrom("tool_call_tasks")
-          .select("session_id")
-          .where("id", "=", locked.task_id)
-          .limit(1),
-      );
-      if (!taskRow?.session_id) {
-        throw new Error(
-          `Plan approval interaction ${locked.id} is missing a session`,
-        );
-      }
-      const sessionRow = await executeTakeFirst(
-        client,
-        db
-          .selectFrom("sessions as s")
-          .innerJoin("conversations as c", "c.id", "s.conversation_id")
-          .select([
-            "s.collaboration_state",
-            "s.collaboration_mode",
-            "s.active_plan_approval_interaction_id",
-            "c.kind as conversation_kind",
-          ])
-          .where("s.id", "=", taskRow.session_id)
-          .limit(1),
-      );
-      if (!sessionRow) {
-        throw new Error(`Session ${taskRow.session_id} not found`);
-      }
-      if (isGroupConversationKind(sessionRow.conversation_kind)) {
-        throw new Error("Plan mode is only available in private conversations.");
-      }
-      if (
-        !isPlanAwaitingApprovalCollaborationMode(sessionRow.collaboration_mode)
-      ) {
-        throw new Error(
-          `Session ${taskRow.session_id} must be in plan_awaiting_approval before resolving plan approval.`,
-        );
-      }
-      if (!sessionRow.active_plan_approval_interaction_id) {
-        throw new Error(
-          `Session ${taskRow.session_id} is missing active_plan_approval_interaction_id`,
-        );
-      }
-      if (sessionRow.active_plan_approval_interaction_id !== locked.id) {
-        throw new Error(
-          `Session ${taskRow.session_id} points to ${sessionRow.active_plan_approval_interaction_id}, not ${locked.id}`,
-        );
-      }
-
-      const collaborationState = parseSessionCollaborationState(
-        sessionRow.collaboration_state == null
-          ? {}
-          : requireJsonObject(
-              sessionRow.collaboration_state,
-              `Session ${taskRow.session_id} collaboration_state`,
-            ),
-      );
-      const existingDraft = collaborationState.planDraft;
-      if (!existingDraft) {
-        throw new Error(
-          `Session ${taskRow.session_id} is missing collaborationState.planDraft`,
-        );
-      }
-
-      await updateSessionCollaboration(
-        {
-          sessionId: taskRow.session_id,
-          collaborationMode:
+      if (locked.remote_agent_run_id && locked.requester_remote_agent_id) {
+        await executeSqlOn(
+          client,
+          `
+            UPDATE remote_agent_conversation_contexts
+            SET collaboration_mode = $3,
+                collaboration_state = $4::jsonb,
+                active_plan_approval_interaction_id = NULL,
+                updated_at = NOW()
+            WHERE remote_agent_id = $1
+              AND conversation_id = $2
+          `,
+          [
+            locked.requester_remote_agent_id,
+            locked.conversation_id,
             nextStatus === "approved" ? "default" : "plan_drafting",
-          collaborationState:
-            nextStatus === "approved"
-              ? {}
-              : {
-                  planDraft: buildSessionPlanDraftState({
-                    summary: existingDraft.summary,
-                    checklist: existingDraft.checklist,
-                    explanation: existingDraft.explanation,
-                    enteredAt: existingDraft.enteredAt,
-                  }),
-                },
-          activePlanApprovalInteractionId: null,
-        },
-        client,
-      );
+            JSON.stringify({}),
+          ],
+        );
+      } else {
+        if (!locked.task_id) {
+          throw new Error(
+            `Interaction ${locked.id} is missing task governance`,
+          );
+        }
+        const taskRow = await executeTakeFirst(
+          client,
+          db
+            .selectFrom("tool_call_tasks")
+            .select("session_id")
+            .where("id", "=", locked.task_id)
+            .limit(1),
+        );
+        if (!taskRow?.session_id) {
+          throw new Error(
+            `Plan approval interaction ${locked.id} is missing a session`,
+          );
+        }
+        const sessionRow = await executeTakeFirst(
+          client,
+          db
+            .selectFrom("sessions as s")
+            .innerJoin("conversations as c", "c.id", "s.conversation_id")
+            .select([
+              "s.collaboration_state",
+              "s.collaboration_mode",
+              "s.active_plan_approval_interaction_id",
+              "c.kind as conversation_kind",
+            ])
+            .where("s.id", "=", taskRow.session_id)
+            .limit(1),
+        );
+        if (!sessionRow) {
+          throw new Error(`Session ${taskRow.session_id} not found`);
+        }
+        if (isGroupConversationKind(sessionRow.conversation_kind)) {
+          throw new Error("Plan mode is only available in private conversations.");
+        }
+        if (
+          !isPlanAwaitingApprovalCollaborationMode(sessionRow.collaboration_mode)
+        ) {
+          throw new Error(
+            `Session ${taskRow.session_id} must be in plan_awaiting_approval before resolving plan approval.`,
+          );
+        }
+        if (!sessionRow.active_plan_approval_interaction_id) {
+          throw new Error(
+            `Session ${taskRow.session_id} is missing active_plan_approval_interaction_id`,
+          );
+        }
+        if (sessionRow.active_plan_approval_interaction_id !== locked.id) {
+          throw new Error(
+            `Session ${taskRow.session_id} points to ${sessionRow.active_plan_approval_interaction_id}, not ${locked.id}`,
+          );
+        }
+
+        const collaborationState = parseSessionCollaborationState(
+          sessionRow.collaboration_state == null
+            ? {}
+            : requireJsonObject(
+                sessionRow.collaboration_state,
+                `Session ${taskRow.session_id} collaboration_state`,
+              ),
+        );
+        const existingDraft = collaborationState.planDraft;
+        if (!existingDraft) {
+          throw new Error(
+            `Session ${taskRow.session_id} is missing collaborationState.planDraft`,
+          );
+        }
+
+        await updateSessionCollaboration(
+          {
+            sessionId: taskRow.session_id,
+            collaborationMode:
+              nextStatus === "approved" ? "default" : "plan_drafting",
+            collaborationState:
+              nextStatus === "approved"
+                ? {}
+                : {
+                    planDraft: buildSessionPlanDraftState({
+                      summary: existingDraft.summary,
+                      checklist: existingDraft.checklist,
+                      explanation: existingDraft.explanation,
+                      enteredAt: existingDraft.enteredAt,
+                    }),
+                  },
+            activePlanApprovalInteractionId: null,
+          },
+          client,
+        );
+      }
     } else {
       if (params.decision !== "approve" && params.decision !== "reject") {
         throw new Error("decision must be approve or reject");
@@ -2864,6 +3248,19 @@ export async function resolveInteractionRequest(
   }
 
   const interaction = result.interaction;
+  if (interaction.remoteAgentRunId) {
+    const { notifyRemoteAgentInteractionResolved } = await import(
+      "../remote-agents/service.js"
+    );
+    await notifyRemoteAgentInteractionResolved(interaction.id);
+    return {
+      outcome: result.outcome,
+      interaction,
+      createdGrant: result.createdGrant,
+      createdGrants: result.createdGrant ? [result.createdGrant] : undefined,
+    };
+  }
+
   if (!interaction.taskId) {
     throw new Error(`Interaction ${interaction.id} is missing task governance`);
   }

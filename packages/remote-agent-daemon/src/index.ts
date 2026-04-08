@@ -6,6 +6,7 @@ import {
   execSync,
   type ChildProcess,
 } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import {
   existsSync,
   mkdirSync,
@@ -56,6 +57,13 @@ type DeliveryMessage = {
   deliveries: Delivery[];
 };
 
+type InteractionResolvedMessage = {
+  type: "agent:interaction:resolved";
+  remoteAgentId: string;
+  interactionId: string;
+  interaction: Record<string, any>;
+};
+
 type ConnectedMessage = {
   type: "connected";
   machineId: string;
@@ -72,7 +80,19 @@ type Delivery = {
 type DriverEvent =
   | { kind: "session"; sessionId: string }
   | { kind: "turn_end" }
-  | { kind: "error"; message: string };
+  | { kind: "error"; message: string }
+  | { kind: "control_request"; requestId: string; request: Record<string, any> }
+  | {
+      kind: "codex_server_request";
+      requestId: string | number;
+      method: string;
+      params: Record<string, any>;
+    }
+  | {
+      kind: "plan_updated";
+      explanation?: string;
+      plan: Array<{ step: string; status: string }>;
+    };
 
 type SpawnContext = {
   prompt: string;
@@ -82,6 +102,7 @@ type SpawnContext = {
   runtimePath?: string;
   workingDirectory: string;
   chatBridgePath: string;
+  bridgeStatePath: string;
   sessionId?: string;
 };
 
@@ -97,6 +118,7 @@ interface RuntimeDriver {
   spawn(context: SpawnContext): DriverLaunch;
   parseOutputLine(line: string): DriverEvent[];
   encodeWakeMessage?(text: string, sessionId?: string): string | null;
+  destroy?(): void;
 }
 
 type SessionState = {
@@ -246,6 +268,26 @@ function buildWakePrompt() {
   ].join(" ");
 }
 
+function buildPlanApprovedPrompt(note?: string) {
+  return [
+    "The user approved your plan in Synapse.",
+    note ? `Note from the user: ${note}` : "",
+    "Continue with the approved work. Check messages first if needed, then proceed.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
+function buildPlanRevisionPrompt(note?: string) {
+  return [
+    "The user asked you to revise your plan in Synapse.",
+    note ? `Feedback: ${note}` : "",
+    "Review the conversation history, update your plan, and request approval again when ready.",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function buildBootstrapPrompt(params: {
   remoteAgentId: string;
   runtimeKind: RuntimeKind;
@@ -291,6 +333,74 @@ function previewLine(value: string, maxLength = 280) {
     return normalized;
   }
   return `${normalized.slice(0, maxLength)}...`;
+}
+
+function safeJsonParse<T = any>(value: string): T | null {
+  try {
+    return JSON.parse(value) as T;
+  } catch {
+    return null;
+  }
+}
+
+function buildInternalUrl(serverUrl: string, pathname: string) {
+  return new URL(pathname, serverUrl);
+}
+
+async function requestJson<T>(
+  serverUrl: string,
+  machineKey: string,
+  pathname: string,
+  init?: RequestInit,
+): Promise<T> {
+  const url = buildInternalUrl(serverUrl, pathname);
+  const headers = new Headers(init?.headers);
+  headers.set("authorization", `Bearer ${machineKey}`);
+  if (init?.body && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
+  const response = await fetch(url, {
+    ...init,
+    headers,
+  });
+  if (!response.ok) {
+    const bodyText = await response.text().catch(() => "");
+    throw new Error(
+      `Remote-agent request failed (${response.status} ${response.statusText})${bodyText ? `: ${bodyText}` : ""}`,
+    );
+  }
+  return (await response.json()) as T;
+}
+
+function readBridgeState(filePath: string): {
+  lastConversationId?: string;
+  lastToolName?: string;
+  updatedAt?: string;
+} {
+  if (!filePath || !existsSync(filePath)) {
+    return {};
+  }
+  const parsed = safeJsonParse<Record<string, any>>(readFileSync(filePath, "utf8"));
+  if (!parsed || typeof parsed !== "object") {
+    return {};
+  }
+  return {
+    lastConversationId:
+      typeof parsed.lastConversationId === "string"
+        ? parsed.lastConversationId
+        : undefined,
+    lastToolName:
+      typeof parsed.lastToolName === "string" ? parsed.lastToolName : undefined,
+    updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
+  };
+}
+
+function writeJsonLine(processRef: ChildProcess | null, payload: unknown) {
+  if (!processRef?.stdin?.writable) {
+    return false;
+  }
+  processRef.stdin.write(`${JSON.stringify(payload)}\n`);
+  return true;
 }
 
 function which(binary: string) {
@@ -401,6 +511,29 @@ function detectCodexRuntime(): RuntimeCatalogEntry {
   };
 }
 
+function detectRuntime(runtimeKind: RuntimeKind): RuntimeCatalogEntry {
+  return runtimeKind === "claude_code"
+    ? detectClaudeRuntime()
+    : detectCodexRuntime();
+}
+
+function describeRuntimeCatalogIssue(entry: RuntimeCatalogEntry) {
+  const runtimeLabel =
+    entry.runtimeKind === "claude_code" ? "Claude Code" : "Codex CLI";
+  switch (entry.status) {
+    case "missing_binary":
+      return `${runtimeLabel} is not installed or not on PATH for this machine`;
+    case "broken_path":
+      return `${runtimeLabel} executable path is invalid`;
+    case "unsupported_platform":
+      return `${runtimeLabel} is not supported on this platform`;
+    case "runtime_error":
+      return entry.lastError?.trim() || `${runtimeLabel} runtime check failed`;
+    default:
+      return `${runtimeLabel} is not available`;
+  }
+}
+
 class ClaudeDriver implements RuntimeDriver {
   readonly runtimeKind = "claude_code" as const;
   readonly supportsPersistentSession = true;
@@ -415,6 +548,8 @@ class ClaudeDriver implements RuntimeDriver {
       context.serverUrl,
       "--machine-key",
       context.machineKey,
+      "--state-file",
+      context.bridgeStatePath,
     ];
 
     const mcpConfig = JSON.stringify({
@@ -437,6 +572,8 @@ class ClaudeDriver implements RuntimeDriver {
     }
 
     const args = [
+      "--print",
+      "--verbose",
       "--allow-dangerously-skip-permissions",
       "--dangerously-skip-permissions",
       "--output-format",
@@ -462,7 +599,7 @@ class ClaudeDriver implements RuntimeDriver {
       shell: process.platform === "win32",
     });
 
-    const initialMessage = JSON.stringify({
+    writeJsonLine(child, {
       type: "user",
       message: {
         role: "user",
@@ -470,22 +607,31 @@ class ClaudeDriver implements RuntimeDriver {
       },
       ...(context.sessionId ? { session_id: context.sessionId } : {}),
     });
-    child.stdin?.write(`${initialMessage}\n`);
 
     return { process: child };
   }
 
   parseOutputLine(line: string) {
-    let event: any;
-    try {
-      event = JSON.parse(line);
-    } catch {
+    const event = safeJsonParse<any>(line);
+    if (!event) {
       return [];
     }
 
     const events: DriverEvent[] = [];
     if (event.type === "system" && event.subtype === "init" && event.session_id) {
       events.push({ kind: "session", sessionId: String(event.session_id) });
+    }
+    if (
+      event.type === "control_request" &&
+      typeof event.request_id === "string" &&
+      event.request &&
+      typeof event.request === "object"
+    ) {
+      events.push({
+        kind: "control_request",
+        requestId: event.request_id,
+        request: event.request,
+      });
     }
     if (event.type === "result") {
       if (event.is_error && event.stop_reason !== "max_tokens") {
@@ -516,6 +662,21 @@ class CodexDriver implements RuntimeDriver {
   readonly runtimeKind = "codex" as const;
   readonly supportsPersistentSession = false;
 
+  private child: ChildProcess | null = null;
+
+  private context: SpawnContext | null = null;
+
+  private requestSeq = 0;
+
+  private pendingRequests = new Map<
+    string,
+    "initialize" | "collaborationMode/list" | "thread/start" | "thread/resume" | "turn/start"
+  >();
+
+  private currentThreadId?: string;
+
+  private currentModel?: string;
+
   spawn(context: SpawnContext): DriverLaunch {
     const gitDirectory = path.join(context.workingDirectory, ".git");
     if (!existsSync(gitDirectory)) {
@@ -545,15 +706,14 @@ class CodexDriver implements RuntimeDriver {
       context.serverUrl,
       "--machine-key",
       context.machineKey,
+      "--state-file",
+      context.bridgeStatePath,
     ];
 
-    const args = ["exec"];
-    if (context.sessionId) {
-      args.push("resume", context.sessionId);
-    }
-    args.push(
-      "--dangerously-bypass-approvals-and-sandbox",
-      "--json",
+    const args = [
+      "app-server",
+      "--listen",
+      "stdio://",
       "-c",
       `mcp_servers.chat.command=${JSON.stringify(bridgeCommand)}`,
       "-c",
@@ -566,8 +726,7 @@ class CodexDriver implements RuntimeDriver {
       "mcp_servers.chat.enabled=true",
       "-c",
       "mcp_servers.chat.required=true",
-      context.prompt,
-    );
+    ];
 
     const runtimePath = context.runtimePath || "codex";
     const isWindowsJsEntry =
@@ -576,7 +735,7 @@ class CodexDriver implements RuntimeDriver {
     const child = isWindowsJsEntry
       ? spawn(process.execPath, [runtimePath, ...args], {
           cwd: context.workingDirectory,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe"],
           env: {
             ...process.env,
             FORCE_COLOR: "0",
@@ -585,7 +744,7 @@ class CodexDriver implements RuntimeDriver {
         })
       : spawn(runtimePath, args, {
           cwd: context.workingDirectory,
-          stdio: ["ignore", "pipe", "pipe"],
+          stdio: ["pipe", "pipe", "pipe"],
           env: {
             ...process.env,
             FORCE_COLOR: "0",
@@ -594,46 +753,233 @@ class CodexDriver implements RuntimeDriver {
           shell: process.platform === "win32",
         });
 
+    this.child = child;
+    this.context = context;
+    this.requestSeq = 0;
+    this.pendingRequests.clear();
+    this.currentThreadId = context.sessionId ?? undefined;
+    this.currentModel = undefined;
+    this.sendRequest("initialize", {
+      clientInfo: {
+        name: "synapse_remote_agent",
+        title: "Synapse Remote Agent",
+        version: "0.1.0",
+      },
+      capabilities: {
+        experimentalApi: true,
+      },
+    });
+
     return { process: child };
   }
 
   parseOutputLine(line: string) {
-    let event: any;
-    try {
-      event = JSON.parse(line);
-    } catch {
+    const event = safeJsonParse<any>(line);
+    if (!event || typeof event !== "object") {
       return [];
     }
 
     const events: DriverEvent[] = [];
-    switch (event.type) {
-      case "thread.started":
-        if (event.thread_id) {
-          events.push({ kind: "session", sessionId: String(event.thread_id) });
+    if (event.id && "result" in event) {
+      const requestId = String(event.id);
+      const method = this.pendingRequests.get(requestId);
+      this.pendingRequests.delete(requestId);
+      switch (method) {
+        case "initialize":
+          this.sendNotification("initialized");
+          this.sendRequest("collaborationMode/list", {});
+          if (this.context?.sessionId) {
+            this.sendRequest("thread/resume", {
+              threadId: this.context.sessionId,
+              cwd: this.context.workingDirectory,
+              approvalPolicy: "never",
+            });
+          } else {
+            this.sendRequest("thread/start", {
+              cwd: this.context?.workingDirectory,
+              approvalPolicy: "never",
+              sandbox: "danger-full-access",
+            });
+          }
+          break;
+        case "collaborationMode/list":
+          break;
+        case "thread/start":
+        case "thread/resume": {
+          const thread = event.result?.thread;
+          const threadId =
+            typeof thread?.id === "string"
+              ? thread.id
+              : typeof thread?.threadId === "string"
+                ? thread.threadId
+                : this.context?.sessionId;
+          if (threadId) {
+            this.currentThreadId = threadId;
+            events.push({ kind: "session", sessionId: threadId });
+          }
+          if (typeof event.result?.model === "string") {
+            this.currentModel = event.result.model;
+          }
+          this.startTurn();
+          break;
         }
-        break;
-      case "turn.completed":
-        events.push({ kind: "turn_end" });
-        break;
-      case "turn.failed":
-        events.push({
-          kind: "error",
-          message: String(event.error?.message || "Codex execution failed"),
-        });
-        events.push({ kind: "turn_end" });
-        break;
-      case "error":
-        events.push({
-          kind: "error",
-          message: String(event.message || "Codex execution failed"),
-        });
-        break;
-      default:
-        break;
+        case "turn/start":
+          break;
+        default:
+          break;
+      }
+      return events;
     }
+
+    if (event.id && "error" in event) {
+      events.push({
+        kind: "error",
+        message: String(event.error?.message || "Codex app-server request failed"),
+      });
+      events.push({ kind: "turn_end" });
+      return events;
+    }
+
+    if (typeof event.method === "string" && "id" in event) {
+      events.push({
+        kind: "codex_server_request",
+        requestId: event.id,
+        method: event.method,
+        params:
+          event.params && typeof event.params === "object" ? event.params : {},
+      });
+      return events;
+    }
+
+    if (typeof event.method === "string") {
+      switch (event.method) {
+        case "thread/started": {
+          const threadId =
+            typeof event.params?.thread?.id === "string"
+              ? event.params.thread.id
+              : undefined;
+          if (threadId) {
+            events.push({ kind: "session", sessionId: threadId });
+          }
+          break;
+        }
+        case "turn/plan/updated":
+          events.push({
+            kind: "plan_updated",
+            explanation:
+              typeof event.params?.explanation === "string"
+                ? event.params.explanation
+                : undefined,
+            plan: Array.isArray(event.params?.plan)
+              ? event.params.plan
+                  .map((step: any) => ({
+                    step: String(step?.step || ""),
+                    status: String(step?.status || "pending"),
+                  }))
+                  .filter((step: { step: string }) => Boolean(step.step))
+              : [],
+          });
+          break;
+        case "turn/completed":
+          if (event.params?.turn?.error?.message) {
+            events.push({
+              kind: "error",
+              message: String(event.params.turn.error.message),
+            });
+          }
+          events.push({ kind: "turn_end" });
+          break;
+        default:
+          break;
+      }
+      return events;
+    }
+
     return events;
   }
+
+  destroy() {
+    this.child = null;
+    this.context = null;
+    this.pendingRequests.clear();
+    this.currentThreadId = undefined;
+    this.currentModel = undefined;
+  }
+
+  private sendRequest(
+    method:
+      | "initialize"
+      | "collaborationMode/list"
+      | "thread/start"
+      | "thread/resume"
+      | "turn/start",
+    params: Record<string, unknown>,
+  ) {
+    const requestId = `req-${++this.requestSeq}`;
+    this.pendingRequests.set(requestId, method);
+    writeJsonLine(this.child, {
+      jsonrpc: "2.0",
+      id: requestId,
+      method,
+      params,
+    });
+  }
+
+  private sendNotification(method: string, params?: Record<string, unknown>) {
+    writeJsonLine(this.child, {
+      jsonrpc: "2.0",
+      method,
+      ...(params ? { params } : {}),
+    });
+  }
+
+  private startTurn() {
+    if (!this.currentThreadId || !this.context) {
+      return;
+    }
+    this.sendRequest("turn/start", {
+      threadId: this.currentThreadId,
+      input: [
+        {
+          type: "text",
+          text: this.context.prompt,
+        },
+      ],
+      cwd: this.context.workingDirectory,
+      approvalPolicy: "never",
+      sandboxPolicy: {
+        type: "dangerFullAccess",
+      },
+    });
+  }
 }
+
+type PendingInteraction = {
+  interactionId: string;
+  kind: "user_input" | "plan_approval";
+  protocol: "claude_permission" | "codex_request";
+  requestId: string;
+  runKey: string;
+  conversationId: string;
+  toolName?: string;
+  originalInput?: Record<string, any>;
+};
+
+type LatestPlanDraft = {
+  title: string;
+  summary?: string;
+  planMarkdown: string;
+  checklist?: Array<{ id?: string; text: string; done?: boolean }>;
+};
+
+type RemoteAgentRuntimeState =
+  | "offline"
+  | "idle"
+  | "running"
+  | "waiting_user_input"
+  | "plan_drafting"
+  | "waiting_plan_approval"
+  | "error";
 
 function createDriver(runtimeKind: RuntimeKind): RuntimeDriver {
   return runtimeKind === "claude_code"
@@ -789,6 +1135,15 @@ class DaemonSupervisor {
           }
           return;
         }
+
+        if (message?.type === "agent:interaction:resolved") {
+          const resolved = message as InteractionResolvedMessage;
+          const agent = this.agents.get(resolved.remoteAgentId);
+          if (agent) {
+            await agent.resolveInteraction(resolved);
+          }
+          return;
+        }
       });
 
       ws.once("close", () => {
@@ -841,6 +1196,18 @@ class ManagedRemoteAgent {
 
   private stateFile = "";
 
+  private bridgeStateFile = "";
+
+  private driver: RuntimeDriver | null = null;
+
+  private pendingInteraction: PendingInteraction | null = null;
+
+  private pendingSyntheticPrompts: string[] = [];
+
+  private latestPlanDraft: LatestPlanDraft | null = null;
+
+  private lastConversationId?: string;
+
   constructor(private readonly params: {
     remoteAgentId: string;
     daemon: DaemonSupervisor;
@@ -864,6 +1231,7 @@ class ManagedRemoteAgent {
       this.params.remoteAgentId,
     );
     this.stateFile = path.join(this.stateDirectory, "session.json");
+    this.bridgeStateFile = path.join(this.stateDirectory, "bridge-state.json");
     ensureDirectory(this.stateDirectory);
     ensureDirectory(path.join(this.stateDirectory, "notes"));
     if (!existsSync(path.join(this.stateDirectory, "MEMORY.md"))) {
@@ -887,6 +1255,7 @@ class ManagedRemoteAgent {
       stateDirectory: this.stateDirectory,
       sessionId: this.sessionId ?? undefined,
     });
+    this.publishStatus("idle", "Ready", undefined);
   }
 
   stop(reason: string) {
@@ -894,11 +1263,16 @@ class ManagedRemoteAgent {
       this.process.kill();
     }
     this.process = null;
+    this.driver?.destroy?.();
+    this.driver = null;
     this.running = false;
     this.pendingWake = false;
+    this.pendingInteraction = null;
+    this.latestPlanDraft = null;
     log("warn", `remote-agent:${this.params.remoteAgentId}`, "Stopped remote agent", {
       reason,
     });
+    this.publishStatus("offline", reason, undefined);
   }
 
   async enqueueDeliveries(deliveries: Delivery[]) {
@@ -907,10 +1281,86 @@ class ManagedRemoteAgent {
       this.pendingDeliveryIds.add(delivery.deliveryId);
       this.pendingDeliveries.push(delivery);
     }
+    const uniqueConversationIds = [...new Set(deliveries.map((delivery) => delivery.conversationId))];
+    if (uniqueConversationIds.length === 1) {
+      this.lastConversationId = uniqueConversationIds[0];
+    }
     log("debug", `remote-agent:${this.params.remoteAgentId}`, "Queued deliveries", {
       pendingCount: this.pendingDeliveries.length,
     });
     await this.wake();
+  }
+
+  async resolveInteraction(message: InteractionResolvedMessage) {
+    if (!this.pendingInteraction || this.pendingInteraction.interactionId !== message.interactionId) {
+      return;
+    }
+
+    const interaction = message.interaction || {};
+    const pending = this.pendingInteraction;
+    this.pendingInteraction = null;
+
+    if (pending.protocol === "claude_permission") {
+      const response =
+        pending.kind === "user_input"
+          ? {
+              behavior: "allow",
+              updatedInput: {
+                ...(pending.originalInput || {}),
+                answers: this.buildClaudeAnswerMap(interaction),
+              },
+              toolUseID: pending.originalInput?.tool_use_id,
+            }
+          : interaction.status === "approved"
+            ? {
+                behavior: "allow",
+                updatedInput: pending.originalInput || {},
+              }
+            : {
+                behavior: "deny",
+                message:
+                  interaction.resolutionNote ||
+                  "The user asked you to revise the proposed plan.",
+              };
+
+      writeJsonLine(this.process, {
+        type: "control_response",
+        response: {
+          subtype: "success",
+          request_id: pending.requestId,
+          response,
+        },
+      });
+      this.publishStatus("running", "Continuing after user input", pending.conversationId);
+      return;
+    }
+
+    if (pending.protocol === "codex_request") {
+      if (pending.kind === "user_input") {
+        writeJsonLine(this.process, {
+          jsonrpc: "2.0",
+          id: pending.requestId,
+          result: {
+            answers: this.buildCodexAnswerMap(interaction),
+          },
+        });
+        this.publishStatus("running", "Continuing after user input", pending.conversationId);
+        return;
+      }
+
+      const note =
+        typeof interaction.resolutionNote === "string"
+          ? interaction.resolutionNote
+          : undefined;
+      if (interaction.status === "approved") {
+        this.pendingSyntheticPrompts.push(buildPlanApprovedPrompt(note));
+      } else {
+        this.pendingSyntheticPrompts.push(buildPlanRevisionPrompt(note));
+      }
+      this.latestPlanDraft = null;
+      this.publishStatus("idle", "Plan decision received", pending.conversationId);
+      await this.wake();
+    }
   }
 
   private workingDirectory() {
@@ -929,15 +1379,20 @@ class ManagedRemoteAgent {
       return;
     }
 
-    const driver = createDriver(this.runtimeKind);
+    if (this.pendingInteraction) {
+      return;
+    }
+
+    const driver = this.driver ?? createDriver(this.runtimeKind);
     if (
       driver.supportsPersistentSession &&
       this.process &&
       !this.running &&
       typeof driver.encodeWakeMessage === "function"
     ) {
+      const nextPrompt = this.nextPrompt();
       const wakeMessage = driver.encodeWakeMessage(
-        buildWakePrompt(),
+        nextPrompt,
         this.sessionId,
       );
       if (wakeMessage && this.process.stdin?.writable) {
@@ -945,9 +1400,11 @@ class ManagedRemoteAgent {
         this.pendingDeliveryIds.clear();
         this.running = true;
         this.pendingWake = false;
+        this.latestPlanDraft = null;
         log("info", `remote-agent:${this.params.remoteAgentId}`, "Waking persistent session", {
           sessionId: this.sessionId ?? undefined,
         });
+        this.publishStatus("running", "Checking unread messages", this.resolveConversationId());
         this.process.stdin.write(`${wakeMessage}\n`);
         return;
       }
@@ -969,13 +1426,28 @@ class ManagedRemoteAgent {
     this.running = true;
     this.pendingDeliveries.length = 0;
     this.pendingDeliveryIds.clear();
+    this.latestPlanDraft = null;
+    const resolvedRuntime = this.resolveRuntimePathForLaunch();
+    if (!resolvedRuntime.ok) {
+      this.running = false;
+      this.driver = null;
+      log("error", `remote-agent:${this.params.remoteAgentId}`, "Runtime unavailable", {
+        runtimeKind: this.runtimeKind,
+        runtimePath: this.runtimePath ?? undefined,
+        error: resolvedRuntime.error,
+      });
+      this.publishStatus(
+        "error",
+        resolvedRuntime.error,
+        this.resolveConversationId(),
+        resolvedRuntime.error,
+      );
+      return;
+    }
+
     const driver = createDriver(this.runtimeKind);
-    const prompt = buildBootstrapPrompt({
-      remoteAgentId: this.params.remoteAgentId,
-      runtimeKind: this.runtimeKind,
-      workingDirectory: this.workingDirectory(),
-      stateDirectory: this.stateDirectory,
-    });
+    this.driver = driver;
+    const prompt = this.nextPrompt();
 
     let launch: DriverLaunch;
     try {
@@ -990,22 +1462,51 @@ class ManagedRemoteAgent {
         remoteAgentId: this.params.remoteAgentId,
         serverUrl: this.params.config.serverUrl,
         machineKey: this.params.config.apiKey,
-        runtimePath: this.runtimePath,
+        runtimePath: resolvedRuntime.runtimePath,
         workingDirectory: this.workingDirectory(),
         chatBridgePath: CHAT_BRIDGE_PATH,
+        bridgeStatePath: this.bridgeStateFile,
         sessionId: this.sessionId,
       });
     } catch (error) {
       this.running = false;
+      this.driver = null;
       log("error", `remote-agent:${this.params.remoteAgentId}`, "Failed to start local runtime", {
         error: error instanceof Error ? error.message : String(error),
       });
+      this.publishStatus("error", error instanceof Error ? error.message : String(error), this.resolveConversationId(), error instanceof Error ? error.message : String(error));
       return;
     }
 
     this.process = launch.process;
     this.stdoutBuffer = "";
     this.stderrBuffer = "";
+    this.publishStatus("running", "Processing messages", this.resolveConversationId());
+
+    let processErrored = false;
+    launch.process.once("error", (error: NodeJS.ErrnoException) => {
+      processErrored = true;
+      this.process = null;
+      this.driver?.destroy?.();
+      this.driver = null;
+      this.running = false;
+      const message =
+        error.code === "ENOENT"
+          ? `Failed to start ${this.runtimeKind}: executable not found`
+          : error.message;
+      log("error", `remote-agent:${this.params.remoteAgentId}`, "Runtime process error", {
+        runtimeKind: this.runtimeKind,
+        runtimePath: resolvedRuntime.runtimePath,
+        error: error.message,
+        code: error.code,
+      });
+      this.publishStatus(
+        "error",
+        message,
+        this.resolveConversationId(),
+        error.message,
+      );
+    });
 
     launch.process.stdout?.on("data", (chunk: Buffer | string) => {
       this.stdoutBuffer += String(chunk);
@@ -1019,7 +1520,7 @@ class ManagedRemoteAgent {
           });
         }
         for (const event of driver.parseOutputLine(line)) {
-          this.handleDriverEvent(event);
+          void this.handleDriverEvent(event);
         }
       }
     });
@@ -1040,23 +1541,57 @@ class ManagedRemoteAgent {
     });
 
     launch.process.once("exit", (code, signal) => {
-      this.process = null;
-      const driverForExit = createDriver(this.runtimeKind);
-      if (!driverForExit.supportsPersistentSession) {
-        this.running = false;
+      if (processErrored) {
+        return;
       }
+      this.process = null;
+      const supportsPersistentSession = this.driver?.supportsPersistentSession === true;
+      this.driver?.destroy?.();
+      if (!supportsPersistentSession) {
+        this.driver = null;
+      }
+      this.running = false;
       log("info", `remote-agent:${this.params.remoteAgentId}`, "Runtime process exited", {
         code: code ?? undefined,
         signal: signal ?? undefined,
         sessionId: this.sessionId ?? undefined,
       });
-      if (this.pendingDeliveries.length > 0) {
+      if (this.pendingInteraction) {
+        this.publishStatus(
+          this.pendingInteraction.kind === "plan_approval"
+            ? "waiting_plan_approval"
+            : "waiting_user_input",
+          "Waiting for a response in Synapse",
+          this.pendingInteraction.conversationId,
+        );
+      } else if (this.pendingDeliveries.length > 0 || this.pendingSyntheticPrompts.length > 0) {
         void this.wake();
+      } else {
+        this.publishStatus("idle", "Idle", this.resolveConversationId());
       }
     });
   }
 
-  private handleDriverEvent(event: DriverEvent) {
+  private resolveRuntimePathForLaunch():
+    | { ok: true; runtimePath?: string }
+    | { ok: false; error: string } {
+    if (this.runtimePath?.trim()) {
+      return { ok: true, runtimePath: this.runtimePath.trim() };
+    }
+    const detected = detectRuntime(this.runtimeKind);
+    if (detected.status !== "available" || !detected.executablePath) {
+      return {
+        ok: false,
+        error: describeRuntimeCatalogIssue(detected),
+      };
+    }
+    return {
+      ok: true,
+      runtimePath: detected.executablePath,
+    };
+  }
+
+  private async handleDriverEvent(event: DriverEvent) {
     switch (event.kind) {
       case "session":
         if (this.sessionId !== event.sessionId) {
@@ -1071,24 +1606,497 @@ class ManagedRemoteAgent {
             sessionId: event.sessionId,
           });
         }
+        this.publishStatus(this.running ? "running" : "idle", "Session connected", this.resolveConversationId());
         break;
       case "error":
         log("error", `remote-agent:${this.params.remoteAgentId}`, "Runtime event error", {
           message: event.message,
         });
+        this.publishStatus("error", event.message, this.resolveConversationId(), event.message);
         break;
       case "turn_end":
         this.running = false;
         log("debug", `remote-agent:${this.params.remoteAgentId}`, "Runtime turn completed", {
           pendingCount: this.pendingDeliveries.length,
         });
-        if (this.pendingDeliveries.length > 0) {
-          void this.wake();
+        if (this.process && !this.driver?.supportsPersistentSession) {
+          this.process.kill();
         }
+        if (this.latestPlanDraft) {
+          await this.requestPlanApproval(this.latestPlanDraft);
+          break;
+        }
+        if (this.pendingInteraction) {
+          break;
+        }
+        if (this.pendingDeliveries.length > 0 || this.pendingSyntheticPrompts.length > 0) {
+          void this.wake();
+        } else {
+          this.publishStatus("idle", "Idle", this.resolveConversationId());
+        }
+        break;
+      case "control_request":
+        await this.handleClaudeControlRequest(event.requestId, event.request);
+        break;
+      case "codex_server_request":
+        await this.handleCodexServerRequest(event.requestId, event.method, event.params);
+        break;
+      case "plan_updated":
+        this.latestPlanDraft = {
+          title: "Plan from Codex",
+          summary: event.explanation,
+          planMarkdown: event.plan
+            .map((step) => `- [${step.status === "completed" ? "x" : " "}] ${step.step}`)
+            .join("\n"),
+          checklist: event.plan.map((step, index) => ({
+            id: `plan-${index + 1}`,
+            text: step.step,
+            done: step.status === "completed",
+          })),
+        };
+        this.publishStatus("plan_drafting", "Drafting a plan", this.resolveConversationId());
         break;
       default:
         break;
     }
+  }
+
+  private nextPrompt() {
+    const synthetic = this.pendingSyntheticPrompts.shift();
+    if (synthetic) {
+      return synthetic;
+    }
+    if (this.sessionId) {
+      return buildWakePrompt();
+    }
+    return buildBootstrapPrompt({
+      remoteAgentId: this.params.remoteAgentId,
+      runtimeKind: this.runtimeKind,
+      workingDirectory: this.workingDirectory(),
+      stateDirectory: this.stateDirectory,
+    });
+  }
+
+  private resolveConversationId() {
+    const bridgeState = readBridgeState(this.bridgeStateFile);
+    if (bridgeState.lastConversationId) {
+      this.lastConversationId = bridgeState.lastConversationId;
+      return bridgeState.lastConversationId;
+    }
+    return this.lastConversationId;
+  }
+
+  private runtimeCapabilities() {
+    if (this.runtimeKind === "claude_code") {
+      return {
+        supportsRequestUserInput: true,
+        supportsPlanMode: true,
+        supportsPersistentSession: true,
+        supportsStructuredIo: true,
+      };
+    }
+    return {
+      supportsRequestUserInput: true,
+      supportsPlanMode: true,
+      supportsPersistentSession: false,
+      supportsCodexAppServer: true,
+    };
+  }
+
+  private publishStatus(
+    state: RemoteAgentRuntimeState,
+    statusText?: string,
+    conversationId?: string,
+    lastError?: string,
+  ) {
+    this.params.daemon.send({
+      type: "agent:status",
+      remoteAgentId: this.params.remoteAgentId,
+      state,
+      statusText,
+      conversationId: conversationId ?? null,
+      interactionId: this.pendingInteraction?.interactionId ?? null,
+      sessionId: this.sessionId ?? null,
+      lastError: lastError ?? null,
+      runKey: this.pendingInteraction?.runKey ?? null,
+      capabilities: this.runtimeCapabilities(),
+    });
+  }
+
+  private async handleClaudeControlRequest(
+    requestId: string,
+    request: Record<string, any>,
+  ) {
+    const subtype = String(request.subtype || "");
+    switch (subtype) {
+      case "initialize":
+        writeJsonLine(this.process, {
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: requestId,
+            response: {
+              commands: [],
+              output_style: "normal",
+              available_output_styles: ["normal"],
+              models: [],
+              account: {},
+              pid: process.pid,
+            },
+          },
+        });
+        return;
+      case "set_model":
+      case "set_max_thinking_tokens":
+      case "set_permission_mode":
+      case "interrupt":
+        writeJsonLine(this.process, {
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: requestId,
+          },
+        });
+        return;
+      case "elicitation":
+        writeJsonLine(this.process, {
+          type: "control_response",
+          response: {
+            subtype: "success",
+            request_id: requestId,
+            response: {
+              action: "cancel",
+            },
+          },
+        });
+        return;
+      case "can_use_tool":
+        await this.handleClaudeToolPermissionRequest(requestId, request);
+        return;
+      default:
+        writeJsonLine(this.process, {
+          type: "control_response",
+          response: {
+            subtype: "error",
+            request_id: requestId,
+            error: `Unsupported Claude control request subtype: ${subtype}`,
+          },
+        });
+    }
+  }
+
+  private async handleClaudeToolPermissionRequest(
+    requestId: string,
+    request: Record<string, any>,
+  ) {
+    const toolName = String(request.tool_name || "");
+    const input =
+      request.input && typeof request.input === "object"
+        ? (request.input as Record<string, any>)
+        : {};
+    if (toolName === "AskUserQuestion") {
+      const interaction = await this.createUserInputInteraction({
+        requestId,
+        protocol: "claude_permission",
+        title:
+          typeof input.questions?.[0]?.question === "string"
+            ? input.questions[0].question
+            : "Question from Claude",
+        instructions: undefined,
+        questions: Array.isArray(input.questions)
+          ? input.questions.map((question: any, index: number) => ({
+              id: `question-${index + 1}`,
+              header: String(question?.header || `Question ${index + 1}`),
+              type: question?.multiSelect ? "multi_select" : "single_select",
+              prompt: String(question?.question || `Question ${index + 1}`),
+              required: true,
+              allowOther: true,
+              options: Array.isArray(question?.options)
+                ? question.options.map((option: any, optionIndex: number) => ({
+                    id: `option-${index + 1}-${optionIndex + 1}`,
+                    label: String(option?.label || `Option ${optionIndex + 1}`),
+                    description:
+                      typeof option?.description === "string"
+                        ? option.description
+                        : undefined,
+                  }))
+                : [],
+            }))
+          : [],
+        toolName,
+        originalInput: input,
+      });
+      this.pendingInteraction = interaction;
+      this.publishStatus("waiting_user_input", "Waiting for user input", interaction.conversationId);
+      return;
+    }
+
+    if (toolName === "ExitPlanMode") {
+      const planMarkdown =
+        typeof input.plan === "string" && input.plan.trim()
+          ? input.plan
+          : typeof input.planFilePath === "string" && existsSync(input.planFilePath)
+            ? readFileSync(input.planFilePath, "utf8")
+            : "";
+      const interaction = await this.createPlanApprovalInteraction({
+        requestId,
+        protocol: "claude_permission",
+        title: "Plan from Claude",
+        summary: "Claude wants approval before leaving plan mode.",
+        planMarkdown: planMarkdown || "Claude did not provide a plan body.",
+        checklist: undefined,
+        toolName,
+        originalInput: input,
+      });
+      this.pendingInteraction = interaction;
+      this.publishStatus("waiting_plan_approval", "Waiting for plan approval", interaction.conversationId);
+      return;
+    }
+
+    writeJsonLine(this.process, {
+      type: "control_response",
+      response: {
+        subtype: "success",
+        request_id: requestId,
+        response: {
+          behavior: "allow",
+          updatedInput: input,
+        },
+      },
+    });
+  }
+
+  private async handleCodexServerRequest(
+    requestId: string | number,
+    method: string,
+    params: Record<string, any>,
+  ) {
+    if (method === "item/tool/requestUserInput") {
+      const interaction = await this.createUserInputInteraction({
+        requestId: String(requestId),
+        protocol: "codex_request",
+        title:
+          typeof params.questions?.[0]?.question === "string"
+            ? params.questions[0].question
+            : "Question from Codex",
+        instructions: undefined,
+        questions: Array.isArray(params.questions)
+          ? params.questions.map((question: any, index: number) => ({
+              id:
+                typeof question?.id === "string"
+                  ? question.id
+                  : `question-${index + 1}`,
+              header: String(question?.header || `Question ${index + 1}`),
+              type: "single_select",
+              prompt: String(question?.question || `Question ${index + 1}`),
+              required: true,
+              allowOther: Boolean(question?.isOther),
+              secret: Boolean(question?.isSecret),
+              options: Array.isArray(question?.options)
+                ? question.options.map((option: any, optionIndex: number) => ({
+                    id: `option-${index + 1}-${optionIndex + 1}`,
+                    label: String(option?.label || `Option ${optionIndex + 1}`),
+                    description:
+                      typeof option?.description === "string"
+                        ? option.description
+                        : undefined,
+                  }))
+                : [],
+            }))
+          : [],
+      });
+      this.pendingInteraction = interaction;
+      this.publishStatus("waiting_user_input", "Waiting for user input", interaction.conversationId);
+      return;
+    }
+
+    if (method === "item/commandExecution/requestApproval") {
+      writeJsonLine(this.process, {
+        jsonrpc: "2.0",
+        id: requestId,
+        result: { decision: "accept" },
+      });
+      return;
+    }
+
+    if (
+      method === "item/fileChange/requestApproval" ||
+      method === "item/permissions/requestApproval"
+    ) {
+      writeJsonLine(this.process, {
+        jsonrpc: "2.0",
+        id: requestId,
+        result: { decision: "accept" },
+      });
+      return;
+    }
+
+    if (method === "mcpServer/elicitation/request") {
+      writeJsonLine(this.process, {
+        jsonrpc: "2.0",
+        id: requestId,
+        result: { action: "cancel", content: null },
+      });
+    }
+  }
+
+  private async createUserInputInteraction(params: {
+    requestId: string;
+    protocol: PendingInteraction["protocol"];
+    title: string;
+    instructions?: string;
+    questions: Array<Record<string, any>>;
+    toolName?: string;
+    originalInput?: Record<string, any>;
+  }): Promise<PendingInteraction> {
+    const conversationId = this.resolveConversationId();
+    if (!conversationId) {
+      throw new Error("Could not determine the active conversation for user input");
+    }
+    const runKey = `remote-agent:${this.params.remoteAgentId}:user-input:${randomUUID()}`;
+    const result = await requestJson<{ interaction: Record<string, any> }>(
+      this.params.config.serverUrl,
+      this.params.config.apiKey,
+      `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/interactions/user-input`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          conversationId,
+          runKey,
+          title: params.title,
+          instructions: params.instructions,
+          questions: params.questions,
+        }),
+      },
+    );
+    return {
+      interactionId: String(result.interaction.id),
+      kind: "user_input",
+      protocol: params.protocol,
+      requestId: params.requestId,
+      runKey,
+      conversationId,
+      toolName: params.toolName,
+      originalInput: params.originalInput,
+    };
+  }
+
+  private async createPlanApprovalInteraction(params: {
+    requestId: string;
+    protocol: PendingInteraction["protocol"];
+    title: string;
+    summary?: string;
+    planMarkdown: string;
+    checklist?: Array<Record<string, any>>;
+    toolName?: string;
+    originalInput?: Record<string, any>;
+  }): Promise<PendingInteraction> {
+    const conversationId = this.resolveConversationId();
+    if (!conversationId) {
+      throw new Error("Could not determine the active conversation for plan approval");
+    }
+    const runKey = `remote-agent:${this.params.remoteAgentId}:plan:${randomUUID()}`;
+    const result = await requestJson<{ interaction: Record<string, any> }>(
+      this.params.config.serverUrl,
+      this.params.config.apiKey,
+      `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/interactions/plan-approval`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          conversationId,
+          runKey,
+          title: params.title,
+          summary: params.summary,
+          planMarkdown: params.planMarkdown,
+          checklist: params.checklist,
+        }),
+      },
+    );
+    return {
+      interactionId: String(result.interaction.id),
+      kind: "plan_approval",
+      protocol: params.protocol,
+      requestId: params.requestId,
+      runKey,
+      conversationId,
+      toolName: params.toolName,
+      originalInput: params.originalInput,
+    };
+  }
+
+  private async requestPlanApproval(planDraft: LatestPlanDraft) {
+    try {
+      const interaction = await this.createPlanApprovalInteraction({
+        requestId: `plan-${randomUUID()}`,
+        protocol: "codex_request",
+        title: planDraft.title,
+        summary: planDraft.summary,
+        planMarkdown: planDraft.planMarkdown,
+        checklist: planDraft.checklist,
+      });
+      this.pendingInteraction = interaction;
+      this.publishStatus("waiting_plan_approval", "Waiting for plan approval", interaction.conversationId);
+    } catch (error) {
+      log("error", `remote-agent:${this.params.remoteAgentId}`, "Failed to create plan approval", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      this.publishStatus(
+        "error",
+        error instanceof Error ? error.message : String(error),
+        this.resolveConversationId(),
+        error instanceof Error ? error.message : String(error),
+      );
+    }
+  }
+
+  private buildClaudeAnswerMap(interaction: Record<string, any>) {
+    const answers: Record<string, string> = {};
+    const questions = Array.isArray(interaction.userInput?.questions)
+      ? interaction.userInput.questions
+      : [];
+    for (const question of questions) {
+      const prompt =
+        typeof question?.prompt === "string" ? question.prompt : undefined;
+      if (!prompt) {
+        continue;
+      }
+      const answer = question?.answer;
+      const parts = [
+        ...(Array.isArray(answer?.selectedOptionLabels)
+          ? answer.selectedOptionLabels.map((value: unknown) => String(value))
+          : []),
+        typeof answer?.otherText === "string" ? answer.otherText : undefined,
+        typeof answer?.text === "string" ? answer.text : undefined,
+      ].filter((value): value is string => Boolean(value));
+      if (parts.length > 0) {
+        answers[prompt] = parts.join(", ");
+      }
+    }
+    return answers;
+  }
+
+  private buildCodexAnswerMap(interaction: Record<string, any>) {
+    const answers: Record<string, { answers: string[] }> = {};
+    const questions = Array.isArray(interaction.userInput?.questions)
+      ? interaction.userInput.questions
+      : [];
+    for (const question of questions) {
+      const questionId =
+        typeof question?.id === "string" ? question.id : undefined;
+      if (!questionId) {
+        continue;
+      }
+      const answer = question?.answer;
+      const values = [
+        ...(Array.isArray(answer?.selectedOptionLabels)
+          ? answer.selectedOptionLabels.map((value: unknown) => String(value))
+          : []),
+        typeof answer?.otherText === "string" ? answer.otherText : undefined,
+        typeof answer?.text === "string" ? answer.text : undefined,
+      ].filter((value): value is string => Boolean(value));
+      answers[questionId] = { answers: values };
+    }
+    return answers;
   }
 }
 

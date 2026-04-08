@@ -28,6 +28,7 @@ export default function ChatPage() {
     loadingConversations,
     loadingMessages,
     runtimeMap,
+    remoteAgentRuntimeMap,
     loadConversations,
     selectConversation,
     loadMessages,
@@ -185,6 +186,7 @@ export default function ChatPage() {
                 ? runtimeMap[selectedConversationId]
                 : undefined
             }
+            remoteAgentRuntimes={remoteAgentRuntimeMap}
             onSend={handleSend}
             workspaceId={workspaceId}
             onRefreshConversation={() => loadConversations(workspaceId)}

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import process from "node:process";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
@@ -11,6 +12,7 @@ type BridgeConfig = {
   remoteAgentId: string;
   serverUrl: string;
   machineKey: string;
+  stateFile?: string;
 };
 
 function parseArgs(argv: string[]): BridgeConfig {
@@ -27,6 +29,7 @@ function parseArgs(argv: string[]): BridgeConfig {
   const remoteAgentId = args.get("remote-agent-id")?.trim() || "";
   const serverUrl = args.get("server-url")?.trim() || "";
   const machineKey = args.get("machine-key")?.trim() || "";
+  const stateFile = args.get("state-file")?.trim() || undefined;
 
   if (!remoteAgentId) {
     throw new Error("--remote-agent-id is required");
@@ -42,6 +45,7 @@ function parseArgs(argv: string[]): BridgeConfig {
     remoteAgentId,
     serverUrl,
     machineKey,
+    stateFile,
   };
 }
 
@@ -94,6 +98,31 @@ function jsonToolResult<T extends Record<string, unknown>>(structuredContent: T)
   };
 }
 
+function updateBridgeState(
+  config: BridgeConfig,
+  patch: Partial<{
+    lastConversationId: string | null;
+    lastToolName: string | null;
+    updatedAt: string;
+  }>,
+) {
+  if (!config.stateFile) {
+    return;
+  }
+  try {
+    const current =
+      existsSync(config.stateFile) && readFileSync(config.stateFile, "utf8").trim()
+        ? (JSON.parse(readFileSync(config.stateFile, "utf8")) as Record<string, unknown>)
+        : {};
+    const next = {
+      ...current,
+      ...patch,
+      updatedAt: patch.updatedAt ?? new Date().toISOString(),
+    };
+    writeFileSync(config.stateFile, JSON.stringify(next, null, 2), "utf8");
+  } catch {}
+}
+
 async function main() {
   const config = parseArgs(process.argv.slice(2));
   const server = new McpServer(
@@ -119,6 +148,9 @@ async function main() {
       },
     },
     async () => {
+      updateBridgeState(config, {
+        lastToolName: "list_conversations",
+      });
       const result = await requestJson<{ conversations: unknown[] }>(
         config,
         `/api/v1/internal/remote-agents/${config.remoteAgentId}/conversations`,
@@ -140,6 +172,9 @@ async function main() {
       },
     },
     async ({ limit }) => {
+      updateBridgeState(config, {
+        lastToolName: "check_messages",
+      });
       const result = await requestJson<{ deliveries: Array<{ deliveryId: string }> }>(
         config,
         `/api/v1/internal/remote-agents/${config.remoteAgentId}/check-messages`,
@@ -181,6 +216,10 @@ async function main() {
       },
     },
     async ({ conversationId, afterSequence, beforeSequence, limit }) => {
+      updateBridgeState(config, {
+        lastConversationId: conversationId,
+        lastToolName: "read_history",
+      });
       const result = await requestJson<{ items: unknown[] }>(
         config,
         `/api/v1/internal/remote-agents/${config.remoteAgentId}/history/${conversationId}`,
@@ -210,6 +249,10 @@ async function main() {
       },
     },
     async ({ conversationId, content, replyToItemId }) => {
+      updateBridgeState(config, {
+        lastConversationId: conversationId,
+        lastToolName: "send_message",
+      });
       const result = await requestJson<{ item: unknown }>(
         config,
         `/api/v1/internal/remote-agents/${config.remoteAgentId}/send`,
@@ -242,6 +285,10 @@ async function main() {
       },
     },
     async ({ conversationId, query, limit }) => {
+      updateBridgeState(config, {
+        lastConversationId: conversationId,
+        lastToolName: "search_messages",
+      });
       const result = await requestJson<{ matches: unknown[] }>(
         config,
         `/api/v1/internal/remote-agents/${config.remoteAgentId}/search`,

@@ -52,6 +52,7 @@ function ParticipantDetailBody({
   const typeLabel = getConversationMemberTypeLabel(member)
   const transportLabel = formatTransportKindLabel(member.transportKind)
   const actorRole = member.title || member.role || "Actor"
+  const remoteAgentRole = member.title || member.role || "Remote agent"
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
@@ -85,6 +86,10 @@ function ParticipantDetailBody({
                 <Badge variant="secondary" className="rounded-full">
                   {actorRole}
                 </Badge>
+              ) : member.type === "remote_agent" ? (
+                <Badge variant="secondary" className="rounded-full">
+                  {remoteAgentRole}
+                </Badge>
               ) : null}
               {member.type === "external" &&
               member.linkedWorkspaceMemberName ? (
@@ -113,6 +118,8 @@ function ParticipantDetailBody({
               <DetailItem label="Participant type" value={typeLabel} />
               {member.type === "actor" ? (
                 <DetailItem label="Role" value={actorRole} />
+              ) : member.type === "remote_agent" ? (
+                <DetailItem label="Role" value={remoteAgentRole} />
               ) : null}
               {member.type === "workspace_member" ? (
                 <DetailItem

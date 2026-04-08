@@ -14,6 +14,7 @@ import { useWorkspace } from "../workspace-provider"
 import type {
   RemoteAgentMachinePairingSessionView,
   RemoteAgentMachineTrustStatus,
+  RemoteAgentRuntimeSummaryView,
   RemoteAgentRuntimeKind,
   RemoteAgentRuntimeStatus,
   RemoteAgentView,
@@ -89,6 +90,34 @@ function runtimeVariant(status?: RemoteAgentRuntimeStatus) {
 
 function normalizeRuntimeLabel(runtimeKind: RemoteAgentRuntimeKind) {
   return runtimeKind === "claude_code" ? "Claude Code" : "Codex CLI"
+}
+
+function sessionStateVariant(state?: RemoteAgentRuntimeSummaryView["state"]) {
+  switch (state) {
+    case "running":
+    case "plan_drafting":
+      return "secondary"
+    case "waiting_user_input":
+    case "waiting_plan_approval":
+      return "default"
+    case "error":
+      return "destructive"
+    default:
+      return "outline"
+  }
+}
+
+function sessionStateLabel(state?: RemoteAgentRuntimeSummaryView["state"]) {
+  switch (state) {
+    case "waiting_user_input":
+      return "waiting input"
+    case "waiting_plan_approval":
+      return "waiting approval"
+    case "plan_drafting":
+      return "planning"
+    default:
+      return state || "offline"
+  }
 }
 
 async function copyText(value: string, label: string) {
@@ -392,6 +421,11 @@ export default function RemoteAgentsPage() {
                       <Badge variant={runtimeVariant(agent.binding ? "available" : "unsupported_platform")}>
                         {normalizeRuntimeLabel(agent.runtimeKind)}
                       </Badge>
+                      {agent.runtimeSummary ? (
+                        <Badge variant={sessionStateVariant(agent.runtimeSummary.state)}>
+                          {sessionStateLabel(agent.runtimeSummary.state)}
+                        </Badge>
+                      ) : null}
                     </div>
                   </div>
                   {agent.description ? (
@@ -409,6 +443,19 @@ export default function RemoteAgentsPage() {
                     <div className="sm:col-span-2">
                       Root: {agent.binding?.localRootPath || "Not configured"}
                     </div>
+                    {agent.runtimeSummary ? (
+                      <>
+                        <div>
+                          Pending conversations: {agent.runtimeSummary.pendingConversationCount}
+                        </div>
+                        <div>
+                          Unread deliveries: {agent.runtimeSummary.unreadDeliveryCount}
+                        </div>
+                        <div className="sm:col-span-2">
+                          Status: {agent.runtimeSummary.statusText || "No live status text"}
+                        </div>
+                      </>
+                    ) : null}
                   </div>
                 </Link>
               ))

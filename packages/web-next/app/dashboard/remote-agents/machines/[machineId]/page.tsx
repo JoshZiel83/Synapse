@@ -9,6 +9,7 @@ import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import type {
   RemoteAgentMachineDetailView,
   RemoteAgentMachineTrustStatus,
+  RemoteAgentRuntimeSummaryView,
   RemoteAgentRuntimeStatus,
 } from "@/lib/api"
 import { api } from "@/lib/api"
@@ -56,6 +57,34 @@ function runtimeVariant(status?: RemoteAgentRuntimeStatus) {
 
 function runtimeLabel(value: string) {
   return value === "claude_code" ? "Claude Code" : "Codex CLI"
+}
+
+function sessionStateVariant(state?: RemoteAgentRuntimeSummaryView["state"]) {
+  switch (state) {
+    case "running":
+    case "plan_drafting":
+      return "secondary"
+    case "waiting_user_input":
+    case "waiting_plan_approval":
+      return "default"
+    case "error":
+      return "destructive"
+    default:
+      return "outline"
+  }
+}
+
+function sessionStateLabel(state?: RemoteAgentRuntimeSummaryView["state"]) {
+  switch (state) {
+    case "waiting_user_input":
+      return "waiting input"
+    case "waiting_plan_approval":
+      return "waiting approval"
+    case "plan_drafting":
+      return "planning"
+    default:
+      return state || "offline"
+  }
 }
 
 export default function RemoteAgentMachineDetailPage() {
@@ -249,9 +278,55 @@ export default function RemoteAgentMachineDetailPage() {
                     {binding.status}
                   </Badge>
                 </div>
+                {binding.runtimeSummary ? (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <Badge variant={sessionStateVariant(binding.runtimeSummary.state)}>
+                      {sessionStateLabel(binding.runtimeSummary.state)}
+                    </Badge>
+                    <Badge variant="outline">
+                      {binding.runtimeSummary.unreadDeliveryCount} unread
+                    </Badge>
+                    <Badge variant="outline">
+                      {binding.runtimeSummary.pendingConversationCount} pending conversations
+                    </Badge>
+                  </div>
+                ) : null}
                 <div className="mt-3 grid gap-2 text-sm text-muted-foreground">
                   <div>Runtime path: {binding.runtimePath || "Default detection"}</div>
                   <div>Local root: {binding.localRootPath || "Not configured"}</div>
+                  {binding.runtimeSummary?.sessionId ? (
+                    <div>Session ID: {binding.runtimeSummary.sessionId}</div>
+                  ) : null}
+                  {binding.runtimeSummary?.statusText ? (
+                    <div>Status: {binding.runtimeSummary.statusText}</div>
+                  ) : null}
+                  {binding.runtimeSummary?.capabilities ? (
+                    <div>
+                      Capabilities:{" "}
+                      {[
+                        binding.runtimeSummary.capabilities.supportsRequestUserInput
+                          ? "request_user_input"
+                          : null,
+                        binding.runtimeSummary.capabilities.supportsPlanMode
+                          ? "plan_mode"
+                          : null,
+                        binding.runtimeSummary.capabilities.supportsPersistentSession
+                          ? "persistent_session"
+                          : null,
+                        binding.runtimeSummary.capabilities.supportsStructuredIo
+                          ? "structured_io"
+                          : null,
+                        binding.runtimeSummary.capabilities.supportsCodexAppServer
+                          ? "codex_app_server"
+                          : null,
+                      ]
+                        .filter(Boolean)
+                        .join(", ") || "none reported"}
+                    </div>
+                  ) : null}
+                  {binding.runtimeSummary?.lastError ? (
+                    <div>Error: {binding.runtimeSummary.lastError}</div>
+                  ) : null}
                 </div>
               </Link>
             ))

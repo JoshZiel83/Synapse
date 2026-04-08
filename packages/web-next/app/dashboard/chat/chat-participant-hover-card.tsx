@@ -41,6 +41,9 @@ function getCompactNote(member: ConversationMember) {
   if (member.type === "actor") {
     return member.title || member.role || "Actor"
   }
+  if (member.type === "remote_agent") {
+    return member.title || member.role || "Remote agent"
+  }
   if (member.type === "external") {
     if (member.linkedWorkspaceMemberName) {
       return `Linked to ${member.linkedWorkspaceMemberName}`

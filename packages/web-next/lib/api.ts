@@ -43,6 +43,7 @@ import type {
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
   WorkspaceChiefActorPreference,
+  RemoteAgentRuntimeState as SharedRemoteAgentRuntimeState,
   RelayDashboardView,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
@@ -254,6 +255,40 @@ export type RemoteAgentRuntimeStatus =
   | "unsupported_platform"
   | "runtime_error"
 
+export interface RemoteAgentRuntimeCapabilityView {
+  supportsRequestUserInput?: boolean
+  supportsPlanMode?: boolean
+  supportsPersistentSession?: boolean
+  supportsCodexAppServer?: boolean
+  supportsStructuredIo?: boolean
+}
+
+export interface RemoteAgentRuntimeSummaryView {
+  runtimeKind: RemoteAgentRuntimeKind
+  state: SharedRemoteAgentRuntimeState["state"]
+  statusText?: string
+  sessionId?: string
+  activeConversationId?: string
+  activeInteractionId?: string
+  pendingConversationCount: number
+  unreadDeliveryCount: number
+  lastActivityAt?: string
+  lastRunStartedAt?: string
+  lastRunFinishedAt?: string
+  lastError?: string
+  capabilities?: RemoteAgentRuntimeCapabilityView
+}
+
+export interface RemoteAgentGroupInteractionGrantView {
+  workspaceMemberId: string
+  grantedByWorkspaceMemberId?: string
+  createdAt?: string
+  updatedAt?: string
+  userId: string
+  name: string
+  avatarUrl?: string
+}
+
 export interface RemoteAgentBindingView {
   machineId: string
   machineTitle?: string
@@ -261,6 +296,7 @@ export interface RemoteAgentBindingView {
   runtimePath?: string
   localRootPath?: string
   machineLifecycleState?: RemoteAgentLifecycleState
+  runtimeSummary?: RemoteAgentRuntimeSummaryView
 }
 
 export interface RemoteAgentView {
@@ -279,6 +315,7 @@ export interface RemoteAgentView {
   createdByWorkspaceMemberId?: string
   createdAt?: string
   updatedAt?: string
+  runtimeSummary?: RemoteAgentRuntimeSummaryView
   binding?: RemoteAgentBindingView
 }
 
@@ -317,6 +354,7 @@ export interface RemoteAgentMachineDetailView {
     runtimePath?: string
     localRootPath?: string
     status: string
+    runtimeSummary?: RemoteAgentRuntimeSummaryView
   }>
 }
 
@@ -1413,6 +1451,29 @@ class ApiClient {
     machineId: string
   ): Promise<RemoteAgentMachineDetailView> {
     return this.fetch(`/workspaces/${wsId}/remote-agent-machines/${machineId}`)
+  }
+  getRemoteAgentGroupInteractionGrants(
+    wsId: string,
+    remoteAgentId: string
+  ): Promise<{ grants: RemoteAgentGroupInteractionGrantView[] }> {
+    return this.fetch(
+      `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-interaction-grants`
+    )
+  }
+  updateRemoteAgentGroupInteractionGrants(
+    wsId: string,
+    remoteAgentId: string,
+    input: {
+      workspaceMemberIds: string[]
+    }
+  ): Promise<{ grants: RemoteAgentGroupInteractionGrantView[] }> {
+    return this.fetch(
+      `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-interaction-grants`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      }
+    )
   }
 
   // Actor lanes

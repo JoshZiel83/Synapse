@@ -131,7 +131,7 @@ type SuggestionListHandle = {
 export type ChatComposerParticipant = {
   id: string
   name: string
-  type: "actor" | "workspace_member" | "external"
+  type: "actor" | "remote_agent" | "workspace_member" | "external"
   targetType?: "actor" | "participant"
   inGroup?: boolean
   role?: string

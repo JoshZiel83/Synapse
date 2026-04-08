@@ -8,6 +8,9 @@ export function getConversationMemberSubtitle(member: ConversationMember) {
   if (member.type === "actor") {
     return member.title || member.role || "Actor"
   }
+  if (member.type === "remote_agent") {
+    return member.title || member.role || "Remote agent"
+  }
   if (member.type === "external") {
     return member.linkedWorkspaceMemberName
       ? `External participant · linked to ${member.linkedWorkspaceMemberName}`
@@ -21,6 +24,7 @@ export function getConversationMemberSubtitle(member: ConversationMember) {
 
 export function getConversationMemberTypeLabel(member: ConversationMember) {
   if (member.type === "actor") return "Actor"
+  if (member.type === "remote_agent") return "Remote agent"
   if (member.type === "external") return "External participant"
   return "Workspace user"
 }
@@ -45,6 +49,9 @@ export function getConversationMemberContactHref(
 ) {
   if (member.type === "actor") {
     return `${basePath}?kind=actor&id=${member.id}`
+  }
+  if (member.type === "remote_agent") {
+    return `${basePath}?kind=remote_agent&id=${member.id}`
   }
   if (member.type === "workspace_member") {
     return `${basePath}?kind=member&id=${member.id}`
@@ -82,6 +89,14 @@ export function resolveAuthorMember(
       return true
     }
     if (
+      author.participantType === "remote_agent" &&
+      member.type === "remote_agent" &&
+      author.remoteAgentId &&
+      member.id === author.remoteAgentId
+    ) {
+      return true
+    }
+    if (
       author.participantType === "external" &&
       member.type === "external" &&
       author.externalUserKey &&
@@ -104,6 +119,9 @@ export function getAuthorContactHref(
   }
   if (author?.participantType === "actor" && author.actorId) {
     return `${basePath}?kind=actor&id=${author.actorId}`
+  }
+  if (author?.participantType === "remote_agent" && author.remoteAgentId) {
+    return `${basePath}?kind=remote_agent&id=${author.remoteAgentId}`
   }
   if (
     author?.participantType === "workspace_member" &&

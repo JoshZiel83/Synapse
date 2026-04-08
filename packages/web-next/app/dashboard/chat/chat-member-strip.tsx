@@ -1,35 +1,71 @@
 'use client';
 
-import type { ActorRuntimeState } from '@synapse/shared';
+import type {
+  ActorRuntimeState,
+  RemoteAgentRuntimeState,
+} from '@synapse/shared';
 import { useRouter } from 'next/navigation';
 import { AvatarGroup, AvatarGroupCount } from '@/components/ui/avatar';
 import { useIsMobile } from '@/hooks/use-mobile';
 import { cn } from '@/lib/utils';
 import { PlusIcon } from 'lucide-react';
-import { runtimeToAvatarStatus } from '@/stores/chat-store';
+import {
+  remoteAgentRuntimeToAvatarStatus,
+  runtimeToAvatarStatus,
+} from '@/stores/chat-store';
 import type { ConversationMember } from '@/stores/chat-store';
 import ChatAvatar from './chat-avatar';
-import { getRuntimeDetail, getRuntimeLabel, getActorRuntimePriority } from './runtime-ui';
+import {
+  getActorRuntimePriority,
+  getRemoteAgentRuntimePriority,
+  getRuntimeDetail,
+  getRuntimeLabel,
+} from './runtime-ui';
 import ChatParticipantHoverCard from './chat-participant-hover-card';
 import {
   getConversationMemberContactHref,
   getConversationMemberSubtitle,
 } from './member-utils';
 
-function orderMembers(members: ConversationMember[], runtimeByActor?: Record<string, ActorRuntimeState>) {
+function orderMembers(
+  members: ConversationMember[],
+  runtimeByActor?: Record<string, ActorRuntimeState>,
+  runtimeByRemoteAgent?: Record<string, RemoteAgentRuntimeState>
+) {
   return [...members].sort((left, right) => {
-    if (left.type !== 'actor' || right.type !== 'actor') {
+    const leftIsAgent = left.type === 'actor' || left.type === 'remote_agent';
+    const rightIsAgent = right.type === 'actor' || right.type === 'remote_agent';
+    if (!leftIsAgent || !rightIsAgent) {
+      if (leftIsAgent !== rightIsAgent) {
+        return leftIsAgent ? -1 : 1;
+      }
       if (left.type === right.type) return 0;
-      return left.type === 'actor' ? -1 : 1;
+      return left.type.localeCompare(right.type);
     }
 
-    return getActorRuntimePriority(runtimeByActor?.[left.id]) - getActorRuntimePriority(runtimeByActor?.[right.id]);
+    const leftPriority =
+      left.type === 'actor'
+        ? getActorRuntimePriority(runtimeByActor?.[left.id])
+        : getRemoteAgentRuntimePriority(runtimeByRemoteAgent?.[left.id]);
+    const rightPriority =
+      right.type === 'actor'
+        ? getActorRuntimePriority(runtimeByActor?.[right.id])
+        : getRemoteAgentRuntimePriority(runtimeByRemoteAgent?.[right.id]);
+
+    if (leftPriority !== rightPriority) {
+      return leftPriority - rightPriority;
+    }
+    if (left.type !== right.type) {
+      return left.type === 'actor' ? -1 : 1;
+    }
+    return left.name.localeCompare(right.name);
   });
 }
 
 interface ChatMemberStripProps {
   members: ConversationMember[];
   runtimeByActor?: Record<string, ActorRuntimeState>;
+  runtimeByRemoteAgent?: Record<string, RemoteAgentRuntimeState>;
   max?: number;
   size?: 'sm' | 'default' | 'lg';
   className?: string;
@@ -41,6 +77,7 @@ interface ChatMemberStripProps {
 export default function ChatMemberStrip({
   members,
   runtimeByActor,
+  runtimeByRemoteAgent,
   max = 5,
   size = 'default',
   className,
@@ -50,14 +87,19 @@ export default function ChatMemberStrip({
 }: ChatMemberStripProps) {
   const router = useRouter();
   const isMobile = useIsMobile();
-  const orderedMembers = orderMembers(members, runtimeByActor);
+  const orderedMembers = orderMembers(members, runtimeByActor, runtimeByRemoteAgent);
   const visibleMembers = orderedMembers.slice(0, max);
   const overflowCount = Math.max(orderedMembers.length - visibleMembers.length, 0);
 
   return (
     <AvatarGroup className={cn('items-center', className)}>
       {visibleMembers.map((member) => {
-        const runtime = member.type === 'actor' ? runtimeByActor?.[member.id] : undefined;
+        const runtime =
+          member.type === 'actor'
+            ? runtimeByActor?.[member.id]
+            : member.type === 'remote_agent'
+              ? runtimeByRemoteAgent?.[member.id]
+              : undefined;
         const href = getConversationMemberContactHref(member, contactBasePath);
         const subtitle = getConversationMemberSubtitle(member);
         const canOpen = Boolean(onMemberClick || href);
@@ -68,7 +110,11 @@ export default function ChatMemberStrip({
             emoji={member.emoji}
             entityType={member.type}
             size={size}
-            statusState={runtimeToAvatarStatus(runtime)}
+            statusState={
+              member.type === 'remote_agent'
+                ? remoteAgentRuntimeToAvatarStatus(runtime as RemoteAgentRuntimeState | undefined)
+                : runtimeToAvatarStatus(runtime as ActorRuntimeState | undefined)
+            }
             statusLabel={getRuntimeLabel(runtime)}
             statusDetail={getRuntimeDetail(runtime)}
           />

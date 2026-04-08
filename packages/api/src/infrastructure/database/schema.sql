@@ -41,6 +41,7 @@ CREATE TYPE remote_agent_machines_lifecycle_state AS ENUM ('online', 'offline');
 CREATE TYPE remote_agent_machine_sessions_status AS ENUM ('connecting', 'active', 'closing', 'closed', 'rejected');
 CREATE TYPE remote_agent_machine_sessions_transport AS ENUM ('websocket');
 CREATE TYPE remote_agent_bindings_status AS ENUM ('active', 'disabled', 'error');
+CREATE TYPE remote_agent_bindings_runtime_state AS ENUM ('offline', 'idle', 'running', 'waiting_user_input', 'plan_drafting', 'waiting_plan_approval', 'error');
 CREATE TYPE remote_agent_runs_status AS ENUM ('queued', 'running', 'completed', 'failed', 'cancelled');
 CREATE TYPE remote_agent_message_deliveries_status AS ENUM ('pending', 'acked', 'completed', 'failed');
 CREATE TYPE remote_agent_runtime_catalog_status AS ENUM ('available', 'missing_binary', 'broken_path', 'unsupported_platform', 'runtime_error');
@@ -928,7 +929,15 @@ CREATE TABLE remote_agent_bindings (
   runtime_path TEXT,
   local_root_path TEXT,
   status remote_agent_bindings_status NOT NULL DEFAULT 'active',
+  runtime_state remote_agent_bindings_runtime_state NOT NULL DEFAULT 'offline',
+  status_text TEXT,
   last_session_id VARCHAR(255),
+  capabilities JSONB NOT NULL DEFAULT '{}',
+  active_conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
+  active_interaction_id UUID,
+  last_activity_at TIMESTAMPTZ,
+  last_run_started_at TIMESTAMPTZ,
+  last_run_finished_at TIMESTAMPTZ,
   last_error TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -940,8 +949,11 @@ CREATE INDEX idx_remote_agent_bindings_machine
 CREATE TABLE remote_agent_runs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   remote_agent_id UUID NOT NULL REFERENCES remote_agents(id) ON DELETE CASCADE,
+  run_key TEXT NOT NULL UNIQUE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
   status remote_agent_runs_status NOT NULL DEFAULT 'queued',
+  status_text TEXT,
+  interaction_id UUID,
   last_error TEXT,
   started_at TIMESTAMPTZ,
   ended_at TIMESTAMPTZ,
@@ -951,6 +963,35 @@ CREATE TABLE remote_agent_runs (
 
 CREATE INDEX idx_remote_agent_runs_remote_agent
   ON remote_agent_runs(remote_agent_id, created_at DESC);
+
+CREATE TABLE remote_agent_conversation_contexts (
+  remote_agent_id UUID NOT NULL REFERENCES remote_agents(id) ON DELETE CASCADE,
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  collaboration_mode TEXT NOT NULL DEFAULT 'default',
+  collaboration_state JSONB NOT NULL DEFAULT '{}',
+  active_plan_approval_interaction_id UUID,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (remote_agent_id, conversation_id)
+);
+
+CREATE INDEX idx_remote_agent_conversation_contexts_remote_agent
+  ON remote_agent_conversation_contexts(remote_agent_id, updated_at DESC);
+
+CREATE INDEX idx_remote_agent_conversation_contexts_conversation
+  ON remote_agent_conversation_contexts(conversation_id, updated_at DESC);
+
+CREATE TABLE remote_agent_group_interaction_grants (
+  remote_agent_id UUID NOT NULL REFERENCES remote_agents(id) ON DELETE CASCADE,
+  workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
+  granted_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW(),
+  updated_at TIMESTAMPTZ DEFAULT NOW(),
+  PRIMARY KEY (remote_agent_id, workspace_member_id)
+);
+
+CREATE INDEX idx_remote_agent_group_interaction_grants_workspace_member
+  ON remote_agent_group_interaction_grants(workspace_member_id, created_at DESC);
 
 CREATE TABLE workspace_relationship_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3257,7 +3298,8 @@ CREATE TABLE interaction_requests (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  task_id UUID NOT NULL REFERENCES tool_call_tasks(id) ON DELETE CASCADE,
+  task_id UUID REFERENCES tool_call_tasks(id) ON DELETE CASCADE,
+  remote_agent_run_id UUID REFERENCES remote_agent_runs(id) ON DELETE CASCADE,
   conversation_item_id UUID UNIQUE REFERENCES conversation_items(id) ON DELETE SET NULL,
   requester_participant_id UUID NOT NULL REFERENCES conversation_participants(id) ON DELETE RESTRICT,
   kind interaction_requests_kind NOT NULL,
@@ -3270,14 +3312,22 @@ CREATE TABLE interaction_requests (
   expires_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
+  CONSTRAINT interaction_requests_task_or_remote_agent_run_chk CHECK (
+    (task_id IS NOT NULL AND remote_agent_run_id IS NULL) OR
+    (task_id IS NULL AND remote_agent_run_id IS NOT NULL)
+  ),
   CONSTRAINT interaction_requests_target_requirement_chk CHECK (
     (
       kind IN ('user_input', 'plan_approval')
-      AND target_participant_id IS NOT NULL
+      AND (
+        target_participant_id IS NOT NULL
+        OR remote_agent_run_id IS NOT NULL
+      )
     )
     OR (
       kind = 'relay_authorization'
       AND target_participant_id IS NULL
+      AND remote_agent_run_id IS NULL
     )
   )
 );
@@ -3455,6 +3505,21 @@ ALTER TABLE sessions ADD CONSTRAINT fk_sessions_active_plan_approval_interaction
   REFERENCES interaction_requests(id)
   ON DELETE SET NULL;
 
+ALTER TABLE remote_agent_bindings ADD CONSTRAINT fk_remote_agent_bindings_active_interaction
+  FOREIGN KEY (active_interaction_id)
+  REFERENCES interaction_requests(id)
+  ON DELETE SET NULL;
+
+ALTER TABLE remote_agent_conversation_contexts ADD CONSTRAINT fk_remote_agent_conversation_contexts_active_plan_approval_interaction
+  FOREIGN KEY (active_plan_approval_interaction_id)
+  REFERENCES interaction_requests(id)
+  ON DELETE SET NULL;
+
+ALTER TABLE remote_agent_runs ADD CONSTRAINT fk_remote_agent_runs_interaction
+  FOREIGN KEY (interaction_id)
+  REFERENCES interaction_requests(id)
+  ON DELETE SET NULL;
+
 CREATE TABLE relay_authorization_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
@@ -3483,7 +3548,11 @@ CREATE TABLE relay_authorization_grants (
 CREATE INDEX idx_interaction_requests_conversation
   ON interaction_requests(conversation_id, created_at DESC);
 CREATE UNIQUE INDEX idx_interaction_requests_task
-  ON interaction_requests(task_id);
+  ON interaction_requests(task_id)
+  WHERE task_id IS NOT NULL;
+CREATE INDEX idx_interaction_requests_remote_agent_run
+  ON interaction_requests(remote_agent_run_id, created_at DESC)
+  WHERE remote_agent_run_id IS NOT NULL;
 CREATE INDEX idx_interaction_requests_target
   ON interaction_requests(target_participant_id, status, created_at DESC);
 CREATE UNIQUE INDEX idx_interaction_requests_pending_request_key

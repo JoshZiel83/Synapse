@@ -839,7 +839,7 @@ async function listConversationParticipantRows(
         linked_user.name AS linked_user_name,
         linked_user.avatar_file_id AS linked_user_avatar_file_id,
         ls.id AS session_id,
-        ls.status AS session_status
+        COALESCE(ls.status::text, rab.runtime_state::text) AS session_status
       FROM conversation_participants cp
       LEFT JOIN workspace_members wm ON wm.id = cp.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
@@ -866,6 +866,8 @@ async function listConversationParticipantRows(
         LIMIT 1
       ) primary_address ON TRUE
       LEFT JOIN users linked_user ON linked_user.id = primary_address.linked_user_id
+      LEFT JOIN remote_agent_bindings rab
+        ON rab.remote_agent_id = cp.remote_agent_id
       LEFT JOIN LATERAL (
         SELECT s.id, s.status
         FROM sessions s
@@ -926,7 +928,7 @@ async function getWorkspaceMemberConversationParticipantRow(
         linked_user.name AS linked_user_name,
         linked_user.avatar_file_id AS linked_user_avatar_file_id,
         ls.id AS session_id,
-        ls.status AS session_status
+        COALESCE(ls.status::text, rab.runtime_state::text) AS session_status
       FROM conversation_participants cp
       LEFT JOIN workspace_members wm ON wm.id = cp.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
@@ -948,6 +950,8 @@ async function getWorkspaceMemberConversationParticipantRow(
         LIMIT 1
       ) primary_address ON TRUE
       LEFT JOIN users linked_user ON linked_user.id = primary_address.linked_user_id
+      LEFT JOIN remote_agent_bindings rab
+        ON rab.remote_agent_id = cp.remote_agent_id
       LEFT JOIN LATERAL (
         SELECT s.id, s.status
         FROM sessions s
@@ -4597,11 +4601,28 @@ export async function getChatConversationMessages(params: {
       };
 
   const runtimeMap = await getConversationRuntimeMap([params.conversationId]);
+  const remoteAgentIds = conversation.participants
+    .filter((participant) => participant.participantType === "remote_agent")
+    .map((participant) => participant.remoteAgentId)
+    .filter((value): value is string => Boolean(value));
+  const runtimeByRemoteAgent: Record<string, any> = {};
+  if (remoteAgentIds.length > 0) {
+    const { loadRemoteAgentRuntimeSnapshot } = await import(
+      "../remote-agents/service.js"
+    );
+    for (const remoteAgentId of remoteAgentIds) {
+      const snapshot = await loadRemoteAgentRuntimeSnapshot(remoteAgentId);
+      if (snapshot) {
+        runtimeByRemoteAgent[remoteAgentId] = snapshot;
+      }
+    }
+  }
 
   return {
     conversation,
     items: enrichedItems,
     runtimeByActor: runtimeMap[params.conversationId] || {},
+    runtimeByRemoteAgent,
     participantReadWatermarkSequence: toNumber(readState.rows[0]?.read_watermark_sequence),
     deviceState,
     hasMoreBefore,

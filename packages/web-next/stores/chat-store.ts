@@ -25,6 +25,7 @@ import type {
   ConversationMessageTransportDelivery,
   ConversationReplyRef,
   InteractionRequestSummary,
+  RemoteAgentRuntimeState,
   TransportKind,
 } from "@synapse/shared"
 import {
@@ -45,9 +46,10 @@ export interface ConversationParticipant {
 
 export interface ConversationMember {
   participantId: string
-  type: "actor" | "workspace_member" | "external"
+  type: "actor" | "remote_agent" | "workspace_member" | "external"
   id: string
   workspaceMemberId?: string
+  remoteAgentId?: string
   name: string
   role?: string
   title?: string
@@ -128,6 +130,7 @@ export interface FeedMessage {
 
 export type ThinkingPhase = "thinking" | "tool" | "responding" | "error"
 export type ActorAvatarStatus = "idle" | ThinkingPhase
+export type RemoteAgentAvatarStatus = RemoteAgentRuntimeState["state"]
 export type ConversationRuntimeMap = Record<
   string,
   Record<string, ActorRuntimeState>
@@ -152,6 +155,7 @@ interface ChatState {
   loadingMessages: boolean
   syncing: boolean
   runtimeMap: ConversationRuntimeMap
+  remoteAgentRuntimeMap: Record<string, RemoteAgentRuntimeState>
   runtimeSeqMap: Record<string, number>
   totalUnread: number
 
@@ -650,6 +654,7 @@ function toConversationMember(
 ): ConversationMember {
   const id =
     participant.actorId ||
+    participant.remoteAgentId ||
     participant.workspaceMemberId ||
     participant.externalUserKey ||
     participant.participantId
@@ -659,11 +664,14 @@ function toConversationMember(
     type:
       participant.participantType === "workspace_member"
         ? "workspace_member"
+        : participant.participantType === "remote_agent"
+          ? "remote_agent"
         : participant.participantType === "external"
           ? "external"
           : "actor",
     id,
     workspaceMemberId: participant.workspaceMemberId,
+    remoteAgentId: participant.remoteAgentId,
     name: participant.name || "Unknown",
     role: participant.role || participant.roleKey,
     title: participant.title,
@@ -704,6 +712,9 @@ function deriveLastMessageRole(
     return "user"
   }
   if (author?.participantType === "actor") {
+    return "assistant"
+  }
+  if (author?.participantType === "remote_agent") {
     return "assistant"
   }
   return "system"
@@ -1031,6 +1042,12 @@ export function runtimeToAvatarStatus(
 ): ActorAvatarStatus | undefined {
   if (!runtime) return undefined
   return runtimePhaseToBadgePhase(runtime) || "idle"
+}
+
+export function remoteAgentRuntimeToAvatarStatus(
+  runtime?: RemoteAgentRuntimeState
+): RemoteAgentAvatarStatus | undefined {
+  return runtime?.state
 }
 
 function applyRuntimeToConversationMembers(
@@ -1519,6 +1536,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   loadingMessages: false,
   syncing: false,
   runtimeMap: {},
+  remoteAgentRuntimeMap: {},
   runtimeSeqMap: {},
   totalUnread: 0,
   snapshot: null,
@@ -1544,6 +1562,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
       loadingMessages: false,
       syncing: false,
       runtimeMap: {},
+      remoteAgentRuntimeMap: {},
       runtimeSeqMap: {},
       totalUnread: 0,
       snapshot: null,
@@ -1700,10 +1719,15 @@ export const useChatStore = create<ChatState>((set, get) => ({
           ...state.runtimeMap,
           [conversationId]: response.runtimeByActor || {},
         }
+        const nextRemoteAgentRuntimeMap = {
+          ...state.remoteAgentRuntimeMap,
+          ...(response.runtimeByRemoteAgent || {}),
+        }
 
         if (state.selectedConversationId !== conversationId) {
           return {
             runtimeMap: nextRuntimeMap,
+            remoteAgentRuntimeMap: nextRemoteAgentRuntimeMap,
           }
         }
 
@@ -1720,13 +1744,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
         return {
           ...createStateFromSnapshot(
-            { ...state, runtimeMap: nextRuntimeMap } as ChatState,
+            {
+              ...state,
+              runtimeMap: nextRuntimeMap,
+              remoteAgentRuntimeMap: nextRemoteAgentRuntimeMap,
+            } as ChatState,
             nextSnapshot,
             {
               loadedMessageItems: mergeRawItems([], response.items),
             }
           ),
           runtimeMap: nextRuntimeMap,
+          remoteAgentRuntimeMap: nextRemoteAgentRuntimeMap,
           loadingMessages: false,
         }
       })
@@ -2080,6 +2109,19 @@ export const useChatStore = create<ChatState>((set, get) => ({
             state.loadedMessageItems,
             payload
           )
+        }
+      } else if (event.eventType === "remote_agent.runtime_updated") {
+        const payload =
+          event.payload as ChatSyncEvent<"remote_agent.runtime_updated">["payload"]
+        void queuePersistSnapshot(state.snapshot, nextSnapshot)
+        return {
+          ...createStateFromSnapshot(state, nextSnapshot, {
+            loadedMessageItems: nextLoadedItems,
+          }),
+          remoteAgentRuntimeMap: {
+            ...state.remoteAgentRuntimeMap,
+            [payload.remoteAgentId]: payload.snapshot,
+          },
         }
       }
 
