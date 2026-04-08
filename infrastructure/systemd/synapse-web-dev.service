@@ -2,7 +2,6 @@
 Description=Synapse Web Frontend (Dev)
 After=network-online.target synapse-api.service
 Wants=network-online.target synapse-api.service
-Conflicts=synapse-web.service
 
 [Service]
 Type=simple

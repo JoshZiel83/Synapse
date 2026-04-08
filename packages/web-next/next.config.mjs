@@ -14,8 +14,57 @@ function normalizePublicApiPrefix(value) {
 
 const publicApiPrefix = normalizePublicApiPrefix(publicApiBase)
 
+function normalizeAllowedDevOrigin(value) {
+  if (!value) {
+    return null
+  }
+
+  const trimmed = value.trim()
+  if (!trimmed) {
+    return null
+  }
+
+  if (trimmed.startsWith('*.')) {
+    return trimmed.toLowerCase()
+  }
+
+  try {
+    const parsed = new URL(trimmed.includes('://') ? trimmed : `https://${trimmed}`)
+    return parsed.hostname.toLowerCase()
+  } catch {
+    return null
+  }
+}
+
+function resolveAllowedDevOrigins() {
+  const explicitValues = (process.env.NEXT_ALLOWED_DEV_ORIGINS || '')
+    .split(',')
+    .map(normalizeAllowedDevOrigin)
+    .filter(Boolean)
+
+  if (explicitValues.length > 0) {
+    return Array.from(new Set(explicitValues))
+  }
+
+  const inferredValues = [
+    process.env.NEXT_PUBLIC_APP_URL,
+    process.env.NEXT_PUBLIC_SITE_URL,
+  ]
+    .map(normalizeAllowedDevOrigin)
+    .filter(Boolean)
+
+  if (inferredValues.length === 0) {
+    return undefined
+  }
+
+  return Array.from(new Set(inferredValues))
+}
+
+const allowedDevOrigins = resolveAllowedDevOrigins()
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  allowedDevOrigins,
   experimental: {
     webpackBuildWorker: false,
   },

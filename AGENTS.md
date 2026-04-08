@@ -41,6 +41,19 @@
 - 线上 mobile web 的静态目录固定为 `/var/www/mobile`。
 - `/mobile` 的聊天 service worker、`_expo` 资源、`favicon` 等都依赖静态导出结果，所以这类改动后必须重新导出并同步。
 
+## Desktop Web 构建与重启
+
+- 公网桌面端 web 根路径 `/` 不是直接暴露 `next dev`，而是由 `synapse-web.service` 运行 `packages/web-next` 的 production build。
+- 修改 `packages/web-next` 或任何会影响桌面端 web 运行结果的共享前端代码、资源、样式、路由、metadata、`public` 文件后，不能只看 dev server；必须重新构建前端产物并重启 `synapse-web.service`。
+- 重启命令：
+  - `sudo systemctl restart synapse-web.service`
+- 重启后必须检查服务状态，确认新的前端构建产物已经成功加载：
+  - `systemctl is-active synapse-web.service`
+  - `systemctl --no-pager --full status synapse-web.service`
+- 如果需要手动验证 production 构建是否能通过，优先运行：
+  - `npm run build -w packages/web-next`
+- 如果只是远程调试开发态页面，可按需启动 `synapse-web-dev.service` 并通过 SSH 隧道访问 `127.0.0.1:3002`，但这不能代表公网 `/` 的最终效果。
+
 ## Web Chat Worker 构建
 
 - `packages/web-next/public/web-chat-service-worker.js` 是构建产物，源码在 `packages/web-next/lib/workers/web-chat-service-worker.ts`；不要直接修改生成后的 worker 文件。

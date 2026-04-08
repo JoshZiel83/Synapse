@@ -113,6 +113,8 @@ NEXT_PUBLIC_API_URL=/api/v1
 NEXT_PUBLIC_WS_URL=wss://$DOMAIN
 NEXT_PUBLIC_APP_URL=$APP_URL
 NEXT_PUBLIC_SITE_URL=$APP_URL
+# Optional: comma-separated hostnames or URLs for additional Next dev origins.
+# NEXT_ALLOWED_DEV_ORIGINS=$DOMAIN
 API_PROXY_ORIGIN=$API_PROXY_ORIGIN
 EOF
 
@@ -135,4 +137,5 @@ echo "  1. Install docker + nginx on the host if they are missing"
 echo "  2. Run: sudo docker compose up -d postgres redis"
 echo "  3. Run: npm ci"
 echo "  4. Run: npm run db:migrate -w packages/api"
-echo "  5. Enable services: sudo systemctl enable --now synapse-api synapse-web-dev"
+echo "  5. Enable services: sudo systemctl enable --now synapse-api synapse-web"
+echo "  6. For remote web dev only: start synapse-web-dev manually and use SSH port forwarding to 127.0.0.1:3002"

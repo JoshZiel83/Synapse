@@ -5,7 +5,8 @@ This repository is deployed on a single Ubuntu host with:
 - local `nginx`
 - `systemd` for API and web
 - Docker for PostgreSQL and Redis
-- web running in dev mode
+- desktop web on a production Next.js server
+- optional localhost-only Next dev server for remote debugging over SSH
 
 ## 1. Host prerequisites
 
@@ -29,6 +30,10 @@ This creates:
 
 - `.env`
 - `packages/web-next/.env.local`
+
+Optional web env:
+
+- `NEXT_ALLOWED_DEV_ORIGINS` for extra Next dev origins, as a comma-separated list of hostnames or URLs
 
 Before starting the API in any environment, fill the Volcengine realtime ASR variables in `.env`:
 
@@ -86,9 +91,9 @@ bash -lc 'set -a && source ./.env && set +a && npm run db:migrate -w packages/ap
 Install and enable the services:
 
 ```bash
-sudo install -m 644 infrastructure/systemd/synapse-api.service infrastructure/systemd/synapse-web-dev.service -t /etc/systemd/system/
+sudo install -m 644 infrastructure/systemd/synapse-api.service infrastructure/systemd/synapse-web.service infrastructure/systemd/synapse-web-dev.service -t /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now synapse-api synapse-web-dev
+sudo systemctl enable --now synapse-api synapse-web
 ```
 
 Important:
@@ -96,6 +101,17 @@ Important:
 - On hosts with `synapse-api.service` enabled, do not also start the API manually with `npm run start -w packages/api`, `node dist/index.js`, or `npm run dev -w packages/api`.
 - `synapse-api.service` is the only supported API process on the host. A second API instance can grab port `3001`, trigger `EADDRINUSE`, and cause repeated restart attempts.
 - `infrastructure/scripts/start-api.sh` now refuses to start when port `3001` is already in use, and exits with status `200`. The unit file treats that exit code as non-restartable to avoid restart storms.
+- `synapse-web.service` is the only public web entrypoint and binds `127.0.0.1:3000` for nginx to proxy.
+- `synapse-web-dev.service` binds `127.0.0.1:3002` only. Keep it disabled by default and start it only when you need remote dev debugging.
+
+For remote web development:
+
+```bash
+sudo systemctl start synapse-web-dev
+ssh -L 3002:127.0.0.1:3002 <user>@<host>
+```
+
+Then open `http://127.0.0.1:3002` locally through the tunnel.
 
 ## 7. Nginx
 
@@ -126,7 +142,7 @@ sudo systemctl reload nginx
 Check services:
 
 ```bash
-systemctl is-active synapse-api synapse-web-dev nginx docker
+systemctl is-active synapse-api synapse-web nginx docker
 ```
 
 Check health:
@@ -134,6 +150,7 @@ Check health:
 ```bash
 curl -sS http://localhost:3001/api/v1/health
 curl -sS https://<your-domain>/api/v1/health
+curl -I http://127.0.0.1:3000
 ```
 
 ## 9. Troubleshooting
