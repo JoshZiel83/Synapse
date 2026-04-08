@@ -164,8 +164,18 @@ function normalizeWhitespace(value: string) {
 }
 
 function truncateText(value: string, maxChars: number) {
-  if (value.length <= maxChars) return value;
-  return value.slice(0, Math.max(0, maxChars - 3)).trimEnd() + '...';
+  const ellipsis = '...';
+  if (maxChars <= 0) return '';
+  if (maxChars <= ellipsis.length) return ellipsis.slice(0, maxChars);
+
+  const codePoints = Array.from(value);
+  if (codePoints.length <= maxChars) return value;
+  return (
+    codePoints
+      .slice(0, Math.max(0, maxChars - ellipsis.length))
+      .join('')
+      .trimEnd() + ellipsis
+  );
 }
 
 function buildLexicalVariants(queryText: string) {
