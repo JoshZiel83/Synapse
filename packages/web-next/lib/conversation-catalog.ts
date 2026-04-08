@@ -14,6 +14,7 @@ export type ConversationCatalogParticipant = {
   participantId: string
   participantType: ChatParticipantSummary["participantType"]
   actorId?: string
+  remoteAgentId?: string
   workspaceMemberId?: string
   name: string
   state: ChatParticipantSummary["state"]
@@ -63,6 +64,7 @@ export function normalizeConversationCatalogEntry(
         participantId: participant.participantId,
         participantType: participant.participantType,
         actorId: participant.actorId,
+        remoteAgentId: participant.remoteAgentId,
         workspaceMemberId: participant.workspaceMemberId,
         name: participant.name,
         state: participant.state,

@@ -34,6 +34,7 @@ import organizationModule from "./modules/organization/index.js";
 import skillsModule from "./modules/skills/index.js";
 import chatModule from "./modules/chat/index.js";
 import relationshipModule from "./modules/relationship/index.js";
+import remoteAgentsModule from "./modules/remote-agents/index.js";
 import automationModule from "./modules/automation/index.js";
 import filesModule from "./modules/files/index.js";
 import memoryModule from "./modules/memory/index.js";
@@ -182,6 +183,7 @@ async function main() {
   await app.register(skillsModule);
   await app.register(chatModule);
   await app.register(relationshipModule);
+  await app.register(remoteAgentsModule);
   await app.register(automationModule);
   await app.register(filesModule);
   await app.register(memoryModule);

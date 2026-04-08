@@ -9,17 +9,21 @@ import {
   getContactHub,
   getContactHubDetail,
   getMemberRelationshipProfile,
+  getRemoteAgentRelationshipProfile,
   listActorAccessRequests,
   listFriendRequests,
   listFriends,
+  listRemoteAgentAccessRequests,
   openDirectConversation,
   requestRelationshipByIdentityProfile,
   resolveActorAccessRequest,
   resolveFriendRequest,
+  resolveRemoteAgentAccessRequest,
   scanRelationshipQr,
   searchRelationshipsByIdentity,
   updateActorRelationshipProfile,
   updateMemberRelationshipProfile,
+  updateRemoteAgentRelationshipProfile,
 } from "./service.js";
 
 const approvalModeSchema = z.enum(["auto", "manual"]);
@@ -164,6 +168,63 @@ export default async function relationshipController(app: FastifyInstance) {
     }
   });
 
+  app.get<{
+    Params: { workspaceId: string; remoteAgentId: string };
+  }>("/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/relationship-profile", async (request, reply) => {
+    const allowed = await requireRequestAction(
+      request,
+      reply,
+      "remote_agent.grant",
+      request.params.remoteAgentId,
+      "Not allowed to manage this remote agent relationship profile",
+    );
+    if (!allowed) return;
+    const userId = (request as any).user!.userId;
+    try {
+      return reply.send(
+        await getRemoteAgentRelationshipProfile({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId,
+        }),
+      );
+    } catch (error) {
+      return sendServiceError(reply, error);
+    }
+  });
+
+  app.put<{
+    Params: { workspaceId: string; remoteAgentId: string };
+    Body: unknown;
+  }>("/api/v1/workspaces/:workspaceId/remote-agents/:remoteAgentId/relationship-profile", async (request, reply) => {
+    const allowed = await requireRequestAction(
+      request,
+      reply,
+      "remote_agent.grant",
+      request.params.remoteAgentId,
+      "Not allowed to manage this remote agent relationship profile",
+    );
+    if (!allowed) return;
+    const userId = (request as any).user!.userId;
+    const body = updateActorProfileSchema.parse(request.body);
+    try {
+      return reply.send(
+        await updateRemoteAgentRelationshipProfile({
+          workspaceId: request.params.workspaceId,
+          remoteAgentId: request.params.remoteAgentId,
+          userId,
+          approvalMode: body.approvalMode,
+          identityId: body.identityId,
+          identitySearchEnabled: body.identitySearchEnabled,
+          accessPolicy: body.accessPolicy,
+          isPublicShared: body.isPublicShared,
+        }),
+      );
+    } catch (error) {
+      return sendServiceError(reply, error);
+    }
+  });
+
   app.post<{
     Params: { workspaceId: string };
     Body: unknown;
@@ -289,6 +350,18 @@ export default async function relationshipController(app: FastifyInstance) {
     );
   });
 
+  app.get<{
+    Params: { workspaceId: string };
+  }>("/api/v1/workspaces/:workspaceId/remote-agent-access-requests", async (request, reply) => {
+    const userId = (request as any).user!.userId;
+    return reply.send(
+      await listRemoteAgentAccessRequests({
+        workspaceId: request.params.workspaceId,
+        userId,
+      }),
+    );
+  });
+
   app.post<{
     Params: { workspaceId: string; requestId: string };
   }>("/api/v1/workspaces/:workspaceId/actor-access-requests/:requestId/approve", async (request, reply) => {
@@ -314,6 +387,42 @@ export default async function relationshipController(app: FastifyInstance) {
     try {
       return reply.send({
         request: await resolveActorAccessRequest({
+          workspaceId: request.params.workspaceId,
+          userId,
+          requestId: request.params.requestId,
+          decision: "reject",
+        }),
+      });
+    } catch (error) {
+      return sendServiceError(reply, error);
+    }
+  });
+
+  app.post<{
+    Params: { workspaceId: string; requestId: string };
+  }>("/api/v1/workspaces/:workspaceId/remote-agent-access-requests/:requestId/approve", async (request, reply) => {
+    const userId = (request as any).user!.userId;
+    try {
+      return reply.send({
+        request: await resolveRemoteAgentAccessRequest({
+          workspaceId: request.params.workspaceId,
+          userId,
+          requestId: request.params.requestId,
+          decision: "approve",
+        }),
+      });
+    } catch (error) {
+      return sendServiceError(reply, error);
+    }
+  });
+
+  app.post<{
+    Params: { workspaceId: string; requestId: string };
+  }>("/api/v1/workspaces/:workspaceId/remote-agent-access-requests/:requestId/reject", async (request, reply) => {
+    const userId = (request as any).user!.userId;
+    try {
+      return reply.send({
+        request: await resolveRemoteAgentAccessRequest({
           workspaceId: request.params.workspaceId,
           userId,
           requestId: request.params.requestId,

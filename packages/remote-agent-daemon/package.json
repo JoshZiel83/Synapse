@@ -1,0 +1,28 @@
+{
+  "name": "@synapse/remote-agent-daemon",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "./dist/index.js",
+  "bin": {
+    "synapse-remote-agent-daemon": "./dist/index.js",
+    "synapse-remote-agent-chat-bridge": "./dist/chat-bridge.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "@synapse/shared": "*",
+    "ws": "^8.20.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^25.1.0",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.16.0",
+    "typescript": "^5.4.0"
+  }
+}

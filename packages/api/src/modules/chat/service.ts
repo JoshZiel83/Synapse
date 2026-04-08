@@ -4862,6 +4862,10 @@ export async function sendChatConversationMessage(
     conversationId: params.conversationId,
     itemId: item.id,
   });
+  const { notifyRemoteAgentDeliveriesForConversation } = await import(
+    "../remote-agents/service.js"
+  );
+  await notifyRemoteAgentDeliveriesForConversation(params.conversationId);
 
   return {
     item,

@@ -13,6 +13,7 @@ import type {
 } from "@synapse/shared";
 import { onEvent } from "../events/index.js";
 import { handleRelayConnection } from "../../modules/mcp-plugins/relay-manager.js";
+import { handleRemoteAgentDaemonConnection } from "../../modules/remote-agents/service.js";
 import { isShuttingDown } from "../shutdown/state.js";
 import { authenticateSessionToken } from "../../modules/auth/service.js";
 import {
@@ -337,6 +338,26 @@ export function setupWebSocket(app: FastifyInstance) {
       return;
     }
     handleRelayConnection(socket, req, app);
+  });
+
+  app.get("/ws/remote-agents", { websocket: true }, (socket: any, req: any) => {
+    if (isShuttingDown()) {
+      try {
+        socket.send(
+          JSON.stringify({
+            type: "server_shutdown",
+            message: "Synapse API server is shutting down",
+            retryable: true,
+          }),
+        );
+      } catch {}
+      try {
+        socket.close(1012, "service restart");
+      } catch {}
+      return;
+    }
+
+    void handleRemoteAgentDaemonConnection(socket, req, app);
   });
 
   app.get("/ws", { websocket: true }, (socket: any, req: any) => {

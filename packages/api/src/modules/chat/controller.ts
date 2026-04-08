@@ -42,6 +42,7 @@ const createConversationSchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),
   workspaceMemberIds: z.array(chatUuidSchema).optional().default([]),
   actorIds: z.array(chatUuidSchema).optional().default([]),
+  remoteAgentIds: z.array(chatUuidSchema).optional().default([]),
   externalParticipants: z
     .array(
       z.object({
@@ -274,6 +275,7 @@ export default async function chatController(app: FastifyInstance) {
         title: body.title,
         workspaceMemberIds: body.workspaceMemberIds,
         actorIds: body.actorIds,
+        remoteAgentIds: body.remoteAgentIds,
         externalParticipants: body.externalParticipants,
         metadata: body.metadata,
       });

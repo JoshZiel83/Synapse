@@ -678,6 +678,13 @@ export async function addSessionMessage(params: {
     });
   }
 
+  if (scope === 'shared' && surface === 'visible') {
+    const { notifyRemoteAgentDeliveriesForConversation } = await import(
+      '../remote-agents/service.js'
+    );
+    await notifyRemoteAgentDeliveriesForConversation(session.conversation_id);
+  }
+
   if (
     scope === 'shared' &&
     surface === 'visible' &&

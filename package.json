@@ -5,15 +5,18 @@
   "workspaces": [
     "packages/shared",
     "packages/api",
+    "packages/remote-agent-daemon",
     "packages/web-next"
   ],
   "scripts": {
     "dev:api": "npm run dev -w packages/api",
+    "dev:daemon": "npm run dev -w packages/remote-agent-daemon",
     "dev:web": "npm run dev -w packages/web-next",
     "dev:mock-chat": "node .workbuddy/mock-chat-completions-server.cjs",
-    "build": "npm run build -w packages/shared && npm run build -w packages/api && npm run build -w packages/web-next",
+    "build": "npm run build -w packages/shared && npm run build -w packages/api && npm run build -w packages/remote-agent-daemon && npm run build -w packages/web-next",
     "build:shared": "npm run build -w packages/shared",
     "build:api": "npm run build -w packages/api",
+    "build:daemon": "npm run build -w packages/remote-agent-daemon",
     "build:web": "npm run build -w packages/shared && npm run build -w packages/web-next",
     "db:bootstrap": "npm run db:bootstrap -w packages/api",
     "db:codegen": "npm run db:codegen -w packages/api",

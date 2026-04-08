@@ -2,6 +2,23 @@ import { getFileUrlById } from "../files/service.js";
 import { listConversationParticipants } from "./service.js";
 
 export function mapConversationParticipant(row: any) {
+  if (row.remote_agent_id) {
+    return {
+      participantId: row.id,
+      type: "remote_agent" as const,
+      remoteAgentId: row.remote_agent_id,
+      id: row.remote_agent_id,
+      name: row.actor_name || "Remote Agent",
+      title: row.actor_title || undefined,
+      role: row.actor_role || "remote_agent",
+      emoji: row.actor_avatar_emoji || undefined,
+      avatarUrl: row.actor_avatar_file_id
+        ? getFileUrlById(row.actor_avatar_file_id)
+        : undefined,
+      state: row.state,
+    };
+  }
+
   if (row.actor_id) {
     return {
       participantId: row.id,

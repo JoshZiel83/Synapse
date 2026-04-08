@@ -904,7 +904,7 @@ export async function enqueueSessionWakeup(params: {
   sourceType: SessionWakeupSourceType;
   sourceItemId?: string;
   sourceSessionId?: string;
-  sourceParticipantType?: 'workspace_member' | 'actor' | 'external' | 'system';
+  sourceParticipantType?: 'workspace_member' | 'actor' | 'remote_agent' | 'external' | 'system';
   sourceParticipantId?: string;
   sourceName?: string;
   summary: string;

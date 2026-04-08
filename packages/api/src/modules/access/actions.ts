@@ -12,6 +12,8 @@ export const ACCESS_ACTIONS = {
   'workspace.manage_members': { resourceType: 'workspace', permission: 'manage_members' },
   'workspace.manage_actors': { resourceType: 'workspace', permission: 'manage_actors' },
   'workspace.use_actors': { resourceType: 'workspace', permission: 'use_actors' },
+  'workspace.manage_remote_agents': { resourceType: 'workspace', permission: 'manage_remote_agents' },
+  'workspace.use_remote_agents': { resourceType: 'workspace', permission: 'use_remote_agents' },
   'workspace.manage_conversations': { resourceType: 'workspace', permission: 'manage_conversations' },
   'workspace.create_conversation': { resourceType: 'workspace', permission: 'create_conversation' },
   'workspace.manage_skills': { resourceType: 'workspace', permission: 'manage_skills' },
@@ -31,6 +33,14 @@ export const ACCESS_ACTIONS = {
   'actor.edit': { resourceType: 'actor', permission: 'edit' },
   'actor.grant': { resourceType: 'actor', permission: 'grant' },
   'actor.delete': { resourceType: 'actor', permission: 'delete' },
+
+  'remote_agent.discover': { resourceType: 'remote_agent', permission: 'discover' },
+  'remote_agent.view': { resourceType: 'remote_agent', permission: 'view' },
+  'remote_agent.invoke': { resourceType: 'remote_agent', permission: 'invoke' },
+  'remote_agent.receive_message': { resourceType: 'remote_agent', permission: 'receive_message' },
+  'remote_agent.edit': { resourceType: 'remote_agent', permission: 'edit' },
+  'remote_agent.grant': { resourceType: 'remote_agent', permission: 'grant' },
+  'remote_agent.delete': { resourceType: 'remote_agent', permission: 'delete' },
 
   'actor_in_conversation.memory_read': { resourceType: 'conversation_actor_context', permission: 'memory_read' },
   'actor_in_conversation.memory_edit': { resourceType: 'conversation_actor_context', permission: 'memory_edit' },

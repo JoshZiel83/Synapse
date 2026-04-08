@@ -14,6 +14,7 @@ type AccessResourceType =
   | "workspace_member"
   | "user"
   | "actor"
+  | "remote_agent"
   | "installed_skill"
   | "plugin_installation"
   | "automation_event_source"
@@ -49,6 +50,15 @@ type ActorRow = {
   access_policy: "workspace_open" | "approval_required";
   created_by_workspace_member_id: string | null;
   is_active: boolean;
+};
+
+type RemoteAgentRow = {
+  id: string;
+  workspace_id: string;
+  access_policy: "workspace_open" | "approval_required";
+  created_by_workspace_member_id: string | null;
+  is_active: boolean;
+  is_public_shared: boolean;
 };
 
 type ConversationRow = {
@@ -116,6 +126,27 @@ async function loadActorRow(actorId: string): Promise<ActorRow | null> {
     .where("id", "=", actorId)
     .limit(1)
     .executeTakeFirst()) as ActorRow | null;
+}
+
+async function loadRemoteAgentRow(
+  remoteAgentId: string,
+): Promise<RemoteAgentRow | null> {
+  const result = await executeSql<RemoteAgentRow>(
+    `
+      SELECT
+        id,
+        workspace_id,
+        access_policy,
+        created_by_workspace_member_id,
+        is_active,
+        is_public_shared
+      FROM remote_agents
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [remoteAgentId],
+  );
+  return result.rows[0] ?? null;
 }
 
 async function loadConversationRow(
@@ -219,6 +250,10 @@ function workspacePermissionFromAccess(
     case "manage_actors":
       return isAdmin || hasWorkspaceAccessKey(access, "actor_admin");
     case "use_actors":
+      return true;
+    case "manage_remote_agents":
+      return isAdmin || hasWorkspaceAccessKey(access, "remote_agent_admin");
+    case "use_remote_agents":
       return true;
     case "manage_conversations":
       return isAdmin || hasWorkspaceAccessKey(access, "conversation_admin");
@@ -371,6 +406,23 @@ async function hasFriendActorAccess(
   return Boolean(row);
 }
 
+async function hasFriendRemoteAgentAccess(
+  workspaceId: string,
+  workspaceMemberId: string,
+  remoteAgentId: string,
+) {
+  const row = await db
+    .selectFrom("workspace_friend_entries")
+    .select("id")
+    .where("workspace_id", "=", workspaceId)
+    .where("owner_workspace_member_id", "=", workspaceMemberId)
+    .where("peer_type", "=", "remote_agent")
+    .where("peer_remote_agent_id", "=", remoteAgentId)
+    .limit(1)
+    .executeTakeFirst();
+  return Boolean(row);
+}
+
 async function hasActorPermission(
   subject: PermissionSubject,
   actorId: string,
@@ -431,6 +483,56 @@ async function hasActorPermission(
     case "delete":
     case "memory_retarget":
     case "memory_delete":
+      return canManage;
+    default:
+      return false;
+  }
+}
+
+async function hasRemoteAgentPermission(
+  subject: PermissionSubject,
+  remoteAgentId: string,
+  permission: string,
+): Promise<boolean> {
+  const remoteAgent = await loadRemoteAgentRow(remoteAgentId);
+  if (!remoteAgent || !remoteAgent.is_active) {
+    return false;
+  }
+
+  if (subject.type !== "workspace_member") {
+    return false;
+  }
+
+  const access = await loadWorkspaceMemberAccess(subject.id);
+  if (!access) {
+    return false;
+  }
+
+  const sameWorkspace = access.workspaceId === remoteAgent.workspace_id;
+  const canManage =
+    sameWorkspace &&
+    (
+      isWorkspaceOwnerOrAdmin(access) ||
+      hasWorkspaceAccessKey(access, "remote_agent_admin") ||
+      remoteAgent.created_by_workspace_member_id === access.id
+    );
+  const canUse =
+    canManage ||
+    (sameWorkspace && remoteAgent.access_policy === "workspace_open") ||
+    (await hasFriendRemoteAgentAccess(access.workspaceId, access.id, remoteAgentId)) ||
+    (!sameWorkspace &&
+      remoteAgent.is_public_shared &&
+      remoteAgent.access_policy === "workspace_open");
+
+  switch (permission) {
+    case "discover":
+    case "view":
+    case "invoke":
+    case "receive_message":
+      return canUse;
+    case "edit":
+    case "grant":
+    case "delete":
       return canManage;
     default:
       return false;
@@ -963,6 +1065,52 @@ async function listActorIds(subject: PermissionSubject, limit?: number) {
   return rows.map((row) => row.id);
 }
 
+async function listRemoteAgentIds(subject: PermissionSubject, limit?: number) {
+  if (subject.type !== "workspace_member") {
+    return [];
+  }
+
+  const access = await loadWorkspaceMemberAccess(subject.id);
+  if (!access) {
+    return [];
+  }
+
+  const result = await executeSql<{ id: string }>(
+    `
+      SELECT id
+      FROM remote_agents
+      WHERE is_active = TRUE
+        AND (
+          workspace_id = $1
+          OR is_public_shared = TRUE
+        )
+        AND (
+          $2::boolean = TRUE
+          OR created_by_workspace_member_id = $3
+          OR access_policy = 'workspace_open'
+          OR EXISTS (
+            SELECT 1
+            FROM workspace_friend_entries friend
+            WHERE friend.workspace_id = $1
+              AND friend.owner_workspace_member_id = $3
+              AND friend.peer_type = 'remote_agent'
+              AND friend.peer_remote_agent_id = remote_agents.id
+          )
+        )
+      ORDER BY created_at DESC
+      LIMIT $4
+    `,
+    [
+      access.workspaceId,
+      isWorkspaceOwnerOrAdmin(access) ||
+        hasWorkspaceAccessKey(access, "remote_agent_admin"),
+      access.id,
+      limit && limit > 0 ? limit : 1000,
+    ],
+  );
+  return result.rows.map((row) => row.id);
+}
+
 async function listModelGroupIds(subject: PermissionSubject, limit?: number) {
   if (subject.type === "actor") {
     const actor = await loadActorRow(subject.id);
@@ -1263,6 +1411,12 @@ export async function checkPermissionSql(params: {
       );
     case "actor":
       return hasActorPermission(params.subject, params.resourceId, params.permission);
+    case "remote_agent":
+      return hasRemoteAgentPermission(
+        params.subject,
+        params.resourceId,
+        params.permission,
+      );
     case "conversation_actor_context":
       return hasConversationActorContextPermission(
         params.subject,
@@ -1332,6 +1486,10 @@ export async function lookupResourcesSql(params: {
     case "actor":
       return params.permission === "view" || params.permission === "discover" || params.permission === "invoke"
         ? listActorIds(params.subject, params.limit)
+        : [];
+    case "remote_agent":
+      return params.permission === "view" || params.permission === "discover" || params.permission === "invoke"
+        ? listRemoteAgentIds(params.subject, params.limit)
         : [];
     case "model_group":
       return params.permission === "use" || params.permission === "view"
