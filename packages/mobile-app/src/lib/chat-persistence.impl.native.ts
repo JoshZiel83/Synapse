@@ -2,12 +2,12 @@ import * as SQLite from "expo-sqlite";
 
 import {
   normalizeChatWorkspaceSnapshot,
-  type ChatWorkspaceSnapshot,
+  toChatWorkspaceQueueState,
 } from "@/lib/chat-data";
 import type { ChatPersistence } from "@/lib/chat-persistence";
 
 const DB_NAME = "synapse-chat.db";
-const TABLE_NAME = "chat_workspace_snapshots";
+const TABLE_NAME = "chat_workspace_states";
 
 let databasePromise: Promise<SQLite.SQLiteDatabase> | null = null;
 
@@ -30,25 +30,31 @@ async function getDatabase() {
 }
 
 export function createChatPersistence(): ChatPersistence {
+  async function loadWorkspaceState(workspaceId: string) {
+    const database = await getDatabase();
+    const row = await database.getFirstAsync<{ payload: string }>(
+      `SELECT payload FROM ${TABLE_NAME} WHERE workspace_id = ? LIMIT 1`,
+      [workspaceId],
+    );
+
+    if (!row?.payload) {
+      return null;
+    }
+
+    try {
+      return normalizeChatWorkspaceSnapshot(workspaceId, JSON.parse(row.payload));
+    } catch {
+      return null;
+    }
+  }
+
   return {
-    async loadWorkspaceSnapshot(workspaceId) {
-      const database = await getDatabase();
-      const row = await database.getFirstAsync<{ payload: string }>(
-        `SELECT payload FROM ${TABLE_NAME} WHERE workspace_id = ? LIMIT 1`,
-        [workspaceId],
-      );
-
-      if (!row?.payload) {
-        return null;
-      }
-
-      try {
-        return normalizeChatWorkspaceSnapshot(workspaceId, JSON.parse(row.payload));
-      } catch {
-        return null;
-      }
+    loadWorkspaceState,
+    async loadWorkspaceQueueState(workspaceId) {
+      const snapshot = await loadWorkspaceState(workspaceId);
+      return snapshot ? toChatWorkspaceQueueState(snapshot) : null;
     },
-    async saveWorkspaceSnapshot(snapshot) {
+    async saveWorkspaceState(snapshot) {
       const database = await getDatabase();
       await database.runAsync(
         `
@@ -65,14 +71,14 @@ export function createChatPersistence(): ChatPersistence {
         ],
       );
     },
-    async deleteWorkspaceSnapshot(workspaceId) {
+    async deleteWorkspaceState(workspaceId) {
       const database = await getDatabase();
       await database.runAsync(
         `DELETE FROM ${TABLE_NAME} WHERE workspace_id = ?`,
         [workspaceId],
       );
     },
-    async clearAllWorkspaceSnapshots() {
+    async clearAllWorkspaceState() {
       const database = await getDatabase();
       await database.execAsync(`DELETE FROM ${TABLE_NAME};`);
     },

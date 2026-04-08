@@ -204,10 +204,13 @@ export function ChatProvider({ children }: { children: ReactNode }) {
 
       if (
         workspaceId &&
-        message.type === "chat:snapshot-updated" &&
+        message.type === "chat:queue-updated" &&
         message.payload.workspaceId === workspaceId
       ) {
-        void chatRuntime.reloadPersistedSnapshot(workspaceId);
+        void chatRuntime
+          .reloadPersistedQueueState(workspaceId)
+          .then(() => chatRuntime.syncFromServer())
+          .catch(() => undefined);
       }
     });
   }, [workspaceId]);
@@ -227,8 +230,31 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    void requestChatServiceWorkerSync("queue-updated");
+    void chatRuntime
+      .awaitPersistence()
+      .then(() => requestChatServiceWorkerSync("queue-updated"))
+      .catch(() => undefined);
   }, [outboxCount, pendingReadCount, sessionStatus, workspaceId]);
+
+  useEffect(() => {
+    if (
+      Platform.OS !== "web" ||
+      sessionStatus !== "authenticated" ||
+      !workspaceId ||
+      !runtimeState.snapshot?.clientInstanceId
+    ) {
+      return;
+    }
+
+    void chatRuntime
+      .awaitPersistence()
+      .then(() => requestChatServiceWorkerSync("client-instance-ready"))
+      .catch(() => undefined);
+  }, [
+    runtimeState.snapshot?.clientInstanceId,
+    sessionStatus,
+    workspaceId,
+  ]);
 
   useWorkspaceWebSocket({
     workspaceId: workspaceId || undefined,

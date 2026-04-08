@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import {
   buildConversationMessageRef,
   normalizeCanonicalContentBlocks,
@@ -75,7 +76,7 @@ export interface ChatServiceError extends Error {
 
 type ConversationKind = "group" | "private" | "virtual";
 type ConversationBoundary = "internal" | "external";
-type ParticipantKind = "workspace_member" | "actor" | "external" | "system";
+type ParticipantKind = "workspace_member" | "actor" | "remote_agent" | "external" | "system";
 type ItemScope = "shared" | "private";
 type ItemSurface = "visible" | "internal";
 type ItemType = "message" | "event" | "summary" | "control";
@@ -114,6 +115,7 @@ type ParticipantRow = {
   participant_kind: ParticipantKind;
   workspace_member_id: string | null;
   actor_id: string | null;
+  remote_agent_id: string | null;
   actor_join_version_id: string | null;
   display_name: string | null;
   role_key: string;
@@ -268,10 +270,13 @@ type ConversationCreateInput = {
 type RegisterClientInstanceInput = {
   workspaceId: string;
   workspaceMemberId: string;
-  clientInstanceId: string;
   platform?: string;
   deviceLabel?: string;
   metadata?: Record<string, unknown>;
+};
+
+type UpdateClientInstanceInput = RegisterClientInstanceInput & {
+  clientInstanceId: string;
 };
 
 type SendMessageInput = {
@@ -284,7 +289,7 @@ type ReadWatermarkInput = {
   workspaceId: string;
   workspaceMemberId: string;
   conversationId: string;
-  clientInstanceId?: string;
+  clientInstanceId: string;
   readUpToSequence: number;
   lastVisibleSequence?: number;
 };
@@ -485,6 +490,11 @@ function participantDisplayName(row: ParticipantRow): string {
       return row.actor_name.trim();
     }
   }
+  if (row.participant_kind === "remote_agent") {
+    if (typeof row.actor_name === "string" && row.actor_name.trim()) {
+      return row.actor_name.trim();
+    }
+  }
   if (
     (row.participant_kind === "external" || row.participant_kind === "system") &&
     typeof row.transport_display_name === "string" &&
@@ -649,14 +659,15 @@ async function getWorkspaceMemberIdentityOrThrow(
 
 async function ensureClientInstance(
   queryable: Queryable,
-  input: RegisterClientInstanceInput,
+  input: UpdateClientInstanceInput,
 ) {
   const existing = await executeSqlOn<{
+    workspace_id: string;
     workspace_member_id: string;
   }>(
     queryable,
     `
-      SELECT workspace_member_id
+      SELECT workspace_id, workspace_member_id
       FROM chat_client_instances
       WHERE id = $1
       LIMIT 1
@@ -664,14 +675,22 @@ async function ensureClientInstance(
     [input.clientInstanceId],
   );
   const owner = existing.rows[0];
+  if (!owner) {
+    throw createChatError(404, "client_instance_not_found", "Client instance not found");
+  }
   if (
-    owner &&
-    typeof owner.workspace_member_id === "string" &&
+    owner.workspace_id !== input.workspaceId ||
     owner.workspace_member_id !== input.workspaceMemberId
   ) {
     throw createChatError(403, "client_instance_forbidden", "Client instance belongs to another workspace member");
   }
+}
 
+async function createClientInstance(
+  queryable: Queryable,
+  input: RegisterClientInstanceInput,
+) {
+  const clientInstanceId = randomUUID();
   await executeSqlOn(
     queryable,
     `
@@ -688,20 +707,40 @@ async function ensureClientInstance(
         updated_at
       )
       VALUES ($1, $2, $3, $4, $5, 'active', $6::jsonb, NOW(), NOW(), NOW())
-      ON CONFLICT (id) DO UPDATE
-      SET workspace_id = EXCLUDED.workspace_id,
-          workspace_member_id = EXCLUDED.workspace_member_id,
-          platform = COALESCE(EXCLUDED.platform, chat_client_instances.platform),
-          device_label = COALESCE(EXCLUDED.device_label, chat_client_instances.device_label),
-          metadata = COALESCE(chat_client_instances.metadata, '{}'::jsonb) || EXCLUDED.metadata,
+    `,
+    [
+      clientInstanceId,
+      input.workspaceId,
+      input.workspaceMemberId,
+      input.platform ?? null,
+      input.deviceLabel ?? null,
+      JSON.stringify(input.metadata ?? {}),
+    ],
+  );
+
+  return clientInstanceId;
+}
+
+async function touchClientInstance(
+  queryable: Queryable,
+  input: UpdateClientInstanceInput,
+) {
+  await ensureClientInstance(queryable, input);
+
+  await executeSqlOn(
+    queryable,
+    `
+      UPDATE chat_client_instances
+      SET platform = COALESCE($2, platform),
+          device_label = COALESCE($3, device_label),
+          metadata = COALESCE(metadata, '{}'::jsonb) || $4::jsonb,
           status = 'active',
           last_seen_at = NOW(),
           updated_at = NOW()
+      WHERE id = $1
     `,
     [
       input.clientInstanceId,
-      input.workspaceId,
-      input.workspaceMemberId,
       input.platform ?? null,
       input.deviceLabel ?? null,
       JSON.stringify(input.metadata ?? {}),
@@ -719,14 +758,14 @@ async function listConversationParticipantRows(
   }
 
   const actorNameExpr = options?.useProfileSnapshot
-    ? "COALESCE(joined_version.name, a.name)"
-    : "a.name";
+    ? "COALESCE(ra.name, joined_version.name, a.name)"
+    : "COALESCE(ra.name, a.name)";
   const actorTitleExpr = options?.useProfileSnapshot
-    ? "COALESCE(joined_version.title, a.title)"
-    : "a.title";
+    ? "COALESCE(ra.title, joined_version.title, a.title)"
+    : "COALESCE(ra.title, a.title)";
   const actorRoleExpr = options?.useProfileSnapshot
-    ? "COALESCE(joined_version.role::text, a.role::text)"
-    : "a.role::text";
+    ? "COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, joined_version.role::text, a.role::text)"
+    : "COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text)";
   const actorCanRepresentExpr = options?.useProfileSnapshot
     ? "COALESCE(joined_version.can_represent_user, a.can_represent_user)"
     : "a.can_represent_user";
@@ -752,6 +791,7 @@ async function listConversationParticipantRows(
         cp.participant_kind,
         cp.workspace_member_id,
         cp.actor_id,
+        cp.remote_agent_id,
         cp.actor_join_version_id,
         cp.display_name,
         cp.role_key,
@@ -764,23 +804,26 @@ async function listConversationParticipantRows(
         ${actorNameExpr} AS actor_name,
         ${actorTitleExpr} AS actor_title,
         ${actorRoleExpr} AS actor_role,
-        COALESCE(
-          (
-            SELECT jsonb_agg(
-              jsonb_build_object(
-                'key', avd.doc_key,
-                'title', avd.title,
-                'visibility', avd.visibility,
-                'priority', avd.priority,
-                'content', avd.content_blocks
+        CASE
+          WHEN ra.id IS NOT NULL THEN '[]'::jsonb
+          ELSE COALESCE(
+            (
+              SELECT jsonb_agg(
+                jsonb_build_object(
+                  'key', avd.doc_key,
+                  'title', avd.title,
+                  'visibility', avd.visibility,
+                  'priority', avd.priority,
+                  'content', avd.content_blocks
+                )
+                ORDER BY avd.priority DESC, avd.created_at ASC
               )
-              ORDER BY avd.priority DESC, avd.created_at ASC
-            )
-            FROM actor_version_docs avd
-            WHERE avd.actor_version_id = ${actorDocVersionExpr}
-          ),
-          '[]'::jsonb
-        ) AS actor_docs,
+              FROM actor_version_docs avd
+              WHERE avd.actor_version_id = ${actorDocVersionExpr}
+            ),
+            '[]'::jsonb
+          )
+        END AS actor_docs,
         ${actorCanRepresentExpr} AS actor_can_represent_user,
         ${actorSpecialtiesExpr} AS actor_specialties,
         ${actorConfigExpr} AS actor_config,
@@ -796,11 +839,12 @@ async function listConversationParticipantRows(
         linked_user.name AS linked_user_name,
         linked_user.avatar_file_id AS linked_user_avatar_file_id,
         ls.id AS session_id,
-        ls.status AS session_status
+        COALESCE(ls.status::text, rab.runtime_state::text) AS session_status
       FROM conversation_participants cp
       LEFT JOIN workspace_members wm ON wm.id = cp.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       LEFT JOIN actors a ON a.id = cp.actor_id
+      LEFT JOIN remote_agents ra ON ra.id = cp.remote_agent_id
       LEFT JOIN actor_versions current_version
         ON current_version.actor_id = a.id
        AND current_version.version = a.current_version
@@ -822,6 +866,8 @@ async function listConversationParticipantRows(
         LIMIT 1
       ) primary_address ON TRUE
       LEFT JOIN users linked_user ON linked_user.id = primary_address.linked_user_id
+      LEFT JOIN remote_agent_bindings rab
+        ON rab.remote_agent_id = cp.remote_agent_id
       LEFT JOIN LATERAL (
         SELECT s.id, s.status
         FROM sessions s
@@ -853,6 +899,7 @@ async function getWorkspaceMemberConversationParticipantRow(
         cp.participant_kind,
         cp.workspace_member_id,
         cp.actor_id,
+        cp.remote_agent_id,
         cp.actor_join_version_id,
         cp.display_name,
         cp.role_key,
@@ -862,16 +909,16 @@ async function getWorkspaceMemberConversationParticipantRow(
         cp.left_at,
         wm.user_id,
         u.name AS user_name,
-        a.name AS actor_name,
-        a.title AS actor_title,
-        a.role::text AS actor_role,
+        COALESCE(ra.name, a.name) AS actor_name,
+        COALESCE(ra.title, a.title) AS actor_title,
+        COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text) AS actor_role,
         '[]'::jsonb AS actor_docs,
         a.can_represent_user AS actor_can_represent_user,
         a.specialties AS actor_specialties,
         a.config AS actor_config,
         a.current_version AS actor_current_version,
-        a.avatar_emoji AS actor_avatar_emoji,
-        a.avatar_file_id AS actor_avatar_file_id,
+        COALESCE(ra.avatar_emoji, a.avatar_emoji) AS actor_avatar_emoji,
+        COALESCE(ra.avatar_file_id, a.avatar_file_id) AS actor_avatar_file_id,
         u.avatar_file_id AS user_avatar_file_id,
         primary_address.id AS transport_address_id,
         primary_address.transport_kind,
@@ -881,11 +928,12 @@ async function getWorkspaceMemberConversationParticipantRow(
         linked_user.name AS linked_user_name,
         linked_user.avatar_file_id AS linked_user_avatar_file_id,
         ls.id AS session_id,
-        ls.status AS session_status
+        COALESCE(ls.status::text, rab.runtime_state::text) AS session_status
       FROM conversation_participants cp
       LEFT JOIN workspace_members wm ON wm.id = cp.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
       LEFT JOIN actors a ON a.id = cp.actor_id
+      LEFT JOIN remote_agents ra ON ra.id = cp.remote_agent_id
       LEFT JOIN LATERAL (
         SELECT
           ta.id,
@@ -902,6 +950,8 @@ async function getWorkspaceMemberConversationParticipantRow(
         LIMIT 1
       ) primary_address ON TRUE
       LEFT JOIN users linked_user ON linked_user.id = primary_address.linked_user_id
+      LEFT JOIN remote_agent_bindings rab
+        ON rab.remote_agent_id = cp.remote_agent_id
       LEFT JOIN LATERAL (
         SELECT s.id, s.status
         FROM sessions s
@@ -2171,6 +2221,7 @@ async function insertParticipant(
     participantKind: ParticipantKind;
     workspaceMemberId?: string;
     actorId?: string;
+    remoteAgentId?: string;
     actorJoinVersionId?: string;
     displayName?: string;
     roleKey: string;
@@ -2188,6 +2239,7 @@ async function insertParticipant(
         participant_kind,
         workspace_member_id,
         actor_id,
+        remote_agent_id,
         actor_join_version_id,
         display_name,
         role_key,
@@ -2195,7 +2247,7 @@ async function insertParticipant(
         metadata,
         joined_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'active', $9::jsonb, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10::jsonb, NOW())
     `,
     [
       participantId,
@@ -2203,6 +2255,7 @@ async function insertParticipant(
       params.participantKind,
       params.workspaceMemberId ?? null,
       params.actorId ?? null,
+      params.remoteAgentId ?? null,
       params.actorJoinVersionId ?? null,
       params.displayName ?? null,
       params.roleKey,
@@ -2291,6 +2344,26 @@ async function loadActorsByIds(
         AND id = ANY($2::uuid[])
     `,
     [workspaceId, actorIds],
+  );
+  return result.rows;
+}
+
+async function loadRemoteAgentsByIds(
+  queryable: Queryable,
+  remoteAgentIds: string[],
+) {
+  if (remoteAgentIds.length === 0) {
+    return [] as Array<{ id: string; name: string }>;
+  }
+  const result = await executeSqlOn<{ id: string; name: string }>(
+    queryable,
+    `
+      SELECT id, name
+      FROM remote_agents
+      WHERE is_active = TRUE
+        AND id = ANY($1::uuid[])
+    `,
+    [remoteAgentIds],
   );
   return result.rows;
 }
@@ -2388,6 +2461,7 @@ export async function createConversationForWorkspaceMember(params: {
   title?: string;
   workspaceMemberIds?: string[];
   actorIds?: string[];
+  remoteAgentIds?: string[];
   externalParticipants?: ConversationCreateExternalParticipantInput[];
   metadata?: Record<string, unknown>;
   queryable?: Queryable;
@@ -2412,6 +2486,7 @@ export async function createConversationForWorkspaceMember(params: {
       ),
     ];
     const actorIds = [...new Set(params.actorIds ?? [])];
+    const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])];
     const externalParticipants = params.externalParticipants ?? [];
 
     if (workspaceMemberIds.length > 0) {
@@ -2452,6 +2527,22 @@ export async function createConversationForWorkspaceMember(params: {
           participantKind: "actor",
           actorId: actor.id,
           displayName: actor.name,
+          queryable,
+        });
+      }
+    }
+
+    if (remoteAgentIds.length > 0) {
+      const remoteAgentRows = await loadRemoteAgentsByIds(queryable, remoteAgentIds);
+      if (remoteAgentRows.length !== remoteAgentIds.length) {
+        throw createChatError(400, "invalid_remote_agent", "One or more remote agents are invalid");
+      }
+      for (const remoteAgent of remoteAgentRows) {
+        await ensureConversationParticipant({
+          conversationId: conversation.id as string,
+          participantKind: "remote_agent",
+          remoteAgentId: remoteAgent.id,
+          displayName: remoteAgent.name,
           queryable,
         });
       }
@@ -2501,6 +2592,7 @@ export async function getConversationParticipant(params: {
   conversationId: string;
   participantId?: string;
   actorId?: string;
+  remoteAgentId?: string;
   workspaceMemberId?: string;
   queryable?: Queryable;
 }) {
@@ -2531,6 +2623,8 @@ export async function getConversationParticipant(params: {
         ? participant.id === params.participantId
         : params.actorId
           ? participant.actor_id === params.actorId
+          : params.remoteAgentId
+            ? participant.remote_agent_id === params.remoteAgentId
           : params.workspaceMemberId
             ? participant.workspace_member_id === params.workspaceMemberId
             : false,
@@ -2543,6 +2637,7 @@ export async function ensureConversationParticipant(params: {
   participantKind: ParticipantKind;
   workspaceMemberId?: string;
   actorId?: string;
+  remoteAgentId?: string;
   displayName?: string;
   actorJoinVersionId?: string;
   roleKey?: string;
@@ -2565,6 +2660,9 @@ export async function ensureConversationParticipant(params: {
   if (params.participantKind === "actor" && !params.actorId) {
     throw new Error("actorId is required for actor participants");
   }
+  if (params.participantKind === "remote_agent" && !params.remoteAgentId) {
+    throw new Error("remoteAgentId is required for remote agent participants");
+  }
 
   const existing = await executeSqlOn<{ id: string; state: string }>(
     queryable,
@@ -2576,9 +2674,10 @@ export async function ensureConversationParticipant(params: {
         AND (
           ($2 = 'workspace_member' AND workspace_member_id = $3)
           OR ($2 = 'actor' AND actor_id = $4)
+          OR ($2 = 'remote_agent' AND remote_agent_id = $5)
           OR (
             $2 IN ('external', 'system')
-            AND COALESCE(display_name, '') = COALESCE($5, '')
+            AND COALESCE(display_name, '') = COALESCE($6, '')
           )
         )
       LIMIT 1
@@ -2588,6 +2687,7 @@ export async function ensureConversationParticipant(params: {
       params.participantKind,
       params.workspaceMemberId ?? null,
       params.actorId ?? null,
+      params.remoteAgentId ?? null,
       params.displayName ?? null,
     ],
   );
@@ -2600,18 +2700,20 @@ export async function ensureConversationParticipant(params: {
         UPDATE conversation_participants
         SET workspace_member_id = COALESCE($2, workspace_member_id),
             actor_id = COALESCE($3, actor_id),
-            actor_join_version_id = COALESCE($4, actor_join_version_id),
-            display_name = COALESCE($5, display_name),
-            role_key = COALESCE($6, role_key),
+            remote_agent_id = COALESCE($4, remote_agent_id),
+            actor_join_version_id = COALESCE($5, actor_join_version_id),
+            display_name = COALESCE($6, display_name),
+            role_key = COALESCE($7, role_key),
             state = 'active',
             left_at = NULL,
-            metadata = COALESCE(conversation_participants.metadata, '{}'::jsonb) || $7::jsonb
+            metadata = COALESCE(conversation_participants.metadata, '{}'::jsonb) || $8::jsonb
         WHERE id = $1
       `,
       [
         existingId,
         params.workspaceMemberId ?? null,
         params.actorId ?? null,
+        params.remoteAgentId ?? null,
         params.actorJoinVersionId ?? null,
         params.displayName ?? null,
         params.roleKey ?? "member",
@@ -2654,6 +2756,7 @@ export async function ensureConversationParticipant(params: {
     participantKind: params.participantKind,
     workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
+    remoteAgentId: params.remoteAgentId,
     actorJoinVersionId: params.actorJoinVersionId,
     displayName: params.displayName,
     roleKey: params.roleKey ?? "member",
@@ -2673,12 +2776,14 @@ export async function addConversationParticipants(params: {
   conversationId: string;
   workspaceMemberIds?: string[];
   actorIds?: string[];
+  remoteAgentIds?: string[];
   externalParticipants?: ConversationCreateExternalParticipantInput[];
   queryable?: Queryable;
 }) {
   const executeAdd = async (queryable: Queryable) => {
     const workspaceMemberIds = [...new Set(params.workspaceMemberIds ?? [])];
     const actorIds = [...new Set(params.actorIds ?? [])];
+    const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])];
     const externalParticipants = params.externalParticipants ?? [];
 
     if (workspaceMemberIds.length > 0) {
@@ -2717,6 +2822,22 @@ export async function addConversationParticipants(params: {
           participantKind: "actor",
           actorId: actor.id,
           displayName: actor.name,
+          queryable,
+        });
+      }
+    }
+
+    if (remoteAgentIds.length > 0) {
+      const remoteAgentRows = await loadRemoteAgentsByIds(queryable, remoteAgentIds);
+      if (remoteAgentRows.length !== remoteAgentIds.length) {
+        throw createChatError(400, "invalid_remote_agent", "One or more remote agents are invalid");
+      }
+      for (const remoteAgent of remoteAgentRows) {
+        await ensureConversationParticipant({
+          conversationId: params.conversationId,
+          participantKind: "remote_agent",
+          remoteAgentId: remoteAgent.id,
+          displayName: remoteAgent.name,
           queryable,
         });
       }
@@ -3019,6 +3140,15 @@ export async function createConversationItem(params: {
         restrictedAudienceParticipantIds:
           params.restrictedAudienceParticipantIds,
       });
+
+      const { createRemoteAgentDeliveriesForItem } = await import("../remote-agents/service.js");
+      await createRemoteAgentDeliveriesForItem({
+        workspaceId: params.workspaceId,
+        conversationId: params.conversationId,
+        itemId: item.id,
+        authorParticipantId: params.authorParticipantId,
+        queryable,
+      });
     }
 
     return item;
@@ -3075,6 +3205,8 @@ export async function sendConversationMessageFromParticipant(params: {
     conversationId: params.conversationId,
     itemId: item.id,
   });
+  const { notifyRemoteAgentDeliveriesForConversation } = await import("../remote-agents/service.js");
+  await notifyRemoteAgentDeliveriesForConversation(params.conversationId);
   return item;
 }
 
@@ -3359,6 +3491,7 @@ function participantRowToEntityRef(
     participantType: participant.participant_kind,
     workspaceMemberId: participant.workspace_member_id ?? undefined,
     actorId: participant.actor_id ?? undefined,
+    remoteAgentId: participant.remote_agent_id ?? undefined,
     externalUserKey:
       transportKind && participant.transport_external_id
         ? `${transportKind}:${participant.transport_external_id}`
@@ -3897,7 +4030,31 @@ export async function listConversationRealtimeRecipients(
   }));
 }
 
-export async function registerChatClientInstance(params: {
+export async function createChatClientInstance(params: {
+  workspaceId: string;
+  userId: string;
+  platform?: string;
+  deviceLabel?: string;
+  metadata?: Record<string, unknown>;
+}): Promise<ChatClientInstanceRegistrationResponse> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
+  const clientInstanceId = await transaction(async (client) =>
+    createClientInstance(client, {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
+      platform: params.platform,
+      deviceLabel: params.deviceLabel,
+      metadata: params.metadata,
+    }),
+  );
+
+  return {
+    clientInstanceId,
+    workspaceMemberId: identity.workspaceMemberId,
+  };
+}
+
+export async function touchChatClientInstance(params: {
   workspaceId: string;
   userId: string;
   clientInstanceId: string;
@@ -3907,7 +4064,7 @@ export async function registerChatClientInstance(params: {
 }): Promise<ChatClientInstanceRegistrationResponse> {
   const identity = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
   await transaction(async (client) => {
-    await ensureClientInstance(client, {
+    await touchClientInstance(client, {
       workspaceId: params.workspaceId,
       workspaceMemberId: identity.workspaceMemberId,
       clientInstanceId: params.clientInstanceId,
@@ -3932,6 +4089,7 @@ export async function createChatConversation(params: {
   title?: string;
   workspaceMemberIds?: string[];
   actorIds?: string[];
+  remoteAgentIds?: string[];
   externalParticipants?: ConversationCreateExternalParticipantInput[];
   metadata?: Record<string, unknown>;
 }): Promise<ChatConversationCreateResponse> {
@@ -3939,6 +4097,7 @@ export async function createChatConversation(params: {
   const boundary = params.boundary ?? "internal";
   const workspaceMemberIds = [...new Set([creator.workspaceMemberId, ...(params.workspaceMemberIds ?? [])])];
   const actorIds = [...new Set(params.actorIds ?? [])];
+  const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])];
   const externalParticipants = params.externalParticipants ?? [];
 
   if (boundary === "internal" && externalParticipants.length > 0) {
@@ -3969,6 +4128,11 @@ export async function createChatConversation(params: {
     const actorRows = await loadActorsByIds(client, params.workspaceId, actorIds);
     if (actorRows.length !== actorIds.length) {
       throw createChatError(400, "invalid_actor", "One or more actors are invalid");
+    }
+
+    const remoteAgentRows = await loadRemoteAgentsByIds(client, remoteAgentIds);
+    if (remoteAgentRows.length !== remoteAgentIds.length) {
+      throw createChatError(400, "invalid_remote_agent", "One or more remote agents are invalid");
     }
 
     const addressIds = externalParticipants.flatMap((participant) => participant.transportAddressIds ?? []);
@@ -4024,6 +4188,17 @@ export async function createChatConversation(params: {
         participantKind: "actor",
         actorId: actor.id,
         displayName: actor.name,
+        roleKey: "member",
+        metadata: {},
+      });
+    }
+
+    for (const remoteAgent of remoteAgentRows) {
+      await insertParticipant(client, {
+        conversationId: newConversationId,
+        participantKind: "remote_agent",
+        remoteAgentId: remoteAgent.id,
+        displayName: remoteAgent.name,
         roleKey: "member",
         metadata: {},
       });
@@ -4181,7 +4356,7 @@ export async function getChatConversationMessages(params: {
   afterSequence?: number;
   beforeSequence?: number;
   limit?: number;
-  clientInstanceId?: string;
+  clientInstanceId: string;
 }): Promise<ChatConversationMessagesPage> {
   const identity = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
   const access = await requireConversationAccess(
@@ -4190,16 +4365,14 @@ export async function getChatConversationMessages(params: {
     identity.workspaceMemberId,
   );
 
-  if (params.clientInstanceId) {
-    await ensureClientInstance(
-      rootQueryable(),
-      {
-        workspaceId: params.workspaceId,
-        workspaceMemberId: identity.workspaceMemberId,
-        clientInstanceId: params.clientInstanceId,
-      },
-    );
-  }
+  await ensureClientInstance(
+    rootQueryable(),
+    {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: identity.workspaceMemberId,
+      clientInstanceId: params.clientInstanceId,
+    },
+  );
 
   const limit = Math.min(Math.max(params.limit ?? 100, 1), 200);
   let rows: ItemRow[] = [];
@@ -4386,61 +4559,256 @@ export async function getChatConversationMessages(params: {
     [params.conversationId, access.participant.id],
   );
 
-  let deviceState: ChatDeviceState | undefined;
-  if (params.clientInstanceId) {
-    const deviceStateResult = await executeSql<{
-      client_instance_id: string;
-      conversation_id: string;
-      last_visible_sequence: string | number;
-      last_inbox_seq: string | number;
-      last_opened_at: string | Date | null;
-      draft_payload: unknown;
-    }>(
-      `
-        SELECT
-          client_instance_id,
-          conversation_id,
-          last_visible_sequence,
-          last_inbox_seq,
-          last_opened_at,
-          draft_payload
-        FROM conversation_device_states
-        WHERE conversation_id = $1
-          AND client_instance_id = $2
-        LIMIT 1
-      `,
-      [params.conversationId, params.clientInstanceId],
-    );
-    const row = deviceStateResult.rows[0];
-    deviceState = row
-      ? {
-          clientInstanceId: row.client_instance_id,
-          conversationId: row.conversation_id,
-          lastVisibleSequence: toNumber(row.last_visible_sequence),
-          lastInboxSeq: toNumber(row.last_inbox_seq),
-          lastOpenedAt: row.last_opened_at ? toIso(row.last_opened_at) : undefined,
-          draftPayload: asJsonRecord(row.draft_payload),
-        }
-      : {
-          clientInstanceId: params.clientInstanceId,
-          conversationId: params.conversationId,
-          lastVisibleSequence: 0,
-          lastInboxSeq: 0,
-          draftPayload: {},
-        };
-  }
+  const deviceStateResult = await executeSql<{
+    client_instance_id: string;
+    conversation_id: string;
+    last_visible_sequence: string | number;
+    last_inbox_seq: string | number;
+    last_opened_at: string | Date | null;
+    draft_payload: unknown;
+  }>(
+    `
+      SELECT
+        client_instance_id,
+        conversation_id,
+        last_visible_sequence,
+        last_inbox_seq,
+        last_opened_at,
+        draft_payload
+      FROM conversation_device_states
+      WHERE conversation_id = $1
+        AND client_instance_id = $2
+      LIMIT 1
+    `,
+    [params.conversationId, params.clientInstanceId],
+  );
+  const row = deviceStateResult.rows[0];
+  const deviceState: ChatDeviceState = row
+    ? {
+        clientInstanceId: row.client_instance_id,
+        conversationId: row.conversation_id,
+        lastVisibleSequence: toNumber(row.last_visible_sequence),
+        lastInboxSeq: toNumber(row.last_inbox_seq),
+        lastOpenedAt: row.last_opened_at ? toIso(row.last_opened_at) : undefined,
+        draftPayload: asJsonRecord(row.draft_payload),
+      }
+    : {
+        clientInstanceId: params.clientInstanceId,
+        conversationId: params.conversationId,
+        lastVisibleSequence: 0,
+        lastInboxSeq: 0,
+        draftPayload: {},
+      };
 
   const runtimeMap = await getConversationRuntimeMap([params.conversationId]);
+  const remoteAgentIds = conversation.participants
+    .filter((participant) => participant.participantType === "remote_agent")
+    .map((participant) => participant.remoteAgentId)
+    .filter((value): value is string => Boolean(value));
+  const runtimeByRemoteAgent: Record<string, any> = {};
+  if (remoteAgentIds.length > 0) {
+    const { loadRemoteAgentRuntimeSnapshot } = await import(
+      "../remote-agents/service.js"
+    );
+    for (const remoteAgentId of remoteAgentIds) {
+      const snapshot = await loadRemoteAgentRuntimeSnapshot(remoteAgentId);
+      if (snapshot) {
+        runtimeByRemoteAgent[remoteAgentId] = snapshot;
+      }
+    }
+  }
 
   return {
     conversation,
     items: enrichedItems,
     runtimeByActor: runtimeMap[params.conversationId] || {},
+    runtimeByRemoteAgent,
     participantReadWatermarkSequence: toNumber(readState.rows[0]?.read_watermark_sequence),
     deviceState,
     hasMoreBefore,
     hasMoreAfter,
   };
+}
+
+export async function requireRemoteAgentConversationAccess(
+  queryable: Queryable,
+  conversationId: string,
+  remoteAgentId: string,
+) {
+  const participant = await getConversationParticipant({
+    conversationId,
+    remoteAgentId,
+    queryable,
+  });
+  if (!participant || participant.state !== "active") {
+    throw createChatError(403, "conversation_access_denied", "Remote agent is not an active participant in this conversation");
+  }
+  return { participant };
+}
+
+export async function listVisibleConversationItemsForParticipant(params: {
+  conversationId: string;
+  participantId: string;
+  afterSequence?: number;
+  beforeSequence?: number;
+  limit?: number;
+  queryable?: Queryable;
+}) {
+  const queryable = params.queryable ?? rootQueryable();
+  const limit = Math.min(Math.max(params.limit ?? 100, 1), 200);
+  let rows: ItemRow[] = [];
+
+  if (typeof params.afterSequence === "number") {
+    const result = await executeSqlOn<ItemRow>(
+      queryable,
+      `
+        SELECT
+          id,
+          conversation_id,
+          session_id,
+          turn_id,
+          client_message_id,
+          scope,
+          surface,
+          item_type,
+          subtype,
+          role,
+          author_participant_id,
+          reply_to_item_id,
+          caused_by_item_id,
+          event_payload,
+          event_timeline_policy,
+          event_context_policy,
+          metadata,
+          sequence,
+          created_at
+        FROM conversation_items
+        WHERE conversation_id = $1
+          AND scope = 'shared'
+          AND surface = 'visible'
+          AND (
+            NOT EXISTS (
+              SELECT 1
+              FROM conversation_item_targets cit0
+              WHERE cit0.item_id = conversation_items.id
+            )
+            OR conversation_items.author_participant_id = $3
+            OR EXISTS (
+              SELECT 1
+              FROM conversation_item_targets cit
+              WHERE cit.item_id = conversation_items.id
+                AND cit.target_participant_id = $3
+            )
+          )
+          AND sequence > $2
+        ORDER BY sequence ASC
+        LIMIT $4
+      `,
+      [params.conversationId, params.afterSequence, params.participantId, limit],
+    );
+    rows = result.rows;
+  } else if (typeof params.beforeSequence === "number") {
+    const result = await executeSqlOn<ItemRow>(
+      queryable,
+      `
+        SELECT
+          id,
+          conversation_id,
+          session_id,
+          turn_id,
+          client_message_id,
+          scope,
+          surface,
+          item_type,
+          subtype,
+          role,
+          author_participant_id,
+          reply_to_item_id,
+          caused_by_item_id,
+          event_payload,
+          event_timeline_policy,
+          event_context_policy,
+          metadata,
+          sequence,
+          created_at
+        FROM conversation_items
+        WHERE conversation_id = $1
+          AND scope = 'shared'
+          AND surface = 'visible'
+          AND (
+            NOT EXISTS (
+              SELECT 1
+              FROM conversation_item_targets cit0
+              WHERE cit0.item_id = conversation_items.id
+            )
+            OR conversation_items.author_participant_id = $3
+            OR EXISTS (
+              SELECT 1
+              FROM conversation_item_targets cit
+              WHERE cit.item_id = conversation_items.id
+                AND cit.target_participant_id = $3
+            )
+          )
+          AND sequence < $2
+        ORDER BY sequence DESC
+        LIMIT $4
+      `,
+      [params.conversationId, params.beforeSequence, params.participantId, limit],
+    );
+    rows = [...result.rows].reverse();
+  } else {
+    const result = await executeSqlOn<ItemRow>(
+      queryable,
+      `
+        SELECT
+          id,
+          conversation_id,
+          session_id,
+          turn_id,
+          client_message_id,
+          scope,
+          surface,
+          item_type,
+          subtype,
+          role,
+          author_participant_id,
+          reply_to_item_id,
+          caused_by_item_id,
+          event_payload,
+          event_timeline_policy,
+          event_context_policy,
+          metadata,
+          sequence,
+          created_at
+        FROM conversation_items
+        WHERE conversation_id = $1
+          AND scope = 'shared'
+          AND surface = 'visible'
+          AND (
+            NOT EXISTS (
+              SELECT 1
+              FROM conversation_item_targets cit0
+              WHERE cit0.item_id = conversation_items.id
+            )
+            OR conversation_items.author_participant_id = $2
+            OR EXISTS (
+              SELECT 1
+              FROM conversation_item_targets cit
+              WHERE cit.item_id = conversation_items.id
+                AND cit.target_participant_id = $2
+            )
+          )
+        ORDER BY sequence DESC
+        LIMIT $3
+      `,
+      [params.conversationId, params.participantId, limit],
+    );
+    rows = [...result.rows].reverse();
+  }
+
+  return buildChatConversationItems(queryable, rows, {
+    includeTransportDeliveries: true,
+  });
 }
 
 export async function getChatConversationActorRuntimeTurnDetail(params: {
@@ -4491,13 +4859,11 @@ export async function sendChatConversationMessage(
       params.workspaceMemberId,
     );
 
-    if (params.clientInstanceId) {
-      await ensureClientInstance(client, {
-        workspaceId: params.workspaceId,
-        workspaceMemberId: params.workspaceMemberId,
-        clientInstanceId: params.clientInstanceId,
-      });
-    }
+    await ensureClientInstance(client, {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: params.workspaceMemberId,
+      clientInstanceId: params.clientInstanceId,
+    });
 
     return sendConversationMessageFromParticipant({
       workspaceId: params.workspaceId,
@@ -4517,6 +4883,10 @@ export async function sendChatConversationMessage(
     conversationId: params.conversationId,
     itemId: item.id,
   });
+  const { notifyRemoteAgentDeliveriesForConversation } = await import(
+    "../remote-agents/service.js"
+  );
+  await notifyRemoteAgentDeliveriesForConversation(params.conversationId);
 
   return {
     item,
@@ -4533,13 +4903,11 @@ export async function updateChatConversationReadWatermark(
       params.workspaceMemberId,
     );
 
-    if (params.clientInstanceId) {
-      await ensureClientInstance(client, {
-        workspaceId: params.workspaceId,
-        workspaceMemberId: params.workspaceMemberId,
-        clientInstanceId: params.clientInstanceId,
-      });
-    }
+    await ensureClientInstance(client, {
+      workspaceId: params.workspaceId,
+      workspaceMemberId: params.workspaceMemberId,
+      clientInstanceId: params.clientInstanceId,
+    });
 
     const maxSequence = await getConversationSequenceMax(client, params.conversationId);
     const requestedSequence = Math.min(Math.max(params.readUpToSequence, 0), maxSequence);
@@ -4590,7 +4958,10 @@ export async function updateChatConversationReadWatermark(
     );
 
     if (params.clientInstanceId) {
-      const lastVisibleSequence = Math.max(params.lastVisibleSequence ?? nextSequence, nextSequence);
+      const lastVisibleSequence = Math.min(
+        maxSequence,
+        Math.max(params.lastVisibleSequence ?? nextSequence, nextSequence),
+      );
       await executeSqlOn(
         client,
         `

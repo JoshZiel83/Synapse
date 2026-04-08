@@ -3,12 +3,6 @@ import type pg from 'pg';
 import type { WorkspaceInvitesTrustLevel } from '../../infrastructure/database/generated/db.js';
 import { query, transaction } from '../../infrastructure/database/index.js';
 import {
-  authzEnabled,
-  flushAuthzOutboxEntries,
-  queueAuthzRelationships,
-  touchWorkspaceMemberMembership,
-} from '../../infrastructure/authz/index.js';
-import {
   db,
   executeCompiledQuery,
   executeTakeFirst,
@@ -157,39 +151,12 @@ export async function redeemInvite(token: string, userId: string) {
         .where('id', '=', invite.id),
     );
 
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      [
-        ...touchWorkspaceMemberMembership({
-          workspaceId: invite.workspace_id,
-          workspaceMemberId: memberRow.id,
-          userId,
-          relation: invite.trust_level,
-        }),
-      ],
-      {
-        source: 'workspace.redeem_invite',
-        workspaceId: invite.workspace_id,
-        userId,
-        trustLevel: invite.trust_level,
-      },
-    );
-
     return {
       workspaceId: invite.workspace_id,
       workspaceName: workspace?.name,
       trustLevel: invite.trust_level,
-      authzEntryIds,
     };
   });
-
-  if (result.authzEntryIds.length > 0) {
-    try {
-      await flushAuthzOutboxEntries(result.authzEntryIds);
-    } catch (error) {
-      console.error('[authz] Failed to flush workspace.redeem_invite relationship updates:', error);
-    }
-  }
 
   return {
     workspaceId: result.workspaceId,

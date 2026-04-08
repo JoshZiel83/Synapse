@@ -3,19 +3,20 @@
   "main": "expo-router/entry",
   "version": "1.0.0",
   "scripts": {
+    "build:chat-worker": "node ./scripts/build-chat-worker.mjs",
     "sync:shared": "./node_modules/.bin/tsc -p ../shared/tsconfig.json",
     "prestart": "npm run sync:shared",
     "prestart:clear": "npm run sync:shared",
     "preandroid": "npm run sync:shared",
     "preios": "npm run sync:shared",
-    "preweb": "npm run sync:shared",
+    "preweb": "npm run sync:shared && npm run build:chat-worker",
     "pretypecheck": "npm run sync:shared",
     "start": "expo start",
     "start:clear": "expo start --clear",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "web:export": "expo export --platform web",
+    "web:export": "npm run build:chat-worker && expo export --platform web",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
@@ -43,6 +44,7 @@
     "expo-task-manager": "~14.0.9",
     "expo-video": "~3.0.16",
     "expo-web-browser": "~15.0.10",
+    "idb": "^8.0.3",
     "katex": "^0.16.44",
     "markdown-it": "^14.1.1",
     "markdown-it-katex": "^2.0.3",
@@ -62,6 +64,7 @@
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
+    "esbuild": "^0.28.0",
     "react-test-renderer": "19.1.0",
     "typescript": "~5.9.2"
   },

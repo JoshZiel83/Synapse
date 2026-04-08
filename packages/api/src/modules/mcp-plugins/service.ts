@@ -30,13 +30,6 @@ import type {
 } from "@synapse/shared";
 import { sql, type RawBuilder } from "kysely";
 import { encryptSensitiveFields, isEncrypted } from "../../infrastructure/crypto/index.js";
-import {
-  deleteRelation,
-  flushAuthzOutboxEntries,
-  queueAuthzRelationships,
-  touchRelation,
-  type AuthzRelationMutation,
-} from "../../infrastructure/authz/index.js";
 import { query, transaction } from "../../infrastructure/database/index.js";
 import {
   getWorkspaceCapabilityConversationTypeMask,
@@ -65,14 +58,13 @@ import {
   normalizeFeishuFeatureKeys,
 } from "./feishu/features.js";
 import {
-  buildResourceAccessBindingRef,
-  buildResourceAccessAuthzMutations,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   readAccessBindingTarget,
   resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js";
+import { buildResourceAccessBindingInsertValues } from "../access/binding-storage.js";
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
@@ -831,57 +823,16 @@ function normalizeAttachmentTarget(input: {
   }
 }
 
-function buildPluginInstallationAuthzMutations(params: {
-  installationId: string;
-  workspaceId: string;
-  ownerWorkspaceMemberId?: string | null;
-  operation: "touch" | "delete";
-}) {
-  const mutate = params.operation === "delete" ? deleteRelation : touchRelation;
-  const relations: AuthzRelationMutation[] = [
-    mutate(
-      "plugin_installation",
-      params.installationId,
-      "workspace",
-      "workspace",
-      params.workspaceId,
-    ),
-  ];
-
-  if (params.ownerWorkspaceMemberId) {
-    relations.push(
-      mutate(
-        "plugin_installation",
-        params.installationId,
-        "owner",
-        "workspace_member",
-        params.ownerWorkspaceMemberId,
-      ),
-    );
-  }
-
-  return relations;
-}
-
 function buildInstallationAccessRow(row: AccessBindingRow): InstallationAccessRow {
   const target = readAccessBindingTarget(row);
   return {
     ...row,
     installation_id: row.resource_id,
-    access_target_type: target.bindScope,
-    actor_id: target.actorId,
-    conversation_id: target.conversationId,
-    workspace_member_id: target.workspaceMemberId,
+    access_target_type: target.targetType,
+    actor_id: target.subjectActorId,
+    conversation_id: target.subjectConversationId,
+    workspace_member_id: null,
   };
-}
-
-async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (entryIds.length === 0) return;
-  try {
-    await flushAuthzOutboxEntries(entryIds);
-  } catch (error) {
-    console.error(`[authz] Failed to flush ${source}:`, error);
-  }
 }
 
 async function loadPluginCatalogRows(
@@ -1009,10 +960,10 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
       "binding.installed_skill_id",
       "binding.plugin_installation_id",
       "binding.relay_capability_id",
+      "binding.automation_event_source_id",
       sql<string>`binding.plugin_installation_id::text`.as("resource_id"),
       "binding.target_type",
       "binding.subject_workspace_id",
-      "binding.subject_workspace_member_id",
       sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
         "subject_actor_id",
       ),
@@ -1021,7 +972,6 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
       ),
       "binding.subject_conversation_actor_context_id",
       "binding.conversation_type_mask_override",
-      "binding.granted_permissions",
       "binding.status",
       "binding.created_by_workspace_member_id",
       "binding.reason",
@@ -1934,34 +1884,23 @@ export async function installPluginUnified(data: {
       workspaceId: data.workspaceId,
       target: defaultAccessTargetForAttachment(data.attachmentTarget),
     });
-    const insertedAccess = await executeTakeFirst<{ id: string }>(
+    await executeTakeFirst<{ id: string }>(
       client,
       db
         .insertInto("resource_access_bindings")
-        .values({
-          workspace_id: data.workspaceId,
-          ...buildResourceAccessBindingRef({
+        .values(
+          buildResourceAccessBindingInsertValues({
+            workspaceId: data.workspaceId,
             resourceType: "plugin_installation",
             resourceId: installationId,
+            target: initialAccessTarget,
+            createdByWorkspaceMemberId:
+              data.installedByWorkspaceMemberId || null,
+            reason: plugin.authorization?.reason || null,
           }),
-          target_type: initialAccessTarget.targetType,
-          subject_workspace_id: initialAccessTarget.subjectWorkspaceId,
-          subject_workspace_member_id:
-            initialAccessTarget.subjectWorkspaceMemberId,
-          subject_actor_id: initialAccessTarget.subjectActorId,
-          subject_conversation_id: initialAccessTarget.subjectConversationId,
-          subject_conversation_actor_context_id:
-            initialAccessTarget.subjectConversationActorContextId,
-          granted_permissions: approvedRuntimePermissions,
-          status: "active",
-          created_by_workspace_member_id:
-            data.installedByWorkspaceMemberId || null,
-          reason: plugin.authorization?.reason || null,
-        })
+        )
         .returning("id"),
     );
-    const initialAccessId = insertedAccess!.id;
-
     await executeCompiledQuery(
       client,
       db
@@ -1985,38 +1924,11 @@ export async function installPluginUnified(data: {
         .where("id", "=", plugin.id),
     );
 
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      [
-        ...buildPluginInstallationAuthzMutations({
-          installationId,
-          workspaceId: data.workspaceId,
-          ownerWorkspaceMemberId: target.workspaceMemberId,
-          operation: "touch",
-        }),
-        ...buildResourceAccessAuthzMutations({
-            resourceType: "plugin_installation",
-            resourceId: installationId,
-            workspaceId: data.workspaceId,
-            target: initialAccessTarget,
-            operation: "touch",
-          }),
-      ],
-      {
-        source: "plugin.install",
-        workspaceId: data.workspaceId,
-        installationId,
-        accessBindingId: initialAccessId,
-      },
-    );
-
     return {
       installationId,
-      authzEntryIds,
     };
   });
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, "plugin.install");
   await incrementMcpVersion(data.workspaceId);
 
   const installed = await getInstallation(data.workspaceId, result.installationId);
@@ -2037,37 +1949,7 @@ export async function uninstallPluginUnified(installId: string) {
   if (!installation) {
     throw new McpPluginError(404, "Installation not found");
   }
-
-  const accessRows = await listAccessRows(installId, true);
-
-  const authzEntryIds = await transaction(async (client) => {
-    const ids = await queueAuthzRelationships(
-      client,
-      [
-        ...buildPluginInstallationAuthzMutations({
-          installationId: installId,
-          workspaceId: installation.workspace_id,
-          ownerWorkspaceMemberId: null,
-          operation: "delete",
-        }),
-        ...accessRows
-          .filter((binding) => binding.status === "active")
-          .flatMap((binding) =>
-            buildResourceAccessAuthzMutations({
-              resourceType: "plugin_installation",
-              resourceId: installId,
-              target: readAccessBindingTarget(binding),
-              operation: "delete",
-            }),
-          ),
-      ],
-      {
-        source: "plugin.uninstall",
-        workspaceId: installation.workspace_id,
-        installationId: installId,
-      },
-    );
-
+  await transaction(async (client) => {
     await executeCompiledQuery(
       client,
       db
@@ -2079,11 +1961,8 @@ export async function uninstallPluginUnified(installId: string) {
       client,
       db.deleteFrom("plugin_installations").where("id", "=", installId),
     );
-
-    return ids;
   });
 
-  await flushQueuedAuthzEntries(authzEntryIds, "plugin.uninstall");
   await incrementMcpVersion(installation.workspace_id);
 
   return {
@@ -2258,7 +2137,7 @@ export async function updateInstallation(
     }
   }
 
-  const authzEntryIds = await transaction(async (client) => {
+  await transaction(async (client) => {
     const run = client.query.bind(client) as QueryRunner;
 
     const resolvedConfig =
@@ -2345,10 +2224,8 @@ export async function updateInstallation(
       );
     }
 
-    return [] as string[];
   });
 
-  await flushQueuedAuthzEntries(authzEntryIds, "plugin.installation.update");
   await incrementMcpVersion(workspaceId);
 
   if (data.configData || data.authSessionIds) {
@@ -2415,7 +2292,6 @@ export async function grantPluginInstallationAccess(input: {
   workspaceId: string;
   installationId: string;
   accessTarget?: CapabilityAccessTarget;
-  permissions?: string[];
   conversationTypeMaskOverride?: number | null;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
@@ -2449,8 +2325,8 @@ export async function grantPluginInstallationAccess(input: {
     });
   await validateConversationScopedAccessTarget({
     targetType: accessTarget.targetType,
-    conversationId: accessTarget.conversationId,
-    actorId: accessTarget.actorId,
+    conversationId: accessTarget.subjectConversationId,
+    actorId: accessTarget.subjectActorId,
     effectiveConversationTypeMask,
     buildError: (message) => new McpPluginError(400, message),
   });
@@ -2459,9 +2335,8 @@ export async function grantPluginInstallationAccess(input: {
     (entry) =>
       entry.status === "active" &&
       entry.access_target_type === accessTarget.targetType &&
-      entry.actor_id === accessTarget.actorId &&
-      entry.conversation_id === accessTarget.conversationId &&
-      entry.workspace_member_id === accessTarget.workspaceMemberId,
+      entry.actor_id === accessTarget.subjectActorId &&
+      entry.conversation_id === accessTarget.subjectConversationId,
   );
   if (existing) {
     return mapAccessRowToGrant(
@@ -2481,28 +2356,19 @@ export async function grantPluginInstallationAccess(input: {
       client,
       db
         .insertInto("resource_access_bindings")
-        .values({
-          workspace_id: input.workspaceId,
-          ...buildResourceAccessBindingRef({
+        .values(
+          buildResourceAccessBindingInsertValues({
+            workspaceId: input.workspaceId,
             resourceType: "plugin_installation",
             resourceId: input.installationId,
+            target: accessTarget,
+            conversationTypeMaskOverride:
+              input.conversationTypeMaskOverride ?? null,
+            createdByWorkspaceMemberId:
+              input.grantedByWorkspaceMemberId || null,
+            reason: input.reason || plugin.authorization?.reason || null,
           }),
-          target_type: accessTarget.targetType,
-          subject_workspace_id: accessTarget.subjectWorkspaceId,
-          subject_workspace_member_id:
-            accessTarget.subjectWorkspaceMemberId,
-          subject_actor_id: accessTarget.subjectActorId,
-          subject_conversation_id: accessTarget.subjectConversationId,
-          subject_conversation_actor_context_id:
-            accessTarget.subjectConversationActorContextId,
-          conversation_type_mask_override:
-            input.conversationTypeMaskOverride ?? null,
-          granted_permissions: input.permissions || [],
-          status: "active",
-          created_by_workspace_member_id:
-            input.grantedByWorkspaceMemberId || null,
-          reason: input.reason || plugin.authorization?.reason || null,
-        })
+        )
         .returningAll(),
     );
 
@@ -2513,29 +2379,11 @@ export async function grantPluginInstallationAccess(input: {
       subject_conversation_actor_context_id:
         accessTarget.subjectConversationActorContextId,
     });
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      buildResourceAccessAuthzMutations({
-        resourceType: "plugin_installation",
-        resourceId: input.installationId,
-        target: accessTarget,
-        operation: "touch",
-      }),
-      {
-        source: "plugin.access.grant",
-        workspaceId: input.workspaceId,
-        installationId: input.installationId,
-        accessBindingId: accessRow.id,
-      },
-    );
-
     return {
       accessRow,
-      authzEntryIds,
     };
   });
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, "plugin.access.grant");
   await incrementMcpVersion(input.workspaceId);
 
   return mapAccessRowToGrant(
@@ -2646,23 +2494,7 @@ export async function revokePluginInstallationAccess(input: {
     return mapAccessRowToGrant(accessRow, [], undefined);
   }
 
-  const authzEntryIds = await transaction(async (client) => {
-    const ids = await queueAuthzRelationships(
-      client,
-      buildResourceAccessAuthzMutations({
-        resourceType: "plugin_installation",
-        resourceId: accessRow.installation_id,
-        target: readAccessBindingTarget(accessRow),
-        operation: "delete",
-      }),
-      {
-        source: "plugin.access.revoke",
-        workspaceId: input.workspaceId,
-        installationId: input.installationId,
-        accessBindingId: accessRow.id,
-      },
-    );
-
+  await transaction(async (client) => {
     await executeCompiledQuery(
       client,
       db
@@ -2673,11 +2505,8 @@ export async function revokePluginInstallationAccess(input: {
         })
         .where("id", "=", accessRow.id),
     );
-
-    return ids;
   });
 
-  await flushQueuedAuthzEntries(authzEntryIds, "plugin.access.revoke");
   await incrementMcpVersion(input.workspaceId);
 
   return {

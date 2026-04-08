@@ -84,7 +84,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const clearSession = useCallback(async () => {
     await persistSessionToken(null);
-    await chatPersistence.clearAllWorkspaceSnapshots();
+    await chatPersistence.clearAllWorkspaceState();
     applySession({ token: null }, setState);
   }, []);
 

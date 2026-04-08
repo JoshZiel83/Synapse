@@ -670,6 +670,10 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
     conversationId: binding.conversationId,
     itemId: item.id,
   });
+  const { notifyRemoteAgentDeliveriesForConversation } = await import(
+    "../remote-agents/service.js"
+  );
+  await notifyRemoteAgentDeliveriesForConversation(binding.conversationId);
 
   return link;
 }

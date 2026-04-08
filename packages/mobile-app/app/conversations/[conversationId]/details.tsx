@@ -24,6 +24,7 @@ export default function ConversationDetailScreen() {
   const router = useRouter();
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
   const {
+    clientInstanceId,
     getConversation,
     refreshConversation,
     status,
@@ -37,12 +38,17 @@ export default function ConversationDetailScreen() {
     : null;
 
   useEffect(() => {
-    if (!conversationId || conversation) {
+    if (
+      !conversationId ||
+      conversation ||
+      status !== "ready" ||
+      !clientInstanceId
+    ) {
       return;
     }
 
     void refreshConversation(conversationId).catch(() => undefined);
-  }, [conversation, conversationId, refreshConversation]);
+  }, [clientInstanceId, conversation, conversationId, refreshConversation, status]);
 
   const activeCount = useMemo(
     () => members.filter((member) => member.state !== "removed").length,

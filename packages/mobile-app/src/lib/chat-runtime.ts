@@ -2,8 +2,12 @@ import { Platform } from "react-native";
 
 import { api } from "@/lib/api";
 import {
+  applyChatWorkspaceQueueState,
   buildPreviewTextFromItem,
+  buildChatWorkspaceSnapshotFromQueueState,
+  createEmptyChatWorkspaceQueueState,
   createEmptyChatWorkspaceSnapshot,
+  getConfirmedConversationMaxSequence,
   getConversationMetaOrDefault,
   mergeChatItems,
   updateConversationInSnapshot,
@@ -140,6 +144,37 @@ export class ChatRuntime {
     return this.state.snapshot;
   }
 
+  async awaitPersistence() {
+    await this.persistPromise;
+  }
+
+  private getActiveSnapshotForWorkspace(workspaceId: string) {
+    const snapshot = this.state.snapshot;
+    if (
+      this.state.activeWorkspaceId !== workspaceId ||
+      !snapshot ||
+      snapshot.workspaceId !== workspaceId
+    ) {
+      return null;
+    }
+
+    return snapshot;
+  }
+
+  private updateSnapshotForWorkspace(
+    workspaceId: string,
+    updater: (current: ChatWorkspaceSnapshot) => ChatWorkspaceSnapshot,
+  ) {
+    const current = this.getActiveSnapshotForWorkspace(workspaceId);
+    if (!current) {
+      return null;
+    }
+
+    const nextSnapshot = updater(current);
+    this.replaceSnapshot(nextSnapshot);
+    return nextSnapshot;
+  }
+
   deactivate() {
     this.initializePromise = null;
     this.syncPromise = null;
@@ -154,24 +189,36 @@ export class ChatRuntime {
   }
 
   async clearLocalState() {
-    await this.persistence.clearAllWorkspaceSnapshots();
+    await this.persistence.clearAllWorkspaceState();
     this.deactivate();
   }
 
-  async reloadPersistedSnapshot(workspaceId?: string | null) {
+  async reloadPersistedQueueState(workspaceId?: string | null) {
     const targetWorkspaceId = workspaceId ?? this.state.activeWorkspaceId;
     if (!targetWorkspaceId) {
       return null;
     }
 
-    const persisted = await this.persistence.loadWorkspaceSnapshot(targetWorkspaceId);
+    const persisted = await this.persistence.loadWorkspaceQueueState(targetWorkspaceId);
     if (this.state.activeWorkspaceId !== targetWorkspaceId) {
       return persisted;
     }
 
-    this.replaceSnapshot(
-      persisted ?? createEmptyChatWorkspaceSnapshot(targetWorkspaceId),
+    const queueState = persisted;
+    if (!this.state.snapshot) {
+      this.replaceSnapshot(
+        buildChatWorkspaceSnapshotFromQueueState(targetWorkspaceId, queueState),
+      );
+      return persisted;
+    }
+
+    this.updateSnapshot((current) =>
+      applyChatWorkspaceQueueState(
+        current,
+        queueState ?? createEmptyChatWorkspaceQueueState(targetWorkspaceId),
+      ),
     );
+
     return persisted;
   }
 
@@ -291,60 +338,104 @@ export class ChatRuntime {
 
   async refreshConversation(conversationId: string) {
     const current = this.state.snapshot;
-    if (!current?.workspaceId) {
+    if (!current?.workspaceId || !current.clientInstanceId) {
       return null;
     }
+    const workspaceId = current.workspaceId;
+    const clientInstanceId = current.clientInstanceId;
 
-    const response = await api.getChatConversationMessages(
-      current.workspaceId,
-      conversationId,
-      {
-        clientInstanceId: current.clientInstanceId ?? undefined,
-        limit: 100,
-      },
-    );
-
-    this.updateSnapshot((snapshotValue) => ({
+    this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => ({
       ...snapshotValue,
-      outbox: clearDeliveredOutbox(snapshotValue.outbox, response.items),
-      conversations: upsertChatConversation(
-        snapshotValue.conversations,
-        response.conversation,
-      ),
-      itemsByConversationId: {
-        ...snapshotValue.itemsByConversationId,
-        [conversationId]: mergeChatItems(
-          snapshotValue.itemsByConversationId[conversationId] ?? [],
-          response.items,
-        ),
-      },
       metaByConversationId: {
         ...snapshotValue.metaByConversationId,
         [conversationId]: {
-          readWatermarkSequence: response.participantReadWatermarkSequence,
-          hasMoreBefore: response.hasMoreBefore,
-          hasLoadedLatest: true,
-          lastFetchedAt: new Date().toISOString(),
+          ...getConversationMetaOrDefault(snapshotValue, conversationId),
+          loadingLatest: true,
+          latestLoadError: undefined,
         },
       },
     }));
 
-    this.replaceState({
-      ...this.state,
-      runtimeByConversationId: {
-        ...this.state.runtimeByConversationId,
-        [conversationId]: response.runtimeByActor ?? {},
-      },
-    });
+    try {
+      const response = await api.getChatConversationMessages(
+        workspaceId,
+        conversationId,
+        {
+          clientInstanceId,
+          limit: 100,
+        },
+      );
 
-    return response;
+      if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
+        return null;
+      }
+
+      this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => ({
+        ...snapshotValue,
+        outbox: clearDeliveredOutbox(snapshotValue.outbox, response.items),
+        conversations: upsertChatConversation(
+          snapshotValue.conversations,
+          response.conversation,
+        ),
+        itemsByConversationId: {
+          ...snapshotValue.itemsByConversationId,
+          [conversationId]: mergeChatItems(
+            snapshotValue.itemsByConversationId[conversationId] ?? [],
+            response.items,
+          ),
+        },
+        metaByConversationId: {
+          ...snapshotValue.metaByConversationId,
+          [conversationId]: {
+            readWatermarkSequence: response.participantReadWatermarkSequence,
+            hasMoreBefore: response.hasMoreBefore,
+            hasLoadedLatest: true,
+            loadingLatest: false,
+            lastFetchedAt: new Date().toISOString(),
+            latestLoadError: undefined,
+          },
+        },
+      }));
+
+      if (this.getActiveSnapshotForWorkspace(workspaceId)) {
+        this.replaceState({
+          ...this.state,
+          runtimeByConversationId: {
+            ...this.state.runtimeByConversationId,
+            [conversationId]: response.runtimeByActor ?? {},
+          },
+        });
+      }
+
+      return response;
+    } catch (error) {
+      if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
+        return null;
+      }
+
+      this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => ({
+        ...snapshotValue,
+        metaByConversationId: {
+          ...snapshotValue.metaByConversationId,
+          [conversationId]: {
+            ...getConversationMetaOrDefault(snapshotValue, conversationId),
+            loadingLatest: false,
+            latestLoadError:
+              error instanceof Error ? error.message : "加载聊天记录失败。",
+          },
+        },
+      }));
+      throw error;
+    }
   }
 
   async loadOlderMessages(conversationId: string) {
     const current = this.state.snapshot;
-    if (!current?.workspaceId) {
+    if (!current?.workspaceId || !current.clientInstanceId) {
       return;
     }
+    const workspaceId = current.workspaceId;
+    const clientInstanceId = current.clientInstanceId;
 
     const existingItems = current.itemsByConversationId[conversationId] ?? [];
     const earliestSequence = existingItems[0]?.sequence;
@@ -354,16 +445,20 @@ export class ChatRuntime {
     }
 
     const response = await api.getChatConversationMessages(
-      current.workspaceId,
+      workspaceId,
       conversationId,
       {
-        clientInstanceId: current.clientInstanceId ?? undefined,
+        clientInstanceId,
         beforeSequence: earliestSequence,
         limit: 100,
       },
     );
 
-    this.updateSnapshot((snapshotValue) => ({
+    if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
+      return;
+    }
+
+    this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => ({
       ...snapshotValue,
       conversations: upsertChatConversation(
         snapshotValue.conversations,
@@ -391,16 +486,18 @@ export class ChatRuntime {
       },
     }));
 
-    this.replaceState({
-      ...this.state,
-      runtimeByConversationId: {
-        ...this.state.runtimeByConversationId,
-        [conversationId]:
-          response.runtimeByActor
-            ?? this.state.runtimeByConversationId[conversationId]
-            ?? {},
-      },
-    });
+    if (this.getActiveSnapshotForWorkspace(workspaceId)) {
+      this.replaceState({
+        ...this.state,
+        runtimeByConversationId: {
+          ...this.state.runtimeByConversationId,
+          [conversationId]:
+            response.runtimeByActor
+              ?? this.state.runtimeByConversationId[conversationId]
+              ?? {},
+        },
+      });
+    }
   }
 
   async markConversationRead(
@@ -412,14 +509,27 @@ export class ChatRuntime {
     if (!current?.workspaceId) {
       return;
     }
+    const workspaceId = current.workspaceId;
+    const confirmedMaxSequence = getConfirmedConversationMaxSequence(
+      current.itemsByConversationId[conversationId] ?? [],
+    );
+    if (confirmedMaxSequence <= 0) {
+      return;
+    }
 
-    const normalizedReadUpToSequence = Math.max(0, Math.floor(readUpToSequence));
-    const normalizedLastVisibleSequence = Math.max(
-      normalizedReadUpToSequence,
-      Math.floor(lastVisibleSequence ?? normalizedReadUpToSequence),
+    const normalizedReadUpToSequence = Math.min(
+      confirmedMaxSequence,
+      Math.max(0, Math.floor(readUpToSequence)),
+    );
+    const normalizedLastVisibleSequence = Math.min(
+      confirmedMaxSequence,
+      Math.max(
+        normalizedReadUpToSequence,
+        Math.floor(lastVisibleSequence ?? normalizedReadUpToSequence),
+      ),
     );
 
-    this.updateSnapshot((snapshotValue) =>
+    this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) =>
       updateConversationInSnapshot(
         {
           ...snapshotValue,
@@ -462,16 +572,20 @@ export class ChatRuntime {
       return;
     }
 
+    const clientInstanceId = current.clientInstanceId;
     try {
       const response = await api.updateChatConversationReadWatermark(
-        current.workspaceId,
+        workspaceId,
         conversationId,
         {
-          clientInstanceId: current.clientInstanceId,
+          clientInstanceId,
           readUpToSequence: normalizedReadUpToSequence,
           lastVisibleSequence: normalizedLastVisibleSequence,
         },
       );
+      if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
+        return;
+      }
       this.applyReadWatermarkAck(response);
     } catch {
       // Keep the pending read queued for the next sync/connection.
@@ -482,6 +596,9 @@ export class ChatRuntime {
     const current = this.state.snapshot;
     if (!current?.workspaceId) {
       throw new Error("No active workspace");
+    }
+    if (!current.clientInstanceId) {
+      throw new Error("Chat is still connecting");
     }
 
     const existingItems = current.itemsByConversationId[conversationId] ?? [];
@@ -571,7 +688,7 @@ export class ChatRuntime {
 
     if (nextSnapshot) {
       this.persistPromise = this.persistPromise
-        .then(() => this.persistence.saveWorkspaceSnapshot(nextSnapshot))
+        .then(() => this.persistence.saveWorkspaceState(nextSnapshot))
         .catch(() => undefined);
     }
   }
@@ -598,23 +715,27 @@ export class ChatRuntime {
       runtimeByConversationId: {},
     });
 
-    const persisted = await this.persistence.loadWorkspaceSnapshot(workspaceId);
+    const persisted = await this.persistence.loadWorkspaceState(workspaceId);
     if (this.state.activeWorkspaceId !== workspaceId) {
       return;
     }
 
+    const hydratedSnapshot =
+      persisted ?? createEmptyChatWorkspaceSnapshot(workspaceId);
+    const hasHydratedConversations = hydratedSnapshot.conversations.length > 0;
+
     this.replaceState({
       ...this.state,
       activeWorkspaceId: workspaceId,
-      status: "ready",
+      status: hasHydratedConversations ? "ready" : "loading",
       error: null,
-      snapshot: persisted ?? createEmptyChatWorkspaceSnapshot(workspaceId),
+      snapshot: hydratedSnapshot,
       runtimeByConversationId: {},
     });
 
     if (this.state.snapshot) {
       this.persistPromise = this.persistPromise
-        .then(() => this.persistence.saveWorkspaceSnapshot(this.state.snapshot!))
+        .then(() => this.persistence.saveWorkspaceState(this.state.snapshot!))
         .catch(() => undefined);
     }
 
@@ -648,14 +769,37 @@ export class ChatRuntime {
       baseSnapshot = createEmptyChatWorkspaceSnapshot(workspaceId);
     }
 
-    const clientInstanceId = baseSnapshot.clientInstanceId ?? createId("client");
-    await api.registerChatClientInstance(workspaceId, clientInstanceId, {
+    const clientInstanceInput = {
       platform: Platform.OS,
       deviceLabel: getDeviceLabel(),
       metadata: {
         workspaceMemberId: bootstrap.workspaceMemberId,
       },
-    });
+    };
+
+    let clientInstanceId = baseSnapshot.clientInstanceId;
+    if (clientInstanceId) {
+      const response = await api.touchChatClientInstance(
+        workspaceId,
+        clientInstanceId,
+        clientInstanceInput,
+      );
+      if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
+        return;
+      }
+      clientInstanceId = response.clientInstanceId;
+    }
+
+    if (!clientInstanceId) {
+      const response = await api.createChatClientInstance(
+        workspaceId,
+        clientInstanceInput,
+      );
+      if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
+        return;
+      }
+      clientInstanceId = response.clientInstanceId;
+    }
 
     this.replaceSnapshot({
       ...baseSnapshot,
@@ -871,22 +1015,40 @@ export class ChatRuntime {
     if (!current?.workspaceId || !current.clientInstanceId) {
       return;
     }
+    const workspaceId = current.workspaceId;
 
     const pendingReads = Object.values(current.pendingReads).sort(
       (left, right) => left.readUpToSequence - right.readUpToSequence,
     );
 
     for (const entry of pendingReads) {
+      const activeSnapshot = this.getActiveSnapshotForWorkspace(workspaceId);
+      if (!activeSnapshot?.clientInstanceId) {
+        return;
+      }
+
+      const activeEntry = activeSnapshot.pendingReads[entry.conversationId];
+      if (
+        !activeEntry ||
+        activeEntry.readUpToSequence !== entry.readUpToSequence ||
+        activeEntry.lastVisibleSequence !== entry.lastVisibleSequence
+      ) {
+        continue;
+      }
+
       try {
         const response = await api.updateChatConversationReadWatermark(
-          current.workspaceId,
+          workspaceId,
           entry.conversationId,
           {
-            clientInstanceId: current.clientInstanceId,
-            readUpToSequence: entry.readUpToSequence,
-            lastVisibleSequence: entry.lastVisibleSequence,
+            clientInstanceId: activeSnapshot.clientInstanceId,
+            readUpToSequence: activeEntry.readUpToSequence,
+            lastVisibleSequence: activeEntry.lastVisibleSequence,
           },
         );
+        if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
+          return;
+        }
         this.applyReadWatermarkAck(response);
       } catch {
         break;
@@ -899,43 +1061,78 @@ export class ChatRuntime {
     if (!current?.workspaceId || !current.clientInstanceId) {
       return;
     }
+    const workspaceId = current.workspaceId;
 
     const entries = Object.values(current.outbox).sort(
       (left, right) => left.optimisticSequence - right.optimisticSequence,
     );
 
     for (const entry of entries) {
-      this.updateSnapshot((snapshotValue) => ({
-        ...snapshotValue,
-        outbox: {
-          ...snapshotValue.outbox,
-          [entry.clientMessageId]: {
-            ...snapshotValue.outbox[entry.clientMessageId]!,
-            attemptCount:
-              snapshotValue.outbox[entry.clientMessageId]!.attemptCount + 1,
-            lastAttemptAt: new Date().toISOString(),
+      const activeSnapshot = this.getActiveSnapshotForWorkspace(workspaceId);
+      if (!activeSnapshot?.clientInstanceId) {
+        return;
+      }
+
+      const activeEntry = activeSnapshot.outbox[entry.clientMessageId];
+      if (!activeEntry) {
+        continue;
+      }
+
+      this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => {
+        const queuedEntry = snapshotValue.outbox[entry.clientMessageId];
+        if (!queuedEntry) {
+          return snapshotValue;
+        }
+
+        return {
+          ...snapshotValue,
+          outbox: {
+            ...snapshotValue.outbox,
+            [entry.clientMessageId]: {
+              ...queuedEntry,
+              attemptCount: queuedEntry.attemptCount + 1,
+              lastAttemptAt: new Date().toISOString(),
+            },
           },
-        },
-      }));
+        };
+      });
+
+      const latestSnapshot = this.getActiveSnapshotForWorkspace(workspaceId);
+      if (!latestSnapshot?.clientInstanceId) {
+        return;
+      }
+      const latestEntry = latestSnapshot.outbox[entry.clientMessageId];
+      if (!latestEntry) {
+        continue;
+      }
 
       try {
         const response = await api.sendChatConversationMessage(
-          current.workspaceId,
-          entry.conversationId,
+          workspaceId,
+          latestEntry.conversationId,
           {
-            clientInstanceId: current.clientInstanceId,
-            clientMessageId: entry.clientMessageId,
-            contentBlocks: entry.contentBlocks,
-            replyToItemId: entry.replyToItemId,
+            clientInstanceId: latestSnapshot.clientInstanceId,
+            clientMessageId: latestEntry.clientMessageId,
+            contentBlocks: latestEntry.contentBlocks,
+            replyToItemId: latestEntry.replyToItemId,
           },
         );
 
-        this.updateSnapshot((snapshotValue) => {
+        if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
+          return;
+        }
+
+        this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => {
+          const queuedEntry = snapshotValue.outbox[entry.clientMessageId];
+          if (!queuedEntry) {
+            return snapshotValue;
+          }
+
           const nextOutbox = { ...snapshotValue.outbox };
           delete nextOutbox[entry.clientMessageId];
 
           const nextItems = mergeChatItems(
-            snapshotValue.itemsByConversationId[entry.conversationId] ?? [],
+            snapshotValue.itemsByConversationId[queuedEntry.conversationId] ?? [],
             [response.item],
           );
 
@@ -945,10 +1142,10 @@ export class ChatRuntime {
               outbox: nextOutbox,
               itemsByConversationId: {
                 ...snapshotValue.itemsByConversationId,
-                [entry.conversationId]: nextItems,
+                [queuedEntry.conversationId]: nextItems,
               },
             },
-            entry.conversationId,
+            queuedEntry.conversationId,
             (conversation) => ({
               ...conversation,
               updatedAt: response.item.createdAt,
@@ -966,21 +1163,31 @@ export class ChatRuntime {
           );
         });
       } catch (error) {
-        this.updateSnapshot((snapshotValue) => ({
-          ...snapshotValue,
-          outbox: {
-            ...snapshotValue.outbox,
-            [entry.clientMessageId]: {
-              ...snapshotValue.outbox[entry.clientMessageId]!,
-              status: "retrying",
-              firstFailedAt:
-                snapshotValue.outbox[entry.clientMessageId]!.firstFailedAt ??
-                new Date().toISOString(),
-              lastErrorMessage:
-                error instanceof Error ? error.message : "发送失败",
+        if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
+          return;
+        }
+
+        this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => {
+          const queuedEntry = snapshotValue.outbox[entry.clientMessageId];
+          if (!queuedEntry) {
+            return snapshotValue;
+          }
+
+          return {
+            ...snapshotValue,
+            outbox: {
+              ...snapshotValue.outbox,
+              [entry.clientMessageId]: {
+                ...queuedEntry,
+                status: "retrying",
+                firstFailedAt:
+                  queuedEntry.firstFailedAt ?? new Date().toISOString(),
+                lastErrorMessage:
+                  error instanceof Error ? error.message : "发送失败",
+              },
             },
-          },
-        }));
+          };
+        });
         break;
       }
     }

@@ -108,8 +108,9 @@ type ConversationOption = {
   conversationTypeKey: ConversationTypeKey | null;
   participants: Array<{
     participantId: string;
-    participantType: 'actor' | 'workspace_member' | 'external' | 'system';
+    participantType: 'actor' | 'remote_agent' | 'workspace_member' | 'external' | 'system';
     actorId?: string;
+    remoteAgentId?: string;
     workspaceMemberId?: string;
     name: string;
     state: 'active' | 'left' | 'removed';

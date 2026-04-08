@@ -7,7 +7,7 @@ import {
   isKnownModelProviderType,
 } from '@synapse/shared';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
-import { AUTHZ_PLATFORM_ID } from '../../infrastructure/authz/index.js';
+import { PLATFORM_RESOURCE_ID } from '../access/core.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
 import { requireRequestAction } from '../access/guards.js';
 import {
@@ -171,7 +171,7 @@ async function requirePlatformPermission(
     request,
     reply,
     'platform.manage_models',
-    AUTHZ_PLATFORM_ID,
+    PLATFORM_RESOURCE_ID,
     errorMessage,
   );
 }

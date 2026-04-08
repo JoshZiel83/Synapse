@@ -78,7 +78,7 @@ import {
   deleteAutomationRule,
   listAutomationRules,
 } from "../automation/service.js";
-import { actorSubject, authorizeAction } from "../access/service.js";
+import { isActorActiveConversationParticipant } from "../access/subject-resolution.js";
 import {
   cancelToolCallTask,
   createToolCallTask,
@@ -1035,6 +1035,26 @@ async function listInviteableActors(params: {
     role: (row.role as string | null) || undefined,
     summary: summarizeInviteableActor(row),
   }));
+}
+
+async function canActorUseInviteActorTool(params: {
+  actorId: string;
+  conversationId: string;
+  conversationKind?: "private" | "group" | "virtual";
+  conversationBoundary?: "internal" | "external";
+}) {
+  if (
+    !params.conversationId ||
+    !isGroupConversationKind(params.conversationKind) ||
+    params.conversationBoundary !== "internal"
+  ) {
+    return false;
+  }
+
+  return isActorActiveConversationParticipant(
+    params.conversationId,
+    params.actorId,
+  );
 }
 
 function buildInviteActorDefinition(candidates: InviteableActor[]) {
@@ -2245,6 +2265,8 @@ export function registerCallableToolPlugins(): void {
             conversationId,
             sessionId: context.sessionId,
             actorId: context.actorId,
+            conversationKind: session.conversation_kind,
+            conversationBoundary: session.conversation_boundary,
             workspaceMemberId: context.workspaceMemberId,
             turnId: context.turnId,
             sourceToolCallId: context.toolCallId,
@@ -2628,26 +2650,21 @@ export function registerCallableToolPlugins(): void {
     },
     resolve: async (ctx): Promise<{ active: boolean; definition: any }> => {
       const conversationId = getToolContextConversationId(ctx);
-      if (
-        !conversationId ||
-        !isGroupConversationKind(getToolContextConversationKind(ctx)) ||
-        getToolContextConversationBoundary(ctx) !== "internal"
-      ) {
-        return { active: false, definition: null as any };
-      }
-
-      const requesterAllowed = await authorizeAction({
-        subject: actorSubject(ctx.actorId),
-        action: "conversation.manage_members",
-        resourceId: conversationId,
-      });
+      const requesterAllowed = conversationId
+        ? await canActorUseInviteActorTool({
+            actorId: ctx.actorId,
+            conversationId,
+            conversationKind: getToolContextConversationKind(ctx),
+            conversationBoundary: getToolContextConversationBoundary(ctx),
+          })
+        : false;
       if (!requesterAllowed) {
         return { active: false, definition: null as any };
       }
 
       const candidates = await listInviteableActors({
         workspaceId: ctx.workspaceId,
-        conversationId,
+        conversationId: conversationId!,
         actorId: ctx.actorId,
       });
 
@@ -2683,13 +2700,16 @@ export function registerCallableToolPlugins(): void {
           "invite_actor is only available in internal group conversations.",
         );
       }
-      const requesterAllowed = await authorizeAction({
-        subject: actorSubject(context.actorId),
-        action: "conversation.manage_members",
-        resourceId: conversationId,
+      const requesterAllowed = await canActorUseInviteActorTool({
+        actorId: context.actorId,
+        conversationId,
+        conversationKind: session.conversation_kind,
+        conversationBoundary: session.conversation_boundary,
       });
       if (!requesterAllowed) {
-        throwToolError("Actor is not allowed to manage conversation participants.");
+        throwToolError(
+          "Actor is not allowed to invite participants into this conversation.",
+        );
       }
 
       const reason =

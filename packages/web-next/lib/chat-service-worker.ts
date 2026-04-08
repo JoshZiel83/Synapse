@@ -1,13 +1,12 @@
 "use client"
 
 import { API_BASE } from "@/lib/api"
-
-export const CHAT_WEB_SERVICE_WORKER_PATH = "/web-chat-service-worker.js"
-export const CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL =
-  "synapse.web.chat.worker"
-export const CHAT_WEB_SERVICE_WORKER_SYNC_TAG = "synapse-web-chat-sync"
-export const CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG =
-  "synapse-web-chat-periodic-sync"
+import {
+  CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL,
+  CHAT_WEB_SERVICE_WORKER_PATH,
+  CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG,
+  CHAT_WEB_SERVICE_WORKER_SYNC_TAG,
+} from "@/lib/chat-service-worker-constants"
 
 type ChatWorkerMessage =
   | {
@@ -27,14 +26,14 @@ type ChatWorkerMessage =
 
 type ChatWorkerBroadcast =
   | {
-      type: "chat:snapshot-updated"
+      type: "chat:queue-updated"
       payload: {
         workspaceId: string
         reason?: string
       }
     }
   | {
-      type: "chat:sync-failed"
+      type: "chat:queue-sync-failed"
       payload?: {
         reason?: string
       }

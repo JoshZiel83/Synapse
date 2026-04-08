@@ -1,14 +1,5 @@
 import { config } from "../../config/index.js";
 import type { PlatformAccessBindingsAccessKey } from "../../infrastructure/database/generated/db.js";
-import {
-  AUTHZ_PLATFORM_ID,
-  deleteRelation,
-  diffAuthzRelationships,
-  enqueueAuthzRelationships,
-  flushAuthzOutboxEntries,
-  touchRelation,
-  type AuthzRelationMutation,
-} from "../../infrastructure/authz/index.js";
 import { query, transaction } from "../../infrastructure/database/index.js";
 import {
   db,
@@ -26,45 +17,7 @@ type UserIdentity = {
 };
 
 function configuredPlatformAdminEmails() {
-  return Array.from(new Set(config.authz.platformAdminEmails));
-}
-
-function buildPlatformAccessRelations(
-  rows: Array<{ userId: string; accessKey: PlatformAccessKey }>,
-): AuthzRelationMutation[] {
-  return rows.map((row) =>
-    touchRelation(
-      "platform",
-      AUTHZ_PLATFORM_ID,
-      row.accessKey,
-      "user",
-      row.userId,
-    ),
-  );
-}
-
-async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (entryIds.length === 0) return;
-
-  try {
-    await flushAuthzOutboxEntries(entryIds);
-  } catch (error) {
-    console.error(
-      `[authz] Failed to flush ${source} relationship updates:`,
-      error,
-    );
-  }
-}
-
-async function listPlatformAccessRows() {
-  const rows = await db
-    .selectFrom('platform_access_bindings')
-    .select(['user_id', 'access_key'])
-    .execute();
-  return rows.map((row) => ({
-    userId: row.user_id,
-    accessKey: row.access_key as PlatformAccessKey,
-  }));
+  return Array.from(new Set(config.platform.adminEmails));
 }
 
 async function ensureUserExists(userId: string) {
@@ -161,25 +114,6 @@ export async function grantPlatformAccess(input: {
     throw new Error("Access already granted");
   }
 
-  const authzEntryIds = await enqueueAuthzRelationships(
-    [
-      touchRelation(
-        "platform",
-        AUTHZ_PLATFORM_ID,
-        input.accessKey,
-        "user",
-        input.userId,
-      ),
-    ],
-    {
-      source: "platform.access.grant",
-      userId: input.userId,
-      accessKey: input.accessKey,
-      assignedByUserId: input.assignedByUserId,
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, "platform.access.grant");
-
   return {
     userId: row.user_id,
     accessKey: row.access_key as PlatformAccessKey,
@@ -205,19 +139,6 @@ export async function ensureSeedPlatformAdminForUser(user: UserIdentity) {
     })
     .onConflict((oc) => oc.columns(['user_id', 'access_key']).doNothing())
     .execute();
-
-  const authzEntryIds = await enqueueAuthzRelationships(
-    buildPlatformAccessRelations([
-      { userId: user.id, accessKey: "super_admin" },
-    ]),
-    {
-      source: "platform_admin.seed",
-      userId: user.id,
-      email: user.email,
-      accessKey: "super_admin",
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, "platform_admin.seed");
 
   return true;
 }
@@ -248,15 +169,6 @@ export async function revokePlatformAccess(
     .where('access_key', '=', accessKey)
     .execute();
 
-  const authzEntryIds = await enqueueAuthzRelationships(
-    [deleteRelation("platform", AUTHZ_PLATFORM_ID, accessKey, "user", userId)],
-    {
-      source: "platform.access.revoke",
-      userId,
-      accessKey,
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, "platform.access.revoke");
 }
 
 export async function ensureConfiguredPlatformAdminForUser(user: UserIdentity) {
@@ -275,25 +187,11 @@ export async function ensureConfiguredPlatformAdminForUser(user: UserIdentity) {
     .onConflict((oc) => oc.columns(['user_id', 'access_key']).doNothing())
     .execute();
 
-  const authzEntryIds = await enqueueAuthzRelationships(
-    buildPlatformAccessRelations([
-      { userId: user.id, accessKey: "super_admin" },
-    ]),
-    {
-      source: "platform_admin.ensure",
-      userId: user.id,
-      email: user.email,
-      accessKey: "super_admin",
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, "platform_admin.ensure");
-
   return true;
 }
 
 export async function syncConfiguredPlatformAdmins() {
   const emails = configuredPlatformAdminEmails();
-  const previousAccessRows = await listPlatformAccessRows();
 
   const matchedUsersResult =
     emails.length > 0
@@ -343,27 +241,15 @@ export async function syncConfiguredPlatformAdmins() {
         .onConflict((oc) => oc.columns(['user_id', 'access_key']).doNothing()),
     );
   });
-
-  const nextAccessRows = await listPlatformAccessRows();
-
-  const authzEntryIds = await enqueueAuthzRelationships(
-    diffAuthzRelationships(
-      buildPlatformAccessRelations(previousAccessRows),
-      buildPlatformAccessRelations(nextAccessRows),
-    ),
-    {
-      source: "platform_admin.sync",
-      configuredEmailCount: emails.length,
-      matchedUserCount: matchedUserIds.length,
-    },
-  );
-  await flushQueuedAuthzEntries(authzEntryIds, "platform_admin.sync");
+  const platformAdminCount = await db
+    .selectFrom("platform_access_bindings")
+    .select(({ fn }) => fn.countAll<string>().as("count"))
+    .where("access_key", "=", "super_admin")
+    .executeTakeFirstOrThrow();
 
   return {
     configuredEmailCount: emails.length,
     matchedUserCount: matchedUserIds.length,
-    platformAdminCount: nextAccessRows.filter(
-      (row) => row.accessKey === "super_admin",
-    ).length,
+    platformAdminCount: Number(platformAdminCount.count),
   };
 }

@@ -14,11 +14,10 @@ import type {
 import { sql } from "kysely";
 import {
   lookupResources,
-  type AuthzSubject,
-} from "../../infrastructure/authz/index.js";
+} from "../access/core.js";
 import { db } from "../../infrastructure/database/kysely.js";
+import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js";
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js";
-import { getConversationActorContextBySessionId } from "../session/service.js";
 import { resolveInstallationConfig } from "./config-resolver.js";
 import {
   getOrCreateInstance,
@@ -121,12 +120,10 @@ type VisibleAccessBindingRow = {
     | "actor"
     | "actor_in_conversation";
   subject_workspace_id: string | null;
-  subject_workspace_member_id: string | null;
   subject_actor_id: string | null;
   subject_conversation_id: string | null;
   subject_conversation_actor_context_id: string | null;
   conversation_type_mask_override: number | null;
-  granted_permissions: string[] | null;
   status: "active" | "revoked";
   created_by_workspace_member_id: string | null;
   reason: string | null;
@@ -260,24 +257,13 @@ function asArray<T>(value: unknown): T[] {
 }
 
 async function buildVisibilitySubjects(params: ResolveParams) {
-  const subjects: AuthzSubject[] = [
-    {
-      type: "actor",
-      id: params.actorId,
-    },
-  ];
-
-  const context = params.conversationActorContextId
-    ? { id: params.conversationActorContextId }
-    : await getConversationActorContextBySessionId(params.sessionId);
-  if (context) {
-    subjects.push({
-      type: "conversation_actor_context",
-      id: context.id,
-    });
-  }
-
-  return subjects;
+  return buildConversationCapabilitySubjects({
+    workspaceId: params.workspaceId,
+    actorId: params.actorId,
+    conversationId: params.conversationId,
+    sessionId: params.sessionId,
+    conversationActorContextId: params.conversationActorContextId,
+  });
 }
 
 function publicReuseScope(scope: VisiblePluginRow["reuse_scope"]) {
@@ -331,7 +317,7 @@ async function loadVisibleAccessBindings(params: {
       ? sql<string>`binding.plugin_installation_id::text`.as("resource_id")
       : sql<string>`binding.relay_capability_id::text`.as("resource_id");
 
-  const rows = await db
+  const rows = (await db
     .selectFrom("resource_access_bindings as binding")
     .leftJoin(
       "conversation_actor_contexts as cac",
@@ -345,7 +331,6 @@ async function loadVisibleAccessBindings(params: {
       resourceIdSelect,
       "binding.target_type",
       "binding.subject_workspace_id",
-      "binding.subject_workspace_member_id",
       sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
         "subject_actor_id",
       ),
@@ -354,12 +339,12 @@ async function loadVisibleAccessBindings(params: {
       ),
       "binding.subject_conversation_actor_context_id",
       "binding.conversation_type_mask_override",
-      "binding.granted_permissions",
       "binding.status",
       "binding.created_by_workspace_member_id",
       "binding.reason",
       "binding.created_at",
       "binding.revoked_at",
+      sql<Record<string, unknown>>`'{}'::jsonb`.as("metadata"),
       sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
         "actor_id",
       ),
@@ -371,7 +356,7 @@ async function loadVisibleAccessBindings(params: {
     .where(resourceColumn, "in", params.resourceIds)
     .where("binding.status", "=", "active")
     .orderBy("binding.created_at", "desc")
-    .execute() as VisibleAccessBindingRow[];
+    .execute()) as unknown as VisibleAccessBindingRow[];
 
   const map = new Map<string, VisibleAccessBindingRow[]>();
   for (const row of rows) {
@@ -672,6 +657,8 @@ function buildRelayScopedInstance(params: {
             conversationId: executionContext.conversationId,
             sessionId: executionContext.sessionId,
             actorId: executionContext.actorId,
+            conversationKind: executionContext.conversationKind,
+            conversationBoundary: executionContext.conversationBoundary,
             workspaceMemberId: executionContext.workspaceMemberId,
             turnId: executionContext.turnId,
             sourceToolCallId: executionContext.toolCallId,

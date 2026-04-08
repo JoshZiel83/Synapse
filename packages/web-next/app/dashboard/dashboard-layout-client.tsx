@@ -20,6 +20,7 @@ import {
   Puzzle,
   Cpu,
   ScrollText,
+  SquareTerminal,
 } from "lucide-react"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 
@@ -27,6 +28,7 @@ const navItems = [
   { href: "/dashboard", label: "Home", icon: House },
   { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
   { href: "/dashboard/contacts", label: "Contacts", icon: ContactRound },
+  { href: "/dashboard/remote-agents", label: "Remote Agents", icon: SquareTerminal },
   { href: "/dashboard/memories", label: "Memories", icon: Brain },
   { href: "/dashboard/skills", label: "Skills", icon: ScrollText },
   { href: "/dashboard/audit", label: "Audit Log", icon: FileText },
@@ -63,6 +65,7 @@ function DashboardInner({ children }: { children: ReactNode }) {
   const isFullPaneRoute =
     pathname.startsWith("/dashboard/chat") ||
     pathname.startsWith("/dashboard/contacts") ||
+    pathname.startsWith("/dashboard/remote-agents") ||
     pathname.startsWith("/dashboard/memories") ||
     pathname.startsWith("/dashboard/skills") ||
     pathname.startsWith("/dashboard/actors") ||

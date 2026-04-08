@@ -7,7 +7,7 @@ import ChatAvatar from './chat-avatar';
 export type MentionableParticipant = {
   id: string;
   name: string;
-  type: 'actor' | 'workspace_member' | 'external';
+  type: 'actor' | 'remote_agent' | 'workspace_member' | 'external';
   role?: string;
   avatarUrl?: string;
   emoji?: string;
@@ -18,7 +18,7 @@ export type MentionableParticipant = {
 type ParticipantSuggestion = {
   id: string;
   display: string;
-  type: 'actor' | 'workspace_member' | 'external';
+  type: 'actor' | 'remote_agent' | 'workspace_member' | 'external';
   role?: string;
   avatarUrl?: string;
   emoji?: string;
@@ -190,6 +190,8 @@ export default function ChatMentionsInput({
                     {participant.description ||
                       (participant.type === 'actor'
                         ? participant.role || 'Actor'
+                        : participant.type === 'remote_agent'
+                          ? participant.role || 'Remote agent'
                         : participant.type === 'external'
                           ? 'External participant'
                           : 'Workspace user')}

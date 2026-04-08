@@ -5,6 +5,7 @@ import type {
   ActorRuntimeState,
   InteractionRequestSummary,
   ConversationReplyRef,
+  RemoteAgentRuntimeState,
 } from "@synapse/shared"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
@@ -45,7 +46,9 @@ interface ConversationChatProps {
   conversation: ConversationSummary
   messages: FeedMessage[]
   loading: boolean
+  composerDisabled?: boolean
   actorRuntimes?: Record<string, ActorRuntimeState>
+  remoteAgentRuntimes?: Record<string, RemoteAgentRuntimeState>
   onSend: (payload: ChatComposerSubmitPayload) => Promise<void> | void
   onBack?: () => void
   workspaceId?: string
@@ -62,14 +65,24 @@ function summarizeMemberCounts(conversation: ConversationSummary) {
   const actorCount = conversation.members.filter(
     (member) => member.type === "actor"
   ).length
+  const remoteAgentCount = conversation.members.filter(
+    (member) => member.type === "remote_agent"
+  ).length
   const externalCount = conversation.members.filter(
     (member) => member.type === "external"
   ).length
   const workspaceMemberLabel = `${workspaceMemberCount} member${workspaceMemberCount === 1 ? "" : "s"}`
   const actorLabel = `${actorCount} actor${actorCount === 1 ? "" : "s"}`
-  if (externalCount === 0) return `${workspaceMemberLabel} · ${actorLabel}`
+  const remoteAgentLabel = `${remoteAgentCount} remote agent${remoteAgentCount === 1 ? "" : "s"}`
+  if (externalCount === 0) {
+    return remoteAgentCount > 0
+      ? `${workspaceMemberLabel} · ${actorLabel} · ${remoteAgentLabel}`
+      : `${workspaceMemberLabel} · ${actorLabel}`
+  }
   const externalLabel = `${externalCount} external${externalCount === 1 ? "" : "s"}`
-  return `${workspaceMemberLabel} · ${actorLabel} · ${externalLabel}`
+  return remoteAgentCount > 0
+    ? `${workspaceMemberLabel} · ${actorLabel} · ${remoteAgentLabel} · ${externalLabel}`
+    : `${workspaceMemberLabel} · ${actorLabel} · ${externalLabel}`
 }
 
 function summarizeCurrentUserProcessingActors(runtimes: ActorRuntimeState[]) {
@@ -224,7 +237,9 @@ export default function ConversationChat({
   conversation,
   messages,
   loading,
+  composerDisabled = false,
   actorRuntimes,
+  remoteAgentRuntimes,
   onSend,
   onBack,
   workspaceId,
@@ -299,6 +314,8 @@ export default function ConversationChat({
             ? member.linkedWorkspaceMemberName
               ? `External participant · linked to ${member.linkedWorkspaceMemberName}`
               : "External participant"
+            : member.type === "remote_agent"
+              ? member.title || member.role || "Remote agent"
             : "Workspace user",
         searchTerms: buildMentionSearchTerms(member),
       }))
@@ -625,6 +642,7 @@ export default function ConversationChat({
             <ChatMemberStrip
               members={conversation.members}
               runtimeByActor={actorRuntimes}
+              runtimeByRemoteAgent={remoteAgentRuntimes}
               max={5}
               size="lg"
               onMemberClick={participantInteractionHandler}
@@ -683,6 +701,12 @@ export default function ConversationChat({
                   actorRuntime={
                     msg.fromActorId
                       ? actorRuntimes?.[msg.fromActorId]
+                      : undefined
+                  }
+                  remoteAgentRuntime={
+                    msg.author?.participantType === "remote_agent" &&
+                    msg.author.remoteAgentId
+                      ? remoteAgentRuntimes?.[msg.author.remoteAgentId]
                       : undefined
                   }
                   timestamp={msg.createdAt}
@@ -760,6 +784,7 @@ export default function ConversationChat({
         <ChatComposer
           workspaceId={workspaceId || null}
           participants={mentionableParticipants}
+          disabled={composerDisabled}
           placeholder="Type a message..."
           replyTo={replyTo}
           onCancelReply={() => setReplyTo(null)}

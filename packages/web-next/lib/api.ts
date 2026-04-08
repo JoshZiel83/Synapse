@@ -21,7 +21,9 @@ import type {
   AutomationRuleUpdatePayload,
   CanonicalContentBlock,
   ChatBootstrapResponse,
+  ChatClientInstanceCreateInput,
   ChatClientInstanceRegistrationResponse,
+  ChatClientInstanceTouchInput,
   ChatConversationCreateResponse,
   ChatConversationMessagesPage,
   ChatConversationMessagesQuery,
@@ -41,6 +43,7 @@ import type {
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
   WorkspaceChiefActorPreference,
+  RemoteAgentRuntimeState as SharedRemoteAgentRuntimeState,
   RelayDashboardView,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
@@ -95,7 +98,7 @@ export interface WorkspaceListResponse {
 }
 
 export interface RelationshipProfileView {
-  subjectType: "member" | "actor"
+  subjectType: "member" | "actor" | "remote_agent"
   approvalMode: "auto" | "manual"
   qrToken: string
   qrUrl: string
@@ -105,10 +108,20 @@ export interface RelationshipProfileView {
   isPublicShared?: boolean
 }
 
+export type ContactHubEntryKind =
+  | "workspace-actor"
+  | "workspace-member"
+  | "workspace-remote-agent"
+  | "friend-actor"
+  | "friend-member"
+  | "friend-remote-agent"
+
+export type ContactTargetType = "member" | "actor" | "remote_agent"
+
 export interface ContactHubEntryView {
-  kind: "workspace-actor" | "workspace-member" | "friend-actor" | "friend-member"
+  kind: ContactHubEntryKind
   id: string
-  targetType: "member" | "actor"
+  targetType: ContactTargetType
   title: string
   subtitle?: string
   avatarUrl?: string
@@ -121,6 +134,7 @@ export interface ContactHubEntryView {
   workspaceMemberId?: string
   userId?: string
   actorId?: string
+  remoteAgentId?: string
   relationLabel: string
   directState: {
     status:
@@ -136,9 +150,11 @@ export interface ContactHubResponse {
   requestSummary: {
     friendPendingCount: number
     actorAccessPendingCount: number
+    remoteAgentAccessPendingCount: number
     totalPendingCount: number
   }
   workspaceActors: ContactHubEntryView[]
+  workspaceRemoteAgents: ContactHubEntryView[]
   workspaceMembers: ContactHubEntryView[]
   friends: ContactHubEntryView[]
   groups: unknown[]
@@ -146,7 +162,7 @@ export interface ContactHubResponse {
 
 export interface IdentitySearchMatchView {
   profileId: string
-  targetType: "member" | "actor"
+  targetType: ContactTargetType
   title: string
   subtitle?: string
   avatarUrl?: string
@@ -159,6 +175,7 @@ export interface IdentitySearchMatchView {
   workspaceMemberId?: string
   userId?: string
   actorId?: string
+  remoteAgentId?: string
   state:
     | "same_workspace_member"
     | "friend"
@@ -167,11 +184,8 @@ export interface IdentitySearchMatchView {
     | "existing"
     | "available"
     | "approval_required"
-    | "pending_approval"
-  contact?: {
-    kind: "workspace-actor" | "workspace-member" | "friend-actor" | "friend-member"
-    id: string
-  }
+      | "pending_approval"
+  contact?: { kind: ContactHubEntryKind; id: string }
   conversationId?: string
   requestId?: string
 }
@@ -197,6 +211,11 @@ export interface ActorAccessRequestListResponse {
   outgoing: any[]
 }
 
+export interface RemoteAgentAccessRequestListResponse {
+  incoming: any[]
+  outgoing: any[]
+}
+
 export interface RelationshipScanResponse {
   outcome:
     | "self_scan"
@@ -207,11 +226,11 @@ export interface RelationshipScanResponse {
     | "actor_access_granted"
     | "actor_access_request_created"
     | "actor_access_pending"
+    | "remote_agent_access_granted"
+    | "remote_agent_access_request_created"
+    | "remote_agent_access_pending"
   requestId?: string
-  contact?: {
-    kind: "workspace-actor" | "workspace-member" | "friend-actor" | "friend-member"
-    id: string
-  }
+  contact?: { kind: ContactHubEntryKind; id: string }
 }
 
 export interface DirectConversationOpenResponse {
@@ -219,6 +238,130 @@ export interface DirectConversationOpenResponse {
   created?: boolean
   conversationId?: string
   requestId?: string
+}
+
+export type RemoteAgentRuntimeKind = "claude_code" | "codex"
+export type RemoteAgentAccessPolicy = "workspace_open" | "approval_required"
+export type RemoteAgentLifecycleState = "online" | "offline"
+export type RemoteAgentMachineTrustStatus =
+  | "pending"
+  | "active"
+  | "revoked"
+  | "blocked"
+export type RemoteAgentRuntimeStatus =
+  | "available"
+  | "missing_binary"
+  | "broken_path"
+  | "unsupported_platform"
+  | "runtime_error"
+
+export interface RemoteAgentRuntimeCapabilityView {
+  supportsRequestUserInput?: boolean
+  supportsPlanMode?: boolean
+  supportsPersistentSession?: boolean
+  supportsCodexAppServer?: boolean
+  supportsStructuredIo?: boolean
+}
+
+export interface RemoteAgentRuntimeSummaryView {
+  runtimeKind: RemoteAgentRuntimeKind
+  state: SharedRemoteAgentRuntimeState["state"]
+  statusText?: string
+  sessionId?: string
+  activeConversationId?: string
+  activeInteractionId?: string
+  pendingConversationCount: number
+  unreadDeliveryCount: number
+  lastActivityAt?: string
+  lastRunStartedAt?: string
+  lastRunFinishedAt?: string
+  lastError?: string
+  capabilities?: RemoteAgentRuntimeCapabilityView
+}
+
+export interface RemoteAgentGroupInteractionGrantView {
+  workspaceMemberId: string
+  grantedByWorkspaceMemberId?: string
+  createdAt?: string
+  updatedAt?: string
+  userId: string
+  name: string
+  avatarUrl?: string
+}
+
+export interface RemoteAgentBindingView {
+  machineId: string
+  machineTitle?: string
+  status: string
+  runtimePath?: string
+  localRootPath?: string
+  machineLifecycleState?: RemoteAgentLifecycleState
+  runtimeSummary?: RemoteAgentRuntimeSummaryView
+}
+
+export interface RemoteAgentView {
+  id: string
+  workspaceId: string
+  name: string
+  title: string
+  description?: string
+  runtimeKind: RemoteAgentRuntimeKind
+  avatarFileId?: string
+  avatarEmoji?: string
+  accessPolicy: RemoteAgentAccessPolicy
+  isActive: boolean
+  isPublicShared: boolean
+  metadata: Record<string, unknown>
+  createdByWorkspaceMemberId?: string
+  createdAt?: string
+  updatedAt?: string
+  runtimeSummary?: RemoteAgentRuntimeSummaryView
+  binding?: RemoteAgentBindingView
+}
+
+export interface RemoteAgentRuntimeCatalogEntryView {
+  runtimeKind: RemoteAgentRuntimeKind
+  executablePath?: string
+  status: RemoteAgentRuntimeStatus
+  version?: string
+  metadata: Record<string, unknown>
+  lastError?: string
+  lastSeenAt?: string
+}
+
+export interface RemoteAgentMachineView {
+  id: string
+  workspaceId: string
+  title: string
+  description?: string
+  trustStatus: RemoteAgentMachineTrustStatus
+  lifecycleState?: RemoteAgentLifecycleState
+  bindingCount: number
+  lastSeenAt?: string
+  createdAt?: string
+  updatedAt?: string
+}
+
+export interface RemoteAgentMachineDetailView {
+  machine: Omit<RemoteAgentMachineView, "bindingCount"> & {
+    bindingCount?: number
+  }
+  runtimeCatalog: RemoteAgentRuntimeCatalogEntryView[]
+  bindings: Array<{
+    remoteAgentId: string
+    name: string
+    runtimeKind: RemoteAgentRuntimeKind
+    runtimePath?: string
+    localRootPath?: string
+    status: string
+    runtimeSummary?: RemoteAgentRuntimeSummaryView
+  }>
+}
+
+export interface RemoteAgentMachinePairingSessionView {
+  machine: Omit<RemoteAgentMachineView, "bindingCount">
+  apiKey: string
+  daemonCommand: string
 }
 
 class ApiClient {
@@ -1078,6 +1221,33 @@ class ApiClient {
       body: JSON.stringify(input),
     })
   }
+  getRemoteAgentRelationshipProfile(
+    wsId: string,
+    remoteAgentId: string
+  ): Promise<RelationshipProfileView> {
+    return this.fetch(
+      `/workspaces/${wsId}/remote-agents/${remoteAgentId}/relationship-profile`
+    )
+  }
+  updateRemoteAgentRelationshipProfile(
+    wsId: string,
+    remoteAgentId: string,
+    input: {
+      approvalMode: "auto" | "manual"
+      identityId?: string
+      identitySearchEnabled?: boolean
+      accessPolicy?: "workspace_open" | "approval_required"
+      isPublicShared?: boolean
+    }
+  ): Promise<RelationshipProfileView> {
+    return this.fetch(
+      `/workspaces/${wsId}/remote-agents/${remoteAgentId}/relationship-profile`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      }
+    )
+  }
   scanRelationshipQr(
     wsId: string,
     token: string
@@ -1115,7 +1285,7 @@ class ApiClient {
   }
   getContactHubDetail(
     wsId: string,
-    contactKind: "workspace-actor" | "workspace-member" | "friend-actor" | "friend-member",
+    contactKind: ContactHubEntryKind,
     contactId: string
   ): Promise<ContactHubDetailResponse> {
     return this.fetch(`/workspaces/${wsId}/contact-hub/${contactKind}/${contactId}`)
@@ -1140,6 +1310,11 @@ class ApiClient {
   ): Promise<ActorAccessRequestListResponse> {
     return this.fetch(`/workspaces/${wsId}/actor-access-requests`)
   }
+  getRemoteAgentAccessRequests(
+    wsId: string
+  ): Promise<RemoteAgentAccessRequestListResponse> {
+    return this.fetch(`/workspaces/${wsId}/remote-agent-access-requests`)
+  }
   approveActorAccessRequest(wsId: string, requestId: string) {
     return this.fetch(`/workspaces/${wsId}/actor-access-requests/${requestId}/approve`, {
       method: "POST",
@@ -1152,10 +1327,28 @@ class ApiClient {
       body: "{}",
     })
   }
+  approveRemoteAgentAccessRequest(wsId: string, requestId: string) {
+    return this.fetch(
+      `/workspaces/${wsId}/remote-agent-access-requests/${requestId}/approve`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
+  }
+  rejectRemoteAgentAccessRequest(wsId: string, requestId: string) {
+    return this.fetch(
+      `/workspaces/${wsId}/remote-agent-access-requests/${requestId}/reject`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
+  }
   openDirectConversation(
     wsId: string,
     input: {
-      contactKind: "workspace-actor" | "workspace-member" | "friend-actor" | "friend-member"
+      contactKind: ContactHubEntryKind
       contactId: string
     }
   ): Promise<DirectConversationOpenResponse> {
@@ -1163,6 +1356,124 @@ class ApiClient {
       method: "POST",
       body: JSON.stringify(input),
     })
+  }
+
+  getRemoteAgents(wsId: string): Promise<{ remoteAgents: RemoteAgentView[] }> {
+    return this.fetch(`/workspaces/${wsId}/remote-agents`)
+  }
+  getRemoteAgent(
+    wsId: string,
+    remoteAgentId: string
+  ): Promise<{ remoteAgent: RemoteAgentView }> {
+    return this.fetch(`/workspaces/${wsId}/remote-agents/${remoteAgentId}`)
+  }
+  createRemoteAgent(
+    wsId: string,
+    input: {
+      name: string
+      title: string
+      description?: string
+      runtimeKind: RemoteAgentRuntimeKind
+      avatarFileId?: string
+      avatarEmoji?: string
+      accessPolicy?: RemoteAgentAccessPolicy
+      isPublicShared?: boolean
+      metadata?: Record<string, unknown>
+    }
+  ): Promise<{ remoteAgent: RemoteAgentView }> {
+    return this.fetch(`/workspaces/${wsId}/remote-agents`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+  updateRemoteAgent(
+    wsId: string,
+    remoteAgentId: string,
+    input: {
+      name?: string
+      title?: string
+      description?: string | null
+      avatarFileId?: string | null
+      avatarEmoji?: string | null
+      accessPolicy?: RemoteAgentAccessPolicy
+      isPublicShared?: boolean
+      isActive?: boolean
+      metadata?: Record<string, unknown>
+    }
+  ): Promise<{ remoteAgent: RemoteAgentView }> {
+    return this.fetch(`/workspaces/${wsId}/remote-agents/${remoteAgentId}`, {
+      method: "PATCH",
+      body: JSON.stringify(input),
+    })
+  }
+  deleteRemoteAgent(
+    wsId: string,
+    remoteAgentId: string
+  ): Promise<{ deleted: boolean }> {
+    return this.fetch(`/workspaces/${wsId}/remote-agents/${remoteAgentId}`, {
+      method: "DELETE",
+    })
+  }
+  bindRemoteAgent(
+    wsId: string,
+    remoteAgentId: string,
+    input: {
+      machineId: string
+      runtimeKind: RemoteAgentRuntimeKind
+      runtimePath?: string
+      localRootPath?: string
+    }
+  ): Promise<{ remoteAgent: RemoteAgentView }> {
+    return this.fetch(`/workspaces/${wsId}/remote-agents/${remoteAgentId}/bind`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+  createRemoteAgentMachinePairingSession(
+    wsId: string,
+    input: {
+      title?: string
+      description?: string
+    }
+  ): Promise<RemoteAgentMachinePairingSessionView> {
+    return this.fetch(`/workspaces/${wsId}/remote-agent-machines/pairing-sessions`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+  getRemoteAgentMachines(
+    wsId: string
+  ): Promise<{ machines: RemoteAgentMachineView[] }> {
+    return this.fetch(`/workspaces/${wsId}/remote-agent-machines`)
+  }
+  getRemoteAgentMachine(
+    wsId: string,
+    machineId: string
+  ): Promise<RemoteAgentMachineDetailView> {
+    return this.fetch(`/workspaces/${wsId}/remote-agent-machines/${machineId}`)
+  }
+  getRemoteAgentGroupInteractionGrants(
+    wsId: string,
+    remoteAgentId: string
+  ): Promise<{ grants: RemoteAgentGroupInteractionGrantView[] }> {
+    return this.fetch(
+      `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-interaction-grants`
+    )
+  }
+  updateRemoteAgentGroupInteractionGrants(
+    wsId: string,
+    remoteAgentId: string,
+    input: {
+      workspaceMemberIds: string[]
+    }
+  ): Promise<{ grants: RemoteAgentGroupInteractionGrantView[] }> {
+    return this.fetch(
+      `/workspaces/${wsId}/remote-agents/${remoteAgentId}/group-interaction-grants`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      }
+    )
   }
 
   // Actor lanes
@@ -1232,14 +1543,27 @@ class ApiClient {
     )
   }
 
-  registerChatClientInstance(
+  createChatClientInstance(
+    workspaceId: string,
+    input?: ChatClientInstanceCreateInput
+  ): Promise<ChatClientInstanceRegistrationResponse> {
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/client-instances`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          platform: input?.platform,
+          deviceLabel: input?.deviceLabel,
+          metadata: input?.metadata,
+        }),
+      }
+    )
+  }
+
+  touchChatClientInstance(
     workspaceId: string,
     clientInstanceId: string,
-    input?: {
-      platform?: string
-      deviceLabel?: string
-      metadata?: Record<string, unknown>
-    }
+    input?: ChatClientInstanceTouchInput
   ): Promise<ChatClientInstanceRegistrationResponse> {
     return this.fetch(
       `/workspaces/${workspaceId}/chat/client-instances/${clientInstanceId}`,
@@ -1283,21 +1607,19 @@ class ApiClient {
   getChatConversationMessages(
     workspaceId: string,
     conversationId: string,
-    input?: ChatConversationMessagesQuery
+    input: ChatConversationMessagesQuery
   ): Promise<ChatConversationMessagesPage> {
     const params = new URLSearchParams()
-    if (typeof input?.afterSequence === "number") {
+    if (typeof input.afterSequence === "number") {
       params.set("afterSequence", String(input.afterSequence))
     }
-    if (typeof input?.beforeSequence === "number") {
+    if (typeof input.beforeSequence === "number") {
       params.set("beforeSequence", String(input.beforeSequence))
     }
-    if (typeof input?.limit === "number") {
+    if (typeof input.limit === "number") {
       params.set("limit", String(input.limit))
     }
-    if (input?.clientInstanceId) {
-      params.set("clientInstanceId", input.clientInstanceId)
-    }
+    params.set("clientInstanceId", input.clientInstanceId)
     const query = params.toString()
 
     return this.fetch(

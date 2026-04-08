@@ -1,768 +1,652 @@
-const CHAT_DB_NAME = "synapse-web-next-chat";
-const CHAT_DB_VERSION = 1;
-const CHAT_SNAPSHOT_STORE = "workspace_snapshots";
-
-const CHAT_WORKER_DB_NAME = "synapse-web-next-chat-worker";
-const CHAT_WORKER_DB_VERSION = 1;
-const CHAT_WORKER_STATE_STORE = "auth_context";
-
-const CHAT_BROADCAST_CHANNEL = "synapse.web.chat.worker";
-const CHAT_SYNC_TAG = "synapse-web-chat-sync";
-const CHAT_PERIODIC_SYNC_TAG = "synapse-web-chat-periodic-sync";
-
-self.addEventListener("install", (event) => {
-  event.waitUntil(self.skipWaiting());
-});
-
-self.addEventListener("activate", (event) => {
-  event.waitUntil(self.clients.claim());
-});
-
-self.addEventListener("message", (event) => {
-  const message = event.data || {};
-  switch (message.type) {
-    case "chat:set-auth-context":
-      event.waitUntil(
-        saveAuthContext(message.payload).then(() =>
-          runSyncPass(message.payload.workspaceId, "auth-context"),
-        ),
-      );
-      break;
-    case "chat:clear-auth-context":
-      event.waitUntil(clearAuthContext());
-      break;
-    case "chat:run-sync":
-      event.waitUntil(runSyncPass(null, message.payload && message.payload.reason));
-      break;
+/* eslint-disable */
+"use strict";
+(() => {
+  // ../../node_modules/idb/build/index.js
+  var instanceOfAny = (object, constructors) => constructors.some((c) => object instanceof c);
+  var idbProxyableTypes;
+  var cursorAdvanceMethods;
+  function getIdbProxyableTypes() {
+    return idbProxyableTypes || (idbProxyableTypes = [
+      IDBDatabase,
+      IDBObjectStore,
+      IDBIndex,
+      IDBCursor,
+      IDBTransaction
+    ]);
   }
-});
-
-self.addEventListener("sync", (event) => {
-  if (event.tag === CHAT_SYNC_TAG) {
-    event.waitUntil(runSyncPass(null, "background-sync"));
+  function getCursorAdvanceMethods() {
+    return cursorAdvanceMethods || (cursorAdvanceMethods = [
+      IDBCursor.prototype.advance,
+      IDBCursor.prototype.continue,
+      IDBCursor.prototype.continuePrimaryKey
+    ]);
   }
-});
-
-self.addEventListener("periodicsync", (event) => {
-  if (event.tag === CHAT_PERIODIC_SYNC_TAG) {
-    event.waitUntil(runSyncPass(null, "periodic-sync"));
-  }
-});
-
-function openDb(name, version, onUpgrade) {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(name, version);
-    request.onerror = () => reject(request.error);
-    request.onupgradeneeded = () => {
-      onUpgrade(request.result);
-    };
-    request.onsuccess = () => resolve(request.result);
-  });
-}
-
-function requestToPromise(request) {
-  return new Promise((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-
-async function withStore(dbName, version, storeName, mode, onUpgrade, run) {
-  const db = await openDb(dbName, version, onUpgrade);
-  try {
-    const tx = db.transaction(storeName, mode);
-    const store = tx.objectStore(storeName);
-    const result = await run(store);
-    await new Promise((resolve, reject) => {
-      tx.oncomplete = () => resolve();
-      tx.onerror = () => reject(tx.error);
-      tx.onabort = () => reject(tx.error);
-    });
-    return result;
-  } finally {
-    db.close();
-  }
-}
-
-function createEmptySnapshot(workspaceId) {
-  return {
-    version: 1,
-    workspaceId,
-    inboxCursor: 0,
-    conversations: [],
-    pendingReads: {},
-    outbox: {},
-  };
-}
-
-function normalizeText(value) {
-  return typeof value === "string" ? value.trim() : "";
-}
-
-function extractText(contentBlocks) {
-  if (!Array.isArray(contentBlocks)) {
-    return "";
-  }
-
-  const parts = [];
-  for (const block of contentBlocks) {
-    if (!block || typeof block !== "object") {
-      continue;
-    }
-
-    if (typeof block.text === "string" && block.text.trim()) {
-      parts.push(block.text.trim());
-      continue;
-    }
-
-    if (typeof block.content === "string" && block.content.trim()) {
-      parts.push(block.content.trim());
-      continue;
-    }
-
-    if (Array.isArray(block.children)) {
-      const nested = extractText(block.children);
-      if (nested) {
-        parts.push(nested);
-      }
-    }
-  }
-
-  return parts.join(" ").trim();
-}
-
-function buildPreviewText(item) {
-  if (!item) {
-    return "";
-  }
-
-  const text = extractText(item.contentBlocks) || normalizeText(item.content);
-  if (text) {
-    return text;
-  }
-
-  if (item.itemType === "event") {
-    return normalizeText(item.subtype) || "Event";
-  }
-
-  return "Attachment";
-}
-
-function buildInteractionPreview(interaction) {
-  if (!interaction || typeof interaction !== "object") {
-    return "Interaction requested";
-  }
-
-  if (interaction.kind === "user_input") {
-    const targetName =
-      interaction.target && typeof interaction.target.name === "string"
-        ? interaction.target.name.trim() || "a user"
-        : "a user";
-    const prompt =
-      interaction.userInput && typeof interaction.userInput.title === "string"
-        ? interaction.userInput.title.trim() || "A question"
-        : "A question";
-    if (interaction.status === "cancelled") {
-      return `Input request for ${targetName} was cancelled: ${prompt}`;
-    }
-    return interaction.status === "answered"
-      ? `${targetName} answered: ${prompt}`
-      : `Input requested from ${targetName}: ${prompt}`;
-  }
-
-  if (interaction.kind === "plan_approval") {
-    const targetName =
-      interaction.target && typeof interaction.target.name === "string"
-        ? interaction.target.name.trim() || "a user"
-        : "a user";
-    const title =
-      interaction.planApproval && typeof interaction.planApproval.title === "string"
-        ? interaction.planApproval.title.trim() || "Plan approval"
-        : "Plan approval";
-    if (interaction.status === "cancelled") {
-      return `Plan approval for ${targetName} was cancelled: ${title}`;
-    }
-    if (interaction.status === "approved") {
-      return `${targetName} approved: ${title}`;
-    }
-    if (interaction.status === "rejected") {
-      return `${targetName} requested changes: ${title}`;
-    }
-    return `Plan approval requested from ${targetName}: ${title}`;
-  }
-
-  const deviceName =
-    interaction.relayAuthorization &&
-    typeof interaction.relayAuthorization.deviceDisplayName === "string"
-      ? interaction.relayAuthorization.deviceDisplayName.trim() || "relay"
-      : "relay";
-  if (interaction.status === "cancelled") {
-    return `Relay authorization request was cancelled for ${deviceName}`;
-  }
-  if (interaction.status === "rejected") {
-    const resolverName =
-      interaction.resolvedBy && typeof interaction.resolvedBy.name === "string"
-        ? interaction.resolvedBy.name.trim() || "A user"
-        : "A user";
-    return `${resolverName} rejected access for ${deviceName}`;
-  }
-  if (interaction.status === "approved") {
-    const resolverName =
-      interaction.resolvedBy && typeof interaction.resolvedBy.name === "string"
-        ? interaction.resolvedBy.name.trim() || "A user"
-        : "A user";
-    return `${resolverName} approved access for ${deviceName}`;
-  }
-  if (interaction.status === "superseded") {
-    return `Relay authorization request was superseded for ${deviceName}`;
-  }
-  return `Relay authorization requested for ${deviceName}`;
-}
-
-function sortConversations(conversations) {
-  return [...conversations].sort((left, right) => {
-    const leftPinned = left.pinnedSortKey ? new Date(left.pinnedSortKey).getTime() : 0;
-    const rightPinned = right.pinnedSortKey ? new Date(right.pinnedSortKey).getTime() : 0;
-    if (leftPinned !== rightPinned) {
-      return rightPinned - leftPinned;
-    }
-
-    const leftAt =
-      (left.lastItem && left.lastItem.createdAt) || left.updatedAt || left.createdAt;
-    const rightAt =
-      (right.lastItem && right.lastItem.createdAt) || right.updatedAt || right.createdAt;
-
-    return new Date(rightAt).getTime() - new Date(leftAt).getTime();
-  });
-}
-
-function upsertConversation(conversations, incoming) {
-  return sortConversations(
-    conversations
-      .filter((conversation) => conversation.conversationId !== incoming.conversationId)
-      .concat(incoming),
-  );
-}
-
-function updateConversation(snapshot, conversationId, updater) {
-  const current = snapshot.conversations.find(
-    (conversation) => conversation.conversationId === conversationId,
-  );
-  if (!current) {
-    return snapshot;
-  }
-
-  return {
-    ...snapshot,
-    conversations: upsertConversation(snapshot.conversations, updater(current)),
-  };
-}
-
-function clearDeliveredOutbox(outbox, items) {
-  const deliveredClientIds = new Set(
-    (items || []).map((item) => item.clientMessageId).filter(Boolean),
-  );
-  if (deliveredClientIds.size === 0) {
-    return outbox;
-  }
-
-  const next = { ...outbox };
-  for (const clientMessageId of deliveredClientIds) {
-    delete next[clientMessageId];
-  }
-  return next;
-}
-
-function randomId(prefix) {
-  return `${prefix}-${Date.now().toString(36)}-${Math.random().toString(16).slice(2)}`;
-}
-
-function resolveApiUrl(apiBase, path) {
-  const base =
-    typeof apiBase === "string" && apiBase.trim()
-      ? apiBase.trim()
-      : "/api/v1";
-  return new URL(`${base.replace(/\/$/, "")}${path}`, self.location.origin).toString();
-}
-
-async function getAuthContext() {
-  const row = await withStore(
-    CHAT_WORKER_DB_NAME,
-    CHAT_WORKER_DB_VERSION,
-    CHAT_WORKER_STATE_STORE,
-    "readonly",
-    (db) => {
-      if (!db.objectStoreNames.contains(CHAT_WORKER_STATE_STORE)) {
-        db.createObjectStore(CHAT_WORKER_STATE_STORE, { keyPath: "key" });
-      }
-    },
-    (store) => requestToPromise(store.get("active")),
-  );
-
-  return row && row.payload ? row.payload : null;
-}
-
-async function saveAuthContext(payload) {
-  return withStore(
-    CHAT_WORKER_DB_NAME,
-    CHAT_WORKER_DB_VERSION,
-    CHAT_WORKER_STATE_STORE,
-    "readwrite",
-    (db) => {
-      if (!db.objectStoreNames.contains(CHAT_WORKER_STATE_STORE)) {
-        db.createObjectStore(CHAT_WORKER_STATE_STORE, { keyPath: "key" });
-      }
-    },
-    (store) =>
-      requestToPromise(
-        store.put({
-          key: "active",
-          payload,
-          updatedAt: new Date().toISOString(),
-        }),
-      ),
-  );
-}
-
-async function clearAuthContext() {
-  return withStore(
-    CHAT_WORKER_DB_NAME,
-    CHAT_WORKER_DB_VERSION,
-    CHAT_WORKER_STATE_STORE,
-    "readwrite",
-    (db) => {
-      if (!db.objectStoreNames.contains(CHAT_WORKER_STATE_STORE)) {
-        db.createObjectStore(CHAT_WORKER_STATE_STORE, { keyPath: "key" });
-      }
-    },
-    (store) => requestToPromise(store.delete("active")),
-  );
-}
-
-async function loadWorkspaceSnapshot(workspaceId) {
-  const row = await withStore(
-    CHAT_DB_NAME,
-    CHAT_DB_VERSION,
-    CHAT_SNAPSHOT_STORE,
-    "readonly",
-    (db) => {
-      if (!db.objectStoreNames.contains(CHAT_SNAPSHOT_STORE)) {
-        db.createObjectStore(CHAT_SNAPSHOT_STORE, { keyPath: "workspaceId" });
-      }
-    },
-    (store) => requestToPromise(store.get(workspaceId)),
-  );
-
-  if (!row || !row.payload || row.payload.version !== 1) {
-    return createEmptySnapshot(workspaceId);
-  }
-
-  return row.payload;
-}
-
-async function saveWorkspaceSnapshot(snapshot) {
-  return withStore(
-    CHAT_DB_NAME,
-    CHAT_DB_VERSION,
-    CHAT_SNAPSHOT_STORE,
-    "readwrite",
-    (db) => {
-      if (!db.objectStoreNames.contains(CHAT_SNAPSHOT_STORE)) {
-        db.createObjectStore(CHAT_SNAPSHOT_STORE, { keyPath: "workspaceId" });
-      }
-    },
-    (store) =>
-      requestToPromise(
-        store.put({
-          workspaceId: snapshot.workspaceId,
-          payload: snapshot,
-          updatedAt: new Date().toISOString(),
-        }),
-      ),
-  );
-}
-
-async function fetchJson(auth, path, options) {
-  const response = await fetch(resolveApiUrl(auth.apiBase, path), {
-    ...options,
-    credentials: "include",
-    headers: {
-      "Content-Type": "application/json",
-      ...(options && options.headers ? options.headers : {}),
-    },
-  });
-
-  const data = await response.json().catch(() => null);
-  if (!response.ok) {
-    throw new Error((data && data.error) || "Request failed");
-  }
-
-  return data;
-}
-
-async function bootstrapWorkspace(auth, snapshot) {
-  const bootstrap = await fetchJson(
-    auth,
-    `/workspaces/${auth.workspaceId}/chat/bootstrap`,
-  );
-
-  let next = snapshot || createEmptySnapshot(auth.workspaceId);
-  if (
-    next.workspaceMemberId &&
-    next.workspaceMemberId !== bootstrap.workspaceMemberId
-  ) {
-    next = createEmptySnapshot(auth.workspaceId);
-  }
-
-  const clientInstanceId = next.clientInstanceId || randomId("client");
-  await fetchJson(
-    auth,
-    `/workspaces/${auth.workspaceId}/chat/client-instances/${clientInstanceId}`,
-    {
-      method: "PUT",
-      body: JSON.stringify({
-        platform: "web-desktop",
-        deviceLabel: "Web Desktop Service Worker",
-        metadata: {
-          workspaceMemberId: bootstrap.workspaceMemberId,
-        },
-      }),
-    },
-  );
-
-  const conversations = (bootstrap.conversations || []).reduce(
-    (current, conversation) => upsertConversation(current, conversation),
-    next.conversations || [],
-  );
-
-  return {
-    ...next,
-    workspaceId: auth.workspaceId,
-    workspaceMemberId: bootstrap.workspaceMemberId,
-    clientInstanceId,
-    inboxCursor: Math.max(next.inboxCursor || 0, bootstrap.nextInboxCursor || 0),
-    lastBootstrappedAt: new Date().toISOString(),
-    conversations,
-  };
-}
-
-function shouldIncrementUnreadCount(conversation, item) {
-  return (
-    item.itemType === "message" &&
-    item.scope === "shared" &&
-    item.surface === "visible" &&
-    item.authorParticipantId !== conversation.viewerParticipantId
-  );
-}
-
-function applyReadWatermarkAck(snapshot, response) {
-  const pendingReads = { ...(snapshot.pendingReads || {}) };
-  const queued = pendingReads[response.conversationId];
-  if (queued && queued.readUpToSequence <= response.readWatermarkSequence) {
-    delete pendingReads[response.conversationId];
-  }
-
-  return updateConversation(
-    {
-      ...snapshot,
-      pendingReads,
-    },
-    response.conversationId,
-    (conversation) => ({
-      ...conversation,
-      unreadCount: 0,
-    }),
-  );
-}
-
-function applySyncEvent(snapshot, event) {
-  let next = {
-    ...snapshot,
-    inboxCursor: Math.max(snapshot.inboxCursor || 0, event.syncSeq || 0),
-  };
-
-  switch (event.eventType) {
-    case "conversation.upsert":
-      next = {
-        ...next,
-        conversations: upsertConversation(
-          next.conversations || [],
-          event.payload.conversation,
-        ),
+  var transactionDoneMap = /* @__PURE__ */ new WeakMap();
+  var transformCache = /* @__PURE__ */ new WeakMap();
+  var reverseTransformCache = /* @__PURE__ */ new WeakMap();
+  function promisifyRequest(request) {
+    const promise = new Promise((resolve, reject) => {
+      const unlisten = () => {
+        request.removeEventListener("success", success);
+        request.removeEventListener("error", error);
       };
-      break;
-    case "conversation.item.created": {
-      const conversationId = event.payload.conversationId;
-      const item = event.payload.item;
-
-      next = updateConversation(
-        {
-          ...next,
-          outbox: clearDeliveredOutbox(next.outbox || {}, [item]),
-        },
-        conversationId,
-        (conversation) => ({
-          ...conversation,
-          unreadCount:
-            shouldIncrementUnreadCount(conversation, item)
-              ? (conversation.unreadCount || 0) + 1
-              : conversation.unreadCount || 0,
-          updatedAt: item.createdAt,
-          lastItem: {
-            itemId: item.id,
-            sequence: item.sequence,
-            itemType: item.itemType,
-            subtype: item.subtype,
-            previewText: buildPreviewText(item),
-            authorParticipantId: item.authorParticipantId,
-            author: item.author,
-            createdAt: item.createdAt,
-          },
-        }),
-      );
-      break;
+      const success = () => {
+        resolve(wrap(request.result));
+        unlisten();
+      };
+      const error = () => {
+        reject(request.error);
+        unlisten();
+      };
+      request.addEventListener("success", success);
+      request.addEventListener("error", error);
+    });
+    reverseTransformCache.set(promise, request);
+    return promise;
+  }
+  function cacheDonePromiseForTransaction(tx) {
+    if (transactionDoneMap.has(tx))
+      return;
+    const done = new Promise((resolve, reject) => {
+      const unlisten = () => {
+        tx.removeEventListener("complete", complete);
+        tx.removeEventListener("error", error);
+        tx.removeEventListener("abort", error);
+      };
+      const complete = () => {
+        resolve();
+        unlisten();
+      };
+      const error = () => {
+        reject(tx.error || new DOMException("AbortError", "AbortError"));
+        unlisten();
+      };
+      tx.addEventListener("complete", complete);
+      tx.addEventListener("error", error);
+      tx.addEventListener("abort", error);
+    });
+    transactionDoneMap.set(tx, done);
+  }
+  var idbProxyTraps = {
+    get(target, prop, receiver) {
+      if (target instanceof IDBTransaction) {
+        if (prop === "done")
+          return transactionDoneMap.get(target);
+        if (prop === "store") {
+          return receiver.objectStoreNames[1] ? void 0 : receiver.objectStore(receiver.objectStoreNames[0]);
+        }
+      }
+      return wrap(target[prop]);
+    },
+    set(target, prop, value) {
+      target[prop] = value;
+      return true;
+    },
+    has(target, prop) {
+      if (target instanceof IDBTransaction && (prop === "done" || prop === "store")) {
+        return true;
+      }
+      return prop in target;
     }
-    case "conversation.read.updated": {
-      const payload = event.payload;
-      if (payload.workspaceMemberId !== next.workspaceMemberId) {
+  };
+  function replaceTraps(callback) {
+    idbProxyTraps = callback(idbProxyTraps);
+  }
+  function wrapFunction(func) {
+    if (getCursorAdvanceMethods().includes(func)) {
+      return function(...args) {
+        func.apply(unwrap(this), args);
+        return wrap(this.request);
+      };
+    }
+    return function(...args) {
+      return wrap(func.apply(unwrap(this), args));
+    };
+  }
+  function transformCachableValue(value) {
+    if (typeof value === "function")
+      return wrapFunction(value);
+    if (value instanceof IDBTransaction)
+      cacheDonePromiseForTransaction(value);
+    if (instanceOfAny(value, getIdbProxyableTypes()))
+      return new Proxy(value, idbProxyTraps);
+    return value;
+  }
+  function wrap(value) {
+    if (value instanceof IDBRequest)
+      return promisifyRequest(value);
+    if (transformCache.has(value))
+      return transformCache.get(value);
+    const newValue = transformCachableValue(value);
+    if (newValue !== value) {
+      transformCache.set(value, newValue);
+      reverseTransformCache.set(newValue, value);
+    }
+    return newValue;
+  }
+  var unwrap = (value) => reverseTransformCache.get(value);
+  function openDB(name, version, { blocked, upgrade, blocking, terminated } = {}) {
+    const request = indexedDB.open(name, version);
+    const openPromise = wrap(request);
+    if (upgrade) {
+      request.addEventListener("upgradeneeded", (event) => {
+        upgrade(wrap(request.result), event.oldVersion, event.newVersion, wrap(request.transaction), event);
+      });
+    }
+    if (blocked) {
+      request.addEventListener("blocked", (event) => blocked(
+        // Casting due to https://github.com/microsoft/TypeScript-DOM-lib-generator/pull/1405
+        event.oldVersion,
+        event.newVersion,
+        event
+      ));
+    }
+    openPromise.then((db) => {
+      if (terminated)
+        db.addEventListener("close", () => terminated());
+      if (blocking) {
+        db.addEventListener("versionchange", (event) => blocking(event.oldVersion, event.newVersion, event));
+      }
+    }).catch(() => {
+    });
+    return openPromise;
+  }
+  var readMethods = ["get", "getKey", "getAll", "getAllKeys", "count"];
+  var writeMethods = ["put", "add", "delete", "clear"];
+  var cachedMethods = /* @__PURE__ */ new Map();
+  function getMethod(target, prop) {
+    if (!(target instanceof IDBDatabase && !(prop in target) && typeof prop === "string")) {
+      return;
+    }
+    if (cachedMethods.get(prop))
+      return cachedMethods.get(prop);
+    const targetFuncName = prop.replace(/FromIndex$/, "");
+    const useIndex = prop !== targetFuncName;
+    const isWrite = writeMethods.includes(targetFuncName);
+    if (
+      // Bail if the target doesn't exist on the target. Eg, getAll isn't in Edge.
+      !(targetFuncName in (useIndex ? IDBIndex : IDBObjectStore).prototype) || !(isWrite || readMethods.includes(targetFuncName))
+    ) {
+      return;
+    }
+    const method = async function(storeName, ...args) {
+      const tx = this.transaction(storeName, isWrite ? "readwrite" : "readonly");
+      let target2 = tx.store;
+      if (useIndex)
+        target2 = target2.index(args.shift());
+      return (await Promise.all([
+        target2[targetFuncName](...args),
+        isWrite && tx.done
+      ]))[0];
+    };
+    cachedMethods.set(prop, method);
+    return method;
+  }
+  replaceTraps((oldTraps) => ({
+    ...oldTraps,
+    get: (target, prop, receiver) => getMethod(target, prop) || oldTraps.get(target, prop, receiver),
+    has: (target, prop) => !!getMethod(target, prop) || oldTraps.has(target, prop)
+  }));
+  var advanceMethodProps = ["continue", "continuePrimaryKey", "advance"];
+  var methodMap = {};
+  var advanceResults = /* @__PURE__ */ new WeakMap();
+  var ittrProxiedCursorToOriginalProxy = /* @__PURE__ */ new WeakMap();
+  var cursorIteratorTraps = {
+    get(target, prop) {
+      if (!advanceMethodProps.includes(prop))
+        return target[prop];
+      let cachedFunc = methodMap[prop];
+      if (!cachedFunc) {
+        cachedFunc = methodMap[prop] = function(...args) {
+          advanceResults.set(this, ittrProxiedCursorToOriginalProxy.get(this)[prop](...args));
+        };
+      }
+      return cachedFunc;
+    }
+  };
+  async function* iterate(...args) {
+    let cursor = this;
+    if (!(cursor instanceof IDBCursor)) {
+      cursor = await cursor.openCursor(...args);
+    }
+    if (!cursor)
+      return;
+    cursor = cursor;
+    const proxiedCursor = new Proxy(cursor, cursorIteratorTraps);
+    ittrProxiedCursorToOriginalProxy.set(proxiedCursor, cursor);
+    reverseTransformCache.set(proxiedCursor, unwrap(cursor));
+    while (cursor) {
+      yield proxiedCursor;
+      cursor = await (advanceResults.get(proxiedCursor) || cursor.continue());
+      advanceResults.delete(proxiedCursor);
+    }
+  }
+  function isIteratorProp(target, prop) {
+    return prop === Symbol.asyncIterator && instanceOfAny(target, [IDBIndex, IDBObjectStore, IDBCursor]) || prop === "iterate" && instanceOfAny(target, [IDBIndex, IDBObjectStore]);
+  }
+  replaceTraps((oldTraps) => ({
+    ...oldTraps,
+    get(target, prop, receiver) {
+      if (isIteratorProp(target, prop))
+        return iterate;
+      return oldTraps.get(target, prop, receiver);
+    },
+    has(target, prop) {
+      return isIteratorProp(target, prop) || oldTraps.has(target, prop);
+    }
+  }));
+
+  // lib/chat-service-worker-constants.ts
+  var CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL = "synapse.web.chat.worker";
+  var CHAT_WEB_SERVICE_WORKER_SYNC_TAG = "synapse-web-chat-sync";
+  var CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG = "synapse-web-chat-periodic-sync";
+
+  // lib/uuid.ts
+  var UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  function isUuid(value) {
+    return typeof value === "string" && UUID_PATTERN.test(value);
+  }
+
+  // lib/chat-persistence.ts
+  var CHAT_QUEUE_DB_NAME = "synapse-web-chat-queue";
+  var CHAT_QUEUE_DB_VERSION = 1;
+  var CHAT_QUEUE_STATE_STORE = "workspace_queue_states";
+  var queueDbPromise = null;
+  function getQueueDatabase() {
+    if (!queueDbPromise) {
+      queueDbPromise = openDB(
+        CHAT_QUEUE_DB_NAME,
+        CHAT_QUEUE_DB_VERSION,
+        {
+          upgrade(database) {
+            if (!database.objectStoreNames.contains(CHAT_QUEUE_STATE_STORE)) {
+              database.createObjectStore(CHAT_QUEUE_STATE_STORE, {
+                keyPath: "workspaceId"
+              });
+            }
+          }
+        }
+      );
+    }
+    return queueDbPromise;
+  }
+  function createEmptyStoredChatQueueState(workspaceId) {
+    return {
+      version: 3,
+      workspaceId,
+      inboxCursor: 0,
+      pendingReads: {},
+      outbox: {}
+    };
+  }
+  function normalizeStoredChatQueueState(workspaceId, value) {
+    if (!value || typeof value !== "object") {
+      return createEmptyStoredChatQueueState(workspaceId);
+    }
+    const snapshot = value;
+    if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
+      return createEmptyStoredChatQueueState(workspaceId);
+    }
+    const pendingReads = snapshot.pendingReads && typeof snapshot.pendingReads === "object" ? Object.fromEntries(
+      Object.entries(snapshot.pendingReads).filter(
+        ([conversationId, entry]) => Boolean(
+          conversationId && entry && typeof entry === "object" && typeof entry.conversationId === "string"
+        )
+      )
+    ) : {};
+    const outbox = snapshot.outbox && typeof snapshot.outbox === "object" ? Object.fromEntries(
+      Object.entries(snapshot.outbox).filter(
+        ([, entry]) => Boolean(
+          entry && typeof entry === "object" && typeof entry.clientMessageId === "string" && typeof entry.conversationId === "string"
+        )
+      )
+    ) : {};
+    return {
+      version: 3,
+      workspaceId,
+      workspaceMemberId: typeof snapshot.workspaceMemberId === "string" ? snapshot.workspaceMemberId : void 0,
+      clientInstanceId: typeof snapshot.clientInstanceId === "string" && isUuid(snapshot.clientInstanceId) ? snapshot.clientInstanceId : void 0,
+      inboxCursor: typeof snapshot.inboxCursor === "number" && Number.isFinite(snapshot.inboxCursor) ? snapshot.inboxCursor : 0,
+      lastBootstrappedAt: typeof snapshot.lastBootstrappedAt === "string" ? snapshot.lastBootstrappedAt : void 0,
+      pendingReads,
+      outbox
+    };
+  }
+  async function loadStoredChatQueueState(workspaceId) {
+    const database = await getQueueDatabase();
+    const row = await database.get(CHAT_QUEUE_STATE_STORE, workspaceId);
+    if (!row?.payload) {
+      return null;
+    }
+    return normalizeStoredChatQueueState(workspaceId, row.payload);
+  }
+  async function saveStoredChatQueueState(queueState) {
+    const database = await getQueueDatabase();
+    await database.put(CHAT_QUEUE_STATE_STORE, {
+      workspaceId: queueState.workspaceId,
+      payload: normalizeStoredChatQueueState(queueState.workspaceId, queueState),
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+  }
+  function sameStoredChatQueueState(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  // lib/workers/web-chat-service-worker.ts
+  var CHAT_WORKER_DB_NAME = "synapse-web-chat-worker";
+  var CHAT_WORKER_DB_VERSION = 1;
+  var CHAT_WORKER_AUTH_CONTEXT_STORE = "auth_context";
+  var scope = self;
+  var workerDbPromise = null;
+  function getWorkerDatabase() {
+    if (!workerDbPromise) {
+      workerDbPromise = openDB(
+        CHAT_WORKER_DB_NAME,
+        CHAT_WORKER_DB_VERSION,
+        {
+          upgrade(database) {
+            if (!database.objectStoreNames.contains(CHAT_WORKER_AUTH_CONTEXT_STORE)) {
+              database.createObjectStore(CHAT_WORKER_AUTH_CONTEXT_STORE, {
+                keyPath: "key"
+              });
+            }
+          }
+        }
+      );
+    }
+    return workerDbPromise;
+  }
+  async function loadAuthContext() {
+    const database = await getWorkerDatabase();
+    const row = await database.get(CHAT_WORKER_AUTH_CONTEXT_STORE, "active");
+    return row?.payload ?? null;
+  }
+  async function saveAuthContext(payload) {
+    const database = await getWorkerDatabase();
+    await database.put(CHAT_WORKER_AUTH_CONTEXT_STORE, {
+      key: "active",
+      payload,
+      updatedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+  }
+  async function clearAuthContext() {
+    const database = await getWorkerDatabase();
+    await database.delete(CHAT_WORKER_AUTH_CONTEXT_STORE, "active");
+  }
+  function sameStoredEntry(left, right) {
+    return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+  }
+  function latestIsoTimestamp(currentValue, nextValue) {
+    if (!currentValue) {
+      return nextValue;
+    }
+    if (!nextValue) {
+      return currentValue;
+    }
+    return new Date(currentValue).getTime() >= new Date(nextValue).getTime() ? currentValue : nextValue;
+  }
+  function mergeStoredQueueTransition(currentState, previousState, nextState) {
+    const nextWorkspaceState = currentState.workspaceMemberId && nextState.workspaceMemberId && currentState.workspaceMemberId !== nextState.workspaceMemberId ? createEmptyStoredChatQueueState(nextState.workspaceId) : currentState.workspaceId === nextState.workspaceId ? currentState : createEmptyStoredChatQueueState(nextState.workspaceId);
+    const previousOutbox = previousState?.outbox ?? {};
+    const previousPendingReads = previousState?.pendingReads ?? {};
+    const nextOutbox = { ...nextWorkspaceState.outbox };
+    const nextPendingReads = { ...nextWorkspaceState.pendingReads };
+    for (const clientMessageId of Object.keys(previousOutbox)) {
+      if (!(clientMessageId in nextState.outbox)) {
+        delete nextOutbox[clientMessageId];
+      }
+    }
+    for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
+      if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
+        nextOutbox[clientMessageId] = entry;
+      }
+    }
+    for (const conversationId of Object.keys(previousPendingReads)) {
+      if (!(conversationId in nextState.pendingReads)) {
+        const currentEntry = nextPendingReads[conversationId];
+        const previousEntry = previousPendingReads[conversationId];
+        if (currentEntry && previousEntry && currentEntry.readUpToSequence > previousEntry.readUpToSequence) {
+          continue;
+        }
+        delete nextPendingReads[conversationId];
+      }
+    }
+    for (const [conversationId, entry] of Object.entries(nextState.pendingReads)) {
+      if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
+        nextPendingReads[conversationId] = entry;
+      }
+    }
+    return {
+      ...nextWorkspaceState,
+      workspaceId: nextState.workspaceId,
+      workspaceMemberId: nextState.workspaceMemberId || nextWorkspaceState.workspaceMemberId,
+      clientInstanceId: nextState.clientInstanceId || nextWorkspaceState.clientInstanceId,
+      inboxCursor: Math.max(nextWorkspaceState.inboxCursor || 0, nextState.inboxCursor || 0),
+      lastBootstrappedAt: latestIsoTimestamp(
+        nextWorkspaceState.lastBootstrappedAt,
+        nextState.lastBootstrappedAt
+      ),
+      pendingReads: nextPendingReads,
+      outbox: nextOutbox
+    };
+  }
+  function resolveApiUrl(apiBase, path) {
+    const base = typeof apiBase === "string" && apiBase.trim() ? apiBase.trim() : "/api/v1";
+    return new URL(`${base.replace(/\/$/, "")}${path}`, scope.location.origin).toString();
+  }
+  scope.addEventListener("install", (event) => {
+    event.waitUntil(scope.skipWaiting());
+  });
+  scope.addEventListener("activate", (event) => {
+    event.waitUntil(scope.clients.claim());
+  });
+  scope.addEventListener("message", (event) => {
+    const message = event.data || {};
+    switch (message.type) {
+      case "chat:set-auth-context":
+        event.waitUntil(
+          saveAuthContext(message.payload).then(
+            () => runSyncPass(message.payload.workspaceId, "auth-context")
+          )
+        );
+        break;
+      case "chat:clear-auth-context":
+        event.waitUntil(clearAuthContext());
+        break;
+      case "chat:run-sync":
+        event.waitUntil(runSyncPass(null, message.payload?.reason));
+        break;
+    }
+  });
+  scope.addEventListener("sync", (event) => {
+    const syncEvent = event;
+    if (syncEvent.tag === CHAT_WEB_SERVICE_WORKER_SYNC_TAG) {
+      syncEvent.waitUntil(runSyncPass(null, "background-sync"));
+    }
+  });
+  scope.addEventListener("periodicsync", (event) => {
+    const syncEvent = event;
+    if (syncEvent.tag === CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG) {
+      syncEvent.waitUntil(runSyncPass(null, "periodic-sync"));
+    }
+  });
+  async function fetchJson(auth, path, options) {
+    const response = await fetch(resolveApiUrl(auth.apiBase, path), {
+      ...options,
+      credentials: "include",
+      headers: {
+        "Content-Type": "application/json",
+        ...options?.headers ?? {}
+      }
+    });
+    const data = await response.json().catch(() => null);
+    if (!response.ok) {
+      throw new Error(data && data.error || "Request failed");
+    }
+    return data;
+  }
+  function applyReadWatermarkAck(snapshot, response) {
+    const pendingReads = { ...snapshot.pendingReads };
+    const queued = pendingReads[response.conversationId];
+    if (queued && queued.readUpToSequence <= response.readWatermarkSequence) {
+      delete pendingReads[response.conversationId];
+    }
+    return {
+      ...snapshot,
+      pendingReads
+    };
+  }
+  async function flushPendingReads(auth, snapshot) {
+    if (!snapshot.clientInstanceId) {
+      return snapshot;
+    }
+    let next = snapshot;
+    const entries = Object.values(snapshot.pendingReads).sort(
+      (left, right) => left.readUpToSequence - right.readUpToSequence
+    );
+    for (const entry of entries) {
+      try {
+        const response = await fetchJson(
+          auth,
+          `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/read-watermark`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              clientInstanceId: snapshot.clientInstanceId,
+              readUpToSequence: entry.readUpToSequence,
+              lastVisibleSequence: entry.lastVisibleSequence
+            })
+          }
+        );
+        next = applyReadWatermarkAck(next, response);
+      } catch {
         break;
       }
-
-      const pendingReads = { ...(next.pendingReads || {}) };
-      const queued = pendingReads[payload.conversationId];
-      if (queued && queued.readUpToSequence <= payload.readWatermarkSequence) {
-        delete pendingReads[payload.conversationId];
+    }
+    return next;
+  }
+  async function flushOutbox(auth, snapshot) {
+    if (!snapshot.clientInstanceId) {
+      return snapshot;
+    }
+    let next = snapshot;
+    const entries = Object.values(snapshot.outbox).sort(
+      (left, right) => left.optimisticSequence - right.optimisticSequence
+    );
+    for (const entry of entries) {
+      const currentEntry = next.outbox[entry.clientMessageId];
+      if (!currentEntry) {
+        continue;
       }
-
-      next = updateConversation(
-        {
-          ...next,
-          pendingReads,
-        },
-        payload.conversationId,
-        (conversation) => ({
-          ...conversation,
-          unreadCount: 0,
-        }),
-      );
-      break;
-    }
-    case "interaction.updated": {
-      const payload = event.payload;
-      if (
-        payload.itemId &&
-        next.conversations.some(
-          (conversation) => conversation.conversationId === payload.conversationId,
-        )
-      ) {
-        next = updateConversation(next, payload.conversationId, (conversation) => ({
-          ...conversation,
-          lastItem:
-            conversation.lastItem &&
-            conversation.lastItem.itemId === payload.itemId
-              ? {
-                  ...conversation.lastItem,
-                  previewText: buildInteractionPreview(payload.interaction),
-                }
-              : conversation.lastItem,
-        }));
-      }
-      break;
-    }
-  }
-
-  return next;
-}
-
-async function flushPendingReads(auth, snapshot) {
-  if (!snapshot.clientInstanceId) {
-    return snapshot;
-  }
-
-  let next = snapshot;
-  const entries = Object.values(snapshot.pendingReads || {}).sort(
-    (left, right) => left.readUpToSequence - right.readUpToSequence,
-  );
-
-  for (const entry of entries) {
-    try {
-      const response = await fetchJson(
-        auth,
-        `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/read-watermark`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            clientInstanceId: snapshot.clientInstanceId,
-            readUpToSequence: entry.readUpToSequence,
-            lastVisibleSequence: entry.lastVisibleSequence,
-          }),
-        },
-      );
-      next = applyReadWatermarkAck(next, response);
-    } catch {
-      break;
-    }
-  }
-
-  return next;
-}
-
-async function flushOutbox(auth, snapshot) {
-  if (!snapshot.clientInstanceId) {
-    return snapshot;
-  }
-
-  let next = snapshot;
-  const entries = Object.values(snapshot.outbox || {}).sort(
-    (left, right) => left.optimisticSequence - right.optimisticSequence,
-  );
-
-  for (const entry of entries) {
-    next = {
-      ...next,
-      outbox: {
-        ...next.outbox,
-        [entry.clientMessageId]: {
-          ...next.outbox[entry.clientMessageId],
-          attemptCount: (next.outbox[entry.clientMessageId].attemptCount || 0) + 1,
-          lastAttemptAt: new Date().toISOString(),
-        },
-      },
-    };
-
-    try {
-      const response = await fetchJson(
-        auth,
-        `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
-        {
-          method: "POST",
-          body: JSON.stringify({
-            clientInstanceId: snapshot.clientInstanceId,
-            clientMessageId: entry.clientMessageId,
-            contentBlocks: entry.contentBlocks,
-            replyToItemId: entry.replyToItemId,
-          }),
-        },
-      );
-
-      const item = response.item;
-      const nextOutbox = { ...next.outbox };
-      delete nextOutbox[entry.clientMessageId];
-
-      next = updateConversation(
-        {
-          ...next,
-          outbox: nextOutbox,
-        },
-        entry.conversationId,
-        (conversation) => ({
-          ...conversation,
-          updatedAt: item.createdAt,
-          lastItem: {
-            itemId: item.id,
-            sequence: item.sequence,
-            itemType: item.itemType,
-            subtype: item.subtype,
-            previewText: buildPreviewText(item),
-            authorParticipantId: item.authorParticipantId,
-            author: item.author,
-            createdAt: item.createdAt,
-          },
-        }),
-      );
-    } catch (error) {
       next = {
         ...next,
         outbox: {
           ...next.outbox,
           [entry.clientMessageId]: {
-            ...next.outbox[entry.clientMessageId],
-            status: "retrying",
-            firstFailedAt:
-              next.outbox[entry.clientMessageId].firstFailedAt ||
-              new Date().toISOString(),
-            lastErrorMessage:
-              error && error.message ? error.message : "Failed to send message",
-          },
-        },
+            ...currentEntry,
+            attemptCount: (currentEntry.attemptCount || 0) + 1,
+            lastAttemptAt: (/* @__PURE__ */ new Date()).toISOString()
+          }
+        }
       };
-      break;
-    }
-  }
-
-  return next;
-}
-
-async function broadcast(message) {
-  try {
-    if ("BroadcastChannel" in self) {
-      const channel = new BroadcastChannel(CHAT_BROADCAST_CHANNEL);
-      channel.postMessage(message);
-      channel.close();
-    }
-  } catch {}
-
-  const clients = await self.clients.matchAll({
-    includeUncontrolled: true,
-    type: "window",
-  });
-
-  for (const client of clients) {
-    client.postMessage(message);
-  }
-}
-
-async function runSyncPass(workspaceIdOverride, reason) {
-  try {
-    const auth = await getAuthContext();
-    if (!auth || !auth.workspaceId || !auth.apiBase) {
-      return;
-    }
-
-    const effectiveAuth = {
-      ...auth,
-      workspaceId: workspaceIdOverride || auth.workspaceId,
-    };
-
-    let snapshot = await loadWorkspaceSnapshot(effectiveAuth.workspaceId);
-    snapshot = await bootstrapWorkspace(effectiveAuth, snapshot);
-
-    let cursor = snapshot.inboxCursor || 0;
-    let hasMore = true;
-
-    while (hasMore) {
-      const response = await fetchJson(
-        effectiveAuth,
-        `/workspaces/${effectiveAuth.workspaceId}/chat/sync?cursor=${encodeURIComponent(
-          String(cursor),
-        )}&limit=200`,
-      );
-
-      for (const event of response.events || []) {
-        snapshot = applySyncEvent(snapshot, event);
+      try {
+        await fetchJson(
+          auth,
+          `/workspaces/${auth.workspaceId}/chat/conversations/${entry.conversationId}/messages`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              clientInstanceId: snapshot.clientInstanceId,
+              clientMessageId: entry.clientMessageId,
+              contentBlocks: entry.contentBlocks,
+              replyToItemId: entry.replyToItemId
+            })
+          }
+        );
+        const nextOutbox = { ...next.outbox };
+        delete nextOutbox[entry.clientMessageId];
+        next = {
+          ...next,
+          outbox: nextOutbox
+        };
+      } catch (error) {
+        const failedEntry = next.outbox[entry.clientMessageId];
+        if (!failedEntry) {
+          break;
+        }
+        next = {
+          ...next,
+          outbox: {
+            ...next.outbox,
+            [entry.clientMessageId]: {
+              ...failedEntry,
+              status: "retrying",
+              firstFailedAt: failedEntry.firstFailedAt || (/* @__PURE__ */ new Date()).toISOString(),
+              lastErrorMessage: error instanceof Error ? error.message : "Failed to send message"
+            }
+          }
+        };
+        break;
       }
-
-      cursor = response.nextCursor;
-      hasMore = Boolean(response.hasMore);
     }
-
-    snapshot = await flushPendingReads(effectiveAuth, snapshot);
-    snapshot = await flushOutbox(effectiveAuth, snapshot);
-    await saveWorkspaceSnapshot(snapshot);
-
-    await broadcast({
-      type: "chat:snapshot-updated",
-      payload: {
-        workspaceId: effectiveAuth.workspaceId,
-        reason: reason || "sync-pass",
-      },
-    });
-  } catch {
-    await broadcast({
-      type: "chat:sync-failed",
-      payload: {
-        reason: reason || "sync-pass",
-      },
-    });
+    return next;
   }
-}
+  async function broadcast(message) {
+    try {
+      if ("BroadcastChannel" in scope) {
+        const channel = new BroadcastChannel(CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL);
+        channel.postMessage(message);
+        channel.close();
+      }
+    } catch {
+    }
+    const clients = await scope.clients.matchAll({
+      includeUncontrolled: true,
+      type: "window"
+    });
+    for (const client of clients) {
+      client.postMessage(message);
+    }
+  }
+  async function runSyncPass(workspaceIdOverride, reason) {
+    try {
+      const auth = await loadAuthContext();
+      if (!auth || !auth.workspaceId || !auth.apiBase) {
+        return;
+      }
+      const effectiveAuth = {
+        ...auth,
+        workspaceId: workspaceIdOverride || auth.workspaceId
+      };
+      const startingSnapshot = await loadStoredChatQueueState(effectiveAuth.workspaceId) || createEmptyStoredChatQueueState(effectiveAuth.workspaceId);
+      if (!startingSnapshot.clientInstanceId) {
+        return;
+      }
+      let nextSnapshot = await flushPendingReads(effectiveAuth, startingSnapshot);
+      nextSnapshot = await flushOutbox(effectiveAuth, nextSnapshot);
+      if (!sameStoredChatQueueState(startingSnapshot, nextSnapshot)) {
+        await saveStoredChatQueueState(
+          mergeStoredQueueTransition(
+            await loadStoredChatQueueState(effectiveAuth.workspaceId) || createEmptyStoredChatQueueState(effectiveAuth.workspaceId),
+            startingSnapshot,
+            nextSnapshot
+          )
+        );
+      }
+      await broadcast({
+        type: "chat:queue-updated",
+        payload: {
+          workspaceId: effectiveAuth.workspaceId,
+          reason: reason || "queue-sync"
+        }
+      });
+    } catch {
+      await broadcast({
+        type: "chat:queue-sync-failed",
+        payload: {
+          reason: reason || "queue-sync"
+        }
+      });
+    }
+  }
+})();

@@ -1,6 +1,9 @@
 "use client"
 
-import type { ActorRuntimeState } from "@synapse/shared"
+import type {
+  ActorRuntimeState,
+  RemoteAgentRuntimeState,
+} from "@synapse/shared"
 import {
   getActorRuntimeCurrentTool,
   getActorRuntimePriority,
@@ -13,8 +16,55 @@ export {
   isActorRuntimeActive,
 } from "@synapse/shared"
 
-export function getRuntimeLabel(runtime?: ActorRuntimeState) {
+function isActorRuntime(
+  runtime: ActorRuntimeState | RemoteAgentRuntimeState | undefined
+): runtime is ActorRuntimeState {
+  return Boolean(runtime && "actorId" in runtime)
+}
+
+export function getRemoteAgentRuntimePriority(runtime?: RemoteAgentRuntimeState) {
+  if (!runtime) return 120
+  switch (runtime.state) {
+    case "waiting_user_input":
+    case "waiting_plan_approval":
+      return 0
+    case "plan_drafting":
+      return 1
+    case "running":
+      return 2
+    case "error":
+      return 3
+    case "idle":
+      return 4
+    case "offline":
+    default:
+      return 5
+  }
+}
+
+export function getRuntimeLabel(
+  runtime?: ActorRuntimeState | RemoteAgentRuntimeState
+) {
   if (!runtime) return undefined
+  if (!isActorRuntime(runtime)) {
+    switch (runtime.state) {
+      case "running":
+        return "Working"
+      case "waiting_user_input":
+        return "Needs input"
+      case "plan_drafting":
+        return "Drafting plan"
+      case "waiting_plan_approval":
+        return "Needs approval"
+      case "error":
+        return "Error"
+      case "offline":
+        return "Offline"
+      case "idle":
+      default:
+        return "Idle"
+    }
+  }
   if (runtime.health === "error" || runtime.laneState === "blocked") {
     return "Error"
   }
@@ -23,8 +73,21 @@ export function getRuntimeLabel(runtime?: ActorRuntimeState) {
   return "Idle"
 }
 
-export function getRuntimeDetail(runtime?: ActorRuntimeState) {
+export function getRuntimeDetail(
+  runtime?: ActorRuntimeState | RemoteAgentRuntimeState
+) {
   if (!runtime) return undefined
+  if (!isActorRuntime(runtime)) {
+    if (runtime.lastError?.message) return runtime.lastError.message
+    if (runtime.statusText) return runtime.statusText
+    if (runtime.unreadDeliveryCount > 0) {
+      return `${runtime.unreadDeliveryCount} unread message${runtime.unreadDeliveryCount === 1 ? "" : "s"}`
+    }
+    if (runtime.pendingConversationCount > 0) {
+      return `${runtime.pendingConversationCount} active conversation${runtime.pendingConversationCount === 1 ? "" : "s"}`
+    }
+    return runtime.sessionId ? `Session ${runtime.sessionId}` : undefined
+  }
   if (runtime.lastError?.message) return runtime.lastError.message
 
   const targets = getActorRuntimeProcessingTargets(runtime)

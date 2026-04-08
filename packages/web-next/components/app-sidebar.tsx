@@ -23,6 +23,7 @@ import {
   Moon,
   Puzzle,
   ScrollText,
+  SquareTerminal,
   ShieldCheck,
   Sun,
 } from "lucide-react"
@@ -63,6 +64,7 @@ const mainItems = [
   { href: "/dashboard", label: "Home", icon: House },
   { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
   { href: "/dashboard/contacts", label: "Contacts", icon: ContactRound },
+  { href: "/dashboard/remote-agents", label: "Remote Agents", icon: SquareTerminal },
 ]
 
 const knowledgeItems = [
@@ -122,6 +124,10 @@ function isItemActive(pathname: string, href: string) {
 
   if (href === "/dashboard/plugins") {
     return pathname === href || pathname.startsWith("/dashboard/plugins/")
+  }
+
+  if (href === "/dashboard/remote-agents") {
+    return pathname === href || pathname.startsWith("/dashboard/remote-agents/")
   }
 
   if (href === "/dashboard/triggers") {

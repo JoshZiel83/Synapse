@@ -130,18 +130,6 @@ const REQUIRED_SCHEMA_SPECS: RequiredSchemaSpec[] = [
     reason: "web QR login requests",
   },
   {
-    table: "authz_outbox",
-    requiredColumns: [
-      "resource_type",
-      "resource_id",
-      "relation",
-      "subject_type",
-      "subject_id",
-      "status",
-    ],
-    reason: "SpiceDB relationship outbox",
-  },
-  {
     table: "realtime_event_outbox",
     requiredColumns: [
       "event_type",

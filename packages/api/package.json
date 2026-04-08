@@ -18,7 +18,6 @@
     "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts"
   },
   "dependencies": {
-    "@authzed/authzed-node": "^1.6.1",
     "@dicebear/collection": "^9.4.2",
     "@dicebear/core": "^9.4.2",
     "@fastify/cookie": "^9.4.0",

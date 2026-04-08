@@ -27,14 +27,6 @@ import {
 import { emitEvent } from '../../infrastructure/events/index.js';
 import { config } from '../../config/index.js';
 import {
-  diffAuthzRelationships,
-  flushAuthzOutboxEntries,
-  queueAuthzRelationships,
-  touchConversationActorContext,
-  touchRelation,
-  type AuthzRelationMutation,
-} from '../../infrastructure/authz/index.js';
-import {
   buildMemorySearchText,
   buildMemoryTextDigest,
   queueMemoryItemEmbeddingIndex,
@@ -150,16 +142,6 @@ const MEMORY_LEXICAL_TOKEN_LIMIT = 24;
 const MEMORY_LEXICAL_QUERY_MAX_CHARS = 512;
 const MEMORY_RRF_K = 60;
 
-async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (entryIds.length === 0) return;
-
-  try {
-    await flushAuthzOutboxEntries(entryIds);
-  } catch (error) {
-    console.error(`[authz] Failed to flush ${source} relationship updates:`, error);
-  }
-}
-
 function parseJsonObject(value: unknown): Record<string, unknown> {
   if (!value) return {};
   if (typeof value === 'string') {
@@ -182,8 +164,18 @@ function normalizeWhitespace(value: string) {
 }
 
 function truncateText(value: string, maxChars: number) {
-  if (value.length <= maxChars) return value;
-  return value.slice(0, Math.max(0, maxChars - 3)).trimEnd() + '...';
+  const ellipsis = '...';
+  if (maxChars <= 0) return '';
+  if (maxChars <= ellipsis.length) return ellipsis.slice(0, maxChars);
+
+  const codePoints = Array.from(value);
+  if (codePoints.length <= maxChars) return value;
+  return (
+    codePoints
+      .slice(0, Math.max(0, maxChars - ellipsis.length))
+      .join('')
+      .trimEnd() + ellipsis
+  );
 }
 
 function buildLexicalVariants(queryText: string) {
@@ -640,84 +632,6 @@ async function resolveConversationActorContextId(
   return context.conversationActorContextId;
 }
 
-function buildMemorySpaceOwnerRelations(params: {
-  workspaceId: string;
-  spaceId: string;
-  binding: MemorySpaceBinding;
-  conversationActorContextId?: string;
-}): AuthzRelationMutation[] {
-  switch (params.binding.spaceType) {
-    case 'workspace_shared':
-      return [
-        touchRelation('memory_space', params.spaceId, 'owner_workspace', 'workspace', params.workspaceId),
-      ];
-    case 'conversation_shared':
-      return params.binding.conversationId
-        ? [touchRelation('memory_space', params.spaceId, 'owner_conversation', 'conversation', params.binding.conversationId)]
-        : [];
-    case 'actor_private':
-      return params.binding.actorId
-        ? [touchRelation('memory_space', params.spaceId, 'owner_actor', 'actor', params.binding.actorId)]
-        : [];
-    case 'participant_private':
-      return params.binding.actorId
-        && params.binding.conversationId
-        && params.conversationActorContextId
-        ? [
-            ...touchConversationActorContext({
-              conversationActorContextId: params.conversationActorContextId,
-              actorId: params.binding.actorId,
-              conversationId: params.binding.conversationId,
-            }),
-            touchRelation(
-              'memory_space',
-              params.spaceId,
-              'owner_participant',
-              'conversation_actor_context',
-              params.conversationActorContextId,
-            ),
-          ]
-        : [];
-    case 'user_private':
-      return params.binding.workspaceMemberId
-        ? [
-            touchRelation(
-              'memory_space',
-              params.spaceId,
-              'owner_workspace_member',
-              'workspace_member',
-              params.binding.workspaceMemberId,
-            ),
-          ]
-        : [];
-    default:
-      return [];
-  }
-}
-
-function buildMemorySpaceAuthzRelations(params: {
-  workspaceId: string;
-  spaceId: string;
-  binding: MemorySpaceBinding;
-  conversationActorContextId?: string;
-}) {
-  return [
-    touchRelation('memory_space', params.spaceId, 'workspace', 'workspace', params.workspaceId),
-    ...buildMemorySpaceOwnerRelations(params),
-  ];
-}
-
-function buildMemoryItemAuthzRelations(params: {
-  workspaceId: string;
-  memoryItemId: string;
-  spaceId: string;
-}) {
-  return [
-    touchRelation('memory_item', params.memoryItemId, 'workspace', 'workspace', params.workspaceId),
-    touchRelation('memory_item', params.memoryItemId, 'space', 'memory_space', params.spaceId),
-  ];
-}
-
 async function findExistingMemorySpace(
   client: QueryExecutor,
   workspaceId: string,
@@ -805,7 +719,6 @@ async function ensureMemorySpace(
     return {
       spaceId: existing.id,
       conversationActorContextId: conversationActorContextId || undefined,
-      authzEntryIds: [] as string[],
     };
   }
 
@@ -827,25 +740,9 @@ async function ensureMemorySpace(
       }),
   );
 
-  const authzEntryIds = await queueAuthzRelationships(
-    client as any,
-    buildMemorySpaceAuthzRelations({
-      workspaceId,
-      spaceId,
-      binding,
-      conversationActorContextId: conversationActorContextId || undefined,
-    }),
-    {
-      source: 'memory_space.create',
-      workspaceId,
-      memorySpaceId: spaceId,
-    },
-  );
-
   return {
     spaceId,
     conversationActorContextId: conversationActorContextId || undefined,
-    authzEntryIds,
   };
 }
 
@@ -1477,7 +1374,7 @@ export async function createMemory(workspaceId: UUID, input: CreateMemoryInput) 
   const normalizedContent = await normalizeMemoryContent(input);
   const memoryItemId = uuidv4();
 
-  const authzEntryIds = await transaction(async (client) => {
+  await transaction(async (client) => {
     const ensuredSpace = await ensureMemorySpace(client, workspaceId, binding);
     await executeCompiledQuery(
       client,
@@ -1513,24 +1410,7 @@ export async function createMemory(workspaceId: UUID, input: CreateMemoryInput) 
     );
     await insertMemoryParts(client, memoryItemId, normalizedContent.parts);
     await maybeMarkSuperseded(client, input.supersedesMemoryId);
-    const itemAuthzEntryIds = await queueAuthzRelationships(
-      client as any,
-      buildMemoryItemAuthzRelations({
-        workspaceId,
-        memoryItemId,
-        spaceId: ensuredSpace.spaceId,
-      }),
-      {
-        source: 'memory_item.create',
-        workspaceId,
-        memoryItemId,
-      },
-    );
-
-    return [...ensuredSpace.authzEntryIds, ...itemAuthzEntryIds];
   });
-
-  await flushQueuedAuthzEntries(authzEntryIds, 'memory.create');
 
   const lexicalIndex = await rebuildMemoryItemLexicalIndex(memoryItemId);
   if (lexicalIndex) {
@@ -1587,7 +1467,7 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
     category: input.category || existing.category,
   });
 
-  const authzEntryIds = await transaction(async (client) => {
+  await transaction(async (client) => {
     const ensuredSpace = await ensureMemorySpace(client, workspaceId, nextBinding);
     await executeCompiledQuery(
       client,
@@ -1619,32 +1499,7 @@ export async function updateMemory(workspaceId: UUID, memoryId: UUID, input: Upd
     );
     await insertMemoryParts(client, memoryId, normalizedContent.parts);
     await maybeMarkSuperseded(client, input.supersedesMemoryId);
-
-    const itemAuthzEntryIds = await queueAuthzRelationships(
-      client as any,
-      diffAuthzRelationships(
-        buildMemoryItemAuthzRelations({
-          workspaceId,
-          memoryItemId: memoryId,
-          spaceId: existing.spaceId,
-        }),
-        buildMemoryItemAuthzRelations({
-          workspaceId,
-          memoryItemId: memoryId,
-          spaceId: ensuredSpace.spaceId,
-        }),
-      ),
-      {
-        source: 'memory_item.update',
-        workspaceId,
-        memoryItemId: memoryId,
-      },
-    );
-
-    return [...ensuredSpace.authzEntryIds, ...itemAuthzEntryIds];
   });
-
-  await flushQueuedAuthzEntries(authzEntryIds, 'memory.update');
 
   const lexicalIndex = await rebuildMemoryItemLexicalIndex(memoryId);
   if (lexicalIndex) {
@@ -1659,7 +1514,7 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
   if (!existingRow) {
     throw new MemoryError('Memory not found', 404);
   }
-  const result = await transaction(async (client) => {
+  await transaction(async (client) => {
     const deleted = await executeCompiledQuery(
       client,
       db
@@ -1670,28 +1525,7 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
     if (!deleted.rowCount) {
       throw new MemoryError('Memory not found', 404);
     }
-
-    const authzEntryIds = await queueAuthzRelationships(
-      client as any,
-      diffAuthzRelationships(
-        buildMemoryItemAuthzRelations({
-          workspaceId,
-          memoryItemId: memoryId,
-          spaceId: existingRow.memory_space_id,
-        }),
-        [],
-      ),
-      {
-        source: 'memory_item.delete',
-        workspaceId,
-        memoryItemId: memoryId,
-      },
-    );
-
-    return { authzEntryIds };
   });
-
-  await flushQueuedAuthzEntries(result.authzEntryIds, 'memory.delete');
 }
 
 export async function listMemories(workspaceId: UUID, input: ListMemoriesInput) {

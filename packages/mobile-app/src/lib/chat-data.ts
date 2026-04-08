@@ -1,5 +1,6 @@
 import Feather from "@expo/vector-icons/Feather";
 
+import { isUuid } from "@/lib/ids";
 import {
   extractText,
   summarizeConversationEvent,
@@ -39,11 +40,13 @@ export interface ChatConversationMeta {
   readWatermarkSequence: number;
   hasMoreBefore: boolean;
   hasLoadedLatest: boolean;
+  loadingLatest: boolean;
   lastFetchedAt?: string;
+  latestLoadError?: string;
 }
 
 export interface ChatWorkspaceSnapshot {
-  version: 3;
+  version: 4;
   workspaceId: string;
   workspaceMemberId?: string;
   clientInstanceId?: string;
@@ -52,6 +55,17 @@ export interface ChatWorkspaceSnapshot {
   conversations: ChatConversationView[];
   itemsByConversationId: Record<string, ChatConversationItem[]>;
   metaByConversationId: Record<string, ChatConversationMeta>;
+  pendingReads: Record<string, PendingChatRead>;
+  outbox: Record<string, PendingChatOutboxMessage>;
+}
+
+export interface ChatWorkspaceQueueState {
+  version: 1;
+  workspaceId: string;
+  workspaceMemberId?: string;
+  clientInstanceId?: string;
+  inboxCursor: number;
+  lastBootstrappedAt?: string;
   pendingReads: Record<string, PendingChatRead>;
   outbox: Record<string, PendingChatOutboxMessage>;
 }
@@ -66,7 +80,7 @@ export function createEmptyChatWorkspaceSnapshot(
   workspaceId: string,
 ): ChatWorkspaceSnapshot {
   return {
-    version: 3,
+    version: 4,
     workspaceId,
     inboxCursor: 0,
     conversations: [],
@@ -75,6 +89,79 @@ export function createEmptyChatWorkspaceSnapshot(
     pendingReads: {},
     outbox: {},
   };
+}
+
+export function createEmptyChatWorkspaceQueueState(
+  workspaceId: string,
+): ChatWorkspaceQueueState {
+  return {
+    version: 1,
+    workspaceId,
+    inboxCursor: 0,
+    pendingReads: {},
+    outbox: {},
+  };
+}
+
+function normalizePendingReads(
+  value: unknown,
+  validConversationIds?: Set<string>,
+): Record<string, PendingChatRead> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.values(value as Record<string, unknown>)
+      .filter(
+        (entry): entry is PendingChatRead =>
+          Boolean(
+            entry &&
+              typeof entry === "object" &&
+              typeof (entry as { conversationId?: unknown }).conversationId === "string" &&
+              typeof (entry as { readUpToSequence?: unknown }).readUpToSequence === "number" &&
+              typeof (entry as { lastVisibleSequence?: unknown }).lastVisibleSequence === "number" &&
+              typeof (entry as { updatedAt?: unknown }).updatedAt === "string",
+          ),
+      )
+      .filter(
+        (entry) =>
+          !validConversationIds || validConversationIds.has(entry.conversationId),
+      )
+      .map((entry) => [entry.conversationId, entry] as const),
+  );
+}
+
+function normalizeOutbox(
+  value: unknown,
+  validConversationIds?: Set<string>,
+): Record<string, PendingChatOutboxMessage> {
+  if (!value || typeof value !== "object") {
+    return {};
+  }
+
+  return Object.fromEntries(
+    Object.values(value as Record<string, unknown>)
+      .filter(
+        (entry): entry is PendingChatOutboxMessage =>
+          Boolean(
+            entry &&
+              typeof entry === "object" &&
+              typeof (entry as { clientMessageId?: unknown }).clientMessageId === "string" &&
+              typeof (entry as { conversationId?: unknown }).conversationId === "string" &&
+              Array.isArray((entry as { contentBlocks?: unknown }).contentBlocks) &&
+              typeof (entry as { createdAt?: unknown }).createdAt === "string" &&
+              typeof (entry as { optimisticSequence?: unknown }).optimisticSequence === "number" &&
+              typeof (entry as { status?: unknown }).status === "string" &&
+              typeof (entry as { attemptCount?: unknown }).attemptCount === "number",
+          ),
+      )
+      .filter(
+        (entry) =>
+          !validConversationIds || validConversationIds.has(entry.conversationId),
+      )
+      .map((entry) => [entry.clientMessageId, entry] as const),
+  );
 }
 
 export function normalizeChatWorkspaceSnapshot(
@@ -87,7 +174,7 @@ export function normalizeChatWorkspaceSnapshot(
 
   const snapshot = value as Partial<ChatWorkspaceSnapshot>;
 
-  if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
+  if (snapshot.version !== 4 || snapshot.workspaceId !== workspaceId) {
     return createEmptyChatWorkspaceSnapshot(workspaceId);
   }
 
@@ -112,14 +199,15 @@ export function normalizeChatWorkspaceSnapshot(
   );
 
   return {
-    version: 3,
+    version: 4,
     workspaceId,
     workspaceMemberId:
       typeof snapshot.workspaceMemberId === "string"
         ? snapshot.workspaceMemberId
         : undefined,
     clientInstanceId:
-      typeof snapshot.clientInstanceId === "string"
+      typeof snapshot.clientInstanceId === "string" &&
+      isUuid(snapshot.clientInstanceId)
         ? snapshot.clientInstanceId
         : undefined,
     inboxCursor:
@@ -146,26 +234,110 @@ export function normalizeChatWorkspaceSnapshot(
         ? Object.fromEntries(
             Object.entries(
               snapshot.metaByConversationId as Record<string, ChatConversationMeta>,
-            ).filter(([conversationId]) => validConversationIds.has(conversationId)),
+            )
+              .filter(([conversationId]) => validConversationIds.has(conversationId))
+              .map(([conversationId, meta]) => [
+                conversationId,
+                {
+                  readWatermarkSequence:
+                    typeof meta?.readWatermarkSequence === "number"
+                      ? meta.readWatermarkSequence
+                      : 0,
+                  hasMoreBefore: Boolean(meta?.hasMoreBefore),
+                  hasLoadedLatest: Boolean(meta?.hasLoadedLatest),
+                  loadingLatest: false,
+                  lastFetchedAt:
+                    typeof meta?.lastFetchedAt === "string"
+                      ? meta.lastFetchedAt
+                      : undefined,
+                } satisfies ChatConversationMeta,
+              ]),
           )
         : {},
-    pendingReads:
-      snapshot.pendingReads && typeof snapshot.pendingReads === "object"
-        ? Object.fromEntries(
-            Object.entries(
-              snapshot.pendingReads as Record<string, PendingChatRead>,
-            ).filter(([conversationId]) => validConversationIds.has(conversationId)),
-          )
-        : {},
-    outbox:
-      snapshot.outbox && typeof snapshot.outbox === "object"
-        ? Object.fromEntries(
-            Object.entries(
-              snapshot.outbox as Record<string, PendingChatOutboxMessage>,
-            ).filter(([, entry]) => validConversationIds.has(entry.conversationId)),
-          )
-        : {},
+    pendingReads: normalizePendingReads(snapshot.pendingReads, validConversationIds),
+    outbox: normalizeOutbox(snapshot.outbox, validConversationIds),
   };
+}
+
+export function normalizeChatWorkspaceQueueState(
+  workspaceId: string,
+  value: unknown,
+): ChatWorkspaceQueueState {
+  if (!value || typeof value !== "object") {
+    return createEmptyChatWorkspaceQueueState(workspaceId);
+  }
+
+  const queueState = value as Partial<ChatWorkspaceQueueState>;
+  if (queueState.version !== 1 || queueState.workspaceId !== workspaceId) {
+    return createEmptyChatWorkspaceQueueState(workspaceId);
+  }
+
+  return {
+    version: 1,
+    workspaceId,
+    workspaceMemberId:
+      typeof queueState.workspaceMemberId === "string"
+        ? queueState.workspaceMemberId
+        : undefined,
+    clientInstanceId:
+      typeof queueState.clientInstanceId === "string" &&
+      isUuid(queueState.clientInstanceId)
+        ? queueState.clientInstanceId
+        : undefined,
+    inboxCursor:
+      typeof queueState.inboxCursor === "number" &&
+      Number.isFinite(queueState.inboxCursor)
+        ? queueState.inboxCursor
+        : 0,
+    lastBootstrappedAt:
+      typeof queueState.lastBootstrappedAt === "string"
+        ? queueState.lastBootstrappedAt
+        : undefined,
+    pendingReads: normalizePendingReads(queueState.pendingReads),
+    outbox: normalizeOutbox(queueState.outbox),
+  };
+}
+
+export function toChatWorkspaceQueueState(
+  snapshot: ChatWorkspaceSnapshot,
+): ChatWorkspaceQueueState {
+  return {
+    version: 1,
+    workspaceId: snapshot.workspaceId,
+    workspaceMemberId: snapshot.workspaceMemberId,
+    clientInstanceId: snapshot.clientInstanceId,
+    inboxCursor: snapshot.inboxCursor,
+    lastBootstrappedAt: snapshot.lastBootstrappedAt,
+    pendingReads: snapshot.pendingReads,
+    outbox: snapshot.outbox,
+  };
+}
+
+export function applyChatWorkspaceQueueState(
+  snapshot: ChatWorkspaceSnapshot,
+  queueState: ChatWorkspaceQueueState,
+): ChatWorkspaceSnapshot {
+  return {
+    ...snapshot,
+    workspaceId: queueState.workspaceId,
+    workspaceMemberId: queueState.workspaceMemberId ?? snapshot.workspaceMemberId,
+    clientInstanceId: queueState.clientInstanceId ?? snapshot.clientInstanceId,
+    inboxCursor: Math.max(snapshot.inboxCursor, queueState.inboxCursor),
+    lastBootstrappedAt:
+      queueState.lastBootstrappedAt ?? snapshot.lastBootstrappedAt,
+    pendingReads: queueState.pendingReads,
+    outbox: queueState.outbox,
+  };
+}
+
+export function buildChatWorkspaceSnapshotFromQueueState(
+  workspaceId: string,
+  queueState: ChatWorkspaceQueueState | null,
+): ChatWorkspaceSnapshot {
+  return applyChatWorkspaceQueueState(
+    createEmptyChatWorkspaceSnapshot(workspaceId),
+    queueState ?? createEmptyChatWorkspaceQueueState(workspaceId),
+  );
 }
 
 export function sortChatConversations(conversations: ChatConversationView[]) {
@@ -372,6 +544,7 @@ export function getConversationMetaOrDefault(
       readWatermarkSequence: 0,
       hasMoreBefore: false,
       hasLoadedLatest: false,
+      loadingLatest: false,
     }
   );
 }
@@ -600,6 +773,17 @@ export function getMobileConversationItems(
   }
 
   return sortChatItems([...merged.values()]);
+}
+
+export function getConfirmedConversationMaxSequence(
+  items: Array<Pick<ChatConversationItem, "sequence"> & { localOnly?: boolean }>,
+) {
+  return items.reduce((maxSequence, item) => {
+    if (item.localOnly) {
+      return maxSequence;
+    }
+    return Math.max(maxSequence, Number(item.sequence || 0));
+  }, 0);
 }
 
 export function getConversationParticipantMap(

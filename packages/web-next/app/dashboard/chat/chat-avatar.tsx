@@ -5,13 +5,27 @@ import { Avatar, AvatarBadge, AvatarFallback, AvatarImage } from '@/components/u
 import { resolveFileUrl } from '@/lib/utils';
 import { getTwemojiUrl } from '@/lib/twemoji';
 import { cn } from '@/lib/utils';
-import type { ActorAvatarStatus, ThinkingPhase } from '@/stores/chat-store';
+import type {
+  ActorAvatarStatus,
+  RemoteAgentAvatarStatus,
+  ThinkingPhase,
+} from '@/stores/chat-store';
 
-const STATUS_DOT_CLASS: Record<ActorAvatarStatus, string> = {
+const ACTOR_STATUS_DOT_CLASS: Record<ActorAvatarStatus, string> = {
   idle: 'bg-muted-foreground/50',
   thinking: 'bg-sky-500',
   tool: 'bg-amber-500',
   responding: 'bg-emerald-500',
+  error: 'bg-destructive',
+};
+
+const REMOTE_AGENT_STATUS_DOT_CLASS: Record<RemoteAgentAvatarStatus, string> = {
+  offline: 'bg-muted-foreground/40',
+  idle: 'bg-muted-foreground/60',
+  running: 'bg-emerald-500',
+  waiting_user_input: 'bg-amber-500',
+  plan_drafting: 'bg-sky-500',
+  waiting_plan_approval: 'bg-orange-500',
   error: 'bg-destructive',
 };
 
@@ -24,9 +38,9 @@ interface ChatAvatarProps {
   name?: string;
   avatarUrl?: string;
   emoji?: string;
-  entityType?: 'conversation' | 'workspace_member' | 'actor' | 'external';
+  entityType?: 'conversation' | 'workspace_member' | 'actor' | 'remote_agent' | 'external';
   size?: 'sm' | 'default' | 'lg';
-  statusState?: ActorAvatarStatus;
+  statusState?: ActorAvatarStatus | RemoteAgentAvatarStatus;
   statusPhase?: ThinkingPhase;
   statusLabel?: string;
   statusDetail?: string;
@@ -46,8 +60,17 @@ export default function ChatAvatar({
   className,
 }: ChatAvatarProps) {
   const resolvedAvatarUrl = resolveFileUrl(avatarUrl);
-  const emojiUrl = !resolvedAvatarUrl && entityType === 'actor' ? getTwemojiUrl(emoji) : null;
+  const emojiUrl =
+    !resolvedAvatarUrl && (entityType === 'actor' || entityType === 'remote_agent')
+      ? getTwemojiUrl(emoji)
+      : null;
   const badgeState = statusState || statusPhase;
+  const badgeClass =
+    badgeState && entityType === 'remote_agent'
+      ? REMOTE_AGENT_STATUS_DOT_CLASS[badgeState as RemoteAgentAvatarStatus]
+      : badgeState
+        ? ACTOR_STATUS_DOT_CLASS[badgeState as ActorAvatarStatus]
+        : null;
   const avatar = (
     <Avatar size={size} className={cn(className)}>
       {resolvedAvatarUrl ? (
@@ -56,13 +79,17 @@ export default function ChatAvatar({
         <AvatarImage src={emojiUrl} alt={name || entityType} className="bg-muted p-1" />
       ) : null}
       <AvatarFallback>{getInitial(name)}</AvatarFallback>
-      {entityType === 'actor' && badgeState ? (
-        <AvatarBadge className={cn('shadow-sm ring-2 ring-background', STATUS_DOT_CLASS[badgeState])} />
+      {(entityType === 'actor' || entityType === 'remote_agent') && badgeState && badgeClass ? (
+        <AvatarBadge className={cn('shadow-sm ring-2 ring-background', badgeClass)} />
       ) : null}
     </Avatar>
   );
 
-  if (entityType !== 'actor' || !badgeState || (!statusLabel && !statusDetail && !name)) {
+  if (
+    (entityType !== 'actor' && entityType !== 'remote_agent') ||
+    !badgeState ||
+    (!statusLabel && !statusDetail && !name)
+  ) {
     return avatar;
   }
 

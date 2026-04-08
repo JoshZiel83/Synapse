@@ -3,18 +3,10 @@ import { v4 as uuidv4 } from "uuid";
 import { transaction } from "../../infrastructure/database/index.js";
 import {
   db,
+  executeSql,
   executeCompiledQuery,
   executeTakeFirst,
 } from "../../infrastructure/database/kysely.js";
-import {
-  buildWorkspaceMemberContextId,
-  deleteRelation,
-  enqueueAuthzRelationships,
-  flushAuthzOutboxEntries,
-  queueAuthzRelationships,
-  touchRelation,
-  touchWorkspaceMemberContext,
-} from "../../infrastructure/authz/index.js";
 import { getFileUrlById } from "../files/service.js";
 import {
   authorizeAction,
@@ -38,8 +30,10 @@ import { mapConversationSummaryView } from "../chat/summary-view.js";
 
 export const CONTACT_HUB_KINDS = [
   "workspace-actor",
+  "workspace-remote-agent",
   "workspace-member",
   "friend-actor",
+  "friend-remote-agent",
   "friend-member",
 ] as const;
 
@@ -48,7 +42,7 @@ export type ContactHubKind = (typeof CONTACT_HUB_KINDS)[number];
 type ApprovalMode = "auto" | "manual";
 type AccessPolicy = "workspace_open" | "approval_required";
 type RequestStatus = "pending" | "approved" | "rejected";
-type ContactTargetType = "member" | "actor";
+type ContactTargetType = "member" | "actor" | "remote_agent";
 type IdentitySearchOutcome =
   | "empty"
   | "invalid"
@@ -89,6 +83,18 @@ type ActorSummary = {
   isPublicShared: boolean;
 };
 
+type RemoteAgentSummary = {
+  workspace: WorkspaceSummary;
+  remoteAgentId: string;
+  name: string;
+  title: string;
+  runtimeKind: "claude_code" | "codex";
+  avatarFileId?: string | null;
+  avatarEmoji?: string | null;
+  accessPolicy: AccessPolicy;
+  isPublicShared: boolean;
+};
+
 type ContactHubEntry = {
   kind: ContactHubKind;
   id: string;
@@ -101,6 +107,7 @@ type ContactHubEntry = {
   workspaceMemberId?: string;
   userId?: string;
   actorId?: string;
+  remoteAgentId?: string;
   relationLabel: string;
   directState: {
     status: "existing" | "available" | "approval_required" | "pending_approval";
@@ -156,15 +163,6 @@ function workspaceSummary(row: {
     name: row.workspace_name || row.name || "Unknown workspace",
     slug: row.workspace_slug || row.slug || "",
   };
-}
-
-async function flushAuthzEntries(entryIds: string[], source: string) {
-  if (entryIds.length === 0) return;
-  try {
-    await flushAuthzOutboxEntries(entryIds);
-  } catch (error) {
-    console.error(`[authz] Failed to flush ${source}:`, error);
-  }
 }
 
 async function getWorkspaceById(workspaceId: string): Promise<WorkspaceSummary | null> {
@@ -297,6 +295,59 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
   };
 }
 
+async function getRemoteAgentSummary(
+  remoteAgentId: string,
+): Promise<RemoteAgentSummary | null> {
+  const result = await executeSql<{
+    remote_agent_id: string;
+    workspace_id: string;
+    workspace_name: string;
+    workspace_slug: string;
+    name: string;
+    title: string;
+    runtime_kind: "claude_code" | "codex";
+    avatar_file_id: string | null;
+    avatar_emoji: string | null;
+    access_policy: AccessPolicy;
+    is_public_shared: boolean;
+  }>(
+    `
+      SELECT
+        ra.id AS remote_agent_id,
+        ra.workspace_id,
+        w.name AS workspace_name,
+        w.slug AS workspace_slug,
+        ra.name,
+        ra.title,
+        ra.runtime_kind,
+        ra.avatar_file_id,
+        ra.avatar_emoji,
+        ra.access_policy,
+        ra.is_public_shared
+      FROM remote_agents ra
+      INNER JOIN workspaces w ON w.id = ra.workspace_id
+      WHERE ra.id = $1
+        AND ra.is_active = TRUE
+      LIMIT 1
+    `,
+    [remoteAgentId],
+  );
+
+  const row = result.rows[0];
+  if (!row) return null;
+  return {
+    workspace: workspaceSummary(row),
+    remoteAgentId: row.remote_agent_id,
+    name: row.name,
+    title: row.title,
+    runtimeKind: row.runtime_kind,
+    avatarFileId: row.avatar_file_id,
+    avatarEmoji: row.avatar_emoji,
+    accessPolicy: row.access_policy,
+    isPublicShared: Boolean(row.is_public_shared),
+  };
+}
+
 function mapMemberFriendEntry(params: {
   entryId: string;
   peer: WorkspaceMemberSummary;
@@ -338,6 +389,30 @@ function mapActorFriendEntry(params: {
     avatarEmoji: params.actor.avatarEmoji || undefined,
     workspace: params.actor.workspace,
     actorId: params.actor.actorId,
+    relationLabel: "Friend",
+    directState: params.conversationId
+      ? { status: "existing", conversationId: params.conversationId }
+      : { status: "available" },
+  };
+}
+
+function mapRemoteAgentFriendEntry(params: {
+  entryId: string;
+  remoteAgent: RemoteAgentSummary;
+  conversationId?: string;
+}): ContactHubEntry {
+  return {
+    kind: "friend-remote-agent",
+    id: params.entryId,
+    targetType: "remote_agent",
+    title: params.remoteAgent.name,
+    subtitle: `${params.remoteAgent.workspace.name} · ${params.remoteAgent.title}`,
+    avatarUrl: params.remoteAgent.avatarFileId
+      ? getFileUrlById(params.remoteAgent.avatarFileId)
+      : undefined,
+    avatarEmoji: params.remoteAgent.avatarEmoji || undefined,
+    workspace: params.remoteAgent.workspace,
+    remoteAgentId: params.remoteAgent.remoteAgentId,
     relationLabel: "Friend",
     directState: params.conversationId
       ? { status: "existing", conversationId: params.conversationId }
@@ -393,12 +468,38 @@ function mapWorkspaceActorEntry(params: {
   };
 }
 
+function mapWorkspaceRemoteAgentEntry(params: {
+  remoteAgent: RemoteAgentSummary;
+  conversationId?: string;
+  accessState: "existing" | "available" | "approval_required" | "pending_approval";
+}): ContactHubEntry {
+  return {
+    kind: "workspace-remote-agent",
+    id: params.remoteAgent.remoteAgentId,
+    targetType: "remote_agent",
+    title: params.remoteAgent.name,
+    subtitle: params.remoteAgent.title,
+    avatarUrl: params.remoteAgent.avatarFileId
+      ? getFileUrlById(params.remoteAgent.avatarFileId)
+      : undefined,
+    avatarEmoji: params.remoteAgent.avatarEmoji || undefined,
+    workspace: params.remoteAgent.workspace,
+    remoteAgentId: params.remoteAgent.remoteAgentId,
+    relationLabel: "Workspace agent",
+    directState:
+      params.accessState === "existing"
+        ? { status: "existing", conversationId: params.conversationId }
+        : { status: params.accessState },
+  };
+}
+
 async function ensureRelationshipProfile(params: {
   workspaceId: string;
   createdByWorkspaceMemberId: string;
   subjectType: ContactTargetType;
   subjectWorkspaceMemberId?: string;
   subjectActorId?: string;
+  subjectRemoteAgentId?: string;
 }) {
   let queryBuilder = db
     .selectFrom("workspace_relationship_profiles")
@@ -412,7 +513,13 @@ async function ensureRelationshipProfile(params: {
           "=",
           params.subjectWorkspaceMemberId || null,
         )
-      : queryBuilder.where("subject_actor_id", "=", params.subjectActorId || null);
+      : params.subjectType === "actor"
+        ? queryBuilder.where("subject_actor_id", "=", params.subjectActorId || null)
+        : queryBuilder.where(
+            "subject_remote_agent_id",
+            "=",
+            params.subjectRemoteAgentId || null,
+          );
   const existing = await queryBuilder.executeTakeFirst();
   if (existing) return existing;
 
@@ -426,6 +533,10 @@ async function ensureRelationshipProfile(params: {
           ? params.subjectWorkspaceMemberId || null
           : null,
       subject_actor_id: params.subjectType === "actor" ? params.subjectActorId || null : null,
+      subject_remote_agent_id:
+        params.subjectType === "remote_agent"
+          ? params.subjectRemoteAgentId || null
+          : null,
       qr_token: uuidv4(),
       created_by_workspace_member_id: params.createdByWorkspaceMemberId,
       approval_mode: "manual",
@@ -471,55 +582,37 @@ async function updateActorAccessPolicy(params: {
     if (!nextActor) {
       throw new Error("Actor not found");
     }
-
-    const operation =
-      params.accessPolicy === "workspace_open" ? touchRelation : deleteRelation;
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      [
-        operation(
-          "actor",
-          params.actorId,
-          "discover_workspace",
-          "workspace",
-          params.workspaceId,
-        ),
-        operation(
-          "actor",
-          params.actorId,
-          "invoke_workspace",
-          "workspace",
-          params.workspaceId,
-        ),
-        operation(
-          "actor",
-          params.actorId,
-          "receive_workspace",
-          "workspace",
-          params.workspaceId,
-        ),
-      ],
-      {
-        source: "relationship.actor_access_policy",
-        workspaceId: params.workspaceId,
-        actorId: params.actorId,
-        accessPolicy: params.accessPolicy,
-        updatedByWorkspaceMemberId: params.updatedByWorkspaceMemberId,
-      },
-    );
-
-    return {
-      actor: nextActor,
-      authzEntryIds,
-    };
+    return nextActor;
   });
+  return result;
+}
 
-  await flushAuthzEntries(
-    result.authzEntryIds,
-    "relationship.actor_access_policy",
+async function updateRemoteAgentAccessPolicy(params: {
+  workspaceId: string;
+  remoteAgentId: string;
+  accessPolicy: AccessPolicy;
+}) {
+  const result = await executeSql<{
+    id: string;
+    workspace_id: string;
+    access_policy: AccessPolicy;
+  }>(
+    `
+      UPDATE remote_agents
+      SET access_policy = $3,
+          updated_at = NOW()
+      WHERE id = $1
+        AND workspace_id = $2
+        AND is_active = TRUE
+      RETURNING id, workspace_id, access_policy
+    `,
+    [params.remoteAgentId, params.workspaceId, params.accessPolicy],
   );
-
-  return result.actor;
+  const row = result.rows[0];
+  if (!row) {
+    throw new Error("Remote agent not found");
+  }
+  return row;
 }
 
 async function grantActorAccess(params: {
@@ -534,47 +627,33 @@ async function grantActorAccess(params: {
   if (!requester || requester.workspace.id !== params.workspaceId) {
     throw new Error("Workspace member not found");
   }
-  const workspaceMemberContextId = buildWorkspaceMemberContextId(
-    requester.workspaceMemberId,
+
+  await ensureFriendEntry({
+    workspaceId: params.workspaceId,
+    ownerWorkspaceMemberId: requester.workspaceMemberId,
+    peerType: "actor",
+    peerActorId: params.actorId,
+  });
+}
+
+async function grantRemoteAgentAccess(params: {
+  workspaceId: string;
+  remoteAgentId: string;
+  requesterWorkspaceMemberId: string;
+}) {
+  const requester = await getWorkspaceMemberSummaryById(
+    params.requesterWorkspaceMemberId,
   );
-  const entryIds = await enqueueAuthzRelationships(
-    [
-      ...touchWorkspaceMemberContext({
-        workspaceMemberId: requester.workspaceMemberId,
-        workspaceId: params.workspaceId,
-        userId: requester.userId,
-      }),
-      touchRelation(
-        "actor",
-        params.actorId,
-        "discover_workspace_member",
-        "workspace_member",
-        workspaceMemberContextId,
-      ),
-      touchRelation(
-        "actor",
-        params.actorId,
-        "invoke_workspace_member",
-        "workspace_member",
-        workspaceMemberContextId,
-      ),
-      touchRelation(
-        "actor",
-        params.actorId,
-        "receive_workspace_member",
-        "workspace_member",
-        workspaceMemberContextId,
-      ),
-    ],
-    {
-      source: "relationship.actor_access_grant",
-      workspaceId: params.workspaceId,
-      actorId: params.actorId,
-      requesterWorkspaceMemberId: params.requesterWorkspaceMemberId,
-      grantedByWorkspaceMemberId: params.grantedByWorkspaceMemberId,
-    },
-  );
-  await flushAuthzEntries(entryIds, "relationship.actor_access_grant");
+  if (!requester || requester.workspace.id !== params.workspaceId) {
+    throw new Error("Workspace member not found");
+  }
+
+  await ensureFriendEntry({
+    workspaceId: params.workspaceId,
+    ownerWorkspaceMemberId: requester.workspaceMemberId,
+    peerType: "remote_agent",
+    peerRemoteAgentId: params.remoteAgentId,
+  });
 }
 
 async function ensureFriendEntry(params: {
@@ -583,6 +662,7 @@ async function ensureFriendEntry(params: {
   peerType: ContactTargetType;
   peerWorkspaceMemberId?: string;
   peerActorId?: string;
+  peerRemoteAgentId?: string;
   sourceRequestId?: string;
 }) {
   await db
@@ -596,6 +676,10 @@ async function ensureFriendEntry(params: {
           ? params.peerWorkspaceMemberId || null
           : null,
       peer_actor_id: params.peerType === "actor" ? params.peerActorId || null : null,
+      peer_remote_agent_id:
+        params.peerType === "remote_agent"
+          ? params.peerRemoteAgentId || null
+          : null,
       source_request_id: params.sourceRequestId || null,
     })
     .onConflict((oc) => oc.doNothing())
@@ -608,6 +692,7 @@ async function findExistingFriendEntry(params: {
   peerType: ContactTargetType;
   peerWorkspaceMemberId?: string;
   peerActorId?: string;
+  peerRemoteAgentId?: string;
 }) {
   let queryBuilder = db
     .selectFrom("workspace_friend_entries")
@@ -622,7 +707,13 @@ async function findExistingFriendEntry(params: {
           "=",
           params.peerWorkspaceMemberId || null,
         )
-      : queryBuilder.where("peer_actor_id", "=", params.peerActorId || null);
+      : params.peerType === "actor"
+        ? queryBuilder.where("peer_actor_id", "=", params.peerActorId || null)
+        : queryBuilder.where(
+            "peer_remote_agent_id",
+            "=",
+            params.peerRemoteAgentId || null,
+          );
   return queryBuilder.executeTakeFirst();
 }
 
@@ -631,6 +722,7 @@ async function findPendingFriendRequest(params: {
   targetType: ContactTargetType;
   targetWorkspaceMemberId?: string;
   targetActorId?: string;
+  targetRemoteAgentId?: string;
 }) {
   let queryBuilder = db
     .selectFrom("workspace_friend_requests")
@@ -649,7 +741,13 @@ async function findPendingFriendRequest(params: {
           "=",
           params.targetWorkspaceMemberId || null,
         )
-      : queryBuilder.where("target_actor_id", "=", params.targetActorId || null);
+      : params.targetType === "actor"
+        ? queryBuilder.where("target_actor_id", "=", params.targetActorId || null)
+        : queryBuilder.where(
+            "target_remote_agent_id",
+            "=",
+            params.targetRemoteAgentId || null,
+          );
   return queryBuilder.executeTakeFirst();
 }
 
@@ -658,6 +756,7 @@ async function createFriendRequest(params: {
   targetType: ContactTargetType;
   targetWorkspaceMemberId?: string;
   targetActorId?: string;
+  targetRemoteAgentId?: string;
   profileId?: string;
 }) {
   const existing = await findPendingFriendRequest(params);
@@ -675,6 +774,10 @@ async function createFriendRequest(params: {
             ? params.targetWorkspaceMemberId || null
             : null,
         target_actor_id: params.targetType === "actor" ? params.targetActorId || null : null,
+        target_remote_agent_id:
+          params.targetType === "remote_agent"
+            ? params.targetRemoteAgentId || null
+            : null,
         requested_via_profile_id: params.profileId || null,
         status: "pending",
       })
@@ -747,6 +850,78 @@ async function createActorAccessRequest(params: {
   }
 }
 
+async function createRemoteAgentAccessRequest(params: {
+  workspaceId: string;
+  remoteAgentId: string;
+  requesterWorkspaceMemberId: string;
+}) {
+  const existing = await executeSql<any>(
+    `
+      SELECT *
+      FROM remote_agent_access_requests
+      WHERE workspace_id = $1
+        AND remote_agent_id = $2
+        AND requester_workspace_member_id = $3
+        AND status = 'pending'
+      LIMIT 1
+    `,
+    [
+      params.workspaceId,
+      params.remoteAgentId,
+      params.requesterWorkspaceMemberId,
+    ],
+  );
+  if (existing.rows[0]) {
+    return { request: existing.rows[0], created: false as const };
+  }
+
+  try {
+    const created = await executeSql<any>(
+      `
+        INSERT INTO remote_agent_access_requests (
+          workspace_id,
+          remote_agent_id,
+          requester_workspace_member_id,
+          status,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, 'pending', NOW(), NOW())
+        RETURNING *
+      `,
+      [
+        params.workspaceId,
+        params.remoteAgentId,
+        params.requesterWorkspaceMemberId,
+      ],
+    );
+    if (!created.rows[0]) {
+      throw new Error("Failed to create remote agent access request");
+    }
+    return { request: created.rows[0], created: true as const };
+  } catch (error) {
+    if (!isUniqueViolation(error)) throw error;
+    const retry = await executeSql<any>(
+      `
+        SELECT *
+        FROM remote_agent_access_requests
+        WHERE workspace_id = $1
+          AND remote_agent_id = $2
+          AND requester_workspace_member_id = $3
+          AND status = 'pending'
+        LIMIT 1
+      `,
+      [
+        params.workspaceId,
+        params.remoteAgentId,
+        params.requesterWorkspaceMemberId,
+      ],
+    );
+    if (!retry.rows[0]) throw error;
+    return { request: retry.rows[0], created: false as const };
+  }
+}
+
 async function loadViewerDirectConversationMap(workspaceMemberId: string) {
   const rows = await db
     .selectFrom("direct_conversation_bindings")
@@ -797,6 +972,11 @@ async function findDirectConversationId(
       values.participant_one_workspace_member_id,
     )
     .where("participant_one_actor_id", "=", values.participant_one_actor_id)
+    .where(
+      "participant_one_remote_agent_id",
+      "=",
+      values.participant_one_remote_agent_id,
+    )
     .where("participant_two_kind", "=", values.participant_two_kind)
     .where(
       "participant_two_workspace_member_id",
@@ -804,6 +984,11 @@ async function findDirectConversationId(
       values.participant_two_workspace_member_id,
     )
     .where("participant_two_actor_id", "=", values.participant_two_actor_id)
+    .where(
+      "participant_two_remote_agent_id",
+      "=",
+      values.participant_two_remote_agent_id,
+    )
     .executeTakeFirst();
   return row?.conversation_id || null;
 }
@@ -828,6 +1013,31 @@ async function getActorAccessState(params: {
     return "available" as const;
   }
   if (params.pendingRequestActorIds.has(params.actor.actorId)) {
+    return "pending_approval" as const;
+  }
+  return "approval_required" as const;
+}
+
+async function getRemoteAgentAccessState(params: {
+  workspaceId: string;
+  userId: string;
+  remoteAgent: RemoteAgentSummary;
+  conversationId?: string;
+  pendingRequestRemoteAgentIds: Set<string>;
+}) {
+  if (params.conversationId) return "existing" as const;
+  const canInvoke = await authorizeAction({
+    subject: await resolveWorkspaceAccessSubject(
+      params.workspaceId,
+      params.userId,
+    ),
+    action: "remote_agent.invoke",
+    resourceId: params.remoteAgent.remoteAgentId,
+  });
+  if (canInvoke || params.remoteAgent.accessPolicy === "workspace_open") {
+    return "available" as const;
+  }
+  if (params.pendingRequestRemoteAgentIds.has(params.remoteAgent.remoteAgentId)) {
     return "pending_approval" as const;
   }
   return "approval_required" as const;
@@ -874,6 +1084,21 @@ async function resolveContactReference(params: {
     };
   }
 
+  if (params.contactKind === "workspace-remote-agent") {
+    const remoteAgent = await getRemoteAgentSummary(params.contactId);
+    if (!remoteAgent || remoteAgent.workspace.id !== params.workspaceId) {
+      throw new Error("Remote agent not found");
+    }
+    return {
+      kind: params.contactKind,
+      remoteAgent,
+      peerIdentity: {
+        kind: "remote_agent" as const,
+        remoteAgentId: remoteAgent.remoteAgentId,
+      },
+    };
+  }
+
   const friendEntry = await db
     .selectFrom("workspace_friend_entries")
     .selectAll()
@@ -902,6 +1127,27 @@ async function resolveContactReference(params: {
       peerIdentity: {
         kind: "member" as const,
         workspaceMemberId: member.workspaceMemberId,
+      },
+    };
+  }
+
+  if (params.contactKind === "friend-remote-agent") {
+    if (!friendEntry.peer_remote_agent_id) {
+      throw new Error("Friend not found");
+    }
+    const remoteAgent = await getRemoteAgentSummary(
+      friendEntry.peer_remote_agent_id,
+    );
+    if (!remoteAgent) {
+      throw new Error("Friend not found");
+    }
+    return {
+      kind: params.contactKind,
+      friendEntry,
+      remoteAgent,
+      peerIdentity: {
+        kind: "remote_agent" as const,
+        remoteAgentId: remoteAgent.remoteAgentId,
       },
     };
   }
@@ -937,7 +1183,7 @@ async function buildContactHubEntryMap(params: {
         viewerWorkspaceMember.workspaceMemberId,
       )
     : new Map<string, string>();
-  const [members, actors, friendEntries, pendingActorAccessRows] =
+  const [members, actors, remoteAgentsResult, friendEntries, pendingActorAccessRows, pendingRemoteAgentAccessRows] =
     await Promise.all([
       db
         .selectFrom("workspace_members as wm")
@@ -979,6 +1225,40 @@ async function buildContactHubEntryMap(params: {
         .where("a.is_active", "=", true)
         .orderBy("a.name", "asc")
         .execute(),
+      executeSql<{
+        remote_agent_id: string;
+        workspace_id: string;
+        workspace_name: string;
+        workspace_slug: string;
+        name: string;
+        title: string;
+        runtime_kind: "claude_code" | "codex";
+        access_policy: AccessPolicy;
+        is_public_shared: boolean;
+        avatar_emoji: string | null;
+        avatar_file_id: string | null;
+      }>(
+        `
+          SELECT
+            ra.id AS remote_agent_id,
+            ra.workspace_id,
+            w.name AS workspace_name,
+            w.slug AS workspace_slug,
+            ra.name,
+            ra.title,
+            ra.runtime_kind,
+            ra.access_policy,
+            ra.is_public_shared,
+            ra.avatar_emoji,
+            ra.avatar_file_id
+          FROM remote_agents ra
+          INNER JOIN workspaces w ON w.id = ra.workspace_id
+          WHERE ra.workspace_id = $1
+            AND ra.is_active = TRUE
+          ORDER BY ra.name ASC, ra.created_at ASC
+        `,
+        [params.workspaceId],
+      ),
       db
         .selectFrom("workspace_friend_entries")
         .selectAll()
@@ -1003,10 +1283,25 @@ async function buildContactHubEntryMap(params: {
             .where("status", "=", "pending")
             .execute()
         : Promise.resolve([]),
+      viewerWorkspaceMember
+        ? executeSql<{ remote_agent_id: string }>(
+            `
+              SELECT remote_agent_id
+              FROM remote_agent_access_requests
+              WHERE workspace_id = $1
+                AND requester_workspace_member_id = $2
+                AND status = 'pending'
+            `,
+            [params.workspaceId, viewerWorkspaceMember.workspaceMemberId],
+          ).then((result) => result.rows)
+        : Promise.resolve([]),
     ]);
 
   const pendingActorAccessIds = new Set(
     pendingActorAccessRows.map((row) => row.actor_id),
+  );
+  const pendingRemoteAgentAccessIds = new Set(
+    pendingRemoteAgentAccessRows.map((row) => row.remote_agent_id),
   );
 
   const workspaceMembers = members.map((row) =>
@@ -1064,6 +1359,41 @@ async function buildContactHubEntryMap(params: {
     );
   }
 
+  const workspaceRemoteAgents: ContactHubEntry[] = [];
+  for (const row of remoteAgentsResult.rows) {
+    const remoteAgent: RemoteAgentSummary = {
+      workspace: workspaceSummary(row),
+      remoteAgentId: row.remote_agent_id,
+      name: row.name,
+      title: row.title,
+      runtimeKind: row.runtime_kind,
+      avatarFileId: row.avatar_file_id,
+      avatarEmoji: row.avatar_emoji,
+      accessPolicy: row.access_policy,
+      isPublicShared: Boolean(row.is_public_shared),
+    };
+    const conversationId = directConversationMap.get(
+      directConversationIdentityKey({
+        kind: "remote_agent",
+        remoteAgentId: remoteAgent.remoteAgentId,
+      }),
+    );
+    const accessState = await getRemoteAgentAccessState({
+      workspaceId: params.workspaceId,
+      userId: params.userId,
+      remoteAgent,
+      conversationId,
+      pendingRequestRemoteAgentIds: pendingRemoteAgentAccessIds,
+    });
+    workspaceRemoteAgents.push(
+      mapWorkspaceRemoteAgentEntry({
+        remoteAgent,
+        conversationId,
+        accessState,
+      }),
+    );
+  }
+
   const friends: ContactHubEntry[] = [];
   for (const entry of friendEntries) {
     if (entry.peer_type === "member" && entry.peer_workspace_member_id) {
@@ -1100,12 +1430,32 @@ async function buildContactHubEntryMap(params: {
           ),
         }),
       );
+      continue;
+    }
+    if (entry.peer_type === "remote_agent" && entry.peer_remote_agent_id) {
+      const remoteAgent = await getRemoteAgentSummary(
+        entry.peer_remote_agent_id,
+      );
+      if (!remoteAgent) continue;
+      friends.push(
+        mapRemoteAgentFriendEntry({
+          entryId: entry.id,
+          remoteAgent,
+          conversationId: directConversationMap.get(
+            directConversationIdentityKey({
+              kind: "remote_agent",
+              remoteAgentId: entry.peer_remote_agent_id,
+            }),
+          ),
+        }),
+      );
     }
   }
 
   return {
     workspaceMembers,
     workspaceActors,
+    workspaceRemoteAgents,
     friends,
   };
 }
@@ -1115,6 +1465,7 @@ async function createOrApproveFriendship(params: {
   targetType: ContactTargetType;
   targetWorkspaceMemberId?: string;
   targetActorId?: string;
+  targetRemoteAgentId?: string;
   sourceRequestId?: string;
 }) {
   const requester = await getWorkspaceMemberSummaryById(
@@ -1130,6 +1481,7 @@ async function createOrApproveFriendship(params: {
     peerType: params.targetType,
     peerWorkspaceMemberId: params.targetWorkspaceMemberId,
     peerActorId: params.targetActorId,
+    peerRemoteAgentId: params.targetRemoteAgentId,
     sourceRequestId: params.sourceRequestId,
   });
 
@@ -1405,6 +1757,140 @@ export async function searchRelationshipsByIdentity(params: {
     };
   }
 
+  if (profile.subject_type === "remote_agent") {
+    const remoteAgent = profile.subject_remote_agent_id
+      ? await getRemoteAgentSummary(profile.subject_remote_agent_id)
+      : null;
+    if (!remoteAgent) {
+      return {
+        query: normalizedQuery,
+        outcome: "not_found" as IdentitySearchOutcome,
+        matches: [],
+      };
+    }
+
+    const conversationId = directConversationMap.get(
+      directConversationIdentityKey({
+        kind: "remote_agent",
+        remoteAgentId: remoteAgent.remoteAgentId,
+      }),
+    );
+
+    if (remoteAgent.workspace.id === params.workspaceId) {
+      const pendingRemoteAgentRequest = await executeSql<{ id: string }>(
+        `
+          SELECT id
+          FROM remote_agent_access_requests
+          WHERE workspace_id = $1
+            AND remote_agent_id = $2
+            AND requester_workspace_member_id = $3
+            AND status = 'pending'
+          LIMIT 1
+        `,
+        [
+          params.workspaceId,
+          remoteAgent.remoteAgentId,
+          viewerWorkspaceMember.workspaceMemberId,
+        ],
+      );
+      const accessState = await getRemoteAgentAccessState({
+        workspaceId: params.workspaceId,
+        userId: params.userId,
+        remoteAgent,
+        conversationId,
+        pendingRequestRemoteAgentIds: new Set(
+          pendingRemoteAgentRequest.rows[0]
+            ? [remoteAgent.remoteAgentId]
+            : [],
+        ),
+      });
+      return {
+        query: normalizedQuery,
+        outcome: "found" as IdentitySearchOutcome,
+        matches: [
+          {
+            profileId: profile.id,
+            targetType: "remote_agent" as const,
+            title: remoteAgent.name,
+            subtitle: `${remoteAgent.workspace.name} · ${remoteAgent.title}`,
+            avatarUrl: remoteAgent.avatarFileId
+              ? getFileUrlById(remoteAgent.avatarFileId)
+              : undefined,
+            avatarEmoji: remoteAgent.avatarEmoji || undefined,
+            workspace: remoteAgent.workspace,
+            remoteAgentId: remoteAgent.remoteAgentId,
+            state: accessState,
+            contact: {
+              kind: "workspace-remote-agent" as const,
+              id: remoteAgent.remoteAgentId,
+            },
+            conversationId,
+            requestId: pendingRemoteAgentRequest.rows[0]?.id,
+          },
+        ],
+      };
+    }
+
+    const existingFriend = await findExistingFriendEntry({
+      workspaceId: params.workspaceId,
+      ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      peerType: "remote_agent",
+      peerRemoteAgentId: remoteAgent.remoteAgentId,
+    });
+    if (existingFriend) {
+      return {
+        query: normalizedQuery,
+        outcome: "found" as IdentitySearchOutcome,
+        matches: [
+          {
+            profileId: profile.id,
+            targetType: "remote_agent" as const,
+            title: remoteAgent.name,
+            subtitle: `${remoteAgent.workspace.name} · ${remoteAgent.title}`,
+            avatarUrl: remoteAgent.avatarFileId
+              ? getFileUrlById(remoteAgent.avatarFileId)
+              : undefined,
+            avatarEmoji: remoteAgent.avatarEmoji || undefined,
+            workspace: remoteAgent.workspace,
+            remoteAgentId: remoteAgent.remoteAgentId,
+            state: "friend" as const,
+            contact: {
+              kind: "friend-remote-agent" as const,
+              id: existingFriend.id,
+            },
+            conversationId,
+          },
+        ],
+      };
+    }
+
+    const pendingRequest = await findPendingFriendRequest({
+      requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      targetType: "remote_agent",
+      targetRemoteAgentId: remoteAgent.remoteAgentId,
+    });
+    return {
+      query: normalizedQuery,
+      outcome: "found" as IdentitySearchOutcome,
+      matches: [
+        {
+          profileId: profile.id,
+          targetType: "remote_agent" as const,
+          title: remoteAgent.name,
+          subtitle: `${remoteAgent.workspace.name} · ${remoteAgent.title}`,
+          avatarUrl: remoteAgent.avatarFileId
+            ? getFileUrlById(remoteAgent.avatarFileId)
+            : undefined,
+          avatarEmoji: remoteAgent.avatarEmoji || undefined,
+          workspace: remoteAgent.workspace,
+          remoteAgentId: remoteAgent.remoteAgentId,
+          state: pendingRequest ? ("pending_request" as const) : ("requestable" as const),
+          requestId: pendingRequest?.id,
+        },
+      ],
+    };
+  }
+
   const actor = profile.subject_actor_id
     ? await getActorSummary(profile.subject_actor_id)
     : null;
@@ -1571,6 +2057,119 @@ export async function requestRelationshipByIdentityProfile(params: {
         approval_mode: profile.approval_mode as ApprovalMode,
       },
     });
+  }
+
+  if (profile.subject_type === "remote_agent") {
+    const remoteAgent = profile.subject_remote_agent_id
+      ? await getRemoteAgentSummary(profile.subject_remote_agent_id)
+      : null;
+    if (!remoteAgent) {
+      throw new Error("Relationship profile target not found");
+    }
+
+    if (profile.workspace_id === params.workspaceId) {
+      const canInvoke = await authorizeAction({
+        subject: await resolveWorkspaceAccessSubject(
+          params.workspaceId,
+          params.userId,
+        ),
+        action: "remote_agent.invoke",
+        resourceId: remoteAgent.remoteAgentId,
+      });
+
+      if (canInvoke || remoteAgent.accessPolicy === "workspace_open") {
+        return {
+          outcome: "remote_agent_access_granted" as const,
+          contact: {
+            kind: "workspace-remote-agent" as const,
+            id: remoteAgent.remoteAgentId,
+          },
+        };
+      }
+
+      if (profile.approval_mode === "auto") {
+        await grantRemoteAgentAccess({
+          workspaceId: params.workspaceId,
+          remoteAgentId: remoteAgent.remoteAgentId,
+          requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+        });
+        return {
+          outcome: "remote_agent_access_granted" as const,
+          contact: {
+            kind: "workspace-remote-agent" as const,
+            id: remoteAgent.remoteAgentId,
+          },
+        };
+      }
+
+      const requestResult = await createRemoteAgentAccessRequest({
+        workspaceId: params.workspaceId,
+        remoteAgentId: remoteAgent.remoteAgentId,
+        requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      });
+      return {
+        outcome: requestResult.created
+          ? ("remote_agent_access_request_created" as const)
+          : ("remote_agent_access_pending" as const),
+        requestId: requestResult.request.id,
+        contact: {
+          kind: "workspace-remote-agent" as const,
+          id: remoteAgent.remoteAgentId,
+        },
+      };
+    }
+
+    const existingFriend = await findExistingFriendEntry({
+      workspaceId: params.workspaceId,
+      ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      peerType: "remote_agent",
+      peerRemoteAgentId: remoteAgent.remoteAgentId,
+    });
+    if (existingFriend) {
+      return {
+        outcome: "friend_active" as const,
+        contact: {
+          kind: "friend-remote-agent" as const,
+          id: existingFriend.id,
+        },
+      };
+    }
+
+    if (profile.approval_mode === "auto") {
+      await createOrApproveFriendship({
+        requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+        targetType: "remote_agent",
+        targetRemoteAgentId: remoteAgent.remoteAgentId,
+      });
+      const entry = await findExistingFriendEntry({
+        workspaceId: params.workspaceId,
+        ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+        peerType: "remote_agent",
+        peerRemoteAgentId: remoteAgent.remoteAgentId,
+      });
+      return {
+        outcome: "friend_active" as const,
+        contact: entry
+          ? {
+              kind: "friend-remote-agent" as const,
+              id: entry.id,
+            }
+          : undefined,
+      };
+    }
+
+    const requestResult = await createFriendRequest({
+      requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+      targetType: "remote_agent",
+      targetRemoteAgentId: remoteAgent.remoteAgentId,
+      profileId: profile.id,
+    });
+    return {
+      outcome: requestResult.created
+        ? ("friend_request_created" as const)
+        : ("friend_request_pending" as const),
+      requestId: requestResult.request.id,
+    };
   }
 
   const actor = profile.subject_actor_id
@@ -1804,6 +2403,40 @@ export async function getActorRelationshipProfile(params: {
   };
 }
 
+export async function getRemoteAgentRelationshipProfile(params: {
+  workspaceId: string;
+  remoteAgentId: string;
+  userId: string;
+}) {
+  const remoteAgent = await getRemoteAgentSummary(params.remoteAgentId);
+  if (!remoteAgent || remoteAgent.workspace.id !== params.workspaceId) {
+    throw new Error("Remote agent not found");
+  }
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
+  const profile = await ensureRelationshipProfile({
+    workspaceId: params.workspaceId,
+    createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+    subjectType: "remote_agent",
+    subjectRemoteAgentId: params.remoteAgentId,
+  });
+  return {
+    subjectType: "remote_agent" as const,
+    approvalMode: profile.approval_mode,
+    qrToken: profile.qr_token,
+    qrUrl: buildRelationshipQrUrl(profile.qr_token),
+    identityId: profile.identity_id,
+    identitySearchEnabled: profile.identity_search_enabled,
+    accessPolicy: remoteAgent.accessPolicy,
+    isPublicShared: remoteAgent.isPublicShared,
+  };
+}
+
 export async function updateActorRelationshipProfile(params: {
   workspaceId: string;
   actorId: string;
@@ -1888,6 +2521,103 @@ export async function updateActorRelationshipProfile(params: {
 
   return {
     subjectType: "actor" as const,
+    approvalMode: updatedProfile.approval_mode,
+    qrToken: updatedProfile.qr_token,
+    qrUrl: buildRelationshipQrUrl(updatedProfile.qr_token),
+    identityId: updatedProfile.identity_id,
+    identitySearchEnabled: updatedProfile.identity_search_enabled,
+    accessPolicy: accessPolicy || "workspace_open",
+    isPublicShared,
+  };
+}
+
+export async function updateRemoteAgentRelationshipProfile(params: {
+  workspaceId: string;
+  remoteAgentId: string;
+  userId: string;
+  approvalMode: ApprovalMode;
+  identityId?: string;
+  identitySearchEnabled?: boolean;
+  accessPolicy?: AccessPolicy;
+  isPublicShared?: boolean;
+}) {
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
+  const profile = await ensureRelationshipProfile({
+    workspaceId: params.workspaceId,
+    createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+    subjectType: "remote_agent",
+    subjectRemoteAgentId: params.remoteAgentId,
+  });
+
+  let updatedProfile;
+  try {
+    updatedProfile = await db
+      .updateTable("workspace_relationship_profiles")
+      .set({
+        approval_mode: params.approvalMode,
+        identity_id:
+          typeof params.identityId === "string"
+            ? validateIdentityId(params.identityId)
+            : profile.identity_id,
+        identity_search_enabled:
+          typeof params.identitySearchEnabled === "boolean"
+            ? params.identitySearchEnabled
+            : profile.identity_search_enabled,
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", profile.id)
+      .returningAll()
+      .executeTakeFirst();
+  } catch (error) {
+    if (isUniqueViolation(error)) {
+      throw new Error("This identity ID is already taken.");
+    }
+    throw error;
+  }
+  if (!updatedProfile) {
+    throw new Error("Failed to update relationship profile");
+  }
+
+  const remoteAgentSummary = await getRemoteAgentSummary(params.remoteAgentId);
+  let accessPolicy = remoteAgentSummary?.accessPolicy;
+  let isPublicShared = remoteAgentSummary?.isPublicShared ?? false;
+
+  if (params.accessPolicy) {
+    const remoteAgentResult = await updateRemoteAgentAccessPolicy({
+      workspaceId: params.workspaceId,
+      remoteAgentId: params.remoteAgentId,
+      accessPolicy: params.accessPolicy,
+    });
+    accessPolicy = remoteAgentResult.access_policy;
+  }
+
+  if (typeof params.isPublicShared === "boolean") {
+    const updateResult = await executeSql<{ is_public_shared: boolean }>(
+      `
+        UPDATE remote_agents
+        SET is_public_shared = $3,
+            updated_at = NOW()
+        WHERE id = $1
+          AND workspace_id = $2
+          AND is_active = TRUE
+        RETURNING is_public_shared
+      `,
+      [params.remoteAgentId, params.workspaceId, params.isPublicShared],
+    );
+    if (!updateResult.rows[0]) {
+      throw new Error("Remote agent not found");
+    }
+    isPublicShared = Boolean(updateResult.rows[0].is_public_shared);
+  }
+
+  return {
+    subjectType: "remote_agent" as const,
     approvalMode: updatedProfile.approval_mode,
     qrToken: updatedProfile.qr_token,
     qrUrl: buildRelationshipQrUrl(updatedProfile.qr_token),
@@ -1984,7 +2714,7 @@ export async function listFriendRequests(params: {
       ) {
         continue;
       }
-    } else if (row.target_actor_id) {
+    } else if (row.target_subject_type === "actor" && row.target_actor_id) {
       const targetActor = await getActorSummary(row.target_actor_id);
       if (!targetActor || targetActor.workspace.id !== params.workspaceId) {
         continue;
@@ -1996,6 +2726,28 @@ export async function listFriendRequests(params: {
         ),
         action: "actor.grant",
         resourceId: row.target_actor_id,
+      });
+      if (!canApprove) continue;
+    } else if (
+      row.target_subject_type === "remote_agent" &&
+      row.target_remote_agent_id
+    ) {
+      const targetRemoteAgent = await getRemoteAgentSummary(
+        row.target_remote_agent_id,
+      );
+      if (
+        !targetRemoteAgent ||
+        targetRemoteAgent.workspace.id !== params.workspaceId
+      ) {
+        continue;
+      }
+      const canApprove = await authorizeAction({
+        subject: await resolveWorkspaceAccessSubject(
+          params.workspaceId,
+          params.userId,
+        ),
+        action: "remote_agent.grant",
+        resourceId: row.target_remote_agent_id,
       });
       if (!canApprove) continue;
     }
@@ -2011,6 +2763,10 @@ export async function listFriendRequests(params: {
       row.target_subject_type === "actor" && row.target_actor_id
         ? await getActorSummary(row.target_actor_id)
         : null;
+    const targetRemoteAgent =
+      row.target_subject_type === "remote_agent" && row.target_remote_agent_id
+        ? await getRemoteAgentSummary(row.target_remote_agent_id)
+        : null;
     incoming.push({
       id: row.id,
       status: row.status,
@@ -2019,6 +2775,7 @@ export async function listFriendRequests(params: {
       targetType: row.target_subject_type,
       targetMember,
       targetActor,
+      targetRemoteAgent,
     });
   }
 
@@ -2032,6 +2789,10 @@ export async function listFriendRequests(params: {
       row.target_subject_type === "actor" && row.target_actor_id
         ? await getActorSummary(row.target_actor_id)
         : null;
+    const targetRemoteAgent =
+      row.target_subject_type === "remote_agent" && row.target_remote_agent_id
+        ? await getRemoteAgentSummary(row.target_remote_agent_id)
+        : null;
     outgoing.push({
       id: row.id,
       status: row.status,
@@ -2039,6 +2800,7 @@ export async function listFriendRequests(params: {
       targetType: row.target_subject_type,
       targetMember,
       targetActor,
+      targetRemoteAgent,
     });
   }
 
@@ -2077,7 +2839,7 @@ export async function resolveFriendRequest(params: {
     ) {
       throw new Error("Not allowed to resolve this friend request");
     }
-  } else if (request.target_actor_id) {
+  } else if (request.target_subject_type === "actor" && request.target_actor_id) {
     const targetActor = await getActorSummary(request.target_actor_id);
     if (!targetActor || targetActor.workspace.id !== params.workspaceId) {
       throw new Error("Friend request not found");
@@ -2093,6 +2855,30 @@ export async function resolveFriendRequest(params: {
     if (!canApprove) {
       throw new Error("Not allowed to resolve this friend request");
     }
+  } else if (
+    request.target_subject_type === "remote_agent" &&
+    request.target_remote_agent_id
+  ) {
+    const targetRemoteAgent = await getRemoteAgentSummary(
+      request.target_remote_agent_id,
+    );
+    if (
+      !targetRemoteAgent ||
+      targetRemoteAgent.workspace.id !== params.workspaceId
+    ) {
+      throw new Error("Friend request not found");
+    }
+    const canApprove = await authorizeAction({
+      subject: await resolveWorkspaceAccessSubject(
+        params.workspaceId,
+        params.userId,
+      ),
+      action: "remote_agent.grant",
+      resourceId: request.target_remote_agent_id,
+    });
+    if (!canApprove) {
+      throw new Error("Not allowed to resolve this friend request");
+    }
   }
 
   if (params.decision === "approve") {
@@ -2101,6 +2887,7 @@ export async function resolveFriendRequest(params: {
       targetType: request.target_subject_type as ContactTargetType,
       targetWorkspaceMemberId: request.target_workspace_member_id || undefined,
       targetActorId: request.target_actor_id || undefined,
+      targetRemoteAgentId: request.target_remote_agent_id || undefined,
       sourceRequestId: request.id,
     });
   }
@@ -2191,6 +2978,77 @@ export async function listActorAccessRequests(params: {
   return { incoming, outgoing };
 }
 
+export async function listRemoteAgentAccessRequests(params: {
+  workspaceId: string;
+  userId: string;
+}) {
+  const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!viewerWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
+
+  const [incomingRows, outgoingRows] = await Promise.all([
+    executeSql<any>(
+      `
+        SELECT *
+        FROM remote_agent_access_requests
+        WHERE workspace_id = $1
+          AND status = 'pending'
+        ORDER BY created_at DESC
+      `,
+      [params.workspaceId],
+    ).then((result) => result.rows),
+    executeSql<any>(
+      `
+        SELECT *
+        FROM remote_agent_access_requests
+        WHERE workspace_id = $1
+          AND requester_workspace_member_id = $2
+          AND status = 'pending'
+        ORDER BY created_at DESC
+      `,
+      [params.workspaceId, viewerWorkspaceMember.workspaceMemberId],
+    ).then((result) => result.rows),
+  ]);
+
+  const incoming = [];
+  for (const row of incomingRows) {
+    const canApprove = await authorizeAction({
+      subject: await resolveWorkspaceAccessSubject(
+        params.workspaceId,
+        params.userId,
+      ),
+      action: "remote_agent.grant",
+      resourceId: row.remote_agent_id,
+    });
+    if (!canApprove) continue;
+    incoming.push({
+      id: row.id,
+      status: row.status,
+      createdAt: toIsoString(row.created_at),
+      requester: await getWorkspaceMemberSummaryById(
+        row.requester_workspace_member_id,
+      ),
+      remoteAgent: await getRemoteAgentSummary(row.remote_agent_id),
+    });
+  }
+
+  const outgoing = [];
+  for (const row of outgoingRows) {
+    outgoing.push({
+      id: row.id,
+      status: row.status,
+      createdAt: toIsoString(row.created_at),
+      remoteAgent: await getRemoteAgentSummary(row.remote_agent_id),
+    });
+  }
+
+  return { incoming, outgoing };
+}
+
 export async function resolveActorAccessRequest(params: {
   workspaceId: string;
   userId: string;
@@ -2254,6 +3112,79 @@ export async function resolveActorAccessRequest(params: {
   return updated;
 }
 
+export async function resolveRemoteAgentAccessRequest(params: {
+  workspaceId: string;
+  userId: string;
+  requestId: string;
+  decision: "approve" | "reject";
+}) {
+  const approverWorkspaceMember = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId,
+  );
+  if (!approverWorkspaceMember) {
+    throw new Error("Workspace member not found");
+  }
+
+  const requestResult = await executeSql<any>(
+    `
+      SELECT *
+      FROM remote_agent_access_requests
+      WHERE id = $1
+      LIMIT 1
+    `,
+    [params.requestId],
+  );
+  const request = requestResult.rows[0];
+  if (!request || request.workspace_id !== params.workspaceId) {
+    throw new Error("Remote agent access request not found");
+  }
+  if (request.status !== "pending") {
+    throw new Error("Remote agent access request has already been resolved");
+  }
+
+  const canApprove = await authorizeAction({
+    subject: await resolveWorkspaceAccessSubject(
+      params.workspaceId,
+      params.userId,
+    ),
+    action: "remote_agent.grant",
+    resourceId: request.remote_agent_id,
+  });
+  if (!canApprove) {
+    throw new Error("Not allowed to resolve this remote agent access request");
+  }
+
+  if (params.decision === "approve") {
+    await grantRemoteAgentAccess({
+      workspaceId: params.workspaceId,
+      remoteAgentId: request.remote_agent_id,
+      requesterWorkspaceMemberId: request.requester_workspace_member_id,
+    });
+  }
+
+  const updated = await executeSql<any>(
+    `
+      UPDATE remote_agent_access_requests
+      SET status = $2,
+          resolved_by_workspace_member_id = $3,
+          resolved_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+      RETURNING *
+    `,
+    [
+      request.id,
+      params.decision === "approve" ? "approved" : "rejected",
+      approverWorkspaceMember.workspaceMemberId,
+    ],
+  );
+  if (!updated.rows[0]) {
+    throw new Error("Failed to resolve remote agent access request");
+  }
+  return updated.rows[0];
+}
+
 export async function getContactHub(params: {
   workspaceId: string;
   userId: string;
@@ -2265,10 +3196,16 @@ export async function getContactHub(params: {
   if (!viewerWorkspaceMember) {
     throw new Error("Workspace member not found");
   }
-  const [{ incoming: friendIncoming }, { incoming: actorIncoming }, entries] =
+  const [
+    { incoming: friendIncoming },
+    { incoming: actorIncoming },
+    { incoming: remoteAgentIncoming },
+    entries,
+  ] =
     await Promise.all([
       listFriendRequests(params),
       listActorAccessRequests(params),
+      listRemoteAgentAccessRequests(params),
       buildContactHubEntryMap(params),
     ]);
   const threads = await listWorkspaceConversationViews({
@@ -2297,9 +3234,12 @@ export async function getContactHub(params: {
     requestSummary: {
       friendPendingCount: friendIncoming.length,
       actorAccessPendingCount: actorIncoming.length,
-      totalPendingCount: friendIncoming.length + actorIncoming.length,
+      remoteAgentAccessPendingCount: remoteAgentIncoming.length,
+      totalPendingCount:
+        friendIncoming.length + actorIncoming.length + remoteAgentIncoming.length,
     },
     workspaceActors: entries.workspaceActors,
+    workspaceRemoteAgents: entries.workspaceRemoteAgents,
     workspaceMembers: entries.workspaceMembers,
     friends: entries.friends,
     groups,
@@ -2318,6 +3258,7 @@ export async function getContactHubDetail(params: {
   });
   const entry = [
     ...hub.workspaceActors,
+    ...((hub as any).workspaceRemoteAgents ?? []),
     ...hub.workspaceMembers,
     ...hub.friends,
   ].find(
@@ -2333,6 +3274,13 @@ export async function getContactHubDetail(params: {
         (participant) =>
           participant.type === "actor" &&
           participant.actorId === entry.actorId,
+      );
+    }
+    if (entry.remoteAgentId) {
+      return conversation.participants.some(
+        (participant) =>
+          participant.type === "remote_agent" &&
+          participant.remoteAgentId === entry.remoteAgentId,
       );
     }
     if (entry.workspaceMemberId) {
@@ -2409,6 +3357,45 @@ export async function openDirectConversation(params: {
     }
   }
 
+  if (resolved.kind === "workspace-remote-agent" && resolved.remoteAgent) {
+    const canInvoke = await authorizeAction({
+      subject: await resolveWorkspaceAccessSubject(
+        params.workspaceId,
+        params.userId,
+      ),
+      action: "remote_agent.invoke",
+      resourceId: resolved.remoteAgent.remoteAgentId,
+    });
+
+    if (!canInvoke && resolved.remoteAgent.accessPolicy === "approval_required") {
+      const profile = await ensureRelationshipProfile({
+        workspaceId: params.workspaceId,
+        createdByWorkspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
+        subjectType: "remote_agent",
+        subjectRemoteAgentId: resolved.remoteAgent.remoteAgentId,
+      });
+      if (profile.approval_mode === "auto") {
+        await grantRemoteAgentAccess({
+          workspaceId: params.workspaceId,
+          remoteAgentId: resolved.remoteAgent.remoteAgentId,
+          requesterWorkspaceMemberId:
+            requesterWorkspaceMember.workspaceMemberId,
+        });
+      } else {
+        const accessRequest = await createRemoteAgentAccessRequest({
+          workspaceId: params.workspaceId,
+          remoteAgentId: resolved.remoteAgent.remoteAgentId,
+          requesterWorkspaceMemberId:
+            requesterWorkspaceMember.workspaceMemberId,
+        });
+        return {
+          status: "pending_approval" as const,
+          requestId: accessRequest.request.id,
+        };
+      }
+    }
+  }
+
   const existingConversationId = await findDirectConversationId(
     requesterIdentity,
     resolved.peerIdentity,
@@ -2435,6 +3422,10 @@ export async function openDirectConversation(params: {
       clientRequestId: uuidv4(),
       kind: "private",
       actorIds: resolved.peerIdentity.kind === "actor" ? [resolved.peerIdentity.actorId] : [],
+      remoteAgentIds:
+        resolved.peerIdentity.kind === "remote_agent"
+          ? [resolved.peerIdentity.remoteAgentId]
+          : [],
       workspaceMemberIds:
         targetWorkspaceMemberId ? [targetWorkspaceMemberId] : [],
     });

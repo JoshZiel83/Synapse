@@ -33,7 +33,7 @@ import {
 } from './runtime-control-plane.js';
 import { logEvent } from './audit.js';
 import { emitEvent } from '../../infrastructure/events/index.js';
-import { touchRelayExposureAuthzState } from './relay-access.js';
+import { touchRelayExposureAccessState } from './relay-access.js';
 import { ingestAutomationProviderEvent } from '../automation/service.js';
 import { enqueueAutomationExecutionJobs, sessionThinkingQueue } from '../../workers/queues.js';
 import {
@@ -2726,7 +2726,7 @@ async function syncDeviceCatalog(
     activeExposureIds.add(exposureRow.id);
 
     await syncExposureCatalog(exposureRow.id, connected.deviceId, registration);
-    await touchRelayExposureAuthzState({
+    await touchRelayExposureAccessState({
       workspaceId: connected.workspaceId,
       deviceId: connected.deviceId,
       exposureId: exposureRow.id,

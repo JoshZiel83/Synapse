@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import { CAPABILITY_ACCESS_TARGET_TYPES } from '@synapse/shared/constants';
 import { authMiddleware } from '../../infrastructure/middleware/auth.js';
 import { workspaceMiddleware } from '../../infrastructure/middleware/workspace.js';
-import { AUTHZ_PLATFORM_ID } from '../../infrastructure/authz/index.js';
+import { PLATFORM_RESOURCE_ID } from '../access/core.js';
 import { requireRequestAction } from '../access/guards.js';
 import {
   authorizeAction,
@@ -101,7 +101,6 @@ const updateInstalledSkillSchema = z.object({
 const skillAccessGrantSchema = z.object({
   accessTarget: accessTargetSchema.optional(),
   conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
-  permissions: z.array(z.string()).optional(),
   reason: z.string().trim().min(1).optional(),
 });
 
@@ -141,7 +140,7 @@ async function requirePlatformManage(
     request,
     reply,
     'platform.manage',
-    AUTHZ_PLATFORM_ID,
+    PLATFORM_RESOURCE_ID,
     errorMessage,
   );
 }
@@ -494,7 +493,6 @@ export function registerSkillRoutes(app: FastifyInstance) {
         installedSkillId,
         accessTarget: body.accessTarget,
         conversationTypeMaskOverride: body.conversationTypeMaskOverride,
-        permissions: body.permissions,
         reason: body.reason,
         grantedByWorkspaceMemberId: workspaceMemberId,
       });

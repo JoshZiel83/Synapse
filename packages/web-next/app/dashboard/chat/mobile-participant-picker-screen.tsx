@@ -190,11 +190,20 @@ export function MobileParticipantPickerScreen({
                       {participant.name}
                     </span>
                     <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                      {participant.type === "workspace_member" ? "member" : participant.type}
+                      {participant.type === "workspace_member"
+                        ? "member"
+                        : participant.type === "remote_agent"
+                          ? "remote agent"
+                          : participant.type}
                     </span>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
-                    {participant.description || (participant.type === "workspace_member" ? "member" : participant.type)}
+                    {participant.description ||
+                      (participant.type === "workspace_member"
+                        ? "member"
+                        : participant.type === "remote_agent"
+                          ? "remote agent"
+                          : participant.type)}
                   </p>
                 </div>
                 <div

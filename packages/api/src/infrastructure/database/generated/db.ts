@@ -31,10 +31,6 @@ export type AuthSessionsClientType = "android" | "api" | "cli" | "ios" | "web" |
 
 export type AuthSessionsTransport = "cookie" | "token";
 
-export type AuthzOutboxOperation = "delete" | "touch";
-
-export type AuthzOutboxStatus = "applied" | "failed" | "pending" | "processing";
-
 export type AutomationDeliveriesTargetPolicy = "all_members" | "specified_members";
 
 export type AutomationEventSourcesCreatedByKind = "session" | "system" | "workspace_member";
@@ -95,12 +91,6 @@ export type ContextCompactionRunsChainScope = "private" | "shared";
 
 export type ContextCompactionRunsStatus = "cancelled" | "completed" | "failed" | "pending" | "running";
 
-export type ConversationGrantsPermission = "attach_resources" | "manage" | "manage_members" | "moderate" | "send";
-
-export type ConversationGrantsStatus = "active" | "revoked";
-
-export type ConversationGrantsSubjectType = "actor" | "workspace_member";
-
 export type ConversationItemPartsPartType = "file_ref" | "json" | "text";
 
 export type ConversationItemsEventContextPolicy = "actor_private" | "none" | "shared" | "targeted_members";
@@ -117,7 +107,7 @@ export type ConversationItemsSurface = "internal" | "visible";
 
 export type ConversationItemTargetsTargetKind = "cc" | "to" | "visible";
 
-export type ConversationParticipantsKind = "actor" | "external" | "system" | "workspace_member";
+export type ConversationParticipantsKind = "actor" | "external" | "remote_agent" | "system" | "workspace_member";
 
 export type ConversationParticipantsState = "active" | "left" | "removed";
 
@@ -219,7 +209,7 @@ export type RelationshipApprovalMode = "auto" | "manual";
 
 export type RelationshipRequestStatus = "approved" | "pending" | "rejected";
 
-export type RelationshipTargetType = "actor" | "member";
+export type RelationshipTargetType = "actor" | "member" | "remote_agent";
 
 export type RelayAuthorizationGrantsRetention = "consume_once" | "until_revoked";
 
@@ -263,6 +253,26 @@ export type RelaySyncSourcesSyncMode = "follow" | "snapshot";
 
 export type RelayToolsStatus = "active" | "removed";
 
+export type RemoteAgentBindingsRuntimeState = "error" | "idle" | "offline" | "plan_drafting" | "running" | "waiting_plan_approval" | "waiting_user_input";
+
+export type RemoteAgentBindingsStatus = "active" | "disabled" | "error";
+
+export type RemoteAgentMachineSessionsStatus = "active" | "closed" | "closing" | "connecting" | "rejected";
+
+export type RemoteAgentMachineSessionsTransport = "websocket";
+
+export type RemoteAgentMachinesLifecycleState = "offline" | "online";
+
+export type RemoteAgentMachinesTrustStatus = "active" | "blocked" | "pending" | "revoked";
+
+export type RemoteAgentMessageDeliveriesStatus = "acked" | "completed" | "failed" | "pending";
+
+export type RemoteAgentRunsStatus = "cancelled" | "completed" | "failed" | "queued" | "running";
+
+export type RemoteAgentRuntimeCatalogStatus = "available" | "broken_path" | "missing_binary" | "runtime_error" | "unsupported_platform";
+
+export type RemoteAgentsRuntimeKind = "claude_code" | "codex";
+
 export type ResourceAccessBindingResourceType = "automation_event_source" | "installed_skill" | "plugin_installation" | "relay_capability";
 
 export type ResourceAccessBindingsStatus = "active" | "revoked";
@@ -283,7 +293,7 @@ export type SessionsCollaborationMode = "default" | "plan_awaiting_approval" | "
 
 export type SessionsStatus = "blocked" | "closed" | "idle" | "queued" | "running";
 
-export type SessionWakeupsSourceParticipantType = "actor" | "external" | "system" | "workspace_member";
+export type SessionWakeupsSourceParticipantType = "actor" | "external" | "remote_agent" | "system" | "workspace_member";
 
 export type SessionWakeupsSourceType = "actor_message" | "automation" | "retry" | "system_interrupt" | "user_message";
 
@@ -343,7 +353,7 @@ export type TransportMessageLinksTransportKind = "feishu" | "weixin";
 
 export type TurnsStatus = "cancelled" | "completed" | "failed" | "running";
 
-export type WorkspaceAccessBindingsAccessKey = "actor_admin" | "conversation_admin" | "memory_admin" | "model_admin" | "plugin_admin" | "relay_admin" | "skill_admin";
+export type WorkspaceAccessBindingsAccessKey = "actor_admin" | "conversation_admin" | "memory_admin" | "model_admin" | "plugin_admin" | "relay_admin" | "remote_agent_admin" | "skill_admin";
 
 export type WorkspaceInvitesTrustLevel = "admin" | "guest" | "member";
 
@@ -500,24 +510,6 @@ export interface AuthSessions {
   updated_at: Generated<Timestamp | null>;
   user_agent: string | null;
   user_id: string;
-}
-
-export interface AuthzOutbox {
-  applied_at: Timestamp | null;
-  attempts: Generated<number>;
-  created_at: Generated<Timestamp | null>;
-  id: Generated<string>;
-  last_error: string | null;
-  operation: AuthzOutboxOperation;
-  relation: string;
-  resource_id: string;
-  resource_type: string;
-  status: Generated<AuthzOutboxStatus>;
-  subject_id: string;
-  subject_relation: string | null;
-  subject_type: string;
-  updated_at: Generated<Timestamp | null>;
-  zed_token: string | null;
 }
 
 export interface AutomationDeliveries {
@@ -841,7 +833,7 @@ export interface ConversationActorContexts {
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
-  session_id: string;
+  session_id: string | null;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -860,21 +852,6 @@ export interface ConversationDeviceStates {
   last_opened_at: Timestamp | null;
   last_visible_sequence: Generated<Int8>;
   updated_at: Generated<Timestamp>;
-}
-
-export interface ConversationGrants {
-  actor_id: string | null;
-  conversation_id: string;
-  created_at: Generated<Timestamp | null>;
-  granted_by_workspace_member_id: string | null;
-  id: Generated<string>;
-  permission: ConversationGrantsPermission;
-  reason: string | null;
-  revoked_at: Timestamp | null;
-  status: Generated<ConversationGrantsStatus>;
-  subject_type: ConversationGrantsSubjectType;
-  workspace_id: string;
-  workspace_member_id: string | null;
 }
 
 export interface ConversationItemContextTargets {
@@ -949,6 +926,7 @@ export interface ConversationParticipants {
   left_at: Timestamp | null;
   metadata: Generated<Json>;
   participant_kind: ConversationParticipantsKind;
+  remote_agent_id: string | null;
   role_key: Generated<string>;
   state: Generated<ConversationParticipantsState>;
   workspace_member_id: string | null;
@@ -996,9 +974,11 @@ export interface DirectConversationBindings {
   id: Generated<string>;
   participant_one_actor_id: string | null;
   participant_one_kind: RelationshipTargetType;
+  participant_one_remote_agent_id: string | null;
   participant_one_workspace_member_id: string | null;
   participant_two_actor_id: string | null;
   participant_two_kind: RelationshipTargetType;
+  participant_two_remote_agent_id: string | null;
   participant_two_workspace_member_id: string | null;
 }
 
@@ -1131,6 +1111,7 @@ export interface InteractionRequests {
   expires_at: Timestamp | null;
   id: Generated<string>;
   kind: InteractionRequestsKind;
+  remote_agent_run_id: string | null;
   request_key: string;
   requester_participant_id: string;
   resolved_at: Timestamp | null;
@@ -1138,7 +1119,7 @@ export interface InteractionRequests {
   revision: Generated<Int8>;
   status: Generated<InteractionRequestsStatus>;
   target_participant_id: string | null;
-  task_id: string;
+  task_id: string | null;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
@@ -1727,12 +1708,163 @@ export interface RelayTools {
   updated_at: Generated<Timestamp | null>;
 }
 
+export interface RemoteAgentAccessRequests {
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  remote_agent_id: string;
+  requester_workspace_member_id: string;
+  resolved_at: Timestamp | null;
+  resolved_by_workspace_member_id: string | null;
+  status: Generated<RelationshipRequestStatus>;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
+}
+
+export interface RemoteAgentBindings {
+  active_conversation_id: string | null;
+  active_interaction_id: string | null;
+  capabilities: Generated<Json>;
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  last_activity_at: Timestamp | null;
+  last_error: string | null;
+  last_run_finished_at: Timestamp | null;
+  last_run_started_at: Timestamp | null;
+  last_session_id: string | null;
+  local_root_path: string | null;
+  machine_id: string;
+  remote_agent_id: string;
+  runtime_kind: RemoteAgentsRuntimeKind;
+  runtime_path: string | null;
+  runtime_state: Generated<RemoteAgentBindingsRuntimeState>;
+  status: Generated<RemoteAgentBindingsStatus>;
+  status_text: string | null;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface RemoteAgentConversationContexts {
+  active_plan_approval_interaction_id: string | null;
+  collaboration_mode: Generated<string>;
+  collaboration_state: Generated<Json>;
+  conversation_id: string;
+  created_at: Generated<Timestamp | null>;
+  remote_agent_id: string;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface RemoteAgentConversationViews {
+  conversation_id: string;
+  created_at: Generated<Timestamp>;
+  last_delivery_at: Timestamp | null;
+  last_delivery_item_id: string | null;
+  last_read_at: Timestamp | null;
+  last_read_item_id: string | null;
+  last_read_sequence: Generated<Int8>;
+  remote_agent_id: string;
+  unread_count: Generated<number>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface RemoteAgentGroupInteractionGrants {
+  created_at: Generated<Timestamp | null>;
+  granted_by_workspace_member_id: string | null;
+  remote_agent_id: string;
+  updated_at: Generated<Timestamp | null>;
+  workspace_member_id: string;
+}
+
+export interface RemoteAgentMachines {
+  api_key_hash: string;
+  created_at: Generated<Timestamp | null>;
+  created_by_workspace_member_id: string | null;
+  description: string | null;
+  id: Generated<string>;
+  last_seen_at: Timestamp | null;
+  lifecycle_state: RemoteAgentMachinesLifecycleState | null;
+  title: string;
+  trust_status: Generated<RemoteAgentMachinesTrustStatus>;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
+}
+
+export interface RemoteAgentMachineSessions {
+  close_reason: string | null;
+  created_at: Generated<Timestamp | null>;
+  ended_at: Timestamp | null;
+  id: Generated<string>;
+  last_heartbeat_at: Timestamp | null;
+  machine_id: string;
+  remote_addr: string | null;
+  started_at: Generated<Timestamp | null>;
+  status: Generated<RemoteAgentMachineSessionsStatus>;
+  transport: Generated<RemoteAgentMachineSessionsTransport>;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface RemoteAgentMessageDeliveries {
+  attempts: Generated<number>;
+  conversation_id: string;
+  created_at: Generated<Timestamp>;
+  id: Generated<string>;
+  item_id: string;
+  last_acked_at: Timestamp | null;
+  remote_agent_id: string;
+  status: Generated<RemoteAgentMessageDeliveriesStatus>;
+  updated_at: Generated<Timestamp>;
+}
+
+export interface RemoteAgentRuns {
+  conversation_id: string | null;
+  created_at: Generated<Timestamp | null>;
+  ended_at: Timestamp | null;
+  id: Generated<string>;
+  interaction_id: string | null;
+  last_error: string | null;
+  remote_agent_id: string;
+  run_key: string;
+  started_at: Timestamp | null;
+  status: Generated<RemoteAgentRunsStatus>;
+  status_text: string | null;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface RemoteAgentRuntimeCatalog {
+  created_at: Generated<Timestamp | null>;
+  executable_path: string | null;
+  id: Generated<string>;
+  last_error: string | null;
+  last_seen_at: Timestamp | null;
+  machine_id: string;
+  metadata: Generated<Json>;
+  runtime_kind: RemoteAgentsRuntimeKind;
+  status: Generated<RemoteAgentRuntimeCatalogStatus>;
+  updated_at: Generated<Timestamp | null>;
+  version: string | null;
+}
+
+export interface RemoteAgents {
+  access_policy: Generated<ActorAccessPolicy>;
+  avatar_emoji: string | null;
+  avatar_file_id: string | null;
+  created_at: Generated<Timestamp | null>;
+  created_by_workspace_member_id: string | null;
+  description: string | null;
+  id: Generated<string>;
+  is_active: Generated<boolean>;
+  is_public_shared: Generated<boolean>;
+  metadata: Generated<Json>;
+  name: string;
+  runtime_kind: RemoteAgentsRuntimeKind;
+  title: string;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
+}
+
 export interface ResourceAccessBindings {
   automation_event_source_id: string | null;
   conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
-  granted_permissions: Generated<string[]>;
   id: Generated<string>;
   installed_skill_id: string | null;
   plugin_installation_id: string | null;
@@ -1745,7 +1877,6 @@ export interface ResourceAccessBindings {
   subject_conversation_actor_context_id: string | null;
   subject_conversation_id: string | null;
   subject_workspace_id: string | null;
-  subject_workspace_member_id: string | null;
   target_type: ResourceAccessBindingsTargetType;
   workspace_id: string;
 }
@@ -2136,6 +2267,7 @@ export interface WorkspaceFriendEntries {
   id: Generated<string>;
   owner_workspace_member_id: string;
   peer_actor_id: string | null;
+  peer_remote_agent_id: string | null;
   peer_type: RelationshipTargetType;
   peer_workspace_member_id: string | null;
   source_request_id: string | null;
@@ -2152,6 +2284,7 @@ export interface WorkspaceFriendRequests {
   resolved_by_workspace_member_id: string | null;
   status: Generated<RelationshipRequestStatus>;
   target_actor_id: string | null;
+  target_remote_agent_id: string | null;
   target_subject_type: RelationshipTargetType;
   target_workspace_member_id: string | null;
   updated_at: Generated<Timestamp | null>;
@@ -2222,6 +2355,7 @@ export interface WorkspaceRelationshipProfiles {
   identity_search_enabled: Generated<boolean>;
   qr_token: string;
   subject_actor_id: string | null;
+  subject_remote_agent_id: string | null;
   subject_type: RelationshipTargetType;
   subject_workspace_member_id: string | null;
   updated_at: Generated<Timestamp | null>;
@@ -2250,7 +2384,6 @@ export interface DB {
   audit_logs: AuditLogs;
   auth_qr_login_requests: AuthQrLoginRequests;
   auth_sessions: AuthSessions;
-  authz_outbox: AuthzOutbox;
   automation_deliveries: AutomationDeliveries;
   automation_delivery_targets: AutomationDeliveryTargets;
   automation_event_sources: AutomationEventSources;
@@ -2277,7 +2410,6 @@ export interface DB {
   conversation_actor_contexts: ConversationActorContexts;
   conversation_context_states: ConversationContextStates;
   conversation_device_states: ConversationDeviceStates;
-  conversation_grants: ConversationGrants;
   conversation_item_context_targets: ConversationItemContextTargets;
   conversation_item_mentions: ConversationItemMentions;
   conversation_item_parts: ConversationItemParts;
@@ -2337,6 +2469,17 @@ export interface DB {
   relay_sync_sources: RelaySyncSources;
   relay_tool_revisions: RelayToolRevisions;
   relay_tools: RelayTools;
+  remote_agent_access_requests: RemoteAgentAccessRequests;
+  remote_agent_bindings: RemoteAgentBindings;
+  remote_agent_conversation_contexts: RemoteAgentConversationContexts;
+  remote_agent_conversation_views: RemoteAgentConversationViews;
+  remote_agent_group_interaction_grants: RemoteAgentGroupInteractionGrants;
+  remote_agent_machine_sessions: RemoteAgentMachineSessions;
+  remote_agent_machines: RemoteAgentMachines;
+  remote_agent_message_deliveries: RemoteAgentMessageDeliveries;
+  remote_agent_runs: RemoteAgentRuns;
+  remote_agent_runtime_catalog: RemoteAgentRuntimeCatalog;
+  remote_agents: RemoteAgents;
   resource_access_bindings: ResourceAccessBindings;
   runtime_events: RuntimeEvents;
   schema_migrations: SchemaMigrations;

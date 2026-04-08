@@ -11,15 +11,6 @@ import { DEFAULT_OFFICIAL_ACTOR_TEMPLATE_SLUG } from "../../infrastructure/datab
 import { getFileUrl } from "../../infrastructure/storage/index.js";
 import { getFileUrlById } from "../files/service.js";
 import {
-  AUTHZ_PLATFORM_ID,
-  buildWorkspaceMemberContextId,
-  deleteRelation,
-  flushAuthzOutboxEntries,
-  queueAuthzRelationships,
-  touchRelation,
-  touchWorkspaceMemberMembership,
-} from "../../infrastructure/authz/index.js";
-import {
   INVITE_TRUST_LEVELS,
   normalizeActorDocs,
   type ActorDoc,
@@ -48,12 +39,6 @@ export interface AddMemberInput {
 
 export type WorkspaceAccessKey = WorkspaceAccessBindingsAccessKey;
 
-function workspaceRelationFromTrustLevel(
-  trustLevel: "owner" | typeof INVITE_TRUST_LEVELS[number],
-) {
-  return trustLevel;
-}
-
 function deriveWorkspaceTrustLevel(row: {
   owner_id?: string | null;
   user_id?: string | null;
@@ -63,19 +48,6 @@ function deriveWorkspaceTrustLevel(row: {
     return "owner";
   }
   return row.trust_level ?? null;
-}
-
-async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (entryIds.length === 0) return;
-
-  try {
-    await flushAuthzOutboxEntries(entryIds);
-  } catch (error) {
-    console.error(
-      `[authz] Failed to flush ${source} relationship updates:`,
-      error,
-    );
-  }
 }
 
 async function getWorkspaceMemberRowByUserId(
@@ -348,31 +320,6 @@ async function loadOfficialActorTemplates(
   });
 }
 
-function buildWorkspaceActorAuthzRelations(
-  workspaceId: string,
-  actorId: string,
-  ownerWorkspaceMemberId: string,
-) {
-  return [
-    touchRelation("workspace", workspaceId, "actor", "actor", actorId),
-    touchRelation("actor", actorId, "workspace", "workspace", workspaceId),
-    touchRelation(
-      "actor",
-      actorId,
-      "owner",
-      "workspace_member",
-      ownerWorkspaceMemberId,
-    ),
-    touchRelation("actor", actorId, "discover_workspace", "workspace", workspaceId),
-    touchRelation("actor", actorId, "invoke_workspace", "workspace", workspaceId),
-    touchRelation("actor", actorId, "receive_workspace", "workspace", workspaceId),
-    touchRelation("actor", actorId, "memory_reader_principal", "actor", actorId),
-    touchRelation("actor", actorId, "memory_editor_principal", "actor", actorId),
-    touchRelation("actor", actorId, "memory_retargeter_principal", "actor", actorId),
-    touchRelation("actor", actorId, "memory_deleter_principal", "actor", actorId),
-  ];
-}
-
 export async function createWorkspace(input: CreateWorkspaceInput) {
   const slug = generateSlug(input.name);
 
@@ -535,55 +482,14 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       String(chiefActor.actorRow.id),
     );
 
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      [
-        touchRelation(
-          "platform",
-          AUTHZ_PLATFORM_ID,
-          "workspace",
-          "workspace",
-          String(workspace.id),
-        ),
-        touchRelation(
-          "workspace",
-          String(workspace.id),
-          "platform",
-          "platform",
-          AUTHZ_PLATFORM_ID,
-        ),
-        ...touchWorkspaceMemberMembership({
-          workspaceId: String(workspace.id),
-          workspaceMemberId: String(creatorMember.id),
-          userId: input.userId,
-          relation: workspaceRelationFromTrustLevel("owner"),
-        }),
-        ...installedActors.flatMap(({ actorRow }) =>
-          buildWorkspaceActorAuthzRelations(
-            String(workspace.id),
-            String(actorRow.id),
-            String(creatorMember.id),
-          ),
-        ),
-      ],
-      {
-        source: "workspace.create",
-        workspaceId: String(workspace.id),
-        userId: input.userId,
-      },
-    );
-
     return {
       workspace: mapWorkspaceRow(workspace),
       secretary: mapActorRow(
         chiefActor.actorRow,
         chiefActor.template.actorDocs,
       ),
-      authzEntryIds,
     };
   });
-
-  await flushQueuedAuthzEntries(result.authzEntryIds, "workspace.create");
 
   return {
     ...result.workspace,
@@ -772,27 +678,8 @@ export async function addMember(input: AddMemberInput) {
       String(memberRow.id),
     );
 
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      [
-        ...touchWorkspaceMemberMembership({
-          workspaceId: input.workspaceId,
-          workspaceMemberId: String(memberRow.id),
-          userId: input.userId,
-          relation: workspaceRelationFromTrustLevel(input.trustLevel),
-        }),
-      ],
-      {
-        source: "workspace.add_member",
-        workspaceId: input.workspaceId,
-        userId: input.userId,
-        trustLevel: input.trustLevel,
-      },
-    );
-
     return {
       member: mapMemberRow(memberRow),
-      authzEntryIds,
     };
   });
 
@@ -800,7 +687,6 @@ export async function addMember(input: AddMemberInput) {
     return null;
   }
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, "workspace.add_member");
   return result.member;
 }
 
@@ -916,18 +802,6 @@ export async function grantWorkspaceAccess(input: {
     throw new Error("Access already granted");
   }
 
-  const authzEntryIds = await queueAccessBindingRelation({
-    operation: "touch",
-    workspaceId: input.workspaceId,
-    workspaceMemberId: input.workspaceMemberId,
-    accessKey: input.accessKey,
-    source: "workspace.access.grant",
-    metadata: {
-      assignedByWorkspaceMemberId: input.assignedByWorkspaceMemberId,
-    },
-  });
-  await flushQueuedAuthzEntries(authzEntryIds, "workspace.access.grant");
-
   return {
     workspaceId: membership.workspace_id,
     workspaceMemberId: row.workspace_member_id,
@@ -961,14 +835,6 @@ export async function revokeWorkspaceAccess(
     throw new Error("Access grant not found");
   }
 
-  const authzEntryIds = await queueAccessBindingRelation({
-    operation: "delete",
-    workspaceId,
-    workspaceMemberId,
-    accessKey,
-    source: "workspace.access.revoke",
-  });
-  await flushQueuedAuthzEntries(authzEntryIds, "workspace.access.revoke");
 }
 
 // ── Row mappers ──
@@ -1049,43 +915,4 @@ function mapWorkspaceChiefActorPreferenceRow(
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
   };
-}
-
-async function queueAccessBindingRelation(input: {
-  operation: "touch" | "delete";
-  workspaceId: string;
-  workspaceMemberId: string;
-  accessKey: WorkspaceAccessKey;
-  source: string;
-  metadata?: Record<string, unknown>;
-}) {
-  return transaction(async (client: pg.PoolClient) =>
-    queueAuthzRelationships(
-      client,
-      [
-        input.operation === "touch"
-          ? touchRelation(
-              "workspace",
-              input.workspaceId,
-              input.accessKey,
-              "workspace_member",
-              buildWorkspaceMemberContextId(input.workspaceMemberId),
-            )
-          : deleteRelation(
-              "workspace",
-              input.workspaceId,
-              input.accessKey,
-              "workspace_member",
-              buildWorkspaceMemberContextId(input.workspaceMemberId),
-            ),
-      ],
-      {
-        source: input.source,
-        workspaceId: input.workspaceId,
-        workspaceMemberId: input.workspaceMemberId,
-        accessKey: input.accessKey,
-        ...(input.metadata || {}),
-      },
-    ),
-  );
 }

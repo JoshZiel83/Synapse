@@ -4,7 +4,7 @@ This repository is deployed on a single Ubuntu host with:
 
 - local `nginx`
 - `systemd` for API and web
-- Docker for PostgreSQL, Redis, and SpiceDB
+- Docker for PostgreSQL and Redis
 - web running in dev mode
 
 ## 1. Host prerequisites
@@ -52,13 +52,12 @@ Default seeded platform admin:
 Start the local-only infrastructure containers:
 
 ```bash
-sudo docker compose up -d postgres redis spicedb-migrate spicedb
+sudo docker compose up -d postgres redis
 ```
 
 Notes:
 
 - Redis is bound to loopback and requires a password from `.env`
-- SpiceDB uses PostgreSQL persistence and is no longer run in testing mode
 
 ## 4. Application dependencies
 

@@ -2,7 +2,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { PLATFORM_ACCESS_KEYS } from "@synapse/shared/constants";
 import { authMiddleware } from "../../infrastructure/middleware/auth.js";
-import { AUTHZ_PLATFORM_ID } from "../../infrastructure/authz/index.js";
+import { PLATFORM_RESOURCE_ID } from "../access/core.js";
 import {
   grantPlatformAccess,
   listPlatformAccessBindings,
@@ -26,7 +26,7 @@ async function requirePlatformManagePermission(
     request,
     reply,
     "platform.manage",
-    AUTHZ_PLATFORM_ID,
+    PLATFORM_RESOURCE_ID,
     errorMessage,
   );
 }
@@ -35,7 +35,7 @@ async function canPlatformPermission(userId: string) {
   return authorizeAction({
     subject: userSubject(userId),
     action: "platform.manage",
-    resourceId: AUTHZ_PLATFORM_ID,
+    resourceId: PLATFORM_RESOURCE_ID,
   });
 }
 

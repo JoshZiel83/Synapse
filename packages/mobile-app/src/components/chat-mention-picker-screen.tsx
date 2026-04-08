@@ -24,12 +24,18 @@ import { useChat } from "@/providers/chat-provider";
 import { theme } from "@/theme/tokens";
 
 function buildParticipantSubtitle(participant: {
-  participantType: "actor" | "workspace_member" | "external" | "system";
+  participantType:
+    | "actor"
+    | "remote_agent"
+    | "workspace_member"
+    | "external"
+    | "system";
   title?: string;
   role?: string;
 }) {
   const fallback =
-    participant.participantType === "actor"
+    participant.participantType === "actor" ||
+    participant.participantType === "remote_agent"
       ? "工作区 Actor"
       : participant.participantType === "external"
         ? "外部联系人"

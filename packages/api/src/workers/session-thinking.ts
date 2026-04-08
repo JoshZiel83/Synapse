@@ -873,6 +873,7 @@ export function startSessionThinkingWorker() {
         const wakeupTargets = pendingWakeups.filter(
           (wakeup) =>
             (wakeup.sourceParticipantType === 'workspace_member' ||
+              wakeup.sourceParticipantType === 'remote_agent' ||
               wakeup.sourceParticipantType === 'external') &&
             wakeup.sourceParticipantId,
         );
@@ -885,6 +886,13 @@ export function startSessionThinkingWorker() {
                   return getConversationParticipant({
                     conversationId: failedSession.conversation_id,
                     workspaceMemberId: wakeup.sourceParticipantId as string,
+                  });
+                }
+
+                if (wakeup.sourceParticipantType === 'remote_agent') {
+                  return getConversationParticipant({
+                    conversationId: failedSession.conversation_id,
+                    remoteAgentId: wakeup.sourceParticipantId as string,
                   });
                 }
 

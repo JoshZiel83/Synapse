@@ -1044,6 +1044,35 @@ export interface ActorRuntimeState {
   updatedAt: Timestamp;
 }
 
+export type RemoteAgentRuntimeStateType =
+  | "offline"
+  | "idle"
+  | "running"
+  | "waiting_user_input"
+  | "plan_drafting"
+  | "waiting_plan_approval"
+  | "error";
+
+export interface RemoteAgentRuntimeState {
+  remoteAgentId: UUID;
+  runtimeKind: "claude_code" | "codex";
+  state: RemoteAgentRuntimeStateType;
+  statusText?: string;
+  activeConversationId?: UUID;
+  activeInteractionId?: UUID;
+  sessionId?: string;
+  pendingConversationCount: number;
+  unreadDeliveryCount: number;
+  lastActivityAt?: Timestamp;
+  lastRunStartedAt?: Timestamp;
+  lastRunFinishedAt?: Timestamp;
+  lastError?: {
+    message: string;
+    at: Timestamp;
+  };
+  updatedAt: Timestamp;
+}
+
 export interface SessionMessage {
   id: UUID;
   sessionId: UUID;
@@ -2279,7 +2308,6 @@ export interface AccessGrant {
   resourceId: string;
   workspaceId: string;
   target: CapabilityAccessTarget;
-  permissions: string[];
   status: AccessGrantStatus;
   grantedByWorkspaceMemberId?: string;
   reason?: string;
@@ -2699,6 +2727,7 @@ export interface McpSetupStep {
 
 export type ConversationParticipantType =
   | "actor"
+  | "remote_agent"
   | "workspace_member"
   | "external"
   | "system";
@@ -2714,6 +2743,7 @@ export interface ConversationEntityRef {
   participantType: ConversationParticipantType;
   workspaceMemberId?: UUID;
   actorId?: UUID;
+  remoteAgentId?: UUID;
   externalUserKey?: string;
   transportAddressId?: UUID;
   transportKind?: TransportKind;
@@ -2739,7 +2769,7 @@ export interface ConversationReplyRef {
 
 export type ConversationParticipantRef = ConversationEntityRef & {
   participantId: UUID;
-  participantType: "actor" | "workspace_member" | "external";
+  participantType: "actor" | "remote_agent" | "workspace_member" | "external";
 };
 
 export interface TransportConnectorCapability {
@@ -3160,6 +3190,7 @@ export interface RelayAuthorizationInteractionSummary {
 export interface InteractionRequestSummaryBase {
   id: UUID;
   taskId?: UUID;
+  remoteAgentRunId?: UUID;
   workspaceId: UUID;
   conversationId: UUID;
   itemId?: UUID;
@@ -3178,7 +3209,7 @@ export interface InteractionRequestSummaryBase {
 export interface UserInputInteractionRequestSummary
   extends InteractionRequestSummaryBase {
   kind: "user_input";
-  target: ConversationEntityRef;
+  target?: ConversationEntityRef;
   userInput: UserInputInteractionSummary;
   planApproval?: never;
   relayAuthorization?: never;
@@ -3187,7 +3218,7 @@ export interface UserInputInteractionRequestSummary
 export interface PlanApprovalInteractionRequestSummary
   extends InteractionRequestSummaryBase {
   kind: "plan_approval";
-  target: ConversationEntityRef;
+  target?: ConversationEntityRef;
   userInput?: never;
   planApproval: PlanApprovalInteractionSummary;
   relayAuthorization?: never;
@@ -3653,7 +3684,11 @@ export function summarizeConversationEvent(
       return "Interaction requested";
     }
     if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
-      const targetName = interaction.target?.name?.trim() || "a user";
+      const targetName =
+        interaction.target?.name?.trim() ||
+        (interaction.requester?.participantType === "remote_agent"
+          ? "the group"
+          : "a user");
       const prompt = interaction.userInput?.title?.trim() || "A question";
       if (interaction.status === "cancelled") {
         return `Input request for ${targetName} was cancelled: ${prompt}`;
@@ -3663,7 +3698,11 @@ export function summarizeConversationEvent(
         : `Input requested from ${targetName}: ${prompt}`;
     }
     if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
-      const targetName = interaction.target?.name?.trim() || "a user";
+      const targetName =
+        interaction.target?.name?.trim() ||
+        (interaction.requester?.participantType === "remote_agent"
+          ? "the group"
+          : "a user");
       const title = interaction.planApproval?.title?.trim() || "Plan approval";
       if (interaction.status === "cancelled") {
         return `Plan approval for ${targetName} was cancelled: ${title}`;
@@ -3866,6 +3905,10 @@ export interface ChatSyncEventPayloadMap {
     itemId?: UUID;
     interaction: InteractionRequestSummary;
   };
+  "remote_agent.runtime_updated": {
+    remoteAgentId: UUID;
+    snapshot: RemoteAgentRuntimeState;
+  };
 }
 
 export type ChatSyncEventType = keyof ChatSyncEventPayloadMap;
@@ -3905,13 +3948,14 @@ export interface ChatConversationMessagesQuery {
   afterSequence?: number;
   beforeSequence?: number;
   limit?: number;
-  clientInstanceId?: UUID;
+  clientInstanceId: UUID;
 }
 
 export interface ChatConversationMessagesPage {
   conversation: ChatConversationView;
   items: ChatConversationItem[];
   runtimeByActor: Record<string, ActorRuntimeState>;
+  runtimeByRemoteAgent: Record<string, RemoteAgentRuntimeState>;
   participantReadWatermarkSequence: number;
   deviceState?: ChatDeviceState;
   hasMoreBefore: boolean;
@@ -3926,6 +3970,18 @@ export interface ChatClientInstanceRegistrationRequest {
 
 export type ChatClientInstanceRegistrationInput =
   ChatClientInstanceRegistrationRequest;
+
+export interface ChatClientInstanceCreateRequest
+  extends ChatClientInstanceRegistrationRequest {}
+
+export type ChatClientInstanceCreateInput =
+  ChatClientInstanceCreateRequest;
+
+export interface ChatClientInstanceTouchRequest
+  extends ChatClientInstanceRegistrationRequest {}
+
+export type ChatClientInstanceTouchInput =
+  ChatClientInstanceTouchRequest;
 
 export interface ChatClientInstanceRegistrationResponse {
   clientInstanceId: UUID;
@@ -3945,6 +4001,7 @@ export interface ChatConversationCreateRequest {
   title?: string;
   workspaceMemberIds?: UUID[];
   actorIds?: UUID[];
+  remoteAgentIds?: UUID[];
   externalParticipants?: ChatConversationCreateExternalParticipantRequest[];
   metadata?: Record<string, unknown>;
 }
@@ -3959,7 +4016,7 @@ export interface ChatConversationSendMessageRequest {
   contentBlocks: CanonicalContentBlock[];
   clientMessageId: UUID;
   replyToItemId?: UUID;
-  clientInstanceId?: UUID;
+  clientInstanceId: UUID;
   metadata?: Record<string, unknown>;
 }
 
@@ -3973,7 +4030,7 @@ export interface ChatConversationSendMessageResponse {
 export interface ChatConversationReadWatermarkRequest {
   readUpToSequence: number;
   lastVisibleSequence?: number;
-  clientInstanceId?: UUID;
+  clientInstanceId: UUID;
 }
 
 export type ChatConversationReadWatermarkInput =
@@ -4755,22 +4812,12 @@ export type PluginReuseScopeV2 =
   | "workspace"
   | "conversation"
   | "actor";
-export type AccessBindingStatus = "active" | "revoked";
 export type ResourceAccessBindingResourceType =
   | "installed_skill"
   | "plugin_installation"
   | "relay_capability"
   | "automation_event_source";
 export type AccessResourceType = ResourceAccessBindingResourceType;
-export type AccessSubjectType =
-  | "platform"
-  | "workspace"
-  | "conversation"
-  | "workspace_in_conversation"
-  | "user"
-  | "actor"
-  | "workspace_member"
-  | "conversation_actor_context";
 
 export interface CatalogPublisherRecord {
   id: string;
@@ -4877,23 +4924,6 @@ export interface PluginPackageVersionSpecRecord {
   requiresHandshake: boolean;
   metadata: Record<string, unknown>;
   createdAt: string;
-}
-
-export interface AccessBindingRecord {
-  id: string;
-  workspaceId?: string;
-  resourceType: AccessResourceType;
-  resourceId: string;
-  relation: string;
-  subjectType: AccessSubjectType;
-  subjectId: string;
-  subjectRelation?: string;
-  status: AccessBindingStatus;
-  createdByWorkspaceMemberId?: string;
-  reason?: string;
-  metadata: Record<string, unknown>;
-  createdAt: string;
-  revokedAt?: string;
 }
 
 export interface InstalledSkillRecord {

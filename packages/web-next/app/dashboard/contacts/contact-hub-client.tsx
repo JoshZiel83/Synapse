@@ -5,6 +5,7 @@ import { buildMobileScanUrl } from "@synapse/shared"
 import QRCode from "qrcode"
 import { useRouter } from "next/navigation"
 import {
+  Bot,
   Cpu,
   Inbox,
   MessageCircle,
@@ -20,6 +21,7 @@ import type {
   ContactHubResponse,
   FriendRequestListResponse,
   IdentitySearchResponse,
+  RemoteAgentAccessRequestListResponse,
   RelationshipProfileView,
 } from "@/lib/api"
 import { api } from "@/lib/api"
@@ -54,7 +56,13 @@ function ContactAvatar({
     <Avatar className="size-10 rounded-2xl">
       <AvatarImage src={resolveFileUrl(entry.avatarUrl) || undefined} alt={entry.title} />
       <AvatarFallback className="rounded-2xl">
-        {entry.targetType === "actor" ? <Cpu className="size-4" /> : entry.title.slice(0, 1).toUpperCase()}
+        {entry.targetType === "actor" ? (
+          <Cpu className="size-4" />
+        ) : entry.targetType === "remote_agent" ? (
+          <Bot className="size-4" />
+        ) : (
+          entry.title.slice(0, 1).toUpperCase()
+        )}
       </AvatarFallback>
     </Avatar>
   )
@@ -127,10 +135,15 @@ export function ContactHubClient() {
     useState<FriendRequestListResponse | null>(null)
   const [actorAccessRequests, setActorAccessRequests] =
     useState<ActorAccessRequestListResponse | null>(null)
+  const [remoteAgentAccessRequests, setRemoteAgentAccessRequests] =
+    useState<RemoteAgentAccessRequestListResponse | null>(null)
   const [selectedActorProfile, setSelectedActorProfile] =
+    useState<RelationshipProfileView | null>(null)
+  const [selectedRemoteAgentProfile, setSelectedRemoteAgentProfile] =
     useState<RelationshipProfileView | null>(null)
   const [myQrImage, setMyQrImage] = useState<string | null>(null)
   const [actorQrImage, setActorQrImage] = useState<string | null>(null)
+  const [remoteAgentQrImage, setRemoteAgentQrImage] = useState<string | null>(null)
   const [submittingRequestId, setSubmittingRequestId] = useState<string | null>(null)
   const [submittingSearchProfileId, setSubmittingSearchProfileId] =
     useState<string | null>(null)
@@ -146,11 +159,13 @@ export function ContactHubClient() {
         profileResponse,
         friendRequestResponse,
         actorAccessResponse,
+        remoteAgentAccessResponse,
       ] = await Promise.all([
         api.getContactHub(workspaceId),
         api.getMyRelationshipProfile(workspaceId),
         api.getFriendRequests(workspaceId),
         api.getActorAccessRequests(workspaceId),
+        api.getRemoteAgentAccessRequests(workspaceId),
       ])
       setHub(hubResponse)
       setMyProfile(profileResponse)
@@ -158,11 +173,13 @@ export function ContactHubClient() {
       setFriendIdDraft(profileResponse.identityId)
       setFriendRequests(friendRequestResponse)
       setActorAccessRequests(actorAccessResponse)
+      setRemoteAgentAccessRequests(remoteAgentAccessResponse)
 
       const selected =
         nextSelected ||
         selectedEntry ||
         hubResponse.workspaceActors[0] ||
+        hubResponse.workspaceRemoteAgents[0] ||
         hubResponse.workspaceMembers[0] ||
         hubResponse.friends[0] ||
         null
@@ -292,6 +309,12 @@ export function ContactHubClient() {
             ? "Relationship request is already pending."
             : result.outcome === "friend_active"
               ? "You are already connected."
+              : result.outcome === "remote_agent_access_request_created"
+                ? "Remote agent access request created."
+                : result.outcome === "remote_agent_access_pending"
+                  ? "Remote agent access request is already pending."
+                  : result.outcome === "remote_agent_access_granted"
+                    ? "Remote agent access granted."
               : "Request submitted."
       )
       await loadHub(selectedEntry)
@@ -366,6 +389,48 @@ export function ContactHubClient() {
     }
   }, [selectedEntry?.actorId, selectedEntry?.kind, workspaceId])
 
+  useEffect(() => {
+    if (
+      !workspaceId ||
+      selectedEntry?.kind !== "workspace-remote-agent" ||
+      !selectedEntry.remoteAgentId
+    ) {
+      setSelectedRemoteAgentProfile(null)
+      setRemoteAgentQrImage(null)
+      return
+    }
+
+    let active = true
+    void api
+      .getRemoteAgentRelationshipProfile(workspaceId, selectedEntry.remoteAgentId)
+      .then(async (profile) => {
+        if (!active) return
+        setSelectedRemoteAgentProfile(profile)
+        if (profile.qrToken) {
+          const image = await QRCode.toDataURL(
+            buildMobileScanUrl({
+              origin: window.location.origin,
+              kind: "relationship",
+              token: profile.qrToken,
+            }),
+            { width: 220, margin: 1 }
+          )
+          if (active) {
+            setRemoteAgentQrImage(image)
+          }
+        }
+      })
+      .catch(() => {
+        if (!active) return
+        setSelectedRemoteAgentProfile(null)
+        setRemoteAgentQrImage(null)
+      })
+
+    return () => {
+      active = false
+    }
+  }, [selectedEntry?.kind, selectedEntry?.remoteAgentId, workspaceId])
+
   async function handleSelectEntry(entry: ContactHubEntryView) {
     if (!workspaceId) return
     setSelectedEntry(entry)
@@ -425,6 +490,24 @@ export function ContactHubClient() {
         await api.approveActorAccessRequest(workspaceId, requestId)
       } else {
         await api.rejectActorAccessRequest(workspaceId, requestId)
+      }
+      await loadHub(selectedEntry)
+    } finally {
+      setSubmittingRequestId(null)
+    }
+  }
+
+  async function handleResolveRemoteAgent(
+    requestId: string,
+    decision: "approve" | "reject"
+  ) {
+    if (!workspaceId) return
+    setSubmittingRequestId(requestId)
+    try {
+      if (decision === "approve") {
+        await api.approveRemoteAgentAccessRequest(workspaceId, requestId)
+      } else {
+        await api.rejectRemoteAgentAccessRequest(workspaceId, requestId)
       }
       await loadHub(selectedEntry)
     } finally {
@@ -498,6 +581,61 @@ export function ContactHubClient() {
     )
   }
 
+  async function handleToggleRemoteAgentApprovalMode() {
+    if (!workspaceId || !selectedEntry?.remoteAgentId || !selectedRemoteAgentProfile) return
+    const nextMode =
+      selectedRemoteAgentProfile.approvalMode === "auto" ? "manual" : "auto"
+    const nextProfile = await api.updateRemoteAgentRelationshipProfile(
+      workspaceId,
+      selectedEntry.remoteAgentId,
+      {
+        approvalMode: nextMode,
+        accessPolicy: selectedRemoteAgentProfile.accessPolicy,
+      }
+    )
+    setSelectedRemoteAgentProfile(nextProfile)
+    toast.success(`Remote agent approval mode switched to ${nextMode}.`)
+  }
+
+  async function handleToggleRemoteAgentAccessPolicy() {
+    if (!workspaceId || !selectedEntry?.remoteAgentId || !selectedRemoteAgentProfile) return
+    const nextPolicy =
+      selectedRemoteAgentProfile.accessPolicy === "workspace_open"
+        ? "approval_required"
+        : "workspace_open"
+    const nextProfile = await api.updateRemoteAgentRelationshipProfile(
+      workspaceId,
+      selectedEntry.remoteAgentId,
+      {
+        approvalMode: selectedRemoteAgentProfile.approvalMode,
+        accessPolicy: nextPolicy,
+      }
+    )
+    setSelectedRemoteAgentProfile(nextProfile)
+    await loadHub(selectedEntry)
+    toast.success(`Remote agent access policy switched to ${nextPolicy}.`)
+  }
+
+  async function handleToggleRemoteAgentPublicShare() {
+    if (!workspaceId || !selectedEntry?.remoteAgentId || !selectedRemoteAgentProfile) return
+    const nextPublicShared = !selectedRemoteAgentProfile.isPublicShared
+    const nextProfile = await api.updateRemoteAgentRelationshipProfile(
+      workspaceId,
+      selectedEntry.remoteAgentId,
+      {
+        approvalMode: selectedRemoteAgentProfile.approvalMode,
+        accessPolicy: selectedRemoteAgentProfile.accessPolicy,
+        isPublicShared: nextPublicShared,
+      }
+    )
+    setSelectedRemoteAgentProfile(nextProfile)
+    toast.success(
+      nextPublicShared
+        ? "Remote agent public sharing enabled."
+        : "Remote agent public sharing disabled."
+    )
+  }
+
   const normalizedQuery = search.trim().toLowerCase()
   const visibleGroups = useMemo(
     () => ((hub?.groups as ConversationSummaryLike[] | undefined) || []).filter((item) => filterConversation(item, normalizedQuery)),
@@ -506,6 +644,13 @@ export function ContactHubClient() {
   const visibleActors = useMemo(
     () => (hub?.workspaceActors || []).filter((entry) => filterEntry(entry, normalizedQuery)),
     [hub?.workspaceActors, normalizedQuery]
+  )
+  const visibleRemoteAgents = useMemo(
+    () =>
+      (hub?.workspaceRemoteAgents || []).filter((entry) =>
+        filterEntry(entry, normalizedQuery)
+      ),
+    [hub?.workspaceRemoteAgents, normalizedQuery]
   )
   const visibleMembers = useMemo(
     () => (hub?.workspaceMembers || []).filter((entry) => filterEntry(entry, normalizedQuery)),
@@ -534,7 +679,7 @@ export function ContactHubClient() {
               <Input
                 value={search}
                 onChange={(event) => setSearch(event.target.value)}
-                placeholder="Search groups, actors, members, friends"
+                placeholder="Search groups, actors, remote agents, members, friends"
                 className="rounded-2xl"
               />
             </div>
@@ -621,8 +766,45 @@ export function ContactHubClient() {
                         </div>
                       </div>
                     ))}
+                    {(remoteAgentAccessRequests?.incoming || []).slice(0, 2).map((request) => (
+                      <div
+                        key={request.id}
+                        className="rounded-2xl border border-border bg-muted/20 px-4 py-3"
+                      >
+                        <div className="text-sm font-medium text-foreground">
+                          {request.remoteAgent?.name || "Unknown remote agent"}
+                        </div>
+                        <div className="mt-1 text-sm text-muted-foreground">
+                          {request.requester?.name || "A user"} wants to start a DM.
+                        </div>
+                        <div className="mt-3 flex gap-2">
+                          <Button
+                            size="sm"
+                            className="flex-1 rounded-full"
+                            disabled={submittingRequestId === request.id}
+                            onClick={() =>
+                              void handleResolveRemoteAgent(request.id, "approve")
+                            }
+                          >
+                            {submittingRequestId === request.id ? "Working..." : "Approve"}
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="flex-1 rounded-full"
+                            disabled={submittingRequestId === request.id}
+                            onClick={() =>
+                              void handleResolveRemoteAgent(request.id, "reject")
+                            }
+                          >
+                            Reject
+                          </Button>
+                        </div>
+                      </div>
+                    ))}
                     {(friendRequests?.incoming || []).length === 0 &&
-                    (actorAccessRequests?.incoming || []).length === 0 ? (
+                    (actorAccessRequests?.incoming || []).length === 0 &&
+                    (remoteAgentAccessRequests?.incoming || []).length === 0 ? (
                       <div className="rounded-2xl border border-border bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
                         No pending requests right now.
                       </div>
@@ -676,7 +858,8 @@ export function ContactHubClient() {
                   <h3 className="text-sm font-semibold text-foreground">Add by Identity ID</h3>
                   <div className="rounded-2xl border border-border bg-muted/20 px-4 py-4">
                     <div className="text-sm text-muted-foreground">
-                      Search a workspace identity and add the matching member or actor.
+                      Search a workspace identity and add the matching member, actor,
+                      or remote agent.
                     </div>
                     <div className="mt-3 space-y-3">
                       <Input
@@ -784,6 +967,35 @@ export function ContactHubClient() {
                   <h3 className="text-sm font-semibold text-foreground">Actors</h3>
                   <div className="space-y-2">
                     {visibleActors.map((entry) => (
+                      <button
+                        key={`${entry.kind}:${entry.id}`}
+                        type="button"
+                        onClick={() => void handleSelectEntry(entry)}
+                        className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-colors ${
+                          selectedEntry?.kind === entry.kind && selectedEntry?.id === entry.id
+                            ? "border-primary bg-accent"
+                            : "border-border/70 hover:bg-accent/40"
+                        }`}
+                      >
+                        <ContactAvatar entry={entry} />
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-sm font-medium text-foreground">
+                            {entry.title}
+                          </div>
+                          <div className="truncate text-sm text-muted-foreground">
+                            {entry.subtitle || entry.workspace.name}
+                          </div>
+                        </div>
+                        {statusBadge(entry)}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+
+                <section className="space-y-2">
+                  <h3 className="text-sm font-semibold text-foreground">Remote agents</h3>
+                  <div className="space-y-2">
+                    {visibleRemoteAgents.map((entry) => (
                       <button
                         key={`${entry.kind}:${entry.id}`}
                         type="button"
@@ -1016,6 +1228,64 @@ export function ContactHubClient() {
                         >
                           Turn public share{" "}
                           {selectedActorProfile.isPublicShared ? "off" : "on"}
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ) : null}
+
+                {selectedEntry.kind === "workspace-remote-agent" &&
+                selectedRemoteAgentProfile ? (
+                  <Card>
+                    <CardHeader>
+                      <CardTitle>Remote Agent QR</CardTitle>
+                    </CardHeader>
+                    <CardContent className="space-y-3">
+                      {remoteAgentQrImage ? (
+                        <img
+                          src={remoteAgentQrImage}
+                          alt="Remote agent relationship QR"
+                          className="w-full rounded-2xl border border-border bg-white p-4"
+                        />
+                      ) : (
+                        <Skeleton className="aspect-square rounded-2xl" />
+                      )}
+                      <p className="text-sm text-muted-foreground">
+                        Approval mode: {selectedRemoteAgentProfile.approvalMode} · access
+                        policy {selectedRemoteAgentProfile.accessPolicy} · public share{" "}
+                        {selectedRemoteAgentProfile.isPublicShared ? "on" : "off"}
+                      </p>
+                      <div className="grid gap-2">
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full rounded-full"
+                          onClick={() => void handleToggleRemoteAgentApprovalMode()}
+                        >
+                          Switch approval to{" "}
+                          {selectedRemoteAgentProfile.approvalMode === "auto"
+                            ? "manual"
+                            : "auto"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full rounded-full"
+                          onClick={() => void handleToggleRemoteAgentAccessPolicy()}
+                        >
+                          Switch policy to{" "}
+                          {selectedRemoteAgentProfile.accessPolicy === "workspace_open"
+                            ? "approval_required"
+                            : "workspace_open"}
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
+                          className="w-full rounded-full"
+                          onClick={() => void handleToggleRemoteAgentPublicShare()}
+                        >
+                          Turn public share{" "}
+                          {selectedRemoteAgentProfile.isPublicShared ? "off" : "on"}
                         </Button>
                       </div>
                     </CardContent>

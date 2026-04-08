@@ -32,12 +32,6 @@ import {
   type MarketplaceVersionStatus,
   type UUID,
 } from "@synapse/shared";
-import {
-  deleteRelation,
-  flushAuthzOutboxEntries,
-  queueAuthzRelationships,
-  touchRelation,
-} from "../../infrastructure/authz/index.js";
 import { transaction } from "../../infrastructure/database/index.js";
 import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
 import { createConversationEvent } from "../chat/service.js";
@@ -969,49 +963,6 @@ async function ensureParentActor(
   }
 }
 
-function buildActorAuthzMutations(params: {
-  actorId: UUID;
-  workspaceId: UUID;
-  ownerWorkspaceMemberId?: UUID;
-  operation: "touch" | "delete";
-}) {
-  const mutate = params.operation === "touch" ? touchRelation : deleteRelation;
-  const relations = [
-    mutate("workspace", params.workspaceId, "actor", "actor", params.actorId),
-    mutate("actor", params.actorId, "workspace", "workspace", params.workspaceId),
-    mutate("actor", params.actorId, "discover_workspace", "workspace", params.workspaceId),
-    mutate("actor", params.actorId, "invoke_workspace", "workspace", params.workspaceId),
-    mutate("actor", params.actorId, "receive_workspace", "workspace", params.workspaceId),
-    mutate("actor", params.actorId, "memory_reader_principal", "actor", params.actorId),
-    mutate("actor", params.actorId, "memory_editor_principal", "actor", params.actorId),
-    mutate("actor", params.actorId, "memory_retargeter_principal", "actor", params.actorId),
-    mutate("actor", params.actorId, "memory_deleter_principal", "actor", params.actorId),
-  ];
-
-  if (params.ownerWorkspaceMemberId) {
-    relations.push(
-      mutate(
-        "actor",
-        params.actorId,
-        "owner",
-        "workspace_member",
-        params.ownerWorkspaceMemberId,
-      ),
-    );
-  }
-
-  return relations;
-}
-
-async function flushQueuedAuthzEntries(entryIds: string[], source: string) {
-  if (entryIds.length === 0) return;
-  try {
-    await flushAuthzOutboxEntries(entryIds);
-  } catch (error) {
-    console.error(`[authz] Failed to flush ${source}:`, error);
-  }
-}
-
 async function buildActorResponseFromRows(rows: ActorRow[]) {
   if (rows.length === 0) return [];
   const docsByVersionId = await loadActorDocsMap(
@@ -1235,29 +1186,11 @@ export async function createActor(input: {
       );
     }
 
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      buildActorAuthzMutations({
-        actorId,
-        workspaceId: input.workspaceId,
-        ownerWorkspaceMemberId: input.createdByWorkspaceMemberId,
-        operation: "touch",
-      }),
-      {
-        source: "actor.create",
-        workspaceId: input.workspaceId,
-        actorId,
-        workspaceMemberId: input.createdByWorkspaceMemberId,
-      },
-    );
-
     return {
       actorId,
-      authzEntryIds,
     };
   });
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, "actor.create");
   const actor = await getActor(result.actorId, input.workspaceId);
   if (!actor) {
     throw new Error("Failed to create actor");
@@ -1502,7 +1435,7 @@ export async function deleteActor(
       [actorId, workspaceId],
     );
     if (existing.rows.length === 0) {
-      return { deleted: false, authzEntryIds: [] as string[] };
+      return { deleted: false };
     }
 
     await executeSqlOn(client, 
@@ -1512,24 +1445,9 @@ export async function deleteActor(
       [actorId, workspaceId],
     );
 
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      buildActorAuthzMutations({
-        actorId,
-        workspaceId,
-        operation: "delete",
-      }),
-      {
-        source: "actor.delete",
-        workspaceId,
-        actorId,
-      },
-    );
-
-    return { deleted: true, authzEntryIds };
+    return { deleted: true };
   });
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, "actor.delete");
   return result.deleted;
 }
 
@@ -1721,30 +1639,11 @@ export async function installActorPackage(input: {
       [actorPackage.package.id],
     );
 
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      buildActorAuthzMutations({
-        actorId,
-        workspaceId: input.workspaceId,
-        ownerWorkspaceMemberId: input.createdByWorkspaceMemberId,
-        operation: "touch",
-      }),
-      {
-        source: "actor.install_package",
-        workspaceId: input.workspaceId,
-        actorId,
-        packageId: actorPackage.package.id,
-        workspaceMemberId: input.createdByWorkspaceMemberId,
-      },
-    );
-
     return {
       actorId,
-      authzEntryIds,
     };
   });
 
-  await flushQueuedAuthzEntries(result.authzEntryIds, "actor.install_package");
   const actor = await getActor(result.actorId, input.workspaceId);
   if (!actor) {
     throw new Error("Failed to install actor package");

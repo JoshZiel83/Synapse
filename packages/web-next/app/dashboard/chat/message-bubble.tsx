@@ -9,6 +9,7 @@ import type {
   ConversationMessageTransportDelivery,
   ConversationReplyRef,
   InteractionRequestSummary,
+  RemoteAgentRuntimeState,
 } from "@synapse/shared"
 import { INTERACTION_REQUEST_KIND } from "@synapse/shared"
 import type {
@@ -57,7 +58,10 @@ import ReactMarkdown, { defaultUrlTransform } from "react-markdown"
 import remarkGfm from "remark-gfm"
 import { extractText } from "@synapse/shared"
 import { toast } from "sonner"
-import { runtimeToAvatarStatus } from "@/stores/chat-store"
+import {
+  remoteAgentRuntimeToAvatarStatus,
+  runtimeToAvatarStatus,
+} from "@/stores/chat-store"
 import type { ServerToolCall } from "@/stores/chat-store"
 import type { ConversationMember } from "@/stores/chat-store"
 import type {
@@ -97,6 +101,7 @@ interface MessageBubbleProps {
   actorEmoji?: string
   actorRole?: string
   actorRuntime?: ActorRuntimeState
+  remoteAgentRuntime?: RemoteAgentRuntimeState
   timestamp?: string
   isUser: boolean
   status?: "sending" | "retrying" | "sent"
@@ -2391,6 +2396,7 @@ export default function MessageBubble({
   actorEmoji,
   actorRole,
   actorRuntime,
+  remoteAgentRuntime,
   timestamp,
   isUser,
   status,
@@ -2443,6 +2449,8 @@ export default function MessageBubble({
     if (author?.participantType === "external") return "external" as const
     if (author?.participantType === "workspace_member")
       return "workspace_member" as const
+    if (author?.participantType === "remote_agent")
+      return "remote_agent" as const
     return "actor" as const
   }, [author?.participantType])
   const resolvedAuthorName = useMemo(() => {
@@ -2456,6 +2464,9 @@ export default function MessageBubble({
     }
     if (author?.participantType === "external") {
       return author.name || authorMember?.name || "External participant"
+    }
+    if (author?.participantType === "remote_agent") {
+      return author.name || authorMember?.name || "Remote agent"
     }
     if (author?.participantType === "actor") {
       return author.name || actorName || authorMember?.name || "Actor"
@@ -2486,6 +2497,15 @@ export default function MessageBubble({
         ? getConversationMemberSubtitle(authorMember)
         : "External participant"
     }
+    if (author?.participantType === "remote_agent") {
+      return (
+        author?.title ||
+        author?.role ||
+        authorMember?.title ||
+        authorMember?.role ||
+        "Remote agent"
+      )
+    }
     if (author?.participantType === "workspace_member") {
       return (
         author.workspaceMemberId &&
@@ -2496,6 +2516,24 @@ export default function MessageBubble({
     }
     return undefined
   }, [actorRole, author, authorMember, viewerWorkspaceMemberId])
+  const authorStatusState =
+    authorEntityType === "actor"
+      ? runtimeToAvatarStatus(actorRuntime)
+      : authorEntityType === "remote_agent"
+        ? remoteAgentRuntimeToAvatarStatus(remoteAgentRuntime)
+        : undefined
+  const authorStatusLabel =
+    authorEntityType === "actor" || authorEntityType === "remote_agent"
+      ? getRuntimeLabel(
+          authorEntityType === "actor" ? actorRuntime : remoteAgentRuntime
+        )
+      : undefined
+  const authorStatusDetail =
+    authorEntityType === "actor" || authorEntityType === "remote_agent"
+      ? getRuntimeDetail(
+          authorEntityType === "actor" ? actorRuntime : remoteAgentRuntime
+        )
+      : undefined
 
   const { blocks: renderedBlocks, sources } = useMemo(
     () => buildRenderedMessageBlocks(contentBlocks, citationSources),
@@ -2917,21 +2955,9 @@ export default function MessageBubble({
               avatarUrl={resolvedAuthorAvatarUrl}
               emoji={resolvedAuthorEmoji}
               entityType={authorEntityType}
-              statusState={
-                authorEntityType === "actor"
-                  ? runtimeToAvatarStatus(actorRuntime)
-                  : undefined
-              }
-              statusLabel={
-                authorEntityType === "actor"
-                  ? getRuntimeLabel(actorRuntime)
-                  : undefined
-              }
-              statusDetail={
-                authorEntityType === "actor"
-                  ? getRuntimeDetail(actorRuntime)
-                  : undefined
-              }
+              statusState={authorStatusState}
+              statusLabel={authorStatusLabel}
+              statusDetail={authorStatusDetail}
             />
           </span>
         </ChatParticipantHoverCard>
@@ -2947,21 +2973,9 @@ export default function MessageBubble({
             avatarUrl={resolvedAuthorAvatarUrl}
             emoji={resolvedAuthorEmoji}
             entityType={authorEntityType}
-            statusState={
-              authorEntityType === "actor"
-                ? runtimeToAvatarStatus(actorRuntime)
-                : undefined
-            }
-            statusLabel={
-              authorEntityType === "actor"
-                ? getRuntimeLabel(actorRuntime)
-                : undefined
-            }
-            statusDetail={
-              authorEntityType === "actor"
-                ? getRuntimeDetail(actorRuntime)
-                : undefined
-            }
+            statusState={authorStatusState}
+            statusLabel={authorStatusLabel}
+            statusDetail={authorStatusDetail}
           />
         </button>
       ) : (
@@ -2971,21 +2985,9 @@ export default function MessageBubble({
           emoji={resolvedAuthorEmoji}
           entityType={authorEntityType}
           className="mt-1 shrink-0"
-          statusState={
-            authorEntityType === "actor"
-              ? runtimeToAvatarStatus(actorRuntime)
-              : undefined
-          }
-          statusLabel={
-            authorEntityType === "actor"
-              ? getRuntimeLabel(actorRuntime)
-              : undefined
-          }
-          statusDetail={
-            authorEntityType === "actor"
-              ? getRuntimeDetail(actorRuntime)
-              : undefined
-          }
+          statusState={authorStatusState}
+          statusLabel={authorStatusLabel}
+          statusDetail={authorStatusDetail}
         />
       )}
 

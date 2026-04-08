@@ -82,7 +82,6 @@ const startAuthSchema = z.object({
 const accessGrantSchema = z.object({
   accessTarget: accessTargetSchema.optional(),
   conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
-  permissions: z.array(z.string()).optional(),
   reason: z.string().trim().min(1).optional(),
 });
 
@@ -529,7 +528,6 @@ export function registerMcpPluginRoutes(app: FastifyInstance) {
         installationId: installId,
         accessTarget: body.accessTarget,
         conversationTypeMaskOverride: body.conversationTypeMaskOverride,
-        permissions: body.permissions,
         reason: body.reason,
         grantedByWorkspaceMemberId: (request as any).workspaceMember!.id,
       });

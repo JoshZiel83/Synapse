@@ -16,14 +16,6 @@ for (const candidate of [
   break;
 }
 
-const authzEnabled = process.env.AUTHZ_ENABLED !== 'false';
-
-if (!authzEnabled) {
-  throw new Error(
-    'AUTHZ_ENABLED=false is no longer supported. Synapse now requires SpiceDB authorization to be enabled in every environment.',
-  );
-}
-
 const configuredAiProvider = process.env.AI_PROVIDER || '';
 const configuredAiEngineKind = process.env.AI_ENGINE_KIND
   || (configuredAiProvider ? getDefaultModelEngineKind(configuredAiProvider) : '');
@@ -125,14 +117,8 @@ export const config = {
     summaryDecayFloor: parseFloat(process.env.MEMORY_SUMMARY_DECAY_FLOOR || '0.35'),
     allowRuntimeModelDownload: process.env.MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD === 'true',
   },
-  authz: {
-    enabled: true,
-    endpoint: process.env.SPICEDB_ENDPOINT || 'localhost:50051',
-    token: process.env.SPICEDB_TOKEN || 'synapse-dev-token',
-    insecure: process.env.SPICEDB_INSECURE !== 'false',
-    schemaPath: process.env.SPICEDB_SCHEMA_PATH || '',
-    outboxBatchSize: parseInt(process.env.AUTHZ_OUTBOX_BATCH_SIZE || '100'),
-    platformAdminEmails: (process.env.PLATFORM_ADMIN_EMAILS || '')
+  platform: {
+    adminEmails: (process.env.PLATFORM_ADMIN_EMAILS || '')
       .split(',')
       .map((email) => email.trim().toLowerCase())
       .filter(Boolean),

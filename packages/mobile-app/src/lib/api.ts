@@ -8,7 +8,9 @@ import type {
   AuthSessionPersistence,
   CanonicalContentBlock,
   ChatBootstrapResponse,
+  ChatClientInstanceCreateInput,
   ChatClientInstanceRegistrationResponse,
+  ChatClientInstanceTouchInput,
   ChatConversationCreateResponse,
   ChatConversationMessagesQuery,
   ChatConversationMessagesPage,
@@ -532,14 +534,27 @@ class ApiClient {
     );
   }
 
-  registerChatClientInstance(
+  createChatClientInstance(
+    workspaceId: string,
+    input?: ChatClientInstanceCreateInput,
+  ): Promise<ChatClientInstanceRegistrationResponse> {
+    return this.request<ChatClientInstanceRegistrationResponse>(
+      `/workspaces/${workspaceId}/chat/client-instances`,
+      {
+        method: "POST",
+        body: JSON.stringify({
+          platform: input?.platform,
+          deviceLabel: input?.deviceLabel,
+          metadata: input?.metadata,
+        }),
+      },
+    );
+  }
+
+  touchChatClientInstance(
     workspaceId: string,
     clientInstanceId: string,
-    input?: {
-      platform?: string;
-      deviceLabel?: string;
-      metadata?: Record<string, unknown>;
-    },
+    input?: ChatClientInstanceTouchInput,
   ): Promise<ChatClientInstanceRegistrationResponse> {
     return this.request<ChatClientInstanceRegistrationResponse>(
       `/workspaces/${workspaceId}/chat/client-instances/${clientInstanceId}`,
@@ -586,21 +601,19 @@ class ApiClient {
   getChatConversationMessages(
     workspaceId: string,
     conversationId: string,
-    input?: ChatConversationMessagesQuery,
+    input: ChatConversationMessagesQuery,
   ): Promise<ChatConversationMessagesPage> {
     const params = new URLSearchParams();
-    if (typeof input?.afterSequence === "number") {
+    if (typeof input.afterSequence === "number") {
       params.set("afterSequence", String(input.afterSequence));
     }
-    if (typeof input?.beforeSequence === "number") {
+    if (typeof input.beforeSequence === "number") {
       params.set("beforeSequence", String(input.beforeSequence));
     }
-    if (typeof input?.limit === "number") {
+    if (typeof input.limit === "number") {
       params.set("limit", String(input.limit));
     }
-    if (input?.clientInstanceId) {
-      params.set("clientInstanceId", input.clientInstanceId);
-    }
+    params.set("clientInstanceId", input.clientInstanceId);
     const query = params.toString();
 
     return this.request<ChatConversationMessagesPage>(

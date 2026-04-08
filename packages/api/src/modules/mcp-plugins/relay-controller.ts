@@ -31,9 +31,8 @@ import { requireRequestAction } from '../access/guards.js';
 import {
   grantRelayExposureAccess,
   listRelayExposureAccessState,
-  revokeRelayDeviceAuthzState,
+  revokeRelayDeviceAccessState,
   revokeRelayExposureAccess,
-  touchRelayDeviceAuthzState,
   updateRelayExposureAccessGrant,
   updateRelayExposurePolicy,
 } from './relay-access.js';
@@ -85,7 +84,6 @@ const accessTargetSchema = z.object({
 const accessGrantSchema = z.object({
   accessTarget: accessTargetSchema.optional(),
   conversationTypeMaskOverride: conversationTypeMaskSchema.nullable().optional(),
-  permissions: z.array(z.string()).optional(),
   reason: z.string().trim().min(1).optional(),
 });
 const accessGrantUpdateSchema = z.object({
@@ -1432,11 +1430,6 @@ export function registerRelayRoutes(app: FastifyInstance) {
     try {
       const body = claimPairingSchema.parse(request.body);
       const claimed = await claimRelayPairingSession(body);
-      await touchRelayDeviceAuthzState({
-        workspaceId: claimed.workspaceId,
-        deviceId: claimed.deviceId,
-        ownerWorkspaceMemberId: claimed.ownerWorkspaceMemberId,
-      });
 
       logEvent({
         workspaceId: claimed.workspaceId,
@@ -1911,7 +1904,7 @@ export function registerRelayRoutes(app: FastifyInstance) {
 
       disconnectRelay(id);
 
-      await revokeRelayDeviceAuthzState({
+      await revokeRelayDeviceAccessState({
         workspaceId,
         deviceId: id,
         ownerWorkspaceMemberId: device.ownerWorkspaceMemberId || null,

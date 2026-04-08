@@ -43,7 +43,12 @@ import {
 } from '@synapse/shared/automation';
 import { decrypt, encrypt } from '../../infrastructure/crypto/index.js';
 import { transaction } from '../../infrastructure/database/index.js';
-import { executeSql, executeSqlOn } from '../../infrastructure/database/kysely.js';
+import {
+  db,
+  executeSql,
+  executeSqlOn,
+  executeTakeFirst,
+} from '../../infrastructure/database/kysely.js';
 import {
   createConversationEvent,
   getConversation,
@@ -68,15 +73,13 @@ import {
 } from '../chat/workspace-identity.js';
 import {
   accessBindingHasTarget,
-  buildResourceAccessAuthzMutations,
-  buildResourceAccessBindingRef,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   readAccessBindingTarget,
   resolveAccessGrantTarget,
   type AccessBindingRow,
 } from '../access/bindings.js';
-import { flushAuthzOutboxEntries, queueAuthzRelationships } from '../../infrastructure/authz/index.js';
+import { buildResourceAccessBindingInsertValues } from '../access/binding-storage.js';
 
 type AutomationRuleRow = {
   id: string;
@@ -1285,12 +1288,10 @@ async function loadAutomationEventSourceAccessRows(
        binding.automation_event_source_id::text AS resource_id,
        binding.target_type,
        binding.subject_workspace_id,
-       binding.subject_workspace_member_id,
        COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
        COALESCE(binding.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
        binding.subject_conversation_actor_context_id,
        binding.conversation_type_mask_override,
-       binding.granted_permissions,
        binding.status,
        binding.created_by_workspace_member_id,
        binding.reason,
@@ -1349,14 +1350,15 @@ function automationEventSourceGrantApplies(params: {
         || (params.row.subject_workspace_id || null) ===
           (params.row.workspace_id || null);
     case 'conversation':
-      return (target.conversationId || null) === params.context.conversationId;
+      return target.subjectConversationId === params.context.conversationId;
     case 'actor':
-      return Boolean(params.context.actorId) && (target.actorId || null) === (params.context.actorId || null);
+      return Boolean(params.context.actorId) &&
+        target.subjectActorId === (params.context.actorId || null);
     case 'actor_in_conversation':
       return (
         Boolean(params.context.actorId) &&
-        (target.actorId || null) === (params.context.actorId || null) &&
-        (target.conversationId || null) === params.context.conversationId
+        target.subjectActorId === (params.context.actorId || null) &&
+        target.subjectConversationId === params.context.conversationId
       );
     default:
       return false;
@@ -1502,88 +1504,45 @@ export async function grantAutomationEventSourceAccess(input: {
   }
 
   const inserted = await transaction(async (client) => {
-    const binding = await executeSqlOn<AccessBindingRow>(
+    const binding = await executeTakeFirst<AccessBindingRow>(
       client,
-      `INSERT INTO resource_access_bindings (
-         workspace_id,
-         resource_type,
-         installed_skill_id,
-         plugin_installation_id,
-         relay_capability_id,
-         automation_event_source_id,
-         target_type,
-         subject_workspace_id,
-         subject_workspace_member_id,
-         subject_actor_id,
-         subject_conversation_id,
-         subject_conversation_actor_context_id,
-         conversation_type_mask_override,
-         granted_permissions,
-         status,
-         created_by_workspace_member_id,
-         reason
-       )
-       VALUES (
-         $1,
-         'automation_event_source',
-         NULL,
-         NULL,
-         NULL,
-         $2,
-         $3,
-         $4,
-         $5,
-         $6,
-         $7,
-         $8,
-         $9,
-         ARRAY['use']::text[],
-         'active',
-         $10,
-         $11
-       )
-       RETURNING *, automation_event_source_id::text AS resource_id`,
-      [
-        input.workspaceId,
-        input.eventSourceId,
-        target.targetType,
-        target.subjectWorkspaceId,
-        target.subjectWorkspaceMemberId,
-        target.subjectActorId,
-        target.subjectConversationId,
-        target.subjectConversationActorContextId,
-        input.conversationTypeMaskOverride ?? null,
-        input.grantedByWorkspaceMemberId || null,
-        input.reason || 'Automation event source access grant',
-      ],
+      db
+        .insertInto('resource_access_bindings')
+        .values(
+          buildResourceAccessBindingInsertValues({
+            workspaceId: input.workspaceId,
+            resourceType: 'automation_event_source',
+            resourceId: input.eventSourceId,
+            target,
+            conversationTypeMaskOverride:
+              input.conversationTypeMaskOverride ?? null,
+            createdByWorkspaceMemberId:
+              input.grantedByWorkspaceMemberId || null,
+            reason: input.reason || 'Automation event source access grant',
+          }),
+        )
+        .returningAll(),
     );
-
-    const authzEntryIds = await queueAuthzRelationships(
-      client,
-      buildResourceAccessAuthzMutations({
-        resourceType: 'automation_event_source',
-        resourceId: input.eventSourceId,
-        workspaceId: input.workspaceId,
-        target,
-        operation: 'touch',
-      }),
-      {
-        source: 'automation.event_source.access.grant',
-        workspaceId: input.workspaceId,
-        eventSourceId: input.eventSourceId,
-        bindingId: binding.rows[0]!.id,
-      },
-    );
+    if (!binding) {
+      throw new Error('Failed to create automation event source access binding');
+    }
 
     return {
-      binding: binding.rows[0]!,
-      authzEntryIds,
+      binding: {
+        ...binding,
+        resource_id: binding.automation_event_source_id!,
+      } as AccessBindingRow,
     };
   });
 
-  await flushAuthzOutboxEntries(inserted.authzEntryIds);
   return mapAutomationEventSourceAccessGrant(
-    normalizeAccessBindingRow(inserted.binding),
+    normalizeAccessBindingRow({
+      ...inserted.binding,
+      subject_actor_id: target.subjectActorId,
+      subject_conversation_id: target.subjectConversationId,
+      subject_conversation_actor_context_id:
+        target.subjectConversationActorContextId,
+    }),
   );
 }
 
@@ -1738,24 +1697,7 @@ export async function revokeAutomationEventSourceAccess(input: {
     throw new Error('Automation event source access binding not found');
   }
 
-  const authzEntryIds = await transaction(async (client) => {
-    const entryIds = await queueAuthzRelationships(
-      client,
-      buildResourceAccessAuthzMutations({
-        resourceType: 'automation_event_source',
-        resourceId: input.eventSourceId,
-        workspaceId: input.workspaceId,
-        target: readAccessBindingTarget(existing),
-        operation: 'delete',
-      }),
-      {
-        source: 'automation.event_source.access.revoke',
-        workspaceId: input.workspaceId,
-        eventSourceId: input.eventSourceId,
-        bindingId: existing.id,
-      },
-    );
-
+  await transaction(async (client) => {
     await executeSqlOn(
       client,
       `UPDATE resource_access_bindings
@@ -1766,11 +1708,7 @@ export async function revokeAutomationEventSourceAccess(input: {
          AND automation_event_source_id = $3::uuid`,
       [input.bindingId, input.workspaceId, input.eventSourceId],
     );
-
-    return entryIds;
   });
-
-  await flushAuthzOutboxEntries(authzEntryIds);
   await pauseAutomationRulesMissingEventSourceAccess(
     input.eventSourceId,
     input.operator,
