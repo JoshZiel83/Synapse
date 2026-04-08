@@ -1,11 +1,13 @@
 "use client"
 
+import { openDB, type DBSchema, type IDBPDatabase } from "idb"
+
 import { isUuid } from "@/lib/uuid"
 import type { ConversationReplyRef, CanonicalContentBlock } from "@synapse/shared"
 
-export const CHAT_SNAPSHOT_DB_NAME = "synapse-web-next-chat"
-export const CHAT_SNAPSHOT_DB_VERSION = 1
-export const CHAT_SNAPSHOT_STORE = "workspace_snapshots"
+export const CHAT_QUEUE_DB_NAME = "synapse-web-chat-queue"
+export const CHAT_QUEUE_DB_VERSION = 1
+export const CHAT_QUEUE_STATE_STORE = "workspace_queue_states"
 
 export interface PendingConversationRead {
   conversationId: string
@@ -40,52 +42,39 @@ export interface StoredChatQueueState {
   outbox: Record<string, PendingOutboxMessage>
 }
 
-function openDatabase() {
-  return new Promise<IDBDatabase>((resolve, reject) => {
-    const request = indexedDB.open(
-      CHAT_SNAPSHOT_DB_NAME,
-      CHAT_SNAPSHOT_DB_VERSION
-    )
-
-    request.onerror = () => reject(request.error)
-    request.onupgradeneeded = () => {
-      const database = request.result
-      if (!database.objectStoreNames.contains(CHAT_SNAPSHOT_STORE)) {
-        database.createObjectStore(CHAT_SNAPSHOT_STORE, {
-          keyPath: "workspaceId",
-        })
-      }
-    }
-    request.onsuccess = () => resolve(request.result)
-  })
+interface ChatQueueStateRow {
+  workspaceId: string
+  payload: StoredChatQueueState
+  updatedAt: string
 }
 
-function requestToPromise<T>(request: IDBRequest<T>) {
-  return new Promise<T>((resolve, reject) => {
-    request.onsuccess = () => resolve(request.result)
-    request.onerror = () => reject(request.error)
-  })
-}
-
-async function withStore<T>(
-  mode: IDBTransactionMode,
-  run: (store: IDBObjectStore) => Promise<T> | T
-) {
-  const database = await openDatabase()
-  const transaction = database.transaction(CHAT_SNAPSHOT_STORE, mode)
-  const store = transaction.objectStore(CHAT_SNAPSHOT_STORE)
-
-  try {
-    const result = await run(store)
-    await new Promise<void>((resolve, reject) => {
-      transaction.oncomplete = () => resolve()
-      transaction.onerror = () => reject(transaction.error)
-      transaction.onabort = () => reject(transaction.error)
-    })
-    return result
-  } finally {
-    database.close()
+interface ChatQueueDatabaseSchema extends DBSchema {
+  [CHAT_QUEUE_STATE_STORE]: {
+    key: string
+    value: ChatQueueStateRow
   }
+}
+
+let queueDbPromise: Promise<IDBPDatabase<ChatQueueDatabaseSchema>> | null = null
+
+function getQueueDatabase() {
+  if (!queueDbPromise) {
+    queueDbPromise = openDB<ChatQueueDatabaseSchema>(
+      CHAT_QUEUE_DB_NAME,
+      CHAT_QUEUE_DB_VERSION,
+      {
+        upgrade(database) {
+          if (!database.objectStoreNames.contains(CHAT_QUEUE_STATE_STORE)) {
+            database.createObjectStore(CHAT_QUEUE_STATE_STORE, {
+              keyPath: "workspaceId",
+            })
+          }
+        },
+      }
+    )
+  }
+
+  return queueDbPromise
 }
 
 export function createEmptyStoredChatQueueState(
@@ -170,11 +159,8 @@ export function normalizeStoredChatQueueState(
 }
 
 export async function loadStoredChatQueueState(workspaceId: string) {
-  const row = await withStore("readonly", (store) =>
-    requestToPromise<
-      { workspaceId: string; payload: StoredChatQueueState } | undefined
-    >(store.get(workspaceId))
-  )
+  const database = await getQueueDatabase()
+  const row = await database.get(CHAT_QUEUE_STATE_STORE, workspaceId)
 
   if (!row?.payload) {
     return null
@@ -183,31 +169,46 @@ export async function loadStoredChatQueueState(workspaceId: string) {
   return normalizeStoredChatQueueState(workspaceId, row.payload)
 }
 
+export async function saveStoredChatQueueState(
+  queueState: StoredChatQueueState
+) {
+  const database = await getQueueDatabase()
+  await database.put(CHAT_QUEUE_STATE_STORE, {
+    workspaceId: queueState.workspaceId,
+    payload: normalizeStoredChatQueueState(queueState.workspaceId, queueState),
+    updatedAt: new Date().toISOString(),
+  })
+}
+
 export async function updateStoredChatQueueState(
   workspaceId: string,
   updater: (current: StoredChatQueueState) => StoredChatQueueState
 ) {
-  await withStore("readwrite", async (store) => {
-    const currentRow = await requestToPromise<
-      { workspaceId: string; payload: StoredChatQueueState } | undefined
-    >(store.get(workspaceId))
+  const database = await getQueueDatabase()
+  const transaction = database.transaction(CHAT_QUEUE_STATE_STORE, "readwrite")
+  const store = transaction.objectStore(CHAT_QUEUE_STATE_STORE)
 
-    const next = updater(
-      normalizeStoredChatQueueState(workspaceId, currentRow?.payload)
-    )
+  const currentRow = await store.get(workspaceId)
+  const next = updater(
+    normalizeStoredChatQueueState(workspaceId, currentRow?.payload)
+  )
 
-    await requestToPromise(
-      store.put({
-        workspaceId,
-        payload: normalizeStoredChatQueueState(workspaceId, next),
-        updatedAt: new Date().toISOString(),
-      })
-    )
+  await store.put({
+    workspaceId,
+    payload: normalizeStoredChatQueueState(workspaceId, next),
+    updatedAt: new Date().toISOString(),
   })
+  await transaction.done
 }
 
 export async function deleteStoredChatQueueState(workspaceId: string) {
-  await withStore("readwrite", (store) =>
-    requestToPromise(store.delete(workspaceId))
-  )
+  const database = await getQueueDatabase()
+  await database.delete(CHAT_QUEUE_STATE_STORE, workspaceId)
+}
+
+export function sameStoredChatQueueState(
+  left: StoredChatQueueState,
+  right: StoredChatQueueState
+) {
+  return JSON.stringify(left) === JSON.stringify(right)
 }
