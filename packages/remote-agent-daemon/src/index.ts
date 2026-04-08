@@ -262,6 +262,8 @@ function toWsUrl(serverUrl: string) {
 function buildWakePrompt() {
   return [
     "You have unread Synapse messages.",
+    "The runtime's built-in request_user_input tool is wired to Synapse and will render an interaction card for the user when you call it.",
+    "If the user explicitly asks you to use require user input, or asks for a multiple-choice clarification, use that built-in tool instead of replying that you cannot show a prompt.",
     "Call check_messages first.",
     "Then use read_history for the relevant conversation(s), reply with send_message when action is needed, and stop when finished.",
     "If there is nothing actionable, stop without sending any message.",
@@ -312,6 +314,7 @@ function buildBootstrapPrompt(params: {
     "- This agent can participate in multiple conversations at once.",
     "- Always call check_messages after a wake-up before deciding what to do.",
     "- Read enough history before replying so your response is grounded in the conversation.",
+    "- If you need structured clarification or confirmation from the user, use the runtime's built-in user-input tool instead of asking in plain chat when that tool is available.",
     "- If there is no actionable work, stop without sending a message.",
     "",
     buildWakePrompt(),
@@ -401,6 +404,10 @@ function writeJsonLine(processRef: ChildProcess | null, payload: unknown) {
   }
   processRef.stdin.write(`${JSON.stringify(payload)}\n`);
   return true;
+}
+
+function stringifyRequestId(requestId: string | number) {
+  return String(requestId);
 }
 
 function which(binary: string) {
@@ -677,6 +684,12 @@ class CodexDriver implements RuntimeDriver {
 
   private currentModel?: string;
 
+  private threadConfig() {
+    return {
+      "features.default_mode_request_user_input": true,
+    };
+  }
+
   spawn(context: SpawnContext): DriverLaunch {
     const gitDirectory = path.join(context.workingDirectory, ".git");
     if (!existsSync(gitDirectory)) {
@@ -793,12 +806,14 @@ class CodexDriver implements RuntimeDriver {
               threadId: this.context.sessionId,
               cwd: this.context.workingDirectory,
               approvalPolicy: "never",
+              config: this.threadConfig(),
             });
           } else {
             this.sendRequest("thread/start", {
               cwd: this.context?.workingDirectory,
               approvalPolicy: "never",
               sandbox: "danger-full-access",
+              config: this.threadConfig(),
             });
           }
           break;
@@ -950,20 +965,36 @@ class CodexDriver implements RuntimeDriver {
       sandboxPolicy: {
         type: "dangerFullAccess",
       },
+      collaborationMode: {
+        mode: "default",
+        settings: {
+          model: this.currentModel || "gpt-5.4",
+          reasoning_effort: null,
+          developer_instructions: null,
+        },
+      },
     });
   }
 }
 
-type PendingInteraction = {
+type PendingInteractionBase = {
   interactionId: string;
   kind: "user_input" | "plan_approval";
-  protocol: "claude_permission" | "codex_request";
-  requestId: string;
   runKey: string;
   conversationId: string;
   toolName?: string;
   originalInput?: Record<string, any>;
 };
+
+type PendingInteraction =
+  | (PendingInteractionBase & {
+      protocol: "claude_permission";
+      requestId: string;
+    })
+  | (PendingInteractionBase & {
+      protocol: "codex_request";
+      requestId: string | number;
+    });
 
 type LatestPlanDraft = {
   title: string;
@@ -1138,6 +1169,9 @@ class DaemonSupervisor {
 
         if (message?.type === "agent:interaction:resolved") {
           const resolved = message as InteractionResolvedMessage;
+          log("info", `remote-agent:${resolved.remoteAgentId}`, "Received resolved interaction", {
+            interactionId: resolved.interactionId,
+          });
           const agent = this.agents.get(resolved.remoteAgentId);
           if (agent) {
             await agent.resolveInteraction(resolved);
@@ -1298,7 +1332,13 @@ class ManagedRemoteAgent {
 
     const interaction = message.interaction || {};
     const pending = this.pendingInteraction;
-    this.pendingInteraction = null;
+    log("info", `remote-agent:${this.params.remoteAgentId}`, "Applying resolved interaction", {
+      interactionId: message.interactionId,
+      protocol: pending.protocol,
+      kind: pending.kind,
+      requestId: stringifyRequestId(pending.requestId),
+      requestIdType: typeof pending.requestId,
+    });
 
     if (pending.protocol === "claude_permission") {
       const response =
@@ -1323,7 +1363,7 @@ class ManagedRemoteAgent {
                   "The user asked you to revise the proposed plan.",
               };
 
-      writeJsonLine(this.process, {
+      const wrote = writeJsonLine(this.process, {
         type: "control_response",
         response: {
           subtype: "success",
@@ -1331,18 +1371,58 @@ class ManagedRemoteAgent {
           response,
         },
       });
+      if (!wrote) {
+        log("error", `remote-agent:${this.params.remoteAgentId}`, "Failed to deliver resolved interaction to runtime", {
+          interactionId: message.interactionId,
+          protocol: pending.protocol,
+          requestId: pending.requestId,
+        });
+        this.publishStatus(
+          "error",
+          "Resolved interaction could not be delivered to the local runtime",
+          pending.conversationId,
+          "Runtime stdin is not writable",
+        );
+        return;
+      }
+      this.pendingInteraction = null;
+      log("info", `remote-agent:${this.params.remoteAgentId}`, "Delivered resolved interaction to runtime", {
+        interactionId: message.interactionId,
+        protocol: pending.protocol,
+        requestId: pending.requestId,
+      });
       this.publishStatus("running", "Continuing after user input", pending.conversationId);
       return;
     }
 
     if (pending.protocol === "codex_request") {
       if (pending.kind === "user_input") {
-        writeJsonLine(this.process, {
+        const wrote = writeJsonLine(this.process, {
           jsonrpc: "2.0",
           id: pending.requestId,
           result: {
             answers: this.buildCodexAnswerMap(interaction),
           },
+        });
+        if (!wrote) {
+          log("error", `remote-agent:${this.params.remoteAgentId}`, "Failed to deliver resolved interaction to runtime", {
+            interactionId: message.interactionId,
+            protocol: pending.protocol,
+            requestId: pending.requestId,
+          });
+          this.publishStatus(
+            "error",
+            "Resolved interaction could not be delivered to the local runtime",
+            pending.conversationId,
+            "Runtime stdin is not writable",
+          );
+          return;
+        }
+        this.pendingInteraction = null;
+        log("info", `remote-agent:${this.params.remoteAgentId}`, "Delivered resolved interaction to runtime", {
+          interactionId: message.interactionId,
+          protocol: pending.protocol,
+          requestId: pending.requestId,
         });
         this.publishStatus("running", "Continuing after user input", pending.conversationId);
         return;
@@ -1352,12 +1432,17 @@ class ManagedRemoteAgent {
         typeof interaction.resolutionNote === "string"
           ? interaction.resolutionNote
           : undefined;
+      this.pendingInteraction = null;
       if (interaction.status === "approved") {
         this.pendingSyntheticPrompts.push(buildPlanApprovedPrompt(note));
       } else {
         this.pendingSyntheticPrompts.push(buildPlanRevisionPrompt(note));
       }
       this.latestPlanDraft = null;
+      log("info", `remote-agent:${this.params.remoteAgentId}`, "Queued plan interaction follow-up", {
+        interactionId: message.interactionId,
+        protocol: pending.protocol,
+      });
       this.publishStatus("idle", "Plan decision received", pending.conversationId);
       await this.wake();
     }
@@ -1520,7 +1605,13 @@ class ManagedRemoteAgent {
           });
         }
         for (const event of driver.parseOutputLine(line)) {
-          void this.handleDriverEvent(event);
+          void this.handleDriverEvent(event).catch((error) => {
+            const message = error instanceof Error ? error.message : String(error);
+            log("error", `remote-agent:${this.params.remoteAgentId}`, "Driver event handling failed", {
+              message,
+            });
+            this.publishStatus("error", message, this.resolveConversationId(), message);
+          });
         }
       }
     });
@@ -1872,8 +1963,13 @@ class ManagedRemoteAgent {
     params: Record<string, any>,
   ) {
     if (method === "item/tool/requestUserInput") {
+      log("info", `remote-agent:${this.params.remoteAgentId}`, "Codex requested user input", {
+        requestId: stringifyRequestId(requestId),
+        requestIdType: typeof requestId,
+        questionCount: Array.isArray(params.questions) ? params.questions.length : 0,
+      });
       const interaction = await this.createUserInputInteraction({
-        requestId: String(requestId),
+        requestId,
         protocol: "codex_request",
         title:
           typeof params.questions?.[0]?.question === "string"
@@ -1942,7 +2038,15 @@ class ManagedRemoteAgent {
 
   private async createUserInputInteraction(params: {
     requestId: string;
-    protocol: PendingInteraction["protocol"];
+    protocol: "claude_permission";
+    title: string;
+    instructions?: string;
+    questions: Array<Record<string, any>>;
+    toolName?: string;
+    originalInput?: Record<string, any>;
+  } | {
+    requestId: string | number;
+    protocol: "codex_request";
     title: string;
     instructions?: string;
     questions: Array<Record<string, any>>;
@@ -1969,10 +2073,22 @@ class ManagedRemoteAgent {
         }),
       },
     );
+    if (params.protocol === "claude_permission") {
+      return {
+        interactionId: String(result.interaction.id),
+        kind: "user_input",
+        protocol: "claude_permission",
+        requestId: params.requestId,
+        runKey,
+        conversationId,
+        toolName: params.toolName,
+        originalInput: params.originalInput,
+      };
+    }
     return {
       interactionId: String(result.interaction.id),
       kind: "user_input",
-      protocol: params.protocol,
+      protocol: "codex_request",
       requestId: params.requestId,
       runKey,
       conversationId,
@@ -1983,7 +2099,16 @@ class ManagedRemoteAgent {
 
   private async createPlanApprovalInteraction(params: {
     requestId: string;
-    protocol: PendingInteraction["protocol"];
+    protocol: "claude_permission";
+    title: string;
+    summary?: string;
+    planMarkdown: string;
+    checklist?: Array<Record<string, any>>;
+    toolName?: string;
+    originalInput?: Record<string, any>;
+  } | {
+    requestId: string | number;
+    protocol: "codex_request";
     title: string;
     summary?: string;
     planMarkdown: string;
@@ -2012,10 +2137,22 @@ class ManagedRemoteAgent {
         }),
       },
     );
+    if (params.protocol === "claude_permission") {
+      return {
+        interactionId: String(result.interaction.id),
+        kind: "plan_approval",
+        protocol: "claude_permission",
+        requestId: params.requestId,
+        runKey,
+        conversationId,
+        toolName: params.toolName,
+        originalInput: params.originalInput,
+      };
+    }
     return {
       interactionId: String(result.interaction.id),
       kind: "plan_approval",
-      protocol: params.protocol,
+      protocol: "codex_request",
       requestId: params.requestId,
       runKey,
       conversationId,

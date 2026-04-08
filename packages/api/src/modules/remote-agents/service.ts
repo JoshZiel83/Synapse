@@ -564,20 +564,22 @@ async function ensureRemoteAgentRun(params: {
       queryable,
       `
         UPDATE remote_agent_runs
-        SET conversation_id = COALESCE($3, conversation_id),
-            status = $4,
-            status_text = $5,
-            last_error = $6,
-            started_at = COALESCE(started_at, CASE WHEN $4 = 'running' THEN NOW() ELSE NULL END),
+        SET conversation_id = COALESCE($2, conversation_id),
+            status = $3::remote_agent_runs_status,
+            status_text = $4,
+            last_error = $5,
+            started_at = COALESCE(
+              started_at,
+              CASE WHEN $3::text = 'running' THEN NOW() ELSE NULL END
+            ),
             ended_at = CASE
-              WHEN $4 IN ('completed', 'failed', 'cancelled') THEN NOW()
+              WHEN $3::text IN ('completed', 'failed', 'cancelled') THEN NOW()
               ELSE NULL
             END,
             updated_at = NOW()
-        WHERE id = $2
+        WHERE id = $1
       `,
       [
-        params.runKey,
         existing.rows[0].id,
         params.conversationId ?? null,
         params.status,
@@ -607,11 +609,14 @@ async function ensureRemoteAgentRun(params: {
         $1,
         $2,
         $3,
-        $4,
+        $4::remote_agent_runs_status,
         $5,
         $6,
-        CASE WHEN $4 = 'running' THEN NOW() ELSE NULL END,
-        CASE WHEN $4 IN ('completed', 'failed', 'cancelled') THEN NOW() ELSE NULL END,
+        CASE WHEN $4::text = 'running' THEN NOW() ELSE NULL END,
+        CASE
+          WHEN $4::text IN ('completed', 'failed', 'cancelled') THEN NOW()
+          ELSE NULL
+        END,
         NOW(),
         NOW()
       )
