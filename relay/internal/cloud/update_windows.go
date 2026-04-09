@@ -11,6 +11,8 @@ import (
 	"syscall"
 )
 
+const windowsUpdateProcessImage = "synapse-relay-gui.exe"
+
 func launchPreparedUpdate(installerPath string, autoLaunch bool) error {
 	trimmedPath := strings.TrimSpace(installerPath)
 	if trimmedPath == "" {
@@ -23,13 +25,7 @@ func launchPreparedUpdate(installerPath string, autoLaunch bool) error {
 		arguments += " /AUTOLAUNCH=1"
 	}
 
-	script := strings.Join([]string{
-		"@echo off",
-		"ping 127.0.0.1 -n 3 > nul",
-		fmt.Sprintf("start \"\" /wait \"%s\" %s", trimmedPath, arguments),
-		"del \"%~f0\"",
-		"",
-	}, "\r\n")
+	script := buildWindowsUpdateLauncherScript(trimmedPath, arguments)
 
 	if err := os.WriteFile(scriptPath, []byte(script), 0o600); err != nil {
 		return fmt.Errorf("write update launcher: %w", err)
@@ -41,4 +37,22 @@ func launchPreparedUpdate(installerPath string, autoLaunch bool) error {
 		return fmt.Errorf("launch update installer: %w", err)
 	}
 	return nil
+}
+
+func buildWindowsUpdateLauncherScript(installerPath string, arguments string) string {
+	return strings.Join([]string{
+		"@echo off",
+		"setlocal",
+		"for /l %%I in (1,1,60) do (",
+		fmt.Sprintf("  tasklist /FI \"IMAGENAME eq %s\" | find /I \"%s\" >nul", windowsUpdateProcessImage, windowsUpdateProcessImage),
+		"  if errorlevel 1 goto install",
+		"  ping 127.0.0.1 -n 2 > nul",
+		")",
+		"del \"%~f0\"",
+		"exit /b 32",
+		":install",
+		fmt.Sprintf("start \"\" /wait \"%s\" %s", installerPath, arguments),
+		"del \"%~f0\"",
+		"",
+	}, "\r\n")
 }

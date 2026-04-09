@@ -26,7 +26,10 @@
       "command": "cli-anything-blender",
       "probe": {
         "type": "executable_any",
-        "candidates": ["blender"]
+        "candidates": ["blender"],
+        "paths": [
+          "/Applications/Blender.app/Contents/MacOS/Blender"
+        ]
       }
     },
     {
@@ -36,7 +39,10 @@
       "command": "cli-anything-cloudcompare",
       "probe": {
         "type": "executable_any",
-        "candidates": ["CloudCompare", "cloudcompare"]
+        "candidates": ["CloudCompare", "cloudcompare"],
+        "paths": [
+          "/Applications/CloudCompare.app/Contents/MacOS/CloudCompare"
+        ]
       }
     },
     {
@@ -90,7 +96,10 @@
       "command": "cli-anything-gimp",
       "probe": {
         "type": "executable_any",
-        "candidates": ["gimp", "gimp-2.10", "gimp-2.99"]
+        "candidates": ["gimp", "gimp-2.10", "gimp-2.99"],
+        "paths": [
+          "/Applications/GIMP.app/Contents/MacOS/gimp"
+        ]
       }
     },
     {
@@ -100,7 +109,10 @@
       "command": "cli-anything-inkscape",
       "probe": {
         "type": "executable_any",
-        "candidates": ["inkscape"]
+        "candidates": ["inkscape"],
+        "paths": [
+          "/Applications/Inkscape.app/Contents/MacOS/inkscape"
+        ]
       }
     },
     {
@@ -130,7 +142,10 @@
       "probe": {
         "type": "executable_any",
         "envPathVar": "KRITA_PATH",
-        "candidates": ["krita"]
+        "candidates": ["krita"],
+        "paths": [
+          "/Applications/krita.app/Contents/MacOS/krita"
+        ]
       }
     },
     {
@@ -174,7 +189,11 @@
       "probe": {
         "type": "executable_any",
         "envPathVar": "MUSESCORE_PATH",
-        "candidates": ["mscore", "musescore"]
+        "candidates": ["mscore", "musescore"],
+        "paths": [
+          "/Applications/MuseScore 4.app/Contents/MacOS/mscore",
+          "~/Applications/MuseScore 4.app/Contents/MacOS/mscore"
+        ]
       }
     },
     {

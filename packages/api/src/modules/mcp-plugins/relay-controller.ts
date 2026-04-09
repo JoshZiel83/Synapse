@@ -118,8 +118,8 @@ const relayDesktopCommitPattern = /^[0-9a-f]{7,64}$/i;
 
 const relayDesktopArtifactFilenames: Record<string, string> = {
   'windows/amd64': 'synapse-relay-gui-windows-amd64-setup.exe',
-  'darwin/amd64': 'synapse-relay-gui-darwin-amd64.dmg',
-  'darwin/arm64': 'synapse-relay-gui-darwin-arm64.dmg',
+  'darwin/amd64': 'synapse-relay-gui-darwin-amd64.pkg',
+  'darwin/arm64': 'synapse-relay-gui-darwin-arm64.pkg',
   'linux/amd64': 'synapse-relay-gui-linux-amd64.deb',
 };
 

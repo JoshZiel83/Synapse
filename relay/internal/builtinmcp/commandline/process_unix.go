@@ -7,13 +7,25 @@ import (
 	"syscall"
 )
 
+type managedProcessController struct{}
+
 func applyPlatformProcessAttrs(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{
 		Setpgid: true,
 	}
 }
 
-func terminateManagedProcess(cmd *exec.Cmd) {
+func bindManagedProcess(_ *exec.Cmd) (managedProcessController, error) {
+	return managedProcessController{}, nil
+}
+
+func releaseManagedProcess(_ managedProcessController) {}
+
+func processControlMode(_ managedProcessController) string {
+	return "process_group"
+}
+
+func terminateManagedProcess(cmd *exec.Cmd, _ managedProcessController) {
 	if cmd == nil || cmd.Process == nil {
 		return
 	}

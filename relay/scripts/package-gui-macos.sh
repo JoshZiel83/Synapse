@@ -8,6 +8,9 @@ repo_root="$(cd "${script_dir}/../.." && pwd)"
 app_path=""
 suffix=""
 volume_name="Synapse Relay"
+bundle_identifier="com.synapse.relay.gui"
+app_version=""
+app_exec_name=""
 
 usage() {
   cat <<'EOF' >&2
@@ -44,8 +47,32 @@ fi
 
 app_path="$(cd "$(dirname "$app_path")" && pwd)/$(basename "$app_path")"
 app_name="$(basename "$app_path")"
+product_name="${app_name%.app}"
 portable_zip="synapse-relay-gui-${suffix}-portable.zip"
 dmg_output="synapse-relay-gui-${suffix}.dmg"
+pkg_output="synapse-relay-gui-${suffix}.pkg"
+
+if [[ -f "${app_path}/Contents/Info.plist" ]]; then
+  detected_bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app_path}/Contents/Info.plist" 2>/dev/null || true)"
+  detected_app_version="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "${app_path}/Contents/Info.plist" 2>/dev/null || true)"
+  detected_app_exec_name="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleExecutable' "${app_path}/Contents/Info.plist" 2>/dev/null || true)"
+  if [[ -n "$detected_bundle_identifier" ]]; then
+    bundle_identifier="$detected_bundle_identifier"
+  fi
+  if [[ -n "$detected_app_version" ]]; then
+    app_version="$detected_app_version"
+  fi
+  if [[ -n "$detected_app_exec_name" ]]; then
+    app_exec_name="$detected_app_exec_name"
+  fi
+fi
+
+if [[ -z "$app_version" ]]; then
+  app_version="0.1.0"
+fi
+if [[ -z "$app_exec_name" ]]; then
+  app_exec_name="${app_name%.app}"
+fi
 
 node "${repo_root}/relay/scripts/prepare-gui-build-assets.mjs" --runtime-output="${app_path}/Contents/Resources/runtime"
 ditto -c -k --sequesterRsrc --keepParent "$app_path" "$portable_zip"
@@ -54,6 +81,8 @@ work_dir="$(mktemp -d)"
 stage_dir="${work_dir}/dmg-root"
 temp_dmg="${work_dir}/Synapse Relay-temp.dmg"
 dmg_base="${work_dir}/Synapse Relay"
+pkg_root="${work_dir}/pkg-root"
+pkg_scripts="${work_dir}/pkg-scripts"
 device=""
 
 cleanup() {
@@ -65,8 +94,35 @@ cleanup() {
 trap cleanup EXIT
 
 mkdir -p "$stage_dir"
-cp -R "$app_path" "$stage_dir/"
-ln -s /Applications "$stage_dir/Applications"
+mkdir -p "$pkg_root" "$pkg_scripts"
+cp -R "$app_path" "$pkg_root/"
+
+cat > "${pkg_scripts}/preinstall" <<EOF
+#!/bin/bash
+set -euo pipefail
+
+product_name="${product_name}"
+app_exec_name="${app_exec_name}"
+app_bundle_path="/Applications/${app_name}"
+app_exec_path="\${app_bundle_path}/Contents/MacOS/\${app_exec_name}"
+
+if pgrep -f "\${app_exec_path}" >/dev/null 2>&1 || pgrep -x "${app_exec_name}" >/dev/null 2>&1; then
+  echo "\${product_name} is currently running. Quit it before installing this update." >&2
+  exit 1
+fi
+EOF
+chmod +x "${pkg_scripts}/preinstall"
+
+pkgbuild \
+  --root "$pkg_root" \
+  --install-location "/Applications" \
+  --identifier "$bundle_identifier" \
+  --version "$app_version" \
+  --scripts "$pkg_scripts" \
+  "$pkg_output" >/dev/null
+
+pkg_name="$(basename "$pkg_output")"
+cp "$pkg_output" "$stage_dir/"
 
 hdiutil create -srcfolder "$stage_dir" -volname "$volume_name" -fs HFS+ -format UDRW -ov "$temp_dmg" >/dev/null
 
@@ -89,8 +145,7 @@ tell application "Finder"
     set arrangement of viewOptions to not arranged
     set icon size of viewOptions to 144
     set text size of viewOptions to 13
-    set position of item "${app_name}" of container window to {190, 220}
-    set position of item "Applications" of container window to {540, 220}
+    set position of item "${pkg_name}" of container window to {360, 220}
     update without registering applications
     delay 2
     close

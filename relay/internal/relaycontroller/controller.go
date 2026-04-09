@@ -97,11 +97,12 @@ func (c *Controller) OnEvent(listener EventListener) {
 }
 
 func (c *Controller) emit(evt relay.Event) {
+	evt = sanitizeRelayEvent(evt)
 	entry := LogEntry{
 		Time:    evt.Timestamp.Format("15:04:05"),
 		Type:    string(evt.Type),
 		Message: evt.Message,
-		Data:    cloneMetadata(evt.Data),
+		Data:    evt.Data,
 	}
 
 	c.logsMu.Lock()
@@ -328,17 +329,6 @@ func (c *Controller) setAuthFailure(code, message string, permanent bool) {
 
 func (c *Controller) clearAuthFailure() {
 	c.setAuthFailure("", "", false)
-}
-
-func cloneMetadata(input map[string]interface{}) map[string]interface{} {
-	if len(input) == 0 {
-		return map[string]interface{}{}
-	}
-	out := make(map[string]interface{}, len(input))
-	for key, value := range input {
-		out[key] = value
-	}
-	return out
 }
 
 func stringMetadata(input map[string]interface{}, key string) string {

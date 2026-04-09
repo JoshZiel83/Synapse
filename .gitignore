@@ -31,6 +31,15 @@ relay/cmd/synapse-relay-gui/frontend/src/lib/wailsjs/
 relay/cmd/synapse-relay-gui/frontend/wailsjs/
 relay/cmd/synapse-relay-gui/frontend/package.json.md5
 relay/cmd/synapse-relay-gui/build/
+relay/internal/nodebundle/assets/node/
+relay/internal/chromemcpbundle/assets/p/
+relay/internal/commandlinebundle/assets/bin/
+relay/internal/commandlinebundle/assets/ff/
+relay/internal/commandlinebundle/assets/git/
+relay/internal/commandlinebundle/assets/nm/
+relay/internal/commandlinebundle/assets/py/
+relay/internal/commandlinebundle/assets/providers/
+relay/internal/commandlinebundle/assets/sp/
 
 # Local reference checkouts
 .refer/

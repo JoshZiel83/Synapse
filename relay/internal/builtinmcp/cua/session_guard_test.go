@@ -78,7 +78,7 @@ func TestSessionGuardPrivacyScreenFailureDoesNotActivateSession(t *testing.T) {
 	}
 }
 
-func TestSessionGuardCaptureOptionsWindowsUseDXGI(t *testing.T) {
+func TestSessionGuardCaptureOptionsWindowsDefaultToDXGI(t *testing.T) {
 	restore := setSessionGuardGOOSForTest(t, "windows")
 	defer restore()
 
@@ -91,6 +91,29 @@ func TestSessionGuardCaptureOptionsWindowsUseDXGI(t *testing.T) {
 	}
 	if options.Backend != desktopCaptureBackendDXGI {
 		t.Fatalf("expected DXGI backend, got %q", options.Backend)
+	}
+}
+
+func TestSessionGuardCaptureOptionsWindowsUseGDIForActiveSession(t *testing.T) {
+	restore := setSessionGuardGOOSForTest(t, "windows")
+	defer restore()
+
+	guard := newSessionGuard(t.TempDir())
+	guard.overlay = &testOverlayController{}
+
+	if err := guard.OpenRuntimeSession("session-a"); err != nil {
+		t.Fatalf("open session-a: %v", err)
+	}
+	if result := guard.BeforeToolCall("session-a"); result != nil {
+		t.Fatalf("expected session-a activation to succeed, got %+v", result)
+	}
+
+	options, err := guard.CaptureOptions()
+	if err != nil {
+		t.Fatalf("capture options: %v", err)
+	}
+	if options.Backend != desktopCaptureBackendGDI {
+		t.Fatalf("expected GDI backend for active Windows session, got %q", options.Backend)
 	}
 }
 

@@ -1915,12 +1915,14 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
               <Badge variant={commandlineDraft.enabled !== false ? 'success' : 'secondary'}>{commandlineDraft.enabled !== false ? 'enabled' : 'disabled'}</Badge>
               <Badge variant="secondary">bash</Badge>
               <Badge variant="secondary">git</Badge>
+              <Badge variant="secondary">gh</Badge>
+              <Badge variant="secondary">glab</Badge>
               <Badge variant="secondary">node</Badge>
               <Badge variant="secondary">python</Badge>
-              <Badge variant="secondary">cli-anything</Badge>
+              <Badge variant="secondary">managed-clis</Badge>
             </div>
             <div className="mt-2 text-sm text-muted-foreground">
-              Exposes one built-in command line app with a single public `bash` tool. The runtime bundles git, node, python, ffmpeg, and managed CLI-Anything wrappers on PATH.
+              Exposes one built-in command line app with a single public `bash` tool. The runtime bundles git, gh, glab, node, python, ffmpeg, and managed upstream CLI wrappers on PATH.
             </div>
           </div>
 
@@ -2037,7 +2039,7 @@ export const AppsPanel = forwardRef<AppsPanelHandle, AppsPanelProps>(function Ap
                 Runtime surface
               </div>
               <div className="mt-2">
-                This app exposes a single `bash` tool. Inside that environment, bash, git, node, python, ffmpeg, ffprobe, and managed CLI-Anything commands are prewired together and share the relay-level timeout ceiling configured above.
+                This app exposes a single `bash` tool. Inside that environment, bash, git, gh, glab, node, python, ffmpeg, ffprobe, and managed upstream CLI commands are prewired together and share the relay-level timeout ceiling configured above.
               </div>
             </div>
           </div>

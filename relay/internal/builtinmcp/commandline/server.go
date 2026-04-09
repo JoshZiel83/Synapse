@@ -1,10 +1,10 @@
 package commandline
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"log"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -128,7 +128,38 @@ func disabledResult(toolName string, resolution string) core.CallResult {
 	}
 }
 
-func (s *Server) Shutdown() {}
+func (s *Server) Shutdown() {
+	s.taskMu.RLock()
+	tasks := make([]*commandTask, 0, len(s.tasks))
+	for _, task := range s.tasks {
+		tasks = append(tasks, task)
+	}
+	s.taskMu.RUnlock()
+
+	if len(tasks) == 0 {
+		return
+	}
+
+	for _, task := range tasks {
+		task.requestCancel("Relay shutdown requested.")
+		task.terminateProcess()
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for time.Now().Before(deadline) {
+		allDone := true
+		for _, task := range tasks {
+			if !task.isTerminal() {
+				allDone = false
+				break
+			}
+		}
+		if allDone {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
 
 func (s *Server) callBash(ctx context.Context, args map[string]interface{}) core.CallResult {
 	binaryPath, err := s.resolveBashBinary()
@@ -190,17 +221,45 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 	}
 	defer cancel()
 
-	cmd := exec.CommandContext(ctx, binaryPath, args...)
+	cmd := exec.Command(binaryPath, args...)
 	applyPlatformProcessAttrs(cmd)
 	cmd.Dir = cwd
 	cmd.Env = s.environment(extraEnv)
 
-	var stdout bytes.Buffer
-	var stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
+	stdout := newCappedOutputWriter(maxCommandOutputBytes)
+	stderr := newCappedOutputWriter(maxCommandOutputBytes)
+	cmd.Stdout = stdout
+	cmd.Stderr = stderr
 
-	runErr := cmd.Run()
+	controller := managedProcessController{}
+	processControl := processControlMode(controller)
+	processControlFallback := ""
+
+	runErr := cmd.Start()
+	if runErr == nil {
+		var bindErr error
+		controller, bindErr = bindManagedProcess(cmd)
+		processControl = processControlMode(controller)
+		if bindErr != nil {
+			processControlFallback = bindErr.Error()
+			log.Printf("[commandline] runtime=%s processControl=%s fallback=%v", runtimeName, processControl, bindErr)
+		}
+
+		waitDone := make(chan error, 1)
+		go func() {
+			waitDone <- cmd.Wait()
+		}()
+
+		select {
+		case <-ctx.Done():
+			terminateManagedProcess(cmd, controller)
+			runErr = <-waitDone
+		case runErr = <-waitDone:
+		}
+
+		releaseManagedProcess(controller)
+	}
+
 	exitCode := 0
 	if runErr != nil {
 		var exitErr *exec.ExitError
@@ -213,8 +272,8 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 		}
 	}
 
-	stdoutText := normalizeOutput(stdout.String())
-	stderrText := normalizeOutput(stderr.String())
+	stdoutText := stdout.textWithNotice(0)
+	stderrText := stderr.textWithNotice(0)
 
 	statusText := fmt.Sprintf("%s exited with code %d.", runtimeName, exitCode)
 	if ctx.Err() == context.DeadlineExceeded {
@@ -245,7 +304,9 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 		"cwd":                 cwd,
 		"exitCode":            exitCode,
 		"stdout":              stdoutText,
+		"stdoutTruncated":     stdout.truncated(),
 		"stderr":              stderrText,
+		"stderrTruncated":     stderr.truncated(),
 		"timedOut":            ctx.Err() == context.DeadlineExceeded,
 		"canceled":            ctx.Err() == context.Canceled,
 		"requestedTimeoutSec": timeout.Requested.Seconds(),
@@ -253,7 +314,11 @@ func (s *Server) runCommand(parent context.Context, runtimeName, binaryPath stri
 		"maxTimeoutSec":       timeout.Max.Seconds(),
 		"usedDefaultTimeout":  timeout.UsedDefault,
 		"timeoutCapped":       timeout.Capped,
+		"processControl":      processControl,
 		"assetVersion":        "",
+	}
+	if processControlFallback != "" {
+		structured["processControlFallbackError"] = processControlFallback
 	}
 	if s.installation != nil {
 		structured["assetVersion"] = s.installation.AssetVersion
@@ -296,6 +361,12 @@ func (s *Server) environment(extraEnv map[string]string) []string {
 		}
 		if strings.TrimSpace(s.installation.PythonBinaryPath) != "" {
 			pathEntries = append(pathEntries, filepath.Dir(s.installation.PythonBinaryPath))
+		}
+		if strings.TrimSpace(s.installation.PythonHomeDir) != "" {
+			pathEntries = append(pathEntries,
+				filepath.Join(s.installation.PythonHomeDir, "Scripts"),
+				filepath.Join(s.installation.PythonHomeDir, "bin"),
+			)
 		}
 		if strings.TrimSpace(s.installation.GitBinaryPath) != "" {
 			pathEntries = append(pathEntries, filepath.Dir(s.installation.GitBinaryPath))

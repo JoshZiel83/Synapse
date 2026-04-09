@@ -280,7 +280,7 @@ func (w *windowsOverlayController) Show(runtimeSessionID string) error {
 		}
 		_, _, _ = procOverlayShowWindow.Call(hwnd, swShowNoActivate)
 		_, _, _ = procOverlaySetWindowPos.Call(hwnd, hwndTopmost, 0, 0, 0, 0, swpNoMove|swpNoSize|swpNoActivate|swpShowWindow)
-		_, _, _ = procOverlayInvalidateRect.Call(hwnd, 0, 1)
+		_, _, _ = procOverlayInvalidateRect.Call(hwnd, 0, 0)
 		return nil
 	})
 }
@@ -530,6 +530,16 @@ func (w *windowsOverlayController) snapshotState() windowsOverlayState {
 	return w.state
 }
 
+func windowsOverlayNeedsAnimation(state windowsOverlayState, now time.Time) bool {
+	if !state.Visible {
+		return false
+	}
+	return state.TrailUntil.After(now) ||
+		state.DragUntil.After(now) ||
+		state.PulseUntil.After(now) ||
+		state.ScrollUntil.After(now)
+}
+
 func (w *windowsOverlayController) paint(hwnd uintptr) uintptr {
 	var paint overlayPaintStruct
 	hdc, _, _ := procOverlayBeginPaint.Call(hwnd, uintptr(unsafe.Pointer(&paint)))
@@ -585,8 +595,13 @@ func windowsOverlayWndProc(hwnd uintptr, msg uint32, wparam, lparam uintptr) uin
 		}
 	case wmEraseBkgnd:
 		return 1
-	case wmTimer, wmOverlayUpdate:
-		_, _, _ = procOverlayInvalidateRect.Call(hwnd, 0, 1)
+	case wmTimer:
+		if controller != nil && windowsOverlayNeedsAnimation(controller.snapshotState(), time.Now()) {
+			_, _, _ = procOverlayInvalidateRect.Call(hwnd, 0, 0)
+		}
+		return 0
+	case wmOverlayUpdate:
+		_, _, _ = procOverlayInvalidateRect.Call(hwnd, 0, 0)
 		return 0
 	case wmOverlayCommand:
 		if controller != nil {

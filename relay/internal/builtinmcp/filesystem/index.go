@@ -3,6 +3,7 @@ package filesystem
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -36,6 +37,18 @@ type fileRecord struct {
 	ContentMtimeNS int64
 	ContentSize    int64
 	ExtractorKey   string
+}
+
+func (s *Server) syncContextErr() error {
+	if s.startCtx == nil {
+		return nil
+	}
+	select {
+	case <-s.startCtx.Done():
+		return s.startCtx.Err()
+	default:
+		return nil
+	}
 }
 
 func (s *Server) openIndex() error {
@@ -172,6 +185,9 @@ func (s *Server) runSyncWorker(ctx context.Context) {
 			return
 		case req := <-s.syncCh:
 			if err := s.runSyncPath(req.path, req.recursive); err != nil {
+				if errors.Is(err, context.Canceled) {
+					return
+				}
 				log.Printf("filesystem sync error for %s: %v", req.path, err)
 			}
 		}
@@ -224,12 +240,16 @@ func (s *Server) enqueueSync(path string, recursive bool) {
 	if path == "" || s.syncCh == nil {
 		return
 	}
+	if err := s.syncContextErr(); err != nil {
+		return
+	}
+	req := syncRequest{path: filepath.Clean(path), recursive: recursive}
 	select {
-	case s.syncCh <- syncRequest{path: filepath.Clean(path), recursive: recursive}:
+	case s.syncCh <- req:
 	default:
 		go func() {
 			select {
-			case s.syncCh <- syncRequest{path: filepath.Clean(path), recursive: recursive}:
+			case s.syncCh <- req:
 			case <-time.After(500 * time.Millisecond):
 			}
 		}()
@@ -237,8 +257,14 @@ func (s *Server) enqueueSync(path string, recursive bool) {
 }
 
 func (s *Server) runSyncPath(path string, recursive bool) error {
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	s.indexSyncMu.Lock()
 	defer s.indexSyncMu.Unlock()
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	return s.syncPath(path, recursive)
 }
 
@@ -249,6 +275,8 @@ func (s *Server) syncAfterMutation(path string, recursive bool) {
 	if s.started && s.db != nil {
 		if err := s.runSyncPath(path, recursive); err == nil {
 			return
+		} else if errors.Is(err, context.Canceled) {
+			return
 		} else {
 			log.Printf("filesystem immediate sync error for %s: %v", path, err)
 		}
@@ -257,6 +285,9 @@ func (s *Server) syncAfterMutation(path string, recursive bool) {
 }
 
 func (s *Server) syncPath(target string, recursive bool) error {
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	target = filepath.Clean(target)
 	if _, blocked := s.blockedSystemPath(target); blocked {
 		return nil
@@ -277,6 +308,9 @@ func (s *Server) syncPath(target string, recursive bool) error {
 }
 
 func (s *Server) syncDirectoryTree(root string) error {
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -285,6 +319,9 @@ func (s *Server) syncDirectoryTree(root string) error {
 
 	seen := make(map[string]struct{})
 	err = filepath.Walk(root, func(path string, info os.FileInfo, walkErr error) error {
+		if err := s.syncContextErr(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return nil
 		}
@@ -305,16 +342,28 @@ func (s *Server) syncDirectoryTree(root string) error {
 	if err != nil {
 		return err
 	}
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	if err := s.deleteMissingUnder(tx, root, seen); err != nil {
+		return err
+	}
+	if err := s.syncContextErr(); err != nil {
 		return err
 	}
 	if _, err := tx.Exec(`PRAGMA optimize`); err != nil {
 		log.Printf("filesystem sqlite optimize warning: %v", err)
 	}
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 
 func (s *Server) syncSinglePath(path string, info os.FileInfo) error {
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -333,6 +382,9 @@ func (s *Server) syncSinglePath(path string, info os.FileInfo) error {
 }
 
 func (s *Server) deleteMissingPath(path string) error {
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	tx, err := s.db.Begin()
 	if err != nil {
 		return err
@@ -345,6 +397,9 @@ func (s *Server) deleteMissingPath(path string) error {
 }
 
 func (s *Server) deleteMissingUnder(tx *sql.Tx, prefix string, seen map[string]struct{}) error {
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	rows, err := tx.Query(`SELECT abs_path FROM files WHERE abs_path = ? OR abs_path LIKE ?`, prefix, likePrefix(prefix))
 	if err != nil {
 		return err
@@ -353,6 +408,9 @@ func (s *Server) deleteMissingUnder(tx *sql.Tx, prefix string, seen map[string]s
 
 	var toDelete []string
 	for rows.Next() {
+		if err := s.syncContextErr(); err != nil {
+			return err
+		}
 		var path string
 		if err := rows.Scan(&path); err != nil {
 			return err
@@ -362,6 +420,9 @@ func (s *Server) deleteMissingUnder(tx *sql.Tx, prefix string, seen map[string]s
 		}
 	}
 	for _, path := range toDelete {
+		if err := s.syncContextErr(); err != nil {
+			return err
+		}
 		if err := s.deletePathRecords(tx, path); err != nil {
 			return err
 		}
@@ -370,12 +431,19 @@ func (s *Server) deleteMissingUnder(tx *sql.Tx, prefix string, seen map[string]s
 }
 
 func (s *Server) deletePathRecords(tx *sql.Tx, path string) error {
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	var ids []int64
 	rows, err := tx.Query(`SELECT id FROM files WHERE abs_path = ? OR abs_path LIKE ?`, path, likePrefix(path))
 	if err != nil {
 		return err
 	}
 	for rows.Next() {
+		if err := s.syncContextErr(); err != nil {
+			rows.Close()
+			return err
+		}
 		var id int64
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
@@ -386,6 +454,9 @@ func (s *Server) deletePathRecords(tx *sql.Tx, path string) error {
 	rows.Close()
 
 	for _, id := range ids {
+		if err := s.syncContextErr(); err != nil {
+			return err
+		}
 		if err := s.deleteContentForFile(tx, id); err != nil {
 			return err
 		}
@@ -400,12 +471,19 @@ func (s *Server) deletePathRecords(tx *sql.Tx, path string) error {
 }
 
 func (s *Server) deleteContentForFile(tx *sql.Tx, fileID int64) error {
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	rows, err := tx.Query(`SELECT id FROM content_chunks WHERE file_id = ?`, fileID)
 	if err != nil {
 		return err
 	}
 	var chunkIDs []int64
 	for rows.Next() {
+		if err := s.syncContextErr(); err != nil {
+			rows.Close()
+			return err
+		}
 		var id int64
 		if err := rows.Scan(&id); err != nil {
 			rows.Close()
@@ -415,15 +493,24 @@ func (s *Server) deleteContentForFile(tx *sql.Tx, fileID int64) error {
 	}
 	rows.Close()
 	for _, chunkID := range chunkIDs {
+		if err := s.syncContextErr(); err != nil {
+			return err
+		}
 		if _, err := tx.Exec(`DELETE FROM content_fts WHERE rowid = ?`, chunkID); err != nil {
 			return err
 		}
+	}
+	if err := s.syncContextErr(); err != nil {
+		return err
 	}
 	_, err = tx.Exec(`DELETE FROM content_chunks WHERE file_id = ?`, fileID)
 	return err
 }
 
 func (s *Server) upsertFileRecord(tx *sql.Tx, path string, info os.FileInfo) error {
+	if err := s.syncContextErr(); err != nil {
+		return err
+	}
 	root, ok := s.matchRoot(path)
 	if !ok {
 		return nil
@@ -511,6 +598,9 @@ func (s *Server) upsertFileRecord(tx *sql.Tx, path string, info os.FileInfo) err
 	var content string
 	var parser string
 	if shouldIndexContent {
+		if err := s.syncContextErr(); err != nil {
+			return err
+		}
 		content, parser, err = s.extractTextContent(path, info)
 		if err != nil {
 			log.Printf("filesystem content extraction failed for %s: %v", path, err)
@@ -558,6 +648,9 @@ func (s *Server) upsertFileRecord(tx *sql.Tx, path string, info os.FileInfo) err
 	if !record.IsDir && strings.TrimSpace(content) != "" {
 		chunks := splitContentIntoChunks(content)
 		for index, chunk := range chunks {
+			if err := s.syncContextErr(); err != nil {
+				return err
+			}
 			res, err := tx.Exec(`INSERT INTO content_chunks(file_id, chunk_no, text) VALUES (?, ?, ?)`, record.ID, index, chunk)
 			if err != nil {
 				return err

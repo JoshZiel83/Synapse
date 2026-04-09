@@ -1,5 +1,5 @@
-import { readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { readdir, readFile } from "node:fs/promises";
+import { basename, join } from "node:path";
 import {
   textBlocks,
   type AvailableSkillSummary,
@@ -7,18 +7,38 @@ import {
   type CapabilityAccessTarget,
 } from "@synapse/shared";
 import { resolveRepoPath } from "../../config/repo-paths.js";
-import { resolveRepoSubprojectPath } from "../../config/subprojects.js";
-import { listVisibleHealthyRelayCommandlineExposureMetadata } from "../mcp-plugins/tool-resolver.js";
+import {
+  resolveRepoSubprojectPath,
+  type RepoSubprojectName,
+} from "../../config/subprojects.js";
 
-type RelayAutoSkillManifestEntry = {
+type ManagedCapabilityManifestEntry = {
   slug: string;
-  repoDir: string;
-  module: string;
   command: string;
+  module?: string;
+  skillPath?: string;
+};
+
+type ManagedSkillSourceManifest = {
+  type: "children" | "single";
+  basePath?: string;
+  path?: string;
+  skillSlug?: string;
+  capabilitySlug: string;
+};
+
+type ManagedProviderManifest = {
+  slug: string;
+  displayName: string;
+  subproject?: RepoSubprojectName;
+  capabilities: ManagedCapabilityManifestEntry[];
+  skillSource?: ManagedSkillSourceManifest;
 };
 
 type RelayAutoSkillDefinition = {
+  providerSlug: string;
   capabilitySlug: string;
+  skillKey: string;
   slug: string;
   name: string;
   description: string;
@@ -32,33 +52,128 @@ const SKILL_FILE_NAME = "SKILL.md";
 const RELAY_AUTO_SKILL_SOURCE = "relay_auto_loaded";
 const relayAutoSkillManifestPath = resolveRepoPath(
   "relay",
-  "cli-anything-wave1.json",
+  "managed-command-providers.json",
 );
 
-let relayAutoSkillIndexPromise:
-  | Promise<Map<string, RelayAutoSkillDefinition>>
-  | null = null;
+let relayAutoSkillIndexPromise: Promise<RelayAutoSkillDefinition[]> | null = null;
+let relayAutoSkillManifestPathOverride: string | null = null;
 
-function parseManifestEntries(raw: unknown): RelayAutoSkillManifestEntry[] {
-  const capabilities = Array.isArray((raw as any)?.capabilities)
-    ? (raw as any).capabilities
+function getRelayAutoSkillManifestPath() {
+  return relayAutoSkillManifestPathOverride || relayAutoSkillManifestPath;
+}
+
+function resetRelayAutoSkillIndexCache() {
+  relayAutoSkillIndexPromise = null;
+}
+
+export function __resetRelayAutoSkillIndexCacheForTests() {
+  resetRelayAutoSkillIndexCache();
+}
+
+export function __setRelayAutoSkillManifestPathForTests(path?: string) {
+  relayAutoSkillManifestPathOverride = path?.trim() || null;
+  resetRelayAutoSkillIndexCache();
+}
+
+function parseManagedProviders(raw: unknown): ManagedProviderManifest[] {
+  const providers = Array.isArray((raw as any)?.providers)
+    ? (raw as any).providers
     : [];
 
-  return capabilities
-    .map((entry: any) => ({
-      slug: typeof entry?.slug === "string" ? entry.slug.trim() : "",
-      repoDir: typeof entry?.repoDir === "string" ? entry.repoDir.trim() : "",
-      module: typeof entry?.module === "string" ? entry.module.trim() : "",
-      command: typeof entry?.command === "string" ? entry.command.trim() : "",
-    }))
+  return providers
+    .map((provider: any) => {
+      const capabilities = Array.isArray(provider?.capabilities)
+        ? provider.capabilities
+            .map((capability: any) => ({
+              slug:
+                typeof capability?.slug === "string"
+                  ? capability.slug.trim()
+                  : "",
+              command:
+                typeof capability?.command === "string"
+                  ? capability.command.trim()
+                  : "",
+              module:
+                typeof capability?.module === "string"
+                  ? capability.module.trim()
+                  : "",
+              skillPath:
+                typeof capability?.skillPath === "string"
+                  ? capability.skillPath.trim()
+                  : "",
+            }))
+            .filter(
+              (capability: ManagedCapabilityManifestEntry) =>
+                capability.slug && capability.command,
+            )
+        : [];
+
+      let skillSource: ManagedSkillSourceManifest | undefined;
+      if (provider?.skillSource && typeof provider.skillSource === "object") {
+        const sourceType =
+          typeof provider.skillSource.type === "string"
+            ? provider.skillSource.type.trim()
+            : "";
+        if (sourceType === "children" || sourceType === "single") {
+          skillSource = {
+            type: sourceType,
+            basePath:
+              typeof provider.skillSource.basePath === "string"
+                ? provider.skillSource.basePath.trim()
+                : "",
+            path:
+              typeof provider.skillSource.path === "string"
+                ? provider.skillSource.path.trim()
+                : "",
+            skillSlug:
+              typeof provider.skillSource.skillSlug === "string"
+                ? provider.skillSource.skillSlug.trim()
+                : "",
+            capabilitySlug:
+              typeof provider.skillSource.capabilitySlug === "string"
+                ? provider.skillSource.capabilitySlug.trim()
+                : "",
+          };
+        }
+      }
+
+      return {
+        slug: typeof provider?.slug === "string" ? provider.slug.trim() : "",
+        displayName:
+          typeof provider?.displayName === "string"
+            ? provider.displayName.trim()
+            : "",
+        subproject:
+          typeof provider?.subproject === "string"
+            ? (provider.subproject.trim() as RepoSubprojectName)
+            : undefined,
+        capabilities,
+        skillSource,
+      };
+    })
     .filter(
-      (entry: RelayAutoSkillManifestEntry) =>
-        entry.slug && entry.repoDir && entry.module && entry.command,
+      (provider: ManagedProviderManifest) =>
+        provider.slug &&
+        provider.displayName &&
+        provider.capabilities.length > 0,
     );
 }
 
+function stripFrontmatter(markdown: string) {
+  const normalized = markdown.replace(/\r\n/g, "\n");
+  if (!normalized.startsWith("---\n")) {
+    return normalized;
+  }
+  const endIndex = normalized.indexOf("\n---\n", 4);
+  if (endIndex < 0) {
+    return normalized;
+  }
+  return normalized.slice(endIndex + 5);
+}
+
 function extractHeading(markdown: string, fallback: string) {
-  for (const line of markdown.split(/\r?\n/)) {
+  const stripped = stripFrontmatter(markdown);
+  for (const line of stripped.split(/\r?\n/)) {
     const trimmed = line.trim();
     if (trimmed.startsWith("# ")) {
       return trimmed.slice(2).trim() || fallback;
@@ -68,7 +183,7 @@ function extractHeading(markdown: string, fallback: string) {
 }
 
 function extractFirstParagraph(markdown: string, fallback: string) {
-  const lines = markdown.replace(/\r\n/g, "\n").split("\n");
+  const lines = stripFrontmatter(markdown).split("\n");
   let seenHeading = false;
   let inFence = false;
   const paragraph: string[] = [];
@@ -123,43 +238,192 @@ function resolveRelayAutoSkillVersion(versions?: Set<string>) {
   return "mixed";
 }
 
+function capabilityKey(providerSlug: string, capabilitySlug: string) {
+  return `${providerSlug}:${capabilitySlug}`;
+}
+
+function normalizePublicSkillSlug(providerSlug: string, rawSkillSlug: string) {
+  const normalized = rawSkillSlug.trim().toLowerCase();
+  if (normalized.startsWith(providerSlug.toLowerCase())) {
+    return normalized;
+  }
+  return `${providerSlug}-${normalized}`;
+}
+
+async function loadSkillDefinition(input: {
+  providerSlug: string;
+  capabilitySlug: string;
+  rawSkillSlug: string;
+  skillsDir: string;
+  fallbackDescription: string;
+}) {
+  const skillPath = join(input.skillsDir, SKILL_FILE_NAME);
+  const markdown = await readFile(skillPath, "utf8");
+  const publicSlug = normalizePublicSkillSlug(
+    input.providerSlug,
+    input.rawSkillSlug,
+  );
+  const skillKey = capabilityKey(input.providerSlug, input.capabilitySlug) +
+    `:${input.rawSkillSlug}`;
+
+  return {
+    providerSlug: input.providerSlug,
+    capabilitySlug: input.capabilitySlug,
+    skillKey,
+    slug: publicSlug,
+    name: extractHeading(markdown, publicSlug),
+    description: extractFirstParagraph(markdown, input.fallbackDescription),
+    skillsDir: input.skillsDir,
+    skillPath,
+    markdown,
+  } satisfies RelayAutoSkillDefinition;
+}
+
+function summarizeRelayAutoSkillError(error: unknown) {
+  if (!error) return "unknown error";
+  if (error instanceof Error && error.message.trim()) {
+    return error.message.trim();
+  }
+  return String(error);
+}
+
+function logRelayAutoSkillWarning(
+  providerSlug: string,
+  context: string,
+  error: unknown,
+) {
+  console.warn(
+    `[relay-auto-skills] skipping ${providerSlug} ${context}: ${summarizeRelayAutoSkillError(error)}`,
+  );
+}
+
+async function tryLoadSkillDefinition(
+  provider: ManagedProviderManifest,
+  input: {
+    capabilitySlug: string;
+    rawSkillSlug: string;
+    skillsDir: string;
+    fallbackDescription: string;
+  },
+) {
+  try {
+    return await loadSkillDefinition({
+      providerSlug: provider.slug,
+      capabilitySlug: input.capabilitySlug,
+      rawSkillSlug: input.rawSkillSlug,
+      skillsDir: input.skillsDir,
+      fallbackDescription: input.fallbackDescription,
+    });
+  } catch (error) {
+    logRelayAutoSkillWarning(
+      provider.slug,
+      `skill ${input.rawSkillSlug}`,
+      error,
+    );
+    return null;
+  }
+}
+
+async function loadProviderSkillDefinitions(provider: ManagedProviderManifest) {
+  const definitions: RelayAutoSkillDefinition[] = [];
+
+  for (const capability of provider.capabilities) {
+    if (!capability.skillPath) {
+      continue;
+    }
+    if (!provider.subproject) {
+      continue;
+    }
+    const skillsDir = resolveRepoSubprojectPath(
+      provider.subproject,
+      ...capability.skillPath.split("/"),
+    );
+    const definition = await tryLoadSkillDefinition(provider, {
+      capabilitySlug: capability.slug,
+      rawSkillSlug: capability.slug,
+      skillsDir,
+      fallbackDescription: `Companion skill for ${capability.command} via relay bash.`,
+    });
+    if (definition) {
+      definitions.push(definition);
+    }
+  }
+
+  if (!provider.skillSource || !provider.subproject) {
+    return definitions;
+  }
+
+  if (provider.skillSource.type === "children") {
+    const basePath = provider.skillSource.basePath || ".";
+    const baseDir = resolveRepoSubprojectPath(
+      provider.subproject,
+      ...basePath.split("/"),
+    );
+    let entries;
+    try {
+      entries = await readdir(baseDir, { withFileTypes: true });
+    } catch (error) {
+      logRelayAutoSkillWarning(provider.slug, `skill directory ${basePath}`, error);
+      return definitions;
+    }
+    for (const entry of entries) {
+      if (!entry.isDirectory()) {
+        continue;
+      }
+      const skillsDir = join(baseDir, entry.name);
+      const definition = await tryLoadSkillDefinition(provider, {
+        capabilitySlug: provider.skillSource.capabilitySlug,
+        rawSkillSlug: entry.name,
+        skillsDir,
+        fallbackDescription: `Companion skill for ${provider.displayName} via relay bash.`,
+      });
+      if (definition) {
+        definitions.push(definition);
+      }
+    }
+    return definitions;
+  }
+
+  const singleSkillPath = provider.skillSource.path || ".";
+  const skillsDir = resolveRepoSubprojectPath(
+    provider.subproject,
+    ...singleSkillPath.split("/"),
+  );
+  const rawSkillSlug =
+    provider.skillSource.skillSlug ||
+    basename(skillsDir) ||
+    provider.skillSource.capabilitySlug;
+  const definition = await tryLoadSkillDefinition(provider, {
+    capabilitySlug: provider.skillSource.capabilitySlug,
+    rawSkillSlug,
+    skillsDir,
+    fallbackDescription: `Companion skill for ${provider.displayName} via relay bash.`,
+  });
+  if (definition) {
+    definitions.push(definition);
+  }
+  return definitions;
+}
+
 async function loadRelayAutoSkillIndex() {
   if (!relayAutoSkillIndexPromise) {
-    relayAutoSkillIndexPromise = (async () => {
+    const pending = (async () => {
       const manifest = JSON.parse(
-        await readFile(relayAutoSkillManifestPath, "utf8"),
+        await readFile(getRelayAutoSkillManifestPath(), "utf8"),
       );
-      const entries = parseManifestEntries(manifest);
-      const index = new Map<string, RelayAutoSkillDefinition>();
+      const providers = parseManagedProviders(manifest);
+      const definitions: RelayAutoSkillDefinition[] = [];
 
-      for (const entry of entries) {
-        const skillsDir = resolveRepoSubprojectPath(
-          "cli-anything",
-          entry.repoDir,
-          "agent-harness",
-          "cli_anything",
-          entry.module,
-          "skills",
-        );
-        const skillPath = join(skillsDir, SKILL_FILE_NAME);
-        const markdown = await readFile(skillPath, "utf8");
-
-        const slug = `cli-anything-${entry.slug}`;
-        const fallbackName = slug;
-        const fallbackDescription = `Companion skill for ${entry.command} via relay bash.`;
-        index.set(entry.slug, {
-          capabilitySlug: entry.slug,
-          slug,
-          name: extractHeading(markdown, fallbackName),
-          description: extractFirstParagraph(markdown, fallbackDescription),
-          skillsDir,
-          skillPath,
-          markdown,
-        });
+      for (const provider of providers) {
+        definitions.push(...(await loadProviderSkillDefinitions(provider)));
       }
 
-      return index;
+      return definitions.sort((left, right) => left.slug.localeCompare(right.slug));
     })();
+    relayAutoSkillIndexPromise = pending.catch((error) => {
+      resetRelayAutoSkillIndexCache();
+      throw error;
+    });
   }
 
   return relayAutoSkillIndexPromise;
@@ -196,53 +460,68 @@ function buildAvailableSkillSummary(
   },
 ): AvailableSkillSummary {
   return {
-    instanceId: `relay-auto-skill:${definition.capabilitySlug}`,
-    packageId: `relay-auto-skill:${definition.capabilitySlug}`,
-    revisionId: `relay-auto-skill:${definition.capabilitySlug}@${input.version}`,
+    instanceId: `relay-auto-skill:${definition.skillKey}`,
+    packageId: `relay-auto-skill:${definition.skillKey}`,
+    revisionId: `relay-auto-skill:${definition.skillKey}@${input.version}`,
     slug: definition.slug,
     name: definition.name,
     description: definition.description,
     version: input.version,
     accessTarget: buildAccessTarget(input),
     sourceKind: RELAY_AUTO_SKILL_SOURCE,
-    entryPoint: `relay-auto-skill://cli-anything/${definition.capabilitySlug}`,
+    entryPoint: `relay-auto-skill://${definition.providerSlug}/${definition.skillKey}`,
   };
 }
 
 function extractReadyCapabilities(metadata: Record<string, unknown>) {
-  const rawCapabilities = Array.isArray(metadata?.cliAnythingCapabilities)
-    ? metadata.cliAnythingCapabilities
+  const rawCapabilities = Array.isArray(metadata?.managedCapabilities)
+    ? metadata.managedCapabilities
     : [];
   const ready = new Map<string, string>();
 
   for (const item of rawCapabilities as any[]) {
     if (item?.ready !== true) continue;
+    if (typeof item?.provider !== "string" || item.provider.trim() === "") {
+      continue;
+    }
     if (typeof item?.slug !== "string" || item.slug.trim() === "") continue;
-    const slug = item.slug.trim();
+    const key = capabilityKey(item.provider.trim(), item.slug.trim());
     const version =
       typeof item?.version === "string" && item.version.trim()
         ? item.version.trim()
         : "relay-auto";
-    ready.set(slug, version);
+    ready.set(key, version);
   }
 
   return ready;
 }
 
 function findRelayAutoSkillDefinition(
-  definitions: Map<string, RelayAutoSkillDefinition>,
+  definitions: RelayAutoSkillDefinition[],
   skillName: string,
 ) {
   const normalizedName = skillName.trim().toLowerCase();
-  for (const definition of definitions.values()) {
-    if (
-      definition.slug.toLowerCase() === normalizedName ||
-      definition.name.toLowerCase() === normalizedName
-    ) {
-      return definition;
-    }
-  }
-  return null;
+  return (
+    definitions.find(
+      (definition) =>
+        definition.slug.toLowerCase() === normalizedName ||
+        definition.name.toLowerCase() === normalizedName,
+    ) || null
+  );
+}
+
+async function loadVisibleHealthyRelayCommandlineExposureMetadata(input: {
+  workspaceId: string;
+  actorId: string;
+  sessionId: string;
+  conversationId: string;
+  conversationKind?: "private" | "group" | "virtual";
+  conversationBoundary?: "internal" | "external";
+}) {
+  const { listVisibleHealthyRelayCommandlineExposureMetadata } = await import(
+    "../mcp-plugins/tool-resolver.js"
+  );
+  return listVisibleHealthyRelayCommandlineExposureMetadata(input);
 }
 
 export async function listRelayAutoLoadedSkills(input: {
@@ -257,12 +536,12 @@ export async function listRelayAutoLoadedSkills(input: {
     return [] as AvailableSkillSummary[];
   }
 
-  let definitions: Map<string, RelayAutoSkillDefinition>;
+  let definitions: RelayAutoSkillDefinition[];
   let exposureMetadata: Record<string, unknown>[];
   try {
     [definitions, exposureMetadata] = await Promise.all([
       loadRelayAutoSkillIndex(),
-      listVisibleHealthyRelayCommandlineExposureMetadata({
+      loadVisibleHealthyRelayCommandlineExposureMetadata({
         workspaceId: input.workspaceId,
         actorId: input.actorId,
         sessionId: input.sessionId,
@@ -285,26 +564,25 @@ export async function listRelayAutoLoadedSkills(input: {
 
   for (const metadata of exposureMetadata) {
     const readyFromExposure = extractReadyCapabilities(metadata);
-    for (const [slug, version] of readyFromExposure.entries()) {
-      readyCapabilities.add(slug);
-      const versions = capabilityVersions.get(slug) || new Set<string>();
+    for (const [key, version] of readyFromExposure.entries()) {
+      readyCapabilities.add(key);
+      const versions = capabilityVersions.get(key) || new Set<string>();
       versions.add(version);
-      capabilityVersions.set(slug, versions);
+      capabilityVersions.set(key, versions);
     }
   }
 
   const skills: AvailableSkillSummary[] = [];
-  for (const [capabilitySlug, definition] of definitions.entries()) {
-    if (!readyCapabilities.has(capabilitySlug)) {
+  for (const definition of definitions) {
+    const key = capabilityKey(definition.providerSlug, definition.capabilitySlug);
+    if (!readyCapabilities.has(key)) {
       continue;
     }
     skills.push(
       buildAvailableSkillSummary(definition, {
         actorId: input.actorId,
         conversationId: input.conversationId,
-        version: resolveRelayAutoSkillVersion(
-          capabilityVersions.get(capabilitySlug),
-        ),
+        version: resolveRelayAutoSkillVersion(capabilityVersions.get(key)),
       }),
     );
   }
@@ -319,7 +597,7 @@ export async function readRelayAutoLoadedSkill(input: {
   assetPath?: string;
   skill?: AvailableSkillSummary;
 }) {
-  let definitions: Map<string, RelayAutoSkillDefinition>;
+  let definitions: RelayAutoSkillDefinition[];
   try {
     definitions = await loadRelayAutoSkillIndex();
   } catch (error) {

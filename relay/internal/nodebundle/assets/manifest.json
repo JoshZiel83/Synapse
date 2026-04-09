@@ -1,6 +1,6 @@
 {
-  "prepared": false,
-  "assetVersion": "unprepared",
-  "platform": "",
-  "nodeBinary": ""
+  "prepared": true,
+  "assetVersion": "node-24.14.1-windows-amd64",
+  "platform": "windows-amd64",
+  "nodeBinary": "node/node.exe"
 }

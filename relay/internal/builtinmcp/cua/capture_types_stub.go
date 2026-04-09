@@ -9,6 +9,7 @@ type desktopCaptureOptions struct {
 
 const (
 	desktopCaptureBackendDXGI             = "dxgi"
+	desktopCaptureBackendGDI              = "gdi"
 	desktopCaptureBackendCGDisplay        = "cgdisplay"
 	desktopCaptureBackendScreenCaptureKit = "screencapturekit"
 )
