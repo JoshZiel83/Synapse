@@ -13,6 +13,10 @@
     "dev:daemon": "npm run dev -w packages/remote-agent-daemon",
     "dev:web": "npm run dev -w packages/web-next",
     "dev:mock-chat": "node .workbuddy/mock-chat-completions-server.cjs",
+    "prepare": "git config core.hooksPath .githooks",
+    "format": "node scripts/format-files.mjs --all",
+    "format:check": "node scripts/format-files.mjs --all --check",
+    "format:staged": "lint-staged",
     "build": "npm run build -w packages/shared && npm run build -w packages/api && npm run build -w packages/remote-agent-daemon && npm run build -w packages/web-next",
     "build:shared": "npm run build -w packages/shared",
     "build:api": "npm run build -w packages/api",
@@ -33,8 +37,15 @@
     "@slock-ai/daemon": "^0.32.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "lint-staged": "^16.4.0",
+    "prettier": "^3.8.3",
+    "prettier-plugin-tailwindcss": "^0.7.4",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "shadcn": "^4.0.5"
+  },
+  "lint-staged": {
+    "*.{js,mjs,cjs,jsx,ts,tsx,json,css,md,mdx,yml,yaml,html}": "node scripts/format-files.mjs --formatter=prettier",
+    "relay/**/*.go": "node scripts/format-files.mjs --formatter=gofmt"
   }
 }

@@ -1,0 +1,16 @@
+node_modules/
+dist/
+.next/
+.turbo/
+coverage/
+
+subprojects/
+.agents/
+.setup/
+
+relay/cmd/synapse-relay-gui/frontend/node_modules/
+relay/cmd/synapse-relay-gui/frontend/dist/
+relay/cmd/synapse-relay-gui/build/
+
+packages/web-next/public/web-chat-service-worker.js
+packages/mobile-app/public/chat-service-worker.js
