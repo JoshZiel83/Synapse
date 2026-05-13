@@ -13,47 +13,47 @@ import type {
   TransportExternalUserSummary,
   TransportKind,
   TransportSessionSummary,
-} from "@synapse/shared/types";
-import { sql } from "kysely";
-import { transaction } from "../../infrastructure/database/index.js";
+} from "@synapse/shared/types"
+import { sql } from "kysely"
+import { transaction } from "../../infrastructure/database/index.js"
 import {
   db,
   executeCompiledQuery,
   executeTakeFirst,
   type TableInsert,
-} from "../../infrastructure/database/kysely.js";
-import { v4 as uuidv4 } from "uuid";
-import { enqueueTransportDeliveryJobs } from "../../workers/queues.js";
-import { ensureConversationParticipant } from "../chat/service.js";
-import { activateConversationParticipant } from "../chat/participant-activation.js";
+} from "../../infrastructure/database/kysely.js"
+import { v4 as uuidv4 } from "uuid"
+import { enqueueTransportDeliveryJobs } from "../../workers/queues.js"
+import { ensureConversationParticipant } from "../chat/service.js"
+import { activateConversationParticipant } from "../chat/participant-activation.js"
 import {
   assertSupportedConnectionMode,
   assertSupportedEndpointType,
-} from "./connectors/index.js";
+} from "./connectors/index.js"
 
 function parseJsonObject(value: unknown) {
   if (typeof value === "string") {
     try {
-      return JSON.parse(value) as Record<string, unknown>;
+      return JSON.parse(value) as Record<string, unknown>
     } catch {
-      return {};
+      return {}
     }
   }
   return value && typeof value === "object"
     ? (value as Record<string, unknown>)
-    : {};
+    : {}
 }
 
 function parseJsonArray<T>(value: unknown): T[] {
   if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(value) as unknown;
-      return Array.isArray(parsed) ? (parsed as T[]) : [];
+      const parsed = JSON.parse(value) as unknown
+      return Array.isArray(parsed) ? (parsed as T[]) : []
     } catch {
-      return [];
+      return []
     }
   }
-  return Array.isArray(value) ? (value as T[]) : [];
+  return Array.isArray(value) ? (value as T[]) : []
 }
 
 function readTrimmedString(
@@ -61,69 +61,69 @@ function readTrimmedString(
   ...keys: string[]
 ): string | undefined {
   for (const key of keys) {
-    const entry = value[key];
+    const entry = value[key]
     if (typeof entry === "string" && entry.trim()) {
-      return entry.trim();
+      return entry.trim()
     }
   }
-  return undefined;
+  return undefined
 }
 
 function assertTransportAccountConfiguration(params: {
-  transportKind: TransportKind;
-  connectionMode: TransportConnectionMode;
-  status: "active" | "disabled" | "error";
-  credentials?: Record<string, unknown>;
+  transportKind: TransportKind
+  connectionMode: TransportConnectionMode
+  status: "active" | "disabled" | "error"
+  credentials?: Record<string, unknown>
 }) {
   if (params.status === "disabled") {
-    return;
+    return
   }
 
-  const credentials = params.credentials || {};
+  const credentials = params.credentials || {}
 
   if (params.transportKind === "feishu") {
-    const appId = readTrimmedString(credentials, "appId", "appID", "cliAppId");
+    const appId = readTrimmedString(credentials, "appId", "appID", "cliAppId")
     const appSecret = readTrimmedString(
       credentials,
       "appSecret",
       "app_secret",
-      "cliAppSecret",
-    );
+      "cliAppSecret"
+    )
     if (!appId || !appSecret) {
-      throw new Error("Feishu account requires appId and appSecret");
+      throw new Error("Feishu account requires appId and appSecret")
     }
 
     if (params.connectionMode === "webhook") {
       const verificationToken = readTrimmedString(
         credentials,
         "verificationToken",
-        "verification_token",
-      );
+        "verification_token"
+      )
       const encryptKey = readTrimmedString(
         credentials,
         "encryptKey",
-        "encrypt_key",
-      );
+        "encrypt_key"
+      )
       if (!verificationToken || !encryptKey) {
         throw new Error(
-          "Feishu webhook mode requires verificationToken and encryptKey",
-        );
+          "Feishu webhook mode requires verificationToken and encryptKey"
+        )
       }
     }
-    return;
+    return
   }
 
   if (params.transportKind === "weixin") {
-    const token = readTrimmedString(credentials, "token");
+    const token = readTrimmedString(credentials, "token")
     if (!token) {
-      throw new Error("Weixin account requires token");
+      throw new Error("Weixin account requires token")
     }
   }
 }
 
 function toIsoString(value: string | Date | null | undefined) {
-  if (!value) return undefined;
-  return value instanceof Date ? value.toISOString() : value;
+  if (!value) return undefined
+  return value instanceof Date ? value.toISOString() : value
 }
 
 function normalizeAccountRow(row: any): TransportAccountSummary {
@@ -141,9 +141,12 @@ function normalizeAccountRow(row: any): TransportAccountSummary {
       (row.account_inbound_actor_mode as
         | TransportAccountInboundActorMode
         | undefined) ||
-      (row.inbound_actor_mode as TransportAccountInboundActorMode | undefined) ||
+      (row.inbound_actor_mode as
+        | TransportAccountInboundActorMode
+        | undefined) ||
       "none",
-    inboundActorId: row.account_inbound_actor_id || row.inbound_actor_id || undefined,
+    inboundActorId:
+      row.account_inbound_actor_id || row.inbound_actor_id || undefined,
     connectionMode: row.connection_mode,
     status: row.status,
     credentials: parseJsonObject(row.credentials),
@@ -151,12 +154,12 @@ function normalizeAccountRow(row: any): TransportAccountSummary {
     metadata: parseJsonObject(row.metadata),
     createdAt: toIsoString(row.created_at)!,
     updatedAt: toIsoString(row.updated_at)!,
-  };
+  }
 }
 
 function normalizeEndpointRow(
   row: any,
-  transportKind: TransportKind,
+  transportKind: TransportKind
 ): TransportEndpointSummary {
   return {
     id: row.endpoint_id || row.id,
@@ -169,11 +172,11 @@ function normalizeEndpointRow(
     metadata: parseJsonObject(row.endpoint_metadata || row.metadata),
     createdAt: toIsoString(row.endpoint_created_at || row.created_at)!,
     updatedAt: toIsoString(row.endpoint_updated_at || row.updated_at)!,
-  };
+  }
 }
 
 function normalizeBindingRow(row: any): ConversationTransportBindingSummary {
-  const account = normalizeAccountRow(row);
+  const account = normalizeAccountRow(row)
   return {
     id: row.binding_id || row.id,
     conversationId: row.conversation_id,
@@ -181,40 +184,42 @@ function normalizeBindingRow(row: any): ConversationTransportBindingSummary {
     transportKind: row.transport_kind,
     outboundEnabled: Boolean(row.outbound_enabled),
     inboundActorMode:
-      (row.inbound_actor_mode as TransportConversationInboundActorMode | undefined) ||
-      "inherit_account",
+      (row.inbound_actor_mode as
+        | TransportConversationInboundActorMode
+        | undefined) || "inherit_account",
     inboundActorId: row.inbound_actor_id || undefined,
     metadata: parseJsonObject(row.binding_metadata || row.metadata),
     createdAt: toIsoString(row.binding_created_at || row.created_at)!,
     updatedAt: toIsoString(row.binding_updated_at || row.updated_at)!,
     account,
     endpoint: normalizeEndpointRow(row, row.transport_kind),
-  };
+  }
 }
 
 function normalizeTransportSessionRow(row: any): TransportSessionSummary {
-  const workspaceId = row.account_workspace_id || row.workspace_id;
+  const workspaceId = row.account_workspace_id || row.workspace_id
   const account = normalizeAccountRow({
     ...row,
     workspace_id: workspaceId,
-  });
+  })
   return {
     id: row.endpoint_id || row.binding_id || row.id,
     workspaceId,
     transportKind: row.transport_kind,
     outboundEnabled: Boolean(row.outbound_enabled),
     inboundActorMode:
-      (row.inbound_actor_mode as TransportConversationInboundActorMode | undefined) ||
-      "inherit_account",
+      (row.inbound_actor_mode as
+        | TransportConversationInboundActorMode
+        | undefined) || "inherit_account",
     inboundActorId: row.inbound_actor_id || undefined,
     metadata: parseJsonObject(
-      row.binding_metadata || row.endpoint_metadata || row.metadata,
+      row.binding_metadata || row.endpoint_metadata || row.metadata
     ),
     createdAt: toIsoString(
-      row.binding_created_at || row.endpoint_created_at || row.created_at,
+      row.binding_created_at || row.endpoint_created_at || row.created_at
     )!,
     updatedAt: toIsoString(
-      row.binding_updated_at || row.endpoint_updated_at || row.updated_at,
+      row.binding_updated_at || row.endpoint_updated_at || row.updated_at
     )!,
     conversationId: row.conversation_id || undefined,
     conversationTitle: readTrimmedString(row, "conversation_title"),
@@ -222,11 +227,11 @@ function normalizeTransportSessionRow(row: any): TransportSessionSummary {
     lastOutboundAt: toIsoString(row.last_outbound_at),
     account,
     endpoint: normalizeEndpointRow(row, row.transport_kind),
-  };
+  }
 }
 
 function normalizeTransportExternalUserRow(
-  row: any,
+  row: any
 ): TransportExternalUserSummary {
   return {
     id: row.id,
@@ -243,37 +248,37 @@ function normalizeTransportExternalUserRow(
     updatedAt: toIsoString(row.updated_at)!,
     lastSeenAt: toIsoString(row.last_seen_at),
     sessions: parseJsonArray<TransportExternalUserSessionRef>(row.sessions),
-  };
+  }
 }
 
 function pickCurrentWeixinExternalUser(params: {
-  externalUsers: TransportExternalUserSummary[];
-  scannerUserId?: string;
+  externalUsers: TransportExternalUserSummary[]
+  scannerUserId?: string
 }) {
   if (params.scannerUserId) {
     return (
       params.externalUsers.find(
-        (externalUser) => externalUser.externalId === params.scannerUserId,
+        (externalUser) => externalUser.externalId === params.scannerUserId
       ) || null
-    );
+    )
   }
-  return params.externalUsers[0] || null;
+  return params.externalUsers[0] || null
 }
 
 function readPendingAutoLinkWorkspaceMemberId(
-  metadata: Record<string, unknown>,
+  metadata: Record<string, unknown>
 ) {
-  return readTrimmedString(metadata, "pendingAutoLinkWorkspaceMemberId");
+  return readTrimmedString(metadata, "pendingAutoLinkWorkspaceMemberId")
 }
 
 async function assertWorkspaceActor(params: {
-  workspaceId: string;
-  actorId?: string | null;
-  label: string;
+  workspaceId: string
+  actorId?: string | null
+  label: string
 }) {
-  const actorId = params.actorId || null;
+  const actorId = params.actorId || null
   if (!actorId) {
-    throw new Error(`${params.label} is required`);
+    throw new Error(`${params.label} is required`)
   }
 
   const actor = await db
@@ -283,54 +288,54 @@ async function assertWorkspaceActor(params: {
     .where("workspace_id", "=", params.workspaceId)
     .where("is_active", "=", true)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!actor?.id) {
-    throw new Error(`${params.label} is not available in this workspace`);
+    throw new Error(`${params.label} is not available in this workspace`)
   }
-  return actorId;
+  return actorId
 }
 
 async function assertTransportAccountOwner(params: {
-  workspaceId: string;
-  ownerScope: TransportAccountOwnerScope;
-  ownerWorkspaceMemberId?: string | null;
+  workspaceId: string
+  ownerScope: TransportAccountOwnerScope
+  ownerWorkspaceMemberId?: string | null
 }) {
   if (params.ownerScope === "workspace") {
     if (params.ownerWorkspaceMemberId) {
       throw new Error(
-        "Workspace-owned transport account cannot have an owner workspace member",
-      );
+        "Workspace-owned transport account cannot have an owner workspace member"
+      )
     }
-    return null;
+    return null
   }
 
-  const ownerWorkspaceMemberId = params.ownerWorkspaceMemberId || null;
+  const ownerWorkspaceMemberId = params.ownerWorkspaceMemberId || null
   if (!ownerWorkspaceMemberId) {
     throw new Error(
-      "Workspace-member transport account requires ownerWorkspaceMemberId",
-    );
+      "Workspace-member transport account requires ownerWorkspaceMemberId"
+    )
   }
 
   const isWorkspaceMember = await assertWorkspaceMember({
     workspaceId: params.workspaceId,
     workspaceMemberId: ownerWorkspaceMemberId,
-  });
+  })
   if (!isWorkspaceMember) {
-    throw new Error("Transport account owner must be a workspace member");
+    throw new Error("Transport account owner must be a workspace member")
   }
 
-  return ownerWorkspaceMemberId;
+  return ownerWorkspaceMemberId
 }
 
 async function assertTransportAccountInboundActor(params: {
-  workspaceId: string;
-  ownerScope: TransportAccountOwnerScope;
-  ownerWorkspaceMemberId?: string | null;
-  inboundActorMode: TransportAccountInboundActorMode;
-  inboundActorId?: string | null;
+  workspaceId: string
+  ownerScope: TransportAccountOwnerScope
+  ownerWorkspaceMemberId?: string | null
+  inboundActorMode: TransportAccountInboundActorMode
+  inboundActorId?: string | null
 }) {
   if (params.inboundActorMode === "none") {
-    return null;
+    return null
   }
 
   if (params.inboundActorMode === "follow_owner_chief_actor") {
@@ -339,33 +344,33 @@ async function assertTransportAccountInboundActor(params: {
       !params.ownerWorkspaceMemberId
     ) {
       throw new Error(
-        "Follow chief actor is only available for workspace-member-owned IM accounts",
-      );
+        "Follow chief actor is only available for workspace-member-owned IM accounts"
+      )
     }
-    return null;
+    return null
   }
 
   return assertWorkspaceActor({
     workspaceId: params.workspaceId,
     actorId: params.inboundActorId,
     label: "Inbound actor",
-  });
+  })
 }
 
 async function assertConversationInboundActor(params: {
-  workspaceId: string;
-  inboundActorMode: TransportConversationInboundActorMode;
-  inboundActorId?: string | null;
+  workspaceId: string
+  inboundActorMode: TransportConversationInboundActorMode
+  inboundActorId?: string | null
 }) {
   if (params.inboundActorMode !== "specified_actor") {
-    return null;
+    return null
   }
 
   return assertWorkspaceActor({
     workspaceId: params.workspaceId,
     actorId: params.inboundActorId,
     label: "Inbound actor",
-  });
+  })
 }
 
 async function loadTransportAccountRow(workspaceId: string, accountId: string) {
@@ -375,13 +380,13 @@ async function loadTransportAccountRow(workspaceId: string, accountId: string) {
     .where("workspace_id", "=", workspaceId)
     .where("id", "=", accountId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 async function loadTransportAccountRowByWorkspaceKey(params: {
-  workspaceId: string;
-  transportKind: TransportKind;
-  accountKey: string;
+  workspaceId: string
+  transportKind: TransportKind
+  accountKey: string
 }) {
   return db
     .selectFrom("transport_accounts")
@@ -390,7 +395,7 @@ async function loadTransportAccountRowByWorkspaceKey(params: {
     .where("transport_kind", "=", params.transportKind)
     .where("account_key", "=", params.accountKey.trim())
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 async function loadTransportAccountRowById(accountId: string) {
@@ -399,13 +404,13 @@ async function loadTransportAccountRowById(accountId: string) {
     .selectAll()
     .where("id", "=", accountId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 async function loadWorkspaceMemberTransportAccountRow(params: {
-  workspaceId: string;
-  workspaceMemberId: string;
-  transportKind: TransportKind;
+  workspaceId: string
+  workspaceMemberId: string
+  transportKind: TransportKind
 }) {
   return db
     .selectFrom("transport_accounts")
@@ -419,17 +424,17 @@ async function loadWorkspaceMemberTransportAccountRow(params: {
         WHEN status = 'active' THEN 0
         WHEN status = 'error' THEN 1
         ELSE 2
-      END`,
+      END`
     )
     .orderBy("updated_at", "desc")
     .orderBy("created_at", "desc")
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 async function loadWorkspaceMemberDisplayName(params: {
-  workspaceId: string;
-  workspaceMemberId: string;
+  workspaceId: string
+  workspaceMemberId: string
 }) {
   const row = await db
     .selectFrom("workspace_members as wm")
@@ -438,39 +443,39 @@ async function loadWorkspaceMemberDisplayName(params: {
     .where("wm.workspace_id", "=", params.workspaceId)
     .where("wm.id", "=", params.workspaceMemberId)
     .limit(1)
-    .executeTakeFirst();
-  return readTrimmedString((row || {}) as Record<string, unknown>, "name");
+    .executeTakeFirst()
+  return readTrimmedString((row || {}) as Record<string, unknown>, "name")
 }
 
 async function assertConversationParticipants(params: {
-  conversationId: string;
-  participantIds: string[];
+  conversationId: string
+  participantIds: string[]
 }) {
-  if (params.participantIds.length === 0) return;
+  if (params.participantIds.length === 0) return
   const rows = await db
     .selectFrom("conversation_participants")
     .select("id")
     .where("conversation_id", "=", params.conversationId)
     .where("id", "in", params.participantIds)
-    .execute();
-  const existing = new Set(rows.map((row) => row.id as string));
+    .execute()
+  const existing = new Set(rows.map((row) => row.id as string))
   const missing = params.participantIds.filter(
-    (participantId) => !existing.has(participantId),
-  );
+    (participantId) => !existing.has(participantId)
+  )
   if (missing.length > 0) {
     throw new Error(
-      "One or more target participants do not belong to this conversation",
-    );
+      "One or more target participants do not belong to this conversation"
+    )
   }
 }
 
 async function assertConversationParticipantType(params: {
-  conversationId: string;
-  participantId?: string | null;
-  allowedTypes: Array<"actor" | "user" | "external">;
-  label: string;
+  conversationId: string
+  participantId?: string | null
+  allowedTypes: Array<"actor" | "user" | "external">
+  label: string
 }) {
-  if (!params.participantId) return;
+  if (!params.participantId) return
 
   const row = await db
     .selectFrom("conversation_participants")
@@ -478,19 +483,19 @@ async function assertConversationParticipantType(params: {
     .where("conversation_id", "=", params.conversationId)
     .where("id", "=", params.participantId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   const participantType = row?.participant_kind as
     | "actor"
     | "user"
     | "external"
-    | undefined;
+    | undefined
   if (!participantType) {
-    throw new Error(`${params.label} does not belong to this conversation`);
+    throw new Error(`${params.label} does not belong to this conversation`)
   }
   if (!params.allowedTypes.includes(participantType)) {
     throw new Error(
-      `${params.label} must be one of: ${params.allowedTypes.join(", ")}`,
-    );
+      `${params.label} must be one of: ${params.allowedTypes.join(", ")}`
+    )
   }
 }
 
@@ -510,29 +515,29 @@ function normalizeTransportMessageLinkRow(row: any) {
     deliveredAt: toIsoString(row.delivered_at),
     createdAt: toIsoString(row.created_at),
     updatedAt: toIsoString(row.updated_at),
-  };
+  }
 }
 
 export async function listTransportAccounts(
-  workspaceId: string,
+  workspaceId: string
 ): Promise<TransportAccountSummary[]> {
   const rows = await db
     .selectFrom("transport_accounts")
     .selectAll()
     .where("workspace_id", "=", workspaceId)
     .orderBy("created_at", "desc")
-    .execute();
-  return rows.map(normalizeAccountRow);
+    .execute()
+  return rows.map(normalizeAccountRow)
 }
 
 export async function getTransportAccountById(accountId: string) {
-  const row = await loadTransportAccountRowById(accountId);
-  return row ? normalizeAccountRow(row) : null;
+  const row = await loadTransportAccountRowById(accountId)
+  return row ? normalizeAccountRow(row) : null
 }
 
 export async function getTransportAccountByKindAndId(params: {
-  accountId: string;
-  transportKind: TransportKind;
+  accountId: string
+  transportKind: TransportKind
 }) {
   const row = await db
     .selectFrom("transport_accounts")
@@ -540,22 +545,22 @@ export async function getTransportAccountByKindAndId(params: {
     .where("id", "=", params.accountId)
     .where("transport_kind", "=", params.transportKind)
     .limit(1)
-    .executeTakeFirst();
-  return row ? normalizeAccountRow(row) : null;
+    .executeTakeFirst()
+  return row ? normalizeAccountRow(row) : null
 }
 
 export async function getTransportAccountByWorkspaceKindAndKey(params: {
-  workspaceId: string;
-  transportKind: TransportKind;
-  accountKey: string;
+  workspaceId: string
+  transportKind: TransportKind
+  accountKey: string
 }) {
-  const row = await loadTransportAccountRowByWorkspaceKey(params);
-  return row ? normalizeAccountRow(row) : null;
+  const row = await loadTransportAccountRowByWorkspaceKey(params)
+  return row ? normalizeAccountRow(row) : null
 }
 
 export async function getCurrentUserWeixinBinding(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }): Promise<CurrentUserWeixinBindingSummary | null> {
   const workspaceMember = await db
     .selectFrom("workspace_members")
@@ -563,38 +568,38 @@ export async function getCurrentUserWeixinBinding(params: {
     .where("workspace_id", "=", params.workspaceId)
     .where("user_id", "=", params.userId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!workspaceMember?.id) {
-    return null;
+    return null
   }
 
   const row = await loadWorkspaceMemberTransportAccountRow({
     workspaceId: params.workspaceId,
     workspaceMemberId: workspaceMember.id,
     transportKind: "weixin",
-  });
+  })
   if (!row) {
-    return null;
+    return null
   }
 
-  const account = normalizeAccountRow(row);
+  const account = normalizeAccountRow(row)
   if (account.status !== "active") {
-    return null;
+    return null
   }
-  const metadata = parseJsonObject(row.metadata);
-  const scannerUserId = readTrimmedString(metadata, "scannerUserId");
+  const metadata = parseJsonObject(row.metadata)
+  const scannerUserId = readTrimmedString(metadata, "scannerUserId")
   const pendingAutoLinkWorkspaceMemberId =
-    readPendingAutoLinkWorkspaceMemberId(metadata);
+    readPendingAutoLinkWorkspaceMemberId(metadata)
   const externalUsers = await listTransportExternalUsers({
     workspaceId: params.workspaceId,
     transportAccountId: account.id,
-  });
+  })
   const pendingAutoLinkWorkspaceMemberName = pendingAutoLinkWorkspaceMemberId
     ? await loadWorkspaceMemberDisplayName({
         workspaceId: params.workspaceId,
         workspaceMemberId: pendingAutoLinkWorkspaceMemberId,
       })
-    : undefined;
+    : undefined
 
   return {
     account,
@@ -605,68 +610,67 @@ export async function getCurrentUserWeixinBinding(params: {
     externalUser:
       pickCurrentWeixinExternalUser({ externalUsers, scannerUserId }) ||
       undefined,
-  };
+  }
 }
 
 export async function setCurrentUserWeixinBindingAutoLink(params: {
-  workspaceId: string;
-  userId: string;
-  targetWorkspaceMemberId?: string | null;
+  workspaceId: string
+  userId: string
+  targetWorkspaceMemberId?: string | null
 }): Promise<CurrentUserWeixinBindingSummary> {
   const binding = await getCurrentUserWeixinBinding({
     workspaceId: params.workspaceId,
     userId: params.userId,
-  });
+  })
   if (!binding) {
-    throw new Error("WeChat binding not found");
+    throw new Error("WeChat binding not found")
   }
 
-  const nextTargetWorkspaceMemberId = params.targetWorkspaceMemberId || null;
+  const nextTargetWorkspaceMemberId = params.targetWorkspaceMemberId || null
   if (nextTargetWorkspaceMemberId) {
     const isWorkspaceMember = await assertWorkspaceMember({
       workspaceId: params.workspaceId,
       workspaceMemberId: nextTargetWorkspaceMemberId,
-    });
+    })
     if (!isWorkspaceMember) {
-      throw new Error("Workspace member not found");
+      throw new Error("Workspace member not found")
     }
   }
 
   const nextMetadata = {
     ...(binding.account.metadata || {}),
-  } as Record<string, unknown>;
+  } as Record<string, unknown>
   if (nextTargetWorkspaceMemberId) {
-    nextMetadata.pendingAutoLinkWorkspaceMemberId =
-      nextTargetWorkspaceMemberId;
-    nextMetadata.pendingAutoLinkMode = "first_inbound_once";
-    nextMetadata.pendingAutoLinkConfiguredAt = new Date().toISOString();
+    nextMetadata.pendingAutoLinkWorkspaceMemberId = nextTargetWorkspaceMemberId
+    nextMetadata.pendingAutoLinkMode = "first_inbound_once"
+    nextMetadata.pendingAutoLinkConfiguredAt = new Date().toISOString()
   } else {
-    delete (nextMetadata as any).pendingAutoLinkWorkspaceMemberId;
-    delete (nextMetadata as any).pendingAutoLinkMode;
-    delete (nextMetadata as any).pendingAutoLinkConfiguredAt;
+    delete (nextMetadata as any).pendingAutoLinkWorkspaceMemberId
+    delete (nextMetadata as any).pendingAutoLinkMode
+    delete (nextMetadata as any).pendingAutoLinkConfiguredAt
   }
-  delete (nextMetadata as any).pendingAutoLinkConsumedAt;
-  delete (nextMetadata as any).pendingAutoLinkConsumedExternalId;
+  delete (nextMetadata as any).pendingAutoLinkConsumedAt
+  delete (nextMetadata as any).pendingAutoLinkConsumedExternalId
 
   await updateTransportAccount({
     workspaceId: params.workspaceId,
     accountId: binding.account.id,
     metadata: nextMetadata,
-  });
+  })
 
   const updatedBinding = await getCurrentUserWeixinBinding({
     workspaceId: params.workspaceId,
     userId: params.userId,
-  });
+  })
   if (!updatedBinding) {
-    throw new Error("WeChat binding not found");
+    throw new Error("WeChat binding not found")
   }
-  return updatedBinding;
+  return updatedBinding
 }
 
 export async function linkCurrentUserWeixinBinding(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }): Promise<CurrentUserWeixinBindingSummary> {
   const currentWorkspaceMember = await db
     .selectFrom("workspace_members")
@@ -674,22 +678,23 @@ export async function linkCurrentUserWeixinBinding(params: {
     .where("workspace_id", "=", params.workspaceId)
     .where("user_id", "=", params.userId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!currentWorkspaceMember?.id) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
 
-  const binding = await getCurrentUserWeixinBinding(params);
+  const binding = await getCurrentUserWeixinBinding(params)
   if (!binding) {
-    throw new Error("WeChat binding not found");
+    throw new Error("WeChat binding not found")
   }
 
-  const scannerUserId = binding.scannerUserId || binding.externalUser?.externalId;
+  const scannerUserId =
+    binding.scannerUserId || binding.externalUser?.externalId
   if (!scannerUserId) {
-    throw new Error("WeChat binding does not expose a user ID yet");
+    throw new Error("WeChat binding does not expose a user ID yet")
   }
 
-  let externalUser = binding.externalUser || null;
+  let externalUser = binding.externalUser || null
   if (!externalUser) {
     await ensureTransportAddress({
       workspaceId: params.workspaceId,
@@ -702,92 +707,92 @@ export async function linkCurrentUserWeixinBinding(params: {
         source: "qr_login",
         scannerUserId,
       },
-    });
+    })
 
-    const refreshed = await getCurrentUserWeixinBinding(params);
-    externalUser = refreshed?.externalUser || null;
+    const refreshed = await getCurrentUserWeixinBinding(params)
+    externalUser = refreshed?.externalUser || null
   }
 
   if (!externalUser) {
-    throw new Error("WeChat user not found");
+    throw new Error("WeChat user not found")
   }
   if (
     externalUser.linkedWorkspaceMemberId &&
     externalUser.linkedWorkspaceMemberId !== currentWorkspaceMember.id
   ) {
-    throw new Error("WeChat user is already linked to another workspace member");
+    throw new Error("WeChat user is already linked to another workspace member")
   }
 
   await setTransportAddressLinkedUser({
     workspaceId: params.workspaceId,
     transportAddressId: externalUser.id,
     workspaceMemberId: currentWorkspaceMember.id,
-  });
+  })
 
-  const updatedBinding = await getCurrentUserWeixinBinding(params);
+  const updatedBinding = await getCurrentUserWeixinBinding(params)
   if (!updatedBinding) {
-    throw new Error("WeChat binding not found");
+    throw new Error("WeChat binding not found")
   }
-  return updatedBinding;
+  return updatedBinding
 }
 
 export function getPendingTransportAccountAutoLinkWorkspaceMemberId(
-  account: Pick<TransportAccountSummary, "metadata">,
+  account: Pick<TransportAccountSummary, "metadata">
 ) {
-  const metadata = parseJsonObject(account.metadata);
-  return readPendingAutoLinkWorkspaceMemberId(metadata) || null;
+  const metadata = parseJsonObject(account.metadata)
+  return readPendingAutoLinkWorkspaceMemberId(metadata) || null
 }
 
 export async function consumeTransportAccountAutoLink(params: {
-  account: TransportAccountSummary;
-  transportAddressId: string;
-  targetWorkspaceMemberId: string;
-  matchedExternalId: string;
+  account: TransportAccountSummary
+  transportAddressId: string
+  targetWorkspaceMemberId: string
+  matchedExternalId: string
 }) {
   await setTransportAddressLinkedUser({
     workspaceId: params.account.workspaceId,
     transportAddressId: params.transportAddressId,
     workspaceMemberId: params.targetWorkspaceMemberId,
-  });
+  })
 
   const nextMetadata = {
     ...parseJsonObject(params.account.metadata),
     pendingAutoLinkConsumedAt: new Date().toISOString(),
     pendingAutoLinkConsumedExternalId: params.matchedExternalId,
-  };
-  delete (nextMetadata as any).pendingAutoLinkWorkspaceMemberId;
-  delete (nextMetadata as any).pendingAutoLinkMode;
-  delete (nextMetadata as any).pendingAutoLinkConfiguredAt;
+  }
+  delete (nextMetadata as any).pendingAutoLinkWorkspaceMemberId
+  delete (nextMetadata as any).pendingAutoLinkMode
+  delete (nextMetadata as any).pendingAutoLinkConfiguredAt
 
   return updateTransportAccount({
     workspaceId: params.account.workspaceId,
     accountId: params.account.id,
     metadata: nextMetadata,
-  });
+  })
 }
 
 export async function listActiveTransportAccounts(params?: {
-  connectionMode?: TransportConnectionMode;
-  transportKind?: TransportKind;
+  connectionMode?: TransportConnectionMode
+  transportKind?: TransportKind
 }) {
   let builder = db
     .selectFrom("transport_accounts")
     .selectAll()
-    .where("status", "=", "active");
+    .where("status", "=", "active")
 
   if (params?.connectionMode) {
-    builder = builder.where("connection_mode", "=", params.connectionMode);
+    builder = builder.where("connection_mode", "=", params.connectionMode)
   }
   if (params?.transportKind) {
-    builder = builder.where("transport_kind", "=", params.transportKind);
+    builder = builder.where("transport_kind", "=", params.transportKind)
   }
 
-  const rows = await builder.orderBy("created_at", "asc").execute();
-  return rows.map(normalizeAccountRow);
+  const rows = await builder.orderBy("created_at", "asc").execute()
+  return rows.map(normalizeAccountRow)
 }
 
 export async function listTransportSessions(
-  workspaceId: string,
+  workspaceId: string
 ): Promise<TransportSessionSummary[]> {
   const inboundActivity = db
     .selectFrom("transport_message_links")
@@ -795,7 +800,7 @@ export async function listTransportSessions(
     .select(sql<Date | null>`MAX(created_at)`.as("last_inbound_at"))
     .where("direction", "=", "inbound")
     .groupBy("transport_endpoint_id")
-    .as("inbound_activity");
+    .as("inbound_activity")
 
   const outboundActivity = db
     .selectFrom("transport_message_links")
@@ -803,7 +808,7 @@ export async function listTransportSessions(
     .select(sql<Date | null>`MAX(created_at)`.as("last_outbound_at"))
     .where("direction", "=", "outbound")
     .groupBy("transport_endpoint_id")
-    .as("outbound_activity");
+    .as("outbound_activity")
 
   const rows = await db
     .selectFrom("transport_endpoints as te")
@@ -811,14 +816,18 @@ export async function listTransportSessions(
     .leftJoin(
       "conversation_transport_bindings as ctb",
       "ctb.transport_endpoint_id",
-      "te.id",
+      "te.id"
     )
     .leftJoin("conversations as c", "c.id", "ctb.conversation_id")
-    .leftJoin(inboundActivity, "inbound_activity.transport_endpoint_id", "te.id")
+    .leftJoin(
+      inboundActivity,
+      "inbound_activity.transport_endpoint_id",
+      "te.id"
+    )
     .leftJoin(
       outboundActivity,
       "outbound_activity.transport_endpoint_id",
-      "te.id",
+      "te.id"
     )
     .select([
       "ctb.id as binding_id",
@@ -862,55 +871,63 @@ export async function listTransportSessions(
     .where("ta.workspace_id", "=", workspaceId)
     .orderBy(
       sql`COALESCE(inbound_activity.last_inbound_at, outbound_activity.last_outbound_at, te.updated_at)`,
-      "desc",
+      "desc"
     )
     .orderBy("te.created_at", "desc")
-    .execute();
+    .execute()
 
-  return rows.map(normalizeTransportSessionRow);
+  return rows.map(normalizeTransportSessionRow)
 }
 
 export async function listTransportExternalUsers(params: {
-  workspaceId: string;
-  transportAccountId?: string;
+  workspaceId: string
+  transportAccountId?: string
 }): Promise<TransportExternalUserSummary[]> {
   const activity = db
     .selectFrom("conversation_participant_addresses as cpa_activity")
     .innerJoin(
       "conversation_participants as cm_activity",
       "cm_activity.id",
-      "cpa_activity.conversation_participant_id",
+      "cpa_activity.conversation_participant_id"
     )
     .innerJoin(
       "transport_message_links as tml",
       "tml.conversation_id",
-      "cm_activity.conversation_id",
+      "cm_activity.conversation_id"
     )
     .select("cpa_activity.transport_address_id")
     .select(sql<Date | null>`MAX(tml.created_at)`.as("last_seen_at"))
     .groupBy("cpa_activity.transport_address_id")
-    .as("activity");
+    .as("activity")
 
   let builder = db
     .selectFrom("transport_addresses as ta")
-    .innerJoin("transport_accounts as account", "account.id", "ta.transport_account_id")
+    .innerJoin(
+      "transport_accounts as account",
+      "account.id",
+      "ta.transport_account_id"
+    )
     .leftJoin(
       "workspace_members as linked_wm",
       "linked_wm.id",
-      "ta.workspace_member_id",
+      "ta.workspace_member_id"
     )
     .leftJoin("users as linked_user", "linked_user.id", "linked_wm.user_id")
     .leftJoin(
       "conversation_participant_addresses as cpa",
       "cpa.transport_address_id",
-      "ta.id",
+      "ta.id"
     )
-    .leftJoin("conversation_participants as cm", "cm.id", "cpa.conversation_participant_id")
+    .leftJoin(
+      "conversation_participants as cm",
+      "cm.id",
+      "cpa.conversation_participant_id"
+    )
     .leftJoin("conversations as c", "c.id", "cm.conversation_id")
     .leftJoin(
       "conversation_transport_bindings as ctb",
       "ctb.conversation_id",
-      "c.id",
+      "c.id"
     )
     .leftJoin("transport_endpoints as te", "te.id", "ctb.transport_endpoint_id")
     .leftJoin(activity, "activity.transport_address_id", "ta.id")
@@ -943,14 +960,14 @@ export async function listTransportExternalUsers(params: {
       )`.as("sessions"),
     ])
     .where("ta.workspace_id", "=", params.workspaceId)
-    .where("ta.address_type", "=", "user");
+    .where("ta.address_type", "=", "user")
 
   if (params.transportAccountId) {
     builder = builder.where(
       "ta.transport_account_id",
       "=",
-      params.transportAccountId,
-    );
+      params.transportAccountId
+    )
   }
 
   const rows = await builder
@@ -963,52 +980,52 @@ export async function listTransportExternalUsers(params: {
     ])
     .orderBy(
       sql`COALESCE(activity.last_seen_at, ta.updated_at, ta.created_at)`,
-      "desc",
+      "desc"
     )
     .orderBy("ta.created_at", "desc")
-    .execute();
+    .execute()
 
-  return rows.map(normalizeTransportExternalUserRow);
+  return rows.map(normalizeTransportExternalUserRow)
 }
 
 export async function createTransportAccount(params: {
-  workspaceId: string;
-  transportKind: TransportKind;
-  accountKey: string;
-  displayName: string;
-  ownerScope?: TransportAccountOwnerScope;
-  ownerWorkspaceMemberId?: string | null;
-  inboundActorMode?: TransportAccountInboundActorMode;
-  inboundActorId?: string | null;
-  connectionMode: TransportConnectionMode;
-  status?: "active" | "disabled" | "error";
-  credentials?: Record<string, unknown>;
-  config?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  transportKind: TransportKind
+  accountKey: string
+  displayName: string
+  ownerScope?: TransportAccountOwnerScope
+  ownerWorkspaceMemberId?: string | null
+  inboundActorMode?: TransportAccountInboundActorMode
+  inboundActorId?: string | null
+  connectionMode: TransportConnectionMode
+  status?: "active" | "disabled" | "error"
+  credentials?: Record<string, unknown>
+  config?: Record<string, unknown>
+  metadata?: Record<string, unknown>
 }) {
-  assertSupportedConnectionMode(params.transportKind, params.connectionMode);
-  const nextStatus = params.status || "active";
+  assertSupportedConnectionMode(params.transportKind, params.connectionMode)
+  const nextStatus = params.status || "active"
   assertTransportAccountConfiguration({
     transportKind: params.transportKind,
     connectionMode: params.connectionMode,
     status: nextStatus,
     credentials: params.credentials,
-  });
-  const ownerScope = params.ownerScope || "workspace";
+  })
+  const ownerScope = params.ownerScope || "workspace"
   const ownerWorkspaceMemberId = await assertTransportAccountOwner({
     workspaceId: params.workspaceId,
     ownerScope,
     ownerWorkspaceMemberId:
       ownerScope === "workspace" ? null : params.ownerWorkspaceMemberId,
-  });
-  const inboundActorMode = params.inboundActorMode || "none";
+  })
+  const inboundActorMode = params.inboundActorMode || "none"
   const inboundActorId = await assertTransportAccountInboundActor({
     workspaceId: params.workspaceId,
     ownerScope,
     ownerWorkspaceMemberId,
     inboundActorMode,
     inboundActorId: params.inboundActorId,
-  });
+  })
 
   const row = await db
     .insertInto("transport_accounts")
@@ -1024,91 +1041,96 @@ export async function createTransportAccount(params: {
       inbound_actor_id: inboundActorId,
       connection_mode: params.connectionMode,
       status: nextStatus,
-      credentials: (params.credentials || {}) as TableInsert<"transport_accounts">["credentials"],
-      config: (params.config || {}) as TableInsert<"transport_accounts">["config"],
-      metadata: (params.metadata || {}) as TableInsert<"transport_accounts">["metadata"],
+      credentials: (params.credentials ||
+        {}) as TableInsert<"transport_accounts">["credentials"],
+      config: (params.config ||
+        {}) as TableInsert<"transport_accounts">["config"],
+      metadata: (params.metadata ||
+        {}) as TableInsert<"transport_accounts">["metadata"],
       created_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirstOrThrow()
 
-  return normalizeAccountRow(row);
+  return normalizeAccountRow(row)
 }
 
 export async function updateTransportAccount(params: {
-  workspaceId: string;
-  accountId: string;
-  displayName?: string;
-  ownerScope?: TransportAccountOwnerScope;
-  ownerWorkspaceMemberId?: string | null;
-  inboundActorMode?: TransportAccountInboundActorMode;
-  inboundActorId?: string | null;
-  connectionMode?: TransportConnectionMode;
-  status?: "active" | "disabled" | "error";
-  credentials?: Record<string, unknown>;
-  config?: Record<string, unknown>;
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  accountId: string
+  displayName?: string
+  ownerScope?: TransportAccountOwnerScope
+  ownerWorkspaceMemberId?: string | null
+  inboundActorMode?: TransportAccountInboundActorMode
+  inboundActorId?: string | null
+  connectionMode?: TransportConnectionMode
+  status?: "active" | "disabled" | "error"
+  credentials?: Record<string, unknown>
+  config?: Record<string, unknown>
+  metadata?: Record<string, unknown>
 }) {
   const existing = await loadTransportAccountRow(
     params.workspaceId,
-    params.accountId,
-  );
+    params.accountId
+  )
   if (!existing) {
-    throw new Error("Transport account not found");
+    throw new Error("Transport account not found")
   }
 
   const nextConnectionMode =
     params.connectionMode ||
-    (existing.connection_mode as TransportConnectionMode);
+    (existing.connection_mode as TransportConnectionMode)
   assertSupportedConnectionMode(
     existing.transport_kind as TransportKind,
-    nextConnectionMode,
-  );
+    nextConnectionMode
+  )
   const nextStatus =
-    params.status || (existing.status as "active" | "disabled" | "error");
+    params.status || (existing.status as "active" | "disabled" | "error")
   const nextCredentials = params.credentials
     ? params.credentials
-    : parseJsonObject(existing.credentials);
+    : parseJsonObject(existing.credentials)
   const nextOwnerScope =
     params.ownerScope ||
     (existing.owner_scope as TransportAccountOwnerScope | undefined) ||
-    "workspace";
+    "workspace"
   const nextOwnerWorkspaceMemberId =
     nextOwnerScope === "workspace"
       ? null
       : params.ownerWorkspaceMemberId !== undefined
         ? params.ownerWorkspaceMemberId
         : (existing.owner_workspace_member_id as string | null | undefined) ||
-          null;
+          null
   assertTransportAccountConfiguration({
     transportKind: existing.transport_kind as TransportKind,
     connectionMode: nextConnectionMode,
     status: nextStatus,
     credentials: nextCredentials,
-  });
+  })
   const resolvedOwnerWorkspaceMemberId = await assertTransportAccountOwner({
     workspaceId: params.workspaceId,
     ownerScope: nextOwnerScope,
     ownerWorkspaceMemberId: nextOwnerWorkspaceMemberId,
-  });
+  })
   const nextInboundActorMode =
     params.inboundActorMode ||
-    (existing.inbound_actor_mode as TransportAccountInboundActorMode | undefined) ||
-    "none";
+    (existing.inbound_actor_mode as
+      | TransportAccountInboundActorMode
+      | undefined) ||
+    "none"
   const nextInboundActorId =
     nextInboundActorMode === "specified_actor"
       ? params.inboundActorId !== undefined
         ? params.inboundActorId
         : (existing.inbound_actor_id as string | null | undefined) || null
-      : null;
+      : null
   const resolvedInboundActorId = await assertTransportAccountInboundActor({
     workspaceId: params.workspaceId,
     ownerScope: nextOwnerScope,
     ownerWorkspaceMemberId: resolvedOwnerWorkspaceMemberId,
     inboundActorMode: nextInboundActorMode,
     inboundActorId: nextInboundActorId,
-  });
+  })
   const row = await db
     .updateTable("transport_accounts")
     .set({
@@ -1119,31 +1141,40 @@ export async function updateTransportAccount(params: {
       inbound_actor_id: resolvedInboundActorId,
       connection_mode: nextConnectionMode,
       status: nextStatus,
-      credentials: nextCredentials as TableInsert<"transport_accounts">["credentials"],
+      credentials:
+        nextCredentials as TableInsert<"transport_accounts">["credentials"],
       config: (params.config !== undefined
         ? params.config
-        : parseJsonObject(existing.config)) as TableInsert<"transport_accounts">["config"],
+        : parseJsonObject(
+            existing.config
+          )) as TableInsert<"transport_accounts">["config"],
       metadata: (params.metadata !== undefined
         ? params.metadata
-        : parseJsonObject(existing.metadata)) as TableInsert<"transport_accounts">["metadata"],
+        : parseJsonObject(
+            existing.metadata
+          )) as TableInsert<"transport_accounts">["metadata"],
       updated_at: sql`NOW()`,
     })
     .where("workspace_id", "=", params.workspaceId)
     .where("id", "=", params.accountId)
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirstOrThrow()
 
-  return normalizeAccountRow(row);
+  return normalizeAccountRow(row)
 }
 
 export async function getConversationTransportBinding(params: {
-  workspaceId: string;
-  conversationId: string;
+  workspaceId: string
+  conversationId: string
 }) {
   const row = await db
     .selectFrom("conversation_transport_bindings as ctb")
     .innerJoin("transport_accounts as ta", "ta.id", "ctb.transport_account_id")
-    .innerJoin("transport_endpoints as te", "te.id", "ctb.transport_endpoint_id")
+    .innerJoin(
+      "transport_endpoints as te",
+      "te.id",
+      "ctb.transport_endpoint_id"
+    )
     .select([
       "ctb.id as binding_id",
       "ctb.workspace_id",
@@ -1182,20 +1213,24 @@ export async function getConversationTransportBinding(params: {
     .where("ctb.workspace_id", "=", params.workspaceId)
     .where("ctb.conversation_id", "=", params.conversationId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
-  return row ? normalizeBindingRow(row) : null;
+  return row ? normalizeBindingRow(row) : null
 }
 
 export async function findConversationTransportBindingByEndpoint(params: {
-  transportAccountId: string;
-  endpointType: TransportEndpointType;
-  endpointExternalId: string;
+  transportAccountId: string
+  endpointType: TransportEndpointType
+  endpointExternalId: string
 }) {
   const row = await db
     .selectFrom("conversation_transport_bindings as ctb")
     .innerJoin("transport_accounts as ta", "ta.id", "ctb.transport_account_id")
-    .innerJoin("transport_endpoints as te", "te.id", "ctb.transport_endpoint_id")
+    .innerJoin(
+      "transport_endpoints as te",
+      "te.id",
+      "ctb.transport_endpoint_id"
+    )
     .select([
       "ctb.id as binding_id",
       "ctb.workspace_id",
@@ -1235,42 +1270,42 @@ export async function findConversationTransportBindingByEndpoint(params: {
     .where("te.endpoint_type", "=", params.endpointType)
     .where("te.external_id", "=", params.endpointExternalId.trim())
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
-  return row ? normalizeBindingRow(row) : null;
+  return row ? normalizeBindingRow(row) : null
 }
 
 export async function upsertConversationTransportBinding(params: {
-  workspaceId: string;
-  conversationId: string;
-  transportAccountId: string;
-  endpointType: TransportEndpointType;
-  endpointExternalId: string;
-  parentExternalId?: string;
-  endpointDisplayName?: string;
-  outboundEnabled?: boolean;
-  inboundActorMode?: TransportConversationInboundActorMode;
-  inboundActorId?: string | null;
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  conversationId: string
+  transportAccountId: string
+  endpointType: TransportEndpointType
+  endpointExternalId: string
+  parentExternalId?: string
+  endpointDisplayName?: string
+  outboundEnabled?: boolean
+  inboundActorMode?: TransportConversationInboundActorMode
+  inboundActorId?: string | null
+  metadata?: Record<string, unknown>
 }) {
   const account = await loadTransportAccountRow(
     params.workspaceId,
-    params.transportAccountId,
-  );
+    params.transportAccountId
+  )
   if (!account) {
-    throw new Error("Transport account not found");
+    throw new Error("Transport account not found")
   }
 
   assertSupportedEndpointType(
     account.transport_kind as TransportKind,
-    params.endpointType,
-  );
-  const inboundActorMode = params.inboundActorMode || "inherit_account";
+    params.endpointType
+  )
+  const inboundActorMode = params.inboundActorMode || "inherit_account"
   const inboundActorId = await assertConversationInboundActor({
     workspaceId: params.workspaceId,
     inboundActorMode,
     inboundActorId: params.inboundActorId,
-  });
+  })
 
   await transaction(async (client) => {
     const endpointRow = await executeTakeFirst<{ id: string }>(
@@ -1284,7 +1319,8 @@ export async function upsertConversationTransportBinding(params: {
           external_id: params.endpointExternalId.trim(),
           parent_external_id: params.parentExternalId?.trim() || null,
           display_name: params.endpointDisplayName?.trim() || null,
-          metadata: (params.metadata || {}) as TableInsert<"transport_endpoints">["metadata"],
+          metadata: (params.metadata ||
+            {}) as TableInsert<"transport_endpoints">["metadata"],
           created_at: sql`NOW()`,
           updated_at: sql`NOW()`,
         })
@@ -1296,13 +1332,13 @@ export async function upsertConversationTransportBinding(params: {
               display_name: sql`COALESCE(excluded.display_name, transport_endpoints.display_name)`,
               metadata: sql`transport_endpoints.metadata || excluded.metadata`,
               updated_at: sql`NOW()`,
-            }),
+            })
         )
-        .returning("id"),
-    );
-    const endpointId = endpointRow?.id;
+        .returning("id")
+    )
+    const endpointId = endpointRow?.id
     if (!endpointId) {
-      throw new Error("Failed to upsert transport endpoint");
+      throw new Error("Failed to upsert transport endpoint")
     }
 
     await executeCompiledQuery(
@@ -1318,7 +1354,8 @@ export async function upsertConversationTransportBinding(params: {
           outbound_enabled: params.outboundEnabled ?? true,
           inbound_actor_mode: inboundActorMode,
           inbound_actor_id: inboundActorId,
-          metadata: (params.metadata || {}) as TableInsert<"conversation_transport_bindings">["metadata"],
+          metadata: (params.metadata ||
+            {}) as TableInsert<"conversation_transport_bindings">["metadata"],
           created_at: sql`NOW()`,
           updated_at: sql`NOW()`,
         })
@@ -1331,65 +1368,65 @@ export async function upsertConversationTransportBinding(params: {
             inbound_actor_id: sql`excluded.inbound_actor_id`,
             metadata: sql`excluded.metadata`,
             updated_at: sql`NOW()`,
-          }),
-        ),
-    );
-  });
+          })
+        )
+    )
+  })
 
   return getConversationTransportBinding({
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
-  });
+  })
 }
 
 export async function updateConversationTransportSettings(params: {
-  workspaceId: string;
-  conversationId: string;
-  outboundEnabled?: boolean;
-  inboundActorMode?: TransportConversationInboundActorMode;
-  inboundActorId?: string | null;
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  conversationId: string
+  outboundEnabled?: boolean
+  inboundActorMode?: TransportConversationInboundActorMode
+  inboundActorId?: string | null
+  metadata?: Record<string, unknown>
 }) {
   const existing = await getConversationTransportBinding({
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
-  });
+  })
   if (!existing) {
-    throw new Error("Transport session not found for this conversation");
+    throw new Error("Transport session not found for this conversation")
   }
 
   const nextInboundActorMode =
-    params.inboundActorMode || existing.inboundActorMode;
+    params.inboundActorMode || existing.inboundActorMode
   const nextInboundActorId =
     nextInboundActorMode === "specified_actor"
       ? params.inboundActorId !== undefined
         ? params.inboundActorId
         : existing.inboundActorId || null
-      : null;
+      : null
   const resolvedInboundActorId = await assertConversationInboundActor({
     workspaceId: params.workspaceId,
     inboundActorMode: nextInboundActorMode,
     inboundActorId: nextInboundActorId,
-  });
+  })
 
   const updates: Record<string, unknown> = {
     updated_at: sql`NOW()`,
-  };
+  }
   if (params.outboundEnabled !== undefined) {
-    updates.outbound_enabled = params.outboundEnabled;
+    updates.outbound_enabled = params.outboundEnabled
   }
   if (
     params.inboundActorMode !== undefined ||
     params.inboundActorId !== undefined
   ) {
-    updates.inbound_actor_mode = nextInboundActorMode;
-    updates.inbound_actor_id = resolvedInboundActorId;
+    updates.inbound_actor_mode = nextInboundActorMode
+    updates.inbound_actor_id = resolvedInboundActorId
   }
   if (params.metadata !== undefined) {
     updates.metadata = {
       ...parseJsonObject(existing.metadata),
       ...(params.metadata || {}),
-    } as TableInsert<"conversation_transport_bindings">["metadata"];
+    } as TableInsert<"conversation_transport_bindings">["metadata"]
   }
 
   await db
@@ -1397,21 +1434,21 @@ export async function updateConversationTransportSettings(params: {
     .set(updates)
     .where("workspace_id", "=", params.workspaceId)
     .where("conversation_id", "=", params.conversationId)
-    .execute();
+    .execute()
 
   return getConversationTransportBinding({
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
-  });
+  })
 }
 
 export async function updateTransportSessionSettings(params: {
-  workspaceId: string;
-  transportEndpointId: string;
-  outboundEnabled?: boolean;
-  inboundActorMode?: TransportConversationInboundActorMode;
-  inboundActorId?: string | null;
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  transportEndpointId: string
+  outboundEnabled?: boolean
+  inboundActorMode?: TransportConversationInboundActorMode
+  inboundActorId?: string | null
+  metadata?: Record<string, unknown>
 }) {
   const row = await db
     .selectFrom("conversation_transport_bindings")
@@ -1419,10 +1456,10 @@ export async function updateTransportSessionSettings(params: {
     .where("workspace_id", "=", params.workspaceId)
     .where("transport_endpoint_id", "=", params.transportEndpointId)
     .limit(1)
-    .executeTakeFirst();
-  const conversationId = row?.conversation_id as string | undefined;
+    .executeTakeFirst()
+  const conversationId = row?.conversation_id as string | undefined
   if (!conversationId) {
-    throw new Error("Transport session not found");
+    throw new Error("Transport session not found")
   }
 
   await updateConversationTransportSettings({
@@ -1432,38 +1469,38 @@ export async function updateTransportSessionSettings(params: {
     inboundActorMode: params.inboundActorMode,
     inboundActorId: params.inboundActorId,
     metadata: params.metadata,
-  });
+  })
 
-  const updatedSessions = await listTransportSessions(params.workspaceId);
+  const updatedSessions = await listTransportSessions(params.workspaceId)
   return (
     updatedSessions.find(
-      (session) => session.id === params.transportEndpointId,
+      (session) => session.id === params.transportEndpointId
     ) || null
-  );
+  )
 }
 
 export async function deleteConversationTransportBinding(params: {
-  workspaceId: string;
-  conversationId: string;
+  workspaceId: string
+  conversationId: string
 }) {
   const row = await db
     .deleteFrom("conversation_transport_bindings")
     .where("workspace_id", "=", params.workspaceId)
     .where("conversation_id", "=", params.conversationId)
     .returning("id")
-    .executeTakeFirst();
-  return Boolean(row);
+    .executeTakeFirst()
+  return Boolean(row)
 }
 
 export async function ensureTransportAddress(params: {
-  workspaceId: string;
-  transportAccountId: string;
-  transportKind: TransportKind;
-  addressType?: "user" | "bot" | "system";
-  externalId: string;
-  displayName?: string;
-  workspaceMemberId?: string;
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  transportAccountId: string
+  transportKind: TransportKind
+  addressType?: "user" | "bot" | "system"
+  externalId: string
+  displayName?: string
+  workspaceMemberId?: string
+  metadata?: Record<string, unknown>
 }) {
   return db
     .insertInto("transport_addresses")
@@ -1476,7 +1513,8 @@ export async function ensureTransportAddress(params: {
       external_id: params.externalId.trim(),
       display_name: params.displayName?.trim() || null,
       workspace_member_id: params.workspaceMemberId || null,
-      metadata: (params.metadata || {}) as TableInsert<"transport_addresses">["metadata"],
+      metadata: (params.metadata ||
+        {}) as TableInsert<"transport_addresses">["metadata"],
       created_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
@@ -1488,16 +1526,16 @@ export async function ensureTransportAddress(params: {
           workspace_member_id: sql`COALESCE(excluded.workspace_member_id, transport_addresses.workspace_member_id)`,
           metadata: sql`transport_addresses.metadata || excluded.metadata`,
           updated_at: sql`NOW()`,
-        }),
+        })
     )
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirstOrThrow()
 }
 
 export async function getTransportAddressByExternalId(params: {
-  transportAccountId: string;
-  externalId: string;
-  addressType?: "user" | "bot" | "system";
+  transportAccountId: string
+  externalId: string
+  addressType?: "user" | "bot" | "system"
 }) {
   return db
     .selectFrom("transport_addresses")
@@ -1506,7 +1544,7 @@ export async function getTransportAddressByExternalId(params: {
     .where("address_type", "=", params.addressType || "user")
     .where("external_id", "=", params.externalId.trim())
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 export async function getTransportAddressById(transportAddressId: string) {
@@ -1515,37 +1553,41 @@ export async function getTransportAddressById(transportAddressId: string) {
     .selectAll()
     .where("id", "=", transportAddressId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 export async function getPrimaryTransportAddressForParticipant(params: {
-  conversationParticipantId: string;
-  transportAccountId?: string;
+  conversationParticipantId: string
+  transportAccountId?: string
 }) {
   let builder = db
     .selectFrom("conversation_participant_addresses as cpa")
     .innerJoin("transport_addresses as ta", "ta.id", "cpa.transport_address_id")
     .selectAll("ta")
-    .where("cpa.conversation_participant_id", "=", params.conversationParticipantId);
+    .where(
+      "cpa.conversation_participant_id",
+      "=",
+      params.conversationParticipantId
+    )
 
   if (params.transportAccountId) {
     builder = builder.where(
       "ta.transport_account_id",
       "=",
-      params.transportAccountId,
-    );
+      params.transportAccountId
+    )
   }
 
   return builder
     .orderBy("cpa.is_primary", "desc")
     .orderBy("cpa.created_at", "asc")
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 export async function getReachableTransportAddressForParticipant(params: {
-  conversationParticipantId: string;
-  transportAccountId: string;
+  conversationParticipantId: string
+  transportAccountId: string
 }) {
   const result = await db.executeQuery(
     sql<any>`SELECT candidate.*
@@ -1576,24 +1618,24 @@ export async function getReachableTransportAddressForParticipant(params: {
       ORDER BY candidate.is_attached DESC,
                candidate.is_primary DESC,
                candidate.binding_created_at ASC
-      LIMIT 1`.compile(db),
-  );
-  return result.rows[0] ?? null;
+      LIMIT 1`.compile(db)
+  )
+  return result.rows[0] ?? null
 }
 
 async function removeConversationParticipantTransportAddress(params: {
-  conversationParticipantId: string;
-  transportAddressId: string;
+  conversationParticipantId: string
+  transportAddressId: string
 }) {
   await db
     .deleteFrom("conversation_participant_addresses")
     .where("conversation_participant_id", "=", params.conversationParticipantId)
     .where("transport_address_id", "=", params.transportAddressId)
-    .execute();
+    .execute()
 }
 
 async function archiveConversationParticipantIfOrphaned(
-  conversationParticipantId: string,
+  conversationParticipantId: string
 ) {
   const row = await db
     .selectFrom("conversation_participants as cm")
@@ -1608,14 +1650,14 @@ async function archiveConversationParticipantIfOrphaned(
     ])
     .where("cm.id", "=", conversationParticipantId)
     .limit(1)
-    .executeTakeFirst();
-  if (!row) return;
+    .executeTakeFirst()
+  if (!row) return
   if (
     row.participant_kind !== "external" ||
     row.state !== "active" ||
     row.has_addresses
   ) {
-    return;
+    return
   }
 
   await db
@@ -1626,19 +1668,19 @@ async function archiveConversationParticipantIfOrphaned(
       metadata: sql`COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify({ retiredByTransportLink: true })}::jsonb`,
     })
     .where("id", "=", conversationParticipantId)
-    .execute();
+    .execute()
 }
 
 export async function syncTransportAddressConversationParticipant(params: {
-  conversationId: string;
-  transportAddressId: string;
-  workspaceMemberId?: string | null;
-  displayName?: string;
-  recordJoinEvent?: boolean;
+  conversationId: string
+  transportAddressId: string
+  workspaceMemberId?: string | null
+  displayName?: string
+  recordJoinEvent?: boolean
 }) {
-  const address = await getTransportAddressById(params.transportAddressId);
+  const address = await getTransportAddressById(params.transportAddressId)
   if (!address) {
-    throw new Error("Transport external user not found");
+    throw new Error("Transport external user not found")
   }
 
   const desiredMember = params.workspaceMemberId
@@ -1666,77 +1708,83 @@ export async function syncTransportAddressConversationParticipant(params: {
           },
           recordJoinEvent: params.recordJoinEvent,
         })
-      ).member;
+      ).member
 
   await ensureConversationParticipantTransportAddress({
     conversationParticipantId: desiredMember.id,
     transportAddressId: address.id,
     isPrimary: true,
-  });
+  })
 
   const attachedMembers = await db
     .selectFrom("conversation_participant_addresses as cpa")
-    .innerJoin("conversation_participants as cm", "cm.id", "cpa.conversation_participant_id")
+    .innerJoin(
+      "conversation_participants as cm",
+      "cm.id",
+      "cpa.conversation_participant_id"
+    )
     .select(["cm.id", "cm.participant_kind"])
     .where("cpa.transport_address_id", "=", address.id)
     .where("cm.conversation_id", "=", params.conversationId)
     .where("cm.id", "<>", desiredMember.id)
-    .execute();
+    .execute()
 
   for (const row of attachedMembers) {
     await removeConversationParticipantTransportAddress({
       conversationParticipantId: row.id,
       transportAddressId: address.id,
-    });
-    await archiveConversationParticipantIfOrphaned(row.id);
+    })
+    await archiveConversationParticipantIfOrphaned(row.id)
   }
 
-  return desiredMember;
+  return desiredMember
 }
 
 async function listConversationIdsForTransportAddress(
-  transportAddressId: string,
+  transportAddressId: string
 ) {
   const rows = await db
     .selectFrom("conversation_participant_addresses as cpa")
-    .innerJoin("conversation_participants as cm", "cm.id", "cpa.conversation_participant_id")
+    .innerJoin(
+      "conversation_participants as cm",
+      "cm.id",
+      "cpa.conversation_participant_id"
+    )
     .select("cm.conversation_id")
     .distinct()
     .where("cpa.transport_address_id", "=", transportAddressId)
-    .execute();
-  return rows
-    .map((row) => row.conversation_id as string)
-    .filter(Boolean);
+    .execute()
+  return rows.map((row) => row.conversation_id as string).filter(Boolean)
 }
 
 async function syncTransportAddressLinkedUserMemberships(params: {
-  transportAddressId: string;
-  workspaceMemberId?: string | null;
+  transportAddressId: string
+  workspaceMemberId?: string | null
 }) {
   const conversationIds = await listConversationIdsForTransportAddress(
-    params.transportAddressId,
-  );
+    params.transportAddressId
+  )
   for (const conversationId of conversationIds) {
     await syncTransportAddressConversationParticipant({
       conversationId,
       transportAddressId: params.transportAddressId,
       workspaceMemberId: params.workspaceMemberId || null,
       recordJoinEvent: false,
-    });
+    })
   }
 }
 
 async function loadConversationExternalParticipantPrimaryAddress(params: {
-  workspaceId: string;
-  conversationId: string;
-  conversationParticipantId: string;
+  workspaceId: string
+  conversationId: string
+  conversationParticipantId: string
 }) {
   return db
     .selectFrom("conversation_participants as cm")
     .leftJoin(
       "conversation_participant_addresses as cpa",
       "cpa.conversation_participant_id",
-      "cm.id",
+      "cm.id"
     )
     .leftJoin("transport_addresses as ta", "ta.id", "cpa.transport_address_id")
     .select([
@@ -1750,12 +1798,12 @@ async function loadConversationExternalParticipantPrimaryAddress(params: {
     .orderBy("cpa.is_primary", "desc")
     .orderBy("cpa.created_at", "asc")
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 async function assertWorkspaceMember(params: {
-  workspaceId: string;
-  workspaceMemberId: string;
+  workspaceId: string
+  workspaceMemberId: string
 }) {
   const row = await db
     .selectFrom("workspace_members")
@@ -1763,48 +1811,49 @@ async function assertWorkspaceMember(params: {
     .where("workspace_id", "=", params.workspaceId)
     .where("id", "=", params.workspaceMemberId)
     .limit(1)
-    .executeTakeFirst();
-  return Boolean(row);
+    .executeTakeFirst()
+  return Boolean(row)
 }
 
 export async function setConversationExternalParticipantLinkedUser(params: {
-  workspaceId: string;
-  conversationId: string;
-  conversationParticipantId: string;
-  workspaceMemberId?: string | null;
+  workspaceId: string
+  conversationId: string
+  conversationParticipantId: string
+  workspaceMemberId?: string | null
 }) {
-  const participantAddress = await loadConversationExternalParticipantPrimaryAddress({
-    workspaceId: params.workspaceId,
-    conversationId: params.conversationId,
-    conversationParticipantId: params.conversationParticipantId,
-  });
+  const participantAddress =
+    await loadConversationExternalParticipantPrimaryAddress({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      conversationParticipantId: params.conversationParticipantId,
+    })
   if (!participantAddress) {
-    throw new Error("External participant not found in this conversation");
+    throw new Error("External participant not found in this conversation")
   }
   if (!participantAddress.transport_address_id) {
-    throw new Error("External participant does not have a transport address");
+    throw new Error("External participant does not have a transport address")
   }
 
   return setTransportAddressLinkedUser({
     workspaceId: params.workspaceId,
     transportAddressId: participantAddress.transport_address_id as string,
     workspaceMemberId: params.workspaceMemberId,
-  });
+  })
 }
 
 export async function setTransportAddressLinkedUser(params: {
-  workspaceId: string;
-  transportAddressId: string;
-  workspaceMemberId?: string | null;
+  workspaceId: string
+  transportAddressId: string
+  workspaceMemberId?: string | null
 }) {
-  const nextWorkspaceMemberId = params.workspaceMemberId || null;
+  const nextWorkspaceMemberId = params.workspaceMemberId || null
   if (nextWorkspaceMemberId) {
     const isWorkspaceMember = await assertWorkspaceMember({
       workspaceId: params.workspaceId,
       workspaceMemberId: nextWorkspaceMemberId,
-    });
+    })
     if (!isWorkspaceMember) {
-      throw new Error("Workspace member not found");
+      throw new Error("Workspace member not found")
     }
   }
 
@@ -1818,24 +1867,24 @@ export async function setTransportAddressLinkedUser(params: {
     .where("id", "=", params.transportAddressId)
     .where("address_type", "=", "user")
     .returningAll()
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row) {
-    throw new Error("Transport external user not found");
+    throw new Error("Transport external user not found")
   }
 
   await syncTransportAddressLinkedUserMemberships({
     transportAddressId: params.transportAddressId,
     workspaceMemberId: nextWorkspaceMemberId,
-  });
+  })
 
-  return row;
+  return row
 }
 
 export async function ensureConversationParticipantTransportAddress(params: {
-  conversationParticipantId: string;
-  transportAddressId: string;
-  isPrimary?: boolean;
-  metadata?: Record<string, unknown>;
+  conversationParticipantId: string
+  transportAddressId: string
+  isPrimary?: boolean
+  metadata?: Record<string, unknown>
 }) {
   if (params.isPrimary) {
     await db
@@ -1844,8 +1893,12 @@ export async function ensureConversationParticipantTransportAddress(params: {
         is_primary: false,
         updated_at: sql`NOW()`,
       })
-      .where("conversation_participant_id", "=", params.conversationParticipantId)
-      .execute();
+      .where(
+        "conversation_participant_id",
+        "=",
+        params.conversationParticipantId
+      )
+      .execute()
   }
 
   return db
@@ -1854,7 +1907,8 @@ export async function ensureConversationParticipantTransportAddress(params: {
       conversation_participant_id: params.conversationParticipantId,
       transport_address_id: params.transportAddressId,
       is_primary: params.isPrimary ?? false,
-      metadata: (params.metadata || {}) as TableInsert<"conversation_participant_addresses">["metadata"],
+      metadata: (params.metadata ||
+        {}) as TableInsert<"conversation_participant_addresses">["metadata"],
       created_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
@@ -1868,15 +1922,15 @@ export async function ensureConversationParticipantTransportAddress(params: {
           END`,
           metadata: sql`conversation_participant_addresses.metadata || excluded.metadata`,
           updated_at: sql`NOW()`,
-        }),
+        })
     )
     .returningAll()
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 export async function updateTransportAddressMetadata(params: {
-  transportAddressId: string;
-  metadata: Record<string, unknown>;
+  transportAddressId: string
+  metadata: Record<string, unknown>
 }) {
   return db
     .updateTable("transport_addresses")
@@ -1886,12 +1940,12 @@ export async function updateTransportAddressMetadata(params: {
     })
     .where("id", "=", params.transportAddressId)
     .returningAll()
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 export async function updateTransportEndpointMetadata(params: {
-  endpointId: string;
-  metadata: Record<string, unknown>;
+  endpointId: string
+  metadata: Record<string, unknown>
 }) {
   return db
     .updateTable("transport_endpoints")
@@ -1901,30 +1955,30 @@ export async function updateTransportEndpointMetadata(params: {
     })
     .where("id", "=", params.endpointId)
     .returningAll()
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 export async function queueConversationTransportProjection(params: {
-  workspaceId: string;
-  conversationId: string;
-  itemId: string;
-  direction?: "inbound" | "outbound";
-  externalMessageId?: string;
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  conversationId: string
+  itemId: string
+  direction?: "inbound" | "outbound"
+  externalMessageId?: string
+  metadata?: Record<string, unknown>
 }) {
-  const direction = params.direction || "outbound";
+  const direction = params.direction || "outbound"
   const binding = await getConversationTransportBinding({
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
-  });
+  })
   if (!binding) {
-    return null;
+    return null
   }
   if (direction === "outbound" && binding.account.status !== "active") {
-    return null;
+    return null
   }
   if (direction === "outbound" && !binding.outboundEnabled) {
-    return null;
+    return null
   }
 
   const link = await db
@@ -1956,58 +2010,58 @@ export async function queueConversationTransportProjection(params: {
           external_message_id: sql`COALESCE(excluded.external_message_id, transport_message_links.external_message_id)`,
           metadata: sql`transport_message_links.metadata || excluded.metadata`,
           updated_at: sql`NOW()`,
-        }),
+        })
     )
     .returningAll()
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (link && direction === "outbound") {
     await enqueueTransportDeliveryJobs([link.id]).catch((error) => {
       console.error(
         `[im] Failed to enqueue transport delivery job for link ${link.id}:`,
-        error,
-      );
-    });
+        error
+      )
+    })
   }
 
-  return link;
+  return link
 }
 
 export async function findTransportMessageLinkByExternalMessage(params: {
-  transportAccountId: string;
-  transportEndpointId?: string;
-  externalMessageId: string;
-  direction: "inbound" | "outbound";
+  transportAccountId: string
+  transportEndpointId?: string
+  externalMessageId: string
+  direction: "inbound" | "outbound"
 }) {
   let builder = db
     .selectFrom("transport_message_links")
     .selectAll()
     .where("transport_account_id", "=", params.transportAccountId)
     .where("external_message_id", "=", params.externalMessageId.trim())
-    .where("direction", "=", params.direction);
+    .where("direction", "=", params.direction)
 
   if (params.transportEndpointId) {
     builder = builder.where(
       "transport_endpoint_id",
       "=",
-      params.transportEndpointId,
-    );
+      params.transportEndpointId
+    )
   }
 
-  const row = await builder.limit(1).executeTakeFirst();
-  return row ? normalizeTransportMessageLinkRow(row) : null;
+  const row = await builder.limit(1).executeTakeFirst()
+  return row ? normalizeTransportMessageLinkRow(row) : null
 }
 
 export async function updateTransportMessageLinkStatus(params: {
-  linkId: string;
-  status: TransportDeliveryStatus;
-  externalMessageId?: string;
-  metadata?: Record<string, unknown>;
-  error?: string;
+  linkId: string
+  status: TransportDeliveryStatus
+  externalMessageId?: string
+  metadata?: Record<string, unknown>
+  error?: string
 }) {
   const extraMetadata = {
     ...(params.metadata || {}),
     ...(params.error ? { lastError: params.error } : {}),
-  };
+  }
   const row = await db
     .updateTable("transport_message_links")
     .set({
@@ -2023,15 +2077,19 @@ export async function updateTransportMessageLinkStatus(params: {
     })
     .where("id", "=", params.linkId)
     .returningAll()
-    .executeTakeFirst();
-  return row ? normalizeTransportMessageLinkRow(row) : null;
+    .executeTakeFirst()
+  return row ? normalizeTransportMessageLinkRow(row) : null
 }
 
 export async function loadTransportMessageLinkForDelivery(linkId: string) {
   const row = await db
     .selectFrom("transport_message_links as tml")
     .innerJoin("transport_accounts as ta", "ta.id", "tml.transport_account_id")
-    .innerJoin("transport_endpoints as te", "te.id", "tml.transport_endpoint_id")
+    .innerJoin(
+      "transport_endpoints as te",
+      "te.id",
+      "tml.transport_endpoint_id"
+    )
     .innerJoin("conversation_items as ci", "ci.id", "tml.item_id")
     .select([
       "tml.id",
@@ -2071,8 +2129,8 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
     ])
     .where("tml.id", "=", linkId)
     .limit(1)
-    .executeTakeFirst();
-  if (!row) return null;
+    .executeTakeFirst()
+  if (!row) return null
 
   return {
     ...normalizeTransportMessageLinkRow(row),
@@ -2104,8 +2162,8 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
         endpoint_created_at: row.endpoint_created_at,
         endpoint_updated_at: row.endpoint_updated_at,
       },
-      row.transport_kind as TransportKind,
+      row.transport_kind as TransportKind
     ),
     itemMetadata: parseJsonObject(row.item_metadata),
-  };
+  }
 }

@@ -362,10 +362,7 @@ function collectComposerDraftState(
     const attrs = node.attrs as ComposerMentionNodeAttrs
     if (!attrs.id) return true
 
-    if (
-      attrs.targetType === "actor" ||
-      attrs.targetType === "participant"
-    ) {
+    if (attrs.targetType === "actor" || attrs.targetType === "participant") {
       mentionCount += 1
       return true
     }
@@ -961,7 +958,9 @@ export default function ChatComposer({
   )
 
   const uploadedAttachments = attachments.filter(
-    (attachment): attachment is PendingAttachment & { uploadedFile: FileRecordView } =>
+    (
+      attachment
+    ): attachment is PendingAttachment & { uploadedFile: FileRecordView } =>
       attachment.status === "uploaded" && Boolean(attachment.uploadedFile)
   )
   const hasFailedAttachments = attachments.some(
@@ -1427,7 +1426,9 @@ export default function ChatComposer({
 
               insertTrigger("#")
             }}
-            disabled={disabled || submitting || uploadedAttachments.length === 0}
+            disabled={
+              disabled || submitting || uploadedAttachments.length === 0
+            }
             aria-label="Cite an attachment"
           >
             <Hash className="size-4.5" />

@@ -1,8 +1,8 @@
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { Modal, Pressable, StyleSheet, Text, View } from "react-native"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
 
-import { Button } from "@/components/ui";
-import { theme } from "@/theme/tokens";
+import { Button } from "@/components/ui"
+import { theme } from "@/theme/tokens"
 
 export function ScanCameraPermissionSheet({
   open,
@@ -11,13 +11,13 @@ export function ScanCameraPermissionSheet({
   onClose,
   onAuthorize,
 }: {
-  open: boolean;
-  requesting?: boolean;
-  errorMessage?: string | null;
-  onClose: () => void;
-  onAuthorize: () => void;
+  open: boolean
+  requesting?: boolean
+  errorMessage?: string | null
+  onClose: () => void
+  onAuthorize: () => void
 }) {
-  const insets = useSafeAreaInsets();
+  const insets = useSafeAreaInsets()
 
   return (
     <Modal
@@ -63,7 +63,7 @@ export function ScanCameraPermissionSheet({
         </View>
       </View>
     </Modal>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -111,4 +111,4 @@ const styles = StyleSheet.create({
   actionButton: {
     flex: 1,
   },
-});
+})

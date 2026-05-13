@@ -78,11 +78,7 @@ const memorySections = [
   {
     label: "Attached Context",
     tone: "text-slate-600",
-    items: [
-      "Q2 Narrative v4",
-      "Launch Checklist",
-      "Last Retro Summary",
-    ],
+    items: ["Q2 Narrative v4", "Launch Checklist", "Last Retro Summary"],
   },
 ]
 
@@ -113,7 +109,9 @@ const toolRows = [
 function Participant({ name, tone }: { name: string; tone: string }) {
   return (
     <Avatar className="size-9 ring-2 ring-white">
-      <AvatarFallback className={tone}>{name.slice(0, 2).toUpperCase()}</AvatarFallback>
+      <AvatarFallback className={tone}>
+        {name.slice(0, 2).toUpperCase()}
+      </AvatarFallback>
     </Avatar>
   )
 }
@@ -143,7 +141,10 @@ function ChatSurface() {
               ))}
               <AvatarGroupCount>+2</AvatarGroupCount>
             </AvatarGroup>
-            <Badge variant="outline" className="border-border/60 bg-background/80">
+            <Badge
+              variant="outline"
+              className="border-border/60 bg-background/80"
+            >
               6 Active
             </Badge>
           </div>
@@ -161,11 +162,13 @@ function ChatSurface() {
               }`}
             >
               <Avatar className="size-9 shrink-0 ring-2 ring-white">
-                <AvatarFallback className={message.avatarTone}>{message.avatar}</AvatarFallback>
+                <AvatarFallback className={message.avatarTone}>
+                  {message.avatar}
+                </AvatarFallback>
               </Avatar>
               <div className="max-w-full">
                 <div
-                  className={`mb-1 text-[11px] font-medium uppercase tracking-[0.16em] text-slate-500 ${
+                  className={`mb-1 text-[11px] font-medium tracking-[0.16em] text-slate-500 uppercase ${
                     message.align === "end" ? "text-right" : "text-left"
                   }`}
                 >
@@ -198,7 +201,9 @@ function MemorySurface() {
       <CardContent className="space-y-5 p-5">
         {memorySections.map((section) => (
           <div key={section.label}>
-            <div className={`text-sm font-semibold ${section.tone}`}>{section.label}</div>
+            <div className={`text-sm font-semibold ${section.tone}`}>
+              {section.label}
+            </div>
             <div className="mt-3 space-y-2">
               {section.items.map((item) => (
                 <div
@@ -240,14 +245,18 @@ function ToolSurface() {
                   <tool.icon className="size-4" />
                 </div>
                 <div>
-                  <div className="text-sm font-semibold text-slate-950">{tool.name}</div>
+                  <div className="text-sm font-semibold text-slate-950">
+                    {tool.name}
+                  </div>
                   <div className="mt-1 flex items-center gap-2 text-xs text-slate-500">
                     <LockKeyhole className="size-3" />
                     {tool.scope}
                   </div>
                 </div>
               </div>
-              <div className={`rounded-2xl px-3 py-1 text-xs font-medium ${tool.tone}`}>
+              <div
+                className={`rounded-2xl px-3 py-1 text-xs font-medium ${tool.tone}`}
+              >
                 {tool.access}
               </div>
             </div>
@@ -257,7 +266,9 @@ function ToolSurface() {
         <div className="rounded-[22px] border border-emerald-200 bg-emerald-50/78 px-4 py-4">
           <div className="flex items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold text-slate-950">Authorization Flow</div>
+              <div className="text-sm font-semibold text-slate-950">
+                Authorization Flow
+              </div>
               <p className="mt-1 text-sm text-slate-600">
                 Actor 请求 · Scope 校验 · 授权执行
               </p>
@@ -273,24 +284,24 @@ function ToolSurface() {
 export function LandingHeroStack() {
   return (
     <div className="relative h-full">
-      <div className="absolute left-10 top-10 size-36 rounded-full bg-sky-300/22 blur-3xl animate-float-slow" />
-      <div className="absolute right-12 top-18 size-40 rounded-full bg-emerald-200/28 blur-3xl animate-float-slow [animation-delay:1.1s]" />
+      <div className="animate-float-slow absolute top-10 left-10 size-36 rounded-full bg-sky-300/22 blur-3xl" />
+      <div className="animate-float-slow absolute top-18 right-12 size-40 rounded-full bg-emerald-200/28 blur-3xl [animation-delay:1.1s]" />
 
       <div className="relative mx-auto h-full max-w-6xl [perspective:2400px]">
         <div className="relative h-full min-h-[520px] sm:min-h-[620px] lg:min-h-[640px]">
-          <div className="relative z-30 mx-auto max-w-4xl lg:absolute lg:left-1/2 lg:top-8 lg:mt-0 lg:w-[44%] lg:[transform:translate3d(-50%,0,90px)]">
+          <div className="relative z-30 mx-auto max-w-4xl lg:absolute lg:top-8 lg:left-1/2 lg:mt-0 lg:w-[44%] lg:[transform:translate3d(-50%,0,90px)]">
             <LandingReveal delay={0.12} y={28} scale={0.985}>
               <ChatSurface />
             </LandingReveal>
           </div>
 
-          <div className="relative z-20 mx-auto mt-[-30px] max-w-2xl lg:absolute lg:left-[2%] lg:top-20 lg:mt-0 lg:w-[31%] lg:[transform:rotate(-6deg)_translate3d(0,16px,10px)]">
+          <div className="relative z-20 mx-auto mt-[-30px] max-w-2xl lg:absolute lg:top-20 lg:left-[2%] lg:mt-0 lg:w-[31%] lg:[transform:rotate(-6deg)_translate3d(0,16px,10px)]">
             <LandingReveal delay={0.24} x={-24} y={22} scale={0.98}>
               <MemorySurface />
             </LandingReveal>
           </div>
 
-          <div className="relative z-10 mx-auto mt-[-30px] max-w-2xl lg:absolute lg:right-[2%] lg:top-24 lg:mt-0 lg:w-[31%] lg:[transform:rotate(6deg)_translate3d(0,24px,0)]">
+          <div className="relative z-10 mx-auto mt-[-30px] max-w-2xl lg:absolute lg:top-24 lg:right-[2%] lg:mt-0 lg:w-[31%] lg:[transform:rotate(6deg)_translate3d(0,24px,0)]">
             <LandingReveal delay={0.3} x={24} y={24} scale={0.98}>
               <ToolSurface />
             </LandingReveal>

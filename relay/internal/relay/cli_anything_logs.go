@@ -44,14 +44,14 @@ func (e *Engine) emitCLIAnythingCapabilityLogs(servers []mcp.ServerInfo) {
 			),
 		)
 		summary.Data = map[string]interface{}{
-			"server":                group[0].ServerName,
-			"stableKey":             group[0].ServerStableKey,
-			"provider":              group[0].Provider,
-			"providerDisplayName":   providerDisplayName,
-			"phase":                 "managed_cli_readiness",
+			"server":                 group[0].ServerName,
+			"stableKey":              group[0].ServerStableKey,
+			"provider":               group[0].Provider,
+			"providerDisplayName":    providerDisplayName,
+			"phase":                  "managed_cli_readiness",
 			"managedCapabilityCount": len(group),
-			"managedReadyCount":     readyCount,
-			"managedFailedCount":    len(group) - readyCount,
+			"managedReadyCount":      readyCount,
+			"managedFailedCount":     len(group) - readyCount,
 		}
 		e.emit(summary)
 

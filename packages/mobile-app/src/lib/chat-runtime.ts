@@ -1,6 +1,6 @@
-import { Platform } from "react-native";
+import { Platform } from "react-native"
 
-import { api } from "@/lib/api";
+import { api } from "@/lib/api"
 import {
   applyChatWorkspaceQueueState,
   buildPreviewTextFromItem,
@@ -15,11 +15,11 @@ import {
   upsertChatConversations,
   type ChatWorkspaceSnapshot,
   type PendingChatOutboxMessage,
-} from "@/lib/chat-data";
-import { createChatPersistence } from "@/lib/chat-persistence";
-import type { ChatComposerSendPayload } from "@/lib/chat-compose";
-import { getDeviceLabel } from "@/lib/config";
-import { createId } from "@/lib/ids";
+} from "@/lib/chat-data"
+import { createChatPersistence } from "@/lib/chat-persistence"
+import type { ChatComposerSendPayload } from "@/lib/chat-compose"
+import { getDeviceLabel } from "@/lib/config"
+import { createId } from "@/lib/ids"
 import {
   type ActorRuntimeState,
   extractText,
@@ -30,56 +30,58 @@ import {
   type ChatConversationReadWatermarkResponse,
   type ChatSocketEvent,
   type ChatSyncEvent,
-} from "@shared";
+} from "@shared"
 
-export type ChatRuntimeStatus = "idle" | "loading" | "ready";
+export type ChatRuntimeStatus = "idle" | "loading" | "ready"
 
 export interface ChatRuntimeState {
-  status: ChatRuntimeStatus;
-  syncing: boolean;
-  error: string | null;
-  activeWorkspaceId: string | null;
-  snapshot: ChatWorkspaceSnapshot | null;
-  runtimeByConversationId: Record<string, Record<string, ActorRuntimeState>>;
+  status: ChatRuntimeStatus
+  syncing: boolean
+  error: string | null
+  activeWorkspaceId: string | null
+  snapshot: ChatWorkspaceSnapshot | null
+  runtimeByConversationId: Record<string, Record<string, ActorRuntimeState>>
 }
 
-type ChatRuntimeListener = (state: ChatRuntimeState) => void;
+type ChatRuntimeListener = (state: ChatRuntimeState) => void
 
 function clearDeliveredOutbox(
   outbox: ChatWorkspaceSnapshot["outbox"],
-  items: ChatConversationItem[],
+  items: ChatConversationItem[]
 ) {
   const deliveredClientIds = new Set(
     items
       .map((item) => item.clientMessageId)
-      .filter((value): value is string => Boolean(value)),
-  );
+      .filter((value): value is string => Boolean(value))
+  )
   if (deliveredClientIds.size === 0) {
-    return outbox;
+    return outbox
   }
 
-  const nextOutbox = { ...outbox };
+  const nextOutbox = { ...outbox }
   for (const clientMessageId of deliveredClientIds) {
-    delete nextOutbox[clientMessageId];
+    delete nextOutbox[clientMessageId]
   }
-  return nextOutbox;
+  return nextOutbox
 }
 
 function shouldIncrementUnreadCount(
-  conversation: Parameters<typeof updateConversationInSnapshot>[0]["conversations"][number],
-  item: ChatConversationItem,
+  conversation: Parameters<
+    typeof updateConversationInSnapshot
+  >[0]["conversations"][number],
+  item: ChatConversationItem
 ) {
   return (
     item.itemType === "message" &&
     item.scope === "shared" &&
     item.surface === "visible" &&
     item.authorParticipantId !== conversation.viewerParticipantId
-  );
+  )
 }
 
 function patchInteractionInConversationItem(
   item: ChatConversationItem,
-  payload: ChatSyncEvent<"interaction.updated">["payload"],
+  payload: ChatSyncEvent<"interaction.updated">["payload"]
 ) {
   if (
     item.itemType !== "event" ||
@@ -87,7 +89,7 @@ function patchInteractionInConversationItem(
     !item.eventPayload ||
     typeof item.eventPayload !== "object"
   ) {
-    return item;
+    return item
   }
 
   const currentInteraction =
@@ -95,13 +97,13 @@ function patchInteractionInConversationItem(
       ? ((item.eventPayload as { interaction?: unknown }).interaction as
           | { id?: string }
           | undefined)
-      : undefined;
+      : undefined
 
   if (
     item.id !== payload.itemId &&
     currentInteraction?.id !== payload.interactionId
   ) {
-    return item;
+    return item
   }
 
   return {
@@ -110,15 +112,15 @@ function patchInteractionInConversationItem(
       ...(item.eventPayload as Record<string, unknown>),
       interaction: payload.interaction,
     },
-  };
+  }
 }
 
 export class ChatRuntime {
-  private readonly persistence = createChatPersistence();
-  private readonly listeners = new Set<ChatRuntimeListener>();
-  private persistPromise: Promise<void> = Promise.resolve();
-  private syncPromise: Promise<void> | null = null;
-  private initializePromise: Promise<void> | null = null;
+  private readonly persistence = createChatPersistence()
+  private readonly listeners = new Set<ChatRuntimeListener>()
+  private persistPromise: Promise<void> = Promise.resolve()
+  private syncPromise: Promise<void> | null = null
+  private initializePromise: Promise<void> | null = null
   private state: ChatRuntimeState = {
     status: "idle",
     syncing: false,
@@ -126,58 +128,58 @@ export class ChatRuntime {
     activeWorkspaceId: null,
     snapshot: null,
     runtimeByConversationId: {},
-  };
+  }
 
   subscribe(listener: ChatRuntimeListener) {
-    this.listeners.add(listener);
-    listener(this.state);
+    this.listeners.add(listener)
+    listener(this.state)
     return () => {
-      this.listeners.delete(listener);
-    };
+      this.listeners.delete(listener)
+    }
   }
 
   getState() {
-    return this.state;
+    return this.state
   }
 
   getSnapshot() {
-    return this.state.snapshot;
+    return this.state.snapshot
   }
 
   async awaitPersistence() {
-    await this.persistPromise;
+    await this.persistPromise
   }
 
   private getActiveSnapshotForWorkspace(workspaceId: string) {
-    const snapshot = this.state.snapshot;
+    const snapshot = this.state.snapshot
     if (
       this.state.activeWorkspaceId !== workspaceId ||
       !snapshot ||
       snapshot.workspaceId !== workspaceId
     ) {
-      return null;
+      return null
     }
 
-    return snapshot;
+    return snapshot
   }
 
   private updateSnapshotForWorkspace(
     workspaceId: string,
-    updater: (current: ChatWorkspaceSnapshot) => ChatWorkspaceSnapshot,
+    updater: (current: ChatWorkspaceSnapshot) => ChatWorkspaceSnapshot
   ) {
-    const current = this.getActiveSnapshotForWorkspace(workspaceId);
+    const current = this.getActiveSnapshotForWorkspace(workspaceId)
     if (!current) {
-      return null;
+      return null
     }
 
-    const nextSnapshot = updater(current);
-    this.replaceSnapshot(nextSnapshot);
-    return nextSnapshot;
+    const nextSnapshot = updater(current)
+    this.replaceSnapshot(nextSnapshot)
+    return nextSnapshot
   }
 
   deactivate() {
-    this.initializePromise = null;
-    this.syncPromise = null;
+    this.initializePromise = null
+    this.syncPromise = null
     this.replaceState({
       status: "idle",
       syncing: false,
@@ -185,41 +187,42 @@ export class ChatRuntime {
       activeWorkspaceId: null,
       snapshot: null,
       runtimeByConversationId: {},
-    });
+    })
   }
 
   async clearLocalState() {
-    await this.persistence.clearAllWorkspaceState();
-    this.deactivate();
+    await this.persistence.clearAllWorkspaceState()
+    this.deactivate()
   }
 
   async reloadPersistedQueueState(workspaceId?: string | null) {
-    const targetWorkspaceId = workspaceId ?? this.state.activeWorkspaceId;
+    const targetWorkspaceId = workspaceId ?? this.state.activeWorkspaceId
     if (!targetWorkspaceId) {
-      return null;
+      return null
     }
 
-    const persisted = await this.persistence.loadWorkspaceQueueState(targetWorkspaceId);
+    const persisted =
+      await this.persistence.loadWorkspaceQueueState(targetWorkspaceId)
     if (this.state.activeWorkspaceId !== targetWorkspaceId) {
-      return persisted;
+      return persisted
     }
 
-    const queueState = persisted;
+    const queueState = persisted
     if (!this.state.snapshot) {
       this.replaceSnapshot(
-        buildChatWorkspaceSnapshotFromQueueState(targetWorkspaceId, queueState),
-      );
-      return persisted;
+        buildChatWorkspaceSnapshotFromQueueState(targetWorkspaceId, queueState)
+      )
+      return persisted
     }
 
     this.updateSnapshot((current) =>
       applyChatWorkspaceQueueState(
         current,
-        queueState ?? createEmptyChatWorkspaceQueueState(targetWorkspaceId),
-      ),
-    );
+        queueState ?? createEmptyChatWorkspaceQueueState(targetWorkspaceId)
+      )
+    )
 
-    return persisted;
+    return persisted
   }
 
   async ensureWorkspace(workspaceId: string) {
@@ -228,121 +231,124 @@ export class ChatRuntime {
       this.state.status === "ready" &&
       this.state.snapshot
     ) {
-      return;
+      return
     }
 
     if (this.initializePromise) {
-      return this.initializePromise;
+      return this.initializePromise
     }
 
-    this.initializePromise = this.initializeWorkspace(workspaceId).finally(() => {
-      this.initializePromise = null;
-    });
+    this.initializePromise = this.initializeWorkspace(workspaceId).finally(
+      () => {
+        this.initializePromise = null
+      }
+    )
 
-    return this.initializePromise;
+    return this.initializePromise
   }
 
   async refreshInbox() {
-    const workspaceId = this.state.activeWorkspaceId;
+    const workspaceId = this.state.activeWorkspaceId
     if (!workspaceId) {
-      return;
+      return
     }
 
-    await this.bootstrapWorkspace(workspaceId);
+    await this.bootstrapWorkspace(workspaceId)
   }
 
   async syncFromServer() {
-    const current = this.state.snapshot;
+    const current = this.state.snapshot
     if (!current?.workspaceId) {
-      return;
+      return
     }
-    const workspaceId = current.workspaceId;
+    const workspaceId = current.workspaceId
 
     if (this.syncPromise) {
-      return this.syncPromise;
+      return this.syncPromise
     }
 
     this.replaceState({
       ...this.state,
       syncing: true,
-    });
+    })
 
     this.syncPromise = (async () => {
       try {
-        let cursor = this.state.snapshot?.inboxCursor ?? 0;
-        let hasMore = true;
+        let cursor = this.state.snapshot?.inboxCursor ?? 0
+        let hasMore = true
 
         while (hasMore) {
           if (this.state.activeWorkspaceId !== workspaceId) {
-            return;
+            return
           }
 
           const response = await api.getChatSync(current.workspaceId, {
             cursor,
             limit: 200,
-          });
+          })
 
           for (const event of response.events) {
             if (this.state.activeWorkspaceId !== workspaceId) {
-              return;
+              return
             }
-            this.applyChatEvent(event);
+            this.applyChatEvent(event)
           }
 
-          cursor = response.nextCursor;
-          hasMore = response.hasMore;
+          cursor = response.nextCursor
+          hasMore = response.hasMore
         }
 
         if (this.state.activeWorkspaceId !== workspaceId) {
-          return;
+          return
         }
 
-        await this.flushPendingReads();
-        await this.flushOutbox();
+        await this.flushPendingReads()
+        await this.flushOutbox()
       } finally {
-        this.syncPromise = null;
+        this.syncPromise = null
         this.replaceState({
           ...this.state,
           syncing: false,
-        });
+        })
       }
-    })();
+    })()
 
-    return this.syncPromise;
+    return this.syncPromise
   }
 
   handleSocketConnected() {
-    void this.syncFromServer();
+    void this.syncFromServer()
   }
 
   handleSocketEvent(event: ChatSocketEvent | Record<string, unknown>) {
     if (event.type === "chat.sync.event") {
-      this.applyChatEvent((event as ChatSocketEvent<"chat.sync.event">).payload);
-      return;
+      this.applyChatEvent((event as ChatSocketEvent<"chat.sync.event">).payload)
+      return
     }
 
     if (event.type === "runtime.updated") {
-      const payload = (event as ChatSocketEvent<"runtime.updated">).payload;
+      const payload = (event as ChatSocketEvent<"runtime.updated">).payload
       this.replaceState({
         ...this.state,
         runtimeByConversationId: {
           ...this.state.runtimeByConversationId,
           [payload.conversationId]: {
-            ...(this.state.runtimeByConversationId[payload.conversationId] ?? {}),
+            ...(this.state.runtimeByConversationId[payload.conversationId] ??
+              {}),
             [payload.snapshot.actorId]: payload.snapshot,
           },
         },
-      });
+      })
     }
   }
 
   async refreshConversation(conversationId: string) {
-    const current = this.state.snapshot;
+    const current = this.state.snapshot
     if (!current?.workspaceId || !current.clientInstanceId) {
-      return null;
+      return null
     }
-    const workspaceId = current.workspaceId;
-    const clientInstanceId = current.clientInstanceId;
+    const workspaceId = current.workspaceId
+    const clientInstanceId = current.clientInstanceId
 
     this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => ({
       ...snapshotValue,
@@ -354,7 +360,7 @@ export class ChatRuntime {
           latestLoadError: undefined,
         },
       },
-    }));
+    }))
 
     try {
       const response = await api.getChatConversationMessages(
@@ -363,11 +369,11 @@ export class ChatRuntime {
         {
           clientInstanceId,
           limit: 100,
-        },
-      );
+        }
+      )
 
       if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
-        return null;
+        return null
       }
 
       this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => ({
@@ -375,13 +381,13 @@ export class ChatRuntime {
         outbox: clearDeliveredOutbox(snapshotValue.outbox, response.items),
         conversations: upsertChatConversation(
           snapshotValue.conversations,
-          response.conversation,
+          response.conversation
         ),
         itemsByConversationId: {
           ...snapshotValue.itemsByConversationId,
           [conversationId]: mergeChatItems(
             snapshotValue.itemsByConversationId[conversationId] ?? [],
-            response.items,
+            response.items
           ),
         },
         metaByConversationId: {
@@ -395,7 +401,7 @@ export class ChatRuntime {
             latestLoadError: undefined,
           },
         },
-      }));
+      }))
 
       if (this.getActiveSnapshotForWorkspace(workspaceId)) {
         this.replaceState({
@@ -404,13 +410,13 @@ export class ChatRuntime {
             ...this.state.runtimeByConversationId,
             [conversationId]: response.runtimeByActor ?? {},
           },
-        });
+        })
       }
 
-      return response;
+      return response
     } catch (error) {
       if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
-        return null;
+        return null
       }
 
       this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => ({
@@ -424,24 +430,24 @@ export class ChatRuntime {
               error instanceof Error ? error.message : "加载聊天记录失败。",
           },
         },
-      }));
-      throw error;
+      }))
+      throw error
     }
   }
 
   async loadOlderMessages(conversationId: string) {
-    const current = this.state.snapshot;
+    const current = this.state.snapshot
     if (!current?.workspaceId || !current.clientInstanceId) {
-      return;
+      return
     }
-    const workspaceId = current.workspaceId;
-    const clientInstanceId = current.clientInstanceId;
+    const workspaceId = current.workspaceId
+    const clientInstanceId = current.clientInstanceId
 
-    const existingItems = current.itemsByConversationId[conversationId] ?? [];
-    const earliestSequence = existingItems[0]?.sequence;
+    const existingItems = current.itemsByConversationId[conversationId] ?? []
+    const earliestSequence = existingItems[0]?.sequence
     if (!earliestSequence) {
-      await this.refreshConversation(conversationId);
-      return;
+      await this.refreshConversation(conversationId)
+      return
     }
 
     const response = await api.getChatConversationMessages(
@@ -451,24 +457,24 @@ export class ChatRuntime {
         clientInstanceId,
         beforeSequence: earliestSequence,
         limit: 100,
-      },
-    );
+      }
+    )
 
     if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
-      return;
+      return
     }
 
     this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => ({
       ...snapshotValue,
       conversations: upsertChatConversation(
         snapshotValue.conversations,
-        response.conversation,
+        response.conversation
       ),
       itemsByConversationId: {
         ...snapshotValue.itemsByConversationId,
         [conversationId]: mergeChatItems(
           snapshotValue.itemsByConversationId[conversationId] ?? [],
-          response.items,
+          response.items
         ),
       },
       metaByConversationId: {
@@ -478,13 +484,13 @@ export class ChatRuntime {
           readWatermarkSequence: Math.max(
             getConversationMetaOrDefault(snapshotValue, conversationId)
               .readWatermarkSequence,
-            response.participantReadWatermarkSequence,
+            response.participantReadWatermarkSequence
           ),
           hasMoreBefore: response.hasMoreBefore,
           lastFetchedAt: new Date().toISOString(),
         },
       },
-    }));
+    }))
 
     if (this.getActiveSnapshotForWorkspace(workspaceId)) {
       this.replaceState({
@@ -492,42 +498,42 @@ export class ChatRuntime {
         runtimeByConversationId: {
           ...this.state.runtimeByConversationId,
           [conversationId]:
-            response.runtimeByActor
-              ?? this.state.runtimeByConversationId[conversationId]
-              ?? {},
+            response.runtimeByActor ??
+            this.state.runtimeByConversationId[conversationId] ??
+            {},
         },
-      });
+      })
     }
   }
 
   async markConversationRead(
     conversationId: string,
     readUpToSequence: number,
-    lastVisibleSequence?: number,
+    lastVisibleSequence?: number
   ) {
-    const current = this.state.snapshot;
+    const current = this.state.snapshot
     if (!current?.workspaceId) {
-      return;
+      return
     }
-    const workspaceId = current.workspaceId;
+    const workspaceId = current.workspaceId
     const confirmedMaxSequence = getConfirmedConversationMaxSequence(
-      current.itemsByConversationId[conversationId] ?? [],
-    );
+      current.itemsByConversationId[conversationId] ?? []
+    )
     if (confirmedMaxSequence <= 0) {
-      return;
+      return
     }
 
     const normalizedReadUpToSequence = Math.min(
       confirmedMaxSequence,
-      Math.max(0, Math.floor(readUpToSequence)),
-    );
+      Math.max(0, Math.floor(readUpToSequence))
+    )
     const normalizedLastVisibleSequence = Math.min(
       confirmedMaxSequence,
       Math.max(
         normalizedReadUpToSequence,
-        Math.floor(lastVisibleSequence ?? normalizedReadUpToSequence),
-      ),
-    );
+        Math.floor(lastVisibleSequence ?? normalizedReadUpToSequence)
+      )
+    )
 
     this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) =>
       updateConversationInSnapshot(
@@ -539,11 +545,13 @@ export class ChatRuntime {
               conversationId,
               readUpToSequence: Math.max(
                 normalizedReadUpToSequence,
-                snapshotValue.pendingReads[conversationId]?.readUpToSequence ?? 0,
+                snapshotValue.pendingReads[conversationId]?.readUpToSequence ??
+                  0
               ),
               lastVisibleSequence: Math.max(
                 normalizedLastVisibleSequence,
-                snapshotValue.pendingReads[conversationId]?.lastVisibleSequence ?? 0,
+                snapshotValue.pendingReads[conversationId]
+                  ?.lastVisibleSequence ?? 0
               ),
               updatedAt: new Date().toISOString(),
             },
@@ -555,7 +563,7 @@ export class ChatRuntime {
               readWatermarkSequence: Math.max(
                 getConversationMetaOrDefault(snapshotValue, conversationId)
                   .readWatermarkSequence,
-                normalizedReadUpToSequence,
+                normalizedReadUpToSequence
               ),
             },
           },
@@ -564,15 +572,15 @@ export class ChatRuntime {
         (conversation) => ({
           ...conversation,
           unreadCount: 0,
-        }),
-      ),
-    );
+        })
+      )
+    )
 
     if (!current.clientInstanceId) {
-      return;
+      return
     }
 
-    const clientInstanceId = current.clientInstanceId;
+    const clientInstanceId = current.clientInstanceId
     try {
       const response = await api.updateChatConversationReadWatermark(
         workspaceId,
@@ -581,39 +589,39 @@ export class ChatRuntime {
           clientInstanceId,
           readUpToSequence: normalizedReadUpToSequence,
           lastVisibleSequence: normalizedLastVisibleSequence,
-        },
-      );
+        }
+      )
       if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
-        return;
+        return
       }
-      this.applyReadWatermarkAck(response);
+      this.applyReadWatermarkAck(response)
     } catch {
       // Keep the pending read queued for the next sync/connection.
     }
   }
 
   async sendMessage(conversationId: string, input: ChatComposerSendPayload) {
-    const current = this.state.snapshot;
+    const current = this.state.snapshot
     if (!current?.workspaceId) {
-      throw new Error("No active workspace");
+      throw new Error("No active workspace")
     }
     if (!current.clientInstanceId) {
-      throw new Error("Chat is still connecting");
+      throw new Error("Chat is still connecting")
     }
 
-    const existingItems = current.itemsByConversationId[conversationId] ?? [];
+    const existingItems = current.itemsByConversationId[conversationId] ?? []
     const existingOutbox = Object.values(current.outbox).filter(
-      (entry) => entry.conversationId === conversationId,
-    );
+      (entry) => entry.conversationId === conversationId
+    )
     const optimisticSequence =
       Math.max(
         Date.now() * 1000,
         ...existingItems.map((item) => item.sequence),
         ...existingOutbox.map((item) => item.optimisticSequence),
-        0,
-      ) + 1;
+        0
+      ) + 1
 
-    const clientMessageId = createId("message");
+    const clientMessageId = createId("message")
     const outboxEntry: PendingChatOutboxMessage = {
       clientMessageId,
       conversationId,
@@ -624,7 +632,7 @@ export class ChatRuntime {
       optimisticSequence,
       status: "sending",
       attemptCount: 0,
-    };
+    }
 
     this.updateSnapshot((snapshotValue) => ({
       ...snapshotValue,
@@ -632,22 +640,22 @@ export class ChatRuntime {
         ...snapshotValue.outbox,
         [clientMessageId]: outboxEntry,
       },
-    }));
+    }))
 
-    await this.flushOutbox();
+    await this.flushOutbox()
   }
 
   async createConversation(input: {
-    workspaceId?: string;
-    kind: "group" | "private" | "virtual";
-    title?: string;
-    actorIds?: string[];
-    workspaceMemberIds?: string[];
-    boundary?: "internal" | "external";
+    workspaceId?: string
+    kind: "group" | "private" | "virtual"
+    title?: string
+    actorIds?: string[]
+    workspaceMemberIds?: string[]
+    boundary?: "internal" | "external"
   }): Promise<ChatConversationCreateResponse> {
-    const workspaceId = input.workspaceId ?? this.state.activeWorkspaceId;
+    const workspaceId = input.workspaceId ?? this.state.activeWorkspaceId
     if (!workspaceId) {
-      throw new Error("No active workspace");
+      throw new Error("No active workspace")
     }
 
     const response = await api.createChatConversation(workspaceId, {
@@ -657,25 +665,25 @@ export class ChatRuntime {
       actorIds: input.actorIds ?? [],
       workspaceMemberIds: input.workspaceMemberIds ?? [],
       boundary: input.boundary,
-    });
+    })
 
     if (this.state.activeWorkspaceId === workspaceId) {
       this.updateSnapshot((snapshotValue) => ({
         ...snapshotValue,
         conversations: upsertChatConversation(
           snapshotValue.conversations,
-          response.conversation,
+          response.conversation
         ),
-      }));
+      }))
     }
 
-    return response;
+    return response
   }
 
   private replaceState(nextState: ChatRuntimeState) {
-    this.state = nextState;
+    this.state = nextState
     for (const listener of this.listeners) {
-      listener(nextState);
+      listener(nextState)
     }
   }
 
@@ -683,27 +691,27 @@ export class ChatRuntime {
     const nextState = {
       ...this.state,
       snapshot: nextSnapshot,
-    };
-    this.replaceState(nextState);
+    }
+    this.replaceState(nextState)
 
     if (nextSnapshot) {
       this.persistPromise = this.persistPromise
         .then(() => this.persistence.saveWorkspaceState(nextSnapshot))
-        .catch(() => undefined);
+        .catch(() => undefined)
     }
   }
 
   private updateSnapshot(
-    updater: (current: ChatWorkspaceSnapshot) => ChatWorkspaceSnapshot,
+    updater: (current: ChatWorkspaceSnapshot) => ChatWorkspaceSnapshot
   ) {
-    const current = this.state.snapshot;
+    const current = this.state.snapshot
     if (!current) {
-      return null;
+      return null
     }
 
-    const nextSnapshot = updater(current);
-    this.replaceSnapshot(nextSnapshot);
-    return nextSnapshot;
+    const nextSnapshot = updater(current)
+    this.replaceSnapshot(nextSnapshot)
+    return nextSnapshot
   }
 
   private async initializeWorkspace(workspaceId: string) {
@@ -713,16 +721,16 @@ export class ChatRuntime {
       status: "loading",
       error: null,
       runtimeByConversationId: {},
-    });
+    })
 
-    const persisted = await this.persistence.loadWorkspaceState(workspaceId);
+    const persisted = await this.persistence.loadWorkspaceState(workspaceId)
     if (this.state.activeWorkspaceId !== workspaceId) {
-      return;
+      return
     }
 
     const hydratedSnapshot =
-      persisted ?? createEmptyChatWorkspaceSnapshot(workspaceId);
-    const hasHydratedConversations = hydratedSnapshot.conversations.length > 0;
+      persisted ?? createEmptyChatWorkspaceSnapshot(workspaceId)
+    const hasHydratedConversations = hydratedSnapshot.conversations.length > 0
 
     this.replaceState({
       ...this.state,
@@ -731,42 +739,41 @@ export class ChatRuntime {
       error: null,
       snapshot: hydratedSnapshot,
       runtimeByConversationId: {},
-    });
+    })
 
     if (this.state.snapshot) {
       this.persistPromise = this.persistPromise
         .then(() => this.persistence.saveWorkspaceState(this.state.snapshot!))
-        .catch(() => undefined);
+        .catch(() => undefined)
     }
 
     try {
-      await this.bootstrapWorkspace(workspaceId);
+      await this.bootstrapWorkspace(workspaceId)
     } catch (error) {
       if (this.state.activeWorkspaceId !== workspaceId) {
-        return;
+        return
       }
 
       this.replaceState({
         ...this.state,
-        error:
-          error instanceof Error ? error.message : "消息同步初始化失败。",
-      });
+        error: error instanceof Error ? error.message : "消息同步初始化失败。",
+      })
     }
   }
 
   private async bootstrapWorkspace(workspaceId: string) {
-    const bootstrap = await api.getChatBootstrap(workspaceId);
+    const bootstrap = await api.getChatBootstrap(workspaceId)
     if (this.state.activeWorkspaceId !== workspaceId) {
-      return;
+      return
     }
 
     let baseSnapshot =
-      this.state.snapshot ?? createEmptyChatWorkspaceSnapshot(workspaceId);
+      this.state.snapshot ?? createEmptyChatWorkspaceSnapshot(workspaceId)
     if (
       baseSnapshot.workspaceMemberId &&
       baseSnapshot.workspaceMemberId !== bootstrap.workspaceMemberId
     ) {
-      baseSnapshot = createEmptyChatWorkspaceSnapshot(workspaceId);
+      baseSnapshot = createEmptyChatWorkspaceSnapshot(workspaceId)
     }
 
     const clientInstanceInput = {
@@ -775,30 +782,30 @@ export class ChatRuntime {
       metadata: {
         workspaceMemberId: bootstrap.workspaceMemberId,
       },
-    };
+    }
 
-    let clientInstanceId = baseSnapshot.clientInstanceId;
+    let clientInstanceId = baseSnapshot.clientInstanceId
     if (clientInstanceId) {
       const response = await api.touchChatClientInstance(
         workspaceId,
         clientInstanceId,
-        clientInstanceInput,
-      );
+        clientInstanceInput
+      )
       if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
-        return;
+        return
       }
-      clientInstanceId = response.clientInstanceId;
+      clientInstanceId = response.clientInstanceId
     }
 
     if (!clientInstanceId) {
       const response = await api.createChatClientInstance(
         workspaceId,
-        clientInstanceInput,
-      );
+        clientInstanceInput
+      )
       if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
-        return;
+        return
       }
-      clientInstanceId = response.clientInstanceId;
+      clientInstanceId = response.clientInstanceId
     }
 
     this.replaceSnapshot({
@@ -806,34 +813,34 @@ export class ChatRuntime {
       workspaceId,
       workspaceMemberId: bootstrap.workspaceMemberId,
       clientInstanceId,
-      inboxCursor: Math.max(baseSnapshot.inboxCursor, bootstrap.nextInboxCursor),
+      inboxCursor: Math.max(
+        baseSnapshot.inboxCursor,
+        bootstrap.nextInboxCursor
+      ),
       lastBootstrappedAt: new Date().toISOString(),
       conversations: upsertChatConversations(
         baseSnapshot.conversations,
-        bootstrap.conversations,
+        bootstrap.conversations
       ),
-    });
+    })
 
     this.replaceState({
       ...this.state,
       status: "ready",
       error: null,
-    });
+    })
 
-    await this.syncFromServer();
+    await this.syncFromServer()
   }
 
   private applyReadWatermarkAck(
-    response: ChatConversationReadWatermarkResponse,
+    response: ChatConversationReadWatermarkResponse
   ) {
     this.updateSnapshot((current) => {
-      const pendingReads = { ...current.pendingReads };
-      const queued = pendingReads[response.conversationId];
-      if (
-        queued &&
-        queued.readUpToSequence <= response.readWatermarkSequence
-      ) {
-        delete pendingReads[response.conversationId];
+      const pendingReads = { ...current.pendingReads }
+      const queued = pendingReads[response.conversationId]
+      if (queued && queued.readUpToSequence <= response.readWatermarkSequence) {
+        delete pendingReads[response.conversationId]
       }
 
       return updateConversationInSnapshot(
@@ -847,7 +854,7 @@ export class ChatRuntime {
               readWatermarkSequence: Math.max(
                 getConversationMetaOrDefault(current, response.conversationId)
                   .readWatermarkSequence,
-                response.readWatermarkSequence,
+                response.readWatermarkSequence
               ),
             },
           },
@@ -856,9 +863,9 @@ export class ChatRuntime {
         (conversation) => ({
           ...conversation,
           unreadCount: 0,
-        }),
-      );
-    });
+        })
+      )
+    })
   }
 
   private applyChatEvent(event: ChatSyncEvent) {
@@ -866,26 +873,30 @@ export class ChatRuntime {
       let nextSnapshot: ChatWorkspaceSnapshot = {
         ...current,
         inboxCursor: Math.max(current.inboxCursor, event.syncSeq),
-      };
+      }
 
       switch (event.eventType) {
         case "conversation.upsert": {
-          const payload = event.payload as ChatSyncEvent<"conversation.upsert">["payload"];
+          const payload =
+            event.payload as ChatSyncEvent<"conversation.upsert">["payload"]
           nextSnapshot = {
             ...nextSnapshot,
             conversations: upsertChatConversation(
               nextSnapshot.conversations,
-              payload.conversation,
+              payload.conversation
             ),
-          };
-          break;
+          }
+          break
         }
         case "conversation.item.created": {
           const { conversationId, item } =
-            event.payload as ChatSyncEvent<"conversation.item.created">["payload"];
-          const currentItems = nextSnapshot.itemsByConversationId[conversationId] ?? [];
-          const alreadyExists = currentItems.some((entry) => entry.id === item.id);
-          const nextItems = mergeChatItems(currentItems, [item]);
+            event.payload as ChatSyncEvent<"conversation.item.created">["payload"]
+          const currentItems =
+            nextSnapshot.itemsByConversationId[conversationId] ?? []
+          const alreadyExists = currentItems.some(
+            (entry) => entry.id === item.id
+          )
+          const nextItems = mergeChatItems(currentItems, [item])
 
           nextSnapshot = {
             ...nextSnapshot,
@@ -894,7 +905,7 @@ export class ChatRuntime {
               ...nextSnapshot.itemsByConversationId,
               [conversationId]: nextItems,
             },
-          };
+          }
 
           nextSnapshot = updateConversationInSnapshot(
             nextSnapshot,
@@ -916,24 +927,24 @@ export class ChatRuntime {
                 author: item.author,
                 createdAt: item.createdAt,
               },
-            }),
-          );
-          break;
+            })
+          )
+          break
         }
         case "conversation.read.updated": {
           const payload =
-            event.payload as ChatSyncEvent<"conversation.read.updated">["payload"];
+            event.payload as ChatSyncEvent<"conversation.read.updated">["payload"]
           if (payload.workspaceMemberId !== current.workspaceMemberId) {
-            break;
+            break
           }
 
-          const pendingReads = { ...nextSnapshot.pendingReads };
-          const queued = pendingReads[payload.conversationId];
+          const pendingReads = { ...nextSnapshot.pendingReads }
+          const queued = pendingReads[payload.conversationId]
           if (
             queued &&
             queued.readUpToSequence <= payload.readWatermarkSequence
           ) {
-            delete pendingReads[payload.conversationId];
+            delete pendingReads[payload.conversationId]
           }
 
           nextSnapshot = updateConversationInSnapshot(
@@ -945,14 +956,14 @@ export class ChatRuntime {
                 [payload.conversationId]: {
                   ...getConversationMetaOrDefault(
                     nextSnapshot,
-                    payload.conversationId,
+                    payload.conversationId
                   ),
                   readWatermarkSequence: Math.max(
                     getConversationMetaOrDefault(
                       nextSnapshot,
-                      payload.conversationId,
+                      payload.conversationId
                     ).readWatermarkSequence,
-                    payload.readWatermarkSequence,
+                    payload.readWatermarkSequence
                   ),
                 },
               },
@@ -961,18 +972,18 @@ export class ChatRuntime {
             (conversation) => ({
               ...conversation,
               unreadCount: 0,
-            }),
-          );
-          break;
+            })
+          )
+          break
         }
         case "interaction.updated": {
           const payload =
-            event.payload as ChatSyncEvent<"interaction.updated">["payload"];
+            event.payload as ChatSyncEvent<"interaction.updated">["payload"]
           const currentItems =
-            nextSnapshot.itemsByConversationId[payload.conversationId] ?? [];
+            nextSnapshot.itemsByConversationId[payload.conversationId] ?? []
           const nextItems = currentItems.map((item) =>
-            patchInteractionInConversationItem(item, payload),
-          );
+            patchInteractionInConversationItem(item, payload)
+          )
 
           nextSnapshot = {
             ...nextSnapshot,
@@ -980,7 +991,7 @@ export class ChatRuntime {
               ...nextSnapshot.itemsByConversationId,
               [payload.conversationId]: nextItems,
             },
-          };
+          }
 
           nextSnapshot = updateConversationInSnapshot(
             nextSnapshot,
@@ -996,44 +1007,44 @@ export class ChatRuntime {
                         "interaction_requested",
                         {
                           interaction: payload.interaction,
-                        },
+                        }
                       ),
                     }
                   : conversation.lastItem,
-            }),
-          );
-          break;
+            })
+          )
+          break
         }
       }
 
-      return nextSnapshot;
-    });
+      return nextSnapshot
+    })
   }
 
   private async flushPendingReads() {
-    const current = this.state.snapshot;
+    const current = this.state.snapshot
     if (!current?.workspaceId || !current.clientInstanceId) {
-      return;
+      return
     }
-    const workspaceId = current.workspaceId;
+    const workspaceId = current.workspaceId
 
     const pendingReads = Object.values(current.pendingReads).sort(
-      (left, right) => left.readUpToSequence - right.readUpToSequence,
-    );
+      (left, right) => left.readUpToSequence - right.readUpToSequence
+    )
 
     for (const entry of pendingReads) {
-      const activeSnapshot = this.getActiveSnapshotForWorkspace(workspaceId);
+      const activeSnapshot = this.getActiveSnapshotForWorkspace(workspaceId)
       if (!activeSnapshot?.clientInstanceId) {
-        return;
+        return
       }
 
-      const activeEntry = activeSnapshot.pendingReads[entry.conversationId];
+      const activeEntry = activeSnapshot.pendingReads[entry.conversationId]
       if (
         !activeEntry ||
         activeEntry.readUpToSequence !== entry.readUpToSequence ||
         activeEntry.lastVisibleSequence !== entry.lastVisibleSequence
       ) {
-        continue;
+        continue
       }
 
       try {
@@ -1044,44 +1055,44 @@ export class ChatRuntime {
             clientInstanceId: activeSnapshot.clientInstanceId,
             readUpToSequence: activeEntry.readUpToSequence,
             lastVisibleSequence: activeEntry.lastVisibleSequence,
-          },
-        );
+          }
+        )
         if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
-          return;
+          return
         }
-        this.applyReadWatermarkAck(response);
+        this.applyReadWatermarkAck(response)
       } catch {
-        break;
+        break
       }
     }
   }
 
   private async flushOutbox() {
-    const current = this.state.snapshot;
+    const current = this.state.snapshot
     if (!current?.workspaceId || !current.clientInstanceId) {
-      return;
+      return
     }
-    const workspaceId = current.workspaceId;
+    const workspaceId = current.workspaceId
 
     const entries = Object.values(current.outbox).sort(
-      (left, right) => left.optimisticSequence - right.optimisticSequence,
-    );
+      (left, right) => left.optimisticSequence - right.optimisticSequence
+    )
 
     for (const entry of entries) {
-      const activeSnapshot = this.getActiveSnapshotForWorkspace(workspaceId);
+      const activeSnapshot = this.getActiveSnapshotForWorkspace(workspaceId)
       if (!activeSnapshot?.clientInstanceId) {
-        return;
+        return
       }
 
-      const activeEntry = activeSnapshot.outbox[entry.clientMessageId];
+      const activeEntry = activeSnapshot.outbox[entry.clientMessageId]
       if (!activeEntry) {
-        continue;
+        continue
       }
 
       this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => {
-        const queuedEntry = snapshotValue.outbox[entry.clientMessageId];
+        const queuedEntry = snapshotValue.outbox[entry.clientMessageId]
         if (!queuedEntry) {
-          return snapshotValue;
+          return snapshotValue
         }
 
         return {
@@ -1094,16 +1105,16 @@ export class ChatRuntime {
               lastAttemptAt: new Date().toISOString(),
             },
           },
-        };
-      });
+        }
+      })
 
-      const latestSnapshot = this.getActiveSnapshotForWorkspace(workspaceId);
+      const latestSnapshot = this.getActiveSnapshotForWorkspace(workspaceId)
       if (!latestSnapshot?.clientInstanceId) {
-        return;
+        return
       }
-      const latestEntry = latestSnapshot.outbox[entry.clientMessageId];
+      const latestEntry = latestSnapshot.outbox[entry.clientMessageId]
       if (!latestEntry) {
-        continue;
+        continue
       }
 
       try {
@@ -1115,26 +1126,27 @@ export class ChatRuntime {
             clientMessageId: latestEntry.clientMessageId,
             contentBlocks: latestEntry.contentBlocks,
             replyToItemId: latestEntry.replyToItemId,
-          },
-        );
+          }
+        )
 
         if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
-          return;
+          return
         }
 
         this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => {
-          const queuedEntry = snapshotValue.outbox[entry.clientMessageId];
+          const queuedEntry = snapshotValue.outbox[entry.clientMessageId]
           if (!queuedEntry) {
-            return snapshotValue;
+            return snapshotValue
           }
 
-          const nextOutbox = { ...snapshotValue.outbox };
-          delete nextOutbox[entry.clientMessageId];
+          const nextOutbox = { ...snapshotValue.outbox }
+          delete nextOutbox[entry.clientMessageId]
 
           const nextItems = mergeChatItems(
-            snapshotValue.itemsByConversationId[queuedEntry.conversationId] ?? [],
-            [response.item],
-          );
+            snapshotValue.itemsByConversationId[queuedEntry.conversationId] ??
+              [],
+            [response.item]
+          )
 
           return updateConversationInSnapshot(
             {
@@ -1159,18 +1171,18 @@ export class ChatRuntime {
                 author: response.item.author,
                 createdAt: response.item.createdAt,
               },
-            }),
-          );
-        });
+            })
+          )
+        })
       } catch (error) {
         if (!this.getActiveSnapshotForWorkspace(workspaceId)) {
-          return;
+          return
         }
 
         this.updateSnapshotForWorkspace(workspaceId, (snapshotValue) => {
-          const queuedEntry = snapshotValue.outbox[entry.clientMessageId];
+          const queuedEntry = snapshotValue.outbox[entry.clientMessageId]
           if (!queuedEntry) {
-            return snapshotValue;
+            return snapshotValue
           }
 
           return {
@@ -1186,16 +1198,16 @@ export class ChatRuntime {
                   error instanceof Error ? error.message : "发送失败",
               },
             },
-          };
-        });
-        break;
+          }
+        })
+        break
       }
     }
   }
 }
 
 export function createChatRuntime() {
-  return new ChatRuntime();
+  return new ChatRuntime()
 }
 
-export const chatRuntime = createChatRuntime();
+export const chatRuntime = createChatRuntime()

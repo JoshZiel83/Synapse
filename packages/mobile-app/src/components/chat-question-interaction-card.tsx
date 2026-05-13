@@ -1,5 +1,5 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useEffect, useMemo, useRef, useState } from "react";
+import Feather from "@expo/vector-icons/Feather"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   Animated,
   KeyboardAvoidingView,
@@ -11,46 +11,46 @@ import {
   Text,
   TextInput,
   View,
-} from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+} from "react-native"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
 
-import { ChatMarkdown } from "@/components/chat-markdown";
-import { Button } from "@/components/ui";
+import { ChatMarkdown } from "@/components/chat-markdown"
+import { Button } from "@/components/ui"
 import type {
   ChatInteractionResolveInput,
   ChatInteractionResolvePayload,
-} from "@/lib/api";
-import { theme } from "@/theme/tokens";
+} from "@/lib/api"
+import { theme } from "@/theme/tokens"
 import {
   INTERACTION_REQUEST_KIND,
   type InteractionInputQuestionSummary,
   type InteractionRequestSummary,
   type RelayAuthorizationGrantSpec,
   type RelayAuthorizationRequestedAction,
-} from "@shared";
+} from "@shared"
 
-type InteractionResolutionDraftPayload = ChatInteractionResolvePayload;
+type InteractionResolutionDraftPayload = ChatInteractionResolvePayload
 
 type DraftQuestionAnswer = {
-  selectedOptionIds: string[];
-  otherText: string;
-  text: string;
-};
+  selectedOptionIds: string[]
+  otherText: string
+  text: string
+}
 
 const EMPTY_DRAFT: DraftQuestionAnswer = {
   selectedOptionIds: [],
   otherText: "",
   text: "",
-};
+}
 
 function buildDraftQuestionAnswers(
-  interaction: InteractionRequestSummary,
+  interaction: InteractionRequestSummary
 ): Record<string, DraftQuestionAnswer> {
   if (
     interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT ||
     !interaction.userInput
   ) {
-    return {};
+    return {}
   }
 
   return Object.fromEntries(
@@ -61,26 +61,28 @@ function buildDraftQuestionAnswers(
         otherText: question.answer?.otherText || "",
         text: question.answer?.text || "",
       },
-    ]),
-  );
+    ])
+  )
 }
 
-function summarizeQuestionFieldAnswer(question: InteractionInputQuestionSummary) {
-  const parts: string[] = [];
+function summarizeQuestionFieldAnswer(
+  question: InteractionInputQuestionSummary
+) {
+  const parts: string[] = []
 
   if (question.answer?.selectedOptionLabels?.length) {
-    parts.push(question.answer.selectedOptionLabels.join(", "));
+    parts.push(question.answer.selectedOptionLabels.join(", "))
   }
 
   if (question.answer?.otherText) {
-    parts.push(question.answer.otherText);
+    parts.push(question.answer.otherText)
   }
 
   if (question.answer?.text) {
-    parts.push(question.answer.text);
+    parts.push(question.answer.text)
   }
 
-  return parts.join(" | ");
+  return parts.join(" | ")
 }
 
 function summarizeInteractionAnswers(interaction: InteractionRequestSummary) {
@@ -88,21 +90,21 @@ function summarizeInteractionAnswers(interaction: InteractionRequestSummary) {
     interaction.kind !== INTERACTION_REQUEST_KIND.USER_INPUT ||
     !interaction.userInput
   ) {
-    return "";
+    return ""
   }
 
-  const questionCount = interaction.userInput.questions.length;
+  const questionCount = interaction.userInput.questions.length
   return interaction.userInput.questions
     .map((question) => {
-      const summary = summarizeQuestionFieldAnswer(question);
+      const summary = summarizeQuestionFieldAnswer(question)
       if (!summary) {
-        return "";
+        return ""
       }
 
-      return questionCount > 1 ? `${question.prompt}: ${summary}` : summary;
+      return questionCount > 1 ? `${question.prompt}: ${summary}` : summary
     })
     .filter((value) => value.length > 0)
-    .join(" | ");
+    .join(" | ")
 }
 
 function getStatusMeta(status: InteractionRequestSummary["status"]) {
@@ -114,7 +116,7 @@ function getStatusMeta(status: InteractionRequestSummary["status"]) {
         backgroundColor: "rgba(37, 99, 235, 0.10)",
         borderColor: "rgba(37, 99, 235, 0.18)",
         color: theme.colors.primary,
-      };
+      }
     case "answered":
       return {
         label: "已完成",
@@ -122,7 +124,7 @@ function getStatusMeta(status: InteractionRequestSummary["status"]) {
         backgroundColor: "rgba(21, 128, 61, 0.10)",
         borderColor: "rgba(21, 128, 61, 0.18)",
         color: theme.colors.success,
-      };
+      }
     case "approved":
       return {
         label: "已批准",
@@ -130,7 +132,7 @@ function getStatusMeta(status: InteractionRequestSummary["status"]) {
         backgroundColor: "rgba(21, 128, 61, 0.10)",
         borderColor: "rgba(21, 128, 61, 0.18)",
         color: theme.colors.success,
-      };
+      }
     case "rejected":
       return {
         label: "待修改",
@@ -138,7 +140,7 @@ function getStatusMeta(status: InteractionRequestSummary["status"]) {
         backgroundColor: "rgba(245, 158, 11, 0.12)",
         borderColor: "rgba(245, 158, 11, 0.22)",
         color: theme.colors.accent,
-      };
+      }
     case "cancelled":
       return {
         label: "已取消",
@@ -146,7 +148,7 @@ function getStatusMeta(status: InteractionRequestSummary["status"]) {
         backgroundColor: "rgba(115, 115, 115, 0.10)",
         borderColor: "rgba(115, 115, 115, 0.18)",
         color: theme.colors.textMuted,
-      };
+      }
     case "expired":
       return {
         label: "已过期",
@@ -154,7 +156,7 @@ function getStatusMeta(status: InteractionRequestSummary["status"]) {
         backgroundColor: "rgba(220, 38, 38, 0.10)",
         borderColor: "rgba(220, 38, 38, 0.18)",
         color: theme.colors.danger,
-      };
+      }
     case "superseded":
       return {
         label: "已失效",
@@ -162,7 +164,7 @@ function getStatusMeta(status: InteractionRequestSummary["status"]) {
         backgroundColor: "rgba(115, 115, 115, 0.10)",
         borderColor: "rgba(115, 115, 115, 0.18)",
         color: theme.colors.textMuted,
-      };
+      }
     default:
       return {
         label: status,
@@ -170,86 +172,86 @@ function getStatusMeta(status: InteractionRequestSummary["status"]) {
         backgroundColor: "rgba(115, 115, 115, 0.10)",
         borderColor: "rgba(115, 115, 115, 0.18)",
         color: theme.colors.textMuted,
-      };
+      }
   }
 }
 
 function getStatusNote(
   interaction: InteractionRequestSummary,
   viewerCanResolve: boolean,
-  canResolve: boolean,
+  canResolve: boolean
 ) {
-  const targetName = interaction.target?.name?.trim() || "指定用户";
+  const targetName = interaction.target?.name?.trim() || "指定用户"
 
   if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
     if (interaction.status === "pending") {
       return canResolve || viewerCanResolve
         ? "点击开始逐题作答"
-        : `等待 ${targetName} 回答`;
+        : `等待 ${targetName} 回答`
     }
     if (interaction.status === "answered") {
-      return "点击查看答题结果";
+      return "点击查看答题结果"
     }
     if (interaction.status === "expired") {
-      return "此问答已过期";
+      return "此问答已过期"
     }
     if (interaction.status === "cancelled") {
-      return "此问答已被取消";
+      return "此问答已被取消"
     }
     if (interaction.status === "superseded") {
-      return "此问答已被后续操作覆盖";
+      return "此问答已被后续操作覆盖"
     }
-    return "点击查看详情";
+    return "点击查看详情"
   }
 
   if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
     if (interaction.status === "pending") {
       return canResolve || viewerCanResolve
         ? "点击审批或要求修改"
-        : `等待 ${targetName} 审批`;
+        : `等待 ${targetName} 审批`
     }
     if (interaction.status === "approved") {
-      return "计划已批准";
+      return "计划已批准"
     }
     if (interaction.status === "rejected") {
-      return "计划需要修改";
+      return "计划需要修改"
     }
     if (interaction.status === "cancelled") {
-      return "该审批已被取消";
+      return "该审批已被取消"
     }
-    return "点击查看计划详情";
+    return "点击查看计划详情"
   }
 
   if (interaction.status === "pending") {
-    return canResolve ? "点击选择授权范围" : "等待有权限的成员处理";
+    return canResolve ? "点击选择授权范围" : "等待有权限的成员处理"
   }
   if (interaction.status === "approved") {
-    return "授权已批准";
+    return "授权已批准"
   }
   if (interaction.status === "rejected") {
-    return "授权已拒绝";
+    return "授权已拒绝"
   }
   if (interaction.status === "superseded") {
-    return "授权请求已被更新的请求覆盖";
+    return "授权请求已被更新的请求覆盖"
   }
   if (interaction.status === "cancelled") {
-    return "授权请求已取消";
+    return "授权请求已取消"
   }
-  return "点击查看详情";
+  return "点击查看详情"
 }
 
 function formatRelayAuthorizationPresetLabel(preset: string) {
   switch (preset) {
     case "once":
-      return "仅本次";
+      return "仅本次"
     case "actor":
-      return "当前 Actor";
+      return "当前 Actor"
     case "conversation":
-      return "当前会话";
+      return "当前会话"
     case "workspace":
-      return "整个工作区";
+      return "整个工作区"
     default:
-      return preset;
+      return preset
   }
 }
 
@@ -264,7 +266,7 @@ function describeRelayAuthorizationSpec(scope: RelayAuthorizationGrantSpec) {
         scope.filesystem.pathPrefixes.length > 0
           ? scope.filesystem.pathPrefixes
           : ["整个文件系统"],
-    };
+    }
   }
 
   if (scope.capability === "browser" && scope.browser) {
@@ -275,14 +277,12 @@ function describeRelayAuthorizationSpec(scope: RelayAuthorizationGrantSpec) {
           ? scope.browser.registrableDomain
           : scope.browser.scopeType === "origin"
             ? scope.browser.origin
-            : undefined;
+            : undefined
     return {
       summary:
-        scope.browser.action === "write"
-          ? "浏览器写入操作"
-          : "浏览器只读访问",
+        scope.browser.action === "write" ? "浏览器写入操作" : "浏览器只读访问",
       detailLines: [target || "整个浏览器环境"],
-    };
+    }
   }
 
   if (scope.capability === "commandline" && scope.commandline) {
@@ -299,50 +299,50 @@ function describeRelayAuthorizationSpec(scope: RelayAuthorizationGrantSpec) {
           ? `工作目录：${scope.commandline.workingDirectory}`
           : null,
       ].filter((value): value is string => Boolean(value)),
-    };
+    }
   }
 
   return {
     summary:
       scope.cua?.access === "write" ? "桌面输入控制权限" : "桌面观察权限",
     detailLines: ["Computer Use / CUA"],
-  };
+  }
 }
 
 function describeRelayAuthorizationRequestedAction(
-  action: RelayAuthorizationRequestedAction,
+  action: RelayAuthorizationRequestedAction
 ) {
-  const describedScope = describeRelayAuthorizationSpec(action);
+  const describedScope = describeRelayAuthorizationSpec(action)
   return {
     summary: action.summary,
     detailLines: action.detail
       ? [action.detail, ...describedScope.detailLines]
       : describedScope.detailLines,
-  };
+  }
 }
 
 function isFieldComplete(
   question: InteractionInputQuestionSummary,
-  draft: DraftQuestionAnswer,
+  draft: DraftQuestionAnswer
 ) {
-  const textValue = draft.text.trim();
-  const otherValue = draft.otherText.trim();
-  const selectedCount = draft.selectedOptionIds.length;
+  const textValue = draft.text.trim()
+  const otherValue = draft.otherText.trim()
+  const selectedCount = draft.selectedOptionIds.length
 
   if (question.type === "text") {
-    return question.required ? textValue.length > 0 : true;
+    return question.required ? textValue.length > 0 : true
   }
 
-  const hasOption = selectedCount > 0;
-  const hasOther = question.allowOther ? otherValue.length > 0 : false;
-  const answered = hasOption || hasOther;
+  const hasOption = selectedCount > 0
+  const hasOther = question.allowOther ? otherValue.length > 0 : false
+  const answered = hasOption || hasOther
 
   if (!question.required && !answered) {
-    return true;
+    return true
   }
 
   if (!answered) {
-    return false;
+    return false
   }
 
   if (
@@ -351,33 +351,35 @@ function isFieldComplete(
     selectedCount > 0 &&
     selectedCount < question.minSelections
   ) {
-    return false;
+    return false
   }
 
-  return true;
+  return true
 }
 
 function buildAnswersPayload(
   questions: InteractionInputQuestionSummary[],
-  draftAnswers: Record<string, DraftQuestionAnswer>,
+  draftAnswers: Record<string, DraftQuestionAnswer>
 ): InteractionResolutionDraftPayload {
   return {
     answers: questions.map((question) => {
-      const draft = draftAnswers[question.id] || EMPTY_DRAFT;
+      const draft = draftAnswers[question.id] || EMPTY_DRAFT
       return {
         questionId: question.id,
         selectedOptionIds:
-          draft.selectedOptionIds.length > 0 ? draft.selectedOptionIds : undefined,
+          draft.selectedOptionIds.length > 0
+            ? draft.selectedOptionIds
+            : undefined,
         otherText: draft.otherText.trim() || undefined,
         text: draft.text.trim() || undefined,
-      };
+      }
     }),
-  };
+  }
 }
 
 function withInteractionCommandMetadata(
   interaction: InteractionRequestSummary,
-  payload: InteractionResolutionDraftPayload,
+  payload: InteractionResolutionDraftPayload
 ): ChatInteractionResolveInput {
   return {
     ...payload,
@@ -388,7 +390,7 @@ function withInteractionCommandMetadata(
             .toString(16)
             .slice(2)}`,
     baseRevision: interaction.revision,
-  };
+  }
 }
 
 function FieldOptionButton({
@@ -399,12 +401,12 @@ function FieldOptionButton({
   disabled,
   onPress,
 }: {
-  selected: boolean;
-  label: string;
-  description?: string;
-  preview?: string;
-  disabled?: boolean;
-  onPress: () => void;
+  selected: boolean
+  label: string
+  description?: string
+  preview?: string
+  disabled?: boolean
+  onPress: () => void
 }) {
   return (
     <Pressable
@@ -434,28 +436,28 @@ function FieldOptionButton({
         ) : null}
       </View>
     </Pressable>
-  );
+  )
 }
 
 function ReadOnlyUserInputQuestion({
   question,
   index,
 }: {
-  question: InteractionInputQuestionSummary;
-  index: number;
+  question: InteractionInputQuestionSummary
+  index: number
 }) {
-  const answer = question.answer;
-  const selectedOptionIds = new Set(answer?.selectedOptionIds || []);
+  const answer = question.answer
+  const selectedOptionIds = new Set(answer?.selectedOptionIds || [])
   const fallbackSelectionSummary =
     (!question.options || question.options.length === 0) &&
     answer?.selectedOptionLabels?.length
       ? answer.selectedOptionLabels.join(", ")
-      : "";
+      : ""
   const hasVisibleAnswer =
     selectedOptionIds.size > 0 ||
     Boolean(fallbackSelectionSummary) ||
     Boolean(answer?.otherText?.trim()) ||
-    Boolean(answer?.text?.trim());
+    Boolean(answer?.text?.trim())
 
   return (
     <View style={styles.summarySection}>
@@ -488,7 +490,9 @@ function ReadOnlyUserInputQuestion({
           {fallbackSelectionSummary ? (
             <View style={styles.otherAnswerWrap}>
               <Text style={styles.otherAnswerLabel}>已选答案</Text>
-              <Text style={styles.summaryAnswer}>{fallbackSelectionSummary}</Text>
+              <Text style={styles.summaryAnswer}>
+                {fallbackSelectionSummary}
+              </Text>
             </View>
           ) : null}
 
@@ -512,7 +516,7 @@ function ReadOnlyUserInputQuestion({
         </>
       )}
     </View>
-  );
+  )
 }
 
 function RelaySpecSection({
@@ -520,9 +524,9 @@ function RelaySpecSection({
   summary,
   detailLines,
 }: {
-  eyebrow: string;
-  summary: string;
-  detailLines: string[];
+  eyebrow: string
+  summary: string
+  detailLines: string[]
 }) {
   return (
     <View style={styles.summarySection}>
@@ -534,190 +538,194 @@ function RelaySpecSection({
         </Text>
       ))}
     </View>
-  );
+  )
 }
 
 export function ChatQuestionInteractionCard({
   interaction,
   onResolveInteraction,
 }: {
-  interaction: InteractionRequestSummary;
+  interaction: InteractionRequestSummary
   onResolveInteraction?: (
     interactionId: string,
-    input: ChatInteractionResolveInput,
-  ) => Promise<InteractionRequestSummary>;
+    input: ChatInteractionResolveInput
+  ) => Promise<InteractionRequestSummary>
 }) {
-  const insets = useSafeAreaInsets();
-  const [open, setOpen] = useState(false);
-  const [currentIndex, setCurrentIndex] = useState(0);
+  const insets = useSafeAreaInsets()
+  const [open, setOpen] = useState(false)
+  const [currentIndex, setCurrentIndex] = useState(0)
   const [draftAnswers, setDraftAnswers] = useState<
     Record<string, DraftQuestionAnswer>
-  >(() => buildDraftQuestionAnswers(interaction));
-  const [submitting, setSubmitting] = useState(false);
-  const [submitError, setSubmitError] = useState<string | null>(null);
-  const [resolutionNoteDraft, setResolutionNoteDraft] = useState("");
+  >(() => buildDraftQuestionAnswers(interaction))
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState<string | null>(null)
+  const [resolutionNoteDraft, setResolutionNoteDraft] = useState("")
   const [selectedRelayGrantOptionId, setSelectedRelayGrantOptionId] = useState<
     string | null
-  >(interaction.relayAuthorization?.grantOptions[0]?.id || null);
-  const draftAnswersRef = useRef(draftAnswers);
-  const questionCardOffset = useRef(new Animated.Value(0)).current;
-  const userInput = interaction.userInput;
+  >(interaction.relayAuthorization?.grantOptions[0]?.id || null)
+  const draftAnswersRef = useRef(draftAnswers)
+  const questionCardOffset = useRef(new Animated.Value(0)).current
+  const userInput = interaction.userInput
 
-  const viewerCanResolve = interaction.viewerCanResolve === true;
+  const viewerCanResolve = interaction.viewerCanResolve === true
   const canResolveUserInput =
     interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT &&
     Boolean(onResolveInteraction) &&
     viewerCanResolve &&
-    interaction.status === "pending";
+    interaction.status === "pending"
   const canResolvePlanApproval =
     interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL &&
     Boolean(onResolveInteraction) &&
     viewerCanResolve &&
-    interaction.status === "pending";
+    interaction.status === "pending"
   const canResolveRelayAuthorization =
     interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
     Boolean(onResolveInteraction) &&
     viewerCanResolve &&
-    interaction.status === "pending";
+    interaction.status === "pending"
   const canResolve =
-    canResolveUserInput || canResolvePlanApproval || canResolveRelayAuthorization;
-  const statusMeta = getStatusMeta(interaction.status);
+    canResolveUserInput ||
+    canResolvePlanApproval ||
+    canResolveRelayAuthorization
+  const statusMeta = getStatusMeta(interaction.status)
 
   useEffect(() => {
-    const nextDraftAnswers = buildDraftQuestionAnswers(interaction);
-    draftAnswersRef.current = nextDraftAnswers;
-    setDraftAnswers(nextDraftAnswers);
-    setCurrentIndex(0);
-    setSubmitting(false);
-    setSubmitError(null);
-    setResolutionNoteDraft("");
+    const nextDraftAnswers = buildDraftQuestionAnswers(interaction)
+    draftAnswersRef.current = nextDraftAnswers
+    setDraftAnswers(nextDraftAnswers)
+    setCurrentIndex(0)
+    setSubmitting(false)
+    setSubmitError(null)
+    setResolutionNoteDraft("")
     setSelectedRelayGrantOptionId(
-      interaction.relayAuthorization?.grantOptions[0]?.id || null,
-    );
-  }, [interaction.id, interaction.revision, interaction.status]);
+      interaction.relayAuthorization?.grantOptions[0]?.id || null
+    )
+  }, [interaction.id, interaction.revision, interaction.status])
 
   useEffect(() => {
     if (!open || !canResolve) {
-      questionCardOffset.setValue(0);
-      return;
+      questionCardOffset.setValue(0)
+      return
     }
 
-    questionCardOffset.setValue(26);
+    questionCardOffset.setValue(26)
     Animated.spring(questionCardOffset, {
       toValue: 0,
       useNativeDriver: true,
       speed: 18,
       bounciness: 6,
-    }).start();
-  }, [canResolve, currentIndex, open, questionCardOffset]);
+    }).start()
+  }, [canResolve, currentIndex, open, questionCardOffset])
 
   const answerSummary = useMemo(
     () => summarizeInteractionAnswers(interaction),
-    [interaction],
-  );
+    [interaction]
+  )
 
-  const currentField = userInput?.questions[currentIndex] ?? null;
+  const currentField = userInput?.questions[currentIndex] ?? null
   const currentDraft = currentField
     ? draftAnswers[currentField.id] || EMPTY_DRAFT
-    : EMPTY_DRAFT;
+    : EMPTY_DRAFT
   const questionCardOpacity = questionCardOffset.interpolate({
     inputRange: [0, 26],
     outputRange: [1, 0],
-  });
+  })
 
   function applyDraftAnswer(
     questionId: string,
-    updater: (draft: DraftQuestionAnswer) => DraftQuestionAnswer,
+    updater: (draft: DraftQuestionAnswer) => DraftQuestionAnswer
   ) {
     const nextAnswers = {
       ...draftAnswersRef.current,
       [questionId]: updater(draftAnswersRef.current[questionId] || EMPTY_DRAFT),
-    };
+    }
 
-    draftAnswersRef.current = nextAnswers;
-    setDraftAnswers(nextAnswers);
-    return nextAnswers;
+    draftAnswersRef.current = nextAnswers
+    setDraftAnswers(nextAnswers)
+    return nextAnswers
   }
 
   async function submitAnswers(
-    answers: Record<string, DraftQuestionAnswer> = draftAnswersRef.current,
+    answers: Record<string, DraftQuestionAnswer> = draftAnswersRef.current
   ) {
     if (!userInput || !onResolveInteraction || !canResolveUserInput) {
-      return;
+      return
     }
 
-    setSubmitting(true);
-    setSubmitError(null);
+    setSubmitting(true)
+    setSubmitError(null)
     try {
       await onResolveInteraction(
         interaction.id,
         withInteractionCommandMetadata(
           interaction,
-          buildAnswersPayload(userInput.questions, answers),
-        ),
-      );
-      setOpen(false);
+          buildAnswersPayload(userInput.questions, answers)
+        )
+      )
+      setOpen(false)
     } catch (error) {
       setSubmitError(
-        error instanceof Error ? error.message : "提交答题结果失败。",
-      );
+        error instanceof Error ? error.message : "提交答题结果失败。"
+      )
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
   }
 
   async function submitInteractionResolution(
     payload: InteractionResolutionDraftPayload,
-    fallbackErrorMessage: string,
+    fallbackErrorMessage: string
   ) {
     if (!onResolveInteraction) {
-      return;
+      return
     }
 
-    setSubmitting(true);
-    setSubmitError(null);
+    setSubmitting(true)
+    setSubmitError(null)
     try {
       await onResolveInteraction(
         interaction.id,
-        withInteractionCommandMetadata(interaction, payload),
-      );
-      setOpen(false);
+        withInteractionCommandMetadata(interaction, payload)
+      )
+      setOpen(false)
     } catch (error) {
       setSubmitError(
-        error instanceof Error ? error.message : fallbackErrorMessage,
-      );
+        error instanceof Error ? error.message : fallbackErrorMessage
+      )
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
   }
 
   function goToNextQuestion(
-    answers: Record<string, DraftQuestionAnswer> = draftAnswersRef.current,
+    answers: Record<string, DraftQuestionAnswer> = draftAnswersRef.current
   ) {
     if (!userInput || !currentField) {
-      return;
+      return
     }
 
-    if (!isFieldComplete(currentField, answers[currentField.id] || EMPTY_DRAFT)) {
-      return;
+    if (
+      !isFieldComplete(currentField, answers[currentField.id] || EMPTY_DRAFT)
+    ) {
+      return
     }
 
     if (currentIndex >= userInput.questions.length - 1) {
-      void submitAnswers(answers);
-      return;
+      void submitAnswers(answers)
+      return
     }
 
     setCurrentIndex((value) =>
-      Math.min(value + 1, userInput.questions.length - 1),
-    );
+      Math.min(value + 1, userInput.questions.length - 1)
+    )
   }
 
   function handleSelectOption(
     field: InteractionInputQuestionSummary,
-    optionId: string,
+    optionId: string
   ) {
     if (!canResolveUserInput || submitting) {
-      return;
+      return
     }
 
     const nextAnswers = applyDraftAnswer(field.id, (draft) => {
@@ -726,32 +734,34 @@ export function ChatQuestionInteractionCard({
           ...draft,
           selectedOptionIds: [optionId],
           otherText: "",
-        };
+        }
       }
 
-      const hasOption = draft.selectedOptionIds.includes(optionId);
+      const hasOption = draft.selectedOptionIds.includes(optionId)
       if (hasOption) {
         return {
           ...draft,
-          selectedOptionIds: draft.selectedOptionIds.filter((id) => id !== optionId),
-        };
+          selectedOptionIds: draft.selectedOptionIds.filter(
+            (id) => id !== optionId
+          ),
+        }
       }
 
       if (
         typeof field.maxSelections === "number" &&
         draft.selectedOptionIds.length >= field.maxSelections
       ) {
-        return draft;
+        return draft
       }
 
       return {
         ...draft,
         selectedOptionIds: [...draft.selectedOptionIds, optionId],
-      };
-    });
+      }
+    })
 
     if (field.type === "single_select" && !field.allowOther) {
-      goToNextQuestion(nextAnswers);
+      goToNextQuestion(nextAnswers)
     }
   }
 
@@ -769,7 +779,7 @@ export function ChatQuestionInteractionCard({
         : {
             label: "授权",
             icon: "shield" as const,
-          };
+          }
 
   const cardTitle =
     interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
@@ -778,14 +788,14 @@ export function ChatQuestionInteractionCard({
         ? interaction.planApproval?.title || "计划审批"
         : interaction.relayAuthorization
           ? `授权 ${interaction.relayAuthorization.relayToolStableKey}`
-          : "授权请求";
+          : "授权请求"
 
   const cardDescription =
     interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
       ? interaction.userInput?.instructions
       : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
         ? interaction.planApproval?.summary
-        : interaction.relayAuthorization?.reason;
+        : interaction.relayAuthorization?.reason
 
   const cardSummary =
     interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
@@ -794,17 +804,14 @@ export function ChatQuestionInteractionCard({
         ? interaction.resolutionNote
         : interaction.relayAuthorization?.approvedGrant
           ? "已生成授权范围"
-          : interaction.relayAuthorization?.exposureDisplayName;
+          : interaction.relayAuthorization?.exposureDisplayName
 
   return (
     <View style={styles.eventWrap}>
       <Pressable
         accessibilityRole="button"
         onPress={() => setOpen(true)}
-        style={({ pressed }) => [
-          styles.card,
-          pressed && styles.cardPressed,
-        ]}
+        style={({ pressed }) => [styles.card, pressed && styles.cardPressed]}
       >
         <View style={styles.cardHeader}>
           <View style={styles.kindBadge}>
@@ -824,7 +831,11 @@ export function ChatQuestionInteractionCard({
               },
             ]}
           >
-            <Feather name={statusMeta.icon} size={12} color={statusMeta.color} />
+            <Feather
+              name={statusMeta.icon}
+              size={12}
+              color={statusMeta.color}
+            />
             <Text style={[styles.statusBadgeText, { color: statusMeta.color }]}>
               {statusMeta.label}
             </Text>
@@ -833,9 +844,7 @@ export function ChatQuestionInteractionCard({
 
         <Text style={styles.cardTitle}>{cardTitle}</Text>
         {cardDescription ? (
-          <Text style={styles.cardDescription}>
-            {cardDescription}
-          </Text>
+          <Text style={styles.cardDescription}>{cardDescription}</Text>
         ) : null}
         {cardSummary ? (
           <Text numberOfLines={2} style={styles.cardSummary}>
@@ -888,9 +897,7 @@ export function ChatQuestionInteractionCard({
               </Text>
               <Text style={styles.sheetTitle}>{cardTitle}</Text>
               {cardDescription ? (
-                <Text style={styles.sheetDescription}>
-                  {cardDescription}
-                </Text>
+                <Text style={styles.sheetDescription}>{cardDescription}</Text>
               ) : null}
             </View>
 
@@ -918,7 +925,9 @@ export function ChatQuestionInteractionCard({
                         <Text style={styles.questionRequired}>必填</Text>
                       ) : null}
                     </View>
-                    <Text style={styles.questionTitle}>{currentField.prompt}</Text>
+                    <Text style={styles.questionTitle}>
+                      {currentField.prompt}
+                    </Text>
                     {currentField.description ? (
                       <Text style={styles.questionDescription}>
                         {currentField.description}
@@ -934,7 +943,7 @@ export function ChatQuestionInteractionCard({
                           applyDraftAnswer(currentField.id, (draft) => ({
                             ...draft,
                             text: value,
-                          }));
+                          }))
                         }}
                         placeholder={currentField.placeholder || "请输入内容"}
                         placeholderTextColor={theme.colors.textSoft}
@@ -949,7 +958,9 @@ export function ChatQuestionInteractionCard({
                         {(currentField.options || []).map((option) => (
                           <FieldOptionButton
                             key={option.id}
-                            selected={currentDraft.selectedOptionIds.includes(option.id)}
+                            selected={currentDraft.selectedOptionIds.includes(
+                              option.id
+                            )}
                             label={option.label}
                             description={option.description}
                             preview={option.preview}
@@ -977,7 +988,7 @@ export function ChatQuestionInteractionCard({
                                 value.trim().length > 0
                                   ? []
                                   : draft.selectedOptionIds,
-                            }));
+                            }))
                           }}
                           placeholder="补充你的答案"
                           placeholderTextColor={theme.colors.textSoft}
@@ -1006,10 +1017,10 @@ export function ChatQuestionInteractionCard({
                     variant="secondary"
                     onPress={() => {
                       if (currentIndex > 0) {
-                        setCurrentIndex((value) => Math.max(0, value - 1));
-                        return;
+                        setCurrentIndex((value) => Math.max(0, value - 1))
+                        return
                       }
-                      setOpen(false);
+                      setOpen(false)
                     }}
                     style={styles.actionButton}
                   />
@@ -1023,8 +1034,7 @@ export function ChatQuestionInteractionCard({
                     }
                     onPress={() => goToNextQuestion()}
                     disabled={
-                      submitting ||
-                      !isFieldComplete(currentField, currentDraft)
+                      submitting || !isFieldComplete(currentField, currentDraft)
                     }
                     style={styles.actionButton}
                   />
@@ -1044,9 +1054,10 @@ export function ChatQuestionInteractionCard({
                           question={question}
                           index={index}
                         />
-                      );
+                      )
                     })
-                  ) : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL ? (
+                  ) : interaction.kind ===
+                    INTERACTION_REQUEST_KIND.PLAN_APPROVAL ? (
                     <>
                       <View style={styles.summarySection}>
                         <Text style={styles.summaryIndex}>计划内容</Text>
@@ -1061,16 +1072,22 @@ export function ChatQuestionInteractionCard({
                           <Text style={styles.summaryAnswer}>暂无计划内容</Text>
                         )}
                       </View>
-                      {(interaction.planApproval?.checklist || []).map((step, index) => (
-                        <View
-                          key={`${step.step}-${index}`}
-                          style={styles.summarySection}
-                        >
-                          <Text style={styles.summaryIndex}>{`检查项 ${index + 1}`}</Text>
-                          <Text style={styles.summaryTitle}>{step.step}</Text>
-                          <Text style={styles.summaryAnswer}>{step.status}</Text>
-                        </View>
-                      ))}
+                      {(interaction.planApproval?.checklist || []).map(
+                        (step, index) => (
+                          <View
+                            key={`${step.step}-${index}`}
+                            style={styles.summarySection}
+                          >
+                            <Text
+                              style={styles.summaryIndex}
+                            >{`检查项 ${index + 1}`}</Text>
+                            <Text style={styles.summaryTitle}>{step.step}</Text>
+                            <Text style={styles.summaryAnswer}>
+                              {step.status}
+                            </Text>
+                          </View>
+                        )
+                      )}
                       {interaction.resolutionNote ? (
                         <View style={styles.summarySection}>
                           <Text style={styles.summaryIndex}>备注</Text>
@@ -1099,7 +1116,8 @@ export function ChatQuestionInteractionCard({
                       <View style={styles.summarySection}>
                         <Text style={styles.summaryIndex}>设备</Text>
                         <Text style={styles.summaryTitle}>
-                          {interaction.relayAuthorization?.deviceDisplayName || "Relay"}
+                          {interaction.relayAuthorization?.deviceDisplayName ||
+                            "Relay"}
                         </Text>
                         <Text style={styles.summaryDescription}>
                           {interaction.relayAuthorization?.reason || "等待授权"}
@@ -1108,7 +1126,8 @@ export function ChatQuestionInteractionCard({
                       <View style={styles.summarySection}>
                         <Text style={styles.summaryIndex}>暴露能力</Text>
                         <Text style={styles.summaryAnswer}>
-                          {interaction.relayAuthorization?.exposureDisplayName || "未提供"}
+                          {interaction.relayAuthorization
+                            ?.exposureDisplayName || "未提供"}
                         </Text>
                       </View>
                       {interaction.relayAuthorization?.requestedAction ? (
@@ -1116,31 +1135,43 @@ export function ChatQuestionInteractionCard({
                           eyebrow="请求操作"
                           summary={
                             describeRelayAuthorizationRequestedAction(
-                              interaction.relayAuthorization.requestedAction,
+                              interaction.relayAuthorization.requestedAction
                             ).summary
                           }
-                          detailLines={describeRelayAuthorizationRequestedAction(
-                            interaction.relayAuthorization.requestedAction,
-                          ).detailLines}
+                          detailLines={
+                            describeRelayAuthorizationRequestedAction(
+                              interaction.relayAuthorization.requestedAction
+                            ).detailLines
+                          }
                         />
                       ) : null}
-                      {(interaction.relayAuthorization?.grantOptions || []).map((option) => (
-                        <FieldOptionButton
-                          key={option.id}
-                          selected={selectedRelayGrantOptionId === option.id}
-                          label={option.summary}
-                          description={option.detail}
-                          disabled={!canResolveRelayAuthorization || submitting}
-                          onPress={() => setSelectedRelayGrantOptionId(option.id)}
-                        />
-                      ))}
-                      {(interaction.relayAuthorization?.availablePresets || []).length ? (
+                      {(interaction.relayAuthorization?.grantOptions || []).map(
+                        (option) => (
+                          <FieldOptionButton
+                            key={option.id}
+                            selected={selectedRelayGrantOptionId === option.id}
+                            label={option.summary}
+                            description={option.detail}
+                            disabled={
+                              !canResolveRelayAuthorization || submitting
+                            }
+                            onPress={() =>
+                              setSelectedRelayGrantOptionId(option.id)
+                            }
+                          />
+                        )
+                      )}
+                      {(interaction.relayAuthorization?.availablePresets || [])
+                        .length ? (
                         <View style={styles.summarySection}>
                           <Text style={styles.summaryIndex}>授权范围</Text>
                           <Text style={styles.summaryAnswer}>
-                            {(interaction.relayAuthorization?.availablePresets || [])
+                            {(
+                              interaction.relayAuthorization
+                                ?.availablePresets || []
+                            )
                               .map((preset) =>
-                                formatRelayAuthorizationPresetLabel(preset),
+                                formatRelayAuthorizationPresetLabel(preset)
                               )
                               .join(" / ")}
                           </Text>
@@ -1151,7 +1182,7 @@ export function ChatQuestionInteractionCard({
                           <Text style={styles.summaryIndex}>已批准范围</Text>
                           <Text style={styles.summaryAnswer}>
                             {formatRelayAuthorizationPresetLabel(
-                              interaction.relayAuthorization.approvedPreset,
+                              interaction.relayAuthorization.approvedPreset
                             )}
                           </Text>
                         </View>
@@ -1162,12 +1193,12 @@ export function ChatQuestionInteractionCard({
                             eyebrow="已批准授权"
                             summary={
                               describeRelayAuthorizationSpec(
-                                interaction.relayAuthorization.approvedGrant,
+                                interaction.relayAuthorization.approvedGrant
                               ).summary
                             }
                             detailLines={[
                               ...describeRelayAuthorizationSpec(
-                                interaction.relayAuthorization.approvedGrant,
+                                interaction.relayAuthorization.approvedGrant
                               ).detailLines,
                               `scope: ${interaction.relayAuthorization.approvedGrant.scope}`,
                               `retention: ${interaction.relayAuthorization.approvedGrant.retention}`,
@@ -1218,7 +1249,7 @@ export function ChatQuestionInteractionCard({
                               decision: "revise",
                               note: resolutionNoteDraft.trim() || undefined,
                             },
-                            "提交审批结果失败。",
+                            "提交审批结果失败。"
                           )
                         }
                         style={styles.actionButton}
@@ -1232,7 +1263,7 @@ export function ChatQuestionInteractionCard({
                               decision: "approve",
                               note: resolutionNoteDraft.trim() || undefined,
                             },
-                            "提交审批结果失败。",
+                            "提交审批结果失败。"
                           )
                         }
                         style={styles.actionButton}
@@ -1241,35 +1272,35 @@ export function ChatQuestionInteractionCard({
                     </>
                   ) : canResolveRelayAuthorization ? (
                     <View style={styles.multiActionWrap}>
-                      {(interaction.relayAuthorization?.availablePresets || []).map(
-                        (preset) => (
-                          <Button
-                            key={preset}
-                            label={
-                              submitting
-                                ? "处理中..."
-                                : formatRelayAuthorizationPresetLabel(preset)
-                            }
-                            onPress={() =>
-                              selectedRelayGrantOptionId
-                                ? void submitInteractionResolution(
-                                    {
-                                      decision: "approve",
-                                      preset,
-                                      selectedGrantOptionId:
-                                        selectedRelayGrantOptionId,
-                                      note:
-                                        resolutionNoteDraft.trim() || undefined,
-                                    },
-                                    "提交授权结果失败。",
-                                  )
-                                : undefined
-                            }
-                            style={styles.singleActionButton}
-                            disabled={submitting || !selectedRelayGrantOptionId}
-                          />
-                        ),
-                      )}
+                      {(
+                        interaction.relayAuthorization?.availablePresets || []
+                      ).map((preset) => (
+                        <Button
+                          key={preset}
+                          label={
+                            submitting
+                              ? "处理中..."
+                              : formatRelayAuthorizationPresetLabel(preset)
+                          }
+                          onPress={() =>
+                            selectedRelayGrantOptionId
+                              ? void submitInteractionResolution(
+                                  {
+                                    decision: "approve",
+                                    preset,
+                                    selectedGrantOptionId:
+                                      selectedRelayGrantOptionId,
+                                    note:
+                                      resolutionNoteDraft.trim() || undefined,
+                                  },
+                                  "提交授权结果失败。"
+                                )
+                              : undefined
+                          }
+                          style={styles.singleActionButton}
+                          disabled={submitting || !selectedRelayGrantOptionId}
+                        />
+                      ))}
                       <Button
                         label={submitting ? "处理中..." : "拒绝"}
                         variant="secondary"
@@ -1279,7 +1310,7 @@ export function ChatQuestionInteractionCard({
                               decision: "reject",
                               note: resolutionNoteDraft.trim() || undefined,
                             },
-                            "提交授权结果失败。",
+                            "提交授权结果失败。"
                           )
                         }
                         style={styles.singleActionButton}
@@ -1301,7 +1332,7 @@ export function ChatQuestionInteractionCard({
         </KeyboardAvoidingView>
       </Modal>
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -1641,4 +1672,4 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
     overflow: "hidden",
   },
-});
+})

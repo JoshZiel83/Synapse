@@ -137,11 +137,7 @@ export interface ContactHubEntryView {
   remoteAgentId?: string
   relationLabel: string
   directState: {
-    status:
-      | "existing"
-      | "available"
-      | "approval_required"
-      | "pending_approval"
+    status: "existing" | "available" | "approval_required" | "pending_approval"
     conversationId?: string
   }
 }
@@ -184,7 +180,7 @@ export interface IdentitySearchMatchView {
     | "existing"
     | "available"
     | "approval_required"
-      | "pending_approval"
+    | "pending_approval"
   contact?: { kind: ContactHubEntryKind; id: string }
   conversationId?: string
   requestId?: string
@@ -543,7 +539,10 @@ class ApiClient {
     wsId: string,
     data: {
       policies: Partial<
-        Record<"plugin_installation" | "installed_skill" | "relay_capability", number>
+        Record<
+          "plugin_installation" | "installed_skill" | "relay_capability",
+          number
+        >
       >
     }
   ): Promise<WorkspaceCapabilityConversationTypePoliciesView> {
@@ -1145,7 +1144,11 @@ class ApiClient {
       }
     )
   }
-  deleteWorkspaceMemberModelItem(wsId: string, groupId: string, itemId: string) {
+  deleteWorkspaceMemberModelItem(
+    wsId: string,
+    groupId: string,
+    itemId: string
+  ) {
     return this.fetch(
       `/workspaces/${wsId}/me/model-groups/${groupId}/items/${itemId}`,
       {
@@ -1203,7 +1206,9 @@ class ApiClient {
     wsId: string,
     actorId: string
   ): Promise<RelationshipProfileView> {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/relationship-profile`)
+    return this.fetch(
+      `/workspaces/${wsId}/actors/${actorId}/relationship-profile`
+    )
   }
   updateActorRelationshipProfile(
     wsId: string,
@@ -1216,10 +1221,13 @@ class ApiClient {
       isPublicShared?: boolean
     }
   ): Promise<RelationshipProfileView> {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/relationship-profile`, {
-      method: "PUT",
-      body: JSON.stringify(input),
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/actors/${actorId}/relationship-profile`,
+      {
+        method: "PUT",
+        body: JSON.stringify(input),
+      }
+    )
   }
   getRemoteAgentRelationshipProfile(
     wsId: string,
@@ -1257,10 +1265,7 @@ class ApiClient {
       body: JSON.stringify({ token }),
     })
   }
-  searchIdentity(
-    wsId: string,
-    query: string
-  ): Promise<IdentitySearchResponse> {
+  searchIdentity(wsId: string, query: string): Promise<IdentitySearchResponse> {
     const params = new URLSearchParams()
     if (query.trim()) {
       params.set("q", query.trim())
@@ -1288,22 +1293,30 @@ class ApiClient {
     contactKind: ContactHubEntryKind,
     contactId: string
   ): Promise<ContactHubDetailResponse> {
-    return this.fetch(`/workspaces/${wsId}/contact-hub/${contactKind}/${contactId}`)
+    return this.fetch(
+      `/workspaces/${wsId}/contact-hub/${contactKind}/${contactId}`
+    )
   }
   getFriendRequests(wsId: string): Promise<FriendRequestListResponse> {
     return this.fetch(`/workspaces/${wsId}/friend-requests`)
   }
   approveFriendRequest(wsId: string, requestId: string) {
-    return this.fetch(`/workspaces/${wsId}/friend-requests/${requestId}/approve`, {
-      method: "POST",
-      body: "{}",
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/friend-requests/${requestId}/approve`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
   }
   rejectFriendRequest(wsId: string, requestId: string) {
-    return this.fetch(`/workspaces/${wsId}/friend-requests/${requestId}/reject`, {
-      method: "POST",
-      body: "{}",
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/friend-requests/${requestId}/reject`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
   }
   getActorAccessRequests(
     wsId: string
@@ -1316,16 +1329,22 @@ class ApiClient {
     return this.fetch(`/workspaces/${wsId}/remote-agent-access-requests`)
   }
   approveActorAccessRequest(wsId: string, requestId: string) {
-    return this.fetch(`/workspaces/${wsId}/actor-access-requests/${requestId}/approve`, {
-      method: "POST",
-      body: "{}",
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/actor-access-requests/${requestId}/approve`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
   }
   rejectActorAccessRequest(wsId: string, requestId: string) {
-    return this.fetch(`/workspaces/${wsId}/actor-access-requests/${requestId}/reject`, {
-      method: "POST",
-      body: "{}",
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/actor-access-requests/${requestId}/reject`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
   }
   approveRemoteAgentAccessRequest(wsId: string, requestId: string) {
     return this.fetch(
@@ -1424,10 +1443,13 @@ class ApiClient {
       localRootPath?: string
     }
   ): Promise<{ remoteAgent: RemoteAgentView }> {
-    return this.fetch(`/workspaces/${wsId}/remote-agents/${remoteAgentId}/bind`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/remote-agents/${remoteAgentId}/bind`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      }
+    )
   }
   createRemoteAgentMachinePairingSession(
     wsId: string,
@@ -1436,10 +1458,13 @@ class ApiClient {
       description?: string
     }
   ): Promise<RemoteAgentMachinePairingSessionView> {
-    return this.fetch(`/workspaces/${wsId}/remote-agent-machines/pairing-sessions`, {
-      method: "POST",
-      body: JSON.stringify(input),
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/remote-agent-machines/pairing-sessions`,
+      {
+        method: "POST",
+        body: JSON.stringify(input),
+      }
+    )
   }
   getRemoteAgentMachines(
     wsId: string
@@ -1507,11 +1532,15 @@ class ApiClient {
   getSessionTree(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/tree`)
   }
-  retryConversationMessage(workspaceId: string, threadId: string, itemId: string) {
+  retryConversationMessage(
+    workspaceId: string,
+    threadId: string,
+    itemId: string
+  ) {
     return this.fetch(
       `/workspaces/${workspaceId}/conversations/${threadId}/messages/${itemId}/retry`,
       {
-      method: "POST",
+        method: "POST",
       }
     )
   }
@@ -1547,17 +1576,14 @@ class ApiClient {
     workspaceId: string,
     input?: ChatClientInstanceCreateInput
   ): Promise<ChatClientInstanceRegistrationResponse> {
-    return this.fetch(
-      `/workspaces/${workspaceId}/chat/client-instances`,
-      {
-        method: "POST",
-        body: JSON.stringify({
-          platform: input?.platform,
-          deviceLabel: input?.deviceLabel,
-          metadata: input?.metadata,
-        }),
-      }
-    )
+    return this.fetch(`/workspaces/${workspaceId}/chat/client-instances`, {
+      method: "POST",
+      body: JSON.stringify({
+        platform: input?.platform,
+        deviceLabel: input?.deviceLabel,
+        metadata: input?.metadata,
+      }),
+    })
   }
 
   touchChatClientInstance(
@@ -1919,10 +1945,13 @@ class ApiClient {
     return this.fetch(`/workspaces/${wsId}/mcp/auth/sessions/${sessionId}`)
   }
   inspectPluginAuthSession(wsId: string, sessionId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/auth/sessions/${sessionId}/inspect`, {
-      method: "POST",
-      body: "{}",
-    })
+    return this.fetch(
+      `/workspaces/${wsId}/mcp/auth/sessions/${sessionId}/inspect`,
+      {
+        method: "POST",
+        body: "{}",
+      }
+    )
   }
   getPluginInstallationAccess(wsId: string, installId: string) {
     return this.fetch(
@@ -2377,9 +2406,7 @@ class ApiClient {
             ? request.response
             : null
         const message =
-          response &&
-          "error" in response &&
-          typeof response.error === "string"
+          response && "error" in response && typeof response.error === "string"
             ? response.error
             : "Upload failed"
 
@@ -2403,7 +2430,6 @@ class ApiClient {
   getFileInfo(fileId: string): Promise<FileRecordView> {
     return this.fetch(`/files/${fileId}/info`)
   }
-
 }
 
 export const api = new ApiClient()

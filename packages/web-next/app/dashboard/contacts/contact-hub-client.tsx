@@ -4,14 +4,7 @@ import { startTransition, useEffect, useMemo, useState } from "react"
 import { buildMobileScanUrl } from "@synapse/shared"
 import QRCode from "qrcode"
 import { useRouter } from "next/navigation"
-import {
-  Bot,
-  Cpu,
-  Inbox,
-  MessageCircle,
-  RefreshCcw,
-  Users,
-} from "lucide-react"
+import { Bot, Cpu, Inbox, MessageCircle, RefreshCcw, Users } from "lucide-react"
 
 import { useWorkspace } from "../workspace-provider"
 import type {
@@ -47,14 +40,13 @@ type ConversationSummaryLike = {
   }
 }
 
-function ContactAvatar({
-  entry,
-}: {
-  entry: ContactHubEntryView
-}) {
+function ContactAvatar({ entry }: { entry: ContactHubEntryView }) {
   return (
     <Avatar className="size-10 rounded-2xl">
-      <AvatarImage src={resolveFileUrl(entry.avatarUrl) || undefined} alt={entry.title} />
+      <AvatarImage
+        src={resolveFileUrl(entry.avatarUrl) || undefined}
+        alt={entry.title}
+      />
       <AvatarFallback className="rounded-2xl">
         {entry.targetType === "actor" ? (
           <Cpu className="size-4" />
@@ -68,9 +60,14 @@ function ContactAvatar({
   )
 }
 
-function GroupAvatar({ conversation }: { conversation: ConversationSummaryLike }) {
+function GroupAvatar({
+  conversation,
+}: {
+  conversation: ConversationSummaryLike
+}) {
   const title = conversation.presentation?.title || conversation.title
-  const avatarUrl = conversation.presentation?.avatarUrl || conversation.avatarUrl
+  const avatarUrl =
+    conversation.presentation?.avatarUrl || conversation.avatarUrl
   return (
     <Avatar className="size-10 rounded-2xl">
       <AvatarImage src={resolveFileUrl(avatarUrl) || undefined} alt={title} />
@@ -83,13 +80,21 @@ function GroupAvatar({ conversation }: { conversation: ConversationSummaryLike }
 
 function filterEntry(entry: ContactHubEntryView, query: string) {
   if (!query) return true
-  return [entry.title, entry.subtitle, entry.workspace.name, entry.relationLabel]
+  return [
+    entry.title,
+    entry.subtitle,
+    entry.workspace.name,
+    entry.relationLabel,
+  ]
     .join(" ")
     .toLowerCase()
     .includes(query)
 }
 
-function filterConversation(conversation: ConversationSummaryLike, query: string) {
+function filterConversation(
+  conversation: ConversationSummaryLike,
+  query: string
+) {
   if (!query) return true
   return [
     conversation.title,
@@ -119,14 +124,16 @@ export function ContactHubClient() {
   const { workspaceId } = useWorkspace()
   const [hub, setHub] = useState<ContactHubResponse | null>(null)
   const [detail, setDetail] = useState<ContactHubDetailResponse | null>(null)
-  const [selectedEntry, setSelectedEntry] = useState<ContactHubEntryView | null>(null)
+  const [selectedEntry, setSelectedEntry] =
+    useState<ContactHubEntryView | null>(null)
   const [search, setSearch] = useState("")
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [myProfile, setMyProfile] = useState<RelationshipProfileView | null>(null)
-  const [friendIdProfile, setFriendIdProfile] = useState<RelationshipProfileView | null>(
+  const [myProfile, setMyProfile] = useState<RelationshipProfileView | null>(
     null
   )
+  const [friendIdProfile, setFriendIdProfile] =
+    useState<RelationshipProfileView | null>(null)
   const [friendIdDraft, setFriendIdDraft] = useState("")
   const [friendIdQuery, setFriendIdQuery] = useState("")
   const [friendIdResults, setFriendIdResults] =
@@ -143,10 +150,15 @@ export function ContactHubClient() {
     useState<RelationshipProfileView | null>(null)
   const [myQrImage, setMyQrImage] = useState<string | null>(null)
   const [actorQrImage, setActorQrImage] = useState<string | null>(null)
-  const [remoteAgentQrImage, setRemoteAgentQrImage] = useState<string | null>(null)
-  const [submittingRequestId, setSubmittingRequestId] = useState<string | null>(null)
-  const [submittingSearchProfileId, setSubmittingSearchProfileId] =
-    useState<string | null>(null)
+  const [remoteAgentQrImage, setRemoteAgentQrImage] = useState<string | null>(
+    null
+  )
+  const [submittingRequestId, setSubmittingRequestId] = useState<string | null>(
+    null
+  )
+  const [submittingSearchProfileId, setSubmittingSearchProfileId] = useState<
+    string | null
+  >(null)
   const [savingFriendId, setSavingFriendId] = useState(false)
   const [searchingFriendId, setSearchingFriendId] = useState(false)
 
@@ -197,7 +209,9 @@ export function ContactHubClient() {
       }
     } catch (error) {
       console.error("Failed to load contact hub:", error)
-      toast.error(error instanceof Error ? error.message : "Failed to load contacts")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to load contacts"
+      )
     } finally {
       setLoading(false)
       setRefreshing(false)
@@ -218,7 +232,9 @@ export function ContactHubClient() {
       setFriendIdDraft(nextProfile.identityId)
       toast.success(`Identity ID updated to ${nextProfile.identityId}.`)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update identity ID")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update identity ID"
+      )
     } finally {
       setSavingFriendId(false)
     }
@@ -243,7 +259,9 @@ export function ContactHubClient() {
       )
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to update search visibility"
+        error instanceof Error
+          ? error.message
+          : "Failed to update search visibility"
       )
     } finally {
       setSavingFriendId(false)
@@ -270,7 +288,9 @@ export function ContactHubClient() {
         )
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Identity search failed")
+      toast.error(
+        error instanceof Error ? error.message : "Identity search failed"
+      )
     } finally {
       setSearchingFriendId(false)
     }
@@ -315,7 +335,7 @@ export function ContactHubClient() {
                   ? "Remote agent access request is already pending."
                   : result.outcome === "remote_agent_access_granted"
                     ? "Remote agent access granted."
-              : "Request submitted."
+                    : "Request submitted."
       )
       await loadHub(selectedEntry)
       if (friendIdQuery.trim()) {
@@ -323,7 +343,9 @@ export function ContactHubClient() {
         setFriendIdResults(refreshed)
       }
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to create relationship")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to create relationship"
+      )
     } finally {
       setSubmittingSearchProfileId(null)
     }
@@ -345,14 +367,18 @@ export function ContactHubClient() {
         token: myProfile.qrToken,
       }),
       {
-      width: 220,
-      margin: 1,
+        width: 220,
+        margin: 1,
       }
     ).then(setMyQrImage)
   }, [myProfile?.qrToken])
 
   useEffect(() => {
-    if (!workspaceId || selectedEntry?.kind !== "workspace-actor" || !selectedEntry.actorId) {
+    if (
+      !workspaceId ||
+      selectedEntry?.kind !== "workspace-actor" ||
+      !selectedEntry.actorId
+    ) {
       setSelectedActorProfile(null)
       setActorQrImage(null)
       return
@@ -402,7 +428,10 @@ export function ContactHubClient() {
 
     let active = true
     void api
-      .getRemoteAgentRelationshipProfile(workspaceId, selectedEntry.remoteAgentId)
+      .getRemoteAgentRelationshipProfile(
+        workspaceId,
+        selectedEntry.remoteAgentId
+      )
       .then(async (profile) => {
         if (!active) return
         setSelectedRemoteAgentProfile(profile)
@@ -435,18 +464,29 @@ export function ContactHubClient() {
     if (!workspaceId) return
     setSelectedEntry(entry)
     try {
-      const nextDetail = await api.getContactHubDetail(workspaceId, entry.kind, entry.id)
+      const nextDetail = await api.getContactHubDetail(
+        workspaceId,
+        entry.kind,
+        entry.id
+      )
       setDetail(nextDetail)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to load contact")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to load contact"
+      )
     }
   }
 
   async function handleOpenDirect(entry: ContactHubEntryView) {
     if (!workspaceId) return
-    if (entry.directState.status === "existing" && entry.directState.conversationId) {
+    if (
+      entry.directState.status === "existing" &&
+      entry.directState.conversationId
+    ) {
       startTransition(() => {
-        router.push(`/dashboard/chat?conversation=${entry.directState.conversationId}`)
+        router.push(
+          `/dashboard/chat?conversation=${entry.directState.conversationId}`
+        )
       })
       return
     }
@@ -456,7 +496,9 @@ export function ContactHubClient() {
       contactId: entry.id,
     })
     if (result.status === "pending_approval") {
-      toast.message("Request submitted. Wait for approval before starting a DM.")
+      toast.message(
+        "Request submitted. Wait for approval before starting a DM."
+      )
       await loadHub(entry)
       return
     }
@@ -467,7 +509,10 @@ export function ContactHubClient() {
     }
   }
 
-  async function handleResolveFriend(requestId: string, decision: "approve" | "reject") {
+  async function handleResolveFriend(
+    requestId: string,
+    decision: "approve" | "reject"
+  ) {
     if (!workspaceId) return
     setSubmittingRequestId(requestId)
     try {
@@ -482,7 +527,10 @@ export function ContactHubClient() {
     }
   }
 
-  async function handleResolveActor(requestId: string, decision: "approve" | "reject") {
+  async function handleResolveActor(
+    requestId: string,
+    decision: "approve" | "reject"
+  ) {
     if (!workspaceId) return
     setSubmittingRequestId(requestId)
     try {
@@ -582,7 +630,12 @@ export function ContactHubClient() {
   }
 
   async function handleToggleRemoteAgentApprovalMode() {
-    if (!workspaceId || !selectedEntry?.remoteAgentId || !selectedRemoteAgentProfile) return
+    if (
+      !workspaceId ||
+      !selectedEntry?.remoteAgentId ||
+      !selectedRemoteAgentProfile
+    )
+      return
     const nextMode =
       selectedRemoteAgentProfile.approvalMode === "auto" ? "manual" : "auto"
     const nextProfile = await api.updateRemoteAgentRelationshipProfile(
@@ -598,7 +651,12 @@ export function ContactHubClient() {
   }
 
   async function handleToggleRemoteAgentAccessPolicy() {
-    if (!workspaceId || !selectedEntry?.remoteAgentId || !selectedRemoteAgentProfile) return
+    if (
+      !workspaceId ||
+      !selectedEntry?.remoteAgentId ||
+      !selectedRemoteAgentProfile
+    )
+      return
     const nextPolicy =
       selectedRemoteAgentProfile.accessPolicy === "workspace_open"
         ? "approval_required"
@@ -617,7 +675,12 @@ export function ContactHubClient() {
   }
 
   async function handleToggleRemoteAgentPublicShare() {
-    if (!workspaceId || !selectedEntry?.remoteAgentId || !selectedRemoteAgentProfile) return
+    if (
+      !workspaceId ||
+      !selectedEntry?.remoteAgentId ||
+      !selectedRemoteAgentProfile
+    )
+      return
     const nextPublicShared = !selectedRemoteAgentProfile.isPublicShared
     const nextProfile = await api.updateRemoteAgentRelationshipProfile(
       workspaceId,
@@ -638,11 +701,17 @@ export function ContactHubClient() {
 
   const normalizedQuery = search.trim().toLowerCase()
   const visibleGroups = useMemo(
-    () => ((hub?.groups as ConversationSummaryLike[] | undefined) || []).filter((item) => filterConversation(item, normalizedQuery)),
+    () =>
+      ((hub?.groups as ConversationSummaryLike[] | undefined) || []).filter(
+        (item) => filterConversation(item, normalizedQuery)
+      ),
     [hub?.groups, normalizedQuery]
   )
   const visibleActors = useMemo(
-    () => (hub?.workspaceActors || []).filter((entry) => filterEntry(entry, normalizedQuery)),
+    () =>
+      (hub?.workspaceActors || []).filter((entry) =>
+        filterEntry(entry, normalizedQuery)
+      ),
     [hub?.workspaceActors, normalizedQuery]
   )
   const visibleRemoteAgents = useMemo(
@@ -653,11 +722,17 @@ export function ContactHubClient() {
     [hub?.workspaceRemoteAgents, normalizedQuery]
   )
   const visibleMembers = useMemo(
-    () => (hub?.workspaceMembers || []).filter((entry) => filterEntry(entry, normalizedQuery)),
+    () =>
+      (hub?.workspaceMembers || []).filter((entry) =>
+        filterEntry(entry, normalizedQuery)
+      ),
     [hub?.workspaceMembers, normalizedQuery]
   )
   const visibleFriends = useMemo(
-    () => (hub?.friends || []).filter((entry) => filterEntry(entry, normalizedQuery)),
+    () =>
+      (hub?.friends || []).filter((entry) =>
+        filterEntry(entry, normalizedQuery)
+      ),
     [hub?.friends, normalizedQuery]
   )
 
@@ -668,7 +743,11 @@ export function ContactHubClient() {
           <CardHeader className="pb-4">
             <CardTitle className="flex items-center justify-between gap-3">
               <span>Contacts</span>
-              <Button variant="outline" size="sm" onClick={() => void loadHub(selectedEntry)}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void loadHub(selectedEntry)}
+              >
                 <RefreshCcw className="mr-2 size-4" />
                 Refresh
               </Button>
@@ -694,114 +773,145 @@ export function ContactHubClient() {
               <div className="space-y-5">
                 <section className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-foreground">Pending requests</h3>
+                    <h3 className="text-sm font-semibold text-foreground">
+                      Pending requests
+                    </h3>
                     <Badge variant="secondary">
                       {hub?.requestSummary.totalPendingCount || 0}
                     </Badge>
                   </div>
                   <div className="space-y-3">
-                    {(friendRequests?.incoming || []).slice(0, 2).map((request) => (
-                      <div
-                        key={request.id}
-                        className="rounded-2xl border border-border bg-muted/20 px-4 py-3"
-                      >
-                        <div className="text-sm font-medium text-foreground">
-                          {request.requester?.name || "Unknown user"}
+                    {(friendRequests?.incoming || [])
+                      .slice(0, 2)
+                      .map((request) => (
+                        <div
+                          key={request.id}
+                          className="rounded-2xl border border-border bg-muted/20 px-4 py-3"
+                        >
+                          <div className="text-sm font-medium text-foreground">
+                            {request.requester?.name || "Unknown user"}
+                          </div>
+                          <div className="mt-1 text-sm text-muted-foreground">
+                            {request.targetType === "actor"
+                              ? `Requested actor ${request.targetActor?.name || "Unknown actor"}`
+                              : `Requested friendship from ${request.requester?.workspace.name || "another workspace"}`}
+                          </div>
+                          <div className="mt-3 flex gap-2">
+                            <Button
+                              size="sm"
+                              className="flex-1 rounded-full"
+                              disabled={submittingRequestId === request.id}
+                              onClick={() =>
+                                void handleResolveFriend(request.id, "approve")
+                              }
+                            >
+                              {submittingRequestId === request.id
+                                ? "Working..."
+                                : "Approve"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="flex-1 rounded-full"
+                              disabled={submittingRequestId === request.id}
+                              onClick={() =>
+                                void handleResolveFriend(request.id, "reject")
+                              }
+                            >
+                              Reject
+                            </Button>
+                          </div>
                         </div>
-                        <div className="mt-1 text-sm text-muted-foreground">
-                          {request.targetType === "actor"
-                            ? `Requested actor ${request.targetActor?.name || "Unknown actor"}`
-                            : `Requested friendship from ${request.requester?.workspace.name || "another workspace"}`}
+                      ))}
+                    {(actorAccessRequests?.incoming || [])
+                      .slice(0, 2)
+                      .map((request) => (
+                        <div
+                          key={request.id}
+                          className="rounded-2xl border border-border bg-muted/20 px-4 py-3"
+                        >
+                          <div className="text-sm font-medium text-foreground">
+                            {request.actor?.name || "Unknown actor"}
+                          </div>
+                          <div className="mt-1 text-sm text-muted-foreground">
+                            {request.requester?.name || "A user"} wants to start
+                            a DM.
+                          </div>
+                          <div className="mt-3 flex gap-2">
+                            <Button
+                              size="sm"
+                              className="flex-1 rounded-full"
+                              disabled={submittingRequestId === request.id}
+                              onClick={() =>
+                                void handleResolveActor(request.id, "approve")
+                              }
+                            >
+                              {submittingRequestId === request.id
+                                ? "Working..."
+                                : "Approve"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="flex-1 rounded-full"
+                              disabled={submittingRequestId === request.id}
+                              onClick={() =>
+                                void handleResolveActor(request.id, "reject")
+                              }
+                            >
+                              Reject
+                            </Button>
+                          </div>
                         </div>
-                        <div className="mt-3 flex gap-2">
-                          <Button
-                            size="sm"
-                            className="flex-1 rounded-full"
-                            disabled={submittingRequestId === request.id}
-                            onClick={() => void handleResolveFriend(request.id, "approve")}
-                          >
-                            {submittingRequestId === request.id ? "Working..." : "Approve"}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="flex-1 rounded-full"
-                            disabled={submittingRequestId === request.id}
-                            onClick={() => void handleResolveFriend(request.id, "reject")}
-                          >
-                            Reject
-                          </Button>
+                      ))}
+                    {(remoteAgentAccessRequests?.incoming || [])
+                      .slice(0, 2)
+                      .map((request) => (
+                        <div
+                          key={request.id}
+                          className="rounded-2xl border border-border bg-muted/20 px-4 py-3"
+                        >
+                          <div className="text-sm font-medium text-foreground">
+                            {request.remoteAgent?.name ||
+                              "Unknown remote agent"}
+                          </div>
+                          <div className="mt-1 text-sm text-muted-foreground">
+                            {request.requester?.name || "A user"} wants to start
+                            a DM.
+                          </div>
+                          <div className="mt-3 flex gap-2">
+                            <Button
+                              size="sm"
+                              className="flex-1 rounded-full"
+                              disabled={submittingRequestId === request.id}
+                              onClick={() =>
+                                void handleResolveRemoteAgent(
+                                  request.id,
+                                  "approve"
+                                )
+                              }
+                            >
+                              {submittingRequestId === request.id
+                                ? "Working..."
+                                : "Approve"}
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="flex-1 rounded-full"
+                              disabled={submittingRequestId === request.id}
+                              onClick={() =>
+                                void handleResolveRemoteAgent(
+                                  request.id,
+                                  "reject"
+                                )
+                              }
+                            >
+                              Reject
+                            </Button>
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                    {(actorAccessRequests?.incoming || []).slice(0, 2).map((request) => (
-                      <div
-                        key={request.id}
-                        className="rounded-2xl border border-border bg-muted/20 px-4 py-3"
-                      >
-                        <div className="text-sm font-medium text-foreground">
-                          {request.actor?.name || "Unknown actor"}
-                        </div>
-                        <div className="mt-1 text-sm text-muted-foreground">
-                          {request.requester?.name || "A user"} wants to start a DM.
-                        </div>
-                        <div className="mt-3 flex gap-2">
-                          <Button
-                            size="sm"
-                            className="flex-1 rounded-full"
-                            disabled={submittingRequestId === request.id}
-                            onClick={() => void handleResolveActor(request.id, "approve")}
-                          >
-                            {submittingRequestId === request.id ? "Working..." : "Approve"}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="flex-1 rounded-full"
-                            disabled={submittingRequestId === request.id}
-                            onClick={() => void handleResolveActor(request.id, "reject")}
-                          >
-                            Reject
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
-                    {(remoteAgentAccessRequests?.incoming || []).slice(0, 2).map((request) => (
-                      <div
-                        key={request.id}
-                        className="rounded-2xl border border-border bg-muted/20 px-4 py-3"
-                      >
-                        <div className="text-sm font-medium text-foreground">
-                          {request.remoteAgent?.name || "Unknown remote agent"}
-                        </div>
-                        <div className="mt-1 text-sm text-muted-foreground">
-                          {request.requester?.name || "A user"} wants to start a DM.
-                        </div>
-                        <div className="mt-3 flex gap-2">
-                          <Button
-                            size="sm"
-                            className="flex-1 rounded-full"
-                            disabled={submittingRequestId === request.id}
-                            onClick={() =>
-                              void handleResolveRemoteAgent(request.id, "approve")
-                            }
-                          >
-                            {submittingRequestId === request.id ? "Working..." : "Approve"}
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            className="flex-1 rounded-full"
-                            disabled={submittingRequestId === request.id}
-                            onClick={() =>
-                              void handleResolveRemoteAgent(request.id, "reject")
-                            }
-                          >
-                            Reject
-                          </Button>
-                        </div>
-                      </div>
-                    ))}
+                      ))}
                     {(friendRequests?.incoming || []).length === 0 &&
                     (actorAccessRequests?.incoming || []).length === 0 &&
                     (remoteAgentAccessRequests?.incoming || []).length === 0 ? (
@@ -813,18 +923,22 @@ export function ContactHubClient() {
                 </section>
 
                 <section className="space-y-2">
-                  <h3 className="text-sm font-semibold text-foreground">My Identity ID</h3>
+                  <h3 className="text-sm font-semibold text-foreground">
+                    My Identity ID
+                  </h3>
                   <div className="rounded-2xl border border-border bg-muted/20 px-4 py-4">
                     <div className="space-y-1">
                       <div className="text-sm text-muted-foreground">
-                        Unique to your current workspace identity. Searchability is off by
-                        default.
+                        Unique to your current workspace identity. Searchability
+                        is off by default.
                       </div>
                     </div>
                     <div className="mt-3 space-y-3">
                       <Input
                         value={friendIdDraft}
-                        onChange={(event) => setFriendIdDraft(event.target.value)}
+                        onChange={(event) =>
+                          setFriendIdDraft(event.target.value)
+                        }
                         autoCapitalize="none"
                         autoCorrect="off"
                         placeholder="Set your identity ID"
@@ -855,16 +969,20 @@ export function ContactHubClient() {
                 </section>
 
                 <section className="space-y-2">
-                  <h3 className="text-sm font-semibold text-foreground">Add by Identity ID</h3>
+                  <h3 className="text-sm font-semibold text-foreground">
+                    Add by Identity ID
+                  </h3>
                   <div className="rounded-2xl border border-border bg-muted/20 px-4 py-4">
                     <div className="text-sm text-muted-foreground">
-                      Search a workspace identity and add the matching member, actor,
-                      or remote agent.
+                      Search a workspace identity and add the matching member,
+                      actor, or remote agent.
                     </div>
                     <div className="mt-3 space-y-3">
                       <Input
                         value={friendIdQuery}
-                        onChange={(event) => setFriendIdQuery(event.target.value)}
+                        onChange={(event) =>
+                          setFriendIdQuery(event.target.value)
+                        }
                         autoCapitalize="none"
                         autoCorrect="off"
                         placeholder="Enter an identity ID"
@@ -904,14 +1022,16 @@ export function ContactHubClient() {
                                           ? "Approval pending"
                                           : match.state === "existing"
                                             ? "Already connected"
-                                    : match.state === "pending_request"
-                                      ? "Friend request pending"
-                                      : "Can send relationship request"}
+                                            : match.state === "pending_request"
+                                              ? "Friend request pending"
+                                              : "Can send relationship request"}
                               </div>
                               <Button
                                 variant="outline"
                                 className="mt-3 w-full rounded-2xl"
-                                onClick={() => void handleFriendIdMatchAction(match)}
+                                onClick={() =>
+                                  void handleFriendIdMatchAction(match)
+                                }
                                 disabled={
                                   match.state === "pending_request" ||
                                   match.state === "pending_approval" ||
@@ -926,7 +1046,8 @@ export function ContactHubClient() {
                                   : match.state === "pending_request" ||
                                       match.state === "pending_approval"
                                     ? "Pending"
-                                    : submittingSearchProfileId === match.profileId
+                                    : submittingSearchProfileId ===
+                                        match.profileId
                                       ? "Submitting..."
                                       : "Request"}
                               </Button>
@@ -939,22 +1060,30 @@ export function ContactHubClient() {
                 </section>
 
                 <section className="space-y-2">
-                  <h3 className="text-sm font-semibold text-foreground">Groups</h3>
+                  <h3 className="text-sm font-semibold text-foreground">
+                    Groups
+                  </h3>
                   <div className="space-y-2">
                     {visibleGroups.map((conversation) => (
                       <button
                         key={conversation.id}
                         type="button"
-                        onClick={() => router.push(`/dashboard/chat?conversation=${conversation.id}`)}
+                        onClick={() =>
+                          router.push(
+                            `/dashboard/chat?conversation=${conversation.id}`
+                          )
+                        }
                         className="flex w-full items-center gap-3 rounded-2xl border border-border/70 px-3 py-3 text-left transition-colors hover:bg-accent/40"
                       >
                         <GroupAvatar conversation={conversation} />
                         <div className="min-w-0 flex-1">
                           <div className="truncate text-sm font-medium text-foreground">
-                            {conversation.presentation?.title || conversation.title}
+                            {conversation.presentation?.title ||
+                              conversation.title}
                           </div>
                           <div className="truncate text-sm text-muted-foreground">
-                            {conversation.lastMessage?.content || "Open group chat"}
+                            {conversation.lastMessage?.content ||
+                              "Open group chat"}
                           </div>
                         </div>
                         <Badge variant="outline">Group</Badge>
@@ -964,7 +1093,9 @@ export function ContactHubClient() {
                 </section>
 
                 <section className="space-y-2">
-                  <h3 className="text-sm font-semibold text-foreground">Actors</h3>
+                  <h3 className="text-sm font-semibold text-foreground">
+                    Actors
+                  </h3>
                   <div className="space-y-2">
                     {visibleActors.map((entry) => (
                       <button
@@ -972,7 +1103,8 @@ export function ContactHubClient() {
                         type="button"
                         onClick={() => void handleSelectEntry(entry)}
                         className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-colors ${
-                          selectedEntry?.kind === entry.kind && selectedEntry?.id === entry.id
+                          selectedEntry?.kind === entry.kind &&
+                          selectedEntry?.id === entry.id
                             ? "border-primary bg-accent"
                             : "border-border/70 hover:bg-accent/40"
                         }`}
@@ -993,7 +1125,9 @@ export function ContactHubClient() {
                 </section>
 
                 <section className="space-y-2">
-                  <h3 className="text-sm font-semibold text-foreground">Remote agents</h3>
+                  <h3 className="text-sm font-semibold text-foreground">
+                    Remote agents
+                  </h3>
                   <div className="space-y-2">
                     {visibleRemoteAgents.map((entry) => (
                       <button
@@ -1001,7 +1135,8 @@ export function ContactHubClient() {
                         type="button"
                         onClick={() => void handleSelectEntry(entry)}
                         className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-colors ${
-                          selectedEntry?.kind === entry.kind && selectedEntry?.id === entry.id
+                          selectedEntry?.kind === entry.kind &&
+                          selectedEntry?.id === entry.id
                             ? "border-primary bg-accent"
                             : "border-border/70 hover:bg-accent/40"
                         }`}
@@ -1022,7 +1157,9 @@ export function ContactHubClient() {
                 </section>
 
                 <section className="space-y-2">
-                  <h3 className="text-sm font-semibold text-foreground">Workspace members</h3>
+                  <h3 className="text-sm font-semibold text-foreground">
+                    Workspace members
+                  </h3>
                   <div className="space-y-2">
                     {visibleMembers.map((entry) => (
                       <button
@@ -1030,7 +1167,8 @@ export function ContactHubClient() {
                         type="button"
                         onClick={() => void handleSelectEntry(entry)}
                         className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-colors ${
-                          selectedEntry?.kind === entry.kind && selectedEntry?.id === entry.id
+                          selectedEntry?.kind === entry.kind &&
+                          selectedEntry?.id === entry.id
                             ? "border-primary bg-accent"
                             : "border-border/70 hover:bg-accent/40"
                         }`}
@@ -1051,7 +1189,9 @@ export function ContactHubClient() {
                 </section>
 
                 <section className="space-y-2">
-                  <h3 className="text-sm font-semibold text-foreground">Friends</h3>
+                  <h3 className="text-sm font-semibold text-foreground">
+                    Friends
+                  </h3>
                   <div className="space-y-2">
                     {visibleFriends.map((entry) => (
                       <button
@@ -1059,7 +1199,8 @@ export function ContactHubClient() {
                         type="button"
                         onClick={() => void handleSelectEntry(entry)}
                         className={`flex w-full items-center gap-3 rounded-2xl border px-3 py-3 text-left transition-colors ${
-                          selectedEntry?.kind === entry.kind && selectedEntry?.id === entry.id
+                          selectedEntry?.kind === entry.kind &&
+                          selectedEntry?.id === entry.id
                             ? "border-primary bg-accent"
                             : "border-border/70 hover:bg-accent/40"
                         }`}
@@ -1101,11 +1242,14 @@ export function ContactHubClient() {
                     {selectedEntry.subtitle || selectedEntry.workspace.name}
                   </p>
                   <div className="flex flex-wrap gap-2">
-                    <Button onClick={() => void handleOpenDirect(selectedEntry)}>
+                    <Button
+                      onClick={() => void handleOpenDirect(selectedEntry)}
+                    >
                       <MessageCircle className="mr-2 size-4" />
                       {selectedEntry.directState.status === "existing"
                         ? "Open existing DM"
-                        : selectedEntry.directState.status === "approval_required"
+                        : selectedEntry.directState.status ===
+                            "approval_required"
                           ? "Request access and DM"
                           : "Start DM"}
                     </Button>
@@ -1121,25 +1265,33 @@ export function ContactHubClient() {
                 </CardHeader>
                 <CardContent className="space-y-3">
                   {(detail.groups as ConversationSummaryLike[]).length > 0 ? (
-                    (detail.groups as ConversationSummaryLike[]).map((conversation) => (
-                      <button
-                        key={conversation.id}
-                        type="button"
-                        onClick={() => router.push(`/dashboard/chat?conversation=${conversation.id}`)}
-                        className="flex w-full items-center gap-3 rounded-2xl border border-border/70 px-3 py-3 text-left transition-colors hover:bg-accent/40"
-                      >
-                        <GroupAvatar conversation={conversation} />
-                        <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium text-foreground">
-                            {conversation.presentation?.title || conversation.title}
+                    (detail.groups as ConversationSummaryLike[]).map(
+                      (conversation) => (
+                        <button
+                          key={conversation.id}
+                          type="button"
+                          onClick={() =>
+                            router.push(
+                              `/dashboard/chat?conversation=${conversation.id}`
+                            )
+                          }
+                          className="flex w-full items-center gap-3 rounded-2xl border border-border/70 px-3 py-3 text-left transition-colors hover:bg-accent/40"
+                        >
+                          <GroupAvatar conversation={conversation} />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate text-sm font-medium text-foreground">
+                              {conversation.presentation?.title ||
+                                conversation.title}
+                            </div>
+                            <div className="truncate text-sm text-muted-foreground">
+                              {conversation.lastMessage?.content ||
+                                "Open group chat"}
+                            </div>
                           </div>
-                          <div className="truncate text-sm text-muted-foreground">
-                            {conversation.lastMessage?.content || "Open group chat"}
-                          </div>
-                        </div>
-                        <Badge variant="outline">Group</Badge>
-                      </button>
-                    ))
+                          <Badge variant="outline">Group</Badge>
+                        </button>
+                      )
+                    )
                   ) : (
                     <div className="rounded-2xl border border-dashed border-border px-4 py-8 text-center text-sm text-muted-foreground">
                       No shared groups yet.
@@ -1172,12 +1324,14 @@ export function ContactHubClient() {
                       className="w-full rounded-full"
                       onClick={() => void handleToggleMyApprovalMode()}
                     >
-                      Switch to {myProfile?.approvalMode === "auto" ? "manual" : "auto"}
+                      Switch to{" "}
+                      {myProfile?.approvalMode === "auto" ? "manual" : "auto"}
                     </Button>
                   </CardContent>
                 </Card>
 
-                {selectedEntry.kind === "workspace-actor" && selectedActorProfile ? (
+                {selectedEntry.kind === "workspace-actor" &&
+                selectedActorProfile ? (
                   <Card>
                     <CardHeader>
                       <CardTitle>Actor QR</CardTitle>
@@ -1193,8 +1347,9 @@ export function ContactHubClient() {
                         <Skeleton className="aspect-square rounded-2xl" />
                       )}
                       <p className="text-sm text-muted-foreground">
-                        Approval mode: {selectedActorProfile.approvalMode} · access policy{" "}
-                        {selectedActorProfile.accessPolicy} · public share{" "}
+                        Approval mode: {selectedActorProfile.approvalMode} ·
+                        access policy {selectedActorProfile.accessPolicy} ·
+                        public share{" "}
                         {selectedActorProfile.isPublicShared ? "on" : "off"}
                       </p>
                       <div className="grid gap-2">
@@ -1216,7 +1371,8 @@ export function ContactHubClient() {
                           onClick={() => void handleToggleActorAccessPolicy()}
                         >
                           Switch policy to{" "}
-                          {selectedActorProfile.accessPolicy === "workspace_open"
+                          {selectedActorProfile.accessPolicy ===
+                          "workspace_open"
                             ? "approval_required"
                             : "workspace_open"}
                         </Button>
@@ -1251,16 +1407,21 @@ export function ContactHubClient() {
                         <Skeleton className="aspect-square rounded-2xl" />
                       )}
                       <p className="text-sm text-muted-foreground">
-                        Approval mode: {selectedRemoteAgentProfile.approvalMode} · access
-                        policy {selectedRemoteAgentProfile.accessPolicy} · public share{" "}
-                        {selectedRemoteAgentProfile.isPublicShared ? "on" : "off"}
+                        Approval mode: {selectedRemoteAgentProfile.approvalMode}{" "}
+                        · access policy{" "}
+                        {selectedRemoteAgentProfile.accessPolicy} · public share{" "}
+                        {selectedRemoteAgentProfile.isPublicShared
+                          ? "on"
+                          : "off"}
                       </p>
                       <div className="grid gap-2">
                         <Button
                           variant="outline"
                           size="sm"
                           className="w-full rounded-full"
-                          onClick={() => void handleToggleRemoteAgentApprovalMode()}
+                          onClick={() =>
+                            void handleToggleRemoteAgentApprovalMode()
+                          }
                         >
                           Switch approval to{" "}
                           {selectedRemoteAgentProfile.approvalMode === "auto"
@@ -1271,10 +1432,13 @@ export function ContactHubClient() {
                           variant="outline"
                           size="sm"
                           className="w-full rounded-full"
-                          onClick={() => void handleToggleRemoteAgentAccessPolicy()}
+                          onClick={() =>
+                            void handleToggleRemoteAgentAccessPolicy()
+                          }
                         >
                           Switch policy to{" "}
-                          {selectedRemoteAgentProfile.accessPolicy === "workspace_open"
+                          {selectedRemoteAgentProfile.accessPolicy ===
+                          "workspace_open"
                             ? "approval_required"
                             : "workspace_open"}
                         </Button>
@@ -1282,10 +1446,14 @@ export function ContactHubClient() {
                           variant="outline"
                           size="sm"
                           className="w-full rounded-full"
-                          onClick={() => void handleToggleRemoteAgentPublicShare()}
+                          onClick={() =>
+                            void handleToggleRemoteAgentPublicShare()
+                          }
                         >
                           Turn public share{" "}
-                          {selectedRemoteAgentProfile.isPublicShared ? "off" : "on"}
+                          {selectedRemoteAgentProfile.isPublicShared
+                            ? "off"
+                            : "on"}
                         </Button>
                       </div>
                     </CardContent>
@@ -1297,7 +1465,8 @@ export function ContactHubClient() {
         ) : (
           <Card className="h-full">
             <CardContent className="flex h-full min-h-[28rem] items-center justify-center text-center text-sm text-muted-foreground">
-              Select a contact to see details, shared groups, and the direct-conversation action.
+              Select a contact to see details, shared groups, and the
+              direct-conversation action.
             </CardContent>
           </Card>
         )}

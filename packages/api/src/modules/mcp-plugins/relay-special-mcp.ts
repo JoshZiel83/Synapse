@@ -1,4 +1,4 @@
-import path from "node:path";
+import path from "node:path"
 import type {
   RelayAuthorizationBrowserAction,
   RelayAuthorizationBrowserPolicy,
@@ -8,7 +8,7 @@ import type {
   RelayAuthorizationGrantOption,
   RelayAuthorizationGrantSpec,
   RelayAuthorizationRequestedAction,
-} from "@synapse/shared/types";
+} from "@synapse/shared/types"
 
 const FILESYSTEM_READ_TOOL_NAMES = new Set([
   "ListAllowedDirectories",
@@ -23,7 +23,7 @@ const FILESYSTEM_READ_TOOL_NAMES = new Set([
   "SearchFiles",
   "ListBackups",
   "GetBackup",
-]);
+])
 
 const FILESYSTEM_WRITE_TOOL_NAMES = new Set([
   "Edit",
@@ -35,7 +35,7 @@ const FILESYSTEM_WRITE_TOOL_NAMES = new Set([
   "Copy",
   "Delete",
   "RestoreBackup",
-]);
+])
 
 const CUA_WRITE_TOOL_NAMES = new Set([
   "desktop_move_pointer",
@@ -44,7 +44,7 @@ const CUA_WRITE_TOOL_NAMES = new Set([
   "desktop_scroll",
   "desktop_type_text",
   "desktop_press_keys",
-]);
+])
 
 const BROWSER_READ_TOOL_NAMES = new Set([
   "list_pages",
@@ -60,7 +60,7 @@ const BROWSER_READ_TOOL_NAMES = new Set([
   "take_snapshot",
   "wait_for",
   "screenshot",
-]);
+])
 
 const BROWSER_WRITE_TOOL_NAMES = new Set([
   "click",
@@ -82,7 +82,7 @@ const BROWSER_WRITE_TOOL_NAMES = new Set([
   "resize_page",
   "type_text",
   "upload_file",
-]);
+])
 
 const DANGEROUS_COMMAND_PREFIXES = new Set([
   "sh",
@@ -106,141 +106,143 @@ const DANGEROUS_COMMAND_PREFIXES = new Set([
   "sudo",
   "doas",
   "pkexec",
-]);
+])
 
 export type RelaySpecialMcpKind =
   | "filesystem"
   | "cua"
   | "browser"
-  | "commandline";
+  | "commandline"
 
 export interface RelaySpecialAuthorizationPlan {
-  kind: RelaySpecialMcpKind;
-  requestedToolName: string;
-  toolStableKey: string;
-  reason: string;
-  requestedAction: RelayAuthorizationRequestedAction;
-  grantOptions: RelayAuthorizationGrantOption[];
+  kind: RelaySpecialMcpKind
+  requestedToolName: string
+  toolStableKey: string
+  reason: string
+  requestedAction: RelayAuthorizationRequestedAction
+  grantOptions: RelayAuthorizationGrantOption[]
 }
 
 type BrowserSiteContext = {
-  origin?: string;
-  host?: string;
-  registrableDomain?: string;
-};
+  origin?: string
+  host?: string
+  registrableDomain?: string
+}
 
 function asTrimmedString(value: unknown) {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
-    : undefined;
+    : undefined
 }
 
 function normalizeBuiltinKind(value: unknown): RelaySpecialMcpKind | null {
-  const normalized = asTrimmedString(value)?.toLowerCase();
+  const normalized = asTrimmedString(value)?.toLowerCase()
   if (
     normalized === "filesystem" ||
     normalized === "cua" ||
     normalized === "browser" ||
     normalized === "commandline"
   ) {
-    return normalized;
+    return normalized
   }
-  return null;
+  return null
 }
 
 function normalizeAbsolutePath(value: unknown) {
-  const text = asTrimmedString(value);
+  const text = asTrimmedString(value)
   if (!text || !path.isAbsolute(text)) {
-    return null;
+    return null
   }
-  return path.resolve(path.normalize(text));
+  return path.resolve(path.normalize(text))
 }
 
 function normalizeDirectoryGrantPrefix(value: string) {
-  return path.resolve(path.normalize(value));
+  return path.resolve(path.normalize(value))
 }
 
 function optionId(parts: Array<string | undefined | null>) {
   return parts
     .filter((value) => typeof value === "string" && value.length > 0)
-    .join(":");
+    .join(":")
 }
 
 function pushGrantOption(
   options: RelayAuthorizationGrantOption[],
-  option: RelayAuthorizationGrantOption,
+  option: RelayAuthorizationGrantOption
 ) {
   if (options.some((candidate) => candidate.id === option.id)) {
-    return;
+    return
   }
-  options.push(option);
+  options.push(option)
 }
 
 function formatPathPrefixes(pathPrefixes: string[]) {
   if (pathPrefixes.length === 0) {
-    return "";
+    return ""
   }
   if (pathPrefixes.length === 1) {
-    return pathPrefixes[0]!;
+    return pathPrefixes[0]!
   }
   if (pathPrefixes.length === 2) {
-    return `${pathPrefixes[0]} and ${pathPrefixes[1]}`;
+    return `${pathPrefixes[0]} and ${pathPrefixes[1]}`
   }
-  return `${pathPrefixes[0]} and ${pathPrefixes.length - 1} more directories`;
+  return `${pathPrefixes[0]} and ${pathPrefixes.length - 1} more directories`
 }
 
 function collectFilesystemDirectoryPrefixes(
   visibleToolName: string,
-  toolInput: Record<string, unknown>,
+  toolInput: Record<string, unknown>
 ) {
-  const prefixes = new Set<string>();
+  const prefixes = new Set<string>()
   const pushPathPrefix = (
     candidate: unknown,
-    mode: "file" | "directory" | "auto" = "auto",
+    mode: "file" | "directory" | "auto" = "auto"
   ) => {
-    const resolved = normalizeAbsolutePath(candidate);
+    const resolved = normalizeAbsolutePath(candidate)
     if (!resolved) {
-      return;
+      return
     }
-    let prefix = resolved;
+    let prefix = resolved
     if (mode === "file" || mode === "auto") {
-      prefix = path.dirname(resolved);
+      prefix = path.dirname(resolved)
     }
-    prefixes.add(normalizeDirectoryGrantPrefix(prefix));
-  };
+    prefixes.add(normalizeDirectoryGrantPrefix(prefix))
+  }
 
-  pushPathPrefix(toolInput.directory_path, "directory");
-  pushPathPrefix(toolInput.file_path, "file");
-  pushPathPrefix(toolInput.source_path, "file");
-  pushPathPrefix(toolInput.destination_path, "file");
-  pushPathPrefix(toolInput.target_path, "file");
+  pushPathPrefix(toolInput.directory_path, "directory")
+  pushPathPrefix(toolInput.file_path, "file")
+  pushPathPrefix(toolInput.source_path, "file")
+  pushPathPrefix(toolInput.destination_path, "file")
+  pushPathPrefix(toolInput.target_path, "file")
   pushPathPrefix(
     toolInput.path,
     visibleToolName === "LS" || visibleToolName === "DirectoryTree"
       ? "directory"
-      : "auto",
-  );
+      : "auto"
+  )
 
-  const files = Array.isArray(toolInput.files) ? toolInput.files : [];
+  const files = Array.isArray(toolInput.files) ? toolInput.files : []
   for (const file of files) {
     if (file && typeof file === "object") {
-      pushPathPrefix((file as Record<string, unknown>).file_path, "file");
+      pushPathPrefix((file as Record<string, unknown>).file_path, "file")
     }
   }
 
-  const operations = Array.isArray(toolInput.operations) ? toolInput.operations : [];
+  const operations = Array.isArray(toolInput.operations)
+    ? toolInput.operations
+    : []
   for (const operation of operations) {
     if (operation && typeof operation === "object") {
-      pushPathPrefix((operation as Record<string, unknown>).file_path, "file");
+      pushPathPrefix((operation as Record<string, unknown>).file_path, "file")
     }
   }
 
-  return Array.from(prefixes).sort();
+  return Array.from(prefixes).sort()
 }
 
 function buildFilesystemGrantSpec(
   access: RelayAuthorizationFilesystemAccess,
-  pathPrefixes: string[],
+  pathPrefixes: string[]
 ): RelayAuthorizationGrantSpec {
   return {
     capability: "filesystem",
@@ -248,29 +250,29 @@ function buildFilesystemGrantSpec(
       access,
       pathPrefixes,
     },
-  };
+  }
 }
 
 function inferFilesystemPlan(params: {
-  toolStableKey?: string;
-  visibleToolName: string;
-  toolInput: Record<string, unknown>;
+  toolStableKey?: string
+  visibleToolName: string
+  toolInput: Record<string, unknown>
 }) {
   const access = FILESYSTEM_WRITE_TOOL_NAMES.has(params.visibleToolName)
     ? "write"
     : FILESYSTEM_READ_TOOL_NAMES.has(params.visibleToolName)
       ? "read"
-      : null;
+      : null
   if (!access) {
-    return null;
+    return null
   }
 
   const directoryPrefixes = collectFilesystemDirectoryPrefixes(
     params.visibleToolName,
-    params.toolInput,
-  );
+    params.toolInput
+  )
   if (directoryPrefixes.length === 0) {
-    return null;
+    return null
   }
 
   const requestedAction: RelayAuthorizationRequestedAction = {
@@ -285,7 +287,7 @@ function inferFilesystemPlan(params: {
       access,
       pathPrefixes: directoryPrefixes,
     },
-  };
+  }
 
   return {
     kind: "filesystem" as const,
@@ -309,22 +311,22 @@ function inferFilesystemPlan(params: {
         grantSpec: buildFilesystemGrantSpec(access, directoryPrefixes),
       },
     ],
-  };
+  }
 }
 
 function inferCUAPlan(params: {
-  toolStableKey?: string;
-  visibleToolName: string;
+  toolStableKey?: string
+  visibleToolName: string
 }) {
   if (!params.visibleToolName.startsWith("desktop_")) {
-    return null;
+    return null
   }
 
   const access: RelayAuthorizationCUAAccess = CUA_WRITE_TOOL_NAMES.has(
-    params.visibleToolName,
+    params.visibleToolName
   )
     ? "write"
-    : "read";
+    : "read"
   const requestedAction: RelayAuthorizationRequestedAction = {
     capability: "cua",
     toolName: params.visibleToolName,
@@ -336,13 +338,14 @@ function inferCUAPlan(params: {
     cua: {
       access,
     },
-  };
+  }
 
   return {
     kind: "cua" as const,
     requestedToolName: params.visibleToolName,
     toolStableKey:
-      params.toolStableKey || `synapse.builtin.cua.${params.visibleToolName}.v1`,
+      params.toolStableKey ||
+      `synapse.builtin.cua.${params.visibleToolName}.v1`,
     reason:
       access === "write"
         ? "Desktop input on the relay requires authorization."
@@ -363,63 +366,65 @@ function inferCUAPlan(params: {
         },
       },
     ],
-  };
+  }
 }
 
 function normalizeHost(value: string) {
-  return value.trim().toLowerCase();
+  return value.trim().toLowerCase()
 }
 
 function isIpv4(host: string) {
-  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host);
+  return /^\d{1,3}(?:\.\d{1,3}){3}$/.test(host)
 }
 
 function inferRegistrableDomain(host: string) {
-  const normalized = normalizeHost(host);
+  const normalized = normalizeHost(host)
   if (!normalized || normalized === "localhost" || isIpv4(normalized)) {
-    return null;
+    return null
   }
-  const labels = normalized.split(".").filter(Boolean);
+  const labels = normalized.split(".").filter(Boolean)
   if (labels.length < 2) {
-    return null;
+    return null
   }
-  return labels.slice(-2).join(".");
+  return labels.slice(-2).join(".")
 }
 
 function inferBrowserSiteContext(
-  toolInput: Record<string, unknown>,
+  toolInput: Record<string, unknown>
 ): BrowserSiteContext | null {
   const rawUrl =
     asTrimmedString(toolInput.url) ||
     asTrimmedString(toolInput.page_url) ||
     asTrimmedString(toolInput.pageUrl) ||
     asTrimmedString(toolInput.browser_url) ||
-    asTrimmedString(toolInput.browserUrl);
+    asTrimmedString(toolInput.browserUrl)
   if (!rawUrl) {
-    return null;
+    return null
   }
 
   try {
-    const parsed = new URL(rawUrl);
-    const host = parsed.hostname ? normalizeHost(parsed.hostname) : undefined;
+    const parsed = new URL(rawUrl)
+    const host = parsed.hostname ? normalizeHost(parsed.hostname) : undefined
     const origin =
       parsed.origin && parsed.origin !== "null"
         ? parsed.origin
-        : `${parsed.protocol}${host ? `//${host}` : ""}`;
+        : `${parsed.protocol}${host ? `//${host}` : ""}`
     return {
       origin,
       host,
-      registrableDomain: host ? inferRegistrableDomain(host) || undefined : undefined,
-    };
+      registrableDomain: host
+        ? inferRegistrableDomain(host) || undefined
+        : undefined,
+    }
   } catch {
-    return null;
+    return null
   }
 }
 
 function buildBrowserGrantSpec(
   action: RelayAuthorizationBrowserAction,
   site: BrowserSiteContext | null,
-  scopeType?: RelayAuthorizationBrowserPolicy["scopeType"],
+  scopeType?: RelayAuthorizationBrowserPolicy["scopeType"]
 ): RelayAuthorizationGrantSpec {
   return {
     capability: "browser",
@@ -430,20 +435,20 @@ function buildBrowserGrantSpec(
       host: site?.host,
       registrableDomain: site?.registrableDomain,
     },
-  };
+  }
 }
 
 function inferBrowserPlan(params: {
-  toolStableKey?: string;
-  visibleToolName: string;
-  toolInput: Record<string, unknown>;
+  toolStableKey?: string
+  visibleToolName: string
+  toolInput: Record<string, unknown>
 }) {
   const action = BROWSER_READ_TOOL_NAMES.has(params.visibleToolName)
     ? "read"
     : BROWSER_WRITE_TOOL_NAMES.has(params.visibleToolName)
       ? "write"
-      : "write";
-  const site = inferBrowserSiteContext(params.toolInput);
+      : "write"
+  const site = inferBrowserSiteContext(params.toolInput)
 
   const requestedAction: RelayAuthorizationRequestedAction = {
     capability: "browser",
@@ -461,22 +466,22 @@ function inferBrowserPlan(params: {
       host: site?.host,
       registrableDomain: site?.registrableDomain,
     },
-  };
+  }
 
-  const grantOptions: RelayAuthorizationGrantOption[] = [];
+  const grantOptions: RelayAuthorizationGrantOption[] = []
   if (site?.host) {
     pushGrantOption(grantOptions, {
       id: optionId(["browser", action, "host", site.host]),
       summary: `Allow ${action} actions on ${site.host}`,
       detail: site.origin,
       grantSpec: buildBrowserGrantSpec(action, site, "host"),
-    });
+    })
   } else if (site?.origin) {
     pushGrantOption(grantOptions, {
       id: optionId(["browser", action, "origin", site.origin]),
       summary: `Allow ${action} actions on ${site.origin}`,
       grantSpec: buildBrowserGrantSpec(action, site, "origin"),
-    });
+    })
   }
 
   if (site?.registrableDomain) {
@@ -485,7 +490,7 @@ function inferBrowserPlan(params: {
       summary: `Allow ${action} actions on ${site.registrableDomain} and subdomains`,
       detail: site.host,
       grantSpec: buildBrowserGrantSpec(action, site, "domain"),
-    });
+    })
   }
 
   pushGrantOption(grantOptions, {
@@ -495,26 +500,27 @@ function inferBrowserPlan(params: {
         ? "Allow browser read actions anywhere"
         : "Allow browser write actions anywhere",
     grantSpec: buildBrowserGrantSpec(action, null),
-  });
+  })
 
   return {
     kind: "browser" as const,
     requestedToolName: params.visibleToolName,
     toolStableKey:
-      params.toolStableKey || `synapse.builtin.browser.${params.visibleToolName}.v1`,
+      params.toolStableKey ||
+      `synapse.builtin.browser.${params.visibleToolName}.v1`,
     reason:
       action === "read"
         ? "Browser inspection on the relay requires authorization."
         : "Browser automation on the relay requires authorization.",
     requestedAction,
     grantOptions,
-  };
+  }
 }
 
 function normalizeCommandForMatch(value: unknown) {
   return typeof value === "string" && value.trim().length > 0
     ? value.trim()
-    : null;
+    : null
 }
 
 function extractCommandPrefix(command: string) {
@@ -525,50 +531,50 @@ function extractCommandPrefix(command: string) {
     command.includes(";") ||
     command.includes("|")
   ) {
-    return null;
+    return null
   }
-  const tokens = command.split(/\s+/).filter(Boolean);
-  let index = 0;
+  const tokens = command.split(/\s+/).filter(Boolean)
+  let index = 0
   while (index < tokens.length && /^[A-Za-z_]\w*=/.test(tokens[index]!)) {
-    index += 1;
+    index += 1
   }
-  const executable = tokens[index];
+  const executable = tokens[index]
   if (!executable) {
-    return null;
+    return null
   }
   if (DANGEROUS_COMMAND_PREFIXES.has(executable)) {
-    return null;
+    return null
   }
-  const next = tokens[index + 1];
+  const next = tokens[index + 1]
   if (next && /^[a-z][a-z0-9]*(-[a-z0-9]+)*$/.test(next)) {
-    return `${executable} ${next}`;
+    return `${executable} ${next}`
   }
   if (/^[a-zA-Z0-9._-]+$/.test(executable) && !executable.includes("/")) {
-    return executable;
+    return executable
   }
-  return null;
+  return null
 }
 
 function buildCommandGrantSpec(
-  policy: RelayAuthorizationCommandlinePolicy,
+  policy: RelayAuthorizationCommandlinePolicy
 ): RelayAuthorizationGrantSpec {
   return {
     capability: "commandline",
     commandline: policy,
-  };
+  }
 }
 
 function inferCommandlinePlan(params: {
-  toolStableKey?: string;
-  visibleToolName: string;
-  toolInput: Record<string, unknown>;
+  toolStableKey?: string
+  visibleToolName: string
+  toolInput: Record<string, unknown>
 }) {
-  const command = normalizeCommandForMatch(params.toolInput.command);
+  const command = normalizeCommandForMatch(params.toolInput.command)
   if (!command) {
-    return null;
+    return null
   }
 
-  const cwd = normalizeAbsolutePath(params.toolInput.cwd) || undefined;
+  const cwd = normalizeAbsolutePath(params.toolInput.cwd) || undefined
   const requestedAction: RelayAuthorizationRequestedAction = {
     capability: "commandline",
     toolName: params.visibleToolName,
@@ -580,7 +586,7 @@ function inferCommandlinePlan(params: {
       commandText: command,
       workingDirectory: cwd,
     },
-  };
+  }
 
   const grantOptions: RelayAuthorizationGrantOption[] = [
     {
@@ -594,9 +600,9 @@ function inferCommandlinePlan(params: {
         workingDirectory: cwd,
       }),
     },
-  ];
+  ]
 
-  const prefix = extractCommandPrefix(command);
+  const prefix = extractCommandPrefix(command)
   if (prefix && prefix !== command) {
     grantOptions.push({
       id: optionId(["commandline", "prefix", prefix, cwd]),
@@ -608,7 +614,7 @@ function inferCommandlinePlan(params: {
         commandText: prefix,
         workingDirectory: cwd,
       }),
-    });
+    })
   }
 
   grantOptions.push({
@@ -621,7 +627,7 @@ function inferCommandlinePlan(params: {
       commandText: "bash",
       workingDirectory: cwd,
     }),
-  });
+  })
 
   return {
     kind: "commandline" as const,
@@ -631,23 +637,23 @@ function inferCommandlinePlan(params: {
     reason: "Executing shell commands on the relay requires authorization.",
     requestedAction,
     grantOptions,
-  };
+  }
 }
 
 export function inferRelaySpecialAuthorizationPlan(params: {
-  toolStableKey?: string;
-  visibleToolName: string;
-  toolInput: Record<string, unknown>;
-  exposureMetadata?: Record<string, unknown>;
+  toolStableKey?: string
+  visibleToolName: string
+  toolInput: Record<string, unknown>
+  exposureMetadata?: Record<string, unknown>
 }): RelaySpecialAuthorizationPlan | null {
   const builtinKind = normalizeBuiltinKind(
     params.exposureMetadata?.builtinKind ||
       params.exposureMetadata?.builtin_kind ||
-      params.exposureMetadata?.kind,
-  );
+      params.exposureMetadata?.kind
+  )
 
   if (builtinKind === "commandline" || params.visibleToolName === "bash") {
-    return inferCommandlinePlan(params);
+    return inferCommandlinePlan(params)
   }
 
   if (
@@ -655,16 +661,16 @@ export function inferRelaySpecialAuthorizationPlan(params: {
     FILESYSTEM_READ_TOOL_NAMES.has(params.visibleToolName) ||
     FILESYSTEM_WRITE_TOOL_NAMES.has(params.visibleToolName)
   ) {
-    return inferFilesystemPlan(params);
+    return inferFilesystemPlan(params)
   }
 
   if (builtinKind === "cua" || params.visibleToolName.startsWith("desktop_")) {
-    return inferCUAPlan(params);
+    return inferCUAPlan(params)
   }
 
   if (builtinKind === "browser") {
-    return inferBrowserPlan(params);
+    return inferBrowserPlan(params)
   }
 
-  return null;
+  return null
 }

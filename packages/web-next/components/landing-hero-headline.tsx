@@ -1,6 +1,12 @@
 "use client"
 
-import { useEffect, useLayoutEffect, useRef, useState, type TransitionEvent } from "react"
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type TransitionEvent,
+} from "react"
 
 const headlineSteps = [
   { lead: "像", tail: "一样思考" },
@@ -40,11 +46,16 @@ function RollingWord({
 
     const updateHeight = () => {
       const nextHeight = Math.ceil(
-        Math.max(currentNode.getBoundingClientRect().height, nextNode.getBoundingClientRect().height)
+        Math.max(
+          currentNode.getBoundingClientRect().height,
+          nextNode.getBoundingClientRect().height
+        )
       )
 
       if (nextHeight > 0) {
-        setItemHeight((previousHeight) => (previousHeight === nextHeight ? previousHeight : nextHeight))
+        setItemHeight((previousHeight) =>
+          previousHeight === nextHeight ? previousHeight : nextHeight
+        )
       }
     }
 
@@ -64,7 +75,10 @@ function RollingWord({
 
   return (
     <span className={`relative inline-flex align-middle ${minWidthClass}`}>
-      <span className="relative overflow-hidden" style={{ height: windowHeight }}>
+      <span
+        className="relative overflow-hidden"
+        style={{ height: windowHeight }}
+      >
         <span
           className="flex flex-col will-change-transform"
           style={{
@@ -87,14 +101,14 @@ function RollingWord({
       <span
         ref={currentProbeRef}
         aria-hidden="true"
-        className={`pointer-events-none absolute left-0 top-0 -z-10 opacity-0 ${rollingWordClass}`}
+        className={`pointer-events-none absolute top-0 left-0 -z-10 opacity-0 ${rollingWordClass}`}
       >
         {currentWord}
       </span>
       <span
         ref={nextProbeRef}
         aria-hidden="true"
-        className={`pointer-events-none absolute left-0 top-0 -z-10 opacity-0 ${rollingWordClass}`}
+        className={`pointer-events-none absolute top-0 left-0 -z-10 opacity-0 ${rollingWordClass}`}
       >
         {nextWord}
       </span>
@@ -129,7 +143,11 @@ export function LandingHeroHeadline() {
   const nextStep = headlineSteps[nextIndex]
 
   const handleTransitionEnd = (event: TransitionEvent<HTMLSpanElement>) => {
-    if (event.target !== event.currentTarget || event.propertyName !== "transform" || !isAnimating) {
+    if (
+      event.target !== event.currentTarget ||
+      event.propertyName !== "transform" ||
+      !isAnimating
+    ) {
       return
     }
 
@@ -139,8 +157,8 @@ export function LandingHeroHeadline() {
   }
 
   return (
-    <div className="font-display animate-fade-up mt-6 text-[clamp(2rem,7vw,5rem)] font-semibold tracking-tight text-slate-950 leading-[0.96]">
-      <div className="inline-flex max-w-full flex-nowrap items-center justify-center gap-x-1 whitespace-nowrap leading-none sm:gap-x-1.5">
+    <div className="font-display animate-fade-up mt-6 text-[clamp(2rem,7vw,5rem)] leading-[0.96] font-semibold tracking-tight text-slate-950">
+      <div className="inline-flex max-w-full flex-nowrap items-center justify-center gap-x-1 leading-none whitespace-nowrap sm:gap-x-1.5">
         <span>让 AI</span>
         <span className="text-primary">
           <RollingWord

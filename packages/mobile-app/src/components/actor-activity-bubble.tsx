@@ -1,10 +1,10 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useEffect, useMemo, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { useEffect, useMemo, useState } from "react"
+import { Pressable, StyleSheet, Text, View } from "react-native"
 
-import { api } from "@/lib/api";
-import { Avatar } from "@/components/ui";
-import { theme } from "@/theme/tokens";
+import { api } from "@/lib/api"
+import { Avatar } from "@/components/ui"
+import { theme } from "@/theme/tokens"
 import {
   getActorRuntimeCurrentTool,
   getActorRuntimeProcessingTargets,
@@ -13,39 +13,39 @@ import {
   ActorRuntimeTurnActivityDetail,
   CanonicalContentBlock,
   ChatParticipantSummary,
-} from "@shared";
+} from "@shared"
 
 function formatTargetsLabel(runtime: ActorRuntimeState) {
-  const targets = getActorRuntimeProcessingTargets(runtime);
+  const targets = getActorRuntimeProcessingTargets(runtime)
   if (targets.length === 0) {
-    return "当前 turn 正在处理中";
+    return "当前 turn 正在处理中"
   }
 
-  const names = targets.map((target) => target.name).filter(Boolean);
+  const names = targets.map((target) => target.name).filter(Boolean)
   if (names.length <= 2) {
-    return `正在处理 ${names.join("、")}`;
+    return `正在处理 ${names.join("、")}`
   }
-  return `正在处理 ${names.slice(0, 2).join("、")} 等 ${names.length} 人`;
+  return `正在处理 ${names.slice(0, 2).join("、")} 等 ${names.length} 人`
 }
 
 function formatToolStateLabel(state: string) {
   switch (state) {
     case "running":
-      return "运行中";
+      return "运行中"
     case "pending":
-      return "等待中";
+      return "等待中"
     case "input_required":
-      return "等待输入";
+      return "等待输入"
     case "completed":
-      return "已完成";
+      return "已完成"
     case "failed":
-      return "失败";
+      return "失败"
     case "cancelled":
-      return "已取消";
+      return "已取消"
     case "skipped":
-      return "已跳过";
+      return "已跳过"
     default:
-      return "处理中";
+      return "处理中"
   }
 }
 
@@ -56,37 +56,37 @@ function getToolStateColor(state: string) {
         bg: "rgba(16, 185, 129, 0.12)",
         border: "rgba(16, 185, 129, 0.18)",
         text: "#047857",
-      };
+      }
     case "failed":
     case "cancelled":
       return {
         bg: "rgba(239, 68, 68, 0.1)",
         border: "rgba(239, 68, 68, 0.18)",
         text: theme.colors.danger,
-      };
+      }
     case "input_required":
       return {
         bg: "rgba(245, 158, 11, 0.12)",
         border: "rgba(245, 158, 11, 0.18)",
         text: "#b45309",
-      };
+      }
     default:
       return {
         bg: "rgba(14, 165, 233, 0.1)",
         border: "rgba(14, 165, 233, 0.18)",
         text: "#0369a1",
-      };
+      }
   }
 }
 
 function getAvatarStatus(runtime: ActorRuntimeState) {
-  if (runtime.health === "error" || runtime.phase === "error") return "error";
-  if (runtime.phase === "tool") return "tool";
-  if (runtime.phase === "responding") return "responding";
+  if (runtime.health === "error" || runtime.phase === "error") return "error"
+  if (runtime.phase === "tool") return "tool"
+  if (runtime.phase === "responding") return "responding"
   if (isActorRuntimeActive(runtime)) {
-    return "thinking";
+    return "thinking"
   }
-  return "idle";
+  return "idle"
 }
 
 function ActivityBlocks({ blocks }: { blocks: CanonicalContentBlock[] }) {
@@ -95,7 +95,7 @@ function ActivityBlocks({ blocks }: { blocks: CanonicalContentBlock[] }) {
       <View style={styles.emptyBlock}>
         <Text style={styles.emptyBlockText}>暂无细节</Text>
       </View>
-    );
+    )
   }
 
   return (
@@ -106,18 +106,22 @@ function ActivityBlocks({ blocks }: { blocks: CanonicalContentBlock[] }) {
             <View key={block.id} style={styles.textBlock}>
               <Text style={styles.textBlockText}>{block.text}</Text>
             </View>
-          );
+          )
         }
 
         if (block.type === "mention") {
           return (
             <View key={block.id} style={styles.inlineBlock}>
-              <Feather name="at-sign" size={12} color={theme.colors.textMuted} />
+              <Feather
+                name="at-sign"
+                size={12}
+                color={theme.colors.textMuted}
+              />
               <Text style={styles.inlineBlockText}>
                 {block.mention.name || block.mention.participantType}
               </Text>
             </View>
-          );
+          )
         }
 
         return (
@@ -127,17 +131,17 @@ function ActivityBlocks({ blocks }: { blocks: CanonicalContentBlock[] }) {
               {block.originalName}
             </Text>
           </View>
-        );
+        )
       })}
     </View>
-  );
+  )
 }
 
 interface ActorActivityBubbleProps {
-  conversationId: string;
-  workspaceId?: string;
-  runtime: ActorRuntimeState;
-  participant?: ChatParticipantSummary;
+  conversationId: string
+  workspaceId?: string
+  runtime: ActorRuntimeState
+  participant?: ChatParticipantSummary
 }
 
 export function ActorActivityBubble({
@@ -146,54 +150,58 @@ export function ActorActivityBubble({
   runtime,
   participant,
 }: ActorActivityBubbleProps) {
-  const preview = runtime.currentTurnPreview;
-  const previewTool = getActorRuntimeCurrentTool(runtime);
-  const [expanded, setExpanded] = useState(false);
-  const [detail, setDetail] = useState<ActorRuntimeTurnActivityDetail | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const preview = runtime.currentTurnPreview
+  const previewTool = getActorRuntimeCurrentTool(runtime)
+  const [expanded, setExpanded] = useState(false)
+  const [detail, setDetail] = useState<ActorRuntimeTurnActivityDetail | null>(
+    null
+  )
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    setExpanded(false);
-    setDetail(null);
-    setError(null);
-  }, [runtime.actorId, preview?.turnId]);
+    setExpanded(false)
+    setDetail(null)
+    setError(null)
+  }, [runtime.actorId, preview?.turnId])
 
   useEffect(() => {
     if (!expanded || !workspaceId || !preview?.turnId) {
-      return;
+      return
     }
 
-    let cancelled = false;
-    setLoading(true);
+    let cancelled = false
+    setLoading(true)
 
     void api
       .getChatConversationRuntimeTurnDetail(
         workspaceId,
         conversationId,
         runtime.actorId,
-        preview.turnId,
+        preview.turnId
       )
       .then((response) => {
-        if (cancelled) return;
-        setDetail(response);
-        setError(null);
+        if (cancelled) return
+        setDetail(response)
+        setError(null)
       })
       .catch((fetchError) => {
-        if (cancelled) return;
+        if (cancelled) return
         setError(
-          fetchError instanceof Error ? fetchError.message : "加载当前 turn 细节失败",
-        );
+          fetchError instanceof Error
+            ? fetchError.message
+            : "加载当前 turn 细节失败"
+        )
       })
       .finally(() => {
         if (!cancelled) {
-          setLoading(false);
+          setLoading(false)
         }
-      });
+      })
 
     return () => {
-      cancelled = true;
-    };
+      cancelled = true
+    }
   }, [
     conversationId,
     expanded,
@@ -201,21 +209,21 @@ export function ActorActivityBubble({
     runtime.actorId,
     runtime.updatedAt,
     workspaceId,
-  ]);
+  ])
 
   const countsLabel = useMemo(() => {
-    if (!preview || preview.totalToolCallCount === 0) return null;
-    const parts = [`${preview.totalToolCallCount} 个工具调用`];
+    if (!preview || preview.totalToolCallCount === 0) return null
+    const parts = [`${preview.totalToolCallCount} 个工具调用`]
     if (preview.completedToolCallCount > 0) {
-      parts.push(`${preview.completedToolCallCount} 已完成`);
+      parts.push(`${preview.completedToolCallCount} 已完成`)
     }
     if (preview.failedToolCallCount > 0) {
-      parts.push(`${preview.failedToolCallCount} 失败`);
+      parts.push(`${preview.failedToolCallCount} 失败`)
     }
-    return parts.join(" · ");
-  }, [preview]);
+    return parts.join(" · ")
+  }, [preview])
 
-  const previewTone = getToolStateColor(previewTool?.state || "running");
+  const previewTone = getToolStateColor(previewTool?.state || "running")
 
   return (
     <View style={styles.row}>
@@ -239,7 +247,9 @@ export function ActorActivityBubble({
               <Text numberOfLines={1} style={styles.actorName}>
                 {runtime.actorName}
               </Text>
-              <Text style={styles.summaryLine}>{formatTargetsLabel(runtime)}</Text>
+              <Text style={styles.summaryLine}>
+                {formatTargetsLabel(runtime)}
+              </Text>
             </View>
             {preview?.turnId ? (
               <Feather
@@ -261,33 +271,45 @@ export function ActorActivityBubble({
                   },
                 ]}
               >
-                <Text style={[styles.statePillText, { color: previewTone.text }]}>
+                <Text
+                  style={[styles.statePillText, { color: previewTone.text }]}
+                >
                   {formatToolStateLabel(previewTool.state)}
                 </Text>
               </View>
               <Text numberOfLines={2} style={styles.toolText}>
                 <Text style={styles.toolTitle}>{previewTool.displayTitle}</Text>
-                {previewTool.displayDetail ? ` · ${previewTool.displayDetail}` : ""}
+                {previewTool.displayDetail
+                  ? ` · ${previewTool.displayDetail}`
+                  : ""}
               </Text>
             </View>
           ) : null}
 
-          {countsLabel ? <Text style={styles.countsText}>{countsLabel}</Text> : null}
+          {countsLabel ? (
+            <Text style={styles.countsText}>{countsLabel}</Text>
+          ) : null}
         </Pressable>
 
         {expanded ? (
           <View style={styles.detailCard}>
             {loading && !detail ? (
               <View style={styles.loadingRow}>
-                <Feather name="loader" size={14} color={theme.colors.textMuted} />
-                <Text style={styles.loadingText}>正在加载当前 turn 活动...</Text>
+                <Feather
+                  name="loader"
+                  size={14}
+                  color={theme.colors.textMuted}
+                />
+                <Text style={styles.loadingText}>
+                  正在加载当前 turn 活动...
+                </Text>
               </View>
             ) : error ? (
               <Text style={styles.errorText}>{error}</Text>
             ) : detail && detail.items.length > 0 ? (
               <View style={styles.itemsList}>
                 {detail.items.map((item) => {
-                  const tone = getToolStateColor(item.state);
+                  const tone = getToolStateColor(item.state)
                   return (
                     <View key={item.toolCallId} style={styles.itemCard}>
                       <View style={styles.itemHeader}>
@@ -300,14 +322,20 @@ export function ActorActivityBubble({
                             },
                           ]}
                         >
-                          <Text style={[styles.statePillText, { color: tone.text }]}>
+                          <Text
+                            style={[styles.statePillText, { color: tone.text }]}
+                          >
                             {formatToolStateLabel(item.state)}
                           </Text>
                         </View>
-                        <Text style={styles.itemTitle}>{item.displayTitle}</Text>
+                        <Text style={styles.itemTitle}>
+                          {item.displayTitle}
+                        </Text>
                       </View>
                       {item.displayDetail ? (
-                        <Text style={styles.itemDetail}>{item.displayDetail}</Text>
+                        <Text style={styles.itemDetail}>
+                          {item.displayDetail}
+                        </Text>
                       ) : null}
                       <View style={styles.section}>
                         <Text style={styles.sectionLabel}>调用</Text>
@@ -318,19 +346,21 @@ export function ActorActivityBubble({
                         <ActivityBlocks blocks={item.resultBlocks} />
                       </View>
                     </View>
-                  );
+                  )
                 })}
               </View>
             ) : (
               <View style={styles.emptyBlock}>
-                <Text style={styles.emptyBlockText}>这个 turn 里还没有工具调用</Text>
+                <Text style={styles.emptyBlockText}>
+                  这个 turn 里还没有工具调用
+                </Text>
               </View>
             )}
           </View>
         ) : null}
       </View>
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -507,4 +537,4 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: theme.colors.textMuted,
   },
-});
+})

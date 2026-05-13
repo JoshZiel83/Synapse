@@ -1,25 +1,25 @@
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native"
 
-import { Avatar } from "@/components/ui";
+import { Avatar } from "@/components/ui"
 import {
   getConversationAvatarSpec,
   type PendingChatRead,
-} from "@/lib/chat-data";
-import { theme } from "@/theme/tokens";
-import type { ChatConversationView } from "@shared";
+} from "@/lib/chat-data"
+import { theme } from "@/theme/tokens"
+import type { ChatConversationView } from "@shared"
 
 function formatMessageTime(value?: string) {
-  if (!value) return "";
+  if (!value) return ""
 
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "";
+  const date = new Date(value)
+  if (Number.isNaN(date.getTime())) return ""
 
   return new Intl.DateTimeFormat("zh-CN", {
     month: "numeric",
     day: "numeric",
     hour: "2-digit",
     minute: "2-digit",
-  }).format(date);
+  }).format(date)
 }
 
 export function ConversationItem({
@@ -29,21 +29,22 @@ export function ConversationItem({
   onPress,
   showDivider = true,
 }: {
-  conversation: ChatConversationView;
-  workspaceMemberId?: string | null;
-  pendingRead?: PendingChatRead;
-  onPress: () => void;
-  showDivider?: boolean;
+  conversation: ChatConversationView
+  workspaceMemberId?: string | null
+  pendingRead?: PendingChatRead
+  onPress: () => void
+  showDivider?: boolean
 }) {
-  const title = conversation.title;
-  const avatar = getConversationAvatarSpec(conversation, workspaceMemberId);
-  const preview = conversation.lastItem?.previewText?.trim() || "打开会话继续沟通";
-  const messageAt = conversation.lastItem?.createdAt || conversation.createdAt;
-  const latestSequence = conversation.lastItem?.sequence ?? 0;
+  const title = conversation.title
+  const avatar = getConversationAvatarSpec(conversation, workspaceMemberId)
+  const preview =
+    conversation.lastItem?.previewText?.trim() || "打开会话继续沟通"
+  const messageAt = conversation.lastItem?.createdAt || conversation.createdAt
+  const latestSequence = conversation.lastItem?.sequence ?? 0
   const unreadCount =
     pendingRead && pendingRead.readUpToSequence >= latestSequence
       ? 0
-      : conversation.unreadCount;
+      : conversation.unreadCount
 
   return (
     <Pressable
@@ -55,13 +56,16 @@ export function ConversationItem({
       ]}
     >
       <View style={styles.avatarWrap}>
-        <Avatar name={avatar.name} uri={avatar.uri} icon={avatar.icon} size={40} />
+        <Avatar
+          name={avatar.name}
+          uri={avatar.uri}
+          icon={avatar.icon}
+          size={40}
+        />
         {unreadCount > 0 ? (
           <View style={styles.unreadBadge}>
             <Text style={styles.unreadText}>
-              {unreadCount > 99
-                ? "99+"
-                : unreadCount}
+              {unreadCount > 99 ? "99+" : unreadCount}
             </Text>
           </View>
         ) : null}
@@ -78,7 +82,7 @@ export function ConversationItem({
         </Text>
       </View>
     </Pressable>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -150,4 +154,4 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: "800",
   },
-});
+})

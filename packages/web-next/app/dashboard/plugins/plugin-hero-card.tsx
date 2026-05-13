@@ -1,44 +1,50 @@
-'use client';
+"use client"
 
-import type { ReactNode } from 'react';
+import type { ReactNode } from "react"
 
-import { AppCard, AppCardContent } from '@/components/app-card';
-import { PluginIcon, getLocale, transportLabels, translate } from './plugin-ui';
+import { AppCard, AppCardContent } from "@/components/app-card"
+import { PluginIcon, getLocale, transportLabels, translate } from "./plugin-ui"
 
 interface Props {
-  plugin: any;
-  eyebrow?: string;
-  action?: ReactNode;
+  plugin: any
+  eyebrow?: string
+  action?: ReactNode
 }
 
 export default function PluginHeroCard({ plugin, eyebrow, action }: Props) {
-  const locale = getLocale(plugin?.default_locale);
+  const locale = getLocale(plugin?.default_locale)
   const title =
-    translate(plugin?.display_name_i18n, locale, plugin?.default_locale || 'en') ||
+    translate(
+      plugin?.display_name_i18n,
+      locale,
+      plugin?.default_locale || "en"
+    ) ||
     plugin?.display_name ||
-    'Plugin';
+    "Plugin"
   const description =
     translate(
       plugin?.long_description_i18n || plugin?.description_i18n,
       locale,
-      plugin?.default_locale || 'en',
+      plugin?.default_locale || "en"
     ) ||
     plugin?.long_description ||
     plugin?.description ||
-    'No description provided.';
-  const primaryCategory = Array.isArray(plugin?.categories) ? plugin.categories[0] : null;
+    "No description provided."
+  const primaryCategory = Array.isArray(plugin?.categories)
+    ? plugin.categories[0]
+    : null
   const primaryCategoryLabel = primaryCategory
     ? translate(
         primaryCategory.displayNameI18n,
         locale,
-        primaryCategory.defaultLocale || 'en',
+        primaryCategory.defaultLocale || "en"
       ) || primaryCategory.displayName
-    : null;
+    : null
   const details = [
     transportLabels[plugin?.transport] || plugin?.transport,
     plugin?.org_display_name,
     primaryCategoryLabel,
-  ].filter(Boolean);
+  ].filter(Boolean)
 
   return (
     <AppCard variant="panel">
@@ -55,18 +61,25 @@ export default function PluginHeroCard({ plugin, eyebrow, action }: Props) {
 
             <div className="min-w-0 space-y-3">
               {eyebrow ? (
-                <div className="text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground">
+                <div className="text-xs font-medium tracking-[0.18em] text-muted-foreground uppercase">
                   {eyebrow}
                 </div>
               ) : null}
 
               <div className="space-y-2">
-                <h1 className="text-2xl font-semibold text-foreground">{title}</h1>
+                <h1 className="text-2xl font-semibold text-foreground">
+                  {title}
+                </h1>
                 {details.length > 0 ? (
                   <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
                     {details.map((detail, index) => (
-                      <span key={`${detail}-${index}`} className="inline-flex items-center gap-2">
-                        {index > 0 ? <span className="text-muted-foreground/50">/</span> : null}
+                      <span
+                        key={`${detail}-${index}`}
+                        className="inline-flex items-center gap-2"
+                      >
+                        {index > 0 ? (
+                          <span className="text-muted-foreground/50">/</span>
+                        ) : null}
                         <span>{detail}</span>
                       </span>
                     ))}
@@ -74,7 +87,9 @@ export default function PluginHeroCard({ plugin, eyebrow, action }: Props) {
                 ) : null}
               </div>
 
-              <p className="max-w-3xl text-sm leading-6 text-muted-foreground">{description}</p>
+              <p className="max-w-3xl text-sm leading-6 text-muted-foreground">
+                {description}
+              </p>
             </div>
           </div>
 
@@ -82,5 +97,5 @@ export default function PluginHeroCard({ plugin, eyebrow, action }: Props) {
         </div>
       </AppCardContent>
     </AppCard>
-  );
+  )
 }

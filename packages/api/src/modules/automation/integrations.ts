@@ -1,56 +1,56 @@
-import crypto from "node:crypto";
+import crypto from "node:crypto"
 import {
   buildAutomationEventSourceTemplate,
   getAutomationEventDefinition,
-} from "@synapse/shared/automation";
-import { nowISO } from "@synapse/shared";
+} from "@synapse/shared/automation"
+import { nowISO } from "@synapse/shared"
 import type {
   AutomationEventSource,
   AutomationEventSourceIntegration,
   AutomationIntegrationProvider,
   AutomationIntegrationTargetKind,
-} from "@synapse/shared";
-import { config } from "../../config/index.js";
-import { db } from "../../infrastructure/database/kysely.js";
-import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js";
+} from "@synapse/shared"
+import { config } from "../../config/index.js"
+import { db } from "../../infrastructure/database/kysely.js"
+import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js"
 
 type IntegrationInstallationRow = {
-  installation_id: string;
-  workspace_id: string;
-  installation_status: "active" | "disabled" | "error" | "archived";
-  config_data: unknown;
-  org_slug: string;
-  item_slug: string;
-  spec_metadata: unknown;
-};
+  installation_id: string
+  workspace_id: string
+  installation_status: "active" | "disabled" | "error" | "archived"
+  config_data: unknown
+  org_slug: string
+  item_slug: string
+  spec_metadata: unknown
+}
 
 type IntegrationWebhookIngressResult =
   | {
-      ignore: true;
+      ignore: true
     }
   | {
-      ignore?: false;
-      payload: Record<string, unknown>;
-      sourceSnapshot: Record<string, unknown>;
-      dedupeKey?: string;
-      occurredAt?: string;
-    };
+      ignore?: false
+      payload: Record<string, unknown>
+      sourceSnapshot: Record<string, unknown>
+      dedupeKey?: string
+      occurredAt?: string
+    }
 
 export interface ResolvedIntegrationInstallation {
-  id: string;
-  workspaceId: string;
-  provider: AutomationIntegrationProvider;
-  orgSlug: string;
-  itemSlug: string;
-  configData: Record<string, unknown>;
+  id: string
+  workspaceId: string
+  provider: AutomationIntegrationProvider
+  orgSlug: string
+  itemSlug: string
+  configData: Record<string, unknown>
 }
 
 type IntegrationEventSpec = {
-  provider: AutomationIntegrationProvider;
-  targetKind: AutomationIntegrationTargetKind;
-  githubEvent?: string;
-  gitlabFlag?: string;
-};
+  provider: AutomationIntegrationProvider
+  targetKind: AutomationIntegrationTargetKind
+  githubEvent?: string
+  gitlabFlag?: string
+}
 
 const INTEGRATION_EVENT_SPECS: Record<string, IntegrationEventSpec> = {
   "github.issue_comment": {
@@ -98,246 +98,272 @@ const INTEGRATION_EVENT_SPECS: Record<string, IntegrationEventSpec> = {
     targetKind: "project",
     gitlabFlag: "push_events",
   },
-};
+}
 
 function asObject(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
-    return {};
+    return {}
   }
-  return value as Record<string, unknown>;
+  return value as Record<string, unknown>
 }
 
 function readString(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
+  return typeof value === "string" && value.trim() ? value.trim() : null
 }
 
-function integrationProviderFromRow(row: IntegrationInstallationRow): AutomationIntegrationProvider | null {
-  const metadataProvider = readString(asObject(row.spec_metadata).integrationProvider);
+function integrationProviderFromRow(
+  row: IntegrationInstallationRow
+): AutomationIntegrationProvider | null {
+  const metadataProvider = readString(
+    asObject(row.spec_metadata).integrationProvider
+  )
   if (metadataProvider === "github" || metadataProvider === "gitlab") {
-    return metadataProvider;
+    return metadataProvider
   }
   if (row.org_slug === "github" || row.org_slug === "gitlab") {
-    return row.org_slug;
+    return row.org_slug
   }
-  return null;
+  return null
 }
 
 function trimTrailingSlash(value: string) {
-  return value.replace(/\/+$/, "");
+  return value.replace(/\/+$/, "")
 }
 
 function joinUrl(base: string, path: string) {
-  return `${trimTrailingSlash(base)}${path.startsWith("/") ? path : `/${path}`}`;
+  return `${trimTrailingSlash(base)}${path.startsWith("/") ? path : `/${path}`}`
 }
 
 function ensureTimingSafeEqual(left: string, right: string) {
-  const leftBuffer = Buffer.from(left, "utf8");
-  const rightBuffer = Buffer.from(right, "utf8");
+  const leftBuffer = Buffer.from(left, "utf8")
+  const rightBuffer = Buffer.from(right, "utf8")
   if (leftBuffer.length !== rightBuffer.length) {
-    return false;
+    return false
   }
-  return crypto.timingSafeEqual(leftBuffer, rightBuffer);
+  return crypto.timingSafeEqual(leftBuffer, rightBuffer)
 }
 
 function headerValue(headers: Record<string, unknown>, key: string) {
-  const loweredKey = key.toLowerCase();
-  const direct = headers[loweredKey] ?? headers[key];
+  const loweredKey = key.toLowerCase()
+  const direct = headers[loweredKey] ?? headers[key]
   if (typeof direct === "string") {
-    return direct;
+    return direct
   }
   if (Array.isArray(direct)) {
-    return typeof direct[0] === "string" ? direct[0] : null;
+    return typeof direct[0] === "string" ? direct[0] : null
   }
-  return null;
+  return null
 }
 
 function nestedTimestamp(payload: Record<string, unknown>, ...path: string[]) {
-  let current: unknown = payload;
+  let current: unknown = payload
   for (const segment of path) {
     if (!current || typeof current !== "object" || Array.isArray(current)) {
-      return null;
+      return null
     }
-    current = (current as Record<string, unknown>)[segment];
+    current = (current as Record<string, unknown>)[segment]
   }
-  const value = readString(current);
-  if (!value) return null;
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+  const value = readString(current)
+  if (!value) return null
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString()
 }
 
 function githubApiBaseUrl(configData: Record<string, unknown>) {
-  return readString(configData.apiBaseUrl) || "https://api.github.com";
+  return readString(configData.apiBaseUrl) || "https://api.github.com"
 }
 
 function gitlabBaseUrl(configData: Record<string, unknown>) {
-  return readString(configData.baseUrl) || "https://gitlab.com";
+  return readString(configData.baseUrl) || "https://gitlab.com"
 }
 
 function installationApiKey(configData: Record<string, unknown>) {
-  const apiKey = readString(configData.apiKey);
+  const apiKey = readString(configData.apiKey)
   if (!apiKey) {
-    throw new Error("Integration installation is missing apiKey");
+    throw new Error("Integration installation is missing apiKey")
   }
-  return apiKey;
+  return apiKey
 }
 
 function integrationSpecForSourceKey(
   sourceKey: string,
-  provider?: AutomationIntegrationProvider,
+  provider?: AutomationIntegrationProvider
 ) {
-  const spec = INTEGRATION_EVENT_SPECS[sourceKey];
+  const spec = INTEGRATION_EVENT_SPECS[sourceKey]
   if (!spec) {
-    throw new Error(`Unsupported integration event source key: ${sourceKey}`);
+    throw new Error(`Unsupported integration event source key: ${sourceKey}`)
   }
   if (provider && spec.provider !== provider) {
-    throw new Error(`Event source ${sourceKey} does not belong to ${provider}`);
+    throw new Error(`Event source ${sourceKey} does not belong to ${provider}`)
   }
-  return spec;
+  return spec
 }
 
 export function listIntegrationRemoteWebhookSubscriptions(
   provider: AutomationIntegrationProvider,
-  sourceKeys: string[],
+  sourceKeys: string[]
 ) {
-  const githubEvents = new Set<string>();
-  const gitlabFlags = new Set<string>();
+  const githubEvents = new Set<string>()
+  const gitlabFlags = new Set<string>()
 
   for (const sourceKey of sourceKeys) {
-    const spec = integrationSpecForSourceKey(sourceKey, provider);
+    const spec = integrationSpecForSourceKey(sourceKey, provider)
     if (spec.githubEvent) {
-      githubEvents.add(spec.githubEvent);
+      githubEvents.add(spec.githubEvent)
     }
     if (spec.gitlabFlag) {
-      gitlabFlags.add(spec.gitlabFlag);
+      gitlabFlags.add(spec.gitlabFlag)
     }
   }
 
   return {
     githubEvents: Array.from(githubEvents).sort(),
     gitlabFlags: Array.from(gitlabFlags).sort(),
-  };
+  }
 }
 
 export function listIntegrationSourceKeysForWebhookIngress(input: {
-  provider: AutomationIntegrationProvider;
-  headers?: Record<string, unknown>;
-  payload?: Record<string, unknown>;
+  provider: AutomationIntegrationProvider
+  headers?: Record<string, unknown>
+  payload?: Record<string, unknown>
 }) {
   if (input.provider === "github") {
-    const eventName = headerValue(input.headers || {}, "x-github-event");
+    const eventName = headerValue(input.headers || {}, "x-github-event")
     if (!eventName || eventName === "ping") {
-      return [];
+      return []
     }
     return Object.entries(INTEGRATION_EVENT_SPECS)
-      .filter(([, spec]) => spec.provider === "github" && spec.githubEvent === eventName)
-      .map(([sourceKey]) => sourceKey);
+      .filter(
+        ([, spec]) =>
+          spec.provider === "github" && spec.githubEvent === eventName
+      )
+      .map(([sourceKey]) => sourceKey)
   }
 
-  const payload = input.payload || {};
-  const objectKind = readString(payload.object_kind)?.toLowerCase();
+  const payload = input.payload || {}
+  const objectKind = readString(payload.object_kind)?.toLowerCase()
   if (!objectKind) {
-    return [];
+    return []
   }
 
   switch (objectKind) {
     case "note":
-      return ["gitlab.note"];
+      return ["gitlab.note"]
     case "merge_request":
-      return ["gitlab.merge_request"];
+      return ["gitlab.merge_request"]
     case "pipeline":
-      return ["gitlab.pipeline"];
+      return ["gitlab.pipeline"]
     case "push":
-      return ["gitlab.push"];
+      return ["gitlab.push"]
     default:
-      return [];
+      return []
   }
 }
 
 function githubRepositoryPath(targetId: string) {
-  const trimmed = targetId.trim().replace(/^\/+/, "").replace(/\/+$/, "");
-  const segments = trimmed.split("/").filter(Boolean);
+  const trimmed = targetId.trim().replace(/^\/+/, "").replace(/\/+$/, "")
+  const segments = trimmed.split("/").filter(Boolean)
   if (segments.length !== 2) {
-    throw new Error("GitHub repository target must use owner/repo format");
+    throw new Error("GitHub repository target must use owner/repo format")
   }
-  return segments.map((segment) => encodeURIComponent(segment)).join("/");
+  return segments.map((segment) => encodeURIComponent(segment)).join("/")
 }
 
 function gitlabProjectPath(targetId: string) {
-  const trimmed = targetId.trim();
+  const trimmed = targetId.trim()
   if (!trimmed) {
-    throw new Error("GitLab project target is required");
+    throw new Error("GitLab project target is required")
   }
-  return encodeURIComponent(trimmed);
+  return encodeURIComponent(trimmed)
 }
 
 async function githubRequest<T>(
   installation: ResolvedIntegrationInstallation,
   path: string,
-  init?: RequestInit,
+  init?: RequestInit
 ): Promise<T> {
-  const response = await fetch(joinUrl(githubApiBaseUrl(installation.configData), path), {
-    ...init,
-    headers: {
-      "Accept": "application/vnd.github+json",
-      "Authorization": `Bearer ${installationApiKey(installation.configData)}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-      ...(init?.headers || {}),
-    },
-  });
+  const response = await fetch(
+    joinUrl(githubApiBaseUrl(installation.configData), path),
+    {
+      ...init,
+      headers: {
+        Accept: "application/vnd.github+json",
+        Authorization: `Bearer ${installationApiKey(installation.configData)}`,
+        "X-GitHub-Api-Version": "2022-11-28",
+        ...(init?.headers || {}),
+      },
+    }
+  )
 
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`GitHub API error ${response.status}: ${body || response.statusText}`);
+    const body = await response.text().catch(() => "")
+    throw new Error(
+      `GitHub API error ${response.status}: ${body || response.statusText}`
+    )
   }
 
   if (response.status === 204) {
-    return undefined as T;
+    return undefined as T
   }
 
-  return response.json() as Promise<T>;
+  return response.json() as Promise<T>
 }
 
 async function gitlabRequest<T>(
   installation: ResolvedIntegrationInstallation,
   path: string,
-  init?: RequestInit,
+  init?: RequestInit
 ): Promise<T> {
-  const response = await fetch(joinUrl(trimTrailingSlash(gitlabBaseUrl(installation.configData)), `/api/v4${path}`), {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      "Authorization": `Bearer ${installationApiKey(installation.configData)}`,
-      ...(init?.headers || {}),
-    },
-  });
+  const response = await fetch(
+    joinUrl(
+      trimTrailingSlash(gitlabBaseUrl(installation.configData)),
+      `/api/v4${path}`
+    ),
+    {
+      ...init,
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${installationApiKey(installation.configData)}`,
+        ...(init?.headers || {}),
+      },
+    }
+  )
 
   if (!response.ok) {
-    const body = await response.text().catch(() => "");
-    throw new Error(`GitLab API error ${response.status}: ${body || response.statusText}`);
+    const body = await response.text().catch(() => "")
+    throw new Error(
+      `GitLab API error ${response.status}: ${body || response.statusText}`
+    )
   }
 
   if (response.status === 204) {
-    return undefined as T;
+    return undefined as T
   }
 
-  return response.json() as Promise<T>;
+  return response.json() as Promise<T>
 }
 
 export function buildIntegrationEventSourceTemplate(input: {
-  provider: AutomationIntegrationProvider;
-  sourceKey: string;
-  targetKind: AutomationIntegrationTargetKind;
-  targetId: string;
-  targetLabel: string;
+  provider: AutomationIntegrationProvider
+  sourceKey: string
+  targetKind: AutomationIntegrationTargetKind
+  targetId: string
+  targetLabel: string
 }) {
-  const definition = getAutomationEventDefinition(input.sourceKey);
-  if (!definition || definition.providerKind !== "integration" || definition.integrationProvider !== input.provider) {
-    throw new Error(`No integration definition found for ${input.sourceKey}`);
+  const definition = getAutomationEventDefinition(input.sourceKey)
+  if (
+    !definition ||
+    definition.providerKind !== "integration" ||
+    definition.integrationProvider !== input.provider
+  ) {
+    throw new Error(`No integration definition found for ${input.sourceKey}`)
   }
 
-  const spec = integrationSpecForSourceKey(input.sourceKey, input.provider);
+  const spec = integrationSpecForSourceKey(input.sourceKey, input.provider)
   if (spec.targetKind !== input.targetKind) {
-    throw new Error(`Event source ${input.sourceKey} requires target kind ${spec.targetKind}`);
+    throw new Error(
+      `Event source ${input.sourceKey} requires target kind ${spec.targetKind}`
+    )
   }
 
   return buildAutomationEventSourceTemplate(input.sourceKey, {
@@ -350,23 +376,27 @@ export function buildIntegrationEventSourceTemplate(input: {
     metadata: {
       integrationProvider: input.provider,
     },
-  });
+  })
 }
 
 export async function getIntegrationInstallation(
   workspaceId: string,
   installationId: string,
   expectedProvider?: AutomationIntegrationProvider,
-  options?: { allowInactive?: boolean },
+  options?: { allowInactive?: boolean }
 ): Promise<ResolvedIntegrationInstallation> {
-  const row = await db
+  const row = (await db
     .selectFrom("plugin_installations as installation")
-    .innerJoin("catalog_items as item", "item.id", "installation.catalog_item_id")
+    .innerJoin(
+      "catalog_items as item",
+      "item.id",
+      "installation.catalog_item_id"
+    )
     .innerJoin("publishers as publisher", "publisher.id", "item.publisher_id")
     .innerJoin(
       "plugin_package_version_specs as spec",
       "spec.catalog_version_id",
-      "installation.catalog_version_id",
+      "installation.catalog_version_id"
     )
     .select([
       "installation.id as installation_id",
@@ -380,21 +410,25 @@ export async function getIntegrationInstallation(
     .where("installation.id", "=", installationId)
     .where("installation.workspace_id", "=", workspaceId)
     .limit(1)
-    .executeTakeFirst() as IntegrationInstallationRow | undefined;
+    .executeTakeFirst()) as IntegrationInstallationRow | undefined
 
   if (!row) {
-    throw new Error(`Integration installation ${installationId} was not found`);
+    throw new Error(`Integration installation ${installationId} was not found`)
   }
   if (row.installation_status !== "active" && !options?.allowInactive) {
-    throw new Error(`Integration installation ${installationId} is not active`);
+    throw new Error(`Integration installation ${installationId} is not active`)
   }
 
-  const provider = integrationProviderFromRow(row);
+  const provider = integrationProviderFromRow(row)
   if (!provider) {
-    throw new Error(`Installation ${installationId} is not an automation-capable integration`);
+    throw new Error(
+      `Installation ${installationId} is not an automation-capable integration`
+    )
   }
   if (expectedProvider && provider !== expectedProvider) {
-    throw new Error(`Installation ${installationId} does not belong to ${expectedProvider}`);
+    throw new Error(
+      `Installation ${installationId} does not belong to ${expectedProvider}`
+    )
   }
 
   return {
@@ -404,39 +438,45 @@ export async function getIntegrationInstallation(
     orgSlug: row.org_slug,
     itemSlug: row.item_slug,
     configData: decryptSensitiveFields(asObject(row.config_data)),
-  };
+  }
 }
 
 export function integrationWebhookCallbackUrl(pathToken: string) {
-  const baseUrl = trimTrailingSlash(config.app.baseUrl || "http://localhost:3001");
-  return `${baseUrl}/api/v1/automation-webhooks/${pathToken}/events`;
+  const baseUrl = trimTrailingSlash(
+    config.app.baseUrl || "http://localhost:3001"
+  )
+  return `${baseUrl}/api/v1/automation-webhooks/${pathToken}/events`
 }
 
 export async function registerIntegrationWebhook(input: {
-  installation: ResolvedIntegrationInstallation;
-  sourceKeys: string[];
-  targetKind: AutomationIntegrationTargetKind;
-  targetId: string;
-  targetLabel: string;
-  callbackUrl: string;
-  secret: string;
-  name: string;
-  description: string;
+  installation: ResolvedIntegrationInstallation
+  sourceKeys: string[]
+  targetKind: AutomationIntegrationTargetKind
+  targetId: string
+  targetLabel: string
+  callbackUrl: string
+  secret: string
+  name: string
+  description: string
 }): Promise<string> {
   if (input.sourceKeys.length === 0) {
-    throw new Error("Integration webhook registration requires at least one sourceKey");
+    throw new Error(
+      "Integration webhook registration requires at least one sourceKey"
+    )
   }
 
   const specs = input.sourceKeys.map((sourceKey) =>
-    integrationSpecForSourceKey(sourceKey, input.installation.provider),
-  );
+    integrationSpecForSourceKey(sourceKey, input.installation.provider)
+  )
   if (specs.some((spec) => spec.targetKind !== input.targetKind)) {
-    throw new Error(`Integration webhook target kind ${input.targetKind} does not match all source keys`);
+    throw new Error(
+      `Integration webhook target kind ${input.targetKind} does not match all source keys`
+    )
   }
   const subscriptions = listIntegrationRemoteWebhookSubscriptions(
     input.installation.provider,
-    input.sourceKeys,
-  );
+    input.sourceKeys
+  )
 
   if (input.installation.provider === "github") {
     const response = await githubRequest<{ id: number | string }>(
@@ -458,9 +498,9 @@ export async function registerIntegrationWebhook(input: {
             insecure_ssl: "0",
           },
         }),
-      },
-    );
-    return String(response.id);
+      }
+    )
+    return String(response.id)
   }
 
   const response = await gitlabRequest<{ id: number | string }>(
@@ -480,20 +520,20 @@ export async function registerIntegrationWebhook(input: {
             name: input.name,
             description: input.description,
             enable_ssl_verification: true,
-          },
-        ),
+          }
+        )
       ),
-    },
-  );
-  return String(response.id);
+    }
+  )
+  return String(response.id)
 }
 
 export async function unregisterIntegrationWebhook(input: {
-  installation: ResolvedIntegrationInstallation;
-  integration: AutomationEventSourceIntegration;
+  installation: ResolvedIntegrationInstallation
+  integration: AutomationEventSourceIntegration
 }) {
   if (!input.integration.externalSubscriptionId) {
-    return;
+    return
   }
 
   try {
@@ -501,63 +541,67 @@ export async function unregisterIntegrationWebhook(input: {
       await githubRequest(
         input.installation,
         `/repos/${githubRepositoryPath(input.integration.targetId)}/hooks/${encodeURIComponent(input.integration.externalSubscriptionId)}`,
-        { method: "DELETE" },
-      );
-      return;
+        { method: "DELETE" }
+      )
+      return
     }
 
     await gitlabRequest(
       input.installation,
       `/projects/${gitlabProjectPath(input.integration.targetId)}/hooks/${encodeURIComponent(input.integration.externalSubscriptionId)}`,
-      { method: "DELETE" },
-    );
+      { method: "DELETE" }
+    )
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    if (
-      input.installation.provider === "github" &&
-      message.includes("404")
-    ) {
-      return;
+    const message = error instanceof Error ? error.message : String(error)
+    if (input.installation.provider === "github" && message.includes("404")) {
+      return
     }
-    if (
-      input.installation.provider === "gitlab" &&
-      message.includes("404")
-    ) {
-      return;
+    if (input.installation.provider === "gitlab" && message.includes("404")) {
+      return
     }
-    throw error;
+    throw error
   }
 }
 
 export async function updateIntegrationWebhook(input: {
-  installation: ResolvedIntegrationInstallation;
+  installation: ResolvedIntegrationInstallation
   integration: Pick<
     AutomationEventSourceIntegration,
-    "provider" | "targetKind" | "targetId" | "targetLabel" | "externalSubscriptionId"
-  >;
-  sourceKeys: string[];
-  callbackUrl: string;
-  secret: string;
-  name: string;
-  description: string;
+    | "provider"
+    | "targetKind"
+    | "targetId"
+    | "targetLabel"
+    | "externalSubscriptionId"
+  >
+  sourceKeys: string[]
+  callbackUrl: string
+  secret: string
+  name: string
+  description: string
 }) {
   if (!input.integration.externalSubscriptionId) {
-    throw new Error("Integration webhook update requires externalSubscriptionId");
+    throw new Error(
+      "Integration webhook update requires externalSubscriptionId"
+    )
   }
   if (input.sourceKeys.length === 0) {
-    throw new Error("Integration webhook update requires at least one sourceKey");
+    throw new Error(
+      "Integration webhook update requires at least one sourceKey"
+    )
   }
 
   const specs = input.sourceKeys.map((sourceKey) =>
-    integrationSpecForSourceKey(sourceKey, input.installation.provider),
-  );
+    integrationSpecForSourceKey(sourceKey, input.installation.provider)
+  )
   if (specs.some((spec) => spec.targetKind !== input.integration.targetKind)) {
-    throw new Error(`Integration webhook target kind ${input.integration.targetKind} does not match all source keys`);
+    throw new Error(
+      `Integration webhook target kind ${input.integration.targetKind} does not match all source keys`
+    )
   }
   const subscriptions = listIntegrationRemoteWebhookSubscriptions(
     input.installation.provider,
-    input.sourceKeys,
-  );
+    input.sourceKeys
+  )
 
   if (input.installation.provider === "github") {
     await githubRequest(
@@ -579,9 +623,9 @@ export async function updateIntegrationWebhook(input: {
             insecure_ssl: "0",
           },
         }),
-      },
-    );
-    return;
+      }
+    )
+    return
   }
 
   await gitlabRequest(
@@ -601,37 +645,37 @@ export async function updateIntegrationWebhook(input: {
             name: input.name,
             description: input.description,
             enable_ssl_verification: true,
-          },
-        ),
+          }
+        )
       ),
-    },
-  );
+    }
+  )
 }
 
 export function normalizeIntegrationWebhookIngress(input: {
   integration: Pick<
     AutomationEventSourceIntegration,
     "provider" | "targetKind" | "targetId" | "targetLabel"
-  >;
-  secret: string;
-  headers: Record<string, unknown>;
-  rawBody?: string;
-  body?: Record<string, unknown>;
+  >
+  secret: string
+  headers: Record<string, unknown>
+  rawBody?: string
+  body?: Record<string, unknown>
 }): IntegrationWebhookIngressResult {
-  const payload = input.body || {};
+  const payload = input.body || {}
   if (input.integration.provider === "github") {
-    const signature = headerValue(input.headers, "x-hub-signature-256");
+    const signature = headerValue(input.headers, "x-hub-signature-256")
     if (!signature || !input.rawBody) {
-      throw new Error("GitHub webhook signature is required");
+      throw new Error("GitHub webhook signature is required")
     }
-    const expected = `sha256=${crypto.createHmac("sha256", input.secret).update(input.rawBody).digest("hex")}`;
+    const expected = `sha256=${crypto.createHmac("sha256", input.secret).update(input.rawBody).digest("hex")}`
     if (!ensureTimingSafeEqual(signature, expected)) {
-      throw new Error("Invalid GitHub webhook signature");
+      throw new Error("Invalid GitHub webhook signature")
     }
 
-    const eventName = headerValue(input.headers, "x-github-event");
+    const eventName = headerValue(input.headers, "x-github-event")
     if (eventName === "ping") {
-      return { ignore: true };
+      return { ignore: true }
     }
 
     return {
@@ -651,16 +695,16 @@ export function normalizeIntegrationWebhookIngress(input: {
         integrationTargetLabel: input.integration.targetLabel,
         githubEvent: eventName,
         githubDeliveryId: headerValue(input.headers, "x-github-delivery"),
-        repositoryFullName: readString(
-          asObject(payload.repository).full_name,
-        ) || input.integration.targetLabel,
+        repositoryFullName:
+          readString(asObject(payload.repository).full_name) ||
+          input.integration.targetLabel,
       },
-    };
+    }
   }
 
-  const gitlabToken = headerValue(input.headers, "x-gitlab-token");
+  const gitlabToken = headerValue(input.headers, "x-gitlab-token")
   if (!gitlabToken || !ensureTimingSafeEqual(gitlabToken, input.secret)) {
-    throw new Error("Invalid GitLab webhook token");
+    throw new Error("Invalid GitLab webhook token")
   }
 
   return {
@@ -682,9 +726,9 @@ export function normalizeIntegrationWebhookIngress(input: {
       gitlabEvent: headerValue(input.headers, "x-gitlab-event"),
       gitlabEventUuid: headerValue(input.headers, "x-gitlab-event-uuid"),
       gitlabWebhookUuid: headerValue(input.headers, "x-gitlab-webhook-uuid"),
-      projectPathWithNamespace: readString(
-        asObject(payload.project).path_with_namespace,
-      ) || input.integration.targetLabel,
+      projectPathWithNamespace:
+        readString(asObject(payload.project).path_with_namespace) ||
+        input.integration.targetLabel,
     },
-  };
+  }
 }

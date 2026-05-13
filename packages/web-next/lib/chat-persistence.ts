@@ -3,7 +3,10 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb"
 
 import { isUuid } from "@/lib/uuid"
-import type { ConversationReplyRef, CanonicalContentBlock } from "@synapse/shared"
+import type {
+  ConversationReplyRef,
+  CanonicalContentBlock,
+} from "@synapse/shared"
 
 export const CHAT_QUEUE_DB_NAME = "synapse-web-chat-queue"
 export const CHAT_QUEUE_DB_VERSION = 1
@@ -109,9 +112,9 @@ export function normalizeStoredChatQueueState(
             ([conversationId, entry]) =>
               Boolean(
                 conversationId &&
-                  entry &&
-                  typeof entry === "object" &&
-                  typeof entry.conversationId === "string"
+                entry &&
+                typeof entry === "object" &&
+                typeof entry.conversationId === "string"
               )
           )
         )
@@ -120,14 +123,13 @@ export function normalizeStoredChatQueueState(
   const outbox =
     snapshot.outbox && typeof snapshot.outbox === "object"
       ? Object.fromEntries(
-          Object.entries(snapshot.outbox).filter(
-            ([, entry]) =>
-              Boolean(
-                entry &&
-                  typeof entry === "object" &&
-                  typeof entry.clientMessageId === "string" &&
-                  typeof entry.conversationId === "string"
-              )
+          Object.entries(snapshot.outbox).filter(([, entry]) =>
+            Boolean(
+              entry &&
+              typeof entry === "object" &&
+              typeof entry.clientMessageId === "string" &&
+              typeof entry.conversationId === "string"
+            )
           )
         )
       : {}

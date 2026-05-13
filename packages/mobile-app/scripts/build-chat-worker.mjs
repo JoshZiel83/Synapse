@@ -1,9 +1,9 @@
-import { build } from "esbuild";
-import { dirname, resolve } from "node:path";
-import { fileURLToPath } from "node:url";
+import { build } from "esbuild"
+import { dirname, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const packageRoot = resolve(__dirname, "..");
+const __dirname = dirname(fileURLToPath(import.meta.url))
+const packageRoot = resolve(__dirname, "..")
 
 await build({
   absWorkingDir: packageRoot,
@@ -20,4 +20,4 @@ await build({
   banner: {
     js: "/* eslint-disable */",
   },
-});
+})

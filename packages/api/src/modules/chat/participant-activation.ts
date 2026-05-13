@@ -1,51 +1,60 @@
-import crypto from "node:crypto";
-import { createConversationEvent, ensureConversationParticipant, getConversationParticipant } from "./service.js";
+import crypto from "node:crypto"
+import {
+  createConversationEvent,
+  ensureConversationParticipant,
+  getConversationParticipant,
+} from "./service.js"
 
 type ParticipantInitiator = {
-  participantKind: "actor" | "remote_agent" | "workspace_member";
-  participantId?: string;
-  workspaceMemberId?: string;
-  actorId?: string;
-  remoteAgentId?: string;
-  name?: string;
-};
+  participantKind: "actor" | "remote_agent" | "workspace_member"
+  participantId?: string
+  workspaceMemberId?: string
+  actorId?: string
+  remoteAgentId?: string
+  name?: string
+}
 
 async function resolveInitiator(params: {
-  conversationId: string;
-  initiator?: ParticipantInitiator;
+  conversationId: string
+  initiator?: ParticipantInitiator
 }) {
   if (!params.initiator) {
-    return undefined;
+    return undefined
   }
   if (params.initiator.participantId) {
-    return params.initiator;
+    return params.initiator
   }
   const participant = await getConversationParticipant({
     conversationId: params.conversationId,
     workspaceMemberId: params.initiator.workspaceMemberId,
     actorId: params.initiator.actorId,
     remoteAgentId: params.initiator.remoteAgentId,
-  });
+  })
   if (!participant) {
-    return params.initiator;
+    return params.initiator
   }
   return {
     ...params.initiator,
     participantId: participant.id,
-  };
+  }
 }
 
 async function loadParticipantDisplay(params: {
-  participantKind: "actor" | "remote_agent" | "workspace_member" | "external" | "system";
-  actorId?: string;
-  workspaceMemberId?: string;
-  displayName?: string;
+  participantKind:
+    | "actor"
+    | "remote_agent"
+    | "workspace_member"
+    | "external"
+    | "system"
+  actorId?: string
+  workspaceMemberId?: string
+  displayName?: string
 }) {
   if (params.displayName?.trim()) {
     return {
       name: params.displayName.trim(),
       title: undefined as string | undefined,
-    };
+    }
   }
   return {
     name:
@@ -53,37 +62,37 @@ async function loadParticipantDisplay(params: {
         ? "Actor"
         : params.participantKind === "remote_agent"
           ? "Remote Agent"
-        : params.participantKind === "workspace_member"
-          ? "User"
-          : params.participantKind === "system"
-            ? "System"
-            : "External participant",
+          : params.participantKind === "workspace_member"
+            ? "User"
+            : params.participantKind === "system"
+              ? "System"
+              : "External participant",
     title: undefined as string | undefined,
-  };
+  }
 }
 
 export async function activateConversationParticipant(params: {
-  workspaceId?: string;
-  conversationId: string;
-  participantKind: "actor" | "workspace_member" | "external" | "system";
-  workspaceMemberId?: string;
-  actorId?: string;
-  remoteAgentId?: string;
-  displayName?: string;
-  actorJoinVersionId?: string;
-  metadata?: Record<string, unknown>;
-  initiator?: ParticipantInitiator;
-  recordJoinEvent?: boolean;
+  workspaceId?: string
+  conversationId: string
+  participantKind: "actor" | "workspace_member" | "external" | "system"
+  workspaceMemberId?: string
+  actorId?: string
+  remoteAgentId?: string
+  displayName?: string
+  actorJoinVersionId?: string
+  metadata?: Record<string, unknown>
+  initiator?: ParticipantInitiator
+  recordJoinEvent?: boolean
 }) {
   const existing = await getConversationParticipant({
     conversationId: params.conversationId,
     workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
     remoteAgentId: params.remoteAgentId,
-  });
-  const activated = !existing || existing.state !== "active";
-  const created = !existing;
-  const revived = Boolean(existing && existing.state !== "active");
+  })
+  const activated = !existing || existing.state !== "active"
+  const created = !existing
+  const revived = Boolean(existing && existing.state !== "active")
 
   const member = await ensureConversationParticipant({
     conversationId: params.conversationId,
@@ -94,23 +103,23 @@ export async function activateConversationParticipant(params: {
     displayName: params.displayName,
     actorJoinVersionId: params.actorJoinVersionId,
     metadata: params.metadata,
-  });
+  })
 
   if (!member) {
-    throw new Error("Failed to activate conversation participant");
+    throw new Error("Failed to activate conversation participant")
   }
 
   if (activated && params.recordJoinEvent !== false) {
     const initiator = await resolveInitiator({
       conversationId: params.conversationId,
       initiator: params.initiator,
-    });
+    })
     const { name, title } = await loadParticipantDisplay({
       participantKind: params.participantKind,
       actorId: params.actorId,
       workspaceMemberId: params.workspaceMemberId,
       displayName: params.displayName,
-    });
+    })
 
     await createConversationEvent({
       workspaceId: params.workspaceId,
@@ -127,7 +136,10 @@ export async function activateConversationParticipant(params: {
         participants: [
           {
             participantId: member.id,
-            participantType: params.participantKind === "system" ? "external" : params.participantKind,
+            participantType:
+              params.participantKind === "system"
+                ? "external"
+                : params.participantKind,
             actorId: params.actorId,
             remoteAgentId: params.remoteAgentId,
             workspaceMemberId: params.workspaceMemberId,
@@ -146,7 +158,7 @@ export async function activateConversationParticipant(params: {
             }
           : undefined,
       },
-    });
+    })
   }
 
   return {
@@ -154,5 +166,5 @@ export async function activateConversationParticipant(params: {
     activated,
     created,
     revived,
-  };
+  }
 }

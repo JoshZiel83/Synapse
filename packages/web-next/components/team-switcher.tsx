@@ -90,7 +90,11 @@ export function TeamSwitcher({
                   <team.logo className="size-4 shrink-0" />
                 </div>
                 <span className="flex-1 truncate">{team.name}</span>
-                {team.id === activeTeam.id ? <Check className="size-4 text-primary" /> : <DropdownMenuShortcut>⌘{index + 1}</DropdownMenuShortcut>}
+                {team.id === activeTeam.id ? (
+                  <Check className="size-4 text-primary" />
+                ) : (
+                  <DropdownMenuShortcut>⌘{index + 1}</DropdownMenuShortcut>
+                )}
               </DropdownMenuItem>
             ))}
             <DropdownMenuSeparator />
@@ -98,7 +102,9 @@ export function TeamSwitcher({
               <div className="flex size-6 items-center justify-center rounded-md border bg-transparent">
                 <Plus className="size-4" />
               </div>
-              <div className="font-medium text-muted-foreground">Add workspace</div>
+              <div className="font-medium text-muted-foreground">
+                Add workspace
+              </div>
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

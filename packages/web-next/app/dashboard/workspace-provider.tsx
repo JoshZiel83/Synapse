@@ -56,7 +56,9 @@ export function useWorkspace() {
 export function WorkspaceProvider({ children }: { children: ReactNode }) {
   const [workspaceId, setWorkspaceId] = useState<string | null>(null)
   const [workspaceName, setWorkspaceName] = useState<string | null>(null)
-  const [currentWorkspaceMemberId, setCurrentWorkspaceMemberId] = useState<string | null>(null)
+  const [currentWorkspaceMemberId, setCurrentWorkspaceMemberId] = useState<
+    string | null
+  >(null)
   const [workspaces, setWorkspaces] = useState<WorkspaceInfo[]>([])
   const [needsOnboarding, setNeedsOnboarding] = useState(false)
   const [loading, setLoading] = useState(true)

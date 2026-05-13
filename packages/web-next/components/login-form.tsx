@@ -114,7 +114,7 @@ export function LoginForm({
                         aria-invalid={Boolean(error) || undefined}
                         required
                       />
-                    <FieldError>{error}</FieldError>
+                      <FieldError>{error}</FieldError>
                     </Field>
                     <Field>
                       <label className="flex items-center gap-3">

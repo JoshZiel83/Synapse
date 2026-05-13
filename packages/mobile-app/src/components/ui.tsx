@@ -1,5 +1,5 @@
-import Feather from "@expo/vector-icons/Feather";
-import { Image } from "expo-image";
+import Feather from "@expo/vector-icons/Feather"
+import { Image } from "expo-image"
 import {
   ActivityIndicator,
   Pressable,
@@ -13,15 +13,12 @@ import {
   type TextInputProps,
   type TextStyle,
   type ViewStyle,
-} from "react-native";
-import {
-  SafeAreaView,
-  useSafeAreaInsets,
-} from "react-native-safe-area-context";
+} from "react-native"
+import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 
-import { useAuthenticatedMediaSource } from "@/hooks/use-authenticated-media-source";
-import { getTwemojiUrl } from "@/lib/twemoji";
-import { theme } from "@/theme/tokens";
+import { useAuthenticatedMediaSource } from "@/hooks/use-authenticated-media-source"
+import { getTwemojiUrl } from "@/lib/twemoji"
+import { theme } from "@/theme/tokens"
 
 export function ScreenScroll({
   children,
@@ -30,13 +27,13 @@ export function ScreenScroll({
   bottomPadding = 128,
   topPadding = 16,
 }: {
-  children: React.ReactNode;
-  contentContainerStyle?: StyleProp<ViewStyle>;
-  refreshControl?: React.ReactElement<RefreshControlProps>;
-  bottomPadding?: number;
-  topPadding?: number;
+  children: React.ReactNode
+  contentContainerStyle?: StyleProp<ViewStyle>
+  refreshControl?: React.ReactElement<RefreshControlProps>
+  bottomPadding?: number
+  topPadding?: number
 }) {
-  const insets = useSafeAreaInsets();
+  const insets = useSafeAreaInsets()
 
   return (
     <SafeAreaView style={styles.safeArea} edges={["top"]}>
@@ -61,15 +58,15 @@ export function ScreenScroll({
         </ScrollView>
       </View>
     </SafeAreaView>
-  );
+  )
 }
 
 export function ScreenView({
   children,
   style,
 }: {
-  children: React.ReactNode;
-  style?: StyleProp<ViewStyle>;
+  children: React.ReactNode
+  style?: StyleProp<ViewStyle>
 }) {
   return (
     <SafeAreaView style={styles.safeArea} edges={["top", "bottom"]}>
@@ -78,7 +75,7 @@ export function ScreenView({
         {children}
       </View>
     </SafeAreaView>
-  );
+  )
 }
 
 export function BackgroundWash() {
@@ -87,42 +84,42 @@ export function BackgroundWash() {
       <View style={[styles.glow, styles.glowPrimary]} />
       <View style={[styles.glow, styles.glowAccent]} />
     </>
-  );
+  )
 }
 
 export function Card({
   children,
   style,
 }: {
-  children: React.ReactNode;
-  style?: StyleProp<ViewStyle>;
+  children: React.ReactNode
+  style?: StyleProp<ViewStyle>
 }) {
-  return <View style={[styles.card, style]}>{children}</View>;
+  return <View style={[styles.card, style]}>{children}</View>
 }
 
 export function SectionBlock({
   children,
   style,
 }: {
-  children: React.ReactNode;
-  style?: StyleProp<ViewStyle>;
+  children: React.ReactNode
+  style?: StyleProp<ViewStyle>
 }) {
-  return <View style={[styles.sectionBlock, style]}>{children}</View>;
+  return <View style={[styles.sectionBlock, style]}>{children}</View>
 }
 
 export function SectionTitleRow({
   title,
   action,
 }: {
-  title: string;
-  action?: React.ReactNode;
+  title: string
+  action?: React.ReactNode
 }) {
   return (
     <View style={styles.sectionTitleRow}>
       <Text style={styles.sectionTitleText}>{title}</Text>
       {action}
     </View>
-  );
+  )
 }
 
 export function MobilePageHeader({
@@ -130,9 +127,9 @@ export function MobilePageHeader({
   titleNode,
   action,
 }: {
-  title?: string;
-  titleNode?: React.ReactNode;
-  action?: React.ReactNode;
+  title?: string
+  titleNode?: React.ReactNode
+  action?: React.ReactNode
 }) {
   return (
     <View style={styles.pageHeader}>
@@ -147,7 +144,7 @@ export function MobilePageHeader({
         {action ? <View style={styles.pageHeaderAction}>{action}</View> : null}
       </View>
     </View>
-  );
+  )
 }
 
 export function SectionHeader({
@@ -156,10 +153,10 @@ export function SectionHeader({
   subtitle,
   action,
 }: {
-  eyebrow?: string;
-  title: string;
-  subtitle?: string;
-  action?: React.ReactNode;
+  eyebrow?: string
+  title: string
+  subtitle?: string
+  action?: React.ReactNode
 }) {
   return (
     <View style={styles.sectionHeader}>
@@ -172,7 +169,7 @@ export function SectionHeader({
       </View>
       {action}
     </View>
-  );
+  )
 }
 
 export function Button({
@@ -183,12 +180,12 @@ export function Button({
   disabled,
   style,
 }: {
-  label: string;
-  onPress?: () => void;
-  variant?: "primary" | "secondary" | "ghost" | "danger";
-  icon?: keyof typeof Feather.glyphMap;
-  disabled?: boolean;
-  style?: StyleProp<ViewStyle>;
+  label: string
+  onPress?: () => void
+  variant?: "primary" | "secondary" | "ghost" | "danger"
+  icon?: keyof typeof Feather.glyphMap
+  disabled?: boolean
+  style?: StyleProp<ViewStyle>
 }) {
   return (
     <Pressable
@@ -226,7 +223,7 @@ export function Button({
         {label}
       </Text>
     </Pressable>
-  );
+  )
 }
 
 export function Field({
@@ -235,9 +232,9 @@ export function Field({
   style,
   ...props
 }: TextInputProps & {
-  label: string;
-  hint?: string;
-  style?: StyleProp<TextStyle>;
+  label: string
+  hint?: string
+  style?: StyleProp<TextStyle>
 }) {
   return (
     <View style={styles.fieldGroup}>
@@ -249,15 +246,15 @@ export function Field({
       />
       {hint ? <Text style={styles.fieldHint}>{hint}</Text> : null}
     </View>
-  );
+  )
 }
 
 export function Pill({
   label,
   tone = "neutral",
 }: {
-  label: string;
-  tone?: "neutral" | "accent" | "primary";
+  label: string
+  tone?: "neutral" | "accent" | "primary"
 }) {
   return (
     <View
@@ -277,7 +274,7 @@ export function Pill({
         {label}
       </Text>
     </View>
-  );
+  )
 }
 
 export function Avatar({
@@ -287,15 +284,15 @@ export function Avatar({
   icon,
   status,
 }: {
-  name?: string;
-  uri?: string | null;
-  size?: number;
-  icon?: keyof typeof Feather.glyphMap;
-  status?: "idle" | "thinking" | "tool" | "responding" | "error";
+  name?: string
+  uri?: string | null
+  size?: number
+  icon?: keyof typeof Feather.glyphMap
+  status?: "idle" | "thinking" | "tool" | "responding" | "error"
 }) {
-  const fallback = (name || "?").slice(0, 1).toUpperCase();
-  const source = useAuthenticatedMediaSource(uri);
-  const emojiSource = !source && !icon ? getTwemojiUrl(name) : null;
+  const fallback = (name || "?").slice(0, 1).toUpperCase()
+  const source = useAuthenticatedMediaSource(uri)
+  const emojiSource = !source && !icon ? getTwemojiUrl(name) : null
 
   return (
     <View style={styles.avatarWrap}>
@@ -330,7 +327,11 @@ export function Avatar({
             contentFit="contain"
           />
         ) : icon ? (
-          <Feather name={icon} size={size * 0.45} color={theme.colors.primary} />
+          <Feather
+            name={icon}
+            size={size * 0.45}
+            color={theme.colors.primary}
+          />
         ) : (
           <Text style={[styles.avatarLabel, { fontSize: size * 0.36 }]}>
             {fallback}
@@ -355,7 +356,7 @@ export function Avatar({
         />
       ) : null}
     </View>
-  );
+  )
 }
 
 export function EmptyState({
@@ -364,10 +365,10 @@ export function EmptyState({
   description,
   action,
 }: {
-  icon: keyof typeof Feather.glyphMap;
-  title: string;
-  description: string;
-  action?: React.ReactNode;
+  icon: keyof typeof Feather.glyphMap
+  title: string
+  description: string
+  action?: React.ReactNode
 }) {
   return (
     <View style={styles.emptyState}>
@@ -378,7 +379,7 @@ export function EmptyState({
       <Text style={styles.emptyDescription}>{description}</Text>
       {action}
     </View>
-  );
+  )
 }
 
 export function LoadingBlock({ label }: { label?: string }) {
@@ -387,7 +388,7 @@ export function LoadingBlock({ label }: { label?: string }) {
       <ActivityIndicator color={theme.colors.primary} />
       {label ? <Text style={styles.loadingLabel}>{label}</Text> : null}
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -671,4 +672,4 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: theme.colors.textMuted,
   },
-});
+})

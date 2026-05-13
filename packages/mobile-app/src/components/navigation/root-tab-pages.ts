@@ -1,1 +1,1 @@
-export { RootTabPages } from "./root-tab-pages.web";
+export { RootTabPages } from "./root-tab-pages.web"

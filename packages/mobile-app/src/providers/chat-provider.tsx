@@ -1,5 +1,5 @@
-import { AppState, Platform, type AppStateStatus } from "react-native";
-import * as Network from "expo-network";
+import { AppState, Platform, type AppStateStatus } from "react-native"
+import * as Network from "expo-network"
 import {
   createContext,
   useCallback,
@@ -8,36 +8,33 @@ import {
   useMemo,
   useState,
   type ReactNode,
-} from "react";
+} from "react"
 
-import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
-import { syncChatBackgroundTaskRegistration } from "@/lib/chat-background-task";
-import type { ChatComposerSendPayload } from "@/lib/chat-compose";
-import {
-  api,
-  type ChatInteractionResolveInput,
-} from "@/lib/api";
+import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket"
+import { syncChatBackgroundTaskRegistration } from "@/lib/chat-background-task"
+import type { ChatComposerSendPayload } from "@/lib/chat-compose"
+import { api, type ChatInteractionResolveInput } from "@/lib/api"
 import {
   chatRuntime,
   type ChatRuntimeState,
   type ChatRuntimeStatus,
-} from "@/lib/chat-runtime";
+} from "@/lib/chat-runtime"
 import {
   getConversationMetaOrDefault,
   getMobileConversationItems,
   toPendingReadAdjustedUnreadCount,
   type ChatConversationMeta,
   type MobileChatItem,
-} from "@/lib/chat-data";
+} from "@/lib/chat-data"
 import {
   ensureChatServiceWorkerRegistered,
   requestChatServiceWorkerSync,
   subscribeToChatServiceWorker,
   syncChatServiceWorkerAuthContext,
-} from "@/lib/chat-web-service-worker";
-import { reportApiUnauthorized } from "@/lib/api";
-import { useSession } from "@/providers/session-provider";
-import { useWorkspace } from "@/providers/workspace-provider";
+} from "@/lib/chat-web-service-worker"
+import { reportApiUnauthorized } from "@/lib/api"
+import { useSession } from "@/providers/session-provider"
+import { useWorkspace } from "@/providers/workspace-provider"
 import {
   type ActorRuntimeState,
   type ChatConversationCreateResponse,
@@ -45,161 +42,168 @@ import {
   type ChatConversationView,
   type InteractionRequestSummary,
   type ChatSocketEvent,
-} from "@shared";
+} from "@shared"
 
 interface ChatContextValue {
-  status: ChatRuntimeStatus;
-  syncing: boolean;
-  error: string | null;
-  workspaceMemberId: string | null;
-  clientInstanceId: string | null;
-  conversations: ChatConversationView[];
-  totalUnreadCount: number;
-  getConversation: (conversationId: string) => ChatConversationView | null;
-  getConversationItems: (conversationId: string) => MobileChatItem[];
-  getConversationMeta: (conversationId: string) => ChatConversationMeta | null;
+  status: ChatRuntimeStatus
+  syncing: boolean
+  error: string | null
+  workspaceMemberId: string | null
+  clientInstanceId: string | null
+  conversations: ChatConversationView[]
+  totalUnreadCount: number
+  getConversation: (conversationId: string) => ChatConversationView | null
+  getConversationItems: (conversationId: string) => MobileChatItem[]
+  getConversationMeta: (conversationId: string) => ChatConversationMeta | null
   getConversationRuntimes: (
-    conversationId: string,
-  ) => Record<string, ActorRuntimeState>;
-  refreshInbox: () => Promise<void>;
+    conversationId: string
+  ) => Record<string, ActorRuntimeState>
+  refreshInbox: () => Promise<void>
   refreshConversation: (
-    conversationId: string,
-  ) => Promise<ChatConversationMessagesPage | null>;
-  loadOlderMessages: (conversationId: string) => Promise<void>;
+    conversationId: string
+  ) => Promise<ChatConversationMessagesPage | null>
+  loadOlderMessages: (conversationId: string) => Promise<void>
   markConversationRead: (
     conversationId: string,
     readUpToSequence: number,
-    lastVisibleSequence?: number,
-  ) => Promise<void>;
+    lastVisibleSequence?: number
+  ) => Promise<void>
   sendMessage: (
     conversationId: string,
-    input: ChatComposerSendPayload,
-  ) => Promise<void>;
+    input: ChatComposerSendPayload
+  ) => Promise<void>
   respondInteraction: (
     conversationId: string,
     interactionId: string,
-    input: ChatInteractionResolveInput,
-  ) => Promise<InteractionRequestSummary>;
+    input: ChatInteractionResolveInput
+  ) => Promise<InteractionRequestSummary>
   createConversation: (input: {
-    kind: "group" | "private" | "virtual";
-    title?: string;
-    actorIds?: string[];
-    workspaceMemberIds?: string[];
-    boundary?: "internal" | "external";
-  }) => Promise<ChatConversationCreateResponse>;
-  clearLocalState: () => Promise<void>;
+    kind: "group" | "private" | "virtual"
+    title?: string
+    actorIds?: string[]
+    workspaceMemberIds?: string[]
+    boundary?: "internal" | "external"
+  }) => Promise<ChatConversationCreateResponse>
+  clearLocalState: () => Promise<void>
 }
 
-const ChatContext = createContext<ChatContextValue | null>(null);
+const ChatContext = createContext<ChatContextValue | null>(null)
 
 export function ChatProvider({ children }: { children: ReactNode }) {
-  const { status: sessionStatus, token } = useSession();
-  const { workspaceId } = useWorkspace();
+  const { status: sessionStatus, token } = useSession()
+  const { workspaceId } = useWorkspace()
   const [runtimeState, setRuntimeState] = useState<ChatRuntimeState>(
-    chatRuntime.getState(),
-  );
+    chatRuntime.getState()
+  )
 
   useEffect(() => {
-    return chatRuntime.subscribe(setRuntimeState);
-  }, []);
+    return chatRuntime.subscribe(setRuntimeState)
+  }, [])
 
   useEffect(() => {
     if (sessionStatus !== "authenticated" || !workspaceId) {
-      chatRuntime.deactivate();
-      return;
+      chatRuntime.deactivate()
+      return
     }
 
-    void chatRuntime.ensureWorkspace(workspaceId);
-  }, [sessionStatus, workspaceId]);
+    void chatRuntime.ensureWorkspace(workspaceId)
+  }, [sessionStatus, workspaceId])
 
   useEffect(() => {
     void syncChatBackgroundTaskRegistration({
       token: sessionStatus === "authenticated" ? token : null,
       workspaceId: sessionStatus === "authenticated" ? workspaceId : null,
-    });
-  }, [sessionStatus, token, workspaceId]);
+    })
+  }, [sessionStatus, token, workspaceId])
 
   useEffect(() => {
     if (Platform.OS !== "web") {
-      return;
+      return
     }
 
-    void ensureChatServiceWorkerRegistered();
-  }, []);
+    void ensureChatServiceWorkerRegistered()
+  }, [])
 
   useEffect(() => {
     if (Platform.OS !== "web") {
-      return;
+      return
     }
 
     void syncChatServiceWorkerAuthContext({
       token: sessionStatus === "authenticated" ? token : null,
       workspaceId: sessionStatus === "authenticated" ? workspaceId : null,
-    });
-  }, [sessionStatus, token, workspaceId]);
+    })
+  }, [sessionStatus, token, workspaceId])
 
   useEffect(() => {
     if (sessionStatus !== "authenticated" || !workspaceId) {
-      return;
+      return
     }
 
     function handleAppStateChange(nextState: AppStateStatus) {
       if (nextState === "active") {
-        void chatRuntime.syncFromServer();
+        void chatRuntime.syncFromServer()
       }
     }
 
-    const subscription = AppState.addEventListener("change", handleAppStateChange);
-    return () => subscription.remove();
-  }, [sessionStatus, workspaceId]);
+    const subscription = AppState.addEventListener(
+      "change",
+      handleAppStateChange
+    )
+    return () => subscription.remove()
+  }, [sessionStatus, workspaceId])
 
   useEffect(() => {
     if (sessionStatus !== "authenticated" || !workspaceId) {
-      return;
+      return
     }
 
     const subscription = Network.addNetworkStateListener((event) => {
       if (event.isConnected && event.isInternetReachable !== false) {
-        void chatRuntime.syncFromServer();
+        void chatRuntime.syncFromServer()
       }
-    });
+    })
 
-    return () => subscription.remove();
-  }, [sessionStatus, workspaceId]);
+    return () => subscription.remove()
+  }, [sessionStatus, workspaceId])
 
   useEffect(() => {
-    if (Platform.OS !== "web" || sessionStatus !== "authenticated" || !workspaceId) {
-      return;
+    if (
+      Platform.OS !== "web" ||
+      sessionStatus !== "authenticated" ||
+      !workspaceId
+    ) {
+      return
     }
 
     function handleVisibilityChange() {
       if (document.visibilityState === "visible") {
-        void chatRuntime.syncFromServer();
+        void chatRuntime.syncFromServer()
       }
     }
 
     function handleOnline() {
-      void chatRuntime.syncFromServer();
-      void requestChatServiceWorkerSync("browser-online");
+      void chatRuntime.syncFromServer()
+      void requestChatServiceWorkerSync("browser-online")
     }
 
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    window.addEventListener("online", handleOnline);
+    document.addEventListener("visibilitychange", handleVisibilityChange)
+    window.addEventListener("online", handleOnline)
     return () => {
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-      window.removeEventListener("online", handleOnline);
-    };
-  }, [sessionStatus, workspaceId]);
+      document.removeEventListener("visibilitychange", handleVisibilityChange)
+      window.removeEventListener("online", handleOnline)
+    }
+  }, [sessionStatus, workspaceId])
 
   useEffect(() => {
     if (Platform.OS !== "web") {
-      return;
+      return
     }
 
     return subscribeToChatServiceWorker((message) => {
       if (message.type === "chat:auth-expired") {
-        reportApiUnauthorized(401);
-        return;
+        reportApiUnauthorized(401)
+        return
       }
 
       if (
@@ -210,15 +214,15 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         void chatRuntime
           .reloadPersistedQueueState(workspaceId)
           .then(() => chatRuntime.syncFromServer())
-          .catch(() => undefined);
+          .catch(() => undefined)
       }
-    });
-  }, [workspaceId]);
+    })
+  }, [workspaceId])
 
   const pendingReadCount = Object.keys(
-    runtimeState.snapshot?.pendingReads ?? {},
-  ).length;
-  const outboxCount = Object.keys(runtimeState.snapshot?.outbox ?? {}).length;
+    runtimeState.snapshot?.pendingReads ?? {}
+  ).length
+  const outboxCount = Object.keys(runtimeState.snapshot?.outbox ?? {}).length
 
   useEffect(() => {
     if (
@@ -227,14 +231,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       !workspaceId ||
       (pendingReadCount === 0 && outboxCount === 0)
     ) {
-      return;
+      return
     }
 
     void chatRuntime
       .awaitPersistence()
       .then(() => requestChatServiceWorkerSync("queue-updated"))
-      .catch(() => undefined);
-  }, [outboxCount, pendingReadCount, sessionStatus, workspaceId]);
+      .catch(() => undefined)
+  }, [outboxCount, pendingReadCount, sessionStatus, workspaceId])
 
   useEffect(() => {
     if (
@@ -243,18 +247,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       !workspaceId ||
       !runtimeState.snapshot?.clientInstanceId
     ) {
-      return;
+      return
     }
 
     void chatRuntime
       .awaitPersistence()
       .then(() => requestChatServiceWorkerSync("client-instance-ready"))
-      .catch(() => undefined);
-  }, [
-    runtimeState.snapshot?.clientInstanceId,
-    sessionStatus,
-    workspaceId,
-  ]);
+      .catch(() => undefined)
+  }, [runtimeState.snapshot?.clientInstanceId, sessionStatus, workspaceId])
 
   useWorkspaceWebSocket({
     workspaceId: workspaceId || undefined,
@@ -268,132 +268,138 @@ export function ChatProvider({ children }: { children: ReactNode }) {
         ]
       : [],
     onConnected: () => {
-      chatRuntime.handleSocketConnected();
+      chatRuntime.handleSocketConnected()
     },
     onEvent: (event: ChatSocketEvent | Record<string, unknown>) => {
-      chatRuntime.handleSocketEvent(event);
+      chatRuntime.handleSocketEvent(event)
     },
-  });
+  })
 
   const conversations = useMemo(() => {
     if (!runtimeState.snapshot) {
-      return [];
+      return []
     }
 
     return runtimeState.snapshot.conversations.map((conversation) => ({
       ...conversation,
       unreadCount: toPendingReadAdjustedUnreadCount(
         conversation,
-        runtimeState.snapshot?.pendingReads[conversation.conversationId],
+        runtimeState.snapshot?.pendingReads[conversation.conversationId]
       ),
-    }));
-  }, [runtimeState.snapshot]);
+    }))
+  }, [runtimeState.snapshot])
 
   const totalUnreadCount = useMemo(
     () =>
       conversations.reduce(
         (total, conversation) => total + conversation.unreadCount,
-        0,
+        0
       ),
-    [conversations],
-  );
+    [conversations]
+  )
 
   const getConversation = useCallback(
     (conversationId: string) =>
       conversations.find(
-        (conversation) => conversation.conversationId === conversationId,
+        (conversation) => conversation.conversationId === conversationId
       ) ?? null,
-    [conversations],
-  );
+    [conversations]
+  )
 
-  const getConversationItems = useCallback((conversationId: string) => {
-    if (!runtimeState.snapshot) {
-      return [];
-    }
+  const getConversationItems = useCallback(
+    (conversationId: string) => {
+      if (!runtimeState.snapshot) {
+        return []
+      }
 
-    return getMobileConversationItems(runtimeState.snapshot, conversationId);
-  }, [runtimeState.snapshot]);
+      return getMobileConversationItems(runtimeState.snapshot, conversationId)
+    },
+    [runtimeState.snapshot]
+  )
 
-  const getConversationMeta = useCallback((conversationId: string) => {
-    if (!runtimeState.snapshot) {
-      return null;
-    }
+  const getConversationMeta = useCallback(
+    (conversationId: string) => {
+      if (!runtimeState.snapshot) {
+        return null
+      }
 
-    return getConversationMetaOrDefault(runtimeState.snapshot, conversationId);
-  }, [runtimeState.snapshot]);
+      return getConversationMetaOrDefault(runtimeState.snapshot, conversationId)
+    },
+    [runtimeState.snapshot]
+  )
 
   const getConversationRuntimes = useCallback(
     (conversationId: string) =>
       runtimeState.runtimeByConversationId[conversationId] ?? {},
-    [runtimeState.runtimeByConversationId],
-  );
+    [runtimeState.runtimeByConversationId]
+  )
 
-  const refreshInbox = useCallback(() => chatRuntime.refreshInbox(), []);
+  const refreshInbox = useCallback(() => chatRuntime.refreshInbox(), [])
 
   const refreshConversation = useCallback(
     (conversationId: string) => chatRuntime.refreshConversation(conversationId),
-    [],
-  );
+    []
+  )
 
   const loadOlderMessages = useCallback(
     (conversationId: string) => chatRuntime.loadOlderMessages(conversationId),
-    [],
-  );
+    []
+  )
 
   const markConversationRead = useCallback(
     (
       conversationId: string,
       readUpToSequence: number,
-      lastVisibleSequence?: number,
+      lastVisibleSequence?: number
     ) =>
       chatRuntime.markConversationRead(
         conversationId,
         readUpToSequence,
-        lastVisibleSequence,
+        lastVisibleSequence
       ),
-    [],
-  );
+    []
+  )
 
   const sendMessage = useCallback(
     (conversationId: string, input: ChatComposerSendPayload) =>
       chatRuntime.sendMessage(conversationId, input),
-    [],
-  );
+    []
+  )
 
   const respondInteraction = useCallback(
     async (
       conversationId: string,
       interactionId: string,
-      input: ChatInteractionResolveInput,
+      input: ChatInteractionResolveInput
     ) => {
       if (!workspaceId) {
-        throw new Error("Workspace context is required to respond.");
+        throw new Error("Workspace context is required to respond.")
       }
 
       const result = await api.resolveChatInteraction(
         workspaceId,
         conversationId,
         interactionId,
-        input,
-      );
-      await chatRuntime.refreshConversation(conversationId);
-      return result.interaction;
+        input
+      )
+      await chatRuntime.refreshConversation(conversationId)
+      return result.interaction
     },
-    [workspaceId],
-  );
+    [workspaceId]
+  )
 
   const createConversation = useCallback(
     (input: {
-      kind: "group" | "private" | "virtual";
-      title?: string;
-      actorIds?: string[];
-      workspaceMemberIds?: string[];
-      boundary?: "internal" | "external";
+      kind: "group" | "private" | "virtual"
+      title?: string
+      actorIds?: string[]
+      workspaceMemberIds?: string[]
+      boundary?: "internal" | "external"
     }) => chatRuntime.createConversation(input),
-    [],
-  );
+    []
+  )
 
-  const clearLocalState = useCallback(() => chatRuntime.clearLocalState(), []);
+  const clearLocalState = useCallback(() => chatRuntime.clearLocalState(), [])
 
   const value = useMemo<ChatContextValue>(
     () => ({
@@ -437,17 +443,17 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       runtimeState.syncing,
       sendMessage,
       totalUnreadCount,
-    ],
-  );
+    ]
+  )
 
-  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>;
+  return <ChatContext.Provider value={value}>{children}</ChatContext.Provider>
 }
 
 export function useChat() {
-  const value = useContext(ChatContext);
+  const value = useContext(ChatContext)
   if (!value) {
-    throw new Error("useChat must be used inside ChatProvider.");
+    throw new Error("useChat must be used inside ChatProvider.")
   }
 
-  return value;
+  return value
 }

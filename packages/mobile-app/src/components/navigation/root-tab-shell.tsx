@@ -1,20 +1,14 @@
-import Ionicons from "@expo/vector-icons/Ionicons";
-import { useIsFocused } from "@react-navigation/native";
-import { usePathname, useRouter } from "expo-router";
-import {
-  Keyboard,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
-import { useEffect, useMemo, useState, type ComponentType } from "react";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Ionicons from "@expo/vector-icons/Ionicons"
+import { useIsFocused } from "@react-navigation/native"
+import { usePathname, useRouter } from "expo-router"
+import { Keyboard, Pressable, StyleSheet, Text, View } from "react-native"
+import { useEffect, useMemo, useState, type ComponentType } from "react"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
 
-import { RootTabPages } from "@/components/navigation/root-tab-pages";
-import { useChat } from "@/providers/chat-provider";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
+import { RootTabPages } from "@/components/navigation/root-tab-pages"
+import { useChat } from "@/providers/chat-provider"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
 import {
   ROOT_TAB_CONFIG,
   ROOT_TAB_ORDER,
@@ -23,28 +17,28 @@ import {
   getRootTabHref,
   getRootTabIndex,
   type RootTabKey,
-} from "@/navigation/root-tabs";
-import ChatsTabScreen from "@/screens/tabs/chats-tab-screen";
-import ContactsTabScreen from "@/screens/tabs/contacts-tab-screen";
-import HomeTabScreen from "@/screens/tabs/home-tab-screen";
-import MeTabScreen from "@/screens/tabs/me-tab-screen";
+} from "@/navigation/root-tabs"
+import ChatsTabScreen from "@/screens/tabs/chats-tab-screen"
+import ContactsTabScreen from "@/screens/tabs/contacts-tab-screen"
+import HomeTabScreen from "@/screens/tabs/home-tab-screen"
+import MeTabScreen from "@/screens/tabs/me-tab-screen"
 
 const TAB_SCREEN_COMPONENTS: Record<RootTabKey, ComponentType> = {
   home: HomeTabScreen,
   chats: ChatsTabScreen,
   contacts: ContactsTabScreen,
   me: MeTabScreen,
-};
+}
 
 function addVisitedTab(
   currentTabs: RootTabKey[],
-  nextTab: RootTabKey,
+  nextTab: RootTabKey
 ): RootTabKey[] {
   if (currentTabs.includes(nextTab)) {
-    return currentTabs;
+    return currentTabs
   }
 
-  return [...currentTabs, nextTab];
+  return [...currentTabs, nextTab]
 }
 
 function RootTabBar({
@@ -53,12 +47,12 @@ function RootTabBar({
   onSelectTab,
   unreadCount,
 }: {
-  activeTab: RootTabKey;
-  hidden: boolean;
-  onSelectTab: (tab: RootTabKey) => void;
-  unreadCount: number;
+  activeTab: RootTabKey
+  hidden: boolean
+  onSelectTab: (tab: RootTabKey) => void
+  unreadCount: number
 }) {
-  const insets = useSafeAreaInsets();
+  const insets = useSafeAreaInsets()
 
   return (
     <View
@@ -73,9 +67,9 @@ function RootTabBar({
       pointerEvents={hidden ? "none" : "auto"}
     >
       {ROOT_TAB_ORDER.map((tab) => {
-        const focused = tab === activeTab;
-        const color = focused ? theme.colors.primary : theme.colors.textSoft;
-        const config = ROOT_TAB_CONFIG[tab];
+        const focused = tab === activeTab
+        const color = focused ? theme.colors.primary : theme.colors.textSoft
+        const config = ROOT_TAB_CONFIG[tab]
 
         return (
           <Pressable
@@ -114,71 +108,71 @@ function RootTabBar({
               {config.label}
             </Text>
           </Pressable>
-        );
+        )
       })}
     </View>
-  );
+  )
 }
 
 export function RootTabShell() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const isFocused = useIsFocused();
-  const { workspaceId } = useWorkspace();
-  const { totalUnreadCount } = useChat();
-  const initialTab = getRootTabFromPathname(pathname) ?? "home";
-  const [selectedTab, setSelectedTab] = useState<RootTabKey>(initialTab);
-  const [visitedTabs, setVisitedTabs] = useState<RootTabKey[]>([initialTab]);
-  const [keyboardVisible, setKeyboardVisible] = useState(false);
+  const router = useRouter()
+  const pathname = usePathname()
+  const isFocused = useIsFocused()
+  const { workspaceId } = useWorkspace()
+  const { totalUnreadCount } = useChat()
+  const initialTab = getRootTabFromPathname(pathname) ?? "home"
+  const [selectedTab, setSelectedTab] = useState<RootTabKey>(initialTab)
+  const [visitedTabs, setVisitedTabs] = useState<RootTabKey[]>([initialTab])
+  const [keyboardVisible, setKeyboardVisible] = useState(false)
 
   const unreadCount = useMemo(
     () => (workspaceId ? totalUnreadCount : 0),
-    [totalUnreadCount, workspaceId],
-  );
+    [totalUnreadCount, workspaceId]
+  )
 
   useEffect(() => {
-    setVisitedTabs((currentTabs) => addVisitedTab(currentTabs, selectedTab));
-  }, [selectedTab]);
+    setVisitedTabs((currentTabs) => addVisitedTab(currentTabs, selectedTab))
+  }, [selectedTab])
 
   useEffect(() => {
     const showSubscription = Keyboard.addListener("keyboardDidShow", () => {
-      setKeyboardVisible(true);
-    });
+      setKeyboardVisible(true)
+    })
     const hideSubscription = Keyboard.addListener("keyboardDidHide", () => {
-      setKeyboardVisible(false);
-    });
+      setKeyboardVisible(false)
+    })
 
     return () => {
-      showSubscription.remove();
-      hideSubscription.remove();
-    };
-  }, []);
+      showSubscription.remove()
+      hideSubscription.remove()
+    }
+  }, [])
 
   useEffect(() => {
     if (!isFocused) {
-      return;
+      return
     }
 
-    const nextTab = getRootTabFromPathname(pathname);
+    const nextTab = getRootTabFromPathname(pathname)
     if (!nextTab || nextTab === selectedTab) {
-      return;
+      return
     }
 
-    setSelectedTab(nextTab);
-  }, [isFocused, pathname, selectedTab]);
+    setSelectedTab(nextTab)
+  }, [isFocused, pathname, selectedTab])
 
   function handleSelectTab(nextTab: RootTabKey) {
     if (nextTab === selectedTab) {
-      return;
+      return
     }
 
-    setSelectedTab(nextTab);
-    router.replace(getRootTabHref(nextTab));
+    setSelectedTab(nextTab)
+    router.replace(getRootTabHref(nextTab))
   }
 
   function renderTabPage(tab: RootTabKey) {
-    const ScreenComponent = TAB_SCREEN_COMPONENTS[tab];
-    return <ScreenComponent />;
+    const ScreenComponent = TAB_SCREEN_COMPONENTS[tab]
+    return <ScreenComponent />
   }
 
   return (
@@ -200,7 +194,7 @@ export function RootTabShell() {
         onSelectTab={handleSelectTab}
       />
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -269,4 +263,4 @@ const styles = StyleSheet.create({
     includeFontPadding: false,
     textAlign: "center",
   },
-});
+})

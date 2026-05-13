@@ -1,9 +1,9 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { AsrResultAccumulator } from "./normalizer.js";
+import test from "node:test"
+import assert from "node:assert/strict"
+import { AsrResultAccumulator } from "./normalizer.js"
 
 test("AsrResultAccumulator emits partial and final utterances without duplicates", () => {
-  const accumulator = new AsrResultAccumulator();
+  const accumulator = new AsrResultAccumulator()
 
   const first = accumulator.ingest(
     {
@@ -29,16 +29,16 @@ test("AsrResultAccumulator emits partial and final utterances without duplicates
       },
     },
     "2026-04-02T00:00:00.000Z",
-    false,
-  );
+    false
+  )
 
   assert.deepEqual(first.partial, {
     displayText: "你好世",
     unstableText: "世",
     receivedAt: "2026-04-02T00:00:00.000Z",
-  });
-  assert.equal(first.segmentFinals.length, 1);
-  assert.equal(first.segmentFinals[0]?.text, "你好");
+  })
+  assert.equal(first.segmentFinals.length, 1)
+  assert.equal(first.segmentFinals[0]?.text, "你好")
 
   const second = accumulator.ingest(
     {
@@ -64,16 +64,16 @@ test("AsrResultAccumulator emits partial and final utterances without duplicates
       },
     },
     "2026-04-02T00:00:01.000Z",
-    true,
-  );
+    true
+  )
 
   assert.deepEqual(second.partial, {
     displayText: "你好世界",
     unstableText: "",
     receivedAt: "2026-04-02T00:00:01.000Z",
-  });
-  assert.equal(second.segmentFinals.length, 1);
-  assert.equal(second.segmentFinals[0]?.text, "世界");
+  })
+  assert.equal(second.segmentFinals.length, 1)
+  assert.equal(second.segmentFinals[0]?.text, "世界")
   assert.deepEqual(second.completed, {
     text: "你好世界",
     segments: [
@@ -93,5 +93,5 @@ test("AsrResultAccumulator emits partial and final utterances without duplicates
       },
     ],
     durationMs: 900,
-  });
-});
+  })
+})

@@ -1,36 +1,43 @@
-import Feather from "@expo/vector-icons/Feather";
-import { Stack, useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
-import { Alert, BackHandler, Pressable, StyleSheet, Text, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { Stack, useLocalSearchParams, useRouter } from "expo-router"
+import { useEffect, useMemo, useState } from "react"
+import {
+  Alert,
+  BackHandler,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native"
 
-import { Button, Field, ScreenScroll, SectionBlock } from "@/components/ui";
-import { api } from "@/lib/api";
-import { useSession } from "@/providers/session-provider";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
+import { Button, Field, ScreenScroll, SectionBlock } from "@/components/ui"
+import { api } from "@/lib/api"
+import { useSession } from "@/providers/session-provider"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
 
 function getErrorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "创建工作区失败。";
+  return error instanceof Error ? error.message : "创建工作区失败。"
 }
 
 export default function CreateWorkspaceScreen() {
-  const router = useRouter();
-  const params = useLocalSearchParams<{ required?: string }>();
-  const { signOut } = useSession();
-  const { needsOnboarding, refreshWorkspaces, workspaces } = useWorkspace();
-  const [name, setName] = useState("");
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const router = useRouter()
+  const params = useLocalSearchParams<{ required?: string }>()
+  const { signOut } = useSession()
+  const { needsOnboarding, refreshWorkspaces, workspaces } = useWorkspace()
+  const [name, setName] = useState("")
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const requiresWorkspaceCreation = useMemo(
     () =>
       params.required === "1" || (needsOnboarding && workspaces.length === 0),
-    [needsOnboarding, params.required, workspaces.length],
-  );
+    [needsOnboarding, params.required, workspaces.length]
+  )
 
   async function leaveToLogin() {
-    await signOut();
-    router.replace("/login");
+    await signOut()
+    router.replace("/login")
   }
 
   function confirmLeaveWithoutWorkspace() {
@@ -46,56 +53,56 @@ export default function CreateWorkspaceScreen() {
           text: "退出登录",
           style: "destructive",
           onPress: () => {
-            void leaveToLogin();
+            void leaveToLogin()
           },
         },
-      ],
-    );
+      ]
+    )
   }
 
   function handleBackPress() {
     if (requiresWorkspaceCreation) {
-      confirmLeaveWithoutWorkspace();
-      return;
+      confirmLeaveWithoutWorkspace()
+      return
     }
 
-    router.back();
+    router.back()
   }
 
   useEffect(() => {
     if (!requiresWorkspaceCreation) {
-      return;
+      return
     }
 
     const subscription = BackHandler.addEventListener(
       "hardwareBackPress",
       () => {
-        confirmLeaveWithoutWorkspace();
-        return true;
-      },
-    );
+        confirmLeaveWithoutWorkspace()
+        return true
+      }
+    )
 
-    return () => subscription.remove();
-  }, [requiresWorkspaceCreation]);
+    return () => subscription.remove()
+  }, [requiresWorkspaceCreation])
 
   async function handleCreateWorkspace() {
-    const nextName = name.trim();
+    const nextName = name.trim()
     if (!nextName) {
-      setError("请输入工作区名称。");
-      return;
+      setError("请输入工作区名称。")
+      return
     }
 
-    setSubmitting(true);
-    setError(null);
+    setSubmitting(true)
+    setError(null)
 
     try {
-      const workspace = await api.createWorkspace(nextName);
-      await refreshWorkspaces(workspace.id);
-      router.replace("/");
+      const workspace = await api.createWorkspace(nextName)
+      await refreshWorkspaces(workspace.id)
+      router.replace("/")
     } catch (nextError) {
-      setError(getErrorMessage(nextError));
+      setError(getErrorMessage(nextError))
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
   }
 
@@ -142,7 +149,7 @@ export default function CreateWorkspaceScreen() {
         />
       </SectionBlock>
     </ScreenScroll>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -187,4 +194,4 @@ const styles = StyleSheet.create({
     lineHeight: 18,
     color: theme.colors.danger,
   },
-});
+})

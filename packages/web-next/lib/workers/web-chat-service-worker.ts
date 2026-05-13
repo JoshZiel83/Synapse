@@ -1,103 +1,103 @@
-import { openDB, type DBSchema, type IDBPDatabase } from "idb";
+import { openDB, type DBSchema, type IDBPDatabase } from "idb"
 
 import {
   CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL,
   CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG,
   CHAT_WEB_SERVICE_WORKER_SYNC_TAG,
-} from "../chat-service-worker-constants";
+} from "../chat-service-worker-constants"
 import {
   createEmptyStoredChatQueueState,
   loadStoredChatQueueState,
   sameStoredChatQueueState,
   saveStoredChatQueueState,
-} from "../chat-persistence";
+} from "../chat-persistence"
 
 type ChatWorkerMessage =
   | {
-      type: "chat:set-auth-context";
+      type: "chat:set-auth-context"
       payload: {
-        workspaceId: string;
-        apiBase: string;
-      };
+        workspaceId: string
+        apiBase: string
+      }
     }
   | {
-      type: "chat:clear-auth-context";
+      type: "chat:clear-auth-context"
     }
   | {
-      type: "chat:run-sync";
-      payload?: { reason?: string };
-    };
+      type: "chat:run-sync"
+      payload?: { reason?: string }
+    }
 
 type ChatWorkerBroadcast =
   | {
-      type: "chat:queue-updated";
+      type: "chat:queue-updated"
       payload: {
-        workspaceId: string;
-        reason?: string;
-      };
+        workspaceId: string
+        reason?: string
+      }
     }
   | {
-      type: "chat:queue-sync-failed";
+      type: "chat:queue-sync-failed"
       payload?: {
-        reason?: string;
-      };
-    };
+        reason?: string
+      }
+    }
 
 type ChatWorkerAuthContext = {
-  workspaceId: string;
-  apiBase: string;
-};
+  workspaceId: string
+  apiBase: string
+}
 
 type BackgroundSyncEventLike = Event & {
-  tag?: string;
-  waitUntil: (promise: Promise<unknown>) => void;
-};
+  tag?: string
+  waitUntil: (promise: Promise<unknown>) => void
+}
 
 interface WorkerAuthContextRow {
-  key: "active";
-  payload: ChatWorkerAuthContext;
-  updatedAt: string;
+  key: "active"
+  payload: ChatWorkerAuthContext
+  updatedAt: string
 }
 
 interface WorkerDatabaseSchema extends DBSchema {
   auth_context: {
-    key: string;
-    value: WorkerAuthContextRow;
-  };
+    key: string
+    value: WorkerAuthContextRow
+  }
 }
 
-const CHAT_WORKER_DB_NAME = "synapse-web-chat-worker";
-const CHAT_WORKER_DB_VERSION = 1;
-const CHAT_WORKER_AUTH_CONTEXT_STORE = "auth_context";
+const CHAT_WORKER_DB_NAME = "synapse-web-chat-worker"
+const CHAT_WORKER_DB_VERSION = 1
+const CHAT_WORKER_AUTH_CONTEXT_STORE = "auth_context"
 
 type ExtendableEventLike = Event & {
-  waitUntil: (promise: Promise<unknown>) => void;
-};
+  waitUntil: (promise: Promise<unknown>) => void
+}
 
 type WindowClientLike = {
-  postMessage: (message: unknown) => void;
-};
+  postMessage: (message: unknown) => void
+}
 
 type ServiceWorkerScopeLike = {
-  skipWaiting: () => Promise<void>;
+  skipWaiting: () => Promise<void>
   clients: {
-    claim: () => Promise<void>;
+    claim: () => Promise<void>
     matchAll: (options?: {
-      includeUncontrolled?: boolean;
-      type?: "window";
-    }) => Promise<WindowClientLike[]>;
-  };
-  location: Location;
-  addEventListener: (type: string, listener: (event: any) => void) => void;
-};
+      includeUncontrolled?: boolean
+      type?: "window"
+    }) => Promise<WindowClientLike[]>
+  }
+  location: Location
+  addEventListener: (type: string, listener: (event: any) => void) => void
+}
 
 type ExtendableMessageEventLike = ExtendableEventLike & {
-  data: unknown;
-};
+  data: unknown
+}
 
-const scope = self as unknown as ServiceWorkerScopeLike;
+const scope = self as unknown as ServiceWorkerScopeLike
 
-let workerDbPromise: Promise<IDBPDatabase<WorkerDatabaseSchema>> | null = null;
+let workerDbPromise: Promise<IDBPDatabase<WorkerDatabaseSchema>> | null = null
 
 function getWorkerDatabase() {
   if (!workerDbPromise) {
@@ -106,59 +106,61 @@ function getWorkerDatabase() {
       CHAT_WORKER_DB_VERSION,
       {
         upgrade(database) {
-          if (!database.objectStoreNames.contains(CHAT_WORKER_AUTH_CONTEXT_STORE)) {
+          if (
+            !database.objectStoreNames.contains(CHAT_WORKER_AUTH_CONTEXT_STORE)
+          ) {
             database.createObjectStore(CHAT_WORKER_AUTH_CONTEXT_STORE, {
               keyPath: "key",
-            });
+            })
           }
         },
-      },
-    );
+      }
+    )
   }
 
-  return workerDbPromise;
+  return workerDbPromise
 }
 
 async function loadAuthContext() {
-  const database = await getWorkerDatabase();
-  const row = await database.get(CHAT_WORKER_AUTH_CONTEXT_STORE, "active");
-  return row?.payload ?? null;
+  const database = await getWorkerDatabase()
+  const row = await database.get(CHAT_WORKER_AUTH_CONTEXT_STORE, "active")
+  return row?.payload ?? null
 }
 
 async function saveAuthContext(payload: ChatWorkerAuthContext) {
-  const database = await getWorkerDatabase();
+  const database = await getWorkerDatabase()
   await database.put(CHAT_WORKER_AUTH_CONTEXT_STORE, {
     key: "active",
     payload,
     updatedAt: new Date().toISOString(),
-  });
+  })
 }
 
 async function clearAuthContext() {
-  const database = await getWorkerDatabase();
-  await database.delete(CHAT_WORKER_AUTH_CONTEXT_STORE, "active");
+  const database = await getWorkerDatabase()
+  await database.delete(CHAT_WORKER_AUTH_CONTEXT_STORE, "active")
 }
 
 function sameStoredEntry(left: unknown, right: unknown) {
-  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
 }
 
 function latestIsoTimestamp(currentValue?: string, nextValue?: string) {
   if (!currentValue) {
-    return nextValue;
+    return nextValue
   }
   if (!nextValue) {
-    return currentValue;
+    return currentValue
   }
   return new Date(currentValue).getTime() >= new Date(nextValue).getTime()
     ? currentValue
-    : nextValue;
+    : nextValue
 }
 
 function mergeStoredQueueTransition(
   currentState: ReturnType<typeof createEmptyStoredChatQueueState>,
   previousState: ReturnType<typeof createEmptyStoredChatQueueState> | null,
-  nextState: ReturnType<typeof createEmptyStoredChatQueueState>,
+  nextState: ReturnType<typeof createEmptyStoredChatQueueState>
 ) {
   const nextWorkspaceState =
     currentState.workspaceMemberId &&
@@ -167,41 +169,43 @@ function mergeStoredQueueTransition(
       ? createEmptyStoredChatQueueState(nextState.workspaceId)
       : currentState.workspaceId === nextState.workspaceId
         ? currentState
-        : createEmptyStoredChatQueueState(nextState.workspaceId);
+        : createEmptyStoredChatQueueState(nextState.workspaceId)
 
-  const previousOutbox = previousState?.outbox ?? {};
-  const previousPendingReads = previousState?.pendingReads ?? {};
-  const nextOutbox = { ...nextWorkspaceState.outbox };
-  const nextPendingReads = { ...nextWorkspaceState.pendingReads };
+  const previousOutbox = previousState?.outbox ?? {}
+  const previousPendingReads = previousState?.pendingReads ?? {}
+  const nextOutbox = { ...nextWorkspaceState.outbox }
+  const nextPendingReads = { ...nextWorkspaceState.pendingReads }
 
   for (const clientMessageId of Object.keys(previousOutbox)) {
     if (!(clientMessageId in nextState.outbox)) {
-      delete nextOutbox[clientMessageId];
+      delete nextOutbox[clientMessageId]
     }
   }
   for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
     if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
-      nextOutbox[clientMessageId] = entry;
+      nextOutbox[clientMessageId] = entry
     }
   }
 
   for (const conversationId of Object.keys(previousPendingReads)) {
     if (!(conversationId in nextState.pendingReads)) {
-      const currentEntry = nextPendingReads[conversationId];
-      const previousEntry = previousPendingReads[conversationId];
+      const currentEntry = nextPendingReads[conversationId]
+      const previousEntry = previousPendingReads[conversationId]
       if (
         currentEntry &&
         previousEntry &&
         currentEntry.readUpToSequence > previousEntry.readUpToSequence
       ) {
-        continue;
+        continue
       }
-      delete nextPendingReads[conversationId];
+      delete nextPendingReads[conversationId]
     }
   }
-  for (const [conversationId, entry] of Object.entries(nextState.pendingReads)) {
+  for (const [conversationId, entry] of Object.entries(
+    nextState.pendingReads
+  )) {
     if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
-      nextPendingReads[conversationId] = entry;
+      nextPendingReads[conversationId] = entry
     }
   }
 
@@ -210,68 +214,75 @@ function mergeStoredQueueTransition(
     workspaceId: nextState.workspaceId,
     workspaceMemberId:
       nextState.workspaceMemberId || nextWorkspaceState.workspaceMemberId,
-    clientInstanceId: nextState.clientInstanceId || nextWorkspaceState.clientInstanceId,
-    inboxCursor: Math.max(nextWorkspaceState.inboxCursor || 0, nextState.inboxCursor || 0),
+    clientInstanceId:
+      nextState.clientInstanceId || nextWorkspaceState.clientInstanceId,
+    inboxCursor: Math.max(
+      nextWorkspaceState.inboxCursor || 0,
+      nextState.inboxCursor || 0
+    ),
     lastBootstrappedAt: latestIsoTimestamp(
       nextWorkspaceState.lastBootstrappedAt,
-      nextState.lastBootstrappedAt,
+      nextState.lastBootstrappedAt
     ),
     pendingReads: nextPendingReads,
     outbox: nextOutbox,
-  };
+  }
 }
 
 function resolveApiUrl(apiBase: string, path: string) {
   const base =
-    typeof apiBase === "string" && apiBase.trim() ? apiBase.trim() : "/api/v1";
-  return new URL(`${base.replace(/\/$/, "")}${path}`, scope.location.origin).toString();
+    typeof apiBase === "string" && apiBase.trim() ? apiBase.trim() : "/api/v1"
+  return new URL(
+    `${base.replace(/\/$/, "")}${path}`,
+    scope.location.origin
+  ).toString()
 }
 
 scope.addEventListener("install", (event: ExtendableEventLike) => {
-  event.waitUntil(scope.skipWaiting());
-});
+  event.waitUntil(scope.skipWaiting())
+})
 
 scope.addEventListener("activate", (event: ExtendableEventLike) => {
-  event.waitUntil(scope.clients.claim());
-});
+  event.waitUntil(scope.clients.claim())
+})
 
 scope.addEventListener("message", (event: ExtendableMessageEventLike) => {
-  const message = (event.data || {}) as ChatWorkerMessage;
+  const message = (event.data || {}) as ChatWorkerMessage
   switch (message.type) {
     case "chat:set-auth-context":
       event.waitUntil(
         saveAuthContext(message.payload).then(() =>
-          runSyncPass(message.payload.workspaceId, "auth-context"),
-        ),
-      );
-      break;
+          runSyncPass(message.payload.workspaceId, "auth-context")
+        )
+      )
+      break
     case "chat:clear-auth-context":
-      event.waitUntil(clearAuthContext());
-      break;
+      event.waitUntil(clearAuthContext())
+      break
     case "chat:run-sync":
-      event.waitUntil(runSyncPass(null, message.payload?.reason));
-      break;
+      event.waitUntil(runSyncPass(null, message.payload?.reason))
+      break
   }
-});
+})
 
 scope.addEventListener("sync", (event: Event) => {
-  const syncEvent = event as BackgroundSyncEventLike;
+  const syncEvent = event as BackgroundSyncEventLike
   if (syncEvent.tag === CHAT_WEB_SERVICE_WORKER_SYNC_TAG) {
-    syncEvent.waitUntil(runSyncPass(null, "background-sync"));
+    syncEvent.waitUntil(runSyncPass(null, "background-sync"))
   }
-});
+})
 
 scope.addEventListener("periodicsync", (event: Event) => {
-  const syncEvent = event as BackgroundSyncEventLike;
+  const syncEvent = event as BackgroundSyncEventLike
   if (syncEvent.tag === CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG) {
-    syncEvent.waitUntil(runSyncPass(null, "periodic-sync"));
+    syncEvent.waitUntil(runSyncPass(null, "periodic-sync"))
   }
-});
+})
 
 async function fetchJson(
   auth: ChatWorkerAuthContext,
   path: string,
-  options?: RequestInit,
+  options?: RequestInit
 ) {
   const response = await fetch(resolveApiUrl(auth.apiBase, path), {
     ...options,
@@ -280,47 +291,47 @@ async function fetchJson(
       "Content-Type": "application/json",
       ...(options?.headers ?? {}),
     },
-  });
+  })
 
-  const data = await response.json().catch(() => null);
+  const data = await response.json().catch(() => null)
   if (!response.ok) {
-    throw new Error((data && data.error) || "Request failed");
+    throw new Error((data && data.error) || "Request failed")
   }
 
-  return data;
+  return data
 }
 
 function applyReadWatermarkAck(
   snapshot: ReturnType<typeof createEmptyStoredChatQueueState>,
   response: {
-    conversationId: string;
-    readWatermarkSequence: number;
-  },
+    conversationId: string
+    readWatermarkSequence: number
+  }
 ) {
-  const pendingReads = { ...snapshot.pendingReads };
-  const queued = pendingReads[response.conversationId];
+  const pendingReads = { ...snapshot.pendingReads }
+  const queued = pendingReads[response.conversationId]
   if (queued && queued.readUpToSequence <= response.readWatermarkSequence) {
-    delete pendingReads[response.conversationId];
+    delete pendingReads[response.conversationId]
   }
 
   return {
     ...snapshot,
     pendingReads,
-  };
+  }
 }
 
 async function flushPendingReads(
   auth: ChatWorkerAuthContext,
-  snapshot: ReturnType<typeof createEmptyStoredChatQueueState>,
+  snapshot: ReturnType<typeof createEmptyStoredChatQueueState>
 ) {
   if (!snapshot.clientInstanceId) {
-    return snapshot;
+    return snapshot
   }
 
-  let next = snapshot;
+  let next = snapshot
   const entries = Object.values(snapshot.pendingReads).sort(
-    (left, right) => left.readUpToSequence - right.readUpToSequence,
-  );
+    (left, right) => left.readUpToSequence - right.readUpToSequence
+  )
 
   for (const entry of entries) {
     try {
@@ -334,34 +345,34 @@ async function flushPendingReads(
             readUpToSequence: entry.readUpToSequence,
             lastVisibleSequence: entry.lastVisibleSequence,
           }),
-        },
-      );
-      next = applyReadWatermarkAck(next, response);
+        }
+      )
+      next = applyReadWatermarkAck(next, response)
     } catch {
-      break;
+      break
     }
   }
 
-  return next;
+  return next
 }
 
 async function flushOutbox(
   auth: ChatWorkerAuthContext,
-  snapshot: ReturnType<typeof createEmptyStoredChatQueueState>,
+  snapshot: ReturnType<typeof createEmptyStoredChatQueueState>
 ) {
   if (!snapshot.clientInstanceId) {
-    return snapshot;
+    return snapshot
   }
 
-  let next = snapshot;
+  let next = snapshot
   const entries = Object.values(snapshot.outbox).sort(
-    (left, right) => left.optimisticSequence - right.optimisticSequence,
-  );
+    (left, right) => left.optimisticSequence - right.optimisticSequence
+  )
 
   for (const entry of entries) {
-    const currentEntry = next.outbox[entry.clientMessageId];
+    const currentEntry = next.outbox[entry.clientMessageId]
     if (!currentEntry) {
-      continue;
+      continue
     }
 
     next = {
@@ -374,7 +385,7 @@ async function flushOutbox(
           lastAttemptAt: new Date().toISOString(),
         },
       },
-    };
+    }
 
     try {
       await fetchJson(
@@ -388,20 +399,20 @@ async function flushOutbox(
             contentBlocks: entry.contentBlocks,
             replyToItemId: entry.replyToItemId,
           }),
-        },
-      );
+        }
+      )
 
-      const nextOutbox = { ...next.outbox };
-      delete nextOutbox[entry.clientMessageId];
+      const nextOutbox = { ...next.outbox }
+      delete nextOutbox[entry.clientMessageId]
 
       next = {
         ...next,
         outbox: nextOutbox,
-      };
+      }
     } catch (error) {
-      const failedEntry = next.outbox[entry.clientMessageId];
+      const failedEntry = next.outbox[entry.clientMessageId]
       if (!failedEntry) {
-        break;
+        break
       }
 
       next = {
@@ -411,25 +422,28 @@ async function flushOutbox(
           [entry.clientMessageId]: {
             ...failedEntry,
             status: "retrying",
-            firstFailedAt: failedEntry.firstFailedAt || new Date().toISOString(),
+            firstFailedAt:
+              failedEntry.firstFailedAt || new Date().toISOString(),
             lastErrorMessage:
               error instanceof Error ? error.message : "Failed to send message",
           },
         },
-      };
-      break;
+      }
+      break
     }
   }
 
-  return next;
+  return next
 }
 
 async function broadcast(message: ChatWorkerBroadcast) {
   try {
     if ("BroadcastChannel" in scope) {
-      const channel = new BroadcastChannel(CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL);
-      channel.postMessage(message);
-      channel.close();
+      const channel = new BroadcastChannel(
+        CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL
+      )
+      channel.postMessage(message)
+      channel.close()
     }
   } catch {
     // Ignore channel failures and fall back to window clients below.
@@ -438,34 +452,37 @@ async function broadcast(message: ChatWorkerBroadcast) {
   const clients = await scope.clients.matchAll({
     includeUncontrolled: true,
     type: "window",
-  });
+  })
 
   for (const client of clients) {
-    client.postMessage(message);
+    client.postMessage(message)
   }
 }
 
-async function runSyncPass(workspaceIdOverride: string | null, reason?: string) {
+async function runSyncPass(
+  workspaceIdOverride: string | null,
+  reason?: string
+) {
   try {
-    const auth = await loadAuthContext();
+    const auth = await loadAuthContext()
     if (!auth || !auth.workspaceId || !auth.apiBase) {
-      return;
+      return
     }
 
     const effectiveAuth = {
       ...auth,
       workspaceId: workspaceIdOverride || auth.workspaceId,
-    };
+    }
 
     const startingSnapshot =
       (await loadStoredChatQueueState(effectiveAuth.workspaceId)) ||
-      createEmptyStoredChatQueueState(effectiveAuth.workspaceId);
+      createEmptyStoredChatQueueState(effectiveAuth.workspaceId)
     if (!startingSnapshot.clientInstanceId) {
-      return;
+      return
     }
 
-    let nextSnapshot = await flushPendingReads(effectiveAuth, startingSnapshot);
-    nextSnapshot = await flushOutbox(effectiveAuth, nextSnapshot);
+    let nextSnapshot = await flushPendingReads(effectiveAuth, startingSnapshot)
+    nextSnapshot = await flushOutbox(effectiveAuth, nextSnapshot)
 
     if (!sameStoredChatQueueState(startingSnapshot, nextSnapshot)) {
       await saveStoredChatQueueState(
@@ -473,9 +490,9 @@ async function runSyncPass(workspaceIdOverride: string | null, reason?: string) 
           (await loadStoredChatQueueState(effectiveAuth.workspaceId)) ||
             createEmptyStoredChatQueueState(effectiveAuth.workspaceId),
           startingSnapshot,
-          nextSnapshot,
-        ),
-      );
+          nextSnapshot
+        )
+      )
     }
 
     await broadcast({
@@ -484,13 +501,13 @@ async function runSyncPass(workspaceIdOverride: string | null, reason?: string) 
         workspaceId: effectiveAuth.workspaceId,
         reason: reason || "queue-sync",
       },
-    });
+    })
   } catch {
     await broadcast({
       type: "chat:queue-sync-failed",
       payload: {
         reason: reason || "queue-sync",
       },
-    });
+    })
   }
 }

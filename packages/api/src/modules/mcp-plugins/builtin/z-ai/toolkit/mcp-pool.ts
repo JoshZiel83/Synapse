@@ -1,32 +1,34 @@
-import { McpHttpClient } from '../../../mcp-client.js';
-import { ToolDefinition } from '@synapse/shared';
+import { McpHttpClient } from "../../../mcp-client.js"
+import { ToolDefinition } from "@synapse/shared"
 
 async function withMcpClient<T>(
   endpoint: string,
   apiKey: string,
-  fn: (client: McpHttpClient) => Promise<T>,
+  fn: (client: McpHttpClient) => Promise<T>
 ): Promise<T> {
   const client = new McpHttpClient(endpoint, {
-    'Authorization': `Bearer ${apiKey}`,
-  });
-  await client.initialize();
+    Authorization: `Bearer ${apiKey}`,
+  })
+  await client.initialize()
   try {
-    return await fn(client);
+    return await fn(client)
   } finally {
-    await client.shutdown().catch(() => {});
+    await client.shutdown().catch(() => {})
   }
 }
 
 export async function discoverTools(
   endpoint: string,
   apiKey: string,
-  fallback: ToolDefinition[],
+  fallback: ToolDefinition[]
 ): Promise<ToolDefinition[]> {
   try {
-    const tools = await withMcpClient(endpoint, apiKey, (client) => client.listTools());
-    return tools.length > 0 ? tools : fallback;
+    const tools = await withMcpClient(endpoint, apiKey, (client) =>
+      client.listTools()
+    )
+    return tools.length > 0 ? tools : fallback
   } catch {
-    return fallback;
+    return fallback
   }
 }
 
@@ -34,28 +36,34 @@ export async function callMcpTool(
   endpoint: string,
   apiKey: string,
   toolName: string,
-  input: Record<string, unknown>,
+  input: Record<string, unknown>
 ): Promise<unknown> {
-  return withMcpClient(endpoint, apiKey, (client) => client.callTool(toolName, input));
+  return withMcpClient(endpoint, apiKey, (client) =>
+    client.callTool(toolName, input)
+  )
 }
 
 export function extractMcpTextResult(result: unknown): string {
-  if (typeof result === 'string') return result;
-  if (!result || typeof result !== 'object') return String(result ?? '');
+  if (typeof result === "string") return result
+  if (!result || typeof result !== "object") return String(result ?? "")
 
-  const candidate = result as Record<string, unknown>;
-  if (typeof candidate.content === 'string') return candidate.content;
+  const candidate = result as Record<string, unknown>
+  if (typeof candidate.content === "string") return candidate.content
   if (Array.isArray(candidate.content)) {
     return candidate.content
       .map((item) => {
-        if (item && typeof item === 'object' && typeof (item as Record<string, unknown>).text === 'string') {
-          return String((item as Record<string, unknown>).text);
+        if (
+          item &&
+          typeof item === "object" &&
+          typeof (item as Record<string, unknown>).text === "string"
+        ) {
+          return String((item as Record<string, unknown>).text)
         }
-        return '';
+        return ""
       })
       .filter(Boolean)
-      .join('\n');
+      .join("\n")
   }
 
-  return JSON.stringify(result);
+  return JSON.stringify(result)
 }

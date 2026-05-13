@@ -38,7 +38,13 @@ import { CanonicalContentEditor } from "@/components/canonical-content-editor"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Field,
   FieldContent,
@@ -84,14 +90,22 @@ function SectionListItem({
     <button
       onClick={onSelect}
       className={`w-full overflow-hidden rounded-3xl border px-4 py-3 text-left transition-colors ${
-        active ? "border-primary bg-accent" : "border-transparent hover:bg-accent/60"
+        active
+          ? "border-primary bg-accent"
+          : "border-transparent hover:bg-accent/60"
       }`}
       title={subtitle}
     >
       <div className="flex flex-col gap-1">
         <div className="flex items-start justify-between gap-3">
-          <div className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">{title}</div>
-          {badge ? <Badge variant="outline" className="shrink-0">{badge}</Badge> : null}
+          <div className="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+            {title}
+          </div>
+          {badge ? (
+            <Badge variant="outline" className="shrink-0">
+              {badge}
+            </Badge>
+          ) : null}
         </div>
         <div className="truncate text-sm text-muted-foreground">{subtitle}</div>
       </div>
@@ -120,7 +134,8 @@ function BasicSection({
         <CardHeader>
           <CardTitle>Core identity</CardTitle>
           <CardDescription>
-            Stable fields for identity, hierarchy, and permission-aware behavior.
+            Stable fields for identity, hierarchy, and permission-aware
+            behavior.
           </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-6">
@@ -130,7 +145,12 @@ function BasicSection({
               <Input
                 id="actor-name"
                 value={form.name}
-                onChange={(event) => updateForm((current) => ({ ...current, name: event.target.value }))}
+                onChange={(event) =>
+                  updateForm((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
                 placeholder="Alice"
               />
             </Field>
@@ -140,7 +160,12 @@ function BasicSection({
                 <FieldLabel>Role</FieldLabel>
                 <Select
                   value={form.role}
-                  onValueChange={(value) => updateForm((current) => ({ ...current, role: value as ActorRole }))}
+                  onValueChange={(value) =>
+                    updateForm((current) => ({
+                      ...current,
+                      role: value as ActorRole,
+                    }))
+                  }
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select a role" />
@@ -162,7 +187,12 @@ function BasicSection({
                 <Input
                   id="actor-title"
                   value={form.title}
-                  onChange={(event) => updateForm((current) => ({ ...current, title: event.target.value }))}
+                  onChange={(event) =>
+                    updateForm((current) => ({
+                      ...current,
+                      title: event.target.value,
+                    }))
+                  }
                   placeholder="Principal Researcher"
                 />
               </Field>
@@ -174,7 +204,10 @@ function BasicSection({
                 <Select
                   value={form.parentId || "none"}
                   onValueChange={(value) =>
-                    updateForm((current) => ({ ...current, parentId: value === "none" ? null : value }))
+                    updateForm((current) => ({
+                      ...current,
+                      parentId: value === "none" ? null : value,
+                    }))
                   }
                 >
                   <SelectTrigger className="w-full">
@@ -187,7 +220,9 @@ function BasicSection({
                         .filter((option) => option.id !== actor.id)
                         .map((option) => (
                           <SelectItem key={option.id} value={option.id}>
-                            {option.definition.name} · {option.definition.title || titleCase(option.definition.role)}
+                            {option.definition.name} ·{" "}
+                            {option.definition.title ||
+                              titleCase(option.definition.role)}
                           </SelectItem>
                         ))}
                     </SelectGroup>
@@ -195,17 +230,28 @@ function BasicSection({
                 </Select>
               </Field>
 
-              <Field orientation="horizontal" className="items-start rounded-3xl border border-border p-4">
+              <Field
+                orientation="horizontal"
+                className="items-start rounded-3xl border border-border p-4"
+              >
                 <FieldContent>
-                  <FieldLabel htmlFor="represent-user">Can represent user</FieldLabel>
+                  <FieldLabel htmlFor="represent-user">
+                    Can represent user
+                  </FieldLabel>
                   <FieldDescription>
-                    Hard switch. The permission system still decides what is allowed at runtime.
+                    Hard switch. The permission system still decides what is
+                    allowed at runtime.
                   </FieldDescription>
                 </FieldContent>
                 <Switch
                   id="represent-user"
                   checked={form.canRepresentUser}
-                  onCheckedChange={(checked) => updateForm((current) => ({ ...current, canRepresentUser: checked }))}
+                  onCheckedChange={(checked) =>
+                    updateForm((current) => ({
+                      ...current,
+                      canRepresentUser: checked,
+                    }))
+                  }
                 />
               </Field>
             </FieldGroup>
@@ -217,21 +263,29 @@ function BasicSection({
         <CardHeader>
           <CardTitle>Avatar and structured specialties</CardTitle>
           <CardDescription>
-            Structured specialties stay machine-readable. Installable skills are managed separately.
+            Structured specialties stay machine-readable. Installable skills are
+            managed separately.
           </CardDescription>
         </CardHeader>
         <CardContent className="grid gap-6 xl:grid-cols-[280px_minmax(0,1fr)]">
           <div className="rounded-[28px] border border-dashed border-border p-4">
             <div className="mb-4 flex items-center gap-4">
               <Avatar className="size-20 rounded-3xl">
-                <AvatarImage src={resolveFileUrl(form.avatarUrl) || undefined} alt={form.name || actor.definition.name} />
+                <AvatarImage
+                  src={resolveFileUrl(form.avatarUrl) || undefined}
+                  alt={form.name || actor.definition.name}
+                />
                 <AvatarFallback className="rounded-3xl bg-primary/10 text-primary">
                   <Bot className="size-8" />
                 </AvatarFallback>
               </Avatar>
               <div className="min-w-0">
-                <div className="truncate text-sm font-medium text-foreground">{form.name || "Unnamed actor"}</div>
-                <div className="text-sm text-muted-foreground">{form.title || titleCase(form.role)}</div>
+                <div className="truncate text-sm font-medium text-foreground">
+                  {form.name || "Unnamed actor"}
+                </div>
+                <div className="text-sm text-muted-foreground">
+                  {form.title || titleCase(form.role)}
+                </div>
               </div>
             </div>
             <Input
@@ -260,7 +314,12 @@ function BasicSection({
               id="actor-specialties"
               rows={3}
               value={form.specialties}
-              onChange={(event) => updateForm((current) => ({ ...current, specialties: event.target.value }))}
+              onChange={(event) =>
+                updateForm((current) => ({
+                  ...current,
+                  specialties: event.target.value,
+                }))
+              }
               placeholder="code.review, research, incident.response"
             />
             <FieldDescription>Comma or newline separated.</FieldDescription>
@@ -272,17 +331,28 @@ function BasicSection({
         <Card>
           <CardHeader>
             <CardTitle>Package source</CardTitle>
-            <CardDescription>This actor was installed from an official package and can receive upgrade notices.</CardDescription>
+            <CardDescription>
+              This actor was installed from an official package and can receive
+              upgrade notices.
+            </CardDescription>
           </CardHeader>
           <CardContent className="grid gap-3 text-sm md:grid-cols-2">
             <div className="rounded-2xl border border-border p-4">
-              <div className="text-xs uppercase tracking-wide text-muted-foreground">Source</div>
-              <div className="mt-2 font-medium text-foreground">{actor.sourceLink.packageDisplayName}</div>
+              <div className="text-xs tracking-wide text-muted-foreground uppercase">
+                Source
+              </div>
+              <div className="mt-2 font-medium text-foreground">
+                {actor.sourceLink.packageDisplayName}
+              </div>
             </div>
             <div className="rounded-2xl border border-border p-4">
-              <div className="text-xs uppercase tracking-wide text-muted-foreground">Sync status</div>
+              <div className="text-xs tracking-wide text-muted-foreground uppercase">
+                Sync status
+              </div>
               <div className="mt-2">
-                <Badge variant="outline">{titleCase(actor.sourceLink.status.replace(/_/g, " "))}</Badge>
+                <Badge variant="outline">
+                  {titleCase(actor.sourceLink.status.replace(/_/g, " "))}
+                </Badge>
               </div>
             </div>
           </CardContent>
@@ -292,17 +362,22 @@ function BasicSection({
       <Card>
         <CardHeader>
           <CardTitle>Current profile preview</CardTitle>
-          <CardDescription>This is the same definition summary other surfaces currently see.</CardDescription>
+          <CardDescription>
+            This is the same definition summary other surfaces currently see.
+          </CardDescription>
         </CardHeader>
         <CardContent className="flex flex-col gap-4">
           <div className="rounded-[28px] border border-border bg-muted/20 p-5">
             <div className="mb-3 flex flex-wrap items-center gap-2">
               <Badge variant="secondary">{titleCase(form.role)}</Badge>
               <Badge variant="outline">v{actor.currentVersion}</Badge>
-              {form.canRepresentUser ? <Badge variant="outline">Can represent user</Badge> : null}
+              {form.canRepresentUser ? (
+                <Badge variant="outline">Can represent user</Badge>
+              ) : null}
             </div>
             <p className="text-sm text-muted-foreground">
-              {form.title || "No title set"} · Updated {formatDate(actor.updatedAt)}
+              {form.title || "No title set"} · Updated{" "}
+              {formatDate(actor.updatedAt)}
             </p>
           </div>
         </CardContent>
@@ -336,7 +411,15 @@ function DocSection({
           <FieldGroup className="md:grid md:grid-cols-[minmax(0,1fr)_140px_120px] md:gap-4">
             <Field>
               <FieldLabel>Section title</FieldLabel>
-              <Input value={doc.title} onChange={(event) => onChange((current) => ({ ...current, title: event.target.value }))} />
+              <Input
+                value={doc.title}
+                onChange={(event) =>
+                  onChange((current) => ({
+                    ...current,
+                    title: event.target.value,
+                  }))
+                }
+              />
             </Field>
 
             <Field>
@@ -383,7 +466,9 @@ function DocSection({
           <CanonicalContentEditor
             workspaceId={workspaceId}
             value={doc.content}
-            onChange={(blocks) => onChange((current) => ({ ...current, content: blocks }))}
+            onChange={(blocks) =>
+              onChange((current) => ({ ...current, content: blocks }))
+            }
             placeholder="Write this actor the way you would describe a real person."
           />
         </CardContent>
@@ -393,7 +478,10 @@ function DocSection({
         <Card>
           <CardHeader>
             <CardTitle>Custom section controls</CardTitle>
-            <CardDescription>Remove this section if it no longer belongs in the actor definition.</CardDescription>
+            <CardDescription>
+              Remove this section if it no longer belongs in the actor
+              definition.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <Button type="button" variant="outline" onClick={onRemove}>
@@ -434,14 +522,18 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
         ])
         if (cancelled) return
         const nextActor = actorResponse as Actor
-        const actorList = Array.isArray(actorsResponse) ? (actorsResponse as Actor[]) : []
+        const actorList = Array.isArray(actorsResponse)
+          ? (actorsResponse as Actor[])
+          : []
         setActor(nextActor)
         setActors(actorList)
         setForm(buildInitialState(nextActor))
       } catch (error) {
         console.error("Failed to load actor editor:", error)
         if (!cancelled) {
-          toast.error(error instanceof Error ? error.message : "Failed to load actor")
+          toast.error(
+            error instanceof Error ? error.message : "Failed to load actor"
+          )
         }
       } finally {
         if (!cancelled) setLoading(false)
@@ -469,7 +561,8 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
       ...form.docs.map((doc) => ({
         key: doc.id,
         title: doc.title,
-        subtitle: summarizeDoc({ content: doc.content }, 120) || doc.description,
+        subtitle:
+          summarizeDoc({ content: doc.content }, 120) || doc.description,
         badge: doc.visibility.replace(/_/g, " "),
       })),
     ]
@@ -508,24 +601,31 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
               avatarFileId: uploaded.id,
               avatarUrl: resolveFileUrl(uploaded.url || uploaded.fullUrl),
             }
-          : current,
+          : current
       )
       toast.success("Avatar uploaded")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Avatar upload failed")
+      toast.error(
+        error instanceof Error ? error.message : "Avatar upload failed"
+      )
     } finally {
       setAvatarUploading(false)
     }
   }
 
-  function updateDoc(docId: string, updater: (doc: EditableDoc) => EditableDoc) {
+  function updateDoc(
+    docId: string,
+    updater: (doc: EditableDoc) => EditableDoc
+  ) {
     setForm((current) =>
       current
         ? {
             ...current,
-            docs: current.docs.map((doc) => (doc.id === docId ? updater(doc) : doc)),
+            docs: current.docs.map((doc) =>
+              doc.id === docId ? updater(doc) : doc
+            ),
           }
-        : current,
+        : current
     )
   }
 
@@ -536,7 +636,9 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
       return
     }
 
-    const docs = form.docs.map(editableDocToActorDoc).filter((doc): doc is ActorDoc => !!doc)
+    const docs = form.docs
+      .map(editableDocToActorDoc)
+      .filter((doc): doc is ActorDoc => !!doc)
     const payload = {
       name: form.name.trim(),
       role: form.role,
@@ -550,13 +652,21 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
 
     setSaving(true)
     try {
-      const saved = (await api.updateActor(workspaceId, actor.id, payload)) as Actor
+      const saved = (await api.updateActor(
+        workspaceId,
+        actor.id,
+        payload
+      )) as Actor
       setActor(saved)
       setForm(buildInitialState(saved))
-      setActors((current) => current.map((item) => (item.id === saved.id ? saved : item)))
+      setActors((current) =>
+        current.map((item) => (item.id === saved.id ? saved : item))
+      )
       toast.success("Actor updated")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to save actor")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to save actor"
+      )
     } finally {
       setSaving(false)
     }
@@ -579,7 +689,9 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
         <Card className="max-w-lg">
           <CardHeader>
             <CardTitle>Actor not found</CardTitle>
-            <CardDescription>This actor is unavailable in the current workspace.</CardDescription>
+            <CardDescription>
+              This actor is unavailable in the current workspace.
+            </CardDescription>
           </CardHeader>
           <CardContent>
             <Button asChild variant="outline">
@@ -594,26 +706,40 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
     )
   }
 
-  const selectedDoc = sectionKey === BASIC_SECTION_KEY ? null : form.docs.find((doc) => doc.id === sectionKey) || null
+  const selectedDoc =
+    sectionKey === BASIC_SECTION_KEY
+      ? null
+      : form.docs.find((doc) => doc.id === sectionKey) || null
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
-      <div className="flex min-h-0 min-w-0 w-[360px] max-w-[360px] basis-[360px] shrink-0 flex-col overflow-hidden border-r border-border bg-muted/20">
+      <div className="flex min-h-0 w-[360px] max-w-[360px] min-w-0 shrink-0 basis-[360px] flex-col overflow-hidden border-r border-border bg-muted/20">
         <div className="border-b border-border px-4 py-4">
           <div className="flex items-start gap-3 rounded-[28px] border border-border bg-background p-4">
             <Avatar className="size-14 rounded-3xl">
-              <AvatarImage src={resolveFileUrl(form.avatarUrl || actor.avatarUrl) || undefined} alt={form.name} />
+              <AvatarImage
+                src={
+                  resolveFileUrl(form.avatarUrl || actor.avatarUrl) || undefined
+                }
+                alt={form.name}
+              />
               <AvatarFallback className="rounded-3xl bg-primary/10 text-primary">
                 <Bot className="size-6" />
               </AvatarFallback>
             </Avatar>
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2">
-                <div className="truncate text-base font-semibold text-foreground">{form.name}</div>
+                <div className="truncate text-base font-semibold text-foreground">
+                  {form.name}
+                </div>
                 <Badge variant="secondary">{titleCase(form.role)}</Badge>
               </div>
-              <div className="mt-1 text-sm text-muted-foreground">{form.title || "No title set"}</div>
-              <div className="mt-2 line-clamp-2 break-all text-sm text-muted-foreground">{currentSummary}</div>
+              <div className="mt-1 text-sm text-muted-foreground">
+                {form.title || "No title set"}
+              </div>
+              <div className="mt-2 line-clamp-2 text-sm break-all text-muted-foreground">
+                {currentSummary}
+              </div>
             </div>
           </div>
 
@@ -630,7 +756,11 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
                 History
               </Link>
             </Button>
-            <Button size="sm" variant="outline" onClick={() => setCreateDocDialogOpen(true)}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => setCreateDocDialogOpen(true)}
+            >
               <Plus data-icon="inline-start" />
               Add doc
             </Button>
@@ -638,9 +768,11 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
         </div>
 
         <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto p-3">
-          <div className="flex w-full min-w-0 max-w-full flex-col gap-6">
+          <div className="flex w-full max-w-full min-w-0 flex-col gap-6">
             <div className="flex flex-col gap-2">
-              <div className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Structure</div>
+              <div className="px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                Structure
+              </div>
               {sectionItems
                 .filter((item) => item.key === BASIC_SECTION_KEY)
                 .map((item) => (
@@ -650,26 +782,37 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
                     title={item.title}
                     subtitle={item.subtitle}
                     badge={item.badge}
-                    onSelect={() => router.replace(buildSectionHref(actor.id, item.key))}
+                    onSelect={() =>
+                      router.replace(buildSectionHref(actor.id, item.key))
+                    }
                   />
                 ))}
             </div>
 
             {ACTOR_DOC_GROUPS.map((group) => {
               const groupKeys = group.keys as readonly string[]
-              const docs = form.docs.filter((doc) => groupKeys.includes(doc.key))
+              const docs = form.docs.filter((doc) =>
+                groupKeys.includes(doc.key)
+              )
               if (docs.length === 0) return null
               return (
                 <div key={group.value} className="flex flex-col gap-2">
-                  <div className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">{group.label}</div>
+                  <div className="px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                    {group.label}
+                  </div>
                   {docs.map((doc) => (
                     <SectionListItem
                       key={doc.id}
                       active={sectionKey === doc.id}
                       title={doc.title}
-                      subtitle={summarizeDoc({ content: doc.content }, 120) || doc.description}
+                      subtitle={
+                        summarizeDoc({ content: doc.content }, 120) ||
+                        doc.description
+                      }
                       badge={doc.visibility.replace(/_/g, " ")}
-                      onSelect={() => router.replace(buildSectionHref(actor.id, doc.id))}
+                      onSelect={() =>
+                        router.replace(buildSectionHref(actor.id, doc.id))
+                      }
                     />
                   ))}
                 </div>
@@ -678,7 +821,9 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
 
             {form.docs.some((doc) => isCustomDocKey(doc.key)) ? (
               <div className="flex flex-col gap-2">
-                <div className="px-1 text-xs font-medium uppercase tracking-wide text-muted-foreground">Custom</div>
+                <div className="px-1 text-xs font-medium tracking-wide text-muted-foreground uppercase">
+                  Custom
+                </div>
                 {form.docs
                   .filter((doc) => isCustomDocKey(doc.key))
                   .map((doc) => (
@@ -686,9 +831,14 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
                       key={doc.id}
                       active={sectionKey === doc.id}
                       title={doc.title}
-                      subtitle={summarizeDoc({ content: doc.content }, 120) || doc.description}
+                      subtitle={
+                        summarizeDoc({ content: doc.content }, 120) ||
+                        doc.description
+                      }
                       badge={doc.visibility.replace(/_/g, " ")}
-                      onSelect={() => router.replace(buildSectionHref(actor.id, doc.id))}
+                      onSelect={() =>
+                        router.replace(buildSectionHref(actor.id, doc.id))
+                      }
                     />
                   ))}
               </div>
@@ -707,7 +857,9 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
                     {selectedDoc ? selectedDoc.title : "Edit actor"}
                   </h1>
                   <Badge variant="outline">v{actor.currentVersion}</Badge>
-                  {avatarUploading ? <Badge variant="outline">Uploading avatar</Badge> : null}
+                  {avatarUploading ? (
+                    <Badge variant="outline">Uploading avatar</Badge>
+                  ) : null}
                 </div>
                 <p className="mt-2 text-sm text-muted-foreground">
                   {selectedDoc
@@ -716,8 +868,15 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
                 </p>
               </div>
 
-              <Button onClick={() => void saveActor()} disabled={saving || avatarUploading}>
-                {saving ? <Loader2 className="animate-spin" data-icon="inline-start" /> : <Save data-icon="inline-start" />}
+              <Button
+                onClick={() => void saveActor()}
+                disabled={saving || avatarUploading}
+              >
+                {saving ? (
+                  <Loader2 className="animate-spin" data-icon="inline-start" />
+                ) : (
+                  <Save data-icon="inline-start" />
+                )}
                 Save changes
               </Button>
             </div>
@@ -735,11 +894,15 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
                       current
                         ? {
                             ...current,
-                            docs: current.docs.filter((item) => item.id !== selectedDoc.id),
+                            docs: current.docs.filter(
+                              (item) => item.id !== selectedDoc.id
+                            ),
                           }
-                        : current,
+                        : current
                     )
-                    router.replace(buildSectionHref(actor.id, BASIC_SECTION_KEY))
+                    router.replace(
+                      buildSectionHref(actor.id, BASIC_SECTION_KEY)
+                    )
                   }}
                 />
               ) : (
@@ -769,11 +932,12 @@ export function ActorEditPage({ actorId }: { actorId: string }) {
               ? {
                   ...current,
                   docs: [...current.docs, doc].sort((left, right) => {
-                    if (right.priority !== left.priority) return right.priority - left.priority
+                    if (right.priority !== left.priority)
+                      return right.priority - left.priority
                     return left.title.localeCompare(right.title)
                   }),
                 }
-              : current,
+              : current
           )
           router.replace(buildSectionHref(actor.id, doc.id))
         }}

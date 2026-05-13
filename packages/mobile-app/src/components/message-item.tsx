@@ -1,66 +1,66 @@
-import Feather from "@expo/vector-icons/Feather";
-import { Image } from "expo-image";
-import { useRouter } from "expo-router";
+import Feather from "@expo/vector-icons/Feather"
+import { Image } from "expo-image"
+import { useRouter } from "expo-router"
 import {
   Pressable,
   StyleSheet,
   Text,
   View,
   type GestureResponderEvent,
-} from "react-native";
+} from "react-native"
 
-import { ChatQuestionInteractionCard } from "@/components/chat-question-interaction-card";
-import { ChatMarkdown } from "@/components/chat-markdown";
-import { Avatar } from "@/components/ui";
-import type { ChatInteractionResolveInput } from "@/lib/api";
+import { ChatQuestionInteractionCard } from "@/components/chat-question-interaction-card"
+import { ChatMarkdown } from "@/components/chat-markdown"
+import { Avatar } from "@/components/ui"
+import type { ChatInteractionResolveInput } from "@/lib/api"
 import {
   buildChatFilePreviewHref,
   getAttachmentLabel,
   serializeMarkdownBlocks,
-} from "@/lib/chat-rich-content";
-import { useAuthenticatedMediaSource } from "@/hooks/use-authenticated-media-source";
+} from "@/lib/chat-rich-content"
+import { useAuthenticatedMediaSource } from "@/hooks/use-authenticated-media-source"
 import {
   buildReplyPreviewText,
   getEntityAvatarSpec,
   getEntityDisplayName,
   type MobileChatItem,
-} from "@/lib/chat-data";
-import { theme } from "@/theme/tokens";
+} from "@/lib/chat-data"
+import { theme } from "@/theme/tokens"
 import {
   extractText,
   summarizeConversationEvent,
   type InteractionRequestSummary,
-} from "@shared";
+} from "@shared"
 
 function formatTimestamp(timestamp: string) {
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return "";
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return ""
 
   return new Intl.DateTimeFormat("zh-CN", {
     hour: "2-digit",
     minute: "2-digit",
-  }).format(date);
+  }).format(date)
 }
 
 function isMine(item: MobileChatItem, viewerParticipantId?: string) {
   return Boolean(
     viewerParticipantId &&
-      item.authorParticipantId &&
-      item.authorParticipantId === viewerParticipantId,
-  );
+    item.authorParticipantId &&
+    item.authorParticipantId === viewerParticipantId
+  )
 }
 
 function ImageAttachment({
   uri,
   onPress,
 }: {
-  uri: string;
-  onPress: () => void;
+  uri: string
+  onPress: () => void
 }) {
-  const source = useAuthenticatedMediaSource(uri);
+  const source = useAuthenticatedMediaSource(uri)
 
   if (!source) {
-    return <View style={styles.imageAttachment} />;
+    return <View style={styles.imageAttachment} />
   }
 
   return (
@@ -72,29 +72,29 @@ function ImageAttachment({
         transition={150}
       />
     </Pressable>
-  );
+  )
 }
 
 function MarkdownMessage({
   blocks,
   mine,
 }: {
-  blocks: MobileChatItem["contentBlocks"];
-  mine: boolean;
+  blocks: MobileChatItem["contentBlocks"]
+  mine: boolean
 }) {
   const markdown = serializeMarkdownBlocks(
-    blocks.filter((block) => block.type !== "file_ref"),
-  );
+    blocks.filter((block) => block.type !== "file_ref")
+  )
 
   if (!markdown) {
-    return null;
+    return null
   }
 
   return (
     <View style={styles.markdownWrap}>
       <ChatMarkdown markdown={markdown} mine={mine} />
     </View>
-  );
+  )
 }
 
 function FileAttachmentCard({
@@ -104,18 +104,14 @@ function FileAttachmentCard({
   mine,
   onPress,
 }: {
-  category: "audio" | "video" | "document";
-  fileName: string;
-  mimeType: string;
-  mine: boolean;
-  onPress: () => void;
+  category: "audio" | "video" | "document"
+  fileName: string
+  mimeType: string
+  mine: boolean
+  onPress: () => void
 }) {
   const iconName =
-    category === "audio"
-      ? "mic"
-      : category === "video"
-        ? "video"
-        : "file-text";
+    category === "audio" ? "mic" : category === "video" ? "video" : "file-text"
 
   return (
     <Pressable
@@ -153,18 +149,18 @@ function FileAttachmentCard({
         color={mine ? "rgba(255,255,255,0.78)" : theme.colors.textMuted}
       />
     </Pressable>
-  );
+  )
 }
 
 function MessageReplyPreview({
   item,
   mine,
 }: {
-  item: MobileChatItem;
-  mine: boolean;
+  item: MobileChatItem
+  mine: boolean
 }) {
   if (!item.replyTo) {
-    return null;
+    return null
   }
 
   return (
@@ -185,7 +181,7 @@ function MessageReplyPreview({
         </Text>
       </View>
     </View>
-  );
+  )
 }
 
 function MessageBlocks({
@@ -193,22 +189,24 @@ function MessageBlocks({
   mine,
   onOpenAttachment,
 }: {
-  item: MobileChatItem;
-  mine: boolean;
+  item: MobileChatItem
+  mine: boolean
   onOpenAttachment: (
     uri: string,
     mimeType: string,
     name: string,
-    category: "image" | "video" | "audio" | "document",
-  ) => void;
+    category: "image" | "video" | "audio" | "document"
+  ) => void
 }) {
-  const attachments = item.contentBlocks.filter((block) => block.type === "file_ref");
+  const attachments = item.contentBlocks.filter(
+    (block) => block.type === "file_ref"
+  )
 
   return (
     <View style={styles.messageBody}>
       <MarkdownMessage blocks={item.contentBlocks} mine={mine} />
       {attachments.map((block) => {
-        if (block.type !== "file_ref") return null;
+        if (block.type !== "file_ref") return null
 
         if (block.category === "image") {
           return (
@@ -220,11 +218,11 @@ function MessageBlocks({
                   block.url,
                   block.mimeType,
                   block.originalName,
-                  "image",
+                  "image"
                 )
               }
             />
-          );
+          )
         }
 
         if (block.category === "audio") {
@@ -240,11 +238,11 @@ function MessageBlocks({
                   block.url,
                   block.mimeType,
                   block.originalName,
-                  "audio",
+                  "audio"
                 )
               }
             />
-          );
+          )
         }
 
         return (
@@ -259,14 +257,14 @@ function MessageBlocks({
                 block.url,
                 block.mimeType,
                 block.originalName,
-                block.category,
+                block.category
               )
             }
           />
-        );
+        )
       })}
     </View>
-  );
+  )
 }
 
 export function MessageItem({
@@ -275,13 +273,13 @@ export function MessageItem({
   onResolveInteraction,
   onLongPress,
 }: {
-  item: MobileChatItem;
-  viewerParticipantId?: string;
+  item: MobileChatItem
+  viewerParticipantId?: string
   onResolveInteraction?: (
     interactionId: string,
-    input: ChatInteractionResolveInput,
-  ) => Promise<InteractionRequestSummary>;
-  onLongPress?: (event: GestureResponderEvent) => void;
+    input: ChatInteractionResolveInput
+  ) => Promise<InteractionRequestSummary>
+  onLongPress?: (event: GestureResponderEvent) => void
 }) {
   if (item.itemType === "event") {
     const interaction =
@@ -292,7 +290,7 @@ export function MessageItem({
         ? ((item.eventPayload as { interaction?: unknown }).interaction as
             | InteractionRequestSummary
             | undefined)
-        : undefined;
+        : undefined
 
     if (interaction) {
       return (
@@ -300,28 +298,28 @@ export function MessageItem({
           interaction={interaction}
           onResolveInteraction={onResolveInteraction}
         />
-      );
+      )
     }
 
     const eventText =
       summarizeConversationEvent(item.subtype, item.eventPayload) ||
       extractText(item.contentBlocks).trim() ||
-      `[${item.subtype}]`;
+      `[${item.subtype}]`
     return (
       <View style={styles.eventWrap}>
         <View style={styles.eventCard}>
           <Text style={styles.eventText}>{eventText}</Text>
         </View>
       </View>
-    );
+    )
   }
 
-  const mine = isMine(item, viewerParticipantId);
-  const router = useRouter();
-  const localDeliveryStatus = item.localDeliveryStatus;
-  const author = item.author;
-  const authorName = getEntityDisplayName(author);
-  const authorAvatar = getEntityAvatarSpec(author);
+  const mine = isMine(item, viewerParticipantId)
+  const router = useRouter()
+  const localDeliveryStatus = item.localDeliveryStatus
+  const author = item.author
+  const authorName = getEntityDisplayName(author)
+  const authorAvatar = getEntityAvatarSpec(author)
   const avatarNode = (
     <Avatar
       name={authorAvatar.name}
@@ -329,9 +327,11 @@ export function MessageItem({
       icon={authorAvatar.icon}
       size={34}
     />
-  );
+  )
   const bubbleNode = (
-    <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
+    <View
+      style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}
+    >
       <MessageBlocks
         item={item}
         mine={mine}
@@ -343,21 +343,26 @@ export function MessageItem({
               name,
               category,
               source: "remote",
-            }),
+            })
           )
         }
       />
     </View>
-  );
+  )
   const messageNode = (
     <View style={[styles.messageStack, mine && styles.messageStackMine]}>
       {item.replyTo ? <MessageReplyPreview item={item} mine={mine} /> : null}
       {bubbleNode}
     </View>
-  );
+  )
 
   return (
-    <View style={[styles.messageRow, mine ? styles.messageRowMine : styles.messageRowOther]}>
+    <View
+      style={[
+        styles.messageRow,
+        mine ? styles.messageRowMine : styles.messageRowOther,
+      ]}
+    >
       {!mine ? avatarNode : null}
       <View style={[styles.messageColumn, mine && styles.messageColumnMine]}>
         {!mine ? <Text style={styles.author}>{authorName}</Text> : null}
@@ -374,7 +379,9 @@ export function MessageItem({
         )}
         <View style={[styles.metaRow, mine && styles.metaRowMine]}>
           {localDeliveryStatus ? (
-            <Text style={[styles.deliveryStatus, mine && styles.deliveryStatusMine]}>
+            <Text
+              style={[styles.deliveryStatus, mine && styles.deliveryStatusMine]}
+            >
               {localDeliveryStatus === "retrying" ? "待重试" : "发送中"}
             </Text>
           ) : null}
@@ -385,7 +392,7 @@ export function MessageItem({
       </View>
       {mine ? avatarNode : null}
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -598,4 +605,4 @@ const styles = StyleSheet.create({
   fileCardMetaMine: {
     color: "rgba(255,255,255,0.74)",
   },
-});
+})

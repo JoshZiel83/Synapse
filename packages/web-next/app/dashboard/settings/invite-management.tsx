@@ -1,115 +1,121 @@
-'use client';
+"use client"
 
-import { useEffect, useState, useCallback } from 'react';
-import { useWorkspace } from '../workspace-provider';
-import { api } from '@/lib/api';
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
+import { useEffect, useState, useCallback } from "react"
+import { useWorkspace } from "../workspace-provider"
+import { api } from "@/lib/api"
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Dialog,
   DialogContent,
   DialogHeader,
   DialogTitle,
   DialogTrigger,
-} from '@/components/ui/dialog';
-import { Badge } from '@/components/ui/badge';
-import { Plus, Copy, Trash2, Check } from 'lucide-react';
+} from "@/components/ui/dialog"
+import { Badge } from "@/components/ui/badge"
+import { Plus, Copy, Trash2, Check } from "lucide-react"
 
 interface Invite {
-  id: string;
-  token: string;
-  trustLevel: string;
-  maxUses: number | null;
-  useCount: number;
-  expiresAt: string | null;
-  createdAt: string;
+  id: string
+  token: string
+  trustLevel: string
+  maxUses: number | null
+  useCount: number
+  expiresAt: string | null
+  createdAt: string
 }
 
 export default function InviteManagement() {
-  const { workspaceId } = useWorkspace();
-  const [invites, setInvites] = useState<Invite[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const { workspaceId } = useWorkspace()
+  const [invites, setInvites] = useState<Invite[]>([])
+  const [loading, setLoading] = useState(true)
+  const [dialogOpen, setDialogOpen] = useState(false)
+  const [copiedId, setCopiedId] = useState<string | null>(null)
 
   // Create form state
-  const [trustLevel, setTrustLevel] = useState('member');
-  const [maxUses, setMaxUses] = useState('');
-  const [expiresIn, setExpiresIn] = useState('');
-  const [creating, setCreating] = useState(false);
+  const [trustLevel, setTrustLevel] = useState("member")
+  const [maxUses, setMaxUses] = useState("")
+  const [expiresIn, setExpiresIn] = useState("")
+  const [creating, setCreating] = useState(false)
 
   const loadInvites = useCallback(async () => {
-    if (!workspaceId) return;
+    if (!workspaceId) return
     try {
-      const res = await api.listInvites(workspaceId);
-      setInvites(res?.data ?? []);
+      const res = await api.listInvites(workspaceId)
+      setInvites(res?.data ?? [])
     } catch (err) {
-      console.error('Failed to load invites:', err);
+      console.error("Failed to load invites:", err)
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
-  }, [workspaceId]);
+  }, [workspaceId])
 
-  useEffect(() => { loadInvites(); }, [loadInvites]);
+  useEffect(() => {
+    loadInvites()
+  }, [loadInvites])
 
   const handleCreate = async () => {
-    if (!workspaceId) return;
-    setCreating(true);
+    if (!workspaceId) return
+    setCreating(true)
     try {
-      const data: any = { trustLevel };
-      if (maxUses) data.maxUses = parseInt(maxUses, 10);
+      const data: any = { trustLevel }
+      if (maxUses) data.maxUses = parseInt(maxUses, 10)
       if (expiresIn) {
-        const hours = parseInt(expiresIn, 10);
+        const hours = parseInt(expiresIn, 10)
         if (hours > 0) {
-          data.expiresAt = new Date(Date.now() + hours * 3600000).toISOString();
+          data.expiresAt = new Date(Date.now() + hours * 3600000).toISOString()
         }
       }
-      await api.createInvite(workspaceId, data);
-      setDialogOpen(false);
-      setTrustLevel('member');
-      setMaxUses('');
-      setExpiresIn('');
-      loadInvites();
+      await api.createInvite(workspaceId, data)
+      setDialogOpen(false)
+      setTrustLevel("member")
+      setMaxUses("")
+      setExpiresIn("")
+      loadInvites()
     } catch (err: any) {
-      alert(err.message || 'Failed to create invite');
+      alert(err.message || "Failed to create invite")
     } finally {
-      setCreating(false);
+      setCreating(false)
     }
-  };
+  }
 
   const handleRevoke = async (inviteId: string) => {
-    if (!workspaceId) return;
+    if (!workspaceId) return
     try {
-      await api.revokeInvite(workspaceId, inviteId);
-      loadInvites();
+      await api.revokeInvite(workspaceId, inviteId)
+      loadInvites()
     } catch (err: any) {
-      alert(err.message || 'Failed to revoke invite');
+      alert(err.message || "Failed to revoke invite")
     }
-  };
+  }
 
   const copyLink = (token: string, inviteId: string) => {
-    const link = `${window.location.origin}/invite/${token}`;
-    navigator.clipboard.writeText(link);
-    setCopiedId(inviteId);
-    setTimeout(() => setCopiedId(null), 2000);
-  };
+    const link = `${window.location.origin}/invite/${token}`
+    navigator.clipboard.writeText(link)
+    setCopiedId(inviteId)
+    setTimeout(() => setCopiedId(null), 2000)
+  }
 
   if (loading) {
     return (
       <div className="flex justify-center py-12">
-        <div className="h-8 w-8 rounded-full border-2 border-primary border-t-transparent animate-spin" />
+        <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
       </div>
-    );
+    )
   }
 
   return (
     <div className="space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-foreground">Invite Links</h3>
-          <p className="text-sm text-muted-foreground">Manage invite links for this workspace</p>
+          <h3 className="text-lg font-semibold text-foreground">
+            Invite Links
+          </h3>
+          <p className="text-sm text-muted-foreground">
+            Manage invite links for this workspace
+          </p>
         </div>
         <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
           <DialogTrigger asChild>
@@ -128,7 +134,7 @@ export default function InviteManagement() {
                 <select
                   value={trustLevel}
                   onChange={(e) => setTrustLevel(e.target.value)}
-                  className="mt-1.5 block w-full rounded-md border border-gray-200 dark:border-white/10 bg-white dark:bg-white/5 px-3 py-2 text-sm text-foreground"
+                  className="mt-1.5 block w-full rounded-md border border-gray-200 bg-white px-3 py-2 text-sm text-foreground dark:border-white/10 dark:bg-white/5"
                 >
                   <option value="member">Member</option>
                   <option value="admin">Admin</option>
@@ -157,8 +163,12 @@ export default function InviteManagement() {
                   className="mt-1.5"
                 />
               </div>
-              <Button onClick={handleCreate} disabled={creating} className="w-full">
-                {creating ? 'Creating...' : 'Create Invite Link'}
+              <Button
+                onClick={handleCreate}
+                disabled={creating}
+                className="w-full"
+              >
+                {creating ? "Creating..." : "Create Invite Link"}
               </Button>
             </div>
           </DialogContent>
@@ -174,23 +184,43 @@ export default function InviteManagement() {
       ) : (
         <div className="space-y-2">
           {invites.map((invite) => {
-            const isExpired = invite.expiresAt && new Date(invite.expiresAt) < new Date();
-            const isUsedUp = invite.maxUses !== null && invite.useCount >= invite.maxUses;
+            const isExpired =
+              invite.expiresAt && new Date(invite.expiresAt) < new Date()
+            const isUsedUp =
+              invite.maxUses !== null && invite.useCount >= invite.maxUses
 
             return (
               <Card key={invite.id}>
-                <CardContent className="flex items-center gap-4 py-3 px-4">
-                  <div className="flex-1 min-w-0">
+                <CardContent className="flex items-center gap-4 px-4 py-3">
+                  <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <code className="text-sm font-mono font-semibold text-foreground">{invite.token}</code>
-                      <Badge variant="outline" className="text-xs capitalize">{invite.trustLevel}</Badge>
-                      {isExpired && <Badge variant="destructive" className="text-xs">Expired</Badge>}
-                      {isUsedUp && <Badge variant="destructive" className="text-xs">Used up</Badge>}
+                      <code className="font-mono text-sm font-semibold text-foreground">
+                        {invite.token}
+                      </code>
+                      <Badge variant="outline" className="text-xs capitalize">
+                        {invite.trustLevel}
+                      </Badge>
+                      {isExpired && (
+                        <Badge variant="destructive" className="text-xs">
+                          Expired
+                        </Badge>
+                      )}
+                      {isUsedUp && (
+                        <Badge variant="destructive" className="text-xs">
+                          Used up
+                        </Badge>
+                      )}
                     </div>
-                    <div className="text-xs text-muted-foreground mt-1">
-                      Used {invite.useCount}{invite.maxUses !== null ? `/${invite.maxUses}` : ''} times
+                    <div className="mt-1 text-xs text-muted-foreground">
+                      Used {invite.useCount}
+                      {invite.maxUses !== null ? `/${invite.maxUses}` : ""}{" "}
+                      times
                       {invite.expiresAt && !isExpired && (
-                        <> &middot; Expires {new Date(invite.expiresAt).toLocaleDateString()}</>
+                        <>
+                          {" "}
+                          &middot; Expires{" "}
+                          {new Date(invite.expiresAt).toLocaleDateString()}
+                        </>
                       )}
                     </div>
                   </div>
@@ -220,10 +250,10 @@ export default function InviteManagement() {
                   </div>
                 </CardContent>
               </Card>
-            );
+            )
           })}
         </div>
       )}
     </div>
-  );
+  )
 }

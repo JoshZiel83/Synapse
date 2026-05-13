@@ -1,27 +1,21 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useMemo, useState } from "react";
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { useLocalSearchParams, useRouter } from "expo-router"
+import { useMemo, useState } from "react"
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native"
 
 import {
   AlphabetIndexedEntityList,
   type AlphabetIndexedEntityItem,
-} from "@/components/alphabet-indexed-entity-list";
-import { EmptyState, ScreenView } from "@/components/ui";
-import { publishMentionSelection } from "@/lib/chat-mention-selection";
+} from "@/components/alphabet-indexed-entity-list"
+import { EmptyState, ScreenView } from "@/components/ui"
+import { publishMentionSelection } from "@/lib/chat-mention-selection"
 import {
   getConversationViewerParticipant,
   getMentionableConversationParticipants,
   participantToConversationEntityRef,
-} from "@/lib/chat-data";
-import { useChat } from "@/providers/chat-provider";
-import { theme } from "@/theme/tokens";
+} from "@/lib/chat-data"
+import { useChat } from "@/providers/chat-provider"
+import { theme } from "@/theme/tokens"
 
 function buildParticipantSubtitle(participant: {
   participantType:
@@ -29,9 +23,9 @@ function buildParticipantSubtitle(participant: {
     | "remote_agent"
     | "workspace_member"
     | "external"
-    | "system";
-  title?: string;
-  role?: string;
+    | "system"
+  title?: string
+  role?: string
 }) {
   const fallback =
     participant.participantType === "actor" ||
@@ -39,47 +33,43 @@ function buildParticipantSubtitle(participant: {
       ? "工作区 Actor"
       : participant.participantType === "external"
         ? "外部联系人"
-        : "工作区成员";
+        : "工作区成员"
 
-  return participant.title?.trim() || participant.role?.trim() || fallback;
+  return participant.title?.trim() || participant.role?.trim() || fallback
 }
 
 export function ChatMentionPickerScreen() {
-  const router = useRouter();
-  const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
-  const { getConversation, workspaceMemberId } = useChat();
-  const [query, setQuery] = useState("");
+  const router = useRouter()
+  const { conversationId } = useLocalSearchParams<{ conversationId: string }>()
+  const { getConversation, workspaceMemberId } = useChat()
+  const [query, setQuery] = useState("")
 
-  const conversation = conversationId ? getConversation(conversationId) : null;
+  const conversation = conversationId ? getConversation(conversationId) : null
   const viewerParticipantId = getConversationViewerParticipant(
     conversation,
-    workspaceMemberId,
-  )?.participantId;
+    workspaceMemberId
+  )?.participantId
 
   const participants = useMemo(
     () =>
       getMentionableConversationParticipants(conversation, viewerParticipantId),
-    [conversation, viewerParticipantId],
-  );
+    [conversation, viewerParticipantId]
+  )
 
   const filteredParticipants = useMemo(() => {
-    const trimmed = query.trim().toLowerCase();
+    const trimmed = query.trim().toLowerCase()
     if (!trimmed) {
-      return participants;
+      return participants
     }
 
     return participants.filter((participant) => {
-      const haystack = [
-        participant.name,
-        participant.title,
-        participant.role,
-      ]
+      const haystack = [participant.name, participant.title, participant.role]
         .filter(Boolean)
         .join(" ")
-        .toLowerCase();
-      return haystack.includes(trimmed);
-    });
-  }, [participants, query]);
+        .toLowerCase()
+      return haystack.includes(trimmed)
+    })
+  }, [participants, query])
 
   const items = useMemo<AlphabetIndexedEntityItem[]>(
     () =>
@@ -91,18 +81,18 @@ export function ChatMentionPickerScreen() {
         targetType: participant.participantType === "actor" ? "actor" : "user",
         onPress: () => {
           if (!conversationId) {
-            return;
+            return
           }
 
           publishMentionSelection(
             conversationId,
-            participantToConversationEntityRef(participant),
-          );
-          router.back();
+            participantToConversationEntityRef(participant)
+          )
+          router.back()
         },
       })),
-    [conversationId, filteredParticipants, router],
-  );
+    [conversationId, filteredParticipants, router]
+  )
 
   return (
     <ScreenView>
@@ -168,7 +158,7 @@ export function ChatMentionPickerScreen() {
         )}
       </View>
     </ScreenView>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -226,4 +216,4 @@ const styles = StyleSheet.create({
     paddingHorizontal: 18,
     paddingTop: 20,
   },
-});
+})

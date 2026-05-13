@@ -30,10 +30,7 @@
       },
       "edgeToEdgeEnabled": true,
       "predictiveBackGestureEnabled": false,
-      "permissions": [
-        "CAMERA",
-        "RECORD_AUDIO"
-      ]
+      "permissions": ["CAMERA", "RECORD_AUDIO"]
     },
     "web": {
       "bundler": "metro",

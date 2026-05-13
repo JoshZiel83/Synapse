@@ -8,10 +8,7 @@ import {
 } from "@synapse/shared"
 
 import { useNotifications } from "@/hooks/use-notifications"
-import {
-  useWebSocket,
-  type WebSocketSubscription,
-} from "@/hooks/use-websocket"
+import { useWebSocket, type WebSocketSubscription } from "@/hooks/use-websocket"
 import {
   ensureChatServiceWorkerRegistered,
   requestChatServiceWorkerSync,
@@ -85,11 +82,7 @@ export function useChatRealtimeSync({
           break
       }
     },
-    [
-      handleRuntimeUpdated,
-      handleSyncEvent,
-      notify,
-    ]
+    [handleRuntimeUpdated, handleSyncEvent, notify]
   )
 
   const subscriptions = useMemo<WebSocketSubscription[]>(() => {
@@ -141,11 +134,7 @@ export function useChatRealtimeSync({
     return () => {
       void syncChatServiceWorkerAuthContext({ workspaceId: null })
     }
-  }, [
-    deactivate,
-    loadConversations,
-    workspaceId,
-  ])
+  }, [deactivate, loadConversations, workspaceId])
 
   useEffect(() => {
     if (!workspaceId) {
@@ -187,10 +176,7 @@ export function useChatRealtimeSync({
   }, [reloadPersistedSnapshot, syncFromServer, workspaceId])
 
   useEffect(() => {
-    if (
-      !workspaceId ||
-      (pendingReadCount === 0 && outboxCount === 0)
-    ) {
+    if (!workspaceId || (pendingReadCount === 0 && outboxCount === 0)) {
       return
     }
 

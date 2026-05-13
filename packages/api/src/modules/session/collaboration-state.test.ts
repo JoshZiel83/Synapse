@@ -1,10 +1,10 @@
-import test from "node:test";
-import assert from "node:assert/strict";
+import test from "node:test"
+import assert from "node:assert/strict"
 import {
   buildSessionPlanDraftState,
   parseSessionCollaborationState,
   requireSessionPlanDraftState,
-} from "./collaboration-state.js";
+} from "./collaboration-state.js"
 
 test("parseSessionCollaborationState only accepts planDraft payloads", () => {
   assert.throws(
@@ -12,9 +12,9 @@ test("parseSessionCollaborationState only accepts planDraft payloads", () => {
       parseSessionCollaborationState({
         pendingPlanApprovalInteractionId: "interaction-1",
       }),
-    /collaborationState\.pendingPlanApprovalInteractionId is not allowed/i,
-  );
-});
+    /collaborationState\.pendingPlanApprovalInteractionId is not allowed/i
+  )
+})
 
 test("parseSessionCollaborationState validates planDraft checklist entries", () => {
   assert.throws(
@@ -24,9 +24,9 @@ test("parseSessionCollaborationState validates planDraft checklist entries", () 
           checklist: [{ step: "", status: "pending" }],
         },
       }),
-    /collaborationState\.planDraft\.checklist\[0\]\.step is required/i,
-  );
-});
+    /collaborationState\.planDraft\.checklist\[0\]\.step is required/i
+  )
+})
 
 test("requireSessionPlanDraftState throws when plan mode session is missing a draft", () => {
   assert.throws(
@@ -35,9 +35,9 @@ test("requireSessionPlanDraftState throws when plan mode session is missing a dr
         collaborationMode: "plan_drafting",
         collaborationState: {},
       }),
-    /missing collaborationState\.planDraft/i,
-  );
-});
+    /missing collaborationState\.planDraft/i
+  )
+})
 
 test("buildSessionPlanDraftState normalizes optional fields", () => {
   const draft = buildSessionPlanDraftState({
@@ -45,12 +45,12 @@ test("buildSessionPlanDraftState normalizes optional fields", () => {
     explanation: "  explanation  ",
     enteredAt: "  2026-04-04T00:00:00.000Z  ",
     checklist: [{ step: "Ship it", status: "pending" }],
-  });
+  })
 
   assert.deepEqual(draft, {
     summary: "summary",
     explanation: "explanation",
     enteredAt: "2026-04-04T00:00:00.000Z",
     checklist: [{ step: "Ship it", status: "pending" }],
-  });
-});
+  })
+})

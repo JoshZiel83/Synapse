@@ -83,10 +83,10 @@ type RelayDispatchPayload struct {
 }
 
 type RelayRuntimeAuthorizationPayload struct {
-	GrantIDs   []string               `json:"grantIds,omitempty"`
-	GrantScope string                 `json:"grantScope,omitempty"`
+	GrantIDs   []string                 `json:"grantIds,omitempty"`
+	GrantScope string                   `json:"grantScope,omitempty"`
 	GrantSpecs []map[string]interface{} `json:"grantSpecs,omitempty"`
-	RetryNonce string                 `json:"retryNonce,omitempty"`
+	RetryNonce string                   `json:"retryNonce,omitempty"`
 }
 
 type RelayRuntimeSessionOpenMessage struct {

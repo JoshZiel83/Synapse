@@ -1,65 +1,65 @@
 import type {
   AutomationCompletionStatus,
   AutomationPolicy,
-} from "../types/index.js";
+} from "../types/index.js"
 
 export interface AutomationPolicyDisplayInput {
-  activeFrom?: string;
-  activeUntil?: string;
-  maxTriggerCount?: number;
-  triggerCount?: number;
-  completionStatus?: AutomationCompletionStatus;
-  completedAt?: string;
+  activeFrom?: string
+  activeUntil?: string
+  maxTriggerCount?: number
+  triggerCount?: number
+  completionStatus?: AutomationCompletionStatus
+  completedAt?: string
 }
 
 export interface AutomationPolicyDisplayOptions {
-  formatTimestamp?: (value: string) => string;
+  formatTimestamp?: (value: string) => string
 }
 
 export interface AutomationPolicyDisplayDetail {
-  label: string;
-  value: string;
+  label: string
+  value: string
 }
 
 export interface AutomationPolicyDisplay {
-  title: string;
-  summary: string;
-  description?: string;
-  details: AutomationPolicyDisplayDetail[];
+  title: string
+  summary: string
+  description?: string
+  details: AutomationPolicyDisplayDetail[]
 }
 
 function formatTimestamp(
   value: string | undefined,
-  options?: AutomationPolicyDisplayOptions,
+  options?: AutomationPolicyDisplayOptions
 ) {
-  if (!value) return null;
-  return options?.formatTimestamp ? options.formatTimestamp(value) : value;
+  if (!value) return null
+  return options?.formatTimestamp ? options.formatTimestamp(value) : value
 }
 
 function formatCountLimit(maxTriggerCount?: number, triggerCount = 0) {
   if (!maxTriggerCount || maxTriggerCount <= 0) {
-    return `No trigger cap (${triggerCount} fired)`;
+    return `No trigger cap (${triggerCount} fired)`
   }
-  return `${triggerCount}/${maxTriggerCount} triggers used`;
+  return `${triggerCount}/${maxTriggerCount} triggers used`
 }
 
 export function describeAutomationPolicy(
   input: AutomationPolicy | AutomationPolicyDisplayInput,
-  options?: AutomationPolicyDisplayOptions,
+  options?: AutomationPolicyDisplayOptions
 ): AutomationPolicyDisplay {
-  const activeFrom = formatTimestamp(input.activeFrom, options);
-  const activeUntil = formatTimestamp(input.activeUntil, options);
-  const completedAt = formatTimestamp(input.completedAt, options);
-  const triggerCount = input.triggerCount || 0;
-  const maxTriggerCount = input.maxTriggerCount;
-  const completionStatus = input.completionStatus || "completed";
-  const limitLabel = formatCountLimit(maxTriggerCount, triggerCount);
+  const activeFrom = formatTimestamp(input.activeFrom, options)
+  const activeUntil = formatTimestamp(input.activeUntil, options)
+  const completedAt = formatTimestamp(input.completedAt, options)
+  const triggerCount = input.triggerCount || 0
+  const maxTriggerCount = input.maxTriggerCount
+  const completionStatus = input.completionStatus || "completed"
+  const limitLabel = formatCountLimit(maxTriggerCount, triggerCount)
 
-  let summary = limitLabel;
+  let summary = limitLabel
   if (activeUntil) {
-    summary = `${limitLabel}, until ${activeUntil}`;
+    summary = `${limitLabel}, until ${activeUntil}`
   } else if (activeFrom) {
-    summary = `${limitLabel}, from ${activeFrom}`;
+    summary = `${limitLabel}, from ${activeFrom}`
   }
 
   const details: AutomationPolicyDisplayDetail[] = [
@@ -72,16 +72,16 @@ export function describeAutomationPolicy(
       label: "On completion",
       value: completionStatus,
     },
-  ];
+  ]
 
   if (activeFrom) {
-    details.push({ label: "Active from", value: activeFrom });
+    details.push({ label: "Active from", value: activeFrom })
   }
   if (activeUntil) {
-    details.push({ label: "Active until", value: activeUntil });
+    details.push({ label: "Active until", value: activeUntil })
   }
   if (completedAt) {
-    details.push({ label: "Completed at", value: completedAt });
+    details.push({ label: "Completed at", value: completedAt })
   }
 
   return {
@@ -94,5 +94,5 @@ export function describeAutomationPolicy(
           ? `Remains active until ${activeUntil}.`
           : "Runs until paused, archived, or expired by policy.",
     details,
-  };
+  }
 }

@@ -1,7 +1,7 @@
-import Feather from "@expo/vector-icons/Feather";
-import * as Clipboard from "expo-clipboard";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
+import Feather from "@expo/vector-icons/Feather"
+import * as Clipboard from "expo-clipboard"
+import { useLocalSearchParams, useRouter } from "expo-router"
+import { useEffect, useMemo, useRef, useState } from "react"
 import {
   KeyboardAvoidingView,
   Platform,
@@ -11,41 +11,41 @@ import {
   StyleSheet,
   Text,
   View,
-} from "react-native";
+} from "react-native"
 
-import { ChatComposer } from "@/components/chat-composer";
-import { ActorActivityBubble } from "@/components/actor-activity-bubble";
-import { ChatMessageActionSheet } from "@/components/chat-message-action-sheet";
-import { MessageItem } from "@/components/message-item";
-import { Button, EmptyState, LoadingBlock, ScreenView } from "@/components/ui";
-import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket";
+import { ChatComposer } from "@/components/chat-composer"
+import { ActorActivityBubble } from "@/components/actor-activity-bubble"
+import { ChatMessageActionSheet } from "@/components/chat-message-action-sheet"
+import { MessageItem } from "@/components/message-item"
+import { Button, EmptyState, LoadingBlock, ScreenView } from "@/components/ui"
+import { useWorkspaceWebSocket } from "@/hooks/use-workspace-websocket"
 import {
   buildReplyPreviewText,
   getConfirmedConversationMaxSequence,
   getConversationDisplayName,
   getConversationViewerParticipant,
   type MobileChatItem,
-} from "@/lib/chat-data";
-import { useChat } from "@/providers/chat-provider";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
+} from "@/lib/chat-data"
+import { useChat } from "@/providers/chat-provider"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
 import {
   getActorRuntimePriority,
   isActorRuntimeActive,
   isActorRuntimeProcessingWorkspaceMember,
   type ConversationReplyRef,
-} from "@shared";
+} from "@shared"
 
 export default function ChatDetailScreen() {
-  const router = useRouter();
-  const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
-  const scrollRef = useRef<ScrollView | null>(null);
-  const lastReportedReadRef = useRef<string>("");
+  const router = useRouter()
+  const { conversationId } = useLocalSearchParams<{ conversationId: string }>()
+  const scrollRef = useRef<ScrollView | null>(null)
+  const lastReportedReadRef = useRef<string>("")
   const previousMessageMetricsRef = useRef<{
-    conversationId: string;
-    firstSequence: number;
-    lastSequence: number;
-  } | null>(null);
+    conversationId: string
+    firstSequence: number
+    lastSequence: number
+  } | null>(null)
   const {
     getConversation,
     getConversationItems,
@@ -59,72 +59,76 @@ export default function ChatDetailScreen() {
     status,
     clientInstanceId,
     workspaceMemberId,
-  } = useChat();
-  const { workspaceId } = useWorkspace();
-  const [refreshing, setRefreshing] = useState(false);
-  const [loadingOlder, setLoadingOlder] = useState(false);
-  const [replyTo, setReplyTo] = useState<ConversationReplyRef | null>(null);
+  } = useChat()
+  const { workspaceId } = useWorkspace()
+  const [refreshing, setRefreshing] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  const [replyTo, setReplyTo] = useState<ConversationReplyRef | null>(null)
   const [actionMenu, setActionMenu] = useState<{
-    item: MobileChatItem;
-    x: number;
-    y: number;
-    mine: boolean;
-  } | null>(null);
+    item: MobileChatItem
+    x: number
+    y: number
+    mine: boolean
+  } | null>(null)
 
-  const conversation = conversationId ? getConversation(conversationId) : null;
-  const items = conversationId ? getConversationItems(conversationId) : [];
-  const actorRuntimes = conversationId ? getConversationRuntimes(conversationId) : {};
-  const meta = conversationId ? getConversationMeta(conversationId) : null;
+  const conversation = conversationId ? getConversation(conversationId) : null
+  const items = conversationId ? getConversationItems(conversationId) : []
+  const actorRuntimes = conversationId
+    ? getConversationRuntimes(conversationId)
+    : {}
+  const meta = conversationId ? getConversationMeta(conversationId) : null
   const confirmedMaxSequence = useMemo(
     () => getConfirmedConversationMaxSequence(items),
-    [items],
-  );
-  const firstSequence = items[0]?.sequence ?? 0;
-  const lastSequence = items[items.length - 1]?.sequence ?? 0;
+    [items]
+  )
+  const firstSequence = items[0]?.sequence ?? 0
+  const lastSequence = items[items.length - 1]?.sequence ?? 0
   const viewerParticipantId = getConversationViewerParticipant(
     conversation,
-    workspaceMemberId,
-  )?.participantId;
-  const loading = status === "loading" && !conversation;
+    workspaceMemberId
+  )?.participantId
+  const loading = status === "loading" && !conversation
   const headerTitle = conversation
     ? getConversationDisplayName(conversation, workspaceMemberId)
-    : "聊天";
+    : "聊天"
   const directActorParticipant =
     conversation?.kind === "private"
       ? (conversation.participants.find(
-          (participant) => participant.participantType === "actor",
+          (participant) => participant.participantType === "actor"
         ) ?? null)
-      : null;
-  const directActorRuntime =
-    directActorParticipant?.actorId
-      ? actorRuntimes[directActorParticipant.actorId] ?? null
-      : null;
+      : null
+  const directActorRuntime = directActorParticipant?.actorId
+    ? (actorRuntimes[directActorParticipant.actorId] ?? null)
+    : null
   const showTypingHint = Boolean(
     workspaceMemberId &&
-      directActorRuntime?.laneState === "running" &&
-      isActorRuntimeProcessingWorkspaceMember(
-        directActorRuntime,
-        workspaceMemberId,
-      ),
-  );
+    directActorRuntime?.laneState === "running" &&
+    isActorRuntimeProcessingWorkspaceMember(
+      directActorRuntime,
+      workspaceMemberId
+    )
+  )
   const activeRuntimes = Object.values(actorRuntimes)
     .filter((runtime) => isActorRuntimeActive(runtime))
-    .sort((left, right) => getActorRuntimePriority(left) - getActorRuntimePriority(right));
+    .sort(
+      (left, right) =>
+        getActorRuntimePriority(left) - getActorRuntimePriority(right)
+    )
   const currentTurnRuntimes = activeRuntimes.filter((runtime) =>
-    Boolean(runtime.currentTurnPreview?.turnId),
-  );
+    Boolean(runtime.currentTurnPreview?.turnId)
+  )
   const loadingConversationHistory = Boolean(
     conversation &&
-      items.length === 0 &&
-      (meta?.loadingLatest || (!meta?.hasLoadedLatest && !meta?.latestLoadError)),
-  );
+    items.length === 0 &&
+    (meta?.loadingLatest || (!meta?.hasLoadedLatest && !meta?.latestLoadError))
+  )
   const conversationHistoryLoadFailed = Boolean(
     conversation &&
-      items.length === 0 &&
-      !meta?.loadingLatest &&
-      !meta?.hasLoadedLatest &&
-      meta?.latestLoadError,
-  );
+    items.length === 0 &&
+    !meta?.loadingLatest &&
+    !meta?.hasLoadedLatest &&
+    meta?.latestLoadError
+  )
 
   useWorkspaceWebSocket({
     workspaceId: workspaceId || undefined,
@@ -139,20 +143,20 @@ export default function ChatDetailScreen() {
             },
           ]
         : [],
-  });
+  })
 
   useEffect(() => {
-    setReplyTo(null);
-    setActionMenu(null);
-  }, [conversationId]);
+    setReplyTo(null)
+    setActionMenu(null)
+  }, [conversationId])
 
   useEffect(() => {
     if (!conversationId || status !== "ready" || !clientInstanceId) {
-      return;
+      return
     }
 
-    void refreshConversation(conversationId).catch(() => undefined);
-  }, [clientInstanceId, conversationId, refreshConversation, status]);
+    void refreshConversation(conversationId).catch(() => undefined)
+  }, [clientInstanceId, conversationId, refreshConversation, status])
 
   useEffect(() => {
     if (!conversationId || items.length === 0) {
@@ -162,51 +166,51 @@ export default function ChatDetailScreen() {
             firstSequence,
             lastSequence,
           }
-        : null;
-      return;
+        : null
+      return
     }
 
-    const previous = previousMessageMetricsRef.current;
-    const conversationChanged = previous?.conversationId !== conversationId;
+    const previous = previousMessageMetricsRef.current
+    const conversationChanged = previous?.conversationId !== conversationId
     const appendedAtTail = Boolean(
       previous &&
-        !conversationChanged &&
-        lastSequence > previous.lastSequence &&
-        firstSequence >= previous.firstSequence,
-    );
+      !conversationChanged &&
+      lastSequence > previous.lastSequence &&
+      firstSequence >= previous.firstSequence
+    )
 
     previousMessageMetricsRef.current = {
       conversationId,
       firstSequence,
       lastSequence,
-    };
+    }
 
     if (!conversationChanged && !appendedAtTail) {
-      return;
+      return
     }
 
     requestAnimationFrame(() => {
-      scrollRef.current?.scrollToEnd({ animated: false });
-    });
-  }, [conversationId, firstSequence, items.length, lastSequence]);
+      scrollRef.current?.scrollToEnd({ animated: false })
+    })
+  }, [conversationId, firstSequence, items.length, lastSequence])
 
   useEffect(() => {
     if (!conversationId || !conversation || confirmedMaxSequence <= 0) {
-      return;
+      return
     }
 
-    const nextKey = `${conversationId}:${confirmedMaxSequence}`;
+    const nextKey = `${conversationId}:${confirmedMaxSequence}`
     if (lastReportedReadRef.current === nextKey) {
-      return;
+      return
     }
 
-    lastReportedReadRef.current = nextKey;
+    lastReportedReadRef.current = nextKey
     void markConversationRead(
       conversationId,
       confirmedMaxSequence,
-      confirmedMaxSequence,
-    );
-  }, [confirmedMaxSequence, conversation, conversationId, markConversationRead]);
+      confirmedMaxSequence
+    )
+  }, [confirmedMaxSequence, conversation, conversationId, markConversationRead])
 
   const messageNodes = useMemo(
     () =>
@@ -218,7 +222,11 @@ export default function ChatDetailScreen() {
           onResolveInteraction={
             conversation
               ? (interactionId, input) =>
-                  respondInteraction(conversation.conversationId, interactionId, input)
+                  respondInteraction(
+                    conversation.conversationId,
+                    interactionId,
+                    input
+                  )
               : undefined
           }
           onLongPress={
@@ -234,19 +242,19 @@ export default function ChatDetailScreen() {
           }
         />
       )),
-    [conversation, items, respondInteraction, viewerParticipantId],
-  );
+    [conversation, items, respondInteraction, viewerParticipantId]
+  )
 
   async function handleRefresh() {
     if (!conversationId || status !== "ready" || !clientInstanceId) {
-      return;
+      return
     }
 
-    setRefreshing(true);
+    setRefreshing(true)
     try {
-      await refreshConversation(conversationId);
+      await refreshConversation(conversationId)
     } finally {
-      setRefreshing(false);
+      setRefreshing(false)
     }
   }
 
@@ -257,14 +265,14 @@ export default function ChatDetailScreen() {
       !clientInstanceId ||
       !meta?.hasMoreBefore
     ) {
-      return;
+      return
     }
 
-    setLoadingOlder(true);
+    setLoadingOlder(true)
     try {
-      await loadOlderMessages(conversationId);
+      await loadOlderMessages(conversationId)
     } finally {
-      setLoadingOlder(false);
+      setLoadingOlder(false)
     }
   }
 
@@ -277,7 +285,7 @@ export default function ChatDetailScreen() {
           description="缺少有效的会话标识。"
         />
       </ScreenView>
-    );
+    )
   }
 
   return (
@@ -289,8 +297,15 @@ export default function ChatDetailScreen() {
       >
         <View style={styles.header}>
           <View style={styles.headerRow}>
-            <Pressable onPress={() => router.back()} style={styles.headerButton}>
-              <Feather name="chevron-left" size={20} color={theme.colors.text} />
+            <Pressable
+              onPress={() => router.back()}
+              style={styles.headerButton}
+            >
+              <Feather
+                name="chevron-left"
+                size={20}
+                color={theme.colors.text}
+              />
             </Pressable>
             <View style={styles.headerTitleWrap}>
               <Text numberOfLines={1} style={styles.headerTitle}>
@@ -377,7 +392,7 @@ export default function ChatDetailScreen() {
                       participant={conversation.participants.find(
                         (participant) =>
                           participant.participantType === "actor" &&
-                          participant.actorId === runtime.actorId,
+                          participant.actorId === runtime.actorId
                       )}
                     />
                   ))}
@@ -413,7 +428,7 @@ export default function ChatDetailScreen() {
                       participant={conversation.participants.find(
                         (participant) =>
                           participant.participantType === "actor" &&
-                          participant.actorId === runtime.actorId,
+                          participant.actorId === runtime.actorId
                       )}
                     />
                   ))}
@@ -456,9 +471,9 @@ export default function ChatDetailScreen() {
               previewText: actionMenu.item.content.trim(),
               previewBlocks: actionMenu.item.contentBlocks,
               createdAt: actionMenu.item.createdAt,
-            });
+            })
           }
-          setActionMenu(null);
+          setActionMenu(null)
         }}
         onCopy={() => {
           if (actionMenu) {
@@ -467,14 +482,14 @@ export default function ChatDetailScreen() {
                 previewText: actionMenu.item.content,
                 previewBlocks: actionMenu.item.contentBlocks,
                 subtype: actionMenu.item.subtype,
-              }),
-            ).catch(() => undefined);
+              })
+            ).catch(() => undefined)
           }
-          setActionMenu(null);
+          setActionMenu(null)
         }}
       />
     </ScreenView>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -537,4 +552,4 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: 2,
   },
-});
+})

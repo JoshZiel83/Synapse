@@ -1,56 +1,56 @@
-import Feather from "@expo/vector-icons/Feather";
-import { Image } from "expo-image";
-import { Link, useRouter } from "expo-router";
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { Image } from "expo-image"
+import { Link, useRouter } from "expo-router"
+import { useState } from "react"
+import { Pressable, StyleSheet, Text, View } from "react-native"
 
-import { Button, Field, ScreenScroll } from "@/components/ui";
-import { EmailField } from "@/components/email-field";
-import { useSession } from "@/providers/session-provider";
-import { theme } from "@/theme/tokens";
-import { APP_NAME } from "@shared";
+import { Button, Field, ScreenScroll } from "@/components/ui"
+import { EmailField } from "@/components/email-field"
+import { useSession } from "@/providers/session-provider"
+import { theme } from "@/theme/tokens"
+import { APP_NAME } from "@shared"
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) return error.message;
-  return "注册失败，请检查填写信息。";
+  if (error instanceof Error && error.message) return error.message
+  return "注册失败，请检查填写信息。"
 }
 
 export default function RegisterScreen() {
-  const router = useRouter();
-  const { signUp } = useSession();
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [acceptedPolicy, setAcceptedPolicy] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const router = useRouter()
+  const { signUp } = useSession()
+  const [name, setName] = useState("")
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [acceptedPolicy, setAcceptedPolicy] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   async function handleRegister() {
     if (!name.trim() || !email.trim() || !password) {
-      setError("请完整填写昵称、邮箱和密码。");
-      return;
+      setError("请完整填写昵称、邮箱和密码。")
+      return
     }
 
     if (password.length < 8) {
-      setError("密码至少需要 8 位。");
-      return;
+      setError("密码至少需要 8 位。")
+      return
     }
 
     if (!acceptedPolicy) {
-      setError("请先勾选隐私政策与用户协议。");
-      return;
+      setError("请先勾选隐私政策与用户协议。")
+      return
     }
 
-    setSubmitting(true);
-    setError(null);
+    setSubmitting(true)
+    setError(null)
 
     try {
-      await signUp(name.trim(), email.trim(), password);
-      router.replace("/");
+      await signUp(name.trim(), email.trim(), password)
+      router.replace("/")
     } catch (nextError) {
-      setError(getErrorMessage(nextError));
+      setError(getErrorMessage(nextError))
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
   }
 
@@ -120,8 +120,7 @@ export default function RegisterScreen() {
             </View>
             <Text style={styles.policyText}>
               我已阅读并同意
-              <Text style={styles.policyLink}>《用户协议》</Text>
-              和
+              <Text style={styles.policyLink}>《用户协议》</Text>和
               <Text style={styles.policyLink}>《隐私政策》</Text>
             </Text>
           </Pressable>
@@ -145,7 +144,7 @@ export default function RegisterScreen() {
         </View>
       </View>
     </ScreenScroll>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -230,4 +229,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: theme.colors.primary,
   },
-});
+})

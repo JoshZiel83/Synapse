@@ -1,23 +1,23 @@
-'use client';
+"use client"
 
-import { useEffect, useMemo, useState } from 'react';
-import { useParams, useRouter, useSearchParams } from 'next/navigation';
+import { useEffect, useMemo, useState } from "react"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import type {
   AutomationEventSource,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
   RelayExposureView,
-} from '@synapse/shared';
+} from "@synapse/shared"
 import type {
   ConversationTypeKey,
   RelayAuthorizationGrantView,
-} from '@synapse/shared/types';
+} from "@synapse/shared/types"
 import {
   CONVERSATION_TYPE_MASK_PRESETS,
   conversationTypeKeysToMask,
   conversationTypeMaskToKeys,
   relayLifecycleEventDefinitions,
-} from '@synapse/shared';
+} from "@synapse/shared"
 import {
   ArrowLeft,
   CheckCircle2,
@@ -33,283 +33,334 @@ import {
   WifiOff,
   Wrench,
   XCircle,
-} from 'lucide-react';
+} from "lucide-react"
 
-import { useWorkspace } from '@/app/dashboard/workspace-provider';
+import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import {
   AppCard,
   AppCardContent,
   AppCardDescription,
   AppCardHeader,
   AppCardTitle,
-} from '@/components/app-card';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
+} from "@/components/app-card"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
 import {
   FieldDescription,
   Field,
   FieldContent,
   FieldGroup,
   FieldLabel,
-} from '@/components/ui/field';
-import { Input } from '@/components/ui/input';
-import { Checkbox } from '@/components/ui/checkbox';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Separator } from '@/components/ui/separator';
-import { Switch } from '@/components/ui/switch';
-import { toast } from 'sonner';
-import { api } from '@/lib/api';
-import { cn } from '@/lib/utils';
-import ResourceAccessStep from '../../resource-access-step';
+} from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import { Checkbox } from "@/components/ui/checkbox"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Separator } from "@/components/ui/separator"
+import { Switch } from "@/components/ui/switch"
+import { toast } from "sonner"
+import { api } from "@/lib/api"
+import { cn } from "@/lib/utils"
+import ResourceAccessStep from "../../resource-access-step"
 
 function formatDateTime(value?: string) {
-  if (!value) return 'Never';
-  return new Date(value).toLocaleString();
+  if (!value) return "Never"
+  return new Date(value).toLocaleString()
 }
 
 const conversationTypeOptions: Array<{
-  key: ConversationTypeKey;
-  label: string;
-  description: string;
+  key: ConversationTypeKey
+  label: string
+  description: string
 }> = [
   {
-    key: 'internal_private',
-    label: 'Internal private',
-    description: 'Private conversations inside the workspace graph.',
+    key: "internal_private",
+    label: "Internal private",
+    description: "Private conversations inside the workspace graph.",
   },
   {
-    key: 'internal_group',
-    label: 'Internal group',
-    description: 'Workspace-local group conversations.',
+    key: "internal_group",
+    label: "Internal group",
+    description: "Workspace-local group conversations.",
   },
   {
-    key: 'external_private',
-    label: 'External private',
-    description: 'Cross-workspace private conversations.',
+    key: "external_private",
+    label: "External private",
+    description: "Cross-workspace private conversations.",
   },
   {
-    key: 'external_group',
-    label: 'External group',
-    description: 'Cross-workspace group conversations.',
+    key: "external_group",
+    label: "External group",
+    description: "Cross-workspace group conversations.",
   },
   {
-    key: 'virtual',
-    label: 'Virtual',
-    description: 'Virtual or synthetic conversations.',
+    key: "virtual",
+    label: "Virtual",
+    description: "Virtual or synthetic conversations.",
   },
-];
+]
 
 const conversationTypePresets = [
-  { label: 'All', value: CONVERSATION_TYPE_MASK_PRESETS.ALL },
-  { label: 'Internal only', value: CONVERSATION_TYPE_MASK_PRESETS.INTERNAL_ONLY },
-  { label: 'External only', value: CONVERSATION_TYPE_MASK_PRESETS.EXTERNAL_ONLY },
-  { label: 'Group only', value: CONVERSATION_TYPE_MASK_PRESETS.GROUP_ONLY },
-  { label: 'Private only', value: CONVERSATION_TYPE_MASK_PRESETS.PRIVATE_ONLY },
-] as const;
+  { label: "All", value: CONVERSATION_TYPE_MASK_PRESETS.ALL },
+  {
+    label: "Internal only",
+    value: CONVERSATION_TYPE_MASK_PRESETS.INTERNAL_ONLY,
+  },
+  {
+    label: "External only",
+    value: CONVERSATION_TYPE_MASK_PRESETS.EXTERNAL_ONLY,
+  },
+  { label: "Group only", value: CONVERSATION_TYPE_MASK_PRESETS.GROUP_ONLY },
+  { label: "Private only", value: CONVERSATION_TYPE_MASK_PRESETS.PRIVATE_ONLY },
+] as const
 
 function formatConversationTypeKeys(keys: ConversationTypeKey[]) {
   return keys
-    .map((key) => conversationTypeOptions.find((option) => option.key === key)?.label || key)
-    .join(', ');
+    .map(
+      (key) =>
+        conversationTypeOptions.find((option) => option.key === key)?.label ||
+        key
+    )
+    .join(", ")
 }
 
 function narrowPresetConversationTypeKeys(
   parentConversationTypeMask: number,
-  presetConversationTypeMask: number,
+  presetConversationTypeMask: number
 ) {
-  const allowedKeys = new Set(conversationTypeMaskToKeys(parentConversationTypeMask));
-  const narrowedKeys = conversationTypeMaskToKeys(presetConversationTypeMask).filter((key) =>
-    allowedKeys.has(key),
-  );
+  const allowedKeys = new Set(
+    conversationTypeMaskToKeys(parentConversationTypeMask)
+  )
+  const narrowedKeys = conversationTypeMaskToKeys(
+    presetConversationTypeMask
+  ).filter((key) => allowedKeys.has(key))
   if (narrowedKeys.length > 0) {
-    return narrowedKeys;
+    return narrowedKeys
   }
-  return conversationTypeMaskToKeys(parentConversationTypeMask);
+  return conversationTypeMaskToKeys(parentConversationTypeMask)
 }
 
-function relayTrustVariant(trustStatus: RelayDeviceSummaryView['trustStatus']) {
+function relayTrustVariant(trustStatus: RelayDeviceSummaryView["trustStatus"]) {
   switch (trustStatus) {
-    case 'active':
-      return 'secondary';
-    case 'blocked':
-    case 'revoked':
-      return 'destructive';
+    case "active":
+      return "secondary"
+    case "blocked":
+    case "revoked":
+      return "destructive"
     default:
-      return 'outline';
+      return "outline"
   }
 }
 
-function exposureVariant(runtimeStatus: RelayExposureView['runtimeStatus']) {
+function exposureVariant(runtimeStatus: RelayExposureView["runtimeStatus"]) {
   switch (runtimeStatus) {
-    case 'healthy':
-      return 'secondary';
-    case 'degraded':
-    case 'starting':
-      return 'outline';
+    case "healthy":
+      return "secondary"
+    case "degraded":
+    case "starting":
+      return "outline"
     default:
-      return 'destructive';
+      return "destructive"
   }
 }
 
-function syncSourceVariant(status: NonNullable<RelayExposureView['syncSource']>['status']) {
+function syncSourceVariant(
+  status: NonNullable<RelayExposureView["syncSource"]>["status"]
+) {
   switch (status) {
-    case 'idle':
-      return 'secondary';
-    case 'syncing':
-      return 'outline';
-    case 'error':
-      return 'destructive';
+    case "idle":
+      return "secondary"
+    case "syncing":
+      return "outline"
+    case "error":
+      return "destructive"
     default:
-      return 'outline';
+      return "outline"
   }
 }
 
-function formatRelayAuthorizationScope(scope: RelayAuthorizationGrantView['scope']) {
+function formatRelayAuthorizationScope(
+  scope: RelayAuthorizationGrantView["scope"]
+) {
   switch (scope) {
-    case 'once':
-      return 'Allow once';
-    case 'actor':
-      return 'Allow this actor';
-    case 'conversation':
-      return 'Allow this conversation';
-    case 'workspace':
-      return 'Always allow';
+    case "once":
+      return "Allow once"
+    case "actor":
+      return "Allow this actor"
+    case "conversation":
+      return "Allow this conversation"
+    case "workspace":
+      return "Always allow"
     default:
-      return scope;
+      return scope
   }
 }
 
 function describeRelayAuthorizationGrant(grant: RelayAuthorizationGrantView) {
-  if (grant.capability === 'filesystem' && grant.filesystem) {
+  if (grant.capability === "filesystem" && grant.filesystem) {
     return {
       icon: FolderOpen,
       summary:
-        grant.filesystem.access === 'write'
-          ? 'Filesystem write access'
-          : 'Filesystem read access',
+        grant.filesystem.access === "write"
+          ? "Filesystem write access"
+          : "Filesystem read access",
       detail:
         grant.filesystem.pathPrefixes.length > 0
-          ? grant.filesystem.pathPrefixes.join('\n')
-          : 'No directory constraint',
-    };
+          ? grant.filesystem.pathPrefixes.join("\n")
+          : "No directory constraint",
+    }
   }
-  if (grant.capability === 'commandline' && grant.commandline) {
+  if (grant.capability === "commandline" && grant.commandline) {
     return {
       icon: Terminal,
       summary:
-        grant.commandline.commandMatchType === 'exact'
-          ? 'Exact command'
-          : grant.commandline.commandMatchType === 'prefix'
-            ? 'Command prefix'
-            : 'Command line access',
+        grant.commandline.commandMatchType === "exact"
+          ? "Exact command"
+          : grant.commandline.commandMatchType === "prefix"
+            ? "Command prefix"
+            : "Command line access",
       detail: [
-        grant.commandline.commandText || 'bash',
+        grant.commandline.commandText || "bash",
         grant.commandline.workingDirectory
           ? `Working directory: ${grant.commandline.workingDirectory}`
           : null,
       ]
         .filter(Boolean)
-        .join('\n'),
-    };
+        .join("\n"),
+    }
   }
-  if (grant.capability === 'browser' && grant.browser) {
+  if (grant.capability === "browser" && grant.browser) {
     const detail =
-      grant.browser.scopeType === 'host'
+      grant.browser.scopeType === "host"
         ? grant.browser.host
-        : grant.browser.scopeType === 'domain'
+        : grant.browser.scopeType === "domain"
           ? grant.browser.registrableDomain
-          : grant.browser.scopeType === 'origin'
+          : grant.browser.scopeType === "origin"
             ? grant.browser.origin
-            : undefined;
+            : undefined
     return {
       icon: Globe,
       summary:
-        grant.browser.action === 'write'
-          ? 'Browser write actions'
-          : 'Browser read actions',
-      detail: detail || 'Browser-wide',
-    };
+        grant.browser.action === "write"
+          ? "Browser write actions"
+          : "Browser read actions",
+      detail: detail || "Browser-wide",
+    }
   }
   return {
     icon: MousePointerClick,
     summary:
-      grant.cua?.access === 'write'
-        ? 'Desktop input actions'
-        : 'Desktop observation',
-    detail: 'CUA automation',
-  };
+      grant.cua?.access === "write"
+        ? "Desktop input actions"
+        : "Desktop observation",
+    detail: "CUA automation",
+  }
 }
 
 export default function RelayDevicePage() {
-  const params = useParams<{ relayId: string }>();
-  const router = useRouter();
-  const searchParams = useSearchParams();
-  const { workspaceId } = useWorkspace();
-  const relayId = params.relayId;
+  const params = useParams<{ relayId: string }>()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const { workspaceId } = useWorkspace()
+  const relayId = params.relayId
 
-  const [relayDetail, setRelayDetail] = useState<RelayDeviceDetailView | null>(null);
-  const [relayEventSources, setRelayEventSources] = useState<AutomationEventSource[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [loadingRelayEventSources, setLoadingRelayEventSources] = useState(true);
-  const [togglingRelaySourceKey, setTogglingRelaySourceKey] = useState<string | null>(null);
-  const [relayAuthorizations, setRelayAuthorizations] = useState<RelayAuthorizationGrantView[]>([]);
-  const [loadingRelayAuthorizations, setLoadingRelayAuthorizations] = useState(false);
-  const [revokingGrantId, setRevokingGrantId] = useState<string | null>(null);
-  const [draftName, setDraftName] = useState('');
-  const [savingDevicePolicy, setSavingDevicePolicy] = useState(false);
-  const [deviceConversationTypeKeys, setDeviceConversationTypeKeys] = useState<ConversationTypeKey[]>(
-    conversationTypeMaskToKeys(CONVERSATION_TYPE_MASK_PRESETS.ALL),
-  );
+  const [relayDetail, setRelayDetail] = useState<RelayDeviceDetailView | null>(
+    null
+  )
+  const [relayEventSources, setRelayEventSources] = useState<
+    AutomationEventSource[]
+  >([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [loadingRelayEventSources, setLoadingRelayEventSources] = useState(true)
+  const [togglingRelaySourceKey, setTogglingRelaySourceKey] = useState<
+    string | null
+  >(null)
+  const [relayAuthorizations, setRelayAuthorizations] = useState<
+    RelayAuthorizationGrantView[]
+  >([])
+  const [loadingRelayAuthorizations, setLoadingRelayAuthorizations] =
+    useState(false)
+  const [revokingGrantId, setRevokingGrantId] = useState<string | null>(null)
+  const [draftName, setDraftName] = useState("")
+  const [savingDevicePolicy, setSavingDevicePolicy] = useState(false)
+  const [deviceConversationTypeKeys, setDeviceConversationTypeKeys] = useState<
+    ConversationTypeKey[]
+  >(conversationTypeMaskToKeys(CONVERSATION_TYPE_MASK_PRESETS.ALL))
 
-  const exposureId = searchParams.get('exposureId');
+  const exposureId = searchParams.get("exposureId")
   const relayAccessAdapter = useMemo(
     () => ({
       loadAccess: (targetWorkspaceId: string, targetExposureId: string) =>
-        api.getRelayExposureAccess(targetWorkspaceId, relayId, targetExposureId),
+        api.getRelayExposureAccess(
+          targetWorkspaceId,
+          relayId,
+          targetExposureId
+        ),
       grantAccess: (
         targetWorkspaceId: string,
         targetExposureId: string,
         payload: {
           accessTarget?: {
-            type: 'workspace' | 'conversation' | 'actor' | 'actor_in_conversation';
-            actorId?: string;
-            conversationId?: string;
-          };
-          conversationTypeMaskOverride?: number | null;
-          permissions?: string[];
-        },
-      ) => api.grantRelayExposureAccess(targetWorkspaceId, relayId, targetExposureId, payload),
+            type:
+              | "workspace"
+              | "conversation"
+              | "actor"
+              | "actor_in_conversation"
+            actorId?: string
+            conversationId?: string
+          }
+          conversationTypeMaskOverride?: number | null
+          permissions?: string[]
+        }
+      ) =>
+        api.grantRelayExposureAccess(
+          targetWorkspaceId,
+          relayId,
+          targetExposureId,
+          payload
+        ),
       revokeAccess: (
         targetWorkspaceId: string,
         targetExposureId: string,
-        bindingId: string,
-      ) => api.revokeRelayExposureAccess(targetWorkspaceId, relayId, targetExposureId, bindingId),
+        bindingId: string
+      ) =>
+        api.revokeRelayExposureAccess(
+          targetWorkspaceId,
+          relayId,
+          targetExposureId,
+          bindingId
+        ),
       updateGrant: (
         targetWorkspaceId: string,
         targetExposureId: string,
         bindingId: string,
         payload: {
-          conversationTypeMaskOverride?: number | null;
-        },
+          conversationTypeMaskOverride?: number | null
+        }
       ) =>
         api.updateRelayExposureAccessGrant(
           targetWorkspaceId,
           relayId,
           targetExposureId,
           bindingId,
-          payload,
+          payload
         ),
       updatePolicy: (
         targetWorkspaceId: string,
         targetExposureId: string,
         payload: {
-          conversationTypeMaskOverride?: number | null;
-        },
-      ) => api.updateRelayExposure(targetWorkspaceId, relayId, targetExposureId, payload),
+          conversationTypeMaskOverride?: number | null
+        }
+      ) =>
+        api.updateRelayExposure(
+          targetWorkspaceId,
+          relayId,
+          targetExposureId,
+          payload
+        ),
     }),
-    [relayId],
-  );
+    [relayId]
+  )
 
   const relayLifecycleSourceDefinitions = useMemo(
     () =>
@@ -320,311 +371,395 @@ export default function RelayDevicePage() {
           providerLabel: relayDetail?.device.title || draftName || relayId,
         }),
       })),
-    [draftName, relayDetail?.device.title, relayDetail?.device.id, relayId],
-  );
+    [draftName, relayDetail?.device.title, relayDetail?.device.id, relayId]
+  )
 
   const activeExposure = useMemo(() => {
-    if (!relayDetail?.exposures.length) return null;
-    return relayDetail.exposures.find((exposure) => exposure.id === exposureId) || relayDetail.exposures[0];
-  }, [exposureId, relayDetail?.exposures]);
+    if (!relayDetail?.exposures.length) return null
+    return (
+      relayDetail.exposures.find((exposure) => exposure.id === exposureId) ||
+      relayDetail.exposures[0]
+    )
+  }, [exposureId, relayDetail?.exposures])
 
   const deviceWorkspaceConversationTypeMask = useMemo(
-    () => relayDetail?.device.workspaceConversationTypeMask ?? CONVERSATION_TYPE_MASK_PRESETS.ALL,
-    [relayDetail?.device.workspaceConversationTypeMask],
-  );
+    () =>
+      relayDetail?.device.workspaceConversationTypeMask ??
+      CONVERSATION_TYPE_MASK_PRESETS.ALL,
+    [relayDetail?.device.workspaceConversationTypeMask]
+  )
   const deviceEffectiveConversationTypeMask = useMemo(
-    () => relayDetail?.device.effectiveConversationTypeMask ?? deviceWorkspaceConversationTypeMask,
-    [deviceWorkspaceConversationTypeMask, relayDetail?.device.effectiveConversationTypeMask],
-  );
+    () =>
+      relayDetail?.device.effectiveConversationTypeMask ??
+      deviceWorkspaceConversationTypeMask,
+    [
+      deviceWorkspaceConversationTypeMask,
+      relayDetail?.device.effectiveConversationTypeMask,
+    ]
+  )
   const deviceAllowedConversationTypeKeys = useMemo(
-    () => new Set(conversationTypeMaskToKeys(deviceWorkspaceConversationTypeMask)),
-    [deviceWorkspaceConversationTypeMask],
-  );
+    () =>
+      new Set(conversationTypeMaskToKeys(deviceWorkspaceConversationTypeMask)),
+    [deviceWorkspaceConversationTypeMask]
+  )
   const currentDeviceConversationTypeMask = useMemo(
     () =>
       conversationTypeKeysToMask(
         deviceConversationTypeKeys,
-        deviceEffectiveConversationTypeMask,
+        deviceEffectiveConversationTypeMask
       ),
-    [deviceConversationTypeKeys, deviceEffectiveConversationTypeMask],
-  );
+    [deviceConversationTypeKeys, deviceEffectiveConversationTypeMask]
+  )
   const nextDeviceConversationTypeMaskOverride = useMemo(
     () =>
       currentDeviceConversationTypeMask === deviceWorkspaceConversationTypeMask
         ? null
         : currentDeviceConversationTypeMask,
-    [currentDeviceConversationTypeMask, deviceWorkspaceConversationTypeMask],
-  );
+    [currentDeviceConversationTypeMask, deviceWorkspaceConversationTypeMask]
+  )
   const hasDeviceConversationTypeChanges =
-    currentDeviceConversationTypeMask !== deviceEffectiveConversationTypeMask;
+    currentDeviceConversationTypeMask !== deviceEffectiveConversationTypeMask
   const selectedDeviceConversationTypeLabels = useMemo(
     () => formatConversationTypeKeys(deviceConversationTypeKeys),
-    [deviceConversationTypeKeys],
-  );
+    [deviceConversationTypeKeys]
+  )
 
   async function loadRelayDetail() {
-    if (!workspaceId || !relayId) return;
+    if (!workspaceId || !relayId) return
 
-    setLoading(true);
+    setLoading(true)
     try {
-      const detail = await api.getRelayDevice(workspaceId, relayId);
-      setRelayDetail(detail);
-      setDraftName(detail.device.title);
+      const detail = await api.getRelayDevice(workspaceId, relayId)
+      setRelayDetail(detail)
+      setDraftName(detail.device.title)
     } catch (error) {
-      console.error('Failed to load relay detail:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to load relay');
+      console.error("Failed to load relay detail:", error)
+      toast.error(
+        error instanceof Error ? error.message : "Failed to load relay"
+      )
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
   }
 
   async function loadRelayEventSources() {
-    if (!workspaceId || !relayId) return;
+    if (!workspaceId || !relayId) return
 
-    setLoadingRelayEventSources(true);
+    setLoadingRelayEventSources(true)
     try {
       const sources = await api.getAutomationEventSources(workspaceId, {
-        providerKind: 'relay',
+        providerKind: "relay",
         providerRef: relayId,
-      });
-      setRelayEventSources(sources);
+      })
+      setRelayEventSources(sources)
     } catch (error) {
-      console.error('Failed to load relay automation event sources:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to load relay event sources');
+      console.error("Failed to load relay automation event sources:", error)
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to load relay event sources"
+      )
     } finally {
-      setLoadingRelayEventSources(false);
+      setLoadingRelayEventSources(false)
     }
   }
 
   async function loadRelayAuthorizations(targetExposureId: string) {
-    if (!workspaceId || !relayId || !targetExposureId) return;
+    if (!workspaceId || !relayId || !targetExposureId) return
 
-    setLoadingRelayAuthorizations(true);
+    setLoadingRelayAuthorizations(true)
     try {
-      const result = await api.listRelayAuthorizations(workspaceId, relayId, targetExposureId);
-      setRelayAuthorizations(result.grants);
+      const result = await api.listRelayAuthorizations(
+        workspaceId,
+        relayId,
+        targetExposureId
+      )
+      setRelayAuthorizations(result.grants)
     } catch (error) {
-      console.error('Failed to load relay authorizations:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to load relay authorizations');
+      console.error("Failed to load relay authorizations:", error)
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to load relay authorizations"
+      )
     } finally {
-      setLoadingRelayAuthorizations(false);
+      setLoadingRelayAuthorizations(false)
     }
   }
 
   useEffect(() => {
-    void loadRelayDetail();
-  }, [relayId, workspaceId]);
+    void loadRelayDetail()
+  }, [relayId, workspaceId])
 
   useEffect(() => {
-    void loadRelayEventSources();
-  }, [relayId, workspaceId]);
+    void loadRelayEventSources()
+  }, [relayId, workspaceId])
 
   useEffect(() => {
-    if (!activeExposure || !relayDetail) return;
-    if (exposureId === activeExposure.id) return;
+    if (!activeExposure || !relayDetail) return
+    if (exposureId === activeExposure.id) return
 
-    const next = new URLSearchParams(searchParams.toString());
-    next.set('exposureId', activeExposure.id);
-    router.replace(`/dashboard/plugins/relays/${relayId}?${next.toString()}`, { scroll: false });
-  }, [activeExposure, exposureId, relayDetail, relayId, router, searchParams]);
+    const next = new URLSearchParams(searchParams.toString())
+    next.set("exposureId", activeExposure.id)
+    router.replace(`/dashboard/plugins/relays/${relayId}?${next.toString()}`, {
+      scroll: false,
+    })
+  }, [activeExposure, exposureId, relayDetail, relayId, router, searchParams])
 
   useEffect(() => {
     if (!activeExposure?.id) {
-      setRelayAuthorizations([]);
-      return;
+      setRelayAuthorizations([])
+      return
     }
-    void loadRelayAuthorizations(activeExposure.id);
-  }, [activeExposure?.id, relayId, workspaceId]);
+    void loadRelayAuthorizations(activeExposure.id)
+  }, [activeExposure?.id, relayId, workspaceId])
 
   useEffect(() => {
-    if (!relayDetail?.device) return;
+    if (!relayDetail?.device) return
     setDeviceConversationTypeKeys(
-      conversationTypeMaskToKeys(relayDetail.device.effectiveConversationTypeMask),
-    );
-  }, [relayDetail?.device]);
+      conversationTypeMaskToKeys(
+        relayDetail.device.effectiveConversationTypeMask
+      )
+    )
+  }, [relayDetail?.device])
 
   async function handleSaveRelay() {
-    if (!workspaceId || !relayDetail || !draftName.trim()) return;
+    if (!workspaceId || !relayDetail || !draftName.trim()) return
 
-    setSaving(true);
+    setSaving(true)
     try {
-      await api.updateRelayDevice(workspaceId, relayDetail.device.id, { title: draftName.trim() });
-      await loadRelayDetail();
-      toast.success('Relay updated');
+      await api.updateRelayDevice(workspaceId, relayDetail.device.id, {
+        title: draftName.trim(),
+      })
+      await loadRelayDetail()
+      toast.success("Relay updated")
     } catch (error) {
-      console.error('Failed to update relay device:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update relay');
+      console.error("Failed to update relay device:", error)
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update relay"
+      )
     } finally {
-      setSaving(false);
+      setSaving(false)
     }
   }
 
   function toggleDeviceConversationTypeKey(key: ConversationTypeKey) {
     if (!deviceAllowedConversationTypeKeys.has(key)) {
-      return;
+      return
     }
     setDeviceConversationTypeKeys((current) => {
-      const exists = current.includes(key);
+      const exists = current.includes(key)
       if (exists && current.length === 1) {
-        return current;
+        return current
       }
-      return exists
-        ? current.filter((item) => item !== key)
-        : [...current, key];
-    });
+      return exists ? current.filter((item) => item !== key) : [...current, key]
+    })
   }
 
   function applyDeviceConversationTypePreset(mask: number) {
     setDeviceConversationTypeKeys(
-      narrowPresetConversationTypeKeys(deviceWorkspaceConversationTypeMask, mask),
-    );
+      narrowPresetConversationTypeKeys(
+        deviceWorkspaceConversationTypeMask,
+        mask
+      )
+    )
   }
 
   function resetDeviceConversationTypePolicy() {
     setDeviceConversationTypeKeys(
-      conversationTypeMaskToKeys(deviceWorkspaceConversationTypeMask),
-    );
+      conversationTypeMaskToKeys(deviceWorkspaceConversationTypeMask)
+    )
   }
 
   async function saveDeviceConversationTypePolicy() {
-    if (!workspaceId || !relayDetail || !hasDeviceConversationTypeChanges) return;
+    if (!workspaceId || !relayDetail || !hasDeviceConversationTypeChanges)
+      return
 
-    setSavingDevicePolicy(true);
+    setSavingDevicePolicy(true)
     try {
       await api.updateRelayDevice(workspaceId, relayDetail.device.id, {
         conversationTypeMaskOverride: nextDeviceConversationTypeMaskOverride,
-      });
-      await loadRelayDetail();
-      toast.success('Device conversation policy updated');
+      })
+      await loadRelayDetail()
+      toast.success("Device conversation policy updated")
     } catch (error) {
-      console.error('Failed to update relay device policy:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update device policy');
+      console.error("Failed to update relay device policy:", error)
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to update device policy"
+      )
     } finally {
-      setSavingDevicePolicy(false);
+      setSavingDevicePolicy(false)
     }
   }
 
   async function handleDisconnectRelay() {
-    if (!workspaceId || !relayDetail) return;
-    if (!window.confirm(`Disconnect relay device "${relayDetail.device.title}"?`)) return;
+    if (!workspaceId || !relayDetail) return
+    if (
+      !window.confirm(`Disconnect relay device "${relayDetail.device.title}"?`)
+    )
+      return
 
-    setSaving(true);
+    setSaving(true)
     try {
-      await api.disconnectRelayDevice(workspaceId, relayDetail.device.id);
-      await loadRelayDetail();
-      toast.success('Disconnect requested');
+      await api.disconnectRelayDevice(workspaceId, relayDetail.device.id)
+      await loadRelayDetail()
+      toast.success("Disconnect requested")
     } catch (error) {
-      console.error('Failed to disconnect relay device:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to disconnect relay');
+      console.error("Failed to disconnect relay device:", error)
+      toast.error(
+        error instanceof Error ? error.message : "Failed to disconnect relay"
+      )
     } finally {
-      setSaving(false);
+      setSaving(false)
     }
   }
 
   async function handleRevokeRelayAuthorization(grantId: string) {
-    if (!workspaceId || !activeExposure) return;
-    if (!window.confirm('Revoke this relay authorization?')) return;
+    if (!workspaceId || !activeExposure) return
+    if (!window.confirm("Revoke this relay authorization?")) return
 
-    setRevokingGrantId(grantId);
+    setRevokingGrantId(grantId)
     try {
       await api.revokeRelayAuthorizationGrant(
         workspaceId,
         relayId,
         activeExposure.id,
-        grantId,
-      );
-      await loadRelayAuthorizations(activeExposure.id);
-      toast.success('Relay authorization revoked');
+        grantId
+      )
+      await loadRelayAuthorizations(activeExposure.id)
+      toast.success("Relay authorization revoked")
     } catch (error) {
-      console.error('Failed to revoke relay authorization:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to revoke relay authorization');
+      console.error("Failed to revoke relay authorization:", error)
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to revoke relay authorization"
+      )
     } finally {
-      setRevokingGrantId(null);
+      setRevokingGrantId(null)
     }
   }
 
   async function handleDeleteRelay() {
-    if (!workspaceId || !relayDetail) return;
-    if (!window.confirm(`Delete relay device "${relayDetail.device.title}"?`)) return;
+    if (!workspaceId || !relayDetail) return
+    if (!window.confirm(`Delete relay device "${relayDetail.device.title}"?`))
+      return
 
-    setSaving(true);
+    setSaving(true)
     try {
-      await api.deleteRelayDevice(workspaceId, relayDetail.device.id);
-      toast.success('Relay deleted');
-      router.push('/dashboard/plugins');
+      await api.deleteRelayDevice(workspaceId, relayDetail.device.id)
+      toast.success("Relay deleted")
+      router.push("/dashboard/plugins")
     } catch (error) {
-      console.error('Failed to delete relay device:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to delete relay');
+      console.error("Failed to delete relay device:", error)
+      toast.error(
+        error instanceof Error ? error.message : "Failed to delete relay"
+      )
     } finally {
-      setSaving(false);
+      setSaving(false)
     }
   }
 
-  async function handleUpdateRelayTrustStatus(nextTrustStatus: 'active' | 'revoked' | 'blocked') {
-    if (!workspaceId || !relayDetail) return;
+  async function handleUpdateRelayTrustStatus(
+    nextTrustStatus: "active" | "revoked" | "blocked"
+  ) {
+    if (!workspaceId || !relayDetail) return
 
-    const actionLabel = nextTrustStatus === 'active' ? 'reactivate' : nextTrustStatus;
-    if (!window.confirm(`${actionLabel[0].toUpperCase()}${actionLabel.slice(1)} relay device "${relayDetail.device.title}"?`)) {
-      return;
+    const actionLabel =
+      nextTrustStatus === "active" ? "reactivate" : nextTrustStatus
+    if (
+      !window.confirm(
+        `${actionLabel[0].toUpperCase()}${actionLabel.slice(1)} relay device "${relayDetail.device.title}"?`
+      )
+    ) {
+      return
     }
 
-    setSaving(true);
+    setSaving(true)
     try {
-      await api.updateRelayTrustStatus(workspaceId, relayDetail.device.id, nextTrustStatus);
-      await loadRelayDetail();
-      toast.success(`Relay ${actionLabel}d`);
+      await api.updateRelayTrustStatus(
+        workspaceId,
+        relayDetail.device.id,
+        nextTrustStatus
+      )
+      await loadRelayDetail()
+      toast.success(`Relay ${actionLabel}d`)
     } catch (error) {
-      console.error('Failed to update relay trust status:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update trust status');
+      console.error("Failed to update relay trust status:", error)
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update trust status"
+      )
     } finally {
-      setSaving(false);
+      setSaving(false)
     }
   }
 
-  async function handleToggleRelayEventSource(sourceKey: string, enabled: boolean) {
-    if (!workspaceId || !relayDetail) return;
+  async function handleToggleRelayEventSource(
+    sourceKey: string,
+    enabled: boolean
+  ) {
+    if (!workspaceId || !relayDetail) return
 
-    const entry = relayLifecycleSourceDefinitions.find((candidate) => candidate.source.sourceKey === sourceKey);
-    if (!entry) return;
+    const entry = relayLifecycleSourceDefinitions.find(
+      (candidate) => candidate.source.sourceKey === sourceKey
+    )
+    if (!entry) return
 
-    const existingSource = relayEventSources.find((source) => source.sourceKey === sourceKey);
-    setTogglingRelaySourceKey(sourceKey);
+    const existingSource = relayEventSources.find(
+      (source) => source.sourceKey === sourceKey
+    )
+    setTogglingRelaySourceKey(sourceKey)
     try {
       if (enabled) {
         await api.createAutomationEventSource(workspaceId, {
-          providerKind: 'relay',
+          providerKind: "relay",
           providerRef: relayDetail.device.id,
           sourceKey: entry.source.sourceKey,
           name: entry.source.name,
           description: entry.source.description,
           payloadSchema: entry.source.payloadSchema,
           examplePayload: entry.source.examplePayload,
-          status: 'active',
+          status: "active",
           metadata: entry.source.metadata,
-        });
-        toast.success(`${entry.source.name} enabled`);
+        })
+        toast.success(`${entry.source.name} enabled`)
       } else if (existingSource) {
-        await api.archiveAutomationEventSource(workspaceId, existingSource.id);
-        toast.success(`${entry.source.name} disabled`);
+        await api.archiveAutomationEventSource(workspaceId, existingSource.id)
+        toast.success(`${entry.source.name} disabled`)
       }
 
-      await loadRelayEventSources();
+      await loadRelayEventSources()
     } catch (error) {
-      console.error('Failed to update relay automation event source:', error);
-      toast.error(error instanceof Error ? error.message : 'Failed to update relay event source');
+      console.error("Failed to update relay automation event source:", error)
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to update relay event source"
+      )
     } finally {
-      setTogglingRelaySourceKey(null);
+      setTogglingRelaySourceKey(null)
     }
   }
 
   if (loading) {
-    return <div className="py-16 text-center text-sm text-muted-foreground">Loading relay...</div>;
+    return (
+      <div className="py-16 text-center text-sm text-muted-foreground">
+        Loading relay...
+      </div>
+    )
   }
 
   if (!relayDetail) {
     return (
-      <div className="flex flex-col gap-4 px-4 pb-6 pt-6 lg:px-6">
-        <Button type="button" variant="outline" size="sm" onClick={() => router.push('/dashboard/plugins')}>
+      <div className="flex flex-col gap-4 px-4 pt-6 pb-6 lg:px-6">
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => router.push("/dashboard/plugins")}
+        >
           <ArrowLeft data-icon="inline-start" />
           Back
         </Button>
@@ -632,13 +767,18 @@ export default function RelayDevicePage() {
           Relay device not found.
         </div>
       </div>
-    );
+    )
   }
 
   return (
-    <div className="flex flex-col gap-6 px-4 pb-6 pt-6 lg:px-6">
+    <div className="flex flex-col gap-6 px-4 pt-6 pb-6 lg:px-6">
       <div className="flex flex-wrap items-center gap-3">
-        <Button type="button" variant="outline" size="sm" onClick={() => router.push('/dashboard/plugins')}>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => router.push("/dashboard/plugins")}
+        >
           <ArrowLeft data-icon="inline-start" />
           Back
         </Button>
@@ -654,18 +794,26 @@ export default function RelayDevicePage() {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <AppCardTitle>{relayDetail.device.title}</AppCardTitle>
-                  <Badge variant={relayTrustVariant(relayDetail.device.trustStatus)}>
+                  <Badge
+                    variant={relayTrustVariant(relayDetail.device.trustStatus)}
+                  >
                     {relayDetail.device.trustStatus}
                   </Badge>
-                  <Badge variant={relayDetail.device.isConnected ? 'secondary' : 'outline'}>
-                    {relayDetail.device.isConnected ? 'connected' : 'offline'}
+                  <Badge
+                    variant={
+                      relayDetail.device.isConnected ? "secondary" : "outline"
+                    }
+                  >
+                    {relayDetail.device.isConnected ? "connected" : "offline"}
                   </Badge>
                 </div>
                 <AppCardDescription className="mt-2 flex flex-wrap items-center gap-3">
                   <span className="inline-flex items-center gap-1.5">
                     <Wrench className="size-4" />
                     {relayDetail.device.deviceType}
-                    {relayDetail.device.platform ? ` on ${relayDetail.device.platform}` : ''}
+                    {relayDetail.device.platform
+                      ? ` on ${relayDetail.device.platform}`
+                      : ""}
                   </span>
                   <span className="inline-flex items-center gap-1.5">
                     {relayDetail.device.isConnected ? (
@@ -680,22 +828,42 @@ export default function RelayDevicePage() {
             </div>
 
             <div className="flex flex-wrap gap-2">
-              <Button type="button" variant="outline" onClick={() => void handleDisconnectRelay()} disabled={saving}>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => void handleDisconnectRelay()}
+                disabled={saving}
+              >
                 <Unplug data-icon="inline-start" />
                 Disconnect
               </Button>
-              {relayDetail.device.trustStatus === 'active' ? (
-                <Button type="button" variant="outline" onClick={() => void handleUpdateRelayTrustStatus('revoked')} disabled={saving}>
+              {relayDetail.device.trustStatus === "active" ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void handleUpdateRelayTrustStatus("revoked")}
+                  disabled={saving}
+                >
                   <XCircle data-icon="inline-start" />
                   Revoke
                 </Button>
               ) : (
-                <Button type="button" variant="outline" onClick={() => void handleUpdateRelayTrustStatus('active')} disabled={saving}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => void handleUpdateRelayTrustStatus("active")}
+                  disabled={saving}
+                >
                   <CheckCircle2 data-icon="inline-start" />
                   Reactivate
                 </Button>
               )}
-              <Button type="button" variant="destructive" onClick={() => void handleDeleteRelay()} disabled={saving}>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={() => void handleDeleteRelay()}
+                disabled={saving}
+              >
                 Delete
               </Button>
             </div>
@@ -714,7 +882,11 @@ export default function RelayDevicePage() {
                     onChange={(event) => setDraftName(event.target.value)}
                     placeholder="Relay name"
                   />
-                  <Button type="button" onClick={() => void handleSaveRelay()} disabled={saving || !draftName.trim()}>
+                  <Button
+                    type="button"
+                    onClick={() => void handleSaveRelay()}
+                    disabled={saving || !draftName.trim()}
+                  >
                     Save
                   </Button>
                 </div>
@@ -723,10 +895,19 @@ export default function RelayDevicePage() {
           </FieldGroup>
 
           <div className="flex flex-wrap gap-2 text-sm text-muted-foreground">
-            <Badge variant="outline">Fingerprint {relayDetail.device.publicKeyFingerprint}</Badge>
-            <Badge variant="outline">Last connected {formatDateTime(relayDetail.device.lastConnectedAt)}</Badge>
-            <Badge variant="outline">{relayDetail.device.exposureCount} MCPs</Badge>
-            <Badge variant="outline">{relayDetail.device.toolCount} tools</Badge>
+            <Badge variant="outline">
+              Fingerprint {relayDetail.device.publicKeyFingerprint}
+            </Badge>
+            <Badge variant="outline">
+              Last connected{" "}
+              {formatDateTime(relayDetail.device.lastConnectedAt)}
+            </Badge>
+            <Badge variant="outline">
+              {relayDetail.device.exposureCount} MCPs
+            </Badge>
+            <Badge variant="outline">
+              {relayDetail.device.toolCount} tools
+            </Badge>
           </div>
         </AppCardContent>
       </AppCard>
@@ -737,18 +918,22 @@ export default function RelayDevicePage() {
             <div className="min-w-0">
               <AppCardTitle>Device Conversation Policy</AppCardTitle>
               <AppCardDescription className="mt-2">
-                Limit which conversation topologies can surface tools from this device. Runtime visibility follows the
-                workspace default, then this device override, then each exposure override, then each matching grant.
+                Limit which conversation topologies can surface tools from this
+                device. Runtime visibility follows the workspace default, then
+                this device override, then each exposure override, then each
+                matching grant.
               </AppCardDescription>
             </div>
             <Badge
               variant={
-                relayDetail.device.conversationTypeMaskOverride ? 'secondary' : 'outline'
+                relayDetail.device.conversationTypeMaskOverride
+                  ? "secondary"
+                  : "outline"
               }
             >
               {relayDetail.device.conversationTypeMaskOverride
-                ? 'Override active'
-                : 'Follow workspace'}
+                ? "Override active"
+                : "Follow workspace"}
             </Badge>
           </div>
         </AppCardHeader>
@@ -759,7 +944,9 @@ export default function RelayDevicePage() {
                 key={preset.label}
                 type="button"
                 variant={
-                  currentDeviceConversationTypeMask === preset.value ? 'default' : 'outline'
+                  currentDeviceConversationTypeMask === preset.value
+                    ? "default"
+                    : "outline"
                 }
                 size="sm"
                 onClick={() => applyDeviceConversationTypePreset(preset.value)}
@@ -776,8 +963,12 @@ export default function RelayDevicePage() {
                   <div className="flex items-start gap-3">
                     <Checkbox
                       checked={deviceConversationTypeKeys.includes(option.key)}
-                      disabled={!deviceAllowedConversationTypeKeys.has(option.key)}
-                      onCheckedChange={() => toggleDeviceConversationTypeKey(option.key)}
+                      disabled={
+                        !deviceAllowedConversationTypeKeys.has(option.key)
+                      }
+                      onCheckedChange={() =>
+                        toggleDeviceConversationTypeKey(option.key)
+                      }
                     />
                     <div className="space-y-1">
                       <FieldLabel>{option.label}</FieldLabel>
@@ -791,7 +982,7 @@ export default function RelayDevicePage() {
 
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
             <div className="rounded-2xl border border-border bg-muted/20 p-4">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 Workspace
               </div>
               <div className="mt-2 text-sm font-medium text-foreground">
@@ -799,12 +990,14 @@ export default function RelayDevicePage() {
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
                 {formatConversationTypeKeys(
-                  conversationTypeMaskToKeys(deviceWorkspaceConversationTypeMask),
+                  conversationTypeMaskToKeys(
+                    deviceWorkspaceConversationTypeMask
+                  )
                 )}
               </div>
             </div>
             <div className="rounded-2xl border border-border bg-muted/20 p-4">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 Effective Device
               </div>
               <div className="mt-2 text-sm font-medium text-foreground">
@@ -812,12 +1005,14 @@ export default function RelayDevicePage() {
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
                 {formatConversationTypeKeys(
-                  conversationTypeMaskToKeys(deviceEffectiveConversationTypeMask),
+                  conversationTypeMaskToKeys(
+                    deviceEffectiveConversationTypeMask
+                  )
                 )}
               </div>
             </div>
             <div className="rounded-2xl border border-border bg-muted/20 p-4">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 Draft
               </div>
               <div className="mt-2 text-sm font-medium text-foreground">
@@ -828,11 +1023,11 @@ export default function RelayDevicePage() {
               </div>
             </div>
             <div className="rounded-2xl border border-border bg-muted/20 p-4">
-              <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+              <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                 Override Payload
               </div>
               <div className="mt-2 text-sm font-medium text-foreground">
-                {nextDeviceConversationTypeMaskOverride ?? 'follow workspace'}
+                {nextDeviceConversationTypeMaskOverride ?? "follow workspace"}
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
                 Exposure policies can only narrow this result further.
@@ -871,8 +1066,9 @@ export default function RelayDevicePage() {
             <div className="min-w-0">
               <AppCardTitle>Relay Lifecycle Event Sources</AppCardTitle>
               <AppCardDescription className="mt-2">
-                Register durable online/offline event sources for this relay. Re-enabling a source reuses the same
-                registration instead of creating duplicates.
+                Register durable online/offline event sources for this relay.
+                Re-enabling a source reuses the same registration instead of
+                creating duplicates.
               </AppCardDescription>
             </div>
             <Button
@@ -892,45 +1088,68 @@ export default function RelayDevicePage() {
           </div>
         </AppCardHeader>
         <AppCardContent className="grid gap-4 lg:grid-cols-2">
-          {relayLifecycleSourceDefinitions.map(({ definition, source: template }) => {
-            const source = relayEventSources.find((entry) => entry.sourceKey === template.sourceKey);
-            const enabled = source ? source.status === 'active' || source.status === 'deprecated' : false;
-            const pending = togglingRelaySourceKey === template.sourceKey;
+          {relayLifecycleSourceDefinitions.map(
+            ({ definition, source: template }) => {
+              const source = relayEventSources.find(
+                (entry) => entry.sourceKey === template.sourceKey
+              )
+              const enabled = source
+                ? source.status === "active" || source.status === "deprecated"
+                : false
+              const pending = togglingRelaySourceKey === template.sourceKey
 
-            return (
-              <div
-                key={template.sourceKey}
-                className="rounded-[22px] border border-border/70 bg-muted/20 px-4 py-4"
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <div className="text-sm font-medium text-foreground">{template.name}</div>
-                      <Badge variant={enabled ? 'secondary' : 'outline'}>
-                        {enabled ? 'enabled' : 'disabled'}
-                      </Badge>
-                      {definition.graceWindowMs ? (
-                        <Badge variant="outline">grace {Math.round(definition.graceWindowMs / 1000)}s</Badge>
-                      ) : null}
-                      {source ? <Badge variant="outline">{source.status}</Badge> : null}
+              return (
+                <div
+                  key={template.sourceKey}
+                  className="rounded-[22px] border border-border/70 bg-muted/20 px-4 py-4"
+                >
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <div className="text-sm font-medium text-foreground">
+                          {template.name}
+                        </div>
+                        <Badge variant={enabled ? "secondary" : "outline"}>
+                          {enabled ? "enabled" : "disabled"}
+                        </Badge>
+                        {definition.graceWindowMs ? (
+                          <Badge variant="outline">
+                            grace {Math.round(definition.graceWindowMs / 1000)}s
+                          </Badge>
+                        ) : null}
+                        {source ? (
+                          <Badge variant="outline">{source.status}</Badge>
+                        ) : null}
+                      </div>
+                      <p className="mt-2 text-sm text-muted-foreground">
+                        {template.description}
+                      </p>
                     </div>
-                    <p className="mt-2 text-sm text-muted-foreground">{template.description}</p>
+                    <Switch
+                      checked={enabled}
+                      disabled={pending}
+                      onCheckedChange={(checked) =>
+                        void handleToggleRelayEventSource(
+                          template.sourceKey,
+                          checked
+                        )
+                      }
+                      aria-label={`Toggle ${template.name}`}
+                    />
                   </div>
-                  <Switch
-                    checked={enabled}
-                    disabled={pending}
-                    onCheckedChange={(checked) => void handleToggleRelayEventSource(template.sourceKey, checked)}
-                    aria-label={`Toggle ${template.name}`}
-                  />
+                  <div className="mt-4 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    <span>Key {template.sourceKey}</span>
+                    <span>
+                      Last event {formatDateTime(source?.lastTriggeredAt)}
+                    </span>
+                    {source?.id ? (
+                      <span>Source {source.id.slice(0, 8)}</span>
+                    ) : null}
+                  </div>
                 </div>
-                <div className="mt-4 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                  <span>Key {template.sourceKey}</span>
-                  <span>Last event {formatDateTime(source?.lastTriggeredAt)}</span>
-                  {source?.id ? <span>Source {source.id.slice(0, 8)}</span> : null}
-                </div>
-              </div>
-            );
-          })}
+              )
+            }
+          )}
         </AppCardContent>
       </AppCard>
 
@@ -939,7 +1158,8 @@ export default function RelayDevicePage() {
           <AppCardHeader>
             <AppCardTitle>MCP Exposures</AppCardTitle>
             <AppCardDescription>
-              Each exposure is authorized directly through relay exposure access, without a mirrored plugin layer.
+              Each exposure is authorized directly through relay exposure
+              access, without a mirrored plugin layer.
             </AppCardDescription>
           </AppCardHeader>
           <AppCardContent className="min-h-0 p-0">
@@ -951,34 +1171,51 @@ export default function RelayDevicePage() {
               <ScrollArea className="h-[28rem]">
                 <div className="flex flex-col gap-2 px-3 pb-3">
                   {relayDetail.exposures.map((exposure) => {
-                    const selected = activeExposure?.id === exposure.id;
+                    const selected = activeExposure?.id === exposure.id
                     return (
                       <button
                         key={exposure.id}
                         type="button"
                         onClick={() => {
-                          const next = new URLSearchParams(searchParams.toString());
-                          next.set('exposureId', exposure.id);
-                          router.replace(`/dashboard/plugins/relays/${relayId}?${next.toString()}`, { scroll: false });
+                          const next = new URLSearchParams(
+                            searchParams.toString()
+                          )
+                          next.set("exposureId", exposure.id)
+                          router.replace(
+                            `/dashboard/plugins/relays/${relayId}?${next.toString()}`,
+                            { scroll: false }
+                          )
                         }}
                         className={cn(
-                          'flex flex-col gap-3 rounded-[22px] px-4 py-4 text-left transition-colors',
-                          selected ? 'bg-accent text-accent-foreground' : 'hover:bg-muted/60',
+                          "flex flex-col gap-3 rounded-[22px] px-4 py-4 text-left transition-colors",
+                          selected
+                            ? "bg-accent text-accent-foreground"
+                            : "hover:bg-muted/60"
                         )}
                       >
                         <div className="flex flex-wrap items-center gap-2">
-                          <div className="text-sm font-medium text-foreground">{exposure.displayName}</div>
-                          <Badge variant={exposureVariant(exposure.runtimeStatus)}>{exposure.runtimeStatus}</Badge>
+                          <div className="text-sm font-medium text-foreground">
+                            {exposure.displayName}
+                          </div>
+                          <Badge
+                            variant={exposureVariant(exposure.runtimeStatus)}
+                          >
+                            {exposure.runtimeStatus}
+                          </Badge>
                         </div>
                         <div className="text-xs text-muted-foreground">
                           {exposure.transport}
                         </div>
                         <div className="flex flex-wrap gap-2">
-                          <Badge variant="outline">{exposure.tools.length} tools</Badge>
-                          <Badge variant="secondary">Direct authorization</Badge>
+                          <Badge variant="outline">
+                            {exposure.tools.length} tools
+                          </Badge>
+                          <Badge variant="secondary">
+                            Direct authorization
+                          </Badge>
                         </div>
                       </button>
-                    );
+                    )
                   })}
                 </div>
               </ScrollArea>
@@ -994,8 +1231,14 @@ export default function RelayDevicePage() {
                   <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
-                        <AppCardTitle>{activeExposure.displayName}</AppCardTitle>
-                        <Badge variant={exposureVariant(activeExposure.runtimeStatus)}>
+                        <AppCardTitle>
+                          {activeExposure.displayName}
+                        </AppCardTitle>
+                        <Badge
+                          variant={exposureVariant(
+                            activeExposure.runtimeStatus
+                          )}
+                        >
                           {activeExposure.runtimeStatus}
                         </Badge>
                       </div>
@@ -1007,16 +1250,26 @@ export default function RelayDevicePage() {
                 </AppCardHeader>
                 <AppCardContent className="flex flex-col gap-4">
                   <div className="flex flex-wrap gap-2">
-                    <Badge variant="outline">Last seen {formatDateTime(activeExposure.lastSeenAt)}</Badge>
+                    <Badge variant="outline">
+                      Last seen {formatDateTime(activeExposure.lastSeenAt)}
+                    </Badge>
                     {activeExposure.syncSource ? (
                       <>
-                        <Badge variant={syncSourceVariant(activeExposure.syncSource.status)}>
+                        <Badge
+                          variant={syncSourceVariant(
+                            activeExposure.syncSource.status
+                          )}
+                        >
                           {activeExposure.syncSource.sourceKind}
                         </Badge>
-                        <Badge variant="outline">{activeExposure.syncSource.syncMode}</Badge>
+                        <Badge variant="outline">
+                          {activeExposure.syncSource.syncMode}
+                        </Badge>
                       </>
                     ) : null}
-                    <Badge variant="outline">Exposure ID {activeExposure.id.slice(0, 8)}</Badge>
+                    <Badge variant="outline">
+                      Exposure ID {activeExposure.id.slice(0, 8)}
+                    </Badge>
                   </div>
 
                   {activeExposure.lastError ? (
@@ -1026,7 +1279,9 @@ export default function RelayDevicePage() {
                   ) : null}
 
                   <div className="flex flex-col gap-2">
-                    <div className="text-sm font-medium text-foreground">Tools</div>
+                    <div className="text-sm font-medium text-foreground">
+                      Tools
+                    </div>
                     <div className="flex flex-wrap gap-2">
                       {activeExposure.tools.length > 0 ? (
                         activeExposure.tools.map((tool) => (
@@ -1035,7 +1290,9 @@ export default function RelayDevicePage() {
                           </Badge>
                         ))
                       ) : (
-                        <span className="text-sm text-muted-foreground">No tools reported yet.</span>
+                        <span className="text-sm text-muted-foreground">
+                          No tools reported yet.
+                        </span>
                       )}
                     </div>
                   </div>
@@ -1065,7 +1322,9 @@ export default function RelayDevicePage() {
                     <AppCardTitle>Relay Authorizations</AppCardTitle>
                   </div>
                   <AppCardDescription>
-                    Fine-grained approvals for special relay MCP actions. These grants are independent from MCP session lifecycle and stay active until consumed or revoked.
+                    Fine-grained approvals for special relay MCP actions. These
+                    grants are independent from MCP session lifecycle and stay
+                    active until consumed or revoked.
                   </AppCardDescription>
                 </AppCardHeader>
                 <AppCardContent className="space-y-3">
@@ -1076,9 +1335,9 @@ export default function RelayDevicePage() {
                     </div>
                   ) : relayAuthorizations.length > 0 ? (
                     relayAuthorizations.map((grant) => {
-                      const described = describeRelayAuthorizationGrant(grant);
-                      const EffectIcon = described.icon;
-                      const isRevoking = revokingGrantId === grant.id;
+                      const described = describeRelayAuthorizationGrant(grant)
+                      const EffectIcon = described.icon
+                      const isRevoking = revokingGrantId === grant.id
                       return (
                         <div
                           key={grant.id}
@@ -1087,15 +1346,23 @@ export default function RelayDevicePage() {
                           <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
                             <div className="min-w-0 space-y-2">
                               <div className="flex flex-wrap items-center gap-2">
-                                <Badge variant="secondary">{formatRelayAuthorizationScope(grant.scope)}</Badge>
-                                <Badge variant="outline">{grant.capability}</Badge>
+                                <Badge variant="secondary">
+                                  {formatRelayAuthorizationScope(grant.scope)}
+                                </Badge>
+                                <Badge variant="outline">
+                                  {grant.capability}
+                                </Badge>
                                 <Badge variant="outline">{grant.status}</Badge>
                               </div>
                               <div className="flex items-start gap-2">
                                 <EffectIcon className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                                 <div className="min-w-0">
-                                  <div className="text-sm font-medium text-foreground">{described.summary}</div>
-                                  <div className="text-xs whitespace-pre-wrap break-all text-muted-foreground">{described.detail}</div>
+                                  <div className="text-sm font-medium text-foreground">
+                                    {described.summary}
+                                  </div>
+                                  <div className="text-xs break-all whitespace-pre-wrap text-muted-foreground">
+                                    {described.detail}
+                                  </div>
                                 </div>
                               </div>
                               <div className="text-xs text-muted-foreground">
@@ -1105,7 +1372,9 @@ export default function RelayDevicePage() {
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => void handleRevokeRelayAuthorization(grant.id)}
+                              onClick={() =>
+                                void handleRevokeRelayAuthorization(grant.id)
+                              }
                               disabled={isRevoking}
                             >
                               {isRevoking ? (
@@ -1117,7 +1386,7 @@ export default function RelayDevicePage() {
                             </Button>
                           </div>
                         </div>
-                      );
+                      )
                     })
                   ) : (
                     <div className="rounded-2xl border border-dashed border-border/70 px-4 py-6 text-sm text-muted-foreground">
@@ -1137,5 +1406,5 @@ export default function RelayDevicePage() {
         </div>
       </div>
     </div>
-  );
+  )
 }

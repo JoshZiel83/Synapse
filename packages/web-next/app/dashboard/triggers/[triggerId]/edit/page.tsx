@@ -1,10 +1,10 @@
-import { AutomationTriggerEditPage } from "@/components/automation-trigger-edit-page";
+import { AutomationTriggerEditPage } from "@/components/automation-trigger-edit-page"
 
 export default async function Page({
   params,
 }: {
-  params: Promise<{ triggerId: string }>;
+  params: Promise<{ triggerId: string }>
 }) {
-  const { triggerId } = await params;
-  return <AutomationTriggerEditPage triggerId={triggerId} />;
+  const { triggerId } = await params
+  return <AutomationTriggerEditPage triggerId={triggerId} />
 }

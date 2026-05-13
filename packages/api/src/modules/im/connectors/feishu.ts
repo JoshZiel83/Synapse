@@ -1,4 +1,4 @@
-import type { TransportConnectorCapability } from "@synapse/shared/types";
+import type { TransportConnectorCapability } from "@synapse/shared/types"
 
 export const FEISHU_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "feishu",
@@ -6,4 +6,4 @@ export const FEISHU_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   supportedEndpointTypes: ["direct", "group"],
   supportsDirectMessages: true,
   supportsGroupMessages: true,
-};
+}

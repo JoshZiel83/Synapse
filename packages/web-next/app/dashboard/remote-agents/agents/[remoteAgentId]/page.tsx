@@ -265,14 +265,17 @@ export default function RemoteAgentDetailPage() {
       syncAgentDraft(result.remoteAgent)
       toast.success("Remote agent updated")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update agent")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update agent"
+      )
     } finally {
       setSavingAgent(false)
     }
   }
 
   async function handleBindAgent() {
-    if (!workspaceId || !remoteAgentId || !agent || !bindingDraft.machineId) return
+    if (!workspaceId || !remoteAgentId || !agent || !bindingDraft.machineId)
+      return
     setSavingBinding(true)
     try {
       const result = await api.bindRemoteAgent(workspaceId, remoteAgentId, {
@@ -284,13 +287,16 @@ export default function RemoteAgentDetailPage() {
       setAgent(result.remoteAgent)
       syncAgentDraft(result.remoteAgent)
       setBindingDraft({
-        machineId: result.remoteAgent.binding?.machineId || bindingDraft.machineId,
+        machineId:
+          result.remoteAgent.binding?.machineId || bindingDraft.machineId,
         runtimePath: result.remoteAgent.binding?.runtimePath || "",
         localRootPath: result.remoteAgent.binding?.localRootPath || "",
       })
       toast.success("Remote agent binding saved")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to bind agent")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to bind agent"
+      )
     } finally {
       setSavingBinding(false)
     }
@@ -318,7 +324,9 @@ export default function RemoteAgentDetailPage() {
       toast.success("Relationship profile updated")
     } catch (error) {
       toast.error(
-        error instanceof Error ? error.message : "Failed to update relationship profile"
+        error instanceof Error
+          ? error.message
+          : "Failed to update relationship profile"
       )
     } finally {
       setSavingProfile(false)
@@ -346,7 +354,11 @@ export default function RemoteAgentDetailPage() {
       applyProfileToAgent(nextProfile)
       toast.success(`Approval mode switched to ${nextProfile.approvalMode}`)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update approval mode")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to update approval mode"
+      )
     } finally {
       setSavingProfile(false)
     }
@@ -374,7 +386,11 @@ export default function RemoteAgentDetailPage() {
       applyProfileToAgent(nextProfile)
       toast.success(`Access policy switched to ${nextProfile.accessPolicy}`)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update access policy")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to update access policy"
+      )
     } finally {
       setSavingProfile(false)
     }
@@ -398,10 +414,16 @@ export default function RemoteAgentDetailPage() {
       setProfile(nextProfile)
       applyProfileToAgent(nextProfile)
       toast.success(
-        nextProfile.isPublicShared ? "Public sharing enabled" : "Public sharing disabled"
+        nextProfile.isPublicShared
+          ? "Public sharing enabled"
+          : "Public sharing disabled"
       )
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to update public sharing")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to update public sharing"
+      )
     } finally {
       setSavingProfile(false)
     }
@@ -418,7 +440,9 @@ export default function RemoteAgentDetailPage() {
       toast.success("Remote agent deleted")
       window.location.href = "/dashboard/remote-agents"
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to delete agent")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to delete agent"
+      )
     } finally {
       setDeletingAgent(false)
     }
@@ -465,7 +489,8 @@ export default function RemoteAgentDetailPage() {
             </h1>
           </div>
           <p className="text-sm text-muted-foreground">
-            {agent?.title || "Configure session metadata, binding, and relationship profile."}
+            {agent?.title ||
+              "Configure session metadata, binding, and relationship profile."}
           </p>
         </div>
         <div className="flex flex-col gap-2 sm:flex-row">
@@ -501,15 +526,21 @@ export default function RemoteAgentDetailPage() {
                   <Badge variant={agent.isActive ? "secondary" : "outline"}>
                     {agent.isActive ? "active" : "disabled"}
                   </Badge>
-                  <Badge variant="outline">{runtimeLabel(agent.runtimeKind)}</Badge>
+                  <Badge variant="outline">
+                    {runtimeLabel(agent.runtimeKind)}
+                  </Badge>
                   <Badge variant="outline">
                     {agent.accessPolicy.replace("_", " ")}
                   </Badge>
-                  <Badge variant={agent.isPublicShared ? "secondary" : "outline"}>
+                  <Badge
+                    variant={agent.isPublicShared ? "secondary" : "outline"}
+                  >
                     {agent.isPublicShared ? "public" : "private"}
                   </Badge>
                   {agent.runtimeSummary ? (
-                    <Badge variant={sessionStateVariant(agent.runtimeSummary.state)}>
+                    <Badge
+                      variant={sessionStateVariant(agent.runtimeSummary.state)}
+                    >
                       {sessionStateLabel(agent.runtimeSummary.state)}
                     </Badge>
                   ) : null}
@@ -518,46 +549,60 @@ export default function RemoteAgentDetailPage() {
                   <div>ID: {agent.id}</div>
                   <div>Created: {formatDateTime(agent.createdAt)}</div>
                   <div>Updated: {formatDateTime(agent.updatedAt)}</div>
-                  <div>Machine: {agent.binding?.machineTitle || "Not bound yet"}</div>
-                  <div>Root: {agent.binding?.localRootPath || "Not configured"}</div>
+                  <div>
+                    Machine: {agent.binding?.machineTitle || "Not bound yet"}
+                  </div>
+                  <div>
+                    Root: {agent.binding?.localRootPath || "Not configured"}
+                  </div>
                   {agent.runtimeSummary?.sessionId ? (
                     <div>Session ID: {agent.runtimeSummary.sessionId}</div>
                   ) : null}
                 </div>
               </div>
               <div className="rounded-[24px] border border-border/70 p-4 text-sm text-muted-foreground">
-                <div className="text-sm font-medium text-foreground">Runtime summary</div>
+                <div className="text-sm font-medium text-foreground">
+                  Runtime summary
+                </div>
                 <div className="mt-2 grid gap-2">
                   <div>
-                    Status: {agent.runtimeSummary?.statusText || sessionStateLabel(agent.runtimeSummary?.state)}
+                    Status:{" "}
+                    {agent.runtimeSummary?.statusText ||
+                      sessionStateLabel(agent.runtimeSummary?.state)}
                   </div>
                   <div>
-                    Pending conversations: {agent.runtimeSummary?.pendingConversationCount || 0}
+                    Pending conversations:{" "}
+                    {agent.runtimeSummary?.pendingConversationCount || 0}
                   </div>
                   <div>
-                    Unread deliveries: {agent.runtimeSummary?.unreadDeliveryCount || 0}
+                    Unread deliveries:{" "}
+                    {agent.runtimeSummary?.unreadDeliveryCount || 0}
                   </div>
                   <div>
-                    Last activity: {formatDateTime(agent.runtimeSummary?.lastActivityAt)}
+                    Last activity:{" "}
+                    {formatDateTime(agent.runtimeSummary?.lastActivityAt)}
                   </div>
                   {agent.runtimeSummary?.lastError ? (
                     <div>Error: {agent.runtimeSummary.lastError}</div>
                   ) : (
                     <div>
-                      One RemoteAgent maps to one local CLI session, even if multiple agents share the same root path.
+                      One RemoteAgent maps to one local CLI session, even if
+                      multiple agents share the same root path.
                     </div>
                   )}
                   {agent.runtimeSummary?.capabilities ? (
                     <div>
                       Capabilities:{" "}
                       {[
-                        agent.runtimeSummary.capabilities.supportsRequestUserInput
+                        agent.runtimeSummary.capabilities
+                          .supportsRequestUserInput
                           ? "request_user_input"
                           : null,
                         agent.runtimeSummary.capabilities.supportsPlanMode
                           ? "plan_mode"
                           : null,
-                        agent.runtimeSummary.capabilities.supportsPersistentSession
+                        agent.runtimeSummary.capabilities
+                          .supportsPersistentSession
                           ? "persistent_session"
                           : null,
                         agent.runtimeSummary.capabilities.supportsStructuredIo
@@ -645,7 +690,9 @@ export default function RemoteAgentDetailPage() {
                   </FieldContent>
                 </Field>
                 <Field>
-                  <FieldLabel htmlFor="agent-description">Description</FieldLabel>
+                  <FieldLabel htmlFor="agent-description">
+                    Description
+                  </FieldLabel>
                   <FieldContent>
                     <Textarea
                       id="agent-description"
@@ -738,7 +785,10 @@ export default function RemoteAgentDetailPage() {
                         }))
                       }
                     >
-                      <SelectTrigger id="binding-machine" className="w-full rounded-2xl">
+                      <SelectTrigger
+                        id="binding-machine"
+                        className="w-full rounded-2xl"
+                      >
                         <SelectValue placeholder="Select a machine" />
                       </SelectTrigger>
                       <SelectContent>
@@ -759,7 +809,9 @@ export default function RemoteAgentDetailPage() {
                   </FieldContent>
                 </Field>
                 <Field>
-                  <FieldLabel htmlFor="binding-runtime-path">Runtime path</FieldLabel>
+                  <FieldLabel htmlFor="binding-runtime-path">
+                    Runtime path
+                  </FieldLabel>
                   <FieldContent>
                     <Input
                       id="binding-runtime-path"
@@ -776,7 +828,9 @@ export default function RemoteAgentDetailPage() {
                   </FieldContent>
                 </Field>
                 <Field>
-                  <FieldLabel htmlFor="binding-root">Local root path</FieldLabel>
+                  <FieldLabel htmlFor="binding-root">
+                    Local root path
+                  </FieldLabel>
                   <FieldContent>
                     <Input
                       id="binding-root"
@@ -842,7 +896,9 @@ export default function RemoteAgentDetailPage() {
                         onCheckedChange={(value) => {
                           setSelectedGrantIds((current) => {
                             if (value) {
-                              return Array.from(new Set([...current, member.id]))
+                              return Array.from(
+                                new Set([...current, member.id])
+                              )
                             }
                             return current.filter((item) => item !== member.id)
                           })
@@ -853,7 +909,9 @@ export default function RemoteAgentDetailPage() {
                           {member.userName || member.userEmail || member.id}
                         </div>
                         <div className="truncate text-xs text-muted-foreground">
-                          {member.userEmail || member.trustLevel || "Workspace member"}
+                          {member.userEmail ||
+                            member.trustLevel ||
+                            "Workspace member"}
                         </div>
                       </div>
                     </label>
@@ -861,9 +919,7 @@ export default function RemoteAgentDetailPage() {
                 })}
               </div>
               <div className="flex flex-wrap items-center justify-between gap-3 rounded-[24px] border border-border/70 px-4 py-3 text-sm text-muted-foreground">
-                <div>
-                  Authorized members: {groupGrants.length}
-                </div>
+                <div>Authorized members: {groupGrants.length}</div>
                 <Button
                   className="rounded-full"
                   onClick={() => void handleSaveGroupGrants()}
@@ -885,7 +941,8 @@ export default function RemoteAgentDetailPage() {
         <CardHeader>
           <CardTitle>Relationship profile</CardTitle>
           <CardDescription>
-            Controls QR, identity search, approval mode, and cross-workspace sharing.
+            Controls QR, identity search, approval mode, and cross-workspace
+            sharing.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -912,9 +969,14 @@ export default function RemoteAgentDetailPage() {
                 )}
                 <div className="rounded-[24px] border border-border/70 p-4 text-sm text-muted-foreground">
                   <div>Approval mode: {profile.approvalMode}</div>
-                  <div>Search visibility: {profile.identitySearchEnabled ? "on" : "off"}</div>
                   <div>
-                    Access policy: {profile.accessPolicy?.replace("_", " ") || "workspace open"}
+                    Search visibility:{" "}
+                    {profile.identitySearchEnabled ? "on" : "off"}
+                  </div>
+                  <div>
+                    Access policy:{" "}
+                    {profile.accessPolicy?.replace("_", " ") ||
+                      "workspace open"}
                   </div>
                 </div>
               </div>
@@ -926,7 +988,9 @@ export default function RemoteAgentDetailPage() {
                     <Input
                       id="relationship-id"
                       value={identityIdDraft}
-                      onChange={(event) => setIdentityIdDraft(event.target.value)}
+                      onChange={(event) =>
+                        setIdentityIdDraft(event.target.value)
+                      }
                       autoCapitalize="none"
                       autoCorrect="off"
                       className="rounded-2xl"
@@ -934,7 +998,9 @@ export default function RemoteAgentDetailPage() {
                   </FieldContent>
                 </Field>
                 <Field orientation="horizontal">
-                  <FieldLabel htmlFor="relationship-search">Identity search</FieldLabel>
+                  <FieldLabel htmlFor="relationship-search">
+                    Identity search
+                  </FieldLabel>
                   <FieldContent>
                     <div className="flex items-center justify-between rounded-2xl border border-border/70 px-4 py-3">
                       <div className="text-sm text-muted-foreground">
@@ -955,7 +1021,8 @@ export default function RemoteAgentDetailPage() {
                     onClick={() => void handleToggleApprovalMode()}
                     disabled={savingProfile}
                   >
-                    Switch to {profile.approvalMode === "auto" ? "manual" : "auto"}
+                    Switch to{" "}
+                    {profile.approvalMode === "auto" ? "manual" : "auto"}
                   </Button>
                   <Button
                     variant="outline"
@@ -982,7 +1049,9 @@ export default function RemoteAgentDetailPage() {
                   onClick={() => void handleSaveIdentitySettings()}
                   disabled={savingProfile || !identityIdDraft.trim()}
                 >
-                  {savingProfile ? "Saving profile..." : "Save relationship profile"}
+                  {savingProfile
+                    ? "Saving profile..."
+                    : "Save relationship profile"}
                 </Button>
               </FieldGroup>
             </div>

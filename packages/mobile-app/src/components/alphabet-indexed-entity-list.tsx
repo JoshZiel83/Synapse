@@ -1,11 +1,11 @@
-import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons";
+import MaterialCommunityIcons from "@expo/vector-icons/MaterialCommunityIcons"
 import {
   useMemo,
   useRef,
   useState,
   type ReactElement,
   type ReactNode,
-} from "react";
+} from "react"
 import {
   PanResponder,
   Pressable,
@@ -14,31 +14,28 @@ import {
   Text,
   View,
   type RefreshControlProps,
-} from "react-native";
+} from "react-native"
 
-import { Avatar } from "@/components/ui";
-import { theme } from "@/theme/tokens";
+import { Avatar } from "@/components/ui"
+import { theme } from "@/theme/tokens"
 
 export type AlphabetIndexedEntityItem = {
-  key: string;
-  title: string;
-  subtitle?: string;
-  avatarUrl?: string | null;
-  targetType: "actor" | "user";
-  onPress: () => void;
-  leadingAccessory?: React.ReactNode;
-  trailingAccessory?: React.ReactNode;
-};
+  key: string
+  title: string
+  subtitle?: string
+  avatarUrl?: string | null
+  targetType: "actor" | "user"
+  onPress: () => void
+  leadingAccessory?: React.ReactNode
+  trailingAccessory?: React.ReactNode
+}
 
 type AlphabetSection = {
-  letter: string;
-  items: AlphabetIndexedEntityItem[];
-};
+  letter: string
+  items: AlphabetIndexedEntityItem[]
+}
 
-const LETTER_RAIL = [
-  ..."ABCDEFGHIJKLMNOPQRSTUVWXYZ",
-  "#",
-];
+const LETTER_RAIL = [..."ABCDEFGHIJKLMNOPQRSTUVWXYZ", "#"]
 
 const PINYIN_INITIAL_BOUNDARIES: Array<{ letter: string; boundary: string }> = [
   { letter: "A", boundary: "阿" },
@@ -64,44 +61,51 @@ const PINYIN_INITIAL_BOUNDARIES: Array<{ letter: string; boundary: string }> = [
   { letter: "X", boundary: "昔" },
   { letter: "Y", boundary: "压" },
   { letter: "Z", boundary: "匝" },
-] as const;
+] as const
 
 function compareText(left: string, right: string) {
   try {
     return left.localeCompare(right, "zh-Hans-u-co-pinyin", {
       sensitivity: "base",
-    });
+    })
   } catch {
     return left.localeCompare(right, undefined, {
       sensitivity: "base",
-    });
+    })
   }
 }
 
 function getInitialLetter(value: string) {
-  const first = value.trim().charAt(0);
-  if (!first) return "#";
+  const first = value.trim().charAt(0)
+  if (!first) return "#"
 
-  const upper = first.toUpperCase();
-  if (/^[A-Z]$/.test(upper)) return upper;
+  const upper = first.toUpperCase()
+  if (/^[A-Z]$/.test(upper)) return upper
 
   if (/^[\u4E00-\u9FFF]$/.test(first)) {
-    for (let index = PINYIN_INITIAL_BOUNDARIES.length - 1; index >= 0; index -= 1) {
-      const current = PINYIN_INITIAL_BOUNDARIES[index];
+    for (
+      let index = PINYIN_INITIAL_BOUNDARIES.length - 1;
+      index >= 0;
+      index -= 1
+    ) {
+      const current = PINYIN_INITIAL_BOUNDARIES[index]
       if (current && compareText(first, current.boundary) >= 0) {
-        return current.letter;
+        return current.letter
       }
     }
-    return "A";
+    return "A"
   }
 
-  return "#";
+  return "#"
 }
 
-function compareItems(left: AlphabetIndexedEntityItem, right: AlphabetIndexedEntityItem) {
-  const titleCompare = compareText(left.title, right.title);
-  if (titleCompare !== 0) return titleCompare;
-  return compareText(left.subtitle || "", right.subtitle || "");
+function compareItems(
+  left: AlphabetIndexedEntityItem,
+  right: AlphabetIndexedEntityItem
+) {
+  const titleCompare = compareText(left.title, right.title)
+  if (titleCompare !== 0) return titleCompare
+  return compareText(left.subtitle || "", right.subtitle || "")
 }
 
 export function AlphabetIndexedEntityList({
@@ -111,50 +115,55 @@ export function AlphabetIndexedEntityList({
   refreshControl,
   bottomPadding = 120,
 }: {
-  items: AlphabetIndexedEntityItem[];
-  headerContent?: ReactNode;
-  emptyState?: ReactNode;
-  refreshControl?: ReactElement<RefreshControlProps>;
-  bottomPadding?: number;
+  items: AlphabetIndexedEntityItem[]
+  headerContent?: ReactNode
+  emptyState?: ReactNode
+  refreshControl?: ReactElement<RefreshControlProps>
+  bottomPadding?: number
 }) {
-  const scrollRef = useRef<ScrollView | null>(null);
-  const letterOffsetsRef = useRef<Record<string, number>>({});
-  const [railHeight, setRailHeight] = useState(0);
-  const [activeLetter, setActiveLetter] = useState<string | null>(null);
+  const scrollRef = useRef<ScrollView | null>(null)
+  const letterOffsetsRef = useRef<Record<string, number>>({})
+  const [railHeight, setRailHeight] = useState(0)
+  const [activeLetter, setActiveLetter] = useState<string | null>(null)
 
-  const sortedItems = useMemo(() => [...items].sort(compareItems), [items]);
+  const sortedItems = useMemo(() => [...items].sort(compareItems), [items])
 
   const sections = useMemo<AlphabetSection[]>(() => {
-    const grouped = new Map<string, AlphabetIndexedEntityItem[]>();
+    const grouped = new Map<string, AlphabetIndexedEntityItem[]>()
     for (const item of sortedItems) {
-      const letter = getInitialLetter(item.title);
+      const letter = getInitialLetter(item.title)
       if (!grouped.has(letter)) {
-        grouped.set(letter, []);
+        grouped.set(letter, [])
       }
-      grouped.get(letter)!.push(item);
+      grouped.get(letter)!.push(item)
     }
 
-    return LETTER_RAIL.filter((letter) => grouped.has(letter)).map((letter) => ({
-      letter,
-      items: grouped.get(letter) || [],
-    }));
-  }, [sortedItems]);
+    return LETTER_RAIL.filter((letter) => grouped.has(letter)).map(
+      (letter) => ({
+        letter,
+        items: grouped.get(letter) || [],
+      })
+    )
+  }, [sortedItems])
 
   function scrollToLetter(letter: string) {
-    const offset = letterOffsetsRef.current[letter];
-    if (typeof offset !== "number") return;
-    setActiveLetter(letter);
-    scrollRef.current?.scrollTo({ y: Math.max(offset - 10, 0), animated: false });
+    const offset = letterOffsetsRef.current[letter]
+    if (typeof offset !== "number") return
+    setActiveLetter(letter)
+    scrollRef.current?.scrollTo({
+      y: Math.max(offset - 10, 0),
+      animated: false,
+    })
   }
 
   function activateRailByLocation(locationY: number) {
-    if (!railHeight) return;
+    if (!railHeight) return
     const index = Math.min(
       LETTER_RAIL.length - 1,
-      Math.max(0, Math.floor((locationY / railHeight) * LETTER_RAIL.length)),
-    );
-    const letter = LETTER_RAIL[index]!;
-    scrollToLetter(letter);
+      Math.max(0, Math.floor((locationY / railHeight) * LETTER_RAIL.length))
+    )
+    const letter = LETTER_RAIL[index]!
+    scrollToLetter(letter)
   }
 
   const railResponder = useMemo(
@@ -163,14 +172,14 @@ export function AlphabetIndexedEntityList({
         onStartShouldSetPanResponder: () => true,
         onMoveShouldSetPanResponder: () => true,
         onPanResponderGrant: (event) => {
-          activateRailByLocation(event.nativeEvent.locationY);
+          activateRailByLocation(event.nativeEvent.locationY)
         },
         onPanResponderMove: (event) => {
-          activateRailByLocation(event.nativeEvent.locationY);
+          activateRailByLocation(event.nativeEvent.locationY)
         },
       }),
-    [railHeight],
-  );
+    [railHeight]
+  )
 
   return (
     <View style={styles.pageShell}>
@@ -195,7 +204,7 @@ export function AlphabetIndexedEntityList({
                 key={section.letter}
                 onLayout={(event) => {
                   letterOffsetsRef.current[section.letter] =
-                    event.nativeEvent.layout.y;
+                    event.nativeEvent.layout.y
                 }}
               >
                 <View style={styles.letterHeader}>
@@ -254,7 +263,9 @@ export function AlphabetIndexedEntityList({
           {...railResponder.panHandlers}
         >
           {LETTER_RAIL.map((letter) => {
-            const enabled = sections.some((section) => section.letter === letter);
+            const enabled = sections.some(
+              (section) => section.letter === letter
+            )
             return (
               <Pressable
                 key={letter}
@@ -272,12 +283,12 @@ export function AlphabetIndexedEntityList({
                   {letter}
                 </Text>
               </Pressable>
-            );
+            )
           })}
         </View>
       ) : null}
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -381,4 +392,4 @@ const styles = StyleSheet.create({
   letterRailTextActive: {
     color: theme.colors.accent,
   },
-});
+})

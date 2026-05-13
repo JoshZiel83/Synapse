@@ -146,13 +146,25 @@ html.legacy-webview.dark {
 
 html.legacy-webview body {
   background-image:
-    radial-gradient(circle at top left, var(--legacy-page-glow-strong) 0, transparent 30%),
-    radial-gradient(circle at bottom right, var(--legacy-page-glow-soft) 0, transparent 28%),
+    radial-gradient(
+      circle at top left,
+      var(--legacy-page-glow-strong) 0,
+      transparent 30%
+    ),
+    radial-gradient(
+      circle at bottom right,
+      var(--legacy-page-glow-soft) 0,
+      transparent 28%
+    ),
     linear-gradient(180deg, var(--legacy-page-tint), var(--background));
 }
 
 html.legacy-webview .relay-sidebar {
-  background-image: linear-gradient(180deg, var(--legacy-sidebar-top), var(--legacy-sidebar-bottom));
+  background-image: linear-gradient(
+    180deg,
+    var(--legacy-sidebar-top),
+    var(--legacy-sidebar-bottom)
+  );
 }
 
 html.legacy-webview .relay-sidebar__item {
@@ -175,7 +187,11 @@ html.legacy-webview .relay-banner {
 html.legacy-webview .surface-noise {
   background-image:
     linear-gradient(135deg, var(--legacy-foreground-3), transparent 45%),
-    radial-gradient(circle at 20% 20%, var(--legacy-primary-10), transparent 24%);
+    radial-gradient(
+      circle at 20% 20%,
+      var(--legacy-primary-10),
+      transparent 24%
+    );
 }
 
 html.legacy-webview .border-border\/60 {

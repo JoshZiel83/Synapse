@@ -2,12 +2,12 @@ import {
   INTERACTION_INPUT_QUESTION_TYPES,
   INTERACTION_REQUEST_KIND,
   textBlocks,
-} from "@synapse/shared";
+} from "@synapse/shared"
 import {
   isGroupConversationKind,
   isPlanAwaitingApprovalCollaborationMode,
-} from "@synapse/shared/utils";
-import { v4 as uuidv4 } from "uuid";
+} from "@synapse/shared/utils"
+import { v4 as uuidv4 } from "uuid"
 import type {
   ChatInteractionResolveInput,
   ChatInteractionResolveOutcome,
@@ -31,9 +31,9 @@ import type {
   RelayAuthorizationRequestMode,
   RelayAuthorizationRequestedAction,
   SessionCollaborationState,
-} from "@synapse/shared/types";
-import { type Queryable } from "../../infrastructure/events/index.js";
-import { transaction } from "../../infrastructure/database/index.js";
+} from "@synapse/shared/types"
+import { type Queryable } from "../../infrastructure/events/index.js"
+import { transaction } from "../../infrastructure/database/index.js"
 import {
   db,
   executeCompiledQuery,
@@ -42,358 +42,369 @@ import {
   executeSqlOn,
   executeTakeFirst,
   type TableInsert,
-} from "../../infrastructure/database/kysely.js";
+} from "../../infrastructure/database/kysely.js"
 import {
   completeToolCallTask,
   failToolCallTask,
-} from "../tool-call-tasks/service.js";
-import { updateSessionCollaboration } from "../session/service.js";
+} from "../tool-call-tasks/service.js"
+import { updateSessionCollaboration } from "../session/service.js"
 import {
   authorizeAction,
   userSubject,
   workspaceMemberSubject,
-} from "../access/service.js";
+} from "../access/service.js"
 import {
   appendWorkspaceMemberSyncEvent,
   createConversationEvent,
   listConversationRealtimeRecipients,
   updateConversationItemEventPayload,
-} from "../chat/service.js";
-import { getFileUrlById } from "../files/service.js";
-import { sql } from "kysely";
+} from "../chat/service.js"
+import { getFileUrlById } from "../files/service.js"
+import { sql } from "kysely"
 import {
   createRelayAuthorizationGrant,
   type RelayAuthorizationGrantRecord,
-} from "../relay-authorizations/service.js";
+} from "../relay-authorizations/service.js"
 import {
   buildSessionPlanDraftState,
   parseSessionCollaborationState,
-} from "../session/collaboration-state.js";
+} from "../session/collaboration-state.js"
 
 type RawInteractionRow = {
-  id: string;
-  workspace_id: string;
-  conversation_id: string;
-  task_id: string | null;
-  remote_agent_run_id: string | null;
-  conversation_item_id: string | null;
-  kind: InteractionRequestKind;
-  status: InteractionRequestStatus;
-  revision: string | number;
-  prompt_payload: unknown;
-  plan_payload: unknown;
-  requested_tool_name: string | null;
-  reason: string | null;
-  request_mode: string | null;
-  requested_action: unknown;
-  grant_options: unknown;
-  available_presets: unknown;
-  source_request_args: unknown;
-  source_runtime_session_id: string | null;
-  source_retry_nonce: string | null;
-  resolution_payload: unknown;
-  resolved_at: string | Date | null;
-  expires_at: string | Date | null;
-  created_at: string | Date;
-  updated_at: string | Date;
-  requester_participant_id: string | null;
-  requester_workspace_member_id: string | null;
-  requester_actor_id: string | null;
-  requester_remote_agent_id: string | null;
-  target_actor_id: string | null;
-  target_workspace_member_id: string | null;
-  target_remote_agent_id: string | null;
-  target_participant_id: string | null;
-  resolved_by_actor_id: string | null;
-  resolved_by_workspace_member_id: string | null;
-  resolved_by_remote_agent_id: string | null;
-  resolved_by_participant_id: string | null;
-  relay_capability_id: string | null;
-  relay_device_id: string | null;
-  relay_exposure_id: string | null;
-  relay_tool_stable_key: string | null;
-  device_display_name: string | null;
-  exposure_display_name: string | null;
-  exposure_stable_key: string | null;
-  requester_participant_kind: string | null;
-  requester_name: string | null;
-  requester_title: string | null;
-  requester_role: string | null;
-  requester_actor_avatar_file_id: string | null;
-  requester_user_avatar_file_id: string | null;
-  requester_remote_agent_avatar_file_id: string | null;
-  requester_avatar_emoji: string | null;
-  target_participant_kind: string | null;
-  target_name: string | null;
-  target_title: string | null;
-  target_role: string | null;
-  target_actor_avatar_file_id: string | null;
-  target_user_avatar_file_id: string | null;
-  target_remote_agent_avatar_file_id: string | null;
-  target_avatar_emoji: string | null;
-  resolved_by_participant_kind: string | null;
-  resolved_by_name: string | null;
-  resolved_by_title: string | null;
-  resolved_by_role: string | null;
-  resolved_by_actor_avatar_file_id: string | null;
-  resolved_by_user_avatar_file_id: string | null;
-  resolved_by_remote_agent_avatar_file_id: string | null;
-  resolved_by_avatar_emoji: string | null;
-};
-
-type RawInteractionCommandRow = {
-  id: string;
-  interaction_id: string;
-  command_id: string;
-  base_revision: string | number;
-  outcome: ChatInteractionResolveOutcome;
-  request_payload: unknown;
-  response_payload: unknown;
-  created_by_workspace_member_id: string | null;
-  created_at: string | Date;
-  updated_at: string | Date;
-};
-
-function toIsoString(value: string | Date | null | undefined) {
-  if (!value) return undefined;
-  return value instanceof Date ? value.toISOString() : value;
+  id: string
+  workspace_id: string
+  conversation_id: string
+  task_id: string | null
+  remote_agent_run_id: string | null
+  conversation_item_id: string | null
+  kind: InteractionRequestKind
+  status: InteractionRequestStatus
+  revision: string | number
+  prompt_payload: unknown
+  plan_payload: unknown
+  requested_tool_name: string | null
+  reason: string | null
+  request_mode: string | null
+  requested_action: unknown
+  grant_options: unknown
+  available_presets: unknown
+  source_request_args: unknown
+  source_runtime_session_id: string | null
+  source_retry_nonce: string | null
+  resolution_payload: unknown
+  resolved_at: string | Date | null
+  expires_at: string | Date | null
+  created_at: string | Date
+  updated_at: string | Date
+  requester_participant_id: string | null
+  requester_workspace_member_id: string | null
+  requester_actor_id: string | null
+  requester_remote_agent_id: string | null
+  target_actor_id: string | null
+  target_workspace_member_id: string | null
+  target_remote_agent_id: string | null
+  target_participant_id: string | null
+  resolved_by_actor_id: string | null
+  resolved_by_workspace_member_id: string | null
+  resolved_by_remote_agent_id: string | null
+  resolved_by_participant_id: string | null
+  relay_capability_id: string | null
+  relay_device_id: string | null
+  relay_exposure_id: string | null
+  relay_tool_stable_key: string | null
+  device_display_name: string | null
+  exposure_display_name: string | null
+  exposure_stable_key: string | null
+  requester_participant_kind: string | null
+  requester_name: string | null
+  requester_title: string | null
+  requester_role: string | null
+  requester_actor_avatar_file_id: string | null
+  requester_user_avatar_file_id: string | null
+  requester_remote_agent_avatar_file_id: string | null
+  requester_avatar_emoji: string | null
+  target_participant_kind: string | null
+  target_name: string | null
+  target_title: string | null
+  target_role: string | null
+  target_actor_avatar_file_id: string | null
+  target_user_avatar_file_id: string | null
+  target_remote_agent_avatar_file_id: string | null
+  target_avatar_emoji: string | null
+  resolved_by_participant_kind: string | null
+  resolved_by_name: string | null
+  resolved_by_title: string | null
+  resolved_by_role: string | null
+  resolved_by_actor_avatar_file_id: string | null
+  resolved_by_user_avatar_file_id: string | null
+  resolved_by_remote_agent_avatar_file_id: string | null
+  resolved_by_avatar_emoji: string | null
 }
 
-function toRevisionNumber(value: string | number | null | undefined, label: string) {
+type RawInteractionCommandRow = {
+  id: string
+  interaction_id: string
+  command_id: string
+  base_revision: string | number
+  outcome: ChatInteractionResolveOutcome
+  request_payload: unknown
+  response_payload: unknown
+  created_by_workspace_member_id: string | null
+  created_at: string | Date
+  updated_at: string | Date
+}
+
+function toIsoString(value: string | Date | null | undefined) {
+  if (!value) return undefined
+  return value instanceof Date ? value.toISOString() : value
+}
+
+function toRevisionNumber(
+  value: string | number | null | undefined,
+  label: string
+) {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return Math.trunc(value);
+    return Math.trunc(value)
   }
   if (typeof value === "string" && value.trim()) {
-    const parsed = Number(value);
+    const parsed = Number(value)
     if (Number.isFinite(parsed)) {
-      return Math.trunc(parsed);
+      return Math.trunc(parsed)
     }
   }
-  throw new Error(`${label} must be a finite revision number`);
+  throw new Error(`${label} must be a finite revision number`)
 }
 
 export interface CreateUserInputInteractionParams {
-  workspaceId: string;
-  conversationId: string;
-  taskId: string;
-  requesterParticipantId: string;
-  targetParticipantId: string;
-  title: string;
-  instructions?: string;
-  questions: InteractionInputQuestionDefinition[];
-  expiresAt?: string;
+  workspaceId: string
+  conversationId: string
+  taskId: string
+  requesterParticipantId: string
+  targetParticipantId: string
+  title: string
+  instructions?: string
+  questions: InteractionInputQuestionDefinition[]
+  expiresAt?: string
 }
 
 export interface CreateRemoteAgentUserInputInteractionParams {
-  workspaceId: string;
-  conversationId: string;
-  remoteAgentRunId: string;
-  requesterParticipantId: string;
-  targetParticipantId?: string;
-  title: string;
-  instructions?: string;
-  questions: InteractionInputQuestionDefinition[];
-  expiresAt?: string;
+  workspaceId: string
+  conversationId: string
+  remoteAgentRunId: string
+  requesterParticipantId: string
+  targetParticipantId?: string
+  title: string
+  instructions?: string
+  questions: InteractionInputQuestionDefinition[]
+  expiresAt?: string
 }
 
 export interface CreatePlanApprovalInteractionParams {
-  workspaceId: string;
-  conversationId: string;
-  sessionId: string;
-  taskId: string;
-  requesterParticipantId: string;
-  targetParticipantId: string;
-  title: string;
-  summary?: string;
-  planMarkdown: string;
-  checklist?: PlanChecklistStep[];
-  collaborationState: SessionCollaborationState;
-  expiresAt?: string;
+  workspaceId: string
+  conversationId: string
+  sessionId: string
+  taskId: string
+  requesterParticipantId: string
+  targetParticipantId: string
+  title: string
+  summary?: string
+  planMarkdown: string
+  checklist?: PlanChecklistStep[]
+  collaborationState: SessionCollaborationState
+  expiresAt?: string
 }
 
 export interface CreateRemoteAgentPlanApprovalInteractionParams {
-  workspaceId: string;
-  conversationId: string;
-  remoteAgentRunId: string;
-  requesterParticipantId: string;
-  targetParticipantId?: string;
-  title: string;
-  summary?: string;
-  planMarkdown: string;
-  checklist?: PlanChecklistStep[];
-  collaborationMode?: string;
-  collaborationState?: Record<string, unknown>;
-  expiresAt?: string;
+  workspaceId: string
+  conversationId: string
+  remoteAgentRunId: string
+  requesterParticipantId: string
+  targetParticipantId?: string
+  title: string
+  summary?: string
+  planMarkdown: string
+  checklist?: PlanChecklistStep[]
+  collaborationMode?: string
+  collaborationState?: Record<string, unknown>
+  expiresAt?: string
 }
 
 export interface CreateRelayAuthorizationInteractionParams {
-  workspaceId: string;
-  conversationId: string;
-  taskId: string;
-  requesterParticipantId: string;
-  relayCapabilityId: string;
-  relayDeviceId: string;
-  relayExposureId: string;
-  requestedToolName: string;
-  runtimeSessionId: string;
-  relayToolStableKey: string;
-  reason: string;
-  requestedAction: RelayAuthorizationRequestedAction;
-  grantOptions: RelayAuthorizationGrantOption[];
-  availablePresets: RelayAuthorizationPreset[];
-  requestMode: RelayAuthorizationRequestMode;
-  sourceRetryNonce?: string;
-  sourceRequestArgs?: Record<string, unknown>;
-  expiresAt?: string;
+  workspaceId: string
+  conversationId: string
+  taskId: string
+  requesterParticipantId: string
+  relayCapabilityId: string
+  relayDeviceId: string
+  relayExposureId: string
+  requestedToolName: string
+  runtimeSessionId: string
+  relayToolStableKey: string
+  reason: string
+  requestedAction: RelayAuthorizationRequestedAction
+  grantOptions: RelayAuthorizationGrantOption[]
+  availablePresets: RelayAuthorizationPreset[]
+  requestMode: RelayAuthorizationRequestMode
+  sourceRetryNonce?: string
+  sourceRequestArgs?: Record<string, unknown>
+  expiresAt?: string
 }
 
 export type ResolveInteractionRequestParams = ChatInteractionResolveInput & {
-  interactionId: string;
-  resolverWorkspaceMemberId: string;
-  resolverParticipantId: string;
-};
+  interactionId: string
+  resolverWorkspaceMemberId: string
+  resolverParticipantId: string
+}
 
 export interface ResolveInteractionRequestResult {
-  outcome: ChatInteractionResolveOutcome;
-  interaction: InteractionRequestSummary;
-  createdGrant?: RelayAuthorizationGrantRecord;
-  createdGrants?: RelayAuthorizationGrantRecord[];
+  outcome: ChatInteractionResolveOutcome
+  interaction: InteractionRequestSummary
+  createdGrant?: RelayAuthorizationGrantRecord
+  createdGrants?: RelayAuthorizationGrantRecord[]
 }
 
 export interface FindOpenRelayAuthorizationInteractionParams {
-  workspaceId: string;
-  conversationId: string;
-  requesterParticipantId: string;
-  relayCapabilityId: string;
-  relayDeviceId: string;
-  relayExposureId: string;
-  requestedToolName: string;
-  relayToolStableKey: string;
-  requestedAction: RelayAuthorizationRequestedAction;
-  grantOptions: RelayAuthorizationGrantOption[];
-  availablePresets: RelayAuthorizationPreset[];
-  requestMode: RelayAuthorizationRequestMode;
+  workspaceId: string
+  conversationId: string
+  requesterParticipantId: string
+  relayCapabilityId: string
+  relayDeviceId: string
+  relayExposureId: string
+  requestedToolName: string
+  relayToolStableKey: string
+  requestedAction: RelayAuthorizationRequestedAction
+  grantOptions: RelayAuthorizationGrantOption[]
+  availablePresets: RelayAuthorizationPreset[]
+  requestMode: RelayAuthorizationRequestMode
 }
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {};
+  if (!value) return {}
   if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(value);
+      const parsed = JSON.parse(value)
       return parsed && typeof parsed === "object"
         ? (parsed as Record<string, unknown>)
-        : {};
+        : {}
     } catch {
-      return {};
+      return {}
     }
   }
-  return typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return typeof value === "object" ? (value as Record<string, unknown>) : {}
 }
 
 function requireJsonObject(
   value: unknown,
-  label: string,
+  label: string
 ): Record<string, unknown> {
   if (value === null || value === undefined) {
-    throw new Error(`${label} is required`);
+    throw new Error(`${label} is required`)
   }
   if (typeof value === "string") {
     if (value.trim().length === 0) {
-      throw new Error(`${label} is required`);
+      throw new Error(`${label} is required`)
     }
     try {
-      const parsed = JSON.parse(value);
+      const parsed = JSON.parse(value)
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-        throw new Error(`${label} must be a JSON object`);
+        throw new Error(`${label} must be a JSON object`)
       }
-      return parsed as Record<string, unknown>;
+      return parsed as Record<string, unknown>
     } catch (error) {
-      if (error instanceof Error && error.message === `${label} must be a JSON object`) {
-        throw error;
+      if (
+        error instanceof Error &&
+        error.message === `${label} must be a JSON object`
+      ) {
+        throw error
       }
-      throw new Error(`${label} must be a valid JSON object`);
+      throw new Error(`${label} must be a valid JSON object`)
     }
   }
   if (typeof value !== "object" || Array.isArray(value)) {
-    throw new Error(`${label} must be a JSON object`);
+    throw new Error(`${label} must be a JSON object`)
   }
-  return value as Record<string, unknown>;
+  return value as Record<string, unknown>
 }
 
 function parseJsonArray<T>(value: unknown, label: string): T[] {
   if (value === null || value === undefined) {
-    return [];
+    return []
   }
   if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(value);
+      const parsed = JSON.parse(value)
       if (!Array.isArray(parsed)) {
-        throw new Error(`${label} must be a JSON array`);
+        throw new Error(`${label} must be a JSON array`)
       }
-      return parsed as T[];
+      return parsed as T[]
     } catch (error) {
-      if (error instanceof Error && error.message === `${label} must be a JSON array`) {
-        throw error;
+      if (
+        error instanceof Error &&
+        error.message === `${label} must be a JSON array`
+      ) {
+        throw error
       }
-      throw new Error(`${label} must be a valid JSON array`);
+      throw new Error(`${label} must be a valid JSON array`)
     }
   }
   if (!Array.isArray(value)) {
-    throw new Error(`${label} must be a JSON array`);
+    throw new Error(`${label} must be a JSON array`)
   }
-  return value as T[];
+  return value as T[]
 }
 
 function requireTrimmedString(value: unknown, label: string): string {
   if (typeof value !== "string" || value.trim().length === 0) {
-    throw new Error(`${label} is required`);
+    throw new Error(`${label} is required`)
   }
-  return value.trim();
+  return value.trim()
 }
 
 function requireIsoString(
   value: string | Date | null | undefined,
-  label: string,
+  label: string
 ): string {
-  const iso = toIsoString(value);
+  const iso = toIsoString(value)
   if (!iso) {
-    throw new Error(`${label} is required`);
+    throw new Error(`${label} is required`)
   }
-  return iso;
+  return iso
 }
 
 function stableJsonStringify(value: unknown): string {
   if (value === null || value === undefined) {
-    return "null";
+    return "null"
   }
   if (Array.isArray(value)) {
-    return `[${value.map((entry) => stableJsonStringify(entry)).join(",")}]`;
+    return `[${value.map((entry) => stableJsonStringify(entry)).join(",")}]`
   }
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>).sort(
-      ([left], [right]) => left.localeCompare(right),
-    );
+      ([left], [right]) => left.localeCompare(right)
+    )
     return `{${entries
-      .map(([key, entry]) => `${JSON.stringify(key)}:${stableJsonStringify(entry)}`)
-      .join(",")}}`;
+      .map(
+        ([key, entry]) => `${JSON.stringify(key)}:${stableJsonStringify(entry)}`
+      )
+      .join(",")}}`
   }
-  return JSON.stringify(value);
+  return JSON.stringify(value)
 }
 
 function jsonbValue<T>(value: T) {
-  return sql<T>`${JSON.stringify(value ?? null)}::jsonb`;
+  return sql<T>`${JSON.stringify(value ?? null)}::jsonb`
 }
 
 function buildRelayAuthorizationDedupeKey(params: {
-  relayDeviceId: string;
-  relayCapabilityId: string;
-  relayExposureId: string;
-  requestedToolName: string;
-  relayToolStableKey: string;
-  requestMode: RelayAuthorizationRequestMode;
-  requestedAction: RelayAuthorizationRequestedAction;
-  grantOptions: RelayAuthorizationGrantOption[];
-  availablePresets: RelayAuthorizationPreset[];
+  relayDeviceId: string
+  relayCapabilityId: string
+  relayExposureId: string
+  requestedToolName: string
+  relayToolStableKey: string
+  requestMode: RelayAuthorizationRequestMode
+  requestedAction: RelayAuthorizationRequestedAction
+  grantOptions: RelayAuthorizationGrantOption[]
+  availablePresets: RelayAuthorizationPreset[]
 }) {
   return stableJsonStringify({
     relayDeviceId: params.relayDeviceId,
@@ -405,294 +416,327 @@ function buildRelayAuthorizationDedupeKey(params: {
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
     availablePresets: params.availablePresets,
-  });
+  })
 }
 
 function buildTaskInteractionRequestKey(taskId: string) {
-  return `task:${taskId}`;
+  return `task:${taskId}`
 }
 
 function buildRemoteAgentInteractionRequestKey(params: {
-  remoteAgentRunId: string;
-  kind: InteractionRequestKind;
+  remoteAgentRunId: string
+  kind: InteractionRequestKind
 }) {
-  return `remote-agent-run:${params.remoteAgentRunId}:${params.kind}`;
+  return `remote-agent-run:${params.remoteAgentRunId}:${params.kind}`
 }
 
 function buildRelayAuthorizationInteractionRequestKey(params: {
-  conversationId: string;
-  requesterParticipantId: string;
-  dedupeKey: string;
+  conversationId: string
+  requesterParticipantId: string
+  dedupeKey: string
 }) {
   return stableJsonStringify({
     conversationId: params.conversationId,
     requesterParticipantId: params.requesterParticipantId,
     kind: INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
     dedupeKey: params.dedupeKey,
-  });
+  })
 }
 
 function entityAvatarUrl(
   primaryAvatarFileId?: string | null,
   secondaryAvatarFileId?: string | null,
-  tertiaryAvatarFileId?: string | null,
+  tertiaryAvatarFileId?: string | null
 ) {
-  if (primaryAvatarFileId) return getFileUrlById(primaryAvatarFileId);
-  if (secondaryAvatarFileId) return getFileUrlById(secondaryAvatarFileId);
-  if (tertiaryAvatarFileId) return getFileUrlById(tertiaryAvatarFileId);
-  return undefined;
+  if (primaryAvatarFileId) return getFileUrlById(primaryAvatarFileId)
+  if (secondaryAvatarFileId) return getFileUrlById(secondaryAvatarFileId)
+  if (tertiaryAvatarFileId) return getFileUrlById(tertiaryAvatarFileId)
+  return undefined
 }
 
 function parseInputOptions(
   value: unknown,
-  optionListLabel = "options",
+  optionListLabel = "options"
 ): InteractionInputOption[] {
   if (!Array.isArray(value)) {
-    return [];
+    return []
   }
 
-  const options: InteractionInputOption[] = [];
-  const usedIds = new Set<string>();
+  const options: InteractionInputOption[] = []
+  const usedIds = new Set<string>()
   for (const [index, item] of value.entries()) {
     if (!item || typeof item !== "object") {
       throw new Error(
-        `Option ${index + 1} in ${optionListLabel} must be an object`,
-      );
+        `Option ${index + 1} in ${optionListLabel} must be an object`
+      )
     }
     const rawId = requireTrimmedString(
       (item as { id?: unknown }).id,
-      `Option ${index + 1} id in ${optionListLabel}`,
-    );
+      `Option ${index + 1} id in ${optionListLabel}`
+    )
     const optionLabel = requireTrimmedString(
       (item as { label?: unknown }).label,
-      `Option ${index + 1} label in ${optionListLabel}`,
-    );
+      `Option ${index + 1} label in ${optionListLabel}`
+    )
     const description =
       typeof (item as { description?: unknown }).description === "string"
         ? (item as { description: string }).description.trim()
-        : undefined;
+        : undefined
     const preview =
       typeof (item as { preview?: unknown }).preview === "string"
         ? (item as { preview: string }).preview.trim()
-        : undefined;
-    const id = rawId;
+        : undefined
+    const id = rawId
     if (usedIds.has(id)) {
-      throw new Error(`Duplicate option id "${id}" in ${optionListLabel}`);
+      throw new Error(`Duplicate option id "${id}" in ${optionListLabel}`)
     }
-    usedIds.add(id);
+    usedIds.add(id)
     options.push({
       id,
       label: optionLabel,
       description: description || undefined,
       preview: preview || undefined,
-    });
+    })
   }
-  return options;
+  return options
 }
 
 function normalizeInputQuestionType(
-  value: unknown,
+  value: unknown
 ): InteractionInputQuestionDefinition["type"] {
   if (
     typeof value === "string" &&
     (INTERACTION_INPUT_QUESTION_TYPES as readonly string[]).includes(value)
   ) {
-    return value as InteractionInputQuestionDefinition["type"];
+    return value as InteractionInputQuestionDefinition["type"]
   }
-  throw new Error(`Unsupported user input question type: ${String(value)}`);
+  throw new Error(`Unsupported user input question type: ${String(value)}`)
 }
 
 function parseUserInputQuestionDefinitions(
-  promptPayload: Record<string, unknown>,
+  promptPayload: Record<string, unknown>
 ): InteractionInputQuestionDefinition[] {
-  const rawQuestions = promptPayload.questions;
+  const rawQuestions = promptPayload.questions
   if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
-    throw new Error("user_input prompt_payload.questions must be a non-empty array");
+    throw new Error(
+      "user_input prompt_payload.questions must be a non-empty array"
+    )
   }
-  const definitions: InteractionInputQuestionDefinition[] = [];
-  const usedIds = new Set<string>();
+  const definitions: InteractionInputQuestionDefinition[] = []
+  const usedIds = new Set<string>()
 
   for (const [index, question] of rawQuestions.entries()) {
     if (!question || typeof question !== "object") {
-      throw new Error(`Question ${index + 1} must be an object`);
+      throw new Error(`Question ${index + 1} must be an object`)
     }
     const id = requireTrimmedString(
       (question as { id?: unknown }).id,
-      `Question ${index + 1} id`,
-    );
+      `Question ${index + 1} id`
+    )
     if (usedIds.has(id)) {
-      throw new Error(`Duplicate question id "${id}"`);
+      throw new Error(`Duplicate question id "${id}"`)
     }
-    usedIds.add(id);
+    usedIds.add(id)
 
     const type = normalizeInputQuestionType(
-      (question as { type?: unknown }).type,
-    );
+      (question as { type?: unknown }).type
+    )
     const definition: InteractionInputQuestionDefinition = {
       id,
       header: requireTrimmedString(
         (question as { header?: unknown }).header,
-        `Question ${index + 1} header`,
+        `Question ${index + 1} header`
       ),
       type,
       prompt: requireTrimmedString(
         (question as { prompt?: unknown }).prompt,
-        `Question ${index + 1} prompt`,
+        `Question ${index + 1} prompt`
       ),
       description:
         typeof (question as { description?: unknown }).description === "string"
-          ? (question as { description: string }).description.trim() || undefined
+          ? (question as { description: string }).description.trim() ||
+            undefined
           : undefined,
       required: (() => {
-        if (typeof (question as { required?: unknown }).required !== "boolean") {
-          throw new Error(`Question "${id}" required must be a boolean`);
+        if (
+          typeof (question as { required?: unknown }).required !== "boolean"
+        ) {
+          throw new Error(`Question "${id}" required must be a boolean`)
         }
-        return Boolean((question as { required: boolean }).required);
+        return Boolean((question as { required: boolean }).required)
       })(),
-    };
+    }
 
     if (type === "text") {
       definition.placeholder =
         typeof (question as { placeholder?: unknown }).placeholder === "string"
-          ? (question as { placeholder: string }).placeholder.trim() || undefined
-          : undefined;
+          ? (question as { placeholder: string }).placeholder.trim() ||
+            undefined
+          : undefined
       if (typeof (question as { secret?: unknown }).secret !== "boolean") {
-        throw new Error(`Question "${id}" secret must be a boolean`);
+        throw new Error(`Question "${id}" secret must be a boolean`)
       }
-      definition.secret =
-        Boolean((question as { secret: boolean }).secret);
+      definition.secret = Boolean((question as { secret: boolean }).secret)
     } else {
       definition.options = parseInputOptions(
         (question as { options?: unknown }).options,
-        `question "${id}" options`,
-      );
+        `question "${id}" options`
+      )
       if (definition.options.length === 0) {
-        throw new Error(`Question "${id}" requires at least one option`);
+        throw new Error(`Question "${id}" requires at least one option`)
       }
-      if (typeof (question as { allowOther?: unknown }).allowOther !== "boolean") {
-        throw new Error(`Question "${id}" allowOther must be a boolean`);
+      if (
+        typeof (question as { allowOther?: unknown }).allowOther !== "boolean"
+      ) {
+        throw new Error(`Question "${id}" allowOther must be a boolean`)
       }
       definition.allowOther = Boolean(
-        (question as { allowOther: boolean }).allowOther,
-      );
+        (question as { allowOther: boolean }).allowOther
+      )
       if (
         (question as { minSelections?: unknown }).minSelections !== undefined &&
-        (typeof (question as { minSelections?: unknown }).minSelections !== "number" ||
-          !Number.isFinite((question as { minSelections: number }).minSelections))
+        (typeof (question as { minSelections?: unknown }).minSelections !==
+          "number" ||
+          !Number.isFinite(
+            (question as { minSelections: number }).minSelections
+          ))
       ) {
-        throw new Error(`Question "${id}" minSelections must be a finite number`);
+        throw new Error(
+          `Question "${id}" minSelections must be a finite number`
+        )
       }
       if (
         (question as { maxSelections?: unknown }).maxSelections !== undefined &&
-        (typeof (question as { maxSelections?: unknown }).maxSelections !== "number" ||
-          !Number.isFinite((question as { maxSelections: number }).maxSelections))
+        (typeof (question as { maxSelections?: unknown }).maxSelections !==
+          "number" ||
+          !Number.isFinite(
+            (question as { maxSelections: number }).maxSelections
+          ))
       ) {
-        throw new Error(`Question "${id}" maxSelections must be a finite number`);
+        throw new Error(
+          `Question "${id}" maxSelections must be a finite number`
+        )
       }
       definition.minSelections =
-        typeof (question as { minSelections?: unknown }).minSelections === "number"
+        typeof (question as { minSelections?: unknown }).minSelections ===
+        "number"
           ? Math.max(
               0,
-              Math.trunc((question as { minSelections: number }).minSelections),
+              Math.trunc((question as { minSelections: number }).minSelections)
             )
-          : undefined;
+          : undefined
       definition.maxSelections =
-        typeof (question as { maxSelections?: unknown }).maxSelections === "number"
+        typeof (question as { maxSelections?: unknown }).maxSelections ===
+        "number"
           ? Math.max(
               1,
-              Math.trunc((question as { maxSelections: number }).maxSelections),
+              Math.trunc((question as { maxSelections: number }).maxSelections)
             )
-          : undefined;
+          : undefined
     }
 
-    definitions.push(definition);
+    definitions.push(definition)
   }
 
-  return definitions;
+  return definitions
 }
 
 function parseUserInputAnswers(
   resolutionPayload: Record<string, unknown>,
-  questions: InteractionInputQuestionDefinition[],
+  questions: InteractionInputQuestionDefinition[]
 ): InteractionInputAnswer[] {
-  const answers: InteractionInputAnswer[] = [];
-  const seenQuestionIds = new Set<string>();
+  const answers: InteractionInputAnswer[] = []
+  const seenQuestionIds = new Set<string>()
 
   if (resolutionPayload.answers === undefined) {
-    return answers;
+    return answers
   }
   if (!Array.isArray(resolutionPayload.answers)) {
-    throw new Error("interaction resolution_payload.answers must be an array");
+    throw new Error("interaction resolution_payload.answers must be an array")
   }
 
   for (const [index, answer] of resolutionPayload.answers.entries()) {
     if (!answer || typeof answer !== "object") {
-      throw new Error(`Answer ${index + 1} must be an object`);
+      throw new Error(`Answer ${index + 1} must be an object`)
     }
     const questionId = requireTrimmedString(
       (answer as { questionId?: unknown }).questionId,
-      `Answer ${index + 1} questionId`,
-    );
+      `Answer ${index + 1} questionId`
+    )
     if (!questions.some((question) => question.id === questionId)) {
-      throw new Error(`Answer references unknown question "${questionId}"`);
+      throw new Error(`Answer references unknown question "${questionId}"`)
     }
     if (seenQuestionIds.has(questionId)) {
-      throw new Error(`Duplicate answer for question "${questionId}"`);
+      throw new Error(`Duplicate answer for question "${questionId}"`)
     }
-    seenQuestionIds.add(questionId);
+    seenQuestionIds.add(questionId)
     const selectedOptionIds = Array.isArray(
-      (answer as { selectedOptionIds?: unknown }).selectedOptionIds,
+      (answer as { selectedOptionIds?: unknown }).selectedOptionIds
     )
       ? Array.from(
           new Set(
-            ((answer as { selectedOptionIds: unknown[] }).selectedOptionIds || [])
+            (
+              (answer as { selectedOptionIds: unknown[] }).selectedOptionIds ||
+              []
+            )
               .map((optionId) =>
-                typeof optionId === "string" ? optionId.trim() : "",
+                typeof optionId === "string" ? optionId.trim() : ""
               )
-              .filter((optionId) => optionId.length > 0),
-          ),
+              .filter((optionId) => optionId.length > 0)
+          )
         )
-      : undefined;
+      : undefined
     if (
-      (answer as { selectedOptionIds?: unknown }).selectedOptionIds !== undefined &&
-      !Array.isArray((answer as { selectedOptionIds?: unknown }).selectedOptionIds)
-    ) {
-      throw new Error(`Answer "${questionId}" selectedOptionIds must be an array`);
-    }
-    const selectedOptionLabels = Array.isArray(
-      (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels,
-    )
-      ? ((answer as { selectedOptionLabels: unknown[] }).selectedOptionLabels || [])
-          .map((label) => (typeof label === "string" ? label.trim() : ""))
-          .filter((label) => label.length > 0)
-      : undefined;
-    if (
-      (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels !== undefined &&
-      !Array.isArray((answer as { selectedOptionLabels?: unknown }).selectedOptionLabels)
+      (answer as { selectedOptionIds?: unknown }).selectedOptionIds !==
+        undefined &&
+      !Array.isArray(
+        (answer as { selectedOptionIds?: unknown }).selectedOptionIds
+      )
     ) {
       throw new Error(
-        `Answer "${questionId}" selectedOptionLabels must be an array`,
-      );
+        `Answer "${questionId}" selectedOptionIds must be an array`
+      )
+    }
+    const selectedOptionLabels = Array.isArray(
+      (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels
+    )
+      ? (
+          (answer as { selectedOptionLabels: unknown[] })
+            .selectedOptionLabels || []
+        )
+          .map((label) => (typeof label === "string" ? label.trim() : ""))
+          .filter((label) => label.length > 0)
+      : undefined
+    if (
+      (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels !==
+        undefined &&
+      !Array.isArray(
+        (answer as { selectedOptionLabels?: unknown }).selectedOptionLabels
+      )
+    ) {
+      throw new Error(
+        `Answer "${questionId}" selectedOptionLabels must be an array`
+      )
     }
     const otherText =
       typeof (answer as { otherText?: unknown }).otherText === "string"
         ? (answer as { otherText: string }).otherText.trim() || undefined
-        : undefined;
+        : undefined
     if (
       (answer as { otherText?: unknown }).otherText !== undefined &&
       typeof (answer as { otherText?: unknown }).otherText !== "string"
     ) {
-      throw new Error(`Answer "${questionId}" otherText must be a string`);
+      throw new Error(`Answer "${questionId}" otherText must be a string`)
     }
     const text =
       typeof (answer as { text?: unknown }).text === "string"
         ? (answer as { text: string }).text.trim() || undefined
-        : undefined;
+        : undefined
     if (
       (answer as { text?: unknown }).text !== undefined &&
       typeof (answer as { text?: unknown }).text !== "string"
     ) {
-      throw new Error(`Answer "${questionId}" text must be a string`);
+      throw new Error(`Answer "${questionId}" text must be a string`)
     }
     answers.push({
       questionId,
@@ -700,32 +744,31 @@ function parseUserInputAnswers(
       selectedOptionLabels,
       otherText,
       text,
-    });
+    })
   }
-  return answers;
+  return answers
 }
 
 function buildUserInputQuestionSummaries(
   promptPayload: Record<string, unknown>,
-  resolutionPayload: Record<string, unknown>,
+  resolutionPayload: Record<string, unknown>
 ): InteractionInputQuestionSummary[] {
-  const definitions = parseUserInputQuestionDefinitions(promptPayload);
-  const answers = parseUserInputAnswers(resolutionPayload, definitions);
-  const answerMap = new Map<string, InteractionInputAnswer>();
+  const definitions = parseUserInputQuestionDefinitions(promptPayload)
+  const answers = parseUserInputAnswers(resolutionPayload, definitions)
+  const answerMap = new Map<string, InteractionInputAnswer>()
   for (const answer of answers) {
-    answerMap.set(answer.questionId, answer);
+    answerMap.set(answer.questionId, answer)
   }
 
   return definitions.map((question) => {
-    const answer = answerMap.get(question.id);
+    const answer = answerMap.get(question.id)
     const labels =
       answer?.selectedOptionIds?.map(
         (selectedId: string) =>
           (question.options || []).find(
-            (option: InteractionInputOption) => option.id === selectedId,
-          )?.label ||
-          selectedId,
-      ) || undefined;
+            (option: InteractionInputOption) => option.id === selectedId
+          )?.label || selectedId
+      ) || undefined
     return {
       ...question,
       required: question.required === true,
@@ -733,96 +776,98 @@ function buildUserInputQuestionSummaries(
         ? {
             ...answer,
             selectedOptionLabels:
-              answer.selectedOptionLabels && answer.selectedOptionLabels.length > 0
+              answer.selectedOptionLabels &&
+              answer.selectedOptionLabels.length > 0
                 ? answer.selectedOptionLabels
                 : labels,
           }
         : undefined,
-    };
-  });
+    }
+  })
 }
 
 function summarizeUserInputAnswers(
-  userInput: InteractionRequestSummary["userInput"],
+  userInput: InteractionRequestSummary["userInput"]
 ): string {
   if (!userInput) {
-    return "a response";
+    return "a response"
   }
 
-  const parts: string[] = [];
+  const parts: string[] = []
   for (const question of userInput.questions) {
-    const answer = question.answer;
-    if (!answer) continue;
-    const valueParts: string[] = [];
+    const answer = question.answer
+    if (!answer) continue
+    const valueParts: string[] = []
     if (answer.selectedOptionLabels?.length) {
-      valueParts.push(answer.selectedOptionLabels.join(", "));
+      valueParts.push(answer.selectedOptionLabels.join(", "))
     }
     if (answer.otherText) {
-      valueParts.push(answer.otherText);
+      valueParts.push(answer.otherText)
     }
     if (answer.text) {
-      valueParts.push(answer.text);
+      valueParts.push(answer.text)
     }
     if (valueParts.length === 0) {
-      continue;
+      continue
     }
     parts.push(
       userInput.questions.length === 1
         ? valueParts.join(", ")
-        : `${question.prompt}: ${valueParts.join(", ")}`,
-    );
+        : `${question.prompt}: ${valueParts.join(", ")}`
+    )
   }
 
   if (parts.length === 0) {
-    return "a response";
+    return "a response"
   }
-  return parts.join(" | ");
+  return parts.join(" | ")
 }
 
 function mapEntityRefFromRow(
   prefix: "requester" | "target" | "resolved_by",
-  row: RawInteractionRow,
+  row: RawInteractionRow
 ): ConversationEntityRef | undefined {
   const participantKind =
-    row[`${prefix}_participant_kind` as keyof RawInteractionRow];
+    row[`${prefix}_participant_kind` as keyof RawInteractionRow]
   if (typeof participantKind !== "string" || !participantKind.trim()) {
-    return undefined;
+    return undefined
   }
   const participantId =
-    row[`${prefix}_participant_id` as keyof RawInteractionRow];
+    row[`${prefix}_participant_id` as keyof RawInteractionRow]
   const workspaceMemberId =
     prefix === "requester"
       ? row.requester_workspace_member_id
       : prefix === "target"
         ? row.target_workspace_member_id
-        : row.resolved_by_workspace_member_id;
+        : row.resolved_by_workspace_member_id
   const actorId =
     prefix === "requester"
       ? row.requester_actor_id
       : prefix === "target"
         ? row.target_actor_id
-        : row.resolved_by_actor_id;
+        : row.resolved_by_actor_id
   const remoteAgentId =
     prefix === "requester"
       ? row.requester_remote_agent_id
       : prefix === "target"
         ? row.target_remote_agent_id
-        : row.resolved_by_remote_agent_id;
-  const name = row[`${prefix}_name` as keyof RawInteractionRow];
-  const title = row[`${prefix}_title` as keyof RawInteractionRow];
-  const role = row[`${prefix}_role` as keyof RawInteractionRow];
+        : row.resolved_by_remote_agent_id
+  const name = row[`${prefix}_name` as keyof RawInteractionRow]
+  const title = row[`${prefix}_title` as keyof RawInteractionRow]
+  const role = row[`${prefix}_role` as keyof RawInteractionRow]
   const actorAvatarFileId =
-    row[`${prefix}_actor_avatar_file_id` as keyof RawInteractionRow];
+    row[`${prefix}_actor_avatar_file_id` as keyof RawInteractionRow]
   const userAvatarFileId =
-    row[`${prefix}_user_avatar_file_id` as keyof RawInteractionRow];
+    row[`${prefix}_user_avatar_file_id` as keyof RawInteractionRow]
   const remoteAgentAvatarFileId =
-    row[`${prefix}_remote_agent_avatar_file_id` as keyof RawInteractionRow];
-  const avatarEmoji =
-    row[`${prefix}_avatar_emoji` as keyof RawInteractionRow];
+    row[`${prefix}_remote_agent_avatar_file_id` as keyof RawInteractionRow]
+  const avatarEmoji = row[`${prefix}_avatar_emoji` as keyof RawInteractionRow]
 
   return {
-    participantId: typeof participantId === "string" ? participantId : undefined,
-    participantType: participantKind as ConversationEntityRef["participantType"],
+    participantId:
+      typeof participantId === "string" ? participantId : undefined,
+    participantType:
+      participantKind as ConversationEntityRef["participantType"],
     actorId: typeof actorId === "string" ? actorId : undefined,
     remoteAgentId:
       typeof remoteAgentId === "string" ? remoteAgentId : undefined,
@@ -836,38 +881,40 @@ function mapEntityRefFromRow(
         ? remoteAgentAvatarFileId
         : null,
       typeof actorAvatarFileId === "string" ? actorAvatarFileId : null,
-      typeof userAvatarFileId === "string" ? userAvatarFileId : null,
+      typeof userAvatarFileId === "string" ? userAvatarFileId : null
     ),
     avatarEmoji: typeof avatarEmoji === "string" ? avatarEmoji : undefined,
-  };
+  }
 }
 
 function requireEntityRef(
   entity: ConversationEntityRef | undefined,
-  label: string,
+  label: string
 ): ConversationEntityRef {
   if (!entity?.participantId || !entity.participantType) {
-    throw new Error(`${label} is missing a participant entity`);
+    throw new Error(`${label} is missing a participant entity`)
   }
-  return entity;
+  return entity
 }
 
-function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSummary {
+function buildInteractionSummary(
+  row: RawInteractionRow
+): InteractionRequestSummary {
   const requester = requireEntityRef(
     mapEntityRefFromRow("requester", row),
-    `Interaction ${row.id} requester`,
-  );
-  const target = mapEntityRefFromRow("target", row);
+    `Interaction ${row.id} requester`
+  )
+  const target = mapEntityRefFromRow("target", row)
   const resolvedBy = row.resolved_by_participant_id
     ? requireEntityRef(
         mapEntityRefFromRow("resolved_by", row),
-        `Interaction ${row.id} resolved_by`,
+        `Interaction ${row.id} resolved_by`
       )
-    : undefined;
+    : undefined
   const resolutionPayload = requireJsonObject(
     row.resolution_payload,
-    `Interaction ${row.id} resolution_payload`,
-  );
+    `Interaction ${row.id} resolution_payload`
+  )
 
   const baseInteraction = {
     id: row.id,
@@ -884,18 +931,24 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
       typeof resolutionPayload.note === "string"
         ? resolutionPayload.note.trim() || undefined
         : undefined,
-    createdAt: requireIsoString(row.created_at, `Interaction ${row.id} created_at`),
-    updatedAt: requireIsoString(row.updated_at, `Interaction ${row.id} updated_at`),
+    createdAt: requireIsoString(
+      row.created_at,
+      `Interaction ${row.id} created_at`
+    ),
+    updatedAt: requireIsoString(
+      row.updated_at,
+      `Interaction ${row.id} updated_at`
+    ),
     resolvedAt: toIsoString(row.resolved_at),
     expiresAt: toIsoString(row.expires_at),
     viewerCanResolve: false,
-  };
+  }
 
   if (row.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
     const promptPayload = requireJsonObject(
       row.prompt_payload,
-      `Interaction ${row.id} prompt_payload`,
-    );
+      `Interaction ${row.id} prompt_payload`
+    )
     return {
       ...baseInteraction,
       kind: INTERACTION_REQUEST_KIND.USER_INPUT,
@@ -903,7 +956,7 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
       userInput: {
         title: requireTrimmedString(
           promptPayload.title,
-          `Interaction ${row.id} user_input.title`,
+          `Interaction ${row.id} user_input.title`
         ),
         instructions:
           typeof promptPayload.instructions === "string"
@@ -911,17 +964,17 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
             : undefined,
         questions: buildUserInputQuestionSummaries(
           promptPayload,
-          resolutionPayload,
+          resolutionPayload
         ),
       },
-    };
+    }
   }
 
   if (row.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
     const planPayload = requireJsonObject(
       row.plan_payload,
-      `Interaction ${row.id} plan_payload`,
-    );
+      `Interaction ${row.id} plan_payload`
+    )
     return {
       ...baseInteraction,
       kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
@@ -929,7 +982,7 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
       planApproval: {
         title: requireTrimmedString(
           planPayload.title,
-          `Interaction ${row.id} plan_approval.title`,
+          `Interaction ${row.id} plan_approval.title`
         ),
         summary:
           typeof planPayload.summary === "string"
@@ -937,94 +990,93 @@ function buildInteractionSummary(row: RawInteractionRow): InteractionRequestSumm
             : undefined,
         planMarkdown: requireTrimmedString(
           planPayload.planMarkdown,
-          `Interaction ${row.id} plan_approval.planMarkdown`,
+          `Interaction ${row.id} plan_approval.planMarkdown`
         ),
         checklist: Array.isArray(planPayload.checklist)
           ? (planPayload.checklist as PlanChecklistStep[])
           : undefined,
       },
-    };
+    }
   }
 
   const requestedAction = requireJsonObject(
     row.requested_action,
-    `Interaction ${row.id} requested_action`,
-  ) as unknown as RelayAuthorizationRequestedAction;
+    `Interaction ${row.id} requested_action`
+  ) as unknown as RelayAuthorizationRequestedAction
   const grantOptions = parseJsonArray<RelayAuthorizationGrantOption>(
     row.grant_options,
-    `Interaction ${row.id} grant_options`,
-  );
+    `Interaction ${row.id} grant_options`
+  )
   const availablePresets = parseJsonArray<RelayAuthorizationPreset>(
     row.available_presets,
-    `Interaction ${row.id} available_presets`,
-  );
+    `Interaction ${row.id} available_presets`
+  )
   const relayAuthorization: RelayAuthorizationInteractionSummary = {
-      requestedToolName: requireTrimmedString(
-        row.requested_tool_name,
-        `Interaction ${row.id} requested_tool_name`,
-      ),
-      relayToolStableKey: requireTrimmedString(
-        row.relay_tool_stable_key,
-        `Interaction ${row.id} relay_tool_stable_key`,
-      ),
-      requestedAction,
-      reason: requireTrimmedString(
-        row.reason,
-        `Interaction ${row.id} relay_authorization.reason`,
-      ),
-      deviceId: requireTrimmedString(
-        row.relay_device_id,
-        `Interaction ${row.id} relay_device_id`,
-      ),
-      deviceDisplayName: requireTrimmedString(
-        row.device_display_name,
-        `Interaction ${row.id} device_display_name`,
-      ),
-      relayCapabilityId: requireTrimmedString(
-        row.relay_capability_id,
-        `Interaction ${row.id} relay_capability_id`,
-      ),
-      exposureId: requireTrimmedString(
-        row.relay_exposure_id,
-        `Interaction ${row.id} relay_exposure_id`,
-      ),
-      exposureDisplayName: requireTrimmedString(
-        row.exposure_display_name,
-        `Interaction ${row.id} exposure_display_name`,
-      ),
-      grantOptions,
-      availablePresets,
-      approvedPreset:
-        typeof resolutionPayload.approvedPreset === "string"
-          ? (resolutionPayload.approvedPreset as RelayAuthorizationPreset)
-          : undefined,
-      approvedGrant:
-        resolutionPayload.approvedGrant &&
-        typeof resolutionPayload.approvedGrant === "object" &&
-        !Array.isArray(resolutionPayload.approvedGrant)
-          ? (resolutionPayload.approvedGrant as RelayAuthorizationInteractionSummary["approvedGrant"])
-          : undefined,
-      requestMode:
-        row.request_mode === "blocking" ||
-        row.request_mode === "background"
-          ? (row.request_mode as RelayAuthorizationRequestMode)
-          : (() => {
-              throw new Error(
-                `Interaction ${row.id} relay_authorization.requestMode is invalid`,
-              );
-            })(),
-  };
+    requestedToolName: requireTrimmedString(
+      row.requested_tool_name,
+      `Interaction ${row.id} requested_tool_name`
+    ),
+    relayToolStableKey: requireTrimmedString(
+      row.relay_tool_stable_key,
+      `Interaction ${row.id} relay_tool_stable_key`
+    ),
+    requestedAction,
+    reason: requireTrimmedString(
+      row.reason,
+      `Interaction ${row.id} relay_authorization.reason`
+    ),
+    deviceId: requireTrimmedString(
+      row.relay_device_id,
+      `Interaction ${row.id} relay_device_id`
+    ),
+    deviceDisplayName: requireTrimmedString(
+      row.device_display_name,
+      `Interaction ${row.id} device_display_name`
+    ),
+    relayCapabilityId: requireTrimmedString(
+      row.relay_capability_id,
+      `Interaction ${row.id} relay_capability_id`
+    ),
+    exposureId: requireTrimmedString(
+      row.relay_exposure_id,
+      `Interaction ${row.id} relay_exposure_id`
+    ),
+    exposureDisplayName: requireTrimmedString(
+      row.exposure_display_name,
+      `Interaction ${row.id} exposure_display_name`
+    ),
+    grantOptions,
+    availablePresets,
+    approvedPreset:
+      typeof resolutionPayload.approvedPreset === "string"
+        ? (resolutionPayload.approvedPreset as RelayAuthorizationPreset)
+        : undefined,
+    approvedGrant:
+      resolutionPayload.approvedGrant &&
+      typeof resolutionPayload.approvedGrant === "object" &&
+      !Array.isArray(resolutionPayload.approvedGrant)
+        ? (resolutionPayload.approvedGrant as RelayAuthorizationInteractionSummary["approvedGrant"])
+        : undefined,
+    requestMode:
+      row.request_mode === "blocking" || row.request_mode === "background"
+        ? (row.request_mode as RelayAuthorizationRequestMode)
+        : (() => {
+            throw new Error(
+              `Interaction ${row.id} relay_authorization.requestMode is invalid`
+            )
+          })(),
+  }
 
   return {
     ...baseInteraction,
     kind: INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
     relayAuthorization,
-  };
+  }
 }
 
 async function getInteractionRowById(
   interactionId: string,
-  queryable?: Queryable,
+  queryable?: Queryable
 ) {
   const compiled = sql<RawInteractionRow>`
     SELECT ir.*,
@@ -1128,50 +1180,50 @@ async function getInteractionRowById(
        ON exposure.id = auth.relay_exposure_id
      WHERE ir.id = ${interactionId}
      LIMIT 1
-  `.compile(db);
+  `.compile(db)
   const result = queryable
     ? await executeCompiledSql<RawInteractionRow>(queryable, compiled)
-    : await db.executeQuery(compiled);
-  return result.rows[0] || null;
+    : await db.executeQuery(compiled)
+  return result.rows[0] || null
 }
 
 type StoredInteractionResolveResponse = {
-  outcome: ChatInteractionResolveOutcome;
-  interaction: InteractionRequestSummary;
-};
+  outcome: ChatInteractionResolveOutcome
+  interaction: InteractionRequestSummary
+}
 
 function requireInteractionResolveOutcome(
   value: unknown,
-  label: string,
+  label: string
 ): ChatInteractionResolveOutcome {
   if (value === "applied" || value === "duplicate" || value === "conflict") {
-    return value;
+    return value
   }
-  throw new Error(`${label} is invalid`);
+  throw new Error(`${label} is invalid`)
 }
 
 function parseStoredInteractionResolveResponse(
   value: unknown,
-  label: string,
+  label: string
 ): StoredInteractionResolveResponse {
-  const payload = requireJsonObject(value, label);
+  const payload = requireJsonObject(value, label)
   const outcome = requireInteractionResolveOutcome(
     payload.outcome,
-    `${label}.outcome`,
-  );
+    `${label}.outcome`
+  )
   if (!payload.interaction || typeof payload.interaction !== "object") {
-    throw new Error(`${label}.interaction is required`);
+    throw new Error(`${label}.interaction is required`)
   }
   return {
     outcome,
     interaction: payload.interaction as InteractionRequestSummary,
-  };
+  }
 }
 
 async function getInteractionCommandRow(
   interactionId: string,
   commandId: string,
-  queryable?: Queryable,
+  queryable?: Queryable
 ) {
   const compiled = db
     .selectFrom("interaction_response_commands")
@@ -1179,16 +1231,16 @@ async function getInteractionCommandRow(
     .where("interaction_id", "=", interactionId)
     .where("command_id", "=", commandId)
     .limit(1)
-    .compile();
+    .compile()
   const result = queryable
     ? await executeCompiledSql<RawInteractionCommandRow>(queryable, compiled)
-    : await db.executeQuery(compiled);
-  return result.rows[0] || null;
+    : await db.executeQuery(compiled)
+  return result.rows[0] || null
 }
 
 async function getInteractionRowByIdForUpdate(
   interactionId: string,
-  queryable: Queryable,
+  queryable: Queryable
 ) {
   const compiled = sql<RawInteractionRow>`
     SELECT ir.*,
@@ -1293,56 +1345,65 @@ async function getInteractionRowByIdForUpdate(
      WHERE ir.id = ${interactionId}
      LIMIT 1
      FOR UPDATE OF ir
-  `.compile(db);
-  const result = await executeCompiledSql<RawInteractionRow>(queryable, compiled);
-  return result.rows[0] || null;
+  `.compile(db)
+  const result = await executeCompiledSql<RawInteractionRow>(
+    queryable,
+    compiled
+  )
+  return result.rows[0] || null
 }
 
 async function insertInteractionCommandRow(
   client: Queryable,
   params: {
-    interactionId: string;
-    commandId: string;
-    baseRevision: number;
-    outcome: ChatInteractionResolveOutcome;
-    requestPayload: Record<string, unknown>;
-    responsePayload: StoredInteractionResolveResponse;
-    createdByWorkspaceMemberId: string;
-  },
+    interactionId: string
+    commandId: string
+    baseRevision: number
+    outcome: ChatInteractionResolveOutcome
+    requestPayload: Record<string, unknown>
+    responsePayload: StoredInteractionResolveResponse
+    createdByWorkspaceMemberId: string
+  }
 ) {
   await executeCompiledQuery(
     client,
     db.insertInto("interaction_response_commands").values({
       interaction_id: params.interactionId,
       command_id: params.commandId,
-      base_revision: params.baseRevision as unknown as TableInsert<"interaction_response_commands">["base_revision"],
+      base_revision:
+        params.baseRevision as unknown as TableInsert<"interaction_response_commands">["base_revision"],
       outcome: params.outcome,
-      request_payload:
-        jsonbValue(params.requestPayload) as unknown as TableInsert<"interaction_response_commands">["request_payload"],
-      response_payload:
-        jsonbValue(params.responsePayload) as unknown as TableInsert<"interaction_response_commands">["response_payload"],
+      request_payload: jsonbValue(
+        params.requestPayload
+      ) as unknown as TableInsert<"interaction_response_commands">["request_payload"],
+      response_payload: jsonbValue(
+        params.responsePayload
+      ) as unknown as TableInsert<"interaction_response_commands">["response_payload"],
       created_by_workspace_member_id: params.createdByWorkspaceMemberId,
-    }),
-  );
+    })
+  )
 }
 
 async function appendInteractionUpdatedSyncEvent(
   queryable: Queryable,
-  interaction: InteractionRequestSummary,
+  interaction: InteractionRequestSummary
 ) {
   const allRecipients = await listConversationRealtimeRecipients(
     interaction.conversationId,
-    queryable,
-  );
+    queryable
+  )
   const recipients =
     interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION ||
     (interaction.requester?.participantType === "remote_agent" &&
       !interaction.target)
       ? allRecipients
-      : allRecipients.filter((recipient) =>
-          recipient.workspaceMemberId === interaction.target?.workspaceMemberId ||
-          recipient.workspaceMemberId === interaction.requester?.workspaceMemberId,
-        );
+      : allRecipients.filter(
+          (recipient) =>
+            recipient.workspaceMemberId ===
+              interaction.target?.workspaceMemberId ||
+            recipient.workspaceMemberId ===
+              interaction.requester?.workspaceMemberId
+        )
   for (const recipient of recipients) {
     await appendWorkspaceMemberSyncEvent(queryable, {
       workspaceId: recipient.workspaceId,
@@ -1356,34 +1417,34 @@ async function appendInteractionUpdatedSyncEvent(
         itemId: interaction.itemId,
         interaction,
       },
-    });
+    })
   }
 }
 
 async function syncInteractionEventPayload(
   interaction: InteractionRequestSummary,
-  queryable?: Queryable,
+  queryable?: Queryable
 ) {
-  if (!interaction.itemId) return;
+  if (!interaction.itemId) return
   await updateConversationItemEventPayload(
     interaction.itemId,
     { interaction },
-    queryable,
-  );
+    queryable
+  )
 }
 
 function buildUserInputAsyncNotice(interaction: InteractionRequestSummary) {
-  const prompt = interaction.userInput?.title?.trim() || "Input request";
-  const answer = summarizeUserInputAnswers(interaction.userInput);
-  const targetName = interaction.target?.name || "A user";
-  const resolutionNote = interaction.resolutionNote?.trim();
-  const summary = `${targetName} answered "${prompt}".`;
+  const prompt = interaction.userInput?.title?.trim() || "Input request"
+  const answer = summarizeUserInputAnswers(interaction.userInput)
+  const targetName = interaction.target?.name || "A user"
+  const resolutionNote = interaction.resolutionNote?.trim()
+  const summary = `${targetName} answered "${prompt}".`
   const lines = [
     summary,
     `Answer: ${answer}.`,
     resolutionNote ? `Note: ${resolutionNote}` : "",
-  ].filter(Boolean);
-  const messageBlocks = textBlocks(lines.join("\n"));
+  ].filter(Boolean)
+  const messageBlocks = textBlocks(lines.join("\n"))
 
   return {
     summary,
@@ -1401,20 +1462,22 @@ function buildUserInputAsyncNotice(interaction: InteractionRequestSummary) {
       interactionKind: interaction.kind,
       interactionStatus: interaction.status,
     },
-  };
+  }
 }
 
-function buildPlanApprovalApprovedNotice(interaction: InteractionRequestSummary) {
-  const resolverName = interaction.resolvedBy?.name || "A user";
-  const title = interaction.planApproval?.title?.trim() || "Plan";
-  const summary = `${resolverName} approved "${title}".`;
+function buildPlanApprovalApprovedNotice(
+  interaction: InteractionRequestSummary
+) {
+  const resolverName = interaction.resolvedBy?.name || "A user"
+  const title = interaction.planApproval?.title?.trim() || "Plan"
+  const summary = `${resolverName} approved "${title}".`
   const lines = [
     summary,
     interaction.resolutionNote?.trim()
       ? `Note: ${interaction.resolutionNote.trim()}`
       : "",
-  ].filter(Boolean);
-  const messageBlocks = textBlocks(lines.join("\n"));
+  ].filter(Boolean)
+  const messageBlocks = textBlocks(lines.join("\n"))
 
   return {
     summary,
@@ -1432,20 +1495,22 @@ function buildPlanApprovalApprovedNotice(interaction: InteractionRequestSummary)
       interactionKind: interaction.kind,
       interactionStatus: interaction.status,
     },
-  };
+  }
 }
 
-function buildPlanApprovalRevisionNotice(interaction: InteractionRequestSummary) {
-  const resolverName = interaction.resolvedBy?.name || "A user";
-  const title = interaction.planApproval?.title?.trim() || "Plan";
-  const summary = `${resolverName} requested revisions for "${title}".`;
+function buildPlanApprovalRevisionNotice(
+  interaction: InteractionRequestSummary
+) {
+  const resolverName = interaction.resolvedBy?.name || "A user"
+  const title = interaction.planApproval?.title?.trim() || "Plan"
+  const summary = `${resolverName} requested revisions for "${title}".`
   const lines = [
     summary,
     interaction.resolutionNote?.trim()
       ? `Feedback: ${interaction.resolutionNote.trim()}`
       : "",
-  ].filter(Boolean);
-  const messageBlocks = textBlocks(lines.join("\n"));
+  ].filter(Boolean)
+  const messageBlocks = textBlocks(lines.join("\n"))
 
   return {
     summary,
@@ -1467,23 +1532,23 @@ function buildPlanApprovalRevisionNotice(interaction: InteractionRequestSummary)
       interactionKind: interaction.kind,
       interactionStatus: interaction.status,
     },
-  };
+  }
 }
 
 function buildRelayAuthorizationRejectedNotice(
-  interaction: InteractionRequestSummary,
+  interaction: InteractionRequestSummary
 ) {
-  const resolverName = interaction.resolvedBy?.name || "An authorized user";
+  const resolverName = interaction.resolvedBy?.name || "An authorized user"
   const deviceName =
-    interaction.relayAuthorization?.deviceDisplayName || "relay device";
-  const summary = `${resolverName} rejected access for ${deviceName}.`;
+    interaction.relayAuthorization?.deviceDisplayName || "relay device"
+  const summary = `${resolverName} rejected access for ${deviceName}.`
   const lines = [
     summary,
     interaction.resolutionNote?.trim()
       ? `Note: ${interaction.resolutionNote.trim()}`
       : "",
-  ].filter(Boolean);
-  const messageBlocks = textBlocks(lines.join("\n"));
+  ].filter(Boolean)
+  const messageBlocks = textBlocks(lines.join("\n"))
 
   return {
     summary,
@@ -1505,25 +1570,25 @@ function buildRelayAuthorizationRejectedNotice(
       interactionKind: interaction.kind,
       interactionStatus: interaction.status,
     },
-  };
+  }
 }
 
 function buildRelayAuthorizationApprovedNotice(
-  interaction: InteractionRequestSummary,
+  interaction: InteractionRequestSummary
 ) {
-  const resolverName = interaction.resolvedBy?.name || "An authorized user";
+  const resolverName = interaction.resolvedBy?.name || "An authorized user"
   const deviceName =
-    interaction.relayAuthorization?.deviceDisplayName || "relay device";
+    interaction.relayAuthorization?.deviceDisplayName || "relay device"
   const approvedPreset =
-    interaction.relayAuthorization?.approvedPreset || "conversation";
-  const summary = `${resolverName} approved ${approvedPreset} access for ${deviceName}.`;
+    interaction.relayAuthorization?.approvedPreset || "conversation"
+  const summary = `${resolverName} approved ${approvedPreset} access for ${deviceName}.`
   const lines = [
     summary,
     interaction.resolutionNote?.trim()
       ? `Note: ${interaction.resolutionNote.trim()}`
       : "",
-  ].filter(Boolean);
-  const messageBlocks = textBlocks(lines.join("\n"));
+  ].filter(Boolean)
+  const messageBlocks = textBlocks(lines.join("\n"))
 
   return {
     summary,
@@ -1541,15 +1606,15 @@ function buildRelayAuthorizationApprovedNotice(
       interactionKind: interaction.kind,
       interactionStatus: interaction.status,
     },
-  };
+  }
 }
 
 function buildRelayAuthorizationSupersededNotice(
-  interaction: InteractionRequestSummary,
+  interaction: InteractionRequestSummary
 ) {
   const summary =
-    "This authorization request was superseded by a newer user message.";
-  const messageBlocks = textBlocks(summary);
+    "This authorization request was superseded by a newer user message."
+  const messageBlocks = textBlocks(summary)
 
   return {
     summary,
@@ -1571,23 +1636,24 @@ function buildRelayAuthorizationSupersededNotice(
       interactionKind: interaction.kind,
       interactionStatus: interaction.status,
     },
-  };
+  }
 }
 
 async function insertInteractionRequest(
   client: Queryable,
   params: {
-  workspaceId: string;
-  conversationId: string;
-  taskId?: string;
-  remoteAgentRunId?: string;
-  requesterParticipantId: string;
-  kind: InteractionRequestKind;
-  requestKey: string;
-  targetParticipantId?: string;
-  expiresAt?: string;
-}) {
-  const interactionId = uuidv4();
+    workspaceId: string
+    conversationId: string
+    taskId?: string
+    remoteAgentRunId?: string
+    requesterParticipantId: string
+    kind: InteractionRequestKind
+    requestKey: string
+    targetParticipantId?: string
+    expiresAt?: string
+  }
+) {
+  const interactionId = uuidv4()
   const created = await executeCompiledSql<{ id: string }>(
     client,
     sql<{ id: string }>`
@@ -1618,34 +1684,34 @@ async function insertInteractionRequest(
         ${params.expiresAt || null}
       )
       RETURNING id
-    `.compile(db),
-  );
+    `.compile(db)
+  )
   if (!created.rows[0]?.id) {
-    throw new Error("Failed to create interaction request");
+    throw new Error("Failed to create interaction request")
   }
-  return created.rows[0]!.id;
+  return created.rows[0]!.id
 }
 
 async function findInteractionIdByTaskId(
   taskId: string,
-  queryable?: Queryable,
+  queryable?: Queryable
 ) {
   const compiled = db
     .selectFrom("interaction_requests")
     .select("id")
     .where("task_id", "=", taskId)
     .limit(1)
-    .compile();
+    .compile()
   const result = queryable
     ? await executeCompiledSql<{ id: string }>(queryable, compiled)
-    : await db.executeQuery(compiled);
-  return result.rows[0]?.id || null;
+    : await db.executeQuery(compiled)
+  return result.rows[0]?.id || null
 }
 
 async function findPendingInteractionIdByRequestKey(
   workspaceId: string,
   requestKey: string,
-  queryable?: Queryable,
+  queryable?: Queryable
 ) {
   const compiled = db
     .selectFrom("interaction_requests")
@@ -1654,70 +1720,74 @@ async function findPendingInteractionIdByRequestKey(
     .where("request_key", "=", requestKey)
     .where("status", "=", "pending")
     .limit(1)
-    .compile();
+    .compile()
   const result = queryable
     ? await executeCompiledSql<{ id: string }>(queryable, compiled)
-    : await db.executeQuery(compiled);
-  return result.rows[0]?.id || null;
+    : await db.executeQuery(compiled)
+  return result.rows[0]?.id || null
 }
 
 async function insertUserInputInteractionDetails(
   client: Queryable,
   params: {
-    interactionId: string;
-    promptPayload: Record<string, unknown>;
-  },
+    interactionId: string
+    promptPayload: Record<string, unknown>
+  }
 ) {
   await executeCompiledQuery(
     client,
     db.insertInto("interaction_user_input_requests").values({
       interaction_id: params.interactionId,
-      prompt_payload:
-        jsonbValue(params.promptPayload) as unknown as TableInsert<"interaction_user_input_requests">["prompt_payload"],
-      resolution_payload:
-        jsonbValue({}) as unknown as TableInsert<"interaction_user_input_requests">["resolution_payload"],
-    }),
-  );
+      prompt_payload: jsonbValue(
+        params.promptPayload
+      ) as unknown as TableInsert<"interaction_user_input_requests">["prompt_payload"],
+      resolution_payload: jsonbValue(
+        {}
+      ) as unknown as TableInsert<"interaction_user_input_requests">["resolution_payload"],
+    })
+  )
 }
 
 async function insertPlanApprovalInteractionDetails(
   client: Queryable,
   params: {
-    interactionId: string;
-    planPayload: Record<string, unknown>;
-  },
+    interactionId: string
+    planPayload: Record<string, unknown>
+  }
 ) {
   await executeCompiledQuery(
     client,
     db.insertInto("interaction_plan_approval_requests").values({
       interaction_id: params.interactionId,
-      plan_payload:
-        jsonbValue(params.planPayload) as unknown as TableInsert<"interaction_plan_approval_requests">["plan_payload"],
-      resolution_payload:
-        jsonbValue({}) as unknown as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
-    }),
-  );
+      plan_payload: jsonbValue(
+        params.planPayload
+      ) as unknown as TableInsert<"interaction_plan_approval_requests">["plan_payload"],
+      resolution_payload: jsonbValue(
+        {}
+      ) as unknown as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
+    })
+  )
 }
 
 async function insertRelayAuthorizationInteractionDetails(
   client: Queryable,
   params: {
-    interactionId: string;
-    relayDeviceId: string;
-    relayCapabilityId: string;
-    relayExposureId: string;
-    requestedToolName: string;
-    relayToolStableKey: string;
-    reason: string;
-    requestMode: RelayAuthorizationRequestMode;
-    sourceRuntimeSessionId?: string;
-    sourceRetryNonce?: string;
-    sourceRequestArgs: Record<string, unknown>;
-    requestedAction: RelayAuthorizationRequestedAction;
-    grantOptions: RelayAuthorizationGrantOption[];
-    availablePresets: RelayAuthorizationPreset[];
-    dedupeKey: string;
-  },
+    interactionId: string
+    relayDeviceId: string
+    relayCapabilityId: string
+    relayExposureId: string
+    requestedToolName: string
+    relayToolStableKey: string
+    reason: string
+    requestMode: RelayAuthorizationRequestMode
+    sourceRuntimeSessionId?: string
+    sourceRetryNonce?: string
+    sourceRequestArgs: Record<string, unknown>
+    requestedAction: RelayAuthorizationRequestedAction
+    grantOptions: RelayAuthorizationGrantOption[]
+    availablePresets: RelayAuthorizationPreset[]
+    dedupeKey: string
+  }
 ) {
   await executeCompiledQuery(
     client,
@@ -1732,25 +1802,30 @@ async function insertRelayAuthorizationInteractionDetails(
       request_mode: params.requestMode,
       source_runtime_session_id: params.sourceRuntimeSessionId || null,
       source_retry_nonce: params.sourceRetryNonce || null,
-      source_request_args:
-        jsonbValue(params.sourceRequestArgs) as unknown as TableInsert<"interaction_relay_authorization_requests">["source_request_args"],
-      requested_action:
-        jsonbValue(params.requestedAction) as unknown as TableInsert<"interaction_relay_authorization_requests">["requested_action"],
-      grant_options:
-        jsonbValue(params.grantOptions) as unknown as TableInsert<"interaction_relay_authorization_requests">["grant_options"],
-      available_presets:
-        jsonbValue(params.availablePresets) as unknown as TableInsert<"interaction_relay_authorization_requests">["available_presets"],
-      resolution_payload:
-        jsonbValue({}) as unknown as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
+      source_request_args: jsonbValue(
+        params.sourceRequestArgs
+      ) as unknown as TableInsert<"interaction_relay_authorization_requests">["source_request_args"],
+      requested_action: jsonbValue(
+        params.requestedAction
+      ) as unknown as TableInsert<"interaction_relay_authorization_requests">["requested_action"],
+      grant_options: jsonbValue(
+        params.grantOptions
+      ) as unknown as TableInsert<"interaction_relay_authorization_requests">["grant_options"],
+      available_presets: jsonbValue(
+        params.availablePresets
+      ) as unknown as TableInsert<"interaction_relay_authorization_requests">["available_presets"],
+      resolution_payload: jsonbValue(
+        {}
+      ) as unknown as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
       dedupe_key: params.dedupeKey,
-    }),
-  );
+    })
+  )
 }
 
 async function updateInteractionConversationItemId(
   client: Queryable,
   interactionId: string,
-  conversationItemId: string,
+  conversationItemId: string
 ) {
   const result = await executeCompiledQuery(
     client,
@@ -1760,31 +1835,31 @@ async function updateInteractionConversationItemId(
         conversation_item_id: conversationItemId,
         updated_at: sql`NOW()`,
       })
-      .where("id", "=", interactionId),
-  );
+      .where("id", "=", interactionId)
+  )
   if (result.rowCount !== 1) {
     throw new Error(
-      `Expected to update conversation item for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`,
-    );
+      `Expected to update conversation item for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
+    )
   }
 }
 
 async function updateInteractionRequestRow(
   client: Queryable,
   interactionId: string,
-  values: Record<string, unknown>,
+  values: Record<string, unknown>
 ) {
   const result = await executeCompiledQuery(
     client,
     db
       .updateTable("interaction_requests")
       .set(values)
-      .where("id", "=", interactionId),
-  );
+      .where("id", "=", interactionId)
+  )
   if (result.rowCount !== 1) {
     throw new Error(
-      `Expected to update interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`,
-    );
+      `Expected to update interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
+    )
   }
 }
 
@@ -1792,7 +1867,7 @@ async function updateInteractionResolutionPayload(
   client: Queryable,
   interactionKind: InteractionRequestKind,
   interactionId: string,
-  payload: Record<string, unknown>,
+  payload: Record<string, unknown>
 ) {
   if (interactionKind === INTERACTION_REQUEST_KIND.USER_INPUT) {
     const result = await executeCompiledQuery(
@@ -1800,17 +1875,18 @@ async function updateInteractionResolutionPayload(
       db
         .updateTable("interaction_user_input_requests")
         .set({
-          resolution_payload:
-            jsonbValue(payload) as unknown as TableInsert<"interaction_user_input_requests">["resolution_payload"],
+          resolution_payload: jsonbValue(
+            payload
+          ) as unknown as TableInsert<"interaction_user_input_requests">["resolution_payload"],
         })
-        .where("interaction_id", "=", interactionId),
-    );
+        .where("interaction_id", "=", interactionId)
+    )
     if (result.rowCount !== 1) {
       throw new Error(
-        `Expected user_input details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`,
-      );
+        `Expected user_input details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
+      )
     }
-    return;
+    return
   }
 
   if (interactionKind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
@@ -1819,17 +1895,18 @@ async function updateInteractionResolutionPayload(
       db
         .updateTable("interaction_plan_approval_requests")
         .set({
-          resolution_payload:
-            jsonbValue(payload) as unknown as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
+          resolution_payload: jsonbValue(
+            payload
+          ) as unknown as TableInsert<"interaction_plan_approval_requests">["resolution_payload"],
         })
-        .where("interaction_id", "=", interactionId),
-    );
+        .where("interaction_id", "=", interactionId)
+    )
     if (result.rowCount !== 1) {
       throw new Error(
-        `Expected plan_approval details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`,
-      );
+        `Expected plan_approval details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
+      )
     }
-    return;
+    return
   }
 
   const result = await executeCompiledQuery(
@@ -1837,37 +1914,38 @@ async function updateInteractionResolutionPayload(
     db
       .updateTable("interaction_relay_authorization_requests")
       .set({
-        resolution_payload:
-          jsonbValue(payload) as unknown as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
+        resolution_payload: jsonbValue(
+          payload
+        ) as unknown as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
       })
-      .where("interaction_id", "=", interactionId),
-  );
+      .where("interaction_id", "=", interactionId)
+  )
   if (result.rowCount !== 1) {
     throw new Error(
-      `Expected relay_authorization details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`,
-    );
+      `Expected relay_authorization details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
+    )
   }
 }
 
 export async function createUserInputInteractionRequest(
-  params: CreateUserInputInteractionParams,
+  params: CreateUserInputInteractionParams
 ) {
   return transaction(async (client) => {
-    const requestKey = buildTaskInteractionRequestKey(params.taskId);
+    const requestKey = buildTaskInteractionRequestKey(params.taskId)
     const existingInteractionId =
       (await findInteractionIdByTaskId(params.taskId, client)) ||
       (await findPendingInteractionIdByRequestKey(
         params.workspaceId,
         requestKey,
-        client,
-      ));
+        client
+      ))
     if (existingInteractionId) {
       const existing = await getInteractionRequestSummary(
         existingInteractionId,
-        client,
-      );
+        client
+      )
       if (existing) {
-        return existing;
+        return existing
       }
     }
 
@@ -1880,7 +1958,7 @@ export async function createUserInputInteractionRequest(
       requestKey,
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
-    });
+    })
 
     await insertUserInputInteractionDetails(client, {
       interactionId,
@@ -1889,11 +1967,11 @@ export async function createUserInputInteractionRequest(
         instructions: params.instructions,
         questions: params.questions,
       },
-    });
+    })
 
-    let interaction = await getInteractionRequestSummary(interactionId, client);
+    let interaction = await getInteractionRequestSummary(interactionId, client)
     if (!interaction) {
-      throw new Error("Failed to load created interaction request");
+      throw new Error("Failed to load created interaction request")
     }
 
     const created = await createConversationEvent({
@@ -1907,44 +1985,44 @@ export async function createUserInputInteractionRequest(
       restrictedAudienceParticipantIds: [params.targetParticipantId],
       contextTargetParticipantIds: [params.targetParticipantId],
       queryable: client,
-    });
+    })
 
     await updateInteractionConversationItemId(
       client,
       interactionId,
-      created.item.id,
-    );
+      created.item.id
+    )
 
-    interaction = await getInteractionRequestSummary(interactionId, client);
+    interaction = await getInteractionRequestSummary(interactionId, client)
     if (!interaction) {
-      throw new Error("Failed to reload created interaction request");
+      throw new Error("Failed to reload created interaction request")
     }
-    await syncInteractionEventPayload(interaction, client);
-    await appendInteractionUpdatedSyncEvent(client, interaction);
-    return interaction;
-  });
+    await syncInteractionEventPayload(interaction, client)
+    await appendInteractionUpdatedSyncEvent(client, interaction)
+    return interaction
+  })
 }
 
 export async function createRemoteAgentUserInputInteractionRequest(
-  params: CreateRemoteAgentUserInputInteractionParams,
+  params: CreateRemoteAgentUserInputInteractionParams
 ) {
   return transaction(async (client) => {
     const requestKey = buildRemoteAgentInteractionRequestKey({
       remoteAgentRunId: params.remoteAgentRunId,
       kind: INTERACTION_REQUEST_KIND.USER_INPUT,
-    });
+    })
     const existingInteractionId = await findPendingInteractionIdByRequestKey(
       params.workspaceId,
       requestKey,
-      client,
-    );
+      client
+    )
     if (existingInteractionId) {
       const existing = await getInteractionRequestSummary(
         existingInteractionId,
-        client,
-      );
+        client
+      )
       if (existing) {
-        return existing;
+        return existing
       }
     }
 
@@ -1957,7 +2035,7 @@ export async function createRemoteAgentUserInputInteractionRequest(
       requestKey,
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
-    });
+    })
 
     await insertUserInputInteractionDetails(client, {
       interactionId,
@@ -1966,14 +2044,14 @@ export async function createRemoteAgentUserInputInteractionRequest(
         instructions: params.instructions,
         questions: params.questions,
       },
-    });
+    })
 
-    let interaction = await getInteractionRequestSummary(interactionId, client);
+    let interaction = await getInteractionRequestSummary(interactionId, client)
     if (!interaction) {
-      throw new Error("Failed to load created remote agent input interaction");
+      throw new Error("Failed to load created remote agent input interaction")
     }
 
-    const targeted = Boolean(params.targetParticipantId);
+    const targeted = Boolean(params.targetParticipantId)
     const created = await createConversationEvent({
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
@@ -1989,39 +2067,43 @@ export async function createRemoteAgentUserInputInteractionRequest(
         ? [params.targetParticipantId!]
         : undefined,
       queryable: client,
-    });
+    })
 
-    await updateInteractionConversationItemId(client, interactionId, created.item.id);
+    await updateInteractionConversationItemId(
+      client,
+      interactionId,
+      created.item.id
+    )
 
-    interaction = await getInteractionRequestSummary(interactionId, client);
+    interaction = await getInteractionRequestSummary(interactionId, client)
     if (!interaction) {
-      throw new Error("Failed to reload created remote agent input interaction");
+      throw new Error("Failed to reload created remote agent input interaction")
     }
-    await syncInteractionEventPayload(interaction, client);
-    await appendInteractionUpdatedSyncEvent(client, interaction);
-    return interaction;
-  });
+    await syncInteractionEventPayload(interaction, client)
+    await appendInteractionUpdatedSyncEvent(client, interaction)
+    return interaction
+  })
 }
 
 export async function createPlanApprovalInteractionRequest(
-  params: CreatePlanApprovalInteractionParams,
+  params: CreatePlanApprovalInteractionParams
 ) {
   return transaction(async (client) => {
-    const requestKey = buildTaskInteractionRequestKey(params.taskId);
+    const requestKey = buildTaskInteractionRequestKey(params.taskId)
     const existingInteractionId =
       (await findInteractionIdByTaskId(params.taskId, client)) ||
       (await findPendingInteractionIdByRequestKey(
         params.workspaceId,
         requestKey,
-        client,
-      ));
+        client
+      ))
     if (existingInteractionId) {
       const existing = await getInteractionRequestSummary(
         existingInteractionId,
-        client,
-      );
+        client
+      )
       if (existing) {
-        return existing;
+        return existing
       }
     }
 
@@ -2034,7 +2116,7 @@ export async function createPlanApprovalInteractionRequest(
       requestKey,
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
-    });
+    })
 
     await insertPlanApprovalInteractionDetails(client, {
       interactionId,
@@ -2044,11 +2126,11 @@ export async function createPlanApprovalInteractionRequest(
         planMarkdown: params.planMarkdown,
         checklist: params.checklist,
       },
-    });
+    })
 
-    let interaction = await getInteractionRequestSummary(interactionId, client);
+    let interaction = await getInteractionRequestSummary(interactionId, client)
     if (!interaction) {
-      throw new Error("Failed to load created interaction request");
+      throw new Error("Failed to load created interaction request")
     }
 
     const created = await createConversationEvent({
@@ -2062,25 +2144,25 @@ export async function createPlanApprovalInteractionRequest(
       restrictedAudienceParticipantIds: [params.targetParticipantId],
       contextTargetParticipantIds: [params.targetParticipantId],
       queryable: client,
-    });
+    })
 
     await updateInteractionConversationItemId(
       client,
       interactionId,
-      created.item.id,
-    );
+      created.item.id
+    )
 
-    interaction = await getInteractionRequestSummary(interactionId, client);
+    interaction = await getInteractionRequestSummary(interactionId, client)
     if (!interaction) {
-      throw new Error("Failed to reload created interaction request");
+      throw new Error("Failed to reload created interaction request")
     }
     const collaborationState = parseSessionCollaborationState(
-      params.collaborationState,
-    );
+      params.collaborationState
+    )
     if (!collaborationState.planDraft) {
       throw new Error(
-        "Plan approval interactions require collaborationState.planDraft",
-      );
+        "Plan approval interactions require collaborationState.planDraft"
+      )
     }
     await updateSessionCollaboration(
       {
@@ -2089,34 +2171,34 @@ export async function createPlanApprovalInteractionRequest(
         collaborationState,
         activePlanApprovalInteractionId: interactionId,
       },
-      client,
-    );
-    await syncInteractionEventPayload(interaction, client);
-    await appendInteractionUpdatedSyncEvent(client, interaction);
-    return interaction;
-  });
+      client
+    )
+    await syncInteractionEventPayload(interaction, client)
+    await appendInteractionUpdatedSyncEvent(client, interaction)
+    return interaction
+  })
 }
 
 export async function createRemoteAgentPlanApprovalInteractionRequest(
-  params: CreateRemoteAgentPlanApprovalInteractionParams,
+  params: CreateRemoteAgentPlanApprovalInteractionParams
 ) {
   return transaction(async (client) => {
     const requestKey = buildRemoteAgentInteractionRequestKey({
       remoteAgentRunId: params.remoteAgentRunId,
       kind: INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
-    });
+    })
     const existingInteractionId = await findPendingInteractionIdByRequestKey(
       params.workspaceId,
       requestKey,
-      client,
-    );
+      client
+    )
     if (existingInteractionId) {
       const existing = await getInteractionRequestSummary(
         existingInteractionId,
-        client,
-      );
+        client
+      )
       if (existing) {
-        return existing;
+        return existing
       }
     }
 
@@ -2129,7 +2211,7 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
       requestKey,
       targetParticipantId: params.targetParticipantId,
       expiresAt: params.expiresAt,
-    });
+    })
 
     await insertPlanApprovalInteractionDetails(client, {
       interactionId,
@@ -2139,14 +2221,14 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
         planMarkdown: params.planMarkdown,
         checklist: params.checklist,
       },
-    });
+    })
 
-    let interaction = await getInteractionRequestSummary(interactionId, client);
+    let interaction = await getInteractionRequestSummary(interactionId, client)
     if (!interaction) {
-      throw new Error("Failed to load created remote agent plan interaction");
+      throw new Error("Failed to load created remote agent plan interaction")
     }
 
-    const targeted = Boolean(params.targetParticipantId);
+    const targeted = Boolean(params.targetParticipantId)
     const created = await createConversationEvent({
       workspaceId: params.workspaceId,
       conversationId: params.conversationId,
@@ -2162,9 +2244,13 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
         ? [params.targetParticipantId!]
         : undefined,
       queryable: client,
-    });
+    })
 
-    await updateInteractionConversationItemId(client, interactionId, created.item.id);
+    await updateInteractionConversationItemId(
+      client,
+      interactionId,
+      created.item.id
+    )
     const contextUpsert = await executeSqlOn<{ remote_agent_id: string }>(
       client,
       `
@@ -2197,24 +2283,24 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
         JSON.stringify(params.collaborationState || {}),
         interactionId,
         params.requesterParticipantId,
-      ],
-    );
+      ]
+    )
     if (!contextUpsert.rows[0]?.remote_agent_id) {
-      throw new Error("Remote agent requester participant is invalid");
+      throw new Error("Remote agent requester participant is invalid")
     }
 
-    interaction = await getInteractionRequestSummary(interactionId, client);
+    interaction = await getInteractionRequestSummary(interactionId, client)
     if (!interaction) {
-      throw new Error("Failed to reload created remote agent plan interaction");
+      throw new Error("Failed to reload created remote agent plan interaction")
     }
-    await syncInteractionEventPayload(interaction, client);
-    await appendInteractionUpdatedSyncEvent(client, interaction);
-    return interaction;
-  });
+    await syncInteractionEventPayload(interaction, client)
+    await appendInteractionUpdatedSyncEvent(client, interaction)
+    return interaction
+  })
 }
 
 export async function createRelayAuthorizationInteractionRequest(
-  params: CreateRelayAuthorizationInteractionParams,
+  params: CreateRelayAuthorizationInteractionParams
 ) {
   return transaction(async (client) => {
     const dedupeKey = buildRelayAuthorizationDedupeKey({
@@ -2227,26 +2313,26 @@ export async function createRelayAuthorizationInteractionRequest(
       requestedAction: params.requestedAction,
       grantOptions: params.grantOptions,
       availablePresets: params.availablePresets,
-    });
+    })
     const requestKey = buildRelayAuthorizationInteractionRequestKey({
       conversationId: params.conversationId,
       requesterParticipantId: params.requesterParticipantId,
       dedupeKey,
-    });
+    })
     const existingInteractionId =
       (await findInteractionIdByTaskId(params.taskId, client)) ||
       (await findPendingInteractionIdByRequestKey(
         params.workspaceId,
         requestKey,
-        client,
-      ));
+        client
+      ))
     if (existingInteractionId) {
       const existing = await getInteractionRequestSummary(
         existingInteractionId,
-        client,
-      );
+        client
+      )
       if (existing) {
-        return existing;
+        return existing
       }
     }
 
@@ -2258,7 +2344,7 @@ export async function createRelayAuthorizationInteractionRequest(
       kind: INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
       requestKey,
       expiresAt: params.expiresAt,
-    });
+    })
 
     await insertRelayAuthorizationInteractionDetails(client, {
       interactionId,
@@ -2276,11 +2362,11 @@ export async function createRelayAuthorizationInteractionRequest(
       grantOptions: params.grantOptions,
       availablePresets: params.availablePresets,
       dedupeKey,
-    });
+    })
 
-    let interaction = await getInteractionRequestSummary(interactionId, client);
+    let interaction = await getInteractionRequestSummary(interactionId, client)
     if (!interaction) {
-      throw new Error("Failed to load created interaction request");
+      throw new Error("Failed to load created interaction request")
     }
 
     const created = await createConversationEvent({
@@ -2292,26 +2378,26 @@ export async function createRelayAuthorizationInteractionRequest(
       timelinePolicy: "all_members",
       contextPolicy: "shared",
       queryable: client,
-    });
+    })
 
     await updateInteractionConversationItemId(
       client,
       interactionId,
-      created.item.id,
-    );
+      created.item.id
+    )
 
-    interaction = await getInteractionRequestSummary(interactionId, client);
+    interaction = await getInteractionRequestSummary(interactionId, client)
     if (!interaction) {
-      throw new Error("Failed to reload created interaction request");
+      throw new Error("Failed to reload created interaction request")
     }
-    await syncInteractionEventPayload(interaction, client);
-    await appendInteractionUpdatedSyncEvent(client, interaction);
-    return interaction;
-  });
+    await syncInteractionEventPayload(interaction, client)
+    await appendInteractionUpdatedSyncEvent(client, interaction)
+    return interaction
+  })
 }
 
 export async function findOpenRelayAuthorizationInteraction(
-  params: FindOpenRelayAuthorizationInteractionParams,
+  params: FindOpenRelayAuthorizationInteractionParams
 ) {
   const dedupeKey = buildRelayAuthorizationDedupeKey({
     relayDeviceId: params.relayDeviceId,
@@ -2323,52 +2409,54 @@ export async function findOpenRelayAuthorizationInteraction(
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
     availablePresets: params.availablePresets,
-  });
+  })
   const row = await db
     .selectFrom("interaction_requests as ir")
     .innerJoin(
       "interaction_relay_authorization_requests as auth",
       "auth.interaction_id",
-      "ir.id",
+      "ir.id"
     )
     .select("ir.id")
     .where("ir.workspace_id", "=", params.workspaceId)
     .where("ir.conversation_id", "=", params.conversationId)
-    .where(sql<boolean>`ir.requester_participant_id = ${params.requesterParticipantId}`)
+    .where(
+      sql<boolean>`ir.requester_participant_id = ${params.requesterParticipantId}`
+    )
     .where("ir.kind", "=", INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION)
     .where("ir.status", "=", "pending")
     .where((eb) =>
       eb.or([
         eb("ir.expires_at", "is", null),
         eb("ir.expires_at", ">", new Date()),
-      ]),
+      ])
     )
     .where("auth.relay_device_id", "=", params.relayDeviceId)
     .where("auth.relay_capability_id", "=", params.relayCapabilityId)
     .where("auth.relay_exposure_id", "=", params.relayExposureId)
     .where("auth.requested_tool_name", "=", params.requestedToolName)
     .where(
-      sql<boolean>`auth.relay_tool_stable_key = ${params.relayToolStableKey}`,
+      sql<boolean>`auth.relay_tool_stable_key = ${params.relayToolStableKey}`
     )
     .where("auth.request_mode", "=", params.requestMode)
     .where("auth.dedupe_key", "=", dedupeKey)
     .orderBy("ir.updated_at", "desc")
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
-  const interactionId = row?.id;
+  const interactionId = row?.id
   if (!interactionId) {
-    return null;
+    return null
   }
-  return getInteractionRequestSummary(interactionId);
+  return getInteractionRequestSummary(interactionId)
 }
 
 export async function getInteractionRequestSummary(
   interactionId: string,
-  queryable?: Queryable,
+  queryable?: Queryable
 ) {
-  const row = await getInteractionRowById(interactionId, queryable);
-  return row ? buildInteractionSummary(row) : null;
+  const row = await getInteractionRowById(interactionId, queryable)
+  return row ? buildInteractionSummary(row) : null
 }
 
 export async function getInteractionRequestSummaryByTaskId(taskId: string) {
@@ -2378,88 +2466,89 @@ export async function getInteractionRequestSummaryByTaskId(taskId: string) {
     .where("task_id", "=", taskId)
     .orderBy("created_at", "desc")
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
-  const interactionId = row?.id;
+  const interactionId = row?.id
   if (!interactionId) {
-    return null;
+    return null
   }
-  return getInteractionRequestSummary(interactionId);
+  return getInteractionRequestSummary(interactionId)
 }
 
 export async function cancelInteractionRequestByTaskId(
   taskId: string,
-  note?: string,
+  note?: string
 ) {
-  const interaction = await getInteractionRequestSummaryByTaskId(taskId);
+  const interaction = await getInteractionRequestSummaryByTaskId(taskId)
   if (!interaction) {
-    return null;
+    return null
   }
-  return cancelInteractionRequest(interaction.id, note);
+  return cancelInteractionRequest(interaction.id, note)
 }
 
 export async function cancelInteractionRequest(
   interactionId: string,
-  note?: string,
+  note?: string
 ) {
-  const existing = await getInteractionRowById(interactionId);
+  const existing = await getInteractionRowById(interactionId)
   if (!existing) {
-    throw new Error("Interaction request not found");
+    throw new Error("Interaction request not found")
   }
 
-  if (
-    existing.status !== "pending"
-  ) {
-    const current = await getInteractionRequestSummary(interactionId);
+  if (existing.status !== "pending") {
+    const current = await getInteractionRequestSummary(interactionId)
     if (!current) {
-      throw new Error("Failed to reload interaction request");
+      throw new Error("Failed to reload interaction request")
     }
-    return current;
+    return current
   }
 
-  const resolutionPayload = parseJsonObject(existing.resolution_payload);
+  const resolutionPayload = parseJsonObject(existing.resolution_payload)
   const interaction = await transaction(async (client) => {
     await updateInteractionRequestRow(client, interactionId, {
       status: "cancelled",
       revision: sql`revision + 1`,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
-    });
+    })
 
     const payload = {
       ...resolutionPayload,
       note: note?.trim() || resolutionPayload.note,
       cancelled: true,
-    };
+    }
 
     await updateInteractionResolutionPayload(
       client,
       existing.kind,
       interactionId,
-      payload,
-    );
-    const nextInteraction = await getInteractionRequestSummary(interactionId, client);
+      payload
+    )
+    const nextInteraction = await getInteractionRequestSummary(
+      interactionId,
+      client
+    )
     if (!nextInteraction) {
-      throw new Error("Failed to reload cancelled interaction");
+      throw new Error("Failed to reload cancelled interaction")
     }
-    await syncInteractionEventPayload(nextInteraction, client);
-    await appendInteractionUpdatedSyncEvent(client, nextInteraction);
-    return nextInteraction;
-  });
+    await syncInteractionEventPayload(nextInteraction, client)
+    await appendInteractionUpdatedSyncEvent(client, nextInteraction)
+    return nextInteraction
+  })
 
-  return interaction;
+  return interaction
 }
 
 export async function canUserViewInteraction(params: {
-  interactionId: string;
-  userId: string;
+  interactionId: string
+  userId: string
 }) {
   const row = await db
     .selectFrom("interaction_requests as ir")
     .select("ir.id")
     .where("ir.id", "=", params.interactionId)
     .where((eb) =>
-        eb.or([
+      eb.or([
         sql<boolean>`EXISTS (
           SELECT 1
           FROM conversation_participants cp
@@ -2509,27 +2598,27 @@ export async function canUserViewInteraction(params: {
               AND cm.state = 'active'
           )`,
         ]),
-      ]),
+      ])
     )
     .limit(1)
-    .executeTakeFirst();
-  return Boolean(row);
+    .executeTakeFirst()
+  return Boolean(row)
 }
 
 export async function canUserResolveInteraction(params: {
-  interaction: InteractionRequestSummary;
-  userId: string;
+  interaction: InteractionRequestSummary
+  userId: string
 }) {
-  const { interaction, userId } = params;
+  const { interaction, userId } = params
   if (interaction.status !== "pending") {
-    return false;
+    return false
   }
 
   if (
     interaction.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
     interaction.target?.participantId
   ) {
-    const targetParticipantId = interaction.target?.participantId;
+    const targetParticipantId = interaction.target?.participantId
     const viewerParticipant = await db
       .selectFrom("conversation_participants as cp")
       .innerJoin("workspace_members as wm", "wm.id", "cp.workspace_member_id")
@@ -2538,9 +2627,9 @@ export async function canUserResolveInteraction(params: {
       .where("cp.state", "=", "active")
       .where("wm.user_id", "=", userId)
       .limit(1)
-      .executeTakeFirst();
+      .executeTakeFirst()
 
-    return Boolean(viewerParticipant?.id);
+    return Boolean(viewerParticipant?.id)
   }
 
   if (
@@ -2560,14 +2649,14 @@ export async function canUserResolveInteraction(params: {
       .where("cp.state", "=", "active")
       .where("wm.user_id", "=", userId)
       .limit(1)
-      .executeTakeFirst();
+      .executeTakeFirst()
 
     if (!viewerMembership?.workspace_member_id) {
-      return false;
+      return false
     }
 
     if (viewerMembership.conversation_kind === "private") {
-      return true;
+      return true
     }
 
     const grant = await executeSql<{ workspace_member_id: string }>(
@@ -2578,33 +2667,36 @@ export async function canUserResolveInteraction(params: {
           AND workspace_member_id = $2
         LIMIT 1
       `,
-      [interaction.requester.remoteAgentId, viewerMembership.workspace_member_id],
-    );
+      [
+        interaction.requester.remoteAgentId,
+        viewerMembership.workspace_member_id,
+      ]
+    )
 
-    return Boolean(grant.rows[0]?.workspace_member_id);
+    return Boolean(grant.rows[0]?.workspace_member_id)
   }
 
-  const deviceId = interaction.relayAuthorization?.deviceId;
+  const deviceId = interaction.relayAuthorization?.deviceId
   if (!deviceId) {
-    return false;
+    return false
   }
 
   return authorizeAction({
     subject: userSubject(userId),
     action: "relay_device.authorize_relay_authorization",
     resourceId: deviceId,
-  });
+  })
 }
 
 export async function enrichInteractionForUser(
   interaction: InteractionRequestSummary,
-  userId?: string,
+  userId?: string
 ): Promise<InteractionRequestSummary> {
   if (!userId) {
     return {
       ...interaction,
       viewerCanResolve: interaction.viewerCanResolve ?? false,
-    };
+    }
   }
 
   return {
@@ -2613,24 +2705,25 @@ export async function enrichInteractionForUser(
       interaction,
       userId,
     }),
-  };
+  }
 }
 
 export async function enrichFeedItemInteractionsForUser(
   item: ConversationFeedItem,
-  userId?: string,
+  userId?: string
 ): Promise<ConversationFeedItem> {
   if (item.kind !== "event" || item.eventType !== "interaction_requested") {
-    return item;
+    return item
   }
 
-  const payload = item.payload as ConversationFeedEventPayloadMap["interaction_requested"];
+  const payload =
+    item.payload as ConversationFeedEventPayloadMap["interaction_requested"]
   const interaction =
     payload.interaction && typeof payload.interaction === "object"
       ? (payload.interaction as InteractionRequestSummary)
-      : null;
+      : null
   if (!interaction) {
-    return item;
+    return item
   }
 
   return {
@@ -2639,12 +2732,12 @@ export async function enrichFeedItemInteractionsForUser(
       ...payload,
       interaction: await enrichInteractionForUser(interaction, userId),
     },
-  };
+  }
 }
 
 function buildSubmittedUserInputAnswers(
   params: ResolveInteractionRequestParams,
-  questions: InteractionInputQuestionDefinition[],
+  questions: InteractionInputQuestionDefinition[]
 ): InteractionInputAnswer[] {
   if (Array.isArray(params.answers) && params.answers.length > 0) {
     return params.answers.map((answer) => ({
@@ -2654,8 +2747,8 @@ function buildSubmittedUserInputAnswers(
             new Set(
               answer.selectedOptionIds
                 .map((optionId: string) => String(optionId || "").trim())
-                .filter((optionId: string) => optionId.length > 0),
-            ),
+                .filter((optionId: string) => optionId.length > 0)
+            )
           )
         : undefined,
       otherText:
@@ -2666,99 +2759,99 @@ function buildSubmittedUserInputAnswers(
         typeof answer.text === "string"
           ? answer.text.trim() || undefined
           : undefined,
-    }));
+    }))
   }
   return questions.map((question) => ({
     questionId: question.id,
-  }));
+  }))
 }
 
 function validateUserInputAnswers(
   questions: InteractionInputQuestionDefinition[],
-  submittedAnswers: InteractionInputAnswer[],
+  submittedAnswers: InteractionInputAnswer[]
 ) {
-  const questionMap = new Map(questions.map((question) => [question.id, question]));
-  const answerMap = new Map<string, InteractionInputAnswer>();
+  const questionMap = new Map(
+    questions.map((question) => [question.id, question])
+  )
+  const answerMap = new Map<string, InteractionInputAnswer>()
 
   for (const answer of submittedAnswers) {
     if (!answer.questionId) {
-      throw new Error("Each answer requires a questionId");
+      throw new Error("Each answer requires a questionId")
     }
     if (!questionMap.has(answer.questionId)) {
-      throw new Error(`Unknown question "${answer.questionId}"`);
+      throw new Error(`Unknown question "${answer.questionId}"`)
     }
     if (answerMap.has(answer.questionId)) {
-      throw new Error(`Duplicate answer for question "${answer.questionId}"`);
+      throw new Error(`Duplicate answer for question "${answer.questionId}"`)
     }
-    answerMap.set(answer.questionId, answer);
+    answerMap.set(answer.questionId, answer)
   }
 
-  const normalized: InteractionInputAnswer[] = [];
+  const normalized: InteractionInputAnswer[] = []
 
   for (const question of questions) {
-    const answer = answerMap.get(question.id);
-    const required = question.required !== false;
+    const answer = answerMap.get(question.id)
+    const required = question.required !== false
 
     if (question.type === "text") {
-      const text = answer?.text?.trim() || undefined;
+      const text = answer?.text?.trim() || undefined
       if (required && !text) {
-        throw new Error(`"${question.prompt}" requires a response`);
+        throw new Error(`"${question.prompt}" requires a response`)
       }
       if (text) {
         normalized.push({
           questionId: question.id,
           text,
-        });
+        })
       }
-      continue;
+      continue
     }
 
-    const allowedOptions = question.options || [];
+    const allowedOptions = question.options || []
     const selectedOptionIds = Array.from(
       new Set(
-        (answer?.selectedOptionIds || []).filter(
-          (optionId: string) => optionId,
-        ),
-      ),
-    );
+        (answer?.selectedOptionIds || []).filter((optionId: string) => optionId)
+      )
+    )
     for (const selectedOptionId of selectedOptionIds) {
       if (
         !allowedOptions.some(
-          (option: InteractionInputOption) => option.id === selectedOptionId,
+          (option: InteractionInputOption) => option.id === selectedOptionId
         )
       ) {
-        throw new Error(`"${question.prompt}" contains an invalid option`);
+        throw new Error(`"${question.prompt}" contains an invalid option`)
       }
     }
 
-    const otherText = answer?.otherText?.trim() || undefined;
+    const otherText = answer?.otherText?.trim() || undefined
     if (otherText && !question.allowOther) {
-      throw new Error(`"${question.prompt}" does not allow other input`);
+      throw new Error(`"${question.prompt}" does not allow other input`)
     }
 
-    const effectiveCount = selectedOptionIds.length + (otherText ? 1 : 0);
+    const effectiveCount = selectedOptionIds.length + (otherText ? 1 : 0)
     const minSelections =
       question.type === "multi_select"
-        ? question.minSelections ?? (required ? 1 : 0)
+        ? (question.minSelections ?? (required ? 1 : 0))
         : required
           ? 1
-          : 0;
+          : 0
     const maxSelections =
       question.type === "multi_select"
-        ? question.maxSelections ?? Number.MAX_SAFE_INTEGER
-        : 1;
+        ? (question.maxSelections ?? Number.MAX_SAFE_INTEGER)
+        : 1
 
     if (maxSelections < minSelections) {
-      throw new Error(`"${question.prompt}" has an invalid selection range`);
+      throw new Error(`"${question.prompt}" has an invalid selection range`)
     }
     if (effectiveCount < minSelections) {
-      throw new Error(`"${question.prompt}" requires more selections`);
+      throw new Error(`"${question.prompt}" requires more selections`)
     }
     if (effectiveCount > maxSelections) {
-      throw new Error(`"${question.prompt}" has too many selections`);
+      throw new Error(`"${question.prompt}" has too many selections`)
     }
     if (question.type === "single_select" && effectiveCount > 1) {
-      throw new Error(`"${question.prompt}" only allows one response`);
+      throw new Error(`"${question.prompt}" only allows one response`)
     }
 
     if (effectiveCount > 0) {
@@ -2772,23 +2865,23 @@ function validateUserInputAnswers(
                 (selectedOptionId) =>
                   allowedOptions.find(
                     (option: InteractionInputOption) =>
-                      option.id === selectedOptionId,
-                  )?.label || selectedOptionId,
+                      option.id === selectedOptionId
+                  )?.label || selectedOptionId
               )
             : undefined,
         otherText,
-      });
+      })
     }
   }
 
-  return normalized;
+  return normalized
 }
 
 function normalizeInteractionCommandAnswers(
-  answers?: InteractionInputAnswer[],
+  answers?: InteractionInputAnswer[]
 ): InteractionInputAnswer[] | undefined {
   if (!Array.isArray(answers) || answers.length === 0) {
-    return undefined;
+    return undefined
   }
   return answers
     .map((answer) => ({
@@ -2798,8 +2891,8 @@ function normalizeInteractionCommandAnswers(
             new Set(
               answer.selectedOptionIds
                 .map((optionId) => String(optionId || "").trim())
-                .filter((optionId) => optionId.length > 0),
-            ),
+                .filter((optionId) => optionId.length > 0)
+            )
           ).sort()
         : undefined,
       otherText:
@@ -2811,11 +2904,11 @@ function normalizeInteractionCommandAnswers(
           ? answer.text.trim() || undefined
           : undefined,
     }))
-    .sort((left, right) => left.questionId.localeCompare(right.questionId));
+    .sort((left, right) => left.questionId.localeCompare(right.questionId))
 }
 
 function buildNormalizedInteractionCommandPayload(
-  params: ResolveInteractionRequestParams,
+  params: ResolveInteractionRequestParams
 ): Record<string, unknown> {
   return {
     answers: normalizeInteractionCommandAnswers(params.answers),
@@ -2825,47 +2918,51 @@ function buildNormalizedInteractionCommandPayload(
       typeof params.selectedGrantOptionId === "string"
         ? params.selectedGrantOptionId.trim() || undefined
         : undefined,
-    note: typeof params.note === "string" ? params.note.trim() || undefined : undefined,
-  };
+    note:
+      typeof params.note === "string"
+        ? params.note.trim() || undefined
+        : undefined,
+  }
 }
 
 export async function resolveInteractionRequest(
-  params: ResolveInteractionRequestParams,
+  params: ResolveInteractionRequestParams
 ): Promise<ResolveInteractionRequestResult> {
-  const normalizedCommandPayload = buildNormalizedInteractionCommandPayload(params);
+  const normalizedCommandPayload =
+    buildNormalizedInteractionCommandPayload(params)
 
   const result = await transaction(async (client) => {
     const locked = await getInteractionRowByIdForUpdate(
       params.interactionId,
-      client,
-    );
+      client
+    )
     if (!locked) {
-      throw new Error("Interaction request not found");
+      throw new Error("Interaction request not found")
     }
 
     const existingCommand = await getInteractionCommandRow(
       params.interactionId,
       params.commandId,
-      client,
-    );
+      client
+    )
     if (existingCommand) {
       const storedRequestPayload = requireJsonObject(
         existingCommand.request_payload,
-        `Interaction command ${existingCommand.id} request_payload`,
-      );
+        `Interaction command ${existingCommand.id} request_payload`
+      )
       if (
         stableJsonStringify(storedRequestPayload) !==
         stableJsonStringify(normalizedCommandPayload)
       ) {
         throw new Error(
-          `commandId ${params.commandId} was already used with a different interaction payload`,
-        );
+          `commandId ${params.commandId} was already used with a different interaction payload`
+        )
       }
 
       const storedResponse = parseStoredInteractionResolveResponse(
         existingCommand.response_payload,
-        `Interaction command ${existingCommand.id} response_payload`,
-      );
+        `Interaction command ${existingCommand.id} response_payload`
+      )
       return {
         outcome:
           storedResponse.outcome === "applied"
@@ -2873,7 +2970,7 @@ export async function resolveInteractionRequest(
             : storedResponse.outcome,
         interaction: storedResponse.interaction,
         createdGrant: undefined,
-      };
+      }
     }
 
     if (
@@ -2881,7 +2978,7 @@ export async function resolveInteractionRequest(
       locked.target_participant_id &&
       locked.target_participant_id !== params.resolverParticipantId
     ) {
-      throw new Error("Only the targeted user can resolve this interaction");
+      throw new Error("Only the targeted user can resolve this interaction")
     }
 
     if (
@@ -2895,10 +2992,10 @@ export async function resolveInteractionRequest(
           .selectFrom("conversations")
           .select("kind")
           .where("id", "=", locked.conversation_id)
-          .limit(1),
-      );
+          .limit(1)
+      )
       if (!conversationRow) {
-        throw new Error(`Conversation ${locked.conversation_id} not found`);
+        throw new Error(`Conversation ${locked.conversation_id} not found`)
       }
       if (conversationRow.kind !== "private") {
         const grantRow = await executeSqlOn<{ workspace_member_id: string }>(
@@ -2910,43 +3007,43 @@ export async function resolveInteractionRequest(
               AND workspace_member_id = $2
             LIMIT 1
           `,
-          [locked.requester_remote_agent_id, params.resolverWorkspaceMemberId],
-        );
+          [locked.requester_remote_agent_id, params.resolverWorkspaceMemberId]
+        )
         if (!grantRow.rows[0]?.workspace_member_id) {
-          throw new Error("You are not allowed to resolve this remote agent interaction");
+          throw new Error(
+            "You are not allowed to resolve this remote agent interaction"
+          )
         }
       }
     }
 
     if (locked.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION) {
-      const relayDeviceId = locked.relay_device_id || "";
+      const relayDeviceId = locked.relay_device_id || ""
       if (!relayDeviceId) {
-        throw new Error(
-          `Interaction ${locked.id} is missing relay_device_id`,
-        );
+        throw new Error(`Interaction ${locked.id} is missing relay_device_id`)
       }
       const canResolveRelayAuthorization = await authorizeAction({
         subject: workspaceMemberSubject(params.resolverWorkspaceMemberId),
         action: "relay_device.authorize_relay_authorization",
         resourceId: relayDeviceId,
-      });
+      })
       if (!canResolveRelayAuthorization) {
         throw new Error(
-          "You are not allowed to resolve this relay authorization interaction",
-        );
+          "You are not allowed to resolve this relay authorization interaction"
+        )
       }
     }
 
     const lockedRevision = toRevisionNumber(
       locked.revision,
-      `Interaction ${locked.id} revision`,
-    );
+      `Interaction ${locked.id} revision`
+    )
     if (locked.status !== "pending" || lockedRevision !== params.baseRevision) {
-      const currentInteraction = buildInteractionSummary(locked);
+      const currentInteraction = buildInteractionSummary(locked)
       const responsePayload: StoredInteractionResolveResponse = {
         outcome: "conflict",
         interaction: currentInteraction,
-      };
+      }
       await insertInteractionCommandRow(client, {
         interactionId: params.interactionId,
         commandId: params.commandId,
@@ -2955,45 +3052,45 @@ export async function resolveInteractionRequest(
         requestPayload: normalizedCommandPayload,
         responsePayload,
         createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
-      });
+      })
       return {
         outcome: "conflict" as const,
         interaction: currentInteraction,
         createdGrant: undefined,
-      };
+      }
     }
 
-    let nextStatus: InteractionRequestStatus;
-    let resolutionPayload: Record<string, unknown>;
-    let createdGrant: RelayAuthorizationGrantRecord | undefined;
+    let nextStatus: InteractionRequestStatus
+    let resolutionPayload: Record<string, unknown>
+    let createdGrant: RelayAuthorizationGrantRecord | undefined
 
     if (locked.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
-      const promptPayload = parseJsonObject(locked.prompt_payload);
-      const questions = parseUserInputQuestionDefinitions(promptPayload);
+      const promptPayload = parseJsonObject(locked.prompt_payload)
+      const questions = parseUserInputQuestionDefinitions(promptPayload)
       if (questions.length === 0) {
-        throw new Error("User input request is invalid");
+        throw new Error("User input request is invalid")
       }
-      const submittedAnswers = buildSubmittedUserInputAnswers(params, questions);
-      const answers = validateUserInputAnswers(questions, submittedAnswers);
+      const submittedAnswers = buildSubmittedUserInputAnswers(params, questions)
+      const answers = validateUserInputAnswers(questions, submittedAnswers)
       if (answers.length === 0) {
-        throw new Error("A valid response is required");
+        throw new Error("A valid response is required")
       }
 
-      nextStatus = "answered";
+      nextStatus = "answered"
       resolutionPayload = {
         answers,
         note: params.note?.trim() || undefined,
-      };
+      }
     } else if (locked.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
       if (params.decision !== "approve" && params.decision !== "revise") {
-        throw new Error("decision must be approve or revise");
+        throw new Error("decision must be approve or revise")
       }
 
-      nextStatus = params.decision === "approve" ? "approved" : "rejected";
+      nextStatus = params.decision === "approve" ? "approved" : "rejected"
       resolutionPayload = {
         decision: params.decision,
         note: params.note?.trim() || undefined,
-      };
+      }
 
       if (locked.remote_agent_run_id && locked.requester_remote_agent_id) {
         await executeSqlOn(
@@ -3012,13 +3109,11 @@ export async function resolveInteractionRequest(
             locked.conversation_id,
             nextStatus === "approved" ? "default" : "plan_drafting",
             JSON.stringify({}),
-          ],
-        );
+          ]
+        )
       } else {
         if (!locked.task_id) {
-          throw new Error(
-            `Interaction ${locked.id} is missing task governance`,
-          );
+          throw new Error(`Interaction ${locked.id} is missing task governance`)
         }
         const taskRow = await executeTakeFirst(
           client,
@@ -3026,12 +3121,12 @@ export async function resolveInteractionRequest(
             .selectFrom("tool_call_tasks")
             .select("session_id")
             .where("id", "=", locked.task_id)
-            .limit(1),
-        );
+            .limit(1)
+        )
         if (!taskRow?.session_id) {
           throw new Error(
-            `Plan approval interaction ${locked.id} is missing a session`,
-          );
+            `Plan approval interaction ${locked.id} is missing a session`
+          )
         }
         const sessionRow = await executeTakeFirst(
           client,
@@ -3045,30 +3140,34 @@ export async function resolveInteractionRequest(
               "c.kind as conversation_kind",
             ])
             .where("s.id", "=", taskRow.session_id)
-            .limit(1),
-        );
+            .limit(1)
+        )
         if (!sessionRow) {
-          throw new Error(`Session ${taskRow.session_id} not found`);
+          throw new Error(`Session ${taskRow.session_id} not found`)
         }
         if (isGroupConversationKind(sessionRow.conversation_kind)) {
-          throw new Error("Plan mode is only available in private conversations.");
+          throw new Error(
+            "Plan mode is only available in private conversations."
+          )
         }
         if (
-          !isPlanAwaitingApprovalCollaborationMode(sessionRow.collaboration_mode)
+          !isPlanAwaitingApprovalCollaborationMode(
+            sessionRow.collaboration_mode
+          )
         ) {
           throw new Error(
-            `Session ${taskRow.session_id} must be in plan_awaiting_approval before resolving plan approval.`,
-          );
+            `Session ${taskRow.session_id} must be in plan_awaiting_approval before resolving plan approval.`
+          )
         }
         if (!sessionRow.active_plan_approval_interaction_id) {
           throw new Error(
-            `Session ${taskRow.session_id} is missing active_plan_approval_interaction_id`,
-          );
+            `Session ${taskRow.session_id} is missing active_plan_approval_interaction_id`
+          )
         }
         if (sessionRow.active_plan_approval_interaction_id !== locked.id) {
           throw new Error(
-            `Session ${taskRow.session_id} points to ${sessionRow.active_plan_approval_interaction_id}, not ${locked.id}`,
-          );
+            `Session ${taskRow.session_id} points to ${sessionRow.active_plan_approval_interaction_id}, not ${locked.id}`
+          )
         }
 
         const collaborationState = parseSessionCollaborationState(
@@ -3076,14 +3175,14 @@ export async function resolveInteractionRequest(
             ? {}
             : requireJsonObject(
                 sessionRow.collaboration_state,
-                `Session ${taskRow.session_id} collaboration_state`,
-              ),
-        );
-        const existingDraft = collaborationState.planDraft;
+                `Session ${taskRow.session_id} collaboration_state`
+              )
+        )
+        const existingDraft = collaborationState.planDraft
         if (!existingDraft) {
           throw new Error(
-            `Session ${taskRow.session_id} is missing collaborationState.planDraft`,
-          );
+            `Session ${taskRow.session_id} is missing collaborationState.planDraft`
+          )
         }
 
         await updateSessionCollaboration(
@@ -3104,20 +3203,18 @@ export async function resolveInteractionRequest(
                   },
             activePlanApprovalInteractionId: null,
           },
-          client,
-        );
+          client
+        )
       }
     } else {
       if (params.decision !== "approve" && params.decision !== "reject") {
-        throw new Error("decision must be approve or reject");
+        throw new Error("decision must be approve or reject")
       }
       if (params.decision === "approve" && !params.preset) {
-        throw new Error(
-          "preset is required when approving relay authorization",
-        );
+        throw new Error("preset is required when approving relay authorization")
       }
 
-      nextStatus = params.decision === "approve" ? "approved" : "rejected";
+      nextStatus = params.decision === "approve" ? "approved" : "rejected"
       resolutionPayload = {
         decision: params.decision,
         approvedPreset:
@@ -3129,39 +3226,39 @@ export async function resolveInteractionRequest(
             ? params.selectedGrantOptionId.trim()
             : undefined,
         note: params.note?.trim() || undefined,
-      };
+      }
 
       if (params.decision === "approve") {
         const selectedGrantOptionId =
           typeof params.selectedGrantOptionId === "string"
             ? params.selectedGrantOptionId.trim()
-            : "";
+            : ""
         if (!selectedGrantOptionId) {
           throw new Error(
-            "selectedGrantOptionId is required when approving relay authorization",
-          );
+            "selectedGrantOptionId is required when approving relay authorization"
+          )
         }
 
         const grantOptions = parseJsonArray<RelayAuthorizationGrantOption>(
           locked.grant_options,
-          `Interaction ${locked.id} grant_options`,
-        );
+          `Interaction ${locked.id} grant_options`
+        )
         const availablePresets = parseJsonArray<RelayAuthorizationPreset>(
           locked.available_presets,
-          `Interaction ${locked.id} available_presets`,
-        );
+          `Interaction ${locked.id} available_presets`
+        )
         if (!availablePresets.includes(params.preset || "once")) {
           throw new Error(
-            `preset ${params.preset || "once"} is not allowed for this relay authorization request`,
-          );
+            `preset ${params.preset || "once"} is not allowed for this relay authorization request`
+          )
         }
         const selectedOption = grantOptions.find(
-          (candidate) => candidate.id === selectedGrantOptionId,
-        );
+          (candidate) => candidate.id === selectedGrantOptionId
+        )
         if (!selectedOption) {
           throw new Error(
-            `Unknown relay authorization option "${selectedGrantOptionId}"`,
-          );
+            `Unknown relay authorization option "${selectedGrantOptionId}"`
+          )
         }
 
         createdGrant = await createRelayAuthorizationGrant(
@@ -3177,7 +3274,8 @@ export async function resolveInteractionRequest(
             sourceTaskId: locked.task_id || undefined,
             preset: params.preset || "once",
             sourceRetryNonce: locked.source_retry_nonce || undefined,
-            sourceRuntimeSessionId: locked.source_runtime_session_id || undefined,
+            sourceRuntimeSessionId:
+              locked.source_runtime_session_id || undefined,
             sourceRequestArgs:
               locked.source_request_args &&
               typeof locked.source_request_args === "object"
@@ -3185,12 +3283,12 @@ export async function resolveInteractionRequest(
                 : {},
             grantSpec: selectedOption.grantSpec,
           },
-          client,
-        );
+          client
+        )
         resolutionPayload = {
           ...resolutionPayload,
           approvedGrant: createdGrant,
-        };
+        }
       }
     }
 
@@ -3200,25 +3298,25 @@ export async function resolveInteractionRequest(
       resolved_by_participant_id: params.resolverParticipantId,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
-    });
+    })
 
     await updateInteractionResolutionPayload(
       client,
       locked.kind,
       params.interactionId,
-      resolutionPayload,
-    );
+      resolutionPayload
+    )
 
     const nextInteraction = await getInteractionRequestSummary(
       params.interactionId,
-      client,
-    );
+      client
+    )
     if (!nextInteraction) {
-      throw new Error("Failed to reload resolved interaction");
+      throw new Error("Failed to reload resolved interaction")
     }
 
-    await syncInteractionEventPayload(nextInteraction, client);
-    await appendInteractionUpdatedSyncEvent(client, nextInteraction);
+    await syncInteractionEventPayload(nextInteraction, client)
+    await appendInteractionUpdatedSyncEvent(client, nextInteraction)
 
     await insertInteractionCommandRow(client, {
       interactionId: params.interactionId,
@@ -3231,67 +3329,66 @@ export async function resolveInteractionRequest(
         interaction: nextInteraction,
       },
       createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
-    });
+    })
 
     return {
       outcome: "applied" as const,
       interaction: nextInteraction,
       createdGrant,
-    };
-  });
+    }
+  })
 
   if (result.outcome !== "applied") {
     return {
       outcome: result.outcome,
       interaction: result.interaction,
-    };
+    }
   }
 
-  const interaction = result.interaction;
+  const interaction = result.interaction
   if (interaction.remoteAgentRunId) {
-    const { notifyRemoteAgentInteractionResolved } = await import(
-      "../remote-agents/service.js"
-    );
-    await notifyRemoteAgentInteractionResolved(interaction.id);
+    const { notifyRemoteAgentInteractionResolved } =
+      await import("../remote-agents/service.js")
+    await notifyRemoteAgentInteractionResolved(interaction.id)
     return {
       outcome: result.outcome,
       interaction,
       createdGrant: result.createdGrant,
       createdGrants: result.createdGrant ? [result.createdGrant] : undefined,
-    };
+    }
   }
 
   if (!interaction.taskId) {
-    throw new Error(`Interaction ${interaction.id} is missing task governance`);
+    throw new Error(`Interaction ${interaction.id} is missing task governance`)
   }
 
   if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
     await completeToolCallTask(
       interaction.taskId,
-      buildUserInputAsyncNotice(interaction),
-    );
+      buildUserInputAsyncNotice(interaction)
+    )
   } else if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
     if (interaction.status === "approved") {
       await completeToolCallTask(
         interaction.taskId,
-        buildPlanApprovalApprovedNotice(interaction),
-      );
+        buildPlanApprovalApprovedNotice(interaction)
+      )
     } else {
       await failToolCallTask(
         interaction.taskId,
-        buildPlanApprovalRevisionNotice(interaction),
-      );
+        buildPlanApprovalRevisionNotice(interaction)
+      )
     }
   } else if (interaction.status === "rejected") {
     await failToolCallTask(
       interaction.taskId,
-      buildRelayAuthorizationRejectedNotice(interaction),
-    );
+      buildRelayAuthorizationRejectedNotice(interaction)
+    )
   } else {
     await completeToolCallTask(
       interaction.taskId,
-      buildRelayAuthorizationApprovedNotice(interaction),
-    );
+      buildRelayAuthorizationApprovedNotice(interaction)
+    )
   }
 
   return {
@@ -3299,36 +3396,36 @@ export async function resolveInteractionRequest(
     interaction,
     createdGrant: result.createdGrant,
     createdGrants: result.createdGrant ? [result.createdGrant] : undefined,
-  };
+  }
 }
 
 export async function markRelayAuthorizationInteractionSuperseded(
   interactionId: string,
-  note?: string,
+  note?: string
 ) {
-  const existing = await getInteractionRowById(interactionId);
+  const existing = await getInteractionRowById(interactionId)
   if (!existing) {
-    throw new Error("Interaction request not found");
+    throw new Error("Interaction request not found")
   }
   if (
     existing.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION ||
     existing.status !== "pending"
   ) {
-    const current = await getInteractionRequestSummary(interactionId);
+    const current = await getInteractionRequestSummary(interactionId)
     if (!current) {
-      throw new Error("Failed to reload interaction request");
+      throw new Error("Failed to reload interaction request")
     }
-    return current;
+    return current
   }
 
-  const resolutionPayload = parseJsonObject(existing.resolution_payload);
+  const resolutionPayload = parseJsonObject(existing.resolution_payload)
   const interaction = await transaction(async (client) => {
     await updateInteractionRequestRow(client, interactionId, {
       status: "superseded",
       revision: sql`revision + 1`,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
-    });
+    })
     await updateInteractionResolutionPayload(
       client,
       INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
@@ -3337,24 +3434,24 @@ export async function markRelayAuthorizationInteractionSuperseded(
         ...resolutionPayload,
         note: note?.trim() || resolutionPayload.note,
         superseded: true,
-      },
-    );
+      }
+    )
     const nextInteraction = await getInteractionRequestSummary(
       interactionId,
-      client,
-    );
+      client
+    )
     if (!nextInteraction) {
-      throw new Error("Failed to reload superseded interaction");
+      throw new Error("Failed to reload superseded interaction")
     }
-    await syncInteractionEventPayload(nextInteraction, client);
-    await appendInteractionUpdatedSyncEvent(client, nextInteraction);
-    return nextInteraction;
-  });
+    await syncInteractionEventPayload(nextInteraction, client)
+    await appendInteractionUpdatedSyncEvent(client, nextInteraction)
+    return nextInteraction
+  })
   if (interaction.taskId) {
     await failToolCallTask(
       interaction.taskId,
-      buildRelayAuthorizationSupersededNotice(interaction),
-    );
+      buildRelayAuthorizationSupersededNotice(interaction)
+    )
   }
-  return interaction;
+  return interaction
 }

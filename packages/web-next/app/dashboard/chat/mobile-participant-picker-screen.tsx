@@ -52,7 +52,9 @@ export function MobileParticipantPickerScreen({
   onBack,
   onConfirm,
 }: MobileParticipantPickerScreenProps) {
-  const [selectedParticipantIds, setSelectedParticipantIds] = useState<string[]>([])
+  const [selectedParticipantIds, setSelectedParticipantIds] = useState<
+    string[]
+  >([])
   const [search, setSearch] = useState(initialSearch)
   const [submitting, setSubmitting] = useState(false)
   const deferredSearch = useDeferredValue(search)
@@ -110,7 +112,9 @@ export function MobileParticipantPickerScreen({
       selectionMode === "single"
         ? [participantId]
         : selectedParticipantIds.includes(participantId)
-          ? selectedParticipantIds.filter((currentId) => currentId !== participantId)
+          ? selectedParticipantIds.filter(
+              (currentId) => currentId !== participantId
+            )
           : [...selectedParticipantIds, participantId]
 
     setSelectedParticipantIds(nextSelectedParticipantIds)
@@ -128,7 +132,7 @@ export function MobileParticipantPickerScreen({
 
   return (
     <div className="flex min-h-svh flex-col bg-background">
-      <header className="sticky top-0 z-20 border-b border-border bg-background px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))]">
+      <header className="sticky top-0 z-20 border-b border-border bg-background px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-4">
         <div className="flex items-center gap-3">
           <Button
             type="button"
@@ -154,7 +158,7 @@ export function MobileParticipantPickerScreen({
 
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
@@ -234,7 +238,7 @@ export function MobileParticipantPickerScreen({
       </div>
 
       {selectionBehavior === "confirm" ? (
-        <div className="sticky bottom-0 border-t border-border bg-background px-4 pb-[max(1rem,env(safe-area-inset-bottom))] pt-4">
+        <div className="sticky bottom-0 border-t border-border bg-background px-4 pt-4 pb-[max(1rem,env(safe-area-inset-bottom))]">
           <Button
             type="button"
             className="h-12 w-full rounded-full"

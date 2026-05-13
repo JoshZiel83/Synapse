@@ -1,8 +1,8 @@
-import Constants from "expo-constants";
+import Constants from "expo-constants"
 import {
   FILE_ORIGIN_SYSTEMS,
   isChatInteractionResolveConflictResponse,
-} from "@shared";
+} from "@shared"
 import type {
   ActorRuntimeTurnActivityDetail,
   AuthSessionPersistence,
@@ -23,15 +23,15 @@ import type {
   ChatInteractionResolveResponse,
   ChatSyncResponse,
   InteractionRequestSummary,
-} from "@shared";
-import { Platform } from "react-native";
+} from "@shared"
+import { Platform } from "react-native"
 
 import {
   API_BASE,
   getDeviceLabel,
   getPlatformClientType,
   resolveApiUrl,
-} from "@/lib/config";
+} from "@/lib/config"
 import type {
   ActorAccessRequestListResponse,
   ActorListResponse,
@@ -52,40 +52,40 @@ import type {
   WorkspaceInfo,
   WorkspaceListResponse,
   WorkspaceMemberListResponse,
-} from "@/types/api";
-import type { FileRecordView } from "@shared";
+} from "@/types/api"
+import type { FileRecordView } from "@shared"
 
-let authToken: string | null = null;
-let unauthorizedHandler: (() => void | Promise<void>) | null = null;
-let unauthorizedHandlerPending = false;
+let authToken: string | null = null
+let unauthorizedHandler: (() => void | Promise<void>) | null = null
+let unauthorizedHandlerPending = false
 
 export type {
   ChatInteractionResolveInput,
   ChatInteractionResolvePayload,
   ChatInteractionResolveResponse,
-};
+}
 export class ApiError extends Error {
-  status: number;
-  code?: string;
-  details?: unknown;
+  status: number
+  code?: string
+  details?: unknown
 
   constructor(
     message: string,
     status: number,
     code?: string,
-    details?: unknown,
+    details?: unknown
   ) {
-    super(message);
-    this.name = "ApiError";
-    this.status = status;
-    this.code = code;
-    this.details = details;
+    super(message)
+    this.name = "ApiError"
+    this.status = status
+    this.code = code
+    this.details = details
   }
 }
 
 interface UploadAssetOptions {
-  onProgress?: (progress: number) => void;
-  signal?: AbortSignal;
+  onProgress?: (progress: number) => void
+  signal?: AbortSignal
 }
 
 function notifyUnauthorizedStatus(status: number) {
@@ -95,13 +95,13 @@ function notifyUnauthorizedStatus(status: number) {
     !unauthorizedHandler ||
     unauthorizedHandlerPending
   ) {
-    return;
+    return
   }
 
-  unauthorizedHandlerPending = true;
+  unauthorizedHandlerPending = true
   void Promise.resolve(unauthorizedHandler()).finally(() => {
-    unauthorizedHandlerPending = false;
-  });
+    unauthorizedHandlerPending = false
+  })
 }
 
 function getAuthHeaders() {
@@ -109,96 +109,96 @@ function getAuthHeaders() {
     ? {
         Authorization: `Bearer ${authToken}`,
       }
-    : undefined;
+    : undefined
 }
 
 function parseErrorMessage(data: unknown, fallback: string) {
   if (data && typeof data === "object" && "error" in data) {
-    const value = (data as { error?: unknown }).error;
+    const value = (data as { error?: unknown }).error
     if (typeof value === "string" && value.trim()) {
-      return value;
+      return value
     }
   }
 
-  return fallback;
+  return fallback
 }
 
 function asArray<T>(value: unknown): T[] {
-  return Array.isArray(value) ? (value as T[]) : [];
+  return Array.isArray(value) ? (value as T[]) : []
 }
 
 function normalizeWorkspaceListResponse(data: unknown): WorkspaceListResponse {
   if (Array.isArray(data)) {
-    return { data };
+    return { data }
   }
 
   if (data && typeof data === "object") {
     return {
       data: asArray((data as { data?: unknown }).data),
-    };
+    }
   }
 
-  return { data: [] };
+  return { data: [] }
 }
 
 function normalizeWorkspaceMemberListResponse(
-  data: unknown,
+  data: unknown
 ): WorkspaceMemberListResponse {
   if (Array.isArray(data)) {
-    return { data };
+    return { data }
   }
 
   if (data && typeof data === "object") {
     return {
       data: asArray((data as { data?: unknown }).data),
-    };
+    }
   }
 
-  return { data: [] };
+  return { data: [] }
 }
 
 function normalizeActorListResponse(data: unknown): ActorListResponse {
   if (Array.isArray(data)) {
-    return { actors: data };
+    return { actors: data }
   }
 
   if (data && typeof data === "object") {
-    const objectData = data as { actors?: unknown; data?: unknown };
+    const objectData = data as { actors?: unknown; data?: unknown }
     return {
       actors: asArray(objectData.actors ?? objectData.data),
-    };
+    }
   }
 
-  return { actors: [] };
+  return { actors: [] }
 }
 
 class ApiClient {
   private async request<T>(path: string, options: RequestInit = {}) {
-    const headers = new Headers(options.headers as HeadersInit | undefined);
+    const headers = new Headers(options.headers as HeadersInit | undefined)
     const isFormData =
-      typeof FormData !== "undefined" && options.body instanceof FormData;
+      typeof FormData !== "undefined" && options.body instanceof FormData
 
     if (!isFormData && !headers.has("Content-Type")) {
-      headers.set("Content-Type", "application/json");
+      headers.set("Content-Type", "application/json")
     }
 
-    const authHeaders = getAuthHeaders();
+    const authHeaders = getAuthHeaders()
     if (authHeaders) {
       Object.entries(authHeaders).forEach(([key, value]) =>
-        headers.set(key, value),
-      );
+        headers.set(key, value)
+      )
     }
 
     const response = await fetch(`${API_BASE}${path}`, {
       ...options,
       headers,
-    });
+    })
 
     if (response.status === 204) {
-      return null as T;
+      return null as T
     }
 
-    const data = await response.json().catch(() => null);
+    const data = await response.json().catch(() => null)
 
     if (!response.ok) {
       const error = new ApiError(
@@ -209,13 +209,13 @@ class ApiClient {
           typeof (data as { code?: unknown }).code === "string"
           ? (data as { code: string }).code
           : undefined,
-        data,
-      );
-      notifyUnauthorizedStatus(response.status);
-      throw error;
+        data
+      )
+      notifyUnauthorizedStatus(response.status)
+      throw error
     }
 
-    return data as T;
+    return data as T
   }
 
   login(email: string, password: string): Promise<AuthResponse> {
@@ -230,10 +230,14 @@ class ApiClient {
         deviceName: getDeviceLabel(),
         platform: `${Platform.OS} / Expo ${Constants.expoVersion ?? "runtime"}`,
       }),
-    });
+    })
   }
 
-  register(name: string, email: string, password: string): Promise<AuthResponse> {
+  register(
+    name: string,
+    email: string,
+    password: string
+  ): Promise<AuthResponse> {
     return this.request<AuthResponse>("/auth/register", {
       method: "POST",
       body: JSON.stringify({
@@ -246,31 +250,31 @@ class ApiClient {
         deviceName: getDeviceLabel(),
         platform: `${Platform.OS} / Expo ${Constants.expoVersion ?? "runtime"}`,
       }),
-    });
+    })
   }
 
   logout() {
     return this.request<void>("/auth/logout", {
       method: "POST",
       body: "{}",
-    });
+    })
   }
 
   getMe(): Promise<AuthMeResponse> {
-    return this.request<AuthMeResponse>("/auth/me");
+    return this.request<AuthMeResponse>("/auth/me")
   }
 
   updateMe(data: { name?: string; avatarFileId?: string | null }) {
     return this.request<AuthMeResponse>("/auth/me", {
       method: "PUT",
       body: JSON.stringify(data),
-    });
+    })
   }
 
   getWorkspaces(): Promise<WorkspaceListResponse> {
     return this.request<unknown>("/workspaces").then(
-      normalizeWorkspaceListResponse,
-    );
+      normalizeWorkspaceListResponse
+    )
   }
 
   createWorkspace(name: string, description?: string): Promise<WorkspaceInfo> {
@@ -280,137 +284,137 @@ class ApiClient {
         name,
         description,
       }),
-    });
+    })
   }
 
   getWorkspaceMembers(
-    workspaceId: string,
+    workspaceId: string
   ): Promise<WorkspaceMemberListResponse> {
     return this.request<unknown>(`/workspaces/${workspaceId}/members`).then(
-      normalizeWorkspaceMemberListResponse,
-    );
+      normalizeWorkspaceMemberListResponse
+    )
   }
 
   getActors(workspaceId: string): Promise<ActorListResponse> {
     return this.request<unknown>(`/workspaces/${workspaceId}/actors`).then(
-      normalizeActorListResponse,
-    );
+      normalizeActorListResponse
+    )
   }
 
   getMyRelationshipProfile(
-    workspaceId: string,
+    workspaceId: string
   ): Promise<RelationshipProfileView> {
     return this.request<RelationshipProfileView>(
-      `/workspaces/${workspaceId}/me/friend-profile`,
-    );
+      `/workspaces/${workspaceId}/me/friend-profile`
+    )
   }
 
   getMyFriendIdProfile(workspaceId: string): Promise<FriendIdProfileView> {
     return this.request<FriendIdProfileView>(
-      `/workspaces/${workspaceId}/me/friend-id`,
-    );
+      `/workspaces/${workspaceId}/me/friend-id`
+    )
   }
 
   updateMyFriendIdProfile(
     workspaceId: string,
     input: {
-      friendId?: string;
-      searchByIdEnabled?: boolean;
-    },
+      friendId?: string
+      searchByIdEnabled?: boolean
+    }
   ): Promise<FriendIdProfileView> {
     return this.request<FriendIdProfileView>(
       `/workspaces/${workspaceId}/me/friend-id`,
       {
         method: "PUT",
         body: JSON.stringify(input),
-      },
-    );
+      }
+    )
   }
 
   updateMyRelationshipProfile(
     workspaceId: string,
-    input: { approvalMode: "auto" | "manual" },
+    input: { approvalMode: "auto" | "manual" }
   ): Promise<RelationshipProfileView> {
     return this.request<RelationshipProfileView>(
       `/workspaces/${workspaceId}/me/friend-profile`,
       {
         method: "PUT",
         body: JSON.stringify(input),
-      },
-    );
+      }
+    )
   }
 
   getActorRelationshipProfile(
     workspaceId: string,
-    actorId: string,
+    actorId: string
   ): Promise<RelationshipProfileView> {
     return this.request<RelationshipProfileView>(
-      `/workspaces/${workspaceId}/actors/${actorId}/friend-profile`,
-    );
+      `/workspaces/${workspaceId}/actors/${actorId}/friend-profile`
+    )
   }
 
   updateActorRelationshipProfile(
     workspaceId: string,
     actorId: string,
     input: {
-      approvalMode: "auto" | "manual";
-      accessPolicy?: "workspace_open" | "approval_required";
-    },
+      approvalMode: "auto" | "manual"
+      accessPolicy?: "workspace_open" | "approval_required"
+    }
   ): Promise<RelationshipProfileView> {
     return this.request<RelationshipProfileView>(
       `/workspaces/${workspaceId}/actors/${actorId}/friend-profile`,
       {
         method: "PUT",
         body: JSON.stringify(input),
-      },
-    );
+      }
+    )
   }
 
   scanRelationshipQr(
     workspaceId: string,
-    token: string,
+    token: string
   ): Promise<RelationshipScanResponse> {
     return this.request<RelationshipScanResponse>(
       `/workspaces/${workspaceId}/relationship-qr/scan`,
       {
         method: "POST",
         body: JSON.stringify({ token }),
-      },
-    );
+      }
+    )
   }
 
   searchIdentity(
     workspaceId: string,
-    query: string,
+    query: string
   ): Promise<IdentitySearchResponse> {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams()
     if (query.trim()) {
-      params.set("q", query.trim());
+      params.set("q", query.trim())
     }
     return this.request<IdentitySearchResponse>(
       `/workspaces/${workspaceId}/identity-search${
         params.size > 0 ? `?${params.toString()}` : ""
-      }`,
-    );
+      }`
+    )
   }
 
   requestIdentityProfile(
     workspaceId: string,
-    profileId: string,
+    profileId: string
   ): Promise<RelationshipScanResponse> {
     return this.request<RelationshipScanResponse>(
       `/workspaces/${workspaceId}/identity-search/request`,
       {
         method: "POST",
         body: JSON.stringify({ profileId }),
-      },
-    );
+      }
+    )
   }
 
   getContactHub(workspaceId: string): Promise<ContactHubResponse> {
     return this.request<ContactHubResponse>(
-      `/workspaces/${workspaceId}/contact-hub`,
-    );
+      `/workspaces/${workspaceId}/contact-hub`
+    )
   }
 
   getContactHubDetail(
@@ -420,53 +424,53 @@ class ApiClient {
       | "workspace-member"
       | "friend-actor"
       | "friend-member",
-    contactId: string,
+    contactId: string
   ): Promise<ContactHubDetailResponse> {
     return this.request<ContactHubDetailResponse>(
-      `/workspaces/${workspaceId}/contact-hub/${contactKind}/${contactId}`,
-    );
+      `/workspaces/${workspaceId}/contact-hub/${contactKind}/${contactId}`
+    )
   }
 
   getFriendRequests(workspaceId: string): Promise<FriendRequestListResponse> {
     return this.request<FriendRequestListResponse>(
-      `/workspaces/${workspaceId}/friend-requests`,
-    );
+      `/workspaces/${workspaceId}/friend-requests`
+    )
   }
 
   approveFriendRequest(workspaceId: string, requestId: string) {
     return this.request<{ request: unknown }>(
       `/workspaces/${workspaceId}/friend-requests/${requestId}/approve`,
-      { method: "POST", body: "{}" },
-    );
+      { method: "POST", body: "{}" }
+    )
   }
 
   rejectFriendRequest(workspaceId: string, requestId: string) {
     return this.request<{ request: unknown }>(
       `/workspaces/${workspaceId}/friend-requests/${requestId}/reject`,
-      { method: "POST", body: "{}" },
-    );
+      { method: "POST", body: "{}" }
+    )
   }
 
   getActorAccessRequests(
-    workspaceId: string,
+    workspaceId: string
   ): Promise<ActorAccessRequestListResponse> {
     return this.request<ActorAccessRequestListResponse>(
-      `/workspaces/${workspaceId}/actor-access-requests`,
-    );
+      `/workspaces/${workspaceId}/actor-access-requests`
+    )
   }
 
   approveActorAccessRequest(workspaceId: string, requestId: string) {
     return this.request<{ request: unknown }>(
       `/workspaces/${workspaceId}/actor-access-requests/${requestId}/approve`,
-      { method: "POST", body: "{}" },
-    );
+      { method: "POST", body: "{}" }
+    )
   }
 
   rejectActorAccessRequest(workspaceId: string, requestId: string) {
     return this.request<{ request: unknown }>(
       `/workspaces/${workspaceId}/actor-access-requests/${requestId}/reject`,
-      { method: "POST", body: "{}" },
-    );
+      { method: "POST", body: "{}" }
+    )
   }
 
   openDirectConversation(
@@ -476,67 +480,67 @@ class ApiClient {
         | "workspace-actor"
         | "workspace-member"
         | "friend-actor"
-        | "friend-member";
-      contactId: string;
-    },
+        | "friend-member"
+      contactId: string
+    }
   ): Promise<DirectConversationOpenResponse> {
     return this.request<DirectConversationOpenResponse>(
       `/workspaces/${workspaceId}/direct-conversations/open`,
       {
         method: "POST",
         body: JSON.stringify(input),
-      },
-    );
+      }
+    )
   }
 
   getWorkspaceChiefActorPreference(
-    workspaceId: string,
+    workspaceId: string
   ): Promise<WorkspaceChiefActorPreference> {
     return this.request<WorkspaceChiefActorPreference>(
-      `/workspaces/${workspaceId}/preferences/chief-actor`,
-    );
+      `/workspaces/${workspaceId}/preferences/chief-actor`
+    )
   }
 
   updateWorkspaceChiefActorPreference(
     workspaceId: string,
-    data: { chiefActorId: string | null },
+    data: { chiefActorId: string | null }
   ): Promise<WorkspaceChiefActorPreference> {
     return this.request<WorkspaceChiefActorPreference>(
       `/workspaces/${workspaceId}/preferences/chief-actor`,
       {
         method: "PUT",
         body: JSON.stringify(data),
-      },
-    );
+      }
+    )
   }
 
   getChatBootstrap(workspaceId: string): Promise<ChatBootstrapResponse> {
     return this.request<ChatBootstrapResponse>(
-      `/workspaces/${workspaceId}/chat/bootstrap`,
-    );
+      `/workspaces/${workspaceId}/chat/bootstrap`
+    )
   }
 
   getChatSync(
     workspaceId: string,
-    input?: { cursor?: number; limit?: number },
+    input?: { cursor?: number; limit?: number }
   ): Promise<ChatSyncResponse> {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams()
     if (typeof input?.cursor === "number") {
-      params.set("cursor", String(input.cursor));
+      params.set("cursor", String(input.cursor))
     }
     if (typeof input?.limit === "number") {
-      params.set("limit", String(input.limit));
+      params.set("limit", String(input.limit))
     }
-    const query = params.toString();
+    const query = params.toString()
 
     return this.request<ChatSyncResponse>(
-      `/workspaces/${workspaceId}/chat/sync${query ? `?${query}` : ""}`,
-    );
+      `/workspaces/${workspaceId}/chat/sync${query ? `?${query}` : ""}`
+    )
   }
 
   createChatClientInstance(
     workspaceId: string,
-    input?: ChatClientInstanceCreateInput,
+    input?: ChatClientInstanceCreateInput
   ): Promise<ChatClientInstanceRegistrationResponse> {
     return this.request<ChatClientInstanceRegistrationResponse>(
       `/workspaces/${workspaceId}/chat/client-instances`,
@@ -547,14 +551,14 @@ class ApiClient {
           deviceLabel: input?.deviceLabel,
           metadata: input?.metadata,
         }),
-      },
-    );
+      }
+    )
   }
 
   touchChatClientInstance(
     workspaceId: string,
     clientInstanceId: string,
-    input?: ChatClientInstanceTouchInput,
+    input?: ChatClientInstanceTouchInput
   ): Promise<ChatClientInstanceRegistrationResponse> {
     return this.request<ChatClientInstanceRegistrationResponse>(
       `/workspaces/${workspaceId}/chat/client-instances/${clientInstanceId}`,
@@ -565,21 +569,21 @@ class ApiClient {
           deviceLabel: input?.deviceLabel,
           metadata: input?.metadata,
         }),
-      },
-    );
+      }
+    )
   }
 
   createChatConversation(
     workspaceId: string,
     input: {
-      clientRequestId: string;
-      kind: "group" | "private" | "virtual";
-      boundary?: "internal" | "external";
-      title?: string;
-      workspaceMemberIds?: string[];
-      actorIds?: string[];
-      metadata?: Record<string, unknown>;
-    },
+      clientRequestId: string
+      kind: "group" | "private" | "virtual"
+      boundary?: "internal" | "external"
+      title?: string
+      workspaceMemberIds?: string[]
+      actorIds?: string[]
+      metadata?: Record<string, unknown>
+    }
   ): Promise<ChatConversationCreateResponse> {
     return this.request<ChatConversationCreateResponse>(
       `/workspaces/${workspaceId}/chat/conversations`,
@@ -594,48 +598,48 @@ class ApiClient {
           actorIds: input.actorIds ?? [],
           metadata: input.metadata,
         }),
-      },
-    );
+      }
+    )
   }
 
   getChatConversationMessages(
     workspaceId: string,
     conversationId: string,
-    input: ChatConversationMessagesQuery,
+    input: ChatConversationMessagesQuery
   ): Promise<ChatConversationMessagesPage> {
-    const params = new URLSearchParams();
+    const params = new URLSearchParams()
     if (typeof input.afterSequence === "number") {
-      params.set("afterSequence", String(input.afterSequence));
+      params.set("afterSequence", String(input.afterSequence))
     }
     if (typeof input.beforeSequence === "number") {
-      params.set("beforeSequence", String(input.beforeSequence));
+      params.set("beforeSequence", String(input.beforeSequence))
     }
     if (typeof input.limit === "number") {
-      params.set("limit", String(input.limit));
+      params.set("limit", String(input.limit))
     }
-    params.set("clientInstanceId", input.clientInstanceId);
-    const query = params.toString();
+    params.set("clientInstanceId", input.clientInstanceId)
+    const query = params.toString()
 
     return this.request<ChatConversationMessagesPage>(
-      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages${query ? `?${query}` : ""}`,
-    );
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages${query ? `?${query}` : ""}`
+    )
   }
 
   getChatConversationRuntimeTurnDetail(
     workspaceId: string,
     conversationId: string,
     actorId: string,
-    turnId: string,
+    turnId: string
   ): Promise<ActorRuntimeTurnActivityDetail> {
     return this.request<ActorRuntimeTurnActivityDetail>(
-      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/actors/${actorId}/runtime-turns/${turnId}`,
-    );
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/actors/${actorId}/runtime-turns/${turnId}`
+    )
   }
 
   sendChatConversationMessage(
     workspaceId: string,
     conversationId: string,
-    input: ChatConversationSendMessageInput,
+    input: ChatConversationSendMessageInput
   ): Promise<ChatConversationSendMessageResponse> {
     return this.request<ChatConversationSendMessageResponse>(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/messages`,
@@ -648,38 +652,38 @@ class ApiClient {
           clientInstanceId: input.clientInstanceId,
           metadata: input.metadata,
         }),
-      },
-    );
+      }
+    )
   }
 
   resolveChatInteraction(
     workspaceId: string,
     conversationId: string,
     interactionId: string,
-    input: ChatInteractionResolveInput,
+    input: ChatInteractionResolveInput
   ): Promise<ChatInteractionResolveResponse> {
     return this.request<ChatInteractionResolveResponse>(
       `/workspaces/${workspaceId}/conversations/${conversationId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(input),
-      },
+      }
     ).catch((error) => {
       if (
         error instanceof ApiError &&
         error.status === 409 &&
         isChatInteractionResolveConflictResponse(error.details)
       ) {
-        return error.details;
+        return error.details
       }
-      throw error;
-    });
+      throw error
+    })
   }
 
   updateChatConversationReadWatermark(
     workspaceId: string,
     conversationId: string,
-    input: ChatConversationReadWatermarkInput,
+    input: ChatConversationReadWatermarkInput
   ): Promise<ChatConversationReadWatermarkResponse> {
     return this.request<ChatConversationReadWatermarkResponse>(
       `/workspaces/${workspaceId}/chat/conversations/${conversationId}/read-watermark`,
@@ -690,33 +694,33 @@ class ApiClient {
           lastVisibleSequence: input.lastVisibleSequence,
           clientInstanceId: input.clientInstanceId,
         }),
-      },
-    );
+      }
+    )
   }
 
   async uploadAsset(
     workspaceId: string,
     asset: UploadAssetInput,
-    options?: UploadAssetOptions,
+    options?: UploadAssetOptions
   ): Promise<FileRecordView> {
-    const formData = new FormData();
+    const formData = new FormData()
     if (Platform.OS === "web") {
-      let fileBody: Blob | File | null = asset.file ?? null;
+      let fileBody: Blob | File | null = asset.file ?? null
       if (!fileBody) {
-        const response = await fetch(asset.uri);
+        const response = await fetch(asset.uri)
         if (!response.ok) {
-          throw new ApiError("Failed to read selected file", response.status);
+          throw new ApiError("Failed to read selected file", response.status)
         }
-        fileBody = await response.blob();
+        fileBody = await response.blob()
       }
 
-      formData.append("file", fileBody, asset.name);
+      formData.append("file", fileBody, asset.name)
     } else {
       formData.append("file", {
         uri: asset.uri,
         name: asset.name,
         type: asset.mimeType,
-      } as never);
+      } as never)
     }
 
     formData.append(
@@ -724,62 +728,62 @@ class ApiClient {
       JSON.stringify({
         family: "user_upload",
         system: FILE_ORIGIN_SYSTEMS.WORKSPACE_MOBILE_UPLOAD,
-      }),
-    );
+      })
+    )
 
-    const headers = new Headers();
-    const authHeaders = getAuthHeaders();
+    const headers = new Headers()
+    const authHeaders = getAuthHeaders()
     if (authHeaders) {
       Object.entries(authHeaders).forEach(([key, value]) =>
-        headers.set(key, value),
-      );
+        headers.set(key, value)
+      )
     }
 
     return new Promise<FileRecordView>((resolve, reject) => {
-      const xhr = new XMLHttpRequest();
-      let settled = false;
-      let removeAbortListener: (() => void) | null = null;
+      const xhr = new XMLHttpRequest()
+      let settled = false
+      let removeAbortListener: (() => void) | null = null
 
       function cleanup() {
-        removeAbortListener?.();
-        removeAbortListener = null;
+        removeAbortListener?.()
+        removeAbortListener = null
       }
 
       function fail(error: ApiError) {
         if (settled) {
-          return;
+          return
         }
 
-        settled = true;
-        cleanup();
-        reject(error);
+        settled = true
+        cleanup()
+        reject(error)
       }
 
       function succeed(value: FileRecordView) {
         if (settled) {
-          return;
+          return
         }
 
-        settled = true;
-        cleanup();
-        resolve(value);
+        settled = true
+        cleanup()
+        resolve(value)
       }
 
-      xhr.open("POST", `${API_BASE}/workspaces/${workspaceId}/files`);
+      xhr.open("POST", `${API_BASE}/workspaces/${workspaceId}/files`)
       headers.forEach((value, key) => {
-        xhr.setRequestHeader(key, value);
-      });
+        xhr.setRequestHeader(key, value)
+      })
 
       xhr.onload = () => {
-        let data: unknown = null;
+        let data: unknown = null
         if (
           typeof xhr.responseText === "string" &&
           xhr.responseText.length > 0
         ) {
           try {
-            data = JSON.parse(xhr.responseText);
+            data = JSON.parse(xhr.responseText)
           } catch {
-            data = null;
+            data = null
           }
         }
 
@@ -788,103 +792,103 @@ class ApiClient {
             parseErrorMessage(data, "Upload failed"),
             xhr.status,
             undefined,
-            data,
-          );
-          notifyUnauthorizedStatus(xhr.status);
-          fail(error);
-          return;
+            data
+          )
+          notifyUnauthorizedStatus(xhr.status)
+          fail(error)
+          return
         }
 
-        succeed(data as FileRecordView);
-      };
+        succeed(data as FileRecordView)
+      }
 
       xhr.onerror = () => {
-        fail(new ApiError("Upload failed", 0, "NETWORK_ERROR"));
-      };
+        fail(new ApiError("Upload failed", 0, "NETWORK_ERROR"))
+      }
 
       xhr.onabort = () => {
-        fail(new ApiError("Upload aborted", 0, "ABORTED"));
-      };
+        fail(new ApiError("Upload aborted", 0, "ABORTED"))
+      }
 
       if (xhr.upload && options?.onProgress) {
         xhr.upload.onprogress = (event) => {
           if (!event.lengthComputable || event.total <= 0) {
-            return;
+            return
           }
 
-          options.onProgress?.(Math.min(1, event.loaded / event.total));
-        };
+          options.onProgress?.(Math.min(1, event.loaded / event.total))
+        }
       }
 
       if (options?.signal) {
         const handleAbort = () => {
-          xhr.abort();
-        };
-
-        if (options.signal.aborted) {
-          handleAbort();
-          return;
+          xhr.abort()
         }
 
-        options.signal.addEventListener("abort", handleAbort, { once: true });
+        if (options.signal.aborted) {
+          handleAbort()
+          return
+        }
+
+        options.signal.addEventListener("abort", handleAbort, { once: true })
         removeAbortListener = () =>
-          options.signal?.removeEventListener("abort", handleAbort);
+          options.signal?.removeEventListener("abort", handleAbort)
       }
 
-      xhr.send(formData);
-    });
+      xhr.send(formData)
+    })
   }
 
   resolveQrLogin(token: string): Promise<AuthQrLoginResolveResponse> {
     return this.request<AuthQrLoginResolveResponse>("/auth/qr-login/resolve", {
       method: "POST",
       body: JSON.stringify({ token }),
-    });
+    })
   }
 
   approveQrLogin(
     token: string,
-    sessionPersistence: AuthSessionPersistence,
+    sessionPersistence: AuthSessionPersistence
   ): Promise<AuthQrLoginStatusResponse> {
     return this.request<AuthQrLoginStatusResponse>("/auth/qr-login/approve", {
       method: "POST",
       body: JSON.stringify({ token, sessionPersistence }),
-    });
+    })
   }
 
   rejectQrLogin(token: string): Promise<AuthQrLoginStatusResponse> {
     return this.request<AuthQrLoginStatusResponse>("/auth/qr-login/reject", {
       method: "POST",
       body: JSON.stringify({ token }),
-    });
+    })
   }
 }
 
-export const api = new ApiClient();
+export const api = new ApiClient()
 
 export function setApiAuthToken(token: string | null) {
-  authToken = token;
-  unauthorizedHandlerPending = false;
+  authToken = token
+  unauthorizedHandlerPending = false
 }
 
 export function getApiAuthToken() {
-  return authToken;
+  return authToken
 }
 
 export function setApiUnauthorizedHandler(
-  handler: (() => void | Promise<void>) | null,
+  handler: (() => void | Promise<void>) | null
 ) {
-  unauthorizedHandler = handler;
+  unauthorizedHandler = handler
 }
 
 export function reportApiUnauthorized(status: number) {
-  notifyUnauthorizedStatus(status);
+  notifyUnauthorizedStatus(status)
 }
 
 export function buildAuthenticatedSource(pathOrUrl: string) {
-  const headers = getAuthHeaders();
+  const headers = getAuthHeaders()
   return {
     uri: resolveApiUrl(pathOrUrl),
     ...(headers ? { headers } : {}),
-  };
+  }
 }

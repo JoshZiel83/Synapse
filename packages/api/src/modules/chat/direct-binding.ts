@@ -1,42 +1,42 @@
 export type DirectConversationIdentity =
   | {
-      kind: "member";
-      workspaceMemberId: string;
+      kind: "member"
+      workspaceMemberId: string
     }
   | {
-      kind: "actor";
-      actorId: string;
+      kind: "actor"
+      actorId: string
     }
   | {
-      kind: "remote_agent";
-      remoteAgentId: string;
-    };
+      kind: "remote_agent"
+      remoteAgentId: string
+    }
 
 export function directConversationIdentityKey(
-  identity: DirectConversationIdentity,
+  identity: DirectConversationIdentity
 ) {
   if (identity.kind === "member") {
-    return `workspace_member:${identity.workspaceMemberId}`;
+    return `workspace_member:${identity.workspaceMemberId}`
   }
   if (identity.kind === "remote_agent") {
-    return `remote_agent:${identity.remoteAgentId}`;
+    return `remote_agent:${identity.remoteAgentId}`
   }
-  return `actor:${identity.actorId}`;
+  return `actor:${identity.actorId}`
 }
 
 export function canonicalizeDirectConversationPair(
   left: DirectConversationIdentity,
-  right: DirectConversationIdentity,
+  right: DirectConversationIdentity
 ) {
-  const leftKey = directConversationIdentityKey(left);
-  const rightKey = directConversationIdentityKey(right);
+  const leftKey = directConversationIdentityKey(left)
+  const rightKey = directConversationIdentityKey(right)
   return leftKey <= rightKey
     ? { participantOne: left, participantTwo: right }
-    : { participantOne: right, participantTwo: left };
+    : { participantOne: right, participantTwo: left }
 }
 
 export function directConversationBindingValues(
-  pair: ReturnType<typeof canonicalizeDirectConversationPair>,
+  pair: ReturnType<typeof canonicalizeDirectConversationPair>
 ) {
   const participantOne =
     pair.participantOne.kind === "member"
@@ -49,17 +49,17 @@ export function directConversationBindingValues(
         }
       : pair.participantOne.kind === "actor"
         ? {
-          participant_one_kind: "actor" as const,
-          participant_one_workspace_member_id: null,
-          participant_one_actor_id: pair.participantOne.actorId,
-          participant_one_remote_agent_id: null,
-        }
+            participant_one_kind: "actor" as const,
+            participant_one_workspace_member_id: null,
+            participant_one_actor_id: pair.participantOne.actorId,
+            participant_one_remote_agent_id: null,
+          }
         : {
-          participant_one_kind: "remote_agent" as const,
-          participant_one_workspace_member_id: null,
-          participant_one_actor_id: null,
-          participant_one_remote_agent_id: pair.participantOne.remoteAgentId,
-        };
+            participant_one_kind: "remote_agent" as const,
+            participant_one_workspace_member_id: null,
+            participant_one_actor_id: null,
+            participant_one_remote_agent_id: pair.participantOne.remoteAgentId,
+          }
   const participantTwo =
     pair.participantTwo.kind === "member"
       ? {
@@ -71,36 +71,36 @@ export function directConversationBindingValues(
         }
       : pair.participantTwo.kind === "actor"
         ? {
-          participant_two_kind: "actor" as const,
-          participant_two_workspace_member_id: null,
-          participant_two_actor_id: pair.participantTwo.actorId,
-          participant_two_remote_agent_id: null,
-        }
+            participant_two_kind: "actor" as const,
+            participant_two_workspace_member_id: null,
+            participant_two_actor_id: pair.participantTwo.actorId,
+            participant_two_remote_agent_id: null,
+          }
         : {
-          participant_two_kind: "remote_agent" as const,
-          participant_two_workspace_member_id: null,
-          participant_two_actor_id: null,
-          participant_two_remote_agent_id: pair.participantTwo.remoteAgentId,
-        };
+            participant_two_kind: "remote_agent" as const,
+            participant_two_workspace_member_id: null,
+            participant_two_actor_id: null,
+            participant_two_remote_agent_id: pair.participantTwo.remoteAgentId,
+          }
 
   return {
     ...participantOne,
     ...participantTwo,
-  };
+  }
 }
 
 export function directConversationBindingPeer(
   row: {
-    participant_one_kind: "member" | "actor" | "remote_agent";
-    participant_one_workspace_member_id: string | null;
-    participant_one_actor_id: string | null;
-    participant_one_remote_agent_id: string | null;
-    participant_two_kind: "member" | "actor" | "remote_agent";
-    participant_two_workspace_member_id: string | null;
-    participant_two_actor_id: string | null;
-    participant_two_remote_agent_id: string | null;
+    participant_one_kind: "member" | "actor" | "remote_agent"
+    participant_one_workspace_member_id: string | null
+    participant_one_actor_id: string | null
+    participant_one_remote_agent_id: string | null
+    participant_two_kind: "member" | "actor" | "remote_agent"
+    participant_two_workspace_member_id: string | null
+    participant_two_actor_id: string | null
+    participant_two_remote_agent_id: string | null
   },
-  viewer: DirectConversationIdentity,
+  viewer: DirectConversationIdentity
 ): DirectConversationIdentity | null {
   const left =
     row.participant_one_kind === "member" &&
@@ -119,7 +119,7 @@ export function directConversationBindingPeer(
               kind: "remote_agent" as const,
               remoteAgentId: row.participant_one_remote_agent_id,
             }
-        : null;
+          : null
   const right =
     row.participant_two_kind === "member" &&
     row.participant_two_workspace_member_id
@@ -137,11 +137,11 @@ export function directConversationBindingPeer(
               kind: "remote_agent" as const,
               remoteAgentId: row.participant_two_remote_agent_id,
             }
-        : null;
+          : null
 
-  if (!left || !right) return null;
-  const viewerKey = directConversationIdentityKey(viewer);
-  if (directConversationIdentityKey(left) === viewerKey) return right;
-  if (directConversationIdentityKey(right) === viewerKey) return left;
-  return null;
+  if (!left || !right) return null
+  const viewerKey = directConversationIdentityKey(viewer)
+  if (directConversationIdentityKey(left) === viewerKey) return right
+  if (directConversationIdentityKey(right) === viewerKey) return left
+  return null
 }

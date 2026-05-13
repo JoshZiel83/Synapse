@@ -142,8 +142,7 @@ function ChiefActorPickerDialogBody({
     })
   }
 
-  const primaryLabel =
-    mode === "settings" ? "Save chief actor" : "Continue"
+  const primaryLabel = mode === "settings" ? "Save chief actor" : "Continue"
 
   return (
     <>
@@ -162,7 +161,7 @@ function ChiefActorPickerDialogBody({
 
       <div className="flex flex-col gap-4">
         <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+          <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
             value={search}
             onChange={(event) => setSearch(event.target.value)}
@@ -253,8 +252,8 @@ function ChiefActorPickerDialogBody({
                   Save as my chief actor
                 </FieldLabel>
                 <FieldDescription>
-                  Future conversations started from the dashboard home page
-                  will launch directly to this actor.
+                  Future conversations started from the dashboard home page will
+                  launch directly to this actor.
                 </FieldDescription>
               </FieldContent>
             </Field>

@@ -1,11 +1,11 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import type { ToolDefinition } from "@synapse/shared";
+import test from "node:test"
+import assert from "node:assert/strict"
+import type { ToolDefinition } from "@synapse/shared"
 import {
   classifyRelayLocalPermissionDenial,
   injectRelayAuthorizationToolParameter,
   parseRelayServerInvokeOptions,
-} from "./relay-invoke-options.js";
+} from "./relay-invoke-options.js"
 
 function baseDefinition(): ToolDefinition {
   return {
@@ -21,20 +21,20 @@ function baseDefinition(): ToolDefinition {
       },
       required: ["command"],
     },
-  };
+  }
 }
 
 test("injectRelayAuthorizationToolParameter augments builtin relay tools only", () => {
   const injected = injectRelayAuthorizationToolParameter(baseDefinition(), {
     builtinKind: "commandline",
-  });
+  })
   const untouched = injectRelayAuthorizationToolParameter(baseDefinition(), {
     builtinKind: "custom",
-  });
+  })
 
-  assert.ok(injected.parameters.properties.request_authorization);
-  assert.equal(untouched.parameters.properties.request_authorization, undefined);
-});
+  assert.ok(injected.parameters.properties.request_authorization)
+  assert.equal(untouched.parameters.properties.request_authorization, undefined)
+})
 
 test("parseRelayServerInvokeOptions strips request_authorization for eligible builtin tools", () => {
   const parsed = parseRelayServerInvokeOptions(
@@ -44,15 +44,15 @@ test("parseRelayServerInvokeOptions strips request_authorization for eligible bu
     },
     {
       builtinKind: "commandline",
-    },
-  );
+    }
+  )
 
-  assert.equal(parsed.validationError, undefined);
+  assert.equal(parsed.validationError, undefined)
   assert.deepEqual(parsed.clientToolArgs, {
     command: "python app.py",
-  });
-  assert.equal(parsed.serverInvokeOptions.requestAuthorization, "background");
-});
+  })
+  assert.equal(parsed.serverInvokeOptions.requestAuthorization, "background")
+})
 
 test("parseRelayServerInvokeOptions rejects invalid request_authorization values", () => {
   const parsed = parseRelayServerInvokeOptions(
@@ -62,15 +62,15 @@ test("parseRelayServerInvokeOptions rejects invalid request_authorization values
     },
     {
       builtinKind: "commandline",
-    },
-  );
+    }
+  )
 
-  assert.match(parsed.validationError || "", /must be one of/i);
+  assert.match(parsed.validationError || "", /must be one of/i)
   assert.deepEqual(parsed.clientToolArgs, {
     command: "python app.py",
-  });
-  assert.equal(parsed.serverInvokeOptions.requestAuthorization, "none");
-});
+  })
+  assert.equal(parsed.serverInvokeOptions.requestAuthorization, "none")
+})
 
 test("classifyRelayLocalPermissionDenial matches approvable local denial codes only", () => {
   const serverDisabled = classifyRelayLocalPermissionDenial({
@@ -83,7 +83,7 @@ test("classifyRelayLocalPermissionDenial matches approvable local denial codes o
       },
       message: "Enable it locally",
     },
-  });
+  })
   const remoteControlDisabled = classifyRelayLocalPermissionDenial({
     isError: true,
     structuredContent: {
@@ -93,9 +93,9 @@ test("classifyRelayLocalPermissionDenial matches approvable local denial codes o
         resolution: "unresolvable",
       },
     },
-  });
+  })
 
-  assert.equal(serverDisabled?.code, "server_disabled");
-  assert.equal(serverDisabled?.denial.resolution, "server_grant");
-  assert.equal(remoteControlDisabled, null);
-});
+  assert.equal(serverDisabled?.code, "server_disabled")
+  assert.equal(serverDisabled?.denial.resolution, "server_grant")
+  assert.equal(remoteControlDisabled, null)
+})

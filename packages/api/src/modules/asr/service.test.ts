@@ -1,9 +1,6 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import {
-  mapProviderError,
-  validateRealtimeAsrAudioConfig,
-} from "./service.js";
+import test from "node:test"
+import assert from "node:assert/strict"
+import { mapProviderError, validateRealtimeAsrAudioConfig } from "./service.js"
 
 test("validateRealtimeAsrAudioConfig accepts PCM/raw and OGG/opus only", () => {
   assert.deepEqual(
@@ -20,8 +17,8 @@ test("validateRealtimeAsrAudioConfig accepts PCM/raw and OGG/opus only", () => {
       rate: 16000,
       bits: 16,
       channel: 1,
-    },
-  );
+    }
+  )
 
   assert.throws(
     () =>
@@ -32,19 +29,16 @@ test("validateRealtimeAsrAudioConfig accepts PCM/raw and OGG/opus only", () => {
         bits: 16,
         channel: 1,
       }),
-    /PCM audio must use the raw codec/,
-  );
-});
+    /PCM audio must use the raw codec/
+  )
+})
 
 test("mapProviderError marks provider busy as retryable", () => {
-  assert.deepEqual(
-    mapProviderError(55000031, { message: "busy" }, "log-1"),
-    {
-      code: "ASR_PROVIDER_BUSY",
-      message: "busy",
-      retryable: true,
-      providerCode: 55000031,
-      providerLogId: "log-1",
-    },
-  );
-});
+  assert.deepEqual(mapProviderError(55000031, { message: "busy" }, "log-1"), {
+    code: "ASR_PROVIDER_BUSY",
+    message: "busy",
+    retryable: true,
+    providerCode: 55000031,
+    providerLogId: "log-1",
+  })
+})

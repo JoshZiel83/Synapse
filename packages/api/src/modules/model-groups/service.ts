@@ -1,105 +1,110 @@
-import { config } from '../../config/index.js';
+import { config } from "../../config/index.js"
 import {
   resolveModelEngineKind,
   validateModelProviderConfig,
-} from '@synapse/shared';
+} from "@synapse/shared"
 import type {
   ModelGroupGrantsGrantScope,
   ModelGroupsOwnerType,
   ModelGroupsRoutingStrategy,
-} from '../../infrastructure/database/generated/db.js';
-import { query } from '../../infrastructure/database/index.js';
-import {
-  db,
-  type TableInsert,
-} from '../../infrastructure/database/kysely.js';
+} from "../../infrastructure/database/generated/db.js"
+import { query } from "../../infrastructure/database/index.js"
+import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
 import {
   DEFAULT_MODEL_ATTEMPT_POLICY,
   DEFAULT_MODEL_ATTEMPT_TIMEOUT_MS,
-} from './defaults.js';
-import { logProviderStep, logRuntimeEvent } from '../execution/service.js';
-import { sql } from 'kysely';
+} from "./defaults.js"
+import { logProviderStep, logRuntimeEvent } from "../execution/service.js"
+import { sql } from "kysely"
 
-type JsonMap = Record<string, unknown>;
-type ModelGroupOwnerType = ModelGroupsOwnerType;
-type ModelGroupGrantScope = ModelGroupGrantsGrantScope;
+type JsonMap = Record<string, unknown>
+type ModelGroupOwnerType = ModelGroupsOwnerType
+type ModelGroupGrantScope = ModelGroupGrantsGrantScope
 
 type ModelGroupRow = {
-  id: string;
-  owner_type: ModelGroupOwnerType;
-  owner_workspace_id: string | null;
-  owner_workspace_member_id: string | null;
-  name: string;
-  description: string | null;
-  routing_strategy: ModelGroupsRoutingStrategy;
-  attempt_policy: Record<string, unknown> | null;
-  is_default: boolean;
-  is_enabled: boolean;
-  created_by_workspace_member_id: string | null;
-  created_at: string | Date;
-  updated_at: string | Date;
-};
+  id: string
+  owner_type: ModelGroupOwnerType
+  owner_workspace_id: string | null
+  owner_workspace_member_id: string | null
+  name: string
+  description: string | null
+  routing_strategy: ModelGroupsRoutingStrategy
+  attempt_policy: Record<string, unknown> | null
+  is_default: boolean
+  is_enabled: boolean
+  created_by_workspace_member_id: string | null
+  created_at: string | Date
+  updated_at: string | Date
+}
 
 type ModelGroupGrantRow = {
-  id?: string;
-  group_id?: string;
-  grant_scope: ModelGroupGrantScope;
-  workspace_id: string | null;
-  workspace_member_id: string | null;
-  actor_id: string | null;
-  status: 'active' | 'revoked';
-  granted_by_workspace_member_id?: string | null;
-  reason?: string | null;
-  created_at?: string | Date;
-  revoked_at?: string | Date | null;
-};
+  id?: string
+  group_id?: string
+  grant_scope: ModelGroupGrantScope
+  workspace_id: string | null
+  workspace_member_id: string | null
+  actor_id: string | null
+  status: "active" | "revoked"
+  granted_by_workspace_member_id?: string | null
+  reason?: string | null
+  created_at?: string | Date
+  revoked_at?: string | Date | null
+}
 
 export class ModelGroupError extends Error {
-  constructor(public statusCode: number, message: string) {
-    super(message);
+  constructor(
+    public statusCode: number,
+    message: string
+  ) {
+    super(message)
   }
 }
 
 function asObject(value: unknown): JsonMap {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) return {};
-  return value as JsonMap;
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {}
+  return value as JsonMap
 }
 
 function toIsoString(value: string | Date | null | undefined) {
-  if (!value) return null;
-  return value instanceof Date ? value.toISOString() : value;
+  if (!value) return null
+  return value instanceof Date ? value.toISOString() : value
 }
 
-function withEngineKind(extraConfig: JsonMap | undefined, engineKind?: string): JsonMap | undefined {
-  const next = { ...(extraConfig || {}) };
+function withEngineKind(
+  extraConfig: JsonMap | undefined,
+  engineKind?: string
+): JsonMap | undefined {
+  const next = { ...(extraConfig || {}) }
   if (engineKind) {
-    next.engine_kind = engineKind;
+    next.engine_kind = engineKind
   }
-  return Object.keys(next).length > 0 ? next : undefined;
+  return Object.keys(next).length > 0 ? next : undefined
 }
 
 function assertValidModelRevisionInput(input: {
-  providerType: string;
-  engineKind?: string;
-  modelName: string;
-  maxTokens?: number;
-  extraConfig?: JsonMap;
+  providerType: string
+  engineKind?: string
+  modelName: string
+  maxTokens?: number
+  extraConfig?: JsonMap
 }) {
-  const engineKind = input.engineKind || resolveModelEngineKind(input.providerType, input.extraConfig);
+  const engineKind =
+    input.engineKind ||
+    resolveModelEngineKind(input.providerType, input.extraConfig)
   const issues = validateModelProviderConfig({
     providerType: input.providerType,
     engineKind,
     modelName: input.modelName,
     maxTokens: input.maxTokens,
-  });
+  })
 
   if (issues.length > 0) {
-    throw new ModelGroupError(400, issues[0].message);
+    throw new ModelGroupError(400, issues[0].message)
   }
 
   return {
     engineKind,
-  };
+  }
 }
 
 function mapGroupRow(row: ModelGroupRow) {
@@ -111,7 +116,7 @@ function mapGroupRow(row: ModelGroupRow) {
     workspace_id: row.owner_workspace_id,
     scope: row.owner_type,
     name: row.name,
-    description: row.description || '',
+    description: row.description || "",
     routing_strategy: row.routing_strategy,
     attempt_policy: asObject(row.attempt_policy),
     is_default: Boolean(row.is_default),
@@ -119,12 +124,15 @@ function mapGroupRow(row: ModelGroupRow) {
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || null,
     created_at: toIsoString(row.created_at),
     updated_at: toIsoString(row.updated_at),
-  };
+  }
 }
 
 function mapGroupItem(row: any) {
-  const extraConfig = asObject(row.extra_config);
-  const engineKind = resolveModelEngineKind(row.provider_type || 'anthropic', extraConfig);
+  const extraConfig = asObject(row.extra_config)
+  const engineKind = resolveModelEngineKind(
+    row.provider_type || "anthropic",
+    extraConfig
+  )
 
   return {
     id: row.item_id ?? row.id,
@@ -147,10 +155,12 @@ function mapGroupItem(row: any) {
     max_retries: row.max_retries ?? null,
     created_at: row.created_at,
     updated_at: row.updated_at,
-  };
+  }
 }
 
-function mapGrantRow(row: ModelGroupGrantRow & { id: string; group_id: string }) {
+function mapGrantRow(
+  row: ModelGroupGrantRow & { id: string; group_id: string }
+) {
   return {
     id: row.id,
     group_id: row.group_id,
@@ -159,87 +169,92 @@ function mapGrantRow(row: ModelGroupGrantRow & { id: string; group_id: string })
     workspace_member_id: row.workspace_member_id,
     actor_id: row.actor_id,
     status: row.status,
-    grantedByWorkspaceMemberId:
-      row.granted_by_workspace_member_id || null,
+    grantedByWorkspaceMemberId: row.granted_by_workspace_member_id || null,
     reason: row.reason || null,
     created_at: toIsoString(row.created_at),
     revoked_at: toIsoString(row.revoked_at),
-  };
+  }
 }
 
 async function clearExistingDefault(
   ownerType: ModelGroupOwnerType,
   ownerWorkspaceId?: string | null,
-  ownerWorkspaceMemberId?: string | null,
+  ownerWorkspaceMemberId?: string | null
 ) {
-  if (ownerType === 'platform') {
+  if (ownerType === "platform") {
     await db
-      .updateTable('model_groups')
+      .updateTable("model_groups")
       .set({
         is_default: false,
       })
-      .where('owner_type', '=', 'platform')
-      .where('is_default', '=', true)
-      .execute();
-    return;
+      .where("owner_type", "=", "platform")
+      .where("is_default", "=", true)
+      .execute()
+    return
   }
 
-  if (ownerType === 'workspace') {
+  if (ownerType === "workspace") {
     if (!ownerWorkspaceId) {
-      throw new ModelGroupError(400, 'ownerWorkspaceId is required for workspace defaults');
+      throw new ModelGroupError(
+        400,
+        "ownerWorkspaceId is required for workspace defaults"
+      )
     }
     await db
-      .updateTable('model_groups')
+      .updateTable("model_groups")
       .set({
         is_default: false,
       })
-      .where('owner_type', '=', 'workspace')
-      .where('owner_workspace_id', '=', ownerWorkspaceId)
-      .where('is_default', '=', true)
-      .execute();
-    return;
+      .where("owner_type", "=", "workspace")
+      .where("owner_workspace_id", "=", ownerWorkspaceId)
+      .where("is_default", "=", true)
+      .execute()
+    return
   }
 
   if (!ownerWorkspaceMemberId) {
-    throw new ModelGroupError(400, 'ownerWorkspaceMemberId is required for workspace_member defaults');
+    throw new ModelGroupError(
+      400,
+      "ownerWorkspaceMemberId is required for workspace_member defaults"
+    )
   }
   await db
-    .updateTable('model_groups')
+    .updateTable("model_groups")
     .set({
       is_default: false,
     })
-    .where('owner_type', '=', 'workspace_member')
-      .where('owner_workspace_member_id', '=', ownerWorkspaceMemberId)
-      .where('is_default', '=', true)
-      .execute();
+    .where("owner_type", "=", "workspace_member")
+    .where("owner_workspace_member_id", "=", ownerWorkspaceMemberId)
+    .where("is_default", "=", true)
+    .execute()
 }
 
 async function getGroupRow(groupId: string) {
   const row = (await db
-    .selectFrom('model_groups')
+    .selectFrom("model_groups")
     .selectAll()
-    .where('id', '=', groupId)
+    .where("id", "=", groupId)
     .limit(1)
-    .executeTakeFirst()) as ModelGroupRow | undefined;
+    .executeTakeFirst()) as ModelGroupRow | undefined
   if (!row) {
-    throw new ModelGroupError(404, 'Model group not found');
+    throw new ModelGroupError(404, "Model group not found")
   }
-  return row;
+  return row
 }
 
 async function createProfileRevision(input: {
-  profileId: string;
-  version: number;
-  providerType: string;
-  engineKind?: string;
-  apiKey: string;
-  baseUrl: string;
-  modelName: string;
-  maxTokens?: number;
-  capabilityTags?: string[];
-  extraConfig?: JsonMap;
-  requestTimeoutMs?: number;
-  maxRetries?: number;
+  profileId: string
+  version: number
+  providerType: string
+  engineKind?: string
+  apiKey: string
+  baseUrl: string
+  modelName: string
+  maxTokens?: number
+  capabilityTags?: string[]
+  extraConfig?: JsonMap
+  requestTimeoutMs?: number
+  maxRetries?: number
 }) {
   const validated = assertValidModelRevisionInput({
     providerType: input.providerType,
@@ -247,11 +262,11 @@ async function createProfileRevision(input: {
     modelName: input.modelName,
     maxTokens: input.maxTokens,
     extraConfig: input.extraConfig,
-  });
-  const effectiveMaxTokens = input.maxTokens ?? 4096;
+  })
+  const effectiveMaxTokens = input.maxTokens ?? 4096
 
   return db
-    .insertInto('model_profile_revisions')
+    .insertInto("model_profile_revisions")
     .values({
       profile_id: input.profileId,
       version: input.version,
@@ -261,13 +276,13 @@ async function createProfileRevision(input: {
       model_name: input.modelName,
       max_tokens: effectiveMaxTokens,
       capability_tags: input.capabilityTags || [],
-      extra_config:
-        (withEngineKind(input.extraConfig, validated.engineKind) || {}) as TableInsert<'model_profile_revisions'>['extra_config'],
+      extra_config: (withEngineKind(input.extraConfig, validated.engineKind) ||
+        {}) as TableInsert<"model_profile_revisions">["extra_config"],
       request_timeout_ms: input.requestTimeoutMs ?? null,
       max_retries: input.maxRetries ?? null,
     })
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirstOrThrow()
 }
 
 async function createDefaultGroupGrant(
@@ -275,174 +290,189 @@ async function createDefaultGroupGrant(
   ownerType: ModelGroupOwnerType,
   ownerWorkspaceId?: string | null,
   ownerWorkspaceMemberId?: string | null,
-  grantedByWorkspaceMemberId?: string | null,
+  grantedByWorkspaceMemberId?: string | null
 ) {
   return (await db
-    .insertInto('model_group_grants')
+    .insertInto("model_group_grants")
     .values({
       group_id: groupId,
       grant_scope:
-        ownerType === 'platform'
-          ? 'platform'
-          : ownerType === 'workspace'
-            ? 'workspace'
-            : 'workspace_member',
-      workspace_id: ownerType === 'workspace' ? ownerWorkspaceId || null : null,
+        ownerType === "platform"
+          ? "platform"
+          : ownerType === "workspace"
+            ? "workspace"
+            : "workspace_member",
+      workspace_id: ownerType === "workspace" ? ownerWorkspaceId || null : null,
       workspace_member_id:
-        ownerType === 'workspace_member'
+        ownerType === "workspace_member"
           ? ownerWorkspaceMemberId || null
           : null,
       actor_id: null,
-      status: 'active',
-      granted_by_workspace_member_id:
-        grantedByWorkspaceMemberId || null,
-      reason: 'default_group_scope',
+      status: "active",
+      granted_by_workspace_member_id: grantedByWorkspaceMemberId || null,
+      reason: "default_group_scope",
     })
     .returningAll()
-    .executeTakeFirstOrThrow()) as ModelGroupGrantRow;
+    .executeTakeFirstOrThrow()) as ModelGroupGrantRow
 }
 
 async function ensureWorkspaceExists(workspaceId: string) {
   const row = await db
-    .selectFrom('workspaces')
-    .select('id')
-    .where('id', '=', workspaceId)
+    .selectFrom("workspaces")
+    .select("id")
+    .where("id", "=", workspaceId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row) {
-    throw new ModelGroupError(404, 'Workspace not found');
+    throw new ModelGroupError(404, "Workspace not found")
   }
 }
 
-async function ensureWorkspaceMember(workspaceMemberId: string, workspaceId?: string) {
+async function ensureWorkspaceMember(
+  workspaceMemberId: string,
+  workspaceId?: string
+) {
   const row = await db
-    .selectFrom('workspace_members')
-    .select(['id', 'workspace_id'])
-    .where('id', '=', workspaceMemberId)
+    .selectFrom("workspace_members")
+    .select(["id", "workspace_id"])
+    .where("id", "=", workspaceMemberId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row || (workspaceId && row.workspace_id !== workspaceId)) {
-    throw new ModelGroupError(400, 'Workspace member is not valid for the target workspace');
+    throw new ModelGroupError(
+      400,
+      "Workspace member is not valid for the target workspace"
+    )
   }
 }
 
 async function ensureActorInWorkspace(actorId: string, workspaceId: string) {
   const row = await db
-    .selectFrom('actors')
-    .select('id')
-    .where('id', '=', actorId)
-    .where('workspace_id', '=', workspaceId)
+    .selectFrom("actors")
+    .select("id")
+    .where("id", "=", actorId)
+    .where("workspace_id", "=", workspaceId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row) {
-    throw new ModelGroupError(404, 'Actor not found');
+    throw new ModelGroupError(404, "Actor not found")
   }
 }
 
 async function validateGrantTarget(input: {
-  grantScope: ModelGroupGrantScope;
-  workspaceId?: string;
-  workspaceMemberId?: string;
-  actorId?: string;
+  grantScope: ModelGroupGrantScope
+  workspaceId?: string
+  workspaceMemberId?: string
+  actorId?: string
 }) {
   switch (input.grantScope) {
-    case 'platform':
-      return;
-    case 'workspace':
+    case "platform":
+      return
+    case "workspace":
       if (!input.workspaceId) {
-        throw new ModelGroupError(400, 'workspaceId is required for workspace grants');
+        throw new ModelGroupError(
+          400,
+          "workspaceId is required for workspace grants"
+        )
       }
-      await ensureWorkspaceExists(input.workspaceId);
-      return;
-    case 'workspace_member':
+      await ensureWorkspaceExists(input.workspaceId)
+      return
+    case "workspace_member":
       if (!input.workspaceMemberId) {
-        throw new ModelGroupError(400, 'workspaceMemberId is required for workspace_member grants');
+        throw new ModelGroupError(
+          400,
+          "workspaceMemberId is required for workspace_member grants"
+        )
       }
-      await ensureWorkspaceMember(input.workspaceMemberId, input.workspaceId);
-      return;
-    case 'actor':
+      await ensureWorkspaceMember(input.workspaceMemberId, input.workspaceId)
+      return
+    case "actor":
       if (!input.workspaceId || !input.actorId) {
-        throw new ModelGroupError(400, 'workspaceId and actorId are required for actor grants');
+        throw new ModelGroupError(
+          400,
+          "workspaceId and actorId are required for actor grants"
+        )
       }
-      await ensureWorkspaceExists(input.workspaceId);
-      await ensureActorInWorkspace(input.actorId, input.workspaceId);
-      return;
+      await ensureWorkspaceExists(input.workspaceId)
+      await ensureActorInWorkspace(input.actorId, input.workspaceId)
+      return
     default:
-      return;
+      return
   }
 }
 
-async function ensureNoDuplicateActiveGrant(groupId: string, input: {
-  grantScope: ModelGroupGrantScope;
-  workspaceId?: string;
-  workspaceMemberId?: string;
-  actorId?: string;
-}) {
+async function ensureNoDuplicateActiveGrant(
+  groupId: string,
+  input: {
+    grantScope: ModelGroupGrantScope
+    workspaceId?: string
+    workspaceMemberId?: string
+    actorId?: string
+  }
+) {
   const row = await db
-    .selectFrom('model_group_grants')
-    .select('group_id')
-    .where('group_id', '=', groupId)
-    .where('status', '=', 'active')
-    .where('grant_scope', '=', input.grantScope)
+    .selectFrom("model_group_grants")
+    .select("group_id")
+    .where("group_id", "=", groupId)
+    .where("status", "=", "active")
+    .where("grant_scope", "=", input.grantScope)
     .where(
-      sql<boolean>`workspace_id IS NOT DISTINCT FROM ${input.workspaceId || null}::uuid`,
+      sql<boolean>`workspace_id IS NOT DISTINCT FROM ${input.workspaceId || null}::uuid`
     )
     .where(
-      sql<boolean>`workspace_member_id IS NOT DISTINCT FROM ${input.workspaceMemberId || null}::uuid`,
+      sql<boolean>`workspace_member_id IS NOT DISTINCT FROM ${input.workspaceMemberId || null}::uuid`
     )
     .where(
-      sql<boolean>`actor_id IS NOT DISTINCT FROM ${input.actorId || null}::uuid`,
+      sql<boolean>`actor_id IS NOT DISTINCT FROM ${input.actorId || null}::uuid`
     )
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (row) {
-    throw new ModelGroupError(409, 'An identical active grant already exists');
+    throw new ModelGroupError(409, "An identical active grant already exists")
   }
 }
 
 export async function listPlatformModelGroups() {
   const result = await db
-    .selectFrom('model_groups')
+    .selectFrom("model_groups")
     .selectAll()
-    .where('owner_type', '=', 'platform')
-    .where('is_enabled', '=', true)
-    .orderBy('is_default', 'desc')
-    .orderBy('name')
-    .execute();
-  return result.map((row) => mapGroupRow(row as ModelGroupRow));
+    .where("owner_type", "=", "platform")
+    .where("is_enabled", "=", true)
+    .orderBy("is_default", "desc")
+    .orderBy("name")
+    .execute()
+  return result.map((row) => mapGroupRow(row as ModelGroupRow))
 }
 
 export async function listWorkspaceModelGroups(workspaceId: string) {
   const result = await db
-    .selectFrom('model_groups as mg')
+    .selectFrom("model_groups as mg")
     .distinct()
-    .leftJoin('model_group_grants as mgg', (join) =>
-      join
-        .onRef('mgg.group_id', '=', 'mg.id')
-        .on('mgg.status', '=', 'active'),
+    .leftJoin("model_group_grants as mgg", (join) =>
+      join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
     )
-    .selectAll('mg')
+    .selectAll("mg")
     .select(
       sql<number>`CASE mg.owner_type
         WHEN 'workspace' THEN 0
         WHEN 'platform' THEN 1
         ELSE 2
-      END`.as('owner_rank'),
+      END`.as("owner_rank")
     )
-    .where('mg.is_enabled', '=', true)
+    .where("mg.is_enabled", "=", true)
     .where((eb) =>
       eb.or([
         eb.and([
-          eb('mg.owner_type', '=', 'workspace'),
-          eb('mg.owner_workspace_id', '=', workspaceId),
+          eb("mg.owner_type", "=", "workspace"),
+          eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb('mgg.grant_scope', '=', 'platform'),
+        eb("mgg.grant_scope", "=", "platform"),
         eb.and([
-          eb('mgg.grant_scope', '=', 'workspace'),
-          eb('mgg.workspace_id', '=', workspaceId),
+          eb("mgg.grant_scope", "=", "workspace"),
+          eb("mgg.workspace_id", "=", workspaceId),
         ]),
         eb.and([
-          eb('mgg.grant_scope', '=', 'workspace_member'),
+          eb("mgg.grant_scope", "=", "workspace_member"),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM workspace_members wm
@@ -451,107 +481,120 @@ export async function listWorkspaceModelGroups(workspaceId: string) {
           )`,
         ]),
         eb.and([
-          eb('mgg.grant_scope', '=', 'actor'),
-          eb('mgg.workspace_id', '=', workspaceId),
+          eb("mgg.grant_scope", "=", "actor"),
+          eb("mgg.workspace_id", "=", workspaceId),
         ]),
-      ]),
+      ])
     )
-    .orderBy('owner_rank')
-    .orderBy('mg.is_default', 'desc')
-    .orderBy('mg.name')
-    .execute();
-  return result.map((row) => mapGroupRow(row as ModelGroupRow));
+    .orderBy("owner_rank")
+    .orderBy("mg.is_default", "desc")
+    .orderBy("mg.name")
+    .execute()
+  return result.map((row) => mapGroupRow(row as ModelGroupRow))
 }
 
-export async function listWorkspaceMemberOwnedModelGroups(workspaceMemberId: string) {
+export async function listWorkspaceMemberOwnedModelGroups(
+  workspaceMemberId: string
+) {
   const result = await db
-    .selectFrom('model_groups')
+    .selectFrom("model_groups")
     .selectAll()
-    .where('owner_type', '=', 'workspace_member')
-    .where('owner_workspace_member_id', '=', workspaceMemberId)
-    .where('is_enabled', '=', true)
-    .orderBy('is_default', 'desc')
-    .orderBy('name')
-    .execute();
-  return result.map((row) => mapGroupRow(row as ModelGroupRow));
+    .where("owner_type", "=", "workspace_member")
+    .where("owner_workspace_member_id", "=", workspaceMemberId)
+    .where("is_enabled", "=", true)
+    .orderBy("is_default", "desc")
+    .orderBy("name")
+    .execute()
+  return result.map((row) => mapGroupRow(row as ModelGroupRow))
 }
 
 export async function listModelGroups(workspaceId: string | null) {
-  return workspaceId ? listWorkspaceModelGroups(workspaceId) : listPlatformModelGroups();
+  return workspaceId
+    ? listWorkspaceModelGroups(workspaceId)
+    : listPlatformModelGroups()
 }
 
 export async function getModelGroup(groupId: string) {
-  const group = await getGroupRow(groupId);
+  const group = await getGroupRow(groupId)
 
   const [itemsResult, grantsResult] = await Promise.all([
     db
-      .selectFrom('model_group_profiles as mgp')
-      .innerJoin('model_profiles as mp', 'mp.id', 'mgp.profile_id')
-      .leftJoin('model_profile_revisions as r', 'r.id', 'mp.current_revision_id')
+      .selectFrom("model_group_profiles as mgp")
+      .innerJoin("model_profiles as mp", "mp.id", "mgp.profile_id")
+      .leftJoin(
+        "model_profile_revisions as r",
+        "r.id",
+        "mp.current_revision_id"
+      )
       .select([
-        'mgp.id as item_id',
-        'mgp.group_id',
-        'mgp.priority',
-        'mgp.weight',
-        'mgp.is_enabled as item_enabled',
-        'mgp.created_at',
-        'mgp.updated_at',
-        'mp.id as profile_id',
-        'mp.display_name',
-        'mp.current_revision_id',
-        'r.version',
-        'r.provider_type',
-        'r.base_url',
-        'r.model_name',
-        'r.max_tokens',
-        'r.capability_tags',
-        'r.extra_config',
-        'r.request_timeout_ms',
-        'r.max_retries',
+        "mgp.id as item_id",
+        "mgp.group_id",
+        "mgp.priority",
+        "mgp.weight",
+        "mgp.is_enabled as item_enabled",
+        "mgp.created_at",
+        "mgp.updated_at",
+        "mp.id as profile_id",
+        "mp.display_name",
+        "mp.current_revision_id",
+        "r.version",
+        "r.provider_type",
+        "r.base_url",
+        "r.model_name",
+        "r.max_tokens",
+        "r.capability_tags",
+        "r.extra_config",
+        "r.request_timeout_ms",
+        "r.max_retries",
       ])
-      .where('mgp.group_id', '=', groupId)
-      .orderBy('mgp.priority', 'asc')
-      .orderBy('mp.display_name')
+      .where("mgp.group_id", "=", groupId)
+      .orderBy("mgp.priority", "asc")
+      .orderBy("mp.display_name")
       .execute(),
     db
-      .selectFrom('model_group_grants')
+      .selectFrom("model_group_grants")
       .selectAll()
-      .where('group_id', '=', groupId)
-      .orderBy('created_at', 'desc')
+      .where("group_id", "=", groupId)
+      .orderBy("created_at", "desc")
       .execute(),
-  ]);
+  ])
 
   return {
     ...mapGroupRow(group),
     items: itemsResult.map(mapGroupItem),
-    grants: (grantsResult as Array<ModelGroupGrantRow & { id: string; group_id: string }>).map(mapGrantRow),
-  };
+    grants: (
+      grantsResult as Array<
+        ModelGroupGrantRow & { id: string; group_id: string }
+      >
+    ).map(mapGrantRow),
+  }
 }
 
-export async function isModelGroupAvailableInWorkspace(groupId: string, workspaceId: string) {
+export async function isModelGroupAvailableInWorkspace(
+  groupId: string,
+  workspaceId: string
+) {
   const row = await db
-    .selectFrom('model_groups as mg')
-    .leftJoin('model_group_grants as mgg', (join) =>
-      join
-        .onRef('mgg.group_id', '=', 'mg.id')
-        .on('mgg.status', '=', 'active'),
+    .selectFrom("model_groups as mg")
+    .leftJoin("model_group_grants as mgg", (join) =>
+      join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
     )
-    .select('mg.id')
-    .where('mg.id', '=', groupId)
-    .where('mg.is_enabled', '=', true)
+    .select("mg.id")
+    .where("mg.id", "=", groupId)
+    .where("mg.is_enabled", "=", true)
     .where((eb) =>
       eb.or([
         eb.and([
-          eb('mg.owner_type', '=', 'workspace'),
-          eb('mg.owner_workspace_id', '=', workspaceId),
+          eb("mg.owner_type", "=", "workspace"),
+          eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb('mgg.grant_scope', '=', 'platform'),
+        eb("mgg.grant_scope", "=", "platform"),
         eb.and([
-          eb('mgg.grant_scope', '=', 'workspace'),
-          eb('mgg.workspace_id', '=', workspaceId),
+          eb("mgg.grant_scope", "=", "workspace"),
+          eb("mgg.workspace_id", "=", workspaceId),
         ]),
         eb.and([
-          eb('mgg.grant_scope', '=', 'workspace_member'),
+          eb("mgg.grant_scope", "=", "workspace_member"),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM workspace_members wm
@@ -560,214 +603,227 @@ export async function isModelGroupAvailableInWorkspace(groupId: string, workspac
           )`,
         ]),
         eb.and([
-          eb('mgg.grant_scope', '=', 'actor'),
-          eb('mgg.workspace_id', '=', workspaceId),
+          eb("mgg.grant_scope", "=", "actor"),
+          eb("mgg.workspace_id", "=", workspaceId),
         ]),
-      ]),
+      ])
     )
     .limit(1)
-    .executeTakeFirst();
-  return Boolean(row);
+    .executeTakeFirst()
+  return Boolean(row)
 }
 
 export async function createModelGroup(data: {
-  ownerType?: ModelGroupOwnerType;
-  workspaceId?: string;
-  ownerWorkspaceMemberId?: string;
-  name: string;
-  description?: string;
-  routingStrategy?: ModelGroupsRoutingStrategy;
-  attemptPolicy?: JsonMap;
-  isDefault?: boolean;
-  createdByWorkspaceMemberId?: string;
+  ownerType?: ModelGroupOwnerType
+  workspaceId?: string
+  ownerWorkspaceMemberId?: string
+  name: string
+  description?: string
+  routingStrategy?: ModelGroupsRoutingStrategy
+  attemptPolicy?: JsonMap
+  isDefault?: boolean
+  createdByWorkspaceMemberId?: string
 }) {
   const ownerType =
-    data.ownerType
-    || (data.workspaceId
-      ? 'workspace'
+    data.ownerType ||
+    (data.workspaceId
+      ? "workspace"
       : data.ownerWorkspaceMemberId
-        ? 'workspace_member'
-        : 'platform');
+        ? "workspace_member"
+        : "platform")
 
-  if (ownerType === 'workspace' && !data.workspaceId) {
-    throw new ModelGroupError(400, 'workspaceId is required for workspace-owned groups');
+  if (ownerType === "workspace" && !data.workspaceId) {
+    throw new ModelGroupError(
+      400,
+      "workspaceId is required for workspace-owned groups"
+    )
   }
-  if (ownerType === 'workspace_member' && !data.ownerWorkspaceMemberId) {
-    throw new ModelGroupError(400, 'ownerWorkspaceMemberId is required for workspace_member-owned groups');
+  if (ownerType === "workspace_member" && !data.ownerWorkspaceMemberId) {
+    throw new ModelGroupError(
+      400,
+      "ownerWorkspaceMemberId is required for workspace_member-owned groups"
+    )
   }
 
   if (data.isDefault) {
     await clearExistingDefault(
       ownerType,
       data.workspaceId || null,
-      data.ownerWorkspaceMemberId || null,
-    );
+      data.ownerWorkspaceMemberId || null
+    )
   }
 
   const row = (await db
-    .insertInto('model_groups')
+    .insertInto("model_groups")
     .values({
       owner_type: ownerType,
-      owner_workspace_id: ownerType === 'workspace' ? data.workspaceId || null : null,
+      owner_workspace_id:
+        ownerType === "workspace" ? data.workspaceId || null : null,
       owner_workspace_member_id:
-        ownerType === 'workspace_member'
+        ownerType === "workspace_member"
           ? data.ownerWorkspaceMemberId || null
           : null,
       name: data.name,
-      description: data.description || '',
-      routing_strategy: data.routingStrategy || 'priority_failover',
-      attempt_policy:
-        (data.attemptPolicy || {}) as TableInsert<'model_groups'>['attempt_policy'],
+      description: data.description || "",
+      routing_strategy: data.routingStrategy || "priority_failover",
+      attempt_policy: (data.attemptPolicy ||
+        {}) as TableInsert<"model_groups">["attempt_policy"],
       is_default: data.isDefault || false,
       is_enabled: true,
-      created_by_workspace_member_id:
-        data.createdByWorkspaceMemberId || null,
+      created_by_workspace_member_id: data.createdByWorkspaceMemberId || null,
     })
     .returningAll()
-    .executeTakeFirstOrThrow()) as ModelGroupRow;
+    .executeTakeFirstOrThrow()) as ModelGroupRow
   await createDefaultGroupGrant(
     row.id,
     row.owner_type,
     row.owner_workspace_id,
     row.owner_workspace_member_id,
-    data.createdByWorkspaceMemberId || null,
-  );
+    data.createdByWorkspaceMemberId || null
+  )
 
-  return mapGroupRow(row);
+  return mapGroupRow(row)
 }
 
-export async function updateModelGroup(groupId: string, data: {
-  name?: string;
-  description?: string;
-  routingStrategy?: ModelGroupsRoutingStrategy;
-  attemptPolicy?: JsonMap;
-  isDefault?: boolean;
-  isActive?: boolean;
-}) {
-  const group = await getGroupRow(groupId);
+export async function updateModelGroup(
+  groupId: string,
+  data: {
+    name?: string
+    description?: string
+    routingStrategy?: ModelGroupsRoutingStrategy
+    attemptPolicy?: JsonMap
+    isDefault?: boolean
+    isActive?: boolean
+  }
+) {
+  const group = await getGroupRow(groupId)
 
   if (data.isDefault === true && data.isActive !== false) {
     await clearExistingDefault(
       group.owner_type,
       group.owner_workspace_id,
-      group.owner_workspace_member_id,
-    );
+      group.owner_workspace_member_id
+    )
   }
 
   const updateData: Record<string, unknown> = {
     updated_at: sql`NOW()`,
-  };
+  }
 
   if (data.name !== undefined) {
-    updateData.name = data.name;
+    updateData.name = data.name
   }
   if (data.description !== undefined) {
-    updateData.description = data.description;
+    updateData.description = data.description
   }
   if (data.routingStrategy !== undefined) {
-    updateData.routing_strategy = data.routingStrategy;
+    updateData.routing_strategy = data.routingStrategy
   }
   if (data.attemptPolicy !== undefined) {
     updateData.attempt_policy =
-      data.attemptPolicy as TableInsert<'model_groups'>['attempt_policy'];
+      data.attemptPolicy as TableInsert<"model_groups">["attempt_policy"]
   }
   if (data.isDefault !== undefined) {
-    updateData.is_default = data.isDefault;
+    updateData.is_default = data.isDefault
   }
   if (data.isActive !== undefined) {
-    updateData.is_enabled = data.isActive;
+    updateData.is_enabled = data.isActive
   }
   if (data.isActive === false) {
-    updateData.is_default = false;
+    updateData.is_default = false
   }
 
   if (Object.keys(updateData).length === 1) {
-    return getModelGroup(groupId);
+    return getModelGroup(groupId)
   }
 
   const updatedRow = (await db
-    .updateTable('model_groups')
+    .updateTable("model_groups")
     .set(updateData as any)
-    .where('id', '=', groupId)
+    .where("id", "=", groupId)
     .returningAll()
-    .executeTakeFirst()) as ModelGroupRow | undefined;
+    .executeTakeFirst()) as ModelGroupRow | undefined
   if (!updatedRow) {
-    throw new ModelGroupError(404, 'Model group not found');
+    throw new ModelGroupError(404, "Model group not found")
   }
 
-  return mapGroupRow(updatedRow);
+  return mapGroupRow(updatedRow)
 }
 
 export async function deleteModelGroup(groupId: string) {
   await db
-    .updateTable('model_groups')
+    .updateTable("model_groups")
     .set({
       is_enabled: false,
       is_default: false,
       updated_at: sql`NOW()`,
     })
-    .where('id', '=', groupId)
-    .execute();
+    .where("id", "=", groupId)
+    .execute()
   await db
-    .updateTable('model_group_profiles')
+    .updateTable("model_group_profiles")
     .set({
       is_enabled: false,
       updated_at: sql`NOW()`,
     })
-    .where('group_id', '=', groupId)
-    .execute();
+    .where("group_id", "=", groupId)
+    .execute()
   await db
-    .updateTable('model_profiles')
+    .updateTable("model_profiles")
     .set({
       is_enabled: false,
       updated_at: sql`NOW()`,
     })
     .where(
-      'id',
-      'in',
+      "id",
+      "in",
       db
-        .selectFrom('model_group_profiles')
-        .select('profile_id')
-        .where('group_id', '=', groupId),
+        .selectFrom("model_group_profiles")
+        .select("profile_id")
+        .where("group_id", "=", groupId)
     )
-    .execute();
+    .execute()
   await db
-    .deleteFrom('actor_model_group_assignments')
-    .where('group_id', '=', groupId)
-    .execute();
+    .deleteFrom("actor_model_group_assignments")
+    .where("group_id", "=", groupId)
+    .execute()
 }
 
-export async function addModelItem(groupId: string, data: {
-  displayName: string;
-  priority?: number;
-  weight?: number;
-  providerType: string;
-  engineKind?: string;
-  apiKey: string;
-  baseUrl: string;
-  modelName: string;
-  maxTokens?: number;
-  capabilityTags?: string[];
-  extraConfig?: JsonMap;
-  requestTimeoutMs?: number;
-  maxRetries?: number;
-  installedByWorkspaceMemberId?: string;
-}) {
-  const group = await getGroupRow(groupId);
+export async function addModelItem(
+  groupId: string,
+  data: {
+    displayName: string
+    priority?: number
+    weight?: number
+    providerType: string
+    engineKind?: string
+    apiKey: string
+    baseUrl: string
+    modelName: string
+    maxTokens?: number
+    capabilityTags?: string[]
+    extraConfig?: JsonMap
+    requestTimeoutMs?: number
+    maxRetries?: number
+    installedByWorkspaceMemberId?: string
+  }
+) {
+  const group = await getGroupRow(groupId)
 
   const profile = await db
-    .insertInto('model_profiles')
+    .insertInto("model_profiles")
     .values({
-      workspace_id: group.owner_type === 'workspace' ? group.owner_workspace_id : null,
+      workspace_id:
+        group.owner_type === "workspace" ? group.owner_workspace_id : null,
       display_name: data.displayName,
       is_enabled: true,
       installed_by_workspace_member_id:
-        data.installedByWorkspaceMemberId
-        || group.created_by_workspace_member_id
-        || null,
+        data.installedByWorkspaceMemberId ||
+        group.created_by_workspace_member_id ||
+        null,
     })
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirstOrThrow()
 
   const revision = await createProfileRevision({
     profileId: profile.id as string,
@@ -782,19 +838,19 @@ export async function addModelItem(groupId: string, data: {
     extraConfig: data.extraConfig,
     requestTimeoutMs: data.requestTimeoutMs,
     maxRetries: data.maxRetries,
-  });
+  })
 
   await db
-    .updateTable('model_profiles')
+    .updateTable("model_profiles")
     .set({
       current_revision_id: revision.id,
       updated_at: sql`NOW()`,
     })
-    .where('id', '=', profile.id)
-    .execute();
+    .where("id", "=", profile.id)
+    .execute()
 
   const item = await db
-    .insertInto('model_group_profiles')
+    .insertInto("model_group_profiles")
     .values({
       group_id: groupId,
       profile_id: profile.id,
@@ -803,7 +859,7 @@ export async function addModelItem(groupId: string, data: {
       is_enabled: true,
     })
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirstOrThrow()
 
   return mapGroupItem({
     ...item,
@@ -820,103 +876,107 @@ export async function addModelItem(groupId: string, data: {
     extra_config: revision.extra_config,
     request_timeout_ms: revision.request_timeout_ms,
     max_retries: revision.max_retries,
-  });
+  })
 }
 
-export async function updateModelItem(groupId: string, itemId: string, data: {
-  displayName?: string;
-  priority?: number;
-  weight?: number;
-  isEnabled?: boolean;
-  providerType?: string;
-  engineKind?: string;
-  apiKey?: string;
-  baseUrl?: string;
-  modelName?: string;
-  maxTokens?: number;
-  capabilityTags?: string[];
-  extraConfig?: JsonMap;
-  requestTimeoutMs?: number;
-  maxRetries?: number;
-}) {
-  const item = await db
-    .selectFrom('model_group_profiles as mgp')
-    .innerJoin('model_groups as mg', 'mg.id', 'mgp.group_id')
-    .innerJoin('model_profiles as mp', 'mp.id', 'mgp.profile_id')
-    .leftJoin('model_profile_revisions as r', 'r.id', 'mp.current_revision_id')
-    .select([
-      'mgp.id as item_id',
-      'mgp.group_id',
-      'mgp.priority',
-      'mgp.weight',
-      'mgp.is_enabled as item_enabled',
-      'mp.id as profile_id',
-      'mp.workspace_id as profile_workspace_id',
-      'mp.display_name',
-      'mp.current_revision_id',
-      'mp.is_enabled as profile_enabled',
-      'mp.installed_by_workspace_member_id',
-      'mg.is_enabled as group_enabled',
-      'r.version',
-      'r.provider_type',
-      'r.api_key',
-      'r.base_url',
-      'r.model_name',
-      'r.max_tokens',
-      'r.capability_tags',
-      'r.extra_config',
-      'r.request_timeout_ms',
-      'r.max_retries',
-    ])
-    .where('mgp.id', '=', itemId)
-    .where('mgp.group_id', '=', groupId)
-    .limit(1)
-    .executeTakeFirst();
-  if (!item) {
-    throw new ModelGroupError(404, 'Model group item not found');
+export async function updateModelItem(
+  groupId: string,
+  itemId: string,
+  data: {
+    displayName?: string
+    priority?: number
+    weight?: number
+    isEnabled?: boolean
+    providerType?: string
+    engineKind?: string
+    apiKey?: string
+    baseUrl?: string
+    modelName?: string
+    maxTokens?: number
+    capabilityTags?: string[]
+    extraConfig?: JsonMap
+    requestTimeoutMs?: number
+    maxRetries?: number
   }
-  const itemUpdate: Record<string, unknown> = {};
+) {
+  const item = await db
+    .selectFrom("model_group_profiles as mgp")
+    .innerJoin("model_groups as mg", "mg.id", "mgp.group_id")
+    .innerJoin("model_profiles as mp", "mp.id", "mgp.profile_id")
+    .leftJoin("model_profile_revisions as r", "r.id", "mp.current_revision_id")
+    .select([
+      "mgp.id as item_id",
+      "mgp.group_id",
+      "mgp.priority",
+      "mgp.weight",
+      "mgp.is_enabled as item_enabled",
+      "mp.id as profile_id",
+      "mp.workspace_id as profile_workspace_id",
+      "mp.display_name",
+      "mp.current_revision_id",
+      "mp.is_enabled as profile_enabled",
+      "mp.installed_by_workspace_member_id",
+      "mg.is_enabled as group_enabled",
+      "r.version",
+      "r.provider_type",
+      "r.api_key",
+      "r.base_url",
+      "r.model_name",
+      "r.max_tokens",
+      "r.capability_tags",
+      "r.extra_config",
+      "r.request_timeout_ms",
+      "r.max_retries",
+    ])
+    .where("mgp.id", "=", itemId)
+    .where("mgp.group_id", "=", groupId)
+    .limit(1)
+    .executeTakeFirst()
+  if (!item) {
+    throw new ModelGroupError(404, "Model group item not found")
+  }
+  const itemUpdate: Record<string, unknown> = {}
   if (data.priority !== undefined) {
-    itemUpdate.priority = data.priority;
+    itemUpdate.priority = data.priority
   }
   if (data.weight !== undefined) {
-    itemUpdate.weight = data.weight;
+    itemUpdate.weight = data.weight
   }
   if (data.isEnabled !== undefined) {
-    itemUpdate.is_enabled = data.isEnabled;
+    itemUpdate.is_enabled = data.isEnabled
   }
 
   if (Object.keys(itemUpdate).length > 0) {
     await db
-      .updateTable('model_group_profiles')
+      .updateTable("model_group_profiles")
       .set({
         ...(itemUpdate as any),
         updated_at: sql`NOW()`,
       })
-      .where('id', '=', itemId)
-      .execute();
+      .where("id", "=", itemId)
+      .execute()
   }
 
   if (data.isEnabled !== undefined) {
     await db
-      .updateTable('model_profiles')
+      .updateTable("model_profiles")
       .set({
         is_enabled: data.isEnabled,
         updated_at: sql`NOW()`,
       })
-      .where('id', '=', item.profile_id as string)
-      .execute();
+      .where("id", "=", item.profile_id as string)
+      .execute()
   }
 
   if (data.displayName !== undefined) {
     await db
-      .updateTable('model_profiles')
+      .updateTable("model_profiles")
       .set({
         display_name: data.displayName,
         updated_at: sql`NOW()`,
       })
-      .where('id', '=', item.profile_id as string)
-      .execute();
+      .where("id", "=", item.profile_id as string)
+      .execute()
   }
 
   const hasConfigChange =
@@ -929,136 +989,146 @@ export async function updateModelItem(groupId: string, itemId: string, data: {
     data.capabilityTags !== undefined ||
     data.extraConfig !== undefined ||
     data.requestTimeoutMs !== undefined ||
-    data.maxRetries !== undefined;
+    data.maxRetries !== undefined
 
   if (hasConfigChange) {
-    const nextVersion = Number(item.version || 0) + 1;
+    const nextVersion = Number(item.version || 0) + 1
     const revision = await createProfileRevision({
       profileId: item.profile_id as string,
       version: nextVersion,
       providerType: data.providerType || (item.provider_type as string),
-      engineKind: data.engineKind || resolveModelEngineKind(
-        data.providerType || (item.provider_type as string),
-        data.extraConfig ?? asObject(item.extra_config),
-      ),
+      engineKind:
+        data.engineKind ||
+        resolveModelEngineKind(
+          data.providerType || (item.provider_type as string),
+          data.extraConfig ?? asObject(item.extra_config)
+        ),
       apiKey: data.apiKey || (item.api_key as string),
       baseUrl: data.baseUrl || (item.base_url as string),
       modelName: data.modelName || (item.model_name as string),
-      maxTokens: data.maxTokens ?? (item.max_tokens as number | null) ?? undefined,
-      capabilityTags: data.capabilityTags || (item.capability_tags as string[] | null) || [],
+      maxTokens:
+        data.maxTokens ?? (item.max_tokens as number | null) ?? undefined,
+      capabilityTags:
+        data.capabilityTags || (item.capability_tags as string[] | null) || [],
       extraConfig: data.extraConfig ?? asObject(item.extra_config),
-      requestTimeoutMs: data.requestTimeoutMs ?? (item.request_timeout_ms as number | null) ?? undefined,
-      maxRetries: data.maxRetries ?? (item.max_retries as number | null) ?? undefined,
-    });
+      requestTimeoutMs:
+        data.requestTimeoutMs ??
+        (item.request_timeout_ms as number | null) ??
+        undefined,
+      maxRetries:
+        data.maxRetries ?? (item.max_retries as number | null) ?? undefined,
+    })
     await db
-      .updateTable('model_profiles')
+      .updateTable("model_profiles")
       .set({
         current_revision_id: revision.id,
         updated_at: sql`NOW()`,
       })
-      .where('id', '=', item.profile_id as string)
-      .execute();
+      .where("id", "=", item.profile_id as string)
+      .execute()
   }
 
   const updated = await db
-    .selectFrom('model_group_profiles as mgp')
-    .innerJoin('model_groups as mg', 'mg.id', 'mgp.group_id')
-    .innerJoin('model_profiles as mp', 'mp.id', 'mgp.profile_id')
-    .leftJoin('model_profile_revisions as r', 'r.id', 'mp.current_revision_id')
+    .selectFrom("model_group_profiles as mgp")
+    .innerJoin("model_groups as mg", "mg.id", "mgp.group_id")
+    .innerJoin("model_profiles as mp", "mp.id", "mgp.profile_id")
+    .leftJoin("model_profile_revisions as r", "r.id", "mp.current_revision_id")
     .select([
-      'mgp.id as item_id',
-      'mgp.group_id',
-      'mgp.priority',
-      'mgp.weight',
-      'mgp.is_enabled as item_enabled',
-      'mgp.created_at',
-      'mgp.updated_at',
-      'mp.id as profile_id',
-      'mp.display_name',
-      'mp.current_revision_id',
-      'mp.is_enabled as profile_enabled',
-      'mg.is_enabled as group_enabled',
-      'r.version',
-      'r.provider_type',
-      'r.base_url',
-      'r.model_name',
-      'r.max_tokens',
-      'r.capability_tags',
-      'r.extra_config',
-      'r.request_timeout_ms',
-      'r.max_retries',
+      "mgp.id as item_id",
+      "mgp.group_id",
+      "mgp.priority",
+      "mgp.weight",
+      "mgp.is_enabled as item_enabled",
+      "mgp.created_at",
+      "mgp.updated_at",
+      "mp.id as profile_id",
+      "mp.display_name",
+      "mp.current_revision_id",
+      "mp.is_enabled as profile_enabled",
+      "mg.is_enabled as group_enabled",
+      "r.version",
+      "r.provider_type",
+      "r.base_url",
+      "r.model_name",
+      "r.max_tokens",
+      "r.capability_tags",
+      "r.extra_config",
+      "r.request_timeout_ms",
+      "r.max_retries",
     ])
-    .where('mgp.id', '=', itemId)
+    .where("mgp.id", "=", itemId)
     .limit(1)
-    .executeTakeFirstOrThrow();
+    .executeTakeFirstOrThrow()
 
-  return mapGroupItem(updated);
+  return mapGroupItem(updated)
 }
 
 export async function deleteModelItem(groupId: string, itemId: string) {
   const item = await db
-    .selectFrom('model_group_profiles as mgp')
-    .innerJoin('model_groups as mg', 'mg.id', 'mgp.group_id')
-    .innerJoin('model_profiles as mp', 'mp.id', 'mgp.profile_id')
+    .selectFrom("model_group_profiles as mgp")
+    .innerJoin("model_groups as mg", "mg.id", "mgp.group_id")
+    .innerJoin("model_profiles as mp", "mp.id", "mgp.profile_id")
     .select([
-      'mgp.profile_id',
-      'mgp.is_enabled as item_enabled',
-      'mg.is_enabled as group_enabled',
-      'mp.is_enabled as profile_enabled',
+      "mgp.profile_id",
+      "mgp.is_enabled as item_enabled",
+      "mg.is_enabled as group_enabled",
+      "mp.is_enabled as profile_enabled",
     ])
-    .where('mgp.id', '=', itemId)
-    .where('mgp.group_id', '=', groupId)
+    .where("mgp.id", "=", itemId)
+    .where("mgp.group_id", "=", groupId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!item) {
-    throw new ModelGroupError(404, 'Model group item not found');
+    throw new ModelGroupError(404, "Model group item not found")
   }
   await db
-    .updateTable('model_group_profiles')
+    .updateTable("model_group_profiles")
     .set({
       is_enabled: false,
       updated_at: sql`NOW()`,
     })
-    .where('id', '=', itemId)
-    .where('group_id', '=', groupId)
-    .execute();
+    .where("id", "=", itemId)
+    .where("group_id", "=", groupId)
+    .execute()
   await db
-    .updateTable('model_profiles')
+    .updateTable("model_profiles")
     .set({
       is_enabled: false,
       updated_at: sql`NOW()`,
     })
-    .where('id', '=', item.profile_id as string)
-    .execute();
+    .where("id", "=", item.profile_id as string)
+    .execute()
 }
 
-async function ensureAssignableModelGroups(workspaceId: string, groupIds: string[], actorId?: string) {
-  if (groupIds.length === 0) return;
+async function ensureAssignableModelGroups(
+  workspaceId: string,
+  groupIds: string[],
+  actorId?: string
+) {
+  if (groupIds.length === 0) return
 
   const result = await db
-    .selectFrom('model_groups as mg')
+    .selectFrom("model_groups as mg")
     .distinct()
-    .leftJoin('model_group_grants as mgg', (join) =>
-      join
-        .onRef('mgg.group_id', '=', 'mg.id')
-        .on('mgg.status', '=', 'active'),
+    .leftJoin("model_group_grants as mgg", (join) =>
+      join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
     )
-    .select('mg.id')
-    .where('mg.id', 'in', groupIds)
-    .where('mg.is_enabled', '=', true)
+    .select("mg.id")
+    .where("mg.id", "in", groupIds)
+    .where("mg.is_enabled", "=", true)
     .where((eb) =>
       eb.or([
         eb.and([
-          eb('mg.owner_type', '=', 'workspace'),
-          eb('mg.owner_workspace_id', '=', workspaceId),
+          eb("mg.owner_type", "=", "workspace"),
+          eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb('mgg.grant_scope', '=', 'platform'),
+        eb("mgg.grant_scope", "=", "platform"),
         eb.and([
-          eb('mgg.grant_scope', '=', 'workspace'),
-          eb('mgg.workspace_id', '=', workspaceId),
+          eb("mgg.grant_scope", "=", "workspace"),
+          eb("mgg.workspace_id", "=", workspaceId),
         ]),
         eb.and([
-          eb('mgg.grant_scope', '=', 'workspace_member'),
+          eb("mgg.grant_scope", "=", "workspace_member"),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM workspace_members wm
@@ -1067,86 +1137,90 @@ async function ensureAssignableModelGroups(workspaceId: string, groupIds: string
           )`,
         ]),
         eb.and([
-          eb('mgg.grant_scope', '=', 'actor'),
-          eb('mgg.workspace_id', '=', workspaceId),
-          actorId
-            ? eb('mgg.actor_id', '=', actorId)
-            : sql<boolean>`TRUE`,
+          eb("mgg.grant_scope", "=", "actor"),
+          eb("mgg.workspace_id", "=", workspaceId),
+          actorId ? eb("mgg.actor_id", "=", actorId) : sql<boolean>`TRUE`,
         ]),
-      ]),
+      ])
     )
-    .execute();
+    .execute()
 
   if (result.length !== groupIds.length) {
-    throw new ModelGroupError(400, 'One or more model groups are invalid for this workspace');
+    throw new ModelGroupError(
+      400,
+      "One or more model groups are invalid for this workspace"
+    )
   }
 }
 
 export async function getItemVersions(itemId: string, groupId?: string) {
   let itemLookup = db
-    .selectFrom('model_group_profiles')
-    .select('profile_id')
-    .where('id', '=', itemId);
+    .selectFrom("model_group_profiles")
+    .select("profile_id")
+    .where("id", "=", itemId)
   if (groupId) {
-    itemLookup = itemLookup.where('group_id', '=', groupId);
+    itemLookup = itemLookup.where("group_id", "=", groupId)
   }
-  const itemRow = await itemLookup.limit(1).executeTakeFirst();
+  const itemRow = await itemLookup.limit(1).executeTakeFirst()
   if (!itemRow) {
-    throw new ModelGroupError(404, 'Model group item not found');
+    throw new ModelGroupError(404, "Model group item not found")
   }
-  const profileId = itemRow.profile_id as string;
+  const profileId = itemRow.profile_id as string
 
   return db
-    .selectFrom('model_profile_revisions as r')
+    .selectFrom("model_profile_revisions as r")
     .select([
-      'r.id',
-      'r.profile_id',
-      'r.version',
-      'r.provider_type',
-      sql<string | null>`r.extra_config->>'engine_kind'`.as('engine_kind'),
-      'r.base_url',
-      'r.model_name',
-      'r.max_tokens',
-      'r.capability_tags',
-      'r.extra_config',
-      'r.request_timeout_ms',
-      'r.max_retries',
-      'r.created_at',
+      "r.id",
+      "r.profile_id",
+      "r.version",
+      "r.provider_type",
+      sql<string | null>`r.extra_config->>'engine_kind'`.as("engine_kind"),
+      "r.base_url",
+      "r.model_name",
+      "r.max_tokens",
+      "r.capability_tags",
+      "r.extra_config",
+      "r.request_timeout_ms",
+      "r.max_retries",
+      "r.created_at",
     ])
-    .where('r.profile_id', '=', profileId)
-    .orderBy('r.version', 'desc')
-    .execute();
+    .where("r.profile_id", "=", profileId)
+    .orderBy("r.version", "desc")
+    .execute()
 }
 
-export async function getActorModelGroups(actorId: string, workspaceId?: string) {
+export async function getActorModelGroups(
+  actorId: string,
+  workspaceId?: string
+) {
   if (workspaceId) {
-    await ensureActorInWorkspace(actorId, workspaceId);
+    await ensureActorInWorkspace(actorId, workspaceId)
   }
 
   let statement = db
-    .selectFrom('actor_model_group_assignments as amga')
-    .innerJoin('model_groups as mg', 'mg.id', 'amga.group_id')
+    .selectFrom("actor_model_group_assignments as amga")
+    .innerJoin("model_groups as mg", "mg.id", "amga.group_id")
     .select([
-      'amga.actor_id',
-      'amga.group_id',
-      'amga.priority',
-      'amga.created_at',
-      'mg.name as group_name',
-      'mg.routing_strategy',
-      'mg.is_default',
-      'mg.owner_workspace_id as workspace_id',
-      'mg.owner_type',
-      'mg.owner_workspace_member_id',
+      "amga.actor_id",
+      "amga.group_id",
+      "amga.priority",
+      "amga.created_at",
+      "mg.name as group_name",
+      "mg.routing_strategy",
+      "mg.is_default",
+      "mg.owner_workspace_id as workspace_id",
+      "mg.owner_type",
+      "mg.owner_workspace_member_id",
     ])
-    .where('amga.actor_id', '=', actorId)
-    .where('mg.is_enabled', '=', true);
+    .where("amga.actor_id", "=", actorId)
+    .where("mg.is_enabled", "=", true)
 
   if (workspaceId) {
     statement = statement.where((eb) =>
       eb.or([
         eb.and([
-          eb('mg.owner_type', '=', 'workspace'),
-          eb('mg.owner_workspace_id', '=', workspaceId),
+          eb("mg.owner_type", "=", "workspace"),
+          eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
         sql<boolean>`EXISTS (
           SELECT 1
@@ -1168,164 +1242,179 @@ export async function getActorModelGroups(actorId: string, workspaceId?: string)
               OR (mgg.grant_scope = 'actor' AND mgg.workspace_id = ${workspaceId})
             )
         )`,
-      ]),
-    );
+      ])
+    )
   }
 
-  return statement.orderBy('amga.priority', 'asc').execute();
+  return statement.orderBy("amga.priority", "asc").execute()
 }
 
-export async function setActorModelGroups(actorId: string, workspaceId: string, groups: { groupId: string; priority: number }[]) {
-  await ensureActorInWorkspace(actorId, workspaceId);
-  await ensureAssignableModelGroups(workspaceId, groups.map((group) => group.groupId), actorId);
+export async function setActorModelGroups(
+  actorId: string,
+  workspaceId: string,
+  groups: { groupId: string; priority: number }[]
+) {
+  await ensureActorInWorkspace(actorId, workspaceId)
+  await ensureAssignableModelGroups(
+    workspaceId,
+    groups.map((group) => group.groupId),
+    actorId
+  )
 
   await db
-    .deleteFrom('actor_model_group_assignments')
-    .where('actor_id', '=', actorId)
-    .execute();
+    .deleteFrom("actor_model_group_assignments")
+    .where("actor_id", "=", actorId)
+    .execute()
   for (const group of groups) {
     await db
-      .insertInto('actor_model_group_assignments')
+      .insertInto("actor_model_group_assignments")
       .values({
         actor_id: actorId,
         group_id: group.groupId,
         priority: group.priority,
       })
-      .execute();
+      .execute()
   }
-  return getActorModelGroups(actorId, workspaceId);
+  return getActorModelGroups(actorId, workspaceId)
 }
 
-export async function listVisibleActorModelGroups(actorId: string, workspaceId: string) {
-  await ensureActorInWorkspace(actorId, workspaceId);
+export async function listVisibleActorModelGroups(
+  actorId: string,
+  workspaceId: string
+) {
+  await ensureActorInWorkspace(actorId, workspaceId)
 
   const result = await db
-    .selectFrom('model_groups as mg')
+    .selectFrom("model_groups as mg")
     .distinct()
-    .leftJoin('model_group_grants as mgg', (join) =>
-      join
-        .onRef('mgg.group_id', '=', 'mg.id')
-        .on('mgg.status', '=', 'active'),
+    .leftJoin("model_group_grants as mgg", (join) =>
+      join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
     )
-    .selectAll('mg')
+    .selectAll("mg")
     .select(
       sql<number>`CASE mg.owner_type
         WHEN 'workspace' THEN 0
         WHEN 'platform' THEN 1
         ELSE 2
-      END`.as('owner_rank'),
+      END`.as("owner_rank")
     )
-    .where('mg.is_enabled', '=', true)
+    .where("mg.is_enabled", "=", true)
     .where((eb) =>
       eb.or([
         eb.and([
-          eb('mg.owner_type', '=', 'workspace'),
-          eb('mg.owner_workspace_id', '=', workspaceId),
+          eb("mg.owner_type", "=", "workspace"),
+          eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb('mgg.grant_scope', '=', 'platform'),
+        eb("mgg.grant_scope", "=", "platform"),
         eb.and([
-          eb('mgg.grant_scope', '=', 'workspace'),
-          eb('mgg.workspace_id', '=', workspaceId),
+          eb("mgg.grant_scope", "=", "workspace"),
+          eb("mgg.workspace_id", "=", workspaceId),
         ]),
         eb.and([
-          eb('mgg.grant_scope', '=', 'actor'),
-          eb('mgg.workspace_id', '=', workspaceId),
-          eb('mgg.actor_id', '=', actorId),
+          eb("mgg.grant_scope", "=", "actor"),
+          eb("mgg.workspace_id", "=", workspaceId),
+          eb("mgg.actor_id", "=", actorId),
         ]),
-      ]),
+      ])
     )
-    .orderBy('owner_rank')
-    .orderBy('mg.is_default', 'desc')
-    .orderBy('mg.name')
-    .execute();
+    .orderBy("owner_rank")
+    .orderBy("mg.is_default", "desc")
+    .orderBy("mg.name")
+    .execute()
 
-  return result.map((row) => mapGroupRow(row as ModelGroupRow));
+  return result.map((row) => mapGroupRow(row as ModelGroupRow))
 }
 
 export async function listModelGroupGrants(groupId: string) {
-  await getGroupRow(groupId);
+  await getGroupRow(groupId)
   const result = await db
-    .selectFrom('model_group_grants')
+    .selectFrom("model_group_grants")
     .selectAll()
-    .where('group_id', '=', groupId)
-    .orderBy('created_at', 'desc')
-    .execute();
-  return (result as Array<ModelGroupGrantRow & { id: string; group_id: string }>).map(mapGrantRow);
+    .where("group_id", "=", groupId)
+    .orderBy("created_at", "desc")
+    .execute()
+  return (
+    result as Array<ModelGroupGrantRow & { id: string; group_id: string }>
+  ).map(mapGrantRow)
 }
 
-export async function issueModelGroupGrant(groupId: string, input: {
-  grantScope: ModelGroupGrantScope;
-  workspaceId?: string;
-  workspaceMemberId?: string;
-  actorId?: string;
-  grantedByWorkspaceMemberId?: string;
-  reason?: string;
-}) {
-  await validateGrantTarget(input);
-  await ensureNoDuplicateActiveGrant(groupId, input);
+export async function issueModelGroupGrant(
+  groupId: string,
+  input: {
+    grantScope: ModelGroupGrantScope
+    workspaceId?: string
+    workspaceMemberId?: string
+    actorId?: string
+    grantedByWorkspaceMemberId?: string
+    reason?: string
+  }
+) {
+  await validateGrantTarget(input)
+  await ensureNoDuplicateActiveGrant(groupId, input)
 
   const result = await db
-    .insertInto('model_group_grants')
+    .insertInto("model_group_grants")
     .values({
       group_id: groupId,
       grant_scope: input.grantScope,
       workspace_id: input.workspaceId || null,
       workspace_member_id: input.workspaceMemberId || null,
       actor_id: input.actorId || null,
-      status: 'active',
-      granted_by_workspace_member_id:
-        input.grantedByWorkspaceMemberId || null,
+      status: "active",
+      granted_by_workspace_member_id: input.grantedByWorkspaceMemberId || null,
       reason: input.reason || null,
     })
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirstOrThrow()
 
-  return mapGrantRow(result as ModelGroupGrantRow & { id: string; group_id: string });
+  return mapGrantRow(
+    result as ModelGroupGrantRow & { id: string; group_id: string }
+  )
 }
 
 export async function revokeModelGroupGrant(groupId: string, grantId: string) {
   const result = await db
-    .updateTable('model_group_grants')
+    .updateTable("model_group_grants")
     .set({
-      status: 'revoked',
+      status: "revoked",
       revoked_at: sql`NOW()`,
     })
-    .where('id', '=', grantId)
-    .where('group_id', '=', groupId)
-    .where('status', '=', 'active')
-    .returning('id')
-    .executeTakeFirst();
+    .where("id", "=", grantId)
+    .where("group_id", "=", groupId)
+    .where("status", "=", "active")
+    .returning("id")
+    .executeTakeFirst()
   if (!result) {
-    throw new ModelGroupError(404, 'Model group grant not found');
+    throw new ModelGroupError(404, "Model group grant not found")
   }
 }
 
 export async function logAIRequest(data: {
-  workspaceId?: string;
-  actorId?: string;
-  sessionId?: string;
-  turnId?: string;
-  round?: number;
-  groupId?: string;
-  profileId?: string;
-  profileRevisionId?: string;
-  requestType: string;
-  inputTokens: number;
-  outputTokens: number;
-  latencyMs: number;
-  status: string;
-  errorMessage?: string;
-  requestBody?: unknown;
-  responseBody?: unknown;
+  workspaceId?: string
+  actorId?: string
+  sessionId?: string
+  turnId?: string
+  round?: number
+  groupId?: string
+  profileId?: string
+  profileRevisionId?: string
+  requestType: string
+  inputTokens: number
+  outputTokens: number
+  latencyMs: number
+  status: string
+  errorMessage?: string
+  requestBody?: unknown
+  responseBody?: unknown
 }) {
   if (!data.turnId) {
     await logRuntimeEvent({
       workspaceId: data.workspaceId,
       sessionId: data.sessionId,
       actorId: data.actorId,
-      source: 'provider',
-      level: data.status === 'error' ? 'error' : 'info',
-      eventType: 'provider.step.legacy',
+      source: "provider",
+      level: data.status === "error" ? "error" : "info",
+      eventType: "provider.step.legacy",
       payload: {
         round: data.round || 1,
         requestType: data.requestType,
@@ -1340,22 +1429,22 @@ export async function logAIRequest(data: {
         requestBody: data.requestBody,
         responseBody: data.responseBody,
       },
-    });
-    return;
+    })
+    return
   }
 
-  let providerType = config.ai.provider;
-  let modelName = config.ai.model;
+  let providerType = config.ai.provider
+  let modelName = config.ai.model
   if (data.profileRevisionId) {
     const revisionRow = await db
-      .selectFrom('model_profile_revisions')
-      .select(['provider_type', 'model_name'])
-      .where('id', '=', data.profileRevisionId)
+      .selectFrom("model_profile_revisions")
+      .select(["provider_type", "model_name"])
+      .where("id", "=", data.profileRevisionId)
       .limit(1)
-      .executeTakeFirst();
+      .executeTakeFirst()
     if (revisionRow) {
-      providerType = revisionRow.provider_type as string;
-      modelName = revisionRow.model_name || modelName;
+      providerType = revisionRow.provider_type as string
+      modelName = revisionRow.model_name || modelName
     }
   }
 
@@ -1363,7 +1452,7 @@ export async function logAIRequest(data: {
     turnId: data.turnId,
     stepIndex: data.round || 1,
     providerType,
-    requestType: data.requestType as 'actor_think' | 'ai_complete',
+    requestType: data.requestType as "actor_think" | "ai_complete",
     modelGroupId: data.groupId,
     modelProfileId: data.profileId,
     modelProfileRevisionId: data.profileRevisionId,
@@ -1373,69 +1462,69 @@ export async function logAIRequest(data: {
     inputTokens: data.inputTokens,
     outputTokens: data.outputTokens,
     latencyMs: data.latencyMs,
-    status: data.status as 'success' | 'error' | 'timeout',
+    status: data.status as "success" | "error" | "timeout",
     errorMessage: data.errorMessage,
-  });
+  })
 }
 
 export async function seedPlatformDefaultGroup() {
   const defaultGroupRow = await db
-    .selectFrom('model_groups')
-    .select('id as group_id')
-    .where('owner_type', '=', 'platform')
-    .where('is_default', '=', true)
-    .where('is_enabled', '=', true)
+    .selectFrom("model_groups")
+    .select("id as group_id")
+    .where("owner_type", "=", "platform")
+    .where("is_default", "=", true)
+    .where("is_enabled", "=", true)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
-  let groupId = defaultGroupRow?.group_id || null;
+  let groupId = defaultGroupRow?.group_id || null
 
   if (!groupId) {
     const fallbackGroupRow = await db
-      .selectFrom('model_groups')
-      .select('id')
-      .where('owner_type', '=', 'platform')
-      .where('is_enabled', '=', true)
-      .orderBy('is_default', 'desc')
-      .orderBy('created_at', 'asc')
+      .selectFrom("model_groups")
+      .select("id")
+      .where("owner_type", "=", "platform")
+      .where("is_enabled", "=", true)
+      .orderBy("is_default", "desc")
+      .orderBy("created_at", "asc")
       .limit(1)
-      .executeTakeFirst();
+      .executeTakeFirst()
 
-    groupId = fallbackGroupRow?.id || null;
+    groupId = fallbackGroupRow?.id || null
 
     if (groupId) {
-      await clearExistingDefault('platform');
+      await clearExistingDefault("platform")
       await db
-        .updateTable('model_groups')
+        .updateTable("model_groups")
         .set({
           is_default: true,
           updated_at: sql`NOW()`,
         })
-        .where('id', '=', groupId)
-        .execute();
+        .where("id", "=", groupId)
+        .execute()
     }
   }
 
   if (!groupId) {
     const group = await createModelGroup({
-      ownerType: 'platform',
-      name: 'Platform Default',
-      description: 'Auto-created from environment variables',
-      routingStrategy: 'priority_failover',
+      ownerType: "platform",
+      name: "Platform Default",
+      description: "Auto-created from environment variables",
+      routingStrategy: "priority_failover",
       attemptPolicy: { ...DEFAULT_MODEL_ATTEMPT_POLICY },
       isDefault: true,
-    });
-    groupId = group.id;
+    })
+    groupId = group.id
   }
 
   if (config.ai.provider && config.ai.apiKey && config.ai.model && groupId) {
     const existingItem = await db
-      .selectFrom('model_group_profiles')
-      .select('id')
-      .where('group_id', '=', groupId)
-      .where('is_enabled', '=', true)
+      .selectFrom("model_group_profiles")
+      .select("id")
+      .where("group_id", "=", groupId)
+      .where("is_enabled", "=", true)
       .limit(1)
-      .executeTakeFirst();
+      .executeTakeFirst()
 
     if (!existingItem) {
       await addModelItem(groupId, {
@@ -1450,9 +1539,9 @@ export async function seedPlatformDefaultGroup() {
         maxTokens: config.ai.maxTokens,
         requestTimeoutMs: DEFAULT_MODEL_ATTEMPT_TIMEOUT_MS,
         maxRetries: 1,
-      });
+      })
     }
   }
 
-  return groupId;
+  return groupId
 }

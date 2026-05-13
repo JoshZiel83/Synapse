@@ -2,20 +2,22 @@ import type {
   AutomationEventDefinition,
   AutomationOccurrenceDisplayContext,
   AutomationEventSourceDefinitionContext,
-} from "./types.js";
+} from "./types.js"
 
 function relaySourceLabel(context: AutomationEventSourceDefinitionContext) {
-  return context.providerLabel?.trim() || context.providerRef?.trim() || "Relay Device";
+  return (
+    context.providerLabel?.trim() ||
+    context.providerRef?.trim() ||
+    "Relay Device"
+  )
 }
 
 function relaySourceId(context: AutomationEventSourceDefinitionContext) {
-  return context.providerRef?.trim() || "unknown-relay";
+  return context.providerRef?.trim() || "unknown-relay"
 }
 
-function readString(
-  value: unknown,
-) {
-  return typeof value === "string" && value.trim() ? value.trim() : null;
+function readString(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : null
 }
 
 function relayOccurrenceLabel(context: AutomationOccurrenceDisplayContext) {
@@ -26,7 +28,7 @@ function relayOccurrenceLabel(context: AutomationOccurrenceDisplayContext) {
     readString(context.sourceName) ||
     readString(context.providerRef) ||
     "Relay Device"
-  );
+  )
 }
 
 function relayOccurrenceId(context: AutomationOccurrenceDisplayContext) {
@@ -36,7 +38,7 @@ function relayOccurrenceId(context: AutomationOccurrenceDisplayContext) {
     readString(context.sourceSnapshot.deviceId) ||
     readString(context.providerRef) ||
     "unknown-relay"
-  );
+  )
 }
 
 export const relayDeviceOnlineEventDefinition: AutomationEventDefinition = {
@@ -44,8 +46,8 @@ export const relayDeviceOnlineEventDefinition: AutomationEventDefinition = {
   providerKind: "relay",
   managementMode: "system",
   buildSource: (context) => {
-    const label = relaySourceLabel(context);
-    const relayId = relaySourceId(context);
+    const label = relaySourceLabel(context)
+    const relayId = relaySourceId(context)
     return {
       sourceKey: "relay.device.online",
       name: `Relay Online: ${label}`,
@@ -71,18 +73,18 @@ export const relayDeviceOnlineEventDefinition: AutomationEventDefinition = {
         managedBy: "relay_lifecycle",
         definitionKey: "relay.device.online",
       },
-    };
+    }
   },
   buildOccurrenceDisplay: (context) => {
-    const label = relayOccurrenceLabel(context);
-    const relayId = relayOccurrenceId(context);
+    const label = relayOccurrenceLabel(context)
+    const relayId = relayOccurrenceId(context)
     return {
       title: `${label} came online`,
       summary: "online",
       description: `Relay "${label}" (${relayId}) reconnected and is considered online.`,
-    };
+    }
   },
-};
+}
 
 export const relayDeviceOfflineEventDefinition: AutomationEventDefinition = {
   definitionKey: "relay.device.offline",
@@ -90,8 +92,8 @@ export const relayDeviceOfflineEventDefinition: AutomationEventDefinition = {
   managementMode: "system",
   graceWindowMs: 60_000,
   buildSource: (context) => {
-    const label = relaySourceLabel(context);
-    const relayId = relaySourceId(context);
+    const label = relaySourceLabel(context)
+    const relayId = relaySourceId(context)
     return {
       sourceKey: "relay.device.offline",
       name: `Relay Offline: ${label}`,
@@ -117,20 +119,20 @@ export const relayDeviceOfflineEventDefinition: AutomationEventDefinition = {
         managedBy: "relay_lifecycle",
         definitionKey: "relay.device.offline",
       },
-    };
+    }
   },
   buildOccurrenceDisplay: (context) => {
-    const label = relayOccurrenceLabel(context);
-    const relayId = relayOccurrenceId(context);
+    const label = relayOccurrenceLabel(context)
+    const relayId = relayOccurrenceId(context)
     return {
       title: `${label} went offline`,
       summary: "offline after 60s grace",
       description: `Relay "${label}" (${relayId}) stayed disconnected for at least one minute and is considered offline.`,
-    };
+    }
   },
-};
+}
 
 export const relayLifecycleEventDefinitions = [
   relayDeviceOnlineEventDefinition,
   relayDeviceOfflineEventDefinition,
-] as const;
+] as const

@@ -1,17 +1,17 @@
-import { db } from "../../infrastructure/database/kysely.js";
+import { db } from "../../infrastructure/database/kysely.js"
 
 export interface WorkspaceMemberIdentity {
-  workspaceMemberId: string;
-  workspaceId: string;
-  userId: string;
-  userName: string;
-  avatarFileId?: string | null;
-  trustLevel: string;
+  workspaceMemberId: string
+  workspaceId: string
+  userId: string
+  userName: string
+  avatarFileId?: string | null
+  trustLevel: string
 }
 
 export async function getWorkspaceMemberIdentity(
   workspaceId: string,
-  userId: string,
+  userId: string
 ): Promise<WorkspaceMemberIdentity | null> {
   const row = await db
     .selectFrom("workspace_members as wm")
@@ -27,10 +27,10 @@ export async function getWorkspaceMemberIdentity(
     .where("wm.workspace_id", "=", workspaceId)
     .where("wm.user_id", "=", userId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
   if (!row) {
-    return null;
+    return null
   }
 
   return {
@@ -40,22 +40,22 @@ export async function getWorkspaceMemberIdentity(
     userName: row.user_name,
     avatarFileId: row.avatar_file_id,
     trustLevel: row.trust_level,
-  };
+  }
 }
 
 export async function requireWorkspaceMemberIdentity(
   workspaceId: string,
-  userId: string,
+  userId: string
 ): Promise<WorkspaceMemberIdentity> {
-  const identity = await getWorkspaceMemberIdentity(workspaceId, userId);
+  const identity = await getWorkspaceMemberIdentity(workspaceId, userId)
   if (!identity) {
-    throw new Error("Workspace membership not found");
+    throw new Error("Workspace membership not found")
   }
-  return identity;
+  return identity
 }
 
 export async function getWorkspaceMemberIdentityById(
-  workspaceMemberId: string,
+  workspaceMemberId: string
 ): Promise<WorkspaceMemberIdentity | null> {
   const row = await db
     .selectFrom("workspace_members as wm")
@@ -70,10 +70,10 @@ export async function getWorkspaceMemberIdentityById(
     ])
     .where("wm.id", "=", workspaceMemberId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
   if (!row) {
-    return null;
+    return null
   }
 
   return {
@@ -83,5 +83,5 @@ export async function getWorkspaceMemberIdentityById(
     userName: row.user_name,
     avatarFileId: row.avatar_file_id,
     trustLevel: row.trust_level,
-  };
+  }
 }

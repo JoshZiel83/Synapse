@@ -1,4 +1,4 @@
-import { randomUUID } from "crypto";
+import { randomUUID } from "crypto"
 import {
   buildConversationMessageRef,
   normalizeCanonicalContentBlocks,
@@ -24,7 +24,7 @@ import {
   type ChatSyncResponse,
   type ConversationMessageSubtype,
   type ConversationReplyRef,
-} from "@synapse/shared";
+} from "@synapse/shared"
 import type {
   ConversationEntityRef,
   ConversationEventContextPolicy,
@@ -38,326 +38,331 @@ import type {
   ConversationMessageTransportContext,
   ConversationMessageTransportDelivery,
   InteractionRequestSummary,
-} from "@synapse/shared/types";
-import { transaction } from "../../infrastructure/database/index.js";
-import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
+} from "@synapse/shared/types"
+import { transaction } from "../../infrastructure/database/index.js"
+import {
+  executeSql,
+  executeSqlOn,
+} from "../../infrastructure/database/kysely.js"
 import {
   enqueueTransactionalEvent,
   type Queryable,
-} from "../../infrastructure/events/index.js";
-import { getFileUrlById } from "../files/service.js";
+} from "../../infrastructure/events/index.js"
+import { getFileUrlById } from "../files/service.js"
 import {
   buildNormalizedMessageContent,
   canonicalContentBlocksToDraftParts,
   itemPartsToCanonicalContentBlocks,
-} from "./message-content.js";
+} from "./message-content.js"
 import {
   getConversationEventSpec,
   isConversationEventType,
   renderConversationEventTimelineBlocks,
-} from "./event-registry.js";
+} from "./event-registry.js"
 import {
   requireWorkspaceMemberIdentity,
   type WorkspaceMemberIdentity,
-} from "./workspace-identity.js";
-import {
-  enrichInteractionForUser,
-} from "../interactions/service.js";
+} from "./workspace-identity.js"
+import { enrichInteractionForUser } from "../interactions/service.js"
 import {
   getConversationRuntimeMap,
   getSessionRuntimeTurnActivityDetail,
-} from "../session/runtime.js";
+} from "../session/runtime.js"
 
 export interface ChatServiceError extends Error {
-  code: string;
-  statusCode: number;
-  details?: Record<string, unknown>;
+  code: string
+  statusCode: number
+  details?: Record<string, unknown>
 }
 
-type ConversationKind = "group" | "private" | "virtual";
-type ConversationBoundary = "internal" | "external";
-type ParticipantKind = "workspace_member" | "actor" | "remote_agent" | "external" | "system";
-type ItemScope = "shared" | "private";
-type ItemSurface = "visible" | "internal";
-type ItemType = "message" | "event" | "summary" | "control";
-type ItemRole = "user" | "assistant" | "system" | "tool";
-type NonEventItemType = Exclude<ItemType, "event">;
+type ConversationKind = "group" | "private" | "virtual"
+type ConversationBoundary = "internal" | "external"
+type ParticipantKind =
+  | "workspace_member"
+  | "actor"
+  | "remote_agent"
+  | "external"
+  | "system"
+type ItemScope = "shared" | "private"
+type ItemSurface = "visible" | "internal"
+type ItemType = "message" | "event" | "summary" | "control"
+type ItemRole = "user" | "assistant" | "system" | "tool"
+type NonEventItemType = Exclude<ItemType, "event">
 
 export interface ConversationItemPartInput {
-  type: "text" | "file_ref" | "json";
-  text?: string;
-  fileId?: string;
-  json?: unknown;
-  mimeType?: string;
-  name?: string;
-  metadata?: Record<string, unknown>;
+  type: "text" | "file_ref" | "json"
+  text?: string
+  fileId?: string
+  json?: unknown
+  mimeType?: string
+  name?: string
+  metadata?: Record<string, unknown>
 }
 
 type ConversationBaseRow = {
-  conversation_id: string;
-  kind: ConversationKind;
-  boundary: ConversationBoundary;
-  title: string | null;
-  created_at: string | Date;
-  updated_at: string | Date;
-  unread_count: number | string;
-  muted: boolean;
-  archived: boolean;
-  pinned_sort_key: string | Date | null;
-  last_visible_item_id: string | null;
-  last_visible_sequence: number | string;
-  last_visible_at: string | Date | null;
-};
-
-type ParticipantRow = {
-  id: string;
-  conversation_id: string;
-  participant_kind: ParticipantKind;
-  workspace_member_id: string | null;
-  actor_id: string | null;
-  remote_agent_id: string | null;
-  actor_join_version_id: string | null;
-  display_name: string | null;
-  role_key: string;
-  state: "active" | "left" | "removed";
-  metadata: unknown;
-  joined_at: string | Date;
-  left_at: string | Date | null;
-  user_id: string | null;
-  user_name: string | null;
-  actor_name: string | null;
-  actor_title: string | null;
-  actor_role: string | null;
-  actor_docs: unknown;
-  actor_can_represent_user: boolean | null;
-  actor_specialties: unknown;
-  actor_config: unknown;
-  actor_current_version: number | string | null;
-  actor_avatar_emoji: string | null;
-  actor_avatar_file_id: string | null;
-  user_avatar_file_id: string | null;
-  transport_address_id: string | null;
-  transport_kind: string | null;
-  transport_external_id: string | null;
-  transport_display_name: string | null;
-  linked_user_id: string | null;
-  linked_user_name: string | null;
-  linked_user_avatar_file_id: string | null;
-  session_id: string | null;
-  session_status: string | null;
-};
-
-type ItemRow = {
-  id: string;
-  conversation_id: string;
-  session_id?: string | null;
-  turn_id?: string | null;
-  client_message_id: string | null;
-  scope: "shared" | "private";
-  surface: "visible" | "internal";
-  item_type: "message" | "event" | "summary" | "control";
-  subtype: string;
-  role: "user" | "assistant" | "system" | "tool";
-  author_participant_id: string | null;
-  reply_to_item_id: string | null;
-  caused_by_item_id: string | null;
-  event_payload?: unknown;
-  event_timeline_policy?: string | null;
-  event_context_policy?: string | null;
-  metadata: unknown;
-  sequence: string | number;
-  created_at: string | Date;
-};
-
-type ItemPartRow = {
-  item_id: string;
-  ordinal: number;
-  part_type: "text" | "file_ref" | "json";
-  text_value: string | null;
-  file_id: string | null;
-  json_value: unknown;
-  mime_type: string | null;
-  name: string | null;
-  metadata: unknown;
-};
-
-type ParticipantLinkRow = {
-  item_id: string;
-  target_participant_id: string;
-};
-
-interface ConversationItemDetailBase {
-  id: string;
-  conversationId: string;
-  sessionId?: string;
-  turnId?: string;
-  sequence: number;
-  scope: ItemScope;
-  surface: ItemSurface;
-  role: ItemRole;
-  authorParticipantId?: string;
-  authorParticipant?: ParticipantRow;
-  restrictedAudienceParticipants: ParticipantRow[];
-  contextTargets: ParticipantRow[];
-  contentBlocks: CanonicalContentBlock[];
-  metadata: Record<string, unknown>;
-  replyToItemId?: string;
-  replyTo?: ConversationReplyRef;
-  causedByItemId?: string;
-  createdAt: string;
-  clientMessageId?: string;
+  conversation_id: string
+  kind: ConversationKind
+  boundary: ConversationBoundary
+  title: string | null
+  created_at: string | Date
+  updated_at: string | Date
+  unread_count: number | string
+  muted: boolean
+  archived: boolean
+  pinned_sort_key: string | Date | null
+  last_visible_item_id: string | null
+  last_visible_sequence: number | string
+  last_visible_at: string | Date | null
 }
 
-export interface ConversationNonEventItemDetail
-  extends ConversationItemDetailBase {
-  itemType: NonEventItemType;
-  subtype: ConversationFeedMessageType;
+type ParticipantRow = {
+  id: string
+  conversation_id: string
+  participant_kind: ParticipantKind
+  workspace_member_id: string | null
+  actor_id: string | null
+  remote_agent_id: string | null
+  actor_join_version_id: string | null
+  display_name: string | null
+  role_key: string
+  state: "active" | "left" | "removed"
+  metadata: unknown
+  joined_at: string | Date
+  left_at: string | Date | null
+  user_id: string | null
+  user_name: string | null
+  actor_name: string | null
+  actor_title: string | null
+  actor_role: string | null
+  actor_docs: unknown
+  actor_can_represent_user: boolean | null
+  actor_specialties: unknown
+  actor_config: unknown
+  actor_current_version: number | string | null
+  actor_avatar_emoji: string | null
+  actor_avatar_file_id: string | null
+  user_avatar_file_id: string | null
+  transport_address_id: string | null
+  transport_kind: string | null
+  transport_external_id: string | null
+  transport_display_name: string | null
+  linked_user_id: string | null
+  linked_user_name: string | null
+  linked_user_avatar_file_id: string | null
+  session_id: string | null
+  session_status: string | null
+}
+
+type ItemRow = {
+  id: string
+  conversation_id: string
+  session_id?: string | null
+  turn_id?: string | null
+  client_message_id: string | null
+  scope: "shared" | "private"
+  surface: "visible" | "internal"
+  item_type: "message" | "event" | "summary" | "control"
+  subtype: string
+  role: "user" | "assistant" | "system" | "tool"
+  author_participant_id: string | null
+  reply_to_item_id: string | null
+  caused_by_item_id: string | null
+  event_payload?: unknown
+  event_timeline_policy?: string | null
+  event_context_policy?: string | null
+  metadata: unknown
+  sequence: string | number
+  created_at: string | Date
+}
+
+type ItemPartRow = {
+  item_id: string
+  ordinal: number
+  part_type: "text" | "file_ref" | "json"
+  text_value: string | null
+  file_id: string | null
+  json_value: unknown
+  mime_type: string | null
+  name: string | null
+  metadata: unknown
+}
+
+type ParticipantLinkRow = {
+  item_id: string
+  target_participant_id: string
+}
+
+interface ConversationItemDetailBase {
+  id: string
+  conversationId: string
+  sessionId?: string
+  turnId?: string
+  sequence: number
+  scope: ItemScope
+  surface: ItemSurface
+  role: ItemRole
+  authorParticipantId?: string
+  authorParticipant?: ParticipantRow
+  restrictedAudienceParticipants: ParticipantRow[]
+  contextTargets: ParticipantRow[]
+  contentBlocks: CanonicalContentBlock[]
+  metadata: Record<string, unknown>
+  replyToItemId?: string
+  replyTo?: ConversationReplyRef
+  causedByItemId?: string
+  createdAt: string
+  clientMessageId?: string
+}
+
+export interface ConversationNonEventItemDetail extends ConversationItemDetailBase {
+  itemType: NonEventItemType
+  subtype: ConversationFeedMessageType
 }
 
 export interface ConversationEventItemDetail<
   T extends ConversationFeedEventType = ConversationFeedEventType,
 > extends ConversationItemDetailBase {
-  itemType: "event";
-  subtype: T;
-  eventPayload: ConversationFeedEventPayloadMap[T];
-  eventTimelinePolicy?: ConversationEventTimelinePolicy;
-  eventContextPolicy?: ConversationEventContextPolicy;
+  itemType: "event"
+  subtype: T
+  eventPayload: ConversationFeedEventPayloadMap[T]
+  eventTimelinePolicy?: ConversationEventTimelinePolicy
+  eventContextPolicy?: ConversationEventContextPolicy
 }
 
 export type ConversationItemDetail =
   | ConversationNonEventItemDetail
-  | ConversationEventItemDetail;
+  | ConversationEventItemDetail
 
 type HydratedConversationItemRecord = {
-  id: string;
-  conversationId: string;
-  sequence: number;
-  clientMessageId?: string;
-  itemType: ItemType;
-  role: ItemRole;
-  subtype: string;
-  scope: ItemScope;
-  surface: ItemSurface;
-  authorParticipantId?: string;
-  replyToItemId?: string;
-  causedByItemId?: string;
-  content: string;
-  contentBlocks: CanonicalContentBlock[];
-  metadata: Record<string, unknown>;
-  restrictedAudienceParticipantIds: string[];
-  createdAt: string;
-};
+  id: string
+  conversationId: string
+  sequence: number
+  clientMessageId?: string
+  itemType: ItemType
+  role: ItemRole
+  subtype: string
+  scope: ItemScope
+  surface: ItemSurface
+  authorParticipantId?: string
+  replyToItemId?: string
+  causedByItemId?: string
+  content: string
+  contentBlocks: CanonicalContentBlock[]
+  metadata: Record<string, unknown>
+  restrictedAudienceParticipantIds: string[]
+  createdAt: string
+}
 
 type ConversationCreateExternalParticipantInput = {
-  displayName: string;
-  metadata?: Record<string, unknown>;
-  transportAddressIds?: string[];
-};
+  displayName: string
+  metadata?: Record<string, unknown>
+  transportAddressIds?: string[]
+}
 
 type ConversationCreateInput = {
-  workspaceId: string;
-  creator: WorkspaceMemberIdentity;
-  clientRequestId: string;
-  kind: ConversationKind;
-  boundary: ConversationBoundary;
-  title?: string;
-  workspaceMemberIds: string[];
-  actorIds: string[];
-  externalParticipants: ConversationCreateExternalParticipantInput[];
-  metadata?: Record<string, unknown>;
-};
+  workspaceId: string
+  creator: WorkspaceMemberIdentity
+  clientRequestId: string
+  kind: ConversationKind
+  boundary: ConversationBoundary
+  title?: string
+  workspaceMemberIds: string[]
+  actorIds: string[]
+  externalParticipants: ConversationCreateExternalParticipantInput[]
+  metadata?: Record<string, unknown>
+}
 
 type RegisterClientInstanceInput = {
-  workspaceId: string;
-  workspaceMemberId: string;
-  platform?: string;
-  deviceLabel?: string;
-  metadata?: Record<string, unknown>;
-};
+  workspaceId: string
+  workspaceMemberId: string
+  platform?: string
+  deviceLabel?: string
+  metadata?: Record<string, unknown>
+}
 
 type UpdateClientInstanceInput = RegisterClientInstanceInput & {
-  clientInstanceId: string;
-};
+  clientInstanceId: string
+}
 
 type SendMessageInput = {
-  workspaceId: string;
-  workspaceMemberId: string;
-  conversationId: string;
-} & ChatConversationSendMessageRequest;
+  workspaceId: string
+  workspaceMemberId: string
+  conversationId: string
+} & ChatConversationSendMessageRequest
 
 type ReadWatermarkInput = {
-  workspaceId: string;
-  workspaceMemberId: string;
-  conversationId: string;
-  clientInstanceId: string;
-  readUpToSequence: number;
-  lastVisibleSequence?: number;
-};
+  workspaceId: string
+  workspaceMemberId: string
+  conversationId: string
+  clientInstanceId: string
+  readUpToSequence: number
+  lastVisibleSequence?: number
+}
 
 function createChatError(
   statusCode: number,
   code: string,
   message: string,
-  details?: Record<string, unknown>,
+  details?: Record<string, unknown>
 ): ChatServiceError {
-  const error = new Error(message) as ChatServiceError;
-  error.statusCode = statusCode;
-  error.code = code;
-  error.details = details;
-  return error;
+  const error = new Error(message) as ChatServiceError
+  error.statusCode = statusCode
+  error.code = code
+  error.details = details
+  return error
 }
 
 export function isChatServiceError(value: unknown): value is ChatServiceError {
   return Boolean(
     value &&
-      typeof value === "object" &&
-      "statusCode" in value &&
-      "code" in value,
-  );
+    typeof value === "object" &&
+    "statusCode" in value &&
+    "code" in value
+  )
 }
 
 function toNumber(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
+    return value
   }
   if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value);
+    const parsed = Number(value)
     if (Number.isFinite(parsed)) {
-      return parsed;
+      return parsed
     }
   }
-  return 0;
+  return 0
 }
 
 function toIso(value: unknown): string {
   if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = new Date(value);
+    const parsed = new Date(value)
     if (!Number.isNaN(parsed.getTime())) {
-      return parsed.toISOString();
+      return parsed.toISOString()
     }
   }
   if (value instanceof Date) {
-    return value.toISOString();
+    return value.toISOString()
   }
-  return new Date().toISOString();
+  return new Date().toISOString()
 }
 
 function asJsonRecord(value: unknown): Record<string, unknown> {
-  if (!value) return {};
+  if (!value) return {}
   if (typeof value === "object" && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
+    return value as Record<string, unknown>
   }
   if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(value);
+      const parsed = JSON.parse(value)
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-        return parsed as Record<string, unknown>;
+        return parsed as Record<string, unknown>
       }
     } catch {
-      return {};
+      return {}
     }
   }
-  return {};
+  return {}
 }
 
 const CONVERSATION_MESSAGE_SUBTYPE_SET = new Set<ConversationMessageSubtype>([
@@ -367,58 +372,55 @@ const CONVERSATION_MESSAGE_SUBTYPE_SET = new Set<ConversationMessageSubtype>([
   "system",
   "tool_result",
   "model_error_notice",
-]);
+])
 
 function isConversationMessageSubtype(
-  value: string,
+  value: string
 ): value is ConversationMessageSubtype {
   return CONVERSATION_MESSAGE_SUBTYPE_SET.has(
-    value as ConversationMessageSubtype,
-  );
+    value as ConversationMessageSubtype
+  )
 }
 
 function assertConversationMessageSubtype(
-  value: string,
+  value: string
 ): asserts value is ConversationMessageSubtype {
   if (!isConversationMessageSubtype(value)) {
-    throw new Error(`Unsupported conversation message subtype: ${value}`);
+    throw new Error(`Unsupported conversation message subtype: ${value}`)
   }
 }
 
 function asConversationFeedEventPayload<T extends ConversationFeedEventType>(
   eventType: T,
-  payload: unknown,
+  payload: unknown
 ): ConversationFeedEventPayloadMap[T] {
-  return asJsonRecord(payload) as unknown as ConversationFeedEventPayloadMap[T];
+  return asJsonRecord(payload) as unknown as ConversationFeedEventPayloadMap[T]
 }
 
 function asChatSyncEventPayload<T extends ChatSyncEventType>(
   eventType: T,
-  payload: unknown,
+  payload: unknown
 ): ChatSyncEventPayloadMap[T] {
-  return asJsonRecord(payload) as unknown as ChatSyncEventPayloadMap[T];
+  return asJsonRecord(payload) as unknown as ChatSyncEventPayloadMap[T]
 }
 
 async function enrichChatConversationItemForViewer(
   item: ChatConversationItem,
-  userId: string,
+  userId: string
 ): Promise<ChatConversationItem> {
-  if (
-    item.itemType !== "event" ||
-    item.subtype !== "interaction_requested"
-  ) {
-    return item;
+  if (item.itemType !== "event" || item.subtype !== "interaction_requested") {
+    return item
   }
 
-  const payload = item.eventPayload;
+  const payload = item.eventPayload
   const interaction =
     payload && typeof payload === "object" && "interaction" in payload
       ? (payload as ConversationFeedEventPayloadMap["interaction_requested"])
           .interaction
-      : undefined;
+      : undefined
 
   if (!interaction) {
-    return item;
+    return item
   }
 
   return {
@@ -427,134 +429,141 @@ async function enrichChatConversationItemForViewer(
       ...payload,
       interaction: await enrichInteractionForUser(
         interaction as InteractionRequestSummary,
-        userId,
+        userId
       ),
     },
-  } as ChatConversationItem;
+  } as ChatConversationItem
 }
 
 async function enrichChatConversationItemsForViewer(
   items: ChatConversationItem[],
-  userId: string,
+  userId: string
 ) {
   const enriched = await Promise.all(
-    items.map((item) => enrichChatConversationItemForViewer(item, userId)),
-  );
-  return enriched;
+    items.map((item) => enrichChatConversationItemForViewer(item, userId))
+  )
+  return enriched
 }
 
 async function enrichChatSyncEventPayloadForViewer<T extends ChatSyncEventType>(
   eventType: T,
   payload: ChatSyncEventPayloadMap[T],
-  userId: string,
+  userId: string
 ): Promise<ChatSyncEventPayloadMap[T]> {
   if (eventType === "conversation.item.created") {
-    const eventPayload = payload as ChatSyncEventPayloadMap["conversation.item.created"];
+    const eventPayload =
+      payload as ChatSyncEventPayloadMap["conversation.item.created"]
     return {
       ...eventPayload,
       item: await enrichChatConversationItemForViewer(
         eventPayload.item,
-        userId,
+        userId
       ),
-    } as ChatSyncEventPayloadMap[T];
+    } as ChatSyncEventPayloadMap[T]
   }
 
   if (eventType === "interaction.updated") {
-    const eventPayload = payload as ChatSyncEventPayloadMap["interaction.updated"];
+    const eventPayload =
+      payload as ChatSyncEventPayloadMap["interaction.updated"]
     return {
       ...eventPayload,
       interaction: await enrichInteractionForUser(
         eventPayload.interaction,
-        userId,
+        userId
       ),
-    } as ChatSyncEventPayloadMap[T];
+    } as ChatSyncEventPayloadMap[T]
   }
 
-  return payload;
+  return payload
 }
 
 function asParticipantTransportKind(
-  value: string | null | undefined,
+  value: string | null | undefined
 ): ConversationEntityRef["transportKind"] {
-  return value === "feishu" || value === "weixin" ? value : undefined;
+  return value === "feishu" || value === "weixin" ? value : undefined
 }
 
 function participantDisplayName(row: ParticipantRow): string {
   if (row.participant_kind === "workspace_member") {
     if (typeof row.user_name === "string" && row.user_name.trim()) {
-      return row.user_name.trim();
+      return row.user_name.trim()
     }
   }
   if (row.participant_kind === "actor") {
     if (typeof row.actor_name === "string" && row.actor_name.trim()) {
-      return row.actor_name.trim();
+      return row.actor_name.trim()
     }
   }
   if (row.participant_kind === "remote_agent") {
     if (typeof row.actor_name === "string" && row.actor_name.trim()) {
-      return row.actor_name.trim();
+      return row.actor_name.trim()
     }
   }
   if (
-    (row.participant_kind === "external" || row.participant_kind === "system") &&
+    (row.participant_kind === "external" ||
+      row.participant_kind === "system") &&
     typeof row.transport_display_name === "string" &&
     row.transport_display_name.trim()
   ) {
-    return row.transport_display_name.trim();
+    return row.transport_display_name.trim()
   }
   if (
-    (row.participant_kind === "external" || row.participant_kind === "system") &&
+    (row.participant_kind === "external" ||
+      row.participant_kind === "system") &&
     typeof row.display_name === "string" &&
     row.display_name.trim()
   ) {
-    return row.display_name.trim();
+    return row.display_name.trim()
   }
   if (typeof row.linked_user_name === "string" && row.linked_user_name.trim()) {
-    return row.linked_user_name.trim();
+    return row.linked_user_name.trim()
   }
   if (typeof row.user_name === "string" && row.user_name.trim()) {
-    return row.user_name.trim();
+    return row.user_name.trim()
   }
   if (typeof row.actor_name === "string" && row.actor_name.trim()) {
-    return row.actor_name.trim();
+    return row.actor_name.trim()
   }
   if (typeof row.display_name === "string" && row.display_name.trim()) {
-    return row.display_name.trim();
+    return row.display_name.trim()
   }
-  return row.participant_kind === "system" ? "System" : "Unknown";
+  return row.participant_kind === "system" ? "System" : "Unknown"
 }
 
 function participantAvatarUrl(row: ParticipantRow): string | undefined {
   const fileId =
     row.actor_avatar_file_id ??
     row.user_avatar_file_id ??
-    row.linked_user_avatar_file_id;
-  return fileId ? getFileUrlById(fileId) : undefined;
+    row.linked_user_avatar_file_id
+  return fileId ? getFileUrlById(fileId) : undefined
 }
 
 function participantAvatarEmoji(row: ParticipantRow): string | undefined {
-  return row.actor_avatar_emoji ?? undefined;
+  return row.actor_avatar_emoji ?? undefined
 }
 
 function previewTextFromItem(item: ChatConversationItem | undefined): string {
-  if (!item) return "";
-  const text = item.content.trim() || extractText(item.contentBlocks).trim();
-  if (text) return text;
-  return item.itemType === "message" ? "Attachment" : `[${item.subtype}]`;
+  if (!item) return ""
+  const text = item.content.trim() || extractText(item.contentBlocks).trim()
+  if (text) return text
+  return item.itemType === "message" ? "Attachment" : `[${item.subtype}]`
 }
 
 function computeConversationTitle(params: {
-  baseTitle: string | null;
-  kind: ConversationKind;
-  participants: ChatParticipantSummary[];
-  viewerWorkspaceMemberId: string;
+  baseTitle: string | null
+  kind: ConversationKind
+  participants: ChatParticipantSummary[]
+  viewerWorkspaceMemberId: string
 }): string {
-  const baseTitle = typeof params.baseTitle === "string" ? params.baseTitle.trim() : "";
+  const baseTitle =
+    typeof params.baseTitle === "string" ? params.baseTitle.trim() : ""
   if (baseTitle) {
-    return baseTitle;
+    return baseTitle
   }
 
-  const active = params.participants.filter((participant) => participant.state === "active");
+  const active = params.participants.filter(
+    (participant) => participant.state === "active"
+  )
   const labels =
     params.kind === "private"
       ? active
@@ -563,47 +572,49 @@ function computeConversationTitle(params: {
               !(
                 participant.participantType === "workspace_member" &&
                 participant.workspaceMemberId === params.viewerWorkspaceMemberId
-              ),
+              )
           )
           .map((participant) => participant.name)
-      : active.map((participant) => participant.name);
+      : active.map((participant) => participant.name)
 
-  const uniqueLabels = [...new Set(labels.filter(Boolean))];
+  const uniqueLabels = [...new Set(labels.filter(Boolean))]
   if (uniqueLabels.length === 0) {
-    return params.kind === "private" ? "Direct message" : "Untitled conversation";
+    return params.kind === "private"
+      ? "Direct message"
+      : "Untitled conversation"
   }
   if (uniqueLabels.length <= 3) {
-    return uniqueLabels.join(", ");
+    return uniqueLabels.join(", ")
   }
-  return `${uniqueLabels.slice(0, 3).join(", ")} +${uniqueLabels.length - 3}`;
+  return `${uniqueLabels.slice(0, 3).join(", ")} +${uniqueLabels.length - 3}`
 }
 
 function buildConversationPresentation(params: {
-  kind: ConversationKind;
-  boundary: ConversationBoundary;
-  participants: ChatParticipantSummary[];
-  viewerWorkspaceMemberId: string;
+  kind: ConversationKind
+  boundary: ConversationBoundary
+  participants: ChatParticipantSummary[]
+  viewerWorkspaceMemberId: string
 }) {
   const activeParticipants = params.participants.filter(
-    (participant) => participant.state === "active",
-  );
+    (participant) => participant.state === "active"
+  )
   const peer =
     params.kind === "private"
-      ? activeParticipants.find(
+      ? (activeParticipants.find(
           (participant) =>
             !(
               participant.participantType === "workspace_member" &&
               participant.workspaceMemberId === params.viewerWorkspaceMemberId
-            ),
-        ) ?? activeParticipants[0]
-      : undefined;
+            )
+        ) ?? activeParticipants[0])
+      : undefined
   const avatarParticipants =
     params.kind === "private"
       ? peer
         ? [peer]
         : activeParticipants.slice(0, 1)
-      : activeParticipants.slice(0, 4);
-  const boundaryLabel = params.boundary === "external" ? "External" : "Internal";
+      : activeParticipants.slice(0, 4)
+  const boundaryLabel = params.boundary === "external" ? "External" : "Internal"
 
   return {
     chatType:
@@ -619,21 +630,21 @@ function buildConversationPresentation(params: {
           ? `${boundaryLabel} virtual chat`
           : `${boundaryLabel} group chat`,
     avatarParticipantIds: avatarParticipants.map(
-      (participant) => participant.participantId,
+      (participant) => participant.participantId
     ),
     peerParticipantId: peer?.participantId,
     avatarUrl: peer?.avatarUrl,
     avatarEmoji: peer?.avatarEmoji,
-  } satisfies ChatConversationView["presentation"];
+  } satisfies ChatConversationView["presentation"]
 }
 
 function isUniqueViolation(error: unknown) {
-  const candidate = error as { code?: string } | null;
+  const candidate = error as { code?: string } | null
   return (
     candidate !== null &&
     typeof candidate === "object" &&
     candidate.code === "23505"
-  );
+  )
 }
 
 function rootQueryable(): Queryable {
@@ -643,27 +654,31 @@ function rootQueryable(): Queryable {
         rows: result.rows,
         rowCount: result.rowCount,
       })),
-  };
+  }
 }
 
 async function getWorkspaceMemberIdentityOrThrow(
   workspaceId: string,
-  userId: string,
+  userId: string
 ) {
   try {
-    return await requireWorkspaceMemberIdentity(workspaceId, userId);
+    return await requireWorkspaceMemberIdentity(workspaceId, userId)
   } catch {
-    throw createChatError(403, "workspace_access_denied", "You are not a member of this workspace");
+    throw createChatError(
+      403,
+      "workspace_access_denied",
+      "You are not a member of this workspace"
+    )
   }
 }
 
 async function ensureClientInstance(
   queryable: Queryable,
-  input: UpdateClientInstanceInput,
+  input: UpdateClientInstanceInput
 ) {
   const existing = await executeSqlOn<{
-    workspace_id: string;
-    workspace_member_id: string;
+    workspace_id: string
+    workspace_member_id: string
   }>(
     queryable,
     `
@@ -672,25 +687,33 @@ async function ensureClientInstance(
       WHERE id = $1
       LIMIT 1
     `,
-    [input.clientInstanceId],
-  );
-  const owner = existing.rows[0];
+    [input.clientInstanceId]
+  )
+  const owner = existing.rows[0]
   if (!owner) {
-    throw createChatError(404, "client_instance_not_found", "Client instance not found");
+    throw createChatError(
+      404,
+      "client_instance_not_found",
+      "Client instance not found"
+    )
   }
   if (
     owner.workspace_id !== input.workspaceId ||
     owner.workspace_member_id !== input.workspaceMemberId
   ) {
-    throw createChatError(403, "client_instance_forbidden", "Client instance belongs to another workspace member");
+    throw createChatError(
+      403,
+      "client_instance_forbidden",
+      "Client instance belongs to another workspace member"
+    )
   }
 }
 
 async function createClientInstance(
   queryable: Queryable,
-  input: RegisterClientInstanceInput,
+  input: RegisterClientInstanceInput
 ) {
-  const clientInstanceId = randomUUID();
+  const clientInstanceId = randomUUID()
   await executeSqlOn(
     queryable,
     `
@@ -715,17 +738,17 @@ async function createClientInstance(
       input.platform ?? null,
       input.deviceLabel ?? null,
       JSON.stringify(input.metadata ?? {}),
-    ],
-  );
+    ]
+  )
 
-  return clientInstanceId;
+  return clientInstanceId
 }
 
 async function touchClientInstance(
   queryable: Queryable,
-  input: UpdateClientInstanceInput,
+  input: UpdateClientInstanceInput
 ) {
-  await ensureClientInstance(queryable, input);
+  await ensureClientInstance(queryable, input)
 
   await executeSqlOn(
     queryable,
@@ -744,43 +767,43 @@ async function touchClientInstance(
       input.platform ?? null,
       input.deviceLabel ?? null,
       JSON.stringify(input.metadata ?? {}),
-    ],
-  );
+    ]
+  )
 }
 
 async function listConversationParticipantRows(
   queryable: Queryable,
   conversationIds: string[],
-  options?: { useProfileSnapshot?: boolean },
+  options?: { useProfileSnapshot?: boolean }
 ) {
   if (conversationIds.length === 0) {
-    return [] as ParticipantRow[];
+    return [] as ParticipantRow[]
   }
 
   const actorNameExpr = options?.useProfileSnapshot
     ? "COALESCE(ra.name, joined_version.name, a.name)"
-    : "COALESCE(ra.name, a.name)";
+    : "COALESCE(ra.name, a.name)"
   const actorTitleExpr = options?.useProfileSnapshot
     ? "COALESCE(ra.title, joined_version.title, a.title)"
-    : "COALESCE(ra.title, a.title)";
+    : "COALESCE(ra.title, a.title)"
   const actorRoleExpr = options?.useProfileSnapshot
     ? "COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, joined_version.role::text, a.role::text)"
-    : "COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text)";
+    : "COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text)"
   const actorCanRepresentExpr = options?.useProfileSnapshot
     ? "COALESCE(joined_version.can_represent_user, a.can_represent_user)"
-    : "a.can_represent_user";
+    : "a.can_represent_user"
   const actorSpecialtiesExpr = options?.useProfileSnapshot
     ? "COALESCE(joined_version.specialties, a.specialties)"
-    : "a.specialties";
+    : "a.specialties"
   const actorConfigExpr = options?.useProfileSnapshot
     ? "COALESCE(joined_version.config, a.config)"
-    : "a.config";
+    : "a.config"
   const actorCurrentVersionExpr = options?.useProfileSnapshot
     ? "COALESCE(joined_version.version, a.current_version)"
-    : "a.current_version";
+    : "a.current_version"
   const actorDocVersionExpr = options?.useProfileSnapshot
     ? "COALESCE(cp.actor_join_version_id, current_version.id)"
-    : "current_version.id";
+    : "current_version.id"
 
   const result = await executeSqlOn<ParticipantRow>(
     queryable,
@@ -879,16 +902,16 @@ async function listConversationParticipantRows(
       WHERE cp.conversation_id = ANY($1::uuid[])
       ORDER BY cp.conversation_id ASC, cp.joined_at ASC, cp.id ASC
     `,
-    [conversationIds],
-  );
+    [conversationIds]
+  )
 
-  return result.rows;
+  return result.rows
 }
 
 async function getWorkspaceMemberConversationParticipantRow(
   queryable: Queryable,
   conversationId: string,
-  workspaceMemberId: string,
+  workspaceMemberId: string
 ) {
   const result = await executeSqlOn<ParticipantRow>(
     queryable,
@@ -964,16 +987,16 @@ async function getWorkspaceMemberConversationParticipantRow(
         AND cp.workspace_member_id = $2
       LIMIT 1
     `,
-    [conversationId, workspaceMemberId],
-  );
+    [conversationId, workspaceMemberId]
+  )
 
-  return result.rows[0] ?? null;
+  return result.rows[0] ?? null
 }
 
 async function getConversationBaseRow(
   queryable: Queryable,
   workspaceMemberId: string,
-  conversationId: string,
+  conversationId: string
 ) {
   const result = await executeSqlOn<ConversationBaseRow>(
     queryable,
@@ -998,15 +1021,15 @@ async function getConversationBaseRow(
         AND v.conversation_id = $2
       LIMIT 1
     `,
-    [workspaceMemberId, conversationId],
-  );
+    [workspaceMemberId, conversationId]
+  )
 
-  return result.rows[0] ?? null;
+  return result.rows[0] ?? null
 }
 
 async function listConversationBaseRows(
   queryable: Queryable,
-  workspaceMemberId: string,
+  workspaceMemberId: string
 ) {
   const result = await executeSqlOn<ConversationBaseRow>(
     queryable,
@@ -1034,18 +1057,15 @@ async function listConversationBaseRows(
         COALESCE(v.last_visible_at, c.updated_at, c.created_at) DESC,
         c.id ASC
     `,
-    [workspaceMemberId],
-  );
+    [workspaceMemberId]
+  )
 
-  return result.rows;
+  return result.rows
 }
 
-async function listItemRowsByIds(
-  queryable: Queryable,
-  itemIds: string[],
-) {
+async function listItemRowsByIds(queryable: Queryable, itemIds: string[]) {
   if (itemIds.length === 0) {
-    return [] as ItemRow[];
+    return [] as ItemRow[]
   }
 
   const result = await executeSqlOn<ItemRow>(
@@ -1074,21 +1094,21 @@ async function listItemRowsByIds(
       FROM conversation_items
       WHERE id = ANY($1::uuid[])
     `,
-    [itemIds],
-  );
+    [itemIds]
+  )
 
-  return result.rows;
+  return result.rows
 }
 
 async function hydrateConversationItems(
   queryable: Queryable,
-  itemRows: ItemRow[],
+  itemRows: ItemRow[]
 ) {
   if (itemRows.length === 0) {
-    return [] as HydratedConversationItemRecord[];
+    return [] as HydratedConversationItemRecord[]
   }
 
-  const itemIds = itemRows.map((row) => row.id);
+  const itemIds = itemRows.map((row) => row.id)
   const [partsResult, restrictedAudienceResult] = await Promise.all([
     executeSqlOn<ItemPartRow>(
       queryable,
@@ -1107,7 +1127,7 @@ async function hydrateConversationItems(
         WHERE item_id = ANY($1::uuid[])
         ORDER BY item_id ASC, ordinal ASC
       `,
-      [itemIds],
+      [itemIds]
     ),
     executeSqlOn<ParticipantLinkRow>(
       queryable,
@@ -1117,29 +1137,31 @@ async function hydrateConversationItems(
         WHERE item_id = ANY($1::uuid[])
         ORDER BY item_id ASC, target_participant_id ASC
       `,
-      [itemIds],
+      [itemIds]
     ),
-  ]);
+  ])
 
-  const partsByItem = new Map<string, ItemPartRow[]>();
+  const partsByItem = new Map<string, ItemPartRow[]>()
   for (const row of partsResult.rows) {
-    const current = partsByItem.get(row.item_id) ?? [];
-    current.push(row);
-    partsByItem.set(row.item_id, current);
+    const current = partsByItem.get(row.item_id) ?? []
+    current.push(row)
+    partsByItem.set(row.item_id, current)
   }
 
-  const restrictedAudienceByItem = new Map<string, string[]>();
+  const restrictedAudienceByItem = new Map<string, string[]>()
   for (const row of restrictedAudienceResult.rows) {
-    const current = restrictedAudienceByItem.get(row.item_id) ?? [];
-    current.push(row.target_participant_id);
-    restrictedAudienceByItem.set(row.item_id, current);
+    const current = restrictedAudienceByItem.get(row.item_id) ?? []
+    current.push(row.target_participant_id)
+    restrictedAudienceByItem.set(row.item_id, current)
   }
 
-  const itemMap = new Map<string, HydratedConversationItemRecord>();
+  const itemMap = new Map<string, HydratedConversationItemRecord>()
   for (const row of itemRows) {
     const contentBlocks = itemPartsToCanonicalContentBlocks(
-      (partsByItem.get(row.id) ?? []) as Parameters<typeof itemPartsToCanonicalContentBlocks>[0],
-    );
+      (partsByItem.get(row.id) ?? []) as Parameters<
+        typeof itemPartsToCanonicalContentBlocks
+      >[0]
+    )
     itemMap.set(row.id, {
       id: row.id,
       conversationId: row.conversation_id,
@@ -1159,89 +1181,92 @@ async function hydrateConversationItems(
       restrictedAudienceParticipantIds:
         restrictedAudienceByItem.get(row.id) ?? [],
       createdAt: toIso(row.created_at),
-    });
+    })
   }
 
-  return itemRows.map((row) => itemMap.get(row.id)!).filter(Boolean);
+  return itemRows.map((row) => itemMap.get(row.id)!).filter(Boolean)
 }
 
 async function loadConversationViews(
   queryable: Queryable,
   workspaceId: string,
   workspaceMemberId: string,
-  conversationIds?: string[],
+  conversationIds?: string[]
 ) {
   const baseRows = conversationIds
     ? await Promise.all(
         conversationIds.map((conversationId) =>
-          getConversationBaseRow(queryable, workspaceMemberId, conversationId),
-        ),
+          getConversationBaseRow(queryable, workspaceMemberId, conversationId)
+        )
       ).then((rows) => rows.filter(Boolean) as ConversationBaseRow[])
-    : await listConversationBaseRows(queryable, workspaceMemberId);
+    : await listConversationBaseRows(queryable, workspaceMemberId)
 
   if (baseRows.length === 0) {
-    return [] as ChatConversationView[];
+    return [] as ChatConversationView[]
   }
 
-  const ids = baseRows.map((row) => row.conversation_id);
-  const participants = await listConversationParticipantRows(queryable, ids);
-  const participantsByConversation = new Map<string, ParticipantRow[]>();
+  const ids = baseRows.map((row) => row.conversation_id)
+  const participants = await listConversationParticipantRows(queryable, ids)
+  const participantsByConversation = new Map<string, ParticipantRow[]>()
   for (const row of participants) {
-    const current = participantsByConversation.get(row.conversation_id) ?? [];
-    current.push(row);
-    participantsByConversation.set(row.conversation_id, current);
+    const current = participantsByConversation.get(row.conversation_id) ?? []
+    current.push(row)
+    participantsByConversation.set(row.conversation_id, current)
   }
 
   const lastItemIds = baseRows
     .map((row) => row.last_visible_item_id)
-    .filter((value): value is string => Boolean(value));
-  const lastItemRows = await listItemRowsByIds(queryable, [...new Set(lastItemIds)]);
-  const lastItems = await buildChatConversationItems(queryable, lastItemRows);
-  const lastItemById = new Map(lastItems.map((item) => [item.id, item]));
+    .filter((value): value is string => Boolean(value))
+  const lastItemRows = await listItemRowsByIds(queryable, [
+    ...new Set(lastItemIds),
+  ])
+  const lastItems = await buildChatConversationItems(queryable, lastItemRows)
+  const lastItemById = new Map(lastItems.map((item) => [item.id, item]))
 
   return baseRows.map((row) => {
-    const conversationParticipants = participantsByConversation.get(row.conversation_id) ?? [];
+    const conversationParticipants =
+      participantsByConversation.get(row.conversation_id) ?? []
     const mappedParticipants = conversationParticipants.map(
-      participantRowToChatParticipantSummary,
-    );
+      participantRowToChatParticipantSummary
+    )
     const viewerMembership = conversationParticipants.find(
       (participant) =>
         participant.state === "active" &&
         participant.participant_kind === "workspace_member" &&
-        participant.workspace_member_id === workspaceMemberId,
-    );
+        participant.workspace_member_id === workspaceMemberId
+    )
     const viewerConversationRole =
       viewerMembership?.role_key === "owner" ||
       viewerMembership?.role_key === "admin" ||
       viewerMembership?.role_key === "member"
         ? viewerMembership.role_key
-        : "member";
+        : "member"
     const canManageConversation =
       row.kind !== "private" &&
-      (viewerConversationRole === "owner" || viewerConversationRole === "admin");
-    const canRename = row.kind !== "private" && canManageConversation;
-    const canManageParticipants = canManageConversation;
+      (viewerConversationRole === "owner" || viewerConversationRole === "admin")
+    const canRename = row.kind !== "private" && canManageConversation
+    const canManageParticipants = canManageConversation
     const status = conversationParticipants.some(
       (participant) =>
-        participant.actor_id && participant.session_status !== "closed",
+        participant.actor_id && participant.session_status !== "closed"
     )
       ? "active"
-      : "completed";
+      : "completed"
     const title = computeConversationTitle({
       baseTitle: row.title,
       kind: row.kind,
       participants: mappedParticipants,
       viewerWorkspaceMemberId: workspaceMemberId,
-    });
+    })
     const presentation = buildConversationPresentation({
       kind: row.kind,
       boundary: row.boundary,
       participants: mappedParticipants,
       viewerWorkspaceMemberId: workspaceMemberId,
-    });
+    })
     const lastItem = row.last_visible_item_id
       ? lastItemById.get(row.last_visible_item_id)
-      : undefined;
+      : undefined
     return {
       conversationId: row.conversation_id,
       workspaceId,
@@ -1252,7 +1277,9 @@ async function loadConversationViews(
       unreadCount: toNumber(row.unread_count),
       muted: Boolean(row.muted),
       archived: Boolean(row.archived),
-      pinnedSortKey: row.pinned_sort_key ? toIso(row.pinned_sort_key) : undefined,
+      pinnedSortKey: row.pinned_sort_key
+        ? toIso(row.pinned_sort_key)
+        : undefined,
       updatedAt: toIso(row.updated_at),
       createdAt: toIso(row.created_at),
       participants: mappedParticipants,
@@ -1275,24 +1302,29 @@ async function loadConversationViews(
             createdAt: lastItem.createdAt,
           }
         : undefined,
-    } satisfies ChatConversationView;
-  });
+    } satisfies ChatConversationView
+  })
 }
 
 async function loadConversationView(
   queryable: Queryable,
   workspaceId: string,
   workspaceMemberId: string,
-  conversationId: string,
+  conversationId: string
 ) {
-  const views = await loadConversationViews(queryable, workspaceId, workspaceMemberId, [conversationId]);
-  return views[0] ?? null;
+  const views = await loadConversationViews(
+    queryable,
+    workspaceId,
+    workspaceMemberId,
+    [conversationId]
+  )
+  return views[0] ?? null
 }
 
 async function getCurrentSyncCursor(
   queryable: Queryable,
   workspaceId: string,
-  workspaceMemberId: string,
+  workspaceMemberId: string
 ) {
   const result = await executeSqlOn<{ cursor: string | number }>(
     queryable,
@@ -1302,15 +1334,15 @@ async function getCurrentSyncCursor(
       WHERE workspace_id = $1
         AND workspace_member_id = $2
     `,
-    [workspaceId, workspaceMemberId],
-  );
-  return toNumber(result.rows[0]?.cursor);
+    [workspaceId, workspaceMemberId]
+  )
+  return toNumber(result.rows[0]?.cursor)
 }
 
 async function countUnreadVisibleMessages(
   queryable: Queryable,
   conversationId: string,
-  participantId: string,
+  participantId: string
 ) {
   const result = await executeSqlOn<{ unread_count: string | number }>(
     queryable,
@@ -1342,20 +1374,20 @@ async function countUnreadVisibleMessages(
           )
         )
     `,
-    [conversationId, participantId],
-  );
+    [conversationId, participantId]
+  )
 
-  return toNumber(result.rows[0]?.unread_count);
+  return toNumber(result.rows[0]?.unread_count)
 }
 
 async function syncVisibleSharedItem(params: {
-  queryable: Queryable;
-  workspaceId?: string;
-  conversationId: string;
-  item: ChatConversationItem;
-  activeParticipants: ParticipantRow[];
-  authorParticipantId?: string;
-  restrictedAudienceParticipantIds?: string[];
+  queryable: Queryable
+  workspaceId?: string
+  conversationId: string
+  item: ChatConversationItem
+  activeParticipants: ParticipantRow[]
+  authorParticipantId?: string
+  restrictedAudienceParticipantIds?: string[]
 }) {
   const effectiveVisibleParticipantIds =
     params.restrictedAudienceParticipantIds &&
@@ -1366,20 +1398,20 @@ async function syncVisibleSharedItem(params: {
             ...(params.authorParticipantId ? [params.authorParticipantId] : []),
           ]),
         ]
-      : params.activeParticipants.map((participant) => participant.id);
+      : params.activeParticipants.map((participant) => participant.id)
 
   const visibleHumanParticipants = params.activeParticipants.filter(
     (participant) =>
       participant.workspace_member_id &&
-      effectiveVisibleParticipantIds.includes(participant.id),
-  );
+      effectiveVisibleParticipantIds.includes(participant.id)
+  )
 
   for (const participant of visibleHumanParticipants) {
     const unreadCount = await countUnreadVisibleMessages(
       params.queryable,
       params.conversationId,
-      participant.id,
-    );
+      participant.id
+    )
     await upsertConversationView(params.queryable, {
       workspaceMemberId: participant.workspace_member_id!,
       conversationId: params.conversationId,
@@ -1390,7 +1422,7 @@ async function syncVisibleSharedItem(params: {
       summary: {
         previewText: previewTextFromItem(params.item),
       },
-    });
+    })
   }
 
   if (params.workspaceId) {
@@ -1405,7 +1437,7 @@ async function syncVisibleSharedItem(params: {
           conversationId: params.conversationId,
           item: params.item,
         },
-      });
+      })
     }
 
     await syncConversationUpsertForWorkspaceMembers(
@@ -1414,22 +1446,22 @@ async function syncVisibleSharedItem(params: {
       visibleHumanParticipants
         .map((participant) => participant.workspace_member_id)
         .filter((value): value is string => Boolean(value)),
-      params.conversationId,
-    );
+      params.conversationId
+    )
   }
 }
 
 async function upsertConversationView(
   queryable: Queryable,
   params: {
-    workspaceMemberId: string;
-    conversationId: string;
-    lastVisibleItemId?: string | null;
-    lastVisibleSequence?: number;
-    lastVisibleAt?: string;
-    unreadCount: number;
-    summary?: Record<string, unknown>;
-  },
+    workspaceMemberId: string
+    conversationId: string
+    lastVisibleItemId?: string | null
+    lastVisibleSequence?: number
+    lastVisibleAt?: string
+    unreadCount: number
+    summary?: Record<string, unknown>
+  }
 ) {
   await executeSqlOn(
     queryable,
@@ -1462,24 +1494,26 @@ async function upsertConversationView(
       params.lastVisibleAt ?? null,
       params.unreadCount,
       JSON.stringify(params.summary ?? {}),
-    ],
-  );
+    ]
+  )
 }
 
-export async function appendWorkspaceMemberSyncEvent<T extends ChatSyncEventType>(
+export async function appendWorkspaceMemberSyncEvent<
+  T extends ChatSyncEventType,
+>(
   queryable: Queryable,
   params: {
-    workspaceId: string;
-    workspaceMemberId: string;
-    conversationId?: string;
-    itemId?: string;
-    eventType: T;
-    payload: ChatSyncEventPayloadMap[T];
-  },
+    workspaceId: string
+    workspaceMemberId: string
+    conversationId?: string
+    itemId?: string
+    eventType: T
+    payload: ChatSyncEventPayloadMap[T]
+  }
 ) {
   const inserted = await executeSqlOn<{
-    sync_seq: string | number;
-    occurred_at: string | Date;
+    sync_seq: string | number
+    occurred_at: string | Date
   }>(
     queryable,
     `
@@ -1503,10 +1537,10 @@ export async function appendWorkspaceMemberSyncEvent<T extends ChatSyncEventType
       params.itemId ?? null,
       params.eventType,
       JSON.stringify(params.payload),
-    ],
-  );
+    ]
+  )
 
-  const row = inserted.rows[0];
+  const row = inserted.rows[0]
   const envelope: ChatSyncEvent<T> = {
     syncSeq: toNumber(row?.sync_seq),
     workspaceId: params.workspaceId,
@@ -1516,7 +1550,7 @@ export async function appendWorkspaceMemberSyncEvent<T extends ChatSyncEventType
     eventType: params.eventType,
     payload: params.payload,
     occurredAt: toIso(row?.occurred_at),
-  };
+  }
 
   await enqueueTransactionalEvent(queryable, {
     type: "chat.sync.event",
@@ -1524,14 +1558,14 @@ export async function appendWorkspaceMemberSyncEvent<T extends ChatSyncEventType
     recipientWorkspaceMemberId: params.workspaceMemberId,
     payload: envelope as unknown as Record<string, unknown>,
     timestamp: envelope.occurredAt,
-  });
+  })
 
-  return envelope;
+  return envelope
 }
 
 async function getConversationSequenceMax(
   queryable: Queryable,
-  conversationId: string,
+  conversationId: string
 ) {
   const result = await executeSqlOn<{ max_sequence: string | number | null }>(
     queryable,
@@ -1540,16 +1574,16 @@ async function getConversationSequenceMax(
       FROM conversation_items
       WHERE conversation_id = $1
     `,
-    [conversationId],
-  );
+    [conversationId]
+  )
 
-  return toNumber(result.rows[0]?.max_sequence);
+  return toNumber(result.rows[0]?.max_sequence)
 }
 
 async function getLastItemAtOrBeforeSequence(
   queryable: Queryable,
   conversationId: string,
-  sequence: number,
+  sequence: number
 ) {
   const result = await executeSqlOn<{ id: string }>(
     queryable,
@@ -1561,150 +1595,166 @@ async function getLastItemAtOrBeforeSequence(
       ORDER BY sequence DESC
       LIMIT 1
     `,
-    [conversationId, sequence],
-  );
-  return result.rows[0]?.id ?? null;
+    [conversationId, sequence]
+  )
+  return result.rows[0]?.id ?? null
 }
 
 async function requireConversationAccess(
   queryable: Queryable,
   conversationId: string,
-  workspaceMemberId: string,
+  workspaceMemberId: string
 ) {
   const participant = await getWorkspaceMemberConversationParticipantRow(
     queryable,
     conversationId,
-    workspaceMemberId,
-  );
+    workspaceMemberId
+  )
   if (!participant || participant.state !== "active") {
-    throw createChatError(403, "conversation_access_denied", "You are not a participant in this conversation");
+    throw createChatError(
+      403,
+      "conversation_access_denied",
+      "You are not a participant in this conversation"
+    )
   }
 
-  const baseRow = await getConversationBaseRow(queryable, workspaceMemberId, conversationId);
+  const baseRow = await getConversationBaseRow(
+    queryable,
+    workspaceMemberId,
+    conversationId
+  )
   if (!baseRow) {
-    throw createChatError(404, "conversation_not_found", "Conversation not found");
+    throw createChatError(
+      404,
+      "conversation_not_found",
+      "Conversation not found"
+    )
   }
 
   return {
     participant,
     baseRow,
-  };
+  }
 }
 
 type PendingActorWakeup = {
-  actorId: string;
-  sessionId: string;
-  sourceType: "user_message" | "actor_message";
-};
+  actorId: string
+  sessionId: string
+  sourceType: "user_message" | "actor_message"
+}
 
 type MentionedParticipantRef = {
-  participantId: string;
-  ordinal: number;
-};
+  participantId: string
+  ordinal: number
+}
 
 type PreparedConversationItemWrite = {
-  activeParticipants: ParticipantRow[];
-  parts: ConversationItemPartInput[];
-  mentionedParticipants: MentionedParticipantRef[];
-  replyToItem: ItemRow | null;
-};
+  activeParticipants: ParticipantRow[]
+  parts: ConversationItemPartInput[]
+  mentionedParticipants: MentionedParticipantRef[]
+  replyToItem: ItemRow | null
+}
 
-function parseMentionBlockFromPart(
-  part: ConversationItemPartInput,
-) {
+function parseMentionBlockFromPart(part: ConversationItemPartInput) {
   if (part.type !== "json" || !part.json) {
-    return null;
+    return null
   }
-  const normalized = normalizeCanonicalContentBlocks([part.json as any]);
-  const block = normalized[0];
-  return block?.type === "mention" ? block : null;
+  const normalized = normalizeCanonicalContentBlocks([part.json as any])
+  const block = normalized[0]
+  return block?.type === "mention" ? block : null
 }
 
 function resolveMentionedConversationParticipant(
   participants: ParticipantRow[],
-  mention: ConversationEntityRef,
+  mention: ConversationEntityRef
 ) {
   const activeParticipants = participants.filter(
-    (participant) => participant.state === "active",
-  );
+    (participant) => participant.state === "active"
+  )
   if (mention.participantId) {
     return activeParticipants.find(
-      (participant) => participant.id === mention.participantId,
-    );
+      (participant) => participant.id === mention.participantId
+    )
   }
   if (mention.workspaceMemberId) {
     return activeParticipants.find(
       (participant) =>
-        participant.workspace_member_id === mention.workspaceMemberId,
-    );
+        participant.workspace_member_id === mention.workspaceMemberId
+    )
   }
   if (mention.actorId) {
     return activeParticipants.find(
-      (participant) => participant.actor_id === mention.actorId,
-    );
+      (participant) => participant.actor_id === mention.actorId
+    )
   }
   if (mention.externalUserKey) {
     return activeParticipants.find(
       (participant) =>
         participantRowToEntityRef(participant)?.externalUserKey ===
-        mention.externalUserKey,
-    );
+        mention.externalUserKey
+    )
   }
-  return null;
+  return null
 }
 
 async function canonicalizeConversationItemParts(
   queryable: Queryable,
   params: {
-    conversationId: string;
-    parts?: ConversationItemPartInput[];
-    activeParticipants?: ParticipantRow[];
-  },
+    conversationId: string
+    parts?: ConversationItemPartInput[]
+    activeParticipants?: ParticipantRow[]
+  }
 ): Promise<{
-  parts: ConversationItemPartInput[];
-  mentionedParticipants: MentionedParticipantRef[];
+  parts: ConversationItemPartInput[]
+  mentionedParticipants: MentionedParticipantRef[]
 }> {
-  const originalParts = params.parts ?? [];
+  const originalParts = params.parts ?? []
   if (originalParts.length === 0) {
     return {
       parts: [],
       mentionedParticipants: [],
-    };
+    }
   }
   const participants =
     params.activeParticipants ??
-    (await listConversationParticipantRows(queryable, [params.conversationId], {
-      useProfileSnapshot: true,
-    })).filter((participant) => participant.state === "active");
-  const parts: ConversationItemPartInput[] = [];
-  const mentionedParticipants: MentionedParticipantRef[] = [];
+    (
+      await listConversationParticipantRows(
+        queryable,
+        [params.conversationId],
+        {
+          useProfileSnapshot: true,
+        }
+      )
+    ).filter((participant) => participant.state === "active")
+  const parts: ConversationItemPartInput[] = []
+  const mentionedParticipants: MentionedParticipantRef[] = []
 
   for (const [ordinal, part] of originalParts.entries()) {
-    const mentionBlock = parseMentionBlockFromPart(part);
+    const mentionBlock = parseMentionBlockFromPart(part)
     if (!mentionBlock) {
-      parts.push(part);
-      continue;
+      parts.push(part)
+      continue
     }
 
     const participant = resolveMentionedConversationParticipant(
       participants,
-      mentionBlock.mention,
-    );
+      mentionBlock.mention
+    )
     if (!participant) {
       throw createChatError(
         400,
         "invalid_mention",
-        "One or more mentions are invalid for this conversation",
-      );
+        "One or more mentions are invalid for this conversation"
+      )
     }
     const canonicalMention = {
       ...mentionBlock,
       mention: participantRowToEntityRef(participant)!,
-    };
+    }
     mentionedParticipants.push({
       participantId: participant.id,
       ordinal,
-    });
+    })
     parts.push({
       ...part,
       json: canonicalMention,
@@ -1712,23 +1762,23 @@ async function canonicalizeConversationItemParts(
         ...(part.metadata ?? {}),
         mention: canonicalMention.mention,
       },
-    });
+    })
   }
 
   return {
     parts,
     mentionedParticipants,
-  };
+  }
 }
 
 async function validateConversationReplyTarget(
   queryable: Queryable,
   conversationId: string,
   replyToItemId?: string,
-  authorParticipantId?: string,
+  authorParticipantId?: string
 ) {
   if (!replyToItemId) {
-    return null;
+    return null
   }
   const rows = await executeSqlOn<ItemRow>(
     queryable,
@@ -1775,36 +1825,36 @@ async function validateConversationReplyTarget(
         )
       LIMIT 1
     `,
-    [replyToItemId, conversationId, authorParticipantId ?? null],
-  );
-  const row = rows.rows[0] ?? null;
+    [replyToItemId, conversationId, authorParticipantId ?? null]
+  )
+  const row = rows.rows[0] ?? null
   if (!row) {
     throw createChatError(
       400,
       "invalid_reply_to_item",
-      "replyToItemId must reference a visible item in the same conversation",
-    );
+      "replyToItemId must reference a visible item in the same conversation"
+    )
   }
-  return row;
+  return row
 }
 
 export async function resolveConversationReplyRef(params: {
-  queryable?: Queryable;
-  conversationId: string;
-  participantId?: string;
-  replyRef?: string;
+  queryable?: Queryable
+  conversationId: string
+  participantId?: string
+  replyRef?: string
 }) {
   if (!params.replyRef) {
-    return null;
+    return null
   }
 
-  const sequence = parseConversationMessageRef(params.replyRef);
+  const sequence = parseConversationMessageRef(params.replyRef)
   if (!Number.isFinite(sequence)) {
     throw createChatError(
       400,
       "invalid_reply_ref",
-      'replyToRef must use the form "m_<sequence>"',
-    );
+      'replyToRef must use the form "m_<sequence>"'
+    )
   }
 
   const exactSql = `
@@ -1830,25 +1880,25 @@ export async function resolveConversationReplyRef(params: {
           )
         )
       LIMIT 1
-    `;
+    `
   const exact = params.queryable
     ? await executeSqlOn<Pick<ItemRow, "id" | "sequence">>(
         params.queryable,
         exactSql,
-        [params.conversationId, sequence, params.participantId ?? null],
+        [params.conversationId, sequence, params.participantId ?? null]
       )
     : await executeSql<Pick<ItemRow, "id" | "sequence">>(exactSql, [
         params.conversationId,
         sequence,
         params.participantId ?? null,
-      ]);
-  const row = exact.rows[0];
+      ])
+  const row = exact.rows[0]
   if (row) {
     return {
       itemId: row.id,
       sequence: toNumber(row.sequence),
       ref: buildConversationMessageRef(toNumber(row.sequence)),
-    };
+    }
   }
 
   const nearbySql = `
@@ -1874,62 +1924,72 @@ export async function resolveConversationReplyRef(params: {
         )
       ORDER BY ABS(sequence - $2::bigint) ASC, sequence ASC
       LIMIT 3
-    `;
+    `
   const nearby = params.queryable
     ? await executeSqlOn<Pick<ItemRow, "id" | "sequence">>(
         params.queryable,
         nearbySql,
-        [params.conversationId, sequence, params.participantId ?? null],
+        [params.conversationId, sequence, params.participantId ?? null]
       )
     : await executeSql<Pick<ItemRow, "id" | "sequence">>(nearbySql, [
         params.conversationId,
         sequence,
         params.participantId ?? null,
-      ]);
+      ])
   const suggestions = nearby.rows
-    .map((candidate) => buildConversationMessageRef(toNumber(candidate.sequence)))
-    .filter((value, index, all) => all.indexOf(value) === index);
+    .map((candidate) =>
+      buildConversationMessageRef(toNumber(candidate.sequence))
+    )
+    .filter((value, index, all) => all.indexOf(value) === index)
   const suggestionText =
-    suggestions.length > 0 ? ` Did you mean ${suggestions.join(", ")}?` : "";
+    suggestions.length > 0 ? ` Did you mean ${suggestions.join(", ")}?` : ""
 
   throw createChatError(
     400,
     "invalid_reply_ref",
-    `Unknown replyToRef "${params.replyRef}".${suggestionText}`,
-  );
+    `Unknown replyToRef "${params.replyRef}".${suggestionText}`
+  )
 }
 
 async function prepareConversationItemWrite(
   queryable: Queryable,
   params: {
-    conversationId: string;
-    scope: ItemScope;
-    surface: ItemSurface;
-    parts?: ConversationItemPartInput[];
-    restrictedAudienceParticipantIds?: string[];
-    contextTargetParticipantIds?: string[];
-    replyToItemId?: string;
-    authorParticipantId?: string;
-  },
+    conversationId: string
+    scope: ItemScope
+    surface: ItemSurface
+    parts?: ConversationItemPartInput[]
+    restrictedAudienceParticipantIds?: string[]
+    contextTargetParticipantIds?: string[]
+    replyToItemId?: string
+    authorParticipantId?: string
+  }
 ): Promise<PreparedConversationItemWrite> {
   const activeParticipants =
     params.scope === "shared" && params.surface === "visible"
-      ? await listConversationParticipantRows(queryable, [params.conversationId], {
-          useProfileSnapshot: true,
-        }).then((participants) =>
-          participants.filter((participant) => participant.state === "active"),
+      ? await listConversationParticipantRows(
+          queryable,
+          [params.conversationId],
+          {
+            useProfileSnapshot: true,
+          }
+        ).then((participants) =>
+          participants.filter((participant) => participant.state === "active")
         )
-      : [];
-  const validParticipantIds = new Set(activeParticipants.map((participant) => participant.id));
+      : []
+  const validParticipantIds = new Set(
+    activeParticipants.map((participant) => participant.id)
+  )
 
   for (const participantId of params.restrictedAudienceParticipantIds ?? []) {
     if (!validParticipantIds.has(participantId)) {
-      throw new Error(`Invalid restricted audience participant ${participantId}`);
+      throw new Error(
+        `Invalid restricted audience participant ${participantId}`
+      )
     }
   }
   for (const participantId of params.contextTargetParticipantIds ?? []) {
     if (!validParticipantIds.has(participantId)) {
-      throw new Error(`Invalid context target participant ${participantId}`);
+      throw new Error(`Invalid context target participant ${participantId}`)
     }
   }
 
@@ -1937,7 +1997,7 @@ async function prepareConversationItemWrite(
     conversationId: params.conversationId,
     parts: params.parts,
     activeParticipants,
-  });
+  })
 
   return {
     activeParticipants,
@@ -1947,14 +2007,14 @@ async function prepareConversationItemWrite(
       queryable,
       params.conversationId,
       params.replyToItemId,
-      params.authorParticipantId,
+      params.authorParticipantId
     ),
-  };
+  }
 }
 
 async function listMentionedParticipantIdsForItem(
   queryable: Queryable,
-  itemId: string,
+  itemId: string
 ) {
   const result = await executeSqlOn<{ mentioned_participant_id: string }>(
     queryable,
@@ -1964,81 +2024,81 @@ async function listMentionedParticipantIdsForItem(
       WHERE item_id = $1
       ORDER BY ordinal ASC, mentioned_participant_id ASC
     `,
-    [itemId],
-  );
-  return result.rows.map((row) => row.mentioned_participant_id);
+    [itemId]
+  )
+  return result.rows.map((row) => row.mentioned_participant_id)
 }
 
 function resolveActorWakeParticipants(params: {
-  conversationKind: ConversationKind;
-  activeParticipants: ParticipantRow[];
-  authorParticipantId?: string;
-  mentionedParticipantIds: string[];
-  replyAuthorParticipantId?: string | null;
+  conversationKind: ConversationKind
+  activeParticipants: ParticipantRow[]
+  authorParticipantId?: string
+  mentionedParticipantIds: string[]
+  replyAuthorParticipantId?: string | null
 }) {
   const actorParticipants = params.activeParticipants.filter(
     (participant) =>
       participant.id !== params.authorParticipantId &&
       participant.state === "active" &&
       typeof participant.actor_id === "string" &&
-      participant.actor_id.length > 0,
-  );
+      participant.actor_id.length > 0
+  )
   if (actorParticipants.length === 0) {
-    return [];
+    return []
   }
   if (params.conversationKind !== "group") {
-    return actorParticipants;
+    return actorParticipants
   }
 
-  const mentionedSet = new Set(params.mentionedParticipantIds);
-  const explicitWakeTargets = new Map<string, ParticipantRow>();
+  const mentionedSet = new Set(params.mentionedParticipantIds)
+  const explicitWakeTargets = new Map<string, ParticipantRow>()
   for (const participant of actorParticipants) {
     if (mentionedSet.has(participant.id)) {
-      explicitWakeTargets.set(participant.id, participant);
+      explicitWakeTargets.set(participant.id, participant)
     }
   }
   if (params.replyAuthorParticipantId) {
     const replyActor = actorParticipants.find(
-      (participant) => participant.id === params.replyAuthorParticipantId,
-    );
+      (participant) => participant.id === params.replyAuthorParticipantId
+    )
     if (replyActor) {
-      explicitWakeTargets.set(replyActor.id, replyActor);
+      explicitWakeTargets.set(replyActor.id, replyActor)
     }
   }
   if (explicitWakeTargets.size > 0) {
-    return Array.from(explicitWakeTargets.values());
+    return Array.from(explicitWakeTargets.values())
   }
   if (params.mentionedParticipantIds.length > 0) {
-    return [];
+    return []
   }
-  return actorParticipants;
+  return actorParticipants
 }
 
 export async function enqueueActorWakeupsForConversationMessage(params: {
-  workspaceId?: string;
-  conversationId: string;
-  itemId: string;
-  sourceParticipantType?: ParticipantKind;
-  sourceParticipantId?: string;
-  sourceName?: string;
-  summary?: string;
-  queryable?: Queryable;
+  workspaceId?: string
+  conversationId: string
+  itemId: string
+  sourceParticipantType?: ParticipantKind
+  sourceParticipantId?: string
+  sourceName?: string
+  summary?: string
+  queryable?: Queryable
 }) {
   if (!params.workspaceId) {
-    return [] as PendingActorWakeup[];
+    return [] as PendingActorWakeup[]
   }
-  const queryable = params.queryable ?? rootQueryable();
-  const itemRows = await listItemRowsByIds(queryable, [params.itemId]);
-  const itemRow = itemRows[0];
+  const queryable = params.queryable ?? rootQueryable()
+  const itemRows = await listItemRowsByIds(queryable, [params.itemId])
+  const itemRow = itemRows[0]
   if (!itemRow) {
-    return [] as PendingActorWakeup[];
+    return [] as PendingActorWakeup[]
   }
   if (
     itemRow.item_type !== "message" ||
     itemRow.scope !== "shared" ||
     itemRow.surface !== "visible"
   ) {
-    return [] as PendingActorWakeup[];
+    return [] as PendingActorWakeup[]
   }
 
   const restrictedAudienceResult = await executeSqlOn<ParticipantLinkRow>(
@@ -2048,10 +2108,10 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
       FROM conversation_item_targets
       WHERE item_id = $1
     `,
-    [params.itemId],
-  );
+    [params.itemId]
+  )
   if (restrictedAudienceResult.rows.length > 0) {
-    return [] as PendingActorWakeup[];
+    return [] as PendingActorWakeup[]
   }
 
   const conversationRow = await executeSqlOn<{ kind: ConversationKind }>(
@@ -2062,77 +2122,77 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
       WHERE id = $1
       LIMIT 1
     `,
-    [params.conversationId],
-  );
-  const conversationKind = conversationRow.rows[0]?.kind;
+    [params.conversationId]
+  )
+  const conversationKind = conversationRow.rows[0]?.kind
   if (!conversationKind) {
-    return [] as PendingActorWakeup[];
+    return [] as PendingActorWakeup[]
   }
 
   const activeParticipants = await listConversationParticipantRows(
     queryable,
     [params.conversationId],
-    { useProfileSnapshot: true },
+    { useProfileSnapshot: true }
   ).then((participants) =>
-    participants.filter((participant) => participant.state === "active"),
-  );
+    participants.filter((participant) => participant.state === "active")
+  )
   const authorParticipant = itemRow.author_participant_id
     ? activeParticipants.find(
-        (participant) => participant.id === itemRow.author_participant_id,
+        (participant) => participant.id === itemRow.author_participant_id
       )
-    : undefined;
+    : undefined
   const sourceParticipantType =
-    params.sourceParticipantType ??
-    authorParticipant?.participant_kind;
+    params.sourceParticipantType ?? authorParticipant?.participant_kind
   if (!sourceParticipantType || sourceParticipantType === "system") {
-    return [] as PendingActorWakeup[];
+    return [] as PendingActorWakeup[]
   }
 
   const mentionedParticipantIds = await listMentionedParticipantIdsForItem(
     queryable,
-    params.itemId,
-  );
+    params.itemId
+  )
   const replyAuthorParticipantId = itemRow.reply_to_item_id
-    ? (await listItemRowsByIds(queryable, [itemRow.reply_to_item_id]))[0]
-        ?.author_participant_id ?? null
-    : null;
+    ? ((await listItemRowsByIds(queryable, [itemRow.reply_to_item_id]))[0]
+        ?.author_participant_id ?? null)
+    : null
   const wakeParticipants = resolveActorWakeParticipants({
     conversationKind,
     activeParticipants,
     authorParticipantId: itemRow.author_participant_id ?? undefined,
     mentionedParticipantIds,
     replyAuthorParticipantId,
-  });
+  })
   if (wakeParticipants.length === 0) {
-    return [] as PendingActorWakeup[];
+    return [] as PendingActorWakeup[]
   }
 
   const sourceType =
-    sourceParticipantType === "actor" ? "actor_message" : "user_message";
+    sourceParticipantType === "actor" ? "actor_message" : "user_message"
   const sourceParticipantId =
     params.sourceParticipantId ??
     (sourceParticipantType === "workspace_member"
-      ? authorParticipant?.workspace_member_id ?? undefined
+      ? (authorParticipant?.workspace_member_id ?? undefined)
       : sourceParticipantType === "actor"
-        ? authorParticipant?.actor_id ?? undefined
-        : itemRow.author_participant_id ?? undefined);
+        ? (authorParticipant?.actor_id ?? undefined)
+        : (itemRow.author_participant_id ?? undefined))
   const sourceName =
     params.sourceName ??
-    (authorParticipant ? participantDisplayName(authorParticipant) : undefined);
+    (authorParticipant ? participantDisplayName(authorParticipant) : undefined)
   const itemSummary =
     params.summary ??
     (await hydrateConversationItems(queryable, [itemRow]))
       .map((item) => item.content.trim())
       .find(Boolean) ??
-    "New message";
+    "New message"
 
-  const { ensureConversationActorSessionContext } = await import("../session/service.js");
-  const { enqueueSessionWakeup } = await import("../session/runtime.js");
-  const pendingWakeups: PendingActorWakeup[] = [];
+  const { ensureConversationActorSessionContext } =
+    await import("../session/service.js")
+  const { enqueueSessionWakeup } = await import("../session/runtime.js")
+  const pendingWakeups: PendingActorWakeup[] = []
 
   for (const participant of wakeParticipants) {
     if (!participant.actor_id) {
-      continue;
+      continue
     }
     const ensuredContext = await ensureConversationActorSessionContext(
       {
@@ -2145,8 +2205,8 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
           source: "chat.message_wakeup",
         },
       },
-      queryable,
-    );
+      queryable
+    )
     await enqueueSessionWakeup({
       sessionId: ensuredContext.sessionId,
       actorId: participant.actor_id,
@@ -2156,51 +2216,54 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
       sourceParticipantType,
       sourceParticipantId,
       sourceName,
-      summary: itemSummary.replace(/\s+/g, " ").trim().slice(0, 96) || "New message",
+      summary:
+        itemSummary.replace(/\s+/g, " ").trim().slice(0, 96) || "New message",
       metadata: {
         source: "chat.message_wakeup",
         conversationId: params.conversationId,
       },
       trigger: sourceType,
-    });
+    })
     pendingWakeups.push({
       actorId: participant.actor_id,
       sessionId: ensuredContext.sessionId,
       sourceType,
-    });
+    })
   }
 
-  return pendingWakeups;
+  return pendingWakeups
 }
 
 async function loadHumanParticipantsForConversation(
   queryable: Queryable,
-  conversationId: string,
+  conversationId: string
 ) {
-  const participants = await listConversationParticipantRows(queryable, [conversationId]);
+  const participants = await listConversationParticipantRows(queryable, [
+    conversationId,
+  ])
   return participants.filter(
     (participant) =>
       participant.state === "active" &&
       typeof participant.workspace_member_id === "string" &&
-      participant.workspace_member_id.length > 0,
-  );
+      participant.workspace_member_id.length > 0
+  )
 }
 
 async function syncConversationUpsertForWorkspaceMembers(
   queryable: Queryable,
   workspaceId: string,
   workspaceMemberIds: string[],
-  conversationId: string,
+  conversationId: string
 ) {
   for (const workspaceMemberId of [...new Set(workspaceMemberIds)]) {
     const conversation = await loadConversationView(
       queryable,
       workspaceId,
       workspaceMemberId,
-      conversationId,
-    );
+      conversationId
+    )
     if (!conversation) {
-      continue;
+      continue
     }
     await appendWorkspaceMemberSyncEvent(queryable, {
       workspaceId,
@@ -2210,26 +2273,26 @@ async function syncConversationUpsertForWorkspaceMembers(
       payload: {
         conversation,
       },
-    });
+    })
   }
 }
 
 async function insertParticipant(
   queryable: Queryable,
   params: {
-    conversationId: string;
-    participantKind: ParticipantKind;
-    workspaceMemberId?: string;
-    actorId?: string;
-    remoteAgentId?: string;
-    actorJoinVersionId?: string;
-    displayName?: string;
-    roleKey: string;
-    metadata?: Record<string, unknown>;
-    transportAddressIds?: string[];
-  },
+    conversationId: string
+    participantKind: ParticipantKind
+    workspaceMemberId?: string
+    actorId?: string
+    remoteAgentId?: string
+    actorJoinVersionId?: string
+    displayName?: string
+    roleKey: string
+    metadata?: Record<string, unknown>
+    transportAddressIds?: string[]
+  }
 ) {
-  const participantId = crypto.randomUUID();
+  const participantId = crypto.randomUUID()
   await executeSqlOn(
     queryable,
     `
@@ -2260,8 +2323,8 @@ async function insertParticipant(
       params.displayName ?? null,
       params.roleKey,
       JSON.stringify(params.metadata ?? {}),
-    ],
-  );
+    ]
+  )
 
   await executeSqlOn(
     queryable,
@@ -2276,11 +2339,17 @@ async function insertParticipant(
       VALUES ($1, $2, 0, NOW(), NOW())
       ON CONFLICT (conversation_id, participant_id) DO NOTHING
     `,
-    [params.conversationId, participantId],
-  );
+    [params.conversationId, participantId]
+  )
 
-  if (Array.isArray(params.transportAddressIds) && params.transportAddressIds.length > 0) {
-    for (const [index, transportAddressId] of params.transportAddressIds.entries()) {
+  if (
+    Array.isArray(params.transportAddressIds) &&
+    params.transportAddressIds.length > 0
+  ) {
+    for (const [
+      index,
+      transportAddressId,
+    ] of params.transportAddressIds.entries()) {
       await executeSqlOn(
         queryable,
         `
@@ -2295,23 +2364,23 @@ async function insertParticipant(
           VALUES ($1, $2, $3, '{}'::jsonb, NOW(), NOW())
           ON CONFLICT (conversation_participant_id, transport_address_id) DO NOTHING
         `,
-        [participantId, transportAddressId, index === 0],
-      );
+        [participantId, transportAddressId, index === 0]
+      )
     }
   }
 
   return {
     id: participantId,
-  };
+  }
 }
 
 async function loadWorkspaceMembersByIds(
   queryable: Queryable,
   workspaceId: string,
-  workspaceMemberIds: string[],
+  workspaceMemberIds: string[]
 ) {
   if (workspaceMemberIds.length === 0) {
-    return [] as Array<{ id: string; user_name: string }>;
+    return [] as Array<{ id: string; user_name: string }>
   }
   const result = await executeSqlOn<{ id: string; user_name: string }>(
     queryable,
@@ -2322,18 +2391,18 @@ async function loadWorkspaceMembersByIds(
       WHERE wm.workspace_id = $1
         AND wm.id = ANY($2::uuid[])
     `,
-    [workspaceId, workspaceMemberIds],
-  );
-  return result.rows;
+    [workspaceId, workspaceMemberIds]
+  )
+  return result.rows
 }
 
 async function loadActorsByIds(
   queryable: Queryable,
   workspaceId: string,
-  actorIds: string[],
+  actorIds: string[]
 ) {
   if (actorIds.length === 0) {
-    return [] as Array<{ id: string; name: string }>;
+    return [] as Array<{ id: string; name: string }>
   }
   const result = await executeSqlOn<{ id: string; name: string }>(
     queryable,
@@ -2343,17 +2412,17 @@ async function loadActorsByIds(
       WHERE workspace_id = $1
         AND id = ANY($2::uuid[])
     `,
-    [workspaceId, actorIds],
-  );
-  return result.rows;
+    [workspaceId, actorIds]
+  )
+  return result.rows
 }
 
 async function loadRemoteAgentsByIds(
   queryable: Queryable,
-  remoteAgentIds: string[],
+  remoteAgentIds: string[]
 ) {
   if (remoteAgentIds.length === 0) {
-    return [] as Array<{ id: string; name: string }>;
+    return [] as Array<{ id: string; name: string }>
   }
   const result = await executeSqlOn<{ id: string; name: string }>(
     queryable,
@@ -2363,18 +2432,18 @@ async function loadRemoteAgentsByIds(
       WHERE is_active = TRUE
         AND id = ANY($1::uuid[])
     `,
-    [remoteAgentIds],
-  );
-  return result.rows;
+    [remoteAgentIds]
+  )
+  return result.rows
 }
 
 async function validateTransportAddresses(
   queryable: Queryable,
   workspaceId: string,
-  addressIds: string[],
+  addressIds: string[]
 ) {
   if (addressIds.length === 0) {
-    return;
+    return
   }
   const result = await executeSqlOn<{ id: string }>(
     queryable,
@@ -2384,16 +2453,20 @@ async function validateTransportAddresses(
       WHERE workspace_id = $1
         AND id = ANY($2::uuid[])
     `,
-    [workspaceId, addressIds],
-  );
+    [workspaceId, addressIds]
+  )
   if (result.rows.length !== addressIds.length) {
-    throw createChatError(400, "invalid_transport_address", "One or more transport addresses are invalid");
+    throw createChatError(
+      400,
+      "invalid_transport_address",
+      "One or more transport addresses are invalid"
+    )
   }
 }
 
 export async function getConversation(
   conversationId: string,
-  queryable: Queryable = rootQueryable(),
+  queryable: Queryable = rootQueryable()
 ) {
   const result = await executeSqlOn<Record<string, unknown>>(
     queryable,
@@ -2403,22 +2476,22 @@ export async function getConversation(
       WHERE id = $1
       LIMIT 1
     `,
-    [conversationId],
-  );
-  return result.rows[0] ?? null;
+    [conversationId]
+  )
+  return result.rows[0] ?? null
 }
 
 export async function createConversation(params: {
-  kind: ConversationKind;
-  boundary?: ConversationBoundary;
-  workspaceId?: string;
-  title?: string;
-  createdByWorkspaceMemberId?: string;
-  metadata?: Record<string, unknown>;
-  queryable?: Queryable;
+  kind: ConversationKind
+  boundary?: ConversationBoundary
+  workspaceId?: string
+  title?: string
+  createdByWorkspaceMemberId?: string
+  metadata?: Record<string, unknown>
+  queryable?: Queryable
 }) {
-  const queryable = params.queryable ?? rootQueryable();
-  const id = crypto.randomUUID();
+  const queryable = params.queryable ?? rootQueryable()
+  const id = crypto.randomUUID()
   const result = await executeSqlOn<Record<string, unknown>>(
     queryable,
     `
@@ -2440,31 +2513,31 @@ export async function createConversation(params: {
       id,
       params.kind,
       params.boundary ?? "internal",
-      params.boundary === "external" ? null : params.workspaceId ?? null,
+      params.boundary === "external" ? null : (params.workspaceId ?? null),
       params.title?.trim() || null,
       params.createdByWorkspaceMemberId ?? null,
       JSON.stringify(params.metadata ?? {}),
-    ],
-  );
-  const created = result.rows[0];
+    ]
+  )
+  const created = result.rows[0]
   if (!created) {
-    throw new Error("Failed to create conversation");
+    throw new Error("Failed to create conversation")
   }
-  return created;
+  return created
 }
 
 export async function createConversationForWorkspaceMember(params: {
-  workspaceId: string;
-  creatorWorkspaceMemberId?: string;
-  kind: ConversationKind;
-  boundary?: ConversationBoundary;
-  title?: string;
-  workspaceMemberIds?: string[];
-  actorIds?: string[];
-  remoteAgentIds?: string[];
-  externalParticipants?: ConversationCreateExternalParticipantInput[];
-  metadata?: Record<string, unknown>;
-  queryable?: Queryable;
+  workspaceId: string
+  creatorWorkspaceMemberId?: string
+  kind: ConversationKind
+  boundary?: ConversationBoundary
+  title?: string
+  workspaceMemberIds?: string[]
+  actorIds?: string[]
+  remoteAgentIds?: string[]
+  externalParticipants?: ConversationCreateExternalParticipantInput[]
+  metadata?: Record<string, unknown>
+  queryable?: Queryable
 }) {
   const executeCreate = async (queryable: Queryable) => {
     const conversation = await createConversation({
@@ -2475,28 +2548,34 @@ export async function createConversationForWorkspaceMember(params: {
       createdByWorkspaceMemberId: params.creatorWorkspaceMemberId,
       metadata: params.metadata,
       queryable,
-    });
+    })
 
     const workspaceMemberIds = [
       ...new Set(
         [
-          ...(params.creatorWorkspaceMemberId ? [params.creatorWorkspaceMemberId] : []),
+          ...(params.creatorWorkspaceMemberId
+            ? [params.creatorWorkspaceMemberId]
+            : []),
           ...(params.workspaceMemberIds ?? []),
-        ].filter(Boolean),
+        ].filter(Boolean)
       ),
-    ];
-    const actorIds = [...new Set(params.actorIds ?? [])];
-    const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])];
-    const externalParticipants = params.externalParticipants ?? [];
+    ]
+    const actorIds = [...new Set(params.actorIds ?? [])]
+    const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])]
+    const externalParticipants = params.externalParticipants ?? []
 
     if (workspaceMemberIds.length > 0) {
       const memberRows = await loadWorkspaceMembersByIds(
         queryable,
         params.workspaceId,
-        workspaceMemberIds,
-      );
+        workspaceMemberIds
+      )
       if (memberRows.length !== workspaceMemberIds.length) {
-        throw createChatError(400, "invalid_workspace_member", "One or more workspace members are invalid");
+        throw createChatError(
+          400,
+          "invalid_workspace_member",
+          "One or more workspace members are invalid"
+        )
       }
       for (const member of memberRows) {
         await ensureConversationParticipant({
@@ -2507,19 +2586,27 @@ export async function createConversationForWorkspaceMember(params: {
           roleKey:
             member.id === params.creatorWorkspaceMemberId ? "owner" : "member",
           queryable,
-        });
+        })
         await upsertConversationView(queryable, {
           workspaceMemberId: member.id,
           conversationId: conversation.id as string,
           unreadCount: 0,
-        });
+        })
       }
     }
 
     if (actorIds.length > 0) {
-      const actorRows = await loadActorsByIds(queryable, params.workspaceId, actorIds);
+      const actorRows = await loadActorsByIds(
+        queryable,
+        params.workspaceId,
+        actorIds
+      )
       if (actorRows.length !== actorIds.length) {
-        throw createChatError(400, "invalid_actor", "One or more actors are invalid");
+        throw createChatError(
+          400,
+          "invalid_actor",
+          "One or more actors are invalid"
+        )
       }
       for (const actor of actorRows) {
         await ensureConversationParticipant({
@@ -2528,14 +2615,21 @@ export async function createConversationForWorkspaceMember(params: {
           actorId: actor.id,
           displayName: actor.name,
           queryable,
-        });
+        })
       }
     }
 
     if (remoteAgentIds.length > 0) {
-      const remoteAgentRows = await loadRemoteAgentsByIds(queryable, remoteAgentIds);
+      const remoteAgentRows = await loadRemoteAgentsByIds(
+        queryable,
+        remoteAgentIds
+      )
       if (remoteAgentRows.length !== remoteAgentIds.length) {
-        throw createChatError(400, "invalid_remote_agent", "One or more remote agents are invalid");
+        throw createChatError(
+          400,
+          "invalid_remote_agent",
+          "One or more remote agents are invalid"
+        )
       }
       for (const remoteAgent of remoteAgentRows) {
         await ensureConversationParticipant({
@@ -2544,7 +2638,7 @@ export async function createConversationForWorkspaceMember(params: {
           remoteAgentId: remoteAgent.id,
           displayName: remoteAgent.name,
           queryable,
-        });
+        })
       }
     }
 
@@ -2556,7 +2650,7 @@ export async function createConversationForWorkspaceMember(params: {
         metadata: externalParticipant.metadata,
         transportAddressIds: externalParticipant.transportAddressIds,
         queryable,
-      });
+      })
     }
 
     if (workspaceMemberIds.length > 0) {
@@ -2564,37 +2658,37 @@ export async function createConversationForWorkspaceMember(params: {
         queryable,
         params.workspaceId,
         workspaceMemberIds,
-        conversation.id as string,
-      );
+        conversation.id as string
+      )
     }
 
-    return conversation;
-  };
+    return conversation
+  }
 
   if (params.queryable) {
-    return executeCreate(params.queryable);
+    return executeCreate(params.queryable)
   }
-  return transaction((client) => executeCreate(client));
+  return transaction((client) => executeCreate(client))
 }
 
 export async function listConversationParticipants(
   conversationId: string,
-  options?: { useProfileSnapshot?: boolean; queryable?: Queryable },
+  options?: { useProfileSnapshot?: boolean; queryable?: Queryable }
 ) {
   return listConversationParticipantRows(
     options?.queryable ?? rootQueryable(),
     [conversationId],
-    { useProfileSnapshot: options?.useProfileSnapshot },
-  );
+    { useProfileSnapshot: options?.useProfileSnapshot }
+  )
 }
 
 export async function getConversationParticipant(params: {
-  conversationId: string;
-  participantId?: string;
-  actorId?: string;
-  remoteAgentId?: string;
-  workspaceMemberId?: string;
-  queryable?: Queryable;
+  conversationId: string
+  participantId?: string
+  actorId?: string
+  remoteAgentId?: string
+  workspaceMemberId?: string
+  queryable?: Queryable
 }) {
   if (params.participantId) {
     const result = await executeSqlOn<ParticipantRow>(
@@ -2606,17 +2700,20 @@ export async function getConversationParticipant(params: {
           AND id = $2
         LIMIT 1
       `,
-      [params.conversationId, params.participantId],
-    );
-    const row = result.rows[0];
+      [params.conversationId, params.participantId]
+    )
+    const row = result.rows[0]
     if (!row) {
-      return null;
+      return null
     }
   }
 
-  const participants = await listConversationParticipants(params.conversationId, {
-    queryable: params.queryable,
-  });
+  const participants = await listConversationParticipants(
+    params.conversationId,
+    {
+      queryable: params.queryable,
+    }
+  )
   return (
     participants.find((participant) =>
       params.participantId
@@ -2625,43 +2722,43 @@ export async function getConversationParticipant(params: {
           ? participant.actor_id === params.actorId
           : params.remoteAgentId
             ? participant.remote_agent_id === params.remoteAgentId
-          : params.workspaceMemberId
-            ? participant.workspace_member_id === params.workspaceMemberId
-            : false,
+            : params.workspaceMemberId
+              ? participant.workspace_member_id === params.workspaceMemberId
+              : false
     ) ?? null
-  );
+  )
 }
 
 export async function ensureConversationParticipant(params: {
-  conversationId: string;
-  participantKind: ParticipantKind;
-  workspaceMemberId?: string;
-  actorId?: string;
-  remoteAgentId?: string;
-  displayName?: string;
-  actorJoinVersionId?: string;
-  roleKey?: string;
-  metadata?: Record<string, unknown>;
-  transportAddressIds?: string[];
-  queryable?: Queryable;
+  conversationId: string
+  participantKind: ParticipantKind
+  workspaceMemberId?: string
+  actorId?: string
+  remoteAgentId?: string
+  displayName?: string
+  actorJoinVersionId?: string
+  roleKey?: string
+  metadata?: Record<string, unknown>
+  transportAddressIds?: string[]
+  queryable?: Queryable
 }) {
-  const queryable = params.queryable ?? rootQueryable();
-  const conversation = await getConversation(params.conversationId, queryable);
+  const queryable = params.queryable ?? rootQueryable()
+  const conversation = await getConversation(params.conversationId, queryable)
   if (!conversation) {
-    throw new Error("Conversation not found");
+    throw new Error("Conversation not found")
   }
 
   if (
     params.participantKind === "workspace_member" &&
     !params.workspaceMemberId
   ) {
-    throw new Error("workspaceMemberId is required for workspace participants");
+    throw new Error("workspaceMemberId is required for workspace participants")
   }
   if (params.participantKind === "actor" && !params.actorId) {
-    throw new Error("actorId is required for actor participants");
+    throw new Error("actorId is required for actor participants")
   }
   if (params.participantKind === "remote_agent" && !params.remoteAgentId) {
-    throw new Error("remoteAgentId is required for remote agent participants");
+    throw new Error("remoteAgentId is required for remote agent participants")
   }
 
   const existing = await executeSqlOn<{ id: string; state: string }>(
@@ -2689,10 +2786,10 @@ export async function ensureConversationParticipant(params: {
       params.actorId ?? null,
       params.remoteAgentId ?? null,
       params.displayName ?? null,
-    ],
-  );
+    ]
+  )
 
-  const existingId = existing.rows[0]?.id;
+  const existingId = existing.rows[0]?.id
   if (existingId) {
     await executeSqlOn(
       queryable,
@@ -2718,11 +2815,17 @@ export async function ensureConversationParticipant(params: {
         params.displayName ?? null,
         params.roleKey ?? "member",
         JSON.stringify(params.metadata ?? {}),
-      ],
-    );
+      ]
+    )
 
-    if (Array.isArray(params.transportAddressIds) && params.transportAddressIds.length > 0) {
-      for (const [index, transportAddressId] of params.transportAddressIds.entries()) {
+    if (
+      Array.isArray(params.transportAddressIds) &&
+      params.transportAddressIds.length > 0
+    ) {
+      for (const [
+        index,
+        transportAddressId,
+      ] of params.transportAddressIds.entries()) {
         await executeSqlOn(
           queryable,
           `
@@ -2739,8 +2842,8 @@ export async function ensureConversationParticipant(params: {
             SET is_primary = EXCLUDED.is_primary,
                 updated_at = NOW()
           `,
-          [existingId, transportAddressId, index === 0],
-        );
+          [existingId, transportAddressId, index === 0]
+        )
       }
     }
 
@@ -2748,7 +2851,7 @@ export async function ensureConversationParticipant(params: {
       conversationId: params.conversationId,
       participantId: existingId,
       queryable,
-    });
+    })
   }
 
   const inserted = await insertParticipant(queryable, {
@@ -2762,38 +2865,42 @@ export async function ensureConversationParticipant(params: {
     roleKey: params.roleKey ?? "member",
     metadata: params.metadata,
     transportAddressIds: params.transportAddressIds,
-  });
+  })
 
   return getConversationParticipant({
     conversationId: params.conversationId,
     participantId: inserted.id,
     queryable,
-  });
+  })
 }
 
 export async function addConversationParticipants(params: {
-  workspaceId: string;
-  conversationId: string;
-  workspaceMemberIds?: string[];
-  actorIds?: string[];
-  remoteAgentIds?: string[];
-  externalParticipants?: ConversationCreateExternalParticipantInput[];
-  queryable?: Queryable;
+  workspaceId: string
+  conversationId: string
+  workspaceMemberIds?: string[]
+  actorIds?: string[]
+  remoteAgentIds?: string[]
+  externalParticipants?: ConversationCreateExternalParticipantInput[]
+  queryable?: Queryable
 }) {
   const executeAdd = async (queryable: Queryable) => {
-    const workspaceMemberIds = [...new Set(params.workspaceMemberIds ?? [])];
-    const actorIds = [...new Set(params.actorIds ?? [])];
-    const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])];
-    const externalParticipants = params.externalParticipants ?? [];
+    const workspaceMemberIds = [...new Set(params.workspaceMemberIds ?? [])]
+    const actorIds = [...new Set(params.actorIds ?? [])]
+    const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])]
+    const externalParticipants = params.externalParticipants ?? []
 
     if (workspaceMemberIds.length > 0) {
       const memberRows = await loadWorkspaceMembersByIds(
         queryable,
         params.workspaceId,
-        workspaceMemberIds,
-      );
+        workspaceMemberIds
+      )
       if (memberRows.length !== workspaceMemberIds.length) {
-        throw createChatError(400, "invalid_workspace_member", "One or more workspace members are invalid");
+        throw createChatError(
+          400,
+          "invalid_workspace_member",
+          "One or more workspace members are invalid"
+        )
       }
       for (const member of memberRows) {
         await ensureConversationParticipant({
@@ -2802,19 +2909,27 @@ export async function addConversationParticipants(params: {
           workspaceMemberId: member.id,
           displayName: member.user_name,
           queryable,
-        });
+        })
         await upsertConversationView(queryable, {
           workspaceMemberId: member.id,
           conversationId: params.conversationId,
           unreadCount: 0,
-        });
+        })
       }
     }
 
     if (actorIds.length > 0) {
-      const actorRows = await loadActorsByIds(queryable, params.workspaceId, actorIds);
+      const actorRows = await loadActorsByIds(
+        queryable,
+        params.workspaceId,
+        actorIds
+      )
       if (actorRows.length !== actorIds.length) {
-        throw createChatError(400, "invalid_actor", "One or more actors are invalid");
+        throw createChatError(
+          400,
+          "invalid_actor",
+          "One or more actors are invalid"
+        )
       }
       for (const actor of actorRows) {
         await ensureConversationParticipant({
@@ -2823,14 +2938,21 @@ export async function addConversationParticipants(params: {
           actorId: actor.id,
           displayName: actor.name,
           queryable,
-        });
+        })
       }
     }
 
     if (remoteAgentIds.length > 0) {
-      const remoteAgentRows = await loadRemoteAgentsByIds(queryable, remoteAgentIds);
+      const remoteAgentRows = await loadRemoteAgentsByIds(
+        queryable,
+        remoteAgentIds
+      )
       if (remoteAgentRows.length !== remoteAgentIds.length) {
-        throw createChatError(400, "invalid_remote_agent", "One or more remote agents are invalid");
+        throw createChatError(
+          400,
+          "invalid_remote_agent",
+          "One or more remote agents are invalid"
+        )
       }
       for (const remoteAgent of remoteAgentRows) {
         await ensureConversationParticipant({
@@ -2839,7 +2961,7 @@ export async function addConversationParticipants(params: {
           remoteAgentId: remoteAgent.id,
           displayName: remoteAgent.name,
           queryable,
-        });
+        })
       }
     }
 
@@ -2851,7 +2973,7 @@ export async function addConversationParticipants(params: {
         metadata: externalParticipant.metadata,
         transportAddressIds: externalParticipant.transportAddressIds,
         queryable,
-      });
+      })
     }
 
     if (workspaceMemberIds.length > 0) {
@@ -2859,42 +2981,42 @@ export async function addConversationParticipants(params: {
         queryable,
         params.workspaceId,
         workspaceMemberIds,
-        params.conversationId,
-      );
+        params.conversationId
+      )
     }
 
-    return listConversationParticipants(params.conversationId, { queryable });
-  };
+    return listConversationParticipants(params.conversationId, { queryable })
+  }
 
   if (params.queryable) {
-    return executeAdd(params.queryable);
+    return executeAdd(params.queryable)
   }
-  return transaction((client) => executeAdd(client));
+  return transaction((client) => executeAdd(client))
 }
 
 export async function createConversationItem(params: {
-  workspaceId?: string;
-  conversationId: string;
-  sessionId?: string;
-  turnId?: string;
-  clientMessageId?: string;
-  scope: ItemScope;
-  surface: ItemSurface;
-  itemType: ItemType;
-  subtype: string;
-  role: ItemRole;
-  authorParticipantId?: string;
-  bundleId?: string;
-  replyToItemId?: string;
-  causedByItemId?: string;
-  eventPayload?: unknown;
-  eventTimelinePolicy?: ConversationEventTimelinePolicy;
-  eventContextPolicy?: ConversationEventContextPolicy;
-  metadata?: Record<string, unknown>;
-  parts?: ConversationItemPartInput[];
-  restrictedAudienceParticipantIds?: string[];
-  contextTargetParticipantIds?: string[];
-  queryable?: Queryable;
+  workspaceId?: string
+  conversationId: string
+  sessionId?: string
+  turnId?: string
+  clientMessageId?: string
+  scope: ItemScope
+  surface: ItemSurface
+  itemType: ItemType
+  subtype: string
+  role: ItemRole
+  authorParticipantId?: string
+  bundleId?: string
+  replyToItemId?: string
+  causedByItemId?: string
+  eventPayload?: unknown
+  eventTimelinePolicy?: ConversationEventTimelinePolicy
+  eventContextPolicy?: ConversationEventContextPolicy
+  metadata?: Record<string, unknown>
+  parts?: ConversationItemPartInput[]
+  restrictedAudienceParticipantIds?: string[]
+  contextTargetParticipantIds?: string[]
+  queryable?: Queryable
 }) {
   const executeInsert = async (queryable: Queryable) => {
     const prepared = await prepareConversationItemWrite(queryable, {
@@ -2906,10 +3028,10 @@ export async function createConversationItem(params: {
       contextTargetParticipantIds: params.contextTargetParticipantIds,
       replyToItemId: params.replyToItemId,
       authorParticipantId: params.authorParticipantId,
-    });
+    })
 
-    const itemId = crypto.randomUUID();
-    let insertedItem: ItemRow | null = null;
+    const itemId = crypto.randomUUID()
+    let insertedItem: ItemRow | null = null
 
     const inserted = await executeSqlOn<ItemRow>(
       queryable,
@@ -2982,9 +3104,9 @@ export async function createConversationItem(params: {
         params.eventTimelinePolicy ?? null,
         params.eventContextPolicy ?? null,
         JSON.stringify(params.metadata ?? {}),
-      ],
-    );
-    insertedItem = inserted.rows[0] ?? null;
+      ]
+    )
+    insertedItem = inserted.rows[0] ?? null
 
     if (!insertedItem && params.clientMessageId && params.authorParticipantId) {
       const existing = await executeSqlOn<ItemRow>(
@@ -3016,22 +3138,28 @@ export async function createConversationItem(params: {
             AND client_message_id = $3
           LIMIT 1
         `,
-        [params.conversationId, params.authorParticipantId, params.clientMessageId],
-      );
-      insertedItem = existing.rows[0] ?? null;
+        [
+          params.conversationId,
+          params.authorParticipantId,
+          params.clientMessageId,
+        ]
+      )
+      insertedItem = existing.rows[0] ?? null
     }
 
     if (!insertedItem) {
-      throw new Error("Failed to create conversation item");
+      throw new Error("Failed to create conversation item")
     }
 
     const isDuplicate =
       insertedItem.id !== itemId &&
       !!params.clientMessageId &&
-      !!params.authorParticipantId;
+      !!params.authorParticipantId
     if (isDuplicate) {
-      const duplicateItems = await buildChatConversationItems(queryable, [insertedItem]);
-      return duplicateItems[0]!;
+      const duplicateItems = await buildChatConversationItems(queryable, [
+        insertedItem,
+      ])
+      return duplicateItems[0]!
     }
 
     for (const [ordinal, part] of prepared.parts.entries()) {
@@ -3057,14 +3185,14 @@ export async function createConversationItem(params: {
           insertedItem.id,
           ordinal,
           part.type,
-          part.type === "text" ? part.text ?? "" : null,
-          part.type === "file_ref" ? part.fileId ?? null : null,
+          part.type === "text" ? (part.text ?? "") : null,
+          part.type === "file_ref" ? (part.fileId ?? null) : null,
           part.type === "json" ? JSON.stringify(part.json ?? {}) : null,
           part.mimeType ?? null,
           part.name ?? null,
           JSON.stringify(part.metadata ?? {}),
-        ],
-      );
+        ]
+      )
     }
 
     if (prepared.mentionedParticipants.length > 0) {
@@ -3079,8 +3207,8 @@ export async function createConversationItem(params: {
             )
             VALUES ($1, $2, $3)
           `,
-          [insertedItem.id, mention.ordinal, mention.participantId],
-        );
+          [insertedItem.id, mention.ordinal, mention.participantId]
+        )
       }
     }
 
@@ -3095,8 +3223,8 @@ export async function createConversationItem(params: {
           )
           VALUES ($1, $2, 'to')
         `,
-        [insertedItem.id, participantId],
-      );
+        [insertedItem.id, participantId]
+      )
     }
 
     for (const participantId of params.contextTargetParticipantIds ?? []) {
@@ -3109,8 +3237,8 @@ export async function createConversationItem(params: {
           )
           VALUES ($1, $2)
         `,
-        [insertedItem.id, participantId],
-      );
+        [insertedItem.id, participantId]
+      )
     }
 
     await executeSqlOn(
@@ -3120,13 +3248,13 @@ export async function createConversationItem(params: {
         SET updated_at = NOW()
         WHERE id = $1
       `,
-      [params.conversationId],
-    );
+      [params.conversationId]
+    )
 
-    const hydrated = await buildChatConversationItems(queryable, [insertedItem]);
-    const item = hydrated[0];
+    const hydrated = await buildChatConversationItems(queryable, [insertedItem])
+    const item = hydrated[0]
     if (!item) {
-      throw new Error("Failed to hydrate conversation item");
+      throw new Error("Failed to hydrate conversation item")
     }
 
     if (params.scope === "shared" && params.surface === "visible") {
@@ -3139,47 +3267,51 @@ export async function createConversationItem(params: {
         authorParticipantId: params.authorParticipantId,
         restrictedAudienceParticipantIds:
           params.restrictedAudienceParticipantIds,
-      });
+      })
 
-      const { createRemoteAgentDeliveriesForItem } = await import("../remote-agents/service.js");
+      const { createRemoteAgentDeliveriesForItem } =
+        await import("../remote-agents/service.js")
       await createRemoteAgentDeliveriesForItem({
         workspaceId: params.workspaceId,
         conversationId: params.conversationId,
         itemId: item.id,
         authorParticipantId: params.authorParticipantId,
         queryable,
-      });
+      })
     }
 
-    return item;
-  };
+    return item
+  }
 
   if (params.queryable) {
-    return executeInsert(params.queryable);
+    return executeInsert(params.queryable)
   }
-  return transaction((client) => executeInsert(client));
+  return transaction((client) => executeInsert(client))
 }
 
 export async function sendConversationMessageFromParticipant(params: {
-  workspaceId?: string;
-  conversationId: string;
-  senderParticipantId: string;
-  sessionId?: string;
-  clientMessageId?: string;
-  role?: "user" | "assistant" | "system";
-  contentBlocks: CanonicalContentBlock[];
-  replyToItemId?: string;
-  metadata?: Record<string, unknown>;
-  queryable?: Queryable;
+  workspaceId?: string
+  conversationId: string
+  senderParticipantId: string
+  sessionId?: string
+  clientMessageId?: string
+  role?: "user" | "assistant" | "system"
+  contentBlocks: CanonicalContentBlock[]
+  replyToItemId?: string
+  metadata?: Record<string, unknown>
+  queryable?: Queryable
 }) {
-  if (!Array.isArray(params.contentBlocks) || params.contentBlocks.length === 0) {
-    throw new Error("contentBlocks is required");
+  if (
+    !Array.isArray(params.contentBlocks) ||
+    params.contentBlocks.length === 0
+  ) {
+    throw new Error("contentBlocks is required")
   }
   const normalized = await buildNormalizedMessageContent({
     content: "",
     contentBlocks: params.contentBlocks,
     metadata: params.metadata ?? {},
-  });
+  })
 
   const item = await createConversationItem({
     workspaceId: params.workspaceId,
@@ -3196,44 +3328,49 @@ export async function sendConversationMessageFromParticipant(params: {
     metadata: normalized.normalizedMetadata,
     parts: normalized.parts,
     queryable: params.queryable,
-  });
+  })
   if (params.queryable || !params.workspaceId) {
-    return item;
+    return item
   }
   await enqueueActorWakeupsForConversationMessage({
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
     itemId: item.id,
-  });
-  const { notifyRemoteAgentDeliveriesForConversation } = await import("../remote-agents/service.js");
-  await notifyRemoteAgentDeliveriesForConversation(params.conversationId);
-  return item;
+  })
+  const { notifyRemoteAgentDeliveriesForConversation } =
+    await import("../remote-agents/service.js")
+  await notifyRemoteAgentDeliveriesForConversation(params.conversationId)
+  return item
 }
 
 export async function createConversationEvent<
   T extends ConversationFeedEventType,
 >(params: {
-  workspaceId?: string;
-  conversationId: string;
-  sessionId?: string;
-  turnId?: string;
-  eventType: T;
-  authorParticipantId?: string;
-  metadata?: Record<string, unknown>;
-  eventPayload: ConversationFeedEventPayloadMap[T];
-  timelinePolicy?: ConversationEventTimelinePolicy;
-  contextPolicy?: ConversationEventContextPolicy;
-  restrictedAudienceParticipantIds?: string[];
-  contextTargetParticipantIds?: string[];
-  queryable?: Queryable;
+  workspaceId?: string
+  conversationId: string
+  sessionId?: string
+  turnId?: string
+  eventType: T
+  authorParticipantId?: string
+  metadata?: Record<string, unknown>
+  eventPayload: ConversationFeedEventPayloadMap[T]
+  timelinePolicy?: ConversationEventTimelinePolicy
+  contextPolicy?: ConversationEventContextPolicy
+  restrictedAudienceParticipantIds?: string[]
+  contextTargetParticipantIds?: string[]
+  queryable?: Queryable
 }) {
   const executeCreate = async (queryable: Queryable) => {
-    const spec = getConversationEventSpec(params.eventType);
-    const timelinePolicy = params.timelinePolicy ?? spec.timelinePolicy;
-    const contextPolicy = params.contextPolicy ?? spec.contextPolicy;
-    const eventPayload = params.eventPayload;
-    const participants = await listConversationParticipantRows(queryable, [params.conversationId]);
-    const activeParticipants = participants.filter((participant) => participant.state === "active");
+    const spec = getConversationEventSpec(params.eventType)
+    const timelinePolicy = params.timelinePolicy ?? spec.timelinePolicy
+    const contextPolicy = params.contextPolicy ?? spec.contextPolicy
+    const eventPayload = params.eventPayload
+    const participants = await listConversationParticipantRows(queryable, [
+      params.conversationId,
+    ])
+    const activeParticipants = participants.filter(
+      (participant) => participant.state === "active"
+    )
 
     const timelineTargetParticipantIds =
       timelinePolicy === "targeted_members"
@@ -3246,7 +3383,7 @@ export async function createConversationEvent<
             ? activeParticipants
                 .filter((participant) => participant.actor_id)
                 .map((participant) => participant.id)
-            : [];
+            : []
 
     const contextTargetParticipantIds =
       contextPolicy === "targeted_members"
@@ -3257,16 +3394,16 @@ export async function createConversationEvent<
               .map((participant) => participant.id)
           : contextPolicy === "actor_private"
             ? [...new Set(params.contextTargetParticipantIds ?? [])]
-            : [];
+            : []
 
     const normalizedTimeline = await buildNormalizedMessageContent({
       content: "",
       contentBlocks: renderConversationEventTimelineBlocks(
         params.eventType,
-        eventPayload,
+        eventPayload
       ),
       metadata: params.metadata ?? {},
-    });
+    })
 
     const item = await createConversationItem({
       workspaceId: params.workspaceId,
@@ -3287,12 +3424,12 @@ export async function createConversationEvent<
       restrictedAudienceParticipantIds: timelineTargetParticipantIds,
       contextTargetParticipantIds,
       queryable,
-    });
+    })
 
     if (item.itemType !== "event") {
       throw new Error(
-        `Expected event item for conversation event ${params.eventType}`,
-      );
+        `Expected event item for conversation event ${params.eventType}`
+      )
     }
 
     return {
@@ -3305,13 +3442,13 @@ export async function createConversationEvent<
       timelineContentBlocks: normalizedTimeline.contentBlocks,
       metadata: normalizedTimeline.normalizedMetadata,
       eventPayload,
-    };
-  };
+    }
+  }
 
   if (params.queryable) {
-    return executeCreate(params.queryable);
+    return executeCreate(params.queryable)
   }
-  return transaction((client) => executeCreate(client));
+  return transaction((client) => executeCreate(client))
 }
 
 export async function updateConversationItemEventPayload<
@@ -3319,7 +3456,7 @@ export async function updateConversationItemEventPayload<
 >(
   itemId: string,
   payload: ConversationFeedEventPayloadMap[T],
-  queryable: Queryable = rootQueryable(),
+  queryable: Queryable = rootQueryable()
 ) {
   await executeSqlOn(
     queryable,
@@ -3328,26 +3465,34 @@ export async function updateConversationItemEventPayload<
       SET event_payload = $2::jsonb
       WHERE id = $1
     `,
-    [itemId, JSON.stringify(payload)],
-  );
+    [itemId, JSON.stringify(payload)]
+  )
 }
 
 async function buildConversationItemDetails(
   queryable: Queryable,
-  itemRows: ItemRow[],
+  itemRows: ItemRow[]
 ): Promise<ConversationItemDetail[]> {
   if (itemRows.length === 0) {
-    return [];
+    return []
   }
 
-  const hydratedItems = await hydrateConversationItems(queryable, itemRows);
-  const hydratedById = new Map(hydratedItems.map((item) => [item.id, item]));
-  const conversationIds = [...new Set(itemRows.map((row) => row.conversation_id))];
-  const participants = await listConversationParticipantRows(queryable, conversationIds, {
-    useProfileSnapshot: true,
-  });
-  const participantById = new Map(participants.map((participant) => [participant.id, participant]));
-  const itemIds = itemRows.map((row) => row.id);
+  const hydratedItems = await hydrateConversationItems(queryable, itemRows)
+  const hydratedById = new Map(hydratedItems.map((item) => [item.id, item]))
+  const conversationIds = [
+    ...new Set(itemRows.map((row) => row.conversation_id)),
+  ]
+  const participants = await listConversationParticipantRows(
+    queryable,
+    conversationIds,
+    {
+      useProfileSnapshot: true,
+    }
+  )
+  const participantById = new Map(
+    participants.map((participant) => [participant.id, participant])
+  )
+  const itemIds = itemRows.map((row) => row.id)
   const contextTargetsResult = await executeSqlOn<ParticipantLinkRow>(
     queryable,
     `
@@ -3356,29 +3501,40 @@ async function buildConversationItemDetails(
       WHERE item_id = ANY($1::uuid[])
       ORDER BY item_id ASC, target_participant_id ASC
     `,
-    [itemIds],
-  );
-  const contextTargetIdsByItem = new Map<string, string[]>();
+    [itemIds]
+  )
+  const contextTargetIdsByItem = new Map<string, string[]>()
   for (const row of contextTargetsResult.rows) {
-    const current = contextTargetIdsByItem.get(row.item_id) ?? [];
-    current.push(row.target_participant_id);
-    contextTargetIdsByItem.set(row.item_id, current);
+    const current = contextTargetIdsByItem.get(row.item_id) ?? []
+    current.push(row.target_participant_id)
+    contextTargetIdsByItem.set(row.item_id, current)
   }
-  const replyToIds = [...new Set(
-    itemRows
-      .map((row) => row.reply_to_item_id)
-      .filter((replyToItemId): replyToItemId is string => Boolean(replyToItemId)),
-  )];
-  const replyRows = await listItemRowsByIds(queryable, replyToIds);
-  const replyHydrated = await hydrateConversationItems(queryable, replyRows);
-  const replyRowById = new Map(replyRows.map((row) => [row.id, row]));
-  const replyHydratedById = new Map(replyHydrated.map((item) => [item.id, item]));
-  const replyRefById = new Map<string, ConversationReplyRef>();
+  const replyToIds = [
+    ...new Set(
+      itemRows
+        .map((row) => row.reply_to_item_id)
+        .filter((replyToItemId): replyToItemId is string =>
+          Boolean(replyToItemId)
+        )
+    ),
+  ]
+  const replyRows = await listItemRowsByIds(queryable, replyToIds)
+  const replyHydrated = await hydrateConversationItems(queryable, replyRows)
+  const replyRowById = new Map(replyRows.map((row) => [row.id, row]))
+  const replyHydratedById = new Map(
+    replyHydrated.map((item) => [item.id, item])
+  )
+  const replyRefById = new Map<string, ConversationReplyRef>()
   for (const replyToItemId of replyToIds) {
-    const replyRow = replyRowById.get(replyToItemId);
-    const replyItem = replyHydratedById.get(replyToItemId);
-    if (!replyRow || !replyItem || replyRow.scope !== "shared" || replyRow.surface !== "visible") {
-      continue;
+    const replyRow = replyRowById.get(replyToItemId)
+    const replyItem = replyHydratedById.get(replyToItemId)
+    if (
+      !replyRow ||
+      !replyItem ||
+      replyRow.scope !== "shared" ||
+      replyRow.surface !== "visible"
+    ) {
+      continue
     }
     replyRefById.set(replyToItemId, {
       itemId: replyToItemId,
@@ -3387,25 +3543,32 @@ async function buildConversationItemDetails(
       itemType: replyRow.item_type,
       subtype: replyRow.subtype,
       author: replyRow.author_participant_id
-        ? participantRowToEntityRef(participantById.get(replyRow.author_participant_id))
+        ? participantRowToEntityRef(
+            participantById.get(replyRow.author_participant_id)
+          )
         : undefined,
       previewText: replyItem.content.trim(),
       previewBlocks: replyItem.contentBlocks,
       createdAt: toIso(replyRow.created_at),
-    });
+    })
   }
 
   return itemRows.map((row) => {
-    const hydrated = hydratedById.get(row.id);
+    const hydrated = hydratedById.get(row.id)
     if (!hydrated) {
-      throw new Error(`Failed to hydrate conversation item ${row.id}`);
+      throw new Error(`Failed to hydrate conversation item ${row.id}`)
     }
-    const restrictedAudienceParticipants = hydrated.restrictedAudienceParticipantIds
-      .map((participantId) => participantById.get(participantId))
-      .filter((participant): participant is ParticipantRow => Boolean(participant));
+    const restrictedAudienceParticipants =
+      hydrated.restrictedAudienceParticipantIds
+        .map((participantId) => participantById.get(participantId))
+        .filter((participant): participant is ParticipantRow =>
+          Boolean(participant)
+        )
     const contextTargets = (contextTargetIdsByItem.get(row.id) ?? [])
       .map((participantId) => participantById.get(participantId))
-      .filter((participant): participant is ParticipantRow => Boolean(participant));
+      .filter((participant): participant is ParticipantRow =>
+        Boolean(participant)
+      )
     const baseItem = {
       id: row.id,
       conversationId: row.conversation_id,
@@ -3425,25 +3588,25 @@ async function buildConversationItemDetails(
       metadata: asJsonRecord(row.metadata),
       replyToItemId: row.reply_to_item_id ?? undefined,
       replyTo: row.reply_to_item_id
-        ? replyRefById.get(row.reply_to_item_id) ?? {
+        ? (replyRefById.get(row.reply_to_item_id) ?? {
             itemId: row.reply_to_item_id,
             itemType: "message",
             subtype: "unavailable",
             previewText: "",
             previewBlocks: [],
             isUnavailable: true,
-          }
+          })
         : undefined,
       causedByItemId: row.caused_by_item_id ?? undefined,
       createdAt: toIso(row.created_at),
       clientMessageId: row.client_message_id ?? undefined,
-    } satisfies ConversationItemDetailBase;
+    } satisfies ConversationItemDetailBase
 
     if (row.item_type === "event") {
       if (!isConversationEventType(row.subtype)) {
         throw new Error(
-          `Unsupported conversation event subtype ${row.subtype} for item ${row.id}`,
-        );
+          `Unsupported conversation event subtype ${row.subtype} for item ${row.id}`
+        )
       }
 
       return {
@@ -3452,7 +3615,7 @@ async function buildConversationItemDetails(
         subtype: row.subtype,
         eventPayload: asConversationFeedEventPayload(
           row.subtype,
-          row.event_payload,
+          row.event_payload
         ),
         eventTimelinePolicy:
           (row.event_timeline_policy as ConversationEventTimelinePolicy | null) ??
@@ -3460,32 +3623,32 @@ async function buildConversationItemDetails(
         eventContextPolicy:
           (row.event_context_policy as ConversationEventContextPolicy | null) ??
           undefined,
-      } satisfies ConversationEventItemDetail;
+      } satisfies ConversationEventItemDetail
     }
 
     if (row.item_type !== "summary") {
-      assertConversationMessageSubtype(row.subtype);
+      assertConversationMessageSubtype(row.subtype)
     } else if (row.subtype !== "summary") {
       throw new Error(
-        `Unsupported conversation summary subtype ${row.subtype} for item ${row.id}`,
-      );
+        `Unsupported conversation summary subtype ${row.subtype} for item ${row.id}`
+      )
     }
 
     return {
       ...baseItem,
       itemType: row.item_type,
       subtype: row.subtype,
-    } satisfies ConversationNonEventItemDetail;
-  });
+    } satisfies ConversationNonEventItemDetail
+  })
 }
 
 function participantRowToEntityRef(
-  participant: ParticipantRow | undefined,
+  participant: ParticipantRow | undefined
 ): ConversationEntityRef | undefined {
   if (!participant) {
-    return undefined;
+    return undefined
   }
-  const transportKind = asParticipantTransportKind(participant.transport_kind);
+  const transportKind = asParticipantTransportKind(participant.transport_kind)
   return {
     participantId: participant.id,
     participantType: participant.participant_kind,
@@ -3503,15 +3666,15 @@ function participantRowToEntityRef(
     role: participant.actor_role ?? participant.role_key,
     avatarUrl: participantAvatarUrl(participant),
     avatarEmoji: participantAvatarEmoji(participant),
-  };
+  }
 }
 
 function participantRowToChatParticipantSummary(
-  participant: ParticipantRow,
+  participant: ParticipantRow
 ): ChatParticipantSummary {
-  const entity = participantRowToEntityRef(participant);
+  const entity = participantRowToEntityRef(participant)
   if (!entity) {
-    throw new Error(`Failed to map participant ${participant.id}`);
+    throw new Error(`Failed to map participant ${participant.id}`)
   }
   return {
     participantId: participant.id,
@@ -3534,17 +3697,19 @@ function participantRowToChatParticipantSummary(
     leftAt: participant.left_at ? toIso(participant.left_at) : undefined,
     sessionId: participant.session_id ?? undefined,
     sessionStatus: participant.session_status ?? undefined,
-  } satisfies ChatParticipantSummary;
+  } satisfies ChatParticipantSummary
 }
 
 function conversationItemDetailToChatItem(
   item: ConversationItemDetail,
-  transportDeliveries: ConversationMessageTransportDelivery[] = [],
+  transportDeliveries: ConversationMessageTransportDelivery[] = []
 ): ChatConversationItem {
-  const author = participantRowToEntityRef(item.authorParticipant);
+  const author = participantRowToEntityRef(item.authorParticipant)
   const restrictedAudience = item.restrictedAudienceParticipants
     .map((participant) => participantRowToEntityRef(participant))
-    .filter((participant): participant is ConversationEntityRef => Boolean(participant));
+    .filter((participant): participant is ConversationEntityRef =>
+      Boolean(participant)
+    )
   const baseItem = {
     id: item.id,
     conversationId: item.conversationId,
@@ -3566,12 +3731,14 @@ function conversationItemDetailToChatItem(
     metadata: item.metadata,
     restrictedAudienceParticipantIds:
       item.restrictedAudienceParticipants.length > 0
-        ? item.restrictedAudienceParticipants.map((participant) => participant.id)
+        ? item.restrictedAudienceParticipants.map(
+            (participant) => participant.id
+          )
         : undefined,
     restrictedAudience:
       restrictedAudience.length > 0 ? restrictedAudience : undefined,
     createdAt: item.createdAt,
-  };
+  }
 
   if (item.itemType === "event") {
     return {
@@ -3581,7 +3748,7 @@ function conversationItemDetailToChatItem(
       eventPayload: item.eventPayload,
       eventTimelinePolicy: item.eventTimelinePolicy,
       eventContextPolicy: item.eventContextPolicy,
-    } as ChatConversationEventItem;
+    } as ChatConversationEventItem
   }
 
   return {
@@ -3590,40 +3757,38 @@ function conversationItemDetailToChatItem(
     subtype: item.subtype,
     transport: mapTransportContext(item.metadata),
     transportDeliveries,
-  } satisfies ChatConversationItem;
+  } satisfies ChatConversationItem
 }
 
 async function buildChatConversationItems(
   queryable: Queryable,
   itemRows: ItemRow[],
-  options?: { includeTransportDeliveries?: boolean },
+  options?: { includeTransportDeliveries?: boolean }
 ) {
   if (itemRows.length === 0) {
-    return [] as ChatConversationItem[];
+    return [] as ChatConversationItem[]
   }
 
-  const details = await buildConversationItemDetails(queryable, itemRows);
+  const details = await buildConversationItemDetails(queryable, itemRows)
   const deliveriesByItem = options?.includeTransportDeliveries
     ? await loadTransportDeliveriesForItems(
         queryable,
-        details.map((item) => item.id),
+        details.map((item) => item.id)
       )
-    : new Map<string, ConversationMessageTransportDelivery[]>();
+    : new Map<string, ConversationMessageTransportDelivery[]>()
 
   return details.map((detail) =>
     conversationItemDetailToChatItem(
       detail,
-      deliveriesByItem.get(detail.id) ?? [],
-    ),
-  );
+      deliveriesByItem.get(detail.id) ?? []
+    )
+  )
 }
 
-function conversationEventDetailToFeedItem<
-  T extends ConversationFeedEventType,
->(
+function conversationEventDetailToFeedItem<T extends ConversationFeedEventType>(
   item: ConversationEventItemDetail<T>,
   author: ConversationEntityRef | undefined,
-  restrictedAudience: ConversationEntityRef[],
+  restrictedAudience: ConversationEntityRef[]
 ): ConversationFeedEventItem<T> {
   return {
     kind: "event",
@@ -3639,27 +3804,27 @@ function conversationEventDetailToFeedItem<
     eventType: item.subtype,
     payload: item.eventPayload,
     createdAt: item.createdAt,
-  } as ConversationFeedEventItem<T>;
+  } as ConversationFeedEventItem<T>
 }
 
 function mapTransportContext(
-  metadata: Record<string, unknown>,
+  metadata: Record<string, unknown>
 ): ConversationMessageTransportContext | undefined {
-  const raw = metadata.transport;
+  const raw = metadata.transport
   if (!raw || typeof raw !== "object") {
-    return undefined;
+    return undefined
   }
-  const value = raw as Record<string, unknown>;
+  const value = raw as Record<string, unknown>
   const direction =
     value.direction === "inbound" || value.direction === "outbound"
       ? value.direction
-      : undefined;
+      : undefined
   const transportKind =
     value.transportKind === "feishu" || value.transportKind === "weixin"
       ? value.transportKind
-      : undefined;
+      : undefined
   if (!direction || !transportKind) {
-    return undefined;
+    return undefined
   }
   return {
     direction,
@@ -3688,28 +3853,28 @@ function mapTransportContext(
       typeof value.senderExternalId === "string"
         ? value.senderExternalId
         : undefined,
-  };
+  }
 }
 
 async function loadTransportDeliveriesForItems(
   queryable: Queryable,
-  itemIds: string[],
+  itemIds: string[]
 ) {
   if (itemIds.length === 0) {
-    return new Map<string, ConversationMessageTransportDelivery[]>();
+    return new Map<string, ConversationMessageTransportDelivery[]>()
   }
   const result = await executeSqlOn<{
-      item_id: string;
-      link_id: string;
-      transport_kind: "feishu" | "weixin";
-      direction: "inbound" | "outbound";
-      delivery_status: "pending" | "sent" | "failed" | "skipped";
-    external_message_id: string | null;
-    metadata: unknown;
-    delivered_at: string | Date | null;
-    endpoint_type: "direct" | "group";
-    endpoint_external_id: string | null;
-    endpoint_display_name: string | null;
+    item_id: string
+    link_id: string
+    transport_kind: "feishu" | "weixin"
+    direction: "inbound" | "outbound"
+    delivery_status: "pending" | "sent" | "failed" | "skipped"
+    external_message_id: string | null
+    metadata: unknown
+    delivered_at: string | Date | null
+    endpoint_type: "direct" | "group"
+    endpoint_external_id: string | null
+    endpoint_display_name: string | null
   }>(
     queryable,
     `
@@ -3731,11 +3896,11 @@ async function loadTransportDeliveriesForItems(
       WHERE tml.item_id = ANY($1::uuid[])
       ORDER BY tml.item_id ASC, tml.created_at ASC
     `,
-    [itemIds],
-  );
-  const byItem = new Map<string, ConversationMessageTransportDelivery[]>();
+    [itemIds]
+  )
+  const byItem = new Map<string, ConversationMessageTransportDelivery[]>()
   for (const row of result.rows) {
-    const current = byItem.get(row.item_id) ?? [];
+    const current = byItem.get(row.item_id) ?? []
     current.push({
       linkId: row.link_id,
       transportKind: row.transport_kind,
@@ -3747,31 +3912,29 @@ async function loadTransportDeliveriesForItems(
       externalMessageId: row.external_message_id ?? undefined,
       deliveredAt: row.delivered_at ? toIso(row.delivered_at) : undefined,
       metadata: asJsonRecord(row.metadata),
-    });
-    byItem.set(row.item_id, current);
+    })
+    byItem.set(row.item_id, current)
   }
-  return byItem;
+  return byItem
 }
 
 export function conversationItemDetailToFeedItem(
   item: ConversationItemDetail,
-  transportDeliveries: ConversationMessageTransportDelivery[] = [],
+  transportDeliveries: ConversationMessageTransportDelivery[] = []
 ): ConversationFeedItem {
-  const author = participantRowToEntityRef(item.authorParticipant);
+  const author = participantRowToEntityRef(item.authorParticipant)
   const restrictedAudience = item.restrictedAudienceParticipants
     .map((participant) => participantRowToEntityRef(participant))
-    .filter((participant): participant is ConversationEntityRef => Boolean(participant));
+    .filter((participant): participant is ConversationEntityRef =>
+      Boolean(participant)
+    )
 
   if (item.itemType === "event") {
-    return conversationEventDetailToFeedItem(
-      item,
-      author,
-      restrictedAudience,
-    );
+    return conversationEventDetailToFeedItem(item, author, restrictedAudience)
   }
 
   if (item.itemType !== "summary") {
-    assertConversationMessageSubtype(item.subtype);
+    assertConversationMessageSubtype(item.subtype)
   }
 
   return {
@@ -3795,42 +3958,42 @@ export function conversationItemDetailToFeedItem(
     transportDeliveries,
     createdAt: item.createdAt,
     clientMessageId: item.clientMessageId,
-  } satisfies ConversationFeedMessageItem;
+  } satisfies ConversationFeedMessageItem
 }
 
 export function isFeedItemVisibleToWorkspaceMember(
   item: ConversationFeedItem,
-  workspaceMemberId: string,
+  workspaceMemberId: string
 ) {
   if (item.kind === "message") {
     if (item.messageType === "model_error_notice") {
       if (!item.restrictedAudience || item.restrictedAudience.length === 0) {
-        return true;
+        return true
       }
       if (item.author?.workspaceMemberId === workspaceMemberId) {
-        return true;
+        return true
       }
       return item.restrictedAudience.some(
-        (target) => target.workspaceMemberId === workspaceMemberId,
-      );
+        (target) => target.workspaceMemberId === workspaceMemberId
+      )
     }
-    return true;
+    return true
   }
 
   if (!item.restrictedAudience || item.restrictedAudience.length === 0) {
-    return true;
+    return true
   }
   if (item.author?.workspaceMemberId === workspaceMemberId) {
-    return true;
+    return true
   }
   return item.restrictedAudience.some(
-    (target) => target.workspaceMemberId === workspaceMemberId,
-  );
+    (target) => target.workspaceMemberId === workspaceMemberId
+  )
 }
 
 export async function getConversationFeedItemById(
   itemId: string,
-  queryable: Queryable = rootQueryable(),
+  queryable: Queryable = rootQueryable()
 ) {
   const rows = await executeSqlOn<ItemRow>(
     queryable,
@@ -3859,28 +4022,33 @@ export async function getConversationFeedItemById(
       WHERE id = $1
       LIMIT 1
     `,
-    [itemId],
-  );
-  const row = rows.rows[0];
+    [itemId]
+  )
+  const row = rows.rows[0]
   if (!row) {
-    return null;
+    return null
   }
-  const [detail] = await buildConversationItemDetails(queryable, [row]);
+  const [detail] = await buildConversationItemDetails(queryable, [row])
   if (!detail) {
-    return null;
+    return null
   }
-  const deliveries = await loadTransportDeliveriesForItems(queryable, [detail.id]);
-  return conversationItemDetailToFeedItem(detail, deliveries.get(detail.id) ?? []);
+  const deliveries = await loadTransportDeliveriesForItems(queryable, [
+    detail.id,
+  ])
+  return conversationItemDetailToFeedItem(
+    detail,
+    deliveries.get(detail.id) ?? []
+  )
 }
 
 export async function getContextConversationItemsForParticipant(params: {
-  conversationId: string;
-  participantId: string;
-  beforeSequence?: number;
-  limit?: number;
-  queryable?: Queryable;
+  conversationId: string
+  participantId: string
+  beforeSequence?: number
+  limit?: number
+  queryable?: Queryable
 }) {
-  const queryable = params.queryable ?? rootQueryable();
+  const queryable = params.queryable ?? rootQueryable()
   const result = await executeSqlOn<ItemRow>(
     queryable,
     `
@@ -3941,15 +4109,15 @@ export async function getContextConversationItemsForParticipant(params: {
       params.participantId,
       params.beforeSequence ?? null,
       Math.max(1, Math.min(params.limit ?? 200, 500)),
-    ],
-  );
-  const rows = [...result.rows].reverse();
-  return buildConversationItemDetails(queryable, rows);
+    ]
+  )
+  const rows = [...result.rows].reverse()
+  return buildConversationItemDetails(queryable, rows)
 }
 
 export async function getLastVisibleConversationItem(
   conversationId: string,
-  queryable: Queryable = rootQueryable(),
+  queryable: Queryable = rootQueryable()
 ) {
   const result = await executeSqlOn<ItemRow>(
     queryable,
@@ -3981,35 +4149,35 @@ export async function getLastVisibleConversationItem(
       ORDER BY sequence DESC
       LIMIT 1
     `,
-    [conversationId],
-  );
-  const row = result.rows[0];
+    [conversationId]
+  )
+  const row = result.rows[0]
   if (!row) {
-    return null;
+    return null
   }
-  const [detail] = await buildConversationItemDetails(queryable, [row]);
-  return detail ?? null;
+  const [detail] = await buildConversationItemDetails(queryable, [row])
+  return detail ?? null
 }
 
 export async function listWorkspaceConversationViews(params: {
-  workspaceId: string;
-  workspaceMemberId: string;
-  queryable?: Queryable;
+  workspaceId: string
+  workspaceMemberId: string
+  queryable?: Queryable
 }) {
   return loadConversationViews(
     params.queryable ?? rootQueryable(),
     params.workspaceId,
-    params.workspaceMemberId,
-  );
+    params.workspaceMemberId
+  )
 }
 
 export async function listConversationRealtimeRecipients(
   conversationId: string,
-  queryable: Queryable = rootQueryable(),
+  queryable: Queryable = rootQueryable()
 ) {
   const result = await executeSqlOn<{
-    workspace_id: string;
-    workspace_member_id: string;
+    workspace_id: string
+    workspace_member_id: string
   }>(
     queryable,
     `
@@ -4021,23 +4189,26 @@ export async function listConversationRealtimeRecipients(
         AND cp.state = 'active'
         AND cp.workspace_member_id IS NOT NULL
     `,
-    [conversationId],
-  );
+    [conversationId]
+  )
 
   return result.rows.map((row) => ({
     workspaceId: row.workspace_id,
     workspaceMemberId: row.workspace_member_id,
-  }));
+  }))
 }
 
 export async function createChatClientInstance(params: {
-  workspaceId: string;
-  userId: string;
-  platform?: string;
-  deviceLabel?: string;
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  userId: string
+  platform?: string
+  deviceLabel?: string
+  metadata?: Record<string, unknown>
 }): Promise<ChatClientInstanceRegistrationResponse> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
   const clientInstanceId = await transaction(async (client) =>
     createClientInstance(client, {
       workspaceId: params.workspaceId,
@@ -4045,24 +4216,27 @@ export async function createChatClientInstance(params: {
       platform: params.platform,
       deviceLabel: params.deviceLabel,
       metadata: params.metadata,
-    }),
-  );
+    })
+  )
 
   return {
     clientInstanceId,
     workspaceMemberId: identity.workspaceMemberId,
-  };
+  }
 }
 
 export async function touchChatClientInstance(params: {
-  workspaceId: string;
-  userId: string;
-  clientInstanceId: string;
-  platform?: string;
-  deviceLabel?: string;
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  userId: string
+  clientInstanceId: string
+  platform?: string
+  deviceLabel?: string
+  metadata?: Record<string, unknown>
 }): Promise<ChatClientInstanceRegistrationResponse> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
   await transaction(async (client) => {
     await touchClientInstance(client, {
       workspaceId: params.workspaceId,
@@ -4071,37 +4245,49 @@ export async function touchChatClientInstance(params: {
       platform: params.platform,
       deviceLabel: params.deviceLabel,
       metadata: params.metadata,
-    });
-  });
+    })
+  })
 
   return {
     clientInstanceId: params.clientInstanceId,
     workspaceMemberId: identity.workspaceMemberId,
-  };
+  }
 }
 
 export async function createChatConversation(params: {
-  workspaceId: string;
-  userId: string;
-  clientRequestId: string;
-  kind: ConversationKind;
-  boundary?: ConversationBoundary;
-  title?: string;
-  workspaceMemberIds?: string[];
-  actorIds?: string[];
-  remoteAgentIds?: string[];
-  externalParticipants?: ConversationCreateExternalParticipantInput[];
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  userId: string
+  clientRequestId: string
+  kind: ConversationKind
+  boundary?: ConversationBoundary
+  title?: string
+  workspaceMemberIds?: string[]
+  actorIds?: string[]
+  remoteAgentIds?: string[]
+  externalParticipants?: ConversationCreateExternalParticipantInput[]
+  metadata?: Record<string, unknown>
 }): Promise<ChatConversationCreateResponse> {
-  const creator = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
-  const boundary = params.boundary ?? "internal";
-  const workspaceMemberIds = [...new Set([creator.workspaceMemberId, ...(params.workspaceMemberIds ?? [])])];
-  const actorIds = [...new Set(params.actorIds ?? [])];
-  const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])];
-  const externalParticipants = params.externalParticipants ?? [];
+  const creator = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const boundary = params.boundary ?? "internal"
+  const workspaceMemberIds = [
+    ...new Set([
+      creator.workspaceMemberId,
+      ...(params.workspaceMemberIds ?? []),
+    ]),
+  ]
+  const actorIds = [...new Set(params.actorIds ?? [])]
+  const remoteAgentIds = [...new Set(params.remoteAgentIds ?? [])]
+  const externalParticipants = params.externalParticipants ?? []
 
   if (boundary === "internal" && externalParticipants.length > 0) {
-    throw createChatError(400, "external_participants_not_allowed", "Internal conversations do not allow external participants");
+    throw createChatError(
+      400,
+      "external_participants_not_allowed",
+      "Internal conversations do not allow external participants"
+    )
   }
 
   const conversationId = await transaction(async (client) => {
@@ -4114,31 +4300,55 @@ export async function createChatConversation(params: {
           AND client_request_id = $2
         LIMIT 1
       `,
-      [creator.workspaceMemberId, params.clientRequestId],
-    );
+      [creator.workspaceMemberId, params.clientRequestId]
+    )
     if (existingRequest.rows[0]?.conversation_id) {
-      return existingRequest.rows[0].conversation_id;
+      return existingRequest.rows[0].conversation_id
     }
 
-    const memberRows = await loadWorkspaceMembersByIds(client, params.workspaceId, workspaceMemberIds);
+    const memberRows = await loadWorkspaceMembersByIds(
+      client,
+      params.workspaceId,
+      workspaceMemberIds
+    )
     if (memberRows.length !== workspaceMemberIds.length) {
-      throw createChatError(400, "invalid_workspace_member", "One or more workspace members are invalid");
+      throw createChatError(
+        400,
+        "invalid_workspace_member",
+        "One or more workspace members are invalid"
+      )
     }
 
-    const actorRows = await loadActorsByIds(client, params.workspaceId, actorIds);
+    const actorRows = await loadActorsByIds(
+      client,
+      params.workspaceId,
+      actorIds
+    )
     if (actorRows.length !== actorIds.length) {
-      throw createChatError(400, "invalid_actor", "One or more actors are invalid");
+      throw createChatError(
+        400,
+        "invalid_actor",
+        "One or more actors are invalid"
+      )
     }
 
-    const remoteAgentRows = await loadRemoteAgentsByIds(client, remoteAgentIds);
+    const remoteAgentRows = await loadRemoteAgentsByIds(client, remoteAgentIds)
     if (remoteAgentRows.length !== remoteAgentIds.length) {
-      throw createChatError(400, "invalid_remote_agent", "One or more remote agents are invalid");
+      throw createChatError(
+        400,
+        "invalid_remote_agent",
+        "One or more remote agents are invalid"
+      )
     }
 
-    const addressIds = externalParticipants.flatMap((participant) => participant.transportAddressIds ?? []);
-    await validateTransportAddresses(client, params.workspaceId, [...new Set(addressIds)]);
+    const addressIds = externalParticipants.flatMap(
+      (participant) => participant.transportAddressIds ?? []
+    )
+    await validateTransportAddresses(client, params.workspaceId, [
+      ...new Set(addressIds),
+    ])
 
-    const newConversationId = crypto.randomUUID();
+    const newConversationId = crypto.randomUUID()
     await executeSqlOn(
       client,
       `
@@ -4163,8 +4373,8 @@ export async function createChatConversation(params: {
         params.title?.trim() || null,
         creator.workspaceMemberId,
         JSON.stringify(params.metadata ?? {}),
-      ],
-    );
+      ]
+    )
 
     for (const member of memberRows) {
       await insertParticipant(client, {
@@ -4174,12 +4384,12 @@ export async function createChatConversation(params: {
         displayName: member.user_name,
         roleKey: member.id === creator.workspaceMemberId ? "owner" : "member",
         metadata: {},
-      });
+      })
       await upsertConversationView(client, {
         workspaceMemberId: member.id,
         conversationId: newConversationId,
         unreadCount: 0,
-      });
+      })
     }
 
     for (const actor of actorRows) {
@@ -4190,7 +4400,7 @@ export async function createChatConversation(params: {
         displayName: actor.name,
         roleKey: "member",
         metadata: {},
-      });
+      })
     }
 
     for (const remoteAgent of remoteAgentRows) {
@@ -4201,7 +4411,7 @@ export async function createChatConversation(params: {
         displayName: remoteAgent.name,
         roleKey: "member",
         metadata: {},
-      });
+      })
     }
 
     for (const external of externalParticipants) {
@@ -4212,7 +4422,7 @@ export async function createChatConversation(params: {
         roleKey: "member",
         metadata: external.metadata ?? {},
         transportAddressIds: external.transportAddressIds,
-      });
+      })
     }
 
     await executeSqlOn(
@@ -4227,76 +4437,91 @@ export async function createChatConversation(params: {
         )
         VALUES ($1, $2, $3, $4, NOW())
       `,
-      [creator.workspaceMemberId, params.clientRequestId, params.workspaceId, newConversationId],
-    );
+      [
+        creator.workspaceMemberId,
+        params.clientRequestId,
+        params.workspaceId,
+        newConversationId,
+      ]
+    )
 
     await syncConversationUpsertForWorkspaceMembers(
       client,
       params.workspaceId,
       memberRows.map((row) => row.id),
-      newConversationId,
-    );
+      newConversationId
+    )
 
-    return newConversationId;
-  });
+    return newConversationId
+  })
 
   const conversation = await loadConversationView(
     rootQueryable(),
     params.workspaceId,
     creator.workspaceMemberId,
-    conversationId,
-  );
+    conversationId
+  )
 
   if (!conversation) {
-    throw createChatError(500, "conversation_load_failed", "Failed to load created conversation");
+    throw createChatError(
+      500,
+      "conversation_load_failed",
+      "Failed to load created conversation"
+    )
   }
 
   return {
     conversation,
-  };
+  }
 }
 
 export async function getChatBootstrap(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }): Promise<ChatBootstrapResponse> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
   const conversations = await loadConversationViews(
     rootQueryable(),
     params.workspaceId,
-    identity.workspaceMemberId,
-  );
+    identity.workspaceMemberId
+  )
   const nextInboxCursor = await getCurrentSyncCursor(
     rootQueryable(),
     params.workspaceId,
-    identity.workspaceMemberId,
-  );
+    identity.workspaceMemberId
+  )
 
   return {
     workspaceMemberId: identity.workspaceMemberId,
     clientInstanceRequired: true,
     conversations,
     nextInboxCursor,
-  };
+  }
 }
 
 export async function getChatSync(params: {
-  workspaceId: string;
-  userId: string;
-  cursor?: number;
-  limit?: number;
+  workspaceId: string
+  userId: string
+  cursor?: number
+  limit?: number
 }): Promise<ChatSyncResponse> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
-  const limit = Math.min(Math.max(params.limit ?? 200, 1), 500);
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const limit = Math.min(Math.max(params.limit ?? 200, 1), 500)
   const result = await executeSql<{
-    sync_seq: string | number;
-    workspace_id: string;
-    workspace_member_id: string;
-    conversation_id: string | null;
-    item_id: string | null;
-    event_type: ChatSyncEventType;
-    payload: unknown;
-    occurred_at: string | Date;
+    sync_seq: string | number
+    workspace_id: string
+    workspace_member_id: string
+    conversation_id: string | null
+    item_id: string | null
+    event_type: ChatSyncEventType
+    payload: unknown
+    occurred_at: string | Date
   }>(
     `
       SELECT
@@ -4315,20 +4540,25 @@ export async function getChatSync(params: {
       ORDER BY sync_seq ASC
       LIMIT $4
     `,
-    [params.workspaceId, identity.workspaceMemberId, params.cursor ?? 0, limit + 1],
-  );
+    [
+      params.workspaceId,
+      identity.workspaceMemberId,
+      params.cursor ?? 0,
+      limit + 1,
+    ]
+  )
 
-  const hasMore = result.rows.length > limit;
-  const rows = hasMore ? result.rows.slice(0, limit) : result.rows;
+  const hasMore = result.rows.length > limit
+  const rows = hasMore ? result.rows.slice(0, limit) : result.rows
   const events: ChatSyncEvent[] = await Promise.all(
     rows.map(async (row) => {
-      const eventType = row.event_type;
-      const payload = asChatSyncEventPayload(eventType, row.payload);
+      const eventType = row.event_type
+      const payload = asChatSyncEventPayload(eventType, row.payload)
       const enrichedPayload = await enrichChatSyncEventPayloadForViewer(
         eventType,
         payload,
-        identity.userId,
-      );
+        identity.userId
+      )
       return {
         syncSeq: toNumber(row.sync_seq),
         workspaceId: row.workspace_id,
@@ -4338,46 +4568,49 @@ export async function getChatSync(params: {
         eventType,
         payload: enrichedPayload,
         occurredAt: toIso(row.occurred_at),
-      };
-    }),
-  );
+      }
+    })
+  )
 
   return {
     events,
-    nextCursor: events.length > 0 ? events[events.length - 1]!.syncSeq : params.cursor ?? 0,
+    nextCursor:
+      events.length > 0
+        ? events[events.length - 1]!.syncSeq
+        : (params.cursor ?? 0),
     hasMore,
-  };
+  }
 }
 
 export async function getChatConversationMessages(params: {
-  workspaceId: string;
-  userId: string;
-  conversationId: string;
-  afterSequence?: number;
-  beforeSequence?: number;
-  limit?: number;
-  clientInstanceId: string;
+  workspaceId: string
+  userId: string
+  conversationId: string
+  afterSequence?: number
+  beforeSequence?: number
+  limit?: number
+  clientInstanceId: string
 }): Promise<ChatConversationMessagesPage> {
-  const identity = await getWorkspaceMemberIdentityOrThrow(params.workspaceId, params.userId);
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
   const access = await requireConversationAccess(
     rootQueryable(),
     params.conversationId,
-    identity.workspaceMemberId,
-  );
+    identity.workspaceMemberId
+  )
 
-  await ensureClientInstance(
-    rootQueryable(),
-    {
-      workspaceId: params.workspaceId,
-      workspaceMemberId: identity.workspaceMemberId,
-      clientInstanceId: params.clientInstanceId,
-    },
-  );
+  await ensureClientInstance(rootQueryable(), {
+    workspaceId: params.workspaceId,
+    workspaceMemberId: identity.workspaceMemberId,
+    clientInstanceId: params.clientInstanceId,
+  })
 
-  const limit = Math.min(Math.max(params.limit ?? 100, 1), 200);
-  let rows: ItemRow[] = [];
-  let hasMoreBefore = false;
-  let hasMoreAfter = false;
+  const limit = Math.min(Math.max(params.limit ?? 100, 1), 200)
+  let rows: ItemRow[] = []
+  let hasMoreBefore = false
+  let hasMoreAfter = false
   if (typeof params.afterSequence === "number") {
     const result = await executeSql<ItemRow>(
       `
@@ -4423,11 +4656,16 @@ export async function getChatConversationMessages(params: {
         ORDER BY sequence ASC
         LIMIT $4
       `,
-      [params.conversationId, params.afterSequence, access.participant.id, limit + 1],
-    );
-    hasMoreAfter = result.rows.length > limit;
-    hasMoreBefore = params.afterSequence > 0;
-    rows = hasMoreAfter ? result.rows.slice(0, limit) : result.rows;
+      [
+        params.conversationId,
+        params.afterSequence,
+        access.participant.id,
+        limit + 1,
+      ]
+    )
+    hasMoreAfter = result.rows.length > limit
+    hasMoreBefore = params.afterSequence > 0
+    rows = hasMoreAfter ? result.rows.slice(0, limit) : result.rows
   } else if (typeof params.beforeSequence === "number") {
     const result = await executeSql<ItemRow>(
       `
@@ -4473,11 +4711,16 @@ export async function getChatConversationMessages(params: {
         ORDER BY sequence DESC
         LIMIT $4
       `,
-      [params.conversationId, params.beforeSequence, access.participant.id, limit + 1],
-    );
-    hasMoreBefore = result.rows.length > limit;
-    hasMoreAfter = true;
-    rows = (hasMoreBefore ? result.rows.slice(0, limit) : result.rows).reverse();
+      [
+        params.conversationId,
+        params.beforeSequence,
+        access.participant.id,
+        limit + 1,
+      ]
+    )
+    hasMoreBefore = result.rows.length > limit
+    hasMoreAfter = true
+    rows = (hasMoreBefore ? result.rows.slice(0, limit) : result.rows).reverse()
   } else {
     const result = await executeSql<ItemRow>(
       `
@@ -4522,32 +4765,36 @@ export async function getChatConversationMessages(params: {
         ORDER BY sequence DESC
         LIMIT $3
       `,
-      [params.conversationId, access.participant.id, limit + 1],
-    );
-    hasMoreBefore = result.rows.length > limit;
-    rows = (hasMoreBefore ? result.rows.slice(0, limit) : result.rows).reverse();
+      [params.conversationId, access.participant.id, limit + 1]
+    )
+    hasMoreBefore = result.rows.length > limit
+    rows = (hasMoreBefore ? result.rows.slice(0, limit) : result.rows).reverse()
   }
 
   const items = await buildChatConversationItems(rootQueryable(), rows, {
     includeTransportDeliveries: true,
-  });
+  })
   const enrichedItems = await enrichChatConversationItemsForViewer(
     items,
-    identity.userId,
-  );
+    identity.userId
+  )
 
   const conversation = await loadConversationView(
     rootQueryable(),
     params.workspaceId,
     identity.workspaceMemberId,
-    params.conversationId,
-  );
+    params.conversationId
+  )
   if (!conversation) {
-    throw createChatError(404, "conversation_not_found", "Conversation not found");
+    throw createChatError(
+      404,
+      "conversation_not_found",
+      "Conversation not found"
+    )
   }
 
   const readState = await executeSql<{
-    read_watermark_sequence: string | number;
+    read_watermark_sequence: string | number
   }>(
     `
       SELECT read_watermark_sequence
@@ -4556,16 +4803,16 @@ export async function getChatConversationMessages(params: {
         AND participant_id = $2
       LIMIT 1
     `,
-    [params.conversationId, access.participant.id],
-  );
+    [params.conversationId, access.participant.id]
+  )
 
   const deviceStateResult = await executeSql<{
-    client_instance_id: string;
-    conversation_id: string;
-    last_visible_sequence: string | number;
-    last_inbox_seq: string | number;
-    last_opened_at: string | Date | null;
-    draft_payload: unknown;
+    client_instance_id: string
+    conversation_id: string
+    last_visible_sequence: string | number
+    last_inbox_seq: string | number
+    last_opened_at: string | Date | null
+    draft_payload: unknown
   }>(
     `
       SELECT
@@ -4580,16 +4827,18 @@ export async function getChatConversationMessages(params: {
         AND client_instance_id = $2
       LIMIT 1
     `,
-    [params.conversationId, params.clientInstanceId],
-  );
-  const row = deviceStateResult.rows[0];
+    [params.conversationId, params.clientInstanceId]
+  )
+  const row = deviceStateResult.rows[0]
   const deviceState: ChatDeviceState = row
     ? {
         clientInstanceId: row.client_instance_id,
         conversationId: row.conversation_id,
         lastVisibleSequence: toNumber(row.last_visible_sequence),
         lastInboxSeq: toNumber(row.last_inbox_seq),
-        lastOpenedAt: row.last_opened_at ? toIso(row.last_opened_at) : undefined,
+        lastOpenedAt: row.last_opened_at
+          ? toIso(row.last_opened_at)
+          : undefined,
         draftPayload: asJsonRecord(row.draft_payload),
       }
     : {
@@ -4598,22 +4847,21 @@ export async function getChatConversationMessages(params: {
         lastVisibleSequence: 0,
         lastInboxSeq: 0,
         draftPayload: {},
-      };
+      }
 
-  const runtimeMap = await getConversationRuntimeMap([params.conversationId]);
+  const runtimeMap = await getConversationRuntimeMap([params.conversationId])
   const remoteAgentIds = conversation.participants
     .filter((participant) => participant.participantType === "remote_agent")
     .map((participant) => participant.remoteAgentId)
-    .filter((value): value is string => Boolean(value));
-  const runtimeByRemoteAgent: Record<string, any> = {};
+    .filter((value): value is string => Boolean(value))
+  const runtimeByRemoteAgent: Record<string, any> = {}
   if (remoteAgentIds.length > 0) {
-    const { loadRemoteAgentRuntimeSnapshot } = await import(
-      "../remote-agents/service.js"
-    );
+    const { loadRemoteAgentRuntimeSnapshot } =
+      await import("../remote-agents/service.js")
     for (const remoteAgentId of remoteAgentIds) {
-      const snapshot = await loadRemoteAgentRuntimeSnapshot(remoteAgentId);
+      const snapshot = await loadRemoteAgentRuntimeSnapshot(remoteAgentId)
       if (snapshot) {
-        runtimeByRemoteAgent[remoteAgentId] = snapshot;
+        runtimeByRemoteAgent[remoteAgentId] = snapshot
       }
     }
   }
@@ -4623,40 +4871,46 @@ export async function getChatConversationMessages(params: {
     items: enrichedItems,
     runtimeByActor: runtimeMap[params.conversationId] || {},
     runtimeByRemoteAgent,
-    participantReadWatermarkSequence: toNumber(readState.rows[0]?.read_watermark_sequence),
+    participantReadWatermarkSequence: toNumber(
+      readState.rows[0]?.read_watermark_sequence
+    ),
     deviceState,
     hasMoreBefore,
     hasMoreAfter,
-  };
+  }
 }
 
 export async function requireRemoteAgentConversationAccess(
   queryable: Queryable,
   conversationId: string,
-  remoteAgentId: string,
+  remoteAgentId: string
 ) {
   const participant = await getConversationParticipant({
     conversationId,
     remoteAgentId,
     queryable,
-  });
+  })
   if (!participant || participant.state !== "active") {
-    throw createChatError(403, "conversation_access_denied", "Remote agent is not an active participant in this conversation");
+    throw createChatError(
+      403,
+      "conversation_access_denied",
+      "Remote agent is not an active participant in this conversation"
+    )
   }
-  return { participant };
+  return { participant }
 }
 
 export async function listVisibleConversationItemsForParticipant(params: {
-  conversationId: string;
-  participantId: string;
-  afterSequence?: number;
-  beforeSequence?: number;
-  limit?: number;
-  queryable?: Queryable;
+  conversationId: string
+  participantId: string
+  afterSequence?: number
+  beforeSequence?: number
+  limit?: number
+  queryable?: Queryable
 }) {
-  const queryable = params.queryable ?? rootQueryable();
-  const limit = Math.min(Math.max(params.limit ?? 100, 1), 200);
-  let rows: ItemRow[] = [];
+  const queryable = params.queryable ?? rootQueryable()
+  const limit = Math.min(Math.max(params.limit ?? 100, 1), 200)
+  let rows: ItemRow[] = []
 
   if (typeof params.afterSequence === "number") {
     const result = await executeSqlOn<ItemRow>(
@@ -4704,9 +4958,9 @@ export async function listVisibleConversationItemsForParticipant(params: {
         ORDER BY sequence ASC
         LIMIT $4
       `,
-      [params.conversationId, params.afterSequence, params.participantId, limit],
-    );
-    rows = result.rows;
+      [params.conversationId, params.afterSequence, params.participantId, limit]
+    )
+    rows = result.rows
   } else if (typeof params.beforeSequence === "number") {
     const result = await executeSqlOn<ItemRow>(
       queryable,
@@ -4753,9 +5007,14 @@ export async function listVisibleConversationItemsForParticipant(params: {
         ORDER BY sequence DESC
         LIMIT $4
       `,
-      [params.conversationId, params.beforeSequence, params.participantId, limit],
-    );
-    rows = [...result.rows].reverse();
+      [
+        params.conversationId,
+        params.beforeSequence,
+        params.participantId,
+        limit,
+      ]
+    )
+    rows = [...result.rows].reverse()
   } else {
     const result = await executeSqlOn<ItemRow>(
       queryable,
@@ -4801,69 +5060,73 @@ export async function listVisibleConversationItemsForParticipant(params: {
         ORDER BY sequence DESC
         LIMIT $3
       `,
-      [params.conversationId, params.participantId, limit],
-    );
-    rows = [...result.rows].reverse();
+      [params.conversationId, params.participantId, limit]
+    )
+    rows = [...result.rows].reverse()
   }
 
   return buildChatConversationItems(queryable, rows, {
     includeTransportDeliveries: true,
-  });
+  })
 }
 
 export async function getChatConversationActorRuntimeTurnDetail(params: {
-  workspaceId: string;
-  userId: string;
-  conversationId: string;
-  actorId: string;
-  turnId: string;
+  workspaceId: string
+  userId: string
+  conversationId: string
+  actorId: string
+  turnId: string
 }): Promise<ActorRuntimeTurnActivityDetail> {
   const identity = await getWorkspaceMemberIdentityOrThrow(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   await requireConversationAccess(
     rootQueryable(),
     params.conversationId,
-    identity.workspaceMemberId,
-  );
+    identity.workspaceMemberId
+  )
 
   const detail = await getSessionRuntimeTurnActivityDetail({
     conversationId: params.conversationId,
     actorId: params.actorId,
     turnId: params.turnId,
-  });
+  })
   if (!detail) {
     throw createChatError(
       404,
       "runtime_turn_not_found",
-      "Current turn activity not found",
-    );
+      "Current turn activity not found"
+    )
   }
 
-  return detail;
+  return detail
 }
 
 export async function sendChatConversationMessage(
-  params: SendMessageInput,
+  params: SendMessageInput
 ): Promise<ChatConversationSendMessageResponse> {
-  const contentBlocks = params.contentBlocks;
+  const contentBlocks = params.contentBlocks
   if (!Array.isArray(contentBlocks) || contentBlocks.length === 0) {
-    throw createChatError(400, "invalid_content_blocks", "contentBlocks is required");
+    throw createChatError(
+      400,
+      "invalid_content_blocks",
+      "contentBlocks is required"
+    )
   }
 
   const item = await transaction(async (client) => {
     const access = await requireConversationAccess(
       client,
       params.conversationId,
-      params.workspaceMemberId,
-    );
+      params.workspaceMemberId
+    )
 
     await ensureClientInstance(client, {
       workspaceId: params.workspaceId,
       workspaceMemberId: params.workspaceMemberId,
       clientInstanceId: params.clientInstanceId,
-    });
+    })
 
     return sendConversationMessageFromParticipant({
       workspaceId: params.workspaceId,
@@ -4875,45 +5138,50 @@ export async function sendChatConversationMessage(
       replyToItemId: params.replyToItemId,
       metadata: params.metadata,
       queryable: client,
-    });
-  });
+    })
+  })
 
   await enqueueActorWakeupsForConversationMessage({
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
     itemId: item.id,
-  });
-  const { notifyRemoteAgentDeliveriesForConversation } = await import(
-    "../remote-agents/service.js"
-  );
-  await notifyRemoteAgentDeliveriesForConversation(params.conversationId);
+  })
+  const { notifyRemoteAgentDeliveriesForConversation } =
+    await import("../remote-agents/service.js")
+  await notifyRemoteAgentDeliveriesForConversation(params.conversationId)
 
   return {
     item,
-  };
+  }
 }
 
 export async function updateChatConversationReadWatermark(
-  params: ReadWatermarkInput,
+  params: ReadWatermarkInput
 ): Promise<ChatConversationReadWatermarkResponse> {
   return transaction(async (client) => {
     const access = await requireConversationAccess(
       client,
       params.conversationId,
-      params.workspaceMemberId,
-    );
+      params.workspaceMemberId
+    )
 
     await ensureClientInstance(client, {
       workspaceId: params.workspaceId,
       workspaceMemberId: params.workspaceMemberId,
       clientInstanceId: params.clientInstanceId,
-    });
+    })
 
-    const maxSequence = await getConversationSequenceMax(client, params.conversationId);
-    const requestedSequence = Math.min(Math.max(params.readUpToSequence, 0), maxSequence);
+    const maxSequence = await getConversationSequenceMax(
+      client,
+      params.conversationId
+    )
+    const requestedSequence = Math.min(
+      Math.max(params.readUpToSequence, 0),
+      maxSequence
+    )
 
     const existingState = await executeSqlOn<{
-      read_watermark_sequence: string | number;
+      read_watermark_sequence: string | number
     }>(
       client,
       `
@@ -4923,17 +5191,17 @@ export async function updateChatConversationReadWatermark(
           AND participant_id = $2
         LIMIT 1
       `,
-      [params.conversationId, access.participant.id],
-    );
+      [params.conversationId, access.participant.id]
+    )
     const nextSequence = Math.max(
       toNumber(existingState.rows[0]?.read_watermark_sequence),
-      requestedSequence,
-    );
+      requestedSequence
+    )
     const lastReadItemId = await getLastItemAtOrBeforeSequence(
       client,
       params.conversationId,
-      nextSequence,
-    );
+      nextSequence
+    )
 
     await executeSqlOn(
       client,
@@ -4954,14 +5222,19 @@ export async function updateChatConversationReadWatermark(
             last_read_at = NOW(),
             updated_at = NOW()
       `,
-      [params.conversationId, access.participant.id, nextSequence, lastReadItemId],
-    );
+      [
+        params.conversationId,
+        access.participant.id,
+        nextSequence,
+        lastReadItemId,
+      ]
+    )
 
     if (params.clientInstanceId) {
       const lastVisibleSequence = Math.min(
         maxSequence,
-        Math.max(params.lastVisibleSequence ?? nextSequence, nextSequence),
-      );
+        Math.max(params.lastVisibleSequence ?? nextSequence, nextSequence)
+      )
       await executeSqlOn(
         client,
         `
@@ -4981,23 +5254,23 @@ export async function updateChatConversationReadWatermark(
               last_opened_at = NOW(),
               updated_at = NOW()
         `,
-        [params.conversationId, params.clientInstanceId, lastVisibleSequence],
-      );
+        [params.conversationId, params.clientInstanceId, lastVisibleSequence]
+      )
     }
 
     const unreadCount = await countUnreadVisibleMessages(
       client,
       params.conversationId,
-      access.participant.id,
-    );
+      access.participant.id
+    )
 
     await upsertConversationView(client, {
       workspaceMemberId: params.workspaceMemberId,
       conversationId: params.conversationId,
       unreadCount,
-    });
+    })
 
-    const lastReadAt = new Date().toISOString();
+    const lastReadAt = new Date().toISOString()
     await appendWorkspaceMemberSyncEvent(client, {
       workspaceId: params.workspaceId,
       workspaceMemberId: params.workspaceMemberId,
@@ -5010,14 +5283,14 @@ export async function updateChatConversationReadWatermark(
         readWatermarkSequence: nextSequence,
         lastReadAt,
       },
-    });
+    })
 
     await syncConversationUpsertForWorkspaceMembers(
       client,
       params.workspaceId,
       [params.workspaceMemberId],
-      params.conversationId,
-    );
+      params.conversationId
+    )
 
     return {
       conversationId: params.conversationId,
@@ -5025,6 +5298,6 @@ export async function updateChatConversationReadWatermark(
       participantId: access.participant.id,
       readWatermarkSequence: nextSequence,
       lastReadAt,
-    };
-  });
+    }
+  })
 }

@@ -1,40 +1,43 @@
-import type { ConversationEntityRef } from "@shared";
+import type { ConversationEntityRef } from "@shared"
 
-type MentionSelectionListener = (mention: ConversationEntityRef) => void;
+type MentionSelectionListener = (mention: ConversationEntityRef) => void
 
-const listenersByConversationId = new Map<string, Set<MentionSelectionListener>>();
+const listenersByConversationId = new Map<
+  string,
+  Set<MentionSelectionListener>
+>()
 
 export function publishMentionSelection(
   conversationId: string,
-  mention: ConversationEntityRef,
+  mention: ConversationEntityRef
 ) {
-  const listeners = listenersByConversationId.get(conversationId);
+  const listeners = listenersByConversationId.get(conversationId)
   if (!listeners) {
-    return;
+    return
   }
 
   for (const listener of listeners) {
-    listener(mention);
+    listener(mention)
   }
 }
 
 export function subscribeMentionSelection(
   conversationId: string,
-  listener: MentionSelectionListener,
+  listener: MentionSelectionListener
 ) {
-  const listeners = listenersByConversationId.get(conversationId) ?? new Set();
-  listeners.add(listener);
-  listenersByConversationId.set(conversationId, listeners);
+  const listeners = listenersByConversationId.get(conversationId) ?? new Set()
+  listeners.add(listener)
+  listenersByConversationId.set(conversationId, listeners)
 
   return () => {
-    const current = listenersByConversationId.get(conversationId);
+    const current = listenersByConversationId.get(conversationId)
     if (!current) {
-      return;
+      return
     }
 
-    current.delete(listener);
+    current.delete(listener)
     if (current.size === 0) {
-      listenersByConversationId.delete(conversationId);
+      listenersByConversationId.delete(conversationId)
     }
-  };
+  }
 }

@@ -1,4 +1,4 @@
-import type { TransportConnectorCapability } from "@synapse/shared/types";
+import type { TransportConnectorCapability } from "@synapse/shared/types"
 
 export const WEIXIN_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "weixin",
@@ -6,4 +6,4 @@ export const WEIXIN_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   supportedEndpointTypes: ["direct"],
   supportsDirectMessages: true,
   supportsGroupMessages: false,
-};
+}

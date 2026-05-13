@@ -1,7 +1,7 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useRouter } from "expo-router";
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { useRouter } from "expo-router"
+import { useState } from "react"
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native"
 
 import {
   Avatar,
@@ -10,11 +10,11 @@ import {
   LoadingBlock,
   ScreenScroll,
   SectionBlock,
-} from "@/components/ui";
-import { api } from "@/lib/api";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
-import type { IdentitySearchMatchView } from "@/types/api";
+} from "@/components/ui"
+import { api } from "@/lib/api"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
+import type { IdentitySearchMatchView } from "@/types/api"
 
 function buildSearchDetailParams(match: IdentitySearchMatchView) {
   return {
@@ -28,62 +28,64 @@ function buildSearchDetailParams(match: IdentitySearchMatchView) {
       workspaceSlug: match.workspace.slug,
       state: match.state,
     },
-  };
+  }
 }
 
 function resultStateLabel(match: IdentitySearchMatchView) {
   switch (match.state) {
     case "same_workspace_member":
-      return "同 workspace 用户";
+      return "同 workspace 用户"
     case "friend":
-      return "已是好友";
+      return "已是好友"
     case "pending_request":
-      return "好友申请待处理";
+      return "好友申请待处理"
     default:
-      return "可查看并发起好友申请";
+      return "可查看并发起好友申请"
   }
 }
 
 export default function AddFriendScreen() {
-  const router = useRouter();
-  const { workspaceId } = useWorkspace();
-  const [query, setQuery] = useState("");
-  const [results, setResults] = useState<IdentitySearchMatchView[]>([]);
-  const [searching, setSearching] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+  const router = useRouter()
+  const { workspaceId } = useWorkspace()
+  const [query, setQuery] = useState("")
+  const [results, setResults] = useState<IdentitySearchMatchView[]>([])
+  const [searching, setSearching] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
 
   async function handleSearch() {
-    if (!workspaceId) return;
+    if (!workspaceId) return
 
-    setSearching(true);
-    setMessage(null);
+    setSearching(true)
+    setMessage(null)
     try {
-      const result = await api.searchIdentity(workspaceId, query);
+      const result = await api.searchIdentity(workspaceId, query)
 
       if (result.outcome === "empty") {
-        setResults([]);
-        setMessage("请输入好友 ID。");
-        return;
+        setResults([])
+        setMessage("请输入好友 ID。")
+        return
       }
       if (result.outcome === "invalid") {
-        setResults([]);
-        setMessage("好友 ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。");
-        return;
+        setResults([])
+        setMessage(
+          "好友 ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。"
+        )
+        return
       }
       if (result.outcome === "self") {
-        setResults([]);
-        setMessage("这是你自己的好友 ID。");
-        return;
+        setResults([])
+        setMessage("这是你自己的好友 ID。")
+        return
       }
       if (result.outcome === "not_found" || result.matches.length === 0) {
-        setResults([]);
-        setMessage("没有找到结果。对方可能关闭了 ID 搜索。");
-        return;
+        setResults([])
+        setMessage("没有找到结果。对方可能关闭了 ID 搜索。")
+        return
       }
 
-      setResults(result.matches);
+      setResults(result.matches)
       if (result.matches.length === 1) {
-        const match = result.matches[0]!;
+        const match = result.matches[0]!
         if (match.contact) {
           router.push({
             pathname: "/contacts/[contactType]/[contactId]",
@@ -91,20 +93,20 @@ export default function AddFriendScreen() {
               contactType: match.contact.kind,
               contactId: match.contact.id,
             },
-          });
-          return;
+          })
+          return
         }
 
-        router.push(buildSearchDetailParams(match));
-        return;
+        router.push(buildSearchDetailParams(match))
+        return
       }
 
-      setMessage("同一个账号在多个 workspace 中可被添加，请选择具体身份。");
+      setMessage("同一个账号在多个 workspace 中可被添加，请选择具体身份。")
     } catch (error) {
-      setResults([]);
-      setMessage(error instanceof Error ? error.message : "搜索好友失败。");
+      setResults([])
+      setMessage(error instanceof Error ? error.message : "搜索好友失败。")
     } finally {
-      setSearching(false);
+      setSearching(false)
     }
   }
 
@@ -116,11 +118,11 @@ export default function AddFriendScreen() {
           contactType: match.contact.kind,
           contactId: match.contact.id,
         },
-      });
-      return;
+      })
+      return
     }
 
-    router.push(buildSearchDetailParams(match));
+    router.push(buildSearchDetailParams(match))
   }
 
   return (
@@ -137,7 +139,8 @@ export default function AddFriendScreen() {
 
       <SectionBlock>
         <Text style={styles.tipText}>
-          输入对方的好友 ID。查到后会进入联系人详情；如果没有结果，会直接在这里提示。
+          输入对方的好友
+          ID。查到后会进入联系人详情；如果没有结果，会直接在这里提示。
         </Text>
         <View style={styles.searchShell}>
           <Feather name="search" size={16} color={theme.colors.textSoft} />
@@ -166,11 +169,7 @@ export default function AddFriendScreen() {
         </SectionBlock>
       ) : message && results.length === 0 ? (
         <SectionBlock>
-          <EmptyState
-            icon="search"
-            title="搜索结果"
-            description={message}
-          />
+          <EmptyState icon="search" title="搜索结果" description={message} />
         </SectionBlock>
       ) : results.length > 1 ? (
         <SectionBlock>
@@ -195,7 +194,9 @@ export default function AddFriendScreen() {
                   <Text numberOfLines={2} style={styles.resultSubtitle}>
                     {match.subtitle}
                   </Text>
-                  <Text style={styles.resultMeta}>{resultStateLabel(match)}</Text>
+                  <Text style={styles.resultMeta}>
+                    {resultStateLabel(match)}
+                  </Text>
                 </View>
                 <Feather
                   name="chevron-right"
@@ -208,7 +209,7 @@ export default function AddFriendScreen() {
         </SectionBlock>
       ) : null}
     </ScreenScroll>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -296,4 +297,4 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: theme.colors.textSoft,
   },
-});
+})

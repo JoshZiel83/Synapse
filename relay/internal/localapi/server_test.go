@@ -63,14 +63,14 @@ func TestHandlePairingAllowsMatchingOrigin(t *testing.T) {
 func TestHandleStatusRedactsSensitiveFieldsForUntrustedOrigin(t *testing.T) {
 	server := New(DefaultPort, "test", nil, func() StatusSnapshot {
 		return StatusSnapshot{
-			Relay:                "running",
-			Paired:               true,
-			ServerIdentityPinned: true,
-			DeviceID:             "device-123",
-			DisplayName:          "Relay Desktop",
-			ServerBaseURL:        "https://synapse.example",
-			WebSocketURL:         "wss://synapse.example/api/v1/mcp/relay/connect",
-			PublicKeyFingerprint: "fingerprint-123",
+			Relay:                 "running",
+			Paired:                true,
+			ServerIdentityPinned:  true,
+			DeviceID:              "device-123",
+			DisplayName:           "Relay Desktop",
+			ServerBaseURL:         "https://synapse.example",
+			WebSocketURL:          "wss://synapse.example/api/v1/mcp/relay/connect",
+			PublicKeyFingerprint:  "fingerprint-123",
 			ServerTLSPublicKeyPin: "sha256:pin",
 		}
 	})
@@ -106,14 +106,14 @@ func TestHandleStatusRedactsSensitiveFieldsForUntrustedOrigin(t *testing.T) {
 func TestHandleStatusReturnsFullSnapshotForTrustedOrigin(t *testing.T) {
 	server := New(DefaultPort, "test", nil, func() StatusSnapshot {
 		return StatusSnapshot{
-			Relay:                "running",
-			Paired:               true,
-			ServerIdentityPinned: true,
-			DeviceID:             "device-123",
-			DisplayName:          "Relay Desktop",
-			ServerBaseURL:        "https://synapse.example",
-			WebSocketURL:         "wss://synapse.example/api/v1/mcp/relay/connect",
-			PublicKeyFingerprint: "fingerprint-123",
+			Relay:                 "running",
+			Paired:                true,
+			ServerIdentityPinned:  true,
+			DeviceID:              "device-123",
+			DisplayName:           "Relay Desktop",
+			ServerBaseURL:         "https://synapse.example",
+			WebSocketURL:          "wss://synapse.example/api/v1/mcp/relay/connect",
+			PublicKeyFingerprint:  "fingerprint-123",
 			ServerTLSPublicKeyPin: "sha256:pin",
 		}
 	})

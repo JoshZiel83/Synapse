@@ -1,31 +1,33 @@
-import type { BuiltinOrgSeed } from "../types.js";
-import { aminerToolDefinitions } from "../../builtin/aminer/openapi/tool-specs.js";
+import type { BuiltinOrgSeed } from "../types.js"
+import { aminerToolDefinitions } from "../../builtin/aminer/openapi/tool-specs.js"
 
-const i18n = (en: string, zhCN: string) => ({ en, "zh-CN": zhCN });
+const i18n = (en: string, zhCN: string) => ({ en, "zh-CN": zhCN })
 
 export const aminerSeed: BuiltinOrgSeed = {
   slug: "aminer",
   displayName: "AMiner",
-  description: "AMiner academic research toolkit for scholar, paper, patent, organization, venue, and deep research workflows.",
+  description:
+    "AMiner academic research toolkit for scholar, paper, patent, organization, venue, and deep research workflows.",
   plugins: [
     {
       slug: "openapi",
       displayName: "AMiner Open Platform",
       displayNameI18n: i18n("AMiner Open Platform", "AMiner 开放平台"),
-      description: "Official-style AMiner academic data toolkit wrapped as a builtin MCP plugin for scholar, paper, organization, venue, patent, and deep research workflows.",
+      description:
+        "Official-style AMiner academic data toolkit wrapped as a builtin MCP plugin for scholar, paper, organization, venue, patent, and deep research workflows.",
       descriptionI18n: i18n(
         "Official-style AMiner academic data toolkit wrapped as a builtin MCP plugin for scholar, paper, organization, venue, patent, and deep research workflows.",
-        "把 AMiner 学术数据能力包装成内置 MCP 插件，覆盖学者、论文、机构、期刊、专利和深度研究工作流。",
+        "把 AMiner 学术数据能力包装成内置 MCP 插件，覆盖学者、论文、机构、期刊、专利和深度研究工作流。"
       ),
       longDescription:
         "This builtin plugin wraps AMiner Open Platform endpoints into MCP tools with cleaner input schemas, better parameter descriptions, and human-readable output formatting. It supports scholar lookup, paper search, academic QA search, organization and venue discovery, patent search, and AMiner deep research.",
       longDescriptionI18n: i18n(
         "This builtin plugin wraps AMiner Open Platform endpoints into MCP tools with cleaner input schemas, better parameter descriptions, and human-readable output formatting. It supports scholar lookup, paper search, academic QA search, organization and venue discovery, patent search, and AMiner deep research.",
-        "该插件把 AMiner 开放平台接口封装成 MCP 工具，提供更干净的输入定义、更清晰的参数说明和更可读的输出格式，支持学者查询、论文搜索、学术问答、机构/期刊发现、专利搜索和 AMiner 沉思。",
+        "该插件把 AMiner 开放平台接口封装成 MCP 工具，提供更干净的输入定义、更清晰的参数说明和更可读的输出格式，支持学者查询、论文搜索、学术问答、机构/期刊发现、专利搜索和 AMiner 沉思。"
       ),
       summaryI18n: i18n(
         "Academic search and research toolkit powered by AMiner.",
-        "由 AMiner 提供的学术检索与研究工具包。",
+        "由 AMiner 提供的学术检索与研究工具包。"
       ),
       defaultLocale: "zh-CN",
       transport: "builtin",
@@ -34,10 +36,7 @@ export const aminerSeed: BuiltinOrgSeed = {
       defaultReuseScope: "workspace",
       requiresHandshake: false,
       iconAssetPath: "assets/icons/aminer.svg",
-      categorySlugs: [
-        "search-and-retrieval",
-        "documents-and-reading",
-      ],
+      categorySlugs: ["search-and-retrieval", "documents-and-reading"],
       tags: [
         "aminer",
         "academic",
@@ -69,11 +68,13 @@ export const aminerSeed: BuiltinOrgSeed = {
           apiToken: {
             type: "string",
             sensitive: true,
-            description: "Optional prebuilt AMiner JWT token. Prefer apiKey + userId for automatic token generation.",
+            description:
+              "Optional prebuilt AMiner JWT token. Prefer apiKey + userId for automatic token generation.",
           },
           tokenTtlSeconds: {
             type: "integer",
-            description: "JWT lifetime in seconds when auto-signing tokens with apiKey + userId.",
+            description:
+              "JWT lifetime in seconds when auto-signing tokens with apiKey + userId.",
           },
           timeoutMs: {
             type: "integer",
@@ -96,11 +97,11 @@ export const aminerSeed: BuiltinOrgSeed = {
           titleI18n: i18n("API Key", "API Key"),
           descriptionI18n: i18n(
             "Your AMiner API key. The plugin will sign short-lived JWT tokens automatically.",
-            "你的 AMiner API Key。插件会自动签发短期 JWT token。",
+            "你的 AMiner API Key。插件会自动签发短期 JWT token。"
           ),
           placeholderI18n: i18n(
             "Paste your AMiner API key",
-            "粘贴你的 AMiner API Key",
+            "粘贴你的 AMiner API Key"
           ),
           secret: true,
         },
@@ -110,11 +111,11 @@ export const aminerSeed: BuiltinOrgSeed = {
           titleI18n: i18n("User ID", "用户 ID"),
           descriptionI18n: i18n(
             "Your AMiner user ID used in the JWT payload.",
-            "你的 AMiner 用户 ID，会写入 JWT payload。",
+            "你的 AMiner 用户 ID，会写入 JWT payload。"
           ),
           placeholderI18n: i18n(
             "Paste your AMiner user ID",
-            "粘贴你的 AMiner 用户 ID",
+            "粘贴你的 AMiner 用户 ID"
           ),
         },
         {
@@ -123,11 +124,11 @@ export const aminerSeed: BuiltinOrgSeed = {
           titleI18n: i18n("JWT Token", "JWT Token"),
           descriptionI18n: i18n(
             "Optional fallback: paste a prebuilt AMiner JWT token directly.",
-            "可选兜底项：直接粘贴已经生成好的 AMiner JWT token。",
+            "可选兜底项：直接粘贴已经生成好的 AMiner JWT token。"
           ),
           placeholderI18n: i18n(
             "Paste a prebuilt JWT token",
-            "粘贴已生成的 JWT token",
+            "粘贴已生成的 JWT token"
           ),
           secret: true,
         },
@@ -137,7 +138,7 @@ export const aminerSeed: BuiltinOrgSeed = {
           titleI18n: i18n("JWT TTL (s)", "JWT 有效期（秒）"),
           descriptionI18n: i18n(
             "Lifetime for auto-generated JWT tokens. Default is 7200 seconds.",
-            "自动生成 JWT token 的有效期，默认 7200 秒。",
+            "自动生成 JWT token 的有效期，默认 7200 秒。"
           ),
           defaultValue: 7200,
         },
@@ -147,7 +148,7 @@ export const aminerSeed: BuiltinOrgSeed = {
           titleI18n: i18n("Timeout (ms)", "超时时间（毫秒）"),
           descriptionI18n: i18n(
             "Optional request timeout. Leave empty to use the 60 second default.",
-            "可选请求超时时间。留空时默认 60 秒。",
+            "可选请求超时时间。留空时默认 60 秒。"
           ),
         },
       ],
@@ -156,19 +157,36 @@ export const aminerSeed: BuiltinOrgSeed = {
         timeoutMs: 60000,
       },
       validationRules: [
-        { field: "apiKey", rule: "min_length", value: 8, message: "AMiner API key looks too short" },
-        { field: "userId", rule: "min_length", value: 4, message: "AMiner user ID looks too short" },
-        { field: "apiToken", rule: "min_length", value: 20, message: "AMiner JWT token looks too short" },
+        {
+          field: "apiKey",
+          rule: "min_length",
+          value: 8,
+          message: "AMiner API key looks too short",
+        },
+        {
+          field: "userId",
+          rule: "min_length",
+          value: 4,
+          message: "AMiner user ID looks too short",
+        },
+        {
+          field: "apiToken",
+          rule: "min_length",
+          value: 20,
+          message: "AMiner JWT token looks too short",
+        },
       ],
       setupSteps: [
         {
           id: "credentials",
           title: "Configure AMiner Credentials",
-          description: "Prefer API key + user ID so the plugin can sign JWT tokens automatically. A prebuilt JWT token also works as a fallback.",
+          description:
+            "Prefer API key + user ID so the plugin can sign JWT tokens automatically. A prebuilt JWT token also works as a fallback.",
           scope: "plugin",
           fields: ["apiKey", "userId", "apiToken"],
           helpUrl: "https://datacenter.aminer.cn/",
-          helpText: "Use your AMiner API key and user ID from the AMiner console, or paste a prebuilt JWT token.",
+          helpText:
+            "Use your AMiner API key and user ID from the AMiner console, or paste a prebuilt JWT token.",
         },
       ],
       installFlow: {
@@ -179,14 +197,20 @@ export const aminerSeed: BuiltinOrgSeed = {
             titleI18n: i18n("Connect AMiner", "连接 AMiner"),
             descriptionI18n: i18n(
               "Prefer API key + user ID for automatic JWT signing. You can also paste a prebuilt JWT token.",
-              "推荐填写 API Key + 用户 ID，让插件自动签 JWT；也可以直接粘贴已生成的 JWT token。",
+              "推荐填写 API Key + 用户 ID，让插件自动签 JWT；也可以直接粘贴已生成的 JWT token。"
             ),
             scope: "plugin",
-            fields: ["apiKey", "userId", "apiToken", "tokenTtlSeconds", "timeoutMs"],
+            fields: [
+              "apiKey",
+              "userId",
+              "apiToken",
+              "tokenTtlSeconds",
+              "timeoutMs",
+            ],
             helpUrl: "https://datacenter.aminer.cn/",
             helpTextI18n: i18n(
               "Use your AMiner API key and user ID from the AMiner console, or paste a JWT token generated from them.",
-              "使用控制台里的 AMiner API Key 和用户 ID，或直接粘贴基于它们生成的 JWT token。",
+              "使用控制台里的 AMiner API Key 和用户 ID，或直接粘贴基于它们生成的 JWT token。"
             ),
           },
           {
@@ -195,7 +219,7 @@ export const aminerSeed: BuiltinOrgSeed = {
             titleI18n: i18n("Review and Install", "确认并安装"),
             descriptionI18n: i18n(
               "Review the configured token and install the plugin.",
-              "确认 token 配置后安装插件。",
+              "确认 token 配置后安装插件。"
             ),
             scope: "plugin",
             fields: [],
@@ -205,8 +229,9 @@ export const aminerSeed: BuiltinOrgSeed = {
       authorization: {
         requiredPermissions: ["network:outbound"],
         defaultAccessTargetType: "workspace",
-        reason: "AMiner Open Platform requires outbound network access to call AMiner academic data APIs.",
+        reason:
+          "AMiner Open Platform requires outbound network access to call AMiner academic data APIs.",
       },
     },
   ],
-};
+}

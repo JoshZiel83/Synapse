@@ -22,13 +22,7 @@ import {
 } from "./member-utils"
 import TransportKindIcon from "./transport-kind-icon"
 
-function CompactDetail({
-  label,
-  value,
-}: {
-  label: string
-  value: string
-}) {
+function CompactDetail({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
       <span className="shrink-0 font-medium text-foreground/80">{label}</span>
@@ -84,10 +78,7 @@ export default function ChatParticipantHoverCard({
   const subtitle = getConversationMemberSubtitle(member)
   const typeLabel = getConversationMemberTypeLabel(member)
   const transportLabel = formatTransportKindLabel(member.transportKind)
-  const contactHref = getConversationMemberContactHref(
-    member,
-    contactBasePath
-  )
+  const contactHref = getConversationMemberContactHref(member, contactBasePath)
   const compactNote = getCompactNote(member)
 
   return (
@@ -108,7 +99,7 @@ export default function ChatParticipantHoverCard({
               <TransportKindIcon
                 kind={member.transportKind}
                 size={12}
-                className="absolute -bottom-1 -right-1 size-4 p-px"
+                className="absolute -right-1 -bottom-1 size-4 p-px"
               />
             </div>
             <div className="min-w-0 flex-1">

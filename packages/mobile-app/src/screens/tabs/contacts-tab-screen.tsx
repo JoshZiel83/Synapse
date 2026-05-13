@@ -1,6 +1,6 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useRouter } from "expo-router";
-import { useEffect, useMemo, useState } from "react";
+import Feather from "@expo/vector-icons/Feather"
+import { useRouter } from "expo-router"
+import { useEffect, useMemo, useState } from "react"
 import {
   Modal,
   Pressable,
@@ -8,13 +8,13 @@ import {
   StyleSheet,
   Text,
   View,
-} from "react-native";
+} from "react-native"
 
 import {
   AlphabetIndexedEntityList,
   type AlphabetIndexedEntityItem,
-} from "@/components/alphabet-indexed-entity-list";
-import { MobileHeaderActions } from "@/components/mobile-header-actions";
+} from "@/components/alphabet-indexed-entity-list"
+import { MobileHeaderActions } from "@/components/mobile-header-actions"
 import {
   Button,
   EmptyState,
@@ -22,108 +22,108 @@ import {
   MobilePageHeader,
   Pill,
   ScreenView,
-} from "@/components/ui";
-import { useScanLauncher } from "@/hooks/use-scan-launcher";
-import { api } from "@/lib/api";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
-import type { ContactHubEntryView, ContactHubResponse } from "@/types/api";
+} from "@/components/ui"
+import { useScanLauncher } from "@/hooks/use-scan-launcher"
+import { api } from "@/lib/api"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
+import type { ContactHubEntryView, ContactHubResponse } from "@/types/api"
 
-type ContactFilter = "all" | "friend" | "actor" | "workspace-member";
+type ContactFilter = "all" | "friend" | "actor" | "workspace-member"
 
 const FILTER_OPTIONS: Array<{ value: ContactFilter; label: string }> = [
   { value: "all", label: "默认" },
   { value: "friend", label: "好友" },
   { value: "actor", label: "Actor" },
   { value: "workspace-member", label: "Workspace Member" },
-];
+]
 
 function compareText(left: string, right: string) {
   try {
     return left.localeCompare(right, "zh-Hans-u-co-pinyin", {
       sensitivity: "base",
-    });
+    })
   } catch {
     return left.localeCompare(right, undefined, {
       sensitivity: "base",
-    });
+    })
   }
 }
 
 function compareEntries(left: ContactHubEntryView, right: ContactHubEntryView) {
-  const titleCompare = compareText(left.title, right.title);
-  if (titleCompare !== 0) return titleCompare;
-  return compareText(left.subtitle || "", right.subtitle || "");
+  const titleCompare = compareText(left.title, right.title)
+  if (titleCompare !== 0) return titleCompare
+  return compareText(left.subtitle || "", right.subtitle || "")
 }
 
 function isFriendEntry(entry: ContactHubEntryView) {
-  return entry.kind.startsWith("friend");
+  return entry.kind.startsWith("friend")
 }
 
 function formatPendingCount(count: number) {
-  return count > 99 ? "99+" : String(count);
+  return count > 99 ? "99+" : String(count)
 }
 
 export default function ContactsTabScreen() {
-  const router = useRouter();
-  const { openScan, permissionSheet } = useScanLauncher("relationship");
-  const { workspaceId } = useWorkspace();
-  const [hub, setHub] = useState<ContactHubResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [filter, setFilter] = useState<ContactFilter>("all");
-  const [filterMenuOpen, setFilterMenuOpen] = useState(false);
+  const router = useRouter()
+  const { openScan, permissionSheet } = useScanLauncher("relationship")
+  const { workspaceId } = useWorkspace()
+  const [hub, setHub] = useState<ContactHubResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [filter, setFilter] = useState<ContactFilter>("all")
+  const [filterMenuOpen, setFilterMenuOpen] = useState(false)
 
   async function loadHub(isRefreshing = false) {
     if (!workspaceId) {
-      setHub(null);
-      setLoading(false);
-      setRefreshing(false);
-      return;
+      setHub(null)
+      setLoading(false)
+      setRefreshing(false)
+      return
     }
 
     if (isRefreshing) {
-      setRefreshing(true);
+      setRefreshing(true)
     } else {
-      setLoading(true);
+      setLoading(true)
     }
 
     try {
-      setHub(await api.getContactHub(workspaceId));
-      setError(null);
+      setHub(await api.getContactHub(workspaceId))
+      setError(null)
     } catch (nextError) {
       setError(
-        nextError instanceof Error ? nextError.message : "联系人加载失败。",
-      );
+        nextError instanceof Error ? nextError.message : "联系人加载失败。"
+      )
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      setLoading(false)
+      setRefreshing(false)
     }
   }
 
   useEffect(() => {
-    void loadHub();
-  }, [workspaceId]);
+    void loadHub()
+  }, [workspaceId])
 
   const filteredEntries = useMemo(() => {
     const all = [
       ...(hub?.workspaceActors || []),
       ...(hub?.workspaceMembers || []),
       ...(hub?.friends || []),
-    ];
+    ]
 
     if (filter === "friend") {
-      return [...(hub?.friends || [])].sort(compareEntries);
+      return [...(hub?.friends || [])].sort(compareEntries)
     }
     if (filter === "actor") {
-      return [...(hub?.workspaceActors || [])].sort(compareEntries);
+      return [...(hub?.workspaceActors || [])].sort(compareEntries)
     }
     if (filter === "workspace-member") {
-      return [...(hub?.workspaceMembers || [])].sort(compareEntries);
+      return [...(hub?.workspaceMembers || [])].sort(compareEntries)
     }
-    return [...all].sort(compareEntries);
-  }, [filter, hub?.friends, hub?.workspaceActors, hub?.workspaceMembers]);
+    return [...all].sort(compareEntries)
+  }, [filter, hub?.friends, hub?.workspaceActors, hub?.workspaceMembers])
 
   const items = useMemo<AlphabetIndexedEntityItem[]>(
     () =>
@@ -145,12 +145,12 @@ export default function ContactsTabScreen() {
             },
           }),
       })),
-    [filteredEntries, router],
-  );
+    [filteredEntries, router]
+  )
 
   const filterLabel =
-    FILTER_OPTIONS.find((option) => option.value === filter)?.label || "默认";
-  const pendingRequestCount = hub?.requestSummary.totalPendingCount || 0;
+    FILTER_OPTIONS.find((option) => option.value === filter)?.label || "默认"
+  const pendingRequestCount = hub?.requestSummary.totalPendingCount || 0
 
   return (
     <ScreenView>
@@ -235,7 +235,9 @@ export default function ContactsTabScreen() {
                     color={theme.colors.textSoft}
                   />
                 </Pressable>
-                <Text style={styles.countText}>{filteredEntries.length} 人</Text>
+                <Text style={styles.countText}>
+                  {filteredEntries.length} 人
+                </Text>
               </View>
             }
             emptyState={
@@ -268,8 +270,8 @@ export default function ContactsTabScreen() {
               <Pressable
                 key={option.value}
                 onPress={() => {
-                  setFilter(option.value);
-                  setFilterMenuOpen(false);
+                  setFilter(option.value)
+                  setFilterMenuOpen(false)
                 }}
                 style={({ pressed }) => [
                   styles.filterOption,
@@ -285,7 +287,11 @@ export default function ContactsTabScreen() {
                   {option.label}
                 </Text>
                 {filter === option.value ? (
-                  <Feather name="check" size={16} color={theme.colors.primary} />
+                  <Feather
+                    name="check"
+                    size={16}
+                    color={theme.colors.primary}
+                  />
                 ) : null}
               </Pressable>
             ))}
@@ -293,7 +299,7 @@ export default function ContactsTabScreen() {
         </View>
       </Modal>
     </ScreenView>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -395,4 +401,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: theme.colors.primary,
   },
-});
+})

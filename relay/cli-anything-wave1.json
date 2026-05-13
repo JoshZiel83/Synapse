@@ -27,9 +27,7 @@
       "probe": {
         "type": "executable_any",
         "candidates": ["blender"],
-        "paths": [
-          "/Applications/Blender.app/Contents/MacOS/Blender"
-        ]
+        "paths": ["/Applications/Blender.app/Contents/MacOS/Blender"]
       }
     },
     {
@@ -40,9 +38,7 @@
       "probe": {
         "type": "executable_any",
         "candidates": ["CloudCompare", "cloudcompare"],
-        "paths": [
-          "/Applications/CloudCompare.app/Contents/MacOS/CloudCompare"
-        ]
+        "paths": ["/Applications/CloudCompare.app/Contents/MacOS/CloudCompare"]
       }
     },
     {
@@ -97,9 +93,7 @@
       "probe": {
         "type": "executable_any",
         "candidates": ["gimp", "gimp-2.10", "gimp-2.99"],
-        "paths": [
-          "/Applications/GIMP.app/Contents/MacOS/gimp"
-        ]
+        "paths": ["/Applications/GIMP.app/Contents/MacOS/gimp"]
       }
     },
     {
@@ -110,9 +104,7 @@
       "probe": {
         "type": "executable_any",
         "candidates": ["inkscape"],
-        "paths": [
-          "/Applications/Inkscape.app/Contents/MacOS/inkscape"
-        ]
+        "paths": ["/Applications/Inkscape.app/Contents/MacOS/inkscape"]
       }
     },
     {
@@ -143,9 +135,7 @@
         "type": "executable_any",
         "envPathVar": "KRITA_PATH",
         "candidates": ["krita"],
-        "paths": [
-          "/Applications/krita.app/Contents/MacOS/krita"
-        ]
+        "paths": ["/Applications/krita.app/Contents/MacOS/krita"]
       }
     },
     {

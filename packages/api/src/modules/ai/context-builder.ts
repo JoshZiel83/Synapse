@@ -6,80 +6,78 @@ import type {
   CanonicalFileCategory,
   CanonicalToolCall,
   CanonicalToolResult,
-} from "@synapse/shared";
-import { buildConversationMessageRef } from "@synapse/shared";
+} from "@synapse/shared"
+import { buildConversationMessageRef } from "@synapse/shared"
 import type {
   CanonicalContextAuthor,
   CanonicalContextItem,
   CanonicalContextTarget,
-} from "@synapse/shared/types";
+} from "@synapse/shared/types"
 import {
   extractText,
   fileRefBlock,
   normalizeCanonicalContentBlocks,
   textBlock,
   textBlocks,
-} from "@synapse/shared";
-import { renderConversationEventContextBlocks } from "../chat/event-registry.js";
-import { getFileUrlById } from "../files/service.js";
+} from "@synapse/shared"
+import { renderConversationEventContextBlocks } from "../chat/event-registry.js"
+import { getFileUrlById } from "../files/service.js"
 
-function mimeToCategory(
-  mimeType: string,
-): CanonicalFileCategory {
-  if (mimeType.startsWith("image/")) return "image";
-  if (mimeType.startsWith("audio/")) return "audio";
-  if (mimeType.startsWith("video/")) return "video";
-  return "document";
+function mimeToCategory(mimeType: string): CanonicalFileCategory {
+  if (mimeType.startsWith("image/")) return "image"
+  if (mimeType.startsWith("audio/")) return "audio"
+  if (mimeType.startsWith("video/")) return "video"
+  return "document"
 }
 
 function parseMetadata(metadata: unknown): Record<string, unknown> {
   if (typeof metadata === "string") {
     try {
-      return JSON.parse(metadata);
+      return JSON.parse(metadata)
     } catch {
-      return {};
+      return {}
     }
   }
-  return (metadata || {}) as Record<string, unknown>;
+  return (metadata || {}) as Record<string, unknown>
 }
 
 function parseJsonValue(value: unknown): unknown {
   if (typeof value === "string") {
     try {
-      return JSON.parse(value);
+      return JSON.parse(value)
     } catch {
-      return undefined;
+      return undefined
     }
   }
-  return value;
+  return value
 }
 
 function parseSizeBytes(value: unknown): number {
   if (typeof value === "number" && Number.isFinite(value)) {
-    return value;
+    return value
   }
   if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value);
+    const parsed = Number(value)
     if (Number.isFinite(parsed)) {
-      return parsed;
+      return parsed
     }
   }
-  return 0;
+  return 0
 }
 
 export function itemPartsToCanonicalBlocks(
-  parts: any[],
+  parts: any[]
 ): CanonicalContentBlock[] {
-  const blocks: CanonicalContentBlock[] = [];
+  const blocks: CanonicalContentBlock[] = []
 
   for (const part of parts || []) {
     if (part.part_type === "text") {
-      blocks.push(textBlock(part.text_value || ""));
-      continue;
+      blocks.push(textBlock(part.text_value || ""))
+      continue
     }
 
     if (part.part_type === "file_ref" && part.file_id) {
-      const metadata = parseMetadata(part.metadata);
+      const metadata = parseMetadata(part.metadata)
       blocks.push(
         fileRefBlock({
           fileId: part.file_id,
@@ -88,39 +86,39 @@ export function itemPartsToCanonicalBlocks(
             part.file_mime_type || part.mime_type || "application/octet-stream",
           originalName: part.original_name || part.name || "file",
           sizeBytes: parseSizeBytes(part.size_bytes ?? metadata.sizeBytes),
-          category:
-            (metadata.category as CanonicalFileCategory) ||
-            "document",
-        }),
-      );
-      continue;
+          category: (metadata.category as CanonicalFileCategory) || "document",
+        })
+      )
+      continue
     }
 
     if (part.part_type === "json") {
-      const payload = parseJsonValue(part.json_value);
-      if (!payload || typeof payload !== "object") continue;
+      const payload = parseJsonValue(part.json_value)
+      if (!payload || typeof payload !== "object") continue
       const normalized = normalizeCanonicalContentBlocks([
         payload as CanonicalContentBlockInput,
-      ]);
+      ])
       if (normalized.length > 0) {
-        blocks.push(...normalized);
+        blocks.push(...normalized)
       }
     }
   }
 
-  return blocks;
+  return blocks
 }
 
 function buildAuthor(
   row: any,
-  actorId?: string,
+  actorId?: string
 ): CanonicalContextAuthor | undefined {
-  const authorParticipant = row.authorParticipant || row.author_participant;
+  const authorParticipant = row.authorParticipant || row.author_participant
 
   if (authorParticipant?.actor_id || row.author_actor_id) {
     const participantId =
-      authorParticipant?.id || row.authorParticipantId || row.author_participant_id;
-    const resolvedActorId = authorParticipant?.actor_id || row.author_actor_id;
+      authorParticipant?.id ||
+      row.authorParticipantId ||
+      row.author_participant_id
+    const resolvedActorId = authorParticipant?.actor_id || row.author_actor_id
     return {
       participantId: participantId,
       participantType: "actor",
@@ -132,13 +130,15 @@ function buildAuthor(
         row.author_name ||
         undefined,
       isSelf: resolvedActorId === actorId,
-    };
+    }
   }
 
   if (authorParticipant?.workspace_member_id || row.author_user_id) {
     return {
       participantId:
-        authorParticipant?.id || row.authorParticipantId || row.author_participant_id,
+        authorParticipant?.id ||
+        row.authorParticipantId ||
+        row.author_participant_id,
       participantType: "workspace_member",
       userId: authorParticipant?.user_id || row.author_user_id,
       sessionId: row.sessionId || row.session_id || undefined,
@@ -148,7 +148,7 @@ function buildAuthor(
         row.author_name ||
         undefined,
       isSelf: false,
-    };
+    }
   }
 
   if (
@@ -157,96 +157,95 @@ function buildAuthor(
   ) {
     return {
       participantId:
-        authorParticipant?.id || row.authorParticipantId || row.author_participant_id,
+        authorParticipant?.id ||
+        row.authorParticipantId ||
+        row.author_participant_id,
       participantType: "system",
       sessionId: row.sessionId || row.session_id || undefined,
-      name:
-        authorParticipant?.display_name ||
-        row.author_name ||
-        "System",
+      name: authorParticipant?.display_name || row.author_name || "System",
       isSelf: false,
-    };
+    }
   }
 
-  return undefined;
+  return undefined
 }
 
 function buildTargets(targets: any[]): CanonicalContextTarget[] | undefined {
-  if (!targets || targets.length === 0) return undefined;
+  if (!targets || targets.length === 0) return undefined
   const built = targets.map((target) => ({
-    participantId: target.participantId || target.participant_id || target.id || undefined,
-    participantType:
-      (target.participant_kind || "system") as CanonicalContextTarget["participantType"],
+    participantId:
+      target.participantId || target.participant_id || target.id || undefined,
+    participantType: (target.participant_kind ||
+      "system") as CanonicalContextTarget["participantType"],
     actorId: target.actor_id || target.actorId || undefined,
     userId: target.user_id || target.userId || undefined,
     name:
-      target.user_name ||
-      target.actor_name ||
-      target.display_name ||
-      undefined,
-  }));
-  return built.length > 0 ? built : undefined;
+      target.user_name || target.actor_name || target.display_name || undefined,
+  }))
+  return built.length > 0 ? built : undefined
 }
 
 function buildContextItemRef(item: {
-  sequence?: number | string;
-  scope?: string;
-  surface?: string;
+  sequence?: number | string
+  scope?: string
+  surface?: string
 }) {
   const sequence =
     typeof item.sequence === "number"
       ? item.sequence
       : typeof item.sequence === "string"
         ? Number(item.sequence)
-        : NaN;
+        : NaN
   if (
     !Number.isFinite(sequence) ||
     item.scope !== "shared" ||
     item.surface !== "visible"
   ) {
-    return undefined;
+    return undefined
   }
-  return buildConversationMessageRef(sequence);
+  return buildConversationMessageRef(sequence)
 }
 
 export function conversationItemToContextItem(
   item: any,
-  actorId: string,
+  actorId: string
 ): CanonicalContextItem | null {
   const parts = Array.isArray(item.contentBlocks)
-    ? normalizeCanonicalContentBlocks(item.contentBlocks as CanonicalContentBlockInput[])
-    : itemPartsToCanonicalBlocks(item.parts || []);
-  const metadata = parseMetadata(item.metadata);
-  const eventPayload = parseMetadata(item.eventPayload ?? item.event_payload);
-  const author = buildAuthor(item, actorId);
+    ? normalizeCanonicalContentBlocks(
+        item.contentBlocks as CanonicalContentBlockInput[]
+      )
+    : itemPartsToCanonicalBlocks(item.parts || [])
+  const metadata = parseMetadata(item.metadata)
+  const eventPayload = parseMetadata(item.eventPayload ?? item.event_payload)
+  const author = buildAuthor(item, actorId)
   const targets = buildTargets(
     item.contextTargets?.length > 0
       ? item.contextTargets
       : item.context_targets?.length > 0
         ? item.context_targets
-      : item.restrictedAudience || item.targets || [],
-  );
-  const itemType = item.itemType || item.item_type;
-  const conversationId = item.conversationId || item.conversation_id;
-  const sessionId = item.sessionId || item.session_id;
-  const turnId = item.turnId || item.turn_id;
-  const createdAt = item.createdAt || item.created_at;
+        : item.restrictedAudience || item.targets || []
+  )
+  const itemType = item.itemType || item.item_type
+  const conversationId = item.conversationId || item.conversation_id
+  const sessionId = item.sessionId || item.session_id
+  const turnId = item.turnId || item.turn_id
+  const createdAt = item.createdAt || item.created_at
   const eventTimelinePolicy =
-    item.eventTimelinePolicy || item.event_timeline_policy;
+    item.eventTimelinePolicy || item.event_timeline_policy
   const eventContextPolicy =
-    item.eventContextPolicy || item.event_context_policy;
+    item.eventContextPolicy || item.event_context_policy
   const itemRef = buildContextItemRef({
     sequence: item.sequence,
     scope: item.scope || "shared",
     surface: item.surface || "visible",
-  });
+  })
 
   if (metadata.excludeFromContext === true) {
-    return null;
+    return null
   }
 
   if (itemType === "message" && item.subtype === "model_error_notice") {
-    return null;
+    return null
   }
 
   if (itemType === "event" || item.role === "system") {
@@ -254,19 +253,19 @@ export function conversationItemToContextItem(
       | "none"
       | "shared"
       | "actor_private"
-      | "targeted_members";
+      | "targeted_members"
     if (contextPolicy === "none") {
-      return null;
+      return null
     }
 
     const renderedContextParts = renderConversationEventContextBlocks(
       item.subtype || "event",
-      eventPayload,
-    );
+      eventPayload
+    )
     const eventParts =
       renderedContextParts && renderedContextParts.length > 0
         ? renderedContextParts
-        : parts;
+        : parts
     return {
       kind: "event",
       itemId: item.id,
@@ -287,7 +286,7 @@ export function conversationItemToContextItem(
       targets,
       parts: eventParts.length > 0 ? eventParts : textBlocks(""),
       metadata,
-    };
+    }
   }
 
   return {
@@ -309,12 +308,12 @@ export function conversationItemToContextItem(
     replyTo: item.replyTo || item.reply_to,
     parts: parts.length > 0 ? parts : textBlocks(""),
     metadata,
-  };
+  }
 }
 
 function buildInterruptNotice(interrupt: {
-  type: string;
-  content: string;
+  type: string
+  content: string
 }): CanonicalContextItem {
   return {
     kind: "system_notice",
@@ -322,24 +321,24 @@ function buildInterruptNotice(interrupt: {
     scope: "private",
     surface: "internal",
     parts: textBlocks(
-      `[System Interrupt - ${interrupt.type}]: ${interrupt.content}`,
+      `[System Interrupt - ${interrupt.type}]: ${interrupt.content}`
     ),
     metadata: {
       interruptType: interrupt.type,
     },
-  };
+  }
 }
 
 function buildWakeupNotice(
   wakeup: Pick<
     ActorRuntimeWakeup,
     "wakeupId" | "sourceType" | "sourceName" | "summary" | "reasonText"
-  >,
+  >
 ): CanonicalContextItem {
   const title = wakeup.sourceName
     ? `${wakeup.sourceType} from ${wakeup.sourceName}`
-    : wakeup.sourceType;
-  const reason = wakeup.reasonText?.trim() || wakeup.summary.trim();
+    : wakeup.sourceType
+  const reason = wakeup.reasonText?.trim() || wakeup.summary.trim()
   return {
     kind: "system_notice",
     itemId: `wakeup:${wakeup.wakeupId}`,
@@ -353,7 +352,7 @@ function buildWakeupNotice(
       summary: wakeup.summary,
       reasonText: wakeup.reasonText,
     },
-  };
+  }
 }
 
 function expandToolHistoryContextItems(
@@ -363,7 +362,7 @@ function expandToolHistoryContextItems(
   sessionId: string,
   sequence: number | undefined,
   finalText: string,
-  toolHistory: AssistantToolHistory,
+  toolHistory: AssistantToolHistory
 ) {
   if (!toolHistory.rounds || toolHistory.rounds.length === 0) {
     if (finalText) {
@@ -383,9 +382,9 @@ function expandToolHistoryContextItems(
           isSelf: true,
         },
         parts: textBlocks(finalText),
-      });
+      })
     }
-    return;
+    return
   }
 
   for (
@@ -393,14 +392,14 @@ function expandToolHistoryContextItems(
     roundIndex < toolHistory.rounds.length;
     roundIndex++
   ) {
-    const round = toolHistory.rounds[roundIndex];
+    const round = toolHistory.rounds[roundIndex]
     const toolCalls: CanonicalToolCall[] = round.toolCalls.map((toolCall) => ({
       callId: toolCall.callId,
       providerCallId: toolCall.providerCallId,
       toolName: toolCall.toolName,
       input: toolCall.input,
       metadata: toolCall.metadata,
-    }));
+    }))
     const toolResults: CanonicalToolResult[] = round.toolResults.map(
       (toolResult) => ({
         toolCallId: toolResult.toolCallId,
@@ -409,8 +408,8 @@ function expandToolHistoryContextItems(
         content: toolResult.content,
         isError: toolResult.isError,
         metadata: toolResult.metadata,
-      }),
-    );
+      })
+    )
 
     items.push({
       kind: "tool_call_batch",
@@ -428,7 +427,7 @@ function expandToolHistoryContextItems(
       },
       content: round.content,
       toolCalls,
-    });
+    })
 
     if (toolResults.length > 0) {
       items.push({
@@ -440,7 +439,7 @@ function expandToolHistoryContextItems(
         scope: "private",
         surface: "internal",
         toolResults,
-      });
+      })
     }
   }
 
@@ -461,46 +460,46 @@ function expandToolHistoryContextItems(
         isSelf: true,
       },
       parts: textBlocks(finalText),
-    });
+    })
   }
 }
 
 interface SessionMessageRow {
-  id: string;
-  sessionId: string;
-  conversationId?: string;
-  sequence?: number;
-  createdAt?: string;
-  role: string;
-  contentBlocks: CanonicalContentBlock[];
-  metadata: Record<string, unknown> | string;
+  id: string
+  sessionId: string
+  conversationId?: string
+  sequence?: number
+  createdAt?: string
+  role: string
+  contentBlocks: CanonicalContentBlock[]
+  metadata: Record<string, unknown> | string
 }
 
 function sessionMessageText(message: SessionMessageRow) {
-  return extractText(message.contentBlocks || []);
+  return extractText(message.contentBlocks || [])
 }
 
 export function buildSessionContextItems(
   sessionMessages: SessionMessageRow[],
   options: {
-    crossTurnToolHistory?: boolean;
-    interrupts?: { type: string; content: string }[];
+    crossTurnToolHistory?: boolean
+    interrupts?: { type: string; content: string }[]
     wakeups?: Pick<
       ActorRuntimeWakeup,
       "wakeupId" | "sourceType" | "sourceName" | "summary" | "reasonText"
-    >[];
-  } = {},
+    >[]
+  } = {}
 ): CanonicalContextItem[] {
-  const items: CanonicalContextItem[] = [];
+  const items: CanonicalContextItem[] = []
 
   if (options.wakeups) {
-    items.push(...options.wakeups.map(buildWakeupNotice));
+    items.push(...options.wakeups.map(buildWakeupNotice))
   }
 
   for (const msg of sessionMessages) {
-    const meta = parseMetadata(msg.metadata);
+    const meta = parseMetadata(msg.metadata)
     if (meta.excludeFromContext === true) {
-      continue;
+      continue
     }
     switch (msg.role) {
       case "user": {
@@ -522,8 +521,8 @@ export function buildSessionContextItems(
           },
           parts: msg.contentBlocks,
           metadata: meta,
-        });
-        break;
+        })
+        break
       }
 
       case "assistant": {
@@ -535,8 +534,8 @@ export function buildSessionContextItems(
             msg.sessionId,
             msg.sequence,
             sessionMessageText(msg),
-            meta.toolHistory as AssistantToolHistory,
-          );
+            meta.toolHistory as AssistantToolHistory
+          )
         } else {
           items.push({
             kind: "message",
@@ -556,9 +555,9 @@ export function buildSessionContextItems(
             },
             parts: msg.contentBlocks,
             metadata: meta,
-          });
+          })
         }
-        break;
+        break
       }
 
       case "system": {
@@ -574,8 +573,8 @@ export function buildSessionContextItems(
           noticeType: "task_instruction",
           parts: textBlocks(`[Task Instruction]: ${sessionMessageText(msg)}`),
           metadata: meta,
-        });
-        break;
+        })
+        break
       }
 
       case "child_result": {
@@ -591,8 +590,8 @@ export function buildSessionContextItems(
           noticeType: "generic",
           parts: textBlocks(sessionMessageText(msg)),
           metadata: meta,
-        });
-        break;
+        })
+        break
       }
 
       case "tool_result": {
@@ -608,46 +607,46 @@ export function buildSessionContextItems(
           noticeType: "legacy_tool_result",
           parts: textBlocks(`[Tool Result]: ${sessionMessageText(msg)}`),
           metadata: meta,
-        });
-        break;
+        })
+        break
       }
     }
   }
 
   if (options.interrupts) {
-    items.push(...options.interrupts.map(buildInterruptNotice));
+    items.push(...options.interrupts.map(buildInterruptNotice))
   }
 
-  return items;
+  return items
 }
 
 export function buildConversationContextItems(params: {
-  visibleItems: any[];
-  actorId: string;
-  sessionMessages: SessionMessageRow[];
-  interrupts?: { type: string; content: string }[];
+  visibleItems: any[]
+  actorId: string
+  sessionMessages: SessionMessageRow[]
+  interrupts?: { type: string; content: string }[]
   wakeups?: Pick<
     ActorRuntimeWakeup,
     "wakeupId" | "sourceType" | "sourceName" | "summary" | "reasonText"
-  >[];
+  >[]
 }) {
-  const items: CanonicalContextItem[] = [];
+  const items: CanonicalContextItem[] = []
 
   if (params.wakeups) {
-    items.push(...params.wakeups.map(buildWakeupNotice));
+    items.push(...params.wakeups.map(buildWakeupNotice))
   }
 
   if (params.interrupts) {
-    items.push(...params.interrupts.map(buildInterruptNotice));
+    items.push(...params.interrupts.map(buildInterruptNotice))
   }
 
   for (const item of params.visibleItems) {
-    const contextItem = conversationItemToContextItem(item, params.actorId);
-    if (contextItem) items.push(contextItem);
+    const contextItem = conversationItemToContextItem(item, params.actorId)
+    if (contextItem) items.push(contextItem)
   }
 
   for (const sessionMessage of params.sessionMessages) {
-    if (sessionMessage.role !== "tool_result") continue;
+    if (sessionMessage.role !== "tool_result") continue
     items.push({
       kind: "system_notice",
       itemId: sessionMessage.id,
@@ -658,23 +657,25 @@ export function buildConversationContextItems(params: {
       scope: "private",
       surface: "internal",
       noticeType: "legacy_tool_result",
-      parts: textBlocks(`[Tool Result]: ${extractText(sessionMessage.contentBlocks)}`),
+      parts: textBlocks(
+        `[Tool Result]: ${extractText(sessionMessage.contentBlocks)}`
+      ),
       metadata: parseMetadata(sessionMessage.metadata),
-    });
+    })
   }
 
   const lastSequence =
     params.visibleItems.length > 0
       ? params.visibleItems[params.visibleItems.length - 1].sequence
-      : 0;
-  return { items, lastSequence };
+      : 0
+  return { items, lastSequence }
 }
 
 export function buildAdHocContextItems(
   messages: Array<{
-    role: "user" | "assistant";
-    content: CanonicalContentBlock[];
-  }>,
+    role: "user" | "assistant"
+    content: CanonicalContentBlock[]
+  }>
 ): CanonicalContextItem[] {
   return messages.map((message, index) => ({
     kind: "message",
@@ -684,9 +685,10 @@ export function buildAdHocContextItems(
     messageType: "adhoc",
     role: message.role,
     author: {
-      participantType: message.role === "assistant" ? "actor" : "workspace_member",
+      participantType:
+        message.role === "assistant" ? "actor" : "workspace_member",
       isSelf: message.role === "assistant",
     },
     parts: message.content,
-  }));
+  }))
 }

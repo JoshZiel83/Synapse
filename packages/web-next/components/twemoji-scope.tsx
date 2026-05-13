@@ -1,10 +1,6 @@
 "use client"
 
-import {
-  useMemo,
-  type HTMLAttributes,
-  type ReactNode,
-} from "react"
+import { useMemo, type HTMLAttributes, type ReactNode } from "react"
 import twemoji from "twemoji"
 
 import { TWEMOJI_ASSET_BASE } from "@/lib/twemoji"

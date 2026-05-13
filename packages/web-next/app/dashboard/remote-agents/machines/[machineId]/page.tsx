@@ -95,7 +95,9 @@ export default function RemoteAgentMachineDetailPage() {
     : params?.machineId
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
-  const [detail, setDetail] = useState<RemoteAgentMachineDetailView | null>(null)
+  const [detail, setDetail] = useState<RemoteAgentMachineDetailView | null>(
+    null
+  )
 
   async function loadDetail(showLoading = true) {
     if (!workspaceId || !machineId) return
@@ -140,7 +142,8 @@ export default function RemoteAgentMachineDetailPage() {
             </h1>
           </div>
           <p className="text-sm text-muted-foreground">
-            {detail?.machine.description || "Daemon status, runtime discovery, and bound agents."}
+            {detail?.machine.description ||
+              "Daemon status, runtime discovery, and bound agents."}
           </p>
         </div>
         <Button
@@ -187,7 +190,9 @@ export default function RemoteAgentMachineDetailPage() {
                 </div>
                 <div className="grid gap-3 rounded-[24px] border border-border/70 p-4 text-sm text-muted-foreground">
                   <div>Machine ID: {detail.machine.id}</div>
-                  <div>Last seen: {formatDateTime(detail.machine.lastSeenAt)}</div>
+                  <div>
+                    Last seen: {formatDateTime(detail.machine.lastSeenAt)}
+                  </div>
                   <div>Created: {formatDateTime(detail.machine.createdAt)}</div>
                   <div>Updated: {formatDateTime(detail.machine.updatedAt)}</div>
                   <div>Bindings: {detail.bindings.length}</div>
@@ -232,13 +237,16 @@ export default function RemoteAgentMachineDetailPage() {
                   <div className="mt-3 grid gap-2 text-sm text-muted-foreground">
                     <div>Version: {entry.version || "Unknown"}</div>
                     <div>Last seen: {formatDateTime(entry.lastSeenAt)}</div>
-                    {entry.lastError ? <div>Error: {entry.lastError}</div> : null}
+                    {entry.lastError ? (
+                      <div>Error: {entry.lastError}</div>
+                    ) : null}
                   </div>
                 </div>
               ))
             ) : (
               <div className="rounded-[24px] border border-dashed border-border px-4 py-10 text-center text-sm text-muted-foreground">
-                No runtime catalog received yet. Start the daemon once to populate this.
+                No runtime catalog received yet. Start the daemon once to
+                populate this.
               </div>
             )}
           </CardContent>
@@ -274,26 +282,39 @@ export default function RemoteAgentMachineDetailPage() {
                       {runtimeLabel(binding.runtimeKind)}
                     </div>
                   </div>
-                  <Badge variant={binding.status === "active" ? "secondary" : "outline"}>
+                  <Badge
+                    variant={
+                      binding.status === "active" ? "secondary" : "outline"
+                    }
+                  >
                     {binding.status}
                   </Badge>
                 </div>
                 {binding.runtimeSummary ? (
                   <div className="mt-3 flex flex-wrap gap-2">
-                    <Badge variant={sessionStateVariant(binding.runtimeSummary.state)}>
+                    <Badge
+                      variant={sessionStateVariant(
+                        binding.runtimeSummary.state
+                      )}
+                    >
                       {sessionStateLabel(binding.runtimeSummary.state)}
                     </Badge>
                     <Badge variant="outline">
                       {binding.runtimeSummary.unreadDeliveryCount} unread
                     </Badge>
                     <Badge variant="outline">
-                      {binding.runtimeSummary.pendingConversationCount} pending conversations
+                      {binding.runtimeSummary.pendingConversationCount} pending
+                      conversations
                     </Badge>
                   </div>
                 ) : null}
                 <div className="mt-3 grid gap-2 text-sm text-muted-foreground">
-                  <div>Runtime path: {binding.runtimePath || "Default detection"}</div>
-                  <div>Local root: {binding.localRootPath || "Not configured"}</div>
+                  <div>
+                    Runtime path: {binding.runtimePath || "Default detection"}
+                  </div>
+                  <div>
+                    Local root: {binding.localRootPath || "Not configured"}
+                  </div>
                   {binding.runtimeSummary?.sessionId ? (
                     <div>Session ID: {binding.runtimeSummary.sessionId}</div>
                   ) : null}
@@ -304,19 +325,22 @@ export default function RemoteAgentMachineDetailPage() {
                     <div>
                       Capabilities:{" "}
                       {[
-                        binding.runtimeSummary.capabilities.supportsRequestUserInput
+                        binding.runtimeSummary.capabilities
+                          .supportsRequestUserInput
                           ? "request_user_input"
                           : null,
                         binding.runtimeSummary.capabilities.supportsPlanMode
                           ? "plan_mode"
                           : null,
-                        binding.runtimeSummary.capabilities.supportsPersistentSession
+                        binding.runtimeSummary.capabilities
+                          .supportsPersistentSession
                           ? "persistent_session"
                           : null,
                         binding.runtimeSummary.capabilities.supportsStructuredIo
                           ? "structured_io"
                           : null,
-                        binding.runtimeSummary.capabilities.supportsCodexAppServer
+                        binding.runtimeSummary.capabilities
+                          .supportsCodexAppServer
                           ? "codex_app_server"
                           : null,
                       ]

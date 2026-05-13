@@ -1,28 +1,28 @@
-import twemoji from "twemoji";
+import twemoji from "twemoji"
 
 export const TWEMOJI_ASSET_BASE =
-  "https://cdn.jsdelivr.net/gh/jdecked/twemoji@14.0.2/assets/";
+  "https://cdn.jsdelivr.net/gh/jdecked/twemoji@14.0.2/assets/"
 
 export function getTwemojiUrl(value: string | undefined | null): string | null {
-  const trimmed = value?.trim();
+  const trimmed = value?.trim()
   if (!trimmed) {
-    return null;
+    return null
   }
 
   const tester = (
     twemoji as typeof twemoji & {
-      test?: (input: string) => boolean;
+      test?: (input: string) => boolean
     }
-  ).test;
+  ).test
 
   if (typeof tester === "function" && !tester(trimmed)) {
-    return null;
+    return null
   }
 
-  const codePoint = twemoji.convert.toCodePoint(trimmed);
+  const codePoint = twemoji.convert.toCodePoint(trimmed)
   if (!codePoint) {
-    return null;
+    return null
   }
 
-  return `${TWEMOJI_ASSET_BASE}svg/${codePoint}.svg`;
+  return `${TWEMOJI_ASSET_BASE}svg/${codePoint}.svg`
 }

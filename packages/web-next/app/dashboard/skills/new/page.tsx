@@ -1,7 +1,7 @@
-'use client';
+"use client"
 
-import { WorkspaceSkillCreationPage } from '../skills-client';
+import { WorkspaceSkillCreationPage } from "../skills-client"
 
 export default function NewWorkspaceSkillRoutePage() {
-  return <WorkspaceSkillCreationPage />;
+  return <WorkspaceSkillCreationPage />
 }

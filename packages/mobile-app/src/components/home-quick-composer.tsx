@@ -1,12 +1,12 @@
-import Feather from "@expo/vector-icons/Feather";
+import Feather from "@expo/vector-icons/Feather"
 import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   useAudioRecorder,
   useAudioRecorderState,
-} from "expo-audio";
-import { useEffect, useRef, useState } from "react";
+} from "expo-audio"
+import { useEffect, useRef, useState } from "react"
 import {
   ActivityIndicator,
   Alert,
@@ -15,14 +15,16 @@ import {
   Text,
   TextInput,
   View,
-} from "react-native";
+} from "react-native"
 
-import { Avatar } from "@/components/ui";
-import { startMockRealtimeTranscriptionSession } from "@/lib/mock-realtime-transcription";
-import { theme } from "@/theme/tokens";
-import type { Actor } from "@shared";
+import { Avatar } from "@/components/ui"
+import { startMockRealtimeTranscriptionSession } from "@/lib/mock-realtime-transcription"
+import { theme } from "@/theme/tokens"
+import type { Actor } from "@shared"
 
-type MockSessionHandle = ReturnType<typeof startMockRealtimeTranscriptionSession>;
+type MockSessionHandle = ReturnType<
+  typeof startMockRealtimeTranscriptionSession
+>
 
 export function HomeQuickComposer({
   actor,
@@ -31,50 +33,52 @@ export function HomeQuickComposer({
   onPressSelectActor,
   onSend,
 }: {
-  actor: Actor | null;
-  sending?: boolean;
-  disabled?: boolean;
-  onPressSelectActor: () => void;
-  onSend: (draft: string) => Promise<void>;
+  actor: Actor | null
+  sending?: boolean
+  disabled?: boolean
+  onPressSelectActor: () => void
+  onSend: (draft: string) => Promise<void>
 }) {
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState("")
   const recorder = useAudioRecorder({
     ...RecordingPresets.HIGH_QUALITY,
     isMeteringEnabled: true,
-  });
-  const recorderState = useAudioRecorderState(recorder, 120);
-  const transcriptionSessionRef = useRef<MockSessionHandle | null>(null);
+  })
+  const recorderState = useAudioRecorderState(recorder, 120)
+  const transcriptionSessionRef = useRef<MockSessionHandle | null>(null)
 
   useEffect(() => {
     return () => {
-      transcriptionSessionRef.current?.stop();
+      transcriptionSessionRef.current?.stop()
       if (recorderState.isRecording) {
-        void recorder.stop().catch(() => undefined);
+        void recorder.stop().catch(() => undefined)
       }
-    };
-  }, [recorder, recorderState.isRecording]);
+    }
+  }, [recorder, recorderState.isRecording])
 
-  const hasText = draft.trim().length > 0;
+  const hasText = draft.trim().length > 0
 
   async function appendMockTranscript() {
-    transcriptionSessionRef.current?.stop();
+    transcriptionSessionRef.current?.stop()
     transcriptionSessionRef.current = startMockRealtimeTranscriptionSession({
       onChunk: (chunk) => {
         setDraft((current) => {
-          const next = current.trim();
-          return next ? `${next}${next.endsWith(" ") ? "" : " "}${chunk}` : chunk;
-        });
+          const next = current.trim()
+          return next
+            ? `${next}${next.endsWith(" ") ? "" : " "}${chunk}`
+            : chunk
+        })
       },
-    });
+    })
   }
 
   async function startVoiceInput() {
-    if (disabled || sending) return;
+    if (disabled || sending) return
 
-    const permission = await requestRecordingPermissionsAsync();
+    const permission = await requestRecordingPermissionsAsync()
     if (!permission.granted) {
-      Alert.alert("无法录音", "请先授权麦克风权限。");
-      return;
+      Alert.alert("无法录音", "请先授权麦克风权限。")
+      return
     }
 
     await setAudioModeAsync({
@@ -83,19 +87,19 @@ export function HomeQuickComposer({
       interruptionMode: "duckOthers",
       shouldPlayInBackground: false,
       shouldRouteThroughEarpiece: false,
-    });
+    })
 
-    await recorder.prepareToRecordAsync();
-    recorder.record();
-    await appendMockTranscript();
+    await recorder.prepareToRecordAsync()
+    recorder.record()
+    await appendMockTranscript()
   }
 
   async function stopVoiceInput() {
-    transcriptionSessionRef.current?.stop();
-    transcriptionSessionRef.current = null;
+    transcriptionSessionRef.current?.stop()
+    transcriptionSessionRef.current = null
 
     if (recorderState.isRecording) {
-      await recorder.stop().catch(() => undefined);
+      await recorder.stop().catch(() => undefined)
     }
 
     await setAudioModeAsync({
@@ -104,14 +108,14 @@ export function HomeQuickComposer({
       interruptionMode: "duckOthers",
       shouldPlayInBackground: false,
       shouldRouteThroughEarpiece: false,
-    }).catch(() => undefined);
+    }).catch(() => undefined)
   }
 
   async function handleSend() {
-    const trimmed = draft.trim();
-    if (!trimmed || !actor || disabled || sending) return;
-    await onSend(trimmed);
-    setDraft("");
+    const trimmed = draft.trim()
+    if (!trimmed || !actor || disabled || sending) return
+    await onSend(trimmed)
+    setDraft("")
   }
 
   return (
@@ -165,7 +169,9 @@ export function HomeQuickComposer({
                 styles.recordButton,
                 recorderState.isRecording && styles.recordButtonActive,
                 (disabled || sending || !actor) && styles.actionDisabled,
-                pressed && !(disabled || sending || !actor) && styles.actionPressed,
+                pressed &&
+                  !(disabled || sending || !actor) &&
+                  styles.actionPressed,
               ]}
             >
               {recorderState.isRecording ? (
@@ -184,7 +190,9 @@ export function HomeQuickComposer({
               style={({ pressed }) => [
                 styles.sendButton,
                 (disabled || sending || !actor) && styles.actionDisabled,
-                pressed && !(disabled || sending || !actor) && styles.actionPressed,
+                pressed &&
+                  !(disabled || sending || !actor) &&
+                  styles.actionPressed,
               ]}
             >
               {sending ? (
@@ -207,7 +215,9 @@ export function HomeQuickComposer({
               styles.voiceButton,
               recorderState.isRecording && styles.voiceButtonActive,
               (disabled || sending || !actor) && styles.actionDisabled,
-              pressed && !(disabled || sending || !actor) && styles.actionPressed,
+              pressed &&
+                !(disabled || sending || !actor) &&
+                styles.actionPressed,
             ]}
           >
             {recorderState.isRecording ? (
@@ -230,32 +240,26 @@ export function HomeQuickComposer({
         )}
       </View>
     </View>
-  );
+  )
 }
 
 function normalizeMetering(metering?: number) {
   if (typeof metering !== "number" || Number.isNaN(metering)) {
-    return 0.18;
+    return 0.18
   }
 
-  const clamped = Math.max(-60, Math.min(0, metering));
-  return (clamped + 60) / 60;
+  const clamped = Math.max(-60, Math.min(0, metering))
+  return (clamped + 60) / 60
 }
 
-function VoiceWave({
-  color,
-  metering,
-}: {
-  color: string;
-  metering?: number;
-}) {
-  const level = normalizeMetering(metering);
+function VoiceWave({ color, metering }: { color: string; metering?: number }) {
+  const level = normalizeMetering(metering)
   const scales = [
     0.45 + level * 0.9,
     0.35 + level * 0.6,
     0.55 + level * 1.15,
     0.4 + level * 0.75,
-  ];
+  ]
 
   return (
     <View style={styles.waveRow}>
@@ -272,7 +276,7 @@ function VoiceWave({
         />
       ))}
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -398,4 +402,4 @@ const styles = StyleSheet.create({
   actionPressed: {
     transform: [{ scale: 0.985 }],
   },
-});
+})

@@ -1,24 +1,28 @@
-import { ToolDefinition } from "@synapse/shared";
-import { DEFAULT_STATUS_PROPERTY_NAMES, getMijiaDeviceSpec, normalizeMijiaCapabilityName } from "../../../mijia/device-spec.js";
-import { MijiaCloudClient, MijiaApiError } from "../../../mijia/cloud-client.js";
+import { ToolDefinition } from "@synapse/shared"
+import {
+  DEFAULT_STATUS_PROPERTY_NAMES,
+  getMijiaDeviceSpec,
+  normalizeMijiaCapabilityName,
+} from "../../../mijia/device-spec.js"
+import { MijiaCloudClient, MijiaApiError } from "../../../mijia/cloud-client.js"
 import type {
   JsonObject,
   MijiaDeviceActionSpec,
   MijiaDevicePropertySpec,
   MijiaDeviceRecord,
-} from "../../../mijia/types.js";
+} from "../../../mijia/types.js"
 
 type ToolSpec = {
-  name: string;
-  description: string;
-  raw?: boolean;
-  parameters: ToolDefinition["parameters"];
+  name: string
+  description: string
+  raw?: boolean
+  parameters: ToolDefinition["parameters"]
   execute: (
     client: MijiaCloudClient,
     input: JsonObject,
-    config: Record<string, unknown>,
-  ) => Promise<unknown>;
-};
+    config: Record<string, unknown>
+  ) => Promise<unknown>
+}
 
 function buildTool(
   name: string,
@@ -26,7 +30,7 @@ function buildTool(
   properties: ToolDefinition["parameters"]["properties"],
   required: string[],
   execute: ToolSpec["execute"],
-  options?: { raw?: boolean },
+  options?: { raw?: boolean }
 ): ToolSpec {
   return {
     name,
@@ -38,149 +42,150 @@ function buildTool(
       required,
     },
     execute,
-  };
+  }
 }
 
 function readString(value: unknown) {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : undefined;
+  return typeof value === "string" && value.trim().length > 0
+    ? value.trim()
+    : undefined
 }
 
 function readBoolean(value: unknown, fallback = false) {
-  return typeof value === "boolean" ? value : fallback;
+  return typeof value === "boolean" ? value : fallback
 }
 
 function readNumber(value: unknown) {
-  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "number" && Number.isFinite(value)) return value
   if (typeof value === "string" && value.trim().length > 0) {
-    const parsed = Number(value);
-    if (Number.isFinite(parsed)) return parsed;
+    const parsed = Number(value)
+    if (Number.isFinite(parsed)) return parsed
   }
-  return undefined;
+  return undefined
 }
 
 function readStringArray(value: unknown) {
   return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
-    : [];
+    ? value.filter(
+        (item): item is string =>
+          typeof item === "string" && item.trim().length > 0
+      )
+    : []
 }
 
 function pickDeviceQuery(input: JsonObject) {
-  const did = readString(input.did);
-  const deviceName = readString(input.deviceName);
+  const did = readString(input.did)
+  const deviceName = readString(input.deviceName)
   if (!did && !deviceName) {
-    throw new Error("Provide either did or deviceName.");
+    throw new Error("Provide either did or deviceName.")
   }
   return {
     did,
     deviceName,
-  };
+  }
 }
 
 async function loadVisibleDevices(
   client: MijiaCloudClient,
   config: Record<string, unknown>,
-  includeSharedOverride?: boolean,
+  includeSharedOverride?: boolean
 ) {
   const includeShared =
-    includeSharedOverride ??
-    readBoolean(config.includeSharedDevices, true);
-  const devices = await client.getDevicesList();
-  if (!includeShared) return devices;
-  return devices.concat(await client.getSharedDevicesList());
+    includeSharedOverride ?? readBoolean(config.includeSharedDevices, true)
+  const devices = await client.getDevicesList()
+  if (!includeShared) return devices
+  return devices.concat(await client.getSharedDevicesList())
 }
 
-function filterByQuery<T extends { name?: string; model?: string; did?: string }>(
-  values: T[],
-  query?: string,
-) {
-  if (!query) return values;
-  const normalized = query.toLowerCase();
+function filterByQuery<
+  T extends { name?: string; model?: string; did?: string },
+>(values: T[], query?: string) {
+  if (!query) return values
+  const normalized = query.toLowerCase()
   return values.filter((value) =>
     [value.name, value.model, value.did]
       .filter((item): item is string => typeof item === "string")
-      .some((item) => item.toLowerCase().includes(normalized)),
-  );
+      .some((item) => item.toLowerCase().includes(normalized))
+  )
 }
 
 async function resolveDevice(
   client: MijiaCloudClient,
   input: JsonObject,
-  config: Record<string, unknown>,
+  config: Record<string, unknown>
 ) {
-  const query = pickDeviceQuery(input);
+  const query = pickDeviceQuery(input)
   const devices = await loadVisibleDevices(
     client,
     config,
-    typeof input.includeShared === "boolean" ? input.includeShared : undefined,
-  );
+    typeof input.includeShared === "boolean" ? input.includeShared : undefined
+  )
 
   if (query.did) {
-    const matched = devices.find((device) => device.did === query.did);
+    const matched = devices.find((device) => device.did === query.did)
     if (!matched) {
-      throw new Error(`Device ${query.did} was not found.`);
+      throw new Error(`Device ${query.did} was not found.`)
     }
-    return matched;
+    return matched
   }
 
-  const deviceName = query.deviceName!.toLowerCase();
+  const deviceName = query.deviceName!.toLowerCase()
   const matches = devices.filter(
-    (device) => device.name.toLowerCase() === deviceName,
-  );
+    (device) => device.name.toLowerCase() === deviceName
+  )
   if (matches.length === 0) {
-    throw new Error(`Device '${query.deviceName}' was not found.`);
+    throw new Error(`Device '${query.deviceName}' was not found.`)
   }
   if (matches.length > 1) {
     throw new Error(
       `Multiple devices are named '${query.deviceName}'. Use did instead. Candidates: ${matches
         .map((device) => `${device.name} (${device.did})`)
-        .join(", ")}`,
-    );
+        .join(", ")}`
+    )
   }
-  return matches[0]!;
+  return matches[0]!
 }
 
 function pickProperty(
   deviceName: string,
   spec: Awaited<ReturnType<typeof getMijiaDeviceSpec>>,
-  propertyName: string,
+  propertyName: string
 ) {
   const property = spec.propertyMap.get(
-    normalizeMijiaCapabilityName(propertyName),
-  );
+    normalizeMijiaCapabilityName(propertyName)
+  )
   if (!property) {
     throw new Error(
-      `Device '${deviceName}' does not expose property '${propertyName}'.`,
-    );
+      `Device '${deviceName}' does not expose property '${propertyName}'.`
+    )
   }
-  return property;
+  return property
 }
 
 function pickAction(
   deviceName: string,
   spec: Awaited<ReturnType<typeof getMijiaDeviceSpec>>,
-  actionName: string,
+  actionName: string
 ) {
-  const action = spec.actionMap.get(
-    normalizeMijiaCapabilityName(actionName),
-  );
+  const action = spec.actionMap.get(normalizeMijiaCapabilityName(actionName))
   if (!action) {
     throw new Error(
-      `Device '${deviceName}' does not expose action '${actionName}'.`,
-    );
+      `Device '${deviceName}' does not expose action '${actionName}'.`
+    )
   }
-  return action;
+  return action
 }
 
 function listVisiblePropertyValues(property: MijiaDevicePropertySpec) {
   return property.valueList?.map((item) => ({
     value: item.value,
     description: item.description,
-  }));
+  }))
 }
 
 function summarizeCapabilities(
   device: MijiaDeviceRecord,
-  spec: Awaited<ReturnType<typeof getMijiaDeviceSpec>>,
+  spec: Awaited<ReturnType<typeof getMijiaDeviceSpec>>
 ) {
   return {
     device: {
@@ -212,127 +217,127 @@ function summarizeCapabilities(
       siid: action.method.siid,
       aiid: action.method.aiid,
     })),
-  };
+  }
 }
 
 function selectStatusProperties(
   spec: Awaited<ReturnType<typeof getMijiaDeviceSpec>>,
-  requestedNames: string[],
+  requestedNames: string[]
 ) {
   if (requestedNames.length > 0) {
-    return requestedNames.map((name) => pickProperty(spec.name, spec, name));
+    return requestedNames.map((name) => pickProperty(spec.name, spec, name))
   }
 
-  const selected: MijiaDevicePropertySpec[] = [];
+  const selected: MijiaDevicePropertySpec[] = []
   for (const name of DEFAULT_STATUS_PROPERTY_NAMES) {
-    const property = spec.propertyMap.get(normalizeMijiaCapabilityName(name));
+    const property = spec.propertyMap.get(normalizeMijiaCapabilityName(name))
     if (property && property.readable && !selected.includes(property)) {
-      selected.push(property);
+      selected.push(property)
     }
   }
 
   if (selected.length === 0) {
     selected.push(
-      ...spec.properties.filter((property) => property.readable).slice(0, 8),
-    );
+      ...spec.properties.filter((property) => property.readable).slice(0, 8)
+    )
   }
 
-  return selected.slice(0, 16);
+  return selected.slice(0, 16)
 }
 
 function parsePropertyValue(
   property: MijiaDevicePropertySpec,
-  rawValue: string,
+  rawValue: string
 ) {
-  let parsed: unknown = rawValue;
+  let parsed: unknown = rawValue
 
   switch (property.type) {
     case "bool": {
-      const normalized = rawValue.toLowerCase();
-      if (["true", "1", "on", "yes"].includes(normalized)) return true;
-      if (["false", "0", "off", "no"].includes(normalized)) return false;
-      throw new Error(
-        `Property '${property.name}' expects a boolean value.`,
-      );
+      const normalized = rawValue.toLowerCase()
+      if (["true", "1", "on", "yes"].includes(normalized)) return true
+      if (["false", "0", "off", "no"].includes(normalized)) return false
+      throw new Error(`Property '${property.name}' expects a boolean value.`)
     }
     case "int":
     case "uint":
     case "float": {
-      const numeric = Number(rawValue);
+      const numeric = Number(rawValue)
       if (!Number.isFinite(numeric)) {
-        throw new Error(`Property '${property.name}' expects a numeric value.`);
+        throw new Error(`Property '${property.name}' expects a numeric value.`)
       }
-      parsed = property.type === "float" ? numeric : Math.trunc(numeric);
-      break;
+      parsed = property.type === "float" ? numeric : Math.trunc(numeric)
+      break
     }
     case "string":
     default:
-      parsed = rawValue;
-      break;
+      parsed = rawValue
+      break
   }
 
   if (property.range && typeof parsed === "number") {
-    const [minimum, maximum, step] = property.range;
+    const [minimum, maximum, step] = property.range
     if (parsed < minimum || parsed > maximum) {
       throw new Error(
-        `Value ${parsed} is out of range for '${property.name}' (${minimum}..${maximum}).`,
-      );
+        `Value ${parsed} is out of range for '${property.name}' (${minimum}..${maximum}).`
+      )
     }
     if (typeof step === "number" && step > 0) {
-      const delta = Math.abs((parsed - minimum) / step);
+      const delta = Math.abs((parsed - minimum) / step)
       if (!Number.isInteger(delta)) {
         throw new Error(
-          `Value ${parsed} must respect the step ${step} for '${property.name}'.`,
-        );
+          `Value ${parsed} must respect the step ${step} for '${property.name}'.`
+        )
       }
     }
   }
 
   if (property.valueList && property.valueList.length > 0) {
-    const matches = property.valueList.some((item) => item.value === parsed);
+    const matches = property.valueList.some((item) => item.value === parsed)
     if (!matches) {
       throw new Error(
         `Value ${rawValue} is not supported for '${property.name}'. Allowed values: ${property.valueList
           .map((item) => `${item.value}`)
-          .join(", ")}`,
-      );
+          .join(", ")}`
+      )
     }
   }
 
-  return parsed;
+  return parsed
 }
 
 function parseActionArgs(rawValue: unknown) {
-  const text = readString(rawValue);
-  if (!text) return undefined;
+  const text = readString(rawValue)
+  if (!text) return undefined
   try {
-    const parsed = JSON.parse(text);
-    if (Array.isArray(parsed)) return parsed;
-    return [parsed];
+    const parsed = JSON.parse(text)
+    if (Array.isArray(parsed)) return parsed
+    return [parsed]
   } catch {
-    return [text];
+    return [text]
   }
 }
 
 function parseJsonInput(rawValue: unknown, fieldName: string) {
-  const text = readString(rawValue);
+  const text = readString(rawValue)
   if (!text) {
-    throw new Error(`${fieldName} must be a JSON object or array encoded as a string.`);
+    throw new Error(
+      `${fieldName} must be a JSON object or array encoded as a string.`
+    )
   }
   try {
-    return JSON.parse(text) as JsonObject | JsonObject[];
+    return JSON.parse(text) as JsonObject | JsonObject[]
   } catch {
-    throw new Error(`${fieldName} must be valid JSON.`);
+    throw new Error(`${fieldName} must be valid JSON.`)
   }
 }
 
 function formatRawResult(result: unknown) {
   if (result && typeof result === "object") {
-    return result;
+    return result
   }
   return {
     result,
-  };
+  }
 }
 
 const toolSpecs: ToolSpec[] = [
@@ -347,11 +352,15 @@ const toolSpecs: ToolSpec[] = [
     },
     [],
     async (client, input) => {
-      const homes = await client.getHomesList();
-      const query = readString(input.query)?.toLowerCase();
-      const filtered = homes.filter((home: any) =>
-        !query || String(home?.name || "").toLowerCase().includes(query),
-      );
+      const homes = await client.getHomesList()
+      const query = readString(input.query)?.toLowerCase()
+      const filtered = homes.filter(
+        (home: any) =>
+          !query ||
+          String(home?.name || "")
+            .toLowerCase()
+            .includes(query)
+      )
       return {
         homes: filtered.map((home: any) => ({
           id: String(home.id),
@@ -360,8 +369,8 @@ const toolSpecs: ToolSpec[] = [
           roomCount: Array.isArray(home.roomlist) ? home.roomlist.length : 0,
           address: readString(home.address),
         })),
-      };
-    },
+      }
+    }
   ),
   buildTool(
     "list_devices",
@@ -373,25 +382,27 @@ const toolSpecs: ToolSpec[] = [
       },
       query: {
         type: "string",
-        description: "Optional substring filter across device name, model, or did.",
+        description:
+          "Optional substring filter across device name, model, or did.",
       },
       includeShared: {
         type: "boolean",
-        description: "Override whether shared devices are included in the result.",
+        description:
+          "Override whether shared devices are included in the result.",
       },
     },
     [],
     async (client, input, config) => {
-      const homeId = readString(input.homeId);
+      const homeId = readString(input.homeId)
       const includeShared =
         typeof input.includeShared === "boolean"
           ? input.includeShared
-          : undefined;
-      const devices = await loadVisibleDevices(client, config, includeShared);
+          : undefined
+      const devices = await loadVisibleDevices(client, config, includeShared)
       const filtered = filterByQuery(
         homeId ? devices.filter((device) => device.homeId === homeId) : devices,
-        readString(input.query),
-      );
+        readString(input.query)
+      )
       return {
         devices: filtered.map((device) => ({
           did: device.did,
@@ -404,8 +415,8 @@ const toolSpecs: ToolSpec[] = [
           isOnline: device.isOnline,
           isShared: device.isShared,
         })),
-      };
-    },
+      }
+    }
   ),
   buildTool(
     "get_device_capabilities",
@@ -417,15 +428,16 @@ const toolSpecs: ToolSpec[] = [
       },
       deviceName: {
         type: "string",
-        description: "Target device name from the Mi Home app. Use only when unique.",
+        description:
+          "Target device name from the Mi Home app. Use only when unique.",
       },
     },
     [],
     async (client, input, config) => {
-      const device = await resolveDevice(client, input, config);
-      const spec = await getMijiaDeviceSpec(device.model);
-      return summarizeCapabilities(device, spec);
-    },
+      const device = await resolveDevice(client, input, config)
+      const spec = await getMijiaDeviceSpec(device.model)
+      return summarizeCapabilities(device, spec)
+    }
   ),
   buildTool(
     "get_device_status",
@@ -437,27 +449,35 @@ const toolSpecs: ToolSpec[] = [
       },
       deviceName: {
         type: "string",
-        description: "Target device name from the Mi Home app. Use only when unique.",
+        description:
+          "Target device name from the Mi Home app. Use only when unique.",
       },
       propertyNames: {
         type: "array",
-        description: "Optional property names to read. When omitted, the tool picks common status properties.",
+        description:
+          "Optional property names to read. When omitted, the tool picks common status properties.",
         items: {
           type: "string",
         },
       },
       includeShared: {
         type: "boolean",
-        description: "Override whether shared devices are considered for lookup.",
+        description:
+          "Override whether shared devices are considered for lookup.",
       },
     },
     [],
     async (client, input, config) => {
-      const device = await resolveDevice(client, input, config);
-      const spec = await getMijiaDeviceSpec(device.model);
-      const properties = selectStatusProperties(spec, readStringArray(input.propertyNames));
+      const device = await resolveDevice(client, input, config)
+      const spec = await getMijiaDeviceSpec(device.model)
+      const properties = selectStatusProperties(
+        spec,
+        readStringArray(input.propertyNames)
+      )
       if (properties.length === 0) {
-        throw new Error(`Device '${device.name}' does not expose readable properties.`);
+        throw new Error(
+          `Device '${device.name}' does not expose readable properties.`
+        )
       }
 
       const results = await client.getDevicesProp(
@@ -465,10 +485,10 @@ const toolSpecs: ToolSpec[] = [
           did: device.did,
           siid: property.method.siid,
           piid: property.method.piid,
-        })),
-      );
+        }))
+      )
 
-      const resultList = Array.isArray(results) ? results : [results];
+      const resultList = Array.isArray(results) ? results : [results]
       return {
         device: {
           did: device.did,
@@ -482,16 +502,15 @@ const toolSpecs: ToolSpec[] = [
           isShared: device.isShared,
         },
         properties: properties.map((property, index) => {
-          const raw = (resultList[index] || {}) as Record<string, unknown>;
-          const code = typeof raw.code === "number" ? raw.code : 0;
+          const raw = (resultList[index] || {}) as Record<string, unknown>
+          const code = typeof raw.code === "number" ? raw.code : 0
           return {
             name: property.name,
             description: property.description,
             value: raw.value,
             valueDisplay: raw.value,
             code,
-            error:
-              code === 0 ? undefined : `Mijia error ${code}`,
+            error: code === 0 ? undefined : `Mijia error ${code}`,
             readable: property.readable,
             writable: property.writable,
             unit: property.unit,
@@ -501,10 +520,10 @@ const toolSpecs: ToolSpec[] = [
             piid: property.method.piid,
             updateTime:
               typeof raw.updateTime === "number" ? raw.updateTime : undefined,
-          };
+          }
         }),
-      };
-    },
+      }
+    }
   ),
   buildTool(
     "set_device_property",
@@ -516,37 +535,47 @@ const toolSpecs: ToolSpec[] = [
       },
       deviceName: {
         type: "string",
-        description: "Target device name from the Mi Home app. Use only when unique.",
+        description:
+          "Target device name from the Mi Home app. Use only when unique.",
       },
       propertyName: {
         type: "string",
-        description: "Friendly property name such as on, brightness, or target-temperature.",
+        description:
+          "Friendly property name such as on, brightness, or target-temperature.",
       },
       value: {
         type: "string",
-        description: "New value encoded as text. Booleans accept true/false, 1/0, on/off.",
+        description:
+          "New value encoded as text. Booleans accept true/false, 1/0, on/off.",
       },
       includeShared: {
         type: "boolean",
-        description: "Override whether shared devices are considered for lookup.",
+        description:
+          "Override whether shared devices are considered for lookup.",
       },
     },
     ["propertyName", "value"],
     async (client, input, config) => {
-      const device = await resolveDevice(client, input, config);
-      const spec = await getMijiaDeviceSpec(device.model);
-      const property = pickProperty(device.name, spec, String(input.propertyName || ""));
+      const device = await resolveDevice(client, input, config)
+      const spec = await getMijiaDeviceSpec(device.model)
+      const property = pickProperty(
+        device.name,
+        spec,
+        String(input.propertyName || "")
+      )
       if (!property.writable) {
-        throw new Error(`Property '${property.name}' is read-only on '${device.name}'.`);
+        throw new Error(
+          `Property '${property.name}' is read-only on '${device.name}'.`
+        )
       }
 
-      const parsedValue = parsePropertyValue(property, String(input.value));
+      const parsedValue = parsePropertyValue(property, String(input.value))
       const result = await client.setDevicesProp({
         did: device.did,
         siid: property.method.siid,
         piid: property.method.piid,
         value: parsedValue,
-      });
+      })
 
       return {
         device: {
@@ -562,8 +591,8 @@ const toolSpecs: ToolSpec[] = [
           piid: property.method.piid,
         },
         result: formatRawResult(result),
-      };
-    },
+      }
+    }
   ),
   buildTool(
     "run_device_action",
@@ -575,7 +604,8 @@ const toolSpecs: ToolSpec[] = [
       },
       deviceName: {
         type: "string",
-        description: "Target device name from the Mi Home app. Use only when unique.",
+        description:
+          "Target device name from the Mi Home app. Use only when unique.",
       },
       actionName: {
         type: "string",
@@ -587,21 +617,26 @@ const toolSpecs: ToolSpec[] = [
       },
       includeShared: {
         type: "boolean",
-        description: "Override whether shared devices are considered for lookup.",
+        description:
+          "Override whether shared devices are considered for lookup.",
       },
     },
     ["actionName"],
     async (client, input, config) => {
-      const device = await resolveDevice(client, input, config);
-      const spec = await getMijiaDeviceSpec(device.model);
-      const action = pickAction(device.name, spec, String(input.actionName || ""));
-      const args = parseActionArgs(input.argsJson);
+      const device = await resolveDevice(client, input, config)
+      const spec = await getMijiaDeviceSpec(device.model)
+      const action = pickAction(
+        device.name,
+        spec,
+        String(input.actionName || "")
+      )
+      const args = parseActionArgs(input.argsJson)
       const result = await client.runAction({
         did: device.did,
         siid: action.method.siid,
         aiid: action.method.aiid,
         ...(args ? { value: args } : {}),
-      });
+      })
 
       return {
         device: {
@@ -617,8 +652,8 @@ const toolSpecs: ToolSpec[] = [
           args,
         },
         result: formatRawResult(result),
-      };
-    },
+      }
+    }
   ),
   buildTool(
     "list_scenes",
@@ -635,8 +670,8 @@ const toolSpecs: ToolSpec[] = [
     },
     [],
     async (client, input) => {
-      const scenes = await client.getScenesList(readString(input.homeId));
-      const query = readString(input.query)?.toLowerCase();
+      const scenes = await client.getScenesList(readString(input.homeId))
+      const query = readString(input.query)?.toLowerCase()
       return {
         scenes: scenes
           .filter(
@@ -644,7 +679,7 @@ const toolSpecs: ToolSpec[] = [
               !query ||
               String(scene?.name || "")
                 .toLowerCase()
-                .includes(query),
+                .includes(query)
           )
           .map((scene: any) => ({
             sceneId: String(scene.scene_id),
@@ -652,8 +687,8 @@ const toolSpecs: ToolSpec[] = [
             homeId: String(scene.home_id),
             homeName: readString(scene.home_name),
           })),
-      };
-    },
+      }
+    }
   ),
   buildTool(
     "run_scene",
@@ -669,39 +704,40 @@ const toolSpecs: ToolSpec[] = [
       },
       homeId: {
         type: "string",
-        description: "Optional home ID, useful when multiple scenes share a name.",
+        description:
+          "Optional home ID, useful when multiple scenes share a name.",
       },
     },
     [],
     async (client, input) => {
-      const sceneId = readString(input.sceneId);
-      let homeId = readString(input.homeId);
-      let sceneName = readString(input.sceneName);
+      const sceneId = readString(input.sceneId)
+      let homeId = readString(input.homeId)
+      let sceneName = readString(input.sceneName)
       if (!sceneId && !sceneName) {
-        throw new Error("Provide either sceneId or sceneName.");
+        throw new Error("Provide either sceneId or sceneName.")
       }
 
       if (!sceneId) {
-        const scenes = await client.getScenesList(homeId);
+        const scenes = await client.getScenesList(homeId)
         const matches = scenes.filter(
           (scene: any) =>
-            String(scene?.name || "").toLowerCase() === sceneName!.toLowerCase(),
-        );
+            String(scene?.name || "").toLowerCase() === sceneName!.toLowerCase()
+        )
         if (matches.length === 0) {
-          throw new Error(`Scene '${sceneName}' was not found.`);
+          throw new Error(`Scene '${sceneName}' was not found.`)
         }
         if (matches.length > 1) {
           throw new Error(
             `Multiple scenes are named '${sceneName}'. Provide sceneId or homeId. Candidates: ${matches
               .map((scene: any) => `${scene.name} (${scene.scene_id})`)
-              .join(", ")}`,
-          );
+              .join(", ")}`
+          )
         }
-        sceneName = String(matches[0]!.name);
-        homeId = String(matches[0]!.home_id);
+        sceneName = String(matches[0]!.name)
+        homeId = String(matches[0]!.home_id)
       }
 
-      const result = await client.runScene(sceneId || "", homeId || "");
+      const result = await client.runScene(sceneId || "", homeId || "")
       return {
         scene: {
           sceneId: sceneId || undefined,
@@ -709,8 +745,8 @@ const toolSpecs: ToolSpec[] = [
           homeId,
         },
         result: formatRawResult(result),
-      };
-    },
+      }
+    }
   ),
   buildTool(
     "get_device_statistics",
@@ -722,7 +758,8 @@ const toolSpecs: ToolSpec[] = [
       },
       deviceName: {
         type: "string",
-        description: "Target device name from the Mi Home app. Use only when unique.",
+        description:
+          "Target device name from the Mi Home app. Use only when unique.",
       },
       key: {
         type: "string",
@@ -730,7 +767,8 @@ const toolSpecs: ToolSpec[] = [
       },
       dataType: {
         type: "string",
-        description: "Statistic granularity such as stat_hour_v3, stat_day_v3, stat_week_v3, or stat_month_v3.",
+        description:
+          "Statistic granularity such as stat_hour_v3, stat_day_v3, stat_week_v3, or stat_month_v3.",
       },
       limit: {
         type: "number",
@@ -738,27 +776,29 @@ const toolSpecs: ToolSpec[] = [
       },
       timeStart: {
         type: "number",
-        description: "Optional Unix timestamp in seconds for the beginning of the range.",
+        description:
+          "Optional Unix timestamp in seconds for the beginning of the range.",
       },
       timeEnd: {
         type: "number",
-        description: "Optional Unix timestamp in seconds for the end of the range.",
+        description:
+          "Optional Unix timestamp in seconds for the end of the range.",
       },
       includeShared: {
         type: "boolean",
-        description: "Override whether shared devices are considered for lookup.",
+        description:
+          "Override whether shared devices are considered for lookup.",
       },
     },
     ["key", "dataType"],
     async (client, input, config) => {
-      const device = await resolveDevice(client, input, config);
-      const timeEnd =
-        Math.trunc(readNumber(input.timeEnd) || Date.now() / 1_000);
-      const timeStart =
-        Math.trunc(
-          readNumber(input.timeStart) ||
-            timeEnd - 30 * 24 * 60 * 60,
-        );
+      const device = await resolveDevice(client, input, config)
+      const timeEnd = Math.trunc(
+        readNumber(input.timeEnd) || Date.now() / 1_000
+      )
+      const timeStart = Math.trunc(
+        readNumber(input.timeStart) || timeEnd - 30 * 24 * 60 * 60
+      )
       const result = await client.getStatistics({
         did: device.did,
         key: String(input.key),
@@ -766,7 +806,7 @@ const toolSpecs: ToolSpec[] = [
         limit: Math.trunc(readNumber(input.limit) || 20),
         time_start: timeStart,
         time_end: timeEnd,
-      });
+      })
 
       return {
         device: {
@@ -775,8 +815,8 @@ const toolSpecs: ToolSpec[] = [
           model: device.model,
         },
         statistics: formatRawResult(result),
-      };
-    },
+      }
+    }
   ),
   buildTool(
     "get_properties_raw",
@@ -784,16 +824,19 @@ const toolSpecs: ToolSpec[] = [
     {
       paramsJson: {
         type: "string",
-        description: "JSON object or JSON array accepted by the Mijia prop/get endpoint.",
+        description:
+          "JSON object or JSON array accepted by the Mijia prop/get endpoint.",
       },
     },
     ["paramsJson"],
     async (client, input) => {
       return formatRawResult(
-        await client.getDevicesProp(parseJsonInput(input.paramsJson, "paramsJson")),
-      );
+        await client.getDevicesProp(
+          parseJsonInput(input.paramsJson, "paramsJson")
+        )
+      )
     },
-    { raw: true },
+    { raw: true }
   ),
   buildTool(
     "set_properties_raw",
@@ -801,16 +844,19 @@ const toolSpecs: ToolSpec[] = [
     {
       paramsJson: {
         type: "string",
-        description: "JSON object or JSON array accepted by the Mijia prop/set endpoint.",
+        description:
+          "JSON object or JSON array accepted by the Mijia prop/set endpoint.",
       },
     },
     ["paramsJson"],
     async (client, input) => {
       return formatRawResult(
-        await client.setDevicesProp(parseJsonInput(input.paramsJson, "paramsJson")),
-      );
+        await client.setDevicesProp(
+          parseJsonInput(input.paramsJson, "paramsJson")
+        )
+      )
     },
-    { raw: true },
+    { raw: true }
   ),
   buildTool(
     "run_action_raw",
@@ -818,47 +864,47 @@ const toolSpecs: ToolSpec[] = [
     {
       paramsJson: {
         type: "string",
-        description: "JSON object or JSON array accepted by the Mijia action endpoint.",
+        description:
+          "JSON object or JSON array accepted by the Mijia action endpoint.",
       },
     },
     ["paramsJson"],
     async (client, input) => {
       return formatRawResult(
-        await client.runAction(parseJsonInput(input.paramsJson, "paramsJson")),
-      );
+        await client.runAction(parseJsonInput(input.paramsJson, "paramsJson"))
+      )
     },
-    { raw: true },
+    { raw: true }
   ),
-];
+]
 
 export function getMijiaToolDefinitions(config: Record<string, unknown> = {}) {
-  const exposeRawTools = readBoolean(config.exposeRawMiotTools, false);
+  const exposeRawTools = readBoolean(config.exposeRawMiotTools, false)
   return toolSpecs
     .filter((tool) => exposeRawTools || tool.raw !== true)
     .map((tool) => ({
       name: tool.name,
       description: tool.description,
       parameters: tool.parameters,
-    }));
+    }))
 }
 
 export async function executeMijiaTool(
   toolName: string,
   input: JsonObject,
   config: Record<string, unknown>,
-  client: MijiaCloudClient,
+  client: MijiaCloudClient
 ) {
-  const tool = toolSpecs.find((item) => item.name === toolName);
+  const tool = toolSpecs.find((item) => item.name === toolName)
   if (!tool) {
-    throw new Error(`Unknown Mijia tool '${toolName}'.`);
+    throw new Error(`Unknown Mijia tool '${toolName}'.`)
   }
   try {
-    return await tool.execute(client, input, config);
+    return await tool.execute(client, input, config)
   } catch (error) {
     if (error instanceof MijiaApiError) {
-      throw new Error(error.message);
+      throw new Error(error.message)
     }
-    throw error;
+    throw error
   }
 }
-

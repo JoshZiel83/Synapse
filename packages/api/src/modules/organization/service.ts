@@ -1,4 +1,4 @@
-import type pg from "pg";
+import type pg from "pg"
 import {
   extractText,
   GROUP_CONVERSATION_KIND,
@@ -31,149 +31,151 @@ import {
   type MarketplaceVersion,
   type MarketplaceVersionStatus,
   type UUID,
-} from "@synapse/shared";
-import { transaction } from "../../infrastructure/database/index.js";
-import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
-import { createConversationEvent } from "../chat/service.js";
-import { getFileUrlById } from "../files/service.js";
-import { listAuthorizedResourceIds, type AccessSubject } from "../access/service.js";
+} from "@synapse/shared"
+import { transaction } from "../../infrastructure/database/index.js"
+import {
+  executeSql,
+  executeSqlOn,
+} from "../../infrastructure/database/kysely.js"
+import { createConversationEvent } from "../chat/service.js"
+import { getFileUrlById } from "../files/service.js"
+import {
+  listAuthorizedResourceIds,
+  type AccessSubject,
+} from "../access/service.js"
 
-type QueryRow = pg.QueryResultRow;
-type QueryResultLike<T extends QueryRow> = { rows: T[] };
+type QueryRow = pg.QueryResultRow
+type QueryResultLike<T extends QueryRow> = { rows: T[] }
 type QueryRunner = <T extends QueryRow>(
   text: string,
-  params?: unknown[],
-) => Promise<QueryResultLike<T>>;
+  params?: unknown[]
+) => Promise<QueryResultLike<T>>
 
 export interface ActorUpdateSourceInput {
-  type: ActorUpdateSourceType;
-  workspaceMemberId?: UUID;
-  actorId?: UUID;
-  sessionId?: UUID;
-  turnId?: UUID;
-  conversationId?: UUID;
-  reason?: string;
+  type: ActorUpdateSourceType
+  workspaceMemberId?: UUID
+  actorId?: UUID
+  sessionId?: UUID
+  turnId?: UUID
+  conversationId?: UUID
+  reason?: string
 }
 
 type ActorRow = {
-  id: string;
-  workspace_id: string;
-  name: string;
-  role: ActorRole;
-  title: string;
-  avatar_file_id: string | null;
-  avatar_emoji: string | null;
-  parent_id: string | null;
-  can_represent_user: boolean;
-  specialties: string[] | null;
-  config: Record<string, unknown> | string | null;
-  current_version: number;
-  is_active: boolean;
-  is_public_shared: boolean;
-  created_at: string;
-  updated_at: string;
-  current_actor_version_id: string;
-  source_catalog_item_id: string | null;
-  source_catalog_version_id: string | null;
-  source_sync_mode:
-    | ActorPackageSyncMode
-    | "follow_upstream"
-    | "detached"
-    | null;
-  source_baseline_actor_version: number | null;
-  source_created_at: string | null;
-  source_updated_at: string | null;
-  source_slug: string | null;
-  source_display_name: string | null;
-  source_latest_version_id: string | null;
-  source_publisher_slug: string | null;
-  source_publisher_display_name: string | null;
-  source_imported_version: string | null;
-  source_latest_version: string | null;
-};
+  id: string
+  workspace_id: string
+  name: string
+  role: ActorRole
+  title: string
+  avatar_file_id: string | null
+  avatar_emoji: string | null
+  parent_id: string | null
+  can_represent_user: boolean
+  specialties: string[] | null
+  config: Record<string, unknown> | string | null
+  current_version: number
+  is_active: boolean
+  is_public_shared: boolean
+  created_at: string
+  updated_at: string
+  current_actor_version_id: string
+  source_catalog_item_id: string | null
+  source_catalog_version_id: string | null
+  source_sync_mode: ActorPackageSyncMode | "follow_upstream" | "detached" | null
+  source_baseline_actor_version: number | null
+  source_created_at: string | null
+  source_updated_at: string | null
+  source_slug: string | null
+  source_display_name: string | null
+  source_latest_version_id: string | null
+  source_publisher_slug: string | null
+  source_publisher_display_name: string | null
+  source_imported_version: string | null
+  source_latest_version: string | null
+}
 
 type ActorVersionRow = {
-  id: string;
-  actor_id: string;
-  version: number;
-  previous_version_id: string | null;
-  name: string;
-  role: ActorRole;
-  title: string;
-  parent_id: string | null;
-  can_represent_user: boolean;
-  specialties: string[] | null;
-  config: Record<string, unknown> | string | null;
-  version_delta: ActorVersionDelta | string | null;
-  created_by_workspace_member_id: string | null;
-  source_type: ActorUpdateSourceType;
-  source_workspace_member_id: string | null;
-  source_actor_id: string | null;
-  source_session_id: string | null;
-  source_turn_id: string | null;
-  source_conversation_id: string | null;
-  source_reason: string | null;
-  created_at: string;
-};
+  id: string
+  actor_id: string
+  version: number
+  previous_version_id: string | null
+  name: string
+  role: ActorRole
+  title: string
+  parent_id: string | null
+  can_represent_user: boolean
+  specialties: string[] | null
+  config: Record<string, unknown> | string | null
+  version_delta: ActorVersionDelta | string | null
+  created_by_workspace_member_id: string | null
+  source_type: ActorUpdateSourceType
+  source_workspace_member_id: string | null
+  source_actor_id: string | null
+  source_session_id: string | null
+  source_turn_id: string | null
+  source_conversation_id: string | null
+  source_reason: string | null
+  created_at: string
+}
 
 type ActorDocRow = {
-  id: string;
-  actor_version_id: string;
-  doc_key: ActorDoc["key"];
-  title: string;
-  visibility: ActorDoc["visibility"];
-  priority: number;
-  content_blocks: unknown;
-};
+  id: string
+  actor_version_id: string
+  doc_key: ActorDoc["key"]
+  title: string
+  visibility: ActorDoc["visibility"]
+  priority: number
+  content_blocks: unknown
+}
 
 type ActorPackageRow = {
-  package_id: string;
-  package_workspace_id: string | null;
-  package_slug: string;
-  package_display_name: string;
-  package_icon_file_id: string | null;
-  package_summary: string;
-  package_long_description: string;
-  package_source_kind: "builtin" | "official" | "workspace" | "user" | "relay";
-  package_visibility: "public" | "workspace" | "private";
-  package_tags: string[] | null;
-  package_download_count: number;
-  package_is_active: boolean;
-  package_metadata: Record<string, unknown> | string | null;
-  package_created_at: string;
-  package_updated_at: string;
-  publisher_id: string;
-  publisher_slug: string;
-  publisher_display_name: string;
-  publisher_description: string;
-  publisher_owner_user_id: string | null;
-  publisher_workspace_id: string | null;
-  publisher_is_builtin: boolean;
-  publisher_is_verified: boolean;
-  publisher_created_at: string;
-  publisher_updated_at: string;
-  version_id: string;
-  version_value: string;
-  version_status: MarketplaceVersionStatus;
-  version_changelog: string;
-  version_metadata: Record<string, unknown> | string | null;
-  version_created_by_user_id: string | null;
-  version_created_at: string;
-  actor_role: ActorRole;
-  actor_name: string;
-  actor_avatar_file_id: string | null;
-  actor_avatar_emoji: string | null;
-  actor_title: string;
-  actor_can_represent_user: boolean;
-  actor_docs: unknown;
-  actor_specialties: string[] | null;
-  actor_config: Record<string, unknown> | string | null;
-  actor_metadata: Record<string, unknown> | string | null;
-};
+  package_id: string
+  package_workspace_id: string | null
+  package_slug: string
+  package_display_name: string
+  package_icon_file_id: string | null
+  package_summary: string
+  package_long_description: string
+  package_source_kind: "builtin" | "official" | "workspace" | "user" | "relay"
+  package_visibility: "public" | "workspace" | "private"
+  package_tags: string[] | null
+  package_download_count: number
+  package_is_active: boolean
+  package_metadata: Record<string, unknown> | string | null
+  package_created_at: string
+  package_updated_at: string
+  publisher_id: string
+  publisher_slug: string
+  publisher_display_name: string
+  publisher_description: string
+  publisher_owner_user_id: string | null
+  publisher_workspace_id: string | null
+  publisher_is_builtin: boolean
+  publisher_is_verified: boolean
+  publisher_created_at: string
+  publisher_updated_at: string
+  version_id: string
+  version_value: string
+  version_status: MarketplaceVersionStatus
+  version_changelog: string
+  version_metadata: Record<string, unknown> | string | null
+  version_created_by_user_id: string | null
+  version_created_at: string
+  actor_role: ActorRole
+  actor_name: string
+  actor_avatar_file_id: string | null
+  actor_avatar_emoji: string | null
+  actor_title: string
+  actor_can_represent_user: boolean
+  actor_docs: unknown
+  actor_specialties: string[] | null
+  actor_config: Record<string, unknown> | string | null
+  actor_metadata: Record<string, unknown> | string | null
+}
 
 type ActorTreeNode = Actor & {
-  children: ActorTreeNode[];
-};
+  children: ActorTreeNode[]
+}
 
 const ACTOR_SELECT = `
   SELECT
@@ -221,7 +223,7 @@ const ACTOR_SELECT = `
     ON imported_version.id = source_ref.source_catalog_version_id
   LEFT JOIN catalog_versions latest_version
     ON latest_version.id = source_item.latest_version_id
-`;
+`
 
 const ACTOR_PACKAGE_SELECT = `
   SELECT
@@ -273,81 +275,83 @@ const ACTOR_PACKAGE_SELECT = `
   JOIN actor_template_version_specs spec ON spec.catalog_version_id = version.id
   WHERE item.item_kind = 'actor_template'
     AND item.is_active = TRUE
-`;
+`
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {};
+  if (!value) return {}
   if (typeof value === "string") {
     try {
-      return JSON.parse(value) as Record<string, unknown>;
+      return JSON.parse(value) as Record<string, unknown>
     } catch {
-      return {};
+      return {}
     }
   }
-  return typeof value === "object" ? (value as Record<string, unknown>) : {};
+  return typeof value === "object" ? (value as Record<string, unknown>) : {}
 }
 
 function parseJsonArray<T>(value: unknown): T[] {
-  if (!value) return [];
+  if (!value) return []
   if (typeof value === "string") {
     try {
-      return JSON.parse(value) as T[];
+      return JSON.parse(value) as T[]
     } catch {
-      return [];
+      return []
     }
   }
-  return Array.isArray(value) ? (value as T[]) : [];
+  return Array.isArray(value) ? (value as T[]) : []
 }
 
 function arraysEqual(left: string[], right: string[]) {
-  if (left.length !== right.length) return false;
-  return left.every((value, index) => value === right[index]);
+  if (left.length !== right.length) return false
+  return left.every((value, index) => value === right[index])
 }
 
 function jsonEqual(left: unknown, right: unknown) {
-  return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {});
+  return JSON.stringify(left ?? {}) === JSON.stringify(right ?? {})
 }
 
 function sortDocs(docs: ActorDoc[]) {
   return [...docs].sort((left, right) => {
-    if (right.priority !== left.priority) return right.priority - left.priority;
-    return left.title.localeCompare(right.title);
-  });
+    if (right.priority !== left.priority) return right.priority - left.priority
+    return left.title.localeCompare(right.title)
+  })
 }
 
 function normalizeActorDocInputs(docs: unknown): ActorDoc[] {
-  return sortDocs(normalizeActorDocs(parseJsonArray<ActorDocInput>(docs)));
+  return sortDocs(normalizeActorDocs(parseJsonArray<ActorDocInput>(docs)))
 }
 
 function sanitizeSpecialties(specialties?: string[]) {
   return Array.from(
-    new Set((specialties || []).map((value) => value.trim()).filter(Boolean)),
-  );
+    new Set((specialties || []).map((value) => value.trim()).filter(Boolean))
+  )
 }
 
 function normalizeAvatarEmoji(value?: string | null) {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  if (typeof value !== "string") return undefined
+  const trimmed = value.trim()
+  return trimmed || undefined
 }
 
-function mapCatalogSourceKind(sourceKind: ActorPackageRow["package_source_kind"]): MarketplaceSourceType {
+function mapCatalogSourceKind(
+  sourceKind: ActorPackageRow["package_source_kind"]
+): MarketplaceSourceType {
   switch (sourceKind) {
     case "builtin":
-      return "builtin";
+      return "builtin"
     case "official":
-      return "official";
+      return "official"
     case "workspace":
-      return "workspace_upload";
+      return "workspace_upload"
     case "user":
-      return "user_upload";
+      return "user_upload"
     case "relay":
-      return "relay_derived";
+      return "relay_derived"
   }
 }
 
 function buildActorPackageDefinition(row: ActorPackageRow): ActorDefinition {
-  const docs = normalizeActorDocInputs(row.actor_docs);
+  const docs = normalizeActorDocInputs(row.actor_docs)
   return {
     name: row.actor_name,
     role: row.actor_role,
@@ -358,10 +362,12 @@ function buildActorPackageDefinition(row: ActorPackageRow): ActorDefinition {
     docs,
     specialties: sanitizeSpecialties(row.actor_specialties || []),
     config: parseJsonObject(row.actor_config),
-  };
+  }
 }
 
-function buildActorPackagePublisher(row: ActorPackageRow): MarketplacePublisher {
+function buildActorPackagePublisher(
+  row: ActorPackageRow
+): MarketplacePublisher {
   return {
     id: row.publisher_id,
     slug: row.publisher_slug,
@@ -372,20 +378,20 @@ function buildActorPackagePublisher(row: ActorPackageRow): MarketplacePublisher 
     ownerUserId: row.publisher_owner_user_id || undefined,
     createdAt: row.publisher_created_at,
     updatedAt: row.publisher_updated_at,
-  };
+  }
 }
 
 function buildActorPackageRevision(
   row: ActorPackageRow,
-  actor: ActorDefinition,
+  actor: ActorDefinition
 ): MarketplaceVersion {
-  const versionMetadata = parseJsonObject(row.version_metadata);
+  const versionMetadata = parseJsonObject(row.version_metadata)
   const setupGuide = normalizeCanonicalContentBlocks(
-    parseJsonArray(versionMetadata.setupGuide),
-  );
+    parseJsonArray(versionMetadata.setupGuide)
+  )
   const releaseNotes = normalizeCanonicalContentBlocks(
-    parseJsonArray(versionMetadata.releaseNotes),
-  );
+    parseJsonArray(versionMetadata.releaseNotes)
+  )
 
   return {
     id: row.version_id,
@@ -411,19 +417,21 @@ function buildActorPackageRevision(
     createdByUserId: row.version_created_by_user_id || undefined,
     createdAt: row.version_created_at,
     assets: [],
-  };
+  }
 }
 
 function buildActorPackageRecord(row: ActorPackageRow): ActorPackageRecord {
-  const actor = buildActorPackageDefinition(row);
+  const actor = buildActorPackageDefinition(row)
   const packageDescription =
-    row.package_summary || summarizeActorForRole(actor.docs, row.actor_title) || `${row.package_display_name} actor`;
+    row.package_summary ||
+    summarizeActorForRole(actor.docs, row.actor_title) ||
+    `${row.package_display_name} actor`
   const longDescription =
     row.package_long_description ||
     summarizeActorForPrompt(actor.docs) ||
-    packageDescription;
-  const latestRevision = buildActorPackageRevision(row, actor);
-  const publisher = buildActorPackagePublisher(row);
+    packageDescription
+  const latestRevision = buildActorPackageRevision(row, actor)
+  const publisher = buildActorPackagePublisher(row)
   const marketplaceItem: MarketplaceItem = {
     id: row.package_id,
     publisherId: row.publisher_id,
@@ -439,7 +447,9 @@ function buildActorPackageRecord(row: ActorPackageRow): ActorPackageRecord {
     sourceType: mapCatalogSourceKind(row.package_source_kind),
     tags: row.package_tags || [],
     isActive: Boolean(row.package_is_active),
-    isBuiltin: row.package_source_kind === "builtin" || Boolean(row.publisher_is_builtin),
+    isBuiltin:
+      row.package_source_kind === "builtin" ||
+      Boolean(row.publisher_is_builtin),
     downloadCount: row.package_download_count,
     latestRevisionId: row.version_id,
     defaultInstanceScope: "workspace",
@@ -450,48 +460,53 @@ function buildActorPackageRecord(row: ActorPackageRow): ActorPackageRecord {
     updatedAt: row.package_updated_at,
     publisher,
     latestRevision,
-  };
+  }
 
   return {
     package: marketplaceItem,
     manifest: {
       actor,
       setupGuide: normalizeCanonicalContentBlocks(
-        parseJsonArray(parseJsonObject(row.version_metadata).setupGuide),
+        parseJsonArray(parseJsonObject(row.version_metadata).setupGuide)
       ),
       releaseNotes: normalizeCanonicalContentBlocks(
-        parseJsonArray(parseJsonObject(row.version_metadata).releaseNotes),
+        parseJsonArray(parseJsonObject(row.version_metadata).releaseNotes)
       ),
     },
     dependencies: [],
     requirementChecks: [],
-  };
+  }
 }
 
-function buildActorSourceLink(row: ActorRow): ActorPackageSourceLink | undefined {
-  if (!row.source_catalog_item_id) return undefined;
+function buildActorSourceLink(
+  row: ActorRow
+): ActorPackageSourceLink | undefined {
+  if (!row.source_catalog_item_id) return undefined
 
-  const baselineActorVersion = row.source_baseline_actor_version || 1;
-  const hasLocalChanges = row.current_version > baselineActorVersion;
+  const baselineActorVersion = row.source_baseline_actor_version || 1
+  const hasLocalChanges = row.current_version > baselineActorVersion
   const hasUpstreamUpdate =
     Boolean(row.source_latest_version_id) &&
-    row.source_catalog_version_id !== row.source_latest_version_id;
+    row.source_catalog_version_id !== row.source_latest_version_id
 
-  let status: ActorPackageSourceLink["status"] = "up_to_date";
+  let status: ActorPackageSourceLink["status"] = "up_to_date"
   if ((row.source_sync_mode || "notify") === "detached") {
-    status = "detached";
+    status = "detached"
   } else if (hasLocalChanges && hasUpstreamUpdate) {
-    status = "update_available_with_local_changes";
+    status = "update_available_with_local_changes"
   } else if (hasLocalChanges) {
-    status = "diverged";
+    status = "diverged"
   } else if (hasUpstreamUpdate) {
-    status = "update_available";
+    status = "update_available"
   }
 
   return {
     actorId: row.id,
     packageId: row.source_catalog_item_id,
-    importedRevisionId: row.source_catalog_version_id || row.source_latest_version_id || row.source_catalog_item_id,
+    importedRevisionId:
+      row.source_catalog_version_id ||
+      row.source_latest_version_id ||
+      row.source_catalog_item_id,
     packageSlug: row.source_slug || row.source_catalog_item_id,
     packageDisplayName: row.source_display_name || "Unknown package",
     packagePublisherSlug: row.source_publisher_slug || undefined,
@@ -500,26 +515,30 @@ function buildActorSourceLink(row: ActorRow): ActorPackageSourceLink | undefined
     latestRevisionId: row.source_latest_version_id || undefined,
     latestVersion: row.source_latest_version || undefined,
     baselineActorVersion,
-    syncMode: row.source_sync_mode === "manual_merge" ? "manual_merge" : "notify",
+    syncMode:
+      row.source_sync_mode === "manual_merge" ? "manual_merge" : "notify",
     hasLocalChanges,
     hasUpstreamUpdate,
     status,
     createdAt: row.source_created_at || row.created_at,
     updatedAt: row.source_updated_at || row.updated_at,
-  };
+  }
 }
 
-function buildActorDefinition(row: {
-  name: string;
-  role: ActorRole;
-  title: string;
-  avatar_file_id?: string | null;
-  avatar_emoji?: string | null;
-  parent_id: string | null;
-  can_represent_user: boolean;
-  specialties: string[] | null;
-  config: Record<string, unknown> | string | null;
-}, docs: ActorDoc[]): ActorDefinition {
+function buildActorDefinition(
+  row: {
+    name: string
+    role: ActorRole
+    title: string
+    avatar_file_id?: string | null
+    avatar_emoji?: string | null
+    parent_id: string | null
+    can_represent_user: boolean
+    specialties: string[] | null
+    config: Record<string, unknown> | string | null
+  },
+  docs: ActorDoc[]
+): ActorDefinition {
   return {
     name: row.name,
     role: row.role,
@@ -531,13 +550,13 @@ function buildActorDefinition(row: {
     docs: sortDocs(docs),
     specialties: sanitizeSpecialties(row.specialties || []),
     config: parseJsonObject(row.config),
-  };
+  }
 }
 
 function buildActorVersionSource(
-  source?: ActorUpdateSourceInput | null,
+  source?: ActorUpdateSourceInput | null
 ): ActorVersionSource | undefined {
-  if (!source) return undefined;
+  if (!source) return undefined
   return {
     type: source.type,
     workspaceMemberId: source.workspaceMemberId || undefined,
@@ -546,19 +565,21 @@ function buildActorVersionSource(
     turnId: source.turnId || undefined,
     conversationId: source.conversationId || undefined,
     reason: source.reason || undefined,
-  };
+  }
 }
 
-function buildActorVersionSourceFromRow(row: Pick<
-  ActorVersionRow,
-  | "source_type"
-  | "source_workspace_member_id"
-  | "source_actor_id"
-  | "source_session_id"
-  | "source_turn_id"
-  | "source_conversation_id"
-  | "source_reason"
->): ActorVersionSource {
+function buildActorVersionSourceFromRow(
+  row: Pick<
+    ActorVersionRow,
+    | "source_type"
+    | "source_workspace_member_id"
+    | "source_actor_id"
+    | "source_session_id"
+    | "source_turn_id"
+    | "source_conversation_id"
+    | "source_reason"
+  >
+): ActorVersionSource {
   return {
     type: row.source_type,
     workspaceMemberId: row.source_workspace_member_id || undefined,
@@ -567,7 +588,7 @@ function buildActorVersionSourceFromRow(row: Pick<
     turnId: row.source_turn_id || undefined,
     conversationId: row.source_conversation_id || undefined,
     reason: row.source_reason || undefined,
-  };
+  }
 }
 
 function mapActorRow(row: ActorRow, docs: ActorDoc[]): Actor {
@@ -585,10 +606,13 @@ function mapActorRow(row: ActorRow, docs: ActorDoc[]): Actor {
     isPublicShared: Boolean(row.is_public_shared),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  };
+  }
 }
 
-function mapActorVersionRow(row: ActorVersionRow, docs: ActorDoc[]): ActorVersion {
+function mapActorVersionRow(
+  row: ActorVersionRow,
+  docs: ActorDoc[]
+): ActorVersion {
   return {
     id: row.id,
     actorId: row.actor_id,
@@ -599,42 +623,42 @@ function mapActorVersionRow(row: ActorVersionRow, docs: ActorDoc[]): ActorVersio
       typeof row.version_delta === "string"
         ? (JSON.parse(row.version_delta) as ActorVersionDelta)
         : row.version_delta || undefined,
-    createdByWorkspaceMemberId:
-      row.created_by_workspace_member_id || undefined,
+    createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
     source: buildActorVersionSourceFromRow(row),
     createdAt: row.created_at,
-  };
+  }
 }
 
 function summarizeUnknownValue(value: unknown): string {
-  if (value === null || value === undefined) return "empty";
-  if (typeof value === "string") return value.trim() || "empty";
-  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (value === null || value === undefined) return "empty"
+  if (typeof value === "string") return value.trim() || "empty"
+  if (typeof value === "number" || typeof value === "boolean")
+    return String(value)
   if (Array.isArray(value)) {
-    if (value.length === 0) return "empty";
-    return value.map((entry) => summarizeUnknownValue(entry)).join(", ");
+    if (value.length === 0) return "empty"
+    return value.map((entry) => summarizeUnknownValue(entry)).join(", ")
   }
   try {
-    return JSON.stringify(value);
+    return JSON.stringify(value)
   } catch {
-    return "updated";
+    return "updated"
   }
 }
 
 function buildFieldSummary(
   field: ActorVersionChangedField,
   before: unknown,
-  after: unknown,
+  after: unknown
 ) {
   return textBlocks(
-    `${field} changed from "${summarizeUnknownValue(before)}" to "${summarizeUnknownValue(after)}".`,
-  );
+    `${field} changed from "${summarizeUnknownValue(before)}" to "${summarizeUnknownValue(after)}".`
+  )
 }
 
 function buildFieldChange(
   field: ActorVersionChangedField,
   before: unknown,
-  after: unknown,
+  after: unknown
 ): ActorVersionChange {
   return {
     kind: "field",
@@ -642,17 +666,17 @@ function buildFieldChange(
     before,
     after,
     summary: buildFieldSummary(field, before, after),
-  };
+  }
 }
 
 function buildDocFieldChanges(
   beforeDoc: ActorDoc | undefined,
-  afterDoc: ActorDoc | undefined,
+  afterDoc: ActorDoc | undefined
 ): ActorDocFieldChange[] {
-  const changes: ActorDocFieldChange[] = [];
+  const changes: ActorDocFieldChange[] = []
 
   if (!beforeDoc || !afterDoc) {
-    return changes;
+    return changes
   }
 
   if (beforeDoc.title !== afterDoc.title) {
@@ -660,44 +684,44 @@ function buildDocFieldChanges(
       field: "title",
       before: beforeDoc.title,
       after: afterDoc.title,
-    });
+    })
   }
   if (beforeDoc.visibility !== afterDoc.visibility) {
     changes.push({
       field: "visibility",
       before: beforeDoc.visibility,
       after: afterDoc.visibility,
-    });
+    })
   }
   if (beforeDoc.priority !== afterDoc.priority) {
     changes.push({
       field: "priority",
       before: beforeDoc.priority,
       after: afterDoc.priority,
-    });
+    })
   }
   if (!jsonEqual(beforeDoc.content, afterDoc.content)) {
     changes.push({
       field: "content",
       beforeSummaryText: summarizeActorDoc(beforeDoc, 180),
       afterSummaryText: summarizeActorDoc(afterDoc, 180),
-    });
+    })
   }
 
-  return changes;
+  return changes
 }
 
-function buildDocChange(beforeDoc: ActorDoc | undefined, afterDoc: ActorDoc | undefined): ActorVersionDocChange | null {
-  if (!beforeDoc && !afterDoc) return null;
-  const referenceDoc = afterDoc || beforeDoc!;
-  const changeType: ActorVersionDocChange["changeType"] = beforeDoc && afterDoc
-    ? "updated"
-    : afterDoc
-      ? "added"
-      : "removed";
+function buildDocChange(
+  beforeDoc: ActorDoc | undefined,
+  afterDoc: ActorDoc | undefined
+): ActorVersionDocChange | null {
+  if (!beforeDoc && !afterDoc) return null
+  const referenceDoc = afterDoc || beforeDoc!
+  const changeType: ActorVersionDocChange["changeType"] =
+    beforeDoc && afterDoc ? "updated" : afterDoc ? "added" : "removed"
   const summaryText =
     summarizeActorDoc(afterDoc || beforeDoc!, 180) ||
-    `${referenceDoc.title} ${changeType}`;
+    `${referenceDoc.title} ${changeType}`
 
   return {
     kind: "doc",
@@ -709,7 +733,7 @@ function buildDocChange(beforeDoc: ActorDoc | undefined, afterDoc: ActorDoc | un
     priority: referenceDoc.priority,
     fieldChanges: buildDocFieldChanges(beforeDoc, afterDoc),
     summary: textBlocks(summaryText),
-  };
+  }
 }
 
 function buildActorVersionDelta(
@@ -717,59 +741,73 @@ function buildActorVersionDelta(
   after: ActorDefinition,
   fromVersion: number,
   toVersion: number,
-  source?: ActorUpdateSourceInput,
+  source?: ActorUpdateSourceInput
 ): ActorVersionDelta | undefined {
-  const changes: ActorVersionChange[] = [];
+  const changes: ActorVersionChange[] = []
 
   if (before.name !== after.name) {
-    changes.push(buildFieldChange("name", before.name, after.name));
+    changes.push(buildFieldChange("name", before.name, after.name))
   }
   if (before.role !== after.role) {
-    changes.push(buildFieldChange("role", before.role, after.role));
+    changes.push(buildFieldChange("role", before.role, after.role))
   }
   if (before.title !== after.title) {
-    changes.push(buildFieldChange("title", before.title, after.title));
+    changes.push(buildFieldChange("title", before.title, after.title))
   }
   if ((before.parentId || null) !== (after.parentId || null)) {
-    changes.push(buildFieldChange("parentId", before.parentId || null, after.parentId || null));
+    changes.push(
+      buildFieldChange(
+        "parentId",
+        before.parentId || null,
+        after.parentId || null
+      )
+    )
   }
   if (before.canRepresentUser !== after.canRepresentUser) {
-    changes.push(buildFieldChange("canRepresentUser", before.canRepresentUser, after.canRepresentUser));
+    changes.push(
+      buildFieldChange(
+        "canRepresentUser",
+        before.canRepresentUser,
+        after.canRepresentUser
+      )
+    )
   }
   if (!arraysEqual(before.specialties, after.specialties)) {
-    changes.push(buildFieldChange("specialties", before.specialties, after.specialties));
+    changes.push(
+      buildFieldChange("specialties", before.specialties, after.specialties)
+    )
   }
   if (!jsonEqual(before.config, after.config)) {
-    changes.push(buildFieldChange("config", before.config, after.config));
+    changes.push(buildFieldChange("config", before.config, after.config))
   }
 
   const docIds = new Set([
     ...before.docs.map((doc) => doc.id),
     ...after.docs.map((doc) => doc.id),
-  ]);
-  const beforeDocs = new Map(before.docs.map((doc) => [doc.id, doc]));
-  const afterDocs = new Map(after.docs.map((doc) => [doc.id, doc]));
+  ])
+  const beforeDocs = new Map(before.docs.map((doc) => [doc.id, doc]))
+  const afterDocs = new Map(after.docs.map((doc) => [doc.id, doc]))
   const docChanges = Array.from(docIds)
     .map((docId) => {
-      const beforeDoc = beforeDocs.get(docId);
-      const afterDoc = afterDocs.get(docId);
+      const beforeDoc = beforeDocs.get(docId)
+      const afterDoc = afterDocs.get(docId)
       if (beforeDoc && afterDoc) {
         const unchanged =
           beforeDoc.key === afterDoc.key &&
           beforeDoc.title === afterDoc.title &&
           beforeDoc.visibility === afterDoc.visibility &&
           beforeDoc.priority === afterDoc.priority &&
-          jsonEqual(beforeDoc.content, afterDoc.content);
-        if (unchanged) return null;
+          jsonEqual(beforeDoc.content, afterDoc.content)
+        if (unchanged) return null
       }
-      return buildDocChange(beforeDoc, afterDoc);
+      return buildDocChange(beforeDoc, afterDoc)
     })
-    .filter((value): value is ActorVersionDocChange => Boolean(value));
+    .filter((value): value is ActorVersionDocChange => Boolean(value))
 
-  changes.push(...docChanges);
+  changes.push(...docChanges)
 
   if (changes.length === 0) {
-    return undefined;
+    return undefined
   }
 
   return {
@@ -778,7 +816,7 @@ function buildActorVersionDelta(
     source: buildActorVersionSource(source),
     changes,
     summary: changes.flatMap((change) => change.summary),
-  };
+  }
 }
 
 function toActorVersionChangeWire(change: ActorVersionChange) {
@@ -788,8 +826,9 @@ function toActorVersionChangeWire(change: ActorVersionChange) {
       field: change.field,
       before: change.before,
       after: change.after,
-      summaryText: extractText(change.summary).replace(/\s+/g, " ").trim() || undefined,
-    };
+      summaryText:
+        extractText(change.summary).replace(/\s+/g, " ").trim() || undefined,
+    }
   }
 
   return {
@@ -801,18 +840,19 @@ function toActorVersionChangeWire(change: ActorVersionChange) {
     visibility: change.visibility,
     priority: change.priority,
     fieldChanges: change.fieldChanges,
-    summaryText: extractText(change.summary).replace(/\s+/g, " ").trim() || undefined,
-  };
+    summaryText:
+      extractText(change.summary).replace(/\s+/g, " ").trim() || undefined,
+  }
 }
 
 async function emitActorVersionChangedEvents(params: {
-  workspaceId: UUID;
-  actorId: UUID;
-  actorName: string;
-  actorTitle: string;
-  actorAvatarUrl?: string;
-  actorAvatarEmoji?: string;
-  delta: ActorVersionDelta;
+  workspaceId: UUID
+  actorId: UUID
+  actorName: string
+  actorTitle: string
+  actorAvatarUrl?: string
+  actorAvatarEmoji?: string
+  delta: ActorVersionDelta
 }) {
   const memberships = await runQuery<{ conversation_id: string }>(
     `SELECT DISTINCT cp.conversation_id
@@ -821,12 +861,12 @@ async function emitActorVersionChangedEvents(params: {
      WHERE cp.actor_id = $1
        AND cp.state = 'active'
        AND c.kind = $2`,
-    [params.actorId, GROUP_CONVERSATION_KIND],
-  );
+    [params.actorId, GROUP_CONVERSATION_KIND]
+  )
 
-  if (memberships.rows.length === 0) return;
+  if (memberships.rows.length === 0) return
 
-  const changes = params.delta.changes.map(toActorVersionChangeWire);
+  const changes = params.delta.changes.map(toActorVersionChangeWire)
 
   await Promise.all(
     memberships.rows.map((membership) =>
@@ -855,26 +895,26 @@ async function emitActorVersionChangedEvents(params: {
           changes,
           source: params.delta.source,
         },
-      }),
-    ),
-  );
+      })
+    )
+  )
 }
 
 async function runQuery<T extends QueryRow>(text: string, params?: unknown[]) {
-  return executeSql<T>(text, params);
+  return executeSql<T>(text, params)
 }
 
 function clientQuery(client: pg.PoolClient): QueryRunner {
   return async <T extends QueryRow>(text: string, params?: unknown[]) =>
-    executeSqlOn<T>(client, text, params);
+    executeSqlOn<T>(client, text, params)
 }
 
 async function loadActorDocsMap(
   runner: QueryRunner,
-  actorVersionIds: string[],
+  actorVersionIds: string[]
 ): Promise<Map<string, ActorDoc[]>> {
   if (actorVersionIds.length === 0) {
-    return new Map();
+    return new Map()
   }
 
   const result = await runner<ActorDocRow>(
@@ -882,71 +922,73 @@ async function loadActorDocsMap(
      FROM actor_version_docs
      WHERE actor_version_id = ANY($1::uuid[])
      ORDER BY priority DESC, created_at ASC`,
-    [actorVersionIds],
-  );
+    [actorVersionIds]
+  )
 
-  const docsByVersionId = new Map<string, ActorDoc[]>();
+  const docsByVersionId = new Map<string, ActorDoc[]>()
   for (const row of result.rows) {
-    const docs = docsByVersionId.get(row.actor_version_id) || [];
+    const docs = docsByVersionId.get(row.actor_version_id) || []
     docs.push({
       id: row.id,
       key: row.doc_key,
       title: row.title,
       visibility: row.visibility,
       priority: row.priority,
-      content: normalizeCanonicalContentBlocks(parseJsonArray(row.content_blocks)),
-    });
-    docsByVersionId.set(row.actor_version_id, docs);
+      content: normalizeCanonicalContentBlocks(
+        parseJsonArray(row.content_blocks)
+      ),
+    })
+    docsByVersionId.set(row.actor_version_id, docs)
   }
 
   for (const [versionId, docs] of docsByVersionId.entries()) {
-    docsByVersionId.set(versionId, sortDocs(docs));
+    docsByVersionId.set(versionId, sortDocs(docs))
   }
 
-  return docsByVersionId;
+  return docsByVersionId
 }
 
 async function getActorRowsByIds(
   workspaceId: UUID,
-  actorIds: UUID[],
+  actorIds: UUID[]
 ): Promise<ActorRow[]> {
-  if (actorIds.length === 0) return [];
+  if (actorIds.length === 0) return []
 
   const result = await runQuery<ActorRow>(
     `${ACTOR_SELECT}
      WHERE a.workspace_id = $1
        AND a.id = ANY($2::uuid[])
      ORDER BY a.created_at DESC`,
-    [workspaceId, actorIds],
-  );
+    [workspaceId, actorIds]
+  )
 
-  return result.rows;
+  return result.rows
 }
 
 async function getActorRow(
   workspaceId: UUID,
   actorId: UUID,
-  runner: QueryRunner = runQuery,
+  runner: QueryRunner = runQuery
 ): Promise<ActorRow | null> {
   const result = await runner<ActorRow>(
     `${ACTOR_SELECT}
      WHERE a.workspace_id = $1
        AND a.id = $2
      LIMIT 1`,
-    [workspaceId, actorId],
-  );
-  return result.rows[0] || null;
+    [workspaceId, actorId]
+  )
+  return result.rows[0] || null
 }
 
 async function ensureParentActor(
   workspaceId: UUID,
   parentId: UUID | null | undefined,
   actorId?: UUID,
-  runner: QueryRunner = runQuery,
+  runner: QueryRunner = runQuery
 ) {
-  if (!parentId) return;
+  if (!parentId) return
   if (actorId && parentId === actorId) {
-    throw new Error("Actor cannot be its own parent");
+    throw new Error("Actor cannot be its own parent")
   }
 
   const parent = await runner<{ id: string }>(
@@ -955,72 +997,77 @@ async function ensureParentActor(
      WHERE id = $1
        AND workspace_id = $2
      LIMIT 1`,
-    [parentId, workspaceId],
-  );
+    [parentId, workspaceId]
+  )
 
   if (parent.rows.length === 0) {
-    throw new Error("Parent actor not found");
+    throw new Error("Parent actor not found")
   }
 }
 
 async function buildActorResponseFromRows(rows: ActorRow[]) {
-  if (rows.length === 0) return [];
+  if (rows.length === 0) return []
   const docsByVersionId = await loadActorDocsMap(
     runQuery,
-    rows.map((row) => row.current_actor_version_id),
-  );
+    rows.map((row) => row.current_actor_version_id)
+  )
   return rows.map((row) =>
-    mapActorRow(row, docsByVersionId.get(row.current_actor_version_id) || []),
-  );
+    mapActorRow(row, docsByVersionId.get(row.current_actor_version_id) || [])
+  )
 }
 
 export async function listActors(
   workspaceId: UUID,
-  subject: AccessSubject,
+  subject: AccessSubject
 ): Promise<Actor[]> {
   const actorIds = await listAuthorizedResourceIds({
     subject,
     action: "actor.view",
-  });
-  const rows = await getActorRowsByIds(workspaceId, actorIds as UUID[]);
-  return buildActorResponseFromRows(rows);
+  })
+  const rows = await getActorRowsByIds(workspaceId, actorIds as UUID[])
+  return buildActorResponseFromRows(rows)
 }
 
 export async function getFullOrgTree(
   workspaceId: UUID,
-  subject: AccessSubject,
+  subject: AccessSubject
 ): Promise<ActorTreeNode[]> {
-  const actors = await listActors(workspaceId, subject);
+  const actors = await listActors(workspaceId, subject)
   const nodes = new Map<string, ActorTreeNode>(
-    actors.map((actor) => [actor.id, { ...actor, children: [] }]),
-  );
-  const roots: ActorTreeNode[] = [];
+    actors.map((actor) => [actor.id, { ...actor, children: [] }])
+  )
+  const roots: ActorTreeNode[] = []
 
   for (const actor of nodes.values()) {
-    const parentId = actor.definition.parentId;
+    const parentId = actor.definition.parentId
     if (parentId && nodes.has(parentId)) {
-      nodes.get(parentId)!.children.push(actor);
-      continue;
+      nodes.get(parentId)!.children.push(actor)
+      continue
     }
-    roots.push(actor);
+    roots.push(actor)
   }
 
-  return roots;
+  return roots
 }
 
 export async function getActor(
   actorId: UUID,
-  workspaceId: UUID,
+  workspaceId: UUID
 ): Promise<Actor | null> {
-  const row = await getActorRow(workspaceId, actorId);
-  if (!row) return null;
-  const docsByVersionId = await loadActorDocsMap(runQuery, [row.current_actor_version_id]);
-  return mapActorRow(row, docsByVersionId.get(row.current_actor_version_id) || []);
+  const row = await getActorRow(workspaceId, actorId)
+  if (!row) return null
+  const docsByVersionId = await loadActorDocsMap(runQuery, [
+    row.current_actor_version_id,
+  ])
+  return mapActorRow(
+    row,
+    docsByVersionId.get(row.current_actor_version_id) || []
+  )
 }
 
 export async function listActorVersions(
   actorId: UUID,
-  workspaceId: UUID,
+  workspaceId: UUID
 ): Promise<ActorVersion[]> {
   const actorExists = await runQuery<{ id: string }>(
     `SELECT id
@@ -1028,9 +1075,9 @@ export async function listActorVersions(
      WHERE id = $1
        AND workspace_id = $2
      LIMIT 1`,
-    [actorId, workspaceId],
-  );
-  if (actorExists.rows.length === 0) return [];
+    [actorId, workspaceId]
+  )
+  if (actorExists.rows.length === 0) return []
 
   const result = await runQuery<ActorVersionRow>(
     `SELECT
@@ -1058,45 +1105,51 @@ export async function listActorVersions(
      FROM actor_versions
      WHERE actor_id = $1
      ORDER BY version DESC`,
-    [actorId],
-  );
+    [actorId]
+  )
 
   const docsByVersionId = await loadActorDocsMap(
     runQuery,
-    result.rows.map((row) => row.id),
-  );
+    result.rows.map((row) => row.id)
+  )
 
   return result.rows.map((row) =>
-    mapActorVersionRow(row, docsByVersionId.get(row.id) || []),
-  );
+    mapActorVersionRow(row, docsByVersionId.get(row.id) || [])
+  )
 }
 
 export async function createActor(input: {
-  workspaceId: UUID;
-  createdByWorkspaceMemberId?: UUID;
-  name: string;
-  role: ActorRole;
-  title?: string;
-  avatarFileId?: UUID;
-  avatarEmoji?: string;
-  canRepresentUser?: boolean;
-  docs?: ActorDocInput[];
-  parentId?: UUID;
-  specialties?: string[];
-  config?: Record<string, unknown>;
+  workspaceId: UUID
+  createdByWorkspaceMemberId?: UUID
+  name: string
+  role: ActorRole
+  title?: string
+  avatarFileId?: UUID
+  avatarEmoji?: string
+  canRepresentUser?: boolean
+  docs?: ActorDocInput[]
+  parentId?: UUID
+  specialties?: string[]
+  config?: Record<string, unknown>
 }): Promise<Actor> {
   if (input.avatarFileId && normalizeAvatarEmoji(input.avatarEmoji)) {
-    throw new Error("avatarFileId and avatarEmoji are mutually exclusive");
+    throw new Error("avatarFileId and avatarEmoji are mutually exclusive")
   }
 
-  const docs = sortDocs(normalizeActorDocs(input.docs || []));
-  const specialties = sanitizeSpecialties(input.specialties);
+  const docs = sortDocs(normalizeActorDocs(input.docs || []))
+  const specialties = sanitizeSpecialties(input.specialties)
 
   const result = await transaction(async (client) => {
-    const runner = clientQuery(client);
-    await ensureParentActor(input.workspaceId, input.parentId, undefined, runner);
+    const runner = clientQuery(client)
+    await ensureParentActor(
+      input.workspaceId,
+      input.parentId,
+      undefined,
+      runner
+    )
 
-    const actorResult = await executeSqlOn<{ id: string }>(client, 
+    const actorResult = await executeSqlOn<{ id: string }>(
+      client,
       `INSERT INTO actors (
          workspace_id,
          name,
@@ -1125,11 +1178,12 @@ export async function createActor(input: {
         specialties,
         JSON.stringify(input.config || {}),
         input.createdByWorkspaceMemberId || null,
-      ],
-    );
-    const actorId = actorResult.rows[0]!.id;
+      ]
+    )
+    const actorId = actorResult.rows[0]!.id
 
-    const versionResult = await executeSqlOn<{ id: string }>(client, 
+    const versionResult = await executeSqlOn<{ id: string }>(
+      client,
       `INSERT INTO actor_versions (
          actor_id,
          version,
@@ -1160,12 +1214,13 @@ export async function createActor(input: {
         input.createdByWorkspaceMemberId ? "workspace_member" : "system",
         input.createdByWorkspaceMemberId || null,
         "actor_create",
-      ],
-    );
-    const actorVersionId = versionResult.rows[0]!.id;
+      ]
+    )
+    const actorVersionId = versionResult.rows[0]!.id
 
     for (const doc of docs) {
-      await executeSqlOn(client, 
+      await executeSqlOn(
+        client,
         `INSERT INTO actor_version_docs (
            actor_version_id,
            doc_key,
@@ -1182,56 +1237,56 @@ export async function createActor(input: {
           doc.visibility,
           doc.priority,
           JSON.stringify(doc.content),
-        ],
-      );
+        ]
+      )
     }
 
     return {
       actorId,
-    };
-  });
+    }
+  })
 
-  const actor = await getActor(result.actorId, input.workspaceId);
+  const actor = await getActor(result.actorId, input.workspaceId)
   if (!actor) {
-    throw new Error("Failed to create actor");
+    throw new Error("Failed to create actor")
   }
-  return actor;
+  return actor
 }
 
 export async function updateActor(
   actorId: UUID,
   workspaceId: UUID,
   updates: Partial<{
-    name: string;
-    role: ActorRole;
-    title: string;
-    avatarFileId: UUID | null;
-    avatarEmoji: string | null;
-    canRepresentUser: boolean;
-    docs: ActorDocInput[];
-    parentId: UUID | null;
-    specialties: string[];
-    config: Record<string, unknown>;
+    name: string
+    role: ActorRole
+    title: string
+    avatarFileId: UUID | null
+    avatarEmoji: string | null
+    canRepresentUser: boolean
+    docs: ActorDocInput[]
+    parentId: UUID | null
+    specialties: string[]
+    config: Record<string, unknown>
   }>,
-  source: ActorUpdateSourceInput = { type: "system" },
+  source: ActorUpdateSourceInput = { type: "system" }
 ): Promise<Actor | null> {
-  const currentActorRow = await getActorRow(workspaceId, actorId);
-  if (!currentActorRow) return null;
-  const currentActor = await getActor(actorId, workspaceId);
-  if (!currentActor) return null;
+  const currentActorRow = await getActorRow(workspaceId, actorId)
+  if (!currentActorRow) return null
+  const currentActor = await getActor(actorId, workspaceId)
+  if (!currentActor) return null
 
-  const currentDefinition = currentActor.definition;
+  const currentDefinition = currentActor.definition
   const nextAvatarFileId =
     updates.avatarFileId === undefined
       ? currentDefinition.avatarFileId
-      : updates.avatarFileId || undefined;
+      : updates.avatarFileId || undefined
   const nextAvatarEmoji =
     updates.avatarEmoji === undefined
       ? currentDefinition.avatarEmoji
-      : normalizeAvatarEmoji(updates.avatarEmoji);
+      : normalizeAvatarEmoji(updates.avatarEmoji)
 
   if (nextAvatarFileId && nextAvatarEmoji) {
-    throw new Error("avatarFileId and avatarEmoji are mutually exclusive");
+    throw new Error("avatarFileId and avatarEmoji are mutually exclusive")
   }
 
   const nextDefinition: ActorDefinition = {
@@ -1258,19 +1313,19 @@ export async function updateActor(
       updates.config === undefined
         ? currentDefinition.config
         : updates.config || {},
-  };
+  }
 
   const delta = buildActorVersionDelta(
     currentDefinition,
     nextDefinition,
     currentActor.currentVersion,
     currentActor.currentVersion + 1,
-    source,
-  );
+    source
+  )
 
   const avatarChanged =
     (currentDefinition.avatarFileId || null) !== (nextAvatarFileId || null) ||
-    (currentDefinition.avatarEmoji || null) !== (nextAvatarEmoji || null);
+    (currentDefinition.avatarEmoji || null) !== (nextAvatarEmoji || null)
 
   if (!delta) {
     if (avatarChanged) {
@@ -1281,25 +1336,31 @@ export async function updateActor(
              updated_at = NOW()
          WHERE id = $1
            AND workspace_id = $4`,
-        [actorId, nextAvatarFileId || null, nextAvatarEmoji || null, workspaceId],
-      );
-      return getActor(actorId, workspaceId);
+        [
+          actorId,
+          nextAvatarFileId || null,
+          nextAvatarEmoji || null,
+          workspaceId,
+        ]
+      )
+      return getActor(actorId, workspaceId)
     }
-    return currentActor;
+    return currentActor
   }
 
-  const nextVersion = currentActor.currentVersion + 1;
+  const nextVersion = currentActor.currentVersion + 1
 
   await transaction(async (client) => {
-    const runner = clientQuery(client);
+    const runner = clientQuery(client)
     await ensureParentActor(
       workspaceId,
       nextDefinition.parentId || null,
       actorId,
-      runner,
-    );
+      runner
+    )
 
-    const versionResult = await executeSqlOn<{ id: string }>(client, 
+    const versionResult = await executeSqlOn<{ id: string }>(
+      client,
       `INSERT INTO actor_versions (
          actor_id,
          version,
@@ -1343,12 +1404,13 @@ export async function updateActor(
         source.turnId || null,
         source.conversationId || null,
         source.reason || null,
-      ],
-    );
-    const actorVersionId = versionResult.rows[0]!.id;
+      ]
+    )
+    const actorVersionId = versionResult.rows[0]!.id
 
     for (const doc of nextDefinition.docs) {
-      await executeSqlOn(client, 
+      await executeSqlOn(
+        client,
         `INSERT INTO actor_version_docs (
            actor_version_id,
            doc_key,
@@ -1365,11 +1427,12 @@ export async function updateActor(
           doc.visibility,
           doc.priority,
           JSON.stringify(doc.content),
-        ],
-      );
+        ]
+      )
     }
 
-    await executeSqlOn(client, 
+    await executeSqlOn(
+      client,
       `UPDATE actors
       SET name = $2,
            role = $3,
@@ -1397,12 +1460,12 @@ export async function updateActor(
         JSON.stringify(nextDefinition.config || {}),
         nextVersion,
         workspaceId,
-      ],
-    );
-  });
+      ]
+    )
+  })
 
-  const actor = await getActor(actorId, workspaceId);
-  if (!actor) return null;
+  const actor = await getActor(actorId, workspaceId)
+  if (!actor) return null
 
   try {
     await emitActorVersionChangedEvents({
@@ -1413,49 +1476,54 @@ export async function updateActor(
       actorAvatarUrl: actor.avatarUrl,
       actorAvatarEmoji: actor.definition.avatarEmoji,
       delta,
-    });
+    })
   } catch (error) {
-    console.error("[actor.update] Failed to emit actor_version_changed events:", error);
+    console.error(
+      "[actor.update] Failed to emit actor_version_changed events:",
+      error
+    )
   }
 
-  return actor;
+  return actor
 }
 
 export async function deleteActor(
   actorId: UUID,
-  workspaceId: UUID,
+  workspaceId: UUID
 ): Promise<boolean> {
   const result = await transaction(async (client) => {
-    const existing = await executeSqlOn<{ id: string }>(client, 
+    const existing = await executeSqlOn<{ id: string }>(
+      client,
       `SELECT id
        FROM actors
        WHERE id = $1
          AND workspace_id = $2
        LIMIT 1`,
-      [actorId, workspaceId],
-    );
+      [actorId, workspaceId]
+    )
     if (existing.rows.length === 0) {
-      return { deleted: false };
+      return { deleted: false }
     }
 
-    await executeSqlOn(client, 
+    await executeSqlOn(
+      client,
       `DELETE FROM actors
        WHERE id = $1
          AND workspace_id = $2`,
-      [actorId, workspaceId],
-    );
+      [actorId, workspaceId]
+    )
 
-    return { deleted: true };
-  });
+    return { deleted: true }
+  })
 
-  return result.deleted;
+  return result.deleted
 }
 
 export async function listActorPackages(params: {
-  workspaceId: UUID;
-  search?: string;
+  workspaceId: UUID
+  search?: string
 }): Promise<ActorPackageRecord[]> {
-  const values: unknown[] = [params.workspaceId];
+  const values: unknown[] = [params.workspaceId]
   const searchSql = params.search?.trim()
     ? `AND (
          item.display_name ILIKE $2
@@ -1463,9 +1531,9 @@ export async function listActorPackages(params: {
          OR item.summary ILIKE $2
          OR publisher.display_name ILIKE $2
        )`
-    : "";
+    : ""
   if (searchSql) {
-    values.push(`%${params.search!.trim()}%`);
+    values.push(`%${params.search!.trim()}%`)
   }
 
   const result = await runQuery<ActorPackageRow>(
@@ -1476,15 +1544,15 @@ export async function listActorPackages(params: {
        )
        ${searchSql}
      ORDER BY item.download_count DESC, item.updated_at DESC`,
-    values,
-  );
+    values
+  )
 
-  return result.rows.map(buildActorPackageRecord);
+  return result.rows.map(buildActorPackageRecord)
 }
 
 export async function getActorPackage(
   packageId: UUID,
-  workspaceId: UUID,
+  workspaceId: UUID
 ): Promise<ActorPackageRecord> {
   const result = await runQuery<ActorPackageRow>(
     `${ACTOR_PACKAGE_SELECT}
@@ -1494,37 +1562,44 @@ export async function getActorPackage(
          OR item.workspace_id = $2
        )
      LIMIT 1`,
-    [packageId, workspaceId],
-  );
+    [packageId, workspaceId]
+  )
 
-  const row = result.rows[0];
+  const row = result.rows[0]
   if (!row) {
-    throw new Error("Actor package not found");
+    throw new Error("Actor package not found")
   }
 
-  return buildActorPackageRecord(row);
+  return buildActorPackageRecord(row)
 }
 
 export async function installActorPackage(input: {
-  workspaceId: UUID;
-  packageId: UUID;
-  createdByWorkspaceMemberId?: UUID;
-  name?: string;
-  title?: string;
-  parentId?: UUID | null;
-  syncMode?: ActorPackageSyncMode;
+  workspaceId: UUID
+  packageId: UUID
+  createdByWorkspaceMemberId?: UUID
+  name?: string
+  title?: string
+  parentId?: UUID | null
+  syncMode?: ActorPackageSyncMode
 }): Promise<ActorPackageInstallResult> {
-  const actorPackage = await getActorPackage(input.packageId, input.workspaceId);
-  const packageActor = actorPackage.manifest.actor;
-  const actorName = input.name?.trim() || packageActor.name || actorPackage.package.displayName;
-  const actorTitle = input.title ?? packageActor.title;
-  const syncMode = input.syncMode || "notify";
+  const actorPackage = await getActorPackage(input.packageId, input.workspaceId)
+  const packageActor = actorPackage.manifest.actor
+  const actorName =
+    input.name?.trim() || packageActor.name || actorPackage.package.displayName
+  const actorTitle = input.title ?? packageActor.title
+  const syncMode = input.syncMode || "notify"
 
   const result = await transaction(async (client) => {
-    const runner = clientQuery(client);
-    await ensureParentActor(input.workspaceId, input.parentId || null, undefined, runner);
+    const runner = clientQuery(client)
+    await ensureParentActor(
+      input.workspaceId,
+      input.parentId || null,
+      undefined,
+      runner
+    )
 
-    const actorResult = await executeSqlOn<{ id: string }>(client, 
+    const actorResult = await executeSqlOn<{ id: string }>(
+      client,
       `INSERT INTO actors (
          workspace_id,
          name,
@@ -1553,11 +1628,12 @@ export async function installActorPackage(input: {
         sanitizeSpecialties(packageActor.specialties),
         JSON.stringify(packageActor.config || {}),
         input.createdByWorkspaceMemberId || null,
-      ],
-    );
-    const actorId = actorResult.rows[0]!.id;
+      ]
+    )
+    const actorId = actorResult.rows[0]!.id
 
-    const versionResult = await executeSqlOn<{ id: string }>(client, 
+    const versionResult = await executeSqlOn<{ id: string }>(
+      client,
       `INSERT INTO actor_versions (
          actor_id,
          version,
@@ -1588,12 +1664,13 @@ export async function installActorPackage(input: {
         input.createdByWorkspaceMemberId ? "workspace_member" : "system",
         input.createdByWorkspaceMemberId || null,
         "actor_package_install",
-      ],
-    );
-    const actorVersionId = versionResult.rows[0]!.id;
+      ]
+    )
+    const actorVersionId = versionResult.rows[0]!.id
 
     for (const doc of packageActor.docs) {
-      await executeSqlOn(client, 
+      await executeSqlOn(
+        client,
         `INSERT INTO actor_version_docs (
            actor_version_id,
            doc_key,
@@ -1610,11 +1687,12 @@ export async function installActorPackage(input: {
           doc.visibility,
           doc.priority,
           JSON.stringify(doc.content),
-        ],
-      );
+        ]
+      )
     }
 
-    await executeSqlOn(client, 
+    await executeSqlOn(
+      client,
       `INSERT INTO actor_source_refs (
          actor_id,
          source_catalog_item_id,
@@ -1628,25 +1706,26 @@ export async function installActorPackage(input: {
         actorPackage.package.id,
         actorPackage.package.latestRevisionId || null,
         syncMode,
-      ],
-    );
+      ]
+    )
 
-    await executeSqlOn(client, 
+    await executeSqlOn(
+      client,
       `UPDATE catalog_items
        SET download_count = download_count + 1,
            updated_at = NOW()
        WHERE id = $1`,
-      [actorPackage.package.id],
-    );
+      [actorPackage.package.id]
+    )
 
     return {
       actorId,
-    };
-  });
+    }
+  })
 
-  const actor = await getActor(result.actorId, input.workspaceId);
+  const actor = await getActor(result.actorId, input.workspaceId)
   if (!actor) {
-    throw new Error("Failed to install actor package");
+    throw new Error("Failed to install actor package")
   }
 
   return {
@@ -1654,5 +1733,5 @@ export async function installActorPackage(input: {
     sourcePackage: actorPackage,
     sourceLink: actor.sourceLink!,
     requirementChecks: [],
-  };
+  }
 }

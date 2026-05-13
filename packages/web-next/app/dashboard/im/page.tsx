@@ -137,9 +137,7 @@ function prettyConnectionMode(mode: TransportConnectionMode) {
   return mode === "webhook" ? "Webhook" : "Long connection"
 }
 
-function prettyAccountInboundActorMode(
-  mode: TransportAccountInboundActorMode
-) {
+function prettyAccountInboundActorMode(mode: TransportAccountInboundActorMode) {
   switch (mode) {
     case "follow_owner_chief_actor":
       return "Follow owner chief actor"
@@ -193,7 +191,10 @@ function actorOptionLabel(actor: WorkspaceActorOption) {
 }
 
 function transportAccountOwnerLabel(
-  account: Pick<TransportAccountSummary, "ownerScope" | "ownerWorkspaceMemberId">,
+  account: Pick<
+    TransportAccountSummary,
+    "ownerScope" | "ownerWorkspaceMemberId"
+  >,
   workspaceMemberById: Map<string, WorkspaceDirectoryMember>,
   workspaceName?: string | null
 ) {
@@ -219,7 +220,9 @@ function transportAccountInboundActorLabel(
     const actor = account.inboundActorId
       ? actorById.get(account.inboundActorId)
       : undefined
-    return actor ? actorOptionLabel(actor) : account.inboundActorId || "Unknown actor"
+    return actor
+      ? actorOptionLabel(actor)
+      : account.inboundActorId || "Unknown actor"
   }
   return prettyAccountInboundActorMode(account.inboundActorMode)
 }
@@ -232,7 +235,9 @@ function sessionInboundActorLabel(
     const actor = session.inboundActorId
       ? actorById.get(session.inboundActorId)
       : undefined
-    return actor ? actorOptionLabel(actor) : session.inboundActorId || "Unknown actor"
+    return actor
+      ? actorOptionLabel(actor)
+      : session.inboundActorId || "Unknown actor"
   }
   return prettySessionInboundActorMode(session.inboundActorMode)
 }
@@ -342,7 +347,9 @@ function TransportAccountInboundActorFields({
           <Select
             value={inboundActorMode}
             onValueChange={(value) =>
-              onInboundActorModeChange(value as TransportAccountInboundActorMode)
+              onInboundActorModeChange(
+                value as TransportAccountInboundActorMode
+              )
             }
           >
             <SelectTrigger id={`${idPrefix}-inbound-actor-mode`}>
@@ -425,7 +432,9 @@ function TransportSessionInboundActorFields({
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value="inherit_account">Follow binding setting</SelectItem>
+          <SelectItem value="inherit_account">
+            Follow binding setting
+          </SelectItem>
           <SelectItem value="specified_actor">Specific actor</SelectItem>
           <SelectItem value="none">No default actor</SelectItem>
         </SelectContent>
@@ -517,7 +526,9 @@ export default function ImPage() {
           name: actor.definition.name,
           title: actor.definition.title || actor.definition.role,
         }))
-        .sort((left, right) => actorOptionLabel(left).localeCompare(actorOptionLabel(right))),
+        .sort((left, right) =>
+          actorOptionLabel(left).localeCompare(actorOptionLabel(right))
+        ),
     [actors]
   )
   const actorById = useMemo(
@@ -622,23 +633,22 @@ export default function ImPage() {
         externalUsersRes,
         workspaceMembersRes,
         actorsRes,
-      ] =
-        await Promise.all([
-          api.getTransportAccounts(workspaceId),
-          api.getTransportSessions(workspaceId),
-          api.getTransportExternalUsers(workspaceId),
-          api.getWorkspaceMembers(workspaceId).catch((loadError) => {
-            console.error(
-              "Failed to load workspace members for IM page:",
-              loadError
-            )
-            return null
-          }),
-          api.getActors(workspaceId).catch((loadError) => {
-            console.error("Failed to load actors for IM page:", loadError)
-            return []
-          }),
-        ])
+      ] = await Promise.all([
+        api.getTransportAccounts(workspaceId),
+        api.getTransportSessions(workspaceId),
+        api.getTransportExternalUsers(workspaceId),
+        api.getWorkspaceMembers(workspaceId).catch((loadError) => {
+          console.error(
+            "Failed to load workspace members for IM page:",
+            loadError
+          )
+          return null
+        }),
+        api.getActors(workspaceId).catch((loadError) => {
+          console.error("Failed to load actors for IM page:", loadError)
+          return []
+        }),
+      ])
 
       const nextAccounts = accountsRes?.accounts || []
       const nextSessions = sessionsRes?.sessions || []
@@ -954,8 +964,7 @@ export default function ImPage() {
           ...current,
           [account.id]: {
             ownerScope: updatedAccount.ownerScope,
-            ownerWorkspaceMemberId:
-              updatedAccount.ownerWorkspaceMemberId || "",
+            ownerWorkspaceMemberId: updatedAccount.ownerWorkspaceMemberId || "",
             inboundActorMode: updatedAccount.inboundActorMode,
             inboundActorId: updatedAccount.inboundActorId || "",
           },
@@ -1235,9 +1244,7 @@ export default function ImPage() {
                   ...current,
                   ownerScope: value,
                   ownerWorkspaceMemberId:
-                    value === "workspace"
-                      ? ""
-                      : current.ownerWorkspaceMemberId,
+                    value === "workspace" ? "" : current.ownerWorkspaceMemberId,
                   inboundActorMode:
                     value === "workspace" &&
                     current.inboundActorMode === "follow_owner_chief_actor"
@@ -1338,9 +1345,7 @@ export default function ImPage() {
                   ...current,
                   ownerScope: value,
                   ownerWorkspaceMemberId:
-                    value === "workspace"
-                      ? ""
-                      : current.ownerWorkspaceMemberId,
+                    value === "workspace" ? "" : current.ownerWorkspaceMemberId,
                   inboundActorMode:
                     value === "workspace" &&
                     current.inboundActorMode === "follow_owner_chief_actor"
@@ -1608,8 +1613,7 @@ export default function ImPage() {
                               }))
                             }
                             disabled={
-                              accountBusy ||
-                              sortedWorkspaceMembers.length === 0
+                              accountBusy || sortedWorkspaceMembers.length === 0
                             }
                           >
                             <SelectTrigger>
@@ -1660,14 +1664,18 @@ export default function ImPage() {
                       <div className="flex items-center justify-between gap-3">
                         <div className="space-y-1 text-xs text-muted-foreground">
                           <div>Effective owner: {draftOwnerLabel}</div>
-                          <div>Effective inbound actor: {draftInboundActorLabel}</div>
+                          <div>
+                            Effective inbound actor: {draftInboundActorLabel}
+                          </div>
                         </div>
                         <div className="flex items-center gap-2">
                           {account.status === "active" ? (
                             <Button
                               size="sm"
                               variant="destructive"
-                              onClick={() => void handleDisconnectAccount(account)}
+                              onClick={() =>
+                                void handleDisconnectAccount(account)
+                              }
                               disabled={accountBusy}
                             >
                               {disconnectingAccountId === account.id
@@ -1678,7 +1686,9 @@ export default function ImPage() {
                           <Button
                             size="sm"
                             variant="outline"
-                            onClick={() => void handleSaveAccountSettings(account)}
+                            onClick={() =>
+                              void handleSaveAccountSettings(account)
+                            }
                             disabled={accountBusy}
                           >
                             {savingAccountId === account.id
@@ -1756,7 +1766,8 @@ export default function ImPage() {
                       Last outbound: {formatDateTime(session.lastOutboundAt)}
                     </div>
                     <div className="mt-1 text-xs text-muted-foreground">
-                      Inbound actor: {sessionInboundActorLabel(session, actorById)}
+                      Inbound actor:{" "}
+                      {sessionInboundActorLabel(session, actorById)}
                     </div>
                     <div className="mt-3 text-sm">
                       <div className="font-medium text-foreground">

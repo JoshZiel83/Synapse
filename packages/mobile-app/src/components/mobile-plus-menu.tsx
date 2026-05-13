@@ -1,34 +1,28 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useState } from "react";
-import {
-  Modal,
-  Pressable,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Feather from "@expo/vector-icons/Feather"
+import { useState } from "react"
+import { Modal, Pressable, StyleSheet, Text, View } from "react-native"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
 
-import { theme } from "@/theme/tokens";
+import { theme } from "@/theme/tokens"
 
 type MobilePlusMenuAction = {
-  key: string;
-  label: string;
-  icon: keyof typeof Feather.glyphMap;
-  onPress: () => void;
-};
+  key: string
+  label: string
+  icon: keyof typeof Feather.glyphMap
+  onPress: () => void
+}
 
 export function MobilePlusMenu({
   onStartGroup,
   onAddFriend,
   onScan,
 }: {
-  onStartGroup: () => void;
-  onAddFriend: () => void;
-  onScan: () => void;
+  onStartGroup: () => void
+  onAddFriend: () => void
+  onScan: () => void
 }) {
-  const insets = useSafeAreaInsets();
-  const [open, setOpen] = useState(false);
+  const insets = useSafeAreaInsets()
+  const [open, setOpen] = useState(false)
 
   const actions: MobilePlusMenuAction[] = [
     {
@@ -49,11 +43,11 @@ export function MobilePlusMenu({
       icon: "camera",
       onPress: onScan,
     },
-  ];
+  ]
 
   function handleSelect(action: MobilePlusMenuAction) {
-    setOpen(false);
-    action.onPress();
+    setOpen(false)
+    action.onPress()
   }
 
   return (
@@ -110,7 +104,7 @@ export function MobilePlusMenu({
         </View>
       </Modal>
     </>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -155,4 +149,4 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: theme.colors.text,
   },
-});
+})

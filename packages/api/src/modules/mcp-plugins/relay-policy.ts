@@ -2,70 +2,72 @@ import {
   isValidConversationTypeMask,
   normalizeConversationTypeMask,
   resolveNarrowedConversationTypeMask,
-} from "@synapse/shared";
+} from "@synapse/shared"
 
 type RelayConversationPolicyErrorOptions = {
-  errorCode: string;
-  errorMessage: string;
-};
+  errorCode: string
+  errorMessage: string
+}
 
-function buildRelayConversationPolicyError(options: RelayConversationPolicyErrorOptions) {
-  const error = new Error(options.errorMessage) as Error & { code: string };
-  error.code = options.errorCode;
-  return error;
+function buildRelayConversationPolicyError(
+  options: RelayConversationPolicyErrorOptions
+) {
+  const error = new Error(options.errorMessage) as Error & { code: string }
+  error.code = options.errorCode
+  return error
 }
 
 export function resolveRelayDeviceConversationTypeMask(
   workspaceConversationTypeMask: number,
-  deviceConversationTypeMaskOverride?: number | null,
+  deviceConversationTypeMaskOverride?: number | null
 ) {
   return resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    deviceConversationTypeMaskOverride,
-  );
+    deviceConversationTypeMaskOverride
+  )
 }
 
 export function resolveRelayCapabilityConversationTypeMask(
   deviceConversationTypeMask: number,
-  capabilityConversationTypeMaskOverride?: number | null,
+  capabilityConversationTypeMaskOverride?: number | null
 ) {
   return resolveNarrowedConversationTypeMask(
     deviceConversationTypeMask,
-    capabilityConversationTypeMaskOverride,
-  );
+    capabilityConversationTypeMaskOverride
+  )
 }
 
 export function resolveRelayGrantConversationTypeMask(
   capabilityConversationTypeMask: number,
-  grantConversationTypeMaskOverride?: number | null,
+  grantConversationTypeMaskOverride?: number | null
 ) {
   return resolveNarrowedConversationTypeMask(
     capabilityConversationTypeMask,
-    grantConversationTypeMaskOverride,
-  );
+    grantConversationTypeMaskOverride
+  )
 }
 
 export function assertRelayConversationTypeMaskWithinParent(
   parentConversationTypeMask: number,
   conversationTypeMaskOverride: number | null | undefined,
-  options: RelayConversationPolicyErrorOptions,
+  options: RelayConversationPolicyErrorOptions
 ) {
   const normalizedParentMask = normalizeConversationTypeMask(
-    parentConversationTypeMask,
-  );
+    parentConversationTypeMask
+  )
   if (
     conversationTypeMaskOverride === null ||
     conversationTypeMaskOverride === undefined
   ) {
-    return normalizedParentMask;
+    return normalizedParentMask
   }
 
   const effectiveConversationTypeMask = resolveNarrowedConversationTypeMask(
     normalizedParentMask,
-    conversationTypeMaskOverride,
-  );
+    conversationTypeMaskOverride
+  )
   if (!isValidConversationTypeMask(effectiveConversationTypeMask)) {
-    throw buildRelayConversationPolicyError(options);
+    throw buildRelayConversationPolicyError(options)
   }
-  return effectiveConversationTypeMask;
+  return effectiveConversationTypeMask
 }

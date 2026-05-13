@@ -100,7 +100,9 @@ export function summarizeMemory(memory: Memory) {
     return text.length > 160 ? `${text.slice(0, 157)}...` : text
   }
 
-  const fileBlock = memory.contentBlocks.find((block) => block.type === "file_ref")
+  const fileBlock = memory.contentBlocks.find(
+    (block) => block.type === "file_ref"
+  )
   if (fileBlock?.originalName) {
     return fileBlock.originalName
   }
@@ -354,7 +356,8 @@ export function buildMemoryFolders(params: {
       id: `folder:user_private:${currentWorkspaceMemberId}`,
       parentId: "root",
       label: currentWorkspaceMemberLabel,
-      description: "PM personal memory for this workspace, reusable across direct actor chats.",
+      description:
+        "PM personal memory for this workspace, reusable across direct actor chats.",
       icon: UserRound,
       directMemoryIds: selectMemoryIds(
         memories,
@@ -403,7 +406,10 @@ export function buildMemoryFolders(params: {
   }
 
   for (const group of sortByName(
-    Array.from(groupMap.values()).map((item) => ({ ...item, label: item.title }))
+    Array.from(groupMap.values()).map((item) => ({
+      ...item,
+      label: item.title,
+    }))
   )) {
     const conversationFolderId = `folder:workspace:${workspaceId}:conversation:${group.id}:conversation_shared`
     addUniqueFolder(folders, {
@@ -501,7 +507,8 @@ export function buildMemoryFolders(params: {
         id: folderId,
         parentId: "root",
         label: memory.workspaceMemberName || "Unknown member",
-        description: "PM personal memory for this workspace, reusable across direct actor chats.",
+        description:
+          "PM personal memory for this workspace, reusable across direct actor chats.",
         icon: UserRound,
         directMemoryIds: selectMemoryIds(
           memories,

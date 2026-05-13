@@ -1,30 +1,44 @@
-'use client';
+"use client"
 
-import { useEffect, useMemo, useState } from 'react';
-import { useRouter } from 'next/navigation';
-import { Loader2, Plus, Trash2 } from 'lucide-react';
-import { AppCard, AppCardContent, AppCardHeader, AppCardTitle } from '@/components/app-card';
-import { Button } from '@/components/ui/button';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import { Switch } from '@/components/ui/switch';
-import { useWorkspace } from '@/app/dashboard/workspace-provider';
-import { api } from '@/lib/api';
-import { cn } from '@/lib/utils';
-import InstallDialog from './install-dialog';
-import ResourceAccessStep from './resource-access-step';
-import PluginAdvancedStep from './plugin-advanced-step';
-import { getPluginInstallationDetails, getPluginInstallationTitle } from './plugin-ui';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
+import { Loader2, Plus, Trash2 } from "lucide-react"
+import {
+  AppCard,
+  AppCardContent,
+  AppCardHeader,
+  AppCardTitle,
+} from "@/components/app-card"
+import { Button } from "@/components/ui/button"
+import { ScrollArea } from "@/components/ui/scroll-area"
+import { Switch } from "@/components/ui/switch"
+import { useWorkspace } from "@/app/dashboard/workspace-provider"
+import { api } from "@/lib/api"
+import { cn } from "@/lib/utils"
+import InstallDialog from "./install-dialog"
+import ResourceAccessStep from "./resource-access-step"
+import PluginAdvancedStep from "./plugin-advanced-step"
+import {
+  getPluginInstallationDetails,
+  getPluginInstallationTitle,
+} from "./plugin-ui"
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 
 interface Props {
-  plugin: any;
-  installations: any[];
-  selectedInstallationId?: string | null;
-  initialInstallation?: any | null;
-  onSelectInstallation: (installationId: string) => void;
-  onCreateInstallation: () => void;
-  onInstallationsChanged?: (installation: any) => void | Promise<void>;
+  plugin: any
+  installations: any[]
+  selectedInstallationId?: string | null
+  initialInstallation?: any | null
+  onSelectInstallation: (installationId: string) => void
+  onCreateInstallation: () => void
+  onInstallationsChanged?: (installation: any) => void | Promise<void>
 }
 
 export default function PluginInstallationWorkbench({
@@ -36,124 +50,147 @@ export default function PluginInstallationWorkbench({
   onCreateInstallation,
   onInstallationsChanged,
 }: Props) {
-  const router = useRouter();
-  const { workspaceId } = useWorkspace();
+  const router = useRouter()
+  const { workspaceId } = useWorkspace()
   const activeInstallationId = useMemo(() => {
-    if (!installations.length) return null;
-    if (selectedInstallationId && installations.some((installation) => installation.id === selectedInstallationId)) {
-      return selectedInstallationId;
+    if (!installations.length) return null
+    if (
+      selectedInstallationId &&
+      installations.some(
+        (installation) => installation.id === selectedInstallationId
+      )
+    ) {
+      return selectedInstallationId
     }
-    return installations[0]?.id || null;
-  }, [installations, selectedInstallationId]);
+    return installations[0]?.id || null
+  }, [installations, selectedInstallationId])
 
   const [selectedInstallation, setSelectedInstallation] = useState<any | null>(
-    initialInstallation?.id === activeInstallationId ? initialInstallation : null,
-  );
-  const [loadingInstallation, setLoadingInstallation] = useState(false);
-  const [editorVersion, setEditorVersion] = useState(0);
-  const [savingSettings, setSavingSettings] = useState(false);
-  const [removingInstallation, setRemovingInstallation] = useState(false);
+    initialInstallation?.id === activeInstallationId
+      ? initialInstallation
+      : null
+  )
+  const [loadingInstallation, setLoadingInstallation] = useState(false)
+  const [editorVersion, setEditorVersion] = useState(0)
+  const [savingSettings, setSavingSettings] = useState(false)
+  const [removingInstallation, setRemovingInstallation] = useState(false)
 
   useEffect(() => {
     if (initialInstallation?.id === activeInstallationId) {
-      setSelectedInstallation(initialInstallation);
+      setSelectedInstallation(initialInstallation)
     }
-  }, [activeInstallationId, initialInstallation]);
+  }, [activeInstallationId, initialInstallation])
 
   useEffect(() => {
     if (!workspaceId || !activeInstallationId) {
-      setSelectedInstallation(null);
-      return;
+      setSelectedInstallation(null)
+      return
     }
 
     if (initialInstallation?.id === activeInstallationId) {
-      return;
+      return
     }
 
-    let cancelled = false;
+    let cancelled = false
 
     const load = async () => {
       try {
-        setLoadingInstallation(true);
-        const data = await api.getInstallation(workspaceId, activeInstallationId);
+        setLoadingInstallation(true)
+        const data = await api.getInstallation(
+          workspaceId,
+          activeInstallationId
+        )
         if (!cancelled) {
-          setSelectedInstallation(data.installation);
+          setSelectedInstallation(data.installation)
         }
       } finally {
         if (!cancelled) {
-          setLoadingInstallation(false);
+          setLoadingInstallation(false)
         }
       }
-    };
+    }
 
-    void load();
+    void load()
     return () => {
-      cancelled = true;
-    };
-  }, [activeInstallationId, initialInstallation?.id, workspaceId]);
+      cancelled = true
+    }
+  }, [activeInstallationId, initialInstallation?.id, workspaceId])
 
   const resetSelectedInstallation = async () => {
-    if (!workspaceId || !activeInstallationId) return;
-    const data = await api.getInstallation(workspaceId, activeInstallationId);
-    setSelectedInstallation(data.installation);
-    setEditorVersion((value) => value + 1);
-  };
+    if (!workspaceId || !activeInstallationId) return
+    const data = await api.getInstallation(workspaceId, activeInstallationId)
+    setSelectedInstallation(data.installation)
+    setEditorVersion((value) => value + 1)
+  }
 
   const handleToggleInstallation = async (enabled: boolean) => {
-    if (!workspaceId || !selectedInstallation || savingSettings) return;
+    if (!workspaceId || !selectedInstallation || savingSettings) return
     try {
-      setSavingSettings(true);
-      const installation = await api.updateInstallation(workspaceId, selectedInstallation.id, {
-        isEnabled: enabled,
-      });
-      setSelectedInstallation(installation);
-      await onInstallationsChanged?.(installation);
+      setSavingSettings(true)
+      const installation = await api.updateInstallation(
+        workspaceId,
+        selectedInstallation.id,
+        {
+          isEnabled: enabled,
+        }
+      )
+      setSelectedInstallation(installation)
+      await onInstallationsChanged?.(installation)
     } finally {
-      setSavingSettings(false);
+      setSavingSettings(false)
     }
-  };
+  }
 
   const handleUninstallInstallation = async () => {
-    if (!workspaceId || !selectedInstallation || removingInstallation) return;
-    if (!confirm('Are you sure you want to uninstall this configuration?')) return;
+    if (!workspaceId || !selectedInstallation || removingInstallation) return
+    if (!confirm("Are you sure you want to uninstall this configuration?"))
+      return
 
     try {
-      setRemovingInstallation(true);
-      const removedId = selectedInstallation.id as string;
-      await api.uninstallPlugin(workspaceId, removedId);
+      setRemovingInstallation(true)
+      const removedId = selectedInstallation.id as string
+      await api.uninstallPlugin(workspaceId, removedId)
       const remainingInstallations = await api.getInstallations(
         workspaceId,
-        new URLSearchParams({ pluginId: plugin.id }).toString(),
-      );
+        new URLSearchParams({ pluginId: plugin.id }).toString()
+      )
 
       if (remainingInstallations.length > 0) {
-        onSelectInstallation(remainingInstallations[0].id);
-        return;
+        onSelectInstallation(remainingInstallations[0].id)
+        return
       }
 
-      router.push(`/dashboard/plugins/${plugin.id}`);
+      router.push(`/dashboard/plugins/${plugin.id}`)
     } finally {
-      setRemovingInstallation(false);
+      setRemovingInstallation(false)
     }
-  };
+  }
 
   return (
-    <AppCard variant="panel" className="flex min-h-0 flex-1 flex-col overflow-hidden">
+    <AppCard
+      variant="panel"
+      className="flex min-h-0 flex-1 flex-col overflow-hidden"
+    >
       <AppCardHeader className="flex flex-row items-center justify-between gap-3 space-y-0 px-6 py-6">
         <div className="space-y-1">
           <AppCardTitle>Configurations</AppCardTitle>
           <div className="text-sm text-muted-foreground">
-            Each installation is one configuration. Select one on the left, then manage setup, access, and advanced settings on the right.
+            Each installation is one configuration. Select one on the left, then
+            manage setup, access, and advanced settings on the right.
           </div>
         </div>
         <div className="flex items-center gap-3">
           {selectedInstallation ? (
             <>
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <span>{selectedInstallation.is_enabled ? 'Enabled' : 'Disabled'}</span>
+                <span>
+                  {selectedInstallation.is_enabled ? "Enabled" : "Disabled"}
+                </span>
                 <Switch
                   checked={Boolean(selectedInstallation.is_enabled)}
-                  onCheckedChange={(checked) => void handleToggleInstallation(checked)}
+                  onCheckedChange={(checked) =>
+                    void handleToggleInstallation(checked)
+                  }
                   disabled={savingSettings || removingInstallation}
                 />
               </div>
@@ -176,23 +213,23 @@ export default function PluginInstallationWorkbench({
         </div>
       </AppCardHeader>
 
-      <AppCardContent className="min-h-0 flex-1 px-6 pb-6 pt-0">
-        <div className="grid min-h-0 gap-4 grid-rows-[16rem_minmax(0,1fr)] xl:grid-cols-[320px_minmax(0,1fr)] xl:grid-rows-none">
+      <AppCardContent className="min-h-0 flex-1 px-6 pt-0 pb-6">
+        <div className="grid min-h-0 grid-rows-[16rem_minmax(0,1fr)] gap-4 xl:grid-cols-[320px_minmax(0,1fr)] xl:grid-rows-none">
           <Card className="min-h-0 rounded-[28px] py-0">
             <ScrollArea className="h-full">
               <div className="flex flex-col gap-3 p-4">
                 {installations.map((installation) => {
-                  const selected = installation.id === activeInstallationId;
+                  const selected = installation.id === activeInstallationId
                   return (
                     <button
                       key={installation.id}
                       type="button"
                       onClick={() => onSelectInstallation(installation.id)}
                       className={cn(
-                        'flex flex-col gap-3 rounded-[22px] border px-4 py-4 text-left transition-all',
+                        "flex flex-col gap-3 rounded-[22px] border px-4 py-4 text-left transition-all",
                         selected
-                          ? 'border-foreground/15 bg-accent/70 text-accent-foreground shadow-sm'
-                          : 'border-transparent bg-muted/30 hover:border-border hover:bg-muted/60',
+                          ? "border-foreground/15 bg-accent/70 text-accent-foreground shadow-sm"
+                          : "border-transparent bg-muted/30 hover:border-border hover:bg-muted/60"
                       )}
                     >
                       <div className="space-y-2">
@@ -202,17 +239,21 @@ export default function PluginInstallationWorkbench({
                           </div>
                           <div
                             className={cn(
-                              'inline-flex items-center gap-2 whitespace-nowrap text-xs',
-                              installation.is_enabled ? 'text-emerald-600 dark:text-emerald-300' : 'text-muted-foreground',
+                              "inline-flex items-center gap-2 text-xs whitespace-nowrap",
+                              installation.is_enabled
+                                ? "text-emerald-600 dark:text-emerald-300"
+                                : "text-muted-foreground"
                             )}
                           >
                             <span
                               className={cn(
-                                'size-2 rounded-full',
-                                installation.is_enabled ? 'bg-emerald-500' : 'bg-muted-foreground/35',
+                                "size-2 rounded-full",
+                                installation.is_enabled
+                                  ? "bg-emerald-500"
+                                  : "bg-muted-foreground/35"
                               )}
                             />
-                            {installation.is_enabled ? 'Enabled' : 'Disabled'}
+                            {installation.is_enabled ? "Enabled" : "Disabled"}
                           </div>
                         </div>
                         <p className="text-sm text-muted-foreground">
@@ -225,7 +266,7 @@ export default function PluginInstallationWorkbench({
                         </p>
                       </div>
                     </button>
-                  );
+                  )
                 })}
 
                 <button
@@ -239,7 +280,7 @@ export default function PluginInstallationWorkbench({
             </ScrollArea>
           </Card>
 
-          <div className="min-w-0 min-h-0">
+          <div className="min-h-0 min-w-0">
             {!activeInstallationId ? (
               <Card className="rounded-[28px]">
                 <CardContent className="flex min-h-[18rem] items-center justify-center text-sm text-muted-foreground">
@@ -254,7 +295,10 @@ export default function PluginInstallationWorkbench({
                 </CardContent>
               </Card>
             ) : (
-              <Tabs defaultValue="setup" className="flex h-full min-h-0 flex-col gap-4">
+              <Tabs
+                defaultValue="setup"
+                className="flex h-full min-h-0 flex-col gap-4"
+              >
                 <TabsList>
                   <TabsTrigger value="setup">Setup</TabsTrigger>
                   <TabsTrigger value="access">Access</TabsTrigger>
@@ -266,7 +310,8 @@ export default function PluginInstallationWorkbench({
                     <CardHeader>
                       <CardTitle>Setup</CardTitle>
                       <CardDescription>
-                        Configure this plugin installation. Owner, runtime lifecycle, and sharing are handled in their own tabs.
+                        Configure this plugin installation. Owner, runtime
+                        lifecycle, and sharing are handled in their own tabs.
                       </CardDescription>
                     </CardHeader>
                     <CardContent className="min-h-0 flex-1 pb-6">
@@ -282,16 +327,16 @@ export default function PluginInstallationWorkbench({
                           includeAccessStep={false}
                           closeLabel="Reset"
                           onClose={() => {
-                            void resetSelectedInstallation();
+                            void resetSelectedInstallation()
                           }}
                           onInstallationSaved={async (installation) => {
-                            setSelectedInstallation(installation);
-                            await onInstallationsChanged?.(installation);
+                            setSelectedInstallation(installation)
+                            await onInstallationsChanged?.(installation)
                           }}
                           onSuccess={async (installation) => {
-                            setSelectedInstallation(installation);
-                            setEditorVersion((value) => value + 1);
-                            await onInstallationsChanged?.(installation);
+                            setSelectedInstallation(installation)
+                            setEditorVersion((value) => value + 1)
+                            await onInstallationsChanged?.(installation)
                           }}
                         />
                       </div>
@@ -307,9 +352,9 @@ export default function PluginInstallationWorkbench({
                   <PluginAdvancedStep
                     installation={selectedInstallation}
                     onSaved={async (installation) => {
-                      setSelectedInstallation(installation);
-                      setEditorVersion((value) => value + 1);
-                      await onInstallationsChanged?.(installation);
+                      setSelectedInstallation(installation)
+                      setEditorVersion((value) => value + 1)
+                      await onInstallationsChanged?.(installation)
                     }}
                   />
                 </TabsContent>
@@ -319,5 +364,5 @@ export default function PluginInstallationWorkbench({
         </div>
       </AppCardContent>
     </AppCard>
-  );
+  )
 }

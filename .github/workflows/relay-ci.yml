@@ -3,25 +3,25 @@ name: Relay CI
 on:
   push:
     branches:
-      - '**'
+      - "**"
     paths:
-      - 'relay/**'
+      - "relay/**"
   pull_request:
     paths:
-      - 'relay/**'
+      - "relay/**"
 
 permissions:
   contents: write
 
 env:
-  BUNDLED_NODE_VERSION: '24.14.1'
-  CHROME_DEVTOOLS_MCP_VERSION: '0.20.0'
-  BUNDLED_PYTHON_VERSION: '3.14.1'
-  BUNDLED_PYTHON_STANDALONE_RELEASE: '20251202'
-  BUNDLED_WINDOWS_GIT_VERSION: '2.49.0.windows.1'
-  BUNDLED_FFMPEG_RELEASE_TAG: 'n7.1-2'
-  COMMANDLINE_PACKAGE_PROFILE: 'default-data-v5'
-  PIP_INDEX_URL: 'https://pypi.org/simple'
+  BUNDLED_NODE_VERSION: "24.14.1"
+  CHROME_DEVTOOLS_MCP_VERSION: "0.20.0"
+  BUNDLED_PYTHON_VERSION: "3.14.1"
+  BUNDLED_PYTHON_STANDALONE_RELEASE: "20251202"
+  BUNDLED_WINDOWS_GIT_VERSION: "2.49.0.windows.1"
+  BUNDLED_FFMPEG_RELEASE_TAG: "n7.1-2"
+  COMMANDLINE_PACKAGE_PROFILE: "default-data-v5"
+  PIP_INDEX_URL: "https://pypi.org/simple"
   ENABLE_COS_UPLOAD: ${{ vars.ENABLE_COS_UPLOAD || '' }}
 
 jobs:
@@ -197,7 +197,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: "1.22"
 
       - name: Determine version
         id: version
@@ -223,7 +223,7 @@ jobs:
       - name: Build
         working-directory: relay
         env:
-          CGO_ENABLED: '0'
+          CGO_ENABLED: "0"
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
         run: |
@@ -343,7 +343,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: "1.22"
 
       - uses: actions/setup-node@v4
         with:

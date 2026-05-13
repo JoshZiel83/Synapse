@@ -44,10 +44,13 @@ export function buildContentBlocksPreviewText(blocks: CanonicalContentBlock[]) {
 }
 
 export function buildReplyPreviewText(
-  reply: Pick<
-    ConversationReplyRef,
-    "previewText" | "previewBlocks" | "subtype" | "isUnavailable"
-  > | null | undefined
+  reply:
+    | Pick<
+        ConversationReplyRef,
+        "previewText" | "previewBlocks" | "subtype" | "isUnavailable"
+      >
+    | null
+    | undefined
 ) {
   if (!reply) {
     return ""

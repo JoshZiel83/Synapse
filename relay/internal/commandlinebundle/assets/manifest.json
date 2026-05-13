@@ -98,11 +98,7 @@
       "pythonPaths": [],
       "probe": {
         "type": "http_any",
-        "successStatuses": [
-          200,
-          401,
-          403
-        ],
+        "successStatuses": [200, 401, 403],
         "urls": [
           "http://127.0.0.1:3000/control/status",
           "http://localhost:3000/control/status"
@@ -121,9 +117,7 @@
       "pythonPaths": [],
       "probe": {
         "type": "executable_any",
-        "candidates": [
-          "sox"
-        ]
+        "candidates": ["sox"]
       }
     },
     {
@@ -138,9 +132,7 @@
       "pythonPaths": [],
       "probe": {
         "type": "env_any",
-        "envVars": [
-          "ANYGEN_API_KEY"
-        ]
+        "envVars": ["ANYGEN_API_KEY"]
       }
     },
     {
@@ -155,12 +147,8 @@
       "pythonPaths": [],
       "probe": {
         "type": "executable_any",
-        "candidates": [
-          "blender"
-        ],
-        "paths": [
-          "/Applications/Blender.app/Contents/MacOS/Blender"
-        ]
+        "candidates": ["blender"],
+        "paths": ["/Applications/Blender.app/Contents/MacOS/Blender"]
       }
     },
     {
@@ -175,13 +163,8 @@
       "pythonPaths": [],
       "probe": {
         "type": "executable_any",
-        "candidates": [
-          "CloudCompare",
-          "cloudcompare"
-        ],
-        "paths": [
-          "/Applications/CloudCompare.app/Contents/MacOS/CloudCompare"
-        ]
+        "candidates": ["CloudCompare", "cloudcompare"],
+        "paths": ["/Applications/CloudCompare.app/Contents/MacOS/CloudCompare"]
       }
     },
     {
@@ -214,14 +197,8 @@
       "pythonPaths": [],
       "probe": {
         "type": "executable_any",
-        "candidates": [
-          "draw.io",
-          "drawio",
-          "draw.io.exe"
-        ],
-        "paths": [
-          "/Applications/draw.io.app/Contents/MacOS/draw.io"
-        ]
+        "candidates": ["draw.io", "drawio", "draw.io.exe"],
+        "paths": ["/Applications/draw.io.app/Contents/MacOS/draw.io"]
       }
     },
     {
@@ -237,12 +214,7 @@
       "probe": {
         "type": "executable_any",
         "envPathVar": "FREECAD_PATH",
-        "candidates": [
-          "freecadcmd",
-          "FreeCADCmd",
-          "freecad",
-          "FreeCAD"
-        ],
+        "candidates": ["freecadcmd", "FreeCADCmd", "freecad", "FreeCAD"],
         "paths": [
           "/Applications/FreeCAD.app/Contents/MacOS/FreeCADCmd",
           "/Applications/FreeCAD.app/Contents/MacOS/FreeCAD",
@@ -270,14 +242,8 @@
       "pythonPaths": [],
       "probe": {
         "type": "executable_any",
-        "candidates": [
-          "gimp",
-          "gimp-2.10",
-          "gimp-2.99"
-        ],
-        "paths": [
-          "/Applications/GIMP.app/Contents/MacOS/gimp"
-        ]
+        "candidates": ["gimp", "gimp-2.10", "gimp-2.99"],
+        "paths": ["/Applications/GIMP.app/Contents/MacOS/gimp"]
       }
     },
     {
@@ -292,12 +258,8 @@
       "pythonPaths": [],
       "probe": {
         "type": "executable_any",
-        "candidates": [
-          "inkscape"
-        ],
-        "paths": [
-          "/Applications/Inkscape.app/Contents/MacOS/inkscape"
-        ]
+        "candidates": ["inkscape"],
+        "paths": ["/Applications/Inkscape.app/Contents/MacOS/inkscape"]
       }
     },
     {
@@ -326,9 +288,7 @@
       "pythonPaths": [],
       "probe": {
         "type": "executable_any",
-        "candidates": [
-          "melt"
-        ]
+        "candidates": ["melt"]
       }
     },
     {
@@ -344,12 +304,8 @@
       "probe": {
         "type": "executable_any",
         "envPathVar": "KRITA_PATH",
-        "candidates": [
-          "krita"
-        ],
-        "paths": [
-          "/Applications/krita.app/Contents/MacOS/krita"
-        ]
+        "candidates": ["krita"],
+        "paths": ["/Applications/krita.app/Contents/MacOS/krita"]
       }
     },
     {
@@ -364,10 +320,7 @@
       "pythonPaths": [],
       "probe": {
         "type": "executable_any",
-        "candidates": [
-          "libreoffice",
-          "soffice"
-        ],
+        "candidates": ["libreoffice", "soffice"],
         "paths": [
           "/Applications/LibreOffice.app/Contents/MacOS/soffice",
           "C:/Program Files/LibreOffice/program/soffice.exe",
@@ -421,10 +374,7 @@
       "probe": {
         "type": "executable_any",
         "envPathVar": "MUSESCORE_PATH",
-        "candidates": [
-          "mscore",
-          "musescore"
-        ],
+        "candidates": ["mscore", "musescore"],
         "paths": [
           "/Applications/MuseScore 4.app/Contents/MacOS/mscore",
           "~/Applications/MuseScore 4.app/Contents/MacOS/mscore"
@@ -443,9 +393,7 @@
       "pythonPaths": [],
       "probe": {
         "type": "executable_any",
-        "candidates": [
-          "notebooklm"
-        ]
+        "candidates": ["notebooklm"]
       }
     },
     {
@@ -460,9 +408,7 @@
       "pythonPaths": [],
       "probe": {
         "type": "env_any",
-        "envVars": [
-          "NOVITA_API_KEY"
-        ]
+        "envVars": ["NOVITA_API_KEY"]
       }
     },
     {
@@ -514,9 +460,7 @@
       ],
       "probe": {
         "type": "python_import_any",
-        "candidates": [
-          "renderdoc"
-        ],
+        "candidates": ["renderdoc"],
         "paths": [
           "C:/Program Files/RenderDoc",
           "C:/Program Files (x86)/RenderDoc",
@@ -537,9 +481,7 @@
       "pythonPaths": [],
       "probe": {
         "type": "env_any",
-        "envVars": [
-          "RMS_API_TOKEN"
-        ]
+        "envVars": ["RMS_API_TOKEN"]
       }
     },
     {
@@ -554,9 +496,7 @@
       "pythonPaths": [],
       "probe": {
         "type": "executable_any",
-        "candidates": [
-          "melt"
-        ]
+        "candidates": ["melt"]
       }
     },
     {
@@ -604,10 +544,7 @@
       "probe": {
         "type": "executable_any",
         "envPathVar": "ZOTERO_EXECUTABLE",
-        "candidates": [
-          "zotero",
-          "zotero.exe"
-        ],
+        "candidates": ["zotero", "zotero.exe"],
         "paths": [
           "C:/Program Files/Zotero/zotero.exe",
           "C:/Program Files (x86)/Zotero/zotero.exe",

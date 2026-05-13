@@ -1,32 +1,32 @@
-"use dom";
+"use dom"
 
-import { useEffect, useMemo, useRef } from "react";
-import mermaid from "mermaid";
-import twemoji from "twemoji";
+import { useEffect, useMemo, useRef } from "react"
+import mermaid from "mermaid"
+import twemoji from "twemoji"
 
 import {
   decodeMermaidChart,
   escapeHtml,
   renderMarkdownHtml,
-} from "@/lib/chat-markdown-html";
+} from "@/lib/chat-markdown-html"
 
 export default function ChatMarkdownDom({
   markdown,
   mine,
 }: {
-  markdown: string;
-  mine: boolean;
-  dom?: import("expo/dom").DOMProps;
+  markdown: string
+  mine: boolean
+  dom?: import("expo/dom").DOMProps
 }) {
-  const rootRef = useRef<HTMLDivElement | null>(null);
-  const html = useMemo(() => renderMarkdownHtml(markdown), [markdown]);
+  const rootRef = useRef<HTMLDivElement | null>(null)
+  const html = useMemo(() => renderMarkdownHtml(markdown), [markdown])
 
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false
 
     async function enhanceMarkdown() {
       if (!rootRef.current) {
-        return;
+        return
       }
 
       mermaid.initialize({
@@ -35,32 +35,32 @@ export default function ChatMarkdownDom({
         theme: mine ? "dark" : "default",
         fontFamily:
           '"Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
-      });
+      })
 
       const targets = Array.from(
-        rootRef.current.querySelectorAll<HTMLElement>("[data-mermaid]"),
-      );
+        rootRef.current.querySelectorAll<HTMLElement>("[data-mermaid]")
+      )
 
       await Promise.all(
         targets.map(async (target, index) => {
-          const rawChart = target.dataset.mermaid || "";
-          const chart = decodeMermaidChart(rawChart);
+          const rawChart = target.dataset.mermaid || ""
+          const chart = decodeMermaidChart(rawChart)
 
           try {
             const result = await mermaid.render(
               `chat-mermaid-${index}-${Math.random().toString(36).slice(2)}`,
-              chart,
-            );
+              chart
+            )
             if (!cancelled) {
-              target.innerHTML = result.svg;
+              target.innerHTML = result.svg
             }
           } catch {
             if (!cancelled) {
-              target.innerHTML = `<pre class="code-block">${escapeHtml(chart)}</pre>`;
+              target.innerHTML = `<pre class="code-block">${escapeHtml(chart)}</pre>`
             }
           }
-        }),
-      );
+        })
+      )
 
       if (!cancelled && rootRef.current) {
         twemoji.parse(rootRef.current, {
@@ -68,21 +68,21 @@ export default function ChatMarkdownDom({
           folder: "svg",
           ext: ".svg",
           className: "twemoji-inline",
-        });
+        })
       }
     }
 
-    void enhanceMarkdown();
+    void enhanceMarkdown()
 
     return () => {
-      cancelled = true;
-    };
-  }, [html, mine]);
+      cancelled = true
+    }
+  }, [html, mine])
 
   const paletteClass = useMemo(
     () => (mine ? "markdown-root markdown-root-mine" : "markdown-root"),
-    [mine],
-  );
+    [mine]
+  )
 
   return (
     <div ref={rootRef} className={paletteClass}>
@@ -234,7 +234,10 @@ export default function ChatMarkdownDom({
           height: auto;
         }
       `}</style>
-      <div className="markdown-content" dangerouslySetInnerHTML={{ __html: html }} />
+      <div
+        className="markdown-content"
+        dangerouslySetInnerHTML={{ __html: html }}
+      />
     </div>
-  );
+  )
 }

@@ -14,4 +14,3 @@ export function extractRelationshipQrToken(input: string) {
 
   return /^[A-Za-z0-9_-]{16,255}$/.test(trimmed) ? trimmed : null
 }
-

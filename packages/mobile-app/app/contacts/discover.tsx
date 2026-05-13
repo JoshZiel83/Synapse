@@ -1,7 +1,7 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useRouter } from "expo-router";
-import { useDeferredValue, useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { useRouter } from "expo-router"
+import { useDeferredValue, useEffect, useState } from "react"
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native"
 
 import {
   Avatar,
@@ -12,12 +12,12 @@ import {
   ScreenScroll,
   SectionBlock,
   SectionTitleRow,
-} from "@/components/ui";
-import { api } from "@/lib/api";
-import { titleCase } from "@/lib/contacts";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
-import type { IdentitySearchMatchView } from "@/types/api";
+} from "@/components/ui"
+import { api } from "@/lib/api"
+import { titleCase } from "@/lib/contacts"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
+import type { IdentitySearchMatchView } from "@/types/api"
 
 function buildSearchDetailParams(match: IdentitySearchMatchView) {
   return {
@@ -31,85 +31,85 @@ function buildSearchDetailParams(match: IdentitySearchMatchView) {
       workspaceSlug: match.workspace.slug,
       state: match.state,
     },
-  };
+  }
 }
 
 function requestStateLabel(match: IdentitySearchMatchView) {
   switch (match.state) {
     case "same_workspace_member":
-      return "同工作区成员";
+      return "同工作区成员"
     case "friend":
     case "existing":
-      return "已建立关系";
+      return "已建立关系"
     case "pending_request":
     case "pending_approval":
-      return "等待处理";
+      return "等待处理"
     case "approval_required":
-      return "需要批准";
+      return "需要批准"
     case "available":
-      return "可直接发起";
+      return "可直接发起"
     default:
-      return "可发起连接";
+      return "可发起连接"
   }
 }
 
 export default function DiscoverContactsScreen() {
-  const router = useRouter();
-  const { workspaceId } = useWorkspace();
-  const [search, setSearch] = useState("");
-  const [matches, setMatches] = useState<IdentitySearchMatchView[]>([]);
-  const [loading, setLoading] = useState(true);
+  const router = useRouter()
+  const { workspaceId } = useWorkspace()
+  const [search, setSearch] = useState("")
+  const [matches, setMatches] = useState<IdentitySearchMatchView[]>([])
+  const [loading, setLoading] = useState(true)
   const [submittingProfileId, setSubmittingProfileId] = useState<string | null>(
-    null,
-  );
-  const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
-  const deferredSearch = useDeferredValue(search);
+    null
+  )
+  const [error, setError] = useState<string | null>(null)
+  const [message, setMessage] = useState<string | null>(null)
+  const deferredSearch = useDeferredValue(search)
 
-  const actors = matches.filter((match) => match.targetType === "actor");
-  const members = matches.filter((match) => match.targetType === "member");
+  const actors = matches.filter((match) => match.targetType === "actor")
+  const members = matches.filter((match) => match.targetType === "member")
 
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false
 
     async function loadDiscoveries() {
       if (!workspaceId) {
-        setMatches([]);
-        setLoading(false);
-        return;
+        setMatches([])
+        setLoading(false)
+        return
       }
 
-      setLoading(true);
+      setLoading(true)
 
       try {
-        const response = await api.searchIdentity(workspaceId, deferredSearch);
-        if (cancelled) return;
+        const response = await api.searchIdentity(workspaceId, deferredSearch)
+        if (cancelled) return
 
-        setMatches(response.matches || []);
-        setError(null);
+        setMatches(response.matches || [])
+        setError(null)
       } catch (nextError) {
-        if (cancelled) return;
+        if (cancelled) return
         setError(
           nextError instanceof Error
             ? nextError.message
-            : "远端联系人发现失败。",
-        );
+            : "远端联系人发现失败。"
+        )
       } finally {
         if (!cancelled) {
-          setLoading(false);
+          setLoading(false)
         }
       }
     }
 
-    void loadDiscoveries();
+    void loadDiscoveries()
 
     return () => {
-      cancelled = true;
-    };
-  }, [deferredSearch, workspaceId]);
+      cancelled = true
+    }
+  }, [deferredSearch, workspaceId])
 
   async function handleRequest(match: IdentitySearchMatchView) {
-    if (!workspaceId || submittingProfileId) return;
+    if (!workspaceId || submittingProfileId) return
 
     if (match.contact) {
       router.push({
@@ -118,14 +118,17 @@ export default function DiscoverContactsScreen() {
           contactType: match.contact.kind,
           contactId: match.contact.id,
         },
-      });
-      return;
+      })
+      return
     }
 
-    setSubmittingProfileId(match.profileId);
-    setMessage(null);
+    setSubmittingProfileId(match.profileId)
+    setMessage(null)
     try {
-      const result = await api.requestIdentityProfile(workspaceId, match.profileId);
+      const result = await api.requestIdentityProfile(
+        workspaceId,
+        match.profileId
+      )
       if (result.contact) {
         router.push({
           pathname: "/contacts/[contactType]/[contactId]",
@@ -133,24 +136,24 @@ export default function DiscoverContactsScreen() {
             contactType: result.contact.kind,
             contactId: result.contact.id,
           },
-        });
-        return;
+        })
+        return
       }
 
       setMatches((current) =>
         current.map((item) =>
           item.profileId === match.profileId
             ? { ...item, state: "pending_request", requestId: result.requestId }
-            : item,
-        ),
-      );
-      setMessage("连接请求已提交，等待对方处理。");
+            : item
+        )
+      )
+      setMessage("连接请求已提交，等待对方处理。")
     } catch (nextError) {
       setError(
-        nextError instanceof Error ? nextError.message : "发起连接失败。",
-      );
+        nextError instanceof Error ? nextError.message : "发起连接失败。"
+      )
     } finally {
-      setSubmittingProfileId(null);
+      setSubmittingProfileId(null)
     }
   }
 
@@ -249,9 +252,7 @@ export default function DiscoverContactsScreen() {
                                 ? "等待处理"
                                 : "发起连接"
                         }
-                        variant={
-                          actor.contact ? "secondary" : "primary"
-                        }
+                        variant={actor.contact ? "secondary" : "primary"}
                         onPress={() => void handleRequest(actor)}
                         disabled={
                           !!submittingProfileId ||
@@ -281,10 +282,7 @@ export default function DiscoverContactsScreen() {
             {members.length > 0 ? (
               <View style={styles.listShell}>
                 {members.map((member) => (
-                  <View
-                    key={member.profileId}
-                    style={styles.discoveryCard}
-                  >
+                  <View key={member.profileId} style={styles.discoveryCard}>
                     <View style={styles.discoveryHeader}>
                       <Avatar
                         name={member.title || "远端成员"}
@@ -343,7 +341,7 @@ export default function DiscoverContactsScreen() {
         </>
       )}
     </ScreenScroll>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -449,4 +447,4 @@ const styles = StyleSheet.create({
   actionButton: {
     flex: 1,
   },
-});
+})

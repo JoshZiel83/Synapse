@@ -1,8 +1,8 @@
-import type { TableInsert } from "../../infrastructure/database/kysely.js";
+import type { TableInsert } from "../../infrastructure/database/kysely.js"
 import type {
   AccessBindableResourceType,
   AccessGrantTarget,
-} from "./bindings.js";
+} from "./bindings.js"
 
 export type AccessBindingStorageTarget = Pick<
   TableInsert<"resource_access_bindings">,
@@ -11,7 +11,7 @@ export type AccessBindingStorageTarget = Pick<
   | "subject_actor_id"
   | "subject_conversation_id"
   | "subject_conversation_actor_context_id"
->;
+>
 
 export function buildAccessBindingStorageTarget(
   target: Pick<
@@ -21,7 +21,7 @@ export function buildAccessBindingStorageTarget(
     | "subjectActorId"
     | "subjectConversationId"
     | "subjectConversationActorContextId"
-  >,
+  >
 ): AccessBindingStorageTarget {
   switch (target.targetType) {
     case "workspace":
@@ -31,7 +31,7 @@ export function buildAccessBindingStorageTarget(
         subject_actor_id: null,
         subject_conversation_id: null,
         subject_conversation_actor_context_id: null,
-      };
+      }
     case "conversation":
       return {
         target_type: "conversation",
@@ -39,7 +39,7 @@ export function buildAccessBindingStorageTarget(
         subject_actor_id: null,
         subject_conversation_id: target.subjectConversationId,
         subject_conversation_actor_context_id: null,
-      };
+      }
     case "actor":
       return {
         target_type: "actor",
@@ -47,7 +47,7 @@ export function buildAccessBindingStorageTarget(
         subject_actor_id: target.subjectActorId,
         subject_conversation_id: null,
         subject_conversation_actor_context_id: null,
-      };
+      }
     case "actor_in_conversation":
       return {
         target_type: "actor_in_conversation",
@@ -56,20 +56,22 @@ export function buildAccessBindingStorageTarget(
         subject_conversation_id: null,
         subject_conversation_actor_context_id:
           target.subjectConversationActorContextId,
-      };
+      }
     default:
-      throw new Error(`Unsupported access target type: ${String(target.targetType)}`);
+      throw new Error(
+        `Unsupported access target type: ${String(target.targetType)}`
+      )
   }
 }
 
 export function buildResourceAccessBindingInsertValues(input: {
-  workspaceId: string;
-  resourceType: AccessBindableResourceType;
-  resourceId: string;
-  target: AccessGrantTarget;
-  conversationTypeMaskOverride?: number | null;
-  createdByWorkspaceMemberId?: string | null;
-  reason?: string | null;
+  workspaceId: string
+  resourceType: AccessBindableResourceType
+  resourceId: string
+  target: AccessGrantTarget
+  conversationTypeMaskOverride?: number | null
+  createdByWorkspaceMemberId?: string | null
+  reason?: string | null
 }) {
   return {
     workspace_id: input.workspaceId,
@@ -81,11 +83,13 @@ export function buildResourceAccessBindingInsertValues(input: {
     relay_capability_id:
       input.resourceType === "relay_capability" ? input.resourceId : null,
     automation_event_source_id:
-      input.resourceType === "automation_event_source" ? input.resourceId : null,
+      input.resourceType === "automation_event_source"
+        ? input.resourceId
+        : null,
     ...buildAccessBindingStorageTarget(input.target),
     conversation_type_mask_override: input.conversationTypeMaskOverride ?? null,
     status: "active" as const,
     created_by_workspace_member_id: input.createdByWorkspaceMemberId ?? null,
     reason: input.reason ?? null,
-  } satisfies TableInsert<"resource_access_bindings">;
+  } satisfies TableInsert<"resource_access_bindings">
 }

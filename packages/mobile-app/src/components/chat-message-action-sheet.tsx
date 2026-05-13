@@ -1,5 +1,5 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useEffect, useRef } from "react";
+import Feather from "@expo/vector-icons/Feather"
+import { useEffect, useRef } from "react"
 import {
   Modal,
   Pressable,
@@ -7,13 +7,13 @@ import {
   Text,
   View,
   useWindowDimensions,
-} from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+} from "react-native"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
 
-import { theme } from "@/theme/tokens";
+import { theme } from "@/theme/tokens"
 
-const MENU_WIDTH = 144;
-const MENU_HEIGHT = 98;
+const MENU_WIDTH = 144
+const MENU_HEIGHT = 98
 
 export function ChatMessageActionSheet({
   open,
@@ -22,52 +22,52 @@ export function ChatMessageActionSheet({
   onQuote,
   onCopy,
 }: {
-  open: boolean;
+  open: boolean
   anchor: {
-    x: number;
-    y: number;
-    mine: boolean;
-  } | null;
-  onClose: () => void;
-  onQuote: () => void;
-  onCopy: () => void;
+    x: number
+    y: number
+    mine: boolean
+  } | null
+  onClose: () => void
+  onQuote: () => void
+  onCopy: () => void
 }) {
-  const insets = useSafeAreaInsets();
-  const { width, height } = useWindowDimensions();
-  const openedAtRef = useRef(0);
+  const insets = useSafeAreaInsets()
+  const { width, height } = useWindowDimensions()
+  const openedAtRef = useRef(0)
 
   useEffect(() => {
     if (open) {
-      openedAtRef.current = Date.now();
+      openedAtRef.current = Date.now()
     }
-  }, [open]);
+  }, [open])
 
   const left = anchor
     ? Math.max(
         12,
         Math.min(
           width - MENU_WIDTH - 12,
-          anchor.mine ? anchor.x - MENU_WIDTH + 28 : anchor.x - 20,
-        ),
+          anchor.mine ? anchor.x - MENU_WIDTH + 28 : anchor.x - 20
+        )
       )
-    : 12;
+    : 12
 
   const top = anchor
     ? Math.max(
         insets.top + 8,
         Math.min(
           height - insets.bottom - MENU_HEIGHT - 8,
-          anchor.y - MENU_HEIGHT - 16,
-        ),
+          anchor.y - MENU_HEIGHT - 16
+        )
       )
-    : insets.top + 8;
+    : insets.top + 8
 
   function handleBackdropPress() {
     if (Date.now() - openedAtRef.current < 320) {
-      return;
+      return
     }
 
-    onClose();
+    onClose()
   }
 
   return (
@@ -78,7 +78,10 @@ export function ChatMessageActionSheet({
       onRequestClose={onClose}
     >
       <View style={styles.overlay}>
-        <Pressable style={StyleSheet.absoluteFill} onPress={handleBackdropPress} />
+        <Pressable
+          style={StyleSheet.absoluteFill}
+          onPress={handleBackdropPress}
+        />
 
         <View
           style={[
@@ -105,7 +108,7 @@ export function ChatMessageActionSheet({
         </View>
       </View>
     </Modal>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -138,4 +141,4 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: theme.colors.text,
   },
-});
+})

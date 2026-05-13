@@ -1,6 +1,6 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { useEffect, useState } from "react"
+import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import {
   Avatar,
@@ -12,126 +12,126 @@ import {
   ScreenScroll,
   SectionBlock,
   SectionTitleRow,
-} from "@/components/ui";
-import { api } from "@/lib/api";
-import { API_BASE } from "@/lib/config";
-import { useSession } from "@/providers/session-provider";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
-import type { FriendIdProfileView } from "@/types/api";
+} from "@/components/ui"
+import { api } from "@/lib/api"
+import { API_BASE } from "@/lib/config"
+import { useSession } from "@/providers/session-provider"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
+import type { FriendIdProfileView } from "@/types/api"
 
 export default function MeTabScreen() {
-  const { user, signOut, updateProfile } = useSession();
+  const { user, signOut, updateProfile } = useSession()
   const {
     workspaceId,
     workspaceName,
     workspaces,
     setWorkspaceId,
     needsOnboarding,
-  } = useWorkspace();
-  const [name, setName] = useState(user?.name || "");
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  } = useWorkspace()
+  const [name, setName] = useState(user?.name || "")
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
   const [friendIdProfile, setFriendIdProfile] =
-    useState<FriendIdProfileView | null>(null);
-  const [friendIdDraft, setFriendIdDraft] = useState("");
-  const [friendIdSaving, setFriendIdSaving] = useState(false);
-  const [friendIdMessage, setFriendIdMessage] = useState<string | null>(null);
+    useState<FriendIdProfileView | null>(null)
+  const [friendIdDraft, setFriendIdDraft] = useState("")
+  const [friendIdSaving, setFriendIdSaving] = useState(false)
+  const [friendIdMessage, setFriendIdMessage] = useState<string | null>(null)
 
   useEffect(() => {
-    setName(user?.name || "");
-  }, [user?.name]);
+    setName(user?.name || "")
+  }, [user?.name])
 
   useEffect(() => {
     if (!workspaceId) {
-      setFriendIdProfile(null);
-      setFriendIdDraft("");
-      return;
+      setFriendIdProfile(null)
+      setFriendIdDraft("")
+      return
     }
 
-    let active = true;
+    let active = true
     void api
       .getMyFriendIdProfile(workspaceId)
       .then((profile) => {
-        if (!active) return;
-        setFriendIdProfile(profile);
-        setFriendIdDraft(profile.friendId);
+        if (!active) return
+        setFriendIdProfile(profile)
+        setFriendIdDraft(profile.friendId)
       })
       .catch(() => {
-        if (!active) return;
-        setFriendIdProfile(null);
-      });
+        if (!active) return
+        setFriendIdProfile(null)
+      })
 
     return () => {
-      active = false;
-    };
-  }, [workspaceId]);
+      active = false
+    }
+  }, [workspaceId])
 
   async function handleSaveProfile() {
     if (!name.trim()) {
-      setError("名称不能为空。");
-      return;
+      setError("名称不能为空。")
+      return
     }
 
-    setSaving(true);
-    setError(null);
+    setSaving(true)
+    setError(null)
 
     try {
-      await updateProfile({ name: name.trim() });
+      await updateProfile({ name: name.trim() })
     } catch (nextError) {
       setError(
-        nextError instanceof Error ? nextError.message : "保存资料失败。",
-      );
+        nextError instanceof Error ? nextError.message : "保存资料失败。"
+      )
     } finally {
-      setSaving(false);
+      setSaving(false)
     }
   }
 
   async function handleSaveFriendId() {
-    if (!workspaceId) return;
+    if (!workspaceId) return
 
-    setFriendIdSaving(true);
-    setFriendIdMessage(null);
+    setFriendIdSaving(true)
+    setFriendIdMessage(null)
     try {
       const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
         friendId: friendIdDraft,
         searchByIdEnabled: friendIdProfile?.searchByIdEnabled,
-      });
-      setFriendIdProfile(nextProfile);
-      setFriendIdDraft(nextProfile.friendId);
-      setFriendIdMessage(`好友 ID 已更新为 ${nextProfile.friendId}`);
+      })
+      setFriendIdProfile(nextProfile)
+      setFriendIdDraft(nextProfile.friendId)
+      setFriendIdMessage(`好友 ID 已更新为 ${nextProfile.friendId}`)
     } catch (nextError) {
       setFriendIdMessage(
-        nextError instanceof Error ? nextError.message : "保存好友 ID 失败。",
-      );
+        nextError instanceof Error ? nextError.message : "保存好友 ID 失败。"
+      )
     } finally {
-      setFriendIdSaving(false);
+      setFriendIdSaving(false)
     }
   }
 
   async function handleToggleFriendIdSearch() {
-    if (!workspaceId || !friendIdProfile) return;
+    if (!workspaceId || !friendIdProfile) return
 
-    setFriendIdSaving(true);
-    setFriendIdMessage(null);
+    setFriendIdSaving(true)
+    setFriendIdMessage(null)
     try {
       const nextProfile = await api.updateMyFriendIdProfile(workspaceId, {
         friendId: friendIdProfile.friendId,
         searchByIdEnabled: !friendIdProfile.searchByIdEnabled,
-      });
-      setFriendIdProfile(nextProfile);
-      setFriendIdDraft(nextProfile.friendId);
+      })
+      setFriendIdProfile(nextProfile)
+      setFriendIdDraft(nextProfile.friendId)
       setFriendIdMessage(
         nextProfile.searchByIdEnabled
           ? "已开启通过好友 ID 搜索。"
-          : "已关闭通过好友 ID 搜索。",
-      );
+          : "已关闭通过好友 ID 搜索。"
+      )
     } catch (nextError) {
       setFriendIdMessage(
-        nextError instanceof Error ? nextError.message : "更新搜索开关失败。",
-      );
+        nextError instanceof Error ? nextError.message : "更新搜索开关失败。"
+      )
     } finally {
-      setFriendIdSaving(false);
+      setFriendIdSaving(false)
     }
   }
 
@@ -196,9 +196,7 @@ export default function MeTabScreen() {
             style={styles.friendIdButton}
           />
           <Button
-            label={
-              friendIdProfile?.searchByIdEnabled ? "关闭搜索" : "开启搜索"
-            }
+            label={friendIdProfile?.searchByIdEnabled ? "关闭搜索" : "开启搜索"}
             icon={friendIdProfile?.searchByIdEnabled ? "eye-off" : "eye"}
             variant="secondary"
             onPress={() => void handleToggleFriendIdSearch()}
@@ -226,7 +224,7 @@ export default function MeTabScreen() {
         ) : (
           <View style={styles.listShell}>
             {workspaces.map((workspace) => {
-              const active = workspace.id === workspaceId;
+              const active = workspace.id === workspaceId
               return (
                 <Pressable
                   key={workspace.id}
@@ -270,7 +268,7 @@ export default function MeTabScreen() {
                     </Text>
                   </View>
                 </Pressable>
-              );
+              )
             })}
           </View>
         )}
@@ -289,7 +287,7 @@ export default function MeTabScreen() {
         <Text style={styles.connectionHint}>API：{API_BASE}</Text>
       </SectionBlock>
     </ScreenScroll>
-  );
+  )
 }
 
 function ActionRow({
@@ -298,10 +296,10 @@ function ActionRow({
   onPress,
   danger = false,
 }: {
-  label: string;
-  icon: keyof typeof Feather.glyphMap;
-  onPress: () => void;
-  danger?: boolean;
+  label: string
+  icon: keyof typeof Feather.glyphMap
+  onPress: () => void
+  danger?: boolean
 }) {
   return (
     <Pressable
@@ -323,7 +321,7 @@ function ActionRow({
       </View>
       <Feather name="chevron-right" size={18} color={theme.colors.textSoft} />
     </Pressable>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -449,4 +447,4 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: theme.colors.textSoft,
   },
-});
+})

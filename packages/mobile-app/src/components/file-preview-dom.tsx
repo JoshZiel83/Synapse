@@ -1,20 +1,20 @@
-"use dom";
+"use dom"
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import mermaid from "mermaid";
-import twemoji from "twemoji";
+import { useEffect, useMemo, useRef, useState } from "react"
+import mermaid from "mermaid"
+import twemoji from "twemoji"
 
-import { reportApiUnauthorized } from "@/lib/api";
+import { reportApiUnauthorized } from "@/lib/api"
 import {
   decodeMermaidChart,
   escapeHtml,
   renderMarkdownHtml,
-} from "@/lib/chat-markdown-html";
+} from "@/lib/chat-markdown-html"
 import {
   isMarkdownMimeType,
   isPdfMimeType,
   isTextPreviewMimeType,
-} from "@/lib/chat-rich-content";
+} from "@/lib/chat-rich-content"
 
 export default function FilePreviewDom({
   uri,
@@ -23,112 +23,108 @@ export default function FilePreviewDom({
   token,
   source,
 }: {
-  uri: string;
-  mimeType: string;
-  fileName: string;
-  token?: string | null;
-  source: "local" | "remote";
-  dom?: import("expo/dom").DOMProps;
+  uri: string
+  mimeType: string
+  fileName: string
+  token?: string | null
+  source: "local" | "remote"
+  dom?: import("expo/dom").DOMProps
 }) {
-  const rootRef = useRef<HTMLDivElement | null>(null);
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const [resolvedUri, setResolvedUri] = useState<string | null>(
-    source === "local" ? uri : null,
-  );
-  const [textContent, setTextContent] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-  const [loading, setLoading] = useState(source === "remote");
+    source === "local" ? uri : null
+  )
+  const [textContent, setTextContent] = useState<string | null>(null)
+  const [errorMessage, setErrorMessage] = useState<string | null>(null)
+  const [loading, setLoading] = useState(source === "remote")
 
-  const isTextLike = useMemo(
-    () => isTextPreviewMimeType(mimeType),
-    [mimeType],
-  );
-  const isMarkdown = useMemo(
-    () => isMarkdownMimeType(mimeType),
-    [mimeType],
-  );
-  const isPdf = useMemo(() => isPdfMimeType(mimeType), [mimeType]);
+  const isTextLike = useMemo(() => isTextPreviewMimeType(mimeType), [mimeType])
+  const isMarkdown = useMemo(() => isMarkdownMimeType(mimeType), [mimeType])
+  const isPdf = useMemo(() => isPdfMimeType(mimeType), [mimeType])
   const markdownHtml = useMemo(
     () =>
-      isMarkdown && textContent !== null ? renderMarkdownHtml(textContent) : null,
-    [isMarkdown, textContent],
-  );
+      isMarkdown && textContent !== null
+        ? renderMarkdownHtml(textContent)
+        : null,
+    [isMarkdown, textContent]
+  )
 
   useEffect(() => {
-    let active = true;
-    let objectUrl: string | null = null;
+    let active = true
+    let objectUrl: string | null = null
 
     if (source === "local") {
-      setLoading(false);
+      setLoading(false)
       return () => {
         if (objectUrl) {
-          URL.revokeObjectURL(objectUrl);
+          URL.revokeObjectURL(objectUrl)
         }
-      };
+      }
     }
 
-    setLoading(true);
-    setErrorMessage(null);
-    setResolvedUri(null);
-    setTextContent(null);
+    setLoading(true)
+    setErrorMessage(null)
+    setResolvedUri(null)
+    setTextContent(null)
 
     void (async () => {
       try {
         const response = await fetch(uri, {
           headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-        });
+        })
 
         if (response.status === 401) {
-          reportApiUnauthorized(401);
-          return;
+          reportApiUnauthorized(401)
+          return
         }
 
         if (!response.ok) {
-          throw new Error(`Failed to load file (${response.status})`);
+          throw new Error(`Failed to load file (${response.status})`)
         }
 
         if (isTextLike) {
-          const text = await response.text();
+          const text = await response.text()
           if (!active) {
-            return;
+            return
           }
-          setTextContent(text);
-          setLoading(false);
-          return;
+          setTextContent(text)
+          setLoading(false)
+          return
         }
 
-        const blob = await response.blob();
+        const blob = await response.blob()
         if (!active) {
-          return;
+          return
         }
 
-        objectUrl = URL.createObjectURL(blob);
-        setResolvedUri(objectUrl);
-        setLoading(false);
+        objectUrl = URL.createObjectURL(blob)
+        setResolvedUri(objectUrl)
+        setLoading(false)
       } catch (error) {
         if (!active) {
-          return;
+          return
         }
         setErrorMessage(
-          error instanceof Error ? error.message : "Failed to load file preview",
-        );
-        setLoading(false);
+          error instanceof Error ? error.message : "Failed to load file preview"
+        )
+        setLoading(false)
       }
-    })();
+    })()
 
     return () => {
-      active = false;
+      active = false
       if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
+        URL.revokeObjectURL(objectUrl)
       }
-    };
-  }, [isTextLike, source, token, uri]);
+    }
+  }, [isTextLike, source, token, uri])
 
   useEffect(() => {
-    let cancelled = false;
+    let cancelled = false
 
     async function enhancePreview() {
       if (!rootRef.current || !textContent) {
-        return;
+        return
       }
 
       if (isMarkdown) {
@@ -138,32 +134,32 @@ export default function FilePreviewDom({
           theme: "default",
           fontFamily:
             '"Noto Sans", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif',
-        });
+        })
 
         const targets = Array.from(
-          rootRef.current.querySelectorAll<HTMLElement>("[data-mermaid]"),
-        );
+          rootRef.current.querySelectorAll<HTMLElement>("[data-mermaid]")
+        )
 
         await Promise.all(
           targets.map(async (target, index) => {
-            const rawChart = target.dataset.mermaid || "";
-            const chart = decodeMermaidChart(rawChart);
+            const rawChart = target.dataset.mermaid || ""
+            const chart = decodeMermaidChart(rawChart)
 
             try {
               const result = await mermaid.render(
                 `preview-mermaid-${index}-${Math.random().toString(36).slice(2)}`,
-                chart,
-              );
+                chart
+              )
               if (!cancelled) {
-                target.innerHTML = result.svg;
+                target.innerHTML = result.svg
               }
             } catch {
               if (!cancelled) {
-                target.innerHTML = `<pre class="code-block">${escapeHtml(chart)}</pre>`;
+                target.innerHTML = `<pre class="code-block">${escapeHtml(chart)}</pre>`
               }
             }
-          }),
-        );
+          })
+        )
       }
 
       if (!cancelled && rootRef.current) {
@@ -172,18 +168,18 @@ export default function FilePreviewDom({
           folder: "svg",
           ext: ".svg",
           className: "twemoji-inline",
-        });
+        })
       }
     }
 
-    void enhancePreview();
+    void enhancePreview()
 
     return () => {
-      cancelled = true;
-    };
-  }, [isMarkdown, markdownHtml, textContent]);
+      cancelled = true
+    }
+  }, [isMarkdown, markdownHtml, textContent])
 
-  const displayUri = source === "local" ? uri : resolvedUri;
+  const displayUri = source === "local" ? uri : resolvedUri
 
   return (
     <div ref={rootRef} className="preview-root">
@@ -422,12 +418,12 @@ export default function FilePreviewDom({
           mimeType.startsWith("audio/") ? (
             <audio src={displayUri} controls />
           ) : null}
-          {!loading &&
-          !errorMessage &&
-          !isTextLike &&
-          displayUri &&
-          isPdf ? (
-            <iframe className="preview-frame" src={displayUri} title={fileName} />
+          {!loading && !errorMessage && !isTextLike && displayUri && isPdf ? (
+            <iframe
+              className="preview-frame"
+              src={displayUri}
+              title={fileName}
+            />
           ) : null}
           {!loading &&
           !errorMessage &&
@@ -437,10 +433,14 @@ export default function FilePreviewDom({
           !mimeType.startsWith("video/") &&
           !mimeType.startsWith("audio/") &&
           !isPdf ? (
-            <iframe className="preview-frame" src={displayUri} title={fileName} />
+            <iframe
+              className="preview-frame"
+              src={displayUri}
+              title={fileName}
+            />
           ) : null}
         </div>
       </div>
     </div>
-  );
+  )
 }

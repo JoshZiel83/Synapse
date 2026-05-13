@@ -3,33 +3,33 @@ name: Build Relay GUI
 on:
   push:
     tags:
-      - 'relay-gui-v*'
+      - "relay-gui-v*"
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g. v0.1.0)'
+        description: "Version tag (e.g. v0.1.0)"
         required: true
       platforms:
-        description: 'Build platforms: leave blank to use repo variable, or set all / a comma or space separated list, e.g. linux-amd64 windows-amd64'
+        description: "Build platforms: leave blank to use repo variable, or set all / a comma or space separated list, e.g. linux-amd64 windows-amd64"
         required: false
-        default: ''
+        default: ""
       windows_package_variants:
-        description: 'Windows package variants: leave blank to use repo variable, or set all / portable / setup'
+        description: "Windows package variants: leave blank to use repo variable, or set all / portable / setup"
         required: false
-        default: ''
+        default: ""
 
 permissions:
   contents: write
 
 env:
-  BUNDLED_NODE_VERSION: '24.14.1'
-  CHROME_DEVTOOLS_MCP_VERSION: '0.20.0'
-  BUNDLED_PYTHON_VERSION: '3.14.1'
-  BUNDLED_PYTHON_STANDALONE_RELEASE: '20251202'
-  BUNDLED_WINDOWS_GIT_VERSION: '2.49.0.windows.1'
-  BUNDLED_FFMPEG_RELEASE_TAG: 'n7.1-2'
-  COMMANDLINE_PACKAGE_PROFILE: 'default-data-v5'
-  PIP_INDEX_URL: 'https://pypi.org/simple'
+  BUNDLED_NODE_VERSION: "24.14.1"
+  CHROME_DEVTOOLS_MCP_VERSION: "0.20.0"
+  BUNDLED_PYTHON_VERSION: "3.14.1"
+  BUNDLED_PYTHON_STANDALONE_RELEASE: "20251202"
+  BUNDLED_WINDOWS_GIT_VERSION: "2.49.0.windows.1"
+  BUNDLED_FFMPEG_RELEASE_TAG: "n7.1-2"
+  COMMANDLINE_PACKAGE_PROFILE: "default-data-v5"
+  PIP_INDEX_URL: "https://pypi.org/simple"
   ENABLE_COS_UPLOAD: ${{ vars.ENABLE_COS_UPLOAD || '' }}
 
 jobs:
@@ -110,7 +110,7 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.22'
+          go-version: "1.22"
 
       - uses: actions/setup-node@v4
         with:

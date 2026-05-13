@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState } from "react"
 
 import {
   Field,
@@ -6,31 +6,31 @@ import {
   FieldDescription,
   FieldGroup,
   FieldLabel,
-} from '../components/ui/field'
-import { Separator } from '../components/ui/separator'
+} from "../components/ui/field"
+import { Separator } from "../components/ui/separator"
 import type {
   NotificationSettings,
   RelayConfig,
   SecuritySettings,
   StartupSettings,
-} from '../types'
+} from "../types"
 
 interface SettingsPanelProps {
   config: RelayConfig
   onSaveDesktopSettings: (
     startup: StartupSettings,
     notifications: NotificationSettings,
-    security: SecuritySettings,
+    security: SecuritySettings
   ) => Promise<void>
 }
 
 type SettingKey =
-  | 'runAtLogin'
-  | 'autoConnect'
-  | 'launchHidden'
-  | 'closeBehavior'
-  | 'backgroundEnabled'
-  | 'serverAuthorizationEnabled'
+  | "runAtLogin"
+  | "autoConnect"
+  | "launchHidden"
+  | "closeBehavior"
+  | "backgroundEnabled"
+  | "serverAuthorizationEnabled"
 
 function SettingToggle({
   label,
@@ -62,22 +62,32 @@ function SettingToggle({
   )
 }
 
-export function SettingsPanel({ config, onSaveDesktopSettings }: SettingsPanelProps) {
+export function SettingsPanel({
+  config,
+  onSaveDesktopSettings,
+}: SettingsPanelProps) {
   const [saving, setSaving] = useState<SettingKey | null>(null)
-  const [error, setError] = useState('')
+  const [error, setError] = useState("")
 
-  async function updateStartup(nextStartup: Partial<StartupSettings>, key: SettingKey) {
+  async function updateStartup(
+    nextStartup: Partial<StartupSettings>,
+    key: SettingKey
+  ) {
     setSaving(key)
-    setError('')
+    setError("")
     try {
-      await onSaveDesktopSettings({
-        ...config.startup,
-        ...nextStartup,
-      }, {
-        ...config.notifications,
-      }, {
-        ...config.security,
-      })
+      await onSaveDesktopSettings(
+        {
+          ...config.startup,
+          ...nextStartup,
+        },
+        {
+          ...config.notifications,
+        },
+        {
+          ...config.security,
+        }
+      )
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -85,18 +95,25 @@ export function SettingsPanel({ config, onSaveDesktopSettings }: SettingsPanelPr
     }
   }
 
-  async function updateNotifications(key: keyof NotificationSettings, value: boolean) {
+  async function updateNotifications(
+    key: keyof NotificationSettings,
+    value: boolean
+  ) {
     setSaving(key)
-    setError('')
+    setError("")
     try {
-      await onSaveDesktopSettings({
-        ...config.startup,
-      }, {
-        ...config.notifications,
-        [key]: value,
-      }, {
-        ...config.security,
-      })
+      await onSaveDesktopSettings(
+        {
+          ...config.startup,
+        },
+        {
+          ...config.notifications,
+          [key]: value,
+        },
+        {
+          ...config.security,
+        }
+      )
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -106,16 +123,20 @@ export function SettingsPanel({ config, onSaveDesktopSettings }: SettingsPanelPr
 
   async function updateSecurity(key: keyof SecuritySettings, value: boolean) {
     setSaving(key)
-    setError('')
+    setError("")
     try {
-      await onSaveDesktopSettings({
-        ...config.startup,
-      }, {
-        ...config.notifications,
-      }, {
-        ...config.security,
-        [key]: value,
-      })
+      await onSaveDesktopSettings(
+        {
+          ...config.startup,
+        },
+        {
+          ...config.notifications,
+        },
+        {
+          ...config.security,
+          [key]: value,
+        }
+      )
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -126,8 +147,12 @@ export function SettingsPanel({ config, onSaveDesktopSettings }: SettingsPanelPr
   return (
     <section className="flex flex-col gap-5">
       <div>
-        <h1 className="text-[28px] leading-none font-semibold tracking-tight text-foreground">Settings</h1>
-        <div className="mt-3 text-sm text-muted-foreground">Startup and background behavior.</div>
+        <h1 className="text-[28px] leading-none font-semibold tracking-tight text-foreground">
+          Settings
+        </h1>
+        <div className="mt-3 text-sm text-muted-foreground">
+          Startup and background behavior.
+        </div>
       </div>
 
       {error ? (
@@ -141,36 +166,53 @@ export function SettingsPanel({ config, onSaveDesktopSettings }: SettingsPanelPr
           label="Launch at login"
           description="Start the desktop app when your OS session starts."
           checked={Boolean(config.startup?.runAtLogin)}
-          disabled={saving === 'runAtLogin'}
-          onChange={(checked) => void updateStartup({ runAtLogin: checked }, 'runAtLogin')}
+          disabled={saving === "runAtLogin"}
+          onChange={(checked) =>
+            void updateStartup({ runAtLogin: checked }, "runAtLogin")
+          }
         />
         <Separator />
         <SettingToggle
           label="Auto-connect on launch"
           description="Try to start the relay when the app launches."
           checked={Boolean(config.startup?.autoConnect)}
-          disabled={saving === 'autoConnect'}
-          onChange={(checked) => void updateStartup({ autoConnect: checked }, 'autoConnect')}
+          disabled={saving === "autoConnect"}
+          onChange={(checked) =>
+            void updateStartup({ autoConnect: checked }, "autoConnect")
+          }
         />
         <Separator />
         <SettingToggle
           label="Launch hidden at login"
           description="When started at login, keep the window hidden in the tray."
           checked={Boolean(config.startup?.launchHidden)}
-          disabled={saving === 'launchHidden'}
-          onChange={(checked) => void updateStartup({ launchHidden: checked }, 'launchHidden')}
+          disabled={saving === "launchHidden"}
+          onChange={(checked) =>
+            void updateStartup({ launchHidden: checked }, "launchHidden")
+          }
         />
         <Separator />
         <Field orientation="horizontal">
           <FieldContent>
             <FieldLabel>Close window while running</FieldLabel>
-            <FieldDescription>Choose whether the close button asks every time, minimizes to the tray, or exits the app.</FieldDescription>
+            <FieldDescription>
+              Choose whether the close button asks every time, minimizes to the
+              tray, or exits the app.
+            </FieldDescription>
           </FieldContent>
           <select
             className="h-11 rounded-2xl border border-border/70 bg-background px-3 text-sm"
-            value={config.startup?.closeBehavior || 'ask'}
-            disabled={saving === 'closeBehavior'}
-            onChange={(event) => void updateStartup({ closeBehavior: event.target.value as StartupSettings['closeBehavior'] }, 'closeBehavior')}
+            value={config.startup?.closeBehavior || "ask"}
+            disabled={saving === "closeBehavior"}
+            onChange={(event) =>
+              void updateStartup(
+                {
+                  closeBehavior: event.target
+                    .value as StartupSettings["closeBehavior"],
+                },
+                "closeBehavior"
+              )
+            }
           >
             <option value="ask">Ask every time</option>
             <option value="tray">Minimize to tray</option>
@@ -182,17 +224,19 @@ export function SettingsPanel({ config, onSaveDesktopSettings }: SettingsPanelPr
           label="Background notifications"
           description="Show tray notifications for connect and error events while hidden."
           checked={Boolean(config.notifications?.backgroundEnabled)}
-          disabled={saving === 'backgroundEnabled'}
-          onChange={(checked) => void updateNotifications('backgroundEnabled', checked)}
+          disabled={saving === "backgroundEnabled"}
+          onChange={(checked) =>
+            void updateNotifications("backgroundEnabled", checked)
+          }
         />
         <Separator />
         <SettingToggle
           label="Trust server authorizations"
           description="Allow approved Synapse relay authorization policies to unlock locally blocked built-in tools."
           checked={Boolean(config.security?.serverAuthorizationEnabled)}
-          disabled={saving === 'serverAuthorizationEnabled'}
+          disabled={saving === "serverAuthorizationEnabled"}
           onChange={(checked) =>
-            void updateSecurity('serverAuthorizationEnabled', checked)
+            void updateSecurity("serverAuthorizationEnabled", checked)
           }
         />
       </FieldGroup>

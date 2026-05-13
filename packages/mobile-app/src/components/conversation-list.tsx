@@ -1,9 +1,9 @@
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native"
 
-import { ConversationItem } from "@/components/conversation-item";
-import type { PendingChatRead } from "@/lib/chat-data";
-import { theme } from "@/theme/tokens";
-import type { ChatConversationView } from "@shared";
+import { ConversationItem } from "@/components/conversation-item"
+import type { PendingChatRead } from "@/lib/chat-data"
+import { theme } from "@/theme/tokens"
+import type { ChatConversationView } from "@shared"
 
 export function ConversationList({
   conversations,
@@ -13,17 +13,17 @@ export function ConversationList({
   maxItems,
   showDividers = false,
 }: {
-  conversations: ChatConversationView[];
-  workspaceMemberId?: string | null;
-  pendingReads?: Record<string, PendingChatRead>;
-  onPressConversation: (conversation: ChatConversationView) => void;
-  maxItems?: number;
-  showDividers?: boolean;
+  conversations: ChatConversationView[]
+  workspaceMemberId?: string | null
+  pendingReads?: Record<string, PendingChatRead>
+  onPressConversation: (conversation: ChatConversationView) => void
+  maxItems?: number
+  showDividers?: boolean
 }) {
   const visibleConversations =
     typeof maxItems === "number"
       ? conversations.slice(0, Math.max(maxItems, 0))
-      : conversations;
+      : conversations
 
   return (
     <View style={styles.list}>
@@ -38,11 +38,11 @@ export function ConversationList({
         />
       ))}
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
   list: {
     marginTop: 2,
   },
-});
+})

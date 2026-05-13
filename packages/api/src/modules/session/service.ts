@@ -1,36 +1,34 @@
-import { pool } from '../../infrastructure/database/index.js';
-import { emitEvent } from '../../infrastructure/events/index.js';
+import { pool } from "../../infrastructure/database/index.js"
+import { emitEvent } from "../../infrastructure/events/index.js"
 import {
   db,
   executeCompiledQuery,
   executeTakeFirst,
   type QueryExecutor,
-} from '../../infrastructure/database/kysely.js';
-import { shutdownSessionInstances } from '../mcp-plugins/instance-manager.js';
-import { queueConversationTransportProjection } from '../im/service.js';
+} from "../../infrastructure/database/kysely.js"
+import { shutdownSessionInstances } from "../mcp-plugins/instance-manager.js"
+import { queueConversationTransportProjection } from "../im/service.js"
 import {
   createConversation,
   createConversationItem,
   ensureConversationParticipant,
   getConversation,
-} from '../chat/service.js';
-import {
-  getWorkspaceMemberIdentityById,
-} from '../chat/workspace-identity.js';
+} from "../chat/service.js"
+import { getWorkspaceMemberIdentityById } from "../chat/workspace-identity.js"
 import {
   buildNormalizedMessageContent,
   itemPartsToCanonicalContentBlocks,
-} from '../chat/message-content.js';
+} from "../chat/message-content.js"
 import type {
   UUID,
   ConversationMessageSubtype,
   CanonicalContentBlock,
   SessionMessage,
-} from '@synapse/shared';
+} from "@synapse/shared"
 import type {
   SessionCollaborationMode,
   SessionCollaborationState,
-} from '@synapse/shared/types';
+} from "@synapse/shared/types"
 import {
   type SessionInterruptType,
   type SessionStatus,
@@ -38,147 +36,147 @@ import {
   isGroupConversationKind,
   isThreadConversationKind,
   nowISO,
-} from '@synapse/shared';
-import { sql } from 'kysely';
-import { parseSessionCollaborationState } from './collaboration-state.js';
+} from "@synapse/shared"
+import { sql } from "kysely"
+import { parseSessionCollaborationState } from "./collaboration-state.js"
 
 type SessionConversationMessageRole =
-  | 'user'
-  | 'assistant'
-  | 'system'
-  | 'tool_result';
+  | "user"
+  | "assistant"
+  | "system"
+  | "tool_result"
 
 type SessionConversationMessageSubtype = Exclude<
   ConversationMessageSubtype,
-  'chat.message'
->;
-import { v4 as uuidv4 } from 'uuid';
-import type { SessionsChannelType } from '../../infrastructure/database/generated/db.js';
+  "chat.message"
+>
+import { v4 as uuidv4 } from "uuid"
+import type { SessionsChannelType } from "../../infrastructure/database/generated/db.js"
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {};
-  if (typeof value === 'string') {
+  if (!value) return {}
+  if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(value);
-      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
-        throw new Error('collaboration_state must be a JSON object');
+      const parsed = JSON.parse(value)
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("collaboration_state must be a JSON object")
       }
-      return parsed as Record<string, unknown>;
+      return parsed as Record<string, unknown>
     } catch (error) {
       throw new Error(
         `collaboration_state must be valid JSON: ${
           error instanceof Error ? error.message : String(error)
-        }`,
-      );
+        }`
+      )
     }
   }
-  if (typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error('collaboration_state must be an object');
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("collaboration_state must be an object")
   }
-  return value as Record<string, unknown>;
+  return value as Record<string, unknown>
 }
 
 function normalizeSessionRow(row: any) {
-  if (!row) return null;
+  if (!row) return null
   return {
     ...row,
     conversationId: row.conversation_id,
     conversationKind: row.conversation_kind,
     conversationBoundary: row.conversation_boundary,
     conversationTitle: row.conversation_title,
-    collaborationMode: row.collaboration_mode || 'default',
+    collaborationMode: row.collaboration_mode || "default",
     activePlanApprovalInteractionId:
       row.active_plan_approval_interaction_id || undefined,
     collaborationState: parseSessionCollaborationState(
-      parseJsonObject(row.collaboration_state),
+      parseJsonObject(row.collaboration_state)
     ),
     isGroupConversation: isGroupConversationKind(row.conversation_kind),
     hasThreadContext: isThreadConversationKind(row.conversation_kind),
-  };
+  }
 }
 
 async function getActorJoinVersionId(actorId: UUID) {
   const row = await db
-    .selectFrom('actors as a')
-    .innerJoin('actor_versions as current_version', (join) =>
+    .selectFrom("actors as a")
+    .innerJoin("actor_versions as current_version", (join) =>
       join
-        .onRef('current_version.actor_id', '=', 'a.id')
-        .onRef('current_version.version', '=', 'a.current_version'),
+        .onRef("current_version.actor_id", "=", "a.id")
+        .onRef("current_version.version", "=", "a.current_version")
     )
-    .select('current_version.id as actor_version_id')
-    .where('a.id', '=', actorId)
+    .select("current_version.id as actor_version_id")
+    .where("a.id", "=", actorId)
     .limit(1)
-    .executeTakeFirst();
-  return row?.actor_version_id || undefined;
+    .executeTakeFirst()
+  return row?.actor_version_id || undefined
 }
 
 async function loadSession(sessionId: UUID): Promise<any | null> {
   const row = await db
-    .selectFrom('sessions as s')
-    .innerJoin('actors as a', 'a.id', 's.actor_id')
-    .innerJoin('conversations as c', 'c.id', 's.conversation_id')
-    .selectAll('s')
+    .selectFrom("sessions as s")
+    .innerJoin("actors as a", "a.id", "s.actor_id")
+    .innerJoin("conversations as c", "c.id", "s.conversation_id")
+    .selectAll("s")
     .select([
-      'a.name as actor_name',
-      'c.kind as conversation_kind',
-      'c.boundary as conversation_boundary',
-      'c.title as conversation_title',
+      "a.name as actor_name",
+      "c.kind as conversation_kind",
+      "c.boundary as conversation_boundary",
+      "c.title as conversation_title",
     ])
-    .where('s.id', '=', sessionId)
-    .executeTakeFirst();
-  return normalizeSessionRow(row ?? null);
+    .where("s.id", "=", sessionId)
+    .executeTakeFirst()
+  return normalizeSessionRow(row ?? null)
 }
 
 export async function getConversationActorContextByPair(
   conversationId: UUID,
   actorId: UUID,
-  queryable: QueryExecutor = pool,
+  queryable: QueryExecutor = pool
 ) {
   return executeTakeFirst(
     queryable,
     db
-      .selectFrom('conversation_actor_contexts')
+      .selectFrom("conversation_actor_contexts")
       .selectAll()
-      .where('conversation_id', '=', conversationId)
-      .where('actor_id', '=', actorId)
-      .limit(1),
-  );
+      .where("conversation_id", "=", conversationId)
+      .where("actor_id", "=", actorId)
+      .limit(1)
+  )
 }
 
 export async function getConversationActorContextBySessionId(
   sessionId: UUID,
-  queryable: QueryExecutor = pool,
+  queryable: QueryExecutor = pool
 ) {
   return executeTakeFirst(
     queryable,
     db
-      .selectFrom('conversation_actor_contexts')
+      .selectFrom("conversation_actor_contexts")
       .selectAll()
-      .where('session_id', '=', sessionId)
-      .limit(1),
-  );
+      .where("session_id", "=", sessionId)
+      .limit(1)
+  )
 }
 
 async function getConversationActorSessionRow(
   conversationId: UUID,
   actorId: UUID,
-  queryable: QueryExecutor = pool,
+  queryable: QueryExecutor = pool
 ) {
   return executeTakeFirst(
     queryable,
     db
-      .selectFrom('sessions')
+      .selectFrom("sessions")
       .selectAll()
-      .where('conversation_id', '=', conversationId)
-      .where('actor_id', '=', actorId)
-      .limit(1),
-  );
+      .where("conversation_id", "=", conversationId)
+      .where("actor_id", "=", actorId)
+      .limit(1)
+  )
 }
 
 async function requireActiveActorConversationParticipant(
   conversationId: UUID,
   actorId: UUID,
-  queryable: QueryExecutor = pool,
+  queryable: QueryExecutor = pool
 ) {
   const participant = await executeTakeFirst(
     queryable,
@@ -189,96 +187,96 @@ async function requireActiveActorConversationParticipant(
       .where("participant_kind", "=", "actor")
       .where("actor_id", "=", actorId)
       .where("state", "=", "active")
-      .limit(1),
-  );
+      .limit(1)
+  )
 
   if (!participant) {
     throw new Error(
-      `Actor ${actorId} is not an active participant of conversation ${conversationId}`,
-    );
+      `Actor ${actorId} is not an active participant of conversation ${conversationId}`
+    )
   }
 }
 
 export async function ensureConversationActorSessionContext(
   params: {
-    workspaceId?: UUID;
-    actorId: UUID;
-    conversationId: UUID;
-    channelType?: SessionsChannelType;
-    trigger?: SessionTrigger;
-    metadata?: Record<string, unknown>;
+    workspaceId?: UUID
+    actorId: UUID
+    conversationId: UUID
+    channelType?: SessionsChannelType
+    trigger?: SessionTrigger
+    metadata?: Record<string, unknown>
   },
-  queryable: QueryExecutor = pool,
+  queryable: QueryExecutor = pool
 ) {
   await requireActiveActorConversationParticipant(
     params.conversationId,
     params.actorId,
-    queryable,
-  );
+    queryable
+  )
 
   const existingContext = await getConversationActorContextByPair(
     params.conversationId,
     params.actorId,
-    queryable,
-  );
+    queryable
+  )
 
   let session = existingContext?.session_id
     ? await executeTakeFirst(
         queryable,
         db
-          .selectFrom('sessions')
-          .select('id')
-          .where('id', '=', existingContext.session_id)
-          .limit(1),
+          .selectFrom("sessions")
+          .select("id")
+          .where("id", "=", existingContext.session_id)
+          .limit(1)
       )
-    : null;
-  let sessionCreated = false;
+    : null
+  let sessionCreated = false
 
   if (!session) {
     session = await getConversationActorSessionRow(
       params.conversationId,
       params.actorId,
-      queryable,
-    );
+      queryable
+    )
   }
 
   if (!session) {
     if (!params.workspaceId) {
       throw new Error(
-        `workspaceId is required to create a session for actor ${params.actorId} in conversation ${params.conversationId}`,
-      );
+        `workspaceId is required to create a session for actor ${params.actorId} in conversation ${params.conversationId}`
+      )
     }
 
     const insertedSession = await executeTakeFirst<{ id: string }>(
       queryable,
       db
-        .insertInto('sessions')
+        .insertInto("sessions")
         .values({
           id: uuidv4(),
           workspace_id: params.workspaceId,
           actor_id: params.actorId,
           conversation_id: params.conversationId,
-          channel_type: params.channelType || 'web',
-          trigger: params.trigger || 'user_message',
-          status: 'idle',
+          channel_type: params.channelType || "web",
+          trigger: params.trigger || "user_message",
+          status: "idle",
         })
         .onConflict((oc) =>
-          oc.columns(['conversation_id', 'actor_id']).doNothing(),
+          oc.columns(["conversation_id", "actor_id"]).doNothing()
         )
-        .returning('id'),
-    );
-    sessionCreated = Boolean(insertedSession);
+        .returning("id")
+    )
+    sessionCreated = Boolean(insertedSession)
     session = await getConversationActorSessionRow(
       params.conversationId,
       params.actorId,
-      queryable,
-    );
+      queryable
+    )
   }
 
   if (!session) {
     throw new Error(
-      `Failed to resolve session for actor ${params.actorId} in conversation ${params.conversationId}`,
-    );
+      `Failed to resolve session for actor ${params.actorId} in conversation ${params.conversationId}`
+    )
   }
 
   if (existingContext?.session_id === session.id) {
@@ -287,7 +285,7 @@ export async function ensureConversationActorSessionContext(
       sessionId: session.id,
       conversationActorContextCreated: false,
       sessionCreated,
-    };
+    }
   }
 
   const ensuredContext = await ensureConversationActorContext(
@@ -295,197 +293,199 @@ export async function ensureConversationActorSessionContext(
       actorId: params.actorId,
       conversationId: params.conversationId,
     },
-    queryable,
-  );
+    queryable
+  )
 
   await executeCompiledQuery(
     queryable,
     db
-      .updateTable('conversation_actor_contexts')
+      .updateTable("conversation_actor_contexts")
       .set({
         session_id: session.id,
         updated_at: sql`NOW()`,
       })
-      .where('id', '=', ensuredContext.conversationActorContextId)
-      .returning('id'),
-  );
+      .where("id", "=", ensuredContext.conversationActorContextId)
+      .returning("id")
+  )
 
   return {
     conversationActorContextId: ensuredContext.conversationActorContextId,
     sessionId: session.id,
-    conversationActorContextCreated: ensuredContext.conversationActorContextCreated,
+    conversationActorContextCreated:
+      ensuredContext.conversationActorContextCreated,
     sessionCreated,
-  };
+  }
 }
 
 export async function ensureConversationActorContext(
   params: {
-    actorId: UUID;
-    conversationId: UUID;
+    actorId: UUID
+    conversationId: UUID
   },
-  queryable: QueryExecutor = pool,
+  queryable: QueryExecutor = pool
 ) {
   await requireActiveActorConversationParticipant(
     params.conversationId,
     params.actorId,
-    queryable,
-  );
+    queryable
+  )
 
   const existingContext = await getConversationActorContextByPair(
     params.conversationId,
     params.actorId,
-    queryable,
-  );
+    queryable
+  )
   if (existingContext) {
     return {
       conversationActorContextId: existingContext.id,
       sessionId: existingContext.session_id || undefined,
       conversationActorContextCreated: false,
-    };
+    }
   }
 
   const insertedContext = await executeTakeFirst<{ id: string }>(
     queryable,
     db
-      .insertInto('conversation_actor_contexts')
+      .insertInto("conversation_actor_contexts")
       .values({
         id: uuidv4(),
         conversation_id: params.conversationId,
         actor_id: params.actorId,
         session_id: null,
       })
-      .onConflict((oc) => oc.columns(['conversation_id', 'actor_id']).doNothing())
-      .returning('id'),
-  );
+      .onConflict((oc) =>
+        oc.columns(["conversation_id", "actor_id"]).doNothing()
+      )
+      .returning("id")
+  )
 
   const context = await getConversationActorContextByPair(
     params.conversationId,
     params.actorId,
-    queryable,
-  );
+    queryable
+  )
   if (!context) {
     throw new Error(
-      `Failed to resolve conversation actor context for actor ${params.actorId} in conversation ${params.conversationId}`,
-    );
+      `Failed to resolve conversation actor context for actor ${params.actorId} in conversation ${params.conversationId}`
+    )
   }
 
   return {
     conversationActorContextId: context.id,
     sessionId: context.session_id || undefined,
     conversationActorContextCreated: Boolean(insertedContext),
-  };
+  }
 }
 
 async function resolveSessionMessageAuthor(params: {
-  conversationId: string;
-  workspaceId?: UUID;
-  workspaceMemberId?: UUID;
-  fromActorId?: UUID;
-  fromWorkspaceMemberId?: UUID;
+  conversationId: string
+  workspaceId?: UUID
+  workspaceMemberId?: UUID
+  fromActorId?: UUID
+  fromWorkspaceMemberId?: UUID
 }) {
   if (params.fromActorId) {
-    const actorJoinVersionId = await getActorJoinVersionId(params.fromActorId);
+    const actorJoinVersionId = await getActorJoinVersionId(params.fromActorId)
     return ensureConversationParticipant({
       conversationId: params.conversationId,
-      participantKind: 'actor',
+      participantKind: "actor",
       actorId: params.fromActorId,
       actorJoinVersionId,
-    });
+    })
   }
 
   if (params.fromWorkspaceMemberId) {
     return ensureConversationParticipant({
       conversationId: params.conversationId,
-      participantKind: 'workspace_member',
+      participantKind: "workspace_member",
       workspaceMemberId: params.fromWorkspaceMemberId,
-    });
+    })
   }
 
-  return null;
+  return null
 }
 
 function getSurfaceForSessionMessage(
   conversationKind: string,
-  role: SessionConversationMessageRole | 'child_result',
+  role: SessionConversationMessageRole | "child_result"
 ) {
   if (isGroupConversationKind(conversationKind)) {
-    return { scope: 'private' as const, surface: 'internal' as const };
+    return { scope: "private" as const, surface: "internal" as const }
   }
 
-  if (role === 'tool_result' || role === 'child_result') {
-    return { scope: 'private' as const, surface: 'internal' as const };
+  if (role === "tool_result" || role === "child_result") {
+    return { scope: "private" as const, surface: "internal" as const }
   }
 
-  return { scope: 'shared' as const, surface: 'visible' as const };
+  return { scope: "shared" as const, surface: "visible" as const }
 }
 
 function buildMetadataFromItem(item: any) {
-  return typeof item.metadata === 'string'
+  return typeof item.metadata === "string"
     ? JSON.parse(item.metadata)
-    : { ...(item.metadata || {}) };
+    : { ...(item.metadata || {}) }
 }
 
 // ============ Session CRUD ============
 
 export async function createSession(params: {
-  workspaceId: UUID;
-  actorId: UUID;
-  conversationId?: UUID;
-  workspaceMemberId?: UUID;
-  channelType?: SessionsChannelType;
-  trigger?: SessionTrigger;
-  metadata?: Record<string, unknown>;
+  workspaceId: UUID
+  actorId: UUID
+  conversationId?: UUID
+  workspaceMemberId?: UUID
+  channelType?: SessionsChannelType
+  trigger?: SessionTrigger
+  metadata?: Record<string, unknown>
 }): Promise<any> {
   const {
     workspaceId,
     actorId,
     conversationId,
     workspaceMemberId,
-    channelType = 'web',
-    trigger = 'user_message',
+    channelType = "web",
+    trigger = "user_message",
     metadata = {},
-  } = params;
+  } = params
 
-  let resolvedConversationId = conversationId;
-  let privateConversationCreated = false;
+  let resolvedConversationId = conversationId
+  let privateConversationCreated = false
   if (!resolvedConversationId) {
     const conversation = await createConversation({
-      kind: 'private',
-      boundary: 'internal',
+      kind: "private",
+      boundary: "internal",
       workspaceId,
       metadata: { channelType, trigger },
-    });
-    resolvedConversationId = conversation.id as string;
-    privateConversationCreated = true;
+    })
+    resolvedConversationId = conversation.id as string
+    privateConversationCreated = true
   } else {
-    const conversation = await getConversation(resolvedConversationId);
+    const conversation = await getConversation(resolvedConversationId)
     if (!conversation) {
-      throw new Error(`Conversation ${resolvedConversationId} not found`);
+      throw new Error(`Conversation ${resolvedConversationId} not found`)
     }
   }
-  const finalConversationId = resolvedConversationId as string;
+  const finalConversationId = resolvedConversationId as string
 
   await ensureConversationParticipant({
     conversationId: finalConversationId,
-    participantKind: 'actor',
+    participantKind: "actor",
     actorId,
     actorJoinVersionId: await getActorJoinVersionId(actorId),
-  });
+  })
 
-  let resolvedWorkspaceMemberId: string | undefined;
+  let resolvedWorkspaceMemberId: string | undefined
   if (privateConversationCreated && workspaceMemberId) {
-    const workspaceMember = await getWorkspaceMemberIdentityById(
-      workspaceMemberId,
-    );
+    const workspaceMember =
+      await getWorkspaceMemberIdentityById(workspaceMemberId)
     if (!workspaceMember) {
-      throw new Error('Workspace member not found for session creator');
+      throw new Error("Workspace member not found for session creator")
     }
-    resolvedWorkspaceMemberId = workspaceMember.workspaceMemberId;
+    resolvedWorkspaceMemberId = workspaceMember.workspaceMemberId
     await ensureConversationParticipant({
       conversationId: finalConversationId,
-      participantKind: 'workspace_member',
+      participantKind: "workspace_member",
       workspaceMemberId: resolvedWorkspaceMemberId,
-    });
+    })
   }
 
   const ensuredContext = await ensureConversationActorSessionContext({
@@ -495,109 +495,107 @@ export async function createSession(params: {
     channelType,
     trigger,
     metadata,
-  });
+  })
 
-  return loadSession(ensuredContext.sessionId);
+  return loadSession(ensuredContext.sessionId)
 }
 
 export async function getSession(sessionId: UUID): Promise<any | null> {
-  return loadSession(sessionId);
+  return loadSession(sessionId)
 }
 
 export async function getSessionsByActor(
   workspaceId: UUID,
   actorId: UUID,
-  status?: SessionStatus,
+  status?: SessionStatus
 ): Promise<any[]> {
   let sessionsQuery = db
-    .selectFrom('sessions as s')
-    .innerJoin('conversations as c', 'c.id', 's.conversation_id')
-    .selectAll('s')
+    .selectFrom("sessions as s")
+    .innerJoin("conversations as c", "c.id", "s.conversation_id")
+    .selectAll("s")
     .select([
-      'c.kind as conversation_kind',
-      'c.boundary as conversation_boundary',
-      'c.title as conversation_title',
+      "c.kind as conversation_kind",
+      "c.boundary as conversation_boundary",
+      "c.title as conversation_title",
     ])
-    .where('s.workspace_id', '=', workspaceId)
-    .where('s.actor_id', '=', actorId);
+    .where("s.workspace_id", "=", workspaceId)
+    .where("s.actor_id", "=", actorId)
 
   if (status) {
-    sessionsQuery = sessionsQuery.where('s.status', '=', status);
+    sessionsQuery = sessionsQuery.where("s.status", "=", status)
   }
 
-  const sessions = await sessionsQuery
-    .orderBy('s.created_at', 'desc')
-    .execute();
+  const sessions = await sessionsQuery.orderBy("s.created_at", "desc").execute()
 
-  return sessions.map(normalizeSessionRow);
+  return sessions.map(normalizeSessionRow)
 }
 
 export async function updateSessionStatus(
   sessionId: UUID,
   status: SessionStatus,
-  extra?: { errorMessage?: string | null },
+  extra?: { errorMessage?: string | null }
 ): Promise<void> {
   await db
-    .updateTable('sessions')
+    .updateTable("sessions")
     .set({
       status,
       updated_at: sql`NOW()`,
-      completed_at: status === 'closed' ? sql`NOW()` : null,
+      completed_at: status === "closed" ? sql`NOW()` : null,
       ...(extra?.errorMessage !== undefined
         ? { error_message: extra.errorMessage }
         : {}),
     })
-    .where('id', '=', sessionId)
-    .execute();
+    .where("id", "=", sessionId)
+    .execute()
 }
 
-export async function updateSessionCollaboration(params: {
-  sessionId: UUID;
-  collaborationMode?: SessionCollaborationMode;
-  collaborationState?: SessionCollaborationState;
-  activePlanApprovalInteractionId?: UUID | null;
-}, queryable: QueryExecutor = pool): Promise<void> {
+export async function updateSessionCollaboration(
+  params: {
+    sessionId: UUID
+    collaborationMode?: SessionCollaborationMode
+    collaborationState?: SessionCollaborationState
+    activePlanApprovalInteractionId?: UUID | null
+  },
+  queryable: QueryExecutor = pool
+): Promise<void> {
   const values: Record<string, unknown> = {
     updated_at: sql`NOW()`,
-  };
+  }
 
   if (params.collaborationMode) {
-    values.collaboration_mode = params.collaborationMode;
+    values.collaboration_mode = params.collaborationMode
   }
   if (params.collaborationState) {
     values.collaboration_state = parseSessionCollaborationState(
-      params.collaborationState,
-    ) as Record<string, unknown>;
+      params.collaborationState
+    ) as Record<string, unknown>
   }
-  if ('activePlanApprovalInteractionId' in params) {
+  if ("activePlanApprovalInteractionId" in params) {
     values.active_plan_approval_interaction_id =
-      params.activePlanApprovalInteractionId ?? null;
+      params.activePlanApprovalInteractionId ?? null
   }
 
   await executeCompiledQuery(
     queryable,
-    db
-      .updateTable('sessions')
-      .set(values)
-      .where('id', '=', params.sessionId),
-  );
+    db.updateTable("sessions").set(values).where("id", "=", params.sessionId)
+  )
 }
 
 // ============ Session Messages ============
 
 export async function addSessionMessage(params: {
-  sessionId: UUID;
-  workspaceId: UUID;
-  role: SessionConversationMessageRole;
-  contentBlocks: CanonicalContentBlock[];
-  fromActorId?: UUID;
-  fromWorkspaceMemberId?: UUID;
-  subtype?: SessionConversationMessageSubtype;
-  visibility?: 'default' | 'shared_visible';
-  metadata?: Record<string, unknown>;
-  replyToItemId?: UUID;
-  restrictedAudienceParticipantIds?: UUID[];
-  projectTransportOutbound?: boolean;
+  sessionId: UUID
+  workspaceId: UUID
+  role: SessionConversationMessageRole
+  contentBlocks: CanonicalContentBlock[]
+  fromActorId?: UUID
+  fromWorkspaceMemberId?: UUID
+  subtype?: SessionConversationMessageSubtype
+  visibility?: "default" | "shared_visible"
+  metadata?: Record<string, unknown>
+  replyToItemId?: UUID
+  restrictedAudienceParticipantIds?: UUID[]
+  projectTransportOutbound?: boolean
 }): Promise<SessionMessage> {
   const {
     sessionId,
@@ -607,35 +605,35 @@ export async function addSessionMessage(params: {
     fromActorId,
     fromWorkspaceMemberId,
     subtype,
-    visibility = 'default',
+    visibility = "default",
     metadata = {},
     replyToItemId,
     restrictedAudienceParticipantIds,
     projectTransportOutbound = false,
-  } = params;
-  const session = await getSession(sessionId);
-  if (!session) throw new Error(`Session ${sessionId} not found`);
+  } = params
+  const session = await getSession(sessionId)
+  if (!session) throw new Error(`Session ${sessionId} not found`)
   if (!Array.isArray(contentBlocks) || contentBlocks.length === 0) {
-    throw new Error('contentBlocks is required');
+    throw new Error("contentBlocks is required")
   }
   const normalizedMessage = await buildNormalizedMessageContent({
-    content: '',
+    content: "",
     contentBlocks,
     metadata,
-  });
+  })
 
   const authorMember = await resolveSessionMessageAuthor({
     conversationId: session.conversation_id,
     workspaceId,
     fromActorId,
     fromWorkspaceMemberId,
-  });
+  })
   const { scope, surface } =
-    visibility === 'shared_visible'
-      ? { scope: 'shared' as const, surface: 'visible' as const }
-      : getSurfaceForSessionMessage(session.conversation_kind, role);
-  const itemType = role === 'tool_result' ? 'control' : 'message';
-  const resolvedSubtype = subtype || role;
+    visibility === "shared_visible"
+      ? { scope: "shared" as const, surface: "visible" as const }
+      : getSurfaceForSessionMessage(session.conversation_kind, role)
+  const itemType = role === "tool_result" ? "control" : "message"
+  const resolvedSubtype = subtype || role
 
   const item = await createConversationItem({
     workspaceId,
@@ -645,27 +643,33 @@ export async function addSessionMessage(params: {
     surface,
     itemType,
     subtype: resolvedSubtype,
-    role: role === 'tool_result' ? 'tool' : role === 'system' ? 'system' : role === 'assistant' ? 'assistant' : 'user',
+    role:
+      role === "tool_result"
+        ? "tool"
+        : role === "system"
+          ? "system"
+          : role === "assistant"
+            ? "assistant"
+            : "user",
     authorParticipantId: authorMember?.id,
     replyToItemId,
     metadata: normalizedMessage.normalizedMetadata,
     parts: normalizedMessage.parts,
     restrictedAudienceParticipantIds,
-  });
+  })
 
-  if (
-    projectTransportOutbound &&
-    scope === 'shared' &&
-    surface === 'visible'
-  ) {
+  if (projectTransportOutbound && scope === "shared" && surface === "visible") {
     await queueConversationTransportProjection({
       workspaceId,
       conversationId: session.conversation_id,
       itemId: item.id,
-      direction: 'outbound',
+      direction: "outbound",
       metadata: {
-        senderType:
-          fromActorId ? 'actor' : fromWorkspaceMemberId ? 'workspace_member' : 'system',
+        senderType: fromActorId
+          ? "actor"
+          : fromWorkspaceMemberId
+            ? "workspace_member"
+            : "system",
         senderActorId: fromActorId || undefined,
         senderWorkspaceMemberId: fromWorkspaceMemberId || undefined,
         restrictedAudienceParticipantIds,
@@ -673,36 +677,35 @@ export async function addSessionMessage(params: {
     }).catch((error) => {
       console.error(
         `Failed to queue transport projection for session item ${item.id}:`,
-        error?.message || error,
-      );
-    });
+        error?.message || error
+      )
+    })
   }
 
-  if (scope === 'shared' && surface === 'visible') {
-    const { notifyRemoteAgentDeliveriesForConversation } = await import(
-      '../remote-agents/service.js'
-    );
-    await notifyRemoteAgentDeliveriesForConversation(session.conversation_id);
+  if (scope === "shared" && surface === "visible") {
+    const { notifyRemoteAgentDeliveriesForConversation } =
+      await import("../remote-agents/service.js")
+    await notifyRemoteAgentDeliveriesForConversation(session.conversation_id)
   }
 
   if (
-    scope === 'shared' &&
-    surface === 'visible' &&
+    scope === "shared" &&
+    surface === "visible" &&
     !isGroupConversationKind(session.conversation_kind) &&
-    (role === 'user' || role === 'assistant')
+    (role === "user" || role === "assistant")
   ) {
-    let actorName: string | undefined;
+    let actorName: string | undefined
     if (fromActorId) {
       actorName = (
         await db
-          .selectFrom('actors')
-          .select('name')
-          .where('id', '=', fromActorId)
+          .selectFrom("actors")
+          .select("name")
+          .where("id", "=", fromActorId)
           .executeTakeFirst()
-      )?.name;
+      )?.name
     }
     await emitEvent({
-      type: 'session.message.new',
+      type: "session.message.new",
       workspaceId,
       payload: {
         sessionId,
@@ -716,7 +719,7 @@ export async function addSessionMessage(params: {
         createdAt: item.createdAt,
       },
       timestamp: nowISO(),
-    });
+    })
   }
 
   return {
@@ -729,14 +732,20 @@ export async function addSessionMessage(params: {
     fromWorkspaceMemberId: fromWorkspaceMemberId || undefined,
     metadata: normalizedMessage.normalizedMetadata,
     createdAt: item.createdAt,
-  };
+  }
 }
 
-export async function getSessionMessages(sessionId: UUID): Promise<SessionMessage[]> {
+export async function getSessionMessages(
+  sessionId: UUID
+): Promise<SessionMessage[]> {
   const items = await db
     .selectFrom("conversation_items as ci")
     .innerJoin("sessions as s", "s.id", "ci.session_id")
-    .leftJoin("conversation_participants as cp", "cp.id", "ci.author_participant_id")
+    .leftJoin(
+      "conversation_participants as cp",
+      "cp.id",
+      "ci.author_participant_id"
+    )
     .leftJoin("actors as a", "a.id", "cp.actor_id")
     .leftJoin("workspace_members as wm", "wm.id", "cp.workspace_member_id")
     .leftJoin("users as u", "u.id", "wm.user_id")
@@ -755,17 +764,17 @@ export async function getSessionMessages(sessionId: UUID): Promise<SessionMessag
       "cp.actor_id as from_actor_id",
       "cp.workspace_member_id as from_workspace_member_id",
       sql<string | null>`COALESCE(a.name, u.name, cp.display_name)`.as(
-        "author_name",
+        "author_name"
       ),
     ])
     .where("ci.session_id", "=", sessionId)
     .orderBy("ci.created_at", "asc")
     .orderBy("ci.sequence", "asc")
-    .execute();
+    .execute()
 
-  if (items.length === 0) return [];
+  if (items.length === 0) return []
 
-  const itemIds = items.map((row) => row.id);
+  const itemIds = items.map((row) => row.id)
   const partRows = await db
     .selectFrom("conversation_item_parts as cip")
     .leftJoin("files as f", "f.id", "cip.file_id")
@@ -786,16 +795,16 @@ export async function getSessionMessages(sessionId: UUID): Promise<SessionMessag
     .where("cip.item_id", "in", itemIds)
     .orderBy("cip.item_id", "asc")
     .orderBy("cip.ordinal", "asc")
-    .execute();
+    .execute()
 
-  const partsByItem = new Map<string, any[]>();
+  const partsByItem = new Map<string, any[]>()
   for (const row of partRows) {
-    if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, []);
-    partsByItem.get(row.item_id)!.push(row);
+    if (!partsByItem.has(row.item_id)) partsByItem.set(row.item_id, [])
+    partsByItem.get(row.item_id)!.push(row)
   }
 
   return items.map((row: any) => {
-    const item = { ...row, parts: partsByItem.get(row.id) || [] };
+    const item = { ...row, parts: partsByItem.get(row.id) || [] }
     return {
       id: row.id,
       sessionId: row.session_id,
@@ -808,65 +817,65 @@ export async function getSessionMessages(sessionId: UUID): Promise<SessionMessag
       fromWorkspaceMemberId: row.from_workspace_member_id || undefined,
       metadata: buildMetadataFromItem(item),
       createdAt: row.created_at,
-    };
-  });
+    }
+  })
 }
 
 // ============ Session Interrupts ============
 
 export async function consumeInterrupts(sessionId: UUID): Promise<any[]> {
   return db
-    .updateTable('session_interrupts')
+    .updateTable("session_interrupts")
     .set({
       is_consumed: true,
     })
-    .where('target_session_id', '=', sessionId)
-    .where('is_consumed', '=', false)
+    .where("target_session_id", "=", sessionId)
+    .where("is_consumed", "=", false)
     .returningAll()
-    .execute();
+    .execute()
 }
 
 export async function hasPendingInterrupt(
   sessionId: UUID,
-  type?: SessionInterruptType,
+  type?: SessionInterruptType
 ): Promise<boolean> {
   let query = db
-    .selectFrom('session_interrupts')
-    .select('id')
-    .where('target_session_id', '=', sessionId)
-    .where('is_consumed', '=', false);
+    .selectFrom("session_interrupts")
+    .select("id")
+    .where("target_session_id", "=", sessionId)
+    .where("is_consumed", "=", false)
 
   if (type) {
-    query = query.where('type', '=', type);
+    query = query.where("type", "=", type)
   }
 
-  const row = await query.limit(1).executeTakeFirst();
-  return Boolean(row?.id);
+  const row = await query.limit(1).executeTakeFirst()
+  return Boolean(row?.id)
 }
 
 // ============ Cancel Session ============
 
 export async function cancelSession(sessionId: UUID): Promise<void> {
-  const session = await getSession(sessionId);
-  if (!session) throw new Error('Session not found');
-  if (session.status === 'closed') {
-    throw new Error(`Session already ${session.status}`);
+  const session = await getSession(sessionId)
+  if (!session) throw new Error("Session not found")
+  if (session.status === "closed") {
+    throw new Error(`Session already ${session.status}`)
   }
 
-  await updateSessionStatus(sessionId, 'closed');
-  await shutdownSessionInstances(sessionId).catch(() => {});
+  await updateSessionStatus(sessionId, "closed")
+  await shutdownSessionInstances(sessionId).catch(() => {})
 }
 
 // ============ Actor concurrent session count ============
 
 export async function getActiveSessionCount(actorId: UUID): Promise<number> {
   const row = await db
-    .selectFrom('sessions')
-    .select(({ fn }) => fn.count<string>('id').as('count'))
-    .where('actor_id', '=', actorId)
-    .where('status', '=', 'running')
-    .executeTakeFirst();
-  return parseInt(row?.count || '0', 10);
+    .selectFrom("sessions")
+    .select(({ fn }) => fn.count<string>("id").as("count"))
+    .where("actor_id", "=", actorId)
+    .where("status", "=", "running")
+    .executeTakeFirst()
+  return parseInt(row?.count || "0", 10)
 }
 
 export async function getMaxConcurrentSessions(actorId: UUID): Promise<number> {
@@ -877,9 +886,9 @@ export async function getMaxConcurrentSessions(actorId: UUID): Promise<number> {
         WHEN COALESCE(config->>'maxConcurrentSessions', '') ~ '^[0-9]+$'
           THEN GREATEST((config->>'maxConcurrentSessions')::int, 1)
         ELSE 3
-      END`.as("max_concurrent_sessions"),
+      END`.as("max_concurrent_sessions")
     )
     .where("id", "=", actorId)
-    .executeTakeFirst();
-  return row?.max_concurrent_sessions ?? 3;
+    .executeTakeFirst()
+  return row?.max_concurrent_sessions ?? 3
 }

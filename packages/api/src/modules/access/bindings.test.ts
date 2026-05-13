@@ -1,12 +1,10 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import {
-  type AccessGrantTarget,
-} from "./bindings.js";
+import test from "node:test"
+import assert from "node:assert/strict"
+import { type AccessGrantTarget } from "./bindings.js"
 import {
   buildAccessBindingStorageTarget,
   buildResourceAccessBindingInsertValues,
-} from "./binding-storage.js";
+} from "./binding-storage.js"
 
 test("buildAccessBindingStorageTarget stores actor_in_conversation by context only", () => {
   const target: AccessGrantTarget = {
@@ -15,7 +13,7 @@ test("buildAccessBindingStorageTarget stores actor_in_conversation by context on
     subjectActorId: "actor-1",
     subjectConversationId: "conversation-1",
     subjectConversationActorContextId: "context-1",
-  };
+  }
 
   assert.deepEqual(buildAccessBindingStorageTarget(target), {
     target_type: "actor_in_conversation",
@@ -23,8 +21,8 @@ test("buildAccessBindingStorageTarget stores actor_in_conversation by context on
     subject_actor_id: null,
     subject_conversation_id: null,
     subject_conversation_actor_context_id: "context-1",
-  });
-});
+  })
+})
 
 test("buildResourceAccessBindingInsertValues maps resource and target columns consistently", () => {
   const target: AccessGrantTarget = {
@@ -33,7 +31,7 @@ test("buildResourceAccessBindingInsertValues maps resource and target columns co
     subjectActorId: null,
     subjectConversationId: null,
     subjectConversationActorContextId: null,
-  };
+  }
 
   assert.deepEqual(
     buildResourceAccessBindingInsertValues({
@@ -60,6 +58,6 @@ test("buildResourceAccessBindingInsertValues maps resource and target columns co
       status: "active",
       created_by_workspace_member_id: "member-1",
       reason: "test reason",
-    },
-  );
-});
+    }
+  )
+})

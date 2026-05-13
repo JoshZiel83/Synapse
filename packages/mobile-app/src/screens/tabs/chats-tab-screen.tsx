@@ -1,9 +1,9 @@
-import { useRouter } from "expo-router";
-import { useMemo } from "react";
-import { RefreshControl, ScrollView, StyleSheet, View } from "react-native";
+import { useRouter } from "expo-router"
+import { useMemo } from "react"
+import { RefreshControl, ScrollView, StyleSheet, View } from "react-native"
 
-import { ConversationList } from "@/components/conversation-list";
-import { MobileHeaderActions } from "@/components/mobile-header-actions";
+import { ConversationList } from "@/components/conversation-list"
+import { MobileHeaderActions } from "@/components/mobile-header-actions"
 import {
   Button,
   EmptyState,
@@ -11,15 +11,15 @@ import {
   MobilePageHeader,
   ScreenView,
   SectionBlock,
-} from "@/components/ui";
-import { useScanLauncher } from "@/hooks/use-scan-launcher";
-import { useChat } from "@/providers/chat-provider";
-import { useWorkspace } from "@/providers/workspace-provider";
+} from "@/components/ui"
+import { useScanLauncher } from "@/hooks/use-scan-launcher"
+import { useChat } from "@/providers/chat-provider"
+import { useWorkspace } from "@/providers/workspace-provider"
 
 export default function ChatsTabScreen() {
-  const router = useRouter();
-  const { openScan, permissionSheet } = useScanLauncher("relationship");
-  const { workspaceId, workspaceName } = useWorkspace();
+  const router = useRouter()
+  const { openScan, permissionSheet } = useScanLauncher("relationship")
+  const { workspaceId, workspaceName } = useWorkspace()
   const {
     conversations,
     error,
@@ -27,19 +27,19 @@ export default function ChatsTabScreen() {
     status,
     totalUnreadCount,
     workspaceMemberId,
-  } = useChat();
-  const loading = status === "loading";
-  const refreshing = false;
-  const unreadCount = totalUnreadCount;
-  const headerTitle = unreadCount > 0 ? `消息(${unreadCount})` : "消息";
+  } = useChat()
+  const loading = status === "loading"
+  const refreshing = false
+  const unreadCount = totalUnreadCount
+  const headerTitle = unreadCount > 0 ? `消息(${unreadCount})` : "消息"
   const emptyDescription = useMemo(() => {
     if (!workspaceId) {
-      return "请先进入一个有效工作区。";
+      return "请先进入一个有效工作区。"
     }
     return workspaceName
       ? `${workspaceName} 里还没有任何聊天。`
-      : "还没有任何聊天。";
-  }, [workspaceId, workspaceName]);
+      : "还没有任何聊天。"
+  }, [workspaceId, workspaceName])
 
   return (
     <ScreenView>
@@ -115,7 +115,7 @@ export default function ChatsTabScreen() {
       </View>
       {permissionSheet}
     </ScreenView>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -142,4 +142,4 @@ const styles = StyleSheet.create({
     marginTop: 10,
     width: "100%",
   },
-});
+})

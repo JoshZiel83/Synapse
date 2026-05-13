@@ -74,7 +74,8 @@ servers:
   - name: "filesystem-stdio"
     transport: "stdio"
     command: "npx"
-    args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"]
+    args:
+      ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/allowed/dir"]
     env:
       NODE_ENV: "production"
 

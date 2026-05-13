@@ -1,105 +1,109 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
-import { resolveRepoSubprojectPath } from "../../config/subprojects.js";
+import test from "node:test"
+import assert from "node:assert/strict"
+import { mkdtemp, rm, writeFile } from "node:fs/promises"
+import { tmpdir } from "node:os"
+import { join } from "node:path"
+import { resolveRepoSubprojectPath } from "../../config/subprojects.js"
 import {
   __resetRelayAutoSkillIndexCacheForTests,
   __setRelayAutoSkillManifestPathForTests,
   readRelayAutoLoadedSkill,
-} from "./relay-auto-skills.js";
+} from "./relay-auto-skills.js"
 
 test.afterEach(async () => {
-  __setRelayAutoSkillManifestPathForTests();
-  __resetRelayAutoSkillIndexCacheForTests();
-});
+  __setRelayAutoSkillManifestPathForTests()
+  __resetRelayAutoSkillIndexCacheForTests()
+})
 
 test("readRelayAutoLoadedSkill resolves provider-prefixed child skill", async () => {
   const result = await readRelayAutoLoadedSkill({
     skillName: "lark-cli-lark-shared",
-  });
+  })
 
-  assert.ok(result);
-  assert.equal(result.skill.slug, "lark-cli-lark-shared");
-  assert.match(result.asset.textContent, /lark-cli|Lark CLI/i);
-});
+  assert.ok(result)
+  assert.equal(result.skill.slug, "lark-cli-lark-shared")
+  assert.match(result.asset.textContent, /lark-cli|Lark CLI/i)
+})
 
 test("readRelayAutoLoadedSkill resolves single-directory provider skill", async () => {
   const result = await readRelayAutoLoadedSkill({
     skillName: "xiaohongshu-cli",
-  });
+  })
 
-  assert.ok(result);
-  assert.equal(result.skill.slug, "xiaohongshu-cli");
-  assert.match(result.asset.textContent, /xhs|Xiaohongshu/i);
-});
+  assert.ok(result)
+  assert.equal(result.skill.slug, "xiaohongshu-cli")
+  assert.match(result.asset.textContent, /xhs|Xiaohongshu/i)
+})
 
 test("readRelayAutoLoadedSkill skips broken child skill directories", async () => {
   const brokenDir = await mkdtemp(
-    join(resolveRepoSubprojectPath("lark-cli", "skills"), "broken-auto-skill-"),
-  );
+    join(resolveRepoSubprojectPath("lark-cli", "skills"), "broken-auto-skill-")
+  )
 
   try {
-    __resetRelayAutoSkillIndexCacheForTests();
+    __resetRelayAutoSkillIndexCacheForTests()
     const result = await readRelayAutoLoadedSkill({
       skillName: "xiaohongshu-cli",
-    });
+    })
 
-    assert.ok(result);
-    assert.equal(result.skill.slug, "xiaohongshu-cli");
+    assert.ok(result)
+    assert.equal(result.skill.slug, "xiaohongshu-cli")
   } finally {
-    await rm(brokenDir, { recursive: true, force: true });
-    __resetRelayAutoSkillIndexCacheForTests();
+    await rm(brokenDir, { recursive: true, force: true })
+    __resetRelayAutoSkillIndexCacheForTests()
   }
-});
+})
 
 test("relay auto skill cache retries after manifest load failure", async () => {
   const manifestPath = join(
     tmpdir(),
-    `relay-auto-skills-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`,
-  );
+    `relay-auto-skills-test-${Date.now()}-${Math.random().toString(16).slice(2)}.json`
+  )
 
-  __setRelayAutoSkillManifestPathForTests(manifestPath);
-  await writeFile(manifestPath, "{", "utf8");
+  __setRelayAutoSkillManifestPathForTests(manifestPath)
+  await writeFile(manifestPath, "{", "utf8")
 
   const failed = await readRelayAutoLoadedSkill({
     skillName: "xiaohongshu-cli",
-  });
-  assert.equal(failed, null);
+  })
+  assert.equal(failed, null)
 
   await writeFile(
     manifestPath,
-    `${JSON.stringify({
-      version: 1,
-      providers: [
-        {
-          slug: "xiaohongshu-cli",
-          displayName: "Xiaohongshu CLI",
-          subproject: "xiaohongshu-cli",
-          capabilities: [
-            {
-              slug: "xhs",
-              command: "xhs",
+    `${JSON.stringify(
+      {
+        version: 1,
+        providers: [
+          {
+            slug: "xiaohongshu-cli",
+            displayName: "Xiaohongshu CLI",
+            subproject: "xiaohongshu-cli",
+            capabilities: [
+              {
+                slug: "xhs",
+                command: "xhs",
+              },
+            ],
+            skillSource: {
+              type: "single",
+              path: ".",
+              skillSlug: "xiaohongshu-cli",
+              capabilitySlug: "xhs",
             },
-          ],
-          skillSource: {
-            type: "single",
-            path: ".",
-            skillSlug: "xiaohongshu-cli",
-            capabilitySlug: "xhs",
           },
-        },
-      ],
-    }, null, 2)}\n`,
-    "utf8",
-  );
+        ],
+      },
+      null,
+      2
+    )}\n`,
+    "utf8"
+  )
 
   const recovered = await readRelayAutoLoadedSkill({
     skillName: "xiaohongshu-cli",
-  });
-  assert.ok(recovered);
-  assert.equal(recovered.skill.slug, "xiaohongshu-cli");
+  })
+  assert.ok(recovered)
+  assert.equal(recovered.skill.slug, "xiaohongshu-cli")
 
-  await rm(manifestPath, { force: true });
-});
+  await rm(manifestPath, { force: true })
+})

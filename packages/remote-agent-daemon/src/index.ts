@@ -5,77 +5,72 @@ import {
   execFileSync,
   execSync,
   type ChildProcess,
-} from "node:child_process";
-import { randomUUID } from "node:crypto";
-import {
-  existsSync,
-  mkdirSync,
-  readFileSync,
-  writeFileSync,
-} from "node:fs";
-import os from "node:os";
-import path from "node:path";
-import process from "node:process";
-import { fileURLToPath } from "node:url";
-import WebSocket from "ws";
+} from "node:child_process"
+import { randomUUID } from "node:crypto"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
+import process from "node:process"
+import { fileURLToPath } from "node:url"
+import WebSocket from "ws"
 
-type RuntimeKind = "claude_code" | "codex";
+type RuntimeKind = "claude_code" | "codex"
 
 type RuntimeCatalogEntry = {
-  runtimeKind: RuntimeKind;
-  executablePath?: string;
+  runtimeKind: RuntimeKind
+  executablePath?: string
   status:
     | "available"
     | "missing_binary"
     | "broken_path"
     | "unsupported_platform"
-    | "runtime_error";
-  version?: string;
-  metadata?: Record<string, unknown>;
-  lastError?: string;
-};
+    | "runtime_error"
+  version?: string
+  metadata?: Record<string, unknown>
+  lastError?: string
+}
 
 type DaemonConfig = {
-  serverUrl: string;
-  apiKey: string;
-  heartbeatMs: number;
-  logLevel: LogLevel;
-};
+  serverUrl: string
+  apiKey: string
+  heartbeatMs: number
+  logLevel: LogLevel
+}
 
 type AgentStartMessage = {
-  type: "agent:start";
-  remoteAgentId: string;
-  runtimeKind: RuntimeKind;
-  runtimePath?: string | null;
-  localRootPath?: string | null;
-  sessionId?: string | null;
-  serverUrl?: string;
-};
+  type: "agent:start"
+  remoteAgentId: string
+  runtimeKind: RuntimeKind
+  runtimePath?: string | null
+  localRootPath?: string | null
+  sessionId?: string | null
+  serverUrl?: string
+}
 
 type DeliveryMessage = {
-  type: "agent:deliver";
-  deliveries: Delivery[];
-};
+  type: "agent:deliver"
+  deliveries: Delivery[]
+}
 
 type InteractionResolvedMessage = {
-  type: "agent:interaction:resolved";
-  remoteAgentId: string;
-  interactionId: string;
-  interaction: Record<string, any>;
-};
+  type: "agent:interaction:resolved"
+  remoteAgentId: string
+  interactionId: string
+  interaction: Record<string, any>
+}
 
 type ConnectedMessage = {
-  type: "connected";
-  machineId: string;
-  sessionId: string;
-};
+  type: "connected"
+  machineId: string
+  sessionId: string
+}
 
 type Delivery = {
-  remoteAgentId: string;
-  deliveryId: string;
-  conversationId: string;
-  itemId: string;
-};
+  remoteAgentId: string
+  deliveryId: string
+  conversationId: string
+  itemId: string
+}
 
 type DriverEvent =
   | { kind: "session"; sessionId: string }
@@ -83,81 +78,87 @@ type DriverEvent =
   | { kind: "error"; message: string }
   | { kind: "control_request"; requestId: string; request: Record<string, any> }
   | {
-      kind: "codex_server_request";
-      requestId: string | number;
-      method: string;
-      params: Record<string, any>;
+      kind: "codex_server_request"
+      requestId: string | number
+      method: string
+      params: Record<string, any>
     }
   | {
-      kind: "plan_updated";
-      explanation?: string;
-      plan: Array<{ step: string; status: string }>;
-    };
+      kind: "plan_updated"
+      explanation?: string
+      plan: Array<{ step: string; status: string }>
+    }
 
 type SpawnContext = {
-  prompt: string;
-  remoteAgentId: string;
-  serverUrl: string;
-  machineKey: string;
-  runtimePath?: string;
-  workingDirectory: string;
-  chatBridgePath: string;
-  bridgeStatePath: string;
-  sessionId?: string;
-};
+  prompt: string
+  remoteAgentId: string
+  serverUrl: string
+  machineKey: string
+  runtimePath?: string
+  workingDirectory: string
+  chatBridgePath: string
+  bridgeStatePath: string
+  sessionId?: string
+}
 
 type DriverLaunch = {
-  process: ChildProcess;
-};
+  process: ChildProcess
+}
 
-type LogLevel = "error" | "warn" | "info" | "debug";
+type LogLevel = "error" | "warn" | "info" | "debug"
 
 interface RuntimeDriver {
-  readonly runtimeKind: RuntimeKind;
-  readonly supportsPersistentSession: boolean;
-  spawn(context: SpawnContext): DriverLaunch;
-  parseOutputLine(line: string): DriverEvent[];
-  encodeWakeMessage?(text: string, sessionId?: string): string | null;
-  destroy?(): void;
+  readonly runtimeKind: RuntimeKind
+  readonly supportsPersistentSession: boolean
+  spawn(context: SpawnContext): DriverLaunch
+  parseOutputLine(line: string): DriverEvent[]
+  encodeWakeMessage?(text: string, sessionId?: string): string | null
+  destroy?(): void
 }
 
 type SessionState = {
-  sessionId?: string;
-};
+  sessionId?: string
+}
 
-const DEFAULT_HEARTBEAT_MS = 30_000;
-const DEFAULT_RECONNECT_MS = 3_000;
-const MACHINE_DIR_ROOT = path.join(os.homedir(), ".synapse", "remote-agents");
-const CHAT_BRIDGE_PATH = fileURLToPath(new URL("./chat-bridge.js", import.meta.url));
+const DEFAULT_HEARTBEAT_MS = 30_000
+const DEFAULT_RECONNECT_MS = 3_000
+const MACHINE_DIR_ROOT = path.join(os.homedir(), ".synapse", "remote-agents")
+const CHAT_BRIDGE_PATH = fileURLToPath(
+  new URL("./chat-bridge.js", import.meta.url)
+)
 const LOG_LEVEL_WEIGHTS: Record<LogLevel, number> = {
   error: 0,
   warn: 1,
   info: 2,
   debug: 3,
-};
-
-function resolveLogLevel(value?: string): LogLevel {
-  const normalized = value?.trim().toLowerCase();
-  if (normalized === "error" || normalized === "warn" || normalized === "debug") {
-    return normalized;
-  }
-  return "info";
 }
 
-let activeLogLevel = resolveLogLevel(process.env.SYNAPSE_REMOTE_AGENT_LOG_LEVEL);
+function resolveLogLevel(value?: string): LogLevel {
+  const normalized = value?.trim().toLowerCase()
+  if (
+    normalized === "error" ||
+    normalized === "warn" ||
+    normalized === "debug"
+  ) {
+    return normalized
+  }
+  return "info"
+}
+
+let activeLogLevel = resolveLogLevel(process.env.SYNAPSE_REMOTE_AGENT_LOG_LEVEL)
 
 function shouldLog(level: LogLevel) {
-  return LOG_LEVEL_WEIGHTS[level] <= LOG_LEVEL_WEIGHTS[activeLogLevel];
+  return LOG_LEVEL_WEIGHTS[level] <= LOG_LEVEL_WEIGHTS[activeLogLevel]
 }
 
 function formatLogMeta(meta?: Record<string, unknown>) {
   if (!meta || Object.keys(meta).length === 0) {
-    return "";
+    return ""
   }
   try {
-    return ` ${JSON.stringify(meta)}`;
+    return ` ${JSON.stringify(meta)}`
   } catch {
-    return "";
+    return ""
   }
 }
 
@@ -165,55 +166,55 @@ function log(
   level: LogLevel,
   scope: string,
   message: string,
-  meta?: Record<string, unknown>,
+  meta?: Record<string, unknown>
 ) {
   if (!shouldLog(level)) {
-    return;
+    return
   }
-  const line = `[${new Date().toISOString()}] [${level}] [${scope}] ${message}${formatLogMeta(meta)}\n`;
-  process.stderr.write(line);
+  const line = `[${new Date().toISOString()}] [${level}] [${scope}] ${message}${formatLogMeta(meta)}\n`
+  process.stderr.write(line)
 }
 
 function maskSecret(value: string) {
   if (value.length <= 10) {
-    return value;
+    return value
   }
-  return `${value.slice(0, 8)}…${value.slice(-6)}`;
+  return `${value.slice(0, 8)}…${value.slice(-6)}`
 }
 
 function parseArgs(argv: string[]): DaemonConfig {
-  const args = new Map<string, string>();
-  let debug = false;
+  const args = new Map<string, string>()
+  let debug = false
   for (let index = 0; index < argv.length; index += 1) {
-    const current = argv[index];
-    if (!current?.startsWith("--")) continue;
+    const current = argv[index]
+    if (!current?.startsWith("--")) continue
     if (current === "--debug") {
-      debug = true;
-      continue;
+      debug = true
+      continue
     }
-    const next = argv[index + 1];
-    if (!next || next.startsWith("--")) continue;
-    args.set(current.slice(2), next);
-    index += 1;
+    const next = argv[index + 1]
+    if (!next || next.startsWith("--")) continue
+    args.set(current.slice(2), next)
+    index += 1
   }
 
-  const serverUrl = args.get("server-url")?.trim() || "";
-  const apiKey = args.get("api-key")?.trim() || "";
+  const serverUrl = args.get("server-url")?.trim() || ""
+  const apiKey = args.get("api-key")?.trim() || ""
   const heartbeatMs = Math.max(
     5_000,
-    Number.parseInt(args.get("heartbeat-ms") || "", 10) || DEFAULT_HEARTBEAT_MS,
-  );
+    Number.parseInt(args.get("heartbeat-ms") || "", 10) || DEFAULT_HEARTBEAT_MS
+  )
   const logLevel = debug
     ? "debug"
     : resolveLogLevel(
-        args.get("log-level") || process.env.SYNAPSE_REMOTE_AGENT_LOG_LEVEL,
-      );
+        args.get("log-level") || process.env.SYNAPSE_REMOTE_AGENT_LOG_LEVEL
+      )
 
   if (!serverUrl) {
-    throw new Error("--server-url is required");
+    throw new Error("--server-url is required")
   }
   if (!apiKey) {
-    throw new Error("--api-key is required");
+    throw new Error("--api-key is required")
   }
 
   return {
@@ -221,42 +222,45 @@ function parseArgs(argv: string[]): DaemonConfig {
     apiKey,
     heartbeatMs,
     logLevel,
-  };
+  }
 }
 
 function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function ensureDirectory(directory: string) {
-  mkdirSync(directory, { recursive: true });
+  mkdirSync(directory, { recursive: true })
 }
 
 function readSessionState(filePath: string): SessionState {
   try {
     if (!existsSync(filePath)) {
-      return {};
+      return {}
     }
-    const raw = readFileSync(filePath, "utf8");
-    const parsed = JSON.parse(raw) as SessionState;
-    return parsed && typeof parsed === "object" ? parsed : {};
+    const raw = readFileSync(filePath, "utf8")
+    const parsed = JSON.parse(raw) as SessionState
+    return parsed && typeof parsed === "object" ? parsed : {}
   } catch {
-    return {};
+    return {}
   }
 }
 
 function writeSessionState(filePath: string, state: SessionState) {
-  writeFileSync(filePath, JSON.stringify(state, null, 2), "utf8");
+  writeFileSync(filePath, JSON.stringify(state, null, 2), "utf8")
 }
 
 function trimFirstLine(value: string) {
-  return value.split(/\r?\n/).map((line) => line.trim()).find(Boolean);
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
 }
 
 function toWsUrl(serverUrl: string) {
-  const url = new URL("/ws/remote-agents", serverUrl);
-  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-  return url;
+  const url = new URL("/ws/remote-agents", serverUrl)
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:"
+  return url
 }
 
 function buildWakePrompt() {
@@ -267,7 +271,7 @@ function buildWakePrompt() {
     "Call check_messages first.",
     "Then use read_history for the relevant conversation(s), reply with send_message when action is needed, and stop when finished.",
     "If there is nothing actionable, stop without sending any message.",
-  ].join(" ");
+  ].join(" ")
 }
 
 function buildPlanApprovedPrompt(note?: string) {
@@ -277,7 +281,7 @@ function buildPlanApprovedPrompt(note?: string) {
     "Continue with the approved work. Check messages first if needed, then proceed.",
   ]
     .filter(Boolean)
-    .join(" ");
+    .join(" ")
 }
 
 function buildPlanRevisionPrompt(note?: string) {
@@ -287,14 +291,14 @@ function buildPlanRevisionPrompt(note?: string) {
     "Review the conversation history, update your plan, and request approval again when ready.",
   ]
     .filter(Boolean)
-    .join(" ");
+    .join(" ")
 }
 
 function buildBootstrapPrompt(params: {
-  remoteAgentId: string;
-  runtimeKind: RuntimeKind;
-  workingDirectory: string;
-  stateDirectory: string;
+  remoteAgentId: string
+  runtimeKind: RuntimeKind
+  workingDirectory: string
+  stateDirectory: string
 }) {
   return [
     `You are a Synapse RemoteAgent running as runtime ${params.runtimeKind}.`,
@@ -318,74 +322,76 @@ function buildBootstrapPrompt(params: {
     "- If there is no actionable work, stop without sending a message.",
     "",
     buildWakePrompt(),
-  ].join("\n");
+  ].join("\n")
 }
 
 function splitLines(buffer: string) {
-  const parts = buffer.split(/\r?\n/);
-  const remainder = parts.pop() ?? "";
+  const parts = buffer.split(/\r?\n/)
+  const remainder = parts.pop() ?? ""
   return {
     lines: parts,
     remainder,
-  };
+  }
 }
 
 function previewLine(value: string, maxLength = 280) {
-  const normalized = value.replace(/\s+/g, " ").trim();
+  const normalized = value.replace(/\s+/g, " ").trim()
   if (normalized.length <= maxLength) {
-    return normalized;
+    return normalized
   }
-  return `${normalized.slice(0, maxLength)}...`;
+  return `${normalized.slice(0, maxLength)}...`
 }
 
 function safeJsonParse<T = any>(value: string): T | null {
   try {
-    return JSON.parse(value) as T;
+    return JSON.parse(value) as T
   } catch {
-    return null;
+    return null
   }
 }
 
 function buildInternalUrl(serverUrl: string, pathname: string) {
-  return new URL(pathname, serverUrl);
+  return new URL(pathname, serverUrl)
 }
 
 async function requestJson<T>(
   serverUrl: string,
   machineKey: string,
   pathname: string,
-  init?: RequestInit,
+  init?: RequestInit
 ): Promise<T> {
-  const url = buildInternalUrl(serverUrl, pathname);
-  const headers = new Headers(init?.headers);
-  headers.set("authorization", `Bearer ${machineKey}`);
+  const url = buildInternalUrl(serverUrl, pathname)
+  const headers = new Headers(init?.headers)
+  headers.set("authorization", `Bearer ${machineKey}`)
   if (init?.body && !headers.has("content-type")) {
-    headers.set("content-type", "application/json");
+    headers.set("content-type", "application/json")
   }
   const response = await fetch(url, {
     ...init,
     headers,
-  });
+  })
   if (!response.ok) {
-    const bodyText = await response.text().catch(() => "");
+    const bodyText = await response.text().catch(() => "")
     throw new Error(
-      `Remote-agent request failed (${response.status} ${response.statusText})${bodyText ? `: ${bodyText}` : ""}`,
-    );
+      `Remote-agent request failed (${response.status} ${response.statusText})${bodyText ? `: ${bodyText}` : ""}`
+    )
   }
-  return (await response.json()) as T;
+  return (await response.json()) as T
 }
 
 function readBridgeState(filePath: string): {
-  lastConversationId?: string;
-  lastToolName?: string;
-  updatedAt?: string;
+  lastConversationId?: string
+  lastToolName?: string
+  updatedAt?: string
 } {
   if (!filePath || !existsSync(filePath)) {
-    return {};
+    return {}
   }
-  const parsed = safeJsonParse<Record<string, any>>(readFileSync(filePath, "utf8"));
+  const parsed = safeJsonParse<Record<string, any>>(
+    readFileSync(filePath, "utf8")
+  )
   if (!parsed || typeof parsed !== "object") {
-    return {};
+    return {}
   }
   return {
     lastConversationId:
@@ -394,35 +400,36 @@ function readBridgeState(filePath: string): {
         : undefined,
     lastToolName:
       typeof parsed.lastToolName === "string" ? parsed.lastToolName : undefined,
-    updatedAt: typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
-  };
+    updatedAt:
+      typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
+  }
 }
 
 function writeJsonLine(processRef: ChildProcess | null, payload: unknown) {
   if (!processRef?.stdin?.writable) {
-    return false;
+    return false
   }
-  processRef.stdin.write(`${JSON.stringify(payload)}\n`);
-  return true;
+  processRef.stdin.write(`${JSON.stringify(payload)}\n`)
+  return true
 }
 
 function stringifyRequestId(requestId: string | number) {
-  return String(requestId);
+  return String(requestId)
 }
 
 function which(binary: string) {
   try {
-    const command = process.platform === "win32" ? "where" : "which";
+    const command = process.platform === "win32" ? "where" : "which"
     const output = execSync(`${command} ${binary}`, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    });
+    })
     return output
       .split(/\r?\n/)
       .map((line) => line.trim())
-      .find(Boolean);
+      .find(Boolean)
   } catch {
-    return undefined;
+    return undefined
   }
 }
 
@@ -432,51 +439,57 @@ function detectVersion(command: string, args: string[] = []) {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "pipe"],
       shell: process.platform === "win32",
-    });
-    return trimFirstLine(output);
+    })
+    return trimFirstLine(output)
   } catch {
-    return undefined;
+    return undefined
   }
 }
 
 function detectClaudeRuntime(): RuntimeCatalogEntry {
-  const explicit = process.env.SYNAPSE_CLAUDE_PATH?.trim();
-  const executablePath = explicit || which("claude");
+  const explicit = process.env.SYNAPSE_CLAUDE_PATH?.trim()
+  const executablePath = explicit || which("claude")
   if (!executablePath) {
     return {
       runtimeKind: "claude_code",
       status: "missing_binary",
-    };
+    }
   }
-  const version = detectVersion(executablePath);
+  const version = detectVersion(executablePath)
   return {
     runtimeKind: "claude_code",
     executablePath,
     status: "available",
     version,
-  };
+  }
 }
 
 function resolveWindowsCodexEntry() {
-  const explicit = process.env.SYNAPSE_CODEX_PATH?.trim();
+  const explicit = process.env.SYNAPSE_CODEX_PATH?.trim()
   if (explicit) {
-    return explicit;
+    return explicit
   }
 
   try {
     const globalRoot = execSync("npm root -g", {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-    }).trim();
-    const candidate = path.join(globalRoot, "@openai", "codex", "bin", "codex.js");
+    }).trim()
+    const candidate = path.join(
+      globalRoot,
+      "@openai",
+      "codex",
+      "bin",
+      "codex.js"
+    )
     if (existsSync(candidate)) {
-      return candidate;
+      return candidate
     }
   } catch {}
 
-  const codexPath = which("codex");
+  const codexPath = which("codex")
   if (!codexPath) {
-    return undefined;
+    return undefined
   }
   const fromCmdDir = path.join(
     path.dirname(codexPath),
@@ -484,69 +497,69 @@ function resolveWindowsCodexEntry() {
     "@openai",
     "codex",
     "bin",
-    "codex.js",
-  );
+    "codex.js"
+  )
   if (existsSync(fromCmdDir)) {
-    return fromCmdDir;
+    return fromCmdDir
   }
-  return codexPath;
+  return codexPath
 }
 
 function detectCodexRuntime(): RuntimeCatalogEntry {
   const executablePath =
     process.platform === "win32"
       ? resolveWindowsCodexEntry()
-      : process.env.SYNAPSE_CODEX_PATH?.trim() || which("codex");
+      : process.env.SYNAPSE_CODEX_PATH?.trim() || which("codex")
 
   if (!executablePath) {
     return {
       runtimeKind: "codex",
       status: "missing_binary",
-    };
+    }
   }
 
   const version =
     process.platform === "win32" && executablePath.endsWith(".js")
       ? detectVersion(process.execPath, [executablePath])
-      : detectVersion(executablePath);
+      : detectVersion(executablePath)
 
   return {
     runtimeKind: "codex",
     executablePath,
     status: "available",
     version,
-  };
+  }
 }
 
 function detectRuntime(runtimeKind: RuntimeKind): RuntimeCatalogEntry {
   return runtimeKind === "claude_code"
     ? detectClaudeRuntime()
-    : detectCodexRuntime();
+    : detectCodexRuntime()
 }
 
 function describeRuntimeCatalogIssue(entry: RuntimeCatalogEntry) {
   const runtimeLabel =
-    entry.runtimeKind === "claude_code" ? "Claude Code" : "Codex CLI";
+    entry.runtimeKind === "claude_code" ? "Claude Code" : "Codex CLI"
   switch (entry.status) {
     case "missing_binary":
-      return `${runtimeLabel} is not installed or not on PATH for this machine`;
+      return `${runtimeLabel} is not installed or not on PATH for this machine`
     case "broken_path":
-      return `${runtimeLabel} executable path is invalid`;
+      return `${runtimeLabel} executable path is invalid`
     case "unsupported_platform":
-      return `${runtimeLabel} is not supported on this platform`;
+      return `${runtimeLabel} is not supported on this platform`
     case "runtime_error":
-      return entry.lastError?.trim() || `${runtimeLabel} runtime check failed`;
+      return entry.lastError?.trim() || `${runtimeLabel} runtime check failed`
     default:
-      return `${runtimeLabel} is not available`;
+      return `${runtimeLabel} is not available`
   }
 }
 
 class ClaudeDriver implements RuntimeDriver {
-  readonly runtimeKind = "claude_code" as const;
-  readonly supportsPersistentSession = true;
+  readonly runtimeKind = "claude_code" as const
+  readonly supportsPersistentSession = true
 
   spawn(context: SpawnContext): DriverLaunch {
-    const mcpCommand = process.execPath;
+    const mcpCommand = process.execPath
     const mcpArgs = [
       context.chatBridgePath,
       "--remote-agent-id",
@@ -557,7 +570,7 @@ class ClaudeDriver implements RuntimeDriver {
       context.machineKey,
       "--state-file",
       context.bridgeStatePath,
-    ];
+    ]
 
     const mcpConfig = JSON.stringify({
       mcpServers: {
@@ -566,16 +579,16 @@ class ClaudeDriver implements RuntimeDriver {
           args: mcpArgs,
         },
       },
-    });
+    })
 
-    let mcpConfigArg = mcpConfig;
+    let mcpConfigArg = mcpConfig
     if (process.platform === "win32") {
       const configPath = path.join(
         context.workingDirectory,
-        ".synapse-claude-mcp.json",
-      );
-      writeFileSync(configPath, mcpConfig, "utf8");
-      mcpConfigArg = configPath;
+        ".synapse-claude-mcp.json"
+      )
+      writeFileSync(configPath, mcpConfig, "utf8")
+      mcpConfigArg = configPath
     }
 
     const args = [
@@ -589,10 +602,10 @@ class ClaudeDriver implements RuntimeDriver {
       "stream-json",
       "--mcp-config",
       mcpConfigArg,
-    ];
+    ]
 
     if (context.sessionId) {
-      args.push("--resume", context.sessionId);
+      args.push("--resume", context.sessionId)
     }
 
     const child = spawn(context.runtimePath || "claude", args, {
@@ -604,7 +617,7 @@ class ClaudeDriver implements RuntimeDriver {
         NO_COLOR: "1",
       },
       shell: process.platform === "win32",
-    });
+    })
 
     writeJsonLine(child, {
       type: "user",
@@ -613,20 +626,24 @@ class ClaudeDriver implements RuntimeDriver {
         content: [{ type: "text", text: context.prompt }],
       },
       ...(context.sessionId ? { session_id: context.sessionId } : {}),
-    });
+    })
 
-    return { process: child };
+    return { process: child }
   }
 
   parseOutputLine(line: string) {
-    const event = safeJsonParse<any>(line);
+    const event = safeJsonParse<any>(line)
     if (!event) {
-      return [];
+      return []
     }
 
-    const events: DriverEvent[] = [];
-    if (event.type === "system" && event.subtype === "init" && event.session_id) {
-      events.push({ kind: "session", sessionId: String(event.session_id) });
+    const events: DriverEvent[] = []
+    if (
+      event.type === "system" &&
+      event.subtype === "init" &&
+      event.session_id
+    ) {
+      events.push({ kind: "session", sessionId: String(event.session_id) })
     }
     if (
       event.type === "control_request" &&
@@ -638,19 +655,20 @@ class ClaudeDriver implements RuntimeDriver {
         kind: "control_request",
         requestId: event.request_id,
         request: event.request,
-      });
+      })
     }
     if (event.type === "result") {
       if (event.is_error && event.stop_reason !== "max_tokens") {
         events.push({
           kind: "error",
-          message:
-            String(event.result || event.errors?.[0] || "Claude execution failed"),
-        });
+          message: String(
+            event.result || event.errors?.[0] || "Claude execution failed"
+          ),
+        })
       }
-      events.push({ kind: "turn_end" });
+      events.push({ kind: "turn_end" })
     }
-    return events;
+    return events
   }
 
   encodeWakeMessage(text: string, sessionId?: string) {
@@ -661,43 +679,47 @@ class ClaudeDriver implements RuntimeDriver {
         content: [{ type: "text", text }],
       },
       ...(sessionId ? { session_id: sessionId } : {}),
-    });
+    })
   }
 }
 
 class CodexDriver implements RuntimeDriver {
-  readonly runtimeKind = "codex" as const;
-  readonly supportsPersistentSession = false;
+  readonly runtimeKind = "codex" as const
+  readonly supportsPersistentSession = false
 
-  private child: ChildProcess | null = null;
+  private child: ChildProcess | null = null
 
-  private context: SpawnContext | null = null;
+  private context: SpawnContext | null = null
 
-  private requestSeq = 0;
+  private requestSeq = 0
 
   private pendingRequests = new Map<
     string,
-    "initialize" | "collaborationMode/list" | "thread/start" | "thread/resume" | "turn/start"
-  >();
+    | "initialize"
+    | "collaborationMode/list"
+    | "thread/start"
+    | "thread/resume"
+    | "turn/start"
+  >()
 
-  private currentThreadId?: string;
+  private currentThreadId?: string
 
-  private currentModel?: string;
+  private currentModel?: string
 
   private threadConfig() {
     return {
       "features.default_mode_request_user_input": true,
-    };
+    }
   }
 
   spawn(context: SpawnContext): DriverLaunch {
-    const gitDirectory = path.join(context.workingDirectory, ".git");
+    const gitDirectory = path.join(context.workingDirectory, ".git")
     if (!existsSync(gitDirectory)) {
       execSync("git init", {
         cwd: context.workingDirectory,
         stdio: ["ignore", "pipe", "pipe"],
-      });
-      execSync("git add -A && git commit --allow-empty -m \"init\"", {
+      })
+      execSync('git add -A && git commit --allow-empty -m "init"', {
         cwd: context.workingDirectory,
         stdio: ["ignore", "pipe", "pipe"],
         env: {
@@ -707,10 +729,10 @@ class CodexDriver implements RuntimeDriver {
           GIT_COMMITTER_NAME: "synapse",
           GIT_COMMITTER_EMAIL: "synapse@local",
         },
-      });
+      })
     }
 
-    const bridgeCommand = process.execPath;
+    const bridgeCommand = process.execPath
     const bridgeArgs = [
       context.chatBridgePath,
       "--remote-agent-id",
@@ -721,7 +743,7 @@ class CodexDriver implements RuntimeDriver {
       context.machineKey,
       "--state-file",
       context.bridgeStatePath,
-    ];
+    ]
 
     const args = [
       "app-server",
@@ -739,11 +761,11 @@ class CodexDriver implements RuntimeDriver {
       "mcp_servers.chat.enabled=true",
       "-c",
       "mcp_servers.chat.required=true",
-    ];
+    ]
 
-    const runtimePath = context.runtimePath || "codex";
+    const runtimePath = context.runtimePath || "codex"
     const isWindowsJsEntry =
-      process.platform === "win32" && runtimePath.endsWith(".js");
+      process.platform === "win32" && runtimePath.endsWith(".js")
 
     const child = isWindowsJsEntry
       ? spawn(process.execPath, [runtimePath, ...args], {
@@ -764,14 +786,14 @@ class CodexDriver implements RuntimeDriver {
             NO_COLOR: "1",
           },
           shell: process.platform === "win32",
-        });
+        })
 
-    this.child = child;
-    this.context = context;
-    this.requestSeq = 0;
-    this.pendingRequests.clear();
-    this.currentThreadId = context.sessionId ?? undefined;
-    this.currentModel = undefined;
+    this.child = child
+    this.context = context
+    this.requestSeq = 0
+    this.pendingRequests.clear()
+    this.currentThreadId = context.sessionId ?? undefined
+    this.currentModel = undefined
     this.sendRequest("initialize", {
       clientInfo: {
         name: "synapse_remote_agent",
@@ -781,78 +803,80 @@ class CodexDriver implements RuntimeDriver {
       capabilities: {
         experimentalApi: true,
       },
-    });
+    })
 
-    return { process: child };
+    return { process: child }
   }
 
   parseOutputLine(line: string) {
-    const event = safeJsonParse<any>(line);
+    const event = safeJsonParse<any>(line)
     if (!event || typeof event !== "object") {
-      return [];
+      return []
     }
 
-    const events: DriverEvent[] = [];
+    const events: DriverEvent[] = []
     if (event.id && "result" in event) {
-      const requestId = String(event.id);
-      const method = this.pendingRequests.get(requestId);
-      this.pendingRequests.delete(requestId);
+      const requestId = String(event.id)
+      const method = this.pendingRequests.get(requestId)
+      this.pendingRequests.delete(requestId)
       switch (method) {
         case "initialize":
-          this.sendNotification("initialized");
-          this.sendRequest("collaborationMode/list", {});
+          this.sendNotification("initialized")
+          this.sendRequest("collaborationMode/list", {})
           if (this.context?.sessionId) {
             this.sendRequest("thread/resume", {
               threadId: this.context.sessionId,
               cwd: this.context.workingDirectory,
               approvalPolicy: "never",
               config: this.threadConfig(),
-            });
+            })
           } else {
             this.sendRequest("thread/start", {
               cwd: this.context?.workingDirectory,
               approvalPolicy: "never",
               sandbox: "danger-full-access",
               config: this.threadConfig(),
-            });
+            })
           }
-          break;
+          break
         case "collaborationMode/list":
-          break;
+          break
         case "thread/start":
         case "thread/resume": {
-          const thread = event.result?.thread;
+          const thread = event.result?.thread
           const threadId =
             typeof thread?.id === "string"
               ? thread.id
               : typeof thread?.threadId === "string"
                 ? thread.threadId
-                : this.context?.sessionId;
+                : this.context?.sessionId
           if (threadId) {
-            this.currentThreadId = threadId;
-            events.push({ kind: "session", sessionId: threadId });
+            this.currentThreadId = threadId
+            events.push({ kind: "session", sessionId: threadId })
           }
           if (typeof event.result?.model === "string") {
-            this.currentModel = event.result.model;
+            this.currentModel = event.result.model
           }
-          this.startTurn();
-          break;
+          this.startTurn()
+          break
         }
         case "turn/start":
-          break;
+          break
         default:
-          break;
+          break
       }
-      return events;
+      return events
     }
 
     if (event.id && "error" in event) {
       events.push({
         kind: "error",
-        message: String(event.error?.message || "Codex app-server request failed"),
-      });
-      events.push({ kind: "turn_end" });
-      return events;
+        message: String(
+          event.error?.message || "Codex app-server request failed"
+        ),
+      })
+      events.push({ kind: "turn_end" })
+      return events
     }
 
     if (typeof event.method === "string" && "id" in event) {
@@ -862,8 +886,8 @@ class CodexDriver implements RuntimeDriver {
         method: event.method,
         params:
           event.params && typeof event.params === "object" ? event.params : {},
-      });
-      return events;
+      })
+      return events
     }
 
     if (typeof event.method === "string") {
@@ -872,11 +896,11 @@ class CodexDriver implements RuntimeDriver {
           const threadId =
             typeof event.params?.thread?.id === "string"
               ? event.params.thread.id
-              : undefined;
+              : undefined
           if (threadId) {
-            events.push({ kind: "session", sessionId: threadId });
+            events.push({ kind: "session", sessionId: threadId })
           }
-          break;
+          break
         }
         case "turn/plan/updated":
           events.push({
@@ -893,32 +917,32 @@ class CodexDriver implements RuntimeDriver {
                   }))
                   .filter((step: { step: string }) => Boolean(step.step))
               : [],
-          });
-          break;
+          })
+          break
         case "turn/completed":
           if (event.params?.turn?.error?.message) {
             events.push({
               kind: "error",
               message: String(event.params.turn.error.message),
-            });
+            })
           }
-          events.push({ kind: "turn_end" });
-          break;
+          events.push({ kind: "turn_end" })
+          break
         default:
-          break;
+          break
       }
-      return events;
+      return events
     }
 
-    return events;
+    return events
   }
 
   destroy() {
-    this.child = null;
-    this.context = null;
-    this.pendingRequests.clear();
-    this.currentThreadId = undefined;
-    this.currentModel = undefined;
+    this.child = null
+    this.context = null
+    this.pendingRequests.clear()
+    this.currentThreadId = undefined
+    this.currentModel = undefined
   }
 
   private sendRequest(
@@ -928,16 +952,16 @@ class CodexDriver implements RuntimeDriver {
       | "thread/start"
       | "thread/resume"
       | "turn/start",
-    params: Record<string, unknown>,
+    params: Record<string, unknown>
   ) {
-    const requestId = `req-${++this.requestSeq}`;
-    this.pendingRequests.set(requestId, method);
+    const requestId = `req-${++this.requestSeq}`
+    this.pendingRequests.set(requestId, method)
     writeJsonLine(this.child, {
       jsonrpc: "2.0",
       id: requestId,
       method,
       params,
-    });
+    })
   }
 
   private sendNotification(method: string, params?: Record<string, unknown>) {
@@ -945,12 +969,12 @@ class CodexDriver implements RuntimeDriver {
       jsonrpc: "2.0",
       method,
       ...(params ? { params } : {}),
-    });
+    })
   }
 
   private startTurn() {
     if (!this.currentThreadId || !this.context) {
-      return;
+      return
     }
     this.sendRequest("turn/start", {
       threadId: this.currentThreadId,
@@ -973,35 +997,35 @@ class CodexDriver implements RuntimeDriver {
           developer_instructions: null,
         },
       },
-    });
+    })
   }
 }
 
 type PendingInteractionBase = {
-  interactionId: string;
-  kind: "user_input" | "plan_approval";
-  runKey: string;
-  conversationId: string;
-  toolName?: string;
-  originalInput?: Record<string, any>;
-};
+  interactionId: string
+  kind: "user_input" | "plan_approval"
+  runKey: string
+  conversationId: string
+  toolName?: string
+  originalInput?: Record<string, any>
+}
 
 type PendingInteraction =
   | (PendingInteractionBase & {
-      protocol: "claude_permission";
-      requestId: string;
+      protocol: "claude_permission"
+      requestId: string
     })
   | (PendingInteractionBase & {
-      protocol: "codex_request";
-      requestId: string | number;
-    });
+      protocol: "codex_request"
+      requestId: string | number
+    })
 
 type LatestPlanDraft = {
-  title: string;
-  summary?: string;
-  planMarkdown: string;
-  checklist?: Array<{ id?: string; text: string; done?: boolean }>;
-};
+  title: string
+  summary?: string
+  planMarkdown: string
+  checklist?: Array<{ id?: string; text: string; done?: boolean }>
+}
 
 type RemoteAgentRuntimeState =
   | "offline"
@@ -1010,20 +1034,18 @@ type RemoteAgentRuntimeState =
   | "waiting_user_input"
   | "plan_drafting"
   | "waiting_plan_approval"
-  | "error";
+  | "error"
 
 function createDriver(runtimeKind: RuntimeKind): RuntimeDriver {
-  return runtimeKind === "claude_code"
-    ? new ClaudeDriver()
-    : new CodexDriver();
+  return runtimeKind === "claude_code" ? new ClaudeDriver() : new CodexDriver()
 }
 
 class DaemonSupervisor {
-  private ws: WebSocket | null = null;
+  private ws: WebSocket | null = null
 
-  private readonly agents = new Map<string, ManagedRemoteAgent>();
+  private readonly agents = new Map<string, ManagedRemoteAgent>()
 
-  private machineId: string | null = null;
+  private machineId: string | null = null
 
   constructor(private readonly config: DaemonConfig) {}
 
@@ -1033,312 +1055,367 @@ class DaemonSupervisor {
       apiKey: maskSecret(this.config.apiKey),
       heartbeatMs: this.config.heartbeatMs,
       logLevel: activeLogLevel,
-    });
+    })
     for (;;) {
       try {
-        await this.connectOnce();
+        await this.connectOnce()
       } catch (error) {
         log("error", "daemon", "WebSocket loop failed", {
           error: error instanceof Error ? error.message : String(error),
-        });
+        })
       }
       log("warn", "daemon", "Disconnected from server, retrying", {
         retryInMs: DEFAULT_RECONNECT_MS,
-      });
-      await sleep(DEFAULT_RECONNECT_MS);
+      })
+      await sleep(DEFAULT_RECONNECT_MS)
     }
   }
 
   send(payload: unknown) {
     if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
-      return false;
+      return false
     }
-    this.ws.send(JSON.stringify(payload));
-    return true;
+    this.ws.send(JSON.stringify(payload))
+    return true
   }
 
   private async connectOnce() {
-    const wsUrl = toWsUrl(this.config.serverUrl);
-    wsUrl.searchParams.set("key", this.config.apiKey);
+    const wsUrl = toWsUrl(this.config.serverUrl)
+    wsUrl.searchParams.set("key", this.config.apiKey)
     log("info", "daemon", "Connecting to server", {
-      url: wsUrl.toString().replace(this.config.apiKey, maskSecret(this.config.apiKey)),
-    });
+      url: wsUrl
+        .toString()
+        .replace(this.config.apiKey, maskSecret(this.config.apiKey)),
+    })
 
     await new Promise<void>((resolve, reject) => {
-      const ws = new WebSocket(wsUrl);
-      this.ws = ws;
-      let heartbeatTimer: NodeJS.Timeout | null = null;
+      const ws = new WebSocket(wsUrl)
+      this.ws = ws
+      let heartbeatTimer: NodeJS.Timeout | null = null
 
       const cleanup = () => {
         if (heartbeatTimer) {
-          clearInterval(heartbeatTimer);
-          heartbeatTimer = null;
+          clearInterval(heartbeatTimer)
+          heartbeatTimer = null
         }
-        this.ws = null;
-      };
+        this.ws = null
+      }
 
       ws.once("open", () => {
-        log("info", "daemon", "WebSocket connected");
+        log("info", "daemon", "WebSocket connected")
         heartbeatTimer = setInterval(() => {
-          this.send({ type: "heartbeat" });
-        }, this.config.heartbeatMs);
-      });
+          this.send({ type: "heartbeat" })
+        }, this.config.heartbeatMs)
+      })
 
       ws.once("error", (error) => {
         log("error", "daemon", "WebSocket error", {
           error: error.message,
-        });
-        cleanup();
-        reject(error);
-      });
+        })
+        cleanup()
+        reject(error)
+      })
 
       ws.on("message", async (raw) => {
-        let message: any;
+        let message: any
         try {
-          message = JSON.parse(String(raw));
+          message = JSON.parse(String(raw))
         } catch {
-          return;
+          return
         }
 
         if (message?.type === "connected") {
-          const connected = message as ConnectedMessage;
-          this.machineId = connected.machineId;
-          const runtimeCatalog = [detectClaudeRuntime(), detectCodexRuntime()];
+          const connected = message as ConnectedMessage
+          this.machineId = connected.machineId
+          const runtimeCatalog = [detectClaudeRuntime(), detectCodexRuntime()]
           log("info", "daemon", "Server accepted machine session", {
             machineId: connected.machineId,
             sessionId: connected.sessionId,
-          });
+          })
           log("info", "daemon", "Runtime catalog detected", {
             runtimeCatalog,
-          });
+          })
           this.send({
             type: "ready",
             runtimeCatalog,
-          });
+          })
           log("debug", "daemon", "Sent ready payload", {
             runtimeCount: runtimeCatalog.length,
-          });
-          return;
+          })
+          return
         }
 
         if (message?.type === "pong") {
-          log("debug", "daemon", "Received heartbeat pong");
-          return;
+          log("debug", "daemon", "Received heartbeat pong")
+          return
         }
 
         if (message?.type === "agent:start") {
-          const start = message as AgentStartMessage;
-          log("info", `remote-agent:${start.remoteAgentId}`, "Received agent:start", {
-            runtimeKind: start.runtimeKind,
-            runtimePath: start.runtimePath ?? undefined,
-            localRootPath: start.localRootPath ?? undefined,
-            sessionId: start.sessionId ?? undefined,
-          });
-          const agent = this.getOrCreateAgent(start.remoteAgentId);
-          await agent.configure(start);
-          return;
+          const start = message as AgentStartMessage
+          log(
+            "info",
+            `remote-agent:${start.remoteAgentId}`,
+            "Received agent:start",
+            {
+              runtimeKind: start.runtimeKind,
+              runtimePath: start.runtimePath ?? undefined,
+              localRootPath: start.localRootPath ?? undefined,
+              sessionId: start.sessionId ?? undefined,
+            }
+          )
+          const agent = this.getOrCreateAgent(start.remoteAgentId)
+          await agent.configure(start)
+          return
         }
 
-        if (message?.type === "agent:stop" && typeof message.remoteAgentId === "string") {
-          log("info", `remote-agent:${message.remoteAgentId}`, "Received agent:stop");
-          const agent = this.agents.get(message.remoteAgentId);
+        if (
+          message?.type === "agent:stop" &&
+          typeof message.remoteAgentId === "string"
+        ) {
+          log(
+            "info",
+            `remote-agent:${message.remoteAgentId}`,
+            "Received agent:stop"
+          )
+          const agent = this.agents.get(message.remoteAgentId)
           if (agent) {
-            agent.stop("server stop");
+            agent.stop("server stop")
           }
-          return;
+          return
         }
 
         if (message?.type === "agent:deliver") {
-          const deliver = message as DeliveryMessage;
-          const grouped = new Map<string, Delivery[]>();
+          const deliver = message as DeliveryMessage
+          const grouped = new Map<string, Delivery[]>()
           for (const delivery of deliver.deliveries ?? []) {
-            const bucket = grouped.get(delivery.remoteAgentId) ?? [];
-            bucket.push(delivery);
-            grouped.set(delivery.remoteAgentId, bucket);
+            const bucket = grouped.get(delivery.remoteAgentId) ?? []
+            bucket.push(delivery)
+            grouped.set(delivery.remoteAgentId, bucket)
           }
           for (const [remoteAgentId, deliveries] of grouped) {
-            log("info", `remote-agent:${remoteAgentId}`, "Received message deliveries", {
-              count: deliveries.length,
-              conversationIds: [...new Set(deliveries.map((delivery) => delivery.conversationId))],
-            });
-            const agent = this.getOrCreateAgent(remoteAgentId);
-            await agent.enqueueDeliveries(deliveries);
+            log(
+              "info",
+              `remote-agent:${remoteAgentId}`,
+              "Received message deliveries",
+              {
+                count: deliveries.length,
+                conversationIds: [
+                  ...new Set(
+                    deliveries.map((delivery) => delivery.conversationId)
+                  ),
+                ],
+              }
+            )
+            const agent = this.getOrCreateAgent(remoteAgentId)
+            await agent.enqueueDeliveries(deliveries)
           }
-          return;
+          return
         }
 
         if (message?.type === "agent:interaction:resolved") {
-          const resolved = message as InteractionResolvedMessage;
-          log("info", `remote-agent:${resolved.remoteAgentId}`, "Received resolved interaction", {
-            interactionId: resolved.interactionId,
-          });
-          const agent = this.agents.get(resolved.remoteAgentId);
+          const resolved = message as InteractionResolvedMessage
+          log(
+            "info",
+            `remote-agent:${resolved.remoteAgentId}`,
+            "Received resolved interaction",
+            {
+              interactionId: resolved.interactionId,
+            }
+          )
+          const agent = this.agents.get(resolved.remoteAgentId)
           if (agent) {
-            await agent.resolveInteraction(resolved);
+            await agent.resolveInteraction(resolved)
           }
-          return;
+          return
         }
-      });
+      })
 
       ws.once("close", () => {
-        log("warn", "daemon", "WebSocket closed");
-        cleanup();
-        resolve();
-      });
-    });
+        log("warn", "daemon", "WebSocket closed")
+        cleanup()
+        resolve()
+      })
+    })
   }
 
   private getOrCreateAgent(remoteAgentId: string) {
-    let agent = this.agents.get(remoteAgentId);
+    let agent = this.agents.get(remoteAgentId)
     if (!agent) {
       agent = new ManagedRemoteAgent({
         remoteAgentId,
         daemon: this,
         config: this.config,
         getMachineId: () => this.machineId,
-      });
-      this.agents.set(remoteAgentId, agent);
+      })
+      this.agents.set(remoteAgentId, agent)
     }
-    return agent;
+    return agent
   }
 }
 
 class ManagedRemoteAgent {
-  private runtimeKind: RuntimeKind = "claude_code";
+  private runtimeKind: RuntimeKind = "claude_code"
 
-  private runtimePath?: string;
+  private runtimePath?: string
 
-  private localRootPath?: string;
+  private localRootPath?: string
 
-  private sessionId?: string;
+  private sessionId?: string
 
-  private process: ChildProcess | null = null;
+  private process: ChildProcess | null = null
 
-  private stdoutBuffer = "";
+  private stdoutBuffer = ""
 
-  private stderrBuffer = "";
+  private stderrBuffer = ""
 
-  private running = false;
+  private running = false
 
-  private pendingWake = false;
+  private pendingWake = false
 
-  private readonly pendingDeliveryIds = new Set<string>();
+  private readonly pendingDeliveryIds = new Set<string>()
 
-  private readonly pendingDeliveries: Delivery[] = [];
+  private readonly pendingDeliveries: Delivery[] = []
 
-  private stateDirectory = "";
+  private stateDirectory = ""
 
-  private stateFile = "";
+  private stateFile = ""
 
-  private bridgeStateFile = "";
+  private bridgeStateFile = ""
 
-  private driver: RuntimeDriver | null = null;
+  private driver: RuntimeDriver | null = null
 
-  private pendingInteraction: PendingInteraction | null = null;
+  private pendingInteraction: PendingInteraction | null = null
 
-  private pendingSyntheticPrompts: string[] = [];
+  private pendingSyntheticPrompts: string[] = []
 
-  private latestPlanDraft: LatestPlanDraft | null = null;
+  private latestPlanDraft: LatestPlanDraft | null = null
 
-  private lastConversationId?: string;
+  private lastConversationId?: string
 
-  constructor(private readonly params: {
-    remoteAgentId: string;
-    daemon: DaemonSupervisor;
-    config: DaemonConfig;
-    getMachineId: () => string | null;
-  }) {}
+  constructor(
+    private readonly params: {
+      remoteAgentId: string
+      daemon: DaemonSupervisor
+      config: DaemonConfig
+      getMachineId: () => string | null
+    }
+  ) {}
 
   async configure(message: AgentStartMessage) {
-    this.runtimeKind = message.runtimeKind;
-    this.runtimePath = message.runtimePath ?? undefined;
-    this.localRootPath = message.localRootPath ?? undefined;
+    this.runtimeKind = message.runtimeKind
+    this.runtimePath = message.runtimePath ?? undefined
+    this.localRootPath = message.localRootPath ?? undefined
 
-    const machineId = this.params.getMachineId();
+    const machineId = this.params.getMachineId()
     if (!machineId) {
-      throw new Error("Machine id is not ready");
+      throw new Error("Machine id is not ready")
     }
 
     this.stateDirectory = path.join(
       MACHINE_DIR_ROOT,
       machineId,
-      this.params.remoteAgentId,
-    );
-    this.stateFile = path.join(this.stateDirectory, "session.json");
-    this.bridgeStateFile = path.join(this.stateDirectory, "bridge-state.json");
-    ensureDirectory(this.stateDirectory);
-    ensureDirectory(path.join(this.stateDirectory, "notes"));
+      this.params.remoteAgentId
+    )
+    this.stateFile = path.join(this.stateDirectory, "session.json")
+    this.bridgeStateFile = path.join(this.stateDirectory, "bridge-state.json")
+    ensureDirectory(this.stateDirectory)
+    ensureDirectory(path.join(this.stateDirectory, "notes"))
     if (!existsSync(path.join(this.stateDirectory, "MEMORY.md"))) {
-      writeFileSync(path.join(this.stateDirectory, "MEMORY.md"), "", "utf8");
+      writeFileSync(path.join(this.stateDirectory, "MEMORY.md"), "", "utf8")
     }
 
     const workingDirectory =
-      this.localRootPath ||
-      path.join(this.stateDirectory, "workspace");
-    ensureDirectory(workingDirectory);
+      this.localRootPath || path.join(this.stateDirectory, "workspace")
+    ensureDirectory(workingDirectory)
 
-    const storedState = readSessionState(this.stateFile);
+    const storedState = readSessionState(this.stateFile)
     this.sessionId =
-      message.sessionId ??
-      storedState.sessionId ??
-      this.sessionId;
-    log("info", `remote-agent:${this.params.remoteAgentId}`, "Configured remote agent", {
-      runtimeKind: this.runtimeKind,
-      runtimePath: this.runtimePath ?? undefined,
-      localRootPath: this.localRootPath ?? undefined,
-      stateDirectory: this.stateDirectory,
-      sessionId: this.sessionId ?? undefined,
-    });
-    this.publishStatus("idle", "Ready", undefined);
+      message.sessionId ?? storedState.sessionId ?? this.sessionId
+    log(
+      "info",
+      `remote-agent:${this.params.remoteAgentId}`,
+      "Configured remote agent",
+      {
+        runtimeKind: this.runtimeKind,
+        runtimePath: this.runtimePath ?? undefined,
+        localRootPath: this.localRootPath ?? undefined,
+        stateDirectory: this.stateDirectory,
+        sessionId: this.sessionId ?? undefined,
+      }
+    )
+    this.publishStatus("idle", "Ready", undefined)
   }
 
   stop(reason: string) {
-    if (this.process && (this.process.exitCode === null || this.process.killed === false)) {
-      this.process.kill();
+    if (
+      this.process &&
+      (this.process.exitCode === null || this.process.killed === false)
+    ) {
+      this.process.kill()
     }
-    this.process = null;
-    this.driver?.destroy?.();
-    this.driver = null;
-    this.running = false;
-    this.pendingWake = false;
-    this.pendingInteraction = null;
-    this.latestPlanDraft = null;
-    log("warn", `remote-agent:${this.params.remoteAgentId}`, "Stopped remote agent", {
-      reason,
-    });
-    this.publishStatus("offline", reason, undefined);
+    this.process = null
+    this.driver?.destroy?.()
+    this.driver = null
+    this.running = false
+    this.pendingWake = false
+    this.pendingInteraction = null
+    this.latestPlanDraft = null
+    log(
+      "warn",
+      `remote-agent:${this.params.remoteAgentId}`,
+      "Stopped remote agent",
+      {
+        reason,
+      }
+    )
+    this.publishStatus("offline", reason, undefined)
   }
 
   async enqueueDeliveries(deliveries: Delivery[]) {
     for (const delivery of deliveries) {
-      if (this.pendingDeliveryIds.has(delivery.deliveryId)) continue;
-      this.pendingDeliveryIds.add(delivery.deliveryId);
-      this.pendingDeliveries.push(delivery);
+      if (this.pendingDeliveryIds.has(delivery.deliveryId)) continue
+      this.pendingDeliveryIds.add(delivery.deliveryId)
+      this.pendingDeliveries.push(delivery)
     }
-    const uniqueConversationIds = [...new Set(deliveries.map((delivery) => delivery.conversationId))];
+    const uniqueConversationIds = [
+      ...new Set(deliveries.map((delivery) => delivery.conversationId)),
+    ]
     if (uniqueConversationIds.length === 1) {
-      this.lastConversationId = uniqueConversationIds[0];
+      this.lastConversationId = uniqueConversationIds[0]
     }
-    log("debug", `remote-agent:${this.params.remoteAgentId}`, "Queued deliveries", {
-      pendingCount: this.pendingDeliveries.length,
-    });
-    await this.wake();
+    log(
+      "debug",
+      `remote-agent:${this.params.remoteAgentId}`,
+      "Queued deliveries",
+      {
+        pendingCount: this.pendingDeliveries.length,
+      }
+    )
+    await this.wake()
   }
 
   async resolveInteraction(message: InteractionResolvedMessage) {
-    if (!this.pendingInteraction || this.pendingInteraction.interactionId !== message.interactionId) {
-      return;
+    if (
+      !this.pendingInteraction ||
+      this.pendingInteraction.interactionId !== message.interactionId
+    ) {
+      return
     }
 
-    const interaction = message.interaction || {};
-    const pending = this.pendingInteraction;
-    log("info", `remote-agent:${this.params.remoteAgentId}`, "Applying resolved interaction", {
-      interactionId: message.interactionId,
-      protocol: pending.protocol,
-      kind: pending.kind,
-      requestId: stringifyRequestId(pending.requestId),
-      requestIdType: typeof pending.requestId,
-    });
+    const interaction = message.interaction || {}
+    const pending = this.pendingInteraction
+    log(
+      "info",
+      `remote-agent:${this.params.remoteAgentId}`,
+      "Applying resolved interaction",
+      {
+        interactionId: message.interactionId,
+        protocol: pending.protocol,
+        kind: pending.kind,
+        requestId: stringifyRequestId(pending.requestId),
+        requestIdType: typeof pending.requestId,
+      }
+    )
 
     if (pending.protocol === "claude_permission") {
       const response =
@@ -1361,7 +1438,7 @@ class ManagedRemoteAgent {
                 message:
                   interaction.resolutionNote ||
                   "The user asked you to revise the proposed plan.",
-              };
+              }
 
       const wrote = writeJsonLine(this.process, {
         type: "control_response",
@@ -1370,29 +1447,43 @@ class ManagedRemoteAgent {
           request_id: pending.requestId,
           response,
         },
-      });
+      })
       if (!wrote) {
-        log("error", `remote-agent:${this.params.remoteAgentId}`, "Failed to deliver resolved interaction to runtime", {
-          interactionId: message.interactionId,
-          protocol: pending.protocol,
-          requestId: pending.requestId,
-        });
+        log(
+          "error",
+          `remote-agent:${this.params.remoteAgentId}`,
+          "Failed to deliver resolved interaction to runtime",
+          {
+            interactionId: message.interactionId,
+            protocol: pending.protocol,
+            requestId: pending.requestId,
+          }
+        )
         this.publishStatus(
           "error",
           "Resolved interaction could not be delivered to the local runtime",
           pending.conversationId,
-          "Runtime stdin is not writable",
-        );
-        return;
+          "Runtime stdin is not writable"
+        )
+        return
       }
-      this.pendingInteraction = null;
-      log("info", `remote-agent:${this.params.remoteAgentId}`, "Delivered resolved interaction to runtime", {
-        interactionId: message.interactionId,
-        protocol: pending.protocol,
-        requestId: pending.requestId,
-      });
-      this.publishStatus("running", "Continuing after user input", pending.conversationId);
-      return;
+      this.pendingInteraction = null
+      log(
+        "info",
+        `remote-agent:${this.params.remoteAgentId}`,
+        "Delivered resolved interaction to runtime",
+        {
+          interactionId: message.interactionId,
+          protocol: pending.protocol,
+          requestId: pending.requestId,
+        }
+      )
+      this.publishStatus(
+        "running",
+        "Continuing after user input",
+        pending.conversationId
+      )
+      return
     }
 
     if (pending.protocol === "codex_request") {
@@ -1403,145 +1494,189 @@ class ManagedRemoteAgent {
           result: {
             answers: this.buildCodexAnswerMap(interaction),
           },
-        });
+        })
         if (!wrote) {
-          log("error", `remote-agent:${this.params.remoteAgentId}`, "Failed to deliver resolved interaction to runtime", {
-            interactionId: message.interactionId,
-            protocol: pending.protocol,
-            requestId: pending.requestId,
-          });
+          log(
+            "error",
+            `remote-agent:${this.params.remoteAgentId}`,
+            "Failed to deliver resolved interaction to runtime",
+            {
+              interactionId: message.interactionId,
+              protocol: pending.protocol,
+              requestId: pending.requestId,
+            }
+          )
           this.publishStatus(
             "error",
             "Resolved interaction could not be delivered to the local runtime",
             pending.conversationId,
-            "Runtime stdin is not writable",
-          );
-          return;
+            "Runtime stdin is not writable"
+          )
+          return
         }
-        this.pendingInteraction = null;
-        log("info", `remote-agent:${this.params.remoteAgentId}`, "Delivered resolved interaction to runtime", {
-          interactionId: message.interactionId,
-          protocol: pending.protocol,
-          requestId: pending.requestId,
-        });
-        this.publishStatus("running", "Continuing after user input", pending.conversationId);
-        return;
+        this.pendingInteraction = null
+        log(
+          "info",
+          `remote-agent:${this.params.remoteAgentId}`,
+          "Delivered resolved interaction to runtime",
+          {
+            interactionId: message.interactionId,
+            protocol: pending.protocol,
+            requestId: pending.requestId,
+          }
+        )
+        this.publishStatus(
+          "running",
+          "Continuing after user input",
+          pending.conversationId
+        )
+        return
       }
 
       const note =
         typeof interaction.resolutionNote === "string"
           ? interaction.resolutionNote
-          : undefined;
-      this.pendingInteraction = null;
+          : undefined
+      this.pendingInteraction = null
       if (interaction.status === "approved") {
-        this.pendingSyntheticPrompts.push(buildPlanApprovedPrompt(note));
+        this.pendingSyntheticPrompts.push(buildPlanApprovedPrompt(note))
       } else {
-        this.pendingSyntheticPrompts.push(buildPlanRevisionPrompt(note));
+        this.pendingSyntheticPrompts.push(buildPlanRevisionPrompt(note))
       }
-      this.latestPlanDraft = null;
-      log("info", `remote-agent:${this.params.remoteAgentId}`, "Queued plan interaction follow-up", {
-        interactionId: message.interactionId,
-        protocol: pending.protocol,
-      });
-      this.publishStatus("idle", "Plan decision received", pending.conversationId);
-      await this.wake();
+      this.latestPlanDraft = null
+      log(
+        "info",
+        `remote-agent:${this.params.remoteAgentId}`,
+        "Queued plan interaction follow-up",
+        {
+          interactionId: message.interactionId,
+          protocol: pending.protocol,
+        }
+      )
+      this.publishStatus(
+        "idle",
+        "Plan decision received",
+        pending.conversationId
+      )
+      await this.wake()
     }
   }
 
   private workingDirectory() {
-    return this.localRootPath || path.join(this.stateDirectory, "workspace");
+    return this.localRootPath || path.join(this.stateDirectory, "workspace")
   }
 
   private persistSession() {
-    if (!this.stateFile) return;
+    if (!this.stateFile) return
     writeSessionState(this.stateFile, {
       sessionId: this.sessionId,
-    });
+    })
   }
 
   private async wake() {
     if (!this.stateDirectory) {
-      return;
+      return
     }
 
     if (this.pendingInteraction) {
-      return;
+      return
     }
 
-    const driver = this.driver ?? createDriver(this.runtimeKind);
+    const driver = this.driver ?? createDriver(this.runtimeKind)
     if (
       driver.supportsPersistentSession &&
       this.process &&
       !this.running &&
       typeof driver.encodeWakeMessage === "function"
     ) {
-      const nextPrompt = this.nextPrompt();
-      const wakeMessage = driver.encodeWakeMessage(
-        nextPrompt,
-        this.sessionId,
-      );
+      const nextPrompt = this.nextPrompt()
+      const wakeMessage = driver.encodeWakeMessage(nextPrompt, this.sessionId)
       if (wakeMessage && this.process.stdin?.writable) {
-        this.pendingDeliveries.length = 0;
-        this.pendingDeliveryIds.clear();
-        this.running = true;
-        this.pendingWake = false;
-        this.latestPlanDraft = null;
-        log("info", `remote-agent:${this.params.remoteAgentId}`, "Waking persistent session", {
-          sessionId: this.sessionId ?? undefined,
-        });
-        this.publishStatus("running", "Checking unread messages", this.resolveConversationId());
-        this.process.stdin.write(`${wakeMessage}\n`);
-        return;
+        this.pendingDeliveries.length = 0
+        this.pendingDeliveryIds.clear()
+        this.running = true
+        this.pendingWake = false
+        this.latestPlanDraft = null
+        log(
+          "info",
+          `remote-agent:${this.params.remoteAgentId}`,
+          "Waking persistent session",
+          {
+            sessionId: this.sessionId ?? undefined,
+          }
+        )
+        this.publishStatus(
+          "running",
+          "Checking unread messages",
+          this.resolveConversationId()
+        )
+        this.process.stdin.write(`${wakeMessage}\n`)
+        return
       }
     }
 
     if (this.running || this.pendingWake) {
-      return;
+      return
     }
 
-    this.pendingWake = true;
-    log("debug", `remote-agent:${this.params.remoteAgentId}`, "Scheduling new run", {
-      sessionId: this.sessionId ?? undefined,
-    });
-    this.startRun();
+    this.pendingWake = true
+    log(
+      "debug",
+      `remote-agent:${this.params.remoteAgentId}`,
+      "Scheduling new run",
+      {
+        sessionId: this.sessionId ?? undefined,
+      }
+    )
+    this.startRun()
   }
 
   private startRun() {
-    this.pendingWake = false;
-    this.running = true;
-    this.pendingDeliveries.length = 0;
-    this.pendingDeliveryIds.clear();
-    this.latestPlanDraft = null;
-    const resolvedRuntime = this.resolveRuntimePathForLaunch();
+    this.pendingWake = false
+    this.running = true
+    this.pendingDeliveries.length = 0
+    this.pendingDeliveryIds.clear()
+    this.latestPlanDraft = null
+    const resolvedRuntime = this.resolveRuntimePathForLaunch()
     if (!resolvedRuntime.ok) {
-      this.running = false;
-      this.driver = null;
-      log("error", `remote-agent:${this.params.remoteAgentId}`, "Runtime unavailable", {
-        runtimeKind: this.runtimeKind,
-        runtimePath: this.runtimePath ?? undefined,
-        error: resolvedRuntime.error,
-      });
+      this.running = false
+      this.driver = null
+      log(
+        "error",
+        `remote-agent:${this.params.remoteAgentId}`,
+        "Runtime unavailable",
+        {
+          runtimeKind: this.runtimeKind,
+          runtimePath: this.runtimePath ?? undefined,
+          error: resolvedRuntime.error,
+        }
+      )
       this.publishStatus(
         "error",
         resolvedRuntime.error,
         this.resolveConversationId(),
-        resolvedRuntime.error,
-      );
-      return;
+        resolvedRuntime.error
+      )
+      return
     }
 
-    const driver = createDriver(this.runtimeKind);
-    this.driver = driver;
-    const prompt = this.nextPrompt();
+    const driver = createDriver(this.runtimeKind)
+    this.driver = driver
+    const prompt = this.nextPrompt()
 
-    let launch: DriverLaunch;
+    let launch: DriverLaunch
     try {
-      log("info", `remote-agent:${this.params.remoteAgentId}`, "Starting local runtime", {
-        runtimeKind: this.runtimeKind,
-        runtimePath: this.runtimePath ?? undefined,
-        workingDirectory: this.workingDirectory(),
-        sessionId: this.sessionId ?? undefined,
-      });
+      log(
+        "info",
+        `remote-agent:${this.params.remoteAgentId}`,
+        "Starting local runtime",
+        {
+          runtimeKind: this.runtimeKind,
+          runtimePath: this.runtimePath ?? undefined,
+          workingDirectory: this.workingDirectory(),
+          sessionId: this.sessionId ?? undefined,
+        }
+      )
       launch = driver.spawn({
         prompt,
         remoteAgentId: this.params.remoteAgentId,
@@ -1552,229 +1687,316 @@ class ManagedRemoteAgent {
         chatBridgePath: CHAT_BRIDGE_PATH,
         bridgeStatePath: this.bridgeStateFile,
         sessionId: this.sessionId,
-      });
+      })
     } catch (error) {
-      this.running = false;
-      this.driver = null;
-      log("error", `remote-agent:${this.params.remoteAgentId}`, "Failed to start local runtime", {
-        error: error instanceof Error ? error.message : String(error),
-      });
-      this.publishStatus("error", error instanceof Error ? error.message : String(error), this.resolveConversationId(), error instanceof Error ? error.message : String(error));
-      return;
+      this.running = false
+      this.driver = null
+      log(
+        "error",
+        `remote-agent:${this.params.remoteAgentId}`,
+        "Failed to start local runtime",
+        {
+          error: error instanceof Error ? error.message : String(error),
+        }
+      )
+      this.publishStatus(
+        "error",
+        error instanceof Error ? error.message : String(error),
+        this.resolveConversationId(),
+        error instanceof Error ? error.message : String(error)
+      )
+      return
     }
 
-    this.process = launch.process;
-    this.stdoutBuffer = "";
-    this.stderrBuffer = "";
-    this.publishStatus("running", "Processing messages", this.resolveConversationId());
+    this.process = launch.process
+    this.stdoutBuffer = ""
+    this.stderrBuffer = ""
+    this.publishStatus(
+      "running",
+      "Processing messages",
+      this.resolveConversationId()
+    )
 
-    let processErrored = false;
+    let processErrored = false
     launch.process.once("error", (error: NodeJS.ErrnoException) => {
-      processErrored = true;
-      this.process = null;
-      this.driver?.destroy?.();
-      this.driver = null;
-      this.running = false;
+      processErrored = true
+      this.process = null
+      this.driver?.destroy?.()
+      this.driver = null
+      this.running = false
       const message =
         error.code === "ENOENT"
           ? `Failed to start ${this.runtimeKind}: executable not found`
-          : error.message;
-      log("error", `remote-agent:${this.params.remoteAgentId}`, "Runtime process error", {
-        runtimeKind: this.runtimeKind,
-        runtimePath: resolvedRuntime.runtimePath,
-        error: error.message,
-        code: error.code,
-      });
+          : error.message
+      log(
+        "error",
+        `remote-agent:${this.params.remoteAgentId}`,
+        "Runtime process error",
+        {
+          runtimeKind: this.runtimeKind,
+          runtimePath: resolvedRuntime.runtimePath,
+          error: error.message,
+          code: error.code,
+        }
+      )
       this.publishStatus(
         "error",
         message,
         this.resolveConversationId(),
-        error.message,
-      );
-    });
+        error.message
+      )
+    })
 
     launch.process.stdout?.on("data", (chunk: Buffer | string) => {
-      this.stdoutBuffer += String(chunk);
-      const { lines, remainder } = splitLines(this.stdoutBuffer);
-      this.stdoutBuffer = remainder;
+      this.stdoutBuffer += String(chunk)
+      const { lines, remainder } = splitLines(this.stdoutBuffer)
+      this.stdoutBuffer = remainder
       for (const line of lines) {
-        const preview = previewLine(line);
+        const preview = previewLine(line)
         if (preview) {
-          log("debug", `remote-agent:${this.params.remoteAgentId}`, "Runtime stdout", {
-            preview,
-          });
+          log(
+            "debug",
+            `remote-agent:${this.params.remoteAgentId}`,
+            "Runtime stdout",
+            {
+              preview,
+            }
+          )
         }
         for (const event of driver.parseOutputLine(line)) {
           void this.handleDriverEvent(event).catch((error) => {
-            const message = error instanceof Error ? error.message : String(error);
-            log("error", `remote-agent:${this.params.remoteAgentId}`, "Driver event handling failed", {
+            const message =
+              error instanceof Error ? error.message : String(error)
+            log(
+              "error",
+              `remote-agent:${this.params.remoteAgentId}`,
+              "Driver event handling failed",
+              {
+                message,
+              }
+            )
+            this.publishStatus(
+              "error",
               message,
-            });
-            this.publishStatus("error", message, this.resolveConversationId(), message);
-          });
+              this.resolveConversationId(),
+              message
+            )
+          })
         }
       }
-    });
+    })
 
     launch.process.stderr?.on("data", (chunk: Buffer | string) => {
-      const text = String(chunk);
-      this.stderrBuffer += text;
+      const text = String(chunk)
+      this.stderrBuffer += text
       if (text.includes("No conversation found with session ID")) {
-        this.sessionId = undefined;
-        this.persistSession();
+        this.sessionId = undefined
+        this.persistSession()
       }
-      const preview = trimFirstLine(text);
+      const preview = trimFirstLine(text)
       if (preview) {
-        log("warn", `remote-agent:${this.params.remoteAgentId}`, "Runtime stderr", {
-          preview,
-        });
+        log(
+          "warn",
+          `remote-agent:${this.params.remoteAgentId}`,
+          "Runtime stderr",
+          {
+            preview,
+          }
+        )
       }
-    });
+    })
 
     launch.process.once("exit", (code, signal) => {
       if (processErrored) {
-        return;
+        return
       }
-      this.process = null;
-      const supportsPersistentSession = this.driver?.supportsPersistentSession === true;
-      this.driver?.destroy?.();
+      this.process = null
+      const supportsPersistentSession =
+        this.driver?.supportsPersistentSession === true
+      this.driver?.destroy?.()
       if (!supportsPersistentSession) {
-        this.driver = null;
+        this.driver = null
       }
-      this.running = false;
-      log("info", `remote-agent:${this.params.remoteAgentId}`, "Runtime process exited", {
-        code: code ?? undefined,
-        signal: signal ?? undefined,
-        sessionId: this.sessionId ?? undefined,
-      });
+      this.running = false
+      log(
+        "info",
+        `remote-agent:${this.params.remoteAgentId}`,
+        "Runtime process exited",
+        {
+          code: code ?? undefined,
+          signal: signal ?? undefined,
+          sessionId: this.sessionId ?? undefined,
+        }
+      )
       if (this.pendingInteraction) {
         this.publishStatus(
           this.pendingInteraction.kind === "plan_approval"
             ? "waiting_plan_approval"
             : "waiting_user_input",
           "Waiting for a response in Synapse",
-          this.pendingInteraction.conversationId,
-        );
-      } else if (this.pendingDeliveries.length > 0 || this.pendingSyntheticPrompts.length > 0) {
-        void this.wake();
+          this.pendingInteraction.conversationId
+        )
+      } else if (
+        this.pendingDeliveries.length > 0 ||
+        this.pendingSyntheticPrompts.length > 0
+      ) {
+        void this.wake()
       } else {
-        this.publishStatus("idle", "Idle", this.resolveConversationId());
+        this.publishStatus("idle", "Idle", this.resolveConversationId())
       }
-    });
+    })
   }
 
   private resolveRuntimePathForLaunch():
     | { ok: true; runtimePath?: string }
     | { ok: false; error: string } {
     if (this.runtimePath?.trim()) {
-      return { ok: true, runtimePath: this.runtimePath.trim() };
+      return { ok: true, runtimePath: this.runtimePath.trim() }
     }
-    const detected = detectRuntime(this.runtimeKind);
+    const detected = detectRuntime(this.runtimeKind)
     if (detected.status !== "available" || !detected.executablePath) {
       return {
         ok: false,
         error: describeRuntimeCatalogIssue(detected),
-      };
+      }
     }
     return {
       ok: true,
       runtimePath: detected.executablePath,
-    };
+    }
   }
 
   private async handleDriverEvent(event: DriverEvent) {
     switch (event.kind) {
       case "session":
         if (this.sessionId !== event.sessionId) {
-          this.sessionId = event.sessionId;
-          this.persistSession();
-          log("info", `remote-agent:${this.params.remoteAgentId}`, "Session updated", {
-            sessionId: event.sessionId,
-          });
+          this.sessionId = event.sessionId
+          this.persistSession()
+          log(
+            "info",
+            `remote-agent:${this.params.remoteAgentId}`,
+            "Session updated",
+            {
+              sessionId: event.sessionId,
+            }
+          )
           this.params.daemon.send({
             type: "agent:session",
             remoteAgentId: this.params.remoteAgentId,
             sessionId: event.sessionId,
-          });
+          })
         }
-        this.publishStatus(this.running ? "running" : "idle", "Session connected", this.resolveConversationId());
-        break;
+        this.publishStatus(
+          this.running ? "running" : "idle",
+          "Session connected",
+          this.resolveConversationId()
+        )
+        break
       case "error":
-        log("error", `remote-agent:${this.params.remoteAgentId}`, "Runtime event error", {
-          message: event.message,
-        });
-        this.publishStatus("error", event.message, this.resolveConversationId(), event.message);
-        break;
+        log(
+          "error",
+          `remote-agent:${this.params.remoteAgentId}`,
+          "Runtime event error",
+          {
+            message: event.message,
+          }
+        )
+        this.publishStatus(
+          "error",
+          event.message,
+          this.resolveConversationId(),
+          event.message
+        )
+        break
       case "turn_end":
-        this.running = false;
-        log("debug", `remote-agent:${this.params.remoteAgentId}`, "Runtime turn completed", {
-          pendingCount: this.pendingDeliveries.length,
-        });
+        this.running = false
+        log(
+          "debug",
+          `remote-agent:${this.params.remoteAgentId}`,
+          "Runtime turn completed",
+          {
+            pendingCount: this.pendingDeliveries.length,
+          }
+        )
         if (this.process && !this.driver?.supportsPersistentSession) {
-          this.process.kill();
+          this.process.kill()
         }
         if (this.latestPlanDraft) {
-          await this.requestPlanApproval(this.latestPlanDraft);
-          break;
+          await this.requestPlanApproval(this.latestPlanDraft)
+          break
         }
         if (this.pendingInteraction) {
-          break;
+          break
         }
-        if (this.pendingDeliveries.length > 0 || this.pendingSyntheticPrompts.length > 0) {
-          void this.wake();
+        if (
+          this.pendingDeliveries.length > 0 ||
+          this.pendingSyntheticPrompts.length > 0
+        ) {
+          void this.wake()
         } else {
-          this.publishStatus("idle", "Idle", this.resolveConversationId());
+          this.publishStatus("idle", "Idle", this.resolveConversationId())
         }
-        break;
+        break
       case "control_request":
-        await this.handleClaudeControlRequest(event.requestId, event.request);
-        break;
+        await this.handleClaudeControlRequest(event.requestId, event.request)
+        break
       case "codex_server_request":
-        await this.handleCodexServerRequest(event.requestId, event.method, event.params);
-        break;
+        await this.handleCodexServerRequest(
+          event.requestId,
+          event.method,
+          event.params
+        )
+        break
       case "plan_updated":
         this.latestPlanDraft = {
           title: "Plan from Codex",
           summary: event.explanation,
           planMarkdown: event.plan
-            .map((step) => `- [${step.status === "completed" ? "x" : " "}] ${step.step}`)
+            .map(
+              (step) =>
+                `- [${step.status === "completed" ? "x" : " "}] ${step.step}`
+            )
             .join("\n"),
           checklist: event.plan.map((step, index) => ({
             id: `plan-${index + 1}`,
             text: step.step,
             done: step.status === "completed",
           })),
-        };
-        this.publishStatus("plan_drafting", "Drafting a plan", this.resolveConversationId());
-        break;
+        }
+        this.publishStatus(
+          "plan_drafting",
+          "Drafting a plan",
+          this.resolveConversationId()
+        )
+        break
       default:
-        break;
+        break
     }
   }
 
   private nextPrompt() {
-    const synthetic = this.pendingSyntheticPrompts.shift();
+    const synthetic = this.pendingSyntheticPrompts.shift()
     if (synthetic) {
-      return synthetic;
+      return synthetic
     }
     if (this.sessionId) {
-      return buildWakePrompt();
+      return buildWakePrompt()
     }
     return buildBootstrapPrompt({
       remoteAgentId: this.params.remoteAgentId,
       runtimeKind: this.runtimeKind,
       workingDirectory: this.workingDirectory(),
       stateDirectory: this.stateDirectory,
-    });
+    })
   }
 
   private resolveConversationId() {
-    const bridgeState = readBridgeState(this.bridgeStateFile);
+    const bridgeState = readBridgeState(this.bridgeStateFile)
     if (bridgeState.lastConversationId) {
-      this.lastConversationId = bridgeState.lastConversationId;
-      return bridgeState.lastConversationId;
+      this.lastConversationId = bridgeState.lastConversationId
+      return bridgeState.lastConversationId
     }
-    return this.lastConversationId;
+    return this.lastConversationId
   }
 
   private runtimeCapabilities() {
@@ -1784,21 +2006,21 @@ class ManagedRemoteAgent {
         supportsPlanMode: true,
         supportsPersistentSession: true,
         supportsStructuredIo: true,
-      };
+      }
     }
     return {
       supportsRequestUserInput: true,
       supportsPlanMode: true,
       supportsPersistentSession: false,
       supportsCodexAppServer: true,
-    };
+    }
   }
 
   private publishStatus(
     state: RemoteAgentRuntimeState,
     statusText?: string,
     conversationId?: string,
-    lastError?: string,
+    lastError?: string
   ) {
     this.params.daemon.send({
       type: "agent:status",
@@ -1811,14 +2033,14 @@ class ManagedRemoteAgent {
       lastError: lastError ?? null,
       runKey: this.pendingInteraction?.runKey ?? null,
       capabilities: this.runtimeCapabilities(),
-    });
+    })
   }
 
   private async handleClaudeControlRequest(
     requestId: string,
-    request: Record<string, any>,
+    request: Record<string, any>
   ) {
-    const subtype = String(request.subtype || "");
+    const subtype = String(request.subtype || "")
     switch (subtype) {
       case "initialize":
         writeJsonLine(this.process, {
@@ -1835,8 +2057,8 @@ class ManagedRemoteAgent {
               pid: process.pid,
             },
           },
-        });
-        return;
+        })
+        return
       case "set_model":
       case "set_max_thinking_tokens":
       case "set_permission_mode":
@@ -1847,8 +2069,8 @@ class ManagedRemoteAgent {
             subtype: "success",
             request_id: requestId,
           },
-        });
-        return;
+        })
+        return
       case "elicitation":
         writeJsonLine(this.process, {
           type: "control_response",
@@ -1859,11 +2081,11 @@ class ManagedRemoteAgent {
               action: "cancel",
             },
           },
-        });
-        return;
+        })
+        return
       case "can_use_tool":
-        await this.handleClaudeToolPermissionRequest(requestId, request);
-        return;
+        await this.handleClaudeToolPermissionRequest(requestId, request)
+        return
       default:
         writeJsonLine(this.process, {
           type: "control_response",
@@ -1872,19 +2094,19 @@ class ManagedRemoteAgent {
             request_id: requestId,
             error: `Unsupported Claude control request subtype: ${subtype}`,
           },
-        });
+        })
     }
   }
 
   private async handleClaudeToolPermissionRequest(
     requestId: string,
-    request: Record<string, any>,
+    request: Record<string, any>
   ) {
-    const toolName = String(request.tool_name || "");
+    const toolName = String(request.tool_name || "")
     const input =
       request.input && typeof request.input === "object"
         ? (request.input as Record<string, any>)
-        : {};
+        : {}
     if (toolName === "AskUserQuestion") {
       const interaction = await this.createUserInputInteraction({
         requestId,
@@ -1916,19 +2138,24 @@ class ManagedRemoteAgent {
           : [],
         toolName,
         originalInput: input,
-      });
-      this.pendingInteraction = interaction;
-      this.publishStatus("waiting_user_input", "Waiting for user input", interaction.conversationId);
-      return;
+      })
+      this.pendingInteraction = interaction
+      this.publishStatus(
+        "waiting_user_input",
+        "Waiting for user input",
+        interaction.conversationId
+      )
+      return
     }
 
     if (toolName === "ExitPlanMode") {
       const planMarkdown =
         typeof input.plan === "string" && input.plan.trim()
           ? input.plan
-          : typeof input.planFilePath === "string" && existsSync(input.planFilePath)
+          : typeof input.planFilePath === "string" &&
+              existsSync(input.planFilePath)
             ? readFileSync(input.planFilePath, "utf8")
-            : "";
+            : ""
       const interaction = await this.createPlanApprovalInteraction({
         requestId,
         protocol: "claude_permission",
@@ -1938,10 +2165,14 @@ class ManagedRemoteAgent {
         checklist: undefined,
         toolName,
         originalInput: input,
-      });
-      this.pendingInteraction = interaction;
-      this.publishStatus("waiting_plan_approval", "Waiting for plan approval", interaction.conversationId);
-      return;
+      })
+      this.pendingInteraction = interaction
+      this.publishStatus(
+        "waiting_plan_approval",
+        "Waiting for plan approval",
+        interaction.conversationId
+      )
+      return
     }
 
     writeJsonLine(this.process, {
@@ -1954,20 +2185,27 @@ class ManagedRemoteAgent {
           updatedInput: input,
         },
       },
-    });
+    })
   }
 
   private async handleCodexServerRequest(
     requestId: string | number,
     method: string,
-    params: Record<string, any>,
+    params: Record<string, any>
   ) {
     if (method === "item/tool/requestUserInput") {
-      log("info", `remote-agent:${this.params.remoteAgentId}`, "Codex requested user input", {
-        requestId: stringifyRequestId(requestId),
-        requestIdType: typeof requestId,
-        questionCount: Array.isArray(params.questions) ? params.questions.length : 0,
-      });
+      log(
+        "info",
+        `remote-agent:${this.params.remoteAgentId}`,
+        "Codex requested user input",
+        {
+          requestId: stringifyRequestId(requestId),
+          requestIdType: typeof requestId,
+          questionCount: Array.isArray(params.questions)
+            ? params.questions.length
+            : 0,
+        }
+      )
       const interaction = await this.createUserInputInteraction({
         requestId,
         protocol: "codex_request",
@@ -2000,10 +2238,14 @@ class ManagedRemoteAgent {
                 : [],
             }))
           : [],
-      });
-      this.pendingInteraction = interaction;
-      this.publishStatus("waiting_user_input", "Waiting for user input", interaction.conversationId);
-      return;
+      })
+      this.pendingInteraction = interaction
+      this.publishStatus(
+        "waiting_user_input",
+        "Waiting for user input",
+        interaction.conversationId
+      )
+      return
     }
 
     if (method === "item/commandExecution/requestApproval") {
@@ -2011,8 +2253,8 @@ class ManagedRemoteAgent {
         jsonrpc: "2.0",
         id: requestId,
         result: { decision: "accept" },
-      });
-      return;
+      })
+      return
     }
 
     if (
@@ -2023,8 +2265,8 @@ class ManagedRemoteAgent {
         jsonrpc: "2.0",
         id: requestId,
         result: { decision: "accept" },
-      });
-      return;
+      })
+      return
     }
 
     if (method === "mcpServer/elicitation/request") {
@@ -2032,32 +2274,38 @@ class ManagedRemoteAgent {
         jsonrpc: "2.0",
         id: requestId,
         result: { action: "cancel", content: null },
-      });
+      })
     }
   }
 
-  private async createUserInputInteraction(params: {
-    requestId: string;
-    protocol: "claude_permission";
-    title: string;
-    instructions?: string;
-    questions: Array<Record<string, any>>;
-    toolName?: string;
-    originalInput?: Record<string, any>;
-  } | {
-    requestId: string | number;
-    protocol: "codex_request";
-    title: string;
-    instructions?: string;
-    questions: Array<Record<string, any>>;
-    toolName?: string;
-    originalInput?: Record<string, any>;
-  }): Promise<PendingInteraction> {
-    const conversationId = this.resolveConversationId();
+  private async createUserInputInteraction(
+    params:
+      | {
+          requestId: string
+          protocol: "claude_permission"
+          title: string
+          instructions?: string
+          questions: Array<Record<string, any>>
+          toolName?: string
+          originalInput?: Record<string, any>
+        }
+      | {
+          requestId: string | number
+          protocol: "codex_request"
+          title: string
+          instructions?: string
+          questions: Array<Record<string, any>>
+          toolName?: string
+          originalInput?: Record<string, any>
+        }
+  ): Promise<PendingInteraction> {
+    const conversationId = this.resolveConversationId()
     if (!conversationId) {
-      throw new Error("Could not determine the active conversation for user input");
+      throw new Error(
+        "Could not determine the active conversation for user input"
+      )
     }
-    const runKey = `remote-agent:${this.params.remoteAgentId}:user-input:${randomUUID()}`;
+    const runKey = `remote-agent:${this.params.remoteAgentId}:user-input:${randomUUID()}`
     const result = await requestJson<{ interaction: Record<string, any> }>(
       this.params.config.serverUrl,
       this.params.config.apiKey,
@@ -2071,8 +2319,8 @@ class ManagedRemoteAgent {
           instructions: params.instructions,
           questions: params.questions,
         }),
-      },
-    );
+      }
+    )
     if (params.protocol === "claude_permission") {
       return {
         interactionId: String(result.interaction.id),
@@ -2083,7 +2331,7 @@ class ManagedRemoteAgent {
         conversationId,
         toolName: params.toolName,
         originalInput: params.originalInput,
-      };
+      }
     }
     return {
       interactionId: String(result.interaction.id),
@@ -2094,33 +2342,39 @@ class ManagedRemoteAgent {
       conversationId,
       toolName: params.toolName,
       originalInput: params.originalInput,
-    };
+    }
   }
 
-  private async createPlanApprovalInteraction(params: {
-    requestId: string;
-    protocol: "claude_permission";
-    title: string;
-    summary?: string;
-    planMarkdown: string;
-    checklist?: Array<Record<string, any>>;
-    toolName?: string;
-    originalInput?: Record<string, any>;
-  } | {
-    requestId: string | number;
-    protocol: "codex_request";
-    title: string;
-    summary?: string;
-    planMarkdown: string;
-    checklist?: Array<Record<string, any>>;
-    toolName?: string;
-    originalInput?: Record<string, any>;
-  }): Promise<PendingInteraction> {
-    const conversationId = this.resolveConversationId();
+  private async createPlanApprovalInteraction(
+    params:
+      | {
+          requestId: string
+          protocol: "claude_permission"
+          title: string
+          summary?: string
+          planMarkdown: string
+          checklist?: Array<Record<string, any>>
+          toolName?: string
+          originalInput?: Record<string, any>
+        }
+      | {
+          requestId: string | number
+          protocol: "codex_request"
+          title: string
+          summary?: string
+          planMarkdown: string
+          checklist?: Array<Record<string, any>>
+          toolName?: string
+          originalInput?: Record<string, any>
+        }
+  ): Promise<PendingInteraction> {
+    const conversationId = this.resolveConversationId()
     if (!conversationId) {
-      throw new Error("Could not determine the active conversation for plan approval");
+      throw new Error(
+        "Could not determine the active conversation for plan approval"
+      )
     }
-    const runKey = `remote-agent:${this.params.remoteAgentId}:plan:${randomUUID()}`;
+    const runKey = `remote-agent:${this.params.remoteAgentId}:plan:${randomUUID()}`
     const result = await requestJson<{ interaction: Record<string, any> }>(
       this.params.config.serverUrl,
       this.params.config.apiKey,
@@ -2135,8 +2389,8 @@ class ManagedRemoteAgent {
           planMarkdown: params.planMarkdown,
           checklist: params.checklist,
         }),
-      },
-    );
+      }
+    )
     if (params.protocol === "claude_permission") {
       return {
         interactionId: String(result.interaction.id),
@@ -2147,7 +2401,7 @@ class ManagedRemoteAgent {
         conversationId,
         toolName: params.toolName,
         originalInput: params.originalInput,
-      };
+      }
     }
     return {
       interactionId: String(result.interaction.id),
@@ -2158,7 +2412,7 @@ class ManagedRemoteAgent {
       conversationId,
       toolName: params.toolName,
       originalInput: params.originalInput,
-    };
+    }
   }
 
   private async requestPlanApproval(planDraft: LatestPlanDraft) {
@@ -2170,89 +2424,94 @@ class ManagedRemoteAgent {
         summary: planDraft.summary,
         planMarkdown: planDraft.planMarkdown,
         checklist: planDraft.checklist,
-      });
-      this.pendingInteraction = interaction;
-      this.publishStatus("waiting_plan_approval", "Waiting for plan approval", interaction.conversationId);
+      })
+      this.pendingInteraction = interaction
+      this.publishStatus(
+        "waiting_plan_approval",
+        "Waiting for plan approval",
+        interaction.conversationId
+      )
     } catch (error) {
-      log("error", `remote-agent:${this.params.remoteAgentId}`, "Failed to create plan approval", {
-        error: error instanceof Error ? error.message : String(error),
-      });
+      log(
+        "error",
+        `remote-agent:${this.params.remoteAgentId}`,
+        "Failed to create plan approval",
+        {
+          error: error instanceof Error ? error.message : String(error),
+        }
+      )
       this.publishStatus(
         "error",
         error instanceof Error ? error.message : String(error),
         this.resolveConversationId(),
-        error instanceof Error ? error.message : String(error),
-      );
+        error instanceof Error ? error.message : String(error)
+      )
     }
   }
 
   private buildClaudeAnswerMap(interaction: Record<string, any>) {
-    const answers: Record<string, string> = {};
+    const answers: Record<string, string> = {}
     const questions = Array.isArray(interaction.userInput?.questions)
       ? interaction.userInput.questions
-      : [];
+      : []
     for (const question of questions) {
       const prompt =
-        typeof question?.prompt === "string" ? question.prompt : undefined;
+        typeof question?.prompt === "string" ? question.prompt : undefined
       if (!prompt) {
-        continue;
+        continue
       }
-      const answer = question?.answer;
+      const answer = question?.answer
       const parts = [
         ...(Array.isArray(answer?.selectedOptionLabels)
           ? answer.selectedOptionLabels.map((value: unknown) => String(value))
           : []),
         typeof answer?.otherText === "string" ? answer.otherText : undefined,
         typeof answer?.text === "string" ? answer.text : undefined,
-      ].filter((value): value is string => Boolean(value));
+      ].filter((value): value is string => Boolean(value))
       if (parts.length > 0) {
-        answers[prompt] = parts.join(", ");
+        answers[prompt] = parts.join(", ")
       }
     }
-    return answers;
+    return answers
   }
 
   private buildCodexAnswerMap(interaction: Record<string, any>) {
-    const answers: Record<string, { answers: string[] }> = {};
+    const answers: Record<string, { answers: string[] }> = {}
     const questions = Array.isArray(interaction.userInput?.questions)
       ? interaction.userInput.questions
-      : [];
+      : []
     for (const question of questions) {
       const questionId =
-        typeof question?.id === "string" ? question.id : undefined;
+        typeof question?.id === "string" ? question.id : undefined
       if (!questionId) {
-        continue;
+        continue
       }
-      const answer = question?.answer;
+      const answer = question?.answer
       const values = [
         ...(Array.isArray(answer?.selectedOptionLabels)
           ? answer.selectedOptionLabels.map((value: unknown) => String(value))
           : []),
         typeof answer?.otherText === "string" ? answer.otherText : undefined,
         typeof answer?.text === "string" ? answer.text : undefined,
-      ].filter((value): value is string => Boolean(value));
-      answers[questionId] = { answers: values };
+      ].filter((value): value is string => Boolean(value))
+      answers[questionId] = { answers: values }
     }
-    return answers;
+    return answers
   }
 }
 
 async function main() {
-  const config = parseArgs(process.argv.slice(2));
-  activeLogLevel = config.logLevel;
-  ensureDirectory(MACHINE_DIR_ROOT);
-  const supervisor = new DaemonSupervisor(config);
-  await supervisor.run();
+  const config = parseArgs(process.argv.slice(2))
+  activeLogLevel = config.logLevel
+  ensureDirectory(MACHINE_DIR_ROOT)
+  const supervisor = new DaemonSupervisor(config)
+  await supervisor.run()
 }
 
 main().catch((error) => {
-  log(
-    "error",
-    "daemon",
-    "Daemon crashed",
-    {
-      error: error instanceof Error ? error.stack || error.message : String(error),
-    },
-  );
-  process.exit(1);
-});
+  log("error", "daemon", "Daemon crashed", {
+    error:
+      error instanceof Error ? error.stack || error.message : String(error),
+  })
+  process.exit(1)
+})

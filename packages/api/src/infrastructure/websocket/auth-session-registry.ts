@@ -1,134 +1,166 @@
-import { redisPub, redisSub } from '../redis/index.js';
+import { redisPub, redisSub } from "../redis/index.js"
 
-const AUTH_SESSION_CONTROL_CHANNEL = 'synapse:auth:sessions';
+const AUTH_SESSION_CONTROL_CHANNEL = "synapse:auth:sessions"
 
 type DisconnectReason =
-  | 'Session logged out'
-  | 'All sessions were logged out'
-  | 'Session revoked'
-  | 'Session invalidated';
+  | "Session logged out"
+  | "All sessions were logged out"
+  | "Session revoked"
+  | "Session invalidated"
 
 type AuthSessionControlMessage =
   | {
-      type: 'session.disconnect';
-      sessionId: string;
-      reason: DisconnectReason;
+      type: "session.disconnect"
+      sessionId: string
+      reason: DisconnectReason
     }
   | {
-      type: 'user.disconnect';
-      userId: string;
-      exceptSessionId?: string;
-      reason: DisconnectReason;
-    };
+      type: "user.disconnect"
+      userId: string
+      exceptSessionId?: string
+      reason: DisconnectReason
+    }
 
 interface LiveAuthSocket {
-  clientId: string;
-  sessionId: string;
-  userId: string;
-  disconnect: (reason: string) => void;
+  clientId: string
+  sessionId: string
+  userId: string
+  disconnect: (reason: string) => void
 }
 
-const socketsByClientId = new Map<string, LiveAuthSocket>();
-const clientIdsBySessionId = new Map<string, Set<string>>();
-const clientIdsByUserId = new Map<string, Set<string>>();
+const socketsByClientId = new Map<string, LiveAuthSocket>()
+const clientIdsBySessionId = new Map<string, Set<string>>()
+const clientIdsByUserId = new Map<string, Set<string>>()
 
-let subscriptionStarted = false;
+let subscriptionStarted = false
 
-function addIndex(map: Map<string, Set<string>>, key: string, clientId: string) {
+function addIndex(
+  map: Map<string, Set<string>>,
+  key: string,
+  clientId: string
+) {
   if (!map.has(key)) {
-    map.set(key, new Set());
+    map.set(key, new Set())
   }
-  map.get(key)!.add(clientId);
+  map.get(key)!.add(clientId)
 }
 
-function removeIndex(map: Map<string, Set<string>>, key: string, clientId: string) {
-  const clientIds = map.get(key);
-  if (!clientIds) return;
-  clientIds.delete(clientId);
+function removeIndex(
+  map: Map<string, Set<string>>,
+  key: string,
+  clientId: string
+) {
+  const clientIds = map.get(key)
+  if (!clientIds) return
+  clientIds.delete(clientId)
   if (clientIds.size === 0) {
-    map.delete(key);
+    map.delete(key)
   }
 }
 
-function disconnectClientIds(clientIds: Iterable<string>, reason: string, matcher?: (socket: LiveAuthSocket) => boolean) {
+function disconnectClientIds(
+  clientIds: Iterable<string>,
+  reason: string,
+  matcher?: (socket: LiveAuthSocket) => boolean
+) {
   for (const clientId of [...clientIds]) {
-    const socket = socketsByClientId.get(clientId);
-    if (!socket) continue;
-    if (matcher && !matcher(socket)) continue;
-    socket.disconnect(reason);
+    const socket = socketsByClientId.get(clientId)
+    if (!socket) continue
+    if (matcher && !matcher(socket)) continue
+    socket.disconnect(reason)
   }
 }
 
 function applyControlMessage(message: AuthSessionControlMessage) {
-  if (message.type === 'session.disconnect') {
-    const clientIds = clientIdsBySessionId.get(message.sessionId);
-    if (!clientIds) return;
-    disconnectClientIds(clientIds, message.reason);
-    return;
+  if (message.type === "session.disconnect") {
+    const clientIds = clientIdsBySessionId.get(message.sessionId)
+    if (!clientIds) return
+    disconnectClientIds(clientIds, message.reason)
+    return
   }
 
-  const clientIds = clientIdsByUserId.get(message.userId);
-  if (!clientIds) return;
+  const clientIds = clientIdsByUserId.get(message.userId)
+  if (!clientIds) return
   disconnectClientIds(
     clientIds,
     message.reason,
     message.exceptSessionId
       ? (socket) => socket.sessionId !== message.exceptSessionId
-      : undefined,
-  );
+      : undefined
+  )
 }
 
 export async function initAuthSessionRegistry() {
-  if (subscriptionStarted) return;
-  subscriptionStarted = true;
+  if (subscriptionStarted) return
+  subscriptionStarted = true
 
-  redisSub.on('message', (channel: string, rawMessage: string) => {
-    if (channel !== AUTH_SESSION_CONTROL_CHANNEL) return;
+  redisSub.on("message", (channel: string, rawMessage: string) => {
+    if (channel !== AUTH_SESSION_CONTROL_CHANNEL) return
 
     try {
-      const message = JSON.parse(rawMessage) as AuthSessionControlMessage;
-      applyControlMessage(message);
+      const message = JSON.parse(rawMessage) as AuthSessionControlMessage
+      applyControlMessage(message)
     } catch (error) {
-      console.error('[auth-session-registry] Failed to parse control message:', error);
+      console.error(
+        "[auth-session-registry] Failed to parse control message:",
+        error
+      )
     }
-  });
+  })
 
-  await redisSub.subscribe(AUTH_SESSION_CONTROL_CHANNEL);
+  await redisSub.subscribe(AUTH_SESSION_CONTROL_CHANNEL)
 }
 
 export function registerAuthenticatedSocket(input: LiveAuthSocket) {
-  unregisterAuthenticatedSocket(input.clientId);
+  unregisterAuthenticatedSocket(input.clientId)
 
-  socketsByClientId.set(input.clientId, input);
-  addIndex(clientIdsBySessionId, input.sessionId, input.clientId);
-  addIndex(clientIdsByUserId, input.userId, input.clientId);
+  socketsByClientId.set(input.clientId, input)
+  addIndex(clientIdsBySessionId, input.sessionId, input.clientId)
+  addIndex(clientIdsByUserId, input.userId, input.clientId)
 }
 
 export function unregisterAuthenticatedSocket(clientId: string) {
-  const socket = socketsByClientId.get(clientId);
-  if (!socket) return;
+  const socket = socketsByClientId.get(clientId)
+  if (!socket) return
 
-  socketsByClientId.delete(clientId);
-  removeIndex(clientIdsBySessionId, socket.sessionId, clientId);
-  removeIndex(clientIdsByUserId, socket.userId, clientId);
+  socketsByClientId.delete(clientId)
+  removeIndex(clientIdsBySessionId, socket.sessionId, clientId)
+  removeIndex(clientIdsByUserId, socket.userId, clientId)
 }
 
-export async function disconnectSocketsForSession(sessionId: string, reason: DisconnectReason) {
-  applyControlMessage({ type: 'session.disconnect', sessionId, reason });
+export async function disconnectSocketsForSession(
+  sessionId: string,
+  reason: DisconnectReason
+) {
+  applyControlMessage({ type: "session.disconnect", sessionId, reason })
   await redisPub.publish(
     AUTH_SESSION_CONTROL_CHANNEL,
-    JSON.stringify({ type: 'session.disconnect', sessionId, reason } satisfies AuthSessionControlMessage),
-  );
+    JSON.stringify({
+      type: "session.disconnect",
+      sessionId,
+      reason,
+    } satisfies AuthSessionControlMessage)
+  )
 }
 
 export async function disconnectSocketsForUser(
   userId: string,
   reason: DisconnectReason,
-  exceptSessionId?: string,
+  exceptSessionId?: string
 ) {
-  applyControlMessage({ type: 'user.disconnect', userId, exceptSessionId, reason });
+  applyControlMessage({
+    type: "user.disconnect",
+    userId,
+    exceptSessionId,
+    reason,
+  })
   await redisPub.publish(
     AUTH_SESSION_CONTROL_CHANNEL,
-    JSON.stringify({ type: 'user.disconnect', userId, exceptSessionId, reason } satisfies AuthSessionControlMessage),
-  );
+    JSON.stringify({
+      type: "user.disconnect",
+      userId,
+      exceptSessionId,
+      reason,
+    } satisfies AuthSessionControlMessage)
+  )
 }

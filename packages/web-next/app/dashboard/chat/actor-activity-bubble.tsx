@@ -23,7 +23,10 @@ import {
 import { api } from "@/lib/api"
 import { cn, resolveFileUrl } from "@/lib/utils"
 import type { ConversationMember } from "@/stores/chat-store"
-import { runtimePhaseToBadgePhase, runtimeToAvatarStatus } from "@/stores/chat-store"
+import {
+  runtimePhaseToBadgePhase,
+  runtimeToAvatarStatus,
+} from "@/stores/chat-store"
 import ChatAvatar from "./chat-avatar"
 
 function formatTargetsLabel(runtime: ActorRuntimeState) {
@@ -104,7 +107,7 @@ function ActivityBlocks({ blocks }: { blocks: CanonicalContentBlock[] }) {
           return (
             <pre
               key={block.id}
-              className="whitespace-pre-wrap break-words rounded-2xl border border-border/70 bg-background px-3 py-2 text-xs text-foreground"
+              className="rounded-2xl border border-border/70 bg-background px-3 py-2 text-xs break-words whitespace-pre-wrap text-foreground"
             >
               {block.text}
             </pre>
@@ -156,7 +159,9 @@ export default function ActorActivityBubble({
   const preview = runtime.currentTurnPreview
   const previewTool = getActorRuntimeCurrentTool(runtime)
   const [expanded, setExpanded] = useState(false)
-  const [detail, setDetail] = useState<ActorRuntimeTurnActivityDetail | null>(null)
+  const [detail, setDetail] = useState<ActorRuntimeTurnActivityDetail | null>(
+    null
+  )
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -214,7 +219,9 @@ export default function ActorActivityBubble({
 
   const countsLabel = useMemo(() => {
     if (!preview || preview.totalToolCallCount === 0) return null
-    const parts = [`${preview.totalToolCallCount} tool${preview.totalToolCallCount === 1 ? "" : "s"}`]
+    const parts = [
+      `${preview.totalToolCallCount} tool${preview.totalToolCallCount === 1 ? "" : "s"}`,
+    ]
     if (preview.completedToolCallCount > 0) {
       parts.push(`${preview.completedToolCallCount} done`)
     }
@@ -234,11 +241,13 @@ export default function ActorActivityBubble({
         size="default"
         statusState={runtimeToAvatarStatus(runtime)}
         statusPhase={runtimePhaseToBadgePhase(runtime)}
-        statusLabel={previewTool ? formatToolStateLabel(previewTool.state) : "Active"}
+        statusLabel={
+          previewTool ? formatToolStateLabel(previewTool.state) : "Active"
+        }
         statusDetail={formatTargetsLabel(runtime)}
         className="mt-1"
       />
-      <div className="flex min-w-0 max-w-[85%] flex-1 flex-col gap-2">
+      <div className="flex max-w-[85%] min-w-0 flex-1 flex-col gap-2">
         <button
           type="button"
           disabled={!preview?.turnId}
@@ -292,7 +301,9 @@ export default function ActorActivityBubble({
           ) : null}
 
           {countsLabel ? (
-            <div className="text-[11px] text-muted-foreground">{countsLabel}</div>
+            <div className="text-[11px] text-muted-foreground">
+              {countsLabel}
+            </div>
           ) : null}
         </button>
 
@@ -335,13 +346,13 @@ export default function ActorActivityBubble({
                     </div>
                     <div className="flex flex-col gap-3">
                       <div>
-                        <div className="mb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                        <div className="mb-1 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
                           Call
                         </div>
                         <ActivityBlocks blocks={item.requestBlocks} />
                       </div>
                       <div>
-                        <div className="mb-1 text-[11px] font-medium uppercase tracking-[0.08em] text-muted-foreground">
+                        <div className="mb-1 text-[11px] font-medium tracking-[0.08em] text-muted-foreground uppercase">
                           Result
                         </div>
                         <ActivityBlocks blocks={item.resultBlocks} />

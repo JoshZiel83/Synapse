@@ -1,10 +1,10 @@
-import Feather from "@expo/vector-icons/Feather";
-import { Image } from "expo-image";
-import * as Sharing from "expo-sharing";
-import * as FileSystem from "expo-file-system/legacy";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio";
-import { useMemo, useState } from "react";
+import Feather from "@expo/vector-icons/Feather"
+import { Image } from "expo-image"
+import * as Sharing from "expo-sharing"
+import * as FileSystem from "expo-file-system/legacy"
+import { useLocalSearchParams, useRouter } from "expo-router"
+import { useAudioPlayer, useAudioPlayerStatus } from "expo-audio"
+import { useMemo, useState } from "react"
 import {
   ActivityIndicator,
   Alert,
@@ -13,54 +13,57 @@ import {
   StyleSheet,
   Text,
   View,
-} from "react-native";
-import { useVideoPlayer, VideoView } from "expo-video";
+} from "react-native"
+import { useVideoPlayer, VideoView } from "expo-video"
 
-import FilePreviewDom from "@/components/file-preview-dom";
-import { ScreenView } from "@/components/ui";
+import FilePreviewDom from "@/components/file-preview-dom"
+import { ScreenView } from "@/components/ui"
 import {
   isPdfMimeType,
   isTextPreviewMimeType,
   sanitizeDownloadName,
-} from "@/lib/chat-rich-content";
-import { buildAuthenticatedSource, reportApiUnauthorized } from "@/lib/api";
-import { useAuthenticatedMediaSource } from "@/hooks/use-authenticated-media-source";
-import { useSession } from "@/providers/session-provider";
-import { theme } from "@/theme/tokens";
+} from "@/lib/chat-rich-content"
+import { buildAuthenticatedSource, reportApiUnauthorized } from "@/lib/api"
+import { useAuthenticatedMediaSource } from "@/hooks/use-authenticated-media-source"
+import { useSession } from "@/providers/session-provider"
+import { theme } from "@/theme/tokens"
 
-type PreviewSource = "local" | "remote";
-type PreviewCategory = "image" | "video" | "audio" | "document";
+type PreviewSource = "local" | "remote"
+type PreviewCategory = "image" | "video" | "audio" | "document"
 
 function AudioPreview({
   source,
   fileName,
 }: {
-  source: { uri: string; headers?: Record<string, string> };
-  fileName: string;
+  source: { uri: string; headers?: Record<string, string> }
+  fileName: string
 }) {
-  const player = useAudioPlayer(source);
-  const status = useAudioPlayerStatus(player);
+  const player = useAudioPlayer(source)
+  const status = useAudioPlayerStatus(player)
 
   async function togglePlayback() {
     if (status.playing) {
-      player.pause();
-      return;
+      player.pause()
+      return
     }
 
     if (
       status.didJustFinish ||
       (status.duration > 0 && status.currentTime >= status.duration - 0.1)
     ) {
-      await player.seekTo(0);
+      await player.seekTo(0)
     }
 
-    player.play();
+    player.play()
   }
 
   return (
     <View style={styles.audioCard}>
       <Text style={styles.audioTitle}>{fileName}</Text>
-      <Pressable onPress={() => void togglePlayback()} style={styles.audioButton}>
+      <Pressable
+        onPress={() => void togglePlayback()}
+        style={styles.audioButton}
+      >
         <Feather
           name={status.playing ? "pause" : "play"}
           size={20}
@@ -71,117 +74,115 @@ function AudioPreview({
         </Text>
       </Pressable>
     </View>
-  );
+  )
 }
 
 export default function FilePreviewScreen() {
-  const router = useRouter();
-  const { token } = useSession();
+  const router = useRouter()
+  const { token } = useSession()
   const params = useLocalSearchParams<{
-    uri?: string;
-    mimeType?: string;
-    name?: string;
-    category?: PreviewCategory;
-    source?: PreviewSource;
-  }>();
-  const [downloading, setDownloading] = useState(false);
+    uri?: string
+    mimeType?: string
+    name?: string
+    category?: PreviewCategory
+    source?: PreviewSource
+  }>()
+  const [downloading, setDownloading] = useState(false)
 
-  const uri = params.uri || "";
-  const mimeType = params.mimeType || "application/octet-stream";
-  const fileName = params.name || "文件";
-  const category = (params.category || "document") as PreviewCategory;
-  const sourceType = (params.source || "remote") as PreviewSource;
+  const uri = params.uri || ""
+  const mimeType = params.mimeType || "application/octet-stream"
+  const fileName = params.name || "文件"
+  const category = (params.category || "document") as PreviewCategory
+  const sourceType = (params.source || "remote") as PreviewSource
   const remoteSource = useAuthenticatedMediaSource(
     sourceType === "remote" && (category === "image" || category === "video")
       ? uri
-      : undefined,
-  );
+      : undefined
+  )
   const remoteAudioSource = useMemo(
     () =>
       sourceType === "remote" && category === "audio"
         ? buildAuthenticatedSource(uri)
         : null,
-    [category, sourceType, uri],
-  );
+    [category, sourceType, uri]
+  )
   const localSource = useMemo(
     () => (sourceType === "local" ? { uri } : null),
-    [sourceType, uri],
-  );
+    [sourceType, uri]
+  )
   const mediaSource =
     sourceType === "remote"
       ? category === "audio"
         ? remoteAudioSource
         : remoteSource
-      : localSource;
+      : localSource
 
-  const isTextLike = isTextPreviewMimeType(mimeType);
+  const isTextLike = isTextPreviewMimeType(mimeType)
   const usesDomPreview =
-    category === "document" || isTextLike || isPdfMimeType(mimeType);
+    category === "document" || isTextLike || isPdfMimeType(mimeType)
 
   async function handleDownload() {
     if (!uri || downloading) {
-      return;
+      return
     }
 
-    setDownloading(true);
+    setDownloading(true)
     try {
       if (Platform.OS === "web") {
         const source =
-          sourceType === "remote"
-            ? buildAuthenticatedSource(uri)
-            : { uri };
+          sourceType === "remote" ? buildAuthenticatedSource(uri) : { uri }
         const response = await fetch(source.uri, {
           headers: sourceType === "remote" ? source.headers : undefined,
-        });
+        })
 
         if (response.status === 401) {
-          reportApiUnauthorized(401);
-          return;
+          reportApiUnauthorized(401)
+          return
         }
 
         if (!response.ok) {
-          throw new Error(`下载失败 (${response.status})`);
+          throw new Error(`下载失败 (${response.status})`)
         }
 
-        const blob = await response.blob();
-        const objectUrl = URL.createObjectURL(blob);
-        const anchor = document.createElement("a");
-        anchor.href = objectUrl;
-        anchor.download = sanitizeDownloadName(fileName);
-        document.body.appendChild(anchor);
-        anchor.click();
-        anchor.remove();
-        URL.revokeObjectURL(objectUrl);
-        return;
+        const blob = await response.blob()
+        const objectUrl = URL.createObjectURL(blob)
+        const anchor = document.createElement("a")
+        anchor.href = objectUrl
+        anchor.download = sanitizeDownloadName(fileName)
+        document.body.appendChild(anchor)
+        anchor.click()
+        anchor.remove()
+        URL.revokeObjectURL(objectUrl)
+        return
       }
 
       if (sourceType === "local") {
         if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(uri);
+          await Sharing.shareAsync(uri)
         } else {
-          Alert.alert("当前设备不支持导出该文件。");
+          Alert.alert("当前设备不支持导出该文件。")
         }
-        return;
+        return
       }
 
-      const targetPath = `${FileSystem.cacheDirectory ?? ""}${Date.now()}-${sanitizeDownloadName(fileName)}`;
-      const source = buildAuthenticatedSource(uri);
+      const targetPath = `${FileSystem.cacheDirectory ?? ""}${Date.now()}-${sanitizeDownloadName(fileName)}`
+      const source = buildAuthenticatedSource(uri)
       const result = await FileSystem.downloadAsync(source.uri, targetPath, {
         headers: source.headers,
-      });
+      })
 
       if (await Sharing.isAvailableAsync()) {
-        await Sharing.shareAsync(result.uri);
+        await Sharing.shareAsync(result.uri)
       } else {
-        Alert.alert("文件已下载", result.uri);
+        Alert.alert("文件已下载", result.uri)
       }
     } catch (error) {
       Alert.alert(
         "下载失败",
-        error instanceof Error ? error.message : "请稍后重试",
-      );
+        error instanceof Error ? error.message : "请稍后重试"
+      )
     } finally {
-      setDownloading(false);
+      setDownloading(false)
     }
   }
 
@@ -260,15 +261,15 @@ export default function FilePreviewScreen() {
         ) : null}
       </View>
     </ScreenView>
-  );
+  )
 }
 
 function VideoPreview({
   source,
 }: {
-  source: { uri: string; headers?: Record<string, string> };
+  source: { uri: string; headers?: Record<string, string> }
 }) {
-  const player = useVideoPlayer(source);
+  const player = useVideoPlayer(source)
 
   return (
     <View style={styles.videoShell}>
@@ -280,7 +281,7 @@ function VideoPreview({
         contentFit="contain"
       />
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -377,4 +378,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: theme.colors.white,
   },
-});
+})

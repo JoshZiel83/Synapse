@@ -1,6 +1,6 @@
-import crypto from "node:crypto";
-import fs from "node:fs/promises";
-import type pg from "pg";
+import crypto from "node:crypto"
+import fs from "node:fs/promises"
+import type pg from "pg"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   FILE_ORIGIN_SYSTEMS,
@@ -9,14 +9,14 @@ import {
   REUSE_SCOPES,
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
-} from "@synapse/shared";
+} from "@synapse/shared"
 import type {
   AccessGrant,
   AttachmentTarget,
   AttachmentTargetType,
   CapabilityAccessTarget,
   CapabilityAccessTargetType,
-} from "@synapse/shared/types";
+} from "@synapse/shared/types"
 import type {
   PluginAuthBindingDefinition,
   PluginConfigFieldDefinition,
@@ -27,163 +27,164 @@ import type {
   McpValidationRule,
   PluginReuseScopeV2,
   RuntimeBindingScope,
-} from "@synapse/shared";
-import { sql, type RawBuilder } from "kysely";
-import { encryptSensitiveFields, isEncrypted } from "../../infrastructure/crypto/index.js";
-import { query, transaction } from "../../infrastructure/database/index.js";
+} from "@synapse/shared"
+import { sql, type RawBuilder } from "kysely"
 import {
-  getWorkspaceCapabilityConversationTypeMask,
-} from "../capabilities/conversation-type-policies.js";
+  encryptSensitiveFields,
+  isEncrypted,
+} from "../../infrastructure/crypto/index.js"
+import { query, transaction } from "../../infrastructure/database/index.js"
+import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js"
 import {
   db,
   executeCompiledQuery,
   executeTakeFirst,
   type TableInsert,
-} from "../../infrastructure/database/kysely.js";
-import { emitEvent } from "../../infrastructure/events/index.js";
-import { saveFromBuffer } from "../../infrastructure/storage/file-io.js";
-import {
-  buildPlatformAssetOrigin,
-  getFileUrlById,
-} from "../files/service.js";
-import {
-  attachAuthConnectionsToConfig,
-} from "./auth-service.js";
-import { incrementMcpVersion } from "./runtime-version.js";
-import { builtinCapabilityCategories } from "./builtin-plugins/categories.js";
-import { builtinSeeds } from "./builtin-plugins/index.js";
+} from "../../infrastructure/database/kysely.js"
+import { emitEvent } from "../../infrastructure/events/index.js"
+import { saveFromBuffer } from "../../infrastructure/storage/file-io.js"
+import { buildPlatformAssetOrigin, getFileUrlById } from "../files/service.js"
+import { attachAuthConnectionsToConfig } from "./auth-service.js"
+import { incrementMcpVersion } from "./runtime-version.js"
+import { builtinCapabilityCategories } from "./builtin-plugins/categories.js"
+import { builtinSeeds } from "./builtin-plugins/index.js"
 import {
   assertFeishuFeatureSelection,
   assertFeishuScopesForFeatures,
   normalizeFeishuFeatureKeys,
-} from "./feishu/features.js";
+} from "./feishu/features.js"
 import {
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   readAccessBindingTarget,
   resolveAccessGrantTarget,
   type AccessBindingRow,
-} from "../access/bindings.js";
-import { buildResourceAccessBindingInsertValues } from "../access/binding-storage.js";
+} from "../access/bindings.js"
+import { buildResourceAccessBindingInsertValues } from "../access/binding-storage.js"
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
   validateConversationScopedAccessTarget,
-} from "../access/conversation-type-validation.js";
+} from "../access/conversation-type-validation.js"
 
-type QueryRow = pg.QueryResultRow;
-type QueryResultLike<T extends QueryRow> = { rows: T[] };
+type QueryRow = pg.QueryResultRow
+type QueryResultLike<T extends QueryRow> = { rows: T[] }
 type QueryRunner = <T extends QueryRow>(
   text: string,
-  params?: unknown[],
-) => Promise<QueryResultLike<T>>;
+  params?: unknown[]
+) => Promise<QueryResultLike<T>>
 
-type JsonObject = Record<string, unknown>;
-type JsonArray = unknown[];
+type JsonObject = Record<string, unknown>
+type JsonArray = unknown[]
 
 type PluginCatalogRow = {
-  item_id: string;
-  item_workspace_id: string | null;
-  item_slug: string;
-  item_display_name: string;
-  item_summary: string;
-  item_long_description: string;
-  item_source_kind: "builtin" | "official" | "workspace" | "user" | "relay";
-  item_visibility: "public" | "workspace" | "private";
-  item_tags: string[] | null;
-  item_is_active: boolean;
-  item_download_count: number;
-  item_icon_file_id: string | null;
-  item_metadata: unknown;
-  item_created_at: string;
-  item_updated_at: string;
-  version_id: string | null;
-  version_value: string | null;
-  version_status: "draft" | "active" | "deprecated" | "archived" | null;
-  version_changelog: string | null;
-  version_metadata: unknown;
-  version_created_by_user_id: string | null;
-  version_created_at: string | null;
-  spec_transport: "builtin" | "stdio" | "http" | "relay" | null;
-  spec_entry_point: string | null;
-  spec_tool_manifest: unknown;
-  spec_config_schema: unknown;
-  spec_default_config: unknown;
-  spec_install_flow: unknown;
-  spec_auth_bindings: unknown;
-  spec_default_mount_scope: AttachmentTargetType | null;
-  spec_default_reuse_scope: PluginReuseScopeV2 | null;
-  spec_default_conversation_type_mask: number | null;
-  spec_supported_reuse_scopes: unknown;
-  spec_requires_handshake: boolean | null;
-  spec_metadata: unknown;
-  publisher_id: string;
-  publisher_slug: string;
-  publisher_display_name: string;
-  publisher_description: string;
-  publisher_workspace_id: string | null;
-  publisher_is_builtin: boolean;
-  publisher_is_verified: boolean;
-  publisher_owner_user_id: string | null;
-  publisher_logo_file_id: string | null;
-  categories_json: unknown;
-  runtime_permissions_json: unknown;
-};
+  item_id: string
+  item_workspace_id: string | null
+  item_slug: string
+  item_display_name: string
+  item_summary: string
+  item_long_description: string
+  item_source_kind: "builtin" | "official" | "workspace" | "user" | "relay"
+  item_visibility: "public" | "workspace" | "private"
+  item_tags: string[] | null
+  item_is_active: boolean
+  item_download_count: number
+  item_icon_file_id: string | null
+  item_metadata: unknown
+  item_created_at: string
+  item_updated_at: string
+  version_id: string | null
+  version_value: string | null
+  version_status: "draft" | "active" | "deprecated" | "archived" | null
+  version_changelog: string | null
+  version_metadata: unknown
+  version_created_by_user_id: string | null
+  version_created_at: string | null
+  spec_transport: "builtin" | "stdio" | "http" | "relay" | null
+  spec_entry_point: string | null
+  spec_tool_manifest: unknown
+  spec_config_schema: unknown
+  spec_default_config: unknown
+  spec_install_flow: unknown
+  spec_auth_bindings: unknown
+  spec_default_mount_scope: AttachmentTargetType | null
+  spec_default_reuse_scope: PluginReuseScopeV2 | null
+  spec_default_conversation_type_mask: number | null
+  spec_supported_reuse_scopes: unknown
+  spec_requires_handshake: boolean | null
+  spec_metadata: unknown
+  publisher_id: string
+  publisher_slug: string
+  publisher_display_name: string
+  publisher_description: string
+  publisher_workspace_id: string | null
+  publisher_is_builtin: boolean
+  publisher_is_verified: boolean
+  publisher_owner_user_id: string | null
+  publisher_logo_file_id: string | null
+  categories_json: unknown
+  runtime_permissions_json: unknown
+}
 
 type PluginCategoryRow = {
-  id: string;
-  slug: string;
-  display_name: string;
-  description: string;
-  sort_order: number;
-  metadata: unknown;
-};
+  id: string
+  slug: string
+  display_name: string
+  description: string
+  sort_order: number
+  metadata: unknown
+}
 
 type PublisherRow = {
-  id: string;
-  slug: string;
-  display_name: string;
-  description: string;
-  logo_file_id: string | null;
-  owner_user_id: string | null;
-  workspace_id: string | null;
-  is_builtin: boolean;
-  is_verified: boolean;
-  created_at: string;
-  updated_at: string;
-  plugin_count?: string | number | null;
-};
+  id: string
+  slug: string
+  display_name: string
+  description: string
+  logo_file_id: string | null
+  owner_user_id: string | null
+  workspace_id: string | null
+  is_builtin: boolean
+  is_verified: boolean
+  created_at: string
+  updated_at: string
+  plugin_count?: string | number | null
+}
 
 type InstallationRow = {
-  installation_id: string;
-  workspace_id: string;
-  catalog_item_id: string;
-  catalog_version_id: string;
-  installation_display_name: string;
-  attachment_target_type: AttachmentTargetType;
-  attachment_conversation_id: string | null;
-  attachment_actor_id: string | null;
-  attachment_workspace_member_id: string | null;
-  config_data: unknown;
-  approved_runtime_permissions: string[] | null;
-  reuse_scope: PluginReuseScopeV2;
-  conversation_type_mask_override: number | null;
-  installation_status: "active" | "disabled" | "error" | "archived";
-  installed_by_workspace_member_id: string | null;
-  installation_created_at: string;
-  installation_updated_at: string;
-  source_catalog_item_id: string | null;
-  source_catalog_version_id: string | null;
-  source_sync_mode: "notify" | "manual_merge" | "follow_upstream" | "detached" | null;
-};
+  installation_id: string
+  workspace_id: string
+  catalog_item_id: string
+  catalog_version_id: string
+  installation_display_name: string
+  attachment_target_type: AttachmentTargetType
+  attachment_conversation_id: string | null
+  attachment_actor_id: string | null
+  attachment_workspace_member_id: string | null
+  config_data: unknown
+  approved_runtime_permissions: string[] | null
+  reuse_scope: PluginReuseScopeV2
+  conversation_type_mask_override: number | null
+  installation_status: "active" | "disabled" | "error" | "archived"
+  installed_by_workspace_member_id: string | null
+  installation_created_at: string
+  installation_updated_at: string
+  source_catalog_item_id: string | null
+  source_catalog_version_id: string | null
+  source_sync_mode:
+    | "notify"
+    | "manual_merge"
+    | "follow_upstream"
+    | "detached"
+    | null
+}
 
 type InstallationAccessRow = AccessBindingRow & {
-  installation_id: string;
-  access_target_type: RuntimeBindingScope;
-  conversation_id: string | null;
-  actor_id: string | null;
-  workspace_member_id: string | null;
-};
+  installation_id: string
+  access_target_type: RuntimeBindingScope
+  conversation_id: string | null
+  actor_id: string | null
+  workspace_member_id: string | null
+}
 
 const PLUGIN_CATALOG_SELECT = `
   SELECT
@@ -272,14 +273,14 @@ const PLUGIN_CATALOG_SELECT = `
     WHERE permission_row.catalog_version_id = version.id
   ) runtime_permissions ON TRUE
   WHERE item.item_kind = 'plugin_package'
-`;
+`
 
 export class McpPluginError extends Error {
   constructor(
     public statusCode: number,
-    message: string,
+    message: string
   ) {
-    super(message);
+    super(message)
   }
 }
 
@@ -290,39 +291,39 @@ function sanitizeSlug(value: string) {
     .replace(/[^a-z0-9-]+/g, "-")
     .replace(/-{2,}/g, "-")
     .replace(/^-+|-+$/g, "")
-    .slice(0, 120);
+    .slice(0, 120)
 }
 
 function asObject(value: unknown): JsonObject {
-  if (!value) return {};
+  if (!value) return {}
   if (typeof value === "string") {
     try {
-      return JSON.parse(value) as JsonObject;
+      return JSON.parse(value) as JsonObject
     } catch {
-      return {};
+      return {}
     }
   }
   return typeof value === "object" && !Array.isArray(value)
     ? (value as JsonObject)
-    : {};
+    : {}
 }
 
 function asArray<T>(value: unknown): T[] {
-  if (!value) return [];
+  if (!value) return []
   if (typeof value === "string") {
     try {
-      return JSON.parse(value) as T[];
+      return JSON.parse(value) as T[]
     } catch {
-      return [];
+      return []
     }
   }
-  return Array.isArray(value) ? (value as T[]) : [];
+  return Array.isArray(value) ? (value as T[]) : []
 }
 
 function asStringArray(value: unknown): string[] {
   return asArray<unknown>(value).filter(
-    (item): item is string => typeof item === "string" && item.trim().length > 0,
-  );
+    (item): item is string => typeof item === "string" && item.trim().length > 0
+  )
 }
 
 function isConfigValueMissing(value: unknown) {
@@ -332,84 +333,82 @@ function isConfigValueMissing(value: unknown) {
     value === "" ||
     (typeof value === "string" && value.trim() === "") ||
     (Array.isArray(value) && value.length === 0)
-  );
+  )
 }
 
 function parseBoolean(value: unknown, fallback = false) {
-  if (typeof value === "boolean") return value;
-  return fallback;
+  if (typeof value === "boolean") return value
+  return fallback
 }
 
 function isReuseScope(value: unknown): value is ReuseScope {
-  return typeof value === "string" && REUSE_SCOPES.includes(value as ReuseScope);
+  return typeof value === "string" && REUSE_SCOPES.includes(value as ReuseScope)
 }
 
 function normalizeSupportedReuseScopes(
   value: unknown,
-  defaultScope: ReuseScope,
+  defaultScope: ReuseScope
 ): ReuseScope[] {
-  const requested = asArray<unknown>(value).filter(isReuseScope);
-  const enabledScopes = new Set<ReuseScope>(requested);
+  const requested = asArray<unknown>(value).filter(isReuseScope)
+  const enabledScopes = new Set<ReuseScope>(requested)
   if (enabledScopes.size === 0) {
     for (const scope of REUSE_SCOPES) {
-      enabledScopes.add(scope);
+      enabledScopes.add(scope)
     }
   }
-  enabledScopes.add(defaultScope);
-  return REUSE_SCOPES.filter((scope) => enabledScopes.has(scope));
+  enabledScopes.add(defaultScope)
+  return REUSE_SCOPES.filter((scope) => enabledScopes.has(scope))
 }
 
 function assertSupportedReuseScope(
   supportedScopes: readonly ReuseScope[],
   lifecycleScope: ReuseScope,
-  pluginLabel: string,
+  pluginLabel: string
 ) {
   if (!supportedScopes.includes(lifecycleScope)) {
     throw new McpPluginError(
       400,
-      `Reuse scope '${lifecycleScope}' is not supported by plugin '${pluginLabel}'`,
-    );
+      `Reuse scope '${lifecycleScope}' is not supported by plugin '${pluginLabel}'`
+    )
   }
 }
 
 function publicAttachmentScope(
-  scope: AttachmentTargetType | null | undefined,
+  scope: AttachmentTargetType | null | undefined
 ): AttachmentTargetType {
-  return scope || "workspace";
+  return scope || "workspace"
 }
 
 function internalAttachmentScope(
-  scope: AttachmentTargetType,
+  scope: AttachmentTargetType
 ): AttachmentTargetType {
-  return scope;
+  return scope
 }
 
 function publicReuseScope(
-  scope: PluginReuseScopeV2 | null | undefined,
+  scope: PluginReuseScopeV2 | null | undefined
 ): ReuseScope {
-  return scope || "conversation";
+  return scope || "conversation"
 }
 
-function internalReuseScope(
-  scope: ReuseScope,
-): PluginReuseScopeV2 {
-  return scope;
+function internalReuseScope(scope: ReuseScope): PluginReuseScopeV2 {
+  return scope
 }
 
 function inferMimeTypeForAsset(assetPath: string) {
-  const lower = assetPath.toLowerCase();
-  if (lower.endsWith(".svg")) return "image/svg+xml";
-  if (lower.endsWith(".png")) return "image/png";
-  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg";
-  if (lower.endsWith(".webp")) return "image/webp";
-  return "application/octet-stream";
+  const lower = assetPath.toLowerCase()
+  if (lower.endsWith(".svg")) return "image/svg+xml"
+  if (lower.endsWith(".png")) return "image/png"
+  if (lower.endsWith(".jpg") || lower.endsWith(".jpeg")) return "image/jpeg"
+  if (lower.endsWith(".webp")) return "image/webp"
+  return "application/octet-stream"
 }
 
-let builtinPluginIconFilesTableAvailable: boolean | null = null;
+let builtinPluginIconFilesTableAvailable: boolean | null = null
 
 async function hasBuiltinPluginFilesTable() {
   if (builtinPluginIconFilesTableAvailable !== null) {
-    return builtinPluginIconFilesTableAvailable;
+    return builtinPluginIconFilesTableAvailable
   }
 
   const result = await db.executeQuery(
@@ -418,26 +417,29 @@ async function hasBuiltinPluginFilesTable() {
       FROM information_schema.tables
       WHERE table_schema = 'public'
         AND table_name = 'files'
-    ) AS exists`.compile(db),
-  );
+    ) AS exists`.compile(db)
+  )
 
-  builtinPluginIconFilesTableAvailable = result.rows[0]?.exists === true;
-  return builtinPluginIconFilesTableAvailable;
+  builtinPluginIconFilesTableAvailable = result.rows[0]?.exists === true
+  return builtinPluginIconFilesTableAvailable
 }
 
 async function ensureBuiltinPluginIcon(
   seedSlug: string,
   pluginSlug: string,
-  relativeAssetPath: string,
+  relativeAssetPath: string
 ) {
   if (!(await hasBuiltinPluginFilesTable())) {
-    return null;
+    return null
   }
 
-  const assetUrl = new URL(`./builtin-plugins/${relativeAssetPath}`, import.meta.url);
-  const buffer = await fs.readFile(assetUrl);
-  const sha256 = crypto.createHash("sha256").update(buffer).digest("hex");
-  const key = `${seedSlug}/${pluginSlug}`;
+  const assetUrl = new URL(
+    `./builtin-plugins/${relativeAssetPath}`,
+    import.meta.url
+  )
+  const buffer = await fs.readFile(assetUrl)
+  const sha256 = crypto.createHash("sha256").update(buffer).digest("hex")
+  const key = `${seedSlug}/${pluginSlug}`
 
   const existing = await db
     .selectFrom("files as f")
@@ -449,15 +451,15 @@ async function ensureBuiltinPluginIcon(
     .where(sql<boolean>`fo.details_json->>'builtinPluginIconKey' = ${key}`)
     .where(sql<boolean>`fo.details_json->>'sha256' = ${sha256}`)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
   if (existing) {
     return {
       id: existing.id,
-    };
+    }
   }
 
-  const originalName = relativeAssetPath.split("/").pop() || `${pluginSlug}.svg`;
+  const originalName = relativeAssetPath.split("/").pop() || `${pluginSlug}.svg`
   const file = await saveFromBuffer(
     buffer,
     originalName,
@@ -471,21 +473,21 @@ async function ensureBuiltinPluginIcon(
         sha256,
         source: "builtin_plugin_icon",
       },
-    }),
-  );
+    })
+  )
 
   return {
     id: file.id,
-  };
+  }
 }
 
 function authorizationFromRuntimePermissions(
   runtimePermissions: unknown,
   defaultScope: AttachmentTargetType,
-  specMetadata: JsonObject,
+  specMetadata: JsonObject
 ) {
-  const rows = asArray<JsonObject>(runtimePermissions);
-  const metadataAuthorization = asObject(specMetadata.authorization);
+  const rows = asArray<JsonObject>(runtimePermissions)
+  const metadataAuthorization = asObject(specMetadata.authorization)
   const rawDefaultAccessTargetType =
     (metadataAuthorization.defaultAccessTargetType as
       | CapabilityAccessTargetType
@@ -493,7 +495,7 @@ function authorizationFromRuntimePermissions(
       | undefined) ||
     defaultAccessTargetForAttachment({
       type: defaultScope,
-    }).type;
+    }).type
 
   return {
     requiredPermissions: rows
@@ -505,40 +507,51 @@ function authorizationFromRuntimePermissions(
       typeof metadataAuthorization.reason === "string"
         ? metadataAuthorization.reason
         : undefined,
-  };
+  }
 }
 
 function mapPluginView(row: PluginCatalogRow) {
-  const itemMetadata = asObject(row.item_metadata);
-  const specMetadata = asObject(row.spec_metadata);
-  const defaultInstanceScope = publicAttachmentScope(row.spec_default_mount_scope);
-  const defaultReuseScope = publicReuseScope(row.spec_default_reuse_scope);
+  const itemMetadata = asObject(row.item_metadata)
+  const specMetadata = asObject(row.spec_metadata)
+  const defaultInstanceScope = publicAttachmentScope(
+    row.spec_default_mount_scope
+  )
+  const defaultReuseScope = publicReuseScope(row.spec_default_reuse_scope)
   const defaultConversationTypeMask = resolveEffectiveConversationTypeMask({
     defaultMask: row.spec_default_conversation_type_mask,
     overrideMask: null,
-  });
+  })
   const supportedReuseScopes = normalizeSupportedReuseScopes(
     row.spec_supported_reuse_scopes,
-    defaultReuseScope,
-  );
+    defaultReuseScope
+  )
   const authorization = authorizationFromRuntimePermissions(
     row.runtime_permissions_json,
     defaultInstanceScope,
-    specMetadata,
-  );
-  const configFields = asArray<PluginConfigFieldDefinition>(specMetadata.configFields);
-  const validationRules = asArray<McpValidationRule>(specMetadata.validationRules);
-  const setupSteps = asArray<McpSetupStep>(specMetadata.setupSteps);
-  const installFlow = asObject(row.spec_install_flow);
-  const categories = asArray<JsonObject>(row.categories_json).map((category) => ({
-    id: String(category.id || ""),
-    slug: String(category.slug || ""),
-    display_name: String(category.display_name || ""),
-    description: String(category.description || ""),
-    display_name_i18n: asObject(category.display_name_i18n),
-    description_i18n: asObject(category.description_i18n),
-    default_locale: typeof category.default_locale === "string" ? category.default_locale : "en",
-  }));
+    specMetadata
+  )
+  const configFields = asArray<PluginConfigFieldDefinition>(
+    specMetadata.configFields
+  )
+  const validationRules = asArray<McpValidationRule>(
+    specMetadata.validationRules
+  )
+  const setupSteps = asArray<McpSetupStep>(specMetadata.setupSteps)
+  const installFlow = asObject(row.spec_install_flow)
+  const categories = asArray<JsonObject>(row.categories_json).map(
+    (category) => ({
+      id: String(category.id || ""),
+      slug: String(category.slug || ""),
+      display_name: String(category.display_name || ""),
+      description: String(category.description || ""),
+      display_name_i18n: asObject(category.display_name_i18n),
+      description_i18n: asObject(category.description_i18n),
+      default_locale:
+        typeof category.default_locale === "string"
+          ? category.default_locale
+          : "en",
+    })
+  )
 
   return {
     id: row.item_id,
@@ -555,7 +568,9 @@ function mapPluginView(row: PluginCatalogRow) {
       typeof itemMetadata.defaultLocale === "string"
         ? itemMetadata.defaultLocale
         : "en",
-    icon_url: row.item_icon_file_id ? getFileUrlById(row.item_icon_file_id) : null,
+    icon_url: row.item_icon_file_id
+      ? getFileUrlById(row.item_icon_file_id)
+      : null,
     version: row.version_value || "1.0.0",
     transport: row.spec_transport || "builtin",
     entry_point: row.spec_entry_point || "",
@@ -571,9 +586,7 @@ function mapPluginView(row: PluginCatalogRow) {
     validation_rules: validationRules,
     setup_steps: setupSteps,
     install_flow:
-      Object.keys(installFlow).length > 0
-        ? installFlow
-        : { steps: setupSteps },
+      Object.keys(installFlow).length > 0 ? installFlow : { steps: setupSteps },
     auth_bindings: asArray<PluginAuthBindingDefinition>(row.spec_auth_bindings),
     authorization,
     tags: row.item_tags || [],
@@ -595,7 +608,7 @@ function mapPluginView(row: PluginCatalogRow) {
     },
     requires_handshake: parseBoolean(row.spec_requires_handshake),
     metadata: specMetadata,
-  };
+  }
 }
 
 function mapPublisherView(row: PublisherRow) {
@@ -615,37 +628,37 @@ function mapPublisherView(row: PublisherRow) {
         : Number(row.plugin_count || 0),
     created_at: row.created_at,
     updated_at: row.updated_at,
-  };
+  }
 }
 
 function isSecretConfigField(
   field: PluginConfigFieldDefinition | undefined,
   schemaProperties: Record<string, unknown>,
-  key: string,
+  key: string
 ) {
-  const property = asObject(schemaProperties[key]);
+  const property = asObject(schemaProperties[key])
   return Boolean(
-    field?.secret ||
-      field?.type === "secret" ||
-      property.sensitive === true,
-  );
+    field?.secret || field?.type === "secret" || property.sensitive === true
+  )
 }
 
 function sanitizeInstallationConfig(
   installation: { config_data: unknown; updated_at: string },
   configSchema: Record<string, unknown>,
   configFields: PluginConfigFieldDefinition[],
-  authBindings: PluginAuthBindingDefinition[],
+  authBindings: PluginAuthBindingDefinition[]
 ) {
-  const rawConfig = asObject(installation.config_data);
-  const schemaProperties = asObject(configSchema.properties);
-  const fieldMap = new Map(configFields.map((field) => [field.key, field]));
-  const bindingMap = new Map(authBindings.map((binding) => [binding.key, binding]));
-  const sanitizedConfig: Record<string, unknown> = {};
-  const configState: PluginConfigFieldState[] = [];
+  const rawConfig = asObject(installation.config_data)
+  const schemaProperties = asObject(configSchema.properties)
+  const fieldMap = new Map(configFields.map((field) => [field.key, field]))
+  const bindingMap = new Map(
+    authBindings.map((binding) => [binding.key, binding])
+  )
+  const sanitizedConfig: Record<string, unknown> = {}
+  const configState: PluginConfigFieldState[] = []
 
   for (const [key, value] of Object.entries(rawConfig)) {
-    const field = fieldMap.get(key);
+    const field = fieldMap.get(key)
 
     if (
       field?.type === "auth_connection" &&
@@ -653,7 +666,7 @@ function sanitizeInstallationConfig(
       typeof value === "object" &&
       !Array.isArray(value)
     ) {
-      const ref = value as Record<string, unknown>;
+      const ref = value as Record<string, unknown>
       configState.push({
         key,
         isConfigured: Boolean(ref.connectionId),
@@ -667,7 +680,7 @@ function sanitizeInstallationConfig(
           typeof ref.updatedAt === "string"
             ? ref.updatedAt
             : installation.updated_at,
-      });
+      })
       sanitizedConfig[key] = {
         bindingKey:
           typeof ref.bindingKey === "string"
@@ -679,8 +692,8 @@ function sanitizeInstallationConfig(
             : undefined,
         connectionId:
           typeof ref.connectionId === "string" ? ref.connectionId : undefined,
-      };
-      continue;
+      }
+      continue
     }
 
     if (isSecretConfigField(field, schemaProperties, key)) {
@@ -691,14 +704,14 @@ function sanitizeInstallationConfig(
             : value.length > 4
               ? `${"•".repeat(Math.max(4, value.length - 4))}${value.slice(-4)}`
               : "••••"
-          : undefined;
+          : undefined
       configState.push({
         key,
         isConfigured: value !== undefined && value !== null && value !== "",
         maskedValue: masked,
         updatedAt: installation.updated_at,
-      });
-      continue;
+      })
+      continue
     }
 
     if (field?.serverManaged) {
@@ -706,11 +719,11 @@ function sanitizeInstallationConfig(
         key,
         isConfigured: value !== undefined && value !== null && value !== "",
         updatedAt: installation.updated_at,
-      });
-      continue;
+      })
+      continue
     }
 
-    sanitizedConfig[key] = value;
+    sanitizedConfig[key] = value
   }
 
   for (const field of configFields) {
@@ -720,53 +733,53 @@ function sanitizeInstallationConfig(
         field.type !== "auth_connection" &&
         !field.serverManaged)
     ) {
-      continue;
+      continue
     }
 
     const binding = field.authBindingKey
       ? bindingMap.get(field.authBindingKey)
-      : undefined;
+      : undefined
     configState.push({
       key: field.key,
       isConfigured: false,
       accountDisplayName: binding
         ? Object.values(binding.displayNameI18n || {})[0]
         : undefined,
-    });
+    })
   }
 
   return {
     sanitizedConfig,
     configState,
-  };
+  }
 }
 
 function mergeConfigForUpdate(
   existingConfig: Record<string, unknown>,
   incomingConfig: Record<string, unknown>,
-  configFields: PluginConfigFieldDefinition[],
+  configFields: PluginConfigFieldDefinition[]
 ) {
   const merged: Record<string, unknown> = {
     ...existingConfig,
     ...incomingConfig,
-  };
+  }
 
   for (const field of configFields) {
-    if (!field.secret) continue;
-    const incoming = incomingConfig[field.key];
+    if (!field.secret) continue
+    const incoming = incomingConfig[field.key]
     if (
       (incoming === undefined || incoming === null || incoming === "") &&
       existingConfig[field.key] !== undefined
     ) {
-      merged[field.key] = existingConfig[field.key];
+      merged[field.key] = existingConfig[field.key]
     }
   }
 
-  return merged;
+  return merged
 }
 
 function normalizeAttachmentTarget(input: {
-  attachmentTarget: AttachmentTarget;
+  attachmentTarget: AttachmentTarget
 }) {
   switch (input.attachmentTarget.type) {
     case "workspace":
@@ -775,56 +788,58 @@ function normalizeAttachmentTarget(input: {
         actorId: null,
         conversationId: null,
         workspaceMemberId: null,
-      };
+      }
     case "conversation":
       if (!input.attachmentTarget.conversationId) {
         throw new McpPluginError(
           400,
-          "conversationId is required for conversation attachment",
-        );
+          "conversationId is required for conversation attachment"
+        )
       }
       return {
         mountScope: "conversation" as const,
         actorId: null,
         conversationId: input.attachmentTarget.conversationId,
         workspaceMemberId: null,
-      };
+      }
     case "actor":
       if (!input.attachmentTarget.actorId) {
         throw new McpPluginError(
           400,
-          "actorId is required for actor attachment",
-        );
+          "actorId is required for actor attachment"
+        )
       }
       return {
         mountScope: "actor" as const,
         actorId: input.attachmentTarget.actorId,
         conversationId: null,
         workspaceMemberId: null,
-      };
+      }
     case "workspace_member":
       if (!input.attachmentTarget.workspaceMemberId) {
         throw new McpPluginError(
           400,
-          "workspaceMemberId is required for workspace_member attachment",
-        );
+          "workspaceMemberId is required for workspace_member attachment"
+        )
       }
       return {
         mountScope: "workspace_member" as const,
         actorId: null,
         conversationId: null,
         workspaceMemberId: input.attachmentTarget.workspaceMemberId,
-      };
+      }
     default:
       throw new McpPluginError(
         400,
-        `Unsupported attachment type: ${String(input.attachmentTarget.type)}`,
-      );
+        `Unsupported attachment type: ${String(input.attachmentTarget.type)}`
+      )
   }
 }
 
-function buildInstallationAccessRow(row: AccessBindingRow): InstallationAccessRow {
-  const target = readAccessBindingTarget(row);
+function buildInstallationAccessRow(
+  row: AccessBindingRow
+): InstallationAccessRow {
+  const target = readAccessBindingTarget(row)
   return {
     ...row,
     installation_id: row.resource_id,
@@ -832,62 +847,62 @@ function buildInstallationAccessRow(row: AccessBindingRow): InstallationAccessRo
     actor_id: target.subjectActorId,
     conversation_id: target.subjectConversationId,
     workspace_member_id: null,
-  };
+  }
 }
 
-async function loadPluginCatalogRows(
-  whereClause: RawBuilder<unknown>,
-) {
+async function loadPluginCatalogRows(whereClause: RawBuilder<unknown>) {
   const result = await db.executeQuery(
     sql<PluginCatalogRow>`
       ${sql.raw(PLUGIN_CATALOG_SELECT)}
       ${whereClause}
-    `.compile(db),
-  );
-  return result.rows;
+    `.compile(db)
+  )
+  return result.rows
 }
 
 async function loadPluginCatalogMapByVersionIds(versionIds: string[]) {
   if (versionIds.length === 0) {
-    return new Map<string, ReturnType<typeof mapPluginView>>();
+    return new Map<string, ReturnType<typeof mapPluginView>>()
   }
 
   const rows = await loadPluginCatalogRows(
-    sql`AND version.id = ANY(${versionIds}::uuid[])`,
-  );
+    sql`AND version.id = ANY(${versionIds}::uuid[])`
+  )
 
-  return new Map(rows.map((row) => [row.version_id!, mapPluginView(row)]));
+  return new Map(rows.map((row) => [row.version_id!, mapPluginView(row)]))
 }
 
 async function getPluginCatalogRowByItemId(itemId: string) {
   const rows = await loadPluginCatalogRows(
     sql`AND item.id = ${itemId}
        AND version.id = item.latest_version_id
-       LIMIT 1`,
-  );
+       LIMIT 1`
+  )
 
-  return rows[0] || null;
+  return rows[0] || null
 }
 
 async function loadInstallationRows(
   workspaceId: string,
   filters?: {
-    attachmentType?: AttachmentTargetType;
-    conversationId?: string;
-    actorId?: string;
-    workspaceMemberId?: string;
-    pluginId?: string;
-    installationId?: string;
-  },
+    attachmentType?: AttachmentTargetType
+    conversationId?: string
+    actorId?: string
+    workspaceMemberId?: string
+    pluginId?: string
+    installationId?: string
+  }
 ) {
-  const conditions: RawBuilder<unknown>[] = [sql`installation.workspace_id = ${workspaceId}`];
+  const conditions: RawBuilder<unknown>[] = [
+    sql`installation.workspace_id = ${workspaceId}`,
+  ]
 
   if (filters?.pluginId) {
-    conditions.push(sql`installation.catalog_item_id = ${filters.pluginId}`);
+    conditions.push(sql`installation.catalog_item_id = ${filters.pluginId}`)
   }
 
   if (filters?.installationId) {
-    conditions.push(sql`installation.id = ${filters.installationId}`);
+    conditions.push(sql`installation.id = ${filters.installationId}`)
   }
 
   const result = await db.executeQuery(
@@ -916,33 +931,36 @@ async function loadInstallationRows(
       LEFT JOIN plugin_source_refs source_ref
         ON source_ref.installation_id = installation.id
       WHERE ${sql.join(conditions, sql` AND `)}
-      ORDER BY installation.created_at DESC`.compile(db),
-  );
+      ORDER BY installation.created_at DESC`.compile(db)
+  )
 
   return result.rows.filter((row) => {
     const attachmentTargetType = publicAttachmentScope(
-      row.attachment_target_type || "workspace",
-    );
-    if (filters?.attachmentType && attachmentTargetType !== filters.attachmentType) {
-      return false;
+      row.attachment_target_type || "workspace"
+    )
+    if (
+      filters?.attachmentType &&
+      attachmentTargetType !== filters.attachmentType
+    ) {
+      return false
     }
     if (
       filters?.conversationId &&
       row.attachment_conversation_id !== filters.conversationId
     ) {
-      return false;
+      return false
     }
     if (filters?.actorId && row.attachment_actor_id !== filters.actorId) {
-      return false;
+      return false
     }
     if (
-      filters?.workspaceMemberId
-      && row.attachment_workspace_member_id !== filters.workspaceMemberId
+      filters?.workspaceMemberId &&
+      row.attachment_workspace_member_id !== filters.workspaceMemberId
     ) {
-      return false;
+      return false
     }
-    return true;
-  });
+    return true
+  })
 }
 
 async function listAccessRows(installationId: string, includeRevoked = false) {
@@ -951,7 +969,7 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
     .leftJoin(
       "conversation_actor_contexts as cac",
       "cac.id",
-      "binding.subject_conversation_actor_context_id",
+      "binding.subject_conversation_actor_context_id"
     )
     .select([
       "binding.id",
@@ -965,10 +983,12 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
       "binding.target_type",
       "binding.subject_workspace_id",
       sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
-        "subject_actor_id",
+        "subject_actor_id"
       ),
-      sql<string | null>`COALESCE(binding.subject_conversation_id, cac.conversation_id)`.as(
-        "subject_conversation_id",
+      sql<
+        string | null
+      >`COALESCE(binding.subject_conversation_id, cac.conversation_id)`.as(
+        "subject_conversation_id"
       ),
       "binding.subject_conversation_actor_context_id",
       "binding.conversation_type_mask_override",
@@ -978,91 +998,91 @@ async function listAccessRows(installationId: string, includeRevoked = false) {
       "binding.created_at",
       "binding.revoked_at",
     ])
-    .where("binding.plugin_installation_id", "=", installationId);
+    .where("binding.plugin_installation_id", "=", installationId)
 
   if (!includeRevoked) {
-    builder = builder.where("binding.status", "=", "active");
+    builder = builder.where("binding.status", "=", "active")
   }
 
-  const rows = await builder.orderBy("binding.created_at", "asc").execute();
+  const rows = await builder.orderBy("binding.created_at", "asc").execute()
   return rows.map((row) =>
     buildInstallationAccessRow(
-      normalizeAccessBindingRow(row as unknown as AccessBindingRow),
-    ),
-  );
+      normalizeAccessBindingRow(row as unknown as AccessBindingRow)
+    )
+  )
 }
 
 function buildPluginGrantPlan(input: {
   authorization: {
-    requiredPermissions: string[];
-    defaultAccessTargetType?: CapabilityAccessTargetType;
-    reason?: string;
-  };
-  attachmentTarget: AttachmentTarget;
+    requiredPermissions: string[]
+    defaultAccessTargetType?: CapabilityAccessTargetType
+    reason?: string
+  }
+  attachmentTarget: AttachmentTarget
 }) {
-  const requiredPermissions = input.authorization.requiredPermissions || [];
+  const requiredPermissions = input.authorization.requiredPermissions || []
   if (requiredPermissions.length === 0) {
     return {
       requiresGrant: false,
       requiredPermissions: [],
-    };
+    }
   }
 
   return {
     requiresGrant: true,
     requiredPermissions,
     suggestedAccessTargetType: defaultAccessTargetForAttachment(
-      input.attachmentTarget,
+      input.attachmentTarget
     ).type,
     reason: input.authorization.reason,
-  };
+  }
 }
 
 function defaultAccessTargetForAttachment(
-  attachmentTarget: AttachmentTarget,
+  attachmentTarget: AttachmentTarget
 ): CapabilityAccessTarget {
   switch (attachmentTarget.type) {
     case "workspace":
-      return { type: "workspace" };
+      return { type: "workspace" }
     case "conversation":
       return {
         type: "conversation",
         conversationId: attachmentTarget.conversationId,
-      };
+      }
     case "actor":
       return {
         type: "actor",
         actorId: attachmentTarget.actorId,
-      };
+      }
     case "workspace_member":
-      return { type: "workspace" };
+      return { type: "workspace" }
   }
 }
 
 function capabilityAccessTargetFromStored(input: {
-  targetType: RuntimeBindingScope | null | undefined;
-  actorId?: string | null;
-  conversationId?: string | null;
+  targetType: RuntimeBindingScope | null | undefined
+  actorId?: string | null
+  conversationId?: string | null
 }): CapabilityAccessTarget {
   switch (input.targetType || "workspace") {
     case "workspace":
-      return { type: "workspace" };
+      return { type: "workspace" }
     case "actor":
       return {
         type: "actor",
         actorId: input.actorId || undefined,
-      };
+      }
     case "conversation":
       return {
         type: "conversation",
         conversationId: input.conversationId || undefined,
-      };
+      }
     case "actor_in_conversation":
       return {
         type: "actor_in_conversation",
         actorId: input.actorId || undefined,
         conversationId: input.conversationId || undefined,
-      };
+      }
   }
 }
 
@@ -1071,37 +1091,37 @@ function mapAccessRowToGrant(
   requiredPermissions: string[],
   reason?: string,
   options?: {
-    workspaceConversationTypeMask: number;
-    instanceConversationTypeMaskOverride: number | null;
-  },
+    workspaceConversationTypeMask: number
+    instanceConversationTypeMaskOverride: number | null
+  }
 ): AccessGrant {
   const effectiveConversationTypeMask = options
     ? resolveNarrowedConversationTypeMask(
         resolveNarrowedConversationTypeMask(
           options.workspaceConversationTypeMask,
-          options.instanceConversationTypeMaskOverride,
+          options.instanceConversationTypeMaskOverride
         ),
-        mount.conversation_type_mask_override,
+        mount.conversation_type_mask_override
       )
-    : undefined;
+    : undefined
   return mapAccessBindingToGrant(mount, requiredPermissions, reason, {
     effectiveConversationTypeMask,
-  });
+  })
 }
 
 function buildInstallationPayload(
   row: InstallationRow,
   plugin: ReturnType<typeof mapPluginView>,
-  workspaceConversationTypeMask: number,
+  workspaceConversationTypeMask: number
 ) {
   const sourceDefaultConversationTypeMask = normalizeConversationTypeMask(
     plugin.default_conversation_type_mask,
-    DEFAULT_CONVERSATION_TYPE_MASK,
-  );
+    DEFAULT_CONVERSATION_TYPE_MASK
+  )
   const effectiveConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    row.conversation_type_mask_override,
-  );
+    row.conversation_type_mask_override
+  )
   const { sanitizedConfig, configState } = sanitizeInstallationConfig(
     {
       config_data: row.config_data,
@@ -1109,16 +1129,16 @@ function buildInstallationPayload(
     },
     plugin.config_schema || {},
     plugin.config_fields || [],
-    plugin.auth_bindings || [],
-  );
+    plugin.auth_bindings || []
+  )
 
   const attachmentTarget: AttachmentTarget = {
     type: publicAttachmentScope(row.attachment_target_type),
     actorId: row.attachment_actor_id || undefined,
     conversationId: row.attachment_conversation_id || undefined,
     workspaceMemberId: row.attachment_workspace_member_id || undefined,
-  };
-  const accessTarget = defaultAccessTargetForAttachment(attachmentTarget);
+  }
+  const accessTarget = defaultAccessTargetForAttachment(attachmentTarget)
 
   return {
     id: row.installation_id,
@@ -1176,30 +1196,33 @@ function buildInstallationPayload(
     revision: {
       authorization: plugin.authorization,
     },
-  };
+  }
 }
 
-async function getInstallationPayload(workspaceId: string, installationId: string) {
+async function getInstallationPayload(
+  workspaceId: string,
+  installationId: string
+) {
   const rows = await loadInstallationRows(workspaceId, {
     installationId,
-  });
-  const row = rows[0];
+  })
+  const row = rows[0]
   if (!row) {
-    throw new McpPluginError(404, "Installation not found");
+    throw new McpPluginError(404, "Installation not found")
   }
 
   const pluginsByVersionId = await loadPluginCatalogMapByVersionIds([
     row.catalog_version_id,
-  ]);
-  const plugin = pluginsByVersionId.get(row.catalog_version_id);
+  ])
+  const plugin = pluginsByVersionId.get(row.catalog_version_id)
   if (!plugin) {
-    throw new McpPluginError(404, "Plugin not found");
+    throw new McpPluginError(404, "Plugin not found")
   }
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       row.workspace_id,
-      "plugin_installation",
-    );
+      "plugin_installation"
+    )
 
   return {
     row,
@@ -1208,32 +1231,32 @@ async function getInstallationPayload(workspaceId: string, installationId: strin
     installation: buildInstallationPayload(
       row,
       plugin,
-      workspaceConversationTypeMask,
+      workspaceConversationTypeMask
     ),
-  };
+  }
 }
 
 async function ensureCatalogItem(
   run: QueryRunner,
   input: {
-    orgId: string;
-    workspaceId?: string;
-    slug: string;
-    displayName: string;
-    description?: string;
-    longDescription?: string;
-    iconFileId?: string;
-    tags?: string[];
-    isBuiltin?: boolean;
-    transport: string;
-    displayNameI18n?: Record<string, string>;
-    descriptionI18n?: Record<string, string>;
-    longDescriptionI18n?: Record<string, string>;
-    summaryI18n?: Record<string, string>;
-    defaultLocale?: string;
-  },
+    orgId: string
+    workspaceId?: string
+    slug: string
+    displayName: string
+    description?: string
+    longDescription?: string
+    iconFileId?: string
+    tags?: string[]
+    isBuiltin?: boolean
+    transport: string
+    displayNameI18n?: Record<string, string>
+    descriptionI18n?: Record<string, string>
+    longDescriptionI18n?: Record<string, string>
+    summaryI18n?: Record<string, string>
+    defaultLocale?: string
+  }
 ) {
-  const normalizedSlug = sanitizeSlug(input.slug);
+  const normalizedSlug = sanitizeSlug(input.slug)
   const existing = await run<{ id: string }>(
     `SELECT id
      FROM catalog_items
@@ -1242,8 +1265,8 @@ async function ensureCatalogItem(
        AND slug = $2
        AND workspace_id IS NOT DISTINCT FROM $3
      LIMIT 1`,
-    [input.orgId, normalizedSlug, input.workspaceId || null],
-  );
+    [input.orgId, normalizedSlug, input.workspaceId || null]
+  )
 
   const metadata = {
     displayNameI18n: input.displayNameI18n || { en: input.displayName },
@@ -1253,10 +1276,10 @@ async function ensureCatalogItem(
       (input.longDescription ? { en: input.longDescription } : undefined),
     summaryI18n: input.summaryI18n,
     defaultLocale: input.defaultLocale || "en",
-  };
+  }
 
   if (existing.rows.length > 0) {
-    const itemId = existing.rows[0]!.id;
+    const itemId = existing.rows[0]!.id
     await run(
       `UPDATE catalog_items
        SET display_name = $2,
@@ -1283,9 +1306,9 @@ async function ensureCatalogItem(
         input.tags || [],
         input.iconFileId || null,
         JSON.stringify(metadata),
-      ],
-    );
-    return itemId;
+      ]
+    )
+    return itemId
   }
 
   const inserted = await run<{ id: string }>(
@@ -1323,40 +1346,40 @@ async function ensureCatalogItem(
           : "official",
       input.tags || [],
       JSON.stringify(metadata),
-    ],
-  );
+    ]
+  )
 
-  return inserted.rows[0]!.id;
+  return inserted.rows[0]!.id
 }
 
 async function upsertPluginVersion(
   run: QueryRunner,
   itemId: string,
   input: {
-    version?: string;
-    transport: string;
-    entryPoint?: string;
-    lifecycleScope?: ReuseScope;
-    supportedReuseScopes?: ReuseScope[];
-    defaultInstanceScope?: AttachmentTargetType;
-    defaultConversationTypeMask?: number;
-    requiresHandshake?: boolean;
-    toolsManifest?: unknown[];
-    configSchema?: Record<string, unknown>;
-    defaultConfig?: Record<string, unknown>;
-    installFlow?: PluginInstallFlow;
-    authBindings?: PluginAuthBindingDefinition[];
-    configFields?: PluginConfigFieldDefinition[];
-    validationRules?: McpValidationRule[];
-    setupSteps?: McpSetupStep[];
+    version?: string
+    transport: string
+    entryPoint?: string
+    lifecycleScope?: ReuseScope
+    supportedReuseScopes?: ReuseScope[]
+    defaultInstanceScope?: AttachmentTargetType
+    defaultConversationTypeMask?: number
+    requiresHandshake?: boolean
+    toolsManifest?: unknown[]
+    configSchema?: Record<string, unknown>
+    defaultConfig?: Record<string, unknown>
+    installFlow?: PluginInstallFlow
+    authBindings?: PluginAuthBindingDefinition[]
+    configFields?: PluginConfigFieldDefinition[]
+    validationRules?: McpValidationRule[]
+    setupSteps?: McpSetupStep[]
     authorization?: {
-      requiredPermissions?: string[];
-      defaultAccessTargetType?: CapabilityAccessTargetType;
-      reason?: string;
-    };
-  },
+      requiredPermissions?: string[]
+      defaultAccessTargetType?: CapabilityAccessTargetType
+      reason?: string
+    }
+  }
 ) {
-  const versionValue = input.version || "1.0.0";
+  const versionValue = input.version || "1.0.0"
   const upsertedVersion = await run<{ id: string }>(
     `INSERT INTO catalog_versions (
        catalog_item_id,
@@ -1369,9 +1392,9 @@ async function upsertPluginVersion(
      ON CONFLICT (catalog_item_id, version) DO UPDATE
        SET status = 'active'
      RETURNING id`,
-    [itemId, versionValue],
-  );
-  const versionId = upsertedVersion.rows[0]!.id;
+    [itemId, versionValue]
+  )
+  const versionId = upsertedVersion.rows[0]!.id
 
   const metadata = {
     configFields: input.configFields || [],
@@ -1382,16 +1405,16 @@ async function upsertPluginVersion(
         input.authorization?.defaultAccessTargetType || undefined,
       reason: input.authorization?.reason || undefined,
     },
-  };
-  const defaultReuseScope = input.lifecycleScope || "conversation";
+  }
+  const defaultReuseScope = input.lifecycleScope || "conversation"
   const defaultConversationTypeMask = resolveEffectiveConversationTypeMask({
     defaultMask: input.defaultConversationTypeMask,
     overrideMask: null,
-  });
+  })
   const supportedReuseScopes = normalizeSupportedReuseScopes(
     input.supportedReuseScopes,
-    defaultReuseScope,
-  );
+    defaultReuseScope
+  )
 
   await run(
     `INSERT INTO plugin_package_version_specs (
@@ -1443,14 +1466,14 @@ async function upsertPluginVersion(
       supportedReuseScopes.map((scope) => internalReuseScope(scope)),
       input.requiresHandshake ?? input.transport !== "builtin",
       JSON.stringify(metadata),
-    ],
-  );
+    ]
+  )
 
   await run(
     `DELETE FROM plugin_version_runtime_permissions
      WHERE catalog_version_id = $1`,
-    [versionId],
-  );
+    [versionId]
+  )
 
   for (const permissionKey of input.authorization?.requiredPermissions || []) {
     await run(
@@ -1461,8 +1484,8 @@ async function upsertPluginVersion(
          rationale
        )
        VALUES ($1, $2, TRUE, '')`,
-      [versionId, permissionKey],
-    );
+      [versionId, permissionKey]
+    )
   }
 
   await run(
@@ -1470,53 +1493,53 @@ async function upsertPluginVersion(
      SET latest_version_id = $2,
          updated_at = NOW()
      WHERE id = $1`,
-    [itemId, versionId],
-  );
+    [itemId, versionId]
+  )
 
-  return versionId;
+  return versionId
 }
 
 async function assignPluginCategories(
   run: QueryRunner,
   itemId: string,
-  categorySlugs: string[],
+  categorySlugs: string[]
 ) {
   await run(
     `DELETE FROM catalog_item_categories
      WHERE catalog_item_id = $1`,
-    [itemId],
-  );
+    [itemId]
+  )
 
-  if (categorySlugs.length === 0) return;
+  if (categorySlugs.length === 0) return
 
   const result = await run<{ id: string }>(
     `SELECT id
      FROM catalog_categories
      WHERE item_kind = 'plugin_package'
        AND slug = ANY($1::text[])`,
-    [categorySlugs],
-  );
+    [categorySlugs]
+  )
 
   for (const row of result.rows) {
     await run(
       `INSERT INTO catalog_item_categories (catalog_item_id, category_id)
        VALUES ($1, $2)
        ON CONFLICT DO NOTHING`,
-      [itemId, row.id],
-    );
+      [itemId, row.id]
+    )
   }
 }
 
 export async function createOrganization(data: {
-  slug: string;
-  displayName: string;
-  description?: string;
-  logoFileId?: string;
-  isBuiltin?: boolean;
-  isVerified?: boolean;
-  ownerUserId?: string;
+  slug: string
+  displayName: string
+  description?: string
+  logoFileId?: string
+  isBuiltin?: boolean
+  isVerified?: boolean
+  ownerUserId?: string
 }) {
-  const normalizedSlug = sanitizeSlug(data.slug);
+  const normalizedSlug = sanitizeSlug(data.slug)
   const row = await db
     .insertInto("publishers")
     .values({
@@ -1538,12 +1561,12 @@ export async function createOrganization(data: {
         is_builtin: data.isBuiltin === true,
         is_verified: data.isVerified === true,
         updated_at: sql`NOW()`,
-      }),
+      })
     )
     .returningAll()
-    .executeTakeFirstOrThrow();
+    .executeTakeFirstOrThrow()
 
-  return mapPublisherView(row as unknown as PublisherRow);
+  return mapPublisherView(row as unknown as PublisherRow)
 }
 
 export async function listOrganizations() {
@@ -1554,16 +1577,16 @@ export async function listOrganizations() {
         .onRef("item.publisher_id", "=", "publisher.id")
         .on("item.item_kind", "=", "plugin_package")
         .on("item.is_active", "=", true)
-        .on("item.workspace_id", "is", null),
+        .on("item.workspace_id", "is", null)
     )
     .selectAll("publisher")
     .select(sql<number>`COUNT(item.id)::int`.as("plugin_count"))
     .groupBy("publisher.id")
     .orderBy("publisher.is_verified", "desc")
     .orderBy("publisher.display_name", "asc")
-    .execute();
+    .execute()
 
-  return rows.map((row) => mapPublisherView(row as unknown as PublisherRow));
+  return rows.map((row) => mapPublisherView(row as unknown as PublisherRow))
 }
 
 export async function getOrganization(id: string) {
@@ -1573,13 +1596,13 @@ export async function getOrganization(id: string) {
     .select(sql<number>`0::int`.as("plugin_count"))
     .where("id", "=", id)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
   if (!row) {
-    throw new McpPluginError(404, "Publisher not found");
+    throw new McpPluginError(404, "Publisher not found")
   }
 
-  return mapPublisherView(row as unknown as PublisherRow);
+  return mapPublisherView(row as unknown as PublisherRow)
 }
 
 export async function getOrganizationBySlug(slug: string) {
@@ -1589,78 +1612,78 @@ export async function getOrganizationBySlug(slug: string) {
     .select(sql<number>`0::int`.as("plugin_count"))
     .where("slug", "=", sanitizeSlug(slug))
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
-  return row ? mapPublisherView(row as unknown as PublisherRow) : null;
+  return row ? mapPublisherView(row as unknown as PublisherRow) : null
 }
 
 export async function createPlugin(data: {
-  orgId: string;
-  workspaceId?: string;
-  slug: string;
-  displayName: string;
-  description?: string;
-  longDescription?: string;
-  iconFileId?: string;
-  version?: string;
-  transport: string;
-  entryPoint?: string;
-  lifecycleScope?: ReuseScope;
-  configSchema?: Record<string, unknown>;
-  configFields?: PluginConfigFieldDefinition[];
-  defaultConfig?: Record<string, unknown>;
-  toolsManifest?: unknown[];
-  tags?: string[];
-  categorySlugs?: string[];
-  isBuiltin?: boolean;
-  validationRules?: McpValidationRule[];
-  setupSteps?: McpSetupStep[];
-  installFlow?: PluginInstallFlow;
-  authBindings?: PluginAuthBindingDefinition[];
-  displayNameI18n?: Record<string, string>;
-  descriptionI18n?: Record<string, string>;
-  longDescriptionI18n?: Record<string, string>;
-  summaryI18n?: Record<string, string>;
-  defaultLocale?: string;
-  defaultInstanceScope?: AttachmentTargetType;
-  supportedReuseScopes?: ReuseScope[];
-  requiresHandshake?: boolean;
+  orgId: string
+  workspaceId?: string
+  slug: string
+  displayName: string
+  description?: string
+  longDescription?: string
+  iconFileId?: string
+  version?: string
+  transport: string
+  entryPoint?: string
+  lifecycleScope?: ReuseScope
+  configSchema?: Record<string, unknown>
+  configFields?: PluginConfigFieldDefinition[]
+  defaultConfig?: Record<string, unknown>
+  toolsManifest?: unknown[]
+  tags?: string[]
+  categorySlugs?: string[]
+  isBuiltin?: boolean
+  validationRules?: McpValidationRule[]
+  setupSteps?: McpSetupStep[]
+  installFlow?: PluginInstallFlow
+  authBindings?: PluginAuthBindingDefinition[]
+  displayNameI18n?: Record<string, string>
+  descriptionI18n?: Record<string, string>
+  longDescriptionI18n?: Record<string, string>
+  summaryI18n?: Record<string, string>
+  defaultLocale?: string
+  defaultInstanceScope?: AttachmentTargetType
+  supportedReuseScopes?: ReuseScope[]
+  requiresHandshake?: boolean
   authorization?: {
-    requiredPermissions?: string[];
-    defaultAccessTargetType?: CapabilityAccessTargetType;
-    reason?: string;
-  };
+    requiredPermissions?: string[]
+    defaultAccessTargetType?: CapabilityAccessTargetType
+    reason?: string
+  }
 }) {
   const itemId = await transaction(async (client) => {
-    const run = client.query.bind(client) as QueryRunner;
-    const catalogItemId = await ensureCatalogItem(run, data);
-    await upsertPluginVersion(run, catalogItemId, data);
-    await assignPluginCategories(run, catalogItemId, data.categorySlugs || []);
-    return catalogItemId;
-  });
+    const run = client.query.bind(client) as QueryRunner
+    const catalogItemId = await ensureCatalogItem(run, data)
+    await upsertPluginVersion(run, catalogItemId, data)
+    await assignPluginCategories(run, catalogItemId, data.categorySlugs || [])
+    return catalogItemId
+  })
 
-  return getPlugin(itemId);
+  return getPlugin(itemId)
 }
 
 export async function listPlugins(filters?: {
-  orgId?: string;
-  transport?: string;
-  search?: string;
-  tags?: string[];
-  categorySlugs?: string[];
+  orgId?: string
+  transport?: string
+  search?: string
+  tags?: string[]
+  categorySlugs?: string[]
 }) {
   const conditions: RawBuilder<unknown>[] = [
     sql`version.id = item.latest_version_id`,
     sql`item.is_active = TRUE`,
     sql`item.workspace_id IS NULL`,
-  ];
+  ]
 
   if (filters?.orgId) {
-    conditions.push(sql`item.publisher_id = ${filters.orgId}`);
+    conditions.push(sql`item.publisher_id = ${filters.orgId}`)
   }
 
   if (filters?.transport) {
-    conditions.push(sql`spec.transport = ${filters.transport}`);
+    conditions.push(sql`spec.transport = ${filters.transport}`)
   }
 
   if (filters?.search) {
@@ -1669,12 +1692,12 @@ export async function listPlugins(filters?: {
          SELECT 1
          FROM unnest(COALESCE(item.tags, ARRAY[]::text[])) tag
          WHERE tag ILIKE ${`%${filters.search.trim()}%`}
-       ))`,
-    );
+       ))`
+    )
   }
 
   if (filters?.tags && filters.tags.length > 0) {
-    conditions.push(sql`item.tags && ${filters.tags}::text[]`);
+    conditions.push(sql`item.tags && ${filters.tags}::text[]`)
   }
 
   if (filters?.categorySlugs && filters.categorySlugs.length > 0) {
@@ -1687,16 +1710,16 @@ export async function listPlugins(filters?: {
          WHERE item_category.catalog_item_id = item.id
            AND category.item_kind = 'plugin_package'
            AND category.slug = ANY(${filters.categorySlugs}::text[])
-       )`,
-    );
+       )`
+    )
   }
 
   const rows = await loadPluginCatalogRows(
     sql`AND ${sql.join(conditions, sql` AND `)}
-       ORDER BY item.download_count DESC, item.created_at DESC`,
-  );
+       ORDER BY item.download_count DESC, item.created_at DESC`
+  )
 
-  return rows.map(mapPluginView);
+  return rows.map(mapPluginView)
 }
 
 export async function listPluginCategories() {
@@ -1706,10 +1729,10 @@ export async function listPluginCategories() {
     .where("item_kind", "=", "plugin_package")
     .orderBy("sort_order", "asc")
     .orderBy("display_name", "asc")
-    .execute();
+    .execute()
 
   return rows.map((row) => {
-    const metadata = asObject(row.metadata);
+    const metadata = asObject(row.metadata)
     return {
       id: row.id,
       slug: row.slug,
@@ -1722,104 +1745,113 @@ export async function listPluginCategories() {
           ? metadata.defaultLocale
           : "en",
       sort_order: row.sort_order,
-    };
-  });
+    }
+  })
 }
 
 export async function getPlugin(id: string) {
-  const row = await getPluginCatalogRowByItemId(id);
+  const row = await getPluginCatalogRowByItemId(id)
   if (!row) {
-    throw new McpPluginError(404, "Plugin not found");
+    throw new McpPluginError(404, "Plugin not found")
   }
 
-  return mapPluginView(row);
+  return mapPluginView(row)
 }
 
 export function validateSupportedLifecycleScope(
   supportedScopes: readonly ReuseScope[],
-  lifecycleScope: ReuseScope,
+  lifecycleScope: ReuseScope
 ) {
-  return supportedScopes.includes(lifecycleScope);
+  return supportedScopes.includes(lifecycleScope)
 }
 
 export async function installPluginUnified(data: {
-  workspaceId: string;
-  pluginId: string;
-  attachmentTarget: AttachmentTarget;
-  lifecycleScope?: ReuseScope;
-  configData?: Record<string, unknown>;
-  authSessionIds?: Record<string, string>;
-  installedByWorkspaceMemberId?: string;
+  workspaceId: string
+  pluginId: string
+  attachmentTarget: AttachmentTarget
+  lifecycleScope?: ReuseScope
+  configData?: Record<string, unknown>
+  authSessionIds?: Record<string, string>
+  installedByWorkspaceMemberId?: string
 }) {
-  const plugin = await getPlugin(data.pluginId);
+  const plugin = await getPlugin(data.pluginId)
   const supportedReuseScopes = normalizeSupportedReuseScopes(
     plugin.supported_reuse_scopes,
-    plugin.default_reuse_scope || "conversation",
-  );
+    plugin.default_reuse_scope || "conversation"
+  )
   const lifecycleScope =
-    data.lifecycleScope || plugin.default_reuse_scope || "conversation";
-  assertSupportedReuseScope(supportedReuseScopes, lifecycleScope, plugin.slug);
-  const target = normalizeAttachmentTarget({ attachmentTarget: data.attachmentTarget });
+    data.lifecycleScope || plugin.default_reuse_scope || "conversation"
+  assertSupportedReuseScope(supportedReuseScopes, lifecycleScope, plugin.slug)
+  const target = normalizeAttachmentTarget({
+    attachmentTarget: data.attachmentTarget,
+  })
   const approvedRuntimePermissions =
-    plugin.authorization?.requiredPermissions || [];
+    plugin.authorization?.requiredPermissions || []
 
   async function validateResolvedConfigForInstall(
     config: Record<string, unknown>,
-    run: QueryRunner,
+    run: QueryRunner
   ) {
     if (plugin.entry_point !== "feishu/app") {
-      return;
+      return
     }
 
-    const features = normalizeFeishuFeatureKeys(config.features);
+    const features = normalizeFeishuFeatureKeys(config.features)
     try {
-      assertFeishuFeatureSelection(features);
+      assertFeishuFeatureSelection(features)
     } catch (error) {
       throw new McpPluginError(
         400,
-        error instanceof Error ? error.message : "Invalid Feishu feature selection.",
-      );
+        error instanceof Error
+          ? error.message
+          : "Invalid Feishu feature selection."
+      )
     }
 
-    const rawConnection = asObject(config.feishuAccount);
+    const rawConnection = asObject(config.feishuAccount)
     if (
       rawConnection.__kind !== "auth_connection_ref" ||
       typeof rawConnection.connectionId !== "string"
     ) {
-      throw new McpPluginError(400, "Feishu account authorization is required.");
+      throw new McpPluginError(400, "Feishu account authorization is required.")
     }
 
     const connectionResult = await run<{
-      public_payload: unknown;
+      public_payload: unknown
     }>(
       `SELECT public_payload
        FROM plugin_connections
        WHERE id = $1
        LIMIT 1`,
-      [rawConnection.connectionId],
-    );
+      [rawConnection.connectionId]
+    )
     if (connectionResult.rows.length === 0) {
-      throw new McpPluginError(400, "Feishu auth connection not found.");
+      throw new McpPluginError(400, "Feishu auth connection not found.")
     }
 
     try {
       assertFeishuScopesForFeatures(
         features,
-        asObject(connectionResult.rows[0]!.public_payload).scopes,
-      );
+        asObject(connectionResult.rows[0]!.public_payload).scopes
+      )
     } catch (error) {
       throw new McpPluginError(
         400,
-        error instanceof Error ? error.message : "Feishu scopes do not match the selected features.",
-      );
+        error instanceof Error
+          ? error.message
+          : "Feishu scopes do not match the selected features."
+      )
     }
   }
 
   const result = await transaction(async (client) => {
-    const catalogRow = await getPluginCatalogRowByItemId(plugin.id);
-    const catalogVersionId = catalogRow?.version_id;
+    const catalogRow = await getPluginCatalogRowByItemId(plugin.id)
+    const catalogVersionId = catalogRow?.version_id
     if (!catalogVersionId) {
-      throw new McpPluginError(500, "Plugin catalog is missing its latest version");
+      throw new McpPluginError(
+        500,
+        "Plugin catalog is missing its latest version"
+      )
     }
 
     const insertedInstallation = await executeTakeFirst<{ id: string }>(
@@ -1844,46 +1876,46 @@ export async function installPluginUnified(data: {
           installed_by_workspace_member_id:
             data.installedByWorkspaceMemberId || null,
         })
-        .returning("id"),
-    );
-    const installationId = insertedInstallation!.id;
+        .returning("id")
+    )
+    const installationId = insertedInstallation!.id
 
-    const resolvedConfigBase = data.configData || {};
+    const resolvedConfigBase = data.configData || {}
     const resolvedConfig = await attachAuthConnectionsToConfig({
       installationId,
       workspaceId: data.workspaceId,
-      workspaceMemberId:
-        data.attachmentTarget.workspaceMemberId || "",
+      workspaceMemberId: data.attachmentTarget.workspaceMemberId || "",
       configFields: plugin.config_fields || [],
       authBindings: plugin.auth_bindings || [],
       configData: resolvedConfigBase,
       authSessionIds: data.authSessionIds,
       run: client.query.bind(client) as QueryRunner,
-    });
+    })
     await validateResolvedConfigForInstall(
       resolvedConfig,
-      client.query.bind(client) as QueryRunner,
-    );
+      client.query.bind(client) as QueryRunner
+    )
     const encryptedConfig = encryptSensitiveFields(
       resolvedConfig,
-      plugin.config_schema || {},
-    );
+      plugin.config_schema || {}
+    )
 
     await executeCompiledQuery(
       client,
       db
         .updateTable("plugin_installations")
         .set({
-          config_data: encryptedConfig as TableInsert<"plugin_installations">["config_data"],
+          config_data:
+            encryptedConfig as TableInsert<"plugin_installations">["config_data"],
           updated_at: sql`NOW()`,
         })
-        .where("id", "=", installationId),
-    );
+        .where("id", "=", installationId)
+    )
 
     const initialAccessTarget = await resolveAccessGrantTarget({
       workspaceId: data.workspaceId,
       target: defaultAccessTargetForAttachment(data.attachmentTarget),
-    });
+    })
     await executeTakeFirst<{ id: string }>(
       client,
       db
@@ -1897,21 +1929,19 @@ export async function installPluginUnified(data: {
             createdByWorkspaceMemberId:
               data.installedByWorkspaceMemberId || null,
             reason: plugin.authorization?.reason || null,
-          }),
+          })
         )
-        .returning("id"),
-    );
+        .returning("id")
+    )
     await executeCompiledQuery(
       client,
-      db
-        .insertInto("plugin_source_refs")
-        .values({
-          installation_id: installationId,
-          source_catalog_item_id: plugin.id,
-          source_catalog_version_id: catalogVersionId,
-          sync_mode: "manual_merge",
-        }),
-    );
+      db.insertInto("plugin_source_refs").values({
+        installation_id: installationId,
+        source_catalog_item_id: plugin.id,
+        source_catalog_version_id: catalogVersionId,
+        sync_mode: "manual_merge",
+      })
+    )
 
     await executeCompiledQuery(
       client,
@@ -1921,18 +1951,21 @@ export async function installPluginUnified(data: {
           download_count: sql`download_count + 1`,
           updated_at: sql`NOW()`,
         })
-        .where("id", "=", plugin.id),
-    );
+        .where("id", "=", plugin.id)
+    )
 
     return {
       installationId,
-    };
-  });
+    }
+  })
 
-  await incrementMcpVersion(data.workspaceId);
+  await incrementMcpVersion(data.workspaceId)
 
-  const installed = await getInstallation(data.workspaceId, result.installationId);
-  return installed;
+  const installed = await getInstallation(
+    data.workspaceId,
+    result.installationId
+  )
+  return installed
 }
 
 export async function uninstallPluginUnified(installId: string) {
@@ -1945,124 +1978,124 @@ export async function uninstallPluginUnified(installId: string) {
     ])
     .where("id", "=", installId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!installation) {
-    throw new McpPluginError(404, "Installation not found");
+    throw new McpPluginError(404, "Installation not found")
   }
   await transaction(async (client) => {
     await executeCompiledQuery(
       client,
       db
         .deleteFrom("resource_access_bindings")
-        .where("plugin_installation_id", "=", installId),
-    );
+        .where("plugin_installation_id", "=", installId)
+    )
 
     await executeCompiledQuery(
       client,
-      db.deleteFrom("plugin_installations").where("id", "=", installId),
-    );
-  });
+      db.deleteFrom("plugin_installations").where("id", "=", installId)
+    )
+  })
 
-  await incrementMcpVersion(installation.workspace_id);
+  await incrementMcpVersion(installation.workspace_id)
 
   return {
     id: installId,
     workspace_id: installation.workspace_id,
-  };
+  }
 }
 
 export async function getInstallations(
   workspaceId: string,
   filters?: {
-    attachmentType?: AttachmentTargetType;
-    conversationId?: string;
-    actorId?: string;
-    workspaceMemberId?: string;
-    pluginId?: string;
-  },
+    attachmentType?: AttachmentTargetType
+    conversationId?: string
+    actorId?: string
+    workspaceMemberId?: string
+    pluginId?: string
+  }
 ) {
-  const rows = await loadInstallationRows(workspaceId, filters);
+  const rows = await loadInstallationRows(workspaceId, filters)
   const pluginsByVersionId = await loadPluginCatalogMapByVersionIds(
-    Array.from(new Set(rows.map((row) => row.catalog_version_id))),
-  );
+    Array.from(new Set(rows.map((row) => row.catalog_version_id)))
+  )
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       workspaceId,
-      "plugin_installation",
-    );
+      "plugin_installation"
+    )
 
   return rows
     .map((row) => {
-      const plugin = pluginsByVersionId.get(row.catalog_version_id);
+      const plugin = pluginsByVersionId.get(row.catalog_version_id)
       return plugin
         ? buildInstallationPayload(row, plugin, workspaceConversationTypeMask)
-        : null;
+        : null
     })
-    .filter(Boolean);
+    .filter(Boolean)
 }
 
 export async function getInstallation(workspaceId: string, installId: string) {
-  const { installation } = await getInstallationPayload(workspaceId, installId);
-  return installation;
+  const { installation } = await getInstallationPayload(workspaceId, installId)
+  return installation
 }
 
 export async function updateInstallation(
   installId: string,
   data: {
-    isEnabled?: boolean;
-    configData?: Record<string, unknown>;
-    authSessionIds?: Record<string, string>;
-    lifecycleScope?: ReuseScope;
-    attachmentTarget?: AttachmentTarget;
-    conversationTypeMaskOverride?: number | null;
-    updatedByWorkspaceMemberId?: string;
-  },
+    isEnabled?: boolean
+    configData?: Record<string, unknown>
+    authSessionIds?: Record<string, string>
+    lifecycleScope?: ReuseScope
+    attachmentTarget?: AttachmentTarget
+    conversationTypeMaskOverride?: number | null
+    updatedByWorkspaceMemberId?: string
+  }
 ) {
   const currentRow = await db
     .selectFrom("plugin_installations")
     .select("workspace_id")
     .where("id", "=", installId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!currentRow) {
-    throw new McpPluginError(404, "Installation not found");
+    throw new McpPluginError(404, "Installation not found")
   }
 
-  const workspaceId = currentRow.workspace_id;
+  const workspaceId = currentRow.workspace_id
   const { row, plugin, workspaceConversationTypeMask } =
-    await getInstallationPayload(workspaceId, installId);
+    await getInstallationPayload(workspaceId, installId)
 
   const nextAttachmentType =
-    data.attachmentTarget?.type || publicAttachmentScope(row.attachment_target_type);
+    data.attachmentTarget?.type ||
+    publicAttachmentScope(row.attachment_target_type)
   const nextLifecycleScope =
-    data.lifecycleScope || publicReuseScope(row.reuse_scope);
+    data.lifecycleScope || publicReuseScope(row.reuse_scope)
   const supportedReuseScopes = normalizeSupportedReuseScopes(
     plugin.supported_reuse_scopes,
-    plugin.default_reuse_scope || "conversation",
-  );
+    plugin.default_reuse_scope || "conversation"
+  )
   assertSupportedReuseScope(
     supportedReuseScopes,
     nextLifecycleScope,
-    plugin.slug,
-  );
+    plugin.slug
+  )
 
   const target = normalizeAttachmentTarget({
-    attachmentTarget:
-      data.attachmentTarget || {
-        type: nextAttachmentType,
-        actorId: row.attachment_actor_id || undefined,
-        conversationId: row.attachment_conversation_id || undefined,
-        workspaceMemberId: row.attachment_workspace_member_id || undefined,
-      },
-  });
+    attachmentTarget: data.attachmentTarget || {
+      type: nextAttachmentType,
+      actorId: row.attachment_actor_id || undefined,
+      conversationId: row.attachment_conversation_id || undefined,
+      workspaceMemberId: row.attachment_workspace_member_id || undefined,
+    },
+  })
 
   const mergedConfig = data.configData
     ? mergeConfigForUpdate(
         asObject(row.config_data),
         data.configData,
-        plugin.config_fields || [],
+        plugin.config_fields || []
       )
-    : asObject(row.config_data);
+    : asObject(row.config_data)
 
   if (data.conversationTypeMaskOverride !== undefined) {
     const nextInstanceConversationTypeMask =
@@ -2072,8 +2105,8 @@ export async function updateInstallation(
         buildError: (message) => new McpPluginError(400, message),
         invalidMaskMessage:
           "Plugin installation conversation policy must allow at least one workspace conversation type.",
-      });
-    const accessRows = await listAccessRows(installId);
+      })
+    const accessRows = await listAccessRows(installId)
     for (const accessRow of accessRows) {
       await validateConversationScopedAccessTarget({
         targetType: accessRow.access_target_type,
@@ -2081,64 +2114,68 @@ export async function updateInstallation(
         actorId: accessRow.actor_id,
         effectiveConversationTypeMask: nextInstanceConversationTypeMask,
         buildError: (message) => new McpPluginError(400, message),
-      });
+      })
     }
   }
 
   async function validateResolvedConfigForUpdate(
     config: Record<string, unknown>,
-    run: QueryRunner,
+    run: QueryRunner
   ) {
     if (plugin.entry_point !== "feishu/app") {
-      return;
+      return
     }
 
-    const features = normalizeFeishuFeatureKeys(config.features);
+    const features = normalizeFeishuFeatureKeys(config.features)
     try {
-      assertFeishuFeatureSelection(features);
+      assertFeishuFeatureSelection(features)
     } catch (error) {
       throw new McpPluginError(
         400,
-        error instanceof Error ? error.message : "Invalid Feishu feature selection.",
-      );
+        error instanceof Error
+          ? error.message
+          : "Invalid Feishu feature selection."
+      )
     }
 
-    const rawConnection = asObject(config.feishuAccount);
+    const rawConnection = asObject(config.feishuAccount)
     if (
       rawConnection.__kind !== "auth_connection_ref" ||
       typeof rawConnection.connectionId !== "string"
     ) {
-      throw new McpPluginError(400, "Feishu account authorization is required.");
+      throw new McpPluginError(400, "Feishu account authorization is required.")
     }
 
     const connectionResult = await run<{
-      public_payload: unknown;
+      public_payload: unknown
     }>(
       `SELECT public_payload
        FROM plugin_connections
        WHERE id = $1
        LIMIT 1`,
-      [rawConnection.connectionId],
-    );
+      [rawConnection.connectionId]
+    )
     if (connectionResult.rows.length === 0) {
-      throw new McpPluginError(400, "Feishu auth connection not found.");
+      throw new McpPluginError(400, "Feishu auth connection not found.")
     }
 
     try {
       assertFeishuScopesForFeatures(
         features,
-        asObject(connectionResult.rows[0]!.public_payload).scopes,
-      );
+        asObject(connectionResult.rows[0]!.public_payload).scopes
+      )
     } catch (error) {
       throw new McpPluginError(
         400,
-        error instanceof Error ? error.message : "Feishu scopes do not match the selected features.",
-      );
+        error instanceof Error
+          ? error.message
+          : "Feishu scopes do not match the selected features."
+      )
     }
   }
 
   await transaction(async (client) => {
-    const run = client.query.bind(client) as QueryRunner;
+    const run = client.query.bind(client) as QueryRunner
 
     const resolvedConfig =
       data.configData || data.authSessionIds
@@ -2146,33 +2183,33 @@ export async function updateInstallation(
             installationId: installId,
             workspaceId,
             workspaceMemberId:
-              data.attachmentTarget?.workspaceMemberId
-              || row.attachment_workspace_member_id
-              || "",
+              data.attachmentTarget?.workspaceMemberId ||
+              row.attachment_workspace_member_id ||
+              "",
             configFields: plugin.config_fields || [],
             authBindings: plugin.auth_bindings || [],
             configData: mergedConfig,
             authSessionIds: data.authSessionIds,
             run,
           })
-        : mergedConfig;
+        : mergedConfig
 
     if (data.configData || data.authSessionIds) {
-      await validateResolvedConfigForUpdate(resolvedConfig, run);
+      await validateResolvedConfigForUpdate(resolvedConfig, run)
     }
 
     if (data.configData || data.authSessionIds) {
       const encryptedConfig = encryptSensitiveFields(
         resolvedConfig,
-        plugin.config_schema || {},
-      );
+        plugin.config_schema || {}
+      )
       await run(
         `UPDATE plugin_installations
          SET config_data = $2::jsonb,
              updated_at = NOW()
          WHERE id = $1`,
-        [installId, JSON.stringify(encryptedConfig)],
-      );
+        [installId, JSON.stringify(encryptedConfig)]
+      )
     }
 
     if (data.isEnabled !== undefined) {
@@ -2181,8 +2218,8 @@ export async function updateInstallation(
          SET status = $2,
              updated_at = NOW()
          WHERE id = $1`,
-        [installId, data.isEnabled ? "active" : "disabled"],
-      );
+        [installId, data.isEnabled ? "active" : "disabled"]
+      )
     }
 
     if (data.lifecycleScope) {
@@ -2191,8 +2228,8 @@ export async function updateInstallation(
          SET reuse_scope = $2,
              updated_at = NOW()
          WHERE id = $1`,
-        [installId, internalReuseScope(nextLifecycleScope)],
-      );
+        [installId, internalReuseScope(nextLifecycleScope)]
+      )
     }
 
     if (data.attachmentTarget) {
@@ -2210,8 +2247,8 @@ export async function updateInstallation(
           target.actorId,
           target.conversationId,
           target.workspaceMemberId,
-        ],
-      );
+        ]
+      )
     }
 
     if (data.conversationTypeMaskOverride !== undefined) {
@@ -2220,13 +2257,12 @@ export async function updateInstallation(
          SET conversation_type_mask_override = $2,
              updated_at = NOW()
          WHERE id = $1`,
-        [installId, data.conversationTypeMaskOverride],
-      );
+        [installId, data.conversationTypeMaskOverride]
+      )
     }
+  })
 
-  });
-
-  await incrementMcpVersion(workspaceId);
+  await incrementMcpVersion(workspaceId)
 
   if (data.configData || data.authSessionIds) {
     await emitEvent({
@@ -2234,22 +2270,19 @@ export async function updateInstallation(
       workspaceId,
       payload: { pluginId: row.catalog_item_id, workspaceId },
       timestamp: nowISO(),
-    });
+    })
   }
 
-  return getInstallation(workspaceId, installId);
+  return getInstallation(workspaceId, installId)
 }
 
 export async function getPluginInstallationAccessState(
   workspaceId: string,
-  installationId: string,
+  installationId: string
 ) {
   const { installation, plugin, workspaceConversationTypeMask } =
-    await getInstallationPayload(
-    workspaceId,
-    installationId,
-    );
-  const accessRows = await listAccessRows(installationId);
+    await getInstallationPayload(workspaceId, installationId)
+  const accessRows = await listAccessRows(installationId)
   const grants = accessRows
     .filter((binding) => binding.status === "active")
     .map((binding) =>
@@ -2261,9 +2294,9 @@ export async function getPluginInstallationAccessState(
           workspaceConversationTypeMask,
           instanceConversationTypeMaskOverride:
             installation.conversation_type_mask_override ?? null,
-        },
-      ),
-    );
+        }
+      )
+    )
 
   return {
     grants,
@@ -2280,40 +2313,37 @@ export async function getPluginInstallationAccessState(
         installation.effective_conversation_type_mask,
       reason: plugin.authorization?.reason,
       effectivePermissions:
-        grants.length > 0 ? plugin.authorization?.requiredPermissions || [] : [],
+        grants.length > 0
+          ? plugin.authorization?.requiredPermissions || []
+          : [],
       isVisible: grants.length > 0,
       isAuthorized: grants.length > 0,
       matchingGrantIds: grants.map((grant) => grant.id),
     },
-  };
+  }
 }
 
 export async function grantPluginInstallationAccess(input: {
-  workspaceId: string;
-  installationId: string;
-  accessTarget?: CapabilityAccessTarget;
-  conversationTypeMaskOverride?: number | null;
-  grantedByWorkspaceMemberId?: string;
-  reason?: string;
+  workspaceId: string
+  installationId: string
+  accessTarget?: CapabilityAccessTarget
+  conversationTypeMaskOverride?: number | null
+  grantedByWorkspaceMemberId?: string
+  reason?: string
 }) {
   const { plugin, installation, workspaceConversationTypeMask } =
-    await getInstallationPayload(
-    input.workspaceId,
-    input.installationId,
-    );
-  const accessRows = await listAccessRows(input.installationId);
+    await getInstallationPayload(input.workspaceId, input.installationId)
+  const accessRows = await listAccessRows(input.installationId)
 
-  const resolvedAccessTarget =
-    input.accessTarget ||
-    installation.access_target;
+  const resolvedAccessTarget = input.accessTarget || installation.access_target
   const accessTarget = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: resolvedAccessTarget,
-  });
+  })
   const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    installation.conversation_type_mask_override ?? null,
-  );
+    installation.conversation_type_mask_override ?? null
+  )
   const effectiveConversationTypeMask =
     assertGrantConversationTypeOverrideAllowed({
       targetType: accessTarget.targetType,
@@ -2322,22 +2352,22 @@ export async function grantPluginInstallationAccess(input: {
       buildError: (message) => new McpPluginError(400, message),
       invalidMaskMessage:
         "Plugin access grant conversation policy must allow at least one conversation type from the installation policy.",
-    });
+    })
   await validateConversationScopedAccessTarget({
     targetType: accessTarget.targetType,
     conversationId: accessTarget.subjectConversationId,
     actorId: accessTarget.subjectActorId,
     effectiveConversationTypeMask,
     buildError: (message) => new McpPluginError(400, message),
-  });
+  })
 
   const existing = accessRows.find(
     (entry) =>
       entry.status === "active" &&
       entry.access_target_type === accessTarget.targetType &&
       entry.actor_id === accessTarget.subjectActorId &&
-      entry.conversation_id === accessTarget.subjectConversationId,
-  );
+      entry.conversation_id === accessTarget.subjectConversationId
+  )
   if (existing) {
     return mapAccessRowToGrant(
       existing,
@@ -2347,8 +2377,8 @@ export async function grantPluginInstallationAccess(input: {
         workspaceConversationTypeMask,
         instanceConversationTypeMaskOverride:
           installation.conversation_type_mask_override ?? null,
-      },
-    );
+      }
+    )
   }
 
   const result = await transaction(async (client) => {
@@ -2367,24 +2397,24 @@ export async function grantPluginInstallationAccess(input: {
             createdByWorkspaceMemberId:
               input.grantedByWorkspaceMemberId || null,
             reason: input.reason || plugin.authorization?.reason || null,
-          }),
+          })
         )
-        .returningAll(),
-    );
+        .returningAll()
+    )
 
     const accessRow = buildInstallationAccessRow({
-      ...(normalizeAccessBindingRow(inserted as unknown as AccessBindingRow)),
+      ...normalizeAccessBindingRow(inserted as unknown as AccessBindingRow),
       subject_actor_id: accessTarget.subjectActorId,
       subject_conversation_id: accessTarget.subjectConversationId,
       subject_conversation_actor_context_id:
         accessTarget.subjectConversationActorContextId,
-    });
+    })
     return {
       accessRow,
-    };
-  });
+    }
+  })
 
-  await incrementMcpVersion(input.workspaceId);
+  await incrementMcpVersion(input.workspaceId)
 
   return mapAccessRowToGrant(
     result.accessRow,
@@ -2394,23 +2424,23 @@ export async function grantPluginInstallationAccess(input: {
       workspaceConversationTypeMask,
       instanceConversationTypeMaskOverride:
         installation.conversation_type_mask_override ?? null,
-    },
-  );
+    }
+  )
 }
 
 export async function updatePluginInstallationAccessGrant(input: {
-  workspaceId: string;
-  installationId: string;
-  grantId: string;
-  conversationTypeMaskOverride?: number | null;
+  workspaceId: string
+  installationId: string
+  grantId: string
+  conversationTypeMaskOverride?: number | null
 }) {
   if (input.conversationTypeMaskOverride === undefined) {
     const { plugin, installation, workspaceConversationTypeMask } =
-      await getInstallationPayload(input.workspaceId, input.installationId);
-    const accessRows = await listAccessRows(input.installationId);
-    const accessRow = accessRows.find((entry) => entry.id === input.grantId);
+      await getInstallationPayload(input.workspaceId, input.installationId)
+    const accessRows = await listAccessRows(input.installationId)
+    const accessRow = accessRows.find((entry) => entry.id === input.grantId)
     if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
-      throw new McpPluginError(404, "Access grant not found");
+      throw new McpPluginError(404, "Access grant not found")
     }
     return mapAccessRowToGrant(
       accessRow,
@@ -2420,21 +2450,21 @@ export async function updatePluginInstallationAccessGrant(input: {
         workspaceConversationTypeMask,
         instanceConversationTypeMaskOverride:
           installation.conversation_type_mask_override ?? null,
-      },
-    );
+      }
+    )
   }
 
   const { plugin, installation, workspaceConversationTypeMask } =
-    await getInstallationPayload(input.workspaceId, input.installationId);
-  const accessRows = await listAccessRows(input.installationId, true);
-  const accessRow = accessRows.find((entry) => entry.id === input.grantId);
+    await getInstallationPayload(input.workspaceId, input.installationId)
+  const accessRows = await listAccessRows(input.installationId, true)
+  const accessRow = accessRows.find((entry) => entry.id === input.grantId)
   if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
-    throw new McpPluginError(404, "Access grant not found");
+    throw new McpPluginError(404, "Access grant not found")
   }
   const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
-    installation.conversation_type_mask_override ?? null,
-  );
+    installation.conversation_type_mask_override ?? null
+  )
   const effectiveConversationTypeMask =
     assertGrantConversationTypeOverrideAllowed({
       targetType: accessRow.access_target_type,
@@ -2443,14 +2473,14 @@ export async function updatePluginInstallationAccessGrant(input: {
       buildError: (message) => new McpPluginError(400, message),
       invalidMaskMessage:
         "Plugin access grant conversation policy must allow at least one conversation type from the installation policy.",
-    });
+    })
   await validateConversationScopedAccessTarget({
     targetType: accessRow.access_target_type,
     conversationId: accessRow.conversation_id,
     actorId: accessRow.actor_id,
     effectiveConversationTypeMask,
     buildError: (message) => new McpPluginError(400, message),
-  });
+  })
 
   await db
     .updateTable("resource_access_bindings")
@@ -2460,12 +2490,14 @@ export async function updatePluginInstallationAccessGrant(input: {
     })
     .where("id", "=", input.grantId)
     .where("workspace_id", "=", input.workspaceId)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
-  const updatedAccessRows = await listAccessRows(input.installationId);
-  const updatedAccessRow = updatedAccessRows.find((entry) => entry.id === input.grantId);
+  const updatedAccessRows = await listAccessRows(input.installationId)
+  const updatedAccessRow = updatedAccessRows.find(
+    (entry) => entry.id === input.grantId
+  )
   if (!updatedAccessRow) {
-    throw new McpPluginError(404, "Access grant not found");
+    throw new McpPluginError(404, "Access grant not found")
   }
 
   return mapAccessRowToGrant(
@@ -2476,22 +2508,22 @@ export async function updatePluginInstallationAccessGrant(input: {
       workspaceConversationTypeMask,
       instanceConversationTypeMaskOverride:
         installation.conversation_type_mask_override ?? null,
-    },
-  );
+    }
+  )
 }
 
 export async function revokePluginInstallationAccess(input: {
-  workspaceId: string;
-  installationId: string;
-  grantId: string;
+  workspaceId: string
+  installationId: string
+  grantId: string
 }) {
-  const accessRows = await listAccessRows(input.installationId, true);
-  const accessRow = accessRows.find((entry) => entry.id === input.grantId);
+  const accessRows = await listAccessRows(input.installationId, true)
+  const accessRow = accessRows.find((entry) => entry.id === input.grantId)
   if (!accessRow || accessRow.workspace_id !== input.workspaceId) {
-    throw new McpPluginError(404, "Access grant not found");
+    throw new McpPluginError(404, "Access grant not found")
   }
   if (accessRow.status === "revoked") {
-    return mapAccessRowToGrant(accessRow, [], undefined);
+    return mapAccessRowToGrant(accessRow, [], undefined)
   }
 
   await transaction(async (client) => {
@@ -2503,32 +2535,30 @@ export async function revokePluginInstallationAccess(input: {
           status: "revoked",
           revoked_at: sql`NOW()`,
         })
-        .where("id", "=", accessRow.id),
-    );
-  });
+        .where("id", "=", accessRow.id)
+    )
+  })
 
-  await incrementMcpVersion(input.workspaceId);
+  await incrementMcpVersion(input.workspaceId)
 
   return {
     id: accessRow.id,
     revoked: true,
-  };
+  }
 }
 
 export async function createPluginInstallPlan(input: {
-  workspaceId: string;
-  pluginId: string;
-  attachmentTarget: AttachmentTarget;
+  workspaceId: string
+  pluginId: string
+  attachmentTarget: AttachmentTarget
 }) {
-  const plugin = await getPlugin(input.pluginId);
+  const plugin = await getPlugin(input.pluginId)
   const defaultAccessTarget = defaultAccessTargetForAttachment(
-    input.attachmentTarget,
-  );
+    input.attachmentTarget
+  )
   return {
     packageId: plugin.id,
-    revisionId: (
-      await getPluginCatalogRowByItemId(plugin.id)
-    )!.version_id,
+    revisionId: (await getPluginCatalogRowByItemId(plugin.id))!.version_id,
     workspaceId: input.workspaceId,
     attachmentTarget: input.attachmentTarget,
     defaultAccessTarget,
@@ -2537,81 +2567,75 @@ export async function createPluginInstallPlan(input: {
       authorization: plugin.authorization,
       attachmentTarget: input.attachmentTarget,
     }),
-  };
+  }
 }
 
 export function validateConfig(
   config: Record<string, unknown>,
-  rules: McpValidationRule[],
+  rules: McpValidationRule[]
 ) {
-  const errors: { field: string; message: string }[] = [];
+  const errors: { field: string; message: string }[] = []
 
   for (const rule of rules) {
-    const value = config[rule.field];
+    const value = config[rule.field]
     switch (rule.rule) {
       case "required":
         if (isConfigValueMissing(value)) {
-          errors.push({ field: rule.field, message: rule.message });
+          errors.push({ field: rule.field, message: rule.message })
         }
-        break;
+        break
       case "pattern":
         if (
           typeof value === "string" &&
           rule.value &&
           !new RegExp(rule.value as string).test(value)
         ) {
-          errors.push({ field: rule.field, message: rule.message });
+          errors.push({ field: rule.field, message: rule.message })
         }
-        break;
+        break
       case "url":
         if (typeof value === "string" && value) {
           try {
-            new URL(value);
+            new URL(value)
           } catch {
-            errors.push({ field: rule.field, message: rule.message });
+            errors.push({ field: rule.field, message: rule.message })
           }
         }
-        break;
+        break
       case "min_length":
-        if (
-          typeof value === "string" &&
-          value.length < Number(rule.value)
-        ) {
-          errors.push({ field: rule.field, message: rule.message });
+        if (typeof value === "string" && value.length < Number(rule.value)) {
+          errors.push({ field: rule.field, message: rule.message })
         }
-        break;
+        break
       case "max_length":
-        if (
-          typeof value === "string" &&
-          value.length > Number(rule.value)
-        ) {
-          errors.push({ field: rule.field, message: rule.message });
+        if (typeof value === "string" && value.length > Number(rule.value)) {
+          errors.push({ field: rule.field, message: rule.message })
         }
-        break;
+        break
       case "prefix":
         if (
           typeof value === "string" &&
           !value.startsWith(String(rule.value || ""))
         ) {
-          errors.push({ field: rule.field, message: rule.message });
+          errors.push({ field: rule.field, message: rule.message })
         }
-        break;
+        break
       case "enum":
         if (
           Array.isArray(rule.value) &&
           !rule.value.includes(value as string)
         ) {
-          errors.push({ field: rule.field, message: rule.message });
+          errors.push({ field: rule.field, message: rule.message })
         }
-        break;
+        break
     }
   }
 
-  return { valid: errors.length === 0, errors };
+  return { valid: errors.length === 0, errors }
 }
 
 export async function seedBuiltinMcpPlugins() {
-  await seedBuiltinPluginCategories();
+  await seedBuiltinPluginCategories()
 
   for (const seed of builtinSeeds) {
     const publisher = await createOrganization({
@@ -2620,22 +2644,22 @@ export async function seedBuiltinMcpPlugins() {
       description: seed.description,
       isBuiltin: true,
       isVerified: true,
-    });
+    })
 
     for (const pluginSeed of seed.plugins) {
-      let icon: { id: string } | null = null;
+      let icon: { id: string } | null = null
       if (pluginSeed.iconAssetPath) {
         try {
           icon = await ensureBuiltinPluginIcon(
             seed.slug,
             pluginSeed.slug,
-            pluginSeed.iconAssetPath,
-          );
+            pluginSeed.iconAssetPath
+          )
         } catch (error) {
           console.warn(
             `[builtin-mcp] Failed to persist icon for ${seed.slug}/${pluginSeed.slug}; continuing without icon`,
-            error,
-          );
+            error
+          )
         }
       }
 
@@ -2669,14 +2693,14 @@ export async function seedBuiltinMcpPlugins() {
         summaryI18n: pluginSeed.summaryI18n,
         defaultLocale: pluginSeed.defaultLocale,
         authorization: pluginSeed.authorization,
-      });
+      })
     }
   }
 }
 
 export async function seedBuiltinPluginCategories() {
   for (const category of builtinCapabilityCategories) {
-    if (category.targetKind !== "plugin") continue;
+    if (category.targetKind !== "plugin") continue
     await db
       .insertInto("catalog_categories")
       .values({
@@ -2710,8 +2734,8 @@ export async function seedBuiltinPluginCategories() {
             defaultLocale: category.defaultLocale || "en",
           } as TableInsert<"catalog_categories">["metadata"],
           updated_at: sql`NOW()`,
-        }),
+        })
       )
-      .execute();
+      .execute()
   }
 }

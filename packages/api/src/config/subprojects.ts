@@ -1,5 +1,5 @@
-import { join, resolve } from "node:path";
-import { repoRoot } from "./repo-paths.js";
+import { join, resolve } from "node:path"
+import { repoRoot } from "./repo-paths.js"
 
 export type RepoSubprojectName =
   | "cli-anything"
@@ -11,9 +11,9 @@ export type RepoSubprojectName =
   | "bilibili-cli"
   | "twitter-cli"
   | "discord-cli"
-  | "tg-cli";
+  | "tg-cli"
 
-const REPO_SUBPROJECT_ROOT = join(repoRoot, "subprojects");
+const REPO_SUBPROJECT_ROOT = join(repoRoot, "subprojects")
 
 const REPO_SUBPROJECT_DIRS: Record<RepoSubprojectName, string> = {
   "cli-anything": "cli-anything",
@@ -26,15 +26,15 @@ const REPO_SUBPROJECT_DIRS: Record<RepoSubprojectName, string> = {
   "twitter-cli": "twitter-cli",
   "discord-cli": "discord-cli",
   "tg-cli": "tg-cli",
-};
+}
 
 export function resolveRepoSubprojectRoot(name: RepoSubprojectName) {
-  return resolve(REPO_SUBPROJECT_ROOT, REPO_SUBPROJECT_DIRS[name]);
+  return resolve(REPO_SUBPROJECT_ROOT, REPO_SUBPROJECT_DIRS[name])
 }
 
 export function resolveRepoSubprojectPath(
   name: RepoSubprojectName,
   ...segments: string[]
 ) {
-  return join(resolveRepoSubprojectRoot(name), ...segments);
+  return join(resolveRepoSubprojectRoot(name), ...segments)
 }

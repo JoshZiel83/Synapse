@@ -1,7 +1,7 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { useLocalSearchParams, useRouter } from "expo-router"
+import { useEffect, useMemo } from "react"
+import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import {
   Avatar,
@@ -12,30 +12,30 @@ import {
   ScreenScroll,
   SectionBlock,
   SectionTitleRow,
-} from "@/components/ui";
+} from "@/components/ui"
 import {
   getConversationAvatarSpec,
   getParticipantDisplayName,
-} from "@/lib/chat-data";
-import { useChat } from "@/providers/chat-provider";
-import { theme } from "@/theme/tokens";
+} from "@/lib/chat-data"
+import { useChat } from "@/providers/chat-provider"
+import { theme } from "@/theme/tokens"
 
 export default function ConversationDetailScreen() {
-  const router = useRouter();
-  const { conversationId } = useLocalSearchParams<{ conversationId: string }>();
+  const router = useRouter()
+  const { conversationId } = useLocalSearchParams<{ conversationId: string }>()
   const {
     clientInstanceId,
     getConversation,
     refreshConversation,
     status,
     workspaceMemberId,
-  } = useChat();
-  const conversation = conversationId ? getConversation(conversationId) : null;
-  const members = conversation?.participants ?? [];
-  const loading = status === "loading" && !conversation;
+  } = useChat()
+  const conversation = conversationId ? getConversation(conversationId) : null
+  const members = conversation?.participants ?? []
+  const loading = status === "loading" && !conversation
   const heroAvatar = conversation
     ? getConversationAvatarSpec(conversation, workspaceMemberId)
-    : null;
+    : null
 
   useEffect(() => {
     if (
@@ -44,16 +44,22 @@ export default function ConversationDetailScreen() {
       status !== "ready" ||
       !clientInstanceId
     ) {
-      return;
+      return
     }
 
-    void refreshConversation(conversationId).catch(() => undefined);
-  }, [clientInstanceId, conversation, conversationId, refreshConversation, status]);
+    void refreshConversation(conversationId).catch(() => undefined)
+  }, [
+    clientInstanceId,
+    conversation,
+    conversationId,
+    refreshConversation,
+    status,
+  ])
 
   const activeCount = useMemo(
     () => members.filter((member) => member.state !== "removed").length,
-    [members],
-  );
+    [members]
+  )
 
   return (
     <ScreenScroll topPadding={0} bottomPadding={56}>
@@ -103,7 +109,9 @@ export default function ConversationDetailScreen() {
             <Button
               label="打开聊天"
               icon="message-circle"
-              onPress={() => router.replace(`/chat/${conversation.conversationId}`)}
+              onPress={() =>
+                router.replace(`/chat/${conversation.conversationId}`)
+              }
             />
           </SectionBlock>
 
@@ -134,15 +142,17 @@ export default function ConversationDetailScreen() {
                       </Text>
                       <Text style={styles.rowSubtitle}>
                         {member.title ||
-                        (member.participantType === "workspace_member"
-                          ? "成员"
-                          : member.participantType === "actor"
-                            ? "Actor"
-                            : "会话成员")}
+                          (member.participantType === "workspace_member"
+                            ? "成员"
+                            : member.participantType === "actor"
+                              ? "Actor"
+                              : "会话成员")}
                       </Text>
                     </View>
                     <Pill
-                      label={member.participantType === "actor" ? "角色" : "成员"}
+                      label={
+                        member.participantType === "actor" ? "角色" : "成员"
+                      }
                     />
                   </View>
                 ))}
@@ -158,7 +168,7 @@ export default function ConversationDetailScreen() {
         </>
       )}
     </ScreenScroll>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -243,4 +253,4 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: theme.colors.textMuted,
   },
-});
+})

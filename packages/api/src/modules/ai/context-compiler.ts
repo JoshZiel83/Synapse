@@ -4,90 +4,95 @@ import type {
   ConversationMessage,
   ProviderContextManifest,
   ProviderContextWindow,
-} from "@synapse/shared";
-import { buildConversationMessageRef, textBlock } from "@synapse/shared";
-import type { CanonicalContextItem, ConversationEntityRef } from "@synapse/shared/types";
+} from "@synapse/shared"
+import { buildConversationMessageRef, textBlock } from "@synapse/shared"
+import type {
+  CanonicalContextItem,
+  ConversationEntityRef,
+} from "@synapse/shared/types"
 
 function xmlEscapeText(value: string) {
   return value
     .replace(/&/g, "&amp;")
     .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
+    .replace(/>/g, "&gt;")
 }
 
 function xmlEscapeAttribute(value: string) {
-  return xmlEscapeText(value).replace(/"/g, "&quot;");
+  return xmlEscapeText(value).replace(/"/g, "&quot;")
 }
 
 function buildXmlAttributes(
-  attributes: Record<string, string | number | boolean | undefined | null>,
+  attributes: Record<string, string | number | boolean | undefined | null>
 ) {
   return Object.entries(attributes)
-    .filter(([, value]) => value !== undefined && value !== null && value !== "")
+    .filter(
+      ([, value]) => value !== undefined && value !== null && value !== ""
+    )
     .map(([key, value]) => ` ${key}="${xmlEscapeAttribute(String(value))}"`)
-    .join("");
+    .join("")
 }
 
 function openXmlTag(
   tag: string,
-  attributes: Record<string, string | number | boolean | undefined | null> = {},
+  attributes: Record<string, string | number | boolean | undefined | null> = {}
 ) {
-  return `<${tag}${buildXmlAttributes(attributes)}>`;
+  return `<${tag}${buildXmlAttributes(attributes)}>`
 }
 
 function closeXmlTag(tag: string) {
-  return `</${tag}>`;
+  return `</${tag}>`
 }
 
 function selfClosingXmlTag(
   tag: string,
-  attributes: Record<string, string | number | boolean | undefined | null> = {},
+  attributes: Record<string, string | number | boolean | undefined | null> = {}
 ) {
-  return `<${tag}${buildXmlAttributes(attributes)}/>`;
+  return `<${tag}${buildXmlAttributes(attributes)}/>`
 }
 
 function toXmlTextBlock(value: string) {
-  return textBlock(value);
+  return textBlock(value)
 }
 
 function formatContextTimestamp(timestamp?: string) {
-  if (!timestamp) return "";
-  const date = new Date(timestamp);
-  if (Number.isNaN(date.getTime())) return "";
-  return date.toISOString();
+  if (!timestamp) return ""
+  const date = new Date(timestamp)
+  if (Number.isNaN(date.getTime())) return ""
+  return date.toISOString()
 }
 
 type XmlEntityLike = {
-  participantId?: string;
-  participantType?: string;
-  name?: string;
-  title?: string;
-  role?: string;
-};
+  participantId?: string
+  participantType?: string
+  name?: string
+  title?: string
+  role?: string
+}
 
 function compileEntityAttrs(prefix: string, entity?: XmlEntityLike) {
-  if (!entity) return {};
+  if (!entity) return {}
   return {
     [`${prefix}ParticipantId`]: entity.participantId,
     [`${prefix}Type`]: entity.participantType,
     [`${prefix}Name`]: entity.name,
     [`${prefix}Title`]: entity.title,
     [`${prefix}Role`]: entity.role,
-  };
+  }
 }
 
 function compileBodyBlocks(
-  parts?: CanonicalContentBlock[],
+  parts?: CanonicalContentBlock[]
 ): CanonicalContentBlock[] {
   if (!parts || parts.length === 0) {
-    return [toXmlTextBlock("")];
+    return [toXmlTextBlock("")]
   }
 
-  const compiled: CanonicalContentBlock[] = [];
+  const compiled: CanonicalContentBlock[] = []
   for (const part of parts) {
     if (part.type === "text") {
-      compiled.push(toXmlTextBlock(xmlEscapeText(part.text)));
-      continue;
+      compiled.push(toXmlTextBlock(xmlEscapeText(part.text)))
+      continue
     }
 
     if (part.type === "mention") {
@@ -99,10 +104,10 @@ function compileBodyBlocks(
             name: part.mention.name,
             title: part.mention.title,
             role: part.mention.role,
-          }),
-        ),
-      );
-      continue;
+          })
+        )
+      )
+      continue
     }
 
     compiled.push(
@@ -112,22 +117,25 @@ function compileBodyBlocks(
           name: part.originalName,
           category: part.category,
           mimeType: part.mimeType,
-        }),
-      ),
-    );
-    compiled.push(part);
+        })
+      )
+    )
+    compiled.push(part)
   }
 
-  return compiled;
+  return compiled
 }
 
-function compileReplyPreviewBlocks(item: Extract<CanonicalContextItem, { kind: "message" }>) {
-  if (!item.replyTo) return [];
+function compileReplyPreviewBlocks(
+  item: Extract<CanonicalContextItem, { kind: "message" }>
+) {
+  if (!item.replyTo) return []
 
-  const ref = item.replyTo.ref
-    || (typeof item.replyTo.sequence === "number"
+  const ref =
+    item.replyTo.ref ||
+    (typeof item.replyTo.sequence === "number"
       ? buildConversationMessageRef(item.replyTo.sequence)
-      : undefined);
+      : undefined)
   return [
     toXmlTextBlock(
       openXmlTag("reply_to", {
@@ -138,22 +146,22 @@ function compileReplyPreviewBlocks(item: Extract<CanonicalContextItem, { kind: "
         subtype: item.replyTo.subtype,
         unavailable: item.replyTo.isUnavailable === true ? "true" : undefined,
         ...compileEntityAttrs("author", item.replyTo.author),
-      }),
+      })
     ),
     toXmlTextBlock(openXmlTag("preview")),
     toXmlTextBlock(xmlEscapeText(item.replyTo.previewText || "")),
     toXmlTextBlock(closeXmlTag("preview")),
     toXmlTextBlock(closeXmlTag("reply_to")),
-  ];
+  ]
 }
 
 function compileRestrictedAudience(
-  targets?: Array<ConversationEntityRef | undefined>,
+  targets?: Array<ConversationEntityRef | undefined>
 ) {
   const resolved = (targets || []).filter(
-    (target): target is ConversationEntityRef => Boolean(target),
-  );
-  if (resolved.length === 0) return [];
+    (target): target is ConversationEntityRef => Boolean(target)
+  )
+  if (resolved.length === 0) return []
 
   return [
     toXmlTextBlock(openXmlTag("restricted_audience")),
@@ -165,19 +173,21 @@ function compileRestrictedAudience(
           name: target.name,
           title: target.title,
           role: target.role,
-        }),
-      ),
+        })
+      )
     ),
     toXmlTextBlock(closeXmlTag("restricted_audience")),
-  ];
+  ]
 }
 
 function compileMessageItem(
-  item: Extract<CanonicalContextItem, { kind: "message" }>,
+  item: Extract<CanonicalContextItem, { kind: "message" }>
 ): ConversationMessage {
   const ref =
-    item.itemRef
-    || (typeof item.sequence === "number" ? buildConversationMessageRef(item.sequence) : undefined);
+    item.itemRef ||
+    (typeof item.sequence === "number"
+      ? buildConversationMessageRef(item.sequence)
+      : undefined)
   const content: CanonicalContentBlock[] = [
     toXmlTextBlock(
       openXmlTag("message", {
@@ -191,7 +201,7 @@ function compileMessageItem(
         subtype: item.messageType,
         replyable: item.replyable === true ? "true" : undefined,
         ...compileEntityAttrs("author", item.author),
-      }),
+      })
     ),
     ...compileReplyPreviewBlocks(item),
     ...compileRestrictedAudience(item.targets),
@@ -199,31 +209,33 @@ function compileMessageItem(
     ...compileBodyBlocks(item.parts),
     toXmlTextBlock(closeXmlTag("body")),
     toXmlTextBlock(closeXmlTag("message")),
-  ];
+  ]
 
   if (item.role === "assistant" && item.author?.isSelf) {
     return {
       role: "assistant",
       content,
-    };
+    }
   }
 
   return {
     role: "user",
     content,
-  };
+  }
 }
 
 function compileEventItem(
-  item: Extract<CanonicalContextItem, { kind: "event" }>,
+  item: Extract<CanonicalContextItem, { kind: "event" }>
 ): ConversationMessage {
   const ref =
-    item.itemRef
-    || (typeof item.sequence === "number" ? buildConversationMessageRef(item.sequence) : undefined);
+    item.itemRef ||
+    (typeof item.sequence === "number"
+      ? buildConversationMessageRef(item.sequence)
+      : undefined)
   const payloadText =
     item.eventPayload && Object.keys(item.eventPayload).length > 0
       ? JSON.stringify(item.eventPayload)
-      : "";
+      : ""
   return {
     role: "user",
     content: [
@@ -240,7 +252,7 @@ function compileEventItem(
           contextPolicy: item.contextPolicy,
           replyable: item.replyable === true ? "true" : undefined,
           ...compileEntityAttrs("author", item.author),
-        }),
+        })
       ),
       ...compileRestrictedAudience(item.targets),
       toXmlTextBlock(openXmlTag("event_payload")),
@@ -251,11 +263,11 @@ function compileEventItem(
       toXmlTextBlock(closeXmlTag("body")),
       toXmlTextBlock(closeXmlTag("event")),
     ],
-  };
+  }
 }
 
 function compileSystemNoticeItem(
-  item: Extract<CanonicalContextItem, { kind: "system_notice" }>,
+  item: Extract<CanonicalContextItem, { kind: "system_notice" }>
 ): ConversationMessage {
   return {
     role: "user",
@@ -267,18 +279,18 @@ function compileSystemNoticeItem(
           scope: item.scope,
           surface: item.surface,
           createdAt: formatContextTimestamp(item.createdAt),
-        }),
+        })
       ),
       toXmlTextBlock(openXmlTag("body")),
       ...compileBodyBlocks(item.parts),
       toXmlTextBlock(closeXmlTag("body")),
       toXmlTextBlock(closeXmlTag("system_notice")),
     ],
-  };
+  }
 }
 
 function compileSummaryItem(
-  item: Extract<CanonicalContextItem, { kind: "summary" }>,
+  item: Extract<CanonicalContextItem, { kind: "summary" }>
 ): ConversationMessage {
   return {
     role: "user",
@@ -290,18 +302,18 @@ function compileSummaryItem(
           scope: item.scope,
           surface: item.surface,
           createdAt: formatContextTimestamp(item.createdAt),
-        }),
+        })
       ),
       toXmlTextBlock(openXmlTag("body")),
       ...compileBodyBlocks(item.parts),
       toXmlTextBlock(closeXmlTag("body")),
       toXmlTextBlock(closeXmlTag("summary")),
     ],
-  };
+  }
 }
 
 function compileMemoryRecallItem(
-  item: Extract<CanonicalContextItem, { kind: "memory_recall" }>,
+  item: Extract<CanonicalContextItem, { kind: "memory_recall" }>
 ): ConversationMessage {
   const content: CanonicalContentBlock[] = [
     toXmlTextBlock(
@@ -309,9 +321,9 @@ function compileMemoryRecallItem(
         recallType: item.recallType,
         scope: item.scope,
         surface: item.surface,
-      }),
+      })
     ),
-  ];
+  ]
 
   for (const memory of item.memories) {
     content.push(
@@ -323,24 +335,24 @@ function compileMemoryRecallItem(
           importance: memory.importance,
           confidence: memory.confidence,
           textDigest: memory.textDigest,
-        }),
+        })
       ),
       toXmlTextBlock(openXmlTag("body")),
       ...compileBodyBlocks(memory.contentBlocks),
       toXmlTextBlock(closeXmlTag("body")),
-      toXmlTextBlock(closeXmlTag("memory")),
-    );
+      toXmlTextBlock(closeXmlTag("memory"))
+    )
   }
 
-  content.push(toXmlTextBlock(closeXmlTag("memory_recall")));
+  content.push(toXmlTextBlock(closeXmlTag("memory_recall")))
   return {
     role: "user",
     content,
-  };
+  }
 }
 
 function compileManifestMessage(
-  manifest: ProviderContextManifest,
+  manifest: ProviderContextManifest
 ): ConversationMessage {
   const content: CanonicalContentBlock[] = [
     toXmlTextBlock(
@@ -350,16 +362,16 @@ function compileManifestMessage(
         boundary: manifest.conversationBoundary,
         selfParticipantId: manifest.selfParticipantId,
         selfActorId: manifest.selfActorId,
-      }),
+      })
     ),
     toXmlTextBlock(openXmlTag("participants")),
-  ];
+  ]
 
   for (const participant of manifest.participants) {
     const isSelf =
       (manifest.selfParticipantId &&
-        participant.participantId === manifest.selfParticipantId)
-      || (participant.type === "actor" && participant.id === manifest.selfActorId);
+        participant.participantId === manifest.selfParticipantId) ||
+      (participant.type === "actor" && participant.id === manifest.selfActorId)
     content.push(
       toXmlTextBlock(
         selfClosingXmlTag("participant", {
@@ -369,25 +381,25 @@ function compileManifestMessage(
           title: participant.title,
           role: participant.role,
           isSelf: isSelf ? "true" : undefined,
-        }),
-      ),
-    );
+        })
+      )
+    )
   }
 
   content.push(
     toXmlTextBlock(closeXmlTag("participants")),
-    toXmlTextBlock(closeXmlTag("conversation_manifest")),
-  );
+    toXmlTextBlock(closeXmlTag("conversation_manifest"))
+  )
   return {
     role: "user",
     content,
-  };
+  }
 }
 
 function compileArchiveFrameToConversationMessages(
-  frame: CanonicalArchiveFrame,
+  frame: CanonicalArchiveFrame
 ): ConversationMessage[] {
-  const parts = frame.parts || [toXmlTextBlock("")];
+  const parts = frame.parts || [toXmlTextBlock("")]
 
   switch (frame.role) {
     case "assistant":
@@ -400,7 +412,7 @@ function compileArchiveFrameToConversationMessages(
               ? frame.toolCalls
               : undefined,
         },
-      ];
+      ]
 
     case "tool":
       if (frame.toolResults && frame.toolResults.length > 0) {
@@ -409,14 +421,14 @@ function compileArchiveFrameToConversationMessages(
             role: "tool_result",
             results: frame.toolResults,
           },
-        ];
+        ]
       }
       return [
         {
           role: "user",
           content: parts,
         },
-      ];
+      ]
 
     case "system":
     case "user":
@@ -426,98 +438,98 @@ function compileArchiveFrameToConversationMessages(
           role: "user",
           content: parts,
         },
-      ];
+      ]
   }
 }
 
 export async function compressContextItems(
-  items: CanonicalContextItem[],
+  items: CanonicalContextItem[]
 ): Promise<CanonicalContextItem[]> {
-  return items;
+  return items
 }
 
 export async function compressContextWindow(
-  window: ProviderContextWindow,
+  window: ProviderContextWindow
 ): Promise<ProviderContextWindow> {
-  return window;
+  return window
 }
 
 export async function compileContextItemsToConversationMessages(
-  items: CanonicalContextItem[],
+  items: CanonicalContextItem[]
 ): Promise<ConversationMessage[]> {
-  const messages: ConversationMessage[] = [];
+  const messages: ConversationMessage[] = []
 
   for (const item of items) {
     switch (item.kind) {
       case "system_notice":
-        messages.push(compileSystemNoticeItem(item));
-        break;
+        messages.push(compileSystemNoticeItem(item))
+        break
 
       case "event":
-        messages.push(compileEventItem(item));
-        break;
+        messages.push(compileEventItem(item))
+        break
 
       case "message":
-        messages.push(compileMessageItem(item));
-        break;
+        messages.push(compileMessageItem(item))
+        break
 
       case "tool_call_batch":
         messages.push({
           role: "assistant",
           content: item.content && item.content.length > 0 ? item.content : [],
           toolCalls: item.toolCalls,
-        });
-        break;
+        })
+        break
 
       case "tool_result_batch":
         messages.push({
           role: "tool_result",
           results: item.toolResults,
-        });
-        break;
+        })
+        break
 
       case "summary":
-        messages.push(compileSummaryItem(item));
-        break;
+        messages.push(compileSummaryItem(item))
+        break
 
       case "memory_recall":
-        messages.push(compileMemoryRecallItem(item));
-        break;
+        messages.push(compileMemoryRecallItem(item))
+        break
     }
   }
 
-  return messages;
+  return messages
 }
 
 export async function compileContextWindowToConversationMessages(
-  window: ProviderContextWindow,
+  window: ProviderContextWindow
 ): Promise<ConversationMessage[]> {
-  const messages: ConversationMessage[] = [];
+  const messages: ConversationMessage[] = []
 
   if (window.manifest) {
-    messages.push(compileManifestMessage(window.manifest));
+    messages.push(compileManifestMessage(window.manifest))
   }
 
   if (window.sharedArchivePoint) {
     for (const frame of window.sharedArchivePoint.frames) {
-      messages.push(...compileArchiveFrameToConversationMessages(frame));
+      messages.push(...compileArchiveFrameToConversationMessages(frame))
     }
   }
 
   if (window.privateArchivePoint) {
     for (const frame of window.privateArchivePoint.frames) {
-      messages.push(...compileArchiveFrameToConversationMessages(frame));
+      messages.push(...compileArchiveFrameToConversationMessages(frame))
     }
   }
 
   const orderedTailItems =
     window.orderedTailItems.length > 0
       ? window.orderedTailItems
-      : [...window.sharedTailItems, ...window.privateTailItems];
+      : [...window.sharedTailItems, ...window.privateTailItems]
 
   const tailMessages =
-    await compileContextItemsToConversationMessages(orderedTailItems);
-  messages.push(...tailMessages);
+    await compileContextItemsToConversationMessages(orderedTailItems)
+  messages.push(...tailMessages)
 
-  return messages;
+  return messages
 }

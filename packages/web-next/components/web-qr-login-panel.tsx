@@ -181,12 +181,15 @@ export function WebQrLoginPanel({ redirect }: { redirect: string | null }) {
               unoptimized
               className="size-[220px] rounded-[20px]"
             />
-            <p className="text-sm font-medium text-slate-500">Mobile &gt; Scan</p>
+            <p className="text-sm font-medium text-slate-500">
+              Mobile &gt; Scan
+            </p>
           </>
         ) : (
           <div className="space-y-2 px-4 text-center">
             <p className="text-sm font-medium text-slate-900">
-              {status === "pending_confirm" && "Waiting for mobile confirmation"}
+              {status === "pending_confirm" &&
+                "Waiting for mobile confirmation"}
               {status === "approved" && "Confirmation received"}
               {status === "rejected" && "Login request rejected"}
               {status === "expired" && "QR code expired"}
@@ -200,12 +203,10 @@ export function WebQrLoginPanel({ redirect }: { redirect: string | null }) {
                 "One moment while we finish signing you in."}
               {status === "rejected" &&
                 "Create a new code and try again if you still want to sign in."}
-              {status === "expired" &&
-                "Generate a fresh code to continue."}
+              {status === "expired" && "Generate a fresh code to continue."}
               {status === "consumed" &&
                 "Refresh to start a new QR login request."}
-              {!status &&
-                "Refresh to generate a fresh QR code."}
+              {!status && "Refresh to generate a fresh QR code."}
             </p>
           </div>
         )}

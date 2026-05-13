@@ -1,4 +1,4 @@
-'use client';
+"use client"
 
 import {
   createContext,
@@ -6,111 +6,108 @@ import {
   useEffect,
   useRef,
   type ReactNode,
-} from 'react';
-import { createStore, type StoreApi } from 'zustand/vanilla';
-import { useStore } from 'zustand';
-import type { User } from '@synapse/shared';
-import { api, type AuthMutationOptions } from '@/lib/api';
+} from "react"
+import { createStore, type StoreApi } from "zustand/vanilla"
+import { useStore } from "zustand"
+import type { User } from "@synapse/shared"
+import { api, type AuthMutationOptions } from "@/lib/api"
 
 function normalizeAuthUser(payload: unknown): User | null {
-  if (!payload || typeof payload !== 'object') return null;
-  if ('user' in payload && payload.user && typeof payload.user === 'object') {
-    return payload.user as User;
+  if (!payload || typeof payload !== "object") return null
+  if ("user" in payload && payload.user && typeof payload.user === "object") {
+    return payload.user as User
   }
-  return payload as User;
+  return payload as User
 }
 
 interface AuthState {
-  user: User | null;
-  setUser: (user: User | null) => void;
+  user: User | null
+  setUser: (user: User | null) => void
   login: (
     email: string,
     password: string,
-    options?: AuthMutationOptions,
-  ) => Promise<User | null>;
+    options?: AuthMutationOptions
+  ) => Promise<User | null>
   register: (
     email: string,
     password: string,
     name: string,
-    options?: AuthMutationOptions,
-  ) => Promise<User | null>;
-  logout: () => Promise<void>;
+    options?: AuthMutationOptions
+  ) => Promise<User | null>
+  logout: () => Promise<void>
 }
 
-type AuthStore = StoreApi<AuthState>;
+type AuthStore = StoreApi<AuthState>
 
 function createAuthStore(initialUser: User | null): AuthStore {
   return createStore<AuthState>((set) => ({
     user: normalizeAuthUser(initialUser),
     setUser: (user) => set({ user: normalizeAuthUser(user) }),
     login: async (email, password, options) => {
-      const res = await api.login(email, password, options);
-      const user = normalizeAuthUser(res.user);
-      set({ user });
-      return user;
+      const res = await api.login(email, password, options)
+      const user = normalizeAuthUser(res.user)
+      set({ user })
+      return user
     },
     register: async (email, password, name, options) => {
-      const res = await api.register(email, password, name, options);
-      const user = normalizeAuthUser(res.user);
-      set({ user });
-      return user;
+      const res = await api.register(email, password, name, options)
+      const user = normalizeAuthUser(res.user)
+      set({ user })
+      return user
     },
     logout: async () => {
       try {
-        await api.logout();
+        await api.logout()
       } catch {
         // Best-effort logout: the server may already consider the session invalid.
       }
-      localStorage.removeItem('workspaceId');
-      set({ user: null });
+      localStorage.removeItem("workspaceId")
+      set({ user: null })
     },
-  }));
+  }))
 }
 
-const AuthStoreContext = createContext<AuthStore | null>(null);
+const AuthStoreContext = createContext<AuthStore | null>(null)
 
 export function AuthStoreProvider({
   children,
   initialUser = null,
 }: {
-  children: ReactNode;
-  initialUser?: User | null;
+  children: ReactNode
+  initialUser?: User | null
 }) {
-  const storeRef = useRef<AuthStore | null>(null);
+  const storeRef = useRef<AuthStore | null>(null)
 
   if (!storeRef.current) {
-    storeRef.current = createAuthStore(initialUser);
+    storeRef.current = createAuthStore(initialUser)
   }
 
   useEffect(() => {
     storeRef.current?.setState({
       user: normalizeAuthUser(initialUser),
-    });
-  }, [initialUser]);
+    })
+  }, [initialUser])
 
   return (
     <AuthStoreContext.Provider value={storeRef.current}>
       {children}
     </AuthStoreContext.Provider>
-  );
+  )
 }
 
 function useAuthStoreContext() {
-  const store = useContext(AuthStoreContext);
+  const store = useContext(AuthStoreContext)
   if (!store) {
-    throw new Error('useAuthStore must be used within an AuthStoreProvider');
+    throw new Error("useAuthStore must be used within an AuthStoreProvider")
   }
-  return store;
+  return store
 }
 
-const identity = (state: AuthState) => state;
+const identity = (state: AuthState) => state
 
-export function useAuthStore(): AuthState;
-export function useAuthStore<T>(selector: (state: AuthState) => T): T;
+export function useAuthStore(): AuthState
+export function useAuthStore<T>(selector: (state: AuthState) => T): T
 export function useAuthStore<T>(selector?: (state: AuthState) => T) {
-  const store = useAuthStoreContext();
-  return useStore(
-    store,
-    selector ?? (identity as (state: AuthState) => T),
-  );
+  const store = useAuthStoreContext()
+  return useStore(store, selector ?? (identity as (state: AuthState) => T))
 }

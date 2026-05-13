@@ -3,7 +3,7 @@ import {
   CONVERSATION_TYPE_MASK_BITS,
   CONVERSATION_TYPE_MASK_PRESETS,
   DEFAULT_CONVERSATION_TYPE_MASK,
-} from '../constants/enums.js';
+} from "../constants/enums.js"
 import type {
   ActorRuntimeProcessingTarget,
   ActorRuntimeState,
@@ -11,227 +11,238 @@ import type {
   ConversationTypeKey,
   ConversationTypeMask,
   WorkItemStatus,
-} from '../types/index.js';
-import { WORK_ITEM_TRANSITIONS } from '../types/index.js';
+} from "../types/index.js"
+import { WORK_ITEM_TRANSITIONS } from "../types/index.js"
 
 export function generateId(): string {
   const cryptoRef = globalThis as typeof globalThis & {
     crypto?: {
-      randomUUID?: () => string;
-    };
-  };
-
-  if (typeof cryptoRef.crypto?.randomUUID === 'function') {
-    return cryptoRef.crypto.randomUUID();
+      randomUUID?: () => string
+    }
   }
 
-  return `id_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+  if (typeof cryptoRef.crypto?.randomUUID === "function") {
+    return cryptoRef.crypto.randomUUID()
+  }
+
+  return `id_${Math.random().toString(36).slice(2)}_${Date.now()}`
 }
 
-export function isValidTransition(from: WorkItemStatus, to: WorkItemStatus): boolean {
-  const allowed = WORK_ITEM_TRANSITIONS[from];
-  return allowed?.includes(to) ?? false;
+export function isValidTransition(
+  from: WorkItemStatus,
+  to: WorkItemStatus
+): boolean {
+  const allowed = WORK_ITEM_TRANSITIONS[from]
+  return allowed?.includes(to) ?? false
 }
 
 export function paginate(page: number, pageSize: number, maxPageSize = 100) {
-  const p = Math.max(1, page);
-  const ps = Math.min(Math.max(1, pageSize), maxPageSize);
-  return { offset: (p - 1) * ps, limit: ps, page: p, pageSize: ps };
+  const p = Math.max(1, page)
+  const ps = Math.min(Math.max(1, pageSize), maxPageSize)
+  return { offset: (p - 1) * ps, limit: ps, page: p, pageSize: ps }
 }
 
 export function nowISO(): string {
-  return new Date().toISOString();
+  return new Date().toISOString()
 }
 
-export const GROUP_CONVERSATION_KIND = 'group';
-export const PRIVATE_CONVERSATION_KIND = 'private';
-export const VIRTUAL_CONVERSATION_KIND = 'virtual';
+export const GROUP_CONVERSATION_KIND = "group"
+export const PRIVATE_CONVERSATION_KIND = "private"
+export const VIRTUAL_CONVERSATION_KIND = "virtual"
 export const THREAD_CONVERSATION_KINDS = [
   GROUP_CONVERSATION_KIND,
   PRIVATE_CONVERSATION_KIND,
-] as const;
+] as const
 
 export type ThreadAddressingMode =
-  | 'none'
-  | 'implicit_peer'
-  | 'explicit_recipients';
+  | "none"
+  | "implicit_peer"
+  | "explicit_recipients"
 
 export interface ThreadSemantics {
-  hasThreadContext: boolean;
-  isPrivateConversation: boolean;
-  isGroupConversation: boolean;
-  otherParticipantCount: number;
-  hasAddressablePeer: boolean;
-  addressingMode: ThreadAddressingMode;
-  requiresVisibleReplyBeforeSleep: boolean;
-  allowsSleepWithoutReplyConfirmation: boolean;
+  hasThreadContext: boolean
+  isPrivateConversation: boolean
+  isGroupConversation: boolean
+  otherParticipantCount: number
+  hasAddressablePeer: boolean
+  addressingMode: ThreadAddressingMode
+  requiresVisibleReplyBeforeSleep: boolean
+  allowsSleepWithoutReplyConfirmation: boolean
 }
 
 export type ParsedSynapseQrPayload =
-  | { kind: 'login'; token: string }
-  | { kind: 'relationship'; token: string }
-  | { kind: 'token'; token: string };
+  | { kind: "login"; token: string }
+  | { kind: "relationship"; token: string }
+  | { kind: "token"; token: string }
 
-export function isGroupConversationKind(kind: string | null | undefined): boolean {
-  return kind === GROUP_CONVERSATION_KIND;
+export function isGroupConversationKind(
+  kind: string | null | undefined
+): boolean {
+  return kind === GROUP_CONVERSATION_KIND
 }
 
-export function isPrivateConversationKind(kind: string | null | undefined): boolean {
-  return kind === PRIVATE_CONVERSATION_KIND;
+export function isPrivateConversationKind(
+  kind: string | null | undefined
+): boolean {
+  return kind === PRIVATE_CONVERSATION_KIND
 }
 
-export function isThreadConversationKind(kind: string | null | undefined): boolean {
-  return kind === GROUP_CONVERSATION_KIND || kind === PRIVATE_CONVERSATION_KIND;
+export function isThreadConversationKind(
+  kind: string | null | undefined
+): boolean {
+  return kind === GROUP_CONVERSATION_KIND || kind === PRIVATE_CONVERSATION_KIND
 }
 
 export function isPlanDraftingCollaborationMode(
-  mode: string | null | undefined,
+  mode: string | null | undefined
 ): boolean {
-  return mode === 'plan_drafting';
+  return mode === "plan_drafting"
 }
 
 export function isPlanAwaitingApprovalCollaborationMode(
-  mode: string | null | undefined,
+  mode: string | null | undefined
 ): boolean {
-  return mode === 'plan_awaiting_approval';
+  return mode === "plan_awaiting_approval"
 }
 
 export function isPlanCollaborationMode(
-  mode: string | null | undefined,
+  mode: string | null | undefined
 ): boolean {
   return (
     isPlanDraftingCollaborationMode(mode) ||
     isPlanAwaitingApprovalCollaborationMode(mode)
-  );
+  )
 }
 
-export const CONVERSATION_TYPE_MASK_KEY_ORDER = CONVERSATION_TYPE_KEYS;
+export const CONVERSATION_TYPE_MASK_KEY_ORDER = CONVERSATION_TYPE_KEYS
 
 export function resolveConversationTypeKey(
   kind: string | null | undefined,
-  boundary: string | null | undefined,
+  boundary: string | null | undefined
 ): ConversationTypeKey | null {
   if (kind === VIRTUAL_CONVERSATION_KIND) {
-    return 'virtual';
+    return "virtual"
   }
   if (kind === PRIVATE_CONVERSATION_KIND) {
-    return boundary === 'external' ? 'external_private' : 'internal_private';
+    return boundary === "external" ? "external_private" : "internal_private"
   }
   if (kind === GROUP_CONVERSATION_KIND) {
-    return boundary === 'external' ? 'external_group' : 'internal_group';
+    return boundary === "external" ? "external_group" : "internal_group"
   }
-  return null;
+  return null
 }
 
 export function resolveConversationTypeBit(
   kind: string | null | undefined,
-  boundary: string | null | undefined,
+  boundary: string | null | undefined
 ): ConversationTypeMask | null {
-  const key = resolveConversationTypeKey(kind, boundary);
-  return key ? CONVERSATION_TYPE_MASK_BITS[key] : null;
+  const key = resolveConversationTypeKey(kind, boundary)
+  return key ? CONVERSATION_TYPE_MASK_BITS[key] : null
 }
 
-export function isValidConversationTypeMask(mask: unknown): mask is ConversationTypeMask {
+export function isValidConversationTypeMask(
+  mask: unknown
+): mask is ConversationTypeMask {
   if (!Number.isInteger(mask)) {
-    return false;
+    return false
   }
-  const numericMask = Number(mask);
+  const numericMask = Number(mask)
   if (numericMask <= 0) {
-    return false;
+    return false
   }
-  return (numericMask & ~CONVERSATION_TYPE_MASK_PRESETS.ALL) === 0;
+  return (numericMask & ~CONVERSATION_TYPE_MASK_PRESETS.ALL) === 0
 }
 
 export function normalizeConversationTypeMask(
   mask: unknown,
-  fallback: ConversationTypeMask = DEFAULT_CONVERSATION_TYPE_MASK,
+  fallback: ConversationTypeMask = DEFAULT_CONVERSATION_TYPE_MASK
 ): ConversationTypeMask {
-  return isValidConversationTypeMask(mask) ? Number(mask) : fallback;
+  return isValidConversationTypeMask(mask) ? Number(mask) : fallback
 }
 
 export function resolveEffectiveConversationTypeMask(params: {
-  defaultMask?: unknown;
-  overrideMask?: unknown;
+  defaultMask?: unknown
+  overrideMask?: unknown
 }): ConversationTypeMask {
   if (params.overrideMask === null || params.overrideMask === undefined) {
-    return normalizeConversationTypeMask(params.defaultMask);
+    return normalizeConversationTypeMask(params.defaultMask)
   }
   return normalizeConversationTypeMask(
     params.overrideMask,
-    normalizeConversationTypeMask(params.defaultMask),
-  );
+    normalizeConversationTypeMask(params.defaultMask)
+  )
 }
 
 export function resolveNarrowedConversationTypeMask(
   parentMask: unknown,
-  overrideMask?: unknown,
+  overrideMask?: unknown
 ): ConversationTypeMask {
-  const normalizedParentMask = normalizeConversationTypeMask(parentMask);
+  const normalizedParentMask = normalizeConversationTypeMask(parentMask)
   if (overrideMask === null || overrideMask === undefined) {
-    return normalizedParentMask;
+    return normalizedParentMask
   }
   return (
     normalizedParentMask &
     normalizeConversationTypeMask(overrideMask, normalizedParentMask)
-  );
+  )
 }
 
 export function conversationTypeMaskToKeys(
-  mask: unknown,
+  mask: unknown
 ): ConversationTypeKey[] {
-  const normalizedMask = normalizeConversationTypeMask(mask);
+  const normalizedMask = normalizeConversationTypeMask(mask)
   return CONVERSATION_TYPE_MASK_KEY_ORDER.filter(
-    (key) => (normalizedMask & CONVERSATION_TYPE_MASK_BITS[key]) !== 0,
-  );
+    (key) => (normalizedMask & CONVERSATION_TYPE_MASK_BITS[key]) !== 0
+  )
 }
 
 export function conversationTypeKeysToMask(
   keys: readonly ConversationTypeKey[],
-  fallback: ConversationTypeMask = DEFAULT_CONVERSATION_TYPE_MASK,
+  fallback: ConversationTypeMask = DEFAULT_CONVERSATION_TYPE_MASK
 ): ConversationTypeMask {
   const normalizedKeys = Array.from(new Set(keys)).filter((key) =>
-    CONVERSATION_TYPE_MASK_KEY_ORDER.includes(key),
-  );
+    CONVERSATION_TYPE_MASK_KEY_ORDER.includes(key)
+  )
   if (normalizedKeys.length === 0) {
-    return fallback;
+    return fallback
   }
   return normalizedKeys.reduce(
     (mask, key) => mask | CONVERSATION_TYPE_MASK_BITS[key],
-    0,
-  );
+    0
+  )
 }
 
 export function maskAllowsConversationType(
   mask: unknown,
   kind: string | null | undefined,
-  boundary: string | null | undefined,
+  boundary: string | null | undefined
 ): boolean {
-  const bit = resolveConversationTypeBit(kind, boundary);
+  const bit = resolveConversationTypeBit(kind, boundary)
   if (!bit) {
-    return false;
+    return false
   }
-  const normalizedMask = normalizeConversationTypeMask(mask);
-  return (normalizedMask & bit) !== 0;
+  const normalizedMask = normalizeConversationTypeMask(mask)
+  return (normalizedMask & bit) !== 0
 }
 
 export function resolveThreadSemantics(params: {
-  kind?: string | null;
-  otherParticipantCount?: number;
+  kind?: string | null
+  otherParticipantCount?: number
 }): ThreadSemantics {
   const otherParticipantCount = Math.max(
     0,
-    Math.trunc(params.otherParticipantCount ?? 0),
-  );
-  const isPrivateConversation = isPrivateConversationKind(params.kind);
-  const isGroupConversation = isGroupConversationKind(params.kind);
-  const hasThreadContext = isThreadConversationKind(params.kind);
-  const hasAddressablePeer = hasThreadContext && otherParticipantCount > 0;
+    Math.trunc(params.otherParticipantCount ?? 0)
+  )
+  const isPrivateConversation = isPrivateConversationKind(params.kind)
+  const isGroupConversation = isGroupConversationKind(params.kind)
+  const hasThreadContext = isThreadConversationKind(params.kind)
+  const hasAddressablePeer = hasThreadContext && otherParticipantCount > 0
 
-  let addressingMode: ThreadAddressingMode = 'none';
+  let addressingMode: ThreadAddressingMode = "none"
   if (isPrivateConversation) {
-    addressingMode = 'implicit_peer';
+    addressingMode = "implicit_peer"
   } else if (isGroupConversation) {
-    addressingMode = 'explicit_recipients';
+    addressingMode = "explicit_recipients"
   }
 
   return {
@@ -242,117 +253,118 @@ export function resolveThreadSemantics(params: {
     hasAddressablePeer,
     addressingMode,
     requiresVisibleReplyBeforeSleep: hasAddressablePeer,
-    allowsSleepWithoutReplyConfirmation: isGroupConversation && hasAddressablePeer,
-  };
+    allowsSleepWithoutReplyConfirmation:
+      isGroupConversation && hasAddressablePeer,
+  }
 }
 
 export function isActorRuntimeActive(
-  runtime: Pick<ActorRuntimeState, 'laneState'> | null | undefined,
+  runtime: Pick<ActorRuntimeState, "laneState"> | null | undefined
 ): boolean {
-  if (!runtime) return false;
-  return runtime.laneState !== 'idle' && runtime.laneState !== 'closed';
+  if (!runtime) return false
+  return runtime.laneState !== "idle" && runtime.laneState !== "closed"
 }
 
 export function getActorRuntimePriority(
-  runtime: Pick<ActorRuntimeState, 'health' | 'laneState'> | null | undefined,
+  runtime: Pick<ActorRuntimeState, "health" | "laneState"> | null | undefined
 ): number {
-  if (!runtime) return 3;
-  if (runtime.health === 'error' || runtime.laneState === 'blocked') return 0;
-  if (runtime.laneState === 'running') return 1;
-  if (runtime.laneState === 'queued') return 2;
-  return 3;
+  if (!runtime) return 3
+  if (runtime.health === "error" || runtime.laneState === "blocked") return 0
+  if (runtime.laneState === "running") return 1
+  if (runtime.laneState === "queued") return 2
+  return 3
 }
 
 export function getActorRuntimeProcessingTargets(
-  runtime: Pick<ActorRuntimeState, 'currentTurnPreview'> | null | undefined,
+  runtime: Pick<ActorRuntimeState, "currentTurnPreview"> | null | undefined
 ): ActorRuntimeProcessingTarget[] {
-  return runtime?.currentTurnPreview?.processingTargets ?? [];
+  return runtime?.currentTurnPreview?.processingTargets ?? []
 }
 
 export function getActorRuntimeCurrentTool(
-  runtime: Pick<ActorRuntimeState, 'currentTurnPreview'> | null | undefined,
+  runtime: Pick<ActorRuntimeState, "currentTurnPreview"> | null | undefined
 ): ActorRuntimeTurnPreviewTool | undefined {
   return (
-    runtime?.currentTurnPreview?.activeTool
-    || runtime?.currentTurnPreview?.lastCompletedTool
-  );
+    runtime?.currentTurnPreview?.activeTool ||
+    runtime?.currentTurnPreview?.lastCompletedTool
+  )
 }
 
 export function isActorRuntimeProcessingWorkspaceMember(
-  runtime: Pick<ActorRuntimeState, 'currentTurnPreview'> | null | undefined,
-  workspaceMemberId: string | null | undefined,
+  runtime: Pick<ActorRuntimeState, "currentTurnPreview"> | null | undefined,
+  workspaceMemberId: string | null | undefined
 ): boolean {
-  if (!workspaceMemberId) return false;
+  if (!workspaceMemberId) return false
   return getActorRuntimeProcessingTargets(runtime).some(
     (target) =>
-      target.participantType === 'workspace_member'
-      && target.participantId === workspaceMemberId,
-  );
+      target.participantType === "workspace_member" &&
+      target.participantId === workspaceMemberId
+  )
 }
 
 export function parseSynapseQrPayload(
-  input: string,
+  input: string
 ): ParsedSynapseQrPayload | null {
-  const trimmed = input.trim();
-  if (!trimmed) return null;
+  const trimmed = input.trim()
+  if (!trimmed) return null
 
   const classifyToken = (
     kind: string | null | undefined,
     token: string | null | undefined,
     pathname?: string,
-    hostname?: string,
+    hostname?: string
   ): ParsedSynapseQrPayload | null => {
-    const normalizedToken = token?.trim();
-    if (!normalizedToken) return null;
-    const normalizedKind = kind?.trim().toLowerCase();
-    const normalizedPathname = pathname?.replace(/\/+$/, '').toLowerCase() || '';
-    const normalizedHostname = hostname?.trim().toLowerCase() || '';
+    const normalizedToken = token?.trim()
+    if (!normalizedToken) return null
+    const normalizedKind = kind?.trim().toLowerCase()
+    const normalizedPathname = pathname?.replace(/\/+$/, "").toLowerCase() || ""
+    const normalizedHostname = hostname?.trim().toLowerCase() || ""
 
     if (
-      normalizedKind === 'login' ||
-      normalizedPathname.endsWith('/m/qr-login') ||
-      normalizedPathname.endsWith('/qr-login')
+      normalizedKind === "login" ||
+      normalizedPathname.endsWith("/m/qr-login") ||
+      normalizedPathname.endsWith("/qr-login")
     ) {
-      return { kind: 'login', token: normalizedToken };
+      return { kind: "login", token: normalizedToken }
     }
 
     if (
-      normalizedKind === 'relationship' ||
-      normalizedHostname === 'relationship-qr' ||
-      normalizedPathname.endsWith('/relationship-qr')
+      normalizedKind === "relationship" ||
+      normalizedHostname === "relationship-qr" ||
+      normalizedPathname.endsWith("/relationship-qr")
     ) {
-      return { kind: 'relationship', token: normalizedToken };
+      return { kind: "relationship", token: normalizedToken }
     }
 
     return /^[A-Za-z0-9_-]{16,255}$/.test(normalizedToken)
-      ? { kind: 'token', token: normalizedToken }
-      : null;
-  };
+      ? { kind: "token", token: normalizedToken }
+      : null
+  }
 
   try {
-    const url = new URL(trimmed);
+    const url = new URL(trimmed)
     return classifyToken(
-      url.searchParams.get('kind'),
-      url.searchParams.get('token'),
+      url.searchParams.get("kind"),
+      url.searchParams.get("token"),
       url.pathname,
-      url.hostname,
-    );
+      url.hostname
+    )
   } catch {
     // Ignore malformed URLs and fallback to raw token parsing.
   }
 
   return /^[A-Za-z0-9_-]{16,255}$/.test(trimmed)
-    ? { kind: 'token', token: trimmed }
-    : null;
+    ? { kind: "token", token: trimmed }
+    : null
 }
 
 export function buildMobileScanUrl(params: {
-  origin: string;
-  kind: 'login' | 'relationship';
-  token: string;
+  origin: string
+  kind: "login" | "relationship"
+  token: string
 }) {
-  const url = new URL('/m/scan', params.origin);
-  url.searchParams.set('kind', params.kind);
-  url.searchParams.set('token', params.token);
-  return url.toString();
+  const url = new URL("/m/scan", params.origin)
+  url.searchParams.set("kind", params.kind)
+  url.searchParams.set("token", params.token)
+  return url.toString()
 }

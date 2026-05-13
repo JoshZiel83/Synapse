@@ -3,10 +3,10 @@ import {
   maskAllowsConversationType,
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
-} from "@synapse/shared";
-import { sql } from "kysely";
-import { db, executeSql } from "../../infrastructure/database/kysely.js";
-import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js";
+} from "@synapse/shared"
+import { sql } from "kysely"
+import { db, executeSql } from "../../infrastructure/database/kysely.js"
+import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
 
 type AccessResourceType =
   | "platform"
@@ -26,61 +26,66 @@ type AccessResourceType =
   | "memory_space"
   | "memory_item"
   | "model_group"
-  | "model_profile";
+  | "model_profile"
 
 type PermissionSubject = {
-  type: "user" | "workspace_member" | "actor" | "workspace" | "conversation_actor_context";
-  id: string;
-};
+  type:
+    | "user"
+    | "workspace_member"
+    | "actor"
+    | "workspace"
+    | "conversation_actor_context"
+  id: string
+}
 
-const PLATFORM_RESOURCE_ID = "synapse";
+const PLATFORM_RESOURCE_ID = "synapse"
 
 type WorkspaceMemberAccess = {
-  id: string;
-  workspaceId: string;
-  userId: string;
-  trustLevel: string;
-  ownerId: string | null;
-  accessKeys: string[];
-};
+  id: string
+  workspaceId: string
+  userId: string
+  trustLevel: string
+  ownerId: string | null
+  accessKeys: string[]
+}
 
 type ActorRow = {
-  id: string;
-  workspace_id: string;
-  access_policy: "workspace_open" | "approval_required";
-  created_by_workspace_member_id: string | null;
-  is_active: boolean;
-};
+  id: string
+  workspace_id: string
+  access_policy: "workspace_open" | "approval_required"
+  created_by_workspace_member_id: string | null
+  is_active: boolean
+}
 
 type RemoteAgentRow = {
-  id: string;
-  workspace_id: string;
-  access_policy: "workspace_open" | "approval_required";
-  created_by_workspace_member_id: string | null;
-  is_active: boolean;
-  is_public_shared: boolean;
-};
+  id: string
+  workspace_id: string
+  access_policy: "workspace_open" | "approval_required"
+  created_by_workspace_member_id: string | null
+  is_active: boolean
+  is_public_shared: boolean
+}
 
 type ConversationRow = {
-  id: string;
-  workspace_id: string;
-  kind: "private" | "group" | "virtual";
-  boundary: "internal" | "external";
-};
+  id: string
+  workspace_id: string
+  kind: "private" | "group" | "virtual"
+  boundary: "internal" | "external"
+}
 
 type ConversationActorContextRow = {
-  id: string;
-  actor_id: string;
-  conversation_id: string;
-  session_id: string | null;
-};
+  id: string
+  actor_id: string
+  conversation_id: string
+  session_id: string | null
+}
 
 type ResourceGrantMatch = {
-  resource_id: string;
-};
+  resource_id: string
+}
 
 async function loadWorkspaceMemberAccess(
-  workspaceMemberId: string,
+  workspaceMemberId: string
 ): Promise<WorkspaceMemberAccess | null> {
   const row = await db
     .selectFrom("workspace_members as wm")
@@ -94,14 +99,14 @@ async function loadWorkspaceMemberAccess(
     ])
     .where("wm.id", "=", workspaceMemberId)
     .limit(1)
-    .executeTakeFirst();
-  if (!row) return null;
+    .executeTakeFirst()
+  if (!row) return null
 
   const accessRows = await db
     .selectFrom("workspace_access_bindings")
     .select("access_key")
     .where("workspace_member_id", "=", workspaceMemberId)
-    .execute();
+    .execute()
 
   return {
     id: row.id,
@@ -110,7 +115,7 @@ async function loadWorkspaceMemberAccess(
     trustLevel: row.trust_level,
     ownerId: row.owner_id,
     accessKeys: accessRows.map((entry) => entry.access_key),
-  };
+  }
 }
 
 async function loadActorRow(actorId: string): Promise<ActorRow | null> {
@@ -125,11 +130,11 @@ async function loadActorRow(actorId: string): Promise<ActorRow | null> {
     ])
     .where("id", "=", actorId)
     .limit(1)
-    .executeTakeFirst()) as ActorRow | null;
+    .executeTakeFirst()) as ActorRow | null
 }
 
 async function loadRemoteAgentRow(
-  remoteAgentId: string,
+  remoteAgentId: string
 ): Promise<RemoteAgentRow | null> {
   const result = await executeSql<RemoteAgentRow>(
     `
@@ -144,20 +149,20 @@ async function loadRemoteAgentRow(
       WHERE id = $1
       LIMIT 1
     `,
-    [remoteAgentId],
-  );
-  return result.rows[0] ?? null;
+    [remoteAgentId]
+  )
+  return result.rows[0] ?? null
 }
 
 async function loadConversationRow(
-  conversationId: string,
+  conversationId: string
 ): Promise<ConversationRow | null> {
   return (await db
     .selectFrom("conversations as conversation")
     .leftJoin(
       "workspace_members as creator_member",
       "creator_member.id",
-      "conversation.created_by_workspace_member_id",
+      "conversation.created_by_workspace_member_id"
     )
     .select([
       "conversation.id as id",
@@ -170,18 +175,18 @@ async function loadConversationRow(
     ])
     .where("conversation.id", "=", conversationId)
     .limit(1)
-    .executeTakeFirst()) as unknown as ConversationRow | null;
+    .executeTakeFirst()) as unknown as ConversationRow | null
 }
 
 async function loadConversationActorContext(
-  contextId: string,
+  contextId: string
 ): Promise<ConversationActorContextRow | null> {
   return (await db
     .selectFrom("conversation_actor_contexts")
     .select(["id", "actor_id", "conversation_id", "session_id"])
     .where("id", "=", contextId)
     .limit(1)
-    .executeTakeFirst()) as ConversationActorContextRow | null;
+    .executeTakeFirst()) as ConversationActorContextRow | null
 }
 
 async function loadPlatformAccessKeysForUser(userId: string) {
@@ -189,181 +194,191 @@ async function loadPlatformAccessKeysForUser(userId: string) {
     .selectFrom("platform_access_bindings")
     .select("access_key")
     .where("user_id", "=", userId)
-    .execute();
-  return rows.map((row) => row.access_key);
+    .execute()
+  return rows.map((row) => row.access_key)
 }
 
 function isWorkspaceOwnerOrAdmin(access: WorkspaceMemberAccess) {
-  return access.ownerId === access.userId || access.trustLevel === "admin";
+  return access.ownerId === access.userId || access.trustLevel === "admin"
 }
 
 function hasWorkspaceAccessKey(
   access: WorkspaceMemberAccess,
-  accessKey: string,
+  accessKey: string
 ) {
-  return access.accessKeys.includes(accessKey);
+  return access.accessKeys.includes(accessKey)
 }
 
 async function hasPlatformPermission(
   subject: PermissionSubject,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
-  let userId: string | null = null;
+  let userId: string | null = null
   if (subject.type === "user") {
-    userId = subject.id;
+    userId = subject.id
   } else if (subject.type === "workspace_member") {
-    const access = await loadWorkspaceMemberAccess(subject.id);
-    userId = access?.userId || null;
+    const access = await loadWorkspaceMemberAccess(subject.id)
+    userId = access?.userId || null
   }
   if (!userId) {
-    return false;
+    return false
   }
 
-  const accessKeys = await loadPlatformAccessKeysForUser(userId);
+  const accessKeys = await loadPlatformAccessKeysForUser(userId)
   switch (permission) {
     case "manage":
-      return accessKeys.length > 0;
+      return accessKeys.length > 0
     case "manage_workspaces":
-      return accessKeys.includes("super_admin") || accessKeys.includes("workspace_admin");
+      return (
+        accessKeys.includes("super_admin") ||
+        accessKeys.includes("workspace_admin")
+      )
     case "manage_models":
-      return accessKeys.includes("super_admin") || accessKeys.includes("model_admin");
+      return (
+        accessKeys.includes("super_admin") || accessKeys.includes("model_admin")
+      )
     case "support_access":
-      return accessKeys.includes("super_admin") || accessKeys.includes("support");
+      return (
+        accessKeys.includes("super_admin") || accessKeys.includes("support")
+      )
     case "audit":
-      return accessKeys.includes("super_admin") || accessKeys.includes("auditor");
+      return (
+        accessKeys.includes("super_admin") || accessKeys.includes("auditor")
+      )
     default:
-      return false;
+      return false
   }
 }
 
 function workspacePermissionFromAccess(
   access: WorkspaceMemberAccess,
-  permission: string,
+  permission: string
 ) {
-  const isAdmin = isWorkspaceOwnerOrAdmin(access);
+  const isAdmin = isWorkspaceOwnerOrAdmin(access)
   switch (permission) {
     case "view":
-      return true;
+      return true
     case "manage":
     case "manage_members":
-      return isAdmin;
+      return isAdmin
     case "manage_actors":
-      return isAdmin || hasWorkspaceAccessKey(access, "actor_admin");
+      return isAdmin || hasWorkspaceAccessKey(access, "actor_admin")
     case "use_actors":
-      return true;
+      return true
     case "manage_remote_agents":
-      return isAdmin || hasWorkspaceAccessKey(access, "remote_agent_admin");
+      return isAdmin || hasWorkspaceAccessKey(access, "remote_agent_admin")
     case "use_remote_agents":
-      return true;
+      return true
     case "manage_conversations":
-      return isAdmin || hasWorkspaceAccessKey(access, "conversation_admin");
+      return isAdmin || hasWorkspaceAccessKey(access, "conversation_admin")
     case "create_conversation":
-      return access.trustLevel !== "guest";
+      return access.trustLevel !== "guest"
     case "manage_skills":
-      return isAdmin || hasWorkspaceAccessKey(access, "skill_admin");
+      return isAdmin || hasWorkspaceAccessKey(access, "skill_admin")
     case "manage_plugins":
-      return isAdmin || hasWorkspaceAccessKey(access, "plugin_admin");
+      return isAdmin || hasWorkspaceAccessKey(access, "plugin_admin")
     case "manage_memories":
-      return isAdmin || hasWorkspaceAccessKey(access, "memory_admin");
+      return isAdmin || hasWorkspaceAccessKey(access, "memory_admin")
     case "manage_relays":
-      return isAdmin || hasWorkspaceAccessKey(access, "relay_admin");
+      return isAdmin || hasWorkspaceAccessKey(access, "relay_admin")
     case "manage_models":
-      return isAdmin || hasWorkspaceAccessKey(access, "model_admin");
+      return isAdmin || hasWorkspaceAccessKey(access, "model_admin")
     default:
-      return false;
+      return false
   }
 }
 
 async function hasWorkspacePermission(
   subject: PermissionSubject,
   workspaceId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
   if (subject.type === "workspace") {
-    return subject.id === workspaceId;
+    return subject.id === workspaceId
   }
   if (subject.type !== "workspace_member") {
-    return false;
+    return false
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access || access.workspaceId !== workspaceId) {
-    return false;
+    return false
   }
 
-  return workspacePermissionFromAccess(access, permission);
+  return workspacePermissionFromAccess(access, permission)
 }
 
 async function hasActiveConversationMembership(params: {
-  conversationId: string;
-  workspaceMemberId?: string | null;
-  actorId?: string | null;
+  conversationId: string
+  workspaceMemberId?: string | null
+  actorId?: string | null
 }) {
   let query = db
     .selectFrom("conversation_participants")
     .select(["id", "role_key"])
     .where("conversation_id", "=", params.conversationId)
-    .where("state", "=", "active");
+    .where("state", "=", "active")
 
   if (params.workspaceMemberId) {
     query = query
       .where("participant_kind", "=", "workspace_member")
-      .where("workspace_member_id", "=", params.workspaceMemberId);
+      .where("workspace_member_id", "=", params.workspaceMemberId)
   } else if (params.actorId) {
     query = query
       .where("participant_kind", "=", "actor")
-      .where("actor_id", "=", params.actorId);
+      .where("actor_id", "=", params.actorId)
   } else {
-    return null;
+    return null
   }
 
-  return query.limit(1).executeTakeFirst();
+  return query.limit(1).executeTakeFirst()
 }
 
 async function hasConversationPermission(
   subject: PermissionSubject,
   conversationId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
-  const conversation = await loadConversationRow(conversationId);
+  const conversation = await loadConversationRow(conversationId)
   if (!conversation) {
-    return false;
+    return false
   }
 
   if (subject.type === "workspace_member") {
-    const access = await loadWorkspaceMemberAccess(subject.id);
+    const access = await loadWorkspaceMemberAccess(subject.id)
     if (!access) {
-      return false;
+      return false
     }
     const membership = await hasActiveConversationMembership({
       conversationId,
       workspaceMemberId: subject.id,
-    });
+    })
     const sameWorkspace =
       Boolean(conversation.workspace_id) &&
-      access.workspaceId === conversation.workspace_id;
+      access.workspaceId === conversation.workspace_id
     const isConversationAdmin =
-      membership?.role_key === "owner" || membership?.role_key === "admin";
+      membership?.role_key === "owner" || membership?.role_key === "admin"
     const isWorkspaceConversationAdmin =
-      sameWorkspace && workspacePermissionFromAccess(access, "manage_conversations");
+      sameWorkspace &&
+      workspacePermissionFromAccess(access, "manage_conversations")
 
     switch (permission) {
       case "view":
-        return Boolean(membership);
+        return Boolean(membership)
       case "send":
       case "memory_read":
-        return Boolean(membership);
+        return Boolean(membership)
       case "memory_edit":
-        return Boolean(membership);
+        return Boolean(membership)
       case "manage":
       case "manage_members":
       case "moderate":
       case "attach_resources":
       case "memory_retarget":
       case "memory_delete":
-        return isConversationAdmin || isWorkspaceConversationAdmin;
+        return isConversationAdmin || isWorkspaceConversationAdmin
       default:
-        return false;
+        return false
     }
   }
 
@@ -371,28 +386,28 @@ async function hasConversationPermission(
     const membership = await hasActiveConversationMembership({
       conversationId,
       actorId: subject.id,
-    });
+    })
     if (!membership) {
-      return false;
+      return false
     }
     switch (permission) {
       case "view":
       case "send":
       case "memory_read":
       case "memory_edit":
-        return true;
+        return true
       default:
-        return false;
+        return false
     }
   }
 
-  return false;
+  return false
 }
 
 async function hasFriendActorAccess(
   workspaceId: string,
   workspaceMemberId: string,
-  actorId: string,
+  actorId: string
 ) {
   const row = await db
     .selectFrom("workspace_friend_entries")
@@ -402,14 +417,14 @@ async function hasFriendActorAccess(
     .where("peer_type", "=", "actor")
     .where("peer_actor_id", "=", actorId)
     .limit(1)
-    .executeTakeFirst();
-  return Boolean(row);
+    .executeTakeFirst()
+  return Boolean(row)
 }
 
 async function hasFriendRemoteAgentAccess(
   workspaceId: string,
   workspaceMemberId: string,
-  remoteAgentId: string,
+  remoteAgentId: string
 ) {
   const row = await db
     .selectFrom("workspace_friend_entries")
@@ -419,23 +434,23 @@ async function hasFriendRemoteAgentAccess(
     .where("peer_type", "=", "remote_agent")
     .where("peer_remote_agent_id", "=", remoteAgentId)
     .limit(1)
-    .executeTakeFirst();
-  return Boolean(row);
+    .executeTakeFirst()
+  return Boolean(row)
 }
 
 async function hasActorPermission(
   subject: PermissionSubject,
   actorId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
-  const actor = await loadActorRow(actorId);
+  const actor = await loadActorRow(actorId)
   if (!actor || !actor.is_active) {
-    return false;
+    return false
   }
 
   if (subject.type === "actor") {
     if (subject.id !== actorId) {
-      return false;
+      return false
     }
     switch (permission) {
       case "discover":
@@ -446,29 +461,29 @@ async function hasActorPermission(
       case "memory_edit":
       case "memory_retarget":
       case "memory_delete":
-        return true;
+        return true
       default:
-        return false;
+        return false
     }
   }
 
   if (subject.type !== "workspace_member") {
-    return false;
+    return false
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access || access.workspaceId !== actor.workspace_id) {
-    return false;
+    return false
   }
 
   const canManage =
     isWorkspaceOwnerOrAdmin(access) ||
     hasWorkspaceAccessKey(access, "actor_admin") ||
-    actor.created_by_workspace_member_id === access.id;
+    actor.created_by_workspace_member_id === access.id
   const canUse =
     canManage ||
     actor.access_policy === "workspace_open" ||
-    (await hasFriendActorAccess(actor.workspace_id, access.id, actorId));
+    (await hasFriendActorAccess(actor.workspace_id, access.id, actorId))
 
   switch (permission) {
     case "discover":
@@ -477,76 +492,78 @@ async function hasActorPermission(
     case "receive_message":
     case "memory_read":
     case "memory_edit":
-      return canUse;
+      return canUse
     case "edit":
     case "grant":
     case "delete":
     case "memory_retarget":
     case "memory_delete":
-      return canManage;
+      return canManage
     default:
-      return false;
+      return false
   }
 }
 
 async function hasRemoteAgentPermission(
   subject: PermissionSubject,
   remoteAgentId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
-  const remoteAgent = await loadRemoteAgentRow(remoteAgentId);
+  const remoteAgent = await loadRemoteAgentRow(remoteAgentId)
   if (!remoteAgent || !remoteAgent.is_active) {
-    return false;
+    return false
   }
 
   if (subject.type !== "workspace_member") {
-    return false;
+    return false
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access) {
-    return false;
+    return false
   }
 
-  const sameWorkspace = access.workspaceId === remoteAgent.workspace_id;
+  const sameWorkspace = access.workspaceId === remoteAgent.workspace_id
   const canManage =
     sameWorkspace &&
-    (
-      isWorkspaceOwnerOrAdmin(access) ||
+    (isWorkspaceOwnerOrAdmin(access) ||
       hasWorkspaceAccessKey(access, "remote_agent_admin") ||
-      remoteAgent.created_by_workspace_member_id === access.id
-    );
+      remoteAgent.created_by_workspace_member_id === access.id)
   const canUse =
     canManage ||
     (sameWorkspace && remoteAgent.access_policy === "workspace_open") ||
-    (await hasFriendRemoteAgentAccess(access.workspaceId, access.id, remoteAgentId)) ||
+    (await hasFriendRemoteAgentAccess(
+      access.workspaceId,
+      access.id,
+      remoteAgentId
+    )) ||
     (!sameWorkspace &&
       remoteAgent.is_public_shared &&
-      remoteAgent.access_policy === "workspace_open");
+      remoteAgent.access_policy === "workspace_open")
 
   switch (permission) {
     case "discover":
     case "view":
     case "invoke":
     case "receive_message":
-      return canUse;
+      return canUse
     case "edit":
     case "grant":
     case "delete":
-      return canManage;
+      return canManage
     default:
-      return false;
+      return false
   }
 }
 
 async function hasConversationActorContextPermission(
   subject: PermissionSubject,
   contextId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
-  const context = await loadConversationActorContext(contextId);
+  const context = await loadConversationActorContext(contextId)
   if (!context) {
-    return false;
+    return false
   }
 
   if (subject.type === "actor") {
@@ -556,10 +573,10 @@ async function hasConversationActorContextPermission(
             conversationId: context.conversation_id,
             actorId: subject.id,
           })
-        : null;
+        : null
 
     if (!membership) {
-      return false;
+      return false
     }
 
     switch (permission) {
@@ -567,49 +584,53 @@ async function hasConversationActorContextPermission(
       case "memory_edit":
       case "memory_retarget":
       case "memory_delete":
-        return true;
+        return true
       default:
-        return false;
+        return false
     }
   }
 
   if (subject.type !== "workspace_member") {
-    return false;
+    return false
   }
 
   const inConversation = await hasActiveConversationMembership({
     conversationId: context.conversation_id,
     workspaceMemberId: subject.id,
-  });
+  })
   if (!inConversation) {
-    return false;
+    return false
   }
 
   switch (permission) {
     case "memory_read":
     case "memory_edit":
-      return hasActorPermission(subject, context.actor_id, permission);
+      return hasActorPermission(subject, context.actor_id, permission)
     case "memory_retarget":
     case "memory_delete":
-      return hasActorPermission(subject, context.actor_id, permission);
+      return hasActorPermission(subject, context.actor_id, permission)
     default:
-      return false;
+      return false
   }
 }
 
 type ResourceGrantRow = {
-  resource_id: string;
-  target_type: "workspace" | "conversation" | "actor" | "actor_in_conversation";
-  subject_workspace_id: string | null;
-  subject_actor_id: string | null;
-  subject_conversation_id: string | null;
-  subject_conversation_actor_context_id: string | null;
-};
+  resource_id: string
+  target_type: "workspace" | "conversation" | "actor" | "actor_in_conversation"
+  subject_workspace_id: string | null
+  subject_actor_id: string | null
+  subject_conversation_id: string | null
+  subject_conversation_actor_context_id: string | null
+}
 
 async function listResourceGrantRows(
-  resourceType: "installed_skill" | "plugin_installation" | "relay_capability" | "automation_event_source",
+  resourceType:
+    | "installed_skill"
+    | "plugin_installation"
+    | "relay_capability"
+    | "automation_event_source",
   resourceId: string | null,
-  subject: PermissionSubject,
+  subject: PermissionSubject
 ) {
   const resourceColumn =
     resourceType === "installed_skill"
@@ -618,60 +639,60 @@ async function listResourceGrantRows(
         ? "binding.plugin_installation_id"
         : resourceType === "relay_capability"
           ? "binding.relay_capability_id"
-          : "binding.automation_event_source_id";
+          : "binding.automation_event_source_id"
 
-  const whereClauses: string[] = ["binding.status = 'active'"];
-  const values: unknown[] = [];
+  const whereClauses: string[] = ["binding.status = 'active'"]
+  const values: unknown[] = []
 
   if (resourceId) {
-    values.push(resourceId);
-    whereClauses.push(`${resourceColumn} = $${values.length}::uuid`);
+    values.push(resourceId)
+    whereClauses.push(`${resourceColumn} = $${values.length}::uuid`)
   }
 
   if (subject.type === "workspace") {
-    values.push(subject.id);
+    values.push(subject.id)
     whereClauses.push(
-      `binding.target_type = 'workspace' AND binding.subject_workspace_id = $${values.length}::uuid`,
-    );
+      `binding.target_type = 'workspace' AND binding.subject_workspace_id = $${values.length}::uuid`
+    )
   } else if (subject.type === "actor") {
-    values.push(subject.id);
+    values.push(subject.id)
     whereClauses.push(
-      `binding.target_type = 'actor' AND binding.subject_actor_id = $${values.length}::uuid`,
-    );
+      `binding.target_type = 'actor' AND binding.subject_actor_id = $${values.length}::uuid`
+    )
   } else if (subject.type === "conversation_actor_context") {
-    const context = await loadConversationActorContext(subject.id);
+    const context = await loadConversationActorContext(subject.id)
     if (!context) {
-      return [] as ResourceGrantRow[];
+      return [] as ResourceGrantRow[]
     }
     const membership = await hasActiveConversationMembership({
       conversationId: context.conversation_id,
       actorId: context.actor_id,
-    });
+    })
     if (!membership) {
-      return [] as ResourceGrantRow[];
+      return [] as ResourceGrantRow[]
     }
-    values.push(subject.id);
-    const contextIdIndex = values.length;
-    values.push(context.conversation_id);
-    const conversationIdIndex = values.length;
+    values.push(subject.id)
+    const contextIdIndex = values.length
+    values.push(context.conversation_id)
+    const conversationIdIndex = values.length
     whereClauses.push(
       `(
         (binding.target_type = 'actor_in_conversation' AND binding.subject_conversation_actor_context_id = $${contextIdIndex}::uuid)
         OR
         (binding.target_type = 'conversation' AND binding.subject_conversation_id = $${conversationIdIndex}::uuid)
-      )`,
-    );
+      )`
+    )
   } else if (subject.type === "workspace_member") {
-    const access = await loadWorkspaceMemberAccess(subject.id);
+    const access = await loadWorkspaceMemberAccess(subject.id)
     if (!access) {
-      return [] as ResourceGrantRow[];
+      return [] as ResourceGrantRow[]
     }
-    values.push(access.workspaceId);
+    values.push(access.workspaceId)
     whereClauses.push(
-      `binding.target_type = 'workspace' AND binding.subject_workspace_id = $${values.length}::uuid`,
-    );
+      `binding.target_type = 'workspace' AND binding.subject_workspace_id = $${values.length}::uuid`
+    )
   } else {
-    return [] as ResourceGrantRow[];
+    return [] as ResourceGrantRow[]
   }
 
   const result = await executeSql<ResourceGrantRow>(
@@ -689,61 +710,69 @@ async function listResourceGrantRows(
        binding.subject_conversation_actor_context_id
      FROM resource_access_bindings binding
      WHERE ${whereClauses.join(" AND ")}`,
-    values,
-  );
-  return result.rows;
+    values
+  )
+  return result.rows
 }
 
 async function hasResourceGrant(
-  resourceType: "installed_skill" | "plugin_installation" | "relay_capability" | "automation_event_source",
+  resourceType:
+    | "installed_skill"
+    | "plugin_installation"
+    | "relay_capability"
+    | "automation_event_source",
   resourceId: string,
-  subject: PermissionSubject,
+  subject: PermissionSubject
 ) {
-  const rows = await listResourceGrantRows(resourceType, resourceId, subject);
-  return rows.length > 0;
+  const rows = await listResourceGrantRows(resourceType, resourceId, subject)
+  return rows.length > 0
 }
 
 async function listGrantedResourceIds(
-  resourceType: "installed_skill" | "plugin_installation" | "relay_capability" | "automation_event_source",
+  resourceType:
+    | "installed_skill"
+    | "plugin_installation"
+    | "relay_capability"
+    | "automation_event_source",
   subject: PermissionSubject,
-  limit?: number,
+  limit?: number
 ) {
-  const rows = await listResourceGrantRows(resourceType, null, subject);
-  const ids = Array.from(new Set(rows.map((row) => row.resource_id)));
-  return typeof limit === "number" && limit > 0 ? ids.slice(0, limit) : ids;
+  const rows = await listResourceGrantRows(resourceType, null, subject)
+  const ids = Array.from(new Set(rows.map((row) => row.resource_id)))
+  return typeof limit === "number" && limit > 0 ? ids.slice(0, limit) : ids
 }
 
 function finalizeResourceIdList(groups: readonly string[][], limit?: number) {
-  const merged: string[] = [];
-  const seen = new Set<string>();
+  const merged: string[] = []
+  const seen = new Set<string>()
 
   for (const group of groups) {
     for (const id of group) {
       if (!id || seen.has(id)) {
-        continue;
+        continue
       }
-      seen.add(id);
-      merged.push(id);
+      seen.add(id)
+      merged.push(id)
       if (typeof limit === "number" && limit > 0 && merged.length >= limit) {
-        return merged;
+        return merged
       }
     }
   }
 
-  return merged;
+  return merged
 }
 
 async function listManageableInstalledSkillIds(
   subject: PermissionSubject,
-  limit?: number,
+  limit?: number
 ) {
   if (subject.type !== "workspace_member") {
-    return [] as string[];
+    return [] as string[]
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access) {
-    return [] as string[];
+    return [] as string[]
   }
 
   let query = db
@@ -751,29 +780,27 @@ async function listManageableInstalledSkillIds(
     .select("id")
     .where("workspace_id", "=", access.workspaceId)
     .where("is_active", "=", true)
-    .orderBy("updated_at", "desc");
+    .orderBy("updated_at", "desc")
 
   if (!workspacePermissionFromAccess(access, "manage_skills")) {
-    query = query.where("created_by_workspace_member_id", "=", access.id);
+    query = query.where("created_by_workspace_member_id", "=", access.id)
   }
 
-  const rows = await query
-    .limit(limit && limit > 0 ? limit : 1000)
-    .execute();
-  return rows.map((row) => row.id);
+  const rows = await query.limit(limit && limit > 0 ? limit : 1000).execute()
+  return rows.map((row) => row.id)
 }
 
 async function listManageablePluginInstallationIds(
   subject: PermissionSubject,
-  limit?: number,
+  limit?: number
 ) {
   if (subject.type !== "workspace_member") {
-    return [] as string[];
+    return [] as string[]
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access) {
-    return [] as string[];
+    return [] as string[]
   }
 
   let query = db
@@ -781,178 +808,180 @@ async function listManageablePluginInstallationIds(
     .select("id")
     .where("workspace_id", "=", access.workspaceId)
     .where("status", "=", "active")
-    .orderBy("updated_at", "desc");
+    .orderBy("updated_at", "desc")
 
   if (!workspacePermissionFromAccess(access, "manage_plugins")) {
-    query = query.where("installed_by_workspace_member_id", "=", access.id);
+    query = query.where("installed_by_workspace_member_id", "=", access.id)
   }
 
-  const rows = await query
-    .limit(limit && limit > 0 ? limit : 1000)
-    .execute();
-  return rows.map((row) => row.id);
+  const rows = await query.limit(limit && limit > 0 ? limit : 1000).execute()
+  return rows.map((row) => row.id)
 }
 
 async function listManageableRelayCapabilityIds(
   subject: PermissionSubject,
-  limit?: number,
+  limit?: number
 ) {
   if (subject.type !== "workspace_member") {
-    return [] as string[];
+    return [] as string[]
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access) {
-    return [] as string[];
+    return [] as string[]
   }
 
   let query = db
     .selectFrom("relay_capabilities as capability")
-    .innerJoin("relay_exposures as exposure", "exposure.id", "capability.exposure_id")
+    .innerJoin(
+      "relay_exposures as exposure",
+      "exposure.id",
+      "capability.exposure_id"
+    )
     .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
     .select("capability.id")
     .where("capability.workspace_id", "=", access.workspaceId)
     .where("capability.status", "=", "active")
-    .orderBy("capability.updated_at", "desc");
+    .orderBy("capability.updated_at", "desc")
 
   if (!workspacePermissionFromAccess(access, "manage_relays")) {
-    query = query.where("device.owner_workspace_member_id", "=", access.id);
+    query = query.where("device.owner_workspace_member_id", "=", access.id)
   }
 
-  const rows = await query
-    .limit(limit && limit > 0 ? limit : 1000)
-    .execute();
-  return rows.map((row) => row.id);
+  const rows = await query.limit(limit && limit > 0 ? limit : 1000).execute()
+  return rows.map((row) => row.id)
 }
 
 async function hasInstalledSkillPermission(
   subject: PermissionSubject,
   skillId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
   const row = await db
     .selectFrom("installed_skills")
     .select(["workspace_id", "created_by_workspace_member_id", "is_active"])
     .where("id", "=", skillId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row || !row.is_active) {
-    return false;
+    return false
   }
 
   if (permission === "use" || permission === "view") {
     if (await hasResourceGrant("installed_skill", skillId, subject)) {
-      return true;
+      return true
     }
   }
 
   if (subject.type !== "workspace_member") {
-    return false;
+    return false
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access || access.workspaceId !== row.workspace_id) {
-    return false;
+    return false
   }
 
   const canManage =
     workspacePermissionFromAccess(access, "manage_skills") ||
-    row.created_by_workspace_member_id === access.id;
+    row.created_by_workspace_member_id === access.id
   if (permission === "view" || permission === "use") {
-    return canManage;
+    return canManage
   }
-  return canManage;
+  return canManage
 }
 
 async function hasPluginInstallationPermission(
   subject: PermissionSubject,
   installationId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
   const row = await db
     .selectFrom("plugin_installations")
     .select(["workspace_id", "installed_by_workspace_member_id", "status"])
     .where("id", "=", installationId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row || row.status !== "active") {
-    return false;
+    return false
   }
 
   if (permission === "use" || permission === "view") {
-    if (await hasResourceGrant("plugin_installation", installationId, subject)) {
-      return true;
+    if (
+      await hasResourceGrant("plugin_installation", installationId, subject)
+    ) {
+      return true
     }
   }
 
   if (subject.type !== "workspace_member") {
-    return false;
+    return false
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access || access.workspaceId !== row.workspace_id) {
-    return false;
+    return false
   }
 
   const canManage =
     workspacePermissionFromAccess(access, "manage_plugins") ||
-    row.installed_by_workspace_member_id === access.id;
+    row.installed_by_workspace_member_id === access.id
   if (permission === "view" || permission === "use") {
-    return canManage;
+    return canManage
   }
-  return canManage;
+  return canManage
 }
 
 async function hasRelayDevicePermission(
   subject: PermissionSubject,
   deviceId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
   const row = await db
     .selectFrom("relay_devices")
     .select(["workspace_id", "owner_workspace_member_id"])
     .where("id", "=", deviceId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row) {
-    return false;
+    return false
   }
 
   if (subject.type === "user") {
     if (permission !== "authorize_relay_authorization") {
-      return false;
+      return false
     }
-    return hasPlatformPermission(subject, "manage");
+    return hasPlatformPermission(subject, "manage")
   }
 
   if (subject.type !== "workspace_member") {
-    return false;
+    return false
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access || access.workspaceId !== row.workspace_id) {
-    return false;
+    return false
   }
 
   const canManage =
     workspacePermissionFromAccess(access, "manage_relays") ||
-    row.owner_workspace_member_id === access.id;
+    row.owner_workspace_member_id === access.id
 
   switch (permission) {
     case "view":
     case "manage":
     case "delete":
     case "authorize_relay_authorization":
-      return canManage;
+      return canManage
     default:
-      return false;
+      return false
   }
 }
 
 async function hasRelayExposurePermission(
   subject: PermissionSubject,
   exposureId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
   const row = await db
     .selectFrom("relay_exposures as exposure")
@@ -960,21 +989,29 @@ async function hasRelayExposurePermission(
     .select(["device.id as device_id"])
     .where("exposure.id", "=", exposureId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row?.device_id) {
-    return false;
+    return false
   }
-  return hasRelayDevicePermission(subject, row.device_id, permission === "view" ? "view" : "manage");
+  return hasRelayDevicePermission(
+    subject,
+    row.device_id,
+    permission === "view" ? "view" : "manage"
+  )
 }
 
 async function hasRelayCapabilityPermission(
   subject: PermissionSubject,
   capabilityId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
   const row = await db
     .selectFrom("relay_capabilities as capability")
-    .innerJoin("relay_exposures as exposure", "exposure.id", "capability.exposure_id")
+    .innerJoin(
+      "relay_exposures as exposure",
+      "exposure.id",
+      "capability.exposure_id"
+    )
     .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
     .select([
       "capability.workspace_id",
@@ -984,9 +1021,9 @@ async function hasRelayCapabilityPermission(
     ])
     .where("capability.id", "=", capabilityId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row || row.status !== "active") {
-    return false;
+    return false
   }
 
   if (
@@ -995,48 +1032,48 @@ async function hasRelayCapabilityPermission(
     permission === "request_relay_authorization"
   ) {
     if (await hasResourceGrant("relay_capability", capabilityId, subject)) {
-      return true;
+      return true
     }
   }
 
   if (subject.type !== "workspace_member") {
-    return false;
+    return false
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access || access.workspaceId !== row.workspace_id) {
-    return false;
+    return false
   }
 
   const canManage =
     workspacePermissionFromAccess(access, "manage_relays") ||
-    row.owner_workspace_member_id === access.id;
+    row.owner_workspace_member_id === access.id
 
   if (
     permission === "view" ||
     permission === "use" ||
     permission === "request_relay_authorization"
   ) {
-    return canManage;
+    return canManage
   }
-  return canManage;
+  return canManage
 }
 
 async function listActorIds(subject: PermissionSubject, limit?: number) {
   if (subject.type !== "workspace_member") {
-    return subject.type === "actor" ? [subject.id] : [];
+    return subject.type === "actor" ? [subject.id] : []
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access) {
-    return [];
+    return []
   }
 
   let query = db
     .selectFrom("actors as a")
     .select("a.id")
     .where("a.workspace_id", "=", access.workspaceId)
-    .where("a.is_active", "=", true);
+    .where("a.is_active", "=", true)
 
   if (
     !isWorkspaceOwnerOrAdmin(access) &&
@@ -1054,25 +1091,25 @@ async function listActorIds(subject: PermissionSubject, limit?: number) {
             AND friend.peer_type = 'actor'
             AND friend.peer_actor_id = a.id
         )`,
-      ]),
-    );
+      ])
+    )
   }
 
   const rows = await query
     .orderBy("a.created_at", "desc")
     .limit(limit && limit > 0 ? limit : 1000)
-    .execute();
-  return rows.map((row) => row.id);
+    .execute()
+  return rows.map((row) => row.id)
 }
 
 async function listRemoteAgentIds(subject: PermissionSubject, limit?: number) {
   if (subject.type !== "workspace_member") {
-    return [];
+    return []
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access) {
-    return [];
+    return []
   }
 
   const result = await executeSql<{ id: string }>(
@@ -1106,24 +1143,22 @@ async function listRemoteAgentIds(subject: PermissionSubject, limit?: number) {
         hasWorkspaceAccessKey(access, "remote_agent_admin"),
       access.id,
       limit && limit > 0 ? limit : 1000,
-    ],
-  );
-  return result.rows.map((row) => row.id);
+    ]
+  )
+  return result.rows.map((row) => row.id)
 }
 
 async function listModelGroupIds(subject: PermissionSubject, limit?: number) {
   if (subject.type === "actor") {
-    const actor = await loadActorRow(subject.id);
+    const actor = await loadActorRow(subject.id)
     if (!actor) {
-      return [];
+      return []
     }
     const rows = await db
       .selectFrom("model_groups as mg")
       .distinct()
       .leftJoin("model_group_grants as mgg", (join) =>
-        join
-          .onRef("mgg.group_id", "=", "mg.id")
-          .on("mgg.status", "=", "active"),
+        join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
       )
       .select("mg.id")
       .where("mg.is_enabled", "=", true)
@@ -1143,29 +1178,27 @@ async function listModelGroupIds(subject: PermissionSubject, limit?: number) {
             eb("mgg.workspace_id", "=", actor.workspace_id),
             eb("mgg.actor_id", "=", subject.id),
           ]),
-        ]),
+        ])
       )
       .limit(limit && limit > 0 ? limit : 1000)
-      .execute();
-    return rows.map((row) => row.id);
+      .execute()
+    return rows.map((row) => row.id)
   }
 
   if (subject.type !== "workspace_member") {
-    return [];
+    return []
   }
 
-  const access = await loadWorkspaceMemberAccess(subject.id);
+  const access = await loadWorkspaceMemberAccess(subject.id)
   if (!access) {
-    return [];
+    return []
   }
 
   const rows = await db
     .selectFrom("model_groups as mg")
     .distinct()
     .leftJoin("model_group_grants as mgg", (join) =>
-      join
-        .onRef("mgg.group_id", "=", "mg.id")
-        .on("mgg.status", "=", "active"),
+      join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
     )
     .select("mg.id")
     .where("mg.is_enabled", "=", true)
@@ -1188,17 +1221,17 @@ async function listModelGroupIds(subject: PermissionSubject, limit?: number) {
           eb("mgg.grant_scope", "=", "workspace_member"),
           eb("mgg.workspace_member_id", "=", access.id),
         ]),
-      ]),
+      ])
     )
     .limit(limit && limit > 0 ? limit : 1000)
-    .execute();
-  return rows.map((row) => row.id);
+    .execute()
+  return rows.map((row) => row.id)
 }
 
 async function hasModelGroupPermission(
   subject: PermissionSubject,
   groupId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
   const row = await db
     .selectFrom("model_groups")
@@ -1211,29 +1244,29 @@ async function hasModelGroupPermission(
     ])
     .where("id", "=", groupId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row || !row.is_enabled) {
-    return false;
+    return false
   }
 
   if (permission === "use" || permission === "view") {
-    const allowedIds = new Set(await listModelGroupIds(subject));
+    const allowedIds = new Set(await listModelGroupIds(subject))
     if (allowedIds.has(groupId)) {
-      return true;
+      return true
     }
   }
 
   if (subject.type === "workspace_member") {
-    const access = await loadWorkspaceMemberAccess(subject.id);
+    const access = await loadWorkspaceMemberAccess(subject.id)
     if (!access) {
-      return false;
+      return false
     }
 
     if (
       row.owner_type === "workspace_member" &&
       row.owner_workspace_member_id === access.id
     ) {
-      return true;
+      return true
     }
 
     if (
@@ -1241,29 +1274,32 @@ async function hasModelGroupPermission(
       row.owner_workspace_id === access.workspaceId &&
       workspacePermissionFromAccess(access, "manage_models")
     ) {
-      return true;
+      return true
     }
 
     if (row.owner_type === "platform") {
-      return hasPlatformPermission({ type: "workspace_member", id: access.id }, "manage_models");
+      return hasPlatformPermission(
+        { type: "workspace_member", id: access.id },
+        "manage_models"
+      )
     }
   }
 
-  return false;
+  return false
 }
 
 async function hasModelProfilePermission(
   subject: PermissionSubject,
   profileId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
   const groups = await db
     .selectFrom("model_group_profiles")
     .select("group_id")
     .where("profile_id", "=", profileId)
-    .execute();
+    .execute()
   if (groups.length === 0) {
-    return false;
+    return false
   }
 
   const mappedPermission =
@@ -1271,26 +1307,32 @@ async function hasModelProfilePermission(
       ? permission
       : permission === "attach"
         ? "edit"
-        : permission;
+        : permission
 
   for (const group of groups) {
-    if (await hasModelGroupPermission(subject, group.group_id, mappedPermission)) {
-      return true;
+    if (
+      await hasModelGroupPermission(subject, group.group_id, mappedPermission)
+    ) {
+      return true
     }
   }
 
-  return false;
+  return false
 }
 
 async function hasMemoryItemPermission(
   subject: PermissionSubject,
   memoryItemId: string,
-  permission: string,
+  permission: string
 ): Promise<boolean> {
   const row = await db
     .selectFrom("memory_items as mi")
     .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
-    .leftJoin("conversation_actor_contexts as cac", "cac.id", "ms.anchor_conversation_actor_context_id")
+    .leftJoin(
+      "conversation_actor_contexts as cac",
+      "cac.id",
+      "ms.anchor_conversation_actor_context_id"
+    )
     .select([
       "mi.workspace_id",
       "ms.space_type",
@@ -1303,30 +1345,34 @@ async function hasMemoryItemPermission(
     ])
     .where("mi.id", "=", memoryItemId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row) {
-    return false;
+    return false
   }
 
   switch (row.space_type) {
     case "workspace_shared":
       if (subject.type === "actor") {
-        const actor = await loadActorRow(subject.id);
+        const actor = await loadActorRow(subject.id)
         if (!actor || actor.workspace_id !== row.workspace_id) {
-          return false;
+          return false
         }
-        return permission === "read" || permission === "recall" || permission === "edit";
+        return (
+          permission === "read" ||
+          permission === "recall" ||
+          permission === "edit"
+        )
       }
       return hasWorkspacePermission(
         subject,
         row.workspace_id,
         permission === "read" || permission === "recall"
           ? "view"
-          : "manage_memories",
-      );
+          : "manage_memories"
+      )
     case "conversation_shared":
       if (!row.anchor_conversation_id) {
-        return false;
+        return false
       }
       return hasConversationPermission(
         subject,
@@ -1337,11 +1383,11 @@ async function hasMemoryItemPermission(
             ? "memory_edit"
             : permission === "retarget"
               ? "memory_retarget"
-              : "memory_delete",
-      );
+              : "memory_delete"
+      )
     case "actor_private":
       if (!row.anchor_actor_id) {
-        return false;
+        return false
       }
       return hasActorPermission(
         subject,
@@ -1352,11 +1398,11 @@ async function hasMemoryItemPermission(
             ? "memory_edit"
             : permission === "retarget"
               ? "memory_retarget"
-              : "memory_delete",
-      );
+              : "memory_delete"
+      )
     case "participant_private":
       if (!row.anchor_conversation_actor_context_id) {
-        return false;
+        return false
       }
       return hasConversationActorContextPermission(
         subject,
@@ -1367,28 +1413,32 @@ async function hasMemoryItemPermission(
             ? "memory_edit"
             : permission === "retarget"
               ? "memory_retarget"
-              : "memory_delete",
-      );
+              : "memory_delete"
+      )
     case "user_private":
       if (subject.type === "workspace_member") {
         if (row.anchor_workspace_member_id === subject.id) {
-          return true;
+          return true
         }
       }
-      return hasWorkspacePermission(subject, row.workspace_id, "manage_memories");
+      return hasWorkspacePermission(
+        subject,
+        row.workspace_id,
+        "manage_memories"
+      )
     default:
-      return false;
+      return false
   }
 }
 
 export async function checkPermissionSql(params: {
-  resourceType: AccessResourceType;
-  resourceId: string;
-  permission: string;
-  subject: PermissionSubject;
+  resourceType: AccessResourceType
+  resourceId: string
+  permission: string
+  subject: PermissionSubject
 }) {
   if (!params.resourceId) {
-    return false;
+    return false
   }
 
   switch (params.resourceType) {
@@ -1396,105 +1446,113 @@ export async function checkPermissionSql(params: {
       return (
         params.resourceId === PLATFORM_RESOURCE_ID &&
         hasPlatformPermission(params.subject, params.permission)
-      );
+      )
     case "workspace":
       return hasWorkspacePermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     case "conversation":
       return hasConversationPermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     case "actor":
-      return hasActorPermission(params.subject, params.resourceId, params.permission);
+      return hasActorPermission(
+        params.subject,
+        params.resourceId,
+        params.permission
+      )
     case "remote_agent":
       return hasRemoteAgentPermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     case "conversation_actor_context":
       return hasConversationActorContextPermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     case "memory_item":
       return hasMemoryItemPermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     case "installed_skill":
       return hasInstalledSkillPermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     case "plugin_installation":
       return hasPluginInstallationPermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     case "relay_device":
       return hasRelayDevicePermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     case "relay_exposure":
       return hasRelayExposurePermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     case "relay_capability":
       return hasRelayCapabilityPermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     case "model_group":
       return hasModelGroupPermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     case "model_profile":
       return hasModelProfilePermission(
         params.subject,
         params.resourceId,
-        params.permission,
-      );
+        params.permission
+      )
     default:
-      return false;
+      return false
   }
 }
 
 export async function lookupResourcesSql(params: {
-  resourceType: AccessResourceType;
-  permission: string;
-  subject: PermissionSubject;
-  limit?: number;
+  resourceType: AccessResourceType
+  permission: string
+  subject: PermissionSubject
+  limit?: number
 }) {
   switch (params.resourceType) {
     case "actor":
-      return params.permission === "view" || params.permission === "discover" || params.permission === "invoke"
+      return params.permission === "view" ||
+        params.permission === "discover" ||
+        params.permission === "invoke"
         ? listActorIds(params.subject, params.limit)
-        : [];
+        : []
     case "remote_agent":
-      return params.permission === "view" || params.permission === "discover" || params.permission === "invoke"
+      return params.permission === "view" ||
+        params.permission === "discover" ||
+        params.permission === "invoke"
         ? listRemoteAgentIds(params.subject, params.limit)
-        : [];
+        : []
     case "model_group":
       return params.permission === "use" || params.permission === "view"
         ? listModelGroupIds(params.subject, params.limit)
-        : [];
+        : []
     case "installed_skill":
       return params.permission === "use" || params.permission === "view"
         ? finalizeResourceIdList(
@@ -1502,16 +1560,16 @@ export async function lookupResourcesSql(params: {
               await listGrantedResourceIds(
                 "installed_skill",
                 params.subject,
-                params.limit,
+                params.limit
               ),
               await listManageableInstalledSkillIds(
                 params.subject,
-                params.limit,
+                params.limit
               ),
             ],
-            params.limit,
+            params.limit
           )
-        : [];
+        : []
     case "plugin_installation":
       return params.permission === "use" || params.permission === "view"
         ? finalizeResourceIdList(
@@ -1519,48 +1577,46 @@ export async function lookupResourcesSql(params: {
               await listGrantedResourceIds(
                 "plugin_installation",
                 params.subject,
-                params.limit,
+                params.limit
               ),
               await listManageablePluginInstallationIds(
                 params.subject,
-                params.limit,
+                params.limit
               ),
             ],
-            params.limit,
+            params.limit
           )
-        : [];
+        : []
     case "relay_capability":
-      return (
-        params.permission === "use" ||
+      return params.permission === "use" ||
         params.permission === "view" ||
         params.permission === "request_relay_authorization"
-      )
         ? finalizeResourceIdList(
             [
               await listGrantedResourceIds(
                 "relay_capability",
                 params.subject,
-                params.limit,
+                params.limit
               ),
               await listManageableRelayCapabilityIds(
                 params.subject,
-                params.limit,
+                params.limit
               ),
             ],
-            params.limit,
+            params.limit
           )
-        : [];
+        : []
     case "automation_event_source":
       return params.permission === "use" || params.permission === "view"
-        ? listGrantedResourceIds("automation_event_source", params.subject, params.limit)
-        : [];
+        ? listGrantedResourceIds(
+            "automation_event_source",
+            params.subject,
+            params.limit
+          )
+        : []
     default:
-      return [];
+      return []
   }
 }
 
-export {
-  PLATFORM_RESOURCE_ID,
-  type AccessResourceType,
-  type PermissionSubject,
-};
+export { PLATFORM_RESOURCE_ID, type AccessResourceType, type PermissionSubject }

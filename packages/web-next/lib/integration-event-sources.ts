@@ -1,6 +1,4 @@
-import {
-  listAutomationEventDefinitions,
-} from "@synapse/shared/automation"
+import { listAutomationEventDefinitions } from "@synapse/shared/automation"
 import type {
   AutomationIntegrationProvider,
   AutomationIntegrationTargetKind,
@@ -30,13 +28,14 @@ export function listIntegrationEventDefinitionOptions(
   return listAutomationEventDefinitions({ providerKind: "integration" })
     .filter((definition) => definition.integrationProvider === provider)
     .map((definition) => {
-      const targetKind =
-        provider === "github" ? "repository" : "project"
+      const targetKind = provider === "github" ? "repository" : "project"
       const template = definition.buildSource({
         integrationProvider: provider,
         integrationTargetKind: targetKind,
-        integrationTargetId: provider === "github" ? "owner/repo" : "group/project",
-        integrationTargetLabel: provider === "github" ? "owner/repo" : "group/project",
+        integrationTargetId:
+          provider === "github" ? "owner/repo" : "group/project",
+        integrationTargetLabel:
+          provider === "github" ? "owner/repo" : "group/project",
         providerLabel: provider === "github" ? "owner/repo" : "group/project",
         providerRef: provider === "github" ? "owner/repo" : "group/project",
       })

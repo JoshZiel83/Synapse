@@ -1,10 +1,10 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useState } from "react";
-import { Modal, Pressable, StyleSheet, Text, View } from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
+import Feather from "@expo/vector-icons/Feather"
+import { useState } from "react"
+import { Modal, Pressable, StyleSheet, Text, View } from "react-native"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
 
-import { theme } from "@/theme/tokens";
-import type { WorkspaceInfo } from "@/types/api";
+import { theme } from "@/theme/tokens"
+import type { WorkspaceInfo } from "@/types/api"
 
 export function WorkspaceSwitcher({
   workspaceName,
@@ -13,39 +13,39 @@ export function WorkspaceSwitcher({
   onSelectWorkspace,
   onCreateWorkspace,
 }: {
-  workspaceName: string | null;
-  activeWorkspaceId: string | null;
-  workspaces: WorkspaceInfo[];
-  onSelectWorkspace: (workspaceId: string) => Promise<void>;
-  onCreateWorkspace: () => void;
+  workspaceName: string | null
+  activeWorkspaceId: string | null
+  workspaces: WorkspaceInfo[]
+  onSelectWorkspace: (workspaceId: string) => Promise<void>
+  onCreateWorkspace: () => void
 }) {
-  const insets = useSafeAreaInsets();
-  const [open, setOpen] = useState(false);
-  const [switchingWorkspaceId, setSwitchingWorkspaceId] = useState<string | null>(
-    null,
-  );
+  const insets = useSafeAreaInsets()
+  const [open, setOpen] = useState(false)
+  const [switchingWorkspaceId, setSwitchingWorkspaceId] = useState<
+    string | null
+  >(null)
   const otherWorkspaces = workspaces.filter(
-    (workspace) => workspace.id !== activeWorkspaceId,
-  );
+    (workspace) => workspace.id !== activeWorkspaceId
+  )
 
   async function handleSelectWorkspace(workspaceId: string) {
     if (workspaceId === activeWorkspaceId) {
-      setOpen(false);
-      return;
+      setOpen(false)
+      return
     }
 
-    setSwitchingWorkspaceId(workspaceId);
+    setSwitchingWorkspaceId(workspaceId)
     try {
-      await onSelectWorkspace(workspaceId);
-      setOpen(false);
+      await onSelectWorkspace(workspaceId)
+      setOpen(false)
     } finally {
-      setSwitchingWorkspaceId(null);
+      setSwitchingWorkspaceId(null)
     }
   }
 
   function handleCreateWorkspace() {
-    setOpen(false);
-    onCreateWorkspace();
+    setOpen(false)
+    onCreateWorkspace()
   }
 
   return (
@@ -91,7 +91,7 @@ export function WorkspaceSwitcher({
           >
             <View style={styles.menuList}>
               {otherWorkspaces.map((workspace) => {
-                const switching = workspace.id === switchingWorkspaceId;
+                const switching = workspace.id === switchingWorkspaceId
                 return (
                   <Pressable
                     key={workspace.id}
@@ -106,7 +106,7 @@ export function WorkspaceSwitcher({
                       <Text style={styles.switchingText}>切换中</Text>
                     ) : null}
                   </Pressable>
-                );
+                )
               })}
             </View>
 
@@ -124,7 +124,7 @@ export function WorkspaceSwitcher({
         </View>
       </Modal>
     </>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -202,4 +202,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: theme.colors.primary,
   },
-});
+})

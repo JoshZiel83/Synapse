@@ -1,8 +1,8 @@
-import Feather from "@expo/vector-icons/Feather";
-import { Pressable, StyleSheet, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { Pressable, StyleSheet, View } from "react-native"
 
-import { MobilePlusMenu } from "@/components/mobile-plus-menu";
-import { theme } from "@/theme/tokens";
+import { MobilePlusMenu } from "@/components/mobile-plus-menu"
+import { theme } from "@/theme/tokens"
 
 export function MobileHeaderActions({
   onSearch,
@@ -11,11 +11,11 @@ export function MobileHeaderActions({
   onScan,
   extraAction,
 }: {
-  onSearch: () => void;
-  onStartGroup: () => void;
-  onAddFriend: () => void;
-  onScan: () => void;
-  extraAction?: React.ReactNode;
+  onSearch: () => void
+  onStartGroup: () => void
+  onAddFriend: () => void
+  onScan: () => void
+  extraAction?: React.ReactNode
 }) {
   return (
     <View style={styles.row}>
@@ -23,7 +23,10 @@ export function MobileHeaderActions({
         accessibilityRole="button"
         accessibilityLabel="搜索"
         onPress={onSearch}
-        style={({ pressed }) => [styles.searchTrigger, pressed && styles.pressed]}
+        style={({ pressed }) => [
+          styles.searchTrigger,
+          pressed && styles.pressed,
+        ]}
       >
         <Feather name="search" size={20} color={theme.colors.text} />
       </Pressable>
@@ -34,7 +37,7 @@ export function MobileHeaderActions({
         onScan={onScan}
       />
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -50,4 +53,4 @@ const styles = StyleSheet.create({
   pressed: {
     opacity: 0.55,
   },
-});
+})

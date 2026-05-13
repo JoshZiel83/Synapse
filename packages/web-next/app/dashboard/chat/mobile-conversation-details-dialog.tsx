@@ -1,42 +1,51 @@
-'use client';
+"use client"
 
-import { ArrowDown, MoreHorizontal } from 'lucide-react';
-import { useRouter } from 'next/navigation';
+import { ArrowDown, MoreHorizontal } from "lucide-react"
+import { useRouter } from "next/navigation"
 
-import ChatAvatar from '@/app/dashboard/chat/chat-avatar';
-import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog';
-import type { ConversationMember, ConversationSummary } from '@/stores/chat-store';
+import ChatAvatar from "@/app/dashboard/chat/chat-avatar"
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog"
+import type {
+  ConversationMember,
+  ConversationSummary,
+} from "@/stores/chat-store"
 import {
   getConversationMemberContactHref,
   getConversationMemberSubtitle,
-} from './member-utils';
+} from "./member-utils"
 
 function summarizeMemberCounts(conversation: ConversationSummary) {
-  const workspaceMemberCount = conversation.members.filter((member) => member.type === 'workspace_member').length;
-  const actorCount = conversation.members.filter((member) => member.type === 'actor').length;
-  const externalCount = conversation.members.filter((member) => member.type === 'external').length;
-  const memberLabel = `${workspaceMemberCount} member${workspaceMemberCount === 1 ? '' : 's'}`;
-  const actorLabel = `${actorCount} actor${actorCount === 1 ? '' : 's'}`;
-  if (externalCount === 0) return `${memberLabel} · ${actorLabel}`;
-  return `${memberLabel} · ${actorLabel} · ${externalCount} external${externalCount === 1 ? '' : 's'}`;
+  const workspaceMemberCount = conversation.members.filter(
+    (member) => member.type === "workspace_member"
+  ).length
+  const actorCount = conversation.members.filter(
+    (member) => member.type === "actor"
+  ).length
+  const externalCount = conversation.members.filter(
+    (member) => member.type === "external"
+  ).length
+  const memberLabel = `${workspaceMemberCount} member${workspaceMemberCount === 1 ? "" : "s"}`
+  const actorLabel = `${actorCount} actor${actorCount === 1 ? "" : "s"}`
+  if (externalCount === 0) return `${memberLabel} · ${actorLabel}`
+  return `${memberLabel} · ${actorLabel} · ${externalCount} external${externalCount === 1 ? "" : "s"}`
 }
 
 function orderMembers(members: ConversationMember[]) {
   return [...members].sort((left, right) => {
     if (left.type !== right.type) {
-      return left.type === 'actor' ? -1 : 1;
+      return left.type === "actor" ? -1 : 1
     }
 
-    return left.name.localeCompare(right.name);
-  });
+    return left.name.localeCompare(right.name)
+  })
 }
 
 interface MobileConversationDetailsDialogProps {
-  conversation: ConversationSummary;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onMemberClick?: (member: ConversationMember) => void;
-  contactBasePath?: string;
+  conversation: ConversationSummary
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onMemberClick?: (member: ConversationMember) => void
+  contactBasePath?: string
 }
 
 export default function MobileConversationDetailsDialog({
@@ -44,24 +53,24 @@ export default function MobileConversationDetailsDialog({
   open,
   onOpenChange,
   onMemberClick,
-  contactBasePath = '/dashboard/contacts',
+  contactBasePath = "/dashboard/contacts",
 }: MobileConversationDetailsDialogProps) {
-  const router = useRouter();
+  const router = useRouter()
   const title =
     conversation.title ||
-    conversation.participants.map((participant) => participant.name).join(', ');
-  const memberSummary = summarizeMemberCounts(conversation);
-  const orderedMembers = orderMembers(conversation.members);
+    conversation.participants.map((participant) => participant.name).join(", ")
+  const memberSummary = summarizeMemberCounts(conversation)
+  const orderedMembers = orderMembers(conversation.members)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="inset-0 top-0 start-0 h-[100dvh] max-w-none translate-x-0 rtl:translate-x-0 translate-y-0 gap-0 rounded-none border-0 p-0 ring-0"
+        className="inset-0 start-0 top-0 h-[100dvh] max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-0 p-0 ring-0 rtl:translate-x-0"
       >
         <DialogTitle className="sr-only">Conversation details</DialogTitle>
         <div className="flex min-h-svh flex-col bg-background">
-          <header className="sticky top-0 z-20 border-b border-border bg-background px-4 pb-3 pt-[max(0.75rem,env(safe-area-inset-top))]">
+          <header className="sticky top-0 z-20 border-b border-border bg-background px-4 pt-[max(0.75rem,env(safe-area-inset-top))] pb-3">
             <div className="relative flex items-center justify-between">
               <button
                 type="button"
@@ -110,48 +119,49 @@ export default function MobileConversationDetailsDialog({
                   const href = getConversationMemberContactHref(
                     member,
                     contactBasePath
-                  );
-                  const subtitle = getConversationMemberSubtitle(member);
-                  const canOpen = Boolean(onMemberClick || href);
+                  )
+                  const subtitle = getConversationMemberSubtitle(member)
+                  const canOpen = Boolean(onMemberClick || href)
                   return (
-                  <button
-                    key={`${member.type}-${member.id}`}
-                    type="button"
-                    onClick={() => {
-                      if (onMemberClick) {
-                        onMemberClick(member);
-                        return;
-                      }
-                      if (!href) return;
-                      onOpenChange(false);
-                      router.push(href);
-                    }}
-                    className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/25 disabled:cursor-default disabled:hover:bg-transparent"
-                    disabled={!canOpen}
-                  >
-                    <ChatAvatar
-                      name={member.name}
-                      avatarUrl={member.avatarUrl}
-                      emoji={member.emoji}
-                      entityType={member.type}
-                      size="lg"
-                      className="size-12"
-                    />
-                    <div className="min-w-0 flex-1">
-                      <div className="truncate text-sm font-medium text-foreground">
-                        {member.name}
+                    <button
+                      key={`${member.type}-${member.id}`}
+                      type="button"
+                      onClick={() => {
+                        if (onMemberClick) {
+                          onMemberClick(member)
+                          return
+                        }
+                        if (!href) return
+                        onOpenChange(false)
+                        router.push(href)
+                      }}
+                      className="flex w-full items-center gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/25 disabled:cursor-default disabled:hover:bg-transparent"
+                      disabled={!canOpen}
+                    >
+                      <ChatAvatar
+                        name={member.name}
+                        avatarUrl={member.avatarUrl}
+                        emoji={member.emoji}
+                        entityType={member.type}
+                        size="lg"
+                        className="size-12"
+                      />
+                      <div className="min-w-0 flex-1">
+                        <div className="truncate text-sm font-medium text-foreground">
+                          {member.name}
+                        </div>
+                        <div className="truncate text-xs text-muted-foreground">
+                          {subtitle}
+                        </div>
                       </div>
-                      <div className="truncate text-xs text-muted-foreground">
-                        {subtitle}
-                      </div>
-                    </div>
-                  </button>
-                )})}
+                    </button>
+                  )
+                })}
               </div>
             </section>
           </div>
         </div>
       </DialogContent>
     </Dialog>
-  );
+  )
 }

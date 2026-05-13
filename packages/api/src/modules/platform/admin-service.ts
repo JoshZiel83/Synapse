@@ -1,54 +1,54 @@
-import { config } from "../../config/index.js";
-import type { PlatformAccessBindingsAccessKey } from "../../infrastructure/database/generated/db.js";
-import { query, transaction } from "../../infrastructure/database/index.js";
+import { config } from "../../config/index.js"
+import type { PlatformAccessBindingsAccessKey } from "../../infrastructure/database/generated/db.js"
+import { query, transaction } from "../../infrastructure/database/index.js"
 import {
   db,
   executeCompiledQuery,
   executeTakeFirst,
-} from "../../infrastructure/database/kysely.js";
-import { sql } from "kysely";
-import { getFileUrlById } from "../files/service.js";
+} from "../../infrastructure/database/kysely.js"
+import { sql } from "kysely"
+import { getFileUrlById } from "../files/service.js"
 
-export type PlatformAccessKey = PlatformAccessBindingsAccessKey;
+export type PlatformAccessKey = PlatformAccessBindingsAccessKey
 
 type UserIdentity = {
-  id: string;
-  email: string;
-};
+  id: string
+  email: string
+}
 
 function configuredPlatformAdminEmails() {
-  return Array.from(new Set(config.platform.adminEmails));
+  return Array.from(new Set(config.platform.adminEmails))
 }
 
 async function ensureUserExists(userId: string) {
   const row = await db
-    .selectFrom('users')
-    .select('id')
-    .where('id', '=', userId)
+    .selectFrom("users")
+    .select("id")
+    .where("id", "=", userId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row) {
-    throw new Error("User not found");
+    throw new Error("User not found")
   }
 }
 
 export function isConfiguredPlatformAdminEmail(email: string) {
-  const normalized = email.trim().toLowerCase();
-  return configuredPlatformAdminEmails().includes(normalized);
+  const normalized = email.trim().toLowerCase()
+  return configuredPlatformAdminEmails().includes(normalized)
 }
 
 export async function hasPlatformAccess(
   userId: string,
-  accessKeys: PlatformAccessKey[],
+  accessKeys: PlatformAccessKey[]
 ) {
   const row = await db
-    .selectFrom('platform_access_bindings')
-    .select('user_id')
-    .where('user_id', '=', userId)
-    .where('access_key', 'in', accessKeys)
+    .selectFrom("platform_access_bindings")
+    .select("user_id")
+    .where("user_id", "=", userId)
+    .where("access_key", "in", accessKeys)
     .limit(1)
-    .executeTakeFirst();
-  return Boolean(row);
+    .executeTakeFirst()
+  return Boolean(row)
 }
 
 export async function isPlatformAdmin(userId: string) {
@@ -56,27 +56,27 @@ export async function isPlatformAdmin(userId: string) {
     "super_admin",
     "workspace_admin",
     "model_admin",
-  ]);
+  ])
 }
 
 export async function listPlatformAccessBindings() {
   const rows = await db
-    .selectFrom('platform_access_bindings as pab')
-    .innerJoin('users as u', 'u.id', 'pab.user_id')
+    .selectFrom("platform_access_bindings as pab")
+    .innerJoin("users as u", "u.id", "pab.user_id")
     .select([
-      'pab.user_id',
-      'pab.access_key',
-      'pab.source',
-      'pab.assigned_by_user_id',
-      'pab.created_at',
-      'pab.updated_at',
-      'u.name as user_name',
-      'u.email as user_email',
-      'u.avatar_file_id',
+      "pab.user_id",
+      "pab.access_key",
+      "pab.source",
+      "pab.assigned_by_user_id",
+      "pab.created_at",
+      "pab.updated_at",
+      "u.name as user_name",
+      "u.email as user_email",
+      "u.avatar_file_id",
     ])
-    .orderBy('pab.access_key', 'asc')
-    .orderBy('pab.created_at', 'asc')
-    .execute();
+    .orderBy("pab.access_key", "asc")
+    .orderBy("pab.created_at", "asc")
+    .execute()
 
   return rows.map((row) => ({
     userId: row.user_id,
@@ -88,30 +88,30 @@ export async function listPlatformAccessBindings() {
     userName: row.user_name,
     userEmail: row.user_email,
     avatarUrl: row.avatar_file_id ? getFileUrlById(row.avatar_file_id) : null,
-  }));
+  }))
 }
 
 export async function grantPlatformAccess(input: {
-  userId: string;
-  accessKey: PlatformAccessKey;
-  assignedByUserId: string;
+  userId: string
+  accessKey: PlatformAccessKey
+  assignedByUserId: string
 }) {
-  await ensureUserExists(input.userId);
+  await ensureUserExists(input.userId)
 
   const row = await db
-    .insertInto('platform_access_bindings')
+    .insertInto("platform_access_bindings")
     .values({
       user_id: input.userId,
       access_key: input.accessKey,
-      source: 'manual',
+      source: "manual",
       assigned_by_user_id: input.assignedByUserId,
     })
-    .onConflict((oc) => oc.columns(['user_id', 'access_key']).doNothing())
+    .onConflict((oc) => oc.columns(["user_id", "access_key"]).doNothing())
     .returningAll()
-    .executeTakeFirst();
+    .executeTakeFirst()
 
   if (!row) {
-    throw new Error("Access already granted");
+    throw new Error("Access already granted")
   }
 
   return {
@@ -121,135 +121,134 @@ export async function grantPlatformAccess(input: {
     assignedByUserId: row.assigned_by_user_id ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
-  };
+  }
 }
 
 export async function ensureSeedPlatformAdminForUser(user: UserIdentity) {
   const source = isConfiguredPlatformAdminEmail(user.email)
     ? "config"
-    : "manual";
+    : "manual"
 
   await db
-    .insertInto('platform_access_bindings')
+    .insertInto("platform_access_bindings")
     .values({
       user_id: user.id,
-      access_key: 'super_admin',
+      access_key: "super_admin",
       source,
       assigned_by_user_id: null,
     })
-    .onConflict((oc) => oc.columns(['user_id', 'access_key']).doNothing())
-    .execute();
+    .onConflict((oc) => oc.columns(["user_id", "access_key"]).doNothing())
+    .execute()
 
-  return true;
+  return true
 }
 
 export async function revokePlatformAccess(
   userId: string,
-  accessKey: PlatformAccessKey,
+  accessKey: PlatformAccessKey
 ) {
   const existing = await db
-    .selectFrom('platform_access_bindings')
-    .select('source')
-    .where('user_id', '=', userId)
-    .where('access_key', '=', accessKey)
+    .selectFrom("platform_access_bindings")
+    .select("source")
+    .where("user_id", "=", userId)
+    .where("access_key", "=", accessKey)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
   if (!existing) {
-    throw new Error("Access grant not found");
+    throw new Error("Access grant not found")
   }
 
   if (existing.source === "config") {
-    throw new Error("Config-managed access cannot be revoked manually");
+    throw new Error("Config-managed access cannot be revoked manually")
   }
 
   await db
-    .deleteFrom('platform_access_bindings')
-    .where('user_id', '=', userId)
-    .where('access_key', '=', accessKey)
-    .execute();
-
+    .deleteFrom("platform_access_bindings")
+    .where("user_id", "=", userId)
+    .where("access_key", "=", accessKey)
+    .execute()
 }
 
 export async function ensureConfiguredPlatformAdminForUser(user: UserIdentity) {
   if (!isConfiguredPlatformAdminEmail(user.email)) {
-    return false;
+    return false
   }
 
   await db
-    .insertInto('platform_access_bindings')
+    .insertInto("platform_access_bindings")
     .values({
       user_id: user.id,
-      access_key: 'super_admin',
-      source: 'config',
+      access_key: "super_admin",
+      source: "config",
       assigned_by_user_id: null,
     })
-    .onConflict((oc) => oc.columns(['user_id', 'access_key']).doNothing())
-    .execute();
+    .onConflict((oc) => oc.columns(["user_id", "access_key"]).doNothing())
+    .execute()
 
-  return true;
+  return true
 }
 
 export async function syncConfiguredPlatformAdmins() {
-  const emails = configuredPlatformAdminEmails();
+  const emails = configuredPlatformAdminEmails()
 
   const matchedUsersResult =
     emails.length > 0
       ? {
           rows: await db
-            .selectFrom('users')
-            .select('id')
+            .selectFrom("users")
+            .select("id")
             .where(sql<boolean>`lower(email) = ANY(${emails})`)
             .execute(),
         }
-      : { rows: [] as Array<{ id: string }> };
+      : { rows: [] as Array<{ id: string }> }
 
-  const matchedUserIds = matchedUsersResult.rows.map((row) => row.id);
+  const matchedUserIds = matchedUsersResult.rows.map((row) => row.id)
 
   await transaction(async (client) => {
     if (matchedUserIds.length === 0) {
       await executeCompiledQuery(
         client,
         db
-          .deleteFrom('platform_access_bindings')
-          .where('source', '=', 'config')
-          .where('access_key', '=', 'super_admin'),
-      );
-      return;
+          .deleteFrom("platform_access_bindings")
+          .where("source", "=", "config")
+          .where("access_key", "=", "super_admin")
+      )
+      return
     }
 
     await executeCompiledQuery(
       client,
       db
-        .deleteFrom('platform_access_bindings')
-        .where('source', '=', 'config')
-        .where('access_key', '=', 'super_admin')
-        .where('user_id', 'not in', matchedUserIds),
-    );
+        .deleteFrom("platform_access_bindings")
+        .where("source", "=", "config")
+        .where("access_key", "=", "super_admin")
+        .where("user_id", "not in", matchedUserIds)
+    )
     await executeCompiledQuery(
       client,
       db
-        .insertInto('platform_access_bindings')
+        .insertInto("platform_access_bindings")
         .values(
           matchedUserIds.map((userId) => ({
             user_id: userId,
-            access_key: 'super_admin',
-            source: 'config',
+            access_key: "super_admin",
+            source: "config",
             assigned_by_user_id: null,
-          })),
+          }))
         )
-        .onConflict((oc) => oc.columns(['user_id', 'access_key']).doNothing()),
-    );
-  });
+        .onConflict((oc) => oc.columns(["user_id", "access_key"]).doNothing())
+    )
+  })
   const platformAdminCount = await db
     .selectFrom("platform_access_bindings")
     .select(({ fn }) => fn.countAll<string>().as("count"))
     .where("access_key", "=", "super_admin")
-    .executeTakeFirstOrThrow();
+    .executeTakeFirstOrThrow()
 
   return {
     configuredEmailCount: emails.length,
     matchedUserCount: matchedUserIds.length,
     platformAdminCount: Number(platformAdminCount.count),
-  };
+  }
 }

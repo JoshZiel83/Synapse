@@ -10,9 +10,7 @@
           "description": "JS script to run on the page"
         }
       },
-      "required": [
-        "script"
-      ],
+      "required": ["script"],
       "additionalProperties": false,
       "$schema": "http://json-schema.org/draft-07/schema#"
     },
@@ -35,9 +33,7 @@
           "description": "URL to navigate to"
         }
       },
-      "required": [
-        "url"
-      ],
+      "required": ["url"],
       "additionalProperties": false,
       "$schema": "http://json-schema.org/draft-07/schema#"
     },

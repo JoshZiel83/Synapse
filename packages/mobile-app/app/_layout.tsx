@@ -1,21 +1,21 @@
-import Feather from "@expo/vector-icons/Feather";
-import { ThemeProvider, type Theme } from "@react-navigation/native";
-import { useFonts } from "expo-font";
-import { ErrorBoundary, Stack, useRouter, useSegments } from "expo-router";
-import Head from "expo-router/head";
-import * as SplashScreen from "expo-splash-screen";
-import { StatusBar } from "expo-status-bar";
-import { useEffect } from "react";
-import "react-native-reanimated";
-import "react-native-url-polyfill/auto";
+import Feather from "@expo/vector-icons/Feather"
+import { ThemeProvider, type Theme } from "@react-navigation/native"
+import { useFonts } from "expo-font"
+import { ErrorBoundary, Stack, useRouter, useSegments } from "expo-router"
+import Head from "expo-router/head"
+import * as SplashScreen from "expo-splash-screen"
+import { StatusBar } from "expo-status-bar"
+import { useEffect } from "react"
+import "react-native-reanimated"
+import "react-native-url-polyfill/auto"
 
-import "@/lib/chat-background-task";
-import { AppProviders } from "@/providers/app-providers";
-import { useSession } from "@/providers/session-provider";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
+import "@/lib/chat-background-task"
+import { AppProviders } from "@/providers/app-providers"
+import { useSession } from "@/providers/session-provider"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
 
-SplashScreen.preventAutoHideAsync().catch(() => undefined);
+SplashScreen.preventAutoHideAsync().catch(() => undefined)
 
 const navigationTheme: Theme = {
   dark: false,
@@ -45,31 +45,31 @@ const navigationTheme: Theme = {
       fontWeight: "700",
     },
   },
-};
+}
 
-export { ErrorBoundary };
+export { ErrorBoundary }
 
 export const unstable_settings = {
   initialRouteName: "login",
-};
+}
 
 export default function RootLayout() {
   const [loaded, error] = useFonts({
     ...Feather.font,
-  });
+  })
 
   useEffect(() => {
-    if (error) throw error;
-  }, [error]);
+    if (error) throw error
+  }, [error])
 
   useEffect(() => {
     if (loaded) {
-      void SplashScreen.hideAsync();
+      void SplashScreen.hideAsync()
     }
-  }, [loaded]);
+  }, [loaded])
 
   if (!loaded) {
-    return null;
+    return null
   }
 
   return (
@@ -85,52 +85,51 @@ export default function RootLayout() {
         </ThemeProvider>
       </AppProviders>
     </>
-  );
+  )
 }
 
 function ProtectedNavigation() {
-  const router = useRouter();
-  const segments = useSegments();
-  const { status } = useSession();
-  const { loading: workspaceLoading, needsOnboarding } = useWorkspace();
+  const router = useRouter()
+  const segments = useSegments()
+  const { status } = useSession()
+  const { loading: workspaceLoading, needsOnboarding } = useWorkspace()
   const defaultAnimation =
     process.env.EXPO_OS === "web"
       ? "none"
       : process.env.EXPO_OS === "ios"
         ? "default"
-        : "slide_from_right";
+        : "slide_from_right"
 
   useEffect(() => {
-    if (status === "loading") return;
+    if (status === "loading") return
 
-    const first = segments[0];
-    const second = segments[1];
-    const isAuthRoute = first === "login" || first === "register";
-    const isWorkspaceCreateRoute =
-      first === "workspace" && second === "create";
+    const first = segments[0]
+    const second = segments[1]
+    const isAuthRoute = first === "login" || first === "register"
+    const isWorkspaceCreateRoute = first === "workspace" && second === "create"
 
     if (status === "unauthenticated" && !isAuthRoute) {
-      router.replace("/login");
-      return;
+      router.replace("/login")
+      return
     }
 
     if (status !== "authenticated") {
-      return;
+      return
     }
 
     if (workspaceLoading) {
-      return;
+      return
     }
 
     if (needsOnboarding && !isWorkspaceCreateRoute) {
-      router.replace("/workspace/create?required=1");
-      return;
+      router.replace("/workspace/create?required=1")
+      return
     }
 
     if (!needsOnboarding && isAuthRoute) {
-      router.replace("/");
+      router.replace("/")
     }
-  }, [needsOnboarding, router, segments, status, workspaceLoading]);
+  }, [needsOnboarding, router, segments, status, workspaceLoading])
 
   return (
     <Stack
@@ -173,5 +172,5 @@ function ProtectedNavigation() {
         }}
       />
     </Stack>
-  );
+  )
 }

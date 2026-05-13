@@ -1,8 +1,8 @@
-import { ChevronDown, Plus, RefreshCw, Trash2, X } from 'lucide-react'
-import { useState } from 'react'
+import { ChevronDown, Plus, RefreshCw, Trash2, X } from "lucide-react"
+import { useState } from "react"
 
-import { Badge } from '../components/ui/badge'
-import { Button } from '../components/ui/button'
+import { Badge } from "../components/ui/badge"
+import { Button } from "../components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -10,32 +10,43 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '../components/ui/dialog'
-import { Separator } from '../components/ui/separator'
-import { cn } from '../lib/utils'
-import type { ImportServer, ImportSource, RelayConfig, SyncSourceConfig } from '../types'
+} from "../components/ui/dialog"
+import { Separator } from "../components/ui/separator"
+import { cn } from "../lib/utils"
+import type {
+  ImportServer,
+  ImportSource,
+  RelayConfig,
+  SyncSourceConfig,
+} from "../types"
 
 interface SyncPanelProps {
   config: RelayConfig
   sources: ImportSource[]
   onDetectSources: () => Promise<unknown>
-  onAddSyncSource: (source: ImportSource, syncMode: SyncSourceConfig['syncMode']) => Promise<void>
+  onAddSyncSource: (
+    source: ImportSource,
+    syncMode: SyncSourceConfig["syncMode"]
+  ) => Promise<void>
   onImportServer: (server: ImportServer) => Promise<void>
   onRemoveSyncSource: (sourceKey: string) => Promise<void>
-  onSetSyncSourceMode: (source: ImportSource, syncMode: SyncSourceConfig['syncMode']) => Promise<void>
+  onSetSyncSourceMode: (
+    source: ImportSource,
+    syncMode: SyncSourceConfig["syncMode"]
+  ) => Promise<void>
 }
 
 const syncModes: Array<{
-  value: SyncSourceConfig['syncMode']
+  value: SyncSourceConfig["syncMode"]
   label: string
 }> = [
-  { value: 'follow', label: 'Follow' },
-  { value: 'snapshot', label: 'Snapshot' },
+  { value: "follow", label: "Follow" },
+  { value: "snapshot", label: "Snapshot" },
 ]
 
 function metadataDisplayName(metadata?: Record<string, unknown>) {
   const displayName = metadata?.displayName
-  return typeof displayName === 'string' ? displayName : ''
+  return typeof displayName === "string" ? displayName : ""
 }
 
 export function SyncPanel({
@@ -49,35 +60,51 @@ export function SyncPanel({
 }: SyncPanelProps) {
   const [open, setOpen] = useState(false)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
-  const [selectedSourceKey, setSelectedSourceKey] = useState('')
-  const [selectedMode, setSelectedMode] = useState<SyncSourceConfig['syncMode']>('follow')
+  const [selectedSourceKey, setSelectedSourceKey] = useState("")
+  const [selectedMode, setSelectedMode] =
+    useState<SyncSourceConfig["syncMode"]>("follow")
   const [loading, setLoading] = useState(false)
-  const [message, setMessage] = useState('')
+  const [message, setMessage] = useState("")
 
-  const detectedByKey = new Map(sources.map((source) => [source.sourceKey, source]))
+  const detectedByKey = new Map(
+    sources.map((source) => [source.sourceKey, source])
+  )
   const configuredTargets = (config.syncSources || []).map((syncSource) => {
     const detected = detectedByKey.get(syncSource.sourceKey)
     return {
       sourceKey: syncSource.sourceKey,
-      name: detected?.name || metadataDisplayName(syncSource.metadata) || syncSource.sourceKind,
-      configPath: detected?.configPath || syncSource.configPath || '',
+      name:
+        detected?.name ||
+        metadataDisplayName(syncSource.metadata) ||
+        syncSource.sourceKind,
+      configPath: detected?.configPath || syncSource.configPath || "",
       available: detected?.available || false,
       status: detected?.status || syncSource.status,
       error: detected?.error || syncSource.lastError,
       servers: detected?.servers || [],
       syncMode: syncSource.syncMode,
-      linkedMcps: detected?.linkedMcps || (config.servers || []).filter((server) => server.syncSourceKey === syncSource.sourceKey).length,
+      linkedMcps:
+        detected?.linkedMcps ||
+        (config.servers || []).filter(
+          (server) => server.syncSourceKey === syncSource.sourceKey
+        ).length,
       detectedSource: detected,
     }
   })
 
-  const configuredKeys = new Set(configuredTargets.map((target) => target.sourceKey))
-  const addableSources = sources.filter((source) => !configuredKeys.has(source.sourceKey))
-  const selectedSource = addableSources.find((source) => source.sourceKey === selectedSourceKey) || null
+  const configuredKeys = new Set(
+    configuredTargets.map((target) => target.sourceKey)
+  )
+  const addableSources = sources.filter(
+    (source) => !configuredKeys.has(source.sourceKey)
+  )
+  const selectedSource =
+    addableSources.find((source) => source.sourceKey === selectedSourceKey) ||
+    null
   const importedKeys = new Set(
     (config.servers || [])
       .filter((server) => server.syncSourceKey)
-      .map((server) => `${server.syncSourceKey}::${server.name}`),
+      .map((server) => `${server.syncSourceKey}::${server.name}`)
   )
 
   function toggleExpanded(sourceKey: string) {
@@ -94,7 +121,7 @@ export function SyncPanel({
 
   async function handleDetect() {
     setLoading(true)
-    setMessage('')
+    setMessage("")
     try {
       await onDetectSources()
     } catch (cause) {
@@ -108,12 +135,12 @@ export function SyncPanel({
     if (!selectedSource) {
       return
     }
-    setMessage('')
+    setMessage("")
     try {
       await onAddSyncSource(selectedSource, selectedMode)
       setExpanded((current) => new Set(current).add(selectedSource.sourceKey))
-      setSelectedSourceKey('')
-      setSelectedMode('follow')
+      setSelectedSourceKey("")
+      setSelectedMode("follow")
       setOpen(false)
     } catch (cause) {
       setMessage(cause instanceof Error ? cause.message : String(cause))
@@ -121,7 +148,7 @@ export function SyncPanel({
   }
 
   async function handleImportServer(server: ImportServer) {
-    setMessage('')
+    setMessage("")
     try {
       await onImportServer(server)
     } catch (cause) {
@@ -130,7 +157,7 @@ export function SyncPanel({
   }
 
   async function handleRemoveTarget(sourceKey: string) {
-    setMessage('')
+    setMessage("")
     try {
       await onRemoveSyncSource(sourceKey)
       setExpanded((current) => {
@@ -147,8 +174,12 @@ export function SyncPanel({
     <>
       <section className="flex flex-col gap-4">
         <div>
-          <h1 className="text-[28px] leading-none font-semibold tracking-tight text-foreground">Sync</h1>
-          <div className="mt-3 text-sm text-muted-foreground">Add a target first, then choose which MCP to bring in.</div>
+          <h1 className="text-[28px] leading-none font-semibold tracking-tight text-foreground">
+            Sync
+          </h1>
+          <div className="mt-3 text-sm text-muted-foreground">
+            Add a target first, then choose which MCP to bring in.
+          </div>
         </div>
 
         <div className="flex items-center justify-between gap-3">
@@ -156,7 +187,7 @@ export function SyncPanel({
           <div className="flex gap-2">
             <Button variant="outline" onClick={handleDetect} disabled={loading}>
               <RefreshCw data-icon="inline-start" />
-              {loading ? 'Scanning...' : 'Rescan'}
+              {loading ? "Scanning..." : "Rescan"}
             </Button>
             <Button onClick={() => setOpen(true)}>
               <Plus data-icon="inline-start" />
@@ -189,38 +220,67 @@ export function SyncPanel({
                       className="flex min-w-0 flex-1 items-start gap-3 text-left"
                       onClick={() => toggleExpanded(target.sourceKey)}
                     >
-                      <ChevronDown className={cn('mt-0.5 size-4 shrink-0 transition-transform', isExpanded && 'rotate-180')} />
+                      <ChevronDown
+                        className={cn(
+                          "mt-0.5 size-4 shrink-0 transition-transform",
+                          isExpanded && "rotate-180"
+                        )}
+                      />
                       <div className="min-w-0 flex-1">
                         <div className="flex flex-wrap items-center gap-2">
                           <div className="font-medium">{target.name}</div>
                           <Badge variant="secondary">{target.syncMode}</Badge>
-                          <Badge variant={target.available ? 'success' : target.error ? 'destructive' : 'secondary'}>
-                            {target.available ? 'Ready' : target.error ? 'Missing' : 'Idle'}
+                          <Badge
+                            variant={
+                              target.available
+                                ? "success"
+                                : target.error
+                                  ? "destructive"
+                                  : "secondary"
+                            }
+                          >
+                            {target.available
+                              ? "Ready"
+                              : target.error
+                                ? "Missing"
+                                : "Idle"}
                           </Badge>
                         </div>
                         {target.configPath ? (
-                          <div className="mt-2 break-all text-xs text-muted-foreground">{target.configPath}</div>
+                          <div className="mt-2 text-xs break-all text-muted-foreground">
+                            {target.configPath}
+                          </div>
                         ) : null}
                       </div>
                     </button>
 
-                    <Button variant="ghost" onClick={() => void handleRemoveTarget(target.sourceKey)}>
+                    <Button
+                      variant="ghost"
+                      onClick={() => void handleRemoveTarget(target.sourceKey)}
+                    >
                       <Trash2 data-icon="inline-start" />
                       Detach
                     </Button>
                   </div>
 
                   {isExpanded ? (
-                    <div className="ml-7 mt-4 flex flex-col gap-4">
+                    <div className="mt-4 ml-7 flex flex-col gap-4">
                       <div className="flex flex-wrap gap-2">
                         {syncModes.map((mode) => (
                           <Button
                             key={mode.value}
                             size="sm"
-                            variant={target.syncMode === mode.value ? 'default' : 'outline'}
+                            variant={
+                              target.syncMode === mode.value
+                                ? "default"
+                                : "outline"
+                            }
                             onClick={() => {
                               if (target.detectedSource) {
-                                void onSetSyncSourceMode(target.detectedSource, mode.value)
+                                void onSetSyncSourceMode(
+                                  target.detectedSource,
+                                  mode.value
+                                )
                               }
                             }}
                             disabled={!target.detectedSource}
@@ -232,7 +292,8 @@ export function SyncPanel({
 
                       {!target.available ? (
                         <div className="rounded-2xl border border-dashed border-border/70 px-4 py-6 text-sm text-muted-foreground">
-                          {target.error || 'This target is not available right now.'}
+                          {target.error ||
+                            "This target is not available right now."}
                         </div>
                       ) : target.servers.length === 0 ? (
                         <div className="rounded-2xl border border-dashed border-border/70 px-4 py-6 text-sm text-muted-foreground">
@@ -241,28 +302,38 @@ export function SyncPanel({
                       ) : (
                         <div className="flex flex-col">
                           {target.servers.map((server, serverIndex) => {
-                            const imported = importedKeys.has(`${target.sourceKey}::${server.name}`)
+                            const imported = importedKeys.has(
+                              `${target.sourceKey}::${server.name}`
+                            )
                             return (
                               <div key={`${target.sourceKey}::${server.name}`}>
-                                {serverIndex > 0 ? <Separator className="my-3" /> : null}
+                                {serverIndex > 0 ? (
+                                  <Separator className="my-3" />
+                                ) : null}
                                 <div className="flex items-start justify-between gap-4">
                                   <div className="min-w-0 flex-1">
                                     <div className="flex flex-wrap items-center gap-2">
-                                      <div className="font-medium">{server.name}</div>
-                                      <Badge variant="secondary">{server.transport}</Badge>
+                                      <div className="font-medium">
+                                        {server.name}
+                                      </div>
+                                      <Badge variant="secondary">
+                                        {server.transport}
+                                      </Badge>
                                     </div>
-                                    <div className="mt-2 break-all font-mono text-xs text-muted-foreground">
-                                      {server.transport === 'stdio'
-                                        ? `${server.command || ''} ${(server.args || []).join(' ')}`
+                                    <div className="mt-2 font-mono text-xs break-all text-muted-foreground">
+                                      {server.transport === "stdio"
+                                        ? `${server.command || ""} ${(server.args || []).join(" ")}`
                                         : server.endpoint}
                                     </div>
                                   </div>
                                   <Button
-                                    variant={imported ? 'secondary' : 'outline'}
+                                    variant={imported ? "secondary" : "outline"}
                                     disabled={imported}
-                                    onClick={() => void handleImportServer(server)}
+                                    onClick={() =>
+                                      void handleImportServer(server)
+                                    }
                                   >
-                                    {imported ? 'Added' : 'Add'}
+                                    {imported ? "Added" : "Add"}
                                   </Button>
                                 </div>
                               </div>
@@ -283,7 +354,9 @@ export function SyncPanel({
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Add Sync Target</DialogTitle>
-            <DialogDescription>Choose one source and how Relay should sync from it.</DialogDescription>
+            <DialogDescription>
+              Choose one source and how Relay should sync from it.
+            </DialogDescription>
           </DialogHeader>
 
           <div className="mt-5 flex flex-col gap-5">
@@ -299,17 +372,32 @@ export function SyncPanel({
                       key={source.sourceKey}
                       type="button"
                       className={cn(
-                        'flex items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-background/50',
-                        selectedSourceKey === source.sourceKey && 'bg-primary/10',
+                        "flex items-center justify-between gap-3 px-4 py-3 text-left transition-colors hover:bg-background/50",
+                        selectedSourceKey === source.sourceKey &&
+                          "bg-primary/10"
                       )}
                       onClick={() => setSelectedSourceKey(source.sourceKey)}
                     >
                       <div className="min-w-0 flex-1">
                         <div className="font-medium">{source.name}</div>
-                        <div className="mt-1 break-all text-xs text-muted-foreground">{source.configPath}</div>
+                        <div className="mt-1 text-xs break-all text-muted-foreground">
+                          {source.configPath}
+                        </div>
                       </div>
-                      <Badge variant={source.available ? 'success' : source.error ? 'destructive' : 'secondary'}>
-                        {source.available ? 'Ready' : source.error ? 'Missing' : 'Idle'}
+                      <Badge
+                        variant={
+                          source.available
+                            ? "success"
+                            : source.error
+                              ? "destructive"
+                              : "secondary"
+                        }
+                      >
+                        {source.available
+                          ? "Ready"
+                          : source.error
+                            ? "Missing"
+                            : "Idle"}
                       </Badge>
                     </button>
                   ))}
@@ -319,7 +407,9 @@ export function SyncPanel({
                   {syncModes.map((mode) => (
                     <Button
                       key={mode.value}
-                      variant={selectedMode === mode.value ? 'default' : 'outline'}
+                      variant={
+                        selectedMode === mode.value ? "default" : "outline"
+                      }
                       onClick={() => setSelectedMode(mode.value)}
                     >
                       {mode.label}
@@ -335,7 +425,10 @@ export function SyncPanel({
               <X data-icon="inline-start" />
               Cancel
             </Button>
-            <Button onClick={handleAddTarget} disabled={!selectedSource || !selectedSource.available}>
+            <Button
+              onClick={handleAddTarget}
+              disabled={!selectedSource || !selectedSource.available}
+            >
               <Plus data-icon="inline-start" />
               Add
             </Button>

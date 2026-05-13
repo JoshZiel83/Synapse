@@ -107,7 +107,11 @@ export function useWebSocket({
 
   const syncSubscriptions = useCallback(() => {
     const socket = ws.current
-    if (!socket || socket.readyState !== WebSocket.OPEN || !authenticatedRef.current) {
+    if (
+      !socket ||
+      socket.readyState !== WebSocket.OPEN ||
+      !authenticatedRef.current
+    ) {
       return
     }
 

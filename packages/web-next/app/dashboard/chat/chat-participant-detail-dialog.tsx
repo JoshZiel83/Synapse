@@ -22,16 +22,10 @@ import {
   getConversationMemberTypeLabel,
 } from "./member-utils"
 
-function DetailItem({
-  label,
-  value,
-}: {
-  label: string
-  value: ReactNode
-}) {
+function DetailItem({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="space-y-1.5">
-      <div className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground/80">
+      <div className="text-[11px] font-medium tracking-[0.18em] text-muted-foreground/80 uppercase">
         {label}
       </div>
       <div className="text-sm text-foreground">{value}</div>
@@ -56,7 +50,7 @@ function ParticipantDetailBody({
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">
-      <div className="border-b border-border/70 px-5 pb-5 pt-[max(1rem,env(safe-area-inset-top))] sm:px-6 sm:py-6">
+      <div className="border-b border-border/70 px-5 pt-[max(1rem,env(safe-area-inset-top))] pb-5 sm:px-6 sm:py-6">
         <div className="flex items-start gap-4 pr-10">
           <ChatAvatar
             name={member.name}
@@ -111,7 +105,7 @@ function ParticipantDetailBody({
       <div className="flex-1 overflow-y-auto px-5 py-5 sm:px-6 sm:pb-6">
         <div className="space-y-4">
           <section className="rounded-3xl border border-border/70 bg-muted/20 p-4">
-            <div className="mb-4 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground/80">
+            <div className="mb-4 text-xs font-medium tracking-[0.18em] text-muted-foreground/80 uppercase">
               Details
             </div>
             <div className="grid gap-4">
@@ -141,7 +135,7 @@ function ParticipantDetailBody({
                 <DetailItem
                   label="External user key"
                   value={
-                    <span className="break-all rounded-2xl bg-background px-2.5 py-1 font-mono text-xs ring-1 ring-border">
+                    <span className="rounded-2xl bg-background px-2.5 py-1 font-mono text-xs break-all ring-1 ring-border">
                       {member.externalUserKey}
                     </span>
                   }
@@ -152,7 +146,7 @@ function ParticipantDetailBody({
 
           {member.type === "external" ? (
             <section className="rounded-3xl border border-border/70 bg-background p-4 shadow-sm">
-              <div className="mb-4 text-xs font-medium uppercase tracking-[0.18em] text-muted-foreground/80">
+              <div className="mb-4 text-xs font-medium tracking-[0.18em] text-muted-foreground/80 uppercase">
                 Workspace link
               </div>
               {member.linkedWorkspaceMemberId &&
@@ -226,10 +220,7 @@ export default function ChatParticipantDetailDialog({
   if (!member) return null
 
   const subtitle = getConversationMemberSubtitle(member)
-  const contactHref = getConversationMemberContactHref(
-    member,
-    contactBasePath
-  )
+  const contactHref = getConversationMemberContactHref(member, contactBasePath)
 
   function handleOpenContact() {
     if (!contactHref) return
@@ -240,11 +231,9 @@ export default function ChatParticipantDetailDialog({
   if (isMobile) {
     return (
       <Dialog open={open} onOpenChange={onOpenChange}>
-        <DialogContent className="inset-0 top-0 start-0 h-[100dvh] max-w-none translate-x-0 rtl:translate-x-0 translate-y-0 gap-0 rounded-none border-0 p-0 ring-0">
+        <DialogContent className="inset-0 start-0 top-0 h-[100dvh] max-w-none translate-x-0 translate-y-0 gap-0 rounded-none border-0 p-0 ring-0 rtl:translate-x-0">
           <DialogTitle className="sr-only">{member.name}</DialogTitle>
-          <DialogDescription className="sr-only">
-            {subtitle}
-          </DialogDescription>
+          <DialogDescription className="sr-only">{subtitle}</DialogDescription>
           <ParticipantDetailBody
             member={member}
             contactHref={contactHref}

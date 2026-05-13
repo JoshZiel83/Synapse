@@ -1,7 +1,7 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { useLocalSearchParams, useRouter } from "expo-router"
+import { useEffect, useState } from "react"
+import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import {
   Avatar,
@@ -12,110 +12,107 @@ import {
   ScreenScroll,
   SectionBlock,
   SectionTitleRow,
-} from "@/components/ui";
-import { api } from "@/lib/api";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
-import type {
-  ContactHubDetailResponse,
-  ContactHubEntryView,
-} from "@/types/api";
+} from "@/components/ui"
+import { api } from "@/lib/api"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
+import type { ContactHubDetailResponse, ContactHubEntryView } from "@/types/api"
 
 type ContactType =
   | "workspace-actor"
   | "workspace-member"
   | "friend-actor"
-  | "friend-member";
+  | "friend-member"
 
 function directButtonLabel(entry: ContactHubEntryView) {
   switch (entry.directState.status) {
     case "existing":
-      return "进入已有私聊";
+      return "进入已有私聊"
     case "pending_approval":
-      return "等待批准";
+      return "等待批准"
     case "approval_required":
-      return "申请访问并发起私聊";
+      return "申请访问并发起私聊"
     default:
-      return "发起私聊";
+      return "发起私聊"
   }
 }
 
 export default function ContactDetailScreen() {
-  const router = useRouter();
+  const router = useRouter()
   const { contactType, contactId } = useLocalSearchParams<{
-    contactType: ContactType;
-    contactId: string;
-  }>();
-  const { workspaceId } = useWorkspace();
-  const [detail, setDetail] = useState<ContactHubDetailResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [actionMessage, setActionMessage] = useState<string | null>(null);
+    contactType: ContactType
+    contactId: string
+  }>()
+  const { workspaceId } = useWorkspace()
+  const [detail, setDetail] = useState<ContactHubDetailResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [actionMessage, setActionMessage] = useState<string | null>(null)
 
   useEffect(() => {
     async function loadDetail() {
       if (!workspaceId || !contactType || !contactId) {
-        setLoading(false);
-        return;
+        setLoading(false)
+        return
       }
 
-      setLoading(true);
+      setLoading(true)
       try {
         const nextDetail = await api.getContactHubDetail(
           workspaceId,
           contactType,
-          contactId,
-        );
-        setDetail(nextDetail);
-        setError(null);
+          contactId
+        )
+        setDetail(nextDetail)
+        setError(null)
       } catch (nextError) {
         setError(
           nextError instanceof Error
             ? nextError.message
-            : "联系人详情加载失败。",
-        );
+            : "联系人详情加载失败。"
+        )
       } finally {
-        setLoading(false);
+        setLoading(false)
       }
     }
 
-    void loadDetail();
-  }, [contactId, contactType, workspaceId]);
+    void loadDetail()
+  }, [contactId, contactType, workspaceId])
 
   async function handleOpenDirect() {
-    if (!workspaceId || !detail?.contact || submitting) return;
+    if (!workspaceId || !detail?.contact || submitting) return
 
     if (
       detail.contact.directState.status === "existing" &&
       detail.contact.directState.conversationId
     ) {
-      router.push(`/chat/${detail.contact.directState.conversationId}`);
-      return;
+      router.push(`/chat/${detail.contact.directState.conversationId}`)
+      return
     }
 
-    setSubmitting(true);
-    setActionMessage(null);
+    setSubmitting(true)
+    setActionMessage(null)
     try {
       const result = await api.openDirectConversation(workspaceId, {
         contactKind: detail.contact.kind,
         contactId: detail.contact.id,
-      });
+      })
 
       if (result.status === "pending_approval") {
-        setActionMessage("已提交申请，等待对方批准后才能发起私聊。");
-        return;
+        setActionMessage("已提交申请，等待对方批准后才能发起私聊。")
+        return
       }
 
       if (result.conversationId) {
-        router.replace(`/chat/${result.conversationId}`);
+        router.replace(`/chat/${result.conversationId}`)
       }
     } catch (nextError) {
       setActionMessage(
-        nextError instanceof Error ? nextError.message : "发起私聊失败。",
-      );
+        nextError instanceof Error ? nextError.message : "发起私聊失败。"
+      )
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
   }
 
@@ -202,7 +199,8 @@ export default function ContactDetailScreen() {
                     ? "已有单聊"
                     : detail.contact.directState.status === "pending_approval"
                       ? "等待批准"
-                      : detail.contact.directState.status === "approval_required"
+                      : detail.contact.directState.status ===
+                          "approval_required"
                         ? "需要申请"
                         : "可直接发起"}
                 </Text>
@@ -229,9 +227,12 @@ export default function ContactDetailScreen() {
                     ]}
                   >
                     <Avatar
-                      name={conversation.presentation?.title || conversation.title}
+                      name={
+                        conversation.presentation?.title || conversation.title
+                      }
                       uri={
-                        conversation.presentation?.avatarUrl || conversation.avatarUrl
+                        conversation.presentation?.avatarUrl ||
+                        conversation.avatarUrl
                       }
                       icon="message-circle"
                       size={42}
@@ -260,7 +261,7 @@ export default function ContactDetailScreen() {
         </>
       )}
     </ScreenScroll>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -377,4 +378,4 @@ const styles = StyleSheet.create({
     fontSize: 13,
     color: theme.colors.textMuted,
   },
-});
+})

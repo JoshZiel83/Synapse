@@ -45,9 +45,10 @@ export function ActorDocCreateDialog({
 
   function handleCreate() {
     if (!selectedValue) return
-    const nextDoc = selectedValue === "custom"
-      ? buildEditableCustomDoc()
-      : buildEditableDocFromTemplate(selectedValue)
+    const nextDoc =
+      selectedValue === "custom"
+        ? buildEditableCustomDoc()
+        : buildEditableDocFromTemplate(selectedValue)
     onCreate(nextDoc)
     setSelectedValue("")
     onOpenChange(false)
@@ -77,21 +78,36 @@ export function ActorDocCreateDialog({
           className="max-h-[60vh] overflow-y-auto pr-1"
         >
           {options.map((template) => (
-            <Field key={template.key} orientation="horizontal" className="rounded-3xl border border-border p-4">
-              <RadioGroupItem value={template.key} id={`actor-doc-template-${template.key}`} />
+            <Field
+              key={template.key}
+              orientation="horizontal"
+              className="rounded-3xl border border-border p-4"
+            >
+              <RadioGroupItem
+                value={template.key}
+                id={`actor-doc-template-${template.key}`}
+              />
               <FieldContent>
-                <FieldLabel htmlFor={`actor-doc-template-${template.key}`}>{template.title}</FieldLabel>
+                <FieldLabel htmlFor={`actor-doc-template-${template.key}`}>
+                  {template.title}
+                </FieldLabel>
                 <FieldDescription>{template.description}</FieldDescription>
               </FieldContent>
             </Field>
           ))}
 
-          <Field orientation="horizontal" className="rounded-3xl border border-border p-4">
+          <Field
+            orientation="horizontal"
+            className="rounded-3xl border border-border p-4"
+          >
             <RadioGroupItem value="custom" id="actor-doc-template-custom" />
             <FieldContent>
-              <FieldLabel htmlFor="actor-doc-template-custom">Custom</FieldLabel>
+              <FieldLabel htmlFor="actor-doc-template-custom">
+                Custom
+              </FieldLabel>
               <FieldDescription>
-                Add a freeform section that does not map to the standard actor doc catalog.
+                Add a freeform section that does not map to the standard actor
+                doc catalog.
               </FieldDescription>
             </FieldContent>
           </Field>

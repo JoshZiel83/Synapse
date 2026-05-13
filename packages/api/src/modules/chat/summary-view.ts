@@ -1,5 +1,5 @@
-import { getFileUrlById } from "../files/service.js";
-import { listConversationParticipants } from "./service.js";
+import { getFileUrlById } from "../files/service.js"
+import { listConversationParticipants } from "./service.js"
 
 export function mapConversationParticipant(row: any) {
   if (row.remote_agent_id) {
@@ -16,7 +16,7 @@ export function mapConversationParticipant(row: any) {
         ? getFileUrlById(row.actor_avatar_file_id)
         : undefined,
       state: row.state,
-    };
+    }
   }
 
   if (row.actor_id) {
@@ -33,7 +33,7 @@ export function mapConversationParticipant(row: any) {
         ? getFileUrlById(row.actor_avatar_file_id)
         : undefined,
       state: row.state,
-    };
+    }
   }
 
   if (row.participant_kind === "external") {
@@ -46,7 +46,7 @@ export function mapConversationParticipant(row: any) {
         row.display_name ||
         "External participant",
       state: row.state,
-    };
+    }
   }
 
   return {
@@ -60,15 +60,15 @@ export function mapConversationParticipant(row: any) {
       : undefined,
     conversationRole: row.role_key || undefined,
     state: row.state,
-  };
+  }
 }
 
 function buildConversationPresentation(params: {
-  row: any;
-  participants: ReturnType<typeof mapConversationParticipant>[];
-  viewerWorkspaceMemberId: string;
-  canManageConversation: boolean;
-  canManageParticipants: boolean;
+  row: any
+  participants: ReturnType<typeof mapConversationParticipant>[]
+  viewerWorkspaceMemberId: string
+  canManageConversation: boolean
+  canManageParticipants: boolean
 }) {
   const {
     row,
@@ -76,10 +76,10 @@ function buildConversationPresentation(params: {
     viewerWorkspaceMemberId,
     canManageConversation,
     canManageParticipants,
-  } = params;
+  } = params
   const activeParticipants = participants.filter(
-    (participant) => participant.state === "active",
-  );
+    (participant) => participant.state === "active"
+  )
   const peer =
     row.kind === "private"
       ? activeParticipants.find(
@@ -87,9 +87,9 @@ function buildConversationPresentation(params: {
             !(
               participant.type === "workspace_member" &&
               participant.workspaceMemberId === viewerWorkspaceMemberId
-            ),
+            )
         ) || activeParticipants[0]
-      : undefined;
+      : undefined
 
   const directPeerNames =
     row.kind === "private"
@@ -99,11 +99,11 @@ function buildConversationPresentation(params: {
               !(
                 participant.type === "workspace_member" &&
                 participant.workspaceMemberId === viewerWorkspaceMemberId
-              ),
+              )
           )
           .map((participant) => participant.name)
           .filter(Boolean)
-      : [];
+      : []
 
   const title =
     row.kind === "private" && directPeerNames.length > 0
@@ -114,26 +114,24 @@ function buildConversationPresentation(params: {
           .filter(Boolean)
           .join(", ") ||
         row.last_message?.substring(0, 100) ||
-        "Untitled thread";
+        "Untitled thread"
 
   const chatType =
     row.kind === "private"
       ? "direct"
       : row.kind === "group"
         ? "group"
-        : "virtual";
-  const boundaryLabel = row.boundary === "external" ? "External" : "Internal";
-  const canRename = row.kind !== "private" && canManageConversation;
+        : "virtual"
+  const boundaryLabel = row.boundary === "external" ? "External" : "Internal"
+  const canRename = row.kind !== "private" && canManageConversation
   const canManageConversationParticipants =
-    row.kind !== "private" && canManageParticipants;
+    row.kind !== "private" && canManageParticipants
 
   return {
     chatType,
     title,
     avatarUrl:
-      row.kind === "private"
-        ? peer?.avatarUrl
-        : row.avatar_url || undefined,
+      row.kind === "private" ? peer?.avatarUrl : row.avatar_url || undefined,
     subtitle:
       row.kind === "private"
         ? `${boundaryLabel} direct chat`
@@ -141,49 +139,51 @@ function buildConversationPresentation(params: {
     peer,
     canRename,
     canManageParticipants: canManageConversationParticipants,
-  };
+  }
 }
 
 export async function mapConversationSummaryView(
   row: any,
-  viewer: string | { workspaceMemberId: string },
+  viewer: string | { workspaceMemberId: string }
 ) {
   const viewerWorkspaceMemberId =
-    typeof viewer === "string" ? viewer : viewer.workspaceMemberId;
-  const conversationParticipants = (await listConversationParticipants(row.id)).filter(
-    (participant: any) => participant.state === "active",
-  );
-  const mappedParticipants = conversationParticipants.map(mapConversationParticipant);
+    typeof viewer === "string" ? viewer : viewer.workspaceMemberId
+  const conversationParticipants = (
+    await listConversationParticipants(row.id)
+  ).filter((participant: any) => participant.state === "active")
+  const mappedParticipants = conversationParticipants.map(
+    mapConversationParticipant
+  )
   const actorParticipants = mappedParticipants.filter(
-    (participant: any) => participant.type === "actor",
-  );
+    (participant: any) => participant.type === "actor"
+  )
   const hasOpenLane = conversationParticipants.some(
     (participant: any) =>
-      participant.actor_id && participant.session_status !== "closed",
-  );
+      participant.actor_id && participant.session_status !== "closed"
+  )
   const viewerMembership = conversationParticipants.find(
     (participant: any) =>
       participant.state === "active" &&
       participant.participant_kind === "workspace_member" &&
-      participant.workspace_member_id === viewerWorkspaceMemberId,
-  );
+      participant.workspace_member_id === viewerWorkspaceMemberId
+  )
   const viewerConversationRole =
     viewerMembership?.role_key === "owner" ||
     viewerMembership?.role_key === "admin" ||
     viewerMembership?.role_key === "member"
       ? viewerMembership.role_key
-      : "member";
+      : "member"
   const canManageConversation =
     row.kind !== "private" &&
-    (viewerConversationRole === "owner" || viewerConversationRole === "admin");
-  const canManageParticipants = canManageConversation;
+    (viewerConversationRole === "owner" || viewerConversationRole === "admin")
+  const canManageParticipants = canManageConversation
   const presentation = buildConversationPresentation({
     row,
     participants: mappedParticipants,
     viewerWorkspaceMemberId,
     canManageConversation,
     canManageParticipants,
-  });
+  })
 
   return {
     id: row.id,
@@ -196,10 +196,7 @@ export async function mapConversationSummaryView(
     lastMessage: row.last_message
       ? {
           content: row.last_message,
-          role:
-            row.last_message_sender_type === "user"
-              ? "user"
-              : "assistant",
+          role: row.last_message_sender_type === "user" ? "user" : "assistant",
           actorName: row.last_message_sender_name,
           createdAt: row.last_message_at,
         }
@@ -216,5 +213,5 @@ export async function mapConversationSummaryView(
     },
     viewerParticipantId: viewerMembership?.id,
     viewerWorkspaceMemberId,
-  };
+  }
 }

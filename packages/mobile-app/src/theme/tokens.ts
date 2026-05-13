@@ -46,6 +46,6 @@ export const theme = {
   fonts: {
     display: "System",
   },
-} as const;
+} as const
 
-export type AppTheme = typeof theme;
+export type AppTheme = typeof theme

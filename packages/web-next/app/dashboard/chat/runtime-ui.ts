@@ -11,10 +11,7 @@ import {
   isActorRuntimeActive,
 } from "@synapse/shared"
 
-export {
-  getActorRuntimePriority,
-  isActorRuntimeActive,
-} from "@synapse/shared"
+export { getActorRuntimePriority, isActorRuntimeActive } from "@synapse/shared"
 
 function isActorRuntime(
   runtime: ActorRuntimeState | RemoteAgentRuntimeState | undefined
@@ -22,7 +19,9 @@ function isActorRuntime(
   return Boolean(runtime && "actorId" in runtime)
 }
 
-export function getRemoteAgentRuntimePriority(runtime?: RemoteAgentRuntimeState) {
+export function getRemoteAgentRuntimePriority(
+  runtime?: RemoteAgentRuntimeState
+) {
   if (!runtime) return 120
   switch (runtime.state) {
     case "waiting_user_input":
@@ -115,7 +114,10 @@ export function summarizeRuntimePreview(
 ) {
   const activeRuntimes = Object.values(runtimeByActor || {})
     .filter((runtime) => isActorRuntimeActive(runtime))
-    .sort((left, right) => getActorRuntimePriority(left) - getActorRuntimePriority(right))
+    .sort(
+      (left, right) =>
+        getActorRuntimePriority(left) - getActorRuntimePriority(right)
+    )
 
   if (activeRuntimes.length === 0) return null
 
@@ -139,7 +141,10 @@ export function summarizeRuntimePreview(
   const targetCount = activeRuntimes.reduce(
     (sum, runtime) =>
       sum +
-      Math.max(getActorRuntimeProcessingTargets(runtime).length, runtime.pendingWakeupCount),
+      Math.max(
+        getActorRuntimeProcessingTargets(runtime).length,
+        runtime.pendingWakeupCount
+      ),
     0
   )
   if (targetCount > 0) {

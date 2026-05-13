@@ -77,7 +77,12 @@ export default function RootLayout({
     >
       <body className="min-h-screen bg-background text-foreground">
         <AuthStoreProvider>
-          <ThemeProvider attribute="class" defaultTheme="system" enableSystem disableTransitionOnChange>
+          <ThemeProvider
+            attribute="class"
+            defaultTheme="system"
+            enableSystem
+            disableTransitionOnChange
+          >
             <TooltipProvider>
               {children}
               <Toaster />

@@ -9,134 +9,134 @@ import type {
   FileRecordView,
   User,
   WorkspaceChiefActorPreference,
-} from "@shared";
+} from "@shared"
 
 export interface AuthMeResponse {
-  user: User;
-  session: AuthSessionSummary;
+  user: User
+  session: AuthSessionSummary
 }
 
 export interface WorkspaceInfo {
-  id: string;
-  name: string;
-  slug: string;
-  trustLevel?: string;
+  id: string
+  name: string
+  slug: string
+  trustLevel?: string
 }
 
 export interface WorkspaceListResponse {
-  data: WorkspaceInfo[];
+  data: WorkspaceInfo[]
 }
 
 export interface WorkspaceMemberView {
-  id: string;
-  userId: string;
-  userName?: string;
-  userEmail?: string;
-  avatarUrl?: string | null;
-  trustLevel: string;
-  joinedAt: string;
+  id: string
+  userId: string
+  userName?: string
+  userEmail?: string
+  avatarUrl?: string | null
+  trustLevel: string
+  joinedAt: string
 }
 
 export interface WorkspaceMemberListResponse {
-  data: WorkspaceMemberView[];
+  data: WorkspaceMemberView[]
 }
 
 export interface ActorListResponse {
-  actors: Actor[];
+  actors: Actor[]
 }
 
 export interface ContactWorkspaceRef {
-  id: string;
-  name: string;
-  slug: string;
+  id: string
+  name: string
+  slug: string
 }
 
 export interface ConversationParticipantView {
-  memberId?: string;
-  participantId?: string;
-  type?: "actor" | "workspace_member" | "external";
-  id?: string;
-  workspaceMemberId?: string;
-  actorId?: string;
-  name?: string;
-  title?: string;
-  role?: string;
-  conversationRole?: string;
-  avatarUrl?: string;
-  avatarEmoji?: string;
-  state?: string;
+  memberId?: string
+  participantId?: string
+  type?: "actor" | "workspace_member" | "external"
+  id?: string
+  workspaceMemberId?: string
+  actorId?: string
+  name?: string
+  title?: string
+  role?: string
+  conversationRole?: string
+  avatarUrl?: string
+  avatarEmoji?: string
+  state?: string
 }
 
 export interface ConversationMessagePreview {
-  content: string;
-  role: "user" | "assistant" | "system";
-  actorName?: string;
-  createdAt: string;
+  content: string
+  role: "user" | "assistant" | "system"
+  actorName?: string
+  createdAt: string
 }
 
 export interface ConversationPresentationView {
-  chatType: "direct" | "group" | "virtual";
-  title: string;
-  avatarUrl?: string;
-  subtitle?: string;
-  peer?: ConversationParticipantView;
-  canRename?: boolean;
-  canManageMembers?: boolean;
+  chatType: "direct" | "group" | "virtual"
+  title: string
+  avatarUrl?: string
+  subtitle?: string
+  peer?: ConversationParticipantView
+  canRename?: boolean
+  canManageMembers?: boolean
 }
 
 export interface ConversationSummaryView {
-  id: string;
-  kind: "private" | "group" | "virtual";
-  boundary: "internal" | "external";
-  status: "active" | "completed";
-  transportKind?: string;
-  participants: ConversationParticipantView[];
-  members: ConversationParticipantView[];
-  lastMessage?: ConversationMessagePreview;
-  unreadCount: number;
-  createdAt: string;
-  title: string;
-  name: string;
-  avatarUrl?: string;
-  presentation?: ConversationPresentationView;
+  id: string
+  kind: "private" | "group" | "virtual"
+  boundary: "internal" | "external"
+  status: "active" | "completed"
+  transportKind?: string
+  participants: ConversationParticipantView[]
+  members: ConversationParticipantView[]
+  lastMessage?: ConversationMessagePreview
+  unreadCount: number
+  createdAt: string
+  title: string
+  name: string
+  avatarUrl?: string
+  presentation?: ConversationPresentationView
   permissions?: {
-    canManage?: boolean;
-    canManageMembers?: boolean;
-  };
-  viewerParticipantId?: string;
-  viewerWorkspaceMemberId?: string;
+    canManage?: boolean
+    canManageMembers?: boolean
+  }
+  viewerParticipantId?: string
+  viewerWorkspaceMemberId?: string
 }
 
 export interface ConversationMemberListResponse {
-  members: ConversationParticipantView[];
+  members: ConversationParticipantView[]
 }
 
 export interface ConversationCreateResponse {
-  conversationId: string;
+  conversationId: string
 }
 
 export interface ConversationSendResponse {
-  item: ConversationFeedItem;
+  item: ConversationFeedItem
 }
 
 export interface UploadAssetInput {
-  uri: string;
-  name: string;
-  mimeType: string;
-  file?: Blob | File | null;
+  uri: string
+  name: string
+  mimeType: string
+  file?: Blob | File | null
 }
 
 export interface RelationshipProfileView {
-  subjectType: "user" | "actor";
-  approvalMode: "auto" | "manual";
-  qrToken: string;
-  qrUrl: string;
-  accessPolicy?: "workspace_open" | "approval_required";
+  subjectType: "user" | "actor"
+  approvalMode: "auto" | "manual"
+  qrToken: string
+  qrUrl: string
+  accessPolicy?: "workspace_open" | "approval_required"
 }
 
 export interface FriendIdProfileView {
-  friendId: string;
-  searchByIdEnabled: boolean;
+  friendId: string
+  searchByIdEnabled: boolean
 }
 
 export interface ContactHubEntryRef {
@@ -144,21 +144,21 @@ export interface ContactHubEntryRef {
     | "workspace-actor"
     | "workspace-member"
     | "friend-actor"
-    | "friend-member";
-  id: string;
+    | "friend-member"
+  id: string
 }
 
 export interface IdentitySearchMatchView {
-  profileId: string;
-  targetType: "member" | "actor";
-  title: string;
-  subtitle?: string;
-  avatarUrl?: string;
-  avatarEmoji?: string;
-  workspace: WorkspaceInfo;
-  workspaceMemberId?: string;
-  userId?: string;
-  actorId?: string;
+  profileId: string
+  targetType: "member" | "actor"
+  title: string
+  subtitle?: string
+  avatarUrl?: string
+  avatarEmoji?: string
+  workspace: WorkspaceInfo
+  workspaceMemberId?: string
+  userId?: string
+  actorId?: string
   state:
     | "same_workspace_member"
     | "friend"
@@ -167,16 +167,16 @@ export interface IdentitySearchMatchView {
     | "existing"
     | "available"
     | "approval_required"
-    | "pending_approval";
-  contact?: ContactHubEntryRef;
-  conversationId?: string;
-  requestId?: string;
+    | "pending_approval"
+  contact?: ContactHubEntryRef
+  conversationId?: string
+  requestId?: string
 }
 
 export interface IdentitySearchResponse {
-  query: string;
-  outcome: "empty" | "invalid" | "self" | "not_found" | "found";
-  matches: IdentitySearchMatchView[];
+  query: string
+  outcome: "empty" | "invalid" | "self" | "not_found" | "found"
+  matches: IdentitySearchMatchView[]
 }
 
 export interface ContactHubEntryView {
@@ -184,92 +184,88 @@ export interface ContactHubEntryView {
     | "workspace-actor"
     | "workspace-member"
     | "friend-actor"
-    | "friend-member";
-  id: string;
-  targetType: "member" | "actor";
-  title: string;
-  subtitle?: string;
-  avatarUrl?: string;
-  avatarEmoji?: string;
-  workspace: WorkspaceInfo;
-  workspaceMemberId?: string;
-  userId?: string;
-  actorId?: string;
-  relationLabel: string;
+    | "friend-member"
+  id: string
+  targetType: "member" | "actor"
+  title: string
+  subtitle?: string
+  avatarUrl?: string
+  avatarEmoji?: string
+  workspace: WorkspaceInfo
+  workspaceMemberId?: string
+  userId?: string
+  actorId?: string
+  relationLabel: string
   directState: {
-    status:
-      | "existing"
-      | "available"
-      | "approval_required"
-      | "pending_approval";
-    conversationId?: string;
-  };
+    status: "existing" | "available" | "approval_required" | "pending_approval"
+    conversationId?: string
+  }
 }
 
 export interface RelationshipMemberSummaryView {
-  workspace: WorkspaceInfo;
-  workspaceMemberId: string;
-  userId: string;
-  name: string;
-  email: string;
-  avatarFileId?: string | null;
-  trustLevel?: string;
+  workspace: WorkspaceInfo
+  workspaceMemberId: string
+  userId: string
+  name: string
+  email: string
+  avatarFileId?: string | null
+  trustLevel?: string
 }
 
 export interface RelationshipActorSummaryView {
-  workspace: WorkspaceInfo;
-  actorId: string;
-  name: string;
-  title: string;
-  role: string;
-  avatarStoredName?: string | null;
-  avatarEmoji?: string | null;
-  accessPolicy: "workspace_open" | "approval_required";
+  workspace: WorkspaceInfo
+  actorId: string
+  name: string
+  title: string
+  role: string
+  avatarStoredName?: string | null
+  avatarEmoji?: string | null
+  accessPolicy: "workspace_open" | "approval_required"
 }
 
 export interface FriendRequestView {
-  id: string;
-  status: "pending" | "approved" | "rejected";
-  createdAt: string;
-  requester?: RelationshipMemberSummaryView | null;
-  targetType: "member" | "actor";
-  targetMember?: RelationshipMemberSummaryView | null;
-  targetActor?: RelationshipActorSummaryView | null;
+  id: string
+  status: "pending" | "approved" | "rejected"
+  createdAt: string
+  requester?: RelationshipMemberSummaryView | null
+  targetType: "member" | "actor"
+  targetMember?: RelationshipMemberSummaryView | null
+  targetActor?: RelationshipActorSummaryView | null
 }
 
 export interface FriendRequestListResponse {
-  incoming: FriendRequestView[];
-  outgoing: FriendRequestView[];
+  incoming: FriendRequestView[]
+  outgoing: FriendRequestView[]
 }
 
 export interface ActorAccessRequestView {
-  id: string;
-  status: "pending" | "approved" | "rejected";
-  createdAt: string;
-  requester?: RelationshipMemberSummaryView | null;
-  actor?: RelationshipActorSummaryView | null;
+  id: string
+  status: "pending" | "approved" | "rejected"
+  createdAt: string
+  requester?: RelationshipMemberSummaryView | null
+  actor?: RelationshipActorSummaryView | null
 }
 
 export interface ActorAccessRequestListResponse {
-  incoming: ActorAccessRequestView[];
-  outgoing: ActorAccessRequestView[];
+  incoming: ActorAccessRequestView[]
+  outgoing: ActorAccessRequestView[]
 }
 
 export interface ContactHubResponse {
   requestSummary: {
-    friendPendingCount: number;
-    actorAccessPendingCount: number;
-    totalPendingCount: number;
-  };
-  workspaceActors: ContactHubEntryView[];
-  workspaceMembers: ContactHubEntryView[];
-  friends: ContactHubEntryView[];
-  groups: ConversationSummaryView[];
+    friendPendingCount: number
+    actorAccessPendingCount: number
+    totalPendingCount: number
+  }
+  workspaceActors: ContactHubEntryView[]
+  workspaceMembers: ContactHubEntryView[]
+  friends: ContactHubEntryView[]
+  groups: ConversationSummaryView[]
 }
 
 export interface ContactHubDetailResponse {
-  contact: ContactHubEntryView;
-  groups: ConversationSummaryView[];
+  contact: ContactHubEntryView
+  groups: ConversationSummaryView[]
 }
 
 export interface RelationshipScanResponse {
@@ -281,16 +277,16 @@ export interface RelationshipScanResponse {
     | "friend_request_pending"
     | "actor_access_granted"
     | "actor_access_request_created"
-    | "actor_access_pending";
-  requestId?: string;
-  contact?: ContactHubEntryRef;
+    | "actor_access_pending"
+  requestId?: string
+  contact?: ContactHubEntryRef
 }
 
 export interface DirectConversationOpenResponse {
-  status: "ready" | "pending_approval";
-  created?: boolean;
-  conversationId?: string;
-  requestId?: string;
+  status: "ready" | "pending_approval"
+  created?: boolean
+  conversationId?: string
+  requestId?: string
 }
 
 export type {
@@ -301,4 +297,4 @@ export type {
   ConversationFeedPage,
   FileRecordView,
   WorkspaceChiefActorPreference,
-};
+}

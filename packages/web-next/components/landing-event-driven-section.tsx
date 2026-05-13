@@ -7,7 +7,11 @@ import {
   Workflow,
 } from "lucide-react"
 
-import { LandingReveal, LandingStagger, LandingStaggerItem } from "@/components/landing-motion"
+import {
+  LandingReveal,
+  LandingStagger,
+  LandingStaggerItem,
+} from "@/components/landing-motion"
 import { cn } from "@/lib/utils"
 
 const eventHighlights = [
@@ -96,7 +100,8 @@ export function LandingEventDrivenSection() {
               人不是唯一入口，事件也能驱动团队
             </h2>
             <p className="mt-4 text-base leading-7 text-slate-600 sm:text-lg">
-              自定义服务器推送、飞书 IM 接入和定时触发，都能直接进入同一套运行时，自动拉起群聊、角色和工作流
+              自定义服务器推送、飞书 IM
+              接入和定时触发，都能直接进入同一套运行时，自动拉起群聊、角色和工作流
             </p>
 
             <LandingStagger className="mt-8 space-y-4" delay={0.08}>
@@ -106,21 +111,35 @@ export function LandingEventDrivenSection() {
                     <item.icon className="size-[18px]" />
                   </div>
                   <div>
-                    <div className="text-[15px] font-semibold text-slate-950">{item.title}</div>
-                    <p className="mt-1.5 text-sm leading-6 text-slate-600">{item.description}</p>
+                    <div className="text-[15px] font-semibold text-slate-950">
+                      {item.title}
+                    </div>
+                    <p className="mt-1.5 text-sm leading-6 text-slate-600">
+                      {item.description}
+                    </p>
                   </div>
                 </LandingStaggerItem>
               ))}
             </LandingStagger>
           </LandingReveal>
 
-          <LandingReveal className="relative" delay={0.08} x={28} y={24} scale={0.985}>
-            <div className="absolute -left-8 top-10 size-36 rounded-full bg-sky-200/34 blur-3xl" />
+          <LandingReveal
+            className="relative"
+            delay={0.08}
+            x={28}
+            y={24}
+            scale={0.985}
+          >
+            <div className="absolute top-10 -left-8 size-36 rounded-full bg-sky-200/34 blur-3xl" />
             <div className="absolute -right-4 bottom-8 size-40 rounded-full bg-emerald-200/30 blur-3xl" />
 
             <div className="relative">
               <div className="grid gap-4 xl:grid-cols-[0.9fr_auto_1.1fr] xl:items-start">
-                <LandingStagger className="space-y-3" delay={0.16} stagger={0.08}>
+                <LandingStagger
+                  className="space-y-3"
+                  delay={0.16}
+                  stagger={0.08}
+                >
                   {eventSources.map((source) => (
                     <LandingStaggerItem
                       key={source.title}
@@ -144,13 +163,22 @@ export function LandingEventDrivenSection() {
                           {source.badge}
                         </div>
                       </div>
-                      <div className="mt-3 text-sm font-semibold text-slate-950">{source.title}</div>
-                      <div className="mt-1.5 text-[13px] leading-5 text-slate-600">{source.meta}</div>
+                      <div className="mt-3 text-sm font-semibold text-slate-950">
+                        {source.title}
+                      </div>
+                      <div className="mt-1.5 text-[13px] leading-5 text-slate-600">
+                        {source.meta}
+                      </div>
                     </LandingStaggerItem>
                   ))}
                 </LandingStagger>
 
-                <LandingReveal className="hidden h-full items-center justify-center xl:flex" delay={0.34} x={12} y={0}>
+                <LandingReveal
+                  className="hidden h-full items-center justify-center xl:flex"
+                  delay={0.34}
+                  x={12}
+                  y={0}
+                >
                   <div className="flex size-8 items-center justify-center rounded-full border border-slate-200 bg-white text-slate-400 shadow-[0_12px_24px_-18px_rgba(15,23,42,0.22)]">
                     <ArrowRight className="size-4" />
                   </div>
@@ -165,7 +193,9 @@ export function LandingEventDrivenSection() {
                 >
                   <div className="flex items-start justify-between gap-3">
                     <div>
-                      <div className="text-sm font-semibold text-slate-950">自动工作流</div>
+                      <div className="text-sm font-semibold text-slate-950">
+                        自动工作流
+                      </div>
                       <div className="mt-1 text-[11px] text-slate-500">
                         当前由服务器推送触发
                       </div>
@@ -181,21 +211,33 @@ export function LandingEventDrivenSection() {
                       PROD API / CPU 持续异常
                     </div>
 
-                    <LandingStagger className="mt-3 space-y-3" delay={0.12} stagger={0.07}>
+                    <LandingStagger
+                      className="mt-3 space-y-3"
+                      delay={0.12}
+                      stagger={0.07}
+                    >
                       {workflowSteps.map((step) => (
-                        <LandingStaggerItem key={step.title} className="flex gap-3">
+                        <LandingStaggerItem
+                          key={step.title}
+                          className="flex gap-3"
+                        >
                           <div className="pt-1">
                             <div
                               className={cn(
                                 "size-2.5 rounded-full bg-slate-200",
                                 step.state === "done" && "bg-slate-950",
-                                step.state === "active" && "bg-emerald-500 ring-4 ring-emerald-100"
+                                step.state === "active" &&
+                                  "bg-emerald-500 ring-4 ring-emerald-100"
                               )}
                             />
                           </div>
                           <div>
-                            <div className="text-[13px] font-semibold text-slate-950">{step.title}</div>
-                            <div className="mt-1 text-[12px] leading-5 text-slate-500">{step.meta}</div>
+                            <div className="text-[13px] font-semibold text-slate-950">
+                              {step.title}
+                            </div>
+                            <div className="mt-1 text-[12px] leading-5 text-slate-500">
+                              {step.meta}
+                            </div>
                           </div>
                         </LandingStaggerItem>
                       ))}

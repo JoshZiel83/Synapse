@@ -1,48 +1,48 @@
-import crypto from "node:crypto";
-import os from "node:os";
-import { redis } from "../../infrastructure/redis/index.js";
+import crypto from "node:crypto"
+import os from "node:os"
+import { redis } from "../../infrastructure/redis/index.js"
 
-const COMMAND_STREAM_PREFIX = "mcp:runtime:commands:";
-const REPLY_LIST_PREFIX = "mcp:runtime:reply:";
-const MAX_STREAM_LENGTH = 5000;
-const DEFAULT_COMMAND_TIMEOUT_MS = 30_000;
+const COMMAND_STREAM_PREFIX = "mcp:runtime:commands:"
+const REPLY_LIST_PREFIX = "mcp:runtime:reply:"
+const MAX_STREAM_LENGTH = 5000
+const DEFAULT_COMMAND_TIMEOUT_MS = 30_000
 
 type RuntimeCommandEnvelope = {
-  id: string;
-  type: string;
-  payload: string;
-  replyKey: string;
-};
+  id: string
+  type: string
+  payload: string
+  replyKey: string
+}
 
 type RuntimeCommandResult =
   | { ok: true; result: unknown }
   | {
-      ok: false;
+      ok: false
       error: {
-        name: string;
-        message: string;
-        stack?: string;
-      };
-    };
+        name: string
+        message: string
+        stack?: string
+      }
+    }
 
-type RuntimeCommandHandler = (payload: unknown) => Promise<unknown>;
+type RuntimeCommandHandler = (payload: unknown) => Promise<unknown>
 
 const runtimeNodeId =
   process.env.MCP_RUNTIME_NODE_ID?.trim() ||
-  `${os.hostname()}:${process.pid}:${crypto.randomUUID()}`;
+  `${os.hostname()}:${process.pid}:${crypto.randomUUID()}`
 
-const handlers = new Map<string, RuntimeCommandHandler>();
-let commandReader: any | null = null;
-let listenerRunning = false;
-let listenerLoop: Promise<void> | null = null;
-let lastStreamId = "$";
+const handlers = new Map<string, RuntimeCommandHandler>()
+let commandReader: any | null = null
+let listenerRunning = false
+let listenerLoop: Promise<void> | null = null
+let lastStreamId = "$"
 
 function runtimeCommandStreamKey(nodeId: string) {
-  return `${COMMAND_STREAM_PREFIX}${nodeId}`;
+  return `${COMMAND_STREAM_PREFIX}${nodeId}`
 }
 
 function runtimeReplyKey(commandId: string) {
-  return `${REPLY_LIST_PREFIX}${commandId}`;
+  return `${REPLY_LIST_PREFIX}${commandId}`
 }
 
 function serializeError(error: unknown) {
@@ -51,23 +51,28 @@ function serializeError(error: unknown) {
       name: error.name,
       message: error.message,
       stack: error.stack,
-    };
+    }
   }
   return {
     name: "Error",
-    message: typeof error === "string" ? error : "Unknown runtime control plane error",
-  };
+    message:
+      typeof error === "string" ? error : "Unknown runtime control plane error",
+  }
 }
 
-async function pushCommandReply(replyKey: string, result: RuntimeCommandResult) {
-  await redis.multi()
+async function pushCommandReply(
+  replyKey: string,
+  result: RuntimeCommandResult
+) {
+  await redis
+    .multi()
     .lpush(replyKey, JSON.stringify(result))
     .pexpire(replyKey, DEFAULT_COMMAND_TIMEOUT_MS)
-    .exec();
+    .exec()
 }
 
 async function handleCommand(envelope: RuntimeCommandEnvelope) {
-  const handler = handlers.get(envelope.type);
+  const handler = handlers.get(envelope.type)
   if (!handler) {
     await pushCommandReply(envelope.replyKey, {
       ok: false,
@@ -75,40 +80,40 @@ async function handleCommand(envelope: RuntimeCommandEnvelope) {
         name: "UnhandledRuntimeCommandError",
         message: `Unhandled runtime command type '${envelope.type}'`,
       },
-    });
-    return;
+    })
+    return
   }
 
-  let payload: unknown = {};
+  let payload: unknown = {}
   try {
-    payload = envelope.payload ? JSON.parse(envelope.payload) : {};
+    payload = envelope.payload ? JSON.parse(envelope.payload) : {}
   } catch (error) {
     await pushCommandReply(envelope.replyKey, {
       ok: false,
       error: serializeError(error),
-    });
-    return;
+    })
+    return
   }
 
   try {
-    const result = await handler(payload);
+    const result = await handler(payload)
     await pushCommandReply(envelope.replyKey, {
       ok: true,
       result,
-    });
+    })
   } catch (error) {
     await pushCommandReply(envelope.replyKey, {
       ok: false,
       error: serializeError(error),
-    });
+    })
   }
 }
 
 async function runCommandListener() {
   if (!commandReader) {
-    commandReader = (redis as any).duplicate();
+    commandReader = (redis as any).duplicate()
   }
-  const streamKey = runtimeCommandStreamKey(runtimeNodeId);
+  const streamKey = runtimeCommandStreamKey(runtimeNodeId)
   while (listenerRunning) {
     try {
       const result = await commandReader.xread(
@@ -118,81 +123,81 @@ async function runCommandListener() {
         10,
         "STREAMS",
         streamKey,
-        lastStreamId,
-      );
+        lastStreamId
+      )
       if (!listenerRunning || !result || result.length === 0) {
-        continue;
+        continue
       }
 
       for (const [, entries] of result as [string, [string, string[]][]][]) {
         for (const [entryId, fields] of entries) {
-          lastStreamId = entryId;
-          const values = new Map<string, string>();
+          lastStreamId = entryId
+          const values = new Map<string, string>()
           for (let index = 0; index < fields.length; index += 2) {
-            values.set(fields[index]!, fields[index + 1] || "");
+            values.set(fields[index]!, fields[index + 1] || "")
           }
           await handleCommand({
             id: values.get("id") || entryId,
             type: values.get("type") || "",
             payload: values.get("payload") || "{}",
             replyKey: values.get("reply_key") || "",
-          });
-          await redis.xdel(streamKey, entryId).catch(() => undefined);
+          })
+          await redis.xdel(streamKey, entryId).catch(() => undefined)
         }
       }
     } catch (error) {
       if (!listenerRunning) {
-        break;
+        break
       }
-      console.error("[mcp-runtime] control plane listener error", error);
-      await new Promise((resolve) => setTimeout(resolve, 1000));
+      console.error("[mcp-runtime] control plane listener error", error)
+      await new Promise((resolve) => setTimeout(resolve, 1000))
     }
   }
 }
 
 export function getRuntimeNodeId() {
-  return runtimeNodeId;
+  return runtimeNodeId
 }
 
 export function registerRuntimeCommandHandler(
   type: string,
-  handler: RuntimeCommandHandler,
+  handler: RuntimeCommandHandler
 ) {
-  handlers.set(type, handler);
+  handlers.set(type, handler)
 }
 
 export async function initRuntimeControlPlane() {
   if (listenerRunning) {
-    return;
+    return
   }
-  listenerRunning = true;
-  listenerLoop = runCommandListener();
+  listenerRunning = true
+  listenerLoop = runCommandListener()
 }
 
 export async function shutdownRuntimeControlPlane() {
-  listenerRunning = false;
-  const loop = listenerLoop;
-  listenerLoop = null;
+  listenerRunning = false
+  const loop = listenerLoop
+  listenerLoop = null
   if (commandReader) {
     try {
-      await commandReader.quit();
+      await commandReader.quit()
     } catch {
-      commandReader.disconnect();
+      commandReader.disconnect()
     }
-    commandReader = null;
+    commandReader = null
   }
-  await loop?.catch(() => undefined);
+  await loop?.catch(() => undefined)
 }
 
 export async function sendRuntimeCommand<T>(
   nodeId: string,
   type: string,
   payload: unknown,
-  timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS,
+  timeoutMs = DEFAULT_COMMAND_TIMEOUT_MS
 ): Promise<T> {
-  const commandId = crypto.randomUUID();
-  const replyKey = runtimeReplyKey(commandId);
-  const replyClient = (redis as any).duplicate();
+  const commandId = crypto.randomUUID()
+  const replyKey = runtimeReplyKey(commandId)
+  const replyClient = (redis as any).duplicate()
 
   try {
     await redis.xadd(
@@ -208,32 +213,34 @@ export async function sendRuntimeCommand<T>(
       "payload",
       JSON.stringify(payload ?? {}),
       "reply_key",
-      replyKey,
-    );
+      replyKey
+    )
 
-    const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000));
-    const reply = await replyClient.brpop(replyKey, timeoutSeconds);
+    const timeoutSeconds = Math.max(1, Math.ceil(timeoutMs / 1000))
+    const reply = await replyClient.brpop(replyKey, timeoutSeconds)
     if (!reply || reply.length < 2) {
-      throw new Error(`Runtime command '${type}' timed out after ${timeoutMs}ms`);
+      throw new Error(
+        `Runtime command '${type}' timed out after ${timeoutMs}ms`
+      )
     }
 
-    const message = JSON.parse(reply[1]) as RuntimeCommandResult;
+    const message = JSON.parse(reply[1]) as RuntimeCommandResult
     if (!message.ok) {
-      const error = new Error(message.error.message);
-      error.name = message.error.name;
+      const error = new Error(message.error.message)
+      error.name = message.error.name
       if (message.error.stack) {
-        error.stack = message.error.stack;
+        error.stack = message.error.stack
       }
-      throw error;
+      throw error
     }
 
-    return message.result as T;
+    return message.result as T
   } finally {
     try {
-      await replyClient.quit();
+      await replyClient.quit()
     } catch {
-      replyClient.disconnect();
+      replyClient.disconnect()
     }
-    await redis.del(replyKey).catch(() => undefined);
+    await redis.del(replyKey).catch(() => undefined)
   }
 }

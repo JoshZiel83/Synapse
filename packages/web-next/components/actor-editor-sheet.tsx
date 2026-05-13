@@ -1,14 +1,11 @@
-'use client'
+"use client"
 
-import { useEffect, useState } from 'react'
-import {
-  type Actor,
-  type ActorDoc,
-} from '@synapse/shared'
-import { Loader2, Plus, Trash2 } from 'lucide-react'
-import { toast } from 'sonner'
+import { useEffect, useState } from "react"
+import { type Actor, type ActorDoc } from "@synapse/shared"
+import { Loader2, Plus, Trash2 } from "lucide-react"
+import { toast } from "sonner"
 
-import { api } from '@/lib/api'
+import { api } from "@/lib/api"
 import {
   ACTOR_ROLE_OPTIONS,
   VISIBILITY_OPTIONS,
@@ -21,20 +18,26 @@ import {
   type ActorDocVisibility,
   type EditableDoc,
   type UploadedFile,
-} from '@/components/actor-editor-model'
-import { ActorDocCreateDialog } from '@/components/actor-doc-create-dialog'
-import { CanonicalContentEditor } from '@/components/canonical-content-editor'
-import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
+} from "@/components/actor-editor-model"
+import { ActorDocCreateDialog } from "@/components/actor-doc-create-dialog"
+import { CanonicalContentEditor } from "@/components/canonical-content-editor"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
 import {
   Field,
   FieldContent,
   FieldDescription,
   FieldGroup,
   FieldLabel,
-} from '@/components/ui/field'
-import { Input } from '@/components/ui/input'
-import { ScrollArea } from '@/components/ui/scroll-area'
+} from "@/components/ui/field"
+import { Input } from "@/components/ui/input"
+import { ScrollArea } from "@/components/ui/scroll-area"
 import {
   Select,
   SelectContent,
@@ -42,7 +45,7 @@ import {
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from '@/components/ui/select'
+} from "@/components/ui/select"
 import {
   Sheet,
   SheetContent,
@@ -50,10 +53,10 @@ import {
   SheetFooter,
   SheetHeader,
   SheetTitle,
-} from '@/components/ui/sheet'
-import { Switch } from '@/components/ui/switch'
-import { Textarea } from '@/components/ui/textarea'
-import { resolveFileUrl } from '@/lib/utils'
+} from "@/components/ui/sheet"
+import { Switch } from "@/components/ui/switch"
+import { Textarea } from "@/components/ui/textarea"
+import { resolveFileUrl } from "@/lib/utils"
 
 export function ActorEditorSheet({
   open,
@@ -70,7 +73,9 @@ export function ActorEditorSheet({
   parentOptions: Actor[]
   onSaved: (actor: Actor) => void | Promise<void>
 }) {
-  const [form, setForm] = useState<ActorFormState>(() => buildInitialState(actor))
+  const [form, setForm] = useState<ActorFormState>(() =>
+    buildInitialState(actor)
+  )
   const [avatarUploading, setAvatarUploading] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
   const [createDocDialogOpen, setCreateDocDialogOpen] = useState(false)
@@ -80,7 +85,10 @@ export function ActorEditorSheet({
     setForm(buildInitialState(actor))
   }, [actor, open])
 
-  function updateDoc(docId: string, updater: (doc: EditableDoc) => EditableDoc) {
+  function updateDoc(
+    docId: string,
+    updater: (doc: EditableDoc) => EditableDoc
+  ) {
     setForm((current) => ({
       ...current,
       docs: current.docs.map((doc) => (doc.id === docId ? updater(doc) : doc)),
@@ -97,9 +105,11 @@ export function ActorEditorSheet({
         avatarFileId: uploaded.id,
         avatarUrl: resolveFileUrl(uploaded.url || uploaded.fullUrl),
       }))
-      toast.success('Avatar uploaded')
+      toast.success("Avatar uploaded")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Avatar upload failed')
+      toast.error(
+        error instanceof Error ? error.message : "Avatar upload failed"
+      )
     } finally {
       setAvatarUploading(false)
     }
@@ -108,7 +118,7 @@ export function ActorEditorSheet({
   async function saveActor() {
     if (!workspaceId) return
     if (!form.name.trim()) {
-      toast.error('Name is required')
+      toast.error("Name is required")
       return
     }
 
@@ -133,11 +143,13 @@ export function ActorEditorSheet({
         ? ((await api.updateActor(workspaceId, actor.id, payload)) as Actor)
         : ((await api.createActor(workspaceId, payload)) as Actor)
 
-      toast.success(actor ? 'Actor updated' : 'Actor created')
+      toast.success(actor ? "Actor updated" : "Actor created")
       await onSaved(saved)
       onOpenChange(false)
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : 'Failed to save actor')
+      toast.error(
+        error instanceof Error ? error.message : "Failed to save actor"
+      )
     } finally {
       setIsSaving(false)
     }
@@ -147,9 +159,12 @@ export function ActorEditorSheet({
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent className="w-full p-0 sm:max-w-4xl">
         <SheetHeader className="border-b border-border">
-          <SheetTitle>{actor ? `Edit ${actor.definition.name}` : 'Create actor'}</SheetTitle>
+          <SheetTitle>
+            {actor ? `Edit ${actor.definition.name}` : "Create actor"}
+          </SheetTitle>
           <SheetDescription>
-            Define the actor as a person with structured authority fields and editable narrative docs.
+            Define the actor as a person with structured authority fields and
+            editable narrative docs.
           </SheetDescription>
         </SheetHeader>
 
@@ -159,7 +174,8 @@ export function ActorEditorSheet({
               <CardHeader>
                 <CardTitle>Core identity</CardTitle>
                 <CardDescription>
-                  These structured fields drive routing, hierarchy, and permission-aware behavior.
+                  These structured fields drive routing, hierarchy, and
+                  permission-aware behavior.
                 </CardDescription>
               </CardHeader>
               <CardContent className="flex flex-col gap-6">
@@ -169,7 +185,12 @@ export function ActorEditorSheet({
                     <Input
                       id="actor-name"
                       value={form.name}
-                      onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
+                      onChange={(event) =>
+                        setForm((current) => ({
+                          ...current,
+                          name: event.target.value,
+                        }))
+                      }
                       placeholder="Alice"
                     />
                   </Field>
@@ -179,7 +200,12 @@ export function ActorEditorSheet({
                       <FieldLabel>Role</FieldLabel>
                       <Select
                         value={form.role}
-                        onValueChange={(value) => setForm((current) => ({ ...current, role: value as ActorRole }))}
+                        onValueChange={(value) =>
+                          setForm((current) => ({
+                            ...current,
+                            role: value as ActorRole,
+                          }))
+                        }
                       >
                         <SelectTrigger className="w-full">
                           <SelectValue placeholder="Select a role" />
@@ -188,7 +214,7 @@ export function ActorEditorSheet({
                           <SelectGroup>
                             {ACTOR_ROLE_OPTIONS.map((role) => (
                               <SelectItem key={role} value={role}>
-                                {role.replace(/_/g, ' ')}
+                                {role.replace(/_/g, " ")}
                               </SelectItem>
                             ))}
                           </SelectGroup>
@@ -201,7 +227,12 @@ export function ActorEditorSheet({
                       <Input
                         id="actor-title"
                         value={form.title}
-                        onChange={(event) => setForm((current) => ({ ...current, title: event.target.value }))}
+                        onChange={(event) =>
+                          setForm((current) => ({
+                            ...current,
+                            title: event.target.value,
+                          }))
+                        }
                         placeholder="Principal Researcher"
                       />
                     </Field>
@@ -211,8 +242,13 @@ export function ActorEditorSheet({
                     <Field>
                       <FieldLabel>Reports to</FieldLabel>
                       <Select
-                        value={form.parentId || 'none'}
-                        onValueChange={(value) => setForm((current) => ({ ...current, parentId: value === 'none' ? null : value }))}
+                        value={form.parentId || "none"}
+                        onValueChange={(value) =>
+                          setForm((current) => ({
+                            ...current,
+                            parentId: value === "none" ? null : value,
+                          }))
+                        }
                       >
                         <SelectTrigger className="w-full">
                           <SelectValue placeholder="No manager" />
@@ -224,7 +260,9 @@ export function ActorEditorSheet({
                               .filter((option) => option.id !== actor?.id)
                               .map((option) => (
                                 <SelectItem key={option.id} value={option.id}>
-                                  {option.definition.name} · {option.definition.title || option.definition.role}
+                                  {option.definition.name} ·{" "}
+                                  {option.definition.title ||
+                                    option.definition.role}
                                 </SelectItem>
                               ))}
                           </SelectGroup>
@@ -232,17 +270,28 @@ export function ActorEditorSheet({
                       </Select>
                     </Field>
 
-                    <Field orientation="horizontal" className="items-start rounded-2xl border border-border p-4">
+                    <Field
+                      orientation="horizontal"
+                      className="items-start rounded-2xl border border-border p-4"
+                    >
                       <FieldContent>
-                        <FieldLabel htmlFor="represent-user">Can represent user</FieldLabel>
+                        <FieldLabel htmlFor="represent-user">
+                          Can represent user
+                        </FieldLabel>
                         <FieldDescription>
-                          Hard switch. The permission system still decides what is actually allowed at runtime.
+                          Hard switch. The permission system still decides what
+                          is actually allowed at runtime.
                         </FieldDescription>
                       </FieldContent>
                       <Switch
                         id="represent-user"
                         checked={form.canRepresentUser}
-                        onCheckedChange={(checked) => setForm((current) => ({ ...current, canRepresentUser: checked }))}
+                        onCheckedChange={(checked) =>
+                          setForm((current) => ({
+                            ...current,
+                            canRepresentUser: checked,
+                          }))
+                        }
                       />
                     </Field>
                   </FieldGroup>
@@ -253,7 +302,7 @@ export function ActorEditorSheet({
                       {form.avatarUrl ? (
                         <img
                           src={resolveFileUrl(form.avatarUrl)}
-                          alt={form.name || 'Actor avatar'}
+                          alt={form.name || "Actor avatar"}
                           className="size-20 rounded-2xl object-cover"
                         />
                       ) : (
@@ -271,7 +320,7 @@ export function ActorEditorSheet({
                             if (file) {
                               void handleAvatarUpload(file)
                             }
-                            event.target.value = ''
+                            event.target.value = ""
                           }}
                         />
                         {avatarUploading ? (
@@ -291,20 +340,30 @@ export function ActorEditorSheet({
               <CardHeader>
                 <CardTitle>Specialties</CardTitle>
                 <CardDescription>
-                  Structured specialties stay machine-readable. Installable skills are managed separately.
+                  Structured specialties stay machine-readable. Installable
+                  skills are managed separately.
                 </CardDescription>
               </CardHeader>
               <CardContent>
                 <Field>
-                  <FieldLabel htmlFor="actor-specialties">Specialties</FieldLabel>
+                  <FieldLabel htmlFor="actor-specialties">
+                    Specialties
+                  </FieldLabel>
                   <Textarea
                     id="actor-specialties"
                     value={form.specialties}
-                    onChange={(event) => setForm((current) => ({ ...current, specialties: event.target.value }))}
+                    onChange={(event) =>
+                      setForm((current) => ({
+                        ...current,
+                        specialties: event.target.value,
+                      }))
+                    }
                     placeholder="code.review, research, incident.response"
                     rows={3}
                   />
-                  <FieldDescription>Comma or newline separated.</FieldDescription>
+                  <FieldDescription>
+                    Comma or newline separated.
+                  </FieldDescription>
                 </Field>
               </CardContent>
             </Card>
@@ -314,10 +373,15 @@ export function ActorEditorSheet({
                 <div>
                   <CardTitle>Profile documents</CardTitle>
                   <CardDescription>
-                    Only existing docs are listed here. Add standard or custom sections explicitly when needed.
+                    Only existing docs are listed here. Add standard or custom
+                    sections explicitly when needed.
                   </CardDescription>
                 </div>
-                <Button type="button" variant="outline" onClick={() => setCreateDocDialogOpen(true)}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => setCreateDocDialogOpen(true)}
+                >
                   <Plus data-icon="inline-start" />
                   Add doc
                 </Button>
@@ -337,7 +401,12 @@ export function ActorEditorSheet({
                               <FieldLabel>Section title</FieldLabel>
                               <Input
                                 value={doc.title}
-                                onChange={(event) => updateDoc(doc.id, (current) => ({ ...current, title: event.target.value }))}
+                                onChange={(event) =>
+                                  updateDoc(doc.id, (current) => ({
+                                    ...current,
+                                    title: event.target.value,
+                                  }))
+                                }
                               />
                             </Field>
 
@@ -358,7 +427,10 @@ export function ActorEditorSheet({
                                 <SelectContent>
                                   <SelectGroup>
                                     {VISIBILITY_OPTIONS.map((option) => (
-                                      <SelectItem key={option.value} value={option.value}>
+                                      <SelectItem
+                                        key={option.value}
+                                        value={option.value}
+                                      >
                                         {option.label}
                                       </SelectItem>
                                     ))}
@@ -385,7 +457,12 @@ export function ActorEditorSheet({
                           <CanonicalContentEditor
                             workspaceId={workspaceId}
                             value={doc.content}
-                            onChange={(blocks) => updateDoc(doc.id, (current) => ({ ...current, content: blocks }))}
+                            onChange={(blocks) =>
+                              updateDoc(doc.id, (current) => ({
+                                ...current,
+                                content: blocks,
+                              }))
+                            }
                             placeholder="Write this actor the way you would describe a real person."
                           />
 
@@ -397,7 +474,9 @@ export function ActorEditorSheet({
                                 onClick={() =>
                                   setForm((current) => ({
                                     ...current,
-                                    docs: current.docs.filter((item) => item.id !== doc.id),
+                                    docs: current.docs.filter(
+                                      (item) => item.id !== doc.id
+                                    ),
                                   }))
                                 }
                               >
@@ -412,7 +491,8 @@ export function ActorEditorSheet({
                   </div>
                 ) : (
                   <div className="rounded-3xl border border-dashed border-border p-6 text-sm text-muted-foreground">
-                    No docs yet. Add a standard doc or a custom section to start defining this actor.
+                    No docs yet. Add a standard doc or a custom section to start
+                    defining this actor.
                   </div>
                 )}
               </CardContent>
@@ -421,7 +501,11 @@ export function ActorEditorSheet({
         </ScrollArea>
 
         <SheetFooter className="border-t border-border">
-          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => onOpenChange(false)}
+          >
             Cancel
           </Button>
           <Button
@@ -429,8 +513,10 @@ export function ActorEditorSheet({
             onClick={() => void saveActor()}
             disabled={isSaving || avatarUploading}
           >
-            {isSaving ? <Loader2 className="animate-spin" data-icon="inline-start" /> : null}
-            {actor ? 'Save actor' : 'Create actor'}
+            {isSaving ? (
+              <Loader2 className="animate-spin" data-icon="inline-start" />
+            ) : null}
+            {actor ? "Save actor" : "Create actor"}
           </Button>
         </SheetFooter>
       </SheetContent>
@@ -443,7 +529,8 @@ export function ActorEditorSheet({
           setForm((current) => ({
             ...current,
             docs: [...current.docs, doc].sort((left, right) => {
-              if (right.priority !== left.priority) return right.priority - left.priority
+              if (right.priority !== left.priority)
+                return right.priority - left.priority
               return left.title.localeCompare(right.title)
             }),
           }))

@@ -1,21 +1,24 @@
-import crypto, { createHash, randomBytes } from "node:crypto";
-import type { FastifyInstance } from "fastify";
-import { config } from "../../config/index.js";
-import { transaction } from "../../infrastructure/database/index.js";
-import { executeSql, executeSqlOn } from "../../infrastructure/database/kysely.js";
-import type { Queryable } from "../../infrastructure/events/index.js";
-import { authorizeAction } from "../access/service.js";
+import crypto, { createHash, randomBytes } from "node:crypto"
+import type { FastifyInstance } from "fastify"
+import { config } from "../../config/index.js"
+import { transaction } from "../../infrastructure/database/index.js"
+import {
+  executeSql,
+  executeSqlOn,
+} from "../../infrastructure/database/kysely.js"
+import type { Queryable } from "../../infrastructure/events/index.js"
+import { authorizeAction } from "../access/service.js"
 import {
   getConversationParticipant,
   listVisibleConversationItemsForParticipant,
   requireRemoteAgentConversationAccess,
   sendConversationMessageFromParticipant,
-} from "../chat/service.js";
-import { getFileUrlById } from "../files/service.js";
-import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js";
+} from "../chat/service.js"
+import { getFileUrlById } from "../files/service.js"
+import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 
-type RemoteAgentRuntimeKind = "claude_code" | "codex";
-type RemoteAgentAccessPolicy = "workspace_open" | "approval_required";
+type RemoteAgentRuntimeKind = "claude_code" | "codex"
+type RemoteAgentAccessPolicy = "workspace_open" | "approval_required"
 type RemoteAgentRuntimeState =
   | "offline"
   | "idle"
@@ -23,94 +26,94 @@ type RemoteAgentRuntimeState =
   | "waiting_user_input"
   | "plan_drafting"
   | "waiting_plan_approval"
-  | "error";
+  | "error"
 
 type RuntimeCapabilities = {
-  supportsRequestUserInput?: boolean;
-  supportsPlanMode?: boolean;
-  supportsPersistentSession?: boolean;
-  supportsCodexAppServer?: boolean;
-  supportsStructuredIo?: boolean;
-};
+  supportsRequestUserInput?: boolean
+  supportsPlanMode?: boolean
+  supportsPersistentSession?: boolean
+  supportsCodexAppServer?: boolean
+  supportsStructuredIo?: boolean
+}
 
 type MachineConnection = {
-  machineId: string;
-  workspaceId: string;
-  sessionId: string;
-  socket: any;
-  ready: boolean;
-};
+  machineId: string
+  workspaceId: string
+  sessionId: string
+  socket: any
+  ready: boolean
+}
 
 type RuntimeCatalogEntry = {
-  runtimeKind: RemoteAgentRuntimeKind;
-  executablePath?: string;
+  runtimeKind: RemoteAgentRuntimeKind
+  executablePath?: string
   status:
     | "available"
     | "missing_binary"
     | "broken_path"
     | "unsupported_platform"
-    | "runtime_error";
-  version?: string;
-  metadata?: Record<string, unknown>;
-  lastError?: string;
-};
+    | "runtime_error"
+  version?: string
+  metadata?: Record<string, unknown>
+  lastError?: string
+}
 
 type RuntimeStatusMessage = {
-  type: "agent:status";
-  remoteAgentId: string;
-  state: RemoteAgentRuntimeState;
-  statusText?: string;
-  conversationId?: string | null;
-  interactionId?: string | null;
-  sessionId?: string | null;
-  lastError?: string | null;
-  runKey?: string | null;
-  capabilities?: RuntimeCapabilities;
-};
+  type: "agent:status"
+  remoteAgentId: string
+  state: RemoteAgentRuntimeState
+  statusText?: string
+  conversationId?: string | null
+  interactionId?: string | null
+  sessionId?: string | null
+  lastError?: string | null
+  runKey?: string | null
+  capabilities?: RuntimeCapabilities
+}
 
 type DeliveryRow = {
-  id: string;
-  remote_agent_id: string;
-  conversation_id: string;
-  item_id: string;
-  status: string;
-  created_at: string | Date;
-  sequence: string | number;
-};
+  id: string
+  remote_agent_id: string
+  conversation_id: string
+  item_id: string
+  status: string
+  created_at: string | Date
+  sequence: string | number
+}
 
-const machineConnections = new Map<string, MachineConnection>();
+const machineConnections = new Map<string, MachineConnection>()
 
 function toIso(value: string | Date | null | undefined) {
-  if (typeof value === "string") return value;
-  if (value instanceof Date) return value.toISOString();
-  return undefined;
+  if (typeof value === "string") return value
+  if (value instanceof Date) return value.toISOString()
+  return undefined
 }
 
 function hashMachineApiKey(apiKey: string) {
-  return createHash("sha256").update(apiKey).digest("hex");
+  return createHash("sha256").update(apiKey).digest("hex")
 }
 
 function buildDaemonCommand(apiKey: string) {
-  return `npx @synapse/remote-agent-daemon --server-url ${config.app.baseUrl} --api-key ${apiKey}`;
+  return `npx @synapse/remote-agent-daemon --server-url ${config.app.baseUrl} --api-key ${apiKey}`
 }
 
 function safeSend(connection: MachineConnection, payload: unknown) {
   if (!connection.ready || connection.socket.readyState !== 1) {
-    return false;
+    return false
   }
   try {
-    connection.socket.send(JSON.stringify(payload));
-    return true;
+    connection.socket.send(JSON.stringify(payload))
+    return true
   } catch {
-    return false;
+    return false
   }
 }
 
 async function loadMachineByApiKey(apiKey: string) {
   const result = await executeSql<{
-    id: string;
-    workspace_id: string;
-    trust_status: string;
+    id: string
+    workspace_id: string
+    trust_status: string
   }>(
     `
       SELECT id, workspace_id, trust_status
@@ -118,18 +121,18 @@ async function loadMachineByApiKey(apiKey: string) {
       WHERE api_key_hash = $1
       LIMIT 1
     `,
-    [hashMachineApiKey(apiKey)],
-  );
-  return result.rows[0] ?? null;
+    [hashMachineApiKey(apiKey)]
+  )
+  return result.rows[0] ?? null
 }
 
 async function loadBoundRemoteAgentsForMachine(machineId: string) {
   const result = await executeSql<{
-    remote_agent_id: string;
-    runtime_kind: RemoteAgentRuntimeKind;
-    runtime_path: string | null;
-    local_root_path: string | null;
-    last_session_id: string | null;
+    remote_agent_id: string
+    runtime_kind: RemoteAgentRuntimeKind
+    runtime_path: string | null
+    local_root_path: string | null
+    last_session_id: string | null
   }>(
     `
       SELECT
@@ -145,9 +148,9 @@ async function loadBoundRemoteAgentsForMachine(machineId: string) {
         AND agent.is_active = TRUE
       ORDER BY agent.created_at ASC, agent.id ASC
     `,
-    [machineId],
-  );
-  return result.rows;
+    [machineId]
+  )
+  return result.rows
 }
 
 async function setMachineLifecycleState(
@@ -155,7 +158,7 @@ async function setMachineLifecycleState(
   state: "online" | "offline",
   queryable: Queryable = {
     query: (text, params) => executeSql(text, params),
-  },
+  }
 ) {
   await executeSqlOn(
     queryable,
@@ -166,8 +169,8 @@ async function setMachineLifecycleState(
           updated_at = NOW()
       WHERE id = $1
     `,
-    [machineId, state],
-  );
+    [machineId, state]
+  )
 }
 
 async function upsertRuntimeCatalog(
@@ -175,7 +178,7 @@ async function upsertRuntimeCatalog(
   entries: RuntimeCatalogEntry[],
   queryable: Queryable = {
     query: (text, params) => executeSql(text, params),
-  },
+  }
 ) {
   for (const entry of entries) {
     await executeSqlOn(
@@ -211,18 +214,18 @@ async function upsertRuntimeCatalog(
         entry.version ?? null,
         JSON.stringify(entry.metadata ?? {}),
         entry.lastError ?? null,
-      ],
-    );
+      ]
+    )
   }
 }
 
 async function startBoundRemoteAgents(machineId: string) {
-  const connection = machineConnections.get(machineId);
+  const connection = machineConnections.get(machineId)
   if (!connection || !connection.ready) {
-    return;
+    return
   }
 
-  const bindings = await loadBoundRemoteAgentsForMachine(machineId);
+  const bindings = await loadBoundRemoteAgentsForMachine(machineId)
   for (const binding of bindings) {
     safeSend(connection, {
       type: "agent:start",
@@ -232,14 +235,14 @@ async function startBoundRemoteAgents(machineId: string) {
       localRootPath: binding.local_root_path,
       sessionId: binding.last_session_id,
       serverUrl: config.app.baseUrl,
-    });
+    })
   }
 
   if (bindings.length > 0) {
     await notifyPendingRemoteAgentDeliveries({
       machineId,
       remoteAgentIds: bindings.map((binding) => binding.remote_agent_id),
-    });
+    })
   }
 }
 
@@ -248,7 +251,7 @@ async function updateRemoteAgentRuntimeStatus(
   message: RuntimeStatusMessage,
   queryable: Queryable = {
     query: (text, params) => executeSql(text, params),
-  },
+  }
 ) {
   const runStatus =
     message.state === "offline"
@@ -257,7 +260,7 @@ async function updateRemoteAgentRuntimeStatus(
         ? "failed"
         : message.state === "idle"
           ? "completed"
-          : "running";
+          : "running"
   const runId =
     message.runKey && message.runKey.trim()
       ? await ensureRemoteAgentRun({
@@ -269,7 +272,7 @@ async function updateRemoteAgentRuntimeStatus(
           lastError: message.lastError ?? null,
           queryable,
         })
-      : null;
+      : null
 
   await executeSqlOn(
     queryable,
@@ -315,8 +318,8 @@ async function updateRemoteAgentRuntimeStatus(
       message.sessionId ?? null,
       message.lastError ?? null,
       message.capabilities ? JSON.stringify(message.capabilities) : null,
-    ],
-  );
+    ]
+  )
 
   if (runId && message.interactionId) {
     await executeSqlOn(
@@ -327,45 +330,45 @@ async function updateRemoteAgentRuntimeStatus(
             updated_at = NOW()
         WHERE id = $1
       `,
-      [runId, message.interactionId],
-    );
+      [runId, message.interactionId]
+    )
   }
 
-  await emitRemoteAgentRuntimeUpdated(message.remoteAgentId, queryable);
+  await emitRemoteAgentRuntimeUpdated(message.remoteAgentId, queryable)
 }
 
 async function loadPendingRemoteAgentDeliveries(params: {
-  machineId?: string;
-  conversationId?: string;
-  remoteAgentIds?: string[];
+  machineId?: string
+  conversationId?: string
+  remoteAgentIds?: string[]
 }) {
-  const values: any[] = [];
+  const values: any[] = []
   const where: string[] = [
     "delivery.status = 'pending'",
     "binding.status = 'active'",
-  ];
+  ]
 
   if (params.machineId) {
-    values.push(params.machineId);
-    where.push(`binding.machine_id = $${values.length}`);
+    values.push(params.machineId)
+    where.push(`binding.machine_id = $${values.length}`)
   }
 
   if (params.conversationId) {
-    values.push(params.conversationId);
-    where.push(`delivery.conversation_id = $${values.length}`);
+    values.push(params.conversationId)
+    where.push(`delivery.conversation_id = $${values.length}`)
   }
 
   if (params.remoteAgentIds && params.remoteAgentIds.length > 0) {
-    values.push(params.remoteAgentIds);
-    where.push(`delivery.remote_agent_id = ANY($${values.length}::uuid[])`);
+    values.push(params.remoteAgentIds)
+    where.push(`delivery.remote_agent_id = ANY($${values.length}::uuid[])`)
   }
 
   return executeSql<{
-    delivery_id: string;
-    remote_agent_id: string;
-    machine_id: string;
-    item_id: string;
-    conversation_id: string;
+    delivery_id: string
+    remote_agent_id: string
+    machine_id: string
+    item_id: string
+    conversation_id: string
   }>(
     `
       SELECT
@@ -380,79 +383,82 @@ async function loadPendingRemoteAgentDeliveries(params: {
       WHERE ${where.join("\n        AND ")}
       ORDER BY delivery.created_at ASC
     `,
-    values,
-  );
+    values
+  )
 }
 
 async function notifyPendingRemoteAgentDeliveries(params: {
-  machineId?: string;
-  conversationId?: string;
-  remoteAgentIds?: string[];
+  machineId?: string
+  conversationId?: string
+  remoteAgentIds?: string[]
 }) {
-  const result = await loadPendingRemoteAgentDeliveries(params);
-  const grouped = new Map<string, Array<{
-    remoteAgentId: string;
-    deliveryId: string;
-    conversationId: string;
-    itemId: string;
-  }>>();
+  const result = await loadPendingRemoteAgentDeliveries(params)
+  const grouped = new Map<
+    string,
+    Array<{
+      remoteAgentId: string
+      deliveryId: string
+      conversationId: string
+      itemId: string
+    }>
+  >()
 
   for (const row of result.rows) {
-    const current = grouped.get(row.machine_id) ?? [];
+    const current = grouped.get(row.machine_id) ?? []
     current.push({
       remoteAgentId: row.remote_agent_id,
       deliveryId: row.delivery_id,
       conversationId: row.conversation_id,
       itemId: row.item_id,
-    });
-    grouped.set(row.machine_id, current);
+    })
+    grouped.set(row.machine_id, current)
   }
 
   for (const [machineId, deliveries] of grouped) {
-    const connection = machineConnections.get(machineId);
-    if (!connection) continue;
+    const connection = machineConnections.get(machineId)
+    if (!connection) continue
     safeSend(connection, {
       type: "agent:deliver",
       deliveries,
-    });
+    })
   }
 }
 
 function parseMachineKeyFromRequest(request: {
-  headers: Record<string, unknown>;
+  headers: Record<string, unknown>
 }) {
   const authorization =
     typeof request.headers.authorization === "string"
       ? request.headers.authorization.trim()
-      : "";
+      : ""
   if (/^Bearer\s+/i.test(authorization)) {
-    return authorization.replace(/^Bearer\s+/i, "").trim();
+    return authorization.replace(/^Bearer\s+/i, "").trim()
   }
 
   const header =
     typeof request.headers["x-synapse-machine-key"] === "string"
       ? request.headers["x-synapse-machine-key"].trim()
-      : "";
-  return header || "";
+      : ""
+  return header || ""
 }
 
 async function authenticateMachineForRemoteAgent(params: {
-  remoteAgentId: string;
-  machineKey: string;
+  remoteAgentId: string
+  machineKey: string
 }) {
   if (!params.machineKey) {
-    throw new Error("Machine key is required");
+    throw new Error("Machine key is required")
   }
-  const machine = await loadMachineByApiKey(params.machineKey);
+  const machine = await loadMachineByApiKey(params.machineKey)
   if (!machine || machine.trust_status !== "active") {
-    throw new Error("Machine authentication failed");
+    throw new Error("Machine authentication failed")
   }
 
   const result = await executeSql<{
-    remote_agent_id: string;
-    machine_id: string;
-    workspace_id: string;
-    local_root_path: string | null;
+    remote_agent_id: string
+    machine_id: string
+    workspace_id: string
+    local_root_path: string | null
   }>(
     `
       SELECT
@@ -468,26 +474,26 @@ async function authenticateMachineForRemoteAgent(params: {
         AND agent.is_active = TRUE
       LIMIT 1
     `,
-    [params.remoteAgentId, machine.id],
-  );
+    [params.remoteAgentId, machine.id]
+  )
 
-  const binding = result.rows[0];
+  const binding = result.rows[0]
   if (!binding) {
-    throw new Error("Remote agent is not bound to this machine");
+    throw new Error("Remote agent is not bound to this machine")
   }
 
   return {
     machineId: machine.id,
     workspaceId: binding.workspace_id,
     localRootPath: binding.local_root_path ?? undefined,
-  };
+  }
 }
 
 async function loadConversationHostWorkspaceId(
   conversationId: string,
   queryable: Queryable = {
     query: (text, params) => executeSql(text, params),
-  },
+  }
 ) {
   const result = await executeSqlOn<{ workspace_id: string | null }>(
     queryable,
@@ -497,25 +503,25 @@ async function loadConversationHostWorkspaceId(
       WHERE id = $1
       LIMIT 1
     `,
-    [conversationId],
-  );
-  return result.rows[0]?.workspace_id ?? null;
+    [conversationId]
+  )
+  return result.rows[0]?.workspace_id ?? null
 }
 
 function mapRuntimeSummaryFromRow(row: {
-  runtime_kind: RemoteAgentRuntimeKind;
-  runtime_state?: RemoteAgentRuntimeState | null;
-  status_text?: string | null;
-  last_session_id?: string | null;
-  active_conversation_id?: string | null;
-  active_interaction_id?: string | null;
-  last_activity_at?: string | Date | null;
-  last_run_started_at?: string | Date | null;
-  last_run_finished_at?: string | Date | null;
-  last_error?: string | null;
-  capabilities?: unknown;
-  pending_conversation_count?: string | number | null;
-  unread_delivery_count?: string | number | null;
+  runtime_kind: RemoteAgentRuntimeKind
+  runtime_state?: RemoteAgentRuntimeState | null
+  status_text?: string | null
+  last_session_id?: string | null
+  active_conversation_id?: string | null
+  active_interaction_id?: string | null
+  last_activity_at?: string | Date | null
+  last_run_started_at?: string | Date | null
+  last_run_finished_at?: string | Date | null
+  last_error?: string | null
+  capabilities?: unknown
+  pending_conversation_count?: string | number | null
+  unread_delivery_count?: string | number | null
 }) {
   return {
     runtimeKind: row.runtime_kind,
@@ -534,21 +540,21 @@ function mapRuntimeSummaryFromRow(row: {
       row.capabilities && typeof row.capabilities === "object"
         ? (row.capabilities as RuntimeCapabilities)
         : {},
-  };
+  }
 }
 
 async function ensureRemoteAgentRun(params: {
-  remoteAgentId: string;
-  conversationId?: string | null;
-  runKey: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled";
-  statusText?: string | null;
-  lastError?: string | null;
-  queryable?: Queryable;
+  remoteAgentId: string
+  conversationId?: string | null
+  runKey: string
+  status: "queued" | "running" | "completed" | "failed" | "cancelled"
+  statusText?: string | null
+  lastError?: string | null
+  queryable?: Queryable
 }) {
   const queryable = params.queryable ?? {
     query: (text: string, values?: any[]) => executeSql(text, values),
-  };
+  }
   const existing = await executeSqlOn<{ id: string }>(
     queryable,
     `
@@ -557,8 +563,8 @@ async function ensureRemoteAgentRun(params: {
       WHERE run_key = $1
       LIMIT 1
     `,
-    [params.runKey],
-  );
+    [params.runKey]
+  )
   if (existing.rows[0]?.id) {
     await executeSqlOn(
       queryable,
@@ -585,9 +591,9 @@ async function ensureRemoteAgentRun(params: {
         params.status,
         params.statusText ?? null,
         params.lastError ?? null,
-      ],
-    );
-    return existing.rows[0].id;
+      ]
+    )
+    return existing.rows[0].id
   }
 
   const inserted = await executeSqlOn<{ id: string }>(
@@ -629,33 +635,33 @@ async function ensureRemoteAgentRun(params: {
       params.status,
       params.statusText ?? null,
       params.lastError ?? null,
-    ],
-  );
-  return inserted.rows[0]!.id;
+    ]
+  )
+  return inserted.rows[0]!.id
 }
 
 export async function loadRemoteAgentRuntimeSnapshot(
   remoteAgentId: string,
   queryable: Queryable = {
     query: (text, params) => executeSql(text, params),
-  },
+  }
 ) {
   const result = await executeSqlOn<{
-    remote_agent_id: string;
-    runtime_kind: RemoteAgentRuntimeKind;
-    runtime_state: RemoteAgentRuntimeState;
-    status_text: string | null;
-    active_conversation_id: string | null;
-    active_interaction_id: string | null;
-    last_session_id: string | null;
-    last_activity_at: string | Date | null;
-    last_run_started_at: string | Date | null;
-    last_run_finished_at: string | Date | null;
-    last_error: string | null;
-    updated_at: string | Date;
-    pending_conversation_count: string | number;
-    unread_delivery_count: string | number;
-    capabilities: unknown;
+    remote_agent_id: string
+    runtime_kind: RemoteAgentRuntimeKind
+    runtime_state: RemoteAgentRuntimeState
+    status_text: string | null
+    active_conversation_id: string | null
+    active_interaction_id: string | null
+    last_session_id: string | null
+    last_activity_at: string | Date | null
+    last_run_started_at: string | Date | null
+    last_run_finished_at: string | Date | null
+    last_error: string | null
+    updated_at: string | Date
+    pending_conversation_count: string | number
+    unread_delivery_count: string | number
+    capabilities: unknown
   }>(
     queryable,
     `
@@ -695,14 +701,14 @@ export async function loadRemoteAgentRuntimeSnapshot(
       WHERE binding.remote_agent_id = $1
       LIMIT 1
     `,
-    [remoteAgentId],
-  );
-  const row = result.rows[0];
+    [remoteAgentId]
+  )
+  const row = result.rows[0]
   if (!row) {
-    return null;
+    return null
   }
-  const updatedAt = toIso(row.updated_at) ?? new Date().toISOString();
-  const lastErrorAt = toIso(row.last_activity_at) || toIso(row.updated_at);
+  const updatedAt = toIso(row.updated_at) ?? new Date().toISOString()
+  const lastErrorAt = toIso(row.last_activity_at) || toIso(row.updated_at)
   return {
     remoteAgentId: row.remote_agent_id,
     runtimeKind: row.runtime_kind,
@@ -716,33 +722,37 @@ export async function loadRemoteAgentRuntimeSnapshot(
     lastActivityAt: toIso(row.last_activity_at),
     lastRunStartedAt: toIso(row.last_run_started_at),
     lastRunFinishedAt: toIso(row.last_run_finished_at),
-    lastError: row.last_error && lastErrorAt
-      ? {
-          message: row.last_error,
-          at: lastErrorAt,
-        }
-      : undefined,
+    lastError:
+      row.last_error && lastErrorAt
+        ? {
+            message: row.last_error,
+            at: lastErrorAt,
+          }
+        : undefined,
     updatedAt,
     capabilities:
       row.capabilities && typeof row.capabilities === "object"
         ? (row.capabilities as RuntimeCapabilities)
         : {},
-  };
+  }
 }
 
 async function emitRemoteAgentRuntimeUpdated(
   remoteAgentId: string,
   queryable: Queryable = {
     query: (text, params) => executeSql(text, params),
-  },
+  }
 ) {
-  const snapshot = await loadRemoteAgentRuntimeSnapshot(remoteAgentId, queryable);
+  const snapshot = await loadRemoteAgentRuntimeSnapshot(
+    remoteAgentId,
+    queryable
+  )
   if (!snapshot) {
-    return null;
+    return null
   }
   const recipients = await executeSqlOn<{
-    workspace_id: string;
-    workspace_member_id: string;
+    workspace_id: string
+    workspace_member_id: string
   }>(
     queryable,
     `
@@ -757,9 +767,9 @@ async function emitRemoteAgentRuntimeUpdated(
       WHERE agent_cp.remote_agent_id = $1
         AND agent_cp.state = 'active'
     `,
-    [remoteAgentId],
-  );
-  const { appendWorkspaceMemberSyncEvent } = await import("../chat/service.js");
+    [remoteAgentId]
+  )
+  const { appendWorkspaceMemberSyncEvent } = await import("../chat/service.js")
   for (const recipient of recipients.rows) {
     await appendWorkspaceMemberSyncEvent(queryable, {
       workspaceId: recipient.workspace_id,
@@ -769,49 +779,49 @@ async function emitRemoteAgentRuntimeUpdated(
         remoteAgentId,
         snapshot,
       },
-    });
+    })
   }
-  return snapshot;
+  return snapshot
 }
 
 async function mapRemoteAgentRow(row: {
-  id: string;
-  workspace_id: string;
-  name: string;
-  title: string;
-  description: string | null;
-  runtime_kind: RemoteAgentRuntimeKind;
-  avatar_file_id: string | null;
-  avatar_emoji: string | null;
-  access_policy: RemoteAgentAccessPolicy;
-  is_active: boolean;
-  is_public_shared: boolean;
-  metadata: unknown;
-  created_by_workspace_member_id: string | null;
-  created_at: string | Date;
-  updated_at: string | Date;
-  machine_id?: string | null;
-  machine_title?: string | null;
-  binding_status?: string | null;
-  runtime_path?: string | null;
-  local_root_path?: string | null;
-  machine_lifecycle_state?: string | null;
-  runtime_state?: RemoteAgentRuntimeState | null;
-  status_text?: string | null;
-  last_session_id?: string | null;
-  active_conversation_id?: string | null;
-  active_interaction_id?: string | null;
-  last_activity_at?: string | Date | null;
-  last_run_started_at?: string | Date | null;
-  last_run_finished_at?: string | Date | null;
-  last_error?: string | null;
-  capabilities?: unknown;
-  pending_conversation_count?: string | number | null;
-  unread_delivery_count?: string | number | null;
+  id: string
+  workspace_id: string
+  name: string
+  title: string
+  description: string | null
+  runtime_kind: RemoteAgentRuntimeKind
+  avatar_file_id: string | null
+  avatar_emoji: string | null
+  access_policy: RemoteAgentAccessPolicy
+  is_active: boolean
+  is_public_shared: boolean
+  metadata: unknown
+  created_by_workspace_member_id: string | null
+  created_at: string | Date
+  updated_at: string | Date
+  machine_id?: string | null
+  machine_title?: string | null
+  binding_status?: string | null
+  runtime_path?: string | null
+  local_root_path?: string | null
+  machine_lifecycle_state?: string | null
+  runtime_state?: RemoteAgentRuntimeState | null
+  status_text?: string | null
+  last_session_id?: string | null
+  active_conversation_id?: string | null
+  active_interaction_id?: string | null
+  last_activity_at?: string | Date | null
+  last_run_started_at?: string | Date | null
+  last_run_finished_at?: string | Date | null
+  last_error?: string | null
+  capabilities?: unknown
+  pending_conversation_count?: string | number | null
+  unread_delivery_count?: string | number | null
 }) {
   const runtimeSummary = row.machine_id
     ? mapRuntimeSummaryFromRow(row)
-    : undefined;
+    : undefined
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -843,14 +853,14 @@ async function mapRemoteAgentRow(row: {
           runtimeSummary,
         }
       : undefined,
-  };
+  }
 }
 
 export async function listRemoteAgents(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }) {
-  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
   const result = await executeSql<any>(
     `
       SELECT
@@ -891,19 +901,19 @@ export async function listRemoteAgents(params: {
       WHERE agent.workspace_id = $1
       ORDER BY agent.created_at DESC, agent.id DESC
     `,
-    [params.workspaceId],
-  );
+    [params.workspaceId]
+  )
   return {
     remoteAgents: await Promise.all(result.rows.map(mapRemoteAgentRow)),
-  };
+  }
 }
 
 export async function getRemoteAgent(params: {
-  workspaceId: string;
-  remoteAgentId: string;
-  userId: string;
+  workspaceId: string
+  remoteAgentId: string
+  userId: string
 }) {
-  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
   const result = await executeSql<any>(
     `
       SELECT
@@ -945,31 +955,34 @@ export async function getRemoteAgent(params: {
         AND agent.id = $2
       LIMIT 1
     `,
-    [params.workspaceId, params.remoteAgentId],
-  );
-  const row = result.rows[0];
+    [params.workspaceId, params.remoteAgentId]
+  )
+  const row = result.rows[0]
   if (!row) {
-    throw new Error("Remote agent not found");
+    throw new Error("Remote agent not found")
   }
   return {
     remoteAgent: await mapRemoteAgentRow(row),
-  };
+  }
 }
 
 export async function createRemoteAgent(params: {
-  workspaceId: string;
-  userId: string;
-  name: string;
-  title: string;
-  description?: string;
-  runtimeKind: RemoteAgentRuntimeKind;
-  avatarFileId?: string;
-  avatarEmoji?: string;
-  accessPolicy?: RemoteAgentAccessPolicy;
-  isPublicShared?: boolean;
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  userId: string
+  name: string
+  title: string
+  description?: string
+  runtimeKind: RemoteAgentRuntimeKind
+  avatarFileId?: string
+  avatarEmoji?: string
+  accessPolicy?: RemoteAgentAccessPolicy
+  isPublicShared?: boolean
+  metadata?: Record<string, unknown>
 }) {
-  const identity = await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  const identity = await requireWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId
+  )
   const result = await executeSql<any>(
     `
       INSERT INTO remote_agents (
@@ -1002,38 +1015,38 @@ export async function createRemoteAgent(params: {
       params.isPublicShared === true,
       JSON.stringify(params.metadata ?? {}),
       identity.workspaceMemberId,
-    ],
-  );
+    ]
+  )
   return {
     remoteAgent: await mapRemoteAgentRow(result.rows[0]!),
-  };
+  }
 }
 
 export async function updateRemoteAgent(params: {
-  workspaceId: string;
-  remoteAgentId: string;
-  userId: string;
-  name?: string;
-  title?: string;
-  description?: string | null;
-  avatarFileId?: string | null;
-  avatarEmoji?: string | null;
-  accessPolicy?: RemoteAgentAccessPolicy;
-  isPublicShared?: boolean;
-  isActive?: boolean;
-  metadata?: Record<string, unknown>;
+  workspaceId: string
+  remoteAgentId: string
+  userId: string
+  name?: string
+  title?: string
+  description?: string | null
+  avatarFileId?: string | null
+  avatarEmoji?: string | null
+  accessPolicy?: RemoteAgentAccessPolicy
+  isPublicShared?: boolean
+  isActive?: boolean
+  metadata?: Record<string, unknown>
 }) {
-  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
   const existing = await getRemoteAgent({
     workspaceId: params.workspaceId,
     remoteAgentId: params.remoteAgentId,
     userId: params.userId,
-  });
+  })
 
   const nextMetadata = {
     ...(existing.remoteAgent.metadata ?? {}),
     ...(params.metadata ?? {}),
-  };
+  }
 
   const result = await executeSql<any>(
     `
@@ -1058,50 +1071,53 @@ export async function updateRemoteAgent(params: {
       params.name?.trim() || existing.remoteAgent.name,
       params.title?.trim() || existing.remoteAgent.title,
       params.description === undefined
-        ? existing.remoteAgent.description ?? null
+        ? (existing.remoteAgent.description ?? null)
         : params.description,
       params.avatarFileId === undefined
-        ? existing.remoteAgent.avatarFileId ?? null
+        ? (existing.remoteAgent.avatarFileId ?? null)
         : params.avatarFileId,
       params.avatarEmoji === undefined
-        ? existing.remoteAgent.avatarEmoji ?? null
+        ? (existing.remoteAgent.avatarEmoji ?? null)
         : params.avatarEmoji,
       params.accessPolicy ?? existing.remoteAgent.accessPolicy,
       params.isPublicShared ?? existing.remoteAgent.isPublicShared,
       params.isActive ?? existing.remoteAgent.isActive,
       JSON.stringify(nextMetadata),
-    ],
-  );
+    ]
+  )
   return {
     remoteAgent: await mapRemoteAgentRow(result.rows[0]!),
-  };
+  }
 }
 
 export async function deleteRemoteAgent(params: {
-  workspaceId: string;
-  remoteAgentId: string;
-  userId: string;
+  workspaceId: string
+  remoteAgentId: string
+  userId: string
 }) {
-  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
   await executeSql(
     `
       DELETE FROM remote_agents
       WHERE workspace_id = $1
         AND id = $2
     `,
-    [params.workspaceId, params.remoteAgentId],
-  );
-  return { deleted: true };
+    [params.workspaceId, params.remoteAgentId]
+  )
+  return { deleted: true }
 }
 
 export async function createRemoteAgentMachinePairingSession(params: {
-  workspaceId: string;
-  userId: string;
-  title?: string;
-  description?: string;
+  workspaceId: string
+  userId: string
+  title?: string
+  description?: string
 }) {
-  const identity = await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
-  const apiKey = `sk_machine_${randomBytes(24).toString("hex")}`;
+  const identity = await requireWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId
+  )
+  const apiKey = `sk_machine_${randomBytes(24).toString("hex")}`
   const result = await executeSql<any>(
     `
       INSERT INTO remote_agent_machines (
@@ -1123,8 +1139,8 @@ export async function createRemoteAgentMachinePairingSession(params: {
       params.description?.trim() || null,
       hashMachineApiKey(apiKey),
       identity.workspaceMemberId,
-    ],
-  );
+    ]
+  )
 
   return {
     machine: {
@@ -1140,14 +1156,14 @@ export async function createRemoteAgentMachinePairingSession(params: {
     },
     apiKey,
     daemonCommand: buildDaemonCommand(apiKey),
-  };
+  }
 }
 
 export async function listRemoteAgentMachines(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }) {
-  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
   const result = await executeSql<any>(
     `
       SELECT
@@ -1162,8 +1178,8 @@ export async function listRemoteAgentMachines(params: {
       WHERE machine.workspace_id = $1
       ORDER BY machine.created_at DESC
     `,
-    [params.workspaceId],
-  );
+    [params.workspaceId]
+  )
   return {
     machines: result.rows.map((row) => ({
       id: row.id,
@@ -1177,15 +1193,15 @@ export async function listRemoteAgentMachines(params: {
       createdAt: toIso(row.created_at),
       updatedAt: toIso(row.updated_at),
     })),
-  };
+  }
 }
 
 export async function getRemoteAgentMachine(params: {
-  workspaceId: string;
-  machineId: string;
-  userId: string;
+  workspaceId: string
+  machineId: string
+  userId: string
 }) {
-  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
   const [machineResult, catalogResult, bindingResult] = await Promise.all([
     executeSql<any>(
       `
@@ -1195,7 +1211,7 @@ export async function getRemoteAgentMachine(params: {
           AND id = $2
         LIMIT 1
       `,
-      [params.workspaceId, params.machineId],
+      [params.workspaceId, params.machineId]
     ),
     executeSql<any>(
       `
@@ -1204,7 +1220,7 @@ export async function getRemoteAgentMachine(params: {
         WHERE machine_id = $1
         ORDER BY runtime_kind ASC
       `,
-      [params.machineId],
+      [params.machineId]
     ),
     executeSql<any>(
       `
@@ -1242,13 +1258,13 @@ export async function getRemoteAgentMachine(params: {
         WHERE binding.machine_id = $1
         ORDER BY agent.created_at DESC
       `,
-      [params.machineId],
+      [params.machineId]
     ),
-  ]);
+  ])
 
-  const machine = machineResult.rows[0];
+  const machine = machineResult.rows[0]
   if (!machine) {
-    throw new Error("Machine not found");
+    throw new Error("Machine not found")
   }
 
   return {
@@ -1284,29 +1300,29 @@ export async function getRemoteAgentMachine(params: {
       status: row.status,
       runtimeSummary: mapRuntimeSummaryFromRow(row),
     })),
-  };
+  }
 }
 
 export async function bindRemoteAgent(params: {
-  workspaceId: string;
-  remoteAgentId: string;
-  userId: string;
-  machineId: string;
-  runtimeKind: RemoteAgentRuntimeKind;
-  runtimePath?: string;
-  localRootPath?: string;
+  workspaceId: string
+  remoteAgentId: string
+  userId: string
+  machineId: string
+  runtimeKind: RemoteAgentRuntimeKind
+  runtimePath?: string
+  localRootPath?: string
 }) {
-  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
   const existing = await getRemoteAgent({
     workspaceId: params.workspaceId,
     remoteAgentId: params.remoteAgentId,
     userId: params.userId,
-  });
+  })
   if (!existing.remoteAgent.isActive) {
-    throw new Error("Remote agent is inactive");
+    throw new Error("Remote agent is inactive")
   }
   if (existing.remoteAgent.runtimeKind !== params.runtimeKind) {
-    throw new Error("Binding runtime kind must match remote agent runtime kind");
+    throw new Error("Binding runtime kind must match remote agent runtime kind")
   }
 
   const machineResult = await executeSql<{ id: string }>(
@@ -1317,21 +1333,21 @@ export async function bindRemoteAgent(params: {
         AND id = $2
       LIMIT 1
     `,
-    [params.workspaceId, params.machineId],
-  );
+    [params.workspaceId, params.machineId]
+  )
   if (!machineResult.rows[0]) {
-    throw new Error("Machine not found");
+    throw new Error("Machine not found")
   }
 
   const catalogResult = await executeSql<{
-    executable_path: string | null;
+    executable_path: string | null
     status:
       | "available"
       | "missing_binary"
       | "broken_path"
       | "unsupported_platform"
-      | "runtime_error";
-    last_error: string | null;
+      | "runtime_error"
+    last_error: string | null
   }>(
     `
       SELECT executable_path, status, last_error
@@ -1340,26 +1356,26 @@ export async function bindRemoteAgent(params: {
         AND runtime_kind = $2
       LIMIT 1
     `,
-    [params.machineId, params.runtimeKind],
-  );
+    [params.machineId, params.runtimeKind]
+  )
 
-  const catalogEntry = catalogResult.rows[0] ?? null;
+  const catalogEntry = catalogResult.rows[0] ?? null
   if (!params.runtimePath) {
     if (!catalogEntry) {
-      throw new Error("Machine has not reported runtime availability yet");
+      throw new Error("Machine has not reported runtime availability yet")
     }
     if (catalogEntry.status !== "available") {
       const detail = catalogEntry.last_error?.trim()
         ? `: ${catalogEntry.last_error.trim()}`
-        : "";
+        : ""
       throw new Error(
-        `Runtime ${params.runtimeKind} is not available on this machine (${catalogEntry.status})${detail}`,
-      );
+        `Runtime ${params.runtimeKind} is not available on this machine (${catalogEntry.status})${detail}`
+      )
     }
   }
 
   const effectiveRuntimePath =
-    params.runtimePath ?? catalogEntry?.executable_path ?? null;
+    params.runtimePath ?? catalogEntry?.executable_path ?? null
 
   await executeSql(
     `
@@ -1388,36 +1404,36 @@ export async function bindRemoteAgent(params: {
       params.runtimeKind,
       effectiveRuntimePath,
       params.localRootPath ?? null,
-    ],
-  );
+    ]
+  )
 
-  await startBoundRemoteAgents(params.machineId);
+  await startBoundRemoteAgents(params.machineId)
   return getRemoteAgent({
     workspaceId: params.workspaceId,
     remoteAgentId: params.remoteAgentId,
     userId: params.userId,
-  });
+  })
 }
 
 export async function listRemoteAgentGroupInteractionGrants(params: {
-  workspaceId: string;
-  remoteAgentId: string;
-  userId: string;
+  workspaceId: string
+  remoteAgentId: string
+  userId: string
 }) {
-  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  await requireWorkspaceMemberIdentity(params.workspaceId, params.userId)
   await getRemoteAgent({
     workspaceId: params.workspaceId,
     remoteAgentId: params.remoteAgentId,
     userId: params.userId,
-  });
+  })
   const result = await executeSql<{
-    workspace_member_id: string;
-    granted_by_workspace_member_id: string | null;
-    created_at: string | Date;
-    updated_at: string | Date;
-    user_id: string;
-    user_name: string | null;
-    user_avatar_file_id: string | null;
+    workspace_member_id: string
+    granted_by_workspace_member_id: string | null
+    created_at: string | Date
+    updated_at: string | Date
+    user_id: string
+    user_name: string | null
+    user_avatar_file_id: string | null
   }>(
     `
       SELECT
@@ -1434,12 +1450,13 @@ export async function listRemoteAgentGroupInteractionGrants(params: {
       WHERE grant_row.remote_agent_id = $1
       ORDER BY grant_row.created_at ASC
     `,
-    [params.remoteAgentId],
-  );
+    [params.remoteAgentId]
+  )
   return {
     grants: result.rows.map((row) => ({
       workspaceMemberId: row.workspace_member_id,
-      grantedByWorkspaceMemberId: row.granted_by_workspace_member_id ?? undefined,
+      grantedByWorkspaceMemberId:
+        row.granted_by_workspace_member_id ?? undefined,
       createdAt: toIso(row.created_at),
       updatedAt: toIso(row.updated_at),
       userId: row.user_id,
@@ -1448,22 +1465,25 @@ export async function listRemoteAgentGroupInteractionGrants(params: {
         ? getFileUrlById(row.user_avatar_file_id)
         : undefined,
     })),
-  };
+  }
 }
 
 export async function updateRemoteAgentGroupInteractionGrants(params: {
-  workspaceId: string;
-  remoteAgentId: string;
-  userId: string;
-  workspaceMemberIds: string[];
+  workspaceId: string
+  remoteAgentId: string
+  userId: string
+  workspaceMemberIds: string[]
 }) {
-  const identity = await requireWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  const identity = await requireWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId
+  )
   await getRemoteAgent({
     workspaceId: params.workspaceId,
     remoteAgentId: params.remoteAgentId,
     userId: params.userId,
-  });
-  const nextIds = [...new Set(params.workspaceMemberIds.filter(Boolean))];
+  })
+  const nextIds = [...new Set(params.workspaceMemberIds.filter(Boolean))]
   if (nextIds.length > 0) {
     const membership = await executeSql<{ id: string }>(
       `
@@ -1472,10 +1492,10 @@ export async function updateRemoteAgentGroupInteractionGrants(params: {
         WHERE workspace_id = $1
           AND id = ANY($2::uuid[])
       `,
-      [params.workspaceId, nextIds],
-    );
+      [params.workspaceId, nextIds]
+    )
     if (membership.rows.length !== nextIds.length) {
-      throw new Error("Some workspace members are invalid");
+      throw new Error("Some workspace members are invalid")
     }
   }
 
@@ -1486,8 +1506,8 @@ export async function updateRemoteAgentGroupInteractionGrants(params: {
         DELETE FROM remote_agent_group_interaction_grants
         WHERE remote_agent_id = $1
       `,
-      [params.remoteAgentId],
-    );
+      [params.remoteAgentId]
+    )
     for (const workspaceMemberId of nextIds) {
       await executeSqlOn(
         client,
@@ -1501,46 +1521,41 @@ export async function updateRemoteAgentGroupInteractionGrants(params: {
           )
           VALUES ($1, $2, $3, NOW(), NOW())
         `,
-        [
-          params.remoteAgentId,
-          workspaceMemberId,
-          identity.workspaceMemberId,
-        ],
-      );
+        [params.remoteAgentId, workspaceMemberId, identity.workspaceMemberId]
+      )
     }
-  });
+  })
 
-  return listRemoteAgentGroupInteractionGrants(params);
+  return listRemoteAgentGroupInteractionGrants(params)
 }
 
 export async function createRemoteAgentUserInputInteraction(params: {
-  remoteAgentId: string;
-  machineKey: string;
-  conversationId: string;
-  runKey: string;
-  title: string;
-  instructions?: string;
-  questions: Array<Record<string, unknown>>;
-  expiresAt?: string;
+  remoteAgentId: string
+  machineKey: string
+  conversationId: string
+  runKey: string
+  title: string
+  instructions?: string
+  questions: Array<Record<string, unknown>>
+  expiresAt?: string
 }) {
-  const access = await authenticateMachineForRemoteAgent(params);
+  const access = await authenticateMachineForRemoteAgent(params)
   const conversationAccess = await requireRemoteAgentConversationAccess(
     {
       query: (text: string, values?: any[]) => executeSql(text, values),
     },
     params.conversationId,
-    params.remoteAgentId,
-  );
+    params.remoteAgentId
+  )
   const runId = await ensureRemoteAgentRun({
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
     runKey: params.runKey,
     status: "running",
     statusText: "Waiting for user input",
-  });
-  const { createRemoteAgentUserInputInteractionRequest } = await import(
-    "../interactions/service.js"
-  );
+  })
+  const { createRemoteAgentUserInputInteractionRequest } =
+    await import("../interactions/service.js")
   const interaction = await createRemoteAgentUserInputInteractionRequest({
     workspaceId: access.workspaceId,
     conversationId: params.conversationId,
@@ -1550,7 +1565,7 @@ export async function createRemoteAgentUserInputInteraction(params: {
     instructions: params.instructions,
     questions: params.questions as any[],
     expiresAt: params.expiresAt,
-  });
+  })
   await updateRemoteAgentRuntimeStatus(access.machineId, {
     type: "agent:status",
     remoteAgentId: params.remoteAgentId,
@@ -1559,41 +1574,40 @@ export async function createRemoteAgentUserInputInteraction(params: {
     conversationId: params.conversationId,
     interactionId: interaction.id,
     runKey: params.runKey,
-  });
-  return { interaction };
+  })
+  return { interaction }
 }
 
 export async function createRemoteAgentPlanApprovalInteraction(params: {
-  remoteAgentId: string;
-  machineKey: string;
-  conversationId: string;
-  runKey: string;
-  title: string;
-  summary?: string;
-  planMarkdown: string;
-  checklist?: Array<Record<string, unknown>>;
-  collaborationMode?: string;
-  collaborationState?: Record<string, unknown>;
-  expiresAt?: string;
+  remoteAgentId: string
+  machineKey: string
+  conversationId: string
+  runKey: string
+  title: string
+  summary?: string
+  planMarkdown: string
+  checklist?: Array<Record<string, unknown>>
+  collaborationMode?: string
+  collaborationState?: Record<string, unknown>
+  expiresAt?: string
 }) {
-  const access = await authenticateMachineForRemoteAgent(params);
+  const access = await authenticateMachineForRemoteAgent(params)
   const conversationAccess = await requireRemoteAgentConversationAccess(
     {
       query: (text: string, values?: any[]) => executeSql(text, values),
     },
     params.conversationId,
-    params.remoteAgentId,
-  );
+    params.remoteAgentId
+  )
   const runId = await ensureRemoteAgentRun({
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
     runKey: params.runKey,
     status: "running",
     statusText: "Waiting for plan approval",
-  });
-  const { createRemoteAgentPlanApprovalInteractionRequest } = await import(
-    "../interactions/service.js"
-  );
+  })
+  const { createRemoteAgentPlanApprovalInteractionRequest } =
+    await import("../interactions/service.js")
   const interaction = await createRemoteAgentPlanApprovalInteractionRequest({
     workspaceId: access.workspaceId,
     conversationId: params.conversationId,
@@ -1606,7 +1620,7 @@ export async function createRemoteAgentPlanApprovalInteraction(params: {
     collaborationMode: params.collaborationMode,
     collaborationState: params.collaborationState,
     expiresAt: params.expiresAt,
-  });
+  })
   await updateRemoteAgentRuntimeStatus(access.machineId, {
     type: "agent:status",
     remoteAgentId: params.remoteAgentId,
@@ -1615,23 +1629,23 @@ export async function createRemoteAgentPlanApprovalInteraction(params: {
     conversationId: params.conversationId,
     interactionId: interaction.id,
     runKey: params.runKey,
-  });
-  return { interaction };
+  })
+  return { interaction }
 }
 
 export async function createRemoteAgentDeliveriesForItem(params: {
-  workspaceId?: string;
-  conversationId: string;
-  itemId: string;
-  authorParticipantId?: string;
-  queryable?: Queryable;
+  workspaceId?: string
+  conversationId: string
+  itemId: string
+  authorParticipantId?: string
+  queryable?: Queryable
 }) {
   const queryable = params.queryable ?? {
     query: (text: string, values?: any[]) => executeSql(text, values),
-  };
+  }
   const participants = await executeSqlOn<{
-    participant_id: string;
-    remote_agent_id: string;
+    participant_id: string
+    remote_agent_id: string
   }>(
     queryable,
     `
@@ -1657,8 +1671,8 @@ export async function createRemoteAgentDeliveriesForItem(params: {
           )
         )
     `,
-    [params.conversationId, params.authorParticipantId ?? null, params.itemId],
-  );
+    [params.conversationId, params.authorParticipantId ?? null, params.itemId]
+  )
 
   for (const participant of participants.rows) {
     const inserted = await executeSqlOn(
@@ -1676,8 +1690,8 @@ export async function createRemoteAgentDeliveriesForItem(params: {
         VALUES ($1, $2, $3, 'pending', 0, NOW(), NOW())
         ON CONFLICT (remote_agent_id, item_id) DO NOTHING
       `,
-      [participant.remote_agent_id, params.conversationId, params.itemId],
-    );
+      [participant.remote_agent_id, params.conversationId, params.itemId]
+    )
 
     if ((inserted.rowCount ?? 0) > 0) {
       await executeSqlOn(
@@ -1699,25 +1713,25 @@ export async function createRemoteAgentDeliveriesForItem(params: {
               last_delivery_at = NOW(),
               updated_at = NOW()
         `,
-        [participant.remote_agent_id, params.conversationId, params.itemId],
-      );
+        [participant.remote_agent_id, params.conversationId, params.itemId]
+      )
     }
   }
 }
 
 export async function notifyRemoteAgentDeliveriesForConversation(
-  conversationId: string,
+  conversationId: string
 ) {
   await notifyPendingRemoteAgentDeliveries({
     conversationId,
-  });
+  })
 }
 
 export async function listRemoteAgentConversations(params: {
-  remoteAgentId: string;
-  machineKey: string;
+  remoteAgentId: string
+  machineKey: string
 }) {
-  await authenticateMachineForRemoteAgent(params);
+  await authenticateMachineForRemoteAgent(params)
   const result = await executeSql<any>(
     `
       SELECT
@@ -1736,8 +1750,8 @@ export async function listRemoteAgentConversations(params: {
         AND cp.state = 'active'
       ORDER BY COALESCE(view.updated_at, c.updated_at, c.created_at) DESC, c.id ASC
     `,
-    [params.remoteAgentId],
-  );
+    [params.remoteAgentId]
+  )
   return {
     conversations: result.rows.map((row) => ({
       id: row.id,
@@ -1747,15 +1761,15 @@ export async function listRemoteAgentConversations(params: {
       unreadCount: Number(row.unread_count ?? 0),
       updatedAt: toIso(row.updated_at),
     })),
-  };
+  }
 }
 
 export async function checkRemoteAgentMessages(params: {
-  remoteAgentId: string;
-  machineKey: string;
-  limit?: number;
+  remoteAgentId: string
+  machineKey: string
+  limit?: number
 }) {
-  await authenticateMachineForRemoteAgent(params);
+  await authenticateMachineForRemoteAgent(params)
   const result = await executeSql<DeliveryRow>(
     `
       SELECT
@@ -1773,8 +1787,8 @@ export async function checkRemoteAgentMessages(params: {
       ORDER BY item.sequence ASC, delivery.created_at ASC
       LIMIT $2
     `,
-    [params.remoteAgentId, Math.min(Math.max(params.limit ?? 100, 1), 500)],
-  );
+    [params.remoteAgentId, Math.min(Math.max(params.limit ?? 100, 1), 500)]
+  )
 
   return {
     deliveries: result.rows.map((row) => ({
@@ -1785,25 +1799,25 @@ export async function checkRemoteAgentMessages(params: {
       createdAt: toIso(row.created_at),
       status: row.status,
     })),
-  };
+  }
 }
 
 export async function ackRemoteAgentDeliveries(params: {
-  remoteAgentId: string;
-  machineKey: string;
-  deliveryIds: string[];
+  remoteAgentId: string
+  machineKey: string
+  deliveryIds: string[]
 }) {
-  await authenticateMachineForRemoteAgent(params);
-  const uniqueIds = [...new Set(params.deliveryIds.filter(Boolean))];
+  await authenticateMachineForRemoteAgent(params)
+  const uniqueIds = [...new Set(params.deliveryIds.filter(Boolean))]
   if (uniqueIds.length === 0) {
-    return { acked: 0 };
+    return { acked: 0 }
   }
 
   const rows = await executeSql<{
-    id: string;
-    conversation_id: string;
-    item_id: string;
-    sequence: string | number;
+    id: string
+    conversation_id: string
+    item_id: string
+    sequence: string | number
   }>(
     `
       SELECT
@@ -1816,8 +1830,8 @@ export async function ackRemoteAgentDeliveries(params: {
       WHERE delivery.remote_agent_id = $1
         AND delivery.id = ANY($2::uuid[])
     `,
-    [params.remoteAgentId, uniqueIds],
-  );
+    [params.remoteAgentId, uniqueIds]
+  )
 
   await executeSql(
     `
@@ -1828,18 +1842,18 @@ export async function ackRemoteAgentDeliveries(params: {
       WHERE remote_agent_id = $1
         AND id = ANY($2::uuid[])
     `,
-    [params.remoteAgentId, uniqueIds],
-  );
+    [params.remoteAgentId, uniqueIds]
+  )
 
-  const byConversation = new Map<string, { sequence: number; itemId: string }>();
+  const byConversation = new Map<string, { sequence: number; itemId: string }>()
   for (const row of rows.rows) {
-    const sequence = Number(row.sequence);
-    const existing = byConversation.get(row.conversation_id);
+    const sequence = Number(row.sequence)
+    const existing = byConversation.get(row.conversation_id)
     if (!existing || sequence > existing.sequence) {
       byConversation.set(row.conversation_id, {
         sequence,
         itemId: row.item_id,
-      });
+      })
     }
   }
 
@@ -1873,31 +1887,31 @@ export async function ackRemoteAgentDeliveries(params: {
             ),
             updated_at = NOW()
       `,
-      [params.remoteAgentId, conversationId, state.itemId, state.sequence],
-    );
+      [params.remoteAgentId, conversationId, state.itemId, state.sequence]
+    )
   }
 
   return {
     acked: uniqueIds.length,
-  };
+  }
 }
 
 export async function getRemoteAgentConversationHistory(params: {
-  remoteAgentId: string;
-  machineKey: string;
-  conversationId: string;
-  afterSequence?: number;
-  beforeSequence?: number;
-  limit?: number;
+  remoteAgentId: string
+  machineKey: string
+  conversationId: string
+  afterSequence?: number
+  beforeSequence?: number
+  limit?: number
 }) {
-  await authenticateMachineForRemoteAgent(params);
+  await authenticateMachineForRemoteAgent(params)
   const access = await requireRemoteAgentConversationAccess(
     {
       query: (text: string, values?: any[]) => executeSql(text, values),
     },
     params.conversationId,
-    params.remoteAgentId,
-  );
+    params.remoteAgentId
+  )
 
   const items = await listVisibleConversationItemsForParticipant({
     conversationId: params.conversationId,
@@ -1905,33 +1919,33 @@ export async function getRemoteAgentConversationHistory(params: {
     afterSequence: params.afterSequence,
     beforeSequence: params.beforeSequence,
     limit: params.limit,
-  });
+  })
 
   return {
     items,
-  };
+  }
 }
 
 export async function sendRemoteAgentConversationMessage(params: {
-  remoteAgentId: string;
-  machineKey: string;
-  conversationId: string;
-  clientMessageId?: string;
-  contentBlocks: any[];
-  replyToItemId?: string;
-  metadata?: Record<string, unknown>;
+  remoteAgentId: string
+  machineKey: string
+  conversationId: string
+  clientMessageId?: string
+  contentBlocks: any[]
+  replyToItemId?: string
+  metadata?: Record<string, unknown>
 }) {
-  await authenticateMachineForRemoteAgent(params);
+  await authenticateMachineForRemoteAgent(params)
   const item = await transaction(async (client) => {
     const access = await requireRemoteAgentConversationAccess(
       client,
       params.conversationId,
-      params.remoteAgentId,
-    );
+      params.remoteAgentId
+    )
     const hostWorkspaceId = await loadConversationHostWorkspaceId(
       params.conversationId,
-      client,
-    );
+      client
+    )
     return sendConversationMessageFromParticipant({
       workspaceId: hostWorkspaceId ?? undefined,
       conversationId: params.conversationId,
@@ -1942,35 +1956,35 @@ export async function sendRemoteAgentConversationMessage(params: {
       replyToItemId: params.replyToItemId,
       metadata: params.metadata,
       queryable: client,
-    });
-  });
+    })
+  })
 
-  await notifyRemoteAgentDeliveriesForConversation(params.conversationId);
+  await notifyRemoteAgentDeliveriesForConversation(params.conversationId)
 
   return {
     item,
-  };
+  }
 }
 
 export async function searchRemoteAgentMessages(params: {
-  remoteAgentId: string;
-  machineKey: string;
-  conversationId: string;
-  query: string;
-  limit?: number;
+  remoteAgentId: string
+  machineKey: string
+  conversationId: string
+  query: string
+  limit?: number
 }) {
-  await authenticateMachineForRemoteAgent(params);
+  await authenticateMachineForRemoteAgent(params)
   const access = await requireRemoteAgentConversationAccess(
     {
       query: (text: string, values?: any[]) => executeSql(text, values),
     },
     params.conversationId,
-    params.remoteAgentId,
-  );
+    params.remoteAgentId
+  )
 
   const result = await executeSql<{
-    id: string;
-    sequence: string | number;
+    id: string
+    sequence: string | number
   }>(
     `
       SELECT DISTINCT item.id, item.sequence
@@ -2003,32 +2017,33 @@ export async function searchRemoteAgentMessages(params: {
       `%${params.query.trim()}%`,
       access.participant.id,
       Math.min(Math.max(params.limit ?? 20, 1), 100),
-    ],
-  );
+    ]
+  )
 
   return {
     matches: result.rows.map((row) => ({
       itemId: row.id,
       sequence: Number(row.sequence),
     })),
-  };
+  }
 }
 
 export async function notifyRemoteAgentInteractionResolved(
-  interactionId: string,
+  interactionId: string
 ) {
-  const { getInteractionRequestSummary } = await import("../interactions/service.js");
-  const interaction = await getInteractionRequestSummary(interactionId);
+  const { getInteractionRequestSummary } =
+    await import("../interactions/service.js")
+  const interaction = await getInteractionRequestSummary(interactionId)
   if (
     !interaction ||
     interaction.requester?.participantType !== "remote_agent" ||
     !interaction.requester.remoteAgentId
   ) {
-    return false;
+    return false
   }
 
   const binding = await executeSql<{
-    machine_id: string;
+    machine_id: string
   }>(
     `
       SELECT machine_id
@@ -2037,34 +2052,44 @@ export async function notifyRemoteAgentInteractionResolved(
         AND status = 'active'
       LIMIT 1
     `,
-    [interaction.requester.remoteAgentId],
-  );
-  const machineId = binding.rows[0]?.machine_id;
+    [interaction.requester.remoteAgentId]
+  )
+  const machineId = binding.rows[0]?.machine_id
   if (!machineId) {
-    return false;
+    return false
   }
-  const connection = machineConnections.get(machineId);
+  const connection = machineConnections.get(machineId)
   if (!connection) {
-    return false;
+    return false
   }
   return safeSend(connection, {
     type: "agent:interaction:resolved",
     remoteAgentId: interaction.requester.remoteAgentId,
     interactionId,
     interaction,
-  });
+  })
 }
 
-function closeMachineConnection(connection: MachineConnection, code = 1008, reason = "closing") {
+function closeMachineConnection(
+  connection: MachineConnection,
+  code = 1008,
+  reason = "closing"
+) {
   try {
-    if (connection.socket.readyState === 0 || connection.socket.readyState === 1) {
-      connection.socket.close(code, reason);
+    if (
+      connection.socket.readyState === 0 ||
+      connection.socket.readyState === 1
+    ) {
+      connection.socket.close(code, reason)
     }
   } catch {}
 }
 
-async function finalizeMachineSession(connection: MachineConnection, closeReason?: string) {
-  machineConnections.delete(connection.machineId);
+async function finalizeMachineSession(
+  connection: MachineConnection,
+  closeReason?: string
+) {
+  machineConnections.delete(connection.machineId)
   await executeSql(
     `
       UPDATE remote_agent_machine_sessions
@@ -2074,10 +2099,10 @@ async function finalizeMachineSession(connection: MachineConnection, closeReason
           updated_at = NOW()
       WHERE id = $1
     `,
-    [connection.sessionId, closeReason ?? null],
-  );
-  await setMachineLifecycleState(connection.machineId, "offline");
-  const bindings = await loadBoundRemoteAgentsForMachine(connection.machineId);
+    [connection.sessionId, closeReason ?? null]
+  )
+  await setMachineLifecycleState(connection.machineId, "offline")
+  const bindings = await loadBoundRemoteAgentsForMachine(connection.machineId)
   for (const binding of bindings) {
     await executeSql(
       `
@@ -2090,31 +2115,33 @@ async function finalizeMachineSession(connection: MachineConnection, closeReason
             updated_at = NOW()
         WHERE remote_agent_id = $1
       `,
-      [binding.remote_agent_id, closeReason ?? "Daemon disconnected"],
-    );
-    await emitRemoteAgentRuntimeUpdated(binding.remote_agent_id);
+      [binding.remote_agent_id, closeReason ?? "Daemon disconnected"]
+    )
+    await emitRemoteAgentRuntimeUpdated(binding.remote_agent_id)
   }
 }
 
 export async function handleRemoteAgentDaemonConnection(
   socket: any,
   req: any,
-  _app: FastifyInstance,
+  _app: FastifyInstance
 ) {
-  const requestUrl = new URL(req.url, config.app.baseUrl);
-  const apiKey = requestUrl.searchParams.get("key")?.trim() || "";
-  const machine = await loadMachineByApiKey(apiKey);
+  const requestUrl = new URL(req.url, config.app.baseUrl)
+  const apiKey = requestUrl.searchParams.get("key")?.trim() || ""
+  const machine = await loadMachineByApiKey(apiKey)
   if (!machine || machine.trust_status !== "active") {
     try {
-      socket.send(JSON.stringify({
-        type: "auth_error",
-        message: "Invalid machine key",
-      }));
+      socket.send(
+        JSON.stringify({
+          type: "auth_error",
+          message: "Invalid machine key",
+        })
+      )
     } catch {}
     try {
-      socket.close(1008, "invalid machine key");
+      socket.close(1008, "invalid machine key")
     } catch {}
-    return;
+    return
   }
 
   const sessionResult = await executeSql<{ id: string }>(
@@ -2132,9 +2159,9 @@ export async function handleRemoteAgentDaemonConnection(
       VALUES ($1, 'connecting', 'websocket', $2, NOW(), NOW(), NOW(), NOW())
       RETURNING id
     `,
-    [machine.id, req.socket?.remoteAddress ?? null],
-  );
-  const sessionId = sessionResult.rows[0]!.id;
+    [machine.id, req.socket?.remoteAddress ?? null]
+  )
+  const sessionId = sessionResult.rows[0]!.id
 
   const connection: MachineConnection = {
     machineId: machine.id,
@@ -2142,24 +2169,26 @@ export async function handleRemoteAgentDaemonConnection(
     sessionId,
     socket,
     ready: false,
-  };
-  machineConnections.set(machine.id, connection);
-  await setMachineLifecycleState(machine.id, "online");
+  }
+  machineConnections.set(machine.id, connection)
+  await setMachineLifecycleState(machine.id, "online")
 
   try {
-    socket.send(JSON.stringify({
-      type: "connected",
-      machineId: machine.id,
-      sessionId,
-    }));
+    socket.send(
+      JSON.stringify({
+        type: "connected",
+        machineId: machine.id,
+        sessionId,
+      })
+    )
   } catch {}
 
   socket.on("message", async (raw: any) => {
-    let message: any;
+    let message: any
     try {
-      message = JSON.parse(String(raw));
+      message = JSON.parse(String(raw))
     } catch {
-      return;
+      return
     }
 
     if (message?.type === "heartbeat") {
@@ -2170,16 +2199,16 @@ export async function handleRemoteAgentDaemonConnection(
               updated_at = NOW()
           WHERE id = $1
         `,
-        [sessionId],
-      );
+        [sessionId]
+      )
       try {
-        socket.send(JSON.stringify({ type: "pong" }));
+        socket.send(JSON.stringify({ type: "pong" }))
       } catch {}
-      return;
+      return
     }
 
     if (message?.type === "ready") {
-      connection.ready = true;
+      connection.ready = true
       await executeSql(
         `
           UPDATE remote_agent_machine_sessions
@@ -2188,18 +2217,18 @@ export async function handleRemoteAgentDaemonConnection(
               updated_at = NOW()
           WHERE id = $1
         `,
-        [sessionId],
-      );
+        [sessionId]
+      )
       if (Array.isArray(message.runtimeCatalog)) {
-        await upsertRuntimeCatalog(machine.id, message.runtimeCatalog);
+        await upsertRuntimeCatalog(machine.id, message.runtimeCatalog)
       }
-      await startBoundRemoteAgents(machine.id);
-      return;
+      await startBoundRemoteAgents(machine.id)
+      return
     }
 
     if (message?.type === "runtime:catalog" && Array.isArray(message.catalog)) {
-      await upsertRuntimeCatalog(machine.id, message.catalog);
-      return;
+      await upsertRuntimeCatalog(machine.id, message.catalog)
+      return
     }
 
     if (
@@ -2209,13 +2238,17 @@ export async function handleRemoteAgentDaemonConnection(
       await ackRemoteAgentDeliveries({
         remoteAgentId: String(message.remoteAgentId || ""),
         machineKey: apiKey,
-        deliveryIds: message.deliveryIds
-          .filter((value: unknown): value is string => typeof value === "string"),
-      });
-      return;
+        deliveryIds: message.deliveryIds.filter(
+          (value: unknown): value is string => typeof value === "string"
+        ),
+      })
+      return
     }
 
-    if (message?.type === "agent:session" && typeof message.remoteAgentId === "string") {
+    if (
+      message?.type === "agent:session" &&
+      typeof message.remoteAgentId === "string"
+    ) {
       await executeSql(
         `
           UPDATE remote_agent_bindings
@@ -2224,33 +2257,42 @@ export async function handleRemoteAgentDaemonConnection(
               updated_at = NOW()
           WHERE remote_agent_id = $1
         `,
-        [message.remoteAgentId, typeof message.sessionId === "string" ? message.sessionId : null],
-      );
-      await emitRemoteAgentRuntimeUpdated(message.remoteAgentId);
-      return;
+        [
+          message.remoteAgentId,
+          typeof message.sessionId === "string" ? message.sessionId : null,
+        ]
+      )
+      await emitRemoteAgentRuntimeUpdated(message.remoteAgentId)
+      return
     }
 
-    if (message?.type === "agent:status" && typeof message.remoteAgentId === "string") {
-      await updateRemoteAgentRuntimeStatus(machine.id, message as RuntimeStatusMessage);
-      return;
+    if (
+      message?.type === "agent:status" &&
+      typeof message.remoteAgentId === "string"
+    ) {
+      await updateRemoteAgentRuntimeStatus(
+        machine.id,
+        message as RuntimeStatusMessage
+      )
+      return
     }
-  });
+  })
 
   socket.on("close", async (_code: number, reason: Buffer) => {
     await finalizeMachineSession(
       connection,
-      reason?.toString("utf8") || undefined,
-    );
-  });
+      reason?.toString("utf8") || undefined
+    )
+  })
 
   socket.on("error", async (error: Error) => {
-    await finalizeMachineSession(connection, error.message);
-    closeMachineConnection(connection, 1011, error.message || "machine error");
-  });
+    await finalizeMachineSession(connection, error.message)
+    closeMachineConnection(connection, 1011, error.message || "machine error")
+  })
 }
 
 export function getMachineKeyFromHeaders(request: {
-  headers: Record<string, unknown>;
+  headers: Record<string, unknown>
 }) {
-  return parseMachineKeyFromRequest(request);
+  return parseMachineKeyFromRequest(request)
 }

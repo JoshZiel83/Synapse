@@ -1,5 +1,5 @@
-import type { FastifyInstance } from "fastify";
-import { z } from "zod";
+import type { FastifyInstance } from "fastify"
+import { z } from "zod"
 import {
   TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
   TRANSPORT_ACCOUNT_OWNER_SCOPES,
@@ -7,11 +7,11 @@ import {
   TRANSPORT_CONNECTION_MODES,
   TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES,
   TRANSPORT_KINDS,
-} from "@synapse/shared/constants";
-import { authMiddleware } from "../../infrastructure/middleware/auth.js";
-import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js";
-import { requireRequestAction } from "../access/guards.js";
-import { listMembers } from "../workspace/service.js";
+} from "@synapse/shared/constants"
+import { authMiddleware } from "../../infrastructure/middleware/auth.js"
+import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
+import { requireRequestAction } from "../access/guards.js"
+import { listMembers } from "../workspace/service.js"
 import {
   createTransportAccount,
   getCurrentUserWeixinBinding,
@@ -23,52 +23,54 @@ import {
   setTransportAddressLinkedUser,
   updateTransportSessionSettings,
   updateTransportAccount,
-} from "./service.js";
-import { listTransportConnectorCapabilities } from "./connectors/index.js";
+} from "./service.js"
+import { listTransportConnectorCapabilities } from "./connectors/index.js"
 import {
   getWeixinQrLoginSession,
   getWeixinQrLoginSessionOwner,
   startWeixinQrLoginSession,
-} from "./weixin-qr.js";
-import { refreshTransportRuntimeManager } from "./runtime.js";
+} from "./weixin-qr.js"
+import { refreshTransportRuntimeManager } from "./runtime.js"
 
 const transportAccountOwnerCreateShape = {
   ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).default("workspace"),
   ownerWorkspaceMemberId: z.string().uuid().nullable().optional(),
-};
+}
 
 const transportAccountOwnerUpdateShape = {
   ownerScope: z.enum(TRANSPORT_ACCOUNT_OWNER_SCOPES).optional(),
   ownerWorkspaceMemberId: z.string().uuid().nullable().optional(),
-};
+}
 
-const transportAccountInboundActorModeSchema = z.enum(TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES);
+const transportAccountInboundActorModeSchema = z.enum(
+  TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES
+)
 
 const transportConversationInboundActorModeSchema = z.enum(
-  TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES,
-);
+  TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES
+)
 
 const transportAccountInboundActorCreateShape = {
   inboundActorMode: transportAccountInboundActorModeSchema.optional(),
   inboundActorId: z.string().uuid().nullable().optional(),
-};
+}
 
 const transportAccountInboundActorUpdateShape = {
   inboundActorMode: transportAccountInboundActorModeSchema.optional(),
   inboundActorId: z.string().uuid().nullable().optional(),
-};
+}
 
 const transportConversationInboundActorUpdateShape = {
   inboundActorMode: transportConversationInboundActorModeSchema.optional(),
   inboundActorId: z.string().uuid().nullable().optional(),
-};
+}
 
 function validateTransportAccountOwnerCreate(
   value: {
-    ownerScope: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number];
-    ownerWorkspaceMemberId?: string | null;
+    ownerScope: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number]
+    ownerWorkspaceMemberId?: string | null
   },
-  ctx: z.RefinementCtx,
+  ctx: z.RefinementCtx
 ) {
   if (value.ownerScope === "workspace" && value.ownerWorkspaceMemberId) {
     ctx.addIssue({
@@ -76,7 +78,7 @@ function validateTransportAccountOwnerCreate(
       message:
         "Workspace-owned transport accounts cannot include ownerWorkspaceMemberId",
       path: ["ownerWorkspaceMemberId"],
-    });
+    })
   }
   if (
     value.ownerScope === "workspace_member" &&
@@ -87,16 +89,16 @@ function validateTransportAccountOwnerCreate(
       message:
         "Workspace-member transport accounts require ownerWorkspaceMemberId",
       path: ["ownerWorkspaceMemberId"],
-    });
+    })
   }
 }
 
 function validateTransportAccountOwnerUpdate(
   value: {
-    ownerScope?: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number];
-    ownerWorkspaceMemberId?: string | null;
+    ownerScope?: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number]
+    ownerWorkspaceMemberId?: string | null
   },
-  ctx: z.RefinementCtx,
+  ctx: z.RefinementCtx
 ) {
   if (value.ownerScope === "workspace" && value.ownerWorkspaceMemberId) {
     ctx.addIssue({
@@ -104,31 +106,31 @@ function validateTransportAccountOwnerUpdate(
       message:
         "Workspace-owned transport accounts cannot include ownerWorkspaceMemberId",
       path: ["ownerWorkspaceMemberId"],
-    });
+    })
   }
 }
 
 function validateTransportAccountInboundActorCreate(
   value: {
-    ownerScope: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number];
-    inboundActorMode?: (typeof TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES)[number];
-    inboundActorId?: string | null;
+    ownerScope: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number]
+    inboundActorMode?: (typeof TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES)[number]
+    inboundActorId?: string | null
   },
-  ctx: z.RefinementCtx,
+  ctx: z.RefinementCtx
 ) {
   if (!value.inboundActorMode && value.inboundActorId) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: "inboundActorId requires inboundActorMode=specified_actor",
       path: ["inboundActorId"],
-    });
+    })
   }
   if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: "specified_actor requires inboundActorId",
       path: ["inboundActorId"],
-    });
+    })
   }
   if (
     value.inboundActorMode &&
@@ -139,7 +141,7 @@ function validateTransportAccountInboundActorCreate(
       code: z.ZodIssueCode.custom,
       message: "Only specified_actor can include inboundActorId",
       path: ["inboundActorId"],
-    });
+    })
   }
   if (
     value.inboundActorMode === "follow_owner_chief_actor" &&
@@ -150,24 +152,24 @@ function validateTransportAccountInboundActorCreate(
       message:
         "follow_owner_chief_actor requires a workspace_member-owned account",
       path: ["inboundActorMode"],
-    });
+    })
   }
 }
 
 function validateTransportAccountInboundActorUpdate(
   value: {
-    ownerScope?: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number];
-    inboundActorMode?: (typeof TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES)[number];
-    inboundActorId?: string | null;
+    ownerScope?: (typeof TRANSPORT_ACCOUNT_OWNER_SCOPES)[number]
+    inboundActorMode?: (typeof TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES)[number]
+    inboundActorId?: string | null
   },
-  ctx: z.RefinementCtx,
+  ctx: z.RefinementCtx
 ) {
   if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: "specified_actor requires inboundActorId",
       path: ["inboundActorId"],
-    });
+    })
   }
   if (
     value.inboundActorMode &&
@@ -178,7 +180,7 @@ function validateTransportAccountInboundActorUpdate(
       code: z.ZodIssueCode.custom,
       message: "Only specified_actor can include inboundActorId",
       path: ["inboundActorId"],
-    });
+    })
   }
   if (
     value.inboundActorMode === "follow_owner_chief_actor" &&
@@ -189,23 +191,23 @@ function validateTransportAccountInboundActorUpdate(
       message:
         "follow_owner_chief_actor requires a workspace_member-owned account",
       path: ["inboundActorMode"],
-    });
+    })
   }
 }
 
 function validateTransportConversationInboundActorUpdate(
   value: {
-    inboundActorMode?: (typeof TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES)[number];
-    inboundActorId?: string | null;
+    inboundActorMode?: (typeof TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES)[number]
+    inboundActorId?: string | null
   },
-  ctx: z.RefinementCtx,
+  ctx: z.RefinementCtx
 ) {
   if (value.inboundActorMode === "specified_actor" && !value.inboundActorId) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
       message: "specified_actor requires inboundActorId",
       path: ["inboundActorId"],
-    });
+    })
   }
   if (
     value.inboundActorMode &&
@@ -216,7 +218,7 @@ function validateTransportConversationInboundActorUpdate(
       code: z.ZodIssueCode.custom,
       message: "Only specified_actor can include inboundActorId",
       path: ["inboundActorId"],
-    });
+    })
   }
 }
 
@@ -234,7 +236,7 @@ const accountSchema = z
     ...transportAccountInboundActorCreateShape,
   })
   .superRefine(validateTransportAccountOwnerCreate)
-  .superRefine(validateTransportAccountInboundActorCreate);
+  .superRefine(validateTransportAccountInboundActorCreate)
 
 const updateAccountSchema = z
   .object({
@@ -248,7 +250,7 @@ const updateAccountSchema = z
     ...transportAccountInboundActorUpdateShape,
   })
   .superRefine(validateTransportAccountOwnerUpdate)
-  .superRefine(validateTransportAccountInboundActorUpdate);
+  .superRefine(validateTransportAccountInboundActorUpdate)
 
 const feishuAccountSchema = z
   .object({
@@ -264,7 +266,7 @@ const feishuAccountSchema = z
     ...transportAccountInboundActorCreateShape,
   })
   .superRefine(validateTransportAccountOwnerCreate)
-  .superRefine(validateTransportAccountInboundActorCreate);
+  .superRefine(validateTransportAccountInboundActorCreate)
 
 const updateFeishuAccountSchema = z
   .object({
@@ -280,7 +282,7 @@ const updateFeishuAccountSchema = z
     ...transportAccountInboundActorUpdateShape,
   })
   .superRefine(validateTransportAccountOwnerUpdate)
-  .superRefine(validateTransportAccountInboundActorUpdate);
+  .superRefine(validateTransportAccountInboundActorUpdate)
 
 const transportSessionSettingsSchema = z
   .object({
@@ -288,7 +290,7 @@ const transportSessionSettingsSchema = z
     metadata: z.record(z.unknown()).optional(),
     ...transportConversationInboundActorUpdateShape,
   })
-  .superRefine(validateTransportConversationInboundActorUpdate);
+  .superRefine(validateTransportConversationInboundActorUpdate)
 
 const weixinQrSessionSchema = z
   .object({
@@ -299,41 +301,35 @@ const weixinQrSessionSchema = z
     ...transportAccountInboundActorCreateShape,
   })
   .superRefine(validateTransportAccountOwnerCreate)
-  .superRefine(validateTransportAccountInboundActorCreate);
+  .superRefine(validateTransportAccountInboundActorCreate)
 
 const linkedUserSchema = z.object({
   workspaceMemberId: z.string().uuid().nullable(),
-});
+})
 
 const bindingAutoLinkSchema = z.object({
   workspaceMemberId: z.string().uuid().nullable(),
-});
+})
 
 async function requireWorkspaceAction(
   request: any,
   reply: any,
   action: "workspace.view" | "workspace.manage",
-  errorMessage: string,
+  errorMessage: string
 ) {
-  const { workspaceId } = request.params as { workspaceId: string };
-  return requireRequestAction(
-    request,
-    reply,
-    action,
-    workspaceId,
-    errorMessage,
-  );
+  const { workspaceId } = request.params as { workspaceId: string }
+  return requireRequestAction(request, reply, action, workspaceId, errorMessage)
 }
 
 async function refreshTransportRuntimeState() {
   await refreshTransportRuntimeManager().catch((error) => {
-    console.error("[im] Failed to refresh transport runtime manager:", error);
-  });
+    console.error("[im] Failed to refresh transport runtime manager:", error)
+  })
 }
 
 export default async function imController(app: FastifyInstance) {
-  app.addHook("onRequest", authMiddleware);
-  app.addHook("onRequest", workspaceMiddleware);
+  app.addHook("onRequest", authMiddleware)
+  app.addHook("onRequest", workspaceMiddleware)
 
   app.get<{ Params: { workspaceId: string } }>(
     "/api/v1/workspaces/:workspaceId/im/connectors",
@@ -342,14 +338,14 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.view",
-        "Not allowed to view IM connectors in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to view IM connectors in this workspace"
+      )
+      if (!allowed) return
       return reply.send({
         connectors: listTransportConnectorCapabilities(),
-      });
-    },
-  );
+      })
+    }
+  )
 
   app.get<{ Params: { workspaceId: string } }>(
     "/api/v1/workspaces/:workspaceId/im/accounts",
@@ -358,15 +354,15 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.view",
-        "Not allowed to view IM accounts in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to view IM accounts in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId } = request.params;
-      const accounts = await listTransportAccounts(workspaceId);
-      return reply.send({ accounts });
-    },
-  );
+      const { workspaceId } = request.params
+      const accounts = await listTransportAccounts(workspaceId)
+      return reply.send({ accounts })
+    }
+  )
 
   app.get<{ Params: { workspaceId: string } }>(
     "/api/v1/workspaces/:workspaceId/im/sessions",
@@ -375,19 +371,19 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.view",
-        "Not allowed to view IM sessions in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to view IM sessions in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId } = request.params;
-      const sessions = await listTransportSessions(workspaceId);
-      return reply.send({ sessions });
-    },
-  );
+      const { workspaceId } = request.params
+      const sessions = await listTransportSessions(workspaceId)
+      return reply.send({ sessions })
+    }
+  )
 
   app.get<{
-    Params: { workspaceId: string };
-    Querystring: { transportAccountId?: string };
+    Params: { workspaceId: string }
+    Querystring: { transportAccountId?: string }
   }>(
     "/api/v1/workspaces/:workspaceId/im/external-users",
     async (request, reply) => {
@@ -395,18 +391,18 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.view",
-        "Not allowed to view IM external users in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to view IM external users in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId } = request.params;
+      const { workspaceId } = request.params
       const externalUsers = await listTransportExternalUsers({
         workspaceId,
         transportAccountId: request.query.transportAccountId,
-      });
-      return reply.send({ externalUsers });
-    },
-  );
+      })
+      return reply.send({ externalUsers })
+    }
+  )
 
   app.get<{ Params: { workspaceId: string } }>(
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding",
@@ -415,17 +411,17 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.view",
-        "Not allowed to access WeChat binding in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to access WeChat binding in this workspace"
+      )
+      if (!allowed) return
 
       const binding = await getCurrentUserWeixinBinding({
         workspaceId: request.params.workspaceId,
         userId: (request as any).user!.userId,
-      });
-      return reply.send({ binding });
-    },
-  );
+      })
+      return reply.send({ binding })
+    }
+  )
 
   app.get<{ Params: { workspaceId: string } }>(
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/candidates",
@@ -434,14 +430,14 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.view",
-        "Not allowed to access WeChat binding in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to access WeChat binding in this workspace"
+      )
+      if (!allowed) return
 
-      const members = await listMembers(request.params.workspaceId);
-      return reply.send({ data: members });
-    },
-  );
+      const members = await listMembers(request.params.workspaceId)
+      return reply.send({ data: members })
+    }
+  )
 
   app.post<{ Params: { workspaceId: string } }>(
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/qr",
@@ -450,19 +446,19 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.view",
-        "Not allowed to bind WeChat in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to bind WeChat in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId } = request.params;
-      const workspaceMemberId = (request as any).workspaceMember?.id as string;
-      const userId = (request as any).user!.userId as string;
+      const { workspaceId } = request.params
+      const workspaceMemberId = (request as any).workspaceMember?.id as string
+      const userId = (request as any).user!.userId as string
       const existing = await getCurrentUserWeixinBinding({
         workspaceId,
         userId,
-      });
+      })
       if (existing) {
-        return reply.status(409).send({ error: "WeChat already bound" });
+        return reply.status(409).send({ error: "WeChat already bound" })
       }
 
       const session = await startWeixinQrLoginSession({
@@ -470,13 +466,13 @@ export default async function imController(app: FastifyInstance) {
         ownerScope: "workspace_member",
         ownerWorkspaceMemberId: workspaceMemberId,
         inboundActorMode: "follow_owner_chief_actor",
-      });
-      return reply.status(201).send({ session });
-    },
-  );
+      })
+      return reply.status(201).send({ session })
+    }
+  )
 
   app.get<{
-    Params: { workspaceId: string; sessionId: string };
+    Params: { workspaceId: string; sessionId: string }
   }>(
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/qr/:sessionId",
     async (request, reply) => {
@@ -484,31 +480,31 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.view",
-        "Not allowed to access WeChat binding in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to access WeChat binding in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId, sessionId } = request.params;
-      const workspaceMemberId = (request as any).workspaceMember?.id as string;
-      const owner = getWeixinQrLoginSessionOwner({ workspaceId, sessionId });
+      const { workspaceId, sessionId } = request.params
+      const workspaceMemberId = (request as any).workspaceMember?.id as string
+      const owner = getWeixinQrLoginSessionOwner({ workspaceId, sessionId })
       if (
         !owner ||
         owner.ownerScope !== "workspace_member" ||
         owner.ownerWorkspaceMemberId !== workspaceMemberId
       ) {
-        return reply.status(404).send({ error: "Weixin QR session not found" });
+        return reply.status(404).send({ error: "Weixin QR session not found" })
       }
 
       const session = await getWeixinQrLoginSession({
         workspaceId,
         sessionId,
-      });
+      })
       if (!session) {
-        return reply.status(404).send({ error: "Weixin QR session not found" });
+        return reply.status(404).send({ error: "Weixin QR session not found" })
       }
-      return reply.send({ session });
-    },
-  );
+      return reply.send({ session })
+    }
+  )
 
   app.post<{ Params: { workspaceId: string } }>(
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/link",
@@ -517,29 +513,32 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.view",
-        "Not allowed to link WeChat in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to link WeChat in this workspace"
+      )
+      if (!allowed) return
 
       try {
         const binding = await linkCurrentUserWeixinBinding({
           workspaceId: request.params.workspaceId,
           userId: (request as any).user!.userId,
-        });
-        return reply.send({ binding });
+        })
+        return reply.send({ binding })
       } catch (error) {
         const message =
-          error instanceof Error ? error.message : "Failed to link WeChat";
+          error instanceof Error ? error.message : "Failed to link WeChat"
         if (message === "WeChat binding not found") {
-          return reply.status(404).send({ error: message });
+          return reply.status(404).send({ error: message })
         }
-        if (message === "WeChat user is already linked to another workspace member") {
-          return reply.status(409).send({ error: message });
+        if (
+          message ===
+          "WeChat user is already linked to another workspace member"
+        ) {
+          return reply.status(409).send({ error: message })
         }
-        return reply.status(400).send({ error: message });
+        return reply.status(400).send({ error: message })
       }
-    },
-  );
+    }
+  )
 
   app.put<{ Params: { workspaceId: string }; Body: unknown }>(
     "/api/v1/workspaces/:workspaceId/im/me/weixin-binding/auto-link",
@@ -548,33 +547,33 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.view",
-        "Not allowed to configure WeChat binding in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to configure WeChat binding in this workspace"
+      )
+      if (!allowed) return
 
       try {
-        const body = bindingAutoLinkSchema.parse(request.body);
+        const body = bindingAutoLinkSchema.parse(request.body)
         const binding = await setCurrentUserWeixinBindingAutoLink({
           workspaceId: request.params.workspaceId,
           userId: (request as any).user!.userId,
           targetWorkspaceMemberId: body.workspaceMemberId,
-        });
-        return reply.send({ binding });
+        })
+        return reply.send({ binding })
       } catch (error) {
         const message =
           error instanceof Error
             ? error.message
-            : "Failed to configure WeChat binding";
+            : "Failed to configure WeChat binding"
         if (message === "WeChat binding not found") {
-          return reply.status(404).send({ error: message });
+          return reply.status(404).send({ error: message })
         }
         if (message === "Workspace member not found") {
-          return reply.status(404).send({ error: message });
+          return reply.status(404).send({ error: message })
         }
-        return reply.status(400).send({ error: message });
+        return reply.status(400).send({ error: message })
       }
-    },
-  );
+    }
+  )
 
   app.post<{ Params: { workspaceId: string }; Body: unknown }>(
     "/api/v1/workspaces/:workspaceId/im/accounts/feishu",
@@ -583,22 +582,22 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.manage",
-        "Not allowed to manage IM accounts in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to manage IM accounts in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId } = request.params;
-      const body = feishuAccountSchema.parse(request.body);
+      const { workspaceId } = request.params
+      const body = feishuAccountSchema.parse(request.body)
       const credentials: Record<string, unknown> = {
         appId: body.appId,
         appSecret: body.appSecret,
-      };
+      }
       if (body.connectionMode === "webhook") {
         if (body.verificationToken) {
-          credentials.verificationToken = body.verificationToken;
+          credentials.verificationToken = body.verificationToken
         }
         if (body.encryptKey) {
-          credentials.encryptKey = body.encryptKey;
+          credentials.encryptKey = body.encryptKey
         }
       }
 
@@ -612,17 +611,18 @@ export default async function imController(app: FastifyInstance) {
         connectionMode: body.connectionMode,
         status: body.status,
         inboundActorMode: body.inboundActorMode,
-        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
+        inboundActorId:
+          body.inboundActorId === null ? null : body.inboundActorId,
         credentials,
-      });
-      await refreshTransportRuntimeState();
-      return reply.status(201).send({ account });
-    },
-  );
+      })
+      await refreshTransportRuntimeState()
+      return reply.status(201).send({ account })
+    }
+  )
 
   app.put<{
-    Params: { workspaceId: string; sessionId: string };
-    Body: unknown;
+    Params: { workspaceId: string; sessionId: string }
+    Body: unknown
   }>(
     "/api/v1/workspaces/:workspaceId/im/sessions/:sessionId/settings",
     async (request, reply) => {
@@ -630,27 +630,28 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.manage",
-        "Not allowed to manage IM sessions in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to manage IM sessions in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId, sessionId } = request.params;
-      const body = transportSessionSettingsSchema.parse(request.body);
+      const { workspaceId, sessionId } = request.params
+      const body = transportSessionSettingsSchema.parse(request.body)
       const session = await updateTransportSessionSettings({
         workspaceId,
         transportEndpointId: sessionId,
         outboundEnabled: body.outboundEnabled,
         inboundActorMode: body.inboundActorMode,
-        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
+        inboundActorId:
+          body.inboundActorId === null ? null : body.inboundActorId,
         metadata: body.metadata,
-      });
-      return reply.send({ session });
-    },
-  );
+      })
+      return reply.send({ session })
+    }
+  )
 
   app.put<{
-    Params: { workspaceId: string; addressId: string };
-    Body: unknown;
+    Params: { workspaceId: string; addressId: string }
+    Body: unknown
   }>(
     "/api/v1/workspaces/:workspaceId/im/external-users/:addressId/workspace-member",
     async (request, reply) => {
@@ -658,34 +659,32 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.manage",
-        "Not allowed to manage IM external users in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to manage IM external users in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId, addressId } = request.params;
-      const body = linkedUserSchema.parse(request.body);
+      const { workspaceId, addressId } = request.params
+      const body = linkedUserSchema.parse(request.body)
       await setTransportAddressLinkedUser({
         workspaceId,
         transportAddressId: addressId,
         workspaceMemberId: body.workspaceMemberId,
-      });
+      })
 
-      const externalUsers = await listTransportExternalUsers({ workspaceId });
-      const externalUser = externalUsers.find(
-        (entry) => entry.id === addressId,
-      );
+      const externalUsers = await listTransportExternalUsers({ workspaceId })
+      const externalUser = externalUsers.find((entry) => entry.id === addressId)
       if (!externalUser) {
         return reply
           .status(404)
-          .send({ error: "Transport external user not found" });
+          .send({ error: "Transport external user not found" })
       }
-      return reply.send({ externalUser });
-    },
-  );
+      return reply.send({ externalUser })
+    }
+  )
 
   app.put<{
-    Params: { workspaceId: string; accountId: string };
-    Body: unknown;
+    Params: { workspaceId: string; accountId: string }
+    Body: unknown
   }>(
     "/api/v1/workspaces/:workspaceId/im/accounts/feishu/:accountId",
     async (request, reply) => {
@@ -693,12 +692,12 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.manage",
-        "Not allowed to manage IM accounts in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to manage IM accounts in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId, accountId } = request.params;
-      const body = updateFeishuAccountSchema.parse(request.body);
+      const { workspaceId, accountId } = request.params
+      const body = updateFeishuAccountSchema.parse(request.body)
       const credentials =
         body.appId ||
         body.appSecret ||
@@ -712,7 +711,7 @@ export default async function imController(app: FastifyInstance) {
                 : {}),
               ...(body.encryptKey ? { encryptKey: body.encryptKey } : {}),
             }
-          : undefined;
+          : undefined
 
       const account = await updateTransportAccount({
         workspaceId,
@@ -723,13 +722,14 @@ export default async function imController(app: FastifyInstance) {
         connectionMode: body.connectionMode,
         status: body.status,
         inboundActorMode: body.inboundActorMode,
-        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
+        inboundActorId:
+          body.inboundActorId === null ? null : body.inboundActorId,
         credentials,
-      });
-      await refreshTransportRuntimeState();
-      return reply.send({ account });
-    },
-  );
+      })
+      await refreshTransportRuntimeState()
+      return reply.send({ account })
+    }
+  )
 
   app.post<{ Params: { workspaceId: string }; Body: unknown }>(
     "/api/v1/workspaces/:workspaceId/im/accounts/weixin/qr",
@@ -738,12 +738,12 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.manage",
-        "Not allowed to manage IM accounts in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to manage IM accounts in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId } = request.params;
-      const body = weixinQrSessionSchema.parse(request.body);
+      const { workspaceId } = request.params
+      const body = weixinQrSessionSchema.parse(request.body)
       const session = await startWeixinQrLoginSession({
         workspaceId,
         displayName: body.displayName,
@@ -752,14 +752,15 @@ export default async function imController(app: FastifyInstance) {
         ownerScope: body.ownerScope,
         ownerWorkspaceMemberId: body.ownerWorkspaceMemberId ?? null,
         inboundActorMode: body.inboundActorMode,
-        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
-      });
-      return reply.status(201).send({ session });
-    },
-  );
+        inboundActorId:
+          body.inboundActorId === null ? null : body.inboundActorId,
+      })
+      return reply.status(201).send({ session })
+    }
+  )
 
   app.get<{
-    Params: { workspaceId: string; sessionId: string };
+    Params: { workspaceId: string; sessionId: string }
   }>(
     "/api/v1/workspaces/:workspaceId/im/accounts/weixin/qr/:sessionId",
     async (request, reply) => {
@@ -767,20 +768,20 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.manage",
-        "Not allowed to manage IM accounts in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to manage IM accounts in this workspace"
+      )
+      if (!allowed) return
 
       const session = await getWeixinQrLoginSession({
         workspaceId: request.params.workspaceId,
         sessionId: request.params.sessionId,
-      });
+      })
       if (!session) {
-        return reply.status(404).send({ error: "Weixin QR session not found" });
+        return reply.status(404).send({ error: "Weixin QR session not found" })
       }
-      return reply.send({ session });
-    },
-  );
+      return reply.send({ session })
+    }
+  )
 
   app.post<{ Params: { workspaceId: string }; Body: unknown }>(
     "/api/v1/workspaces/:workspaceId/im/accounts",
@@ -789,12 +790,12 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.manage",
-        "Not allowed to manage IM accounts in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to manage IM accounts in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId } = request.params;
-      const body = accountSchema.parse(request.body);
+      const { workspaceId } = request.params
+      const body = accountSchema.parse(request.body)
       const account = await createTransportAccount({
         workspaceId,
         transportKind: body.transportKind,
@@ -805,19 +806,20 @@ export default async function imController(app: FastifyInstance) {
         connectionMode: body.connectionMode,
         status: body.status,
         inboundActorMode: body.inboundActorMode,
-        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
+        inboundActorId:
+          body.inboundActorId === null ? null : body.inboundActorId,
         credentials: body.credentials,
         config: body.config,
         metadata: body.metadata,
-      });
-      await refreshTransportRuntimeState();
-      return reply.status(201).send({ account });
-    },
-  );
+      })
+      await refreshTransportRuntimeState()
+      return reply.status(201).send({ account })
+    }
+  )
 
   app.put<{
-    Params: { workspaceId: string; accountId: string };
-    Body: unknown;
+    Params: { workspaceId: string; accountId: string }
+    Body: unknown
   }>(
     "/api/v1/workspaces/:workspaceId/im/accounts/:accountId",
     async (request, reply) => {
@@ -825,12 +827,12 @@ export default async function imController(app: FastifyInstance) {
         request,
         reply,
         "workspace.manage",
-        "Not allowed to manage IM accounts in this workspace",
-      );
-      if (!allowed) return;
+        "Not allowed to manage IM accounts in this workspace"
+      )
+      if (!allowed) return
 
-      const { workspaceId, accountId } = request.params;
-      const body = updateAccountSchema.parse(request.body);
+      const { workspaceId, accountId } = request.params
+      const body = updateAccountSchema.parse(request.body)
       const account = await updateTransportAccount({
         workspaceId,
         accountId,
@@ -840,13 +842,14 @@ export default async function imController(app: FastifyInstance) {
         connectionMode: body.connectionMode,
         status: body.status,
         inboundActorMode: body.inboundActorMode,
-        inboundActorId: body.inboundActorId === null ? null : body.inboundActorId,
+        inboundActorId:
+          body.inboundActorId === null ? null : body.inboundActorId,
         credentials: body.credentials,
         config: body.config,
         metadata: body.metadata,
-      });
-      await refreshTransportRuntimeState();
-      return reply.send({ account });
-    },
-  );
+      })
+      await refreshTransportRuntimeState()
+      return reply.send({ account })
+    }
+  )
 }

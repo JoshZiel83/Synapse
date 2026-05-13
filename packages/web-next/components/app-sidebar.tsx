@@ -64,7 +64,11 @@ const mainItems = [
   { href: "/dashboard", label: "Home", icon: House },
   { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
   { href: "/dashboard/contacts", label: "Contacts", icon: ContactRound },
-  { href: "/dashboard/remote-agents", label: "Remote Agents", icon: SquareTerminal },
+  {
+    href: "/dashboard/remote-agents",
+    label: "Remote Agents",
+    icon: SquareTerminal,
+  },
 ]
 
 const knowledgeItems = [
@@ -115,7 +119,10 @@ function SynapseLogo({ className }: { className?: string }) {
 
 function isItemActive(pathname: string, href: string) {
   if (href === "/dashboard/contacts") {
-    return pathname.startsWith("/dashboard/contacts") || pathname.startsWith("/dashboard/actors")
+    return (
+      pathname.startsWith("/dashboard/contacts") ||
+      pathname.startsWith("/dashboard/actors")
+    )
   }
 
   if (href === "/dashboard/memories") {
@@ -148,7 +155,11 @@ function NavSection({
   unreadCount = 0,
 }: {
   label?: string
-  items: Array<{ href: string; label: string; icon: React.ComponentType<{ className?: string }> }>
+  items: Array<{
+    href: string
+    label: string
+    icon: React.ComponentType<{ className?: string }>
+  }>
   pathname: string
   unreadCount?: number
 }) {
@@ -171,7 +182,11 @@ function NavSection({
 
             return (
               <SidebarMenuItem key={item.href}>
-                <SidebarMenuButton asChild isActive={active} tooltip={item.label}>
+                <SidebarMenuButton
+                  asChild
+                  isActive={active}
+                  tooltip={item.label}
+                >
                   <Link href={item.href}>
                     <Icon />
                     <span>{item.label}</span>
@@ -234,7 +249,9 @@ function NavUser({
       toast.success("Avatar updated")
     } catch (error) {
       console.error("Failed to update user avatar:", error)
-      toast.error(error instanceof Error ? error.message : "Avatar upload failed")
+      toast.error(
+        error instanceof Error ? error.message : "Avatar upload failed"
+      )
     } finally {
       setAvatarUploading(false)
     }
@@ -261,12 +278,21 @@ function NavUser({
               className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
             >
               <Avatar className="size-8 rounded-lg">
-                <AvatarImage src={avatarSrc || undefined} alt={user?.name || "User"} />
-                <AvatarFallback className="rounded-lg bg-sidebar-primary text-xs text-sidebar-primary-foreground">{initials}</AvatarFallback>
+                <AvatarImage
+                  src={avatarSrc || undefined}
+                  alt={user?.name || "User"}
+                />
+                <AvatarFallback className="rounded-lg bg-sidebar-primary text-xs text-sidebar-primary-foreground">
+                  {initials}
+                </AvatarFallback>
               </Avatar>
               <div className="grid flex-1 text-left text-sm leading-tight">
-                <span className="truncate font-medium">{user?.name || "User"}</span>
-                <span className="truncate text-xs text-muted-foreground">{user?.email || "No email"}</span>
+                <span className="truncate font-medium">
+                  {user?.name || "User"}
+                </span>
+                <span className="truncate text-xs text-muted-foreground">
+                  {user?.email || "No email"}
+                </span>
               </div>
               <ChevronsUpDown className="ml-auto size-4" />
             </SidebarMenuButton>
@@ -280,12 +306,21 @@ function NavUser({
             <DropdownMenuLabel className="p-0 font-normal">
               <div className="flex items-center gap-2 px-1 py-1.5 text-left text-sm">
                 <Avatar className="size-8 rounded-lg">
-                  <AvatarImage src={avatarSrc || undefined} alt={user?.name || "User"} />
-                  <AvatarFallback className="rounded-lg bg-sidebar-primary text-xs text-sidebar-primary-foreground">{initials}</AvatarFallback>
+                  <AvatarImage
+                    src={avatarSrc || undefined}
+                    alt={user?.name || "User"}
+                  />
+                  <AvatarFallback className="rounded-lg bg-sidebar-primary text-xs text-sidebar-primary-foreground">
+                    {initials}
+                  </AvatarFallback>
                 </Avatar>
                 <div className="grid flex-1 text-left text-sm leading-tight">
-                  <span className="truncate font-medium">{user?.name || "User"}</span>
-                  <span className="truncate text-xs text-muted-foreground">{user?.email || "No email"}</span>
+                  <span className="truncate font-medium">
+                    {user?.name || "User"}
+                  </span>
+                  <span className="truncate text-xs text-muted-foreground">
+                    {user?.email || "No email"}
+                  </span>
                 </div>
               </div>
             </DropdownMenuLabel>
@@ -297,7 +332,11 @@ function NavUser({
                   IM
                 </Link>
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setTheme(mounted && theme === "dark" ? "light" : "dark")}>
+              <DropdownMenuItem
+                onClick={() =>
+                  setTheme(mounted && theme === "dark" ? "light" : "dark")
+                }
+              >
                 {mounted && theme === "dark" ? <Sun /> : <Moon />}
                 {mounted && theme === "dark" ? "Light mode" : "Dark mode"}
               </DropdownMenuItem>
@@ -308,7 +347,11 @@ function NavUser({
                 }}
                 disabled={!workspaceId || avatarUploading}
               >
-                {avatarUploading ? <Loader2 className="animate-spin" /> : <ImagePlus />}
+                {avatarUploading ? (
+                  <Loader2 className="animate-spin" />
+                ) : (
+                  <ImagePlus />
+                )}
                 {avatarUploading ? "Uploading avatar..." : "Change avatar"}
               </DropdownMenuItem>
             </DropdownMenuGroup>
@@ -336,8 +379,12 @@ export function AppSidebar({
   const router = useRouter()
   const unreadCount = useChatStore((state) => state.totalUnread)
   const { workspaceId, workspaces, setWorkspaceId } = useWorkspace()
-  const [workspaceNavigation, setWorkspaceNavigation] = React.useState(emptyWorkspaceNavigation)
-  const [platformNavigation, setPlatformNavigation] = React.useState(emptyPlatformNavigation)
+  const [workspaceNavigation, setWorkspaceNavigation] = React.useState(
+    emptyWorkspaceNavigation
+  )
+  const [platformNavigation, setPlatformNavigation] = React.useState(
+    emptyPlatformNavigation
+  )
 
   const teams = React.useMemo(
     () =>
@@ -354,7 +401,9 @@ export function AppSidebar({
     let cancelled = false
 
     const workspaceNavigationPromise = workspaceId
-      ? api.getWorkspaceNavigation(workspaceId).catch(() => ({ data: emptyWorkspaceNavigation }))
+      ? api
+          .getWorkspaceNavigation(workspaceId)
+          .catch(() => ({ data: emptyWorkspaceNavigation }))
       : Promise.resolve({ data: emptyWorkspaceNavigation })
 
     const platformNavigationPromise = api
@@ -367,7 +416,9 @@ export function AppSidebar({
           return
         }
 
-        setWorkspaceNavigation(workspaceResponse?.data ?? emptyWorkspaceNavigation)
+        setWorkspaceNavigation(
+          workspaceResponse?.data ?? emptyWorkspaceNavigation
+        )
         setPlatformNavigation(platformResponse?.data ?? emptyPlatformNavigation)
       }
     )
@@ -380,7 +431,12 @@ export function AppSidebar({
   const visibleModelItems = React.useMemo(() => {
     const items = []
 
-    if (workspaceNavigation.canAccessWorkspaceModels || workspaceNavigation.canAccessWorkspaceMemberModels || platformNavigation.canAccessPlatformModels || user) {
+    if (
+      workspaceNavigation.canAccessWorkspaceModels ||
+      workspaceNavigation.canAccessWorkspaceMemberModels ||
+      platformNavigation.canAccessPlatformModels ||
+      user
+    ) {
       items.push(modelItems[0])
     }
     if (workspaceNavigation.canAccessWorkspaceModels) {
@@ -388,15 +444,26 @@ export function AppSidebar({
     }
 
     return items
-  }, [platformNavigation.canAccessPlatformModels, user, workspaceNavigation.canAccessWorkspaceModels, workspaceNavigation.canAccessWorkspaceMemberModels])
+  }, [
+    platformNavigation.canAccessPlatformModels,
+    user,
+    workspaceNavigation.canAccessWorkspaceModels,
+    workspaceNavigation.canAccessWorkspaceMemberModels,
+  ])
 
   const visibleAccessItems = React.useMemo(() => {
-    if (!workspaceNavigation.canAccessWorkspaceAccess && !platformNavigation.canAccessPlatformAccess) {
+    if (
+      !workspaceNavigation.canAccessWorkspaceAccess &&
+      !platformNavigation.canAccessPlatformAccess
+    ) {
       return []
     }
 
     return accessItems
-  }, [platformNavigation.canAccessPlatformAccess, workspaceNavigation.canAccessWorkspaceAccess])
+  }, [
+    platformNavigation.canAccessPlatformAccess,
+    workspaceNavigation.canAccessWorkspaceAccess,
+  ])
 
   const visibleAutomationItems = React.useMemo(() => {
     if (!workspaceNavigation.canViewWorkspace) {
@@ -419,11 +486,31 @@ export function AppSidebar({
       </SidebarHeader>
 
       <SidebarContent>
-        <NavSection items={mainItems} pathname={pathname} unreadCount={unreadCount} />
-        <NavSection label="Workspace" items={knowledgeItems} pathname={pathname} />
-        <NavSection label="Automation" items={visibleAutomationItems} pathname={pathname} />
-        <NavSection label="Models" items={visibleModelItems} pathname={pathname} />
-        <NavSection label="Access" items={visibleAccessItems} pathname={pathname} />
+        <NavSection
+          items={mainItems}
+          pathname={pathname}
+          unreadCount={unreadCount}
+        />
+        <NavSection
+          label="Workspace"
+          items={knowledgeItems}
+          pathname={pathname}
+        />
+        <NavSection
+          label="Automation"
+          items={visibleAutomationItems}
+          pathname={pathname}
+        />
+        <NavSection
+          label="Models"
+          items={visibleModelItems}
+          pathname={pathname}
+        />
+        <NavSection
+          label="Access"
+          items={visibleAccessItems}
+          pathname={pathname}
+        />
       </SidebarContent>
 
       <SidebarFooter>

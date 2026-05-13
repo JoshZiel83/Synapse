@@ -1,5 +1,5 @@
-import { AsyncLocalStorage } from "node:async_hooks";
-import { z } from "zod";
+import { AsyncLocalStorage } from "node:async_hooks"
+import { z } from "zod"
 import {
   CONVERSATION_TYPE_MASK_BITS,
   describeAutomationDelivery,
@@ -18,7 +18,7 @@ import {
   type ActorDoc,
   type ToolDefinition,
   type ToolResolveContext,
-} from "@synapse/shared";
+} from "@synapse/shared"
 import type {
   CapabilityInvocationContext,
   ConversationParticipantEntry,
@@ -29,56 +29,53 @@ import type {
   PlanChecklistStep,
   RelayAuthorizationPreset,
   RelayAuthorizationRequestMode,
-} from "@synapse/shared/types";
-import {
-  rethrowToolExecutionError,
-  throwToolError,
-} from "./tool-errors.js";
-import { registerToolPlugin } from "./tool-plugins.js";
+} from "@synapse/shared/types"
+import { rethrowToolExecutionError, throwToolError } from "./tool-errors.js"
+import { registerToolPlugin } from "./tool-plugins.js"
 import {
   buildReplyToRefUsageGuidance,
   buildEnterPlanModeToolDescription,
   buildExitPlanModeToolDescription,
   buildRequestUserInputToolDescription,
   buildUpdatePlanToolDescription,
-} from "./session-tool-guidance.js";
+} from "./session-tool-guidance.js"
 import {
   assertPlanModeConversationKind,
   canEnterPlanMode,
   canExitPlanMode,
   canUpdatePlan,
-} from "./session-plan-mode.js";
+} from "./session-plan-mode.js"
 import {
   buildUserInteractionCandidatesFromEntries,
   buildUserInteractionCandidatesFromRows,
   type UserInteractionCandidate,
-} from "./session-tool-user-interactions.js";
-import { db } from "../../infrastructure/database/kysely.js";
-import { sql } from "kysely";
-import { getSession, updateSessionCollaboration } from "../session/service.js";
+} from "./session-tool-user-interactions.js"
+import { db } from "../../infrastructure/database/kysely.js"
+import { sql } from "kysely"
+import { getSession, updateSessionCollaboration } from "../session/service.js"
 import {
   buildSessionPlanDraftState,
   requireSessionPlanDraftState,
-} from "../session/collaboration-state.js";
+} from "../session/collaboration-state.js"
 import {
   addConversationParticipants,
   getConversationParticipant,
   listConversationParticipants,
   resolveConversationReplyRef,
   sendConversationMessageFromParticipant,
-} from "../chat/service.js";
-import { buildNormalizedMessageContent } from "../chat/message-content.js";
-import { buildDefaultUserMention } from "./inline-ref-resolver.js";
-import { runMemorySearch } from "../memory/service.js";
-import { readVisibleSkill } from "../skills/service.js";
+} from "../chat/service.js"
+import { buildNormalizedMessageContent } from "../chat/message-content.js"
+import { buildDefaultUserMention } from "./inline-ref-resolver.js"
+import { runMemorySearch } from "../memory/service.js"
+import { readVisibleSkill } from "../skills/service.js"
 import {
   listAutomationEventSources,
   listAutomationOccurrences,
   createAutomationRule,
   deleteAutomationRule,
   listAutomationRules,
-} from "../automation/service.js";
-import { isActorActiveConversationParticipant } from "../access/subject-resolution.js";
+} from "../automation/service.js"
+import { isActorActiveConversationParticipant } from "../access/subject-resolution.js"
 import {
   cancelToolCallTask,
   createToolCallTask,
@@ -86,76 +83,80 @@ import {
   getToolCallTaskOutput,
   listToolCallTasksForSession,
   type ToolCallTaskRecord,
-} from "../tool-call-tasks/service.js";
+} from "../tool-call-tasks/service.js"
 import {
   cancelInteractionRequestByTaskId,
   createPlanApprovalInteractionRequest,
   createUserInputInteractionRequest,
   getInteractionRequestSummaryByTaskId,
-} from "../interactions/service.js";
-import { resolveRelayTargetForNamespacedTool } from "../mcp-plugins/tool-resolver.js";
+} from "../interactions/service.js"
+import { resolveRelayTargetForNamespacedTool } from "../mcp-plugins/tool-resolver.js"
 import {
   callRelayTool,
   cancelRelayToolTask,
   loadRelayExposureCatalogSnapshot,
-} from "../mcp-plugins/relay-manager.js";
+} from "../mcp-plugins/relay-manager.js"
 import {
   createRelayAuthorizationRequest,
   waitForRelayAuthorizationResolution,
-} from "../mcp-plugins/relay-authorization-requests.js";
-import { inferRelaySpecialAuthorizationPlan } from "../mcp-plugins/relay-special-mcp.js";
-import { normalizeMcpToolResult } from "../mcp-plugins/result-normalizer.js";
+} from "../mcp-plugins/relay-authorization-requests.js"
+import { inferRelaySpecialAuthorizationPlan } from "../mcp-plugins/relay-special-mcp.js"
+import { normalizeMcpToolResult } from "../mcp-plugins/result-normalizer.js"
 
 type InviteableActor = {
-  id: string;
-  name: string;
-  title?: string;
-  role?: string;
-  summary?: string;
-};
+  id: string
+  name: string
+  title?: string
+  role?: string
+  summary?: string
+}
 
 type SendToCandidate = {
-  type: "actor" | "workspace_member" | "external";
-  participantId: string;
-  actorId?: string;
-  workspaceMemberId?: string;
-  userId?: string;
-  externalUserKey?: string;
-  title?: string;
-  role?: string;
-  name: string;
-  label: string;
-  aliases: string[];
-};
+  type: "actor" | "workspace_member" | "external"
+  participantId: string
+  actorId?: string
+  workspaceMemberId?: string
+  userId?: string
+  externalUserKey?: string
+  title?: string
+  role?: string
+  name: string
+  label: string
+  aliases: string[]
+}
 
 type ToolUserInputOptionInput = {
-  id?: string;
-  label?: string;
-  description?: string;
-  preview?: string;
-};
+  id?: string
+  label?: string
+  description?: string
+  preview?: string
+}
 
 type ToolUserInputQuestionInput = {
-  id?: string;
-  header?: string;
-  type?: string;
-  prompt?: string;
-  description?: string;
-  required?: boolean;
-  options?: Array<string | ToolUserInputOptionInput>;
-  allowOther?: boolean;
-  placeholder?: string;
-  minSelections?: number;
-  maxSelections?: number;
-  secret?: boolean;
-};
+  id?: string
+  header?: string
+  type?: string
+  prompt?: string
+  description?: string
+  required?: boolean
+  options?: Array<string | ToolUserInputOptionInput>
+  allowOther?: boolean
+  placeholder?: string
+  minSelections?: number
+  maxSelections?: number
+  secret?: boolean
+}
 
-const sendToIntentSchema = z.enum(SEND_TO_INTENTS);
-const userInputQuestionTypeOptions = [...INTERACTION_INPUT_QUESTION_TYPES];
+const sendToIntentSchema = z.enum(SEND_TO_INTENTS)
+const userInputQuestionTypeOptions = [...INTERACTION_INPUT_QUESTION_TYPES]
 const selectableQuestionFieldTypeOptions = userInputQuestionTypeOptions.filter(
-  (value): value is Exclude<(typeof INTERACTION_INPUT_QUESTION_TYPES)[number], "text"> =>
-    value !== "text",
-);
+  (
+    value
+  ): value is Exclude<
+    (typeof INTERACTION_INPUT_QUESTION_TYPES)[number],
+    "text"
+  > => value !== "text"
+)
 const sendToInputSchema = z
   .object({
     message: z.string().trim().min(1).max(12000),
@@ -163,36 +164,41 @@ const sendToInputSchema = z
     summary: z.string().trim().min(1).max(240),
     replyToRef: z.string().trim().min(1).optional(),
   })
-  .strict();
+  .strict()
 const currentTimeInputSchema = z
   .object({
     timeZone: z.string().trim().min(1).max(100).optional(),
   })
-  .strict();
+  .strict()
 
 function getToolContextConversationId(ctx: ToolResolveContext) {
-  return ctx.conversationId;
+  return ctx.conversationId
 }
 
 function getToolContextConversationKind(ctx: ToolResolveContext) {
-  return ctx.conversationKind;
+  return ctx.conversationKind
 }
 
 function getToolContextConversationBoundary(ctx: ToolResolveContext) {
-  return ctx.conversationBoundary;
+  return ctx.conversationBoundary
 }
 
 function getToolContextConversationParticipants(ctx: ToolResolveContext) {
-  return ctx.conversationParticipants;
+  return ctx.conversationParticipants
 }
 
-function getThreadConversationId(session: {
-  conversation_id?: string;
-  conversation_kind?: string;
-} | null | undefined) {
+function getThreadConversationId(
+  session:
+    | {
+        conversation_id?: string
+        conversation_kind?: string
+      }
+    | null
+    | undefined
+) {
   return isThreadConversationKind(session?.conversation_kind)
     ? session?.conversation_id || null
-    : null;
+    : null
 }
 
 function normalizeRawSendToInput(input: Record<string, unknown>) {
@@ -201,53 +207,55 @@ function normalizeRawSendToInput(input: Record<string, unknown>) {
     intent: input.intent,
     summary: input.summary ?? input.task,
     replyToRef: input.replyToRef,
-  };
+  }
 }
 
 function formatUtcTimestamp(date: Date) {
-  return `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`;
+  return `${date.toISOString().slice(0, 19).replace("T", " ")} UTC`
 }
 
 async function requireCurrentAutomationParticipant(params: {
-  conversationId: string;
-  actorId?: string;
+  conversationId: string
+  actorId?: string
 }) {
   if (!params.actorId) {
-    throwToolError("Automation tools require an actor session");
+    throwToolError("Automation tools require an actor session")
   }
 
   const participant = await getConversationParticipant({
     conversationId: params.conversationId,
     actorId: params.actorId,
-  });
+  })
   if (!participant || participant.state !== "active") {
-    throwToolError("Current actor is not an active participant in this conversation");
+    throwToolError(
+      "Current actor is not an active participant in this conversation"
+    )
   }
-  return participant;
+  return participant
 }
 
 async function listCurrentSessionAutomationRules(params: {
-  workspaceId: string;
-  sessionId: string;
-  actorId?: string;
+  workspaceId: string
+  sessionId: string
+  actorId?: string
 }) {
-  const session = await getSession(params.sessionId);
+  const session = await getSession(params.sessionId)
   if (!session) {
-    throwToolError("Session not found");
+    throwToolError("Session not found")
   }
   const participant = await requireCurrentAutomationParticipant({
     conversationId: session.conversation_id,
     actorId: params.actorId,
-  });
+  })
   const rules = await listAutomationRules(params.workspaceId, {
     conversationId: session.conversation_id,
-  });
-  return rules.filter((rule) => rule.createdByParticipantId === participant.id);
+  })
+  return rules.filter((rule) => rule.createdByParticipantId === participant.id)
 }
 
 function buildSendToDefinition(params: {
-  conversationKind?: string;
-  otherParticipants: ConversationParticipantEntry[];
+  conversationKind?: string
+  otherParticipants: ConversationParticipantEntry[]
 }): ToolDefinition {
   const rosterDesc = params.otherParticipants
     .map((member) =>
@@ -255,19 +263,19 @@ function buildSendToDefinition(params: {
         ? `"${member.name}" (workspace member)`
         : member.type === "external"
           ? `"${member.name}" (external${member.linkedWorkspaceMemberName ? `, linked to workspace user ${member.linkedWorkspaceMemberName}` : ""})`
-          : `"${member.name}" (actor${member.title ? ", " + member.title : ""})`,
+          : `"${member.name}" (actor${member.title ? ", " + member.title : ""})`
     )
-    .join(", ");
+    .join(", ")
   const semantics = resolveThreadSemantics({
     kind: params.conversationKind,
     otherParticipantCount: params.otherParticipants.length,
-  });
+  })
 
   if (
     semantics.addressingMode === "implicit_peer" &&
     params.otherParticipants.length === 1
   ) {
-    const peerName = params.otherParticipants[0]!.name;
+    const peerName = params.otherParticipants[0]!.name
     return {
       name: "send_to",
       description: `Send a visible message to the other participant in this private thread. The recipient is implicit. Current peer: ${rosterDesc}.`,
@@ -290,13 +298,12 @@ function buildSendToDefinition(params: {
           },
           message: {
             type: "string",
-            description:
-              `The visible message content sent in this private thread with ${peerName}. Prefer inline <mention participantId="..."/>. You may also use <mention name="${peerName}"/> when the name is unique in the roster. Mention only when the sentence itself explicitly points to a participant.`,
+            description: `The visible message content sent in this private thread with ${peerName}. Prefer inline <mention participantId="..."/>. You may also use <mention name="${peerName}"/> when the name is unique in the roster. Mention only when the sentence itself explicitly points to a participant.`,
           },
         },
         required: ["intent", "summary", "message"],
       },
-    };
+    }
   }
 
   return {
@@ -328,7 +335,7 @@ function buildSendToDefinition(params: {
       },
       required: ["intent", "summary", "message"],
     },
-  };
+  }
 }
 
 function formatDateTimeInZone(date: Date, timeZone: string) {
@@ -342,19 +349,19 @@ function formatDateTimeInZone(date: Date, timeZone: string) {
     second: "2-digit",
     hour12: false,
     timeZoneName: "short",
-  });
-  const parts = formatter.formatToParts(date);
+  })
+  const parts = formatter.formatToParts(date)
   const valueFor = (type: string) =>
-    parts.find((part) => part.type === type)?.value || "";
+    parts.find((part) => part.type === type)?.value || ""
 
-  return `${valueFor("year")}-${valueFor("month")}-${valueFor("day")} ${valueFor("hour")}:${valueFor("minute")}:${valueFor("second")} ${valueFor("timeZoneName")}`.trim();
+  return `${valueFor("year")}-${valueFor("month")}-${valueFor("day")} ${valueFor("hour")}:${valueFor("minute")}:${valueFor("second")} ${valueFor("timeZoneName")}`.trim()
 }
 
 function formatWeekdayInZone(date: Date, timeZone: string) {
   return new Intl.DateTimeFormat("en-US", {
     timeZone,
     weekday: "long",
-  }).format(date);
+  }).format(date)
 }
 
 function buildSendToMention(candidate: SendToCandidate): ConversationEntityRef {
@@ -367,65 +374,63 @@ function buildSendToMention(candidate: SendToCandidate): ConversationEntityRef {
     name: candidate.name,
     title: candidate.title,
     role: candidate.role,
-  };
+  }
 }
 
 function parseActorDocs(value: unknown): ActorDoc[] {
-  if (!value) return [];
+  if (!value) return []
   if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(value);
+      const parsed = JSON.parse(value)
       return Array.isArray(parsed)
         ? normalizeActorDocs(parsed as ActorDoc[])
-        : [];
+        : []
     } catch {
-      return [];
+      return []
     }
   }
-  return Array.isArray(value) ? normalizeActorDocs(value as ActorDoc[]) : [];
+  return Array.isArray(value) ? normalizeActorDocs(value as ActorDoc[]) : []
 }
 
 function isGroupVisibleDoc(doc: ActorDoc): boolean {
-  return (
-    doc.visibility === "always" || doc.visibility === "multi_member_only"
-  );
+  return doc.visibility === "always" || doc.visibility === "multi_member_only"
 }
 
 function summarizeInviteableActor(row: {
-  title?: string | null;
-  role?: string | null;
-  actor_docs?: unknown;
+  title?: string | null
+  role?: string | null
+  actor_docs?: unknown
 }): string | undefined {
-  const docs = parseActorDocs(row.actor_docs).filter(isGroupVisibleDoc);
+  const docs = parseActorDocs(row.actor_docs).filter(isGroupVisibleDoc)
   const summary = summarizeActorForRole(docs, row.title || row.role || "Actor")
     .replace(/\s+/g, " ")
-    .trim();
+    .trim()
 
-  return summary || undefined;
+  return summary || undefined
 }
 
 function formatInviteableActor(actor: InviteableActor): string {
-  const title = actor.title || actor.role || "Actor";
-  return `${actor.name} (${title}) [${actor.id}]${actor.summary ? ` - ${actor.summary}` : ""}`;
+  const title = actor.title || actor.role || "Actor"
+  return `${actor.name} (${title}) [${actor.id}]${actor.summary ? ` - ${actor.summary}` : ""}`
 }
 
 function normalizeRecipientAlias(value: string) {
-  return value.trim().toLowerCase();
+  return value.trim().toLowerCase()
 }
 
 function buildSendToCandidates(
   participants: any[],
-  currentActorId?: string,
+  currentActorId?: string
 ): SendToCandidate[] {
-  const candidates: SendToCandidate[] = [];
+  const candidates: SendToCandidate[] = []
 
   for (const participant of participants) {
-    if (participant.state !== "active") continue;
+    if (participant.state !== "active") continue
 
     if (participant.actor_id) {
-      if (participant.actor_id === currentActorId) continue;
-      const name = participant.actor_name || "Unknown actor";
-      const title = participant.actor_title || participant.actor_role || "Actor";
+      if (participant.actor_id === currentActorId) continue
+      const name = participant.actor_name || "Unknown actor"
+      const title = participant.actor_title || participant.actor_role || "Actor"
       candidates.push({
         type: "actor",
         participantId: participant.id,
@@ -435,19 +440,20 @@ function buildSendToCandidates(
         name,
         label: `"${name}" (actor${title ? `, ${title}` : ""})`,
         aliases: [name],
-      });
-      continue;
+      })
+      continue
     }
 
     if (participant.user_id) {
-      const name = participant.user_name || "User";
+      const name = participant.user_name || "User"
       const transportKind =
-        participant.transport_kind === "feishu" || participant.transport_kind === "weixin"
+        participant.transport_kind === "feishu" ||
+        participant.transport_kind === "weixin"
           ? participant.transport_kind
-          : undefined;
+          : undefined
       const transportLabel = transportKind
         ? `, reachable via ${transportKind === "feishu" ? "Feishu" : "WeChat"}`
-        : "";
+        : ""
       candidates.push({
         type: "workspace_member",
         participantId: participant.id,
@@ -456,26 +462,26 @@ function buildSendToCandidates(
         title: "Workspace member",
         label: `"${name}" (workspace member${transportLabel})`,
         aliases: [name],
-      });
-      continue;
+      })
+      continue
     }
 
     if (participant.participant_kind === "external") {
       const linkedWorkspaceMemberName =
-        (participant.linked_user_name as string | null) || undefined;
+        (participant.linked_user_name as string | null) || undefined
       const name =
         (participant.transport_display_name as string | null) ||
         (participant.display_name as string | null) ||
         linkedWorkspaceMemberName ||
-        "External participant";
+        "External participant"
       const aliases = Array.from(
         new Set(
           [name, linkedWorkspaceMemberName].filter(
             (value): value is string =>
-              typeof value === "string" && value.trim().length > 0,
-          ),
-        ),
-      );
+              typeof value === "string" && value.trim().length > 0
+          )
+        )
+      )
       candidates.push({
         type: "external",
         participantId: participant.id,
@@ -490,52 +496,53 @@ function buildSendToCandidates(
             ? `"${name}" (external, linked to workspace user ${linkedWorkspaceMemberName})`
             : `"${name}" (external)`,
         aliases,
-      });
+      })
     }
   }
 
-  return candidates;
+  return candidates
 }
 
 function buildUserInteractionDirectory(candidates: UserInteractionCandidate[]) {
   return candidates
     .map((candidate) => `\`${candidate.participantId}\`: ${candidate.label}`)
-    .join(", ");
+    .join(", ")
 }
 
 function resolveUserInteractionCandidate(
   requestedParticipantId: string,
-  candidates: UserInteractionCandidate[],
+  candidates: UserInteractionCandidate[]
 ) {
   const candidate =
-    candidates.find((entry) => entry.participantId === requestedParticipantId) ||
-    null;
+    candidates.find(
+      (entry) => entry.participantId === requestedParticipantId
+    ) || null
   if (candidate) {
-    return { candidate, error: null };
+    return { candidate, error: null }
   }
 
   return {
     candidate: null,
     error: `targetParticipantId must be one of: ${candidates.map((entry) => entry.participantId).join(", ")}`,
-  };
+  }
 }
 
 function resolveHumanInteractionTarget(params: {
-  requestedParticipantId?: string;
-  conversationKind?: string;
-  candidates: UserInteractionCandidate[];
+  requestedParticipantId?: string
+  conversationKind?: string
+  candidates: UserInteractionCandidate[]
 }) {
-  const requestedParticipantId = params.requestedParticipantId?.trim() || "";
+  const requestedParticipantId = params.requestedParticipantId?.trim() || ""
   const isPrivateConversation =
-    params.conversationKind === "private" && params.candidates.length === 1;
+    params.conversationKind === "private" && params.candidates.length === 1
 
   if (isPrivateConversation) {
-    const implicitCandidate = params.candidates[0] || null;
+    const implicitCandidate = params.candidates[0] || null
     if (!implicitCandidate) {
       return {
         candidate: null,
         error: "There is no active user participant available.",
-      };
+      }
     }
     if (
       requestedParticipantId &&
@@ -544,53 +551,53 @@ function resolveHumanInteractionTarget(params: {
       return {
         candidate: null,
         error: `targetParticipantId must be omitted or set to ${implicitCandidate.participantId} in a private conversation.`,
-      };
+      }
     }
-    return { candidate: implicitCandidate, error: null };
+    return { candidate: implicitCandidate, error: null }
   }
 
   if (!requestedParticipantId) {
     return {
       candidate: null,
       error: "targetParticipantId is required in this conversation.",
-    };
+    }
   }
 
   return resolveUserInteractionCandidate(
     requestedParticipantId,
-    params.candidates,
-  );
+    params.candidates
+  )
 }
 
 function parsePlanChecklist(rawPlan: unknown): {
-  checklist: PlanChecklistStep[];
-  error?: string;
+  checklist: PlanChecklistStep[]
+  error?: string
 } {
   if (!Array.isArray(rawPlan)) {
-    return { checklist: [], error: "plan must be an array." };
+    return { checklist: [], error: "plan must be an array." }
   }
 
-  const checklist: PlanChecklistStep[] = [];
+  const checklist: PlanChecklistStep[] = []
   for (const [index, rawItem] of rawPlan.entries()) {
     if (!rawItem || typeof rawItem !== "object") {
       return {
         checklist: [],
         error: `plan item ${index + 1} is invalid.`,
-      };
+      }
     }
     const step =
       typeof (rawItem as { step?: unknown }).step === "string"
         ? (rawItem as { step: string }).step.trim()
-        : "";
+        : ""
     const status =
       typeof (rawItem as { status?: unknown }).status === "string"
         ? (rawItem as { status: string }).status.trim()
-        : "";
+        : ""
     if (!step) {
       return {
         checklist: [],
         error: `plan item ${index + 1} is missing step.`,
-      };
+      }
     }
     if (
       status !== "pending" &&
@@ -600,37 +607,37 @@ function parsePlanChecklist(rawPlan: unknown): {
       return {
         checklist: [],
         error: `plan item ${index + 1} has invalid status.`,
-      };
+      }
     }
     checklist.push({
       step,
       status: status as PlanChecklistStep["status"],
-    });
+    })
   }
 
-  return { checklist };
+  return { checklist }
 }
 
 async function createGovernedToolCallTask(params: {
-  context: NonNullable<ReturnType<typeof getToolExecutionContext>>;
+  context: NonNullable<ReturnType<typeof getToolExecutionContext>>
   executorKind:
     | "interaction_user_input"
     | "plan_approval"
-    | "relay_authorization";
-  deliveryPolicy: "human_interaction";
-  requestPayload: Record<string, unknown>;
-  summary: string;
-  expiresAt?: string;
-  supportsCancel?: boolean;
+    | "relay_authorization"
+  deliveryPolicy: "human_interaction"
+  requestPayload: Record<string, unknown>
+  summary: string
+  expiresAt?: string
+  supportsCancel?: boolean
 }) {
-  const { context } = params;
+  const { context } = params
   if (!context.toolCallId || !context.toolName) {
-    throwToolError("No tool call context available for task governance");
+    throwToolError("No tool call context available for task governance")
   }
   if (!context.conversationId) {
     throwToolError(
-      "Current tool call is not attached to a conversation that supports deferred follow-up",
-    );
+      "Current tool call is not attached to a conversation that supports deferred follow-up"
+    )
   }
 
   try {
@@ -650,11 +657,11 @@ async function createGovernedToolCallTask(params: {
       supportsCancel: params.supportsCancel === true,
       requestPayload: params.requestPayload,
       deadlineAt: params.expiresAt,
-    });
+    })
   } catch (error) {
     throwToolError(
-      error instanceof Error ? error.message : "Failed to create tool-call task",
-    );
+      error instanceof Error ? error.message : "Failed to create tool-call task"
+    )
   }
 }
 
@@ -676,7 +683,7 @@ function serializeTaskSummary(task: ToolCallTaskRecord) {
     cancelReason: task.cancelReason,
     lastOutputSeq: task.lastOutputSeq,
     lastOutputAt: task.lastOutputAt,
-  };
+  }
 }
 
 function serializeTaskDetails(task: ToolCallTaskRecord) {
@@ -686,26 +693,26 @@ function serializeTaskDetails(task: ToolCallTaskRecord) {
     finalResultPayload: task.finalResultPayload,
     finalErrorPayload: task.finalErrorPayload,
     metadata: task.metadata,
-  };
-}
-
-async function loadSessionTaskOrThrow(
-  sessionId: string,
-  taskId: string,
-) {
-  const task = await getToolCallTaskForSession(sessionId, taskId);
-  if (!task) {
-    throwToolError(`Task "${taskId}" was not found in this session.`);
   }
-  return task;
 }
 
-async function cancelHumanInteractionTask(task: ToolCallTaskRecord, reason?: string) {
-  const note = reason?.trim();
-  const interaction = await cancelInteractionRequestByTaskId(task.id, note);
+async function loadSessionTaskOrThrow(sessionId: string, taskId: string) {
+  const task = await getToolCallTaskForSession(sessionId, taskId)
+  if (!task) {
+    throwToolError(`Task "${taskId}" was not found in this session.`)
+  }
+  return task
+}
+
+async function cancelHumanInteractionTask(
+  task: ToolCallTaskRecord,
+  reason?: string
+) {
+  const note = reason?.trim()
+  const interaction = await cancelInteractionRequestByTaskId(task.id, note)
   const summary =
     note ||
-    `Cancelled ${task.sourceToolName.replace(/_/g, " ")} before it completed.`;
+    `Cancelled ${task.sourceToolName.replace(/_/g, " ")} before it completed.`
 
   return cancelToolCallTask(task.id, {
     summary,
@@ -723,17 +730,17 @@ async function cancelHumanInteractionTask(task: ToolCallTaskRecord, reason?: str
           interactionId: interaction.id,
         }
       : undefined,
-  });
+  })
 }
 
 async function resolveRelayAuthorizationPlanOrThrow(params: {
-  actorId: string;
-  workspaceId: string;
-  sessionId: string;
-  conversationId: string;
-  workspaceMemberId?: string;
-  relayToolName: string;
-  toolArguments: Record<string, unknown>;
+  actorId: string
+  workspaceId: string
+  sessionId: string
+  conversationId: string
+  workspaceMemberId?: string
+  relayToolName: string
+  toolArguments: Record<string, unknown>
 }) {
   const relayTarget = await resolveRelayTargetForNamespacedTool({
     actorId: params.actorId,
@@ -741,24 +748,24 @@ async function resolveRelayAuthorizationPlanOrThrow(params: {
     sessionId: params.sessionId,
     conversationId: params.conversationId,
     namespacedToolName: params.relayToolName,
-  });
+  })
   if (!relayTarget) {
     throwToolError(
-      `Relay tool "${params.relayToolName}" is not currently available in this conversation.`,
-    );
+      `Relay tool "${params.relayToolName}" is not currently available in this conversation.`
+    )
   }
   if (!relayTarget.runtimeSessionId) {
     throwToolError(
-      "This relay tool does not have an active runtime session yet. Call the relay tool first, then request authorization.",
-    );
+      "This relay tool does not have an active runtime session yet. Call the relay tool first, then request authorization."
+    )
   }
 
   const relayCatalog = await loadRelayExposureCatalogSnapshot(
     relayTarget.deviceId,
-    relayTarget.exposureId,
-  );
+    relayTarget.exposureId
+  )
   if (!relayCatalog) {
-    throwToolError("The relay exposure is not currently available.");
+    throwToolError("The relay exposure is not currently available.")
   }
 
   const authorizationPlan = inferRelaySpecialAuthorizationPlan({
@@ -766,68 +773,67 @@ async function resolveRelayAuthorizationPlanOrThrow(params: {
     visibleToolName: relayTarget.visibleToolName,
     toolInput: params.toolArguments,
     exposureMetadata: relayCatalog.metadata,
-  });
+  })
   if (!authorizationPlan) {
     throwToolError(
-      "This relay tool call does not produce a relay authorization plan, or Synapse could not infer an authorization range for the requested action.",
-    );
+      "This relay tool call does not produce a relay authorization plan, or Synapse could not infer an authorization range for the requested action."
+    )
   }
 
   return {
     relayTarget,
     relayCatalog,
     authorizationPlan,
-  };
+  }
 }
 
 function normalizeUserInputQuestionType(
-  value: unknown,
+  value: unknown
 ): InteractionInputQuestionType | null {
-  if (typeof value !== "string") return null;
+  if (typeof value !== "string") return null
   switch (value.trim().toLowerCase()) {
     case "single_select":
     case "single":
     case "radio":
-      return "single_select";
+      return "single_select"
     case "multi_select":
     case "multiple":
     case "checkbox":
-      return "multi_select";
+      return "multi_select"
     case "text":
     case "input":
     case "textarea":
-      return "text";
+      return "text"
     default:
-      return null;
+      return null
   }
 }
 
 function buildUserInputOptionDefinitions(
   questionId: string,
-  rawOptions: ToolUserInputQuestionInput["options"],
+  rawOptions: ToolUserInputQuestionInput["options"]
 ): InteractionInputOption[] {
-  const options: InteractionInputOption[] = [];
-  const usedIds = new Set<string>();
+  const options: InteractionInputOption[] = []
+  const usedIds = new Set<string>()
 
   for (const [index, rawOption] of (rawOptions || []).entries()) {
     if (typeof rawOption === "string") {
-      const label = rawOption.trim();
-      if (!label) continue;
-      const id = `${questionId}_option_${index + 1}`;
-      usedIds.add(id);
-      options.push({ id, label });
-      continue;
+      const label = rawOption.trim()
+      if (!label) continue
+      const id = `${questionId}_option_${index + 1}`
+      usedIds.add(id)
+      options.push({ id, label })
+      continue
     }
-    if (!rawOption || typeof rawOption !== "object") continue;
+    if (!rawOption || typeof rawOption !== "object") continue
     const label =
-      typeof rawOption.label === "string" ? rawOption.label.trim() : "";
-    if (!label) continue;
-    let id =
-      typeof rawOption.id === "string" ? rawOption.id.trim() : "";
+      typeof rawOption.label === "string" ? rawOption.label.trim() : ""
+    if (!label) continue
+    let id = typeof rawOption.id === "string" ? rawOption.id.trim() : ""
     if (!id || usedIds.has(id)) {
-      id = `${questionId}_option_${index + 1}`;
+      id = `${questionId}_option_${index + 1}`
     }
-    usedIds.add(id);
+    usedIds.add(id)
     options.push({
       id,
       label,
@@ -839,31 +845,31 @@ function buildUserInputOptionDefinitions(
         typeof rawOption.preview === "string"
           ? rawOption.preview.trim() || undefined
           : undefined,
-    });
+    })
   }
 
-  return options;
+  return options
 }
 
 function buildUserInputQuestionDefinition(
   rawQuestion: ToolUserInputQuestionInput,
-  fallbackIndex: number,
+  fallbackIndex: number
 ): { question: InteractionInputQuestionDefinition | null; error?: string } {
-  const prompt = String(rawQuestion.prompt || "").trim();
+  const prompt = String(rawQuestion.prompt || "").trim()
   if (!prompt) {
     return {
       question: null,
       error: `Question ${fallbackIndex + 1} is missing a prompt.`,
-    };
+    }
   }
 
-  const normalizedType = normalizeUserInputQuestionType(rawQuestion.type);
+  const normalizedType = normalizeUserInputQuestionType(rawQuestion.type)
   const type =
     normalizedType ||
-    (Array.isArray(rawQuestion.options) ? "single_select" : "text");
+    (Array.isArray(rawQuestion.options) ? "single_select" : "text")
   const id =
     String(rawQuestion.id || `question_${fallbackIndex + 1}`).trim() ||
-    `question_${fallbackIndex + 1}`;
+    `question_${fallbackIndex + 1}`
   const question: InteractionInputQuestionDefinition = {
     id,
     header:
@@ -877,44 +883,50 @@ function buildUserInputQuestionDefinition(
         ? rawQuestion.description.trim() || undefined
         : undefined,
     required: rawQuestion.required !== false,
-  };
+  }
 
   if (type === "text") {
     question.placeholder =
       typeof rawQuestion.placeholder === "string"
         ? rawQuestion.placeholder.trim() || undefined
-        : undefined;
-    question.secret = rawQuestion.secret === true;
-    return { question };
+        : undefined
+    question.secret = rawQuestion.secret === true
+    return { question }
   }
 
-  const options = buildUserInputOptionDefinitions(id, rawQuestion.options);
+  const options = buildUserInputOptionDefinitions(id, rawQuestion.options)
   if (options.length === 0) {
     return {
       question: null,
       error: `"${prompt}" requires at least one option.`,
-    };
+    }
   }
 
-  question.options = options;
-  question.allowOther = rawQuestion.allowOther === true;
+  question.options = options
+  question.allowOther = rawQuestion.allowOther === true
 
   if (type === "multi_select") {
     if (
       typeof rawQuestion.minSelections === "number" &&
       Number.isFinite(rawQuestion.minSelections)
     ) {
-      question.minSelections = Math.max(0, Math.trunc(rawQuestion.minSelections));
+      question.minSelections = Math.max(
+        0,
+        Math.trunc(rawQuestion.minSelections)
+      )
     }
     if (
       typeof rawQuestion.maxSelections === "number" &&
       Number.isFinite(rawQuestion.maxSelections)
     ) {
-      question.maxSelections = Math.max(1, Math.trunc(rawQuestion.maxSelections));
+      question.maxSelections = Math.max(
+        1,
+        Math.trunc(rawQuestion.maxSelections)
+      )
     }
   }
 
-  return { question };
+  return { question }
 }
 
 const taskStatusFilterValues = [
@@ -923,73 +935,73 @@ const taskStatusFilterValues = [
   "completed",
   "failed",
   "cancelled",
-] as const;
+] as const
 
 const taskOutputStreamValues = [
   "combined",
   "stdout",
   "stderr",
   "system",
-] as const;
+] as const
 
 function buildUserInputQuestionDefinitions(rawQuestions: unknown): {
-  questions: InteractionInputQuestionDefinition[];
-  error?: string;
+  questions: InteractionInputQuestionDefinition[]
+  error?: string
 } {
   if (!Array.isArray(rawQuestions) || rawQuestions.length === 0) {
     return {
       questions: [],
       error: "questions must contain at least one question.",
-    };
+    }
   }
   if (rawQuestions.length > 4) {
     return {
       questions: [],
       error: "questions supports at most 4 items.",
-    };
+    }
   }
 
-  const questions: InteractionInputQuestionDefinition[] = [];
-  const usedIds = new Set<string>();
+  const questions: InteractionInputQuestionDefinition[] = []
+  const usedIds = new Set<string>()
 
   for (const [index, rawQuestion] of rawQuestions.entries()) {
     if (!rawQuestion || typeof rawQuestion !== "object") {
-      return { questions: [], error: `Question ${index + 1} is invalid.` };
+      return { questions: [], error: `Question ${index + 1} is invalid.` }
     }
     const { question, error } = buildUserInputQuestionDefinition(
       rawQuestion as ToolUserInputQuestionInput,
-      index,
-    );
+      index
+    )
     if (!question) {
       return {
         questions: [],
         error: error || `Question ${index + 1} is invalid.`,
-      };
+      }
     }
     if (usedIds.has(question.id)) {
       return {
         questions: [],
         error: `Question id "${question.id}" is duplicated.`,
-      };
+      }
     }
-    usedIds.add(question.id);
-    questions.push(question);
+    usedIds.add(question.id)
+    questions.push(question)
   }
 
-  return { questions };
+  return { questions }
 }
 
 async function listInviteableActors(params: {
-  workspaceId: string;
-  conversationId: string;
-  actorId: string;
+  workspaceId: string
+  conversationId: string
+  actorId: string
 }): Promise<InviteableActor[]> {
   const result = await db
     .selectFrom("actors as a")
     .leftJoin("actor_versions as current_version", (join) =>
       join
         .onRef("current_version.actor_id", "=", "a.id")
-        .onRef("current_version.version", "=", "a.current_version"),
+        .onRef("current_version.version", "=", "a.current_version")
     )
     .select([
       "a.id",
@@ -1017,16 +1029,18 @@ async function listInviteableActors(params: {
     .where("a.workspace_id", "=", params.workspaceId)
     .where("a.is_active", "=", true)
     .where("a.id", "<>", params.actorId)
-    .where(sql<boolean>`NOT EXISTS (
+    .where(
+      sql<boolean>`NOT EXISTS (
       SELECT 1
       FROM conversation_participants cp
       WHERE cp.conversation_id = ${params.conversationId}
         AND cp.actor_id = a.id
         AND cp.state = 'active'
-    )`)
+    )`
+    )
     .orderBy("a.name", "asc")
     .orderBy("a.id", "asc")
-    .execute();
+    .execute()
 
   return result.map((row) => ({
     id: row.id as string,
@@ -1034,35 +1048,35 @@ async function listInviteableActors(params: {
     title: (row.title as string | null) || undefined,
     role: (row.role as string | null) || undefined,
     summary: summarizeInviteableActor(row),
-  }));
+  }))
 }
 
 async function canActorUseInviteActorTool(params: {
-  actorId: string;
-  conversationId: string;
-  conversationKind?: "private" | "group" | "virtual";
-  conversationBoundary?: "internal" | "external";
+  actorId: string
+  conversationId: string
+  conversationKind?: "private" | "group" | "virtual"
+  conversationBoundary?: "internal" | "external"
 }) {
   if (
     !params.conversationId ||
     !isGroupConversationKind(params.conversationKind) ||
     params.conversationBoundary !== "internal"
   ) {
-    return false;
+    return false
   }
 
   return isActorActiveConversationParticipant(
     params.conversationId,
-    params.actorId,
-  );
+    params.actorId
+  )
 }
 
 function buildInviteActorDefinition(candidates: InviteableActor[]) {
   const candidateDirectory = candidates
     .map(
-      (candidate) => `\`${candidate.id}\`: ${formatInviteableActor(candidate)}`,
+      (candidate) => `\`${candidate.id}\`: ${formatInviteableActor(candidate)}`
     )
-    .join("; ");
+    .join("; ")
 
   return {
     name: "invite_actor",
@@ -1092,7 +1106,7 @@ function buildInviteActorDefinition(candidates: InviteableActor[]) {
       },
       required: ["actorIds", "reason"],
     },
-  };
+  }
 }
 
 /**
@@ -1126,16 +1140,16 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => {
-      const availableSkills = ctx.availableSkills || [];
+      const availableSkills = ctx.availableSkills || []
       if (availableSkills.length === 0) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
       const skillNames: string[] = Array.from(
-        new Set(availableSkills.map((skill) => skill.slug)),
-      );
+        new Set(availableSkills.map((skill) => skill.slug))
+      )
       const skillList = availableSkills
         .map((skill) => `\`${skill.slug}\`: ${skill.description}`)
-        .join("; ");
+        .join("; ")
       return {
         active: true,
         definition: {
@@ -1158,30 +1172,30 @@ export function registerCallableToolPlugins(): void {
             required: ["skillName"],
           },
         },
-      };
+      }
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
+      const session = await getSession(context.sessionId)
       if (!session) {
-        throwToolError("Session not found");
+        throwToolError("Session not found")
       }
       const actorParticipant = await requireCurrentAutomationParticipant({
         conversationId: session.conversation_id,
         actorId: context.actorId,
-      });
+      })
 
-      const skillName = String((input as any).skillName || "").trim();
+      const skillName = String((input as any).skillName || "").trim()
       const path =
         typeof (input as any).path === "string"
           ? String((input as any).path).trim()
-          : undefined;
+          : undefined
       if (!skillName) {
-        throwToolError("skillName is required");
+        throwToolError("skillName is required")
       }
 
       try {
@@ -1194,7 +1208,7 @@ export function registerCallableToolPlugins(): void {
           conversationBoundary: session.conversation_boundary,
           skillName,
           assetPath: path || undefined,
-        });
+        })
 
         return [
           `Skill: ${result.skill.name}`,
@@ -1203,12 +1217,12 @@ export function registerCallableToolPlugins(): void {
           `Path: ${result.asset.path}`,
           "",
           result.asset.textContent || "",
-        ].join("\n");
+        ].join("\n")
       } catch (err: any) {
-        rethrowToolExecutionError(err, "Failed to read skill");
+        rethrowToolExecutionError(err, "Failed to read skill")
       }
     },
-  });
+  })
 
   registerToolPlugin({
     name: "get_current_time",
@@ -1230,22 +1244,22 @@ export function registerCallableToolPlugins(): void {
       },
     },
     execute: async (input) => {
-      const parsed = currentTimeInputSchema.safeParse(input);
+      const parsed = currentTimeInputSchema.safeParse(input)
       if (!parsed.success) {
         throwToolError("Invalid input for get_current_time.", {
           details: parsed.error.issues.map((issue) => issue.message),
-        });
+        })
       }
 
-      const now = new Date();
+      const now = new Date()
       const resolvedTimeZone =
         parsed.data.timeZone ||
         Intl.DateTimeFormat().resolvedOptions().timeZone ||
-        "UTC";
+        "UTC"
 
       try {
-        const localTime = formatDateTimeInZone(now, resolvedTimeZone);
-        const weekday = formatWeekdayInZone(now, resolvedTimeZone);
+        const localTime = formatDateTimeInZone(now, resolvedTimeZone)
+        const weekday = formatWeekdayInZone(now, resolvedTimeZone)
         return JSON.stringify({
           nowIso: now.toISOString(),
           utc: formatUtcTimestamp(now),
@@ -1253,17 +1267,17 @@ export function registerCallableToolPlugins(): void {
           timeZone: resolvedTimeZone,
           localTime,
           weekday,
-        });
+        })
       } catch (error: any) {
         throwToolError(
           `Invalid timeZone "${resolvedTimeZone}". Use an IANA timezone such as Asia/Shanghai or America/Los_Angeles.`,
           {
             details: error?.message ? [error.message] : undefined,
-          },
-        );
+          }
+        )
       }
     },
-  });
+  })
 
   registerToolPlugin({
     name: "send_to",
@@ -1300,16 +1314,17 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => {
-      const conversationId = getToolContextConversationId(ctx);
-      const conversationParticipants = getToolContextConversationParticipants(ctx);
+      const conversationId = getToolContextConversationId(ctx)
+      const conversationParticipants =
+        getToolContextConversationParticipants(ctx)
       if (!conversationId || !conversationParticipants?.length) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
       const otherParticipants = conversationParticipants.filter(
-        (m) => m.type === "workspace_member" || m.id !== ctx.actorId,
-      );
+        (m) => m.type === "workspace_member" || m.id !== ctx.actorId
+      )
       if (otherParticipants.length === 0) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
       return {
         active: true,
@@ -1317,46 +1332,43 @@ export function registerCallableToolPlugins(): void {
           conversationKind: getToolContextConversationKind(ctx),
           otherParticipants,
         }),
-      };
+      }
     },
     execute: async (input) => {
       const parsed = sendToInputSchema.safeParse(
-        normalizeRawSendToInput(input as Record<string, unknown>),
-      );
+        normalizeRawSendToInput(input as Record<string, unknown>)
+      )
       if (!parsed.success) {
         throwToolError("Invalid input for send_to.", {
           details: parsed.error.issues.map((issue) => issue.message),
-        });
+        })
       }
-      const {
-        intent,
-        summary,
-        message,
-        replyToRef,
-      } = parsed.data;
+      const { intent, summary, message, replyToRef } = parsed.data
 
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
-      const conversationId = getThreadConversationId(session);
+      const session = await getSession(context.sessionId)
+      const conversationId = getThreadConversationId(session)
       if (!session || !conversationId) {
         throwToolError(
-          "Current session is not attached to a thread conversation",
-        );
+          "Current session is not attached to a thread conversation"
+        )
       }
 
-      const allMembers = await listConversationParticipants(conversationId);
+      const allMembers = await listConversationParticipants(conversationId)
       const senderParticipant = allMembers.find(
         (member: any) =>
-          member.actor_id === context.actorId && member.state === "active",
-      );
+          member.actor_id === context.actorId && member.state === "active"
+      )
       if (!senderParticipant?.id) {
-        throwToolError("Current actor is not an active participant in this conversation.");
+        throwToolError(
+          "Current actor is not an active participant in this conversation."
+        )
       }
-      const mentionCandidates = buildSendToCandidates(allMembers);
+      const mentionCandidates = buildSendToCandidates(allMembers)
       const normalizedMessage = await buildNormalizedMessageContent({
         content: message,
         inlineReferences: {
@@ -1366,17 +1378,17 @@ export function registerCallableToolPlugins(): void {
             userName: "User",
           }),
         },
-      });
+      })
       if (normalizedMessage.referenceWarnings.length > 0) {
         throwToolError("Invalid inline references in message.", {
           details: normalizedMessage.referenceWarnings,
-        });
+        })
       }
       const replyTarget = await resolveConversationReplyRef({
         conversationId,
         participantId: senderParticipant.id,
         replyRef: replyToRef,
-      });
+      })
 
       await sendConversationMessageFromParticipant({
         workspaceId: session.workspace_id,
@@ -1390,7 +1402,7 @@ export function registerCallableToolPlugins(): void {
           sendToIntent: intent,
           sendToSummary: summary,
         },
-      });
+      })
 
       const result: Record<string, unknown> = {
         success: true,
@@ -1399,9 +1411,9 @@ export function registerCallableToolPlugins(): void {
         replyToRef: replyTarget?.ref,
         message: "Message sent.",
       }
-      return JSON.stringify(result);
+      return JSON.stringify(result)
     },
-  });
+  })
 
   registerToolPlugin({
     name: "request_user_input",
@@ -1472,20 +1484,24 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => {
-      const conversationParticipants = getToolContextConversationParticipants(ctx);
-      if (!getToolContextConversationId(ctx) || !conversationParticipants?.length) {
-        return { active: false, definition: null as any };
+      const conversationParticipants =
+        getToolContextConversationParticipants(ctx)
+      if (
+        !getToolContextConversationId(ctx) ||
+        !conversationParticipants?.length
+      ) {
+        return { active: false, definition: null as any }
       }
       const candidates = buildUserInteractionCandidatesFromEntries(
-        conversationParticipants,
-      );
+        conversationParticipants
+      )
       if (candidates.length === 0) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
       const isPrivateConversation =
         getToolContextConversationKind(ctx) === "private" &&
-        candidates.length === 1;
-      const candidateDirectory = buildUserInteractionDirectory(candidates);
+        candidates.length === 1
+      const candidateDirectory = buildUserInteractionDirectory(candidates)
       return {
         active: true,
         definition: {
@@ -1509,7 +1525,9 @@ export function registerCallableToolPlugins(): void {
                       type: "string",
                       description:
                         "The exact participant ID of the target user.",
-                      enum: candidates.map((candidate) => candidate.participantId),
+                      enum: candidates.map(
+                        (candidate) => candidate.participantId
+                      ),
                     },
                   }),
               title: {
@@ -1566,36 +1584,38 @@ export function registerCallableToolPlugins(): void {
             required: ["title", "questions"],
           },
         },
-      };
+      }
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
-      const conversationId = getThreadConversationId(session);
+      const session = await getSession(context.sessionId)
+      const conversationId = getThreadConversationId(session)
       if (!session || !conversationId) {
         throwToolError(
-          "Current session is not attached to a thread conversation",
-        );
+          "Current session is not attached to a thread conversation"
+        )
       }
 
-      const allMembers = await listConversationParticipants(conversationId);
+      const allMembers = await listConversationParticipants(conversationId)
       const requesterMember = allMembers.find(
         (member) =>
-          member.actor_id === context.actorId && member.state === "active",
-      );
+          member.actor_id === context.actorId && member.state === "active"
+      )
       if (!requesterMember) {
         throwToolError(
-          "Current actor is not an active participant of this conversation",
-        );
+          "Current actor is not an active participant of this conversation"
+        )
       }
 
-      const candidates = buildUserInteractionCandidatesFromRows(allMembers);
+      const candidates = buildUserInteractionCandidatesFromRows(allMembers)
       if (candidates.length === 0) {
-        throwToolError("There are no active user participants in this conversation");
+        throwToolError(
+          "There are no active user participants in this conversation"
+        )
       }
 
       const resolution = resolveHumanInteractionTarget({
@@ -1605,26 +1625,26 @@ export function registerCallableToolPlugins(): void {
             : undefined,
         conversationKind: session.conversation_kind,
         candidates,
-      });
+      })
       if (!resolution.candidate) {
-        throwToolError(resolution.error || "Target user not found");
+        throwToolError(resolution.error || "Target user not found")
       }
 
-      const title = String((input as any).title || "").trim();
+      const title = String((input as any).title || "").trim()
       if (!title) {
-        throwToolError("title is required");
+        throwToolError("title is required")
       }
 
       const instructions =
         typeof (input as any).instructions === "string"
           ? String((input as any).instructions).trim()
-          : "";
+          : ""
 
       const { questions, error } = buildUserInputQuestionDefinitions(
-        (input as any).questions,
-      );
+        (input as any).questions
+      )
       if (error) {
-        throwToolError(error);
+        throwToolError(error)
       }
 
       const task = await createGovernedToolCallTask({
@@ -1639,9 +1659,9 @@ export function registerCallableToolPlugins(): void {
           questions,
         },
         summary: `Waiting for ${resolution.candidate.name} to complete "${title}".`,
-      });
+      })
 
-      let interaction;
+      let interaction
       try {
         interaction = await createUserInputInteractionRequest({
           workspaceId: context.workspaceId,
@@ -1652,7 +1672,7 @@ export function registerCallableToolPlugins(): void {
           title,
           instructions: instructions || undefined,
           questions,
-        });
+        })
       } catch (error) {
         await cancelToolCallTask(task.id, {
           summary: `Input request for ${resolution.candidate.name} failed before dispatch.`,
@@ -1660,8 +1680,8 @@ export function registerCallableToolPlugins(): void {
             message: error instanceof Error ? error.message : String(error),
           },
           notifyActor: false,
-        });
-        throw error;
+        })
+        throw error
       }
 
       return JSON.stringify({
@@ -1670,9 +1690,9 @@ export function registerCallableToolPlugins(): void {
         interactionId: interaction.id,
         targetMember: resolution.candidate.name,
         message: `Input request sent to ${resolution.candidate.name}. Only that participant can answer it.`,
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "enter_plan_mode",
@@ -1685,8 +1705,7 @@ export function registerCallableToolPlugins(): void {
         properties: {
           summary: {
             type: "string",
-            description:
-              "Optional short summary of what the plan will cover.",
+            description: "Optional short summary of what the plan will cover.",
           },
         },
         required: [],
@@ -1697,7 +1716,7 @@ export function registerCallableToolPlugins(): void {
         Boolean(getToolContextConversationId(ctx)) &&
         canEnterPlanMode(
           ctx.collaborationMode,
-          getToolContextConversationKind(ctx),
+          getToolContextConversationKind(ctx)
         ),
       definition: {
         name: "enter_plan_mode",
@@ -1716,28 +1735,28 @@ export function registerCallableToolPlugins(): void {
       },
     }),
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
+      const session = await getSession(context.sessionId)
       if (!session || !getThreadConversationId(session)) {
         throwToolError(
-          "Current session is not attached to a thread conversation",
-        );
+          "Current session is not attached to a thread conversation"
+        )
       }
-      assertPlanModeConversationKind(session.conversation_kind);
+      assertPlanModeConversationKind(session.conversation_kind)
       if (session.collaborationMode !== "default") {
         throwToolError(
-          "enter_plan_mode is only available when the session is in default mode.",
-        );
+          "enter_plan_mode is only available when the session is in default mode."
+        )
       }
 
       const summary =
         typeof (input as any).summary === "string"
           ? String((input as any).summary).trim() || undefined
-          : undefined;
+          : undefined
 
       await updateSessionCollaboration({
         sessionId: context.sessionId,
@@ -1750,15 +1769,15 @@ export function registerCallableToolPlugins(): void {
           }),
         },
         activePlanApprovalInteractionId: null,
-      });
+      })
 
       return JSON.stringify({
         success: true,
         collaborationMode: "plan_drafting",
         message: "Plan mode enabled.",
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "update_plan",
@@ -1771,7 +1790,8 @@ export function registerCallableToolPlugins(): void {
         properties: {
           explanation: {
             type: "string",
-            description: "Optional short explanation for the latest plan update.",
+            description:
+              "Optional short explanation for the latest plan update.",
           },
           plan: {
             type: "array",
@@ -1795,7 +1815,7 @@ export function registerCallableToolPlugins(): void {
     resolve: (ctx) => ({
       active: canUpdatePlan(
         ctx.collaborationMode,
-        getToolContextConversationKind(ctx),
+        getToolContextConversationKind(ctx)
       ),
       definition: {
         name: "update_plan",
@@ -1805,7 +1825,8 @@ export function registerCallableToolPlugins(): void {
           properties: {
             explanation: {
               type: "string",
-              description: "Optional short explanation for the latest plan update.",
+              description:
+                "Optional short explanation for the latest plan update.",
             },
             plan: {
               type: "array",
@@ -1828,29 +1849,29 @@ export function registerCallableToolPlugins(): void {
       },
     }),
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
+      const session = await getSession(context.sessionId)
       if (!session) {
-        throwToolError("Session not found");
+        throwToolError("Session not found")
       }
-      assertPlanModeConversationKind(session.conversation_kind);
+      assertPlanModeConversationKind(session.conversation_kind)
       if (session.collaborationMode !== "plan_drafting") {
-        throwToolError("update_plan is only available while drafting a plan.");
+        throwToolError("update_plan is only available while drafting a plan.")
       }
 
-      const { checklist, error } = parsePlanChecklist((input as any).plan);
+      const { checklist, error } = parsePlanChecklist((input as any).plan)
       if (error) {
-        throwToolError(error);
+        throwToolError(error)
       }
       const explanation =
         typeof (input as any).explanation === "string"
           ? String((input as any).explanation).trim() || undefined
-          : undefined;
-      const existingDraft = requireSessionPlanDraftState(session);
+          : undefined
+      const existingDraft = requireSessionPlanDraftState(session)
 
       await updateSessionCollaboration({
         sessionId: context.sessionId,
@@ -1862,15 +1883,15 @@ export function registerCallableToolPlugins(): void {
             enteredAt: existingDraft.enteredAt,
           }),
         },
-      });
+      })
 
       return JSON.stringify({
         success: true,
         collaborationMode: "plan_drafting",
         checklist,
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "exit_plan_mode",
@@ -1919,27 +1940,28 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => {
-      const conversationParticipants = getToolContextConversationParticipants(ctx);
+      const conversationParticipants =
+        getToolContextConversationParticipants(ctx)
       if (
         !canExitPlanMode(
           ctx.collaborationMode,
-          getToolContextConversationKind(ctx),
+          getToolContextConversationKind(ctx)
         ) ||
         !getToolContextConversationId(ctx) ||
         !conversationParticipants?.length
       ) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
       const candidates = buildUserInteractionCandidatesFromEntries(
-        conversationParticipants,
-      );
+        conversationParticipants
+      )
       if (candidates.length === 0) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
       const isPrivateConversation =
         getToolContextConversationKind(ctx) === "private" &&
-        candidates.length === 1;
-      const candidateDirectory = buildUserInteractionDirectory(candidates);
+        candidates.length === 1
+      const candidateDirectory = buildUserInteractionDirectory(candidates)
       return {
         active: true,
         definition: {
@@ -1963,7 +1985,9 @@ export function registerCallableToolPlugins(): void {
                       type: "string",
                       description:
                         "The exact participant ID of the target user.",
-                      enum: candidates.map((candidate) => candidate.participantId),
+                      enum: candidates.map(
+                        (candidate) => candidate.participantId
+                      ),
                     },
                   }),
               title: {
@@ -1998,42 +2022,44 @@ export function registerCallableToolPlugins(): void {
             required: ["title", "planMarkdown"],
           },
         },
-      };
+      }
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
-      const conversationId = getThreadConversationId(session);
+      const session = await getSession(context.sessionId)
+      const conversationId = getThreadConversationId(session)
       if (!session || !conversationId) {
         throwToolError(
-          "Current session is not attached to a thread conversation",
-        );
+          "Current session is not attached to a thread conversation"
+        )
       }
-      assertPlanModeConversationKind(session.conversation_kind);
+      assertPlanModeConversationKind(session.conversation_kind)
       if (session.collaborationMode !== "plan_drafting") {
         throwToolError(
-          "exit_plan_mode is only available while drafting a plan.",
-        );
+          "exit_plan_mode is only available while drafting a plan."
+        )
       }
 
-      const allMembers = await listConversationParticipants(conversationId);
+      const allMembers = await listConversationParticipants(conversationId)
       const requesterMember = allMembers.find(
         (member) =>
-          member.actor_id === context.actorId && member.state === "active",
-      );
+          member.actor_id === context.actorId && member.state === "active"
+      )
       if (!requesterMember) {
         throwToolError(
-          "Current actor is not an active participant of this conversation",
-        );
+          "Current actor is not an active participant of this conversation"
+        )
       }
 
-      const candidates = buildUserInteractionCandidatesFromRows(allMembers);
+      const candidates = buildUserInteractionCandidatesFromRows(allMembers)
       if (candidates.length === 0) {
-        throwToolError("There are no active user participants in this conversation");
+        throwToolError(
+          "There are no active user participants in this conversation"
+        )
       }
 
       const resolution = resolveHumanInteractionTarget({
@@ -2043,35 +2069,35 @@ export function registerCallableToolPlugins(): void {
             : undefined,
         conversationKind: session.conversation_kind,
         candidates,
-      });
+      })
       if (!resolution.candidate) {
-        throwToolError(resolution.error || "Target user not found");
+        throwToolError(resolution.error || "Target user not found")
       }
 
-      const title = String((input as any).title || "").trim();
+      const title = String((input as any).title || "").trim()
       if (!title) {
-        throwToolError("title is required");
+        throwToolError("title is required")
       }
       const summary =
         typeof (input as any).summary === "string"
           ? String((input as any).summary).trim() || undefined
-          : undefined;
-      const planMarkdown = String((input as any).planMarkdown || "").trim();
+          : undefined
+      const planMarkdown = String((input as any).planMarkdown || "").trim()
       if (!planMarkdown) {
-        throwToolError("planMarkdown is required");
+        throwToolError("planMarkdown is required")
       }
 
-      let checklist: PlanChecklistStep[] | undefined;
+      let checklist: PlanChecklistStep[] | undefined
       if (Array.isArray((input as any).checklist)) {
-        const parsed = parsePlanChecklist((input as any).checklist);
+        const parsed = parsePlanChecklist((input as any).checklist)
         if (parsed.error) {
-          throwToolError(parsed.error);
+          throwToolError(parsed.error)
         }
-        checklist = parsed.checklist;
+        checklist = parsed.checklist
       } else {
-        checklist = requireSessionPlanDraftState(session).checklist;
+        checklist = requireSessionPlanDraftState(session).checklist
       }
-      const existingDraft = requireSessionPlanDraftState(session);
+      const existingDraft = requireSessionPlanDraftState(session)
 
       const task = await createGovernedToolCallTask({
         context,
@@ -2086,9 +2112,9 @@ export function registerCallableToolPlugins(): void {
           checklist,
         },
         summary: `Waiting for ${resolution.candidate.name} to review "${title}".`,
-      });
+      })
 
-      let interaction;
+      let interaction
       try {
         interaction = await createPlanApprovalInteractionRequest({
           workspaceId: context.workspaceId,
@@ -2109,7 +2135,7 @@ export function registerCallableToolPlugins(): void {
               enteredAt: existingDraft.enteredAt,
             }),
           },
-        });
+        })
       } catch (error) {
         await cancelToolCallTask(task.id, {
           summary: `Plan approval request for ${resolution.candidate.name} failed before dispatch.`,
@@ -2117,8 +2143,8 @@ export function registerCallableToolPlugins(): void {
             message: error instanceof Error ? error.message : String(error),
           },
           notifyActor: false,
-        });
-        throw error;
+        })
+        throw error
       }
 
       return JSON.stringify({
@@ -2128,9 +2154,9 @@ export function registerCallableToolPlugins(): void {
         collaborationMode: "plan_awaiting_approval",
         targetMember: resolution.candidate.name,
         message: `Plan submitted to ${resolution.candidate.name} for approval.`,
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "request_relay_authorization",
@@ -2167,15 +2193,19 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => {
-      const conversationParticipants = getToolContextConversationParticipants(ctx);
-      if (!getToolContextConversationId(ctx) || !conversationParticipants?.length) {
-        return { active: false, definition: null as any };
+      const conversationParticipants =
+        getToolContextConversationParticipants(ctx)
+      if (
+        !getToolContextConversationId(ctx) ||
+        !conversationParticipants?.length
+      ) {
+        return { active: false, definition: null as any }
       }
       const candidates = buildUserInteractionCandidatesFromEntries(
-        conversationParticipants,
-      );
+        conversationParticipants
+      )
       if (candidates.length === 0) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
       return {
         active: true,
@@ -2210,40 +2240,40 @@ export function registerCallableToolPlugins(): void {
             required: ["relayToolName", "reason", "mode", "toolArguments"],
           },
         },
-      };
+      }
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
-      const conversationId = getThreadConversationId(session);
+      const session = await getSession(context.sessionId)
+      const conversationId = getThreadConversationId(session)
       if (!session || !conversationId) {
         throwToolError(
-          "Current session is not attached to a thread conversation",
-        );
+          "Current session is not attached to a thread conversation"
+        )
       }
 
-      const relayToolName = String((input as any).relayToolName || "").trim();
+      const relayToolName = String((input as any).relayToolName || "").trim()
       if (!relayToolName) {
-        throwToolError("relayToolName is required");
+        throwToolError("relayToolName is required")
       }
-      const reason = String((input as any).reason || "").trim();
+      const reason = String((input as any).reason || "").trim()
       if (!reason) {
-        throwToolError("reason is required");
+        throwToolError("reason is required")
       }
       const mode: RelayAuthorizationRequestMode =
-        (input as any).mode === "blocking" ? "blocking" : "background";
+        (input as any).mode === "blocking" ? "blocking" : "background"
       const toolArguments =
         (input as any).toolArguments &&
         typeof (input as any).toolArguments === "object" &&
         !Array.isArray((input as any).toolArguments)
           ? ((input as any).toolArguments as Record<string, unknown>)
-          : null;
+          : null
       if (!toolArguments) {
-        throwToolError("toolArguments must be an object");
+        throwToolError("toolArguments must be an object")
       }
 
       const { relayTarget, authorizationPlan } =
@@ -2255,9 +2285,9 @@ export function registerCallableToolPlugins(): void {
           workspaceMemberId: context.workspaceMemberId,
           relayToolName,
           toolArguments,
-        });
+        })
 
-      let created;
+      let created
       try {
         created = await createRelayAuthorizationRequest({
           source: {
@@ -2287,11 +2317,9 @@ export function registerCallableToolPlugins(): void {
           availablePresets: ["actor", "conversation", "workspace"],
           reason,
           sourceRequestArgs: toolArguments,
-        });
+        })
       } catch (error) {
-        throwToolError(
-          error instanceof Error ? error.message : String(error),
-        );
+        throwToolError(error instanceof Error ? error.message : String(error))
       }
 
       if (mode === "blocking") {
@@ -2300,7 +2328,7 @@ export function registerCallableToolPlugins(): void {
           conversationId,
           createdAt: created.interaction.createdAt,
           onApproved: async (interaction) => interaction,
-        });
+        })
         if (waited.status === "approved") {
           return JSON.stringify({
             success: true,
@@ -2313,7 +2341,7 @@ export function registerCallableToolPlugins(): void {
             retried: false,
             relayToolName,
             authorization: waited.approvedValue.relayAuthorization,
-          });
+          })
         }
         throwToolError(
           waited.status === "superseded"
@@ -2322,8 +2350,8 @@ export function registerCallableToolPlugins(): void {
               ? "Relay authorization request was rejected."
               : waited.status === "cancelled"
                 ? "Relay authorization request was cancelled."
-                : "Relay authorization request did not complete successfully.",
-        );
+                : "Relay authorization request did not complete successfully."
+        )
       }
 
       if (created.reused) {
@@ -2334,7 +2362,7 @@ export function registerCallableToolPlugins(): void {
           relayExposure: relayTarget.exposureDisplayName,
           message:
             "A matching relay authorization request is already pending in this conversation.",
-        });
+        })
       }
 
       return JSON.stringify({
@@ -2348,9 +2376,9 @@ export function registerCallableToolPlugins(): void {
           created.availableAuthorizerCount === 1
             ? `Relay authorization request created. ${created.availableAuthorizers[0]!.name} can approve or reject it.`
             : `Relay authorization request created. ${created.availableAuthorizerCount} current conversation users can approve or reject it.`,
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "list_tasks",
@@ -2380,36 +2408,39 @@ export function registerCallableToolPlugins(): void {
       },
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
       const statuses = Array.isArray((input as any).statuses)
         ? (input as any).statuses
             .map((value: unknown) => String(value || "").trim())
-            .filter((value: string): value is (typeof taskStatusFilterValues)[number] =>
-              (taskStatusFilterValues as readonly string[]).includes(value),
+            .filter(
+              (
+                value: string
+              ): value is (typeof taskStatusFilterValues)[number] =>
+                (taskStatusFilterValues as readonly string[]).includes(value)
             )
-        : [];
+        : []
       const limit =
         typeof (input as any).limit === "number" &&
         Number.isFinite((input as any).limit)
           ? Math.max(1, Math.trunc(Number((input as any).limit)))
-          : 20;
+          : 20
 
       const tasks = await listToolCallTasksForSession({
         sessionId: context.sessionId,
         statuses: statuses.length > 0 ? statuses : undefined,
         limit,
-      });
+      })
 
       return JSON.stringify({
         success: true,
         tasks: tasks.map((task) => serializeTaskSummary(task)),
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "get_task_status",
@@ -2423,38 +2454,39 @@ export function registerCallableToolPlugins(): void {
         properties: {
           taskId: {
             type: "string",
-            description: "The exact task ID returned by a previous task-backed tool call.",
+            description:
+              "The exact task ID returned by a previous task-backed tool call.",
           },
         },
         required: ["taskId"],
       },
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const taskId = String((input as any).taskId || "").trim();
+      const taskId = String((input as any).taskId || "").trim()
       if (!taskId) {
-        throwToolError("taskId is required");
+        throwToolError("taskId is required")
       }
 
-      const task = await loadSessionTaskOrThrow(context.sessionId, taskId);
+      const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
       const interaction =
         task.executorKind === "interaction_user_input" ||
         task.executorKind === "plan_approval" ||
         task.executorKind === "relay_authorization"
           ? await getInteractionRequestSummaryByTaskId(task.id)
-          : null;
+          : null
 
       return JSON.stringify({
         success: true,
         task: serializeTaskDetails(task),
         interaction,
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "cancel_task",
@@ -2468,32 +2500,34 @@ export function registerCallableToolPlugins(): void {
         properties: {
           taskId: {
             type: "string",
-            description: "The exact task ID returned by a previous task-backed tool call.",
+            description:
+              "The exact task ID returned by a previous task-backed tool call.",
           },
           reason: {
             type: "string",
-            description: "Optional reason to record with the cancellation request.",
+            description:
+              "Optional reason to record with the cancellation request.",
           },
         },
         required: ["taskId"],
       },
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const taskId = String((input as any).taskId || "").trim();
+      const taskId = String((input as any).taskId || "").trim()
       if (!taskId) {
-        throwToolError("taskId is required");
+        throwToolError("taskId is required")
       }
 
       const reason =
         typeof (input as any).reason === "string"
           ? String((input as any).reason).trim()
-          : undefined;
-      const task = await loadSessionTaskOrThrow(context.sessionId, taskId);
+          : undefined
+      const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
 
       if (
         task.status === "completed" ||
@@ -2504,24 +2538,24 @@ export function registerCallableToolPlugins(): void {
           success: true,
           alreadyTerminal: true,
           task: serializeTaskDetails(task),
-        });
+        })
       }
 
       if (!task.supportsCancel) {
-        throwToolError(`Task "${task.id}" does not support cancellation.`);
+        throwToolError(`Task "${task.id}" does not support cancellation.`)
       }
 
       const updated =
         task.executorKind === "relay_mcp"
           ? await cancelRelayToolTask(task.id, reason)
-          : await cancelHumanInteractionTask(task, reason);
-      const current = await loadSessionTaskOrThrow(context.sessionId, task.id);
+          : await cancelHumanInteractionTask(task, reason)
+      const current = await loadSessionTaskOrThrow(context.sessionId, task.id)
       const interaction =
         current.executorKind === "interaction_user_input" ||
         current.executorKind === "plan_approval" ||
         current.executorKind === "relay_authorization"
           ? await getInteractionRequestSummaryByTaskId(current.id)
-          : null;
+          : null
 
       return JSON.stringify({
         success: true,
@@ -2531,9 +2565,9 @@ export function registerCallableToolPlugins(): void {
             : `Cancellation requested for task ${task.id}.`,
         task: serializeTaskDetails(current),
         interaction,
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "tail_task_output",
@@ -2547,11 +2581,13 @@ export function registerCallableToolPlugins(): void {
         properties: {
           taskId: {
             type: "string",
-            description: "The exact task ID returned by a previous async relay command call.",
+            description:
+              "The exact task ID returned by a previous async relay command call.",
           },
           afterSeq: {
             type: "number",
-            description: "Optional cursor. Only return output chunks with seq greater than this value.",
+            description:
+              "Optional cursor. Only return output chunks with seq greater than this value.",
           },
           limit: {
             type: "number",
@@ -2567,49 +2603,49 @@ export function registerCallableToolPlugins(): void {
       },
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const taskId = String((input as any).taskId || "").trim();
+      const taskId = String((input as any).taskId || "").trim()
       if (!taskId) {
-        throwToolError("taskId is required");
+        throwToolError("taskId is required")
       }
 
-      const task = await loadSessionTaskOrThrow(context.sessionId, taskId);
+      const task = await loadSessionTaskOrThrow(context.sessionId, taskId)
       if (!task.supportsOutputTail) {
-        throwToolError(`Task "${task.id}" does not expose output tailing.`);
+        throwToolError(`Task "${task.id}" does not expose output tailing.`)
       }
 
       const afterSeq =
         typeof (input as any).afterSeq === "number" &&
         Number.isFinite((input as any).afterSeq)
           ? Math.max(0, Math.trunc(Number((input as any).afterSeq)))
-          : 0;
+          : 0
       const limit =
         typeof (input as any).limit === "number" &&
         Number.isFinite((input as any).limit)
           ? Math.max(1, Math.trunc(Number((input as any).limit)))
-          : 20;
+          : 20
       const stream =
         typeof (input as any).stream === "string" &&
         (taskOutputStreamValues as readonly string[]).includes(
-          String((input as any).stream).trim(),
+          String((input as any).stream).trim()
         )
           ? (String((input as any).stream).trim() as
               | "combined"
               | "stdout"
               | "stderr"
               | "system")
-          : "combined";
+          : "combined"
 
       const chunks = await getToolCallTaskOutput({
         taskId: task.id,
         afterSeq,
         limit,
         stream,
-      });
+      })
 
       return JSON.stringify({
         success: true,
@@ -2618,9 +2654,9 @@ export function registerCallableToolPlugins(): void {
         combinedText: chunks.map((chunk) => chunk.text).join("\n"),
         nextAfterSeq:
           chunks.length > 0 ? chunks[chunks.length - 1]!.seq : afterSeq,
-      });
+      })
     },
-  });
+  })
 
   // ============ invite_actor (callable) ============
   registerToolPlugin({
@@ -2649,7 +2685,7 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: async (ctx): Promise<{ active: boolean; definition: any }> => {
-      const conversationId = getToolContextConversationId(ctx);
+      const conversationId = getToolContextConversationId(ctx)
       const requesterAllowed = conversationId
         ? await canActorUseInviteActorTool({
             actorId: ctx.actorId,
@@ -2657,130 +2693,128 @@ export function registerCallableToolPlugins(): void {
             conversationKind: getToolContextConversationKind(ctx),
             conversationBoundary: getToolContextConversationBoundary(ctx),
           })
-        : false;
+        : false
       if (!requesterAllowed) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
 
       const candidates = await listInviteableActors({
         workspaceId: ctx.workspaceId,
         conversationId: conversationId!,
         actorId: ctx.actorId,
-      });
+      })
 
       if (candidates.length === 0) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
 
       return {
         active: true,
         definition: buildInviteActorDefinition(candidates),
-      };
+      }
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
-      const conversationId = getThreadConversationId(session);
+      const session = await getSession(context.sessionId)
+      const conversationId = getThreadConversationId(session)
       if (!session || !conversationId) {
         throwToolError(
-          "Current session is not attached to a thread conversation",
-        );
+          "Current session is not attached to a thread conversation"
+        )
       }
       if (!isGroupConversationKind(session.conversation_kind)) {
-        throwToolError(
-          "invite_actor is only available in group conversations.",
-        );
+        throwToolError("invite_actor is only available in group conversations.")
       }
       if (session.conversation_boundary !== "internal") {
         throwToolError(
-          "invite_actor is only available in internal group conversations.",
-        );
+          "invite_actor is only available in internal group conversations."
+        )
       }
       const requesterAllowed = await canActorUseInviteActorTool({
         actorId: context.actorId,
         conversationId,
         conversationKind: session.conversation_kind,
         conversationBoundary: session.conversation_boundary,
-      });
+      })
       if (!requesterAllowed) {
         throwToolError(
-          "Actor is not allowed to invite participants into this conversation.",
-        );
+          "Actor is not allowed to invite participants into this conversation."
+        )
       }
 
       const reason =
         typeof (input as any).reason === "string"
           ? String((input as any).reason).trim()
-          : "";
+          : ""
       if (!reason) {
-        throwToolError("reason is required");
+        throwToolError("reason is required")
       }
 
       const candidates = await listInviteableActors({
         workspaceId: session.workspace_id,
         conversationId,
         actorId: context.actorId,
-      });
+      })
       const candidateById = new Map(
-        candidates.map((candidate) => [candidate.id, candidate]),
-      );
-      const candidatesByName = new Map<string, InviteableActor[]>();
+        candidates.map((candidate) => [candidate.id, candidate])
+      )
+      const candidatesByName = new Map<string, InviteableActor[]>()
       for (const candidate of candidates) {
-        const key = candidate.name.trim().toLowerCase();
-        const matches = candidatesByName.get(key) || [];
-        matches.push(candidate);
-        candidatesByName.set(key, matches);
+        const key = candidate.name.trim().toLowerCase()
+        const matches = candidatesByName.get(key) || []
+        matches.push(candidate)
+        candidatesByName.set(key, matches)
       }
 
       const requestedActorIds = Array.isArray((input as any).actorIds)
         ? (input as any).actorIds
             .map((value: unknown) => String(value || "").trim())
             .filter(Boolean)
-        : [];
+        : []
       const fallbackNames = [
         typeof (input as any).actorName === "string"
           ? String((input as any).actorName).trim()
           : "",
         ...(Array.isArray((input as any).actorNames)
           ? (input as any).actorNames.map((value: unknown) =>
-              String(value || "").trim(),
+              String(value || "").trim()
             )
           : []),
-      ].filter(Boolean);
+      ].filter(Boolean)
 
-      const resolvedActors: InviteableActor[] = [];
-      const resolutionErrors: string[] = [];
+      const resolvedActors: InviteableActor[] = []
+      const resolutionErrors: string[] = []
 
       for (const actorId of requestedActorIds) {
-        const candidate = candidateById.get(actorId);
+        const candidate = candidateById.get(actorId)
         if (!candidate) {
           resolutionErrors.push(
-            `Actor ID "${actorId}" is not currently inviteable.`,
-          );
-          continue;
+            `Actor ID "${actorId}" is not currently inviteable.`
+          )
+          continue
         }
-        resolvedActors.push(candidate);
+        resolvedActors.push(candidate)
       }
 
       for (const actorName of fallbackNames) {
-        const matches = candidatesByName.get(actorName.toLowerCase()) || [];
+        const matches = candidatesByName.get(actorName.toLowerCase()) || []
         if (matches.length === 0) {
           resolutionErrors.push(
-            `Actor "${actorName}" is not currently inviteable.`,
-          );
-          continue;
+            `Actor "${actorName}" is not currently inviteable.`
+          )
+          continue
         }
         if (matches.length > 1) {
           resolutionErrors.push(
-            `Actor name "${actorName}" is ambiguous. Use actorIds instead: ${matches.map((candidate) => candidate.id).join(", ")}`,
-          );
-          continue;
+            `Actor name "${actorName}" is ambiguous. Use actorIds instead: ${matches.map((candidate) => candidate.id).join(", ")}`
+          )
+          continue
         }
-        resolvedActors.push(matches[0]!);
+        resolvedActors.push(matches[0]!)
       }
 
       if (resolvedActors.length === 0) {
@@ -2794,7 +2828,7 @@ export function registerCallableToolPlugins(): void {
               summary: candidate.summary,
             })),
           },
-        });
+        })
       }
 
       if (resolutionErrors.length > 0) {
@@ -2808,48 +2842,52 @@ export function registerCallableToolPlugins(): void {
               summary: candidate.summary,
             })),
           },
-        });
+        })
       }
 
       const uniqueActors = Array.from(
         new Map(
-          resolvedActors.map((candidate) => [candidate.id, candidate]),
-        ).values(),
-      );
+          resolvedActors.map((candidate) => [candidate.id, candidate])
+        ).values()
+      )
 
       try {
-        const inviterMember = (await listConversationParticipants(conversationId)).find(
+        const inviterMember = (
+          await listConversationParticipants(conversationId)
+        ).find(
           (member: any) =>
-            member.actor_id === context.actorId && member.state === "active",
-        );
+            member.actor_id === context.actorId && member.state === "active"
+        )
         if (!inviterMember?.id) {
-          throwToolError("Current actor is not an active participant in this conversation.");
+          throwToolError(
+            "Current actor is not an active participant in this conversation."
+          )
         }
         const addResult = await addConversationParticipants({
           conversationId,
           workspaceId: session.workspace_id,
           actorIds: uniqueActors.map((candidate) => candidate.id),
-        });
+        })
         const invitedActorIds = new Set(
           addResult
             .filter((member: any) => member.actor_id)
-            .map((member: any) => member.actor_id as string),
-        );
+            .map((member: any) => member.actor_id as string)
+        )
         const invitedActors = uniqueActors.filter((candidate) =>
-          invitedActorIds.has(candidate.id),
-        );
+          invitedActorIds.has(candidate.id)
+        )
         const skippedActors = uniqueActors
           .filter((candidate) => !invitedActorIds.has(candidate.id))
           .map((candidate) => ({
             id: candidate.id,
             name: candidate.name,
             reason: "Actor already in conversation",
-          }));
+          }))
 
         if (invitedActors.length === 0) {
           throwToolError("No new actors were invited.", {
             extra: { skippedActors },
-          });
+          })
         }
 
         await sendConversationMessageFromParticipant({
@@ -2861,28 +2899,28 @@ export function registerCallableToolPlugins(): void {
           contentBlocks: [
             ...invitedActors.flatMap((candidate, index) => {
               const participant = addResult.find(
-                (member: any) => member.actor_id === candidate.id,
-              );
+                (member: any) => member.actor_id === candidate.id
+              )
               if (!participant?.id) {
-                return [];
+                return []
               }
               const mention = mentionBlock({
                 mention: {
                   participantId: participant.id,
-                  participantType: 'actor',
+                  participantType: "actor",
                   actorId: candidate.id,
                   name: candidate.name,
                   title: candidate.title,
                   role: candidate.role,
                 },
-              });
+              })
               const needsSpacer =
-                index < invitedActors.length - 1 || reason.trim().length > 0;
-              return needsSpacer ? [mention, textBlock(' ')] : [mention];
+                index < invitedActors.length - 1 || reason.trim().length > 0
+              return needsSpacer ? [mention, textBlock(" ")] : [mention]
             }),
             ...textBlocks(reason),
           ],
-        });
+        })
 
         return JSON.stringify({
           success: true,
@@ -2897,12 +2935,12 @@ export function registerCallableToolPlugins(): void {
             invitedActors.length === 1
               ? `${invitedActors[0]!.name} has been invited to the conversation and notified.`
               : `${invitedActors.map((candidate) => candidate.name).join(", ")} have been invited to the conversation and notified.`,
-        });
+        })
       } catch (err: any) {
-        rethrowToolExecutionError(err, "Failed to invite actor(s)");
+        rethrowToolExecutionError(err, "Failed to invite actor(s)")
       }
     },
-  });
+  })
 
   // ============ memory_search (callable) ============
   registerToolPlugin({
@@ -2928,23 +2966,23 @@ export function registerCallableToolPlugins(): void {
       },
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
+      const session = await getSession(context.sessionId)
       if (!session) {
-        throwToolError("Session not found");
+        throwToolError("Session not found")
       }
 
-      const queryText = String((input as any).queryText || "").trim();
+      const queryText = String((input as any).queryText || "").trim()
       const limit = Math.max(
         1,
-        Math.min(10, parseInt(String((input as any).limit || "5"), 10) || 5),
-      );
+        Math.min(10, parseInt(String((input as any).limit || "5"), 10) || 5)
+      )
       if (!queryText) {
-        throwToolError("queryText is required");
+        throwToolError("queryText is required")
       }
 
       const result = await runMemorySearch(context.workspaceId, {
@@ -2956,7 +2994,7 @@ export function registerCallableToolPlugins(): void {
           sessionId: context.sessionId,
           source: "memory_search_tool",
         },
-      });
+      })
 
       return JSON.stringify({
         success: true,
@@ -2970,9 +3008,9 @@ export function registerCallableToolPlugins(): void {
           finalScore: Number(memory.finalScore.toFixed(4)),
           matchedTerms: memory.matchedTerms || [],
         })),
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "schedule_self_wakeup",
@@ -3081,50 +3119,50 @@ export function registerCallableToolPlugins(): void {
       },
     }),
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
+      const session = await getSession(context.sessionId)
       if (!session) {
-        throwToolError("Session not found");
+        throwToolError("Session not found")
       }
       const actorParticipant = await requireCurrentAutomationParticipant({
         conversationId: session.conversation_id,
         actorId: context.actorId,
-      });
+      })
 
-      const name = String((input as any).name || "").trim();
-      const scheduleKind = String((input as any).scheduleKind || "").trim();
+      const name = String((input as any).name || "").trim()
+      const scheduleKind = String((input as any).scheduleKind || "").trim()
       const scheduleExpr =
         typeof (input as any).scheduleExpr === "string"
           ? String((input as any).scheduleExpr).trim()
-          : "";
+          : ""
       const intervalSeconds =
         typeof (input as any).intervalSeconds === "number"
           ? Number((input as any).intervalSeconds)
-          : undefined;
+          : undefined
       const timezone =
         typeof (input as any).timezone === "string"
           ? String((input as any).timezone).trim()
-          : undefined;
-      const message = String((input as any).message || "").trim();
+          : undefined
+      const message = String((input as any).message || "").trim()
       const wakeReason =
         typeof (input as any).wakeReason === "string"
           ? String((input as any).wakeReason).trim()
-          : undefined;
+          : undefined
       const activeUntil =
         typeof (input as any).activeUntil === "string"
           ? String((input as any).activeUntil).trim()
-          : undefined;
+          : undefined
       const maxTriggerCount =
         typeof (input as any).maxTriggerCount === "number"
           ? Number((input as any).maxTriggerCount)
-          : undefined;
+          : undefined
 
       if (!name || !message) {
-        throwToolError("name and message are required");
+        throwToolError("name and message are required")
       }
 
       try {
@@ -3165,20 +3203,20 @@ export function registerCallableToolPlugins(): void {
               targetPolicy: "specified_members",
               targetParticipantIds: [actorParticipant.id],
             },
-          },
-        );
+          }
+        )
 
         return JSON.stringify({
           success: true,
           automationId: rule.id,
           nextFireAt: rule.trigger.nextFireAt,
           message: `Scheduled self wakeup created: ${rule.name}.`,
-        });
+        })
       } catch (err: any) {
-        rethrowToolExecutionError(err, "Failed to create schedule");
+        rethrowToolExecutionError(err, "Failed to create schedule")
       }
     },
-  });
+  })
 
   registerToolPlugin({
     name: "list_event_sources",
@@ -3195,16 +3233,20 @@ export function registerCallableToolPlugins(): void {
     },
     resolve: async (ctx) => {
       if (!ctx.sessionId) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
-      const sources = await listAutomationEventSources(ctx.workspaceId, {
-        status: "active",
-      }, {
-        conversationId: ctx.conversationId!,
-        actorId: ctx.actorId,
-      });
+      const sources = await listAutomationEventSources(
+        ctx.workspaceId,
+        {
+          status: "active",
+        },
+        {
+          conversationId: ctx.conversationId!,
+          actorId: ctx.actorId,
+        }
+      )
       if (sources.length === 0) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
       return {
         active: true,
@@ -3217,24 +3259,28 @@ export function registerCallableToolPlugins(): void {
             required: [],
           },
         },
-      };
+      }
     },
     execute: async () => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context?.sessionId) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
-      const session = await getSession(context.sessionId);
+      const session = await getSession(context.sessionId)
       if (!session) {
-        throwToolError("Session not found");
+        throwToolError("Session not found")
       }
 
-      const sources = await listAutomationEventSources(context.workspaceId, {
-        status: "active",
-      }, {
-        conversationId: session.conversation_id,
-        actorId: context.actorId,
-      });
+      const sources = await listAutomationEventSources(
+        context.workspaceId,
+        {
+          status: "active",
+        },
+        {
+          conversationId: session.conversation_id,
+          actorId: context.actorId,
+        }
+      )
       return JSON.stringify({
         success: true,
         eventSources: sources.map((source) => ({
@@ -3246,9 +3292,9 @@ export function registerCallableToolPlugins(): void {
           providerKind: source.providerKind,
           providerRef: source.providerRef,
         })),
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "subscribe_event",
@@ -3301,25 +3347,29 @@ export function registerCallableToolPlugins(): void {
     },
     resolve: async (ctx) => {
       if (!ctx.sessionId) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
-      const sources = await listAutomationEventSources(ctx.workspaceId, {
-        status: "active",
-      }, {
-        conversationId: ctx.conversationId!,
-        actorId: ctx.actorId,
-      });
+      const sources = await listAutomationEventSources(
+        ctx.workspaceId,
+        {
+          status: "active",
+        },
+        {
+          conversationId: ctx.conversationId!,
+          actorId: ctx.actorId,
+        }
+      )
       if (sources.length === 0) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
 
       const directory = sources
         .map(
           (source) =>
             `\`${source.id}\`: ${source.name} (${source.providerKind}/${source.sourceKey}) - ${source.description}` +
-            `${source.recommendedUsage ? ` Suggested usage: ${source.recommendedUsage}` : ""}`,
+            `${source.recommendedUsage ? ` Suggested usage: ${source.recommendedUsage}` : ""}`
         )
-        .join("; ");
+        .join("; ")
 
       return {
         active: true,
@@ -3369,58 +3419,58 @@ export function registerCallableToolPlugins(): void {
             required: ["name", "eventSourceId", "message"],
           },
         },
-      };
+      }
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
+      const session = await getSession(context.sessionId)
       if (!session) {
-        throwToolError("Session not found");
+        throwToolError("Session not found")
       }
       const actorParticipant = await requireCurrentAutomationParticipant({
         conversationId: session.conversation_id,
         actorId: context.actorId,
-      });
+      })
 
-      const name = String((input as any).name || "").trim();
-      const eventSourceId = String((input as any).eventSourceId || "").trim();
+      const name = String((input as any).name || "").trim()
+      const eventSourceId = String((input as any).eventSourceId || "").trim()
       const matcherInput =
         typeof (input as any).matcher === "string"
           ? String((input as any).matcher).trim()
-          : "";
-      const message = String((input as any).message || "").trim();
+          : ""
+      const message = String((input as any).message || "").trim()
       const wakeReason =
         typeof (input as any).wakeReason === "string"
           ? String((input as any).wakeReason).trim()
-          : undefined;
-      const once = Boolean((input as any).once);
+          : undefined
+      const once = Boolean((input as any).once)
       const activeUntil =
         typeof (input as any).activeUntil === "string"
           ? String((input as any).activeUntil).trim()
-          : undefined;
+          : undefined
       const maxTriggerCount =
         typeof (input as any).maxTriggerCount === "number"
           ? Number((input as any).maxTriggerCount)
-          : undefined;
+          : undefined
 
       if (!name || !eventSourceId || !message) {
-        throwToolError("name, eventSourceId, and message are required");
+        throwToolError("name, eventSourceId, and message are required")
       }
 
-      let matcher: Record<string, unknown> | undefined;
+      let matcher: Record<string, unknown> | undefined
       if (matcherInput) {
         try {
-          const parsed = JSON.parse(matcherInput) as unknown;
+          const parsed = JSON.parse(matcherInput) as unknown
           if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-            throwToolError("matcher must be a JSON object string");
+            throwToolError("matcher must be a JSON object string")
           }
-          matcher = parsed as Record<string, unknown>;
+          matcher = parsed as Record<string, unknown>
         } catch {
-          throwToolError("matcher must be valid JSON");
+          throwToolError("matcher must be valid JSON")
         }
       }
 
@@ -3457,20 +3507,20 @@ export function registerCallableToolPlugins(): void {
               targetPolicy: "specified_members",
               targetParticipantIds: [actorParticipant.id],
             },
-          },
-        );
+          }
+        )
 
         return JSON.stringify({
           success: true,
           automationId: rule.id,
           eventSourceId: rule.trigger.eventSourceId,
           message: `Event subscription created: ${rule.name}.`,
-        });
+        })
       } catch (err: any) {
-        rethrowToolExecutionError(err, "Failed to create event subscription");
+        rethrowToolExecutionError(err, "Failed to create event subscription")
       }
     },
-  });
+  })
 
   registerToolPlugin({
     name: "view_event_source_history",
@@ -3492,14 +3542,18 @@ export function registerCallableToolPlugins(): void {
     },
     resolve: async (ctx) => {
       if (!ctx.sessionId) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
-      const sources = await listAutomationEventSources(ctx.workspaceId, undefined, {
-        conversationId: ctx.conversationId!,
-        actorId: ctx.actorId,
-      });
+      const sources = await listAutomationEventSources(
+        ctx.workspaceId,
+        undefined,
+        {
+          conversationId: ctx.conversationId!,
+          actorId: ctx.actorId,
+        }
+      )
       if (sources.length === 0) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
       return {
         active: true,
@@ -3519,23 +3573,23 @@ export function registerCallableToolPlugins(): void {
             required: ["eventSourceId"],
           },
         },
-      };
+      }
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const eventSourceId = String((input as any).eventSourceId || "").trim();
+      const eventSourceId = String((input as any).eventSourceId || "").trim()
       if (!eventSourceId) {
-        throwToolError("eventSourceId is required");
+        throwToolError("eventSourceId is required")
       }
 
       const occurrences = await listAutomationOccurrences(context.workspaceId, {
         eventSourceId,
         limit: 20,
-      });
+      })
       return JSON.stringify({
         success: true,
         eventSourceId,
@@ -3550,9 +3604,9 @@ export function registerCallableToolPlugins(): void {
           payload: occurrence.payload,
           sourceSnapshot: occurrence.sourceSnapshot,
         })),
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "list_automations",
@@ -3579,22 +3633,22 @@ export function registerCallableToolPlugins(): void {
       },
     }),
     execute: async () => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context?.sessionId) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
       const rules = await listCurrentSessionAutomationRules({
         workspaceId: context.workspaceId,
         sessionId: context.sessionId,
         actorId: context.actorId,
-      });
+      })
       return JSON.stringify({
         success: true,
         automations: rules.map((rule) => {
-          const triggerDisplay = describeAutomationTrigger(rule.trigger);
-          const policyDisplay = describeAutomationPolicy(rule.policy);
-          const deliveryDisplay = describeAutomationDelivery(rule.delivery);
+          const triggerDisplay = describeAutomationTrigger(rule.trigger)
+          const policyDisplay = describeAutomationPolicy(rule.policy)
+          const deliveryDisplay = describeAutomationDelivery(rule.delivery)
           return {
             id: rule.id,
             name: rule.name,
@@ -3619,11 +3673,11 @@ export function registerCallableToolPlugins(): void {
             nextFireAt: rule.trigger.nextFireAt,
             conversationId: rule.conversationId,
             targetParticipantIds: rule.delivery.targetParticipantIds,
-          };
+          }
         }),
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
     name: "cancel_automation",
@@ -3645,15 +3699,15 @@ export function registerCallableToolPlugins(): void {
     },
     resolve: async (ctx) => {
       if (!ctx.sessionId) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
       const rules = await listCurrentSessionAutomationRules({
         workspaceId: ctx.workspaceId,
         sessionId: ctx.sessionId,
         actorId: ctx.actorId,
-      });
+      })
       if (rules.length === 0) {
-        return { active: false, definition: null as any };
+        return { active: false, definition: null as any }
       }
       return {
         active: true,
@@ -3673,39 +3727,39 @@ export function registerCallableToolPlugins(): void {
             required: ["automationId"],
           },
         },
-      };
+      }
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context?.sessionId) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
-      const automationId = String((input as any).automationId || "").trim();
+      const automationId = String((input as any).automationId || "").trim()
       if (!automationId) {
-        throwToolError("automationId is required");
+        throwToolError("automationId is required")
       }
 
       const rules = await listCurrentSessionAutomationRules({
         workspaceId: context.workspaceId,
         sessionId: context.sessionId,
         actorId: context.actorId,
-      });
-      const rule = rules.find((entry) => entry.id === automationId);
+      })
+      const rule = rules.find((entry) => entry.id === automationId)
       if (!rule) {
-        throwToolError("Automation not found in this session scope");
+        throwToolError("Automation not found in this session scope")
       }
 
       await deleteAutomationRule(context.workspaceId, automationId, {
         workspaceMemberId: context.workspaceMemberId,
         actorId: context.actorId,
-      });
+      })
       return JSON.stringify({
         success: true,
         automationId,
         message: `Automation deleted: ${rule.name}.`,
-      });
+      })
     },
-  });
+  })
 
   // ============ sleep (callable) ============
   registerToolPlugin({
@@ -3747,29 +3801,29 @@ export function registerCallableToolPlugins(): void {
       },
     }),
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError("No session context available");
+        throwToolError("No session context available")
       }
 
-      const session = await getSession(context.sessionId);
+      const session = await getSession(context.sessionId)
       if (!session) {
-        throwToolError("Session not found");
+        throwToolError("Session not found")
       }
 
       const summary =
         typeof (input as any).summary === "string"
           ? String((input as any).summary).trim()
-          : "";
+          : ""
 
       return JSON.stringify({
         success: true,
         summary,
         message:
           "Sleep requested. The session will return to idle after this turn completes.",
-      });
+      })
     },
-  });
+  })
 }
 
 /**
@@ -3777,42 +3831,42 @@ export function registerCallableToolPlugins(): void {
  */
 function levenshtein(a: string, b: string): number {
   const m = a.length,
-    n = b.length;
+    n = b.length
   const dp: number[][] = Array.from({ length: m + 1 }, () =>
-    Array(n + 1).fill(0),
-  );
-  for (let i = 0; i <= m; i++) dp[i][0] = i;
-  for (let j = 0; j <= n; j++) dp[0][j] = j;
+    Array(n + 1).fill(0)
+  )
+  for (let i = 0; i <= m; i++) dp[i][0] = i
+  for (let j = 0; j <= n; j++) dp[0][j] = j
   for (let i = 1; i <= m; i++) {
     for (let j = 1; j <= n; j++) {
       dp[i][j] =
         a[i - 1] === b[j - 1]
           ? dp[i - 1][j - 1]
-          : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1]);
+          : 1 + Math.min(dp[i - 1][j], dp[i][j - 1], dp[i - 1][j - 1])
     }
   }
-  return dp[m][n];
+  return dp[m][n]
 }
 
 // ============ Tool Execution Context ============
 // Uses AsyncLocalStorage so each concurrent BullMQ job has its own context.
 
 type ToolExecutionContext = CapabilityInvocationContext & {
-  sessionId: string;
-  actorId: string;
-  workspaceId: string;
-};
+  sessionId: string
+  actorId: string
+  workspaceId: string
+}
 
-const contextStorage = new AsyncLocalStorage<ToolExecutionContext>();
+const contextStorage = new AsyncLocalStorage<ToolExecutionContext>()
 
 /**
  * Run `fn` with the given tool execution context bound via AsyncLocalStorage.
  */
 export function runWithToolContext<T>(
   ctx: ToolExecutionContext,
-  fn: () => T,
+  fn: () => T
 ): T {
-  return contextStorage.run(ctx, fn);
+  return contextStorage.run(ctx, fn)
 }
 
 /** @deprecated Use runWithToolContext instead. Kept only as no-op for call sites that still call it. */
@@ -3821,5 +3875,5 @@ export function setToolExecutionContext(_ctx: ToolExecutionContext | null) {
 }
 
 export function getToolExecutionContext(): ToolExecutionContext | null {
-  return contextStorage.getStore() ?? null;
+  return contextStorage.getStore() ?? null
 }

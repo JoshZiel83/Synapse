@@ -1,8 +1,8 @@
-import { Cable, Globe, Plus, Trash2, X } from 'lucide-react'
-import { useState } from 'react'
+import { Cable, Globe, Plus, Trash2, X } from "lucide-react"
+import { useState } from "react"
 
-import { Badge } from '../components/ui/badge'
-import { Button } from '../components/ui/button'
+import { Badge } from "../components/ui/badge"
+import { Button } from "../components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -10,17 +10,17 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from '../components/ui/dialog'
+} from "../components/ui/dialog"
 import {
   Field,
   FieldContent,
   FieldDescription,
   FieldGroup,
   FieldLabel,
-} from '../components/ui/field'
-import { Input } from '../components/ui/input'
-import { Separator } from '../components/ui/separator'
-import type { RelayConfig, ServerConfig } from '../types'
+} from "../components/ui/field"
+import { Input } from "../components/ui/input"
+import { Separator } from "../components/ui/separator"
+import type { RelayConfig, ServerConfig } from "../types"
 
 interface ServersPanelProps {
   config: RelayConfig
@@ -28,37 +28,43 @@ interface ServersPanelProps {
   onRemoveServer: (name: string) => Promise<void>
 }
 
-export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPanelProps) {
+export function ServersPanel({
+  config,
+  onAddServer,
+  onRemoveServer,
+}: ServersPanelProps) {
   const [open, setOpen] = useState(false)
-  const [transport, setTransport] = useState<'stdio' | 'http'>('stdio')
-  const [name, setName] = useState('')
-  const [command, setCommand] = useState('')
-  const [args, setArgs] = useState('')
-  const [endpoint, setEndpoint] = useState('')
+  const [transport, setTransport] = useState<"stdio" | "http">("stdio")
+  const [name, setName] = useState("")
+  const [command, setCommand] = useState("")
+  const [args, setArgs] = useState("")
+  const [endpoint, setEndpoint] = useState("")
   const [submitting, setSubmitting] = useState(false)
-  const [error, setError] = useState('')
+  const [error, setError] = useState("")
 
-  const externalServers = (config.servers || []).filter((server) => server.transport !== 'builtin')
+  const externalServers = (config.servers || []).filter(
+    (server) => server.transport !== "builtin"
+  )
 
   async function handleAddServer() {
     const payload: ServerConfig = {
       name: name.trim(),
       transport,
-      command: transport === 'stdio' ? command.trim() : '',
-      args: transport === 'stdio' ? args.split(' ').filter(Boolean) : [],
+      command: transport === "stdio" ? command.trim() : "",
+      args: transport === "stdio" ? args.split(" ").filter(Boolean) : [],
       env: {},
-      endpoint: transport === 'http' ? endpoint.trim() : '',
+      endpoint: transport === "http" ? endpoint.trim() : "",
     }
 
     setSubmitting(true)
-    setError('')
+    setError("")
     try {
       await onAddServer(payload)
-      setName('')
-      setCommand('')
-      setArgs('')
-      setEndpoint('')
-      setTransport('stdio')
+      setName("")
+      setCommand("")
+      setArgs("")
+      setEndpoint("")
+      setTransport("stdio")
       setOpen(false)
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
@@ -79,8 +85,13 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
     <>
       <section className="flex flex-col gap-5">
         <div>
-          <h1 className="text-[28px] leading-none font-semibold tracking-tight text-foreground">MCP</h1>
-          <div className="mt-3 text-sm text-muted-foreground">External MCP processes and HTTP endpoints. Built-in apps are managed from the Apps section.</div>
+          <h1 className="text-[28px] leading-none font-semibold tracking-tight text-foreground">
+            MCP
+          </h1>
+          <div className="mt-3 text-sm text-muted-foreground">
+            External MCP processes and HTTP endpoints. Built-in apps are managed
+            from the Apps section.
+          </div>
         </div>
 
         {error ? (
@@ -90,7 +101,9 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
         ) : null}
 
         <div className="flex items-center justify-between gap-3">
-          <div className="text-sm text-muted-foreground">Add stdio or HTTP MCP targets exposed by other processes.</div>
+          <div className="text-sm text-muted-foreground">
+            Add stdio or HTTP MCP targets exposed by other processes.
+          </div>
           <Button onClick={() => setOpen(true)}>
             <Plus data-icon="inline-start" />
             Add
@@ -111,15 +124,20 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
                     <div className="flex flex-wrap items-center gap-2">
                       <div className="font-medium">{server.name}</div>
                       <Badge variant="secondary">{server.transport}</Badge>
-                      {server.enabled === false ? <Badge>disabled</Badge> : null}
+                      {server.enabled === false ? (
+                        <Badge>disabled</Badge>
+                      ) : null}
                     </div>
-                    <div className="mt-2 break-all font-mono text-xs text-muted-foreground">
-                      {server.transport === 'stdio'
-                        ? `${server.command || ''} ${(server.args || []).join(' ')}`
+                    <div className="mt-2 font-mono text-xs break-all text-muted-foreground">
+                      {server.transport === "stdio"
+                        ? `${server.command || ""} ${(server.args || []).join(" ")}`
                         : server.endpoint}
                     </div>
                   </div>
-                  <Button variant="ghost" onClick={() => void handleRemoveServer(server.name)}>
+                  <Button
+                    variant="ghost"
+                    onClick={() => void handleRemoveServer(server.name)}
+                  >
                     <Trash2 data-icon="inline-start" />
                     Remove
                   </Button>
@@ -139,11 +157,17 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
 
           <div className="mt-5 flex flex-col gap-5">
             <div className="flex flex-wrap gap-2">
-              <Button variant={transport === 'stdio' ? 'default' : 'outline'} onClick={() => setTransport('stdio')}>
+              <Button
+                variant={transport === "stdio" ? "default" : "outline"}
+                onClick={() => setTransport("stdio")}
+              >
                 <Cable data-icon="inline-start" />
                 stdio
               </Button>
-              <Button variant={transport === 'http' ? 'default' : 'outline'} onClick={() => setTransport('http')}>
+              <Button
+                variant={transport === "http" ? "default" : "outline"}
+                onClick={() => setTransport("http")}
+              >
                 <Globe data-icon="inline-start" />
                 http
               </Button>
@@ -153,16 +177,26 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
               <Field>
                 <FieldLabel htmlFor="server-name">Name</FieldLabel>
                 <FieldContent>
-                  <Input id="server-name" value={name} onChange={(event) => setName(event.target.value)} placeholder="filesystem" />
+                  <Input
+                    id="server-name"
+                    value={name}
+                    onChange={(event) => setName(event.target.value)}
+                    placeholder="filesystem"
+                  />
                 </FieldContent>
               </Field>
 
-              {transport === 'stdio' ? (
+              {transport === "stdio" ? (
                 <>
                   <Field>
                     <FieldLabel htmlFor="server-command">Command</FieldLabel>
                     <FieldContent>
-                      <Input id="server-command" value={command} onChange={(event) => setCommand(event.target.value)} placeholder="npx" />
+                      <Input
+                        id="server-command"
+                        value={command}
+                        onChange={(event) => setCommand(event.target.value)}
+                        placeholder="npx"
+                      />
                     </FieldContent>
                   </Field>
                   <Field>
@@ -174,7 +208,9 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
                         onChange={(event) => setArgs(event.target.value)}
                         placeholder="-y @modelcontextprotocol/server-filesystem /workspace"
                       />
-                      <FieldDescription>Space-separated command arguments.</FieldDescription>
+                      <FieldDescription>
+                        Space-separated command arguments.
+                      </FieldDescription>
                     </FieldContent>
                   </Field>
                 </>
@@ -199,9 +235,16 @@ export function ServersPanel({ config, onAddServer, onRemoveServer }: ServersPan
               <X data-icon="inline-start" />
               Cancel
             </Button>
-            <Button onClick={handleAddServer} disabled={submitting || !name || (transport === 'stdio' ? !command : !endpoint)}>
+            <Button
+              onClick={handleAddServer}
+              disabled={
+                submitting ||
+                !name ||
+                (transport === "stdio" ? !command : !endpoint)
+              }
+            >
               <Plus data-icon="inline-start" />
-              {submitting ? 'Adding...' : 'Add'}
+              {submitting ? "Adding..." : "Add"}
             </Button>
           </DialogFooter>
         </DialogContent>

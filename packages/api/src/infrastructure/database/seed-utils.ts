@@ -1,15 +1,15 @@
-import { executeSqlOn } from "./kysely.js";
+import { executeSqlOn } from "./kysely.js"
 
 export async function ensurePublisher(
   client: { query: (text: string, params?: any[]) => Promise<any> },
   input: {
-    slug: string;
-    displayName: string;
-    description: string;
-    ownerUserId?: string | null;
-    isBuiltin?: boolean;
-    isVerified?: boolean;
-  },
+    slug: string
+    displayName: string
+    description: string
+    ownerUserId?: string | null
+    isBuiltin?: boolean
+    isVerified?: boolean
+  }
 ) {
   const result = await executeSqlOn<{ id: string }>(
     client,
@@ -32,8 +32,8 @@ export async function ensurePublisher(
       input.ownerUserId || null,
       input.isBuiltin === true,
       input.isVerified !== false,
-    ],
-  );
+    ]
+  )
 
-  return result.rows[0]!.id;
+  return result.rows[0]!.id
 }

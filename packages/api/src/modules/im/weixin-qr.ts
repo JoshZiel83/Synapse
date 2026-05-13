@@ -1,199 +1,199 @@
-import crypto from "node:crypto";
+import crypto from "node:crypto"
 import type {
   TransportAccountInboundActorMode,
   TransportAccountSummary,
   TransportAccountOwnerScope,
   WeixinQrLoginSessionSummary,
   WeixinQrLoginStatus,
-} from "@synapse/shared/types";
+} from "@synapse/shared/types"
 import {
   createTransportAccount,
   ensureTransportAddress,
   getTransportAccountById,
   getTransportAccountByWorkspaceKindAndKey,
   updateTransportAccount,
-} from "./service.js";
-import { refreshTransportRuntimeManager } from "./runtime.js";
+} from "./service.js"
+import { refreshTransportRuntimeManager } from "./runtime.js"
 
-const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com";
-const ACTIVE_LOGIN_TTL_MS = 5 * 60_000;
-const QR_LONG_POLL_TIMEOUT_MS = 25_000;
-const DEFAULT_BOT_TYPE = "3";
+const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com"
+const ACTIVE_LOGIN_TTL_MS = 5 * 60_000
+const QR_LONG_POLL_TIMEOUT_MS = 25_000
+const DEFAULT_BOT_TYPE = "3"
 
 type ActiveWeixinQrLogin = {
-  sessionId: string;
-  workspaceId: string;
-  qrcode: string;
-  qrCodeUrl: string;
-  baseUrl: string;
-  botType: string;
-  displayName?: string;
-  ownerScope: TransportAccountOwnerScope;
-  ownerWorkspaceMemberId?: string | null;
-  inboundActorMode: TransportAccountInboundActorMode;
-  inboundActorId?: string | null;
-  status: WeixinQrLoginStatus;
-  message: string;
-  createdAt: number;
-  updatedAt: number;
-  expiresAt: number;
-  transportAccountId?: string;
-  botId?: string;
-  scannerUserId?: string;
-};
+  sessionId: string
+  workspaceId: string
+  qrcode: string
+  qrCodeUrl: string
+  baseUrl: string
+  botType: string
+  displayName?: string
+  ownerScope: TransportAccountOwnerScope
+  ownerWorkspaceMemberId?: string | null
+  inboundActorMode: TransportAccountInboundActorMode
+  inboundActorId?: string | null
+  status: WeixinQrLoginStatus
+  message: string
+  createdAt: number
+  updatedAt: number
+  expiresAt: number
+  transportAccountId?: string
+  botId?: string
+  scannerUserId?: string
+}
 
 type WeixinQrCodeResponse = {
-  qrcode?: string;
-  qrcode_img_content?: string;
-};
+  qrcode?: string
+  qrcode_img_content?: string
+}
 
 type WeixinQrStatusResponse = {
-  status?: "wait" | "scaned" | "confirmed" | "expired";
-  bot_token?: string;
-  ilink_bot_id?: string;
-  baseurl?: string;
-  ilink_user_id?: string;
-};
+  status?: "wait" | "scaned" | "confirmed" | "expired"
+  bot_token?: string
+  ilink_bot_id?: string
+  baseurl?: string
+  ilink_user_id?: string
+}
 
-const activeWeixinQrLogins = new Map<string, ActiveWeixinQrLogin>();
+const activeWeixinQrLogins = new Map<string, ActiveWeixinQrLogin>()
 
 function nowIso() {
-  return new Date().toISOString();
+  return new Date().toISOString()
 }
 
 function nonEmptyString(value: unknown) {
-  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+  return typeof value === "string" && value.trim() ? value.trim() : undefined
 }
 
 function normalizeBaseUrl(baseUrl?: string) {
-  return nonEmptyString(baseUrl) || DEFAULT_WEIXIN_BASE_URL;
+  return nonEmptyString(baseUrl) || DEFAULT_WEIXIN_BASE_URL
 }
 
 function buildSessionKey(workspaceId: string, sessionId: string) {
-  return `${workspaceId}:${sessionId}`;
+  return `${workspaceId}:${sessionId}`
 }
 
 function isFresh(session: ActiveWeixinQrLogin) {
-  return Date.now() < session.expiresAt;
+  return Date.now() < session.expiresAt
 }
 
 function purgeExpiredSessions() {
-  const now = Date.now();
+  const now = Date.now()
   for (const [key, session] of activeWeixinQrLogins.entries()) {
-    if (session.expiresAt > now) continue;
-    if (session.status === "confirmed") continue;
+    if (session.expiresAt > now) continue
+    if (session.status === "confirmed") continue
     activeWeixinQrLogins.set(key, {
       ...session,
       status: "expired",
       message: "QR code expired. Generate a new one.",
       updatedAt: now,
-    });
+    })
   }
 }
 
 async function fetchWeixinJson<T>(params: {
-  url: string;
-  timeoutMs: number;
-  headers?: Record<string, string>;
+  url: string
+  timeoutMs: number
+  headers?: Record<string, string>
 }): Promise<T> {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), params.timeoutMs);
+  const controller = new AbortController()
+  const timer = setTimeout(() => controller.abort(), params.timeoutMs)
   try {
     const response = await fetch(params.url, {
       headers: params.headers,
       signal: controller.signal,
-    });
-    const text = await response.text();
+    })
+    const text = await response.text()
     if (!response.ok) {
       throw new Error(
-        `Weixin QR API failed with ${response.status}: ${text || response.statusText}`,
-      );
+        `Weixin QR API failed with ${response.status}: ${text || response.statusText}`
+      )
     }
-    return (text ? JSON.parse(text) : {}) as T;
+    return (text ? JSON.parse(text) : {}) as T
   } catch (error) {
     if (error instanceof Error && error.name === "AbortError") {
-      return {} as T;
+      return {} as T
     }
-    throw error;
+    throw error
   } finally {
-    clearTimeout(timer);
+    clearTimeout(timer)
   }
 }
 
 async function fetchWeixinQrCode(params: { baseUrl: string; botType: string }) {
   const url = new URL(
     `ilink/bot/get_bot_qrcode?bot_type=${encodeURIComponent(params.botType)}`,
-    params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`,
-  );
+    params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`
+  )
   return fetchWeixinJson<WeixinQrCodeResponse>({
     url: url.toString(),
     timeoutMs: 10_000,
-  });
+  })
 }
 
 async function pollWeixinQrStatus(params: { baseUrl: string; qrcode: string }) {
   const url = new URL(
     `ilink/bot/get_qrcode_status?qrcode=${encodeURIComponent(params.qrcode)}`,
-    params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`,
-  );
+    params.baseUrl.endsWith("/") ? params.baseUrl : `${params.baseUrl}/`
+  )
   return fetchWeixinJson<WeixinQrStatusResponse>({
     url: url.toString(),
     timeoutMs: QR_LONG_POLL_TIMEOUT_MS,
     headers: {
       "iLink-App-ClientVersion": "1",
     },
-  });
+  })
 }
 
 function mapStatus(
-  status?: WeixinQrStatusResponse["status"],
+  status?: WeixinQrStatusResponse["status"]
 ): WeixinQrLoginStatus {
   switch (status) {
     case "scaned":
-      return "scanned";
+      return "scanned"
     case "confirmed":
-      return "confirmed";
+      return "confirmed"
     case "expired":
-      return "expired";
+      return "expired"
     case "wait":
     default:
-      return "waiting";
+      return "waiting"
   }
 }
 
 async function persistWeixinAccount(params: {
-  session: ActiveWeixinQrLogin;
-  botToken: string;
-  botId?: string;
-  scannerUserId?: string;
-  baseUrl?: string;
+  session: ActiveWeixinQrLogin
+  botToken: string
+  botId?: string
+  scannerUserId?: string
+  baseUrl?: string
 }): Promise<TransportAccountSummary> {
   const accountKey =
     nonEmptyString(params.botId) ||
     nonEmptyString(params.scannerUserId) ||
-    params.session.sessionId;
+    params.session.sessionId
   const displayName =
     nonEmptyString(params.session.displayName) ||
     (nonEmptyString(params.scannerUserId)
       ? `WeChat ${params.scannerUserId}`
-      : "WeChat Bot");
+      : "WeChat Bot")
   const resolvedBaseUrl = normalizeBaseUrl(
-    params.baseUrl || params.session.baseUrl,
-  );
+    params.baseUrl || params.session.baseUrl
+  )
   const metadata = {
     source: "qr_login",
     ilinkBotId: params.botId || null,
     scannerUserId: params.scannerUserId || null,
     qrConfirmedAt: nowIso(),
-  };
+  }
 
   const existing = await getTransportAccountByWorkspaceKindAndKey({
     workspaceId: params.session.workspaceId,
     transportKind: "weixin",
     accountKey,
-  });
+  })
 
-  let account: TransportAccountSummary;
+  let account: TransportAccountSummary
   if (existing) {
     account = await updateTransportAccount({
       workspaceId: params.session.workspaceId,
@@ -217,7 +217,7 @@ async function persistWeixinAccount(params: {
         ...(existing.metadata || {}),
         ...metadata,
       },
-    });
+    })
   } else {
     try {
       account = await createTransportAccount({
@@ -226,8 +226,7 @@ async function persistWeixinAccount(params: {
         accountKey,
         displayName,
         ownerScope: params.session.ownerScope,
-        ownerWorkspaceMemberId:
-          params.session.ownerWorkspaceMemberId ?? null,
+        ownerWorkspaceMemberId: params.session.ownerWorkspaceMemberId ?? null,
         inboundActorMode: params.session.inboundActorMode,
         inboundActorId: params.session.inboundActorId ?? null,
         connectionMode: "long_connection",
@@ -238,26 +237,25 @@ async function persistWeixinAccount(params: {
           baseUrl: resolvedBaseUrl,
         },
         metadata,
-      });
+      })
     } catch (error: any) {
       if (error?.code !== "23505") {
-        throw error;
+        throw error
       }
       const concurrent = await getTransportAccountByWorkspaceKindAndKey({
         workspaceId: params.session.workspaceId,
         transportKind: "weixin",
         accountKey,
-      });
+      })
       if (!concurrent) {
-        throw error;
+        throw error
       }
       account = await updateTransportAccount({
         workspaceId: params.session.workspaceId,
         accountId: concurrent.id,
         displayName,
         ownerScope: params.session.ownerScope,
-        ownerWorkspaceMemberId:
-          params.session.ownerWorkspaceMemberId ?? null,
+        ownerWorkspaceMemberId: params.session.ownerWorkspaceMemberId ?? null,
         inboundActorMode: params.session.inboundActorMode,
         inboundActorId: params.session.inboundActorId ?? null,
         connectionMode: "long_connection",
@@ -274,7 +272,7 @@ async function persistWeixinAccount(params: {
           ...(concurrent.metadata || {}),
           ...metadata,
         },
-      });
+      })
     }
   }
 
@@ -291,37 +289,37 @@ async function persistWeixinAccount(params: {
         scannerUserId: params.scannerUserId,
         qrConfirmedAt: nowIso(),
       },
-    });
+    })
   }
 
   await refreshTransportRuntimeManager().catch((error) => {
-    console.error("[im] Failed to refresh transport runtime manager:", error);
-  });
+    console.error("[im] Failed to refresh transport runtime manager:", error)
+  })
 
-  return account;
+  return account
 }
 
 export function getWeixinQrLoginSessionOwner(params: {
-  workspaceId: string;
-  sessionId: string;
+  workspaceId: string
+  sessionId: string
 }) {
-  purgeExpiredSessions();
+  purgeExpiredSessions()
   const existing = activeWeixinQrLogins.get(
-    buildSessionKey(params.workspaceId, params.sessionId),
-  );
+    buildSessionKey(params.workspaceId, params.sessionId)
+  )
   if (!existing) {
-    return null;
+    return null
   }
   return {
     ownerScope: existing.ownerScope,
     ownerWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
-  };
+  }
 }
 
 async function buildSummary(session: ActiveWeixinQrLogin) {
   const transportAccount = session.transportAccountId
     ? await getTransportAccountById(session.transportAccountId)
-    : null;
+    : null
   return {
     sessionId: session.sessionId,
     workspaceId: session.workspaceId,
@@ -335,31 +333,31 @@ async function buildSummary(session: ActiveWeixinQrLogin) {
     updatedAt: new Date(session.updatedAt).toISOString(),
     expiresAt: new Date(session.expiresAt).toISOString(),
     transportAccount: transportAccount || undefined,
-  } satisfies WeixinQrLoginSessionSummary;
+  } satisfies WeixinQrLoginSessionSummary
 }
 
 export async function startWeixinQrLoginSession(params: {
-  workspaceId: string;
-  displayName?: string;
-  baseUrl?: string;
-  botType?: string;
-  ownerScope?: TransportAccountOwnerScope;
-  ownerWorkspaceMemberId?: string | null;
-  inboundActorMode?: TransportAccountInboundActorMode;
-  inboundActorId?: string | null;
+  workspaceId: string
+  displayName?: string
+  baseUrl?: string
+  botType?: string
+  ownerScope?: TransportAccountOwnerScope
+  ownerWorkspaceMemberId?: string | null
+  inboundActorMode?: TransportAccountInboundActorMode
+  inboundActorId?: string | null
 }) {
-  purgeExpiredSessions();
+  purgeExpiredSessions()
 
-  const baseUrl = normalizeBaseUrl(params.baseUrl);
-  const botType = nonEmptyString(params.botType) || DEFAULT_BOT_TYPE;
-  const qr = await fetchWeixinQrCode({ baseUrl, botType });
-  const qrcode = nonEmptyString(qr.qrcode);
-  const qrCodeUrl = nonEmptyString(qr.qrcode_img_content);
+  const baseUrl = normalizeBaseUrl(params.baseUrl)
+  const botType = nonEmptyString(params.botType) || DEFAULT_BOT_TYPE
+  const qr = await fetchWeixinQrCode({ baseUrl, botType })
+  const qrcode = nonEmptyString(qr.qrcode)
+  const qrCodeUrl = nonEmptyString(qr.qrcode_img_content)
   if (!qrcode || !qrCodeUrl) {
-    throw new Error("Weixin QR login did not return a valid QR code");
+    throw new Error("Weixin QR login did not return a valid QR code")
   }
 
-  const now = Date.now();
+  const now = Date.now()
   const session: ActiveWeixinQrLogin = {
     sessionId: crypto.randomUUID(),
     workspaceId: params.workspaceId,
@@ -377,23 +375,23 @@ export async function startWeixinQrLoginSession(params: {
     createdAt: now,
     updatedAt: now,
     expiresAt: now + ACTIVE_LOGIN_TTL_MS,
-  };
+  }
   activeWeixinQrLogins.set(
     buildSessionKey(params.workspaceId, session.sessionId),
-    session,
-  );
-  return buildSummary(session);
+    session
+  )
+  return buildSummary(session)
 }
 
 export async function getWeixinQrLoginSession(params: {
-  workspaceId: string;
-  sessionId: string;
+  workspaceId: string
+  sessionId: string
 }) {
-  purgeExpiredSessions();
-  const key = buildSessionKey(params.workspaceId, params.sessionId);
-  const existing = activeWeixinQrLogins.get(key);
+  purgeExpiredSessions()
+  const key = buildSessionKey(params.workspaceId, params.sessionId)
+  const existing = activeWeixinQrLogins.get(key)
   if (!existing) {
-    return null;
+    return null
   }
 
   if (!isFresh(existing) && existing.status !== "confirmed") {
@@ -402,24 +400,24 @@ export async function getWeixinQrLoginSession(params: {
       status: "expired",
       message: "QR code expired. Generate a new one.",
       updatedAt: Date.now(),
-    };
-    activeWeixinQrLogins.set(key, expired);
-    return buildSummary(expired);
+    }
+    activeWeixinQrLogins.set(key, expired)
+    return buildSummary(expired)
   }
 
   if (existing.status === "confirmed" || existing.status === "error") {
-    return buildSummary(existing);
+    return buildSummary(existing)
   }
 
   try {
     const statusResponse = await pollWeixinQrStatus({
       baseUrl: existing.baseUrl,
       qrcode: existing.qrcode,
-    });
-    const nextStatus = mapStatus(statusResponse.status);
+    })
+    const nextStatus = mapStatus(statusResponse.status)
     const nextBaseUrl = normalizeBaseUrl(
-      nonEmptyString(statusResponse.baseurl) || existing.baseUrl,
-    );
+      nonEmptyString(statusResponse.baseurl) || existing.baseUrl
+    )
     let nextSession: ActiveWeixinQrLogin = {
       ...existing,
       status: nextStatus,
@@ -434,9 +432,9 @@ export async function getWeixinQrLoginSession(params: {
           : nextStatus === "expired"
             ? "QR code expired. Generate a new one."
             : existing.message,
-    };
+    }
 
-    const confirmedToken = nonEmptyString(statusResponse.bot_token);
+    const confirmedToken = nonEmptyString(statusResponse.bot_token)
     if (nextStatus === "confirmed" && confirmedToken) {
       const account = await persistWeixinAccount({
         session: nextSession,
@@ -444,17 +442,17 @@ export async function getWeixinQrLoginSession(params: {
         botId: nextSession.botId,
         scannerUserId: nextSession.scannerUserId,
         baseUrl: nextBaseUrl,
-      });
+      })
       nextSession = {
         ...nextSession,
         transportAccountId: account.id,
         status: "confirmed",
         message: "WeChat account connected.",
-      };
+      }
     }
 
-    activeWeixinQrLogins.set(key, nextSession);
-    return buildSummary(nextSession);
+    activeWeixinQrLogins.set(key, nextSession)
+    return buildSummary(nextSession)
   } catch (error) {
     const failed: ActiveWeixinQrLogin = {
       ...existing,
@@ -464,8 +462,8 @@ export async function getWeixinQrLoginSession(params: {
           ? error.message
           : "WeChat QR login failed. Try again.",
       updatedAt: Date.now(),
-    };
-    activeWeixinQrLogins.set(key, failed);
-    return buildSummary(failed);
+    }
+    activeWeixinQrLogins.set(key, failed)
+    return buildSummary(failed)
   }
 }

@@ -7,7 +7,7 @@ declare const window: any
 export async function waitForWails(): Promise<boolean> {
   for (let i = 0; i < 20; i++) {
     if (window.go?.main?.App) return true
-    await new Promise(r => setTimeout(r, 250))
+    await new Promise((r) => setTimeout(r, 250))
   }
   return false
 }

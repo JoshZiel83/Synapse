@@ -1,12 +1,30 @@
 "use client"
 
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react"
-import { usePathname, useRouter, useSearchParams, type ReadonlyURLSearchParams } from "next/navigation"
-import { ArrowRightLeft, ChevronDown, ChevronRight, FilePlus2, FileText, Folder, RefreshCw, Search, Upload } from "lucide-react"
+import {
+  usePathname,
+  useRouter,
+  useSearchParams,
+  type ReadonlyURLSearchParams,
+} from "next/navigation"
+import {
+  ArrowRightLeft,
+  ChevronDown,
+  ChevronRight,
+  FilePlus2,
+  FileText,
+  Folder,
+  RefreshCw,
+  Search,
+  Upload,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
-import { fileRecordToBlock, type UploadedFile } from "@/components/actor-editor-model"
+import {
+  fileRecordToBlock,
+  type UploadedFile,
+} from "@/components/actor-editor-model"
 import {
   buildMemoryFolders,
   buildMemoryOwnerPayloadFromPreset,
@@ -39,7 +57,13 @@ import {
 import { Input } from "@/components/ui/input"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Separator } from "@/components/ui/separator"
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { api } from "@/lib/api"
 import { loadConversationCatalog } from "@/lib/conversation-catalog"
 import { cn } from "@/lib/utils"
@@ -48,7 +72,7 @@ import { useAuthStore } from "@/stores/auth-store"
 function buildBrowseHref(
   pathname: string,
   searchParams: URLSearchParams | ReadonlyURLSearchParams,
-  overrides: Record<string, string | null | undefined>,
+  overrides: Record<string, string | null | undefined>
 ) {
   const nextParams = new URLSearchParams(searchParams.toString())
 
@@ -67,7 +91,7 @@ function buildBrowseHref(
 function buildCreateHref(
   pathname: string,
   searchParams: URLSearchParams | ReadonlyURLSearchParams,
-  folder: MemoryFolderNode,
+  folder: MemoryFolderNode
 ) {
   if (!folder.createPreset) return null
 
@@ -112,7 +136,8 @@ export default function MemoryBrowser() {
   const [memories, setMemories] = useState<Memory[]>([])
   const [actors, setActors] = useState<any[]>([])
   const [groups, setGroups] = useState<any[]>([])
-  const [pendingFileCreate, setPendingFileCreate] = useState<PendingFileCreate | null>(null)
+  const [pendingFileCreate, setPendingFileCreate] =
+    useState<PendingFileCreate | null>(null)
   const [movingMemory, setMovingMemory] = useState<Memory | null>(null)
   const [createdFromFiles, setCreatedFromFiles] = useState<{
     count: number
@@ -124,7 +149,8 @@ export default function MemoryBrowser() {
   const query = searchParams.get("q") || ""
   const rawWorkspaceFolderType = searchParams.get("type")
   const workspaceFolderType: "all" | "conversation" | "actor" =
-    rawWorkspaceFolderType === "conversation" || rawWorkspaceFolderType === "actor"
+    rawWorkspaceFolderType === "conversation" ||
+    rawWorkspaceFolderType === "actor"
       ? rawWorkspaceFolderType
       : "all"
   const deferredQuery = useDeferredValue(query)
@@ -146,12 +172,18 @@ export default function MemoryBrowser() {
         loadConversationCatalog(workspaceId),
       ])
 
-      setMemories(Array.isArray(memoryData) ? memoryData : memoryData?.memories || [])
-      setActors((Array.isArray(actorData) ? actorData : []).map(normalizeActorOption))
+      setMemories(
+        Array.isArray(memoryData) ? memoryData : memoryData?.memories || []
+      )
+      setActors(
+        (Array.isArray(actorData) ? actorData : []).map(normalizeActorOption)
+      )
       setGroups(conversationData.map(normalizeGroupOption))
     } catch (error) {
       console.error("Failed to load memories:", error)
-      toast.error(error instanceof Error ? error.message : "Failed to load memories")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to load memories"
+      )
     } finally {
       setLoading(false)
     }
@@ -189,21 +221,28 @@ export default function MemoryBrowser() {
       memories,
       workspaceId,
       workspaceName,
-    ],
+    ]
   )
 
-  const folderMap = useMemo(() => new Map(folders.map((folder) => [folder.id, folder])), [folders])
+  const folderMap = useMemo(
+    () => new Map(folders.map((folder) => [folder.id, folder])),
+    [folders]
+  )
   const requestedFolderId = searchParams.get("folder") || "root"
-  const activeFolder = folderMap.get(requestedFolderId) || folderMap.get("root") || null
+  const activeFolder =
+    folderMap.get(requestedFolderId) || folderMap.get("root") || null
 
   useEffect(() => {
     if (!activeFolder || requestedFolderId === activeFolder.id) return
-    router.replace(buildBrowseHref(pathname, searchParams, { folder: activeFolder.id }), { scroll: false })
+    router.replace(
+      buildBrowseHref(pathname, searchParams, { folder: activeFolder.id }),
+      { scroll: false }
+    )
   }, [activeFolder, pathname, requestedFolderId, router, searchParams])
 
   const folderSegments = useMemo(
     () => (activeFolder ? getFolderSegments(activeFolder.id, folderMap) : []),
-    [activeFolder, folderMap],
+    [activeFolder, folderMap]
   )
   const workspaceFolderId = workspaceId
     ? `folder:workspace:${workspaceId}:workspace_shared`
@@ -214,23 +253,32 @@ export default function MemoryBrowser() {
     () =>
       folders
         .filter((folder) => folder.parentId === activeFolder?.id)
-        .sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" })),
-    [activeFolder?.id, folders],
+        .sort((left, right) =>
+          left.label.localeCompare(right.label, undefined, {
+            sensitivity: "base",
+          })
+        ),
+    [activeFolder?.id, folders]
   )
 
   const fileRows = useMemo(
     () =>
       memories
         .filter((memory) => activeFolder?.directMemoryIds.includes(memory.id))
-        .sort((left, right) => new Date(right.updatedAt).getTime() - new Date(left.updatedAt).getTime()),
-    [activeFolder?.directMemoryIds, memories],
+        .sort(
+          (left, right) =>
+            new Date(right.updatedAt).getTime() -
+            new Date(left.updatedAt).getTime()
+        ),
+    [activeFolder?.directMemoryIds, memories]
   )
 
   const items = useMemo(() => {
     const normalizedQuery = deferredQuery.trim().toLowerCase()
     const folderItems = childFolders.filter((folder) => {
       if (isWorkspaceRoot && workspaceFolderType !== "all") {
-        const isConversationFolder = folder.createPreset?.spaceType === "conversation_shared"
+        const isConversationFolder =
+          folder.createPreset?.spaceType === "conversation_shared"
         const isActorFolder = folder.createPreset?.spaceType === "actor_private"
 
         if (workspaceFolderType === "conversation" && !isConversationFolder) {
@@ -243,17 +291,33 @@ export default function MemoryBrowser() {
       }
 
       if (!normalizedQuery) return true
-      return [folder.label, folder.description || ""].join(" ").toLowerCase().includes(normalizedQuery)
+      return [folder.label, folder.description || ""]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery)
     })
     const memoryItems = fileRows.filter((memory) => {
       if (!normalizedQuery) return true
-      return [summarizeMemory(memory), memory.category, memory.tags.join(" ")].join(" ").toLowerCase().includes(normalizedQuery)
+      return [summarizeMemory(memory), memory.category, memory.tags.join(" ")]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery)
     })
     return { folderItems, memoryItems }
-  }, [childFolders, deferredQuery, fileRows, isWorkspaceRoot, workspaceFolderType])
+  }, [
+    childFolders,
+    deferredQuery,
+    fileRows,
+    isWorkspaceRoot,
+    workspaceFolderType,
+  ])
 
-  const createHref = activeFolder ? buildCreateHref(pathname, searchParams, activeFolder) : null
-  const currentBrowseHref = buildBrowseHref(pathname, searchParams, { folder: activeFolder?.id || "root" })
+  const createHref = activeFolder
+    ? buildCreateHref(pathname, searchParams, activeFolder)
+    : null
+  const currentBrowseHref = buildBrowseHref(pathname, searchParams, {
+    folder: activeFolder?.id || "root",
+  })
   const movingMemoryFolderId = useMemo(() => {
     if (!movingMemory || !workspaceId) return ""
 
@@ -294,14 +358,20 @@ export default function MemoryBrowser() {
         buildMemoryOwnerPayloadFromPreset(
           folder.createPreset,
           effectiveCurrentWorkspaceMemberId
-        ),
+        )
       )
       const savedMemory = (result?.memory || result) as Memory
-      setMemories((current) => current.map((memory) => (memory.id === savedMemory.id ? savedMemory : memory)))
+      setMemories((current) =>
+        current.map((memory) =>
+          memory.id === savedMemory.id ? savedMemory : memory
+        )
+      )
       toast.success("Memory path updated")
     } catch (error) {
       console.error("Failed to move memory:", error)
-      toast.error(error instanceof Error ? error.message : "Failed to move memory")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to move memory"
+      )
       throw error
     }
   }
@@ -314,7 +384,10 @@ export default function MemoryBrowser() {
       const createdMemories: Memory[] = []
 
       for (const file of pendingFileCreate.files) {
-        const uploaded = (await api.uploadFile(workspaceId, file)) as UploadedFile
+        const uploaded = (await api.uploadFile(
+          workspaceId,
+          file
+        )) as UploadedFile
         const result = await api.createMemory(workspaceId, {
           spaceType: pendingFileCreate.preset.spaceType,
           actorId: pendingFileCreate.preset.actorId,
@@ -337,19 +410,30 @@ export default function MemoryBrowser() {
       setCreatedFromFiles({
         count: createdMemories.length,
         latestMemoryId: createdMemories.at(-1)?.id || null,
-        latestLabel: createdMemories.at(-1)?.textDigest?.trim() || pendingFileCreate.files.at(-1)?.name || "New memory",
+        latestLabel:
+          createdMemories.at(-1)?.textDigest?.trim() ||
+          pendingFileCreate.files.at(-1)?.name ||
+          "New memory",
         returnTo: pendingFileCreate.returnTo,
       })
     } catch (error) {
       console.error("Failed to create memory from files:", error)
-      toast.error(error instanceof Error ? error.message : "Failed to create memory from files")
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to create memory from files"
+      )
     } finally {
       setCreatingFromFiles(false)
     }
   }
 
   function handleDragEnter(event: React.DragEvent<HTMLDivElement>) {
-    if (!activeFolder?.createPreset || !event.dataTransfer.types.includes("Files")) return
+    if (
+      !activeFolder?.createPreset ||
+      !event.dataTransfer.types.includes("Files")
+    )
+      return
     dragCounterRef.current += 1
     setDragActive(true)
   }
@@ -362,13 +446,18 @@ export default function MemoryBrowser() {
   }
 
   function handleDragOver(event: React.DragEvent<HTMLDivElement>) {
-    if (!activeFolder?.createPreset || !event.dataTransfer.types.includes("Files")) return
+    if (
+      !activeFolder?.createPreset ||
+      !event.dataTransfer.types.includes("Files")
+    )
+      return
     event.preventDefault()
     event.dataTransfer.dropEffect = "copy"
   }
 
   function handleDrop(event: React.DragEvent<HTMLDivElement>) {
-    if (!activeFolder?.createPreset || event.dataTransfer.files.length === 0) return
+    if (!activeFolder?.createPreset || event.dataTransfer.files.length === 0)
+      return
     event.preventDefault()
     dragCounterRef.current = 0
     setDragActive(false)
@@ -391,7 +480,7 @@ export default function MemoryBrowser() {
       <div
         className={cn(
           "flex min-h-0 flex-1 flex-col overflow-hidden transition-colors",
-          dragActive && "rounded-[28px] bg-muted/25 ring-1 ring-primary/30",
+          dragActive && "rounded-[28px] bg-muted/25 ring-1 ring-primary/30"
         )}
         onDragEnter={handleDragEnter}
         onDragLeave={handleDragLeave}
@@ -408,8 +497,19 @@ export default function MemoryBrowser() {
                     type="button"
                     variant="ghost"
                     size="sm"
-                    className={cn("h-auto px-0 py-0 text-sm", index === folderSegments.length - 1 ? "text-foreground" : "text-muted-foreground")}
-                    onClick={() => router.push(buildBrowseHref(pathname, searchParams, { folder: segment.id }))}
+                    className={cn(
+                      "h-auto px-0 py-0 text-sm",
+                      index === folderSegments.length - 1
+                        ? "text-foreground"
+                        : "text-muted-foreground"
+                    )}
+                    onClick={() =>
+                      router.push(
+                        buildBrowseHref(pathname, searchParams, {
+                          folder: segment.id,
+                        })
+                      )
+                    }
                   >
                     {segment.label}
                   </Button>
@@ -418,7 +518,8 @@ export default function MemoryBrowser() {
             </div>
             {activeFolder ? (
               <div className="text-sm text-muted-foreground">
-                {describeFolderVisibility(activeFolder)} Move a memory to another path to change who can read it.
+                {describeFolderVisibility(activeFolder)} Move a memory to
+                another path to change who can read it.
               </div>
             ) : null}
           </div>
@@ -429,8 +530,10 @@ export default function MemoryBrowser() {
                 value={workspaceFolderType}
                 onValueChange={(value: "all" | "conversation" | "actor") =>
                   router.replace(
-                    buildBrowseHref(pathname, searchParams, { type: value === "all" ? null : value }),
-                    { scroll: false },
+                    buildBrowseHref(pathname, searchParams, {
+                      type: value === "all" ? null : value,
+                    }),
+                    { scroll: false }
                   )
                 }
               >
@@ -445,19 +548,30 @@ export default function MemoryBrowser() {
               </Select>
             ) : null}
 
-            <Button type="button" variant="outline" size="sm" onClick={refreshData} disabled={refreshing}>
-              <RefreshCw data-icon="inline-start" className={cn(refreshing && "animate-spin")} />
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={refreshData}
+              disabled={refreshing}
+            >
+              <RefreshCw
+                data-icon="inline-start"
+                className={cn(refreshing && "animate-spin")}
+              />
               Refresh
             </Button>
 
             <div className="relative w-40 sm:w-52 lg:w-72">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={query}
                 onChange={(event) =>
                   router.replace(
-                    buildBrowseHref(pathname, searchParams, { q: event.target.value || null }),
-                    { scroll: false },
+                    buildBrowseHref(pathname, searchParams, {
+                      q: event.target.value || null,
+                    }),
+                    { scroll: false }
                   )
                 }
                 placeholder="Search in this path"
@@ -498,12 +612,19 @@ export default function MemoryBrowser() {
         <ScrollArea className="min-h-0 flex-1">
           <div className="flex flex-col">
             {loading ? (
-              <div className="px-5 py-10 text-sm text-muted-foreground">Loading memories...</div>
-            ) : items.folderItems.length === 0 && items.memoryItems.length === 0 ? (
+              <div className="px-5 py-10 text-sm text-muted-foreground">
+                Loading memories...
+              </div>
+            ) : items.folderItems.length === 0 &&
+              items.memoryItems.length === 0 ? (
               <div className="px-5 py-10 text-center">
-                <div className="text-base font-medium text-foreground">This path is empty</div>
+                <div className="text-base font-medium text-foreground">
+                  This path is empty
+                </div>
                 <div className="mt-2 text-sm text-muted-foreground">
-                  {createHref ? "Create a memory here. Its visibility will follow this path." : "Navigate into a concrete path to start creating memories."}
+                  {createHref
+                    ? "Create a memory here. Its visibility will follow this path."
+                    : "Navigate into a concrete path to start creating memories."}
                 </div>
               </div>
             ) : (
@@ -515,32 +636,49 @@ export default function MemoryBrowser() {
                       key={folder.id}
                       type="button"
                       className="flex w-full items-center gap-4 border-b border-border/70 px-5 py-4 text-left transition-colors hover:bg-muted/30"
-                      onClick={() => router.push(buildBrowseHref(pathname, searchParams, { folder: folder.id }))}
+                      onClick={() =>
+                        router.push(
+                          buildBrowseHref(pathname, searchParams, {
+                            folder: folder.id,
+                          })
+                        )
+                      }
                     >
                       <div className="flex size-10 items-center justify-center rounded-2xl border border-border bg-muted/30">
                         <Icon className="size-4 text-muted-foreground" />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium text-foreground">{folder.label}</div>
+                        <div className="truncate text-sm font-medium text-foreground">
+                          {folder.label}
+                        </div>
                         {folder.description ? (
-                          <div className="truncate text-sm text-muted-foreground">{folder.description}</div>
+                          <div className="truncate text-sm text-muted-foreground">
+                            {folder.description}
+                          </div>
                         ) : null}
                       </div>
-                      <Badge variant="outline">{folder.directMemoryIds.length}</Badge>
+                      <Badge variant="outline">
+                        {folder.directMemoryIds.length}
+                      </Badge>
                     </button>
                   )
                 })}
 
                 {items.memoryItems.map((memory) => (
-                  <div key={memory.id} className="flex items-center gap-3 border-b border-border/70 px-5 py-4">
+                  <div
+                    key={memory.id}
+                    className="flex items-center gap-3 border-b border-border/70 px-5 py-4"
+                  >
                     <button
                       type="button"
                       className="flex min-w-0 flex-1 items-center gap-4 text-left transition-colors hover:text-foreground"
                       onClick={() =>
                         router.push(
                           `/dashboard/memories/${memory.id}?returnTo=${encodeURIComponent(
-                            buildBrowseHref(pathname, searchParams, { folder: activeFolder?.id || "root" }),
-                          )}`,
+                            buildBrowseHref(pathname, searchParams, {
+                              folder: activeFolder?.id || "root",
+                            })
+                          )}`
                         )
                       }
                     >
@@ -548,16 +686,25 @@ export default function MemoryBrowser() {
                         <FileText className="size-4 text-muted-foreground" />
                       </div>
                       <div className="min-w-0 flex-1">
-                        <div className="truncate text-sm font-medium text-foreground">{summarizeMemory(memory)}</div>
+                        <div className="truncate text-sm font-medium text-foreground">
+                          {summarizeMemory(memory)}
+                        </div>
                         <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                           <Badge variant="outline">{memory.category}</Badge>
-                          <span>{new Date(memory.updatedAt).toLocaleString()}</span>
+                          <span>
+                            {new Date(memory.updatedAt).toLocaleString()}
+                          </span>
                           <span>{memory.contentBlocks.length} blocks</span>
                         </div>
                       </div>
                     </button>
 
-                    <Button type="button" variant="outline" size="sm" onClick={() => setMovingMemory(memory)}>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setMovingMemory(memory)}
+                    >
                       <ArrowRightLeft data-icon="inline-start" />
                       Change Path
                     </Button>
@@ -569,10 +716,18 @@ export default function MemoryBrowser() {
         </ScrollArea>
       </div>
 
-      <Dialog open={pendingFileCreate !== null} onOpenChange={(open) => !open && !creatingFromFiles && setPendingFileCreate(null)}>
+      <Dialog
+        open={pendingFileCreate !== null}
+        onOpenChange={(open) =>
+          !open && !creatingFromFiles && setPendingFileCreate(null)
+        }
+      >
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Create memory from file{pendingFileCreate?.files.length === 1 ? "" : "s"}?</DialogTitle>
+            <DialogTitle>
+              Create memory from file
+              {pendingFileCreate?.files.length === 1 ? "" : "s"}?
+            </DialogTitle>
             <DialogDescription>
               {pendingFileCreate
                 ? `Upload ${pendingFileCreate.files.length} file${pendingFileCreate.files.length === 1 ? "" : "s"} into ${pendingFileCreate.folderLabel}. Anyone who can read that path will be able to read the new mem${pendingFileCreate.files.length === 1 ? "ory" : "ories"}.`
@@ -606,14 +761,21 @@ export default function MemoryBrowser() {
             >
               Cancel
             </Button>
-            <Button type="button" onClick={() => void confirmCreateFromFiles()} disabled={creatingFromFiles}>
+            <Button
+              type="button"
+              onClick={() => void confirmCreateFromFiles()}
+              disabled={creatingFromFiles}
+            >
               {creatingFromFiles ? "Uploading..." : "Create"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={createdFromFiles !== null} onOpenChange={(open) => !open && setCreatedFromFiles(null)}>
+      <Dialog
+        open={createdFromFiles !== null}
+        onOpenChange={(open) => !open && setCreatedFromFiles(null)}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Memory created</DialogTitle>
@@ -659,10 +821,16 @@ export default function MemoryBrowser() {
         onOpenChange={(open) => !open && setMovingMemory(null)}
         folders={folders}
         value={movingMemoryFolderId}
-        title={movingMemory ? `Change path for ${summarizeMemory(movingMemory)}` : "Change memory path"}
+        title={
+          movingMemory
+            ? `Change path for ${summarizeMemory(movingMemory)}`
+            : "Change memory path"
+        }
         description="Browse the path tree and choose the new visibility range for this memory."
         confirmLabel="Move to this path"
-        disallowFolderIds={movingMemoryFolderId ? [movingMemoryFolderId] : undefined}
+        disallowFolderIds={
+          movingMemoryFolderId ? [movingMemoryFolderId] : undefined
+        }
         onConfirm={moveMemoryToFolder}
       />
     </div>

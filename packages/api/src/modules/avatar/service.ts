@@ -1,90 +1,90 @@
-import { createAvatar } from "@dicebear/core";
-import { pixelArt } from "@dicebear/collection";
+import { createAvatar } from "@dicebear/core"
+import { pixelArt } from "@dicebear/collection"
 import {
   FILE_ORIGIN_SYSTEMS,
   type SystemGeneratedFileOriginSystem,
-} from "@synapse/shared";
+} from "@synapse/shared"
 import {
   db,
   executeCompiledQuery,
   executeTakeFirst,
   type QueryExecutor,
-} from "../../infrastructure/database/kysely.js";
+} from "../../infrastructure/database/kysely.js"
 import {
   getStableFileUrl,
   getStableFullFileUrl,
   normalizeOriginalNameForMimeType,
   storeBufferInBackend,
-} from "../../infrastructure/storage/index.js";
+} from "../../infrastructure/storage/index.js"
 import {
   buildSystemGeneratedOrigin,
   mimeToFileContentKind,
-} from "../files/service.js";
+} from "../files/service.js"
 
-type DatabaseExecutor = QueryExecutor;
+type DatabaseExecutor = QueryExecutor
 
 export type PixelArtAvatarTheme = {
-  accessories?: string[];
-  accessoriesColor?: string[];
-  accessoriesProbability?: number;
-  beard?: string[];
-  beardProbability?: number;
-  clothing?: string[];
-  clothingColor?: string[];
-  eyes?: string[];
-  eyesColor?: string[];
-  glasses?: string[];
-  glassesColor?: string[];
-  glassesProbability?: number;
-  hair?: string[];
-  hairColor?: string[];
-  hat?: string[];
-  hatColor?: string[];
-  hatProbability?: number;
-  mouth?: string[];
-  mouthColor?: string[];
-  skinColor?: string[];
-};
+  accessories?: string[]
+  accessoriesColor?: string[]
+  accessoriesProbability?: number
+  beard?: string[]
+  beardProbability?: number
+  clothing?: string[]
+  clothingColor?: string[]
+  eyes?: string[]
+  eyesColor?: string[]
+  glasses?: string[]
+  glassesColor?: string[]
+  glassesProbability?: number
+  hair?: string[]
+  hairColor?: string[]
+  hat?: string[]
+  hatColor?: string[]
+  hatProbability?: number
+  mouth?: string[]
+  mouthColor?: string[]
+  skinColor?: string[]
+}
 
 export type PixelArtAvatarOptionsInput = {
-  seed?: string;
-  accessories?: string;
-  accessoriesProbability?: number;
-  clothing?: string;
-  eyes?: string;
-  glasses?: string;
-  glassesProbability?: number;
-  beard?: string;
-  beardProbability?: number;
-  mouth?: string;
-  hair?: string;
-  hat?: string;
-  hatProbability?: number;
-  accessoriesColor?: string;
-  clothingColor?: string;
-  eyesColor?: string;
-  glassesColor?: string;
-  hairColor?: string;
-  hatColor?: string;
-  mouthColor?: string;
-  skinColor?: string;
-};
+  seed?: string
+  accessories?: string
+  accessoriesProbability?: number
+  clothing?: string
+  eyes?: string
+  glasses?: string
+  glassesProbability?: number
+  beard?: string
+  beardProbability?: number
+  mouth?: string
+  hair?: string
+  hat?: string
+  hatProbability?: number
+  accessoriesColor?: string
+  clothingColor?: string
+  eyesColor?: string
+  glassesColor?: string
+  hairColor?: string
+  hatColor?: string
+  mouthColor?: string
+  skinColor?: string
+}
 
 export type StoredAvatarFile = {
-  fileId: string;
-  url: string;
-  fullUrl: string;
-  originalName: string;
-  mimeType: string;
-  sizeBytes: number;
-};
+  fileId: string
+  url: string
+  fullUrl: string
+  originalName: string
+  mimeType: string
+  sizeBytes: number
+}
 
 export type StoredPixelArtAvatarFile = StoredAvatarFile & {
-  seed: string;
-  options: PixelArtAvatarOptionsInput;
-};
+  seed: string
+  options: PixelArtAvatarOptionsInput
+}
 
-const SVG_MIME_TYPE = "image/svg+xml";
+const SVG_MIME_TYPE = "image/svg+xml"
 const DEFAULT_SKIN_COLORS = [
   "8d5524",
   "a26d3d",
@@ -94,10 +94,17 @@ const DEFAULT_SKIN_COLORS = [
   "eac393",
   "f5cfa0",
   "ffdbac",
-];
-const DEFAULT_HAIR_COLORS = ["28150a", "603015", "612616", "83623b", "a78961", "cab188"];
-const DEFAULT_EYE_COLORS = ["5b7c8b", "647b90", "588387", "876658"];
-const DEFAULT_MOUTH_COLORS = ["c98276", "d29985", "e35d6a"];
+]
+const DEFAULT_HAIR_COLORS = [
+  "28150a",
+  "603015",
+  "612616",
+  "83623b",
+  "a78961",
+  "cab188",
+]
+const DEFAULT_EYE_COLORS = ["5b7c8b", "647b90", "588387", "876658"]
+const DEFAULT_MOUTH_COLORS = ["c98276", "d29985", "e35d6a"]
 const DEFAULT_USER_AVATAR_THEME: PixelArtAvatarTheme = {
   accessoriesProbability: 0,
   beard: ["variant01", "variant03", "variant05"],
@@ -111,7 +118,15 @@ const DEFAULT_USER_AVATAR_THEME: PixelArtAvatarTheme = {
     "variant18",
     "variant21",
   ],
-  clothingColor: ["5bc0de", "44c585", "428bca", "03396c", "d11141", "ffc425", "ffeead"],
+  clothingColor: [
+    "5bc0de",
+    "44c585",
+    "428bca",
+    "03396c",
+    "d11141",
+    "ffc425",
+    "ffeead",
+  ],
   eyes: ["variant02", "variant05", "variant07", "variant09", "variant11"],
   eyesColor: DEFAULT_EYE_COLORS,
   glasses: ["dark01", "dark03", "dark06", "light02"],
@@ -132,7 +147,7 @@ const DEFAULT_USER_AVATAR_THEME: PixelArtAvatarTheme = {
   mouth: ["happy01", "happy03", "happy06", "happy08", "happy11"],
   mouthColor: DEFAULT_MOUTH_COLORS,
   skinColor: DEFAULT_SKIN_COLORS,
-};
+}
 
 function sanitizeFileStem(value: string) {
   const cleaned = value
@@ -140,29 +155,29 @@ function sanitizeFileStem(value: string) {
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/-{2,}/g, "-")
-    .replace(/^-+|-+$/g, "");
-  return cleaned || "avatar";
+    .replace(/^-+|-+$/g, "")
+  return cleaned || "avatar"
 }
 
 function trimOptionalString(value?: string) {
-  if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed || undefined;
+  if (typeof value !== "string") return undefined
+  const trimmed = value.trim()
+  return trimmed || undefined
 }
 
 function singleton(value?: string) {
-  const trimmed = trimOptionalString(value);
-  return trimmed ? [trimmed] : undefined;
+  const trimmed = trimOptionalString(value)
+  return trimmed ? [trimmed] : undefined
 }
 
 function compactObject<T extends Record<string, unknown>>(value: T) {
   return Object.fromEntries(
-    Object.entries(value).filter(([, entry]) => entry !== undefined),
-  ) as T;
+    Object.entries(value).filter(([, entry]) => entry !== undefined)
+  ) as T
 }
 
 function normalizePixelArtOptions(
-  options?: PixelArtAvatarOptionsInput,
+  options?: PixelArtAvatarOptionsInput
 ): PixelArtAvatarOptionsInput {
   return compactObject({
     seed: trimOptionalString(options?.seed),
@@ -198,13 +213,13 @@ function normalizePixelArtOptions(
     hatColor: trimOptionalString(options?.hatColor),
     mouthColor: trimOptionalString(options?.mouthColor),
     skinColor: trimOptionalString(options?.skinColor),
-  });
+  })
 }
 
 function buildPixelArtThemeFromOptions(
-  options?: PixelArtAvatarOptionsInput,
+  options?: PixelArtAvatarOptionsInput
 ): PixelArtAvatarTheme {
-  const normalized = normalizePixelArtOptions(options);
+  const normalized = normalizePixelArtOptions(options)
   return compactObject({
     accessories: singleton(normalized.accessories),
     accessoriesProbability: normalized.accessoriesProbability,
@@ -225,70 +240,73 @@ function buildPixelArtThemeFromOptions(
     mouth: singleton(normalized.mouth),
     mouthColor: singleton(normalized.mouthColor),
     skinColor: singleton(normalized.skinColor),
-  });
+  })
 }
 
 function buildPixelArtSvg(seed: string, theme?: PixelArtAvatarTheme) {
-  const avatar = createAvatar(pixelArt as any, {
-    seed,
-    size: 96,
-    radius: 16,
-    clip: true,
-    randomizeIds: false,
-    backgroundType: ["solid"],
-    backgroundColor: ["transparent"],
-    accessoriesProbability: theme?.accessoriesProbability ?? 0,
-    beardProbability: theme?.beardProbability ?? 0,
-    glassesProbability: theme?.glassesProbability ?? 0,
-    hatProbability: theme?.hatProbability ?? 0,
-    accessories: theme?.accessories,
-    accessoriesColor: theme?.accessoriesColor,
-    beard: theme?.beard,
-    clothing: theme?.clothing,
-    clothingColor: theme?.clothingColor,
-    eyes: theme?.eyes,
-    eyesColor: theme?.eyesColor ?? DEFAULT_EYE_COLORS,
-    glasses: theme?.glasses,
-    glassesColor: theme?.glassesColor,
-    hair: theme?.hair,
-    hairColor: theme?.hairColor ?? DEFAULT_HAIR_COLORS,
-    hat: theme?.hat,
-    hatColor: theme?.hatColor,
-    mouth: theme?.mouth,
-    mouthColor: theme?.mouthColor ?? DEFAULT_MOUTH_COLORS,
-    skinColor: theme?.skinColor ?? DEFAULT_SKIN_COLORS,
-  } as any);
+  const avatar = createAvatar(
+    pixelArt as any,
+    {
+      seed,
+      size: 96,
+      radius: 16,
+      clip: true,
+      randomizeIds: false,
+      backgroundType: ["solid"],
+      backgroundColor: ["transparent"],
+      accessoriesProbability: theme?.accessoriesProbability ?? 0,
+      beardProbability: theme?.beardProbability ?? 0,
+      glassesProbability: theme?.glassesProbability ?? 0,
+      hatProbability: theme?.hatProbability ?? 0,
+      accessories: theme?.accessories,
+      accessoriesColor: theme?.accessoriesColor,
+      beard: theme?.beard,
+      clothing: theme?.clothing,
+      clothingColor: theme?.clothingColor,
+      eyes: theme?.eyes,
+      eyesColor: theme?.eyesColor ?? DEFAULT_EYE_COLORS,
+      glasses: theme?.glasses,
+      glassesColor: theme?.glassesColor,
+      hair: theme?.hair,
+      hairColor: theme?.hairColor ?? DEFAULT_HAIR_COLORS,
+      hat: theme?.hat,
+      hatColor: theme?.hatColor,
+      mouth: theme?.mouth,
+      mouthColor: theme?.mouthColor ?? DEFAULT_MOUTH_COLORS,
+      skinColor: theme?.skinColor ?? DEFAULT_SKIN_COLORS,
+    } as any
+  )
 
-  return avatar.toString();
+  return avatar.toString()
 }
 
 async function saveSvgAvatarFile(
   executor: DatabaseExecutor,
   params: {
-    svg: string;
-    originalName: string;
-    workspaceId: string | null;
-    uploaderUserId: string | null;
-    originSystem: SystemGeneratedFileOriginSystem;
-    metadata?: Record<string, unknown>;
-  },
+    svg: string
+    originalName: string
+    workspaceId: string | null
+    uploaderUserId: string | null
+    originSystem: SystemGeneratedFileOriginSystem
+    metadata?: Record<string, unknown>
+  }
 ): Promise<StoredAvatarFile> {
-  const buffer = Buffer.from(params.svg, "utf8");
+  const buffer = Buffer.from(params.svg, "utf8")
   const normalizedOriginalName = normalizeOriginalNameForMimeType(
     params.originalName,
-    SVG_MIME_TYPE,
-  );
+    SVG_MIME_TYPE
+  )
   const storedBlob = await storeBufferInBackend({
     backend: "local_fs",
     buffer,
     originalName: normalizedOriginalName,
     mimeType: SVG_MIME_TYPE,
-  });
+  })
   const origin = buildSystemGeneratedOrigin({
     system: params.originSystem,
     initiatorUserId: params.uploaderUserId,
     details: params.metadata,
-  });
+  })
 
   const blobRow = await executeTakeFirst<{ id: string }>(
     executor,
@@ -300,10 +318,10 @@ async function saveSvgAvatarFile(
         bucket: storedBlob.bucket,
         locator_json: storedBlob.locator as any,
       })
-      .returning("id"),
-  );
+      .returning("id")
+  )
   if (!blobRow) {
-    throw new Error("Failed to persist avatar file blob");
+    throw new Error("Failed to persist avatar file blob")
   }
 
   const row = await executeTakeFirst<{ id: string }>(
@@ -320,29 +338,27 @@ async function saveSvgAvatarFile(
         sha256: storedBlob.sha256,
         blob_id: blobRow.id,
       })
-      .returning("id"),
-  );
+      .returning("id")
+  )
   if (!row) {
-    throw new Error("Failed to persist avatar file");
+    throw new Error("Failed to persist avatar file")
   }
 
   await executeCompiledQuery(
     executor,
-    db
-      .insertInto("file_origins")
-      .values({
-        file_id: row.id,
-        source_family: origin.family,
-        source_system: origin.system,
-        initiator_user_id: origin.initiatorUserId ?? null,
-        initiator_actor_id: origin.initiatorActorId ?? null,
-        provider_key: origin.providerKey ?? null,
-        plugin_id: origin.pluginId ?? null,
-        parent_file_id: origin.parentFileId ?? null,
-        external_resource_key: origin.externalResourceKey ?? null,
-        details_json: (origin.details || {}) as any,
-      }),
-  );
+    db.insertInto("file_origins").values({
+      file_id: row.id,
+      source_family: origin.family,
+      source_system: origin.system,
+      initiator_user_id: origin.initiatorUserId ?? null,
+      initiator_actor_id: origin.initiatorActorId ?? null,
+      provider_key: origin.providerKey ?? null,
+      plugin_id: origin.pluginId ?? null,
+      parent_file_id: origin.parentFileId ?? null,
+      external_resource_key: origin.externalResourceKey ?? null,
+      details_json: (origin.details || {}) as any,
+    })
+  )
 
   return {
     fileId: row.id,
@@ -351,21 +367,21 @@ async function saveSvgAvatarFile(
     originalName: normalizedOriginalName,
     mimeType: SVG_MIME_TYPE,
     sizeBytes: storedBlob.sizeBytes,
-  };
+  }
 }
 
 export async function createGeneratedUserAvatarFile(
   executor: DatabaseExecutor,
   params: {
-    userId: string;
-    name: string;
-    email: string;
-  },
+    userId: string
+    name: string
+    email: string
+  }
 ): Promise<StoredAvatarFile> {
   const svg = buildPixelArtSvg(
     `user:${params.email.trim().toLowerCase()}:${params.name.trim()}`,
-    DEFAULT_USER_AVATAR_THEME,
-  );
+    DEFAULT_USER_AVATAR_THEME
+  )
 
   return saveSvgAvatarFile(executor, {
     svg,
@@ -380,23 +396,23 @@ export async function createGeneratedUserAvatarFile(
       subjectId: params.userId,
       transparentBackground: true,
     },
-  });
+  })
 }
 
 export async function createGeneratedOfficialActorAvatarFile(
   executor: DatabaseExecutor,
   params: {
-    actorSlug: string;
-    actorName: string;
-    actorTitle: string;
-    uploaderUserId?: string | null;
-    theme?: PixelArtAvatarTheme;
-  },
+    actorSlug: string
+    actorName: string
+    actorTitle: string
+    uploaderUserId?: string | null
+    theme?: PixelArtAvatarTheme
+  }
 ): Promise<StoredAvatarFile> {
   const svg = buildPixelArtSvg(
     `official-actor:${params.actorSlug}:${params.actorName}:${params.actorTitle}`,
-    params.theme,
-  );
+    params.theme
+  )
 
   return saveSvgAvatarFile(executor, {
     svg,
@@ -413,28 +429,28 @@ export async function createGeneratedOfficialActorAvatarFile(
       actorTitle: params.actorTitle,
       transparentBackground: true,
     },
-  });
+  })
 }
 
 export async function createGeneratedActorPixelArtAvatarFile(
   executor: DatabaseExecutor,
   params: {
-    workspaceId: string;
-    actorId: string;
-    actorName: string;
-    actorTitle: string;
-    uploaderUserId?: string | null;
-    options?: PixelArtAvatarOptionsInput;
-  },
+    workspaceId: string
+    actorId: string
+    actorName: string
+    actorTitle: string
+    uploaderUserId?: string | null
+    options?: PixelArtAvatarOptionsInput
+  }
 ): Promise<StoredPixelArtAvatarFile> {
-  const normalizedOptions = normalizePixelArtOptions(params.options);
+  const normalizedOptions = normalizePixelArtOptions(params.options)
   const seed =
     normalizedOptions.seed ||
-    `actor:${params.actorId}:${params.actorName.trim()}:${params.actorTitle.trim()}`;
+    `actor:${params.actorId}:${params.actorName.trim()}:${params.actorTitle.trim()}`
   const svg = buildPixelArtSvg(
     seed,
-    buildPixelArtThemeFromOptions(normalizedOptions),
-  );
+    buildPixelArtThemeFromOptions(normalizedOptions)
+  )
 
   const storedFile = await saveSvgAvatarFile(executor, {
     svg,
@@ -453,11 +469,11 @@ export async function createGeneratedActorPixelArtAvatarFile(
       options: normalizedOptions,
       transparentBackground: true,
     },
-  });
+  })
 
   return {
     ...storedFile,
     seed,
     options: normalizedOptions,
-  };
+  }
 }

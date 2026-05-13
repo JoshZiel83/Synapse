@@ -1,14 +1,14 @@
-import ChatMarkdownDom from "@/components/chat-markdown-dom";
+import ChatMarkdownDom from "@/components/chat-markdown-dom"
 
 export function ChatMarkdown({
   markdown,
   mine,
 }: {
-  markdown: string;
-  mine: boolean;
+  markdown: string
+  mine: boolean
 }) {
   if (!markdown.trim()) {
-    return null;
+    return null
   }
 
   return (
@@ -27,5 +27,5 @@ export function ChatMarkdown({
         },
       }}
     />
-  );
+  )
 }

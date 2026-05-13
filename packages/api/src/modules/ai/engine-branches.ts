@@ -1,271 +1,332 @@
-import { createHash, randomUUID } from 'crypto';
-import { extractText } from '@synapse/shared';
+import { createHash, randomUUID } from "crypto"
+import { extractText } from "@synapse/shared"
 import type {
   CanonicalContextItem,
   CanonicalToolCall,
   EngineBranchState,
   ProviderContextWindow,
   ResolvedModelConfig,
-} from '@synapse/shared';
-import { getModelBranchStateMode } from '@synapse/shared';
-import { query, transaction } from '../../infrastructure/database/index.js';
+} from "@synapse/shared"
+import { getModelBranchStateMode } from "@synapse/shared"
+import { query, transaction } from "../../infrastructure/database/index.js"
 import {
   db,
   executeCompiledQuery,
   executeTakeFirst,
   type TableInsert,
-} from '../../infrastructure/database/kysely.js';
-import { sql } from 'kysely';
+} from "../../infrastructure/database/kysely.js"
+import { sql } from "kysely"
 
-const MAX_APPLIED_ITEM_IDS = 512;
+const MAX_APPLIED_ITEM_IDS = 512
 
 function stableSerialize(value: unknown): string {
-  if (value === null) return 'null';
-  if (value === undefined) return 'undefined';
+  if (value === null) return "null"
+  if (value === undefined) return "undefined"
   if (Array.isArray(value)) {
-    return `[${value.map((item) => stableSerialize(item)).join(',')}]`;
+    return `[${value.map((item) => stableSerialize(item)).join(",")}]`
   }
-  if (typeof value === 'object') {
+  if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>)
       .sort(([left], [right]) => left.localeCompare(right))
-      .map(([key, nestedValue]) => `${JSON.stringify(key)}:${stableSerialize(nestedValue)}`);
-    return `{${entries.join(',')}}`;
+      .map(
+        ([key, nestedValue]) =>
+          `${JSON.stringify(key)}:${stableSerialize(nestedValue)}`
+      )
+    return `{${entries.join(",")}}`
   }
-  return JSON.stringify(value);
+  return JSON.stringify(value)
 }
 
 export function buildContextManifestHash(
-  window: Pick<ProviderContextWindow, 'manifest'>,
+  window: Pick<ProviderContextWindow, "manifest">
 ) {
-  if (!window.manifest) return undefined;
-  return createHash('sha256')
+  if (!window.manifest) return undefined
+  return createHash("sha256")
     .update(stableSerialize(window.manifest))
-    .digest('hex')
-    .slice(0, 16);
+    .digest("hex")
+    .slice(0, 16)
 }
 
 function buildToolCallBatchFingerprint(
-  toolCalls: Array<Pick<CanonicalToolCall, 'callId' | 'providerCallId' | 'toolName' | 'input'>>,
+  toolCalls: Array<
+    Pick<CanonicalToolCall, "callId" | "providerCallId" | "toolName" | "input">
+  >
 ) {
-  const serialized = toolCalls.map((toolCall) => stableSerialize({
-    providerCallId: toolCall.providerCallId || null,
-    toolName: toolCall.toolName,
-    input: toolCall.input,
-  })).join('|');
-  const digest = createHash('sha256')
+  const serialized = toolCalls
+    .map((toolCall) =>
+      stableSerialize({
+        providerCallId: toolCall.providerCallId || null,
+        toolName: toolCall.toolName,
+        input: toolCall.input,
+      })
+    )
+    .join("|")
+  const digest = createHash("sha256")
     .update(serialized)
-    .digest('hex')
-    .slice(0, 16);
+    .digest("hex")
+    .slice(0, 16)
 
-  return `tool_call_batch:fingerprint:${digest}`;
+  return `tool_call_batch:fingerprint:${digest}`
 }
 
 export function buildToolCallBatchAppliedKey(
-  toolCalls: Array<Pick<CanonicalToolCall, 'callId' | 'providerCallId' | 'toolName' | 'input'>>,
-  contentText?: string,
+  toolCalls: Array<
+    Pick<CanonicalToolCall, "callId" | "providerCallId" | "toolName" | "input">
+  >,
+  contentText?: string
 ) {
-  if (!toolCalls || toolCalls.length === 0) return undefined;
-  return buildToolCallBatchFingerprint(toolCalls);
+  if (!toolCalls || toolCalls.length === 0) return undefined
+  return buildToolCallBatchFingerprint(toolCalls)
 }
 
 function extractNativeTailToolCalls(branch: EngineBranchState) {
-  const branchStateMode = getModelBranchStateMode(branch.engineKind);
+  const branchStateMode = getModelBranchStateMode(branch.engineKind)
 
-  if (branchStateMode === 'anthropic.messages') {
+  if (branchStateMode === "anthropic.messages") {
     const messages = Array.isArray(branch.nativeState?.messages)
-      ? branch.nativeState.messages as Array<Record<string, unknown>>
-      : [];
-    const last = messages[messages.length - 1];
-    if (last?.role !== 'assistant' || !Array.isArray(last.content)) return undefined;
+      ? (branch.nativeState.messages as Array<Record<string, unknown>>)
+      : []
+    const last = messages[messages.length - 1]
+    if (last?.role !== "assistant" || !Array.isArray(last.content))
+      return undefined
     const toolCalls = last.content
-      .filter((block): block is Record<string, unknown> => !!block && typeof block === 'object')
-      .filter((block) => block.type === 'tool_use' && typeof block.name === 'string')
+      .filter(
+        (block): block is Record<string, unknown> =>
+          !!block && typeof block === "object"
+      )
+      .filter(
+        (block) => block.type === "tool_use" && typeof block.name === "string"
+      )
       .map((block) => ({
-        callId: typeof block.id === 'string' ? block.id : '',
-        providerCallId: typeof block.id === 'string' ? block.id : undefined,
+        callId: typeof block.id === "string" ? block.id : "",
+        providerCallId: typeof block.id === "string" ? block.id : undefined,
         toolName: String(block.name),
-        input: (block.input && typeof block.input === 'object') ? block.input as Record<string, unknown> : {},
-      }));
-    return toolCalls.length > 0 ? toolCalls : undefined;
+        input:
+          block.input && typeof block.input === "object"
+            ? (block.input as Record<string, unknown>)
+            : {},
+      }))
+    return toolCalls.length > 0 ? toolCalls : undefined
   }
 
-  if (branchStateMode === 'openai.chat_completions') {
+  if (branchStateMode === "openai.chat_completions") {
     const messages = Array.isArray(branch.nativeState?.messages)
-      ? branch.nativeState.messages as Array<Record<string, unknown>>
-      : [];
-    const last = messages[messages.length - 1];
-    if (last?.role !== 'assistant' || !Array.isArray(last.tool_calls)) return undefined;
+      ? (branch.nativeState.messages as Array<Record<string, unknown>>)
+      : []
+    const last = messages[messages.length - 1]
+    if (last?.role !== "assistant" || !Array.isArray(last.tool_calls))
+      return undefined
     const toolCalls = last.tool_calls
-      .filter((toolCall): toolCall is Record<string, unknown> => !!toolCall && typeof toolCall === 'object')
-      .filter((toolCall) => toolCall.function && typeof toolCall.function === 'object' && typeof toolCall.id === 'string')
+      .filter(
+        (toolCall): toolCall is Record<string, unknown> =>
+          !!toolCall && typeof toolCall === "object"
+      )
+      .filter(
+        (toolCall) =>
+          toolCall.function &&
+          typeof toolCall.function === "object" &&
+          typeof toolCall.id === "string"
+      )
       .map((toolCall) => {
-        const fn = toolCall.function as Record<string, unknown>;
-        let input: Record<string, unknown> = {};
-        if (typeof fn.arguments === 'string') {
+        const fn = toolCall.function as Record<string, unknown>
+        let input: Record<string, unknown> = {}
+        if (typeof fn.arguments === "string") {
           try {
-            input = JSON.parse(fn.arguments) as Record<string, unknown>;
+            input = JSON.parse(fn.arguments) as Record<string, unknown>
           } catch {
-            input = {};
+            input = {}
           }
         }
         return {
           callId: String(toolCall.id),
           providerCallId: String(toolCall.id),
-          toolName: typeof fn.name === 'string' ? fn.name : '',
+          toolName: typeof fn.name === "string" ? fn.name : "",
           input,
-        };
-      });
-    return toolCalls.length > 0 ? toolCalls : undefined;
+        }
+      })
+    return toolCalls.length > 0 ? toolCalls : undefined
   }
 
-  if (branchStateMode === 'openai.responses') {
+  if (branchStateMode === "openai.responses") {
     const items = Array.isArray(branch.nativeState?.items)
-      ? branch.nativeState.items as Array<Record<string, unknown>>
-      : [];
-    const collected: Array<Pick<CanonicalToolCall, 'callId' | 'providerCallId' | 'toolName' | 'input'>> = [];
+      ? (branch.nativeState.items as Array<Record<string, unknown>>)
+      : []
+    const collected: Array<
+      Pick<
+        CanonicalToolCall,
+        "callId" | "providerCallId" | "toolName" | "input"
+      >
+    > = []
     for (let index = items.length - 1; index >= 0; index -= 1) {
-      const item = items[index];
-      if (item?.type !== 'function_call' || typeof item.name !== 'string') {
-        if (collected.length > 0) break;
-        continue;
+      const item = items[index]
+      if (item?.type !== "function_call" || typeof item.name !== "string") {
+        if (collected.length > 0) break
+        continue
       }
-      let input: Record<string, unknown> = {};
-      if (typeof item.arguments === 'string') {
+      let input: Record<string, unknown> = {}
+      if (typeof item.arguments === "string") {
         try {
-          input = JSON.parse(item.arguments) as Record<string, unknown>;
+          input = JSON.parse(item.arguments) as Record<string, unknown>
         } catch {
-          input = {};
+          input = {}
         }
-      } else if (item.arguments && typeof item.arguments === 'object') {
-        input = item.arguments as Record<string, unknown>;
+      } else if (item.arguments && typeof item.arguments === "object") {
+        input = item.arguments as Record<string, unknown>
       }
       collected.unshift({
-        callId: typeof item.call_id === 'string' ? item.call_id : (typeof item.id === 'string' ? item.id : ''),
-        providerCallId: typeof item.call_id === 'string' ? item.call_id : (typeof item.id === 'string' ? item.id : undefined),
+        callId:
+          typeof item.call_id === "string"
+            ? item.call_id
+            : typeof item.id === "string"
+              ? item.id
+              : "",
+        providerCallId:
+          typeof item.call_id === "string"
+            ? item.call_id
+            : typeof item.id === "string"
+              ? item.id
+              : undefined,
         toolName: item.name,
         input,
-      });
+      })
     }
-    return collected.length > 0 ? collected : undefined;
+    return collected.length > 0 ? collected : undefined
   }
 
-  return undefined;
+  return undefined
 }
 
 function branchTailAlreadyIncludesToolCalls(
   branch: EngineBranchState,
-  toolCalls: Array<Pick<CanonicalToolCall, 'callId' | 'providerCallId' | 'toolName' | 'input'>>,
+  toolCalls: Array<
+    Pick<CanonicalToolCall, "callId" | "providerCallId" | "toolName" | "input">
+  >
 ) {
-  const nativeTailToolCalls = extractNativeTailToolCalls(branch);
+  const nativeTailToolCalls = extractNativeTailToolCalls(branch)
   if (!nativeTailToolCalls || nativeTailToolCalls.length !== toolCalls.length) {
-    return false;
+    return false
   }
 
-  return buildToolCallBatchFingerprint(nativeTailToolCalls) === buildToolCallBatchFingerprint(toolCalls);
+  return (
+    buildToolCallBatchFingerprint(nativeTailToolCalls) ===
+    buildToolCallBatchFingerprint(toolCalls)
+  )
 }
 
 function buildAppliedItemKeys(item: CanonicalContextItem) {
-  const keys: string[] = [];
-  if (item.itemId) keys.push(`id:${item.itemId}`);
+  const keys: string[] = []
+  if (item.itemId) keys.push(`id:${item.itemId}`)
 
   switch (item.kind) {
-    case 'tool_call_batch':
-      if (item.bundleId) keys.push(`${item.kind}:${item.bundleId}`);
-      keys.push(buildToolCallBatchFingerprint(item.toolCalls));
-      break;
-    case 'tool_result_batch':
-      if (item.bundleId) keys.push(`${item.kind}:${item.bundleId}`);
-      break;
-    case 'summary':
-      if (item.sourceItemIds?.length) keys.push(`summary:${item.summaryType}:${item.sourceItemIds.join(',')}`);
-      break;
-    case 'message':
-      keys.push([
-        'message',
-        item.role,
-        item.author?.sessionId || '',
-        extractText(item.parts).slice(0, 240),
-      ].join(':'));
-      break;
-    case 'system_notice':
-      keys.push([
-        'notice',
-        item.noticeType,
-        extractText(item.parts).slice(0, 240),
-      ].join(':'));
-      break;
-    case 'event':
-      keys.push([
-        'event',
-        item.eventType,
-        extractText(item.parts).slice(0, 240),
-      ].join(':'));
-      break;
-    case 'memory_recall':
-      keys.push([
-        'memory_recall',
-        item.recallType,
-        item.memories.map((memory) => memory.id).join(','),
-      ].join(':'));
-      break;
+    case "tool_call_batch":
+      if (item.bundleId) keys.push(`${item.kind}:${item.bundleId}`)
+      keys.push(buildToolCallBatchFingerprint(item.toolCalls))
+      break
+    case "tool_result_batch":
+      if (item.bundleId) keys.push(`${item.kind}:${item.bundleId}`)
+      break
+    case "summary":
+      if (item.sourceItemIds?.length)
+        keys.push(`summary:${item.summaryType}:${item.sourceItemIds.join(",")}`)
+      break
+    case "message":
+      keys.push(
+        [
+          "message",
+          item.role,
+          item.author?.sessionId || "",
+          extractText(item.parts).slice(0, 240),
+        ].join(":")
+      )
+      break
+    case "system_notice":
+      keys.push(
+        ["notice", item.noticeType, extractText(item.parts).slice(0, 240)].join(
+          ":"
+        )
+      )
+      break
+    case "event":
+      keys.push(
+        ["event", item.eventType, extractText(item.parts).slice(0, 240)].join(
+          ":"
+        )
+      )
+      break
+    case "memory_recall":
+      keys.push(
+        [
+          "memory_recall",
+          item.recallType,
+          item.memories.map((memory) => memory.id).join(","),
+        ].join(":")
+      )
+      break
   }
 
-  return keys;
+  return keys
 }
 
 function trackAppliedItemIds(
   previous: string[] | undefined,
-  items: CanonicalContextItem[],
+  items: CanonicalContextItem[]
 ): string[] | undefined {
-  const seen = new Set(previous || []);
-  const merged = [...(previous || [])];
+  const seen = new Set(previous || [])
+  const merged = [...(previous || [])]
 
   for (const item of items) {
     for (const key of buildAppliedItemKeys(item)) {
-      if (!key || seen.has(key)) continue;
-      seen.add(key);
-      merged.push(key);
+      if (!key || seen.has(key)) continue
+      seen.add(key)
+      merged.push(key)
     }
   }
 
-  if (merged.length === 0) return undefined;
-  return merged.slice(-MAX_APPLIED_ITEM_IDS);
+  if (merged.length === 0) return undefined
+  return merged.slice(-MAX_APPLIED_ITEM_IDS)
 }
 
 function updateScopeSequence(
   current: number | undefined,
   items: CanonicalContextItem[],
-  scope: 'shared' | 'private',
+  scope: "shared" | "private"
 ) {
-  let next = current;
+  let next = current
   for (const item of items) {
-    if (item.scope !== scope || typeof item.sequence !== 'number') continue;
-    next = Math.max(next || 0, item.sequence);
+    if (item.scope !== scope || typeof item.sequence !== "number") continue
+    next = Math.max(next || 0, item.sequence)
   }
-  return next;
+  return next
 }
 
-function isCoveredByBranch(item: CanonicalContextItem, branch: EngineBranchState) {
-  if (typeof item.sequence === 'number') {
-    const limit = item.scope === 'shared'
-      ? branch.cursor.sharedSequence || 0
-      : branch.cursor.privateSequence || 0;
+function isCoveredByBranch(
+  item: CanonicalContextItem,
+  branch: EngineBranchState
+) {
+  if (typeof item.sequence === "number") {
+    const limit =
+      item.scope === "shared"
+        ? branch.cursor.sharedSequence || 0
+        : branch.cursor.privateSequence || 0
     if (item.sequence <= limit) {
-      return true;
+      return true
     }
   }
 
-  if (item.kind === 'tool_call_batch' && branchTailAlreadyIncludesToolCalls(branch, item.toolCalls)) {
-    return true;
+  if (
+    item.kind === "tool_call_batch" &&
+    branchTailAlreadyIncludesToolCalls(branch, item.toolCalls)
+  ) {
+    return true
   }
 
   for (const appliedKey of buildAppliedItemKeys(item)) {
     if (appliedKey && branch.cursor.appliedItemIds?.includes(appliedKey)) {
-      return true;
+      return true
     }
   }
 
-  return false;
+  return false
 }
 
 export function createEngineBindingKey(resolved: ResolvedModelConfig) {
@@ -275,93 +336,104 @@ export function createEngineBindingKey(resolved: ResolvedModelConfig) {
     resolved.profileRevisionId,
     resolved.baseUrl,
     resolved.modelName,
-  ].join(':');
+  ].join(":")
 }
 
 export function getBranchStoreKey(sessionId: string, bindingKey: string) {
-  return `${sessionId}:${bindingKey}`;
+  return `${sessionId}:${bindingKey}`
 }
 
 function asObject(value: unknown): Record<string, unknown> | undefined {
-  if (!value) return undefined;
-  if (typeof value === 'string') {
+  if (!value) return undefined
+  if (typeof value === "string") {
     try {
-      return JSON.parse(value) as Record<string, unknown>;
+      return JSON.parse(value) as Record<string, unknown>
     } catch {
-      return undefined;
+      return undefined
     }
   }
-  if (typeof value === 'object' && !Array.isArray(value)) {
-    return value as Record<string, unknown>;
+  if (typeof value === "object" && !Array.isArray(value)) {
+    return value as Record<string, unknown>
   }
-  return undefined;
+  return undefined
 }
 
 function asStringArray(value: unknown): string[] | undefined {
-  if (!value) return undefined;
+  if (!value) return undefined
   if (Array.isArray(value)) {
-    return value.filter((item): item is string => typeof item === 'string');
+    return value.filter((item): item is string => typeof item === "string")
   }
-  if (typeof value === 'string') {
+  if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(value);
-      return Array.isArray(parsed) ? parsed.filter((item): item is string => typeof item === 'string') : undefined;
+      const parsed = JSON.parse(value)
+      return Array.isArray(parsed)
+        ? parsed.filter((item): item is string => typeof item === "string")
+        : undefined
     } catch {
-      return undefined;
+      return undefined
     }
   }
-  return undefined;
+  return undefined
 }
 
 function rowToBranchState(row: Record<string, unknown>): EngineBranchState {
   return {
     branchId: String(row.id),
     sessionId: String(row.session_id),
-    conversationId: typeof row.conversation_id === 'string' ? row.conversation_id : undefined,
+    conversationId:
+      typeof row.conversation_id === "string" ? row.conversation_id : undefined,
     providerType: row.provider_type as string,
-    engineKind: row.engine_kind as EngineBranchState['engineKind'],
+    engineKind: row.engine_kind as EngineBranchState["engineKind"],
     bindingKey: String(row.binding_key),
     cursor: {
-      sharedSequence: typeof row.last_shared_sequence === 'number' ? row.last_shared_sequence : Number(row.last_shared_sequence || 0),
-      privateSequence: typeof row.last_private_sequence === 'number' ? row.last_private_sequence : Number(row.last_private_sequence || 0),
+      sharedSequence:
+        typeof row.last_shared_sequence === "number"
+          ? row.last_shared_sequence
+          : Number(row.last_shared_sequence || 0),
+      privateSequence:
+        typeof row.last_private_sequence === "number"
+          ? row.last_private_sequence
+          : Number(row.last_private_sequence || 0),
       appliedItemIds: asStringArray(row.applied_item_keys),
     },
     nativeState: asObject(row.native_state),
     metadata: asObject(row.metadata),
-  };
+  }
 }
 
 export async function getEngineBranchState(
   sessionId: string | undefined,
-  resolved: ResolvedModelConfig,
+  resolved: ResolvedModelConfig
 ): Promise<EngineBranchState | undefined> {
-  if (!sessionId) return undefined;
+  if (!sessionId) return undefined
   const result = await db
-    .selectFrom('session_engine_branches')
+    .selectFrom("session_engine_branches")
     .selectAll()
-    .where('session_id', '=', sessionId)
-    .where('binding_key', '=', createEngineBindingKey(resolved))
-    .where('status', '=', 'active')
+    .where("session_id", "=", sessionId)
+    .where("binding_key", "=", createEngineBindingKey(resolved))
+    .where("status", "=", "active")
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 
-  return result ? rowToBranchState(result as Record<string, unknown>) : undefined;
+  return result
+    ? rowToBranchState(result as Record<string, unknown>)
+    : undefined
 }
 
 export async function saveEngineBranchState(
   branch: EngineBranchState | undefined,
   options: {
-    checkpointKind?: 'snapshot' | 'compaction';
-  } = {},
+    checkpointKind?: "snapshot" | "compaction"
+  } = {}
 ): Promise<EngineBranchState | undefined> {
-  if (!branch) return undefined;
+  if (!branch) return undefined
 
   return transaction(async (client) => {
-    const runner = { query: client.query.bind(client) as typeof query };
+    const runner = { query: client.query.bind(client) as typeof query }
     const branchResult = await executeTakeFirst(
       runner,
       db
-        .insertInto('session_engine_branches')
+        .insertInto("session_engine_branches")
         .values({
           id: branch.branchId,
           session_id: branch.sessionId,
@@ -372,64 +444,68 @@ export async function saveEngineBranchState(
           last_shared_sequence: branch.cursor.sharedSequence || 0,
           last_private_sequence: branch.cursor.privateSequence || 0,
           applied_item_keys: branch.cursor.appliedItemIds || [],
-          native_state: (branch.nativeState || {}) as TableInsert<'session_engine_branches'>['native_state'],
-          metadata: (branch.metadata || {}) as TableInsert<'session_engine_branches'>['metadata'],
-          status: 'active',
+          native_state: (branch.nativeState ||
+            {}) as TableInsert<"session_engine_branches">["native_state"],
+          metadata: (branch.metadata ||
+            {}) as TableInsert<"session_engine_branches">["metadata"],
+          status: "active",
           created_at: sql`NOW()`,
           updated_at: sql`NOW()`,
         })
         .onConflict((oc) =>
-          oc.columns(['session_id', 'binding_key']).doUpdateSet({
+          oc.columns(["session_id", "binding_key"]).doUpdateSet({
             conversation_id: branch.conversationId || null,
             provider_type: branch.providerType,
             engine_kind: branch.engineKind,
             last_shared_sequence: branch.cursor.sharedSequence || 0,
             last_private_sequence: branch.cursor.privateSequence || 0,
             applied_item_keys: branch.cursor.appliedItemIds || [],
-            native_state: (branch.nativeState || {}) as TableInsert<'session_engine_branches'>['native_state'],
-            metadata: (branch.metadata || {}) as TableInsert<'session_engine_branches'>['metadata'],
-            status: 'active',
+            native_state: (branch.nativeState ||
+              {}) as TableInsert<"session_engine_branches">["native_state"],
+            metadata: (branch.metadata ||
+              {}) as TableInsert<"session_engine_branches">["metadata"],
+            status: "active",
             updated_at: sql`NOW()`,
-          }),
+          })
         )
-        .returningAll(),
-    );
+        .returningAll()
+    )
     if (!branchResult) {
-      throw new Error('Failed to persist engine branch');
+      throw new Error("Failed to persist engine branch")
     }
 
-    const persisted = rowToBranchState(branchResult as Record<string, unknown>);
+    const persisted = rowToBranchState(branchResult as Record<string, unknown>)
 
     await executeCompiledQuery(
       runner,
-      db
-        .insertInto('engine_branch_checkpoints')
-        .values({
-          branch_id: persisted.branchId,
-          session_id: persisted.sessionId,
-          conversation_id: persisted.conversationId || null,
-          provider_type: persisted.providerType,
-          engine_kind: persisted.engineKind,
-          binding_key: persisted.bindingKey,
-          checkpoint_kind: options.checkpointKind || 'snapshot',
-          shared_sequence: persisted.cursor.sharedSequence || 0,
-          private_sequence: persisted.cursor.privateSequence || 0,
-          applied_item_keys: persisted.cursor.appliedItemIds || [],
-          native_state: (persisted.nativeState || {}) as TableInsert<'engine_branch_checkpoints'>['native_state'],
-          metadata: (persisted.metadata || {}) as TableInsert<'engine_branch_checkpoints'>['metadata'],
-          created_at: sql`NOW()`,
-        }),
-    );
+      db.insertInto("engine_branch_checkpoints").values({
+        branch_id: persisted.branchId,
+        session_id: persisted.sessionId,
+        conversation_id: persisted.conversationId || null,
+        provider_type: persisted.providerType,
+        engine_kind: persisted.engineKind,
+        binding_key: persisted.bindingKey,
+        checkpoint_kind: options.checkpointKind || "snapshot",
+        shared_sequence: persisted.cursor.sharedSequence || 0,
+        private_sequence: persisted.cursor.privateSequence || 0,
+        applied_item_keys: persisted.cursor.appliedItemIds || [],
+        native_state: (persisted.nativeState ||
+          {}) as TableInsert<"engine_branch_checkpoints">["native_state"],
+        metadata: (persisted.metadata ||
+          {}) as TableInsert<"engine_branch_checkpoints">["metadata"],
+        created_at: sql`NOW()`,
+      })
+    )
 
-    return persisted;
-  });
+    return persisted
+  })
 }
 
 export function initializeEngineBranchState(params: {
-  sessionId: string;
-  conversationId?: string;
-  resolved: ResolvedModelConfig;
-  metadata?: Record<string, unknown>;
+  sessionId: string
+  conversationId?: string
+  resolved: ResolvedModelConfig
+  metadata?: Record<string, unknown>
 }): EngineBranchState {
   return {
     branchId: randomUUID(),
@@ -440,18 +516,24 @@ export function initializeEngineBranchState(params: {
     bindingKey: createEngineBindingKey(params.resolved),
     cursor: {},
     metadata: params.metadata,
-  };
+  }
 }
 
 export function buildBranchDeltaWindow(
   window: ProviderContextWindow,
-  branch: EngineBranchState | undefined,
+  branch: EngineBranchState | undefined
 ): ProviderContextWindow {
-  if (!branch) return window;
+  if (!branch) return window
 
-  const sharedTailItems = window.sharedTailItems.filter((item) => !isCoveredByBranch(item, branch));
-  const privateTailItems = window.privateTailItems.filter((item) => !isCoveredByBranch(item, branch));
-  const orderedTailItems = window.orderedTailItems.filter((item) => !isCoveredByBranch(item, branch));
+  const sharedTailItems = window.sharedTailItems.filter(
+    (item) => !isCoveredByBranch(item, branch)
+  )
+  const privateTailItems = window.privateTailItems.filter(
+    (item) => !isCoveredByBranch(item, branch)
+  )
+  const orderedTailItems = window.orderedTailItems.filter(
+    (item) => !isCoveredByBranch(item, branch)
+  )
 
   return {
     manifest: undefined,
@@ -460,50 +542,54 @@ export function buildBranchDeltaWindow(
     privateArchivePoint: null,
     privateTailItems,
     orderedTailItems,
-  };
+  }
 }
 
 export function canResumeBranchFromWindow(
   window: ProviderContextWindow,
-  branch: EngineBranchState | undefined,
+  branch: EngineBranchState | undefined
 ) {
-  if (!branch) return false;
-  if (buildContextManifestHash(window) !== branch.metadata?.contextManifestHash) {
-    return false;
+  if (!branch) return false
+  if (
+    buildContextManifestHash(window) !== branch.metadata?.contextManifestHash
+  ) {
+    return false
   }
   if (
     window.sharedArchivePoint &&
-    window.sharedArchivePoint.coversUntilSequence > (branch.cursor.sharedSequence || 0)
+    window.sharedArchivePoint.coversUntilSequence >
+      (branch.cursor.sharedSequence || 0)
   ) {
-    return false;
+    return false
   }
   if (
     window.privateArchivePoint &&
-    window.privateArchivePoint.coversUntilSequence > (branch.cursor.privateSequence || 0)
+    window.privateArchivePoint.coversUntilSequence >
+      (branch.cursor.privateSequence || 0)
   ) {
-    return false;
+    return false
   }
 
-  const pendingTailToolCalls = extractNativeTailToolCalls(branch);
+  const pendingTailToolCalls = extractNativeTailToolCalls(branch)
   if (pendingTailToolCalls && pendingTailToolCalls.length > 0) {
-    const deltaWindow = buildBranchDeltaWindow(window, branch);
-    const firstDeltaItem = deltaWindow.orderedTailItems[0];
-    if (firstDeltaItem?.kind !== 'tool_result_batch') {
-      return false;
+    const deltaWindow = buildBranchDeltaWindow(window, branch)
+    const firstDeltaItem = deltaWindow.orderedTailItems[0]
+    if (firstDeltaItem?.kind !== "tool_result_batch") {
+      return false
     }
   }
 
-  return true;
+  return true
 }
 
 export function shouldRebuildBranchState(
   window: ProviderContextWindow,
   branch: EngineBranchState | undefined,
-  systemPrompt: string,
+  systemPrompt: string
 ) {
-  if (!branch?.nativeState) return false;
-  if (branch.metadata?.systemPrompt !== systemPrompt) return true;
-  return !canResumeBranchFromWindow(window, branch);
+  if (!branch?.nativeState) return false
+  if (branch.metadata?.systemPrompt !== systemPrompt) return true
+  return !canResumeBranchFromWindow(window, branch)
 }
 
 export function advanceEngineBranchState(
@@ -511,39 +597,56 @@ export function advanceEngineBranchState(
   window: ProviderContextWindow,
   nativeState: Record<string, unknown> | undefined,
   metadata?: Record<string, unknown>,
-  extraAppliedItemIds?: string[],
+  extraAppliedItemIds?: string[]
 ): EngineBranchState {
-  const appliedItemIds = trackAppliedItemIds(branch.cursor.appliedItemIds, window.orderedTailItems) || [];
+  const appliedItemIds =
+    trackAppliedItemIds(
+      branch.cursor.appliedItemIds,
+      window.orderedTailItems
+    ) || []
   if (extraAppliedItemIds) {
-    const seen = new Set(appliedItemIds);
+    const seen = new Set(appliedItemIds)
     for (const itemId of extraAppliedItemIds) {
-      if (!itemId || seen.has(itemId)) continue;
-      seen.add(itemId);
-      appliedItemIds.push(itemId);
+      if (!itemId || seen.has(itemId)) continue
+      seen.add(itemId)
+      appliedItemIds.push(itemId)
     }
   }
 
   return {
     ...branch,
-    conversationId: branch.conversationId || window.sharedArchivePoint?.conversationId || window.privateArchivePoint?.conversationId,
+    conversationId:
+      branch.conversationId ||
+      window.sharedArchivePoint?.conversationId ||
+      window.privateArchivePoint?.conversationId,
     cursor: {
       sharedSequence: updateScopeSequence(
-        window.sharedArchivePoint?.coversUntilSequence ?? branch.cursor.sharedSequence,
+        window.sharedArchivePoint?.coversUntilSequence ??
+          branch.cursor.sharedSequence,
         window.sharedTailItems,
-        'shared',
+        "shared"
       ),
       privateSequence: updateScopeSequence(
-        window.privateArchivePoint?.coversUntilSequence ?? branch.cursor.privateSequence,
+        window.privateArchivePoint?.coversUntilSequence ??
+          branch.cursor.privateSequence,
         window.privateTailItems,
-        'private',
+        "private"
       ),
-      appliedItemIds: appliedItemIds.length > 0 ? appliedItemIds.slice(-MAX_APPLIED_ITEM_IDS) : undefined,
+      appliedItemIds:
+        appliedItemIds.length > 0
+          ? appliedItemIds.slice(-MAX_APPLIED_ITEM_IDS)
+          : undefined,
     },
     nativeState,
-    metadata: metadata ? { ...(branch.metadata || {}), ...metadata } : branch.metadata,
-  };
+    metadata: metadata
+      ? { ...(branch.metadata || {}), ...metadata }
+      : branch.metadata,
+  }
 }
 
-export function buildAssistantMessageAppliedKey(sessionId: string | undefined, text: string) {
-  return ['message', 'assistant', sessionId || '', text.slice(0, 240)].join(':');
+export function buildAssistantMessageAppliedKey(
+  sessionId: string | undefined,
+  text: string
+) {
+  return ["message", "assistant", sessionId || "", text.slice(0, 240)].join(":")
 }

@@ -203,8 +203,14 @@ const skillConversationTypeOptions: Array<{
 
 const skillConversationTypePresets = [
   { label: "All", value: CONVERSATION_TYPE_MASK_PRESETS.ALL },
-  { label: "Internal only", value: CONVERSATION_TYPE_MASK_PRESETS.INTERNAL_ONLY },
-  { label: "External only", value: CONVERSATION_TYPE_MASK_PRESETS.EXTERNAL_ONLY },
+  {
+    label: "Internal only",
+    value: CONVERSATION_TYPE_MASK_PRESETS.INTERNAL_ONLY,
+  },
+  {
+    label: "External only",
+    value: CONVERSATION_TYPE_MASK_PRESETS.EXTERNAL_ONLY,
+  },
   { label: "Group only", value: CONVERSATION_TYPE_MASK_PRESETS.GROUP_ONLY },
   { label: "Private only", value: CONVERSATION_TYPE_MASK_PRESETS.PRIVATE_ONLY },
 ] as const
@@ -754,8 +760,7 @@ function ScopeFields({
             onChange({
               useScope: nextValue,
               actorId:
-                nextValue === "actor" ||
-                nextValue === "actor_in_conversation"
+                nextValue === "actor" || nextValue === "actor_in_conversation"
                   ? value.actorId
                   : null,
               conversationId:
@@ -834,7 +839,6 @@ function ScopeFields({
           </Select>
         </Field>
       ) : null}
-
     </FieldGroup>
   )
 }
@@ -951,7 +955,8 @@ function SkillEditorDialog({
   function toggleConversationTypeKey(key: ConversationTypeKey) {
     setDraft((current) => {
       const existingKeys = conversationTypeMaskToKeys(
-        current.defaultConversationTypeMask || CONVERSATION_TYPE_MASK_PRESETS.ALL
+        current.defaultConversationTypeMask ||
+          CONVERSATION_TYPE_MASK_PRESETS.ALL
       )
       const nextKeys = existingKeys.includes(key)
         ? existingKeys.filter((item) => item !== key)
@@ -961,7 +966,8 @@ function SkillEditorDialog({
         ...current,
         defaultConversationTypeMask: conversationTypeKeysToMask(
           nextKeys,
-          current.defaultConversationTypeMask || CONVERSATION_TYPE_MASK_PRESETS.ALL
+          current.defaultConversationTypeMask ||
+            CONVERSATION_TYPE_MASK_PRESETS.ALL
         ),
       }
     })
@@ -1299,7 +1305,9 @@ function SkillEditorDialog({
                               : "outline"
                           }
                           size="sm"
-                          onClick={() => applyConversationTypePreset(preset.value)}
+                          onClick={() =>
+                            applyConversationTypePreset(preset.value)
+                          }
                         >
                           {preset.label}
                         </Button>
@@ -1312,8 +1320,12 @@ function SkillEditorDialog({
                           <FieldContent>
                             <div className="flex items-start gap-3">
                               <Checkbox
-                                checked={selectedConversationTypeKeys.includes(option.key)}
-                                onCheckedChange={() => toggleConversationTypeKey(option.key)}
+                                checked={selectedConversationTypeKeys.includes(
+                                  option.key
+                                )}
+                                onCheckedChange={() =>
+                                  toggleConversationTypeKey(option.key)
+                                }
                               />
                               <div className="space-y-1">
                                 <FieldLabel>{option.label}</FieldLabel>
@@ -1328,7 +1340,7 @@ function SkillEditorDialog({
                     </FieldGroup>
 
                     <div className="rounded-2xl border border-border bg-muted/20 p-4">
-                      <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
                         Default mask preview
                       </div>
                       <div className="mt-2 text-sm font-medium text-foreground">
@@ -2605,9 +2617,7 @@ export function WorkspaceSkillCreationPage() {
             ? actorsResponse.map(normalizeActorOption)
             : []
         )
-        setConversations(
-          conversationsResponse.map(normalizeConversationOption)
-        )
+        setConversations(conversationsResponse.map(normalizeConversationOption))
         setMembers(
           Array.isArray(membersResponse?.data)
             ? membersResponse.data.map(normalizeMemberOption)
@@ -3207,19 +3217,19 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
         actorsResponse,
         conversationsResponse,
         membersResponse,
-      ] =
-        await Promise.all([
-          api.getSkillMarketplaceItem(skillId, workspaceId),
-          api.getActors(workspaceId),
-          loadConversationCatalog(workspaceId),
-          api.getWorkspaceMembers(workspaceId),
-        ])
+      ] = await Promise.all([
+        api.getSkillMarketplaceItem(skillId, workspaceId),
+        api.getActors(workspaceId),
+        loadConversationCatalog(workspaceId),
+        api.getWorkspaceMembers(workspaceId),
+      ])
 
       const nextActors = Array.isArray(actorsResponse)
         ? actorsResponse.map(normalizeActorOption)
         : []
-      const nextConversations =
-        conversationsResponse.map(normalizeConversationOption)
+      const nextConversations = conversationsResponse.map(
+        normalizeConversationOption
+      )
       const nextMembers = Array.isArray(membersResponse?.data)
         ? membersResponse.data.map(normalizeMemberOption)
         : []
@@ -3568,7 +3578,9 @@ function MarketplaceImportDialog({
 
         <Tabs
           value={sourceType}
-          onValueChange={(value) => setSourceType(value as SkillImportSourceType)}
+          onValueChange={(value) =>
+            setSourceType(value as SkillImportSourceType)
+          }
           className="space-y-4"
         >
           <TabsList className="grid w-full grid-cols-2">
@@ -3884,10 +3896,7 @@ export default function SkillsPage() {
             New skill
           </Button>
           {canManagePlatformSkills ? (
-            <Button
-              variant="outline"
-              onClick={() => setImportDialogOpen(true)}
-            >
+            <Button variant="outline" onClick={() => setImportDialogOpen(true)}>
               <UploadCloud data-icon="inline-start" />
               Import mirror
             </Button>

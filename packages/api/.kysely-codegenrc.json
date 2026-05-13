@@ -1,7 +1,5 @@
 {
-  "defaultSchemas": [
-    "public"
-  ],
+  "defaultSchemas": ["public"],
   "dialect": "postgres",
   "envFile": "../../.env",
   "includePattern": "public.*",

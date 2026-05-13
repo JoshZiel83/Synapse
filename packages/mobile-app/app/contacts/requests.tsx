@@ -1,7 +1,7 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { useRouter } from "expo-router"
+import { useEffect, useState } from "react"
+import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import {
   Avatar,
@@ -12,93 +12,93 @@ import {
   ScreenScroll,
   SectionBlock,
   SectionTitleRow,
-} from "@/components/ui";
-import { api } from "@/lib/api";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
+} from "@/components/ui"
+import { api } from "@/lib/api"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
 import type {
   ActorAccessRequestListResponse,
   FriendRequestListResponse,
-} from "@/types/api";
+} from "@/types/api"
 
 export default function ContactRequestsScreen() {
-  const router = useRouter();
-  const { workspaceId } = useWorkspace();
+  const router = useRouter()
+  const { workspaceId } = useWorkspace()
   const [friendRequests, setFriendRequests] =
-    useState<FriendRequestListResponse | null>(null);
+    useState<FriendRequestListResponse | null>(null)
   const [actorAccessRequests, setActorAccessRequests] =
-    useState<ActorAccessRequestListResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [submittingId, setSubmittingId] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+    useState<ActorAccessRequestListResponse | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [submittingId, setSubmittingId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   async function loadRequests() {
     if (!workspaceId) {
-      setLoading(false);
-      return;
+      setLoading(false)
+      return
     }
-    setLoading(true);
+    setLoading(true)
     try {
       const [friends, actorAccess] = await Promise.all([
         api.getFriendRequests(workspaceId),
         api.getActorAccessRequests(workspaceId),
-      ]);
-      setFriendRequests(friends);
-      setActorAccessRequests(actorAccess);
-      setError(null);
+      ])
+      setFriendRequests(friends)
+      setActorAccessRequests(actorAccess)
+      setError(null)
     } catch (nextError) {
       setError(
-        nextError instanceof Error ? nextError.message : "申请加载失败。",
-      );
+        nextError instanceof Error ? nextError.message : "申请加载失败。"
+      )
     } finally {
-      setLoading(false);
+      setLoading(false)
     }
   }
 
   useEffect(() => {
-    void loadRequests();
-  }, [workspaceId]);
+    void loadRequests()
+  }, [workspaceId])
 
   async function handleResolveFriend(
     requestId: string,
-    decision: "approve" | "reject",
+    decision: "approve" | "reject"
   ) {
-    if (!workspaceId || submittingId) return;
-    setSubmittingId(requestId);
+    if (!workspaceId || submittingId) return
+    setSubmittingId(requestId)
     try {
       if (decision === "approve") {
-        await api.approveFriendRequest(workspaceId, requestId);
+        await api.approveFriendRequest(workspaceId, requestId)
       } else {
-        await api.rejectFriendRequest(workspaceId, requestId);
+        await api.rejectFriendRequest(workspaceId, requestId)
       }
-      await loadRequests();
+      await loadRequests()
     } finally {
-      setSubmittingId(null);
+      setSubmittingId(null)
     }
   }
 
   async function handleResolveActorAccess(
     requestId: string,
-    decision: "approve" | "reject",
+    decision: "approve" | "reject"
   ) {
-    if (!workspaceId || submittingId) return;
-    setSubmittingId(requestId);
+    if (!workspaceId || submittingId) return
+    setSubmittingId(requestId)
     try {
       if (decision === "approve") {
-        await api.approveActorAccessRequest(workspaceId, requestId);
+        await api.approveActorAccessRequest(workspaceId, requestId)
       } else {
-        await api.rejectActorAccessRequest(workspaceId, requestId);
+        await api.rejectActorAccessRequest(workspaceId, requestId)
       }
-      await loadRequests();
+      await loadRequests()
     } finally {
-      setSubmittingId(null);
+      setSubmittingId(null)
     }
   }
 
-  const friendIncoming = friendRequests?.incoming || [];
-  const friendOutgoing = friendRequests?.outgoing || [];
-  const actorIncoming = actorAccessRequests?.incoming || [];
-  const actorOutgoing = actorAccessRequests?.outgoing || [];
+  const friendIncoming = friendRequests?.incoming || []
+  const friendOutgoing = friendRequests?.outgoing || []
+  const actorIncoming = actorAccessRequests?.incoming || []
+  const actorOutgoing = actorAccessRequests?.outgoing || []
 
   return (
     <ScreenScroll topPadding={0} bottomPadding={56}>
@@ -127,7 +127,9 @@ export default function ContactRequestsScreen() {
           <SectionBlock>
             <SectionTitleRow
               title="待处理好友申请"
-              action={<Text style={styles.countText}>{friendIncoming.length} 条</Text>}
+              action={
+                <Text style={styles.countText}>{friendIncoming.length} 条</Text>
+              }
             />
             {friendIncoming.length > 0 ? (
               <View style={styles.listShell}>
@@ -151,13 +153,17 @@ export default function ContactRequestsScreen() {
                       <Button
                         label={submittingId === request.id ? "处理中" : "批准"}
                         disabled={submittingId === request.id}
-                        onPress={() => void handleResolveFriend(request.id, "approve")}
+                        onPress={() =>
+                          void handleResolveFriend(request.id, "approve")
+                        }
                       />
                       <Button
                         label="拒绝"
                         variant="ghost"
                         disabled={submittingId === request.id}
-                        onPress={() => void handleResolveFriend(request.id, "reject")}
+                        onPress={() =>
+                          void handleResolveFriend(request.id, "reject")
+                        }
                       />
                     </View>
                   </View>
@@ -175,16 +181,15 @@ export default function ContactRequestsScreen() {
           <SectionBlock>
             <SectionTitleRow
               title="待处理 Actor 访问申请"
-              action={<Text style={styles.countText}>{actorIncoming.length} 条</Text>}
+              action={
+                <Text style={styles.countText}>{actorIncoming.length} 条</Text>
+              }
             />
             {actorIncoming.length > 0 ? (
               <View style={styles.listShell}>
                 {actorIncoming.map((request) => (
                   <View key={request.id} style={styles.rowCard}>
-                    <Avatar
-                      name={request.actor?.name || "Actor"}
-                      icon="cpu"
-                    />
+                    <Avatar name={request.actor?.name || "Actor"} icon="cpu" />
                     <View style={styles.rowBody}>
                       <Text style={styles.rowTitle}>
                         {request.actor?.name || "未知 Actor"}
@@ -265,7 +270,7 @@ export default function ContactRequestsScreen() {
         </>
       )}
     </ScreenScroll>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -351,4 +356,4 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     gap: 12,
   },
-});
+})

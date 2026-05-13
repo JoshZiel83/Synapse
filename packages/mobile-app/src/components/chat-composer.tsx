@@ -1,15 +1,15 @@
-import Feather from "@expo/vector-icons/Feather";
-import * as DocumentPicker from "expo-document-picker";
-import * as ImagePicker from "expo-image-picker";
-import { useRouter, type Href } from "expo-router";
+import Feather from "@expo/vector-icons/Feather"
+import * as DocumentPicker from "expo-document-picker"
+import * as ImagePicker from "expo-image-picker"
+import { useRouter, type Href } from "expo-router"
 import {
   RecordingPresets,
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
   useAudioRecorder,
   useAudioRecorderState,
-} from "expo-audio";
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+} from "expo-audio"
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react"
 import {
   ActivityIndicator,
   Alert,
@@ -22,11 +22,11 @@ import {
   TextInput,
   View,
   useWindowDimensions,
-} from "react-native";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
-import Svg, { Circle } from "react-native-svg";
+} from "react-native"
+import { useSafeAreaInsets } from "react-native-safe-area-context"
+import Svg, { Circle } from "react-native-svg"
 
-import { ApiError, api } from "@/lib/api";
+import { ApiError, api } from "@/lib/api"
 import {
   buildContentBlocksFromDraftText,
   insertMentionIntoDraft,
@@ -34,128 +34,128 @@ import {
   reconcileDraftMentions,
   type ChatComposerSendPayload,
   type ChatDraftMention,
-} from "@/lib/chat-compose";
-import { subscribeMentionSelection } from "@/lib/chat-mention-selection";
-import { buildChatFilePreviewHref } from "@/lib/chat-rich-content";
+} from "@/lib/chat-compose"
+import { subscribeMentionSelection } from "@/lib/chat-mention-selection"
+import { buildChatFilePreviewHref } from "@/lib/chat-rich-content"
 import {
   buildReplyPreviewText,
   getEntityDisplayName,
   getMentionableConversationParticipants,
-} from "@/lib/chat-data";
-import { createId } from "@/lib/ids";
-import { theme } from "@/theme/tokens";
+} from "@/lib/chat-data"
+import { createId } from "@/lib/ids"
+import { theme } from "@/theme/tokens"
 import {
   fileRefBlock,
   type ChatConversationView,
   type ConversationReplyRef,
   type FileRecordView,
-} from "@shared";
+} from "@shared"
 
-type AttachmentKind = "image" | "video" | "audio" | "file";
-type AttachmentStatus = "uploading" | "uploaded" | "failed";
+type AttachmentKind = "image" | "video" | "audio" | "file"
+type AttachmentStatus = "uploading" | "uploaded" | "failed"
 
 interface LocalAttachment {
-  id: string;
-  kind: AttachmentKind;
-  localUri: string;
-  name: string;
-  mimeType: string;
-  webFile?: Blob | File | null;
-  progress: number;
-  status: AttachmentStatus;
-  file?: FileRecordView;
-  errorMessage?: string;
+  id: string
+  kind: AttachmentKind
+  localUri: string
+  name: string
+  mimeType: string
+  webFile?: Blob | File | null
+  progress: number
+  status: AttachmentStatus
+  file?: FileRecordView
+  errorMessage?: string
 }
 
-const DEFAULT_INPUT_HEIGHT = 22;
-const ATTACHMENT_ICON_SIZE = 32;
-const ATTACHMENT_ICON_STROKE = 2.5;
+const DEFAULT_INPUT_HEIGHT = 22
+const ATTACHMENT_ICON_SIZE = 32
+const ATTACHMENT_ICON_STROKE = 2.5
 
 function inferAttachmentKind(mimeType: string): AttachmentKind {
-  if (mimeType.startsWith("video/")) return "video";
-  if (mimeType.startsWith("audio/")) return "audio";
-  if (mimeType.startsWith("image/")) return "image";
-  return "file";
+  if (mimeType.startsWith("video/")) return "video"
+  if (mimeType.startsWith("audio/")) return "audio"
+  if (mimeType.startsWith("image/")) return "image"
+  return "file"
 }
 
 function normalizeContentKindToAttachmentKind(
-  contentKind: FileRecordView["contentKind"],
+  contentKind: FileRecordView["contentKind"]
 ): AttachmentKind {
-  return contentKind === "document" ? "file" : contentKind;
+  return contentKind === "document" ? "file" : contentKind
 }
 
 function assetName(kind: AttachmentKind, uri: string) {
-  const extension = uri.split(".").pop()?.toLowerCase();
+  const extension = uri.split(".").pop()?.toLowerCase()
   if (extension) {
-    return `${kind}-${Date.now()}.${extension}`;
+    return `${kind}-${Date.now()}.${extension}`
   }
 
-  if (kind === "video") return `video-${Date.now()}.mp4`;
-  if (kind === "audio") return `voice-${Date.now()}.m4a`;
-  if (kind === "file") return `file-${Date.now()}`;
-  return `photo-${Date.now()}.jpg`;
+  if (kind === "video") return `video-${Date.now()}.mp4`
+  if (kind === "audio") return `voice-${Date.now()}.m4a`
+  if (kind === "file") return `file-${Date.now()}`
+  return `photo-${Date.now()}.jpg`
 }
 
 function attachmentIconName(
-  kind: AttachmentKind,
+  kind: AttachmentKind
 ): keyof typeof Feather.glyphMap {
-  if (kind === "video") return "video";
-  if (kind === "audio") return "mic";
-  if (kind === "file") return "file-text";
-  return "image";
+  if (kind === "video") return "video"
+  if (kind === "audio") return "mic"
+  if (kind === "file") return "file-text"
+  return "image"
 }
 
 function findInsertedMentionTrigger(previousText: string, nextText: string) {
   if (nextText.length !== previousText.length + 1) {
-    return null;
+    return null
   }
 
-  let index = 0;
+  let index = 0
   while (
     index < previousText.length &&
     previousText[index] === nextText[index]
   ) {
-    index += 1;
+    index += 1
   }
 
   if (nextText[index] !== "@") {
-    return null;
+    return null
   }
 
-  return previousText.slice(index) === nextText.slice(index + 1) ? index : null;
+  return previousText.slice(index) === nextText.slice(index + 1) ? index : null
 }
 
 function getDraftMeasurementText(text: string) {
   if (text.length === 0) {
-    return " ";
+    return " "
   }
 
-  return text.endsWith("\n") ? `${text} ` : text;
+  return text.endsWith("\n") ? `${text} ` : text
 }
 
 function getAttachmentProgress(attachment: LocalAttachment) {
   if (attachment.status === "uploaded" || attachment.status === "failed") {
-    return 1;
+    return 1
   }
 
-  return Math.max(0.08, attachment.progress);
+  return Math.max(0.08, attachment.progress)
 }
 
 function AttachmentProgressIcon({
   attachment,
 }: {
-  attachment: LocalAttachment;
+  attachment: LocalAttachment
 }) {
-  const center = ATTACHMENT_ICON_SIZE / 2;
-  const radius = center - ATTACHMENT_ICON_STROKE - 1;
-  const circumference = 2 * Math.PI * radius;
-  const progress = getAttachmentProgress(attachment);
+  const center = ATTACHMENT_ICON_SIZE / 2
+  const radius = center - ATTACHMENT_ICON_STROKE - 1
+  const circumference = 2 * Math.PI * radius
+  const progress = getAttachmentProgress(attachment)
   const strokeColor =
     attachment.status === "failed"
       ? theme.colors.danger
       : attachment.status === "uploaded"
         ? theme.colors.success
-        : theme.colors.primary;
+        : theme.colors.primary
 
   return (
     <View style={styles.attachmentStatusIcon}>
@@ -191,7 +191,7 @@ function AttachmentProgressIcon({
         color={strokeColor}
       />
     </View>
-  );
+  )
 }
 
 function AttachmentRow({
@@ -199,9 +199,9 @@ function AttachmentRow({
   accessory,
   onPress,
 }: {
-  attachment: LocalAttachment;
-  accessory: ReactNode;
-  onPress?: () => void;
+  attachment: LocalAttachment
+  accessory: ReactNode
+  onPress?: () => void
 }) {
   const content = (
     <View style={styles.attachmentRow}>
@@ -217,10 +217,10 @@ function AttachmentRow({
       </Text>
       {accessory}
     </View>
-  );
+  )
 
   if (!onPress) {
-    return content;
+    return content
   }
 
   return (
@@ -230,7 +230,7 @@ function AttachmentRow({
     >
       {content}
     </Pressable>
-  );
+  )
 }
 
 function AttachmentListSheet({
@@ -240,13 +240,13 @@ function AttachmentListSheet({
   onRemove,
   onPreview,
 }: {
-  open: boolean;
-  attachments: LocalAttachment[];
-  onClose: () => void;
-  onRemove: (attachmentId: string) => void;
-  onPreview: (attachment: LocalAttachment) => void;
+  open: boolean
+  attachments: LocalAttachment[]
+  onClose: () => void
+  onRemove: (attachmentId: string) => void
+  onPreview: (attachment: LocalAttachment) => void
 }) {
-  const insets = useSafeAreaInsets();
+  const insets = useSafeAreaInsets()
 
   return (
     <Modal
@@ -281,12 +281,16 @@ function AttachmentListSheet({
                     accessibilityRole="button"
                     accessibilityLabel={`移除 ${attachment.name}`}
                     onPress={(event) => {
-                      event.stopPropagation();
-                      onRemove(attachment.id);
+                      event.stopPropagation()
+                      onRemove(attachment.id)
                     }}
                     style={styles.attachmentRowClose}
                   >
-                    <Feather name="x" size={16} color={theme.colors.textMuted} />
+                    <Feather
+                      name="x"
+                      size={16}
+                      color={theme.colors.textMuted}
+                    />
                   </Pressable>
                 }
               />
@@ -295,7 +299,7 @@ function AttachmentListSheet({
         </View>
       </View>
     </Modal>
-  );
+  )
 }
 
 export function ChatComposer({
@@ -308,109 +312,111 @@ export function ChatComposer({
   onCancelReply,
   onSend,
 }: {
-  workspaceId: string;
-  conversationId: string;
-  conversation: ChatConversationView;
-  viewerParticipantId?: string;
-  disabled?: boolean;
-  replyTo?: ConversationReplyRef | null;
-  onCancelReply?: () => void;
-  onSend: (payload: ChatComposerSendPayload) => Promise<void>;
+  workspaceId: string
+  conversationId: string
+  conversation: ChatConversationView
+  viewerParticipantId?: string
+  disabled?: boolean
+  replyTo?: ConversationReplyRef | null
+  onCancelReply?: () => void
+  onSend: (payload: ChatComposerSendPayload) => Promise<void>
 }) {
-  const router = useRouter();
-  const { height: windowHeight } = useWindowDimensions();
-  const [draftText, setDraftText] = useState("");
-  const [draftMentions, setDraftMentions] = useState<ChatDraftMention[]>([]);
-  const [selection, setSelection] = useState({ start: 0, end: 0 });
-  const [inputHeight, setInputHeight] = useState(DEFAULT_INPUT_HEIGHT);
-  const [attachments, setAttachments] = useState<LocalAttachment[]>([]);
-  const [attachmentSheetOpen, setAttachmentSheetOpen] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [menuVisible, setMenuVisible] = useState(false);
-  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY);
-  const recorderState = useAudioRecorderState(recorder);
-  const draftTextRef = useRef(draftText);
-  const draftMentionsRef = useRef(draftMentions);
-  const selectionRef = useRef(selection);
-  const attachmentsRef = useRef(attachments);
-  const uploadControllersRef = useRef(new Map<string, AbortController>());
-  const pendingMentionInsertIndexRef = useRef<number | null>(null);
-  const maxInputHeight = Math.max(120, Math.floor(windowHeight * 0.4));
-  const mentionsEnabled = conversation.kind !== "private";
+  const router = useRouter()
+  const { height: windowHeight } = useWindowDimensions()
+  const [draftText, setDraftText] = useState("")
+  const [draftMentions, setDraftMentions] = useState<ChatDraftMention[]>([])
+  const [selection, setSelection] = useState({ start: 0, end: 0 })
+  const [inputHeight, setInputHeight] = useState(DEFAULT_INPUT_HEIGHT)
+  const [attachments, setAttachments] = useState<LocalAttachment[]>([])
+  const [attachmentSheetOpen, setAttachmentSheetOpen] = useState(false)
+  const [sending, setSending] = useState(false)
+  const [menuVisible, setMenuVisible] = useState(false)
+  const recorder = useAudioRecorder(RecordingPresets.HIGH_QUALITY)
+  const recorderState = useAudioRecorderState(recorder)
+  const draftTextRef = useRef(draftText)
+  const draftMentionsRef = useRef(draftMentions)
+  const selectionRef = useRef(selection)
+  const attachmentsRef = useRef(attachments)
+  const uploadControllersRef = useRef(new Map<string, AbortController>())
+  const pendingMentionInsertIndexRef = useRef<number | null>(null)
+  const maxInputHeight = Math.max(120, Math.floor(windowHeight * 0.4))
+  const mentionsEnabled = conversation.kind !== "private"
 
   const mentionCandidates = useMemo(
     () =>
       getMentionableConversationParticipants(conversation, viewerParticipantId),
-    [conversation, viewerParticipantId],
-  );
+    [conversation, viewerParticipantId]
+  )
 
   const draftBlocks = useMemo(
     () => buildContentBlocksFromDraftText(draftText, draftMentions),
-    [draftMentions, draftText],
-  );
+    [draftMentions, draftText]
+  )
 
   const uploadedAttachments = useMemo(
     () =>
       attachments.filter(
-        (attachment): attachment is LocalAttachment & { file: FileRecordView } =>
-          attachment.status === "uploaded" && Boolean(attachment.file),
+        (
+          attachment
+        ): attachment is LocalAttachment & { file: FileRecordView } =>
+          attachment.status === "uploaded" && Boolean(attachment.file)
       ),
-    [attachments],
-  );
+    [attachments]
+  )
 
   const hasPendingAttachmentWork = attachments.some(
-    (attachment) => attachment.status !== "uploaded",
-  );
+    (attachment) => attachment.status !== "uploaded"
+  )
 
   useEffect(() => {
-    draftTextRef.current = draftText;
-  }, [draftText]);
+    draftTextRef.current = draftText
+  }, [draftText])
 
   useEffect(() => {
-    draftMentionsRef.current = draftMentions;
-  }, [draftMentions]);
+    draftMentionsRef.current = draftMentions
+  }, [draftMentions])
 
   useEffect(() => {
-    selectionRef.current = selection;
-  }, [selection]);
+    selectionRef.current = selection
+  }, [selection])
 
   useEffect(() => {
-    attachmentsRef.current = attachments;
-  }, [attachments]);
+    attachmentsRef.current = attachments
+  }, [attachments])
 
   useEffect(() => {
     return () => {
-      uploadControllersRef.current.forEach((controller) => controller.abort());
-      uploadControllersRef.current.clear();
+      uploadControllersRef.current.forEach((controller) => controller.abort())
+      uploadControllersRef.current.clear()
 
       if (recorderState.isRecording) {
-        void recorder.stop().catch(() => undefined);
+        void recorder.stop().catch(() => undefined)
       }
-    };
-  }, [recorder, recorderState.isRecording]);
+    }
+  }, [recorder, recorderState.isRecording])
 
   useEffect(() => {
     return subscribeMentionSelection(conversationId, (mention) => {
-      const insertIndex = pendingMentionInsertIndexRef.current;
-      pendingMentionInsertIndexRef.current = null;
+      const insertIndex = pendingMentionInsertIndexRef.current
+      pendingMentionInsertIndexRef.current = null
       if (insertIndex === null) {
-        return;
+        return
       }
 
       const inserted = insertMentionIntoDraft(
         draftTextRef.current,
         draftMentionsRef.current,
         mention,
-        insertIndex,
-      );
-      setDraftText(inserted.text);
-      setDraftMentions(inserted.mentions);
+        insertIndex
+      )
+      setDraftText(inserted.text)
+      setDraftMentions(inserted.mentions)
       setSelection({
         start: inserted.selection,
         end: inserted.selection,
-      });
-    });
-  }, [conversationId]);
+      })
+    })
+  }, [conversationId])
 
   function openMentionPicker() {
     if (
@@ -419,42 +425,42 @@ export function ChatComposer({
       sending ||
       mentionCandidates.length === 0
     ) {
-      return false;
+      return false
     }
 
     router.push(
-      `/chat/mention?conversationId=${encodeURIComponent(conversationId)}` as Href,
-    );
-    return true;
+      `/chat/mention?conversationId=${encodeURIComponent(conversationId)}` as Href
+    )
+    return true
   }
 
   function updateAttachment(
     attachmentId: string,
-    updater: (attachment: LocalAttachment) => LocalAttachment,
+    updater: (attachment: LocalAttachment) => LocalAttachment
   ) {
     setAttachments((current) =>
       current.map((attachment) =>
-        attachment.id === attachmentId ? updater(attachment) : attachment,
-      ),
-    );
+        attachment.id === attachmentId ? updater(attachment) : attachment
+      )
+    )
   }
 
   function beginAttachmentUpload(
     attachmentInput: Omit<
       LocalAttachment,
       "progress" | "status" | "file" | "errorMessage"
-    >,
+    >
   ) {
     const attachment: LocalAttachment = {
       ...attachmentInput,
       progress: 0.04,
       status: "uploading",
-    };
+    }
 
-    const controller = new AbortController();
-    uploadControllersRef.current.set(attachment.id, controller);
+    const controller = new AbortController()
+    uploadControllersRef.current.set(attachment.id, controller)
 
-    setAttachments((current) => [...current, attachment]);
+    setAttachments((current) => [...current, attachment])
 
     void api
       .uploadAsset(
@@ -471,12 +477,12 @@ export function ChatComposer({
             updateAttachment(attachment.id, (current) => ({
               ...current,
               progress: Math.max(current.progress, progress),
-            }));
+            }))
           },
-        },
+        }
       )
       .then((file) => {
-        uploadControllersRef.current.delete(attachment.id);
+        uploadControllersRef.current.delete(attachment.id)
         updateAttachment(attachment.id, (current) => ({
           ...current,
           kind: normalizeContentKindToAttachmentKind(file.contentKind),
@@ -486,12 +492,12 @@ export function ChatComposer({
           status: "uploaded",
           file,
           errorMessage: undefined,
-        }));
+        }))
       })
       .catch((error) => {
-        uploadControllersRef.current.delete(attachment.id);
+        uploadControllersRef.current.delete(attachment.id)
         if (error instanceof ApiError && error.code === "ABORTED") {
-          return;
+          return
         }
 
         updateAttachment(attachment.id, (current) => ({
@@ -500,18 +506,18 @@ export function ChatComposer({
           status: "failed",
           errorMessage:
             error instanceof Error ? error.message : "上传失败，请移除后重试",
-        }));
-      });
+        }))
+      })
   }
 
   function queueAttachments(
     nextAttachments: Array<{
-      kind: AttachmentKind;
-      uri: string;
-      name: string;
-      mimeType: string;
-      webFile?: Blob | File | null;
-    }>,
+      kind: AttachmentKind
+      uri: string
+      name: string
+      mimeType: string
+      webFile?: Blob | File | null
+    }>
   ) {
     nextAttachments.forEach((attachment) => {
       beginAttachmentUpload({
@@ -521,15 +527,15 @@ export function ChatComposer({
         name: attachment.name,
         mimeType: attachment.mimeType,
         webFile: attachment.webFile,
-      });
-    });
+      })
+    })
   }
 
   async function pickLibrary() {
-    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync()
     if (!permission.granted) {
-      Alert.alert("无法访问相册", "请先授权照片和视频访问权限。");
-      return;
+      Alert.alert("无法访问相册", "请先授权照片和视频访问权限。")
+      return
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -537,48 +543,48 @@ export function ChatComposer({
       allowsMultipleSelection: true,
       quality: 0.9,
       selectionLimit: 6,
-    });
+    })
 
-    if (result.canceled) return;
+    if (result.canceled) return
 
-    setMenuVisible(false);
+    setMenuVisible(false)
     queueAttachments(
       result.assets.map((asset) => {
         const mimeType =
           asset.mimeType ||
-          (asset.type === "video" ? "video/mp4" : "image/jpeg");
-        const kind = inferAttachmentKind(mimeType);
+          (asset.type === "video" ? "video/mp4" : "image/jpeg")
+        const kind = inferAttachmentKind(mimeType)
         return {
           kind,
           uri: asset.uri,
           name: asset.fileName || assetName(kind, asset.uri),
           mimeType,
           webFile: asset.file,
-        };
-      }),
-    );
+        }
+      })
+    )
   }
 
   async function launchCamera() {
-    const permission = await ImagePicker.requestCameraPermissionsAsync();
+    const permission = await ImagePicker.requestCameraPermissionsAsync()
     if (!permission.granted) {
-      Alert.alert("无法使用相机", "请先授权相机权限。");
-      return;
+      Alert.alert("无法使用相机", "请先授权相机权限。")
+      return
     }
 
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ["images", "videos"],
       quality: 0.85,
-    });
+    })
 
-    if (result.canceled || result.assets.length === 0) return;
+    if (result.canceled || result.assets.length === 0) return
 
-    const asset = result.assets[0]!;
+    const asset = result.assets[0]!
     const mimeType =
-      asset.mimeType || (asset.type === "video" ? "video/mp4" : "image/jpeg");
-    const kind = inferAttachmentKind(mimeType);
+      asset.mimeType || (asset.type === "video" ? "video/mp4" : "image/jpeg")
+    const kind = inferAttachmentKind(mimeType)
 
-    setMenuVisible(false);
+    setMenuVisible(false)
     queueAttachments([
       {
         kind,
@@ -587,47 +593,47 @@ export function ChatComposer({
         mimeType,
         webFile: asset.file,
       },
-    ]);
+    ])
   }
 
   async function pickDocument() {
     const result = await DocumentPicker.getDocumentAsync({
       multiple: true,
       copyToCacheDirectory: true,
-    });
+    })
 
-    if (result.canceled) return;
+    if (result.canceled) return
 
-    setMenuVisible(false);
+    setMenuVisible(false)
     queueAttachments(
       result.assets.map((asset) => {
-        const mimeType = asset.mimeType || "application/octet-stream";
-        const kind = inferAttachmentKind(mimeType);
+        const mimeType = asset.mimeType || "application/octet-stream"
+        const kind = inferAttachmentKind(mimeType)
         return {
           kind,
           uri: asset.uri,
           name: asset.name || assetName(kind, asset.uri),
           mimeType,
           webFile: asset.file,
-        };
-      }),
-    );
+        }
+      })
+    )
   }
 
   async function toggleRecording() {
-    setMenuVisible(false);
+    setMenuVisible(false)
 
     if (recorderState.isRecording) {
-      await recorder.stop();
+      await recorder.stop()
       await setAudioModeAsync({
         allowsRecording: false,
         playsInSilentMode: true,
         interruptionMode: "duckOthers",
         shouldPlayInBackground: false,
         shouldRouteThroughEarpiece: false,
-      });
-      const uri = recorder.getStatus().url || recorderState.url;
-      if (!uri) return;
+      })
+      const uri = recorder.getStatus().url || recorderState.url
+      if (!uri) return
 
       queueAttachments([
         {
@@ -636,14 +642,14 @@ export function ChatComposer({
           name: assetName("audio", uri),
           mimeType: "audio/mp4",
         },
-      ]);
-      return;
+      ])
+      return
     }
 
-    const permission = await requestRecordingPermissionsAsync();
+    const permission = await requestRecordingPermissionsAsync()
     if (!permission.granted) {
-      Alert.alert("无法录音", "请先授权麦克风权限。");
-      return;
+      Alert.alert("无法录音", "请先授权麦克风权限。")
+      return
     }
 
     await setAudioModeAsync({
@@ -652,23 +658,23 @@ export function ChatComposer({
       interruptionMode: "duckOthers",
       shouldPlayInBackground: false,
       shouldRouteThroughEarpiece: false,
-    });
+    })
 
-    await recorder.prepareToRecordAsync();
-    recorder.record();
+    await recorder.prepareToRecordAsync()
+    recorder.record()
   }
 
   async function handleSend() {
     if (draftBlocks.length === 0 && uploadedAttachments.length === 0) {
-      return;
+      return
     }
 
     if (hasPendingAttachmentWork) {
-      return;
+      return
     }
 
-    setMenuVisible(false);
-    setSending(true);
+    setMenuVisible(false)
+    setSending(true)
 
     try {
       await onSend({
@@ -682,97 +688,100 @@ export function ChatComposer({
               originalName: attachment.file.originalName,
               sizeBytes: attachment.file.sizeBytes,
               category: attachment.file.contentKind,
-            }),
+            })
           ),
         ],
         replyToItemId: replyTo?.itemId,
         replyTo: replyTo ?? undefined,
-      });
-      setDraftText("");
-      setDraftMentions([]);
-      setSelection({ start: 0, end: 0 });
-      setInputHeight(DEFAULT_INPUT_HEIGHT);
-      setAttachments([]);
-      setAttachmentSheetOpen(false);
-      onCancelReply?.();
+      })
+      setDraftText("")
+      setDraftMentions([])
+      setSelection({ start: 0, end: 0 })
+      setInputHeight(DEFAULT_INPUT_HEIGHT)
+      setAttachments([])
+      setAttachmentSheetOpen(false)
+      onCancelReply?.()
     } finally {
-      setSending(false);
+      setSending(false)
     }
   }
 
   function handleChangeText(nextText: string) {
-    const previousText = draftTextRef.current;
+    const previousText = draftTextRef.current
     const normalizedDeletion = normalizeMentionBackspace(
       previousText,
       nextText,
       draftMentionsRef.current,
-      selectionRef.current,
-    );
+      selectionRef.current
+    )
 
     if (normalizedDeletion) {
-      setDraftText(normalizedDeletion.text);
-      setDraftMentions(normalizedDeletion.mentions);
+      setDraftText(normalizedDeletion.text)
+      setDraftMentions(normalizedDeletion.mentions)
       if (normalizedDeletion.text.length === 0) {
-        setInputHeight(DEFAULT_INPUT_HEIGHT);
+        setInputHeight(DEFAULT_INPUT_HEIGHT)
       }
       setSelection({
         start: normalizedDeletion.selection,
         end: normalizedDeletion.selection,
-      });
-      return;
+      })
+      return
     }
 
     const nextMentions = reconcileDraftMentions(
       previousText,
       nextText,
-      draftMentionsRef.current,
-    );
+      draftMentionsRef.current
+    )
 
-    setDraftText(nextText);
-    setDraftMentions(nextMentions);
+    setDraftText(nextText)
+    setDraftMentions(nextMentions)
     if (nextText.length === 0) {
-      setInputHeight(DEFAULT_INPUT_HEIGHT);
+      setInputHeight(DEFAULT_INPUT_HEIGHT)
     }
 
-    const mentionTriggerIndex = findInsertedMentionTrigger(previousText, nextText);
+    const mentionTriggerIndex = findInsertedMentionTrigger(
+      previousText,
+      nextText
+    )
     if (
       mentionsEnabled &&
       mentionTriggerIndex !== null &&
       !nextMentions.some(
         (mention) =>
           mentionTriggerIndex >= mention.start &&
-          mentionTriggerIndex < mention.end,
+          mentionTriggerIndex < mention.end
       )
     ) {
-      pendingMentionInsertIndexRef.current = mentionTriggerIndex;
+      pendingMentionInsertIndexRef.current = mentionTriggerIndex
       if (!openMentionPicker()) {
-        pendingMentionInsertIndexRef.current = null;
+        pendingMentionInsertIndexRef.current = null
       }
     }
   }
 
   function removeAttachment(attachmentId: string) {
-    const controller = uploadControllersRef.current.get(attachmentId);
+    const controller = uploadControllersRef.current.get(attachmentId)
     if (controller) {
-      controller.abort();
-      uploadControllersRef.current.delete(attachmentId);
+      controller.abort()
+      uploadControllersRef.current.delete(attachmentId)
     }
 
     setAttachments((current) =>
-      current.filter((attachment) => attachment.id !== attachmentId),
-    );
+      current.filter((attachment) => attachment.id !== attachmentId)
+    )
 
     if (attachmentsRef.current.length <= 2) {
-      setAttachmentSheetOpen(false);
+      setAttachmentSheetOpen(false)
     }
   }
 
   function openAttachmentPreview(attachment: LocalAttachment) {
     const previewCategory =
       attachment.file?.contentKind ??
-      (attachment.kind === "file" ? "document" : attachment.kind);
-    const previewName = attachment.file?.originalName ?? attachment.name;
-    const previewMimeType = attachment.file?.mimeType ?? attachment.mimeType;
+      (attachment.kind === "file" ? "document" : attachment.kind)
+    const previewName = attachment.file?.originalName ?? attachment.name
+    const previewMimeType = attachment.file?.mimeType ?? attachment.mimeType
 
     if (attachment.file?.url) {
       router.push(
@@ -782,18 +791,18 @@ export function ChatComposer({
           name: previewName,
           category: previewCategory,
           source: "remote",
-        }),
-      );
-      return;
+        })
+      )
+      return
     }
 
     if (!attachment.localUri) {
-      return;
+      return
     }
 
     if (attachment.kind === "file" && Platform.OS !== "web") {
-      Alert.alert("文件上传完成后可预览", "文档类附件会在上传成功后打开预览。");
-      return;
+      Alert.alert("文件上传完成后可预览", "文档类附件会在上传成功后打开预览。")
+      return
     }
 
     router.push(
@@ -803,17 +812,17 @@ export function ChatComposer({
         name: previewName,
         category: previewCategory,
         source: "local",
-      }),
-    );
+      })
+    )
   }
 
   const sendDisabled =
     disabled ||
     sending ||
     hasPendingAttachmentWork ||
-    (draftBlocks.length === 0 && uploadedAttachments.length === 0);
+    (draftBlocks.length === 0 && uploadedAttachments.length === 0)
 
-  const primaryAttachment = attachments[0];
+  const primaryAttachment = attachments[0]
 
   return (
     <View style={styles.wrap}>
@@ -844,8 +853,8 @@ export function ChatComposer({
           onPress={
             attachments.length > 1
               ? () => {
-                  setMenuVisible(false);
-                  setAttachmentSheetOpen(true);
+                  setMenuVisible(false)
+                  setAttachmentSheetOpen(true)
                 }
               : () => openAttachmentPreview(primaryAttachment)
           }
@@ -866,8 +875,8 @@ export function ChatComposer({
                 accessibilityRole="button"
                 accessibilityLabel={`移除 ${primaryAttachment.name}`}
                 onPress={(event) => {
-                  event.stopPropagation();
-                  removeAttachment(primaryAttachment.id);
+                  event.stopPropagation()
+                  removeAttachment(primaryAttachment.id)
                 }}
                 style={styles.attachmentRowClose}
               >
@@ -899,10 +908,10 @@ export function ChatComposer({
                     DEFAULT_INPUT_HEIGHT,
                     Math.min(
                       maxInputHeight,
-                      Math.ceil(event.nativeEvent.layout.height),
-                    ),
-                  ),
-                );
+                      Math.ceil(event.nativeEvent.layout.height)
+                    )
+                  )
+                )
               }}
               style={styles.textMeasure}
             >
@@ -914,12 +923,12 @@ export function ChatComposer({
             selection={selection}
             onChangeText={handleChangeText}
             onFocus={() => {
-              setMenuVisible(false);
-              setAttachmentSheetOpen(false);
+              setMenuVisible(false)
+              setAttachmentSheetOpen(false)
             }}
             onSelectionChange={(event) => {
-              setSelection(event.nativeEvent.selection);
-              selectionRef.current = event.nativeEvent.selection;
+              setSelection(event.nativeEvent.selection)
+              selectionRef.current = event.nativeEvent.selection
             }}
             onContentSizeChange={(event) => {
               setInputHeight(
@@ -927,10 +936,10 @@ export function ChatComposer({
                   DEFAULT_INPUT_HEIGHT,
                   Math.min(
                     maxInputHeight,
-                    Math.ceil(event.nativeEvent.contentSize.height),
-                  ),
-                ),
-              );
+                    Math.ceil(event.nativeEvent.contentSize.height)
+                  )
+                )
+              )
             }}
             placeholder="发消息"
             placeholderTextColor={theme.colors.textSoft}
@@ -951,8 +960,8 @@ export function ChatComposer({
         <RoundAction
           icon="plus"
           onPress={() => {
-            setAttachmentSheetOpen(false);
-            setMenuVisible((current) => !current);
+            setAttachmentSheetOpen(false)
+            setMenuVisible((current) => !current)
           }}
           disabled={disabled || sending}
           active={menuVisible}
@@ -1000,7 +1009,7 @@ export function ChatComposer({
         onPreview={openAttachmentPreview}
       />
     </View>
-  );
+  )
 }
 
 function RoundAction({
@@ -1009,10 +1018,10 @@ function RoundAction({
   disabled,
   active,
 }: {
-  icon: keyof typeof Feather.glyphMap;
-  onPress: () => void;
-  disabled?: boolean;
-  active?: boolean;
+  icon: keyof typeof Feather.glyphMap
+  onPress: () => void
+  disabled?: boolean
+  active?: boolean
 }) {
   return (
     <Pressable
@@ -1031,7 +1040,7 @@ function RoundAction({
         color={active ? theme.colors.white : theme.colors.text}
       />
     </Pressable>
-  );
+  )
 }
 
 function MenuAction({
@@ -1039,9 +1048,9 @@ function MenuAction({
   label,
   onPress,
 }: {
-  icon: keyof typeof Feather.glyphMap;
-  label: string;
-  onPress: () => void;
+  icon: keyof typeof Feather.glyphMap
+  label: string
+  onPress: () => void
 }) {
   return (
     <Pressable onPress={onPress} style={styles.menuAction}>
@@ -1050,7 +1059,7 @@ function MenuAction({
       </View>
       <Text style={styles.menuLabel}>{label}</Text>
     </Pressable>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -1268,4 +1277,4 @@ const styles = StyleSheet.create({
     top: 10,
     right: 16,
   },
-});
+})

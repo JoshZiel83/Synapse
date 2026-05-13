@@ -12,7 +12,7 @@ export interface StartupSettings {
   runAtLogin?: boolean
   autoConnect?: boolean
   launchHidden?: boolean
-  closeBehavior?: 'ask' | 'tray' | 'quit'
+  closeBehavior?: "ask" | "tray" | "quit"
 }
 
 export interface NotificationSettings {
@@ -32,7 +32,7 @@ export interface UpdateSettings {
 }
 
 export interface BuiltinDisplaySelectorConfig {
-  mode?: 'main' | 'mouse' | 'index' | 'id' | 'electron_id'
+  mode?: "main" | "mouse" | "index" | "id" | "electron_id"
   index?: number
   id?: number
   electronId?: number
@@ -52,7 +52,7 @@ export interface BuiltinCUAConfig {
 
 export interface BuiltinFilesystemRootConfig {
   path: string
-  access?: 'ro' | 'rw'
+  access?: "ro" | "rw"
 }
 
 export interface BuiltinFilesystemIndexConfig {
@@ -72,8 +72,8 @@ export interface BuiltinFilesystemBackupConfig {
 
 export interface BuiltinFilesystemConfig {
   readOnly?: boolean
-  scope?: 'roots' | 'global'
-  globalAccess?: 'ro' | 'rw'
+  scope?: "roots" | "global"
+  globalAccess?: "ro" | "rw"
   maxGetFileSizeBytes?: number
   roots?: BuiltinFilesystemRootConfig[]
   index?: BuiltinFilesystemIndexConfig
@@ -81,8 +81,8 @@ export interface BuiltinFilesystemConfig {
 }
 
 export interface BuiltinChromeConfig {
-  connectionMode?: 'managed' | 'attach_existing' | 'attach_url'
-  channel?: 'stable' | 'beta' | 'dev' | 'canary'
+  connectionMode?: "managed" | "attach_existing" | "attach_url"
+  channel?: "stable" | "beta" | "dev" | "canary"
   executablePath?: string
   userDataDir?: string
   browserUrl?: string
@@ -105,7 +105,7 @@ export interface BuiltinCommandlineConfig {
 }
 
 export interface BuiltinServerConfig {
-  kind: 'chrome' | 'cua' | 'filesystem' | 'commandline'
+  kind: "chrome" | "cua" | "filesystem" | "commandline"
   instanceId?: string
   chrome?: BuiltinChromeConfig
   cua?: BuiltinCUAConfig
@@ -118,7 +118,7 @@ export interface ServerConfig {
   syncSourceKey?: string
   enabled?: boolean
   name: string
-  transport: 'stdio' | 'http' | 'builtin'
+  transport: "stdio" | "http" | "builtin"
   command?: string
   args?: string[]
   env?: Record<string, string>
@@ -128,11 +128,18 @@ export interface ServerConfig {
 }
 
 export interface SyncSourceConfig {
-  sourceKind: 'manual' | 'claude_code' | 'claude_desktop' | 'codex' | 'gemini' | 'opencode' | 'custom'
+  sourceKind:
+    | "manual"
+    | "claude_code"
+    | "claude_desktop"
+    | "codex"
+    | "gemini"
+    | "opencode"
+    | "custom"
   sourceKey: string
   configPath?: string
-  syncMode: 'snapshot' | 'follow'
-  status: 'unknown' | 'idle' | 'syncing' | 'error' | 'disabled'
+  syncMode: "snapshot" | "follow"
+  status: "unknown" | "idle" | "syncing" | "error" | "disabled"
   lastSyncedAt?: string
   lastError?: string
   metadata?: Record<string, unknown>
@@ -176,11 +183,11 @@ export interface LogEntry {
 }
 
 export interface ImportServer {
-  sourceKind?: SyncSourceConfig['sourceKind']
+  sourceKind?: SyncSourceConfig["sourceKind"]
   sourceKey?: string
   sourceConfigPath?: string
   name: string
-  transport: 'stdio' | 'http'
+  transport: "stdio" | "http"
   command?: string
   args?: string[]
   env?: Record<string, string>
@@ -188,20 +195,20 @@ export interface ImportServer {
 }
 
 export interface ImportSource {
-  kind: SyncSourceConfig['sourceKind']
+  kind: SyncSourceConfig["sourceKind"]
   sourceKey: string
   name: string
   configPath: string
   available: boolean
-  syncMode?: SyncSourceConfig['syncMode']
-  status?: SyncSourceConfig['status']
+  syncMode?: SyncSourceConfig["syncMode"]
+  status?: SyncSourceConfig["status"]
   linkedMcps?: number
   servers: ImportServer[]
   error?: string
 }
 
 export interface ConfigChangeEvent {
-  kind: 'changed' | 'deleted' | 'error'
+  kind: "changed" | "deleted" | "error"
   path?: string
   message?: string
   requiresRestart?: boolean

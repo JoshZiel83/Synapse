@@ -4,24 +4,24 @@ import {
   lookupResourcesSql,
   type AccessResourceType,
   type PermissionSubject,
-} from "./sql-evaluator.js";
+} from "./sql-evaluator.js"
 
-export { PLATFORM_RESOURCE_ID, type AccessResourceType, type PermissionSubject };
+export { PLATFORM_RESOURCE_ID, type AccessResourceType, type PermissionSubject }
 
 export async function checkPermission(params: {
-  resourceType: AccessResourceType;
-  resourceId: string;
-  permission: string;
-  subject: PermissionSubject;
+  resourceType: AccessResourceType
+  resourceId: string
+  permission: string
+  subject: PermissionSubject
 }) {
-  return checkPermissionSql(params);
+  return checkPermissionSql(params)
 }
 
 export async function lookupResources(params: {
-  resourceType: AccessResourceType;
-  permission: string;
-  subject: PermissionSubject;
-  limit?: number;
+  resourceType: AccessResourceType
+  permission: string
+  subject: PermissionSubject
+  limit?: number
 }) {
-  return lookupResourcesSql(params);
+  return lookupResourcesSql(params)
 }

@@ -1,50 +1,50 @@
-import Feather from "@expo/vector-icons/Feather";
-import { Image } from "expo-image";
-import { Link, useRouter } from "expo-router";
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { Image } from "expo-image"
+import { Link, useRouter } from "expo-router"
+import { useState } from "react"
+import { Pressable, StyleSheet, Text, View } from "react-native"
 
-import { EmailField } from "@/components/email-field";
-import { Button, Field, ScreenScroll } from "@/components/ui";
-import { useSession } from "@/providers/session-provider";
-import { theme } from "@/theme/tokens";
-import { APP_NAME } from "@shared";
+import { EmailField } from "@/components/email-field"
+import { Button, Field, ScreenScroll } from "@/components/ui"
+import { useSession } from "@/providers/session-provider"
+import { theme } from "@/theme/tokens"
+import { APP_NAME } from "@shared"
 
 function getErrorMessage(error: unknown) {
-  if (error instanceof Error && error.message) return error.message;
-  return "登录失败，请检查邮箱和密码。";
+  if (error instanceof Error && error.message) return error.message
+  return "登录失败，请检查邮箱和密码。"
 }
 
 export default function LoginScreen() {
-  const router = useRouter();
-  const { signIn } = useSession();
-  const [email, setEmail] = useState("");
-  const [password, setPassword] = useState("");
-  const [acceptedPolicy, setAcceptedPolicy] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const router = useRouter()
+  const { signIn } = useSession()
+  const [email, setEmail] = useState("")
+  const [password, setPassword] = useState("")
+  const [acceptedPolicy, setAcceptedPolicy] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   async function handleLogin() {
     if (!email.trim() || !password) {
-      setError("请输入账号和密码。");
-      return;
+      setError("请输入账号和密码。")
+      return
     }
 
     if (!acceptedPolicy) {
-      setError("请先勾选隐私政策与用户协议。");
-      return;
+      setError("请先勾选隐私政策与用户协议。")
+      return
     }
 
-    setSubmitting(true);
-    setError(null);
+    setSubmitting(true)
+    setError(null)
 
     try {
-      await signIn(email.trim(), password);
-      router.replace("/");
+      await signIn(email.trim(), password)
+      router.replace("/")
     } catch (nextError) {
-      setError(getErrorMessage(nextError));
+      setError(getErrorMessage(nextError))
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
   }
 
@@ -107,8 +107,7 @@ export default function LoginScreen() {
             </View>
             <Text style={styles.policyText}>
               我已阅读并同意
-              <Text style={styles.policyLink}>《用户协议》</Text>
-              和
+              <Text style={styles.policyLink}>《用户协议》</Text>和
               <Text style={styles.policyLink}>《隐私政策》</Text>
             </Text>
           </Pressable>
@@ -132,7 +131,7 @@ export default function LoginScreen() {
         </View>
       </View>
     </ScreenScroll>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -217,4 +216,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: theme.colors.primary,
   },
-});
+})

@@ -15,7 +15,11 @@ import {
   Smartphone,
 } from "lucide-react"
 
-import { LandingReveal, LandingStagger, LandingStaggerItem } from "@/components/landing-motion"
+import {
+  LandingReveal,
+  LandingStagger,
+  LandingStaggerItem,
+} from "@/components/landing-motion"
 
 const accessHighlights = [
   {
@@ -110,16 +114,26 @@ export function LandingLocalAccessSection() {
                     <item.icon className="size-[18px]" />
                   </div>
                   <div>
-                    <div className="text-[15px] font-semibold text-slate-950">{item.title}</div>
-                    <p className="mt-1.5 text-sm leading-6 text-slate-600">{item.description}</p>
+                    <div className="text-[15px] font-semibold text-slate-950">
+                      {item.title}
+                    </div>
+                    <p className="mt-1.5 text-sm leading-6 text-slate-600">
+                      {item.description}
+                    </p>
                   </div>
                 </LandingStaggerItem>
               ))}
             </LandingStagger>
           </LandingReveal>
 
-          <LandingReveal className="relative" delay={0.08} x={30} y={24} scale={0.985}>
-            <div className="absolute left-2 top-12 size-36 rounded-full bg-sky-200/35 blur-3xl" />
+          <LandingReveal
+            className="relative"
+            delay={0.08}
+            x={30}
+            y={24}
+            scale={0.985}
+          >
+            <div className="absolute top-12 left-2 size-36 rounded-full bg-sky-200/35 blur-3xl" />
             <div className="absolute right-3 bottom-12 size-44 rounded-full bg-emerald-200/30 blur-3xl" />
 
             <div className="relative mx-auto aspect-square w-full max-w-[720px]">
@@ -131,21 +145,41 @@ export function LandingLocalAccessSection() {
                 return (
                   <div
                     key={track.sizeClass}
-                    className={`pointer-events-none absolute left-1/2 top-1/2 ${track.sizeClass} -translate-x-1/2 -translate-y-1/2`}
+                    className={`pointer-events-none absolute top-1/2 left-1/2 ${track.sizeClass} -translate-x-1/2 -translate-y-1/2`}
                   >
-                    <LandingReveal className="size-full" delay={delay} scale={0.9} y={0} duration={0.72}>
-                      <div className={`size-full rounded-full border border-dashed ${track.className}`} />
+                    <LandingReveal
+                      className="size-full"
+                      delay={delay}
+                      scale={0.9}
+                      y={0}
+                      duration={0.72}
+                    >
+                      <div
+                        className={`size-full rounded-full border border-dashed ${track.className}`}
+                      />
                     </LandingReveal>
                   </div>
                 )
               })}
 
-              <div className="absolute left-1/2 top-1/2 z-20 -translate-x-1/2 -translate-y-1/2">
-                <LandingReveal className="relative" delay={0.1} y={0} scale={0.86} duration={0.7}>
+              <div className="absolute top-1/2 left-1/2 z-20 -translate-x-1/2 -translate-y-1/2">
+                <LandingReveal
+                  className="relative"
+                  delay={0.1}
+                  y={0}
+                  scale={0.86}
+                  duration={0.7}
+                >
                   <div className="absolute inset-0 rounded-full bg-sky-200/25 blur-3xl" />
                   <div className="relative flex size-20 items-center justify-center rounded-full border border-white/95 bg-[radial-gradient(circle_at_30%_28%,rgba(255,255,255,0.98),rgba(241,245,249,0.96)_58%,rgba(226,232,240,0.98))] shadow-[0_24px_54px_-26px_rgba(148,163,184,0.42)] ring-1 ring-slate-200/70 sm:size-24">
                     <div className="absolute inset-[10%] rounded-full border border-white/70" />
-                    <Image src="/synapse.svg" alt="Synapse" width={72} height={72} className="relative size-8 sm:size-9" />
+                    <Image
+                      src="/synapse.svg"
+                      alt="Synapse"
+                      width={72}
+                      height={72}
+                      className="relative size-8 sm:size-9"
+                    />
                   </div>
                 </LandingReveal>
               </div>
@@ -153,7 +187,7 @@ export function LandingLocalAccessSection() {
               {orbitNodes.map((node) => (
                 <div
                   key={node.label}
-                  className={`absolute left-1/2 top-1/2 ${node.orbitSize} -translate-x-1/2 -translate-y-1/2`}
+                  className={`absolute top-1/2 left-1/2 ${node.orbitSize} -translate-x-1/2 -translate-y-1/2`}
                 >
                   <LandingReveal
                     className="size-full"
@@ -162,8 +196,11 @@ export function LandingLocalAccessSection() {
                     scale={0.9}
                     duration={0.54}
                   >
-                    <div className="relative size-full" style={{ transform: `rotate(${node.angle}deg)` }}>
-                      <div className="absolute left-1/2 top-0 -translate-x-1/2 -translate-y-1/2">
+                    <div
+                      className="relative size-full"
+                      style={{ transform: `rotate(${node.angle}deg)` }}
+                    >
+                      <div className="absolute top-0 left-1/2 -translate-x-1/2 -translate-y-1/2">
                         <div
                           className="relative drop-shadow-[0_12px_28px_rgba(148,163,184,0.18)]"
                           style={{ transform: `rotate(${-node.angle}deg)` }}
@@ -172,7 +209,7 @@ export function LandingLocalAccessSection() {
                             <div className="absolute inset-[11%] rounded-full border border-white/12" />
                             <node.icon className="relative size-[16px] shrink-0 text-slate-950 sm:size-[18px]" />
                           </div>
-                          <span className="absolute left-1/2 top-full mt-1.5 -translate-x-1/2 whitespace-nowrap text-[11px] font-medium tracking-tight text-slate-600 sm:text-xs">
+                          <span className="absolute top-full left-1/2 mt-1.5 -translate-x-1/2 text-[11px] font-medium tracking-tight whitespace-nowrap text-slate-600 sm:text-xs">
                             {node.label}
                           </span>
                         </div>

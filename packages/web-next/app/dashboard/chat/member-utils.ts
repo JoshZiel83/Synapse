@@ -45,7 +45,7 @@ export function formatTransportKindLabel(
 
 export function getConversationMemberContactHref(
   member: ConversationMember,
-  basePath = "/dashboard/contacts",
+  basePath = "/dashboard/contacts"
 ) {
   if (member.type === "actor") {
     return `${basePath}?kind=actor&id=${member.id}`
@@ -64,7 +64,7 @@ export function getConversationMemberContactHref(
 
 export function resolveAuthorMember(
   author: ConversationEntityRef | undefined,
-  conversationMembers: ConversationMember[] | undefined,
+  conversationMembers: ConversationMember[] | undefined
 ) {
   if (!author) return undefined
   const participantId = author.participantId
@@ -111,7 +111,7 @@ export function resolveAuthorMember(
 export function getAuthorContactHref(
   author: ConversationEntityRef | undefined,
   conversationMembers: ConversationMember[] | undefined,
-  basePath = "/dashboard/contacts",
+  basePath = "/dashboard/contacts"
 ) {
   const authorMember = resolveAuthorMember(author, conversationMembers)
   if (authorMember) {

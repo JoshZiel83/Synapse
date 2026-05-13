@@ -1,78 +1,78 @@
-import { API_BASE } from "@/lib/config";
+import { API_BASE } from "@/lib/config"
 import {
   CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL,
   CHAT_WEB_SERVICE_WORKER_FILENAME,
   CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG,
   CHAT_WEB_SERVICE_WORKER_SYNC_TAG,
-} from "@/lib/storage-keys";
-import { getExpoWebBaseScope, withExpoWebBasePath } from "@/lib/web-base-path";
+} from "@/lib/storage-keys"
+import { getExpoWebBaseScope, withExpoWebBasePath } from "@/lib/web-base-path"
 
 type ChatWorkerMessage =
   | {
-      type: "chat:set-auth-context";
+      type: "chat:set-auth-context"
       payload: {
-        token: string;
-        workspaceId: string;
-        apiBase: string;
-      };
+        token: string
+        workspaceId: string
+        apiBase: string
+      }
     }
   | {
-      type: "chat:clear-auth-context";
+      type: "chat:clear-auth-context"
     }
   | {
-      type: "chat:run-sync";
-      payload?: { reason?: string };
-    };
+      type: "chat:run-sync"
+      payload?: { reason?: string }
+    }
 
 type ChatWorkerBroadcast =
   | {
-      type: "chat:queue-updated";
+      type: "chat:queue-updated"
       payload: {
-        workspaceId: string;
-        reason?: string;
-      };
+        workspaceId: string
+        reason?: string
+      }
     }
   | {
-      type: "chat:sync-failed";
+      type: "chat:sync-failed"
       payload?: {
-        reason?: string;
-      };
+        reason?: string
+      }
     }
   | {
-      type: "chat:auth-expired";
-    };
+      type: "chat:auth-expired"
+    }
 
-let registrationPromise: Promise<ServiceWorkerRegistration | null> | null = null;
-let lifecycleBound = false;
+let registrationPromise: Promise<ServiceWorkerRegistration | null> | null = null
+let lifecycleBound = false
 let latestAuthContext: {
-  token: string | null;
-  workspaceId: string | null;
+  token: string | null
+  workspaceId: string | null
 } = {
   token: null,
   workspaceId: null,
-};
+}
 
 function isSupported() {
-  return typeof window !== "undefined" && "serviceWorker" in navigator;
+  return typeof window !== "undefined" && "serviceWorker" in navigator
 }
 
 async function refreshRegistration(
-  registration: ServiceWorkerRegistration | null,
+  registration: ServiceWorkerRegistration | null
 ) {
-  await registration?.update().catch(() => undefined);
+  await registration?.update().catch(() => undefined)
 }
 
 function bindLifecycle(registration: ServiceWorkerRegistration) {
   if (!isSupported() || lifecycleBound) {
-    return;
+    return
   }
 
-  lifecycleBound = true;
+  lifecycleBound = true
 
   navigator.serviceWorker.addEventListener("controllerchange", () => {
-    const authContext = latestAuthContext;
+    const authContext = latestAuthContext
     if (!authContext.token || !authContext.workspaceId) {
-      return;
+      return
     }
 
     void postMessage({
@@ -82,131 +82,141 @@ function bindLifecycle(registration: ServiceWorkerRegistration) {
         workspaceId: authContext.workspaceId,
         apiBase: API_BASE,
       },
-    }).then(() => registerOneOffSync());
-  });
+    }).then(() => registerOneOffSync())
+  })
 
   if (typeof document !== "undefined") {
     document.addEventListener("visibilitychange", () => {
       if (document.visibilityState === "visible") {
-        void refreshRegistration(registration);
+        void refreshRegistration(registration)
       }
-    });
+    })
   }
 
   if (typeof window !== "undefined") {
     window.addEventListener("focus", () => {
-      void refreshRegistration(registration);
-    });
+      void refreshRegistration(registration)
+    })
     window.addEventListener("online", () => {
-      void refreshRegistration(registration);
-    });
+      void refreshRegistration(registration)
+    })
   }
 }
 
 async function getRegistration() {
   if (!isSupported()) {
-    return null;
+    return null
   }
 
   if (!registrationPromise) {
-    const workerPath = withExpoWebBasePath(CHAT_WEB_SERVICE_WORKER_FILENAME);
-    const workerScope = getExpoWebBaseScope();
+    const workerPath = withExpoWebBasePath(CHAT_WEB_SERVICE_WORKER_FILENAME)
+    const workerScope = getExpoWebBaseScope()
     registrationPromise = navigator.serviceWorker
       .register(workerPath, {
         scope: workerScope,
         updateViaCache: "none",
       })
       .then((registration) => {
-        bindLifecycle(registration);
-        void refreshRegistration(registration);
-        void navigator.serviceWorker.ready.catch(() => undefined);
-        return registration;
+        bindLifecycle(registration)
+        void refreshRegistration(registration)
+        void navigator.serviceWorker.ready.catch(() => undefined)
+        return registration
       })
-      .catch(() => null);
+      .catch(() => null)
   }
 
-  return registrationPromise;
+  return registrationPromise
 }
 
 function getBroadcastChannel() {
   if (typeof window === "undefined" || !("BroadcastChannel" in window)) {
-    return null;
+    return null
   }
 
-  return new BroadcastChannel(CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL);
+  return new BroadcastChannel(CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL)
 }
 
 async function postMessage(message: ChatWorkerMessage) {
-  const registration = await getRegistration();
+  const registration = await getRegistration()
   if (!registration || !("serviceWorker" in navigator)) {
-    return;
+    return
   }
 
   const target =
     navigator.serviceWorker.controller ??
     registration.active ??
     registration.waiting ??
-    registration.installing;
-  target?.postMessage(message);
+    registration.installing
+  target?.postMessage(message)
 }
 
 async function registerOneOffSync() {
-  const registration = await getRegistration();
-  const syncManager = registration && "sync" in registration
-    ? (registration as ServiceWorkerRegistration & {
-        sync: { register: (tag: string) => Promise<void> };
-      }).sync
-    : null;
+  const registration = await getRegistration()
+  const syncManager =
+    registration && "sync" in registration
+      ? (
+          registration as ServiceWorkerRegistration & {
+            sync: { register: (tag: string) => Promise<void> }
+          }
+        ).sync
+      : null
 
   if (!syncManager) {
-    return;
+    return
   }
 
-  await syncManager.register(CHAT_WEB_SERVICE_WORKER_SYNC_TAG).catch(() => undefined);
+  await syncManager
+    .register(CHAT_WEB_SERVICE_WORKER_SYNC_TAG)
+    .catch(() => undefined)
 }
 
 async function registerPeriodicSync() {
-  const registration = await getRegistration();
+  const registration = await getRegistration()
   const periodicSync =
     registration && "periodicSync" in registration
-      ? (registration as ServiceWorkerRegistration & {
-          periodicSync: {
-            register: (tag: string, options: { minInterval: number }) => Promise<void>;
-          };
-        }).periodicSync
-      : null;
+      ? (
+          registration as ServiceWorkerRegistration & {
+            periodicSync: {
+              register: (
+                tag: string,
+                options: { minInterval: number }
+              ) => Promise<void>
+            }
+          }
+        ).periodicSync
+      : null
 
   if (!periodicSync) {
-    return;
+    return
   }
 
   await periodicSync
     .register(CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG, {
       minInterval: 15 * 60 * 1000,
     })
-    .catch(() => undefined);
+    .catch(() => undefined)
 }
 
 export async function ensureChatServiceWorkerRegistered() {
-  const registration = await getRegistration();
-  await registerPeriodicSync();
-  return registration;
+  const registration = await getRegistration()
+  await registerPeriodicSync()
+  return registration
 }
 
 export async function syncChatServiceWorkerAuthContext(input: {
-  token: string | null;
-  workspaceId: string | null;
+  token: string | null
+  workspaceId: string | null
 }) {
   if (!isSupported()) {
-    return;
+    return
   }
 
-  latestAuthContext = input;
-  await ensureChatServiceWorkerRegistered();
+  latestAuthContext = input
+  await ensureChatServiceWorkerRegistered()
 
   if (!input.token || !input.workspaceId) {
-    await postMessage({ type: "chat:clear-auth-context" });
-    return;
+    await postMessage({ type: "chat:clear-auth-context" })
+    return
   }
 
   await postMessage({
@@ -216,48 +226,48 @@ export async function syncChatServiceWorkerAuthContext(input: {
       workspaceId: input.workspaceId,
       apiBase: API_BASE,
     },
-  });
+  })
 
-  await registerOneOffSync();
+  await registerOneOffSync()
 }
 
 export async function requestChatServiceWorkerSync(reason = "manual") {
   if (!isSupported()) {
-    return;
+    return
   }
 
-  await ensureChatServiceWorkerRegistered();
+  await ensureChatServiceWorkerRegistered()
   await postMessage({
     type: "chat:run-sync",
     payload: { reason },
-  });
-  await registerOneOffSync();
+  })
+  await registerOneOffSync()
 }
 
 export function subscribeToChatServiceWorker(
-  listener: (message: ChatWorkerBroadcast) => void,
+  listener: (message: ChatWorkerBroadcast) => void
 ) {
-  const channel = getBroadcastChannel();
+  const channel = getBroadcastChannel()
   if (channel) {
     const handleMessage = (event: MessageEvent<ChatWorkerBroadcast>) => {
-      listener(event.data);
-    };
-    channel.addEventListener("message", handleMessage);
+      listener(event.data)
+    }
+    channel.addEventListener("message", handleMessage)
     return () => {
-      channel.removeEventListener("message", handleMessage);
-      channel.close();
-    };
+      channel.removeEventListener("message", handleMessage)
+      channel.close()
+    }
   }
 
   if (!isSupported()) {
-    return () => undefined;
+    return () => undefined
   }
 
   const handleMessage = (event: MessageEvent<ChatWorkerBroadcast>) => {
-    listener(event.data);
-  };
-  navigator.serviceWorker.addEventListener("message", handleMessage);
+    listener(event.data)
+  }
+  navigator.serviceWorker.addEventListener("message", handleMessage)
   return () => {
-    navigator.serviceWorker.removeEventListener("message", handleMessage);
-  };
+    navigator.serviceWorker.removeEventListener("message", handleMessage)
+  }
 }

@@ -1,49 +1,47 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useMemo, useRef, useState } from "react";
-import {
-  Pressable,
-  RefreshControl,
-  StyleSheet,
-  Text,
-  View,
-} from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { useLocalSearchParams, useRouter } from "expo-router"
+import { useEffect, useMemo, useRef, useState } from "react"
+import { Pressable, RefreshControl, StyleSheet, Text, View } from "react-native"
 
 import {
   AlphabetIndexedEntityList,
   type AlphabetIndexedEntityItem,
-} from "@/components/alphabet-indexed-entity-list";
-import { EmptyState, LoadingBlock, ScreenView } from "@/components/ui";
-import { api } from "@/lib/api";
-import { useChat } from "@/providers/chat-provider";
-import { useSession } from "@/providers/session-provider";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
-import type { ContactHubEntryView, ContactHubResponse } from "@/types/api";
-import type { Actor } from "@shared";
+} from "@/components/alphabet-indexed-entity-list"
+import { EmptyState, LoadingBlock, ScreenView } from "@/components/ui"
+import { api } from "@/lib/api"
+import { useChat } from "@/providers/chat-provider"
+import { useSession } from "@/providers/session-provider"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
+import type { ContactHubEntryView, ContactHubResponse } from "@/types/api"
+import type { Actor } from "@shared"
 
-export type WorkspaceEntityPickerMode = "actor" | "group";
+export type WorkspaceEntityPickerMode = "actor" | "group"
 
 function getEntryKey(entry: ContactHubEntryView) {
-  return `${entry.kind}:${entry.id}`;
+  return `${entry.kind}:${entry.id}`
 }
 
 function mapEntryTargetType(entry: ContactHubEntryView): "actor" | "user" {
-  return entry.targetType === "actor" ? "actor" : "user";
+  return entry.targetType === "actor" ? "actor" : "user"
 }
 
 function uniqueIds(values: Array<string | undefined>) {
-  return Array.from(new Set(values.filter((value): value is string => Boolean(value))));
+  return Array.from(
+    new Set(values.filter((value): value is string => Boolean(value)))
+  )
 }
 
 function SelectionCircle({ selected }: { selected: boolean }) {
   return (
-    <View style={[styles.selectionCircle, selected && styles.selectionCircleActive]}>
+    <View
+      style={[styles.selectionCircle, selected && styles.selectionCircleActive]}
+    >
       {selected ? (
         <Feather name="check" size={14} color={theme.colors.white} />
       ) : null}
     </View>
-  );
+  )
 }
 
 function PickerHeader({
@@ -54,12 +52,12 @@ function PickerHeader({
   confirmLabel,
   onConfirm,
 }: {
-  title: string;
-  onBack: () => void;
-  confirmVisible: boolean;
-  confirmDisabled: boolean;
-  confirmLabel: string;
-  onConfirm: () => void;
+  title: string
+  onBack: () => void
+  confirmVisible: boolean
+  confirmDisabled: boolean
+  confirmLabel: string
+  onConfirm: () => void
 }) {
   return (
     <View style={styles.header}>
@@ -68,7 +66,10 @@ function PickerHeader({
         accessibilityLabel="返回"
         hitSlop={8}
         onPress={onBack}
-        style={({ pressed }) => [styles.headerNav, pressed && styles.headerNavPressed]}
+        style={({ pressed }) => [
+          styles.headerNav,
+          pressed && styles.headerNavPressed,
+        ]}
       >
         <Feather name="chevron-left" size={22} color={theme.colors.text} />
       </Pressable>
@@ -103,182 +104,190 @@ function PickerHeader({
         <View style={styles.headerSpacer} />
       )}
     </View>
-  );
+  )
 }
 
 export function WorkspaceEntityPickerScreen({
   mode,
 }: {
-  mode: WorkspaceEntityPickerMode;
+  mode: WorkspaceEntityPickerMode
 }) {
-  const router = useRouter();
-  const { user } = useSession();
-  const { workspaceId } = useWorkspace();
-  const { createConversation } = useChat();
+  const router = useRouter()
+  const { user } = useSession()
+  const { workspaceId } = useWorkspace()
+  const { createConversation } = useChat()
   const { actorId, workspaceMemberId, contactId } = useLocalSearchParams<{
-    actorId?: string;
-    workspaceMemberId?: string;
-    contactId?: string;
-  }>();
-  const [actors, setActors] = useState<Actor[]>([]);
-  const [hub, setHub] = useState<ContactHubResponse | null>(null);
-  const [selectedKeys, setSelectedKeys] = useState<string[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [submitting, setSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const initializedSelectionRef = useRef(false);
+    actorId?: string
+    workspaceMemberId?: string
+    contactId?: string
+  }>()
+  const [actors, setActors] = useState<Actor[]>([])
+  const [hub, setHub] = useState<ContactHubResponse | null>(null)
+  const [selectedKeys, setSelectedKeys] = useState<string[]>([])
+  const [loading, setLoading] = useState(true)
+  const [refreshing, setRefreshing] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const initializedSelectionRef = useRef(false)
 
   useEffect(() => {
-    initializedSelectionRef.current = false;
-    setSelectedKeys([]);
-  }, [mode, workspaceId]);
+    initializedSelectionRef.current = false
+    setSelectedKeys([])
+  }, [mode, workspaceId])
 
   async function loadData(isRefreshing = false) {
     if (!workspaceId) {
-      setActors([]);
-      setHub(null);
-      setLoading(false);
-      setRefreshing(false);
-      return;
+      setActors([])
+      setHub(null)
+      setLoading(false)
+      setRefreshing(false)
+      return
     }
 
     if (isRefreshing) {
-      setRefreshing(true);
+      setRefreshing(true)
     } else {
-      setLoading(true);
+      setLoading(true)
     }
 
     try {
       if (mode === "actor") {
-        const response = await api.getActors(workspaceId);
-        setActors(response.actors.filter((actor) => actor.isActive));
-        setHub(null);
+        const response = await api.getActors(workspaceId)
+        setActors(response.actors.filter((actor) => actor.isActive))
+        setHub(null)
       } else {
-        const response = await api.getContactHub(workspaceId);
-        setHub(response);
-        setActors([]);
+        const response = await api.getContactHub(workspaceId)
+        setHub(response)
+        setActors([])
       }
-      setError(null);
+      setError(null)
     } catch (nextError) {
       setError(
         nextError instanceof Error
           ? nextError.message
           : mode === "actor"
             ? "Actor 列表加载失败。"
-            : "可选联系人加载失败。",
-      );
+            : "可选联系人加载失败。"
+      )
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      setLoading(false)
+      setRefreshing(false)
     }
   }
 
   useEffect(() => {
-    void loadData();
-  }, [mode, workspaceId]);
+    void loadData()
+  }, [mode, workspaceId])
 
   const groupEntries = useMemo(
-    () =>
-      [
-        ...(hub?.workspaceActors || []),
-        ...(hub?.workspaceMembers || []).filter((entry) => entry.userId !== user?.id),
-        ...(hub?.friends || []),
-      ],
-    [hub?.friends, hub?.workspaceActors, hub?.workspaceMembers, user?.id],
-  );
+    () => [
+      ...(hub?.workspaceActors || []),
+      ...(hub?.workspaceMembers || []).filter(
+        (entry) => entry.userId !== user?.id
+      ),
+      ...(hub?.friends || []),
+    ],
+    [hub?.friends, hub?.workspaceActors, hub?.workspaceMembers, user?.id]
+  )
 
   useEffect(() => {
     if (mode !== "group" || initializedSelectionRef.current || loading) {
-      return;
+      return
     }
 
-    const nextSelectedKeys = new Set<string>();
+    const nextSelectedKeys = new Set<string>()
 
     for (const entry of groupEntries) {
       if (actorId && entry.actorId === actorId) {
-        nextSelectedKeys.add(getEntryKey(entry));
+        nextSelectedKeys.add(getEntryKey(entry))
       }
       if (workspaceMemberId && entry.workspaceMemberId === workspaceMemberId) {
-        nextSelectedKeys.add(getEntryKey(entry));
+        nextSelectedKeys.add(getEntryKey(entry))
       }
       if (contactId && entry.id === contactId) {
-        nextSelectedKeys.add(getEntryKey(entry));
+        nextSelectedKeys.add(getEntryKey(entry))
       }
     }
 
-    setSelectedKeys(Array.from(nextSelectedKeys));
-    initializedSelectionRef.current = true;
-  }, [actorId, contactId, groupEntries, loading, mode, workspaceMemberId]);
+    setSelectedKeys(Array.from(nextSelectedKeys))
+    initializedSelectionRef.current = true
+  }, [actorId, contactId, groupEntries, loading, mode, workspaceMemberId])
 
   const selectedEntries = useMemo(
-    () => groupEntries.filter((entry) => selectedKeys.includes(getEntryKey(entry))),
-    [groupEntries, selectedKeys],
-  );
+    () =>
+      groupEntries.filter((entry) => selectedKeys.includes(getEntryKey(entry))),
+    [groupEntries, selectedKeys]
+  )
 
   const selectedActorIds = useMemo(
     () => uniqueIds(selectedEntries.map((entry) => entry.actorId)),
-    [selectedEntries],
-  );
+    [selectedEntries]
+  )
 
   const selectedWorkspaceMemberIds = useMemo(
     () => uniqueIds(selectedEntries.map((entry) => entry.workspaceMemberId)),
-    [selectedEntries],
-  );
+    [selectedEntries]
+  )
 
   async function handleSelectActor(actor: Actor) {
-    if (!workspaceId || submitting) return;
+    if (!workspaceId || submitting) return
 
-    setSubmitting(true);
-    setError(null);
+    setSubmitting(true)
+    setError(null)
     try {
       await api.updateWorkspaceChiefActorPreference(workspaceId, {
         chiefActorId: actor.id,
-      });
+      })
       router.replace({
         pathname: "/",
         params: {
           actorId: actor.id,
         },
-      });
+      })
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "切换 Actor 失败。");
+      setError(
+        nextError instanceof Error ? nextError.message : "切换 Actor 失败。"
+      )
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
   }
 
   async function handleCreateGroup() {
     if (!workspaceId || selectedEntries.length === 0 || submitting) {
-      return;
+      return
     }
 
-    setSubmitting(true);
-    setError(null);
+    setSubmitting(true)
+    setError(null)
     try {
       if (
         selectedEntries.some(
-          (entry) => entry.targetType === "member" && !entry.workspaceMemberId,
+          (entry) => entry.targetType === "member" && !entry.workspaceMemberId
         )
       ) {
-        throw new Error("存在缺少 workspace 成员身份的联系人，暂时无法发起群聊。");
+        throw new Error(
+          "存在缺少 workspace 成员身份的联系人，暂时无法发起群聊。"
+        )
       }
 
       const created = await createConversation({
         kind: "group",
         actorIds: selectedActorIds,
         workspaceMemberIds: selectedWorkspaceMemberIds,
-      });
+      })
 
       if (!created.conversation.conversationId) {
-        throw new Error("服务器没有返回 conversationId");
+        throw new Error("服务器没有返回 conversationId")
       }
 
-      router.replace(`/chat/${created.conversation.conversationId}`);
+      router.replace(`/chat/${created.conversation.conversationId}`)
     } catch (nextError) {
-      setError(nextError instanceof Error ? nextError.message : "发起群聊失败。");
+      setError(
+        nextError instanceof Error ? nextError.message : "发起群聊失败。"
+      )
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
   }
 
@@ -292,12 +301,12 @@ export function WorkspaceEntityPickerScreen({
         avatarUrl: actor.avatarUrl || null,
         targetType: "actor",
         onPress: () => void handleSelectActor(actor),
-      }));
+      }))
     }
 
     return groupEntries.map((entry) => {
-      const key = getEntryKey(entry);
-      const selected = selectedKeys.includes(key);
+      const key = getEntryKey(entry)
+      const selected = selectedKeys.includes(key)
 
       return {
         key,
@@ -310,14 +319,14 @@ export function WorkspaceEntityPickerScreen({
           setSelectedKeys((current) =>
             current.includes(key)
               ? current.filter((item) => item !== key)
-              : [...current, key],
-          );
+              : [...current, key]
+          )
         },
-      };
-    });
-  }, [actors, groupEntries, mode, selectedKeys, submitting, workspaceId]);
+      }
+    })
+  }, [actors, groupEntries, mode, selectedKeys, submitting, workspaceId])
 
-  const title = mode === "actor" ? "选择Actor" : "发起群聊";
+  const title = mode === "actor" ? "选择Actor" : "发起群聊"
   const emptyState = (
     <View style={styles.emptyWrap}>
       <EmptyState
@@ -330,7 +339,7 @@ export function WorkspaceEntityPickerScreen({
         }
       />
     </View>
-  );
+  )
 
   return (
     <ScreenView>
@@ -347,14 +356,18 @@ export function WorkspaceEntityPickerScreen({
         {loading ? (
           <View style={styles.stateWrap}>
             <LoadingBlock
-              label={mode === "actor" ? "正在加载 Actor..." : "正在加载可选对象..."}
+              label={
+                mode === "actor" ? "正在加载 Actor..." : "正在加载可选对象..."
+              }
             />
           </View>
         ) : error && items.length === 0 ? (
           <View style={styles.stateWrap}>
             <EmptyState
               icon="alert-circle"
-              title={mode === "actor" ? "Actor 列表加载失败" : "群聊列表加载失败"}
+              title={
+                mode === "actor" ? "Actor 列表加载失败" : "群聊列表加载失败"
+              }
               description={error}
             />
           </View>
@@ -380,7 +393,7 @@ export function WorkspaceEntityPickerScreen({
         )}
       </View>
     </ScreenView>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -462,4 +475,4 @@ const styles = StyleSheet.create({
     borderColor: theme.colors.primary,
     backgroundColor: theme.colors.primary,
   },
-});
+})

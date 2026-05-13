@@ -7,131 +7,132 @@ import type {
   AutomationTargetPolicy,
   AutomationTriggerKind,
   CanonicalContentBlock,
-} from "../types/index.js";
+} from "../types/index.js"
 
 export interface AutomationRuleCreateTriggerPayload {
-  triggerKind: AutomationTriggerKind;
-  eventSourceId?: string;
-  sourceKind?: AutomationSourceKind;
-  sourceLocator?: string;
-  matchKey?: string;
-  matcher?: Record<string, unknown>;
-  scheduleKind?: AutomationScheduleKind;
-  scheduleExpr?: string;
-  scheduleTimezone?: string;
-  intervalSeconds?: number;
-  startsAt?: string;
+  triggerKind: AutomationTriggerKind
+  eventSourceId?: string
+  sourceKind?: AutomationSourceKind
+  sourceLocator?: string
+  matchKey?: string
+  matcher?: Record<string, unknown>
+  scheduleKind?: AutomationScheduleKind
+  scheduleExpr?: string
+  scheduleTimezone?: string
+  intervalSeconds?: number
+  startsAt?: string
 }
 
 export interface AutomationRuleCreatePolicyPayload {
-  activeFrom?: string;
-  activeUntil?: string;
-  maxTriggerCount?: number;
-  completionStatus?: AutomationCompletionStatus;
+  activeFrom?: string
+  activeUntil?: string
+  maxTriggerCount?: number
+  completionStatus?: AutomationCompletionStatus
 }
 
 export interface AutomationRuleCreateDeliveryPayload {
-  message?: string;
-  wakeReason?: string;
-  messageBlocks?: CanonicalContentBlock[];
-  targetPolicy?: AutomationTargetPolicy;
-  targetParticipantIds?: string[];
+  message?: string
+  wakeReason?: string
+  messageBlocks?: CanonicalContentBlock[]
+  targetPolicy?: AutomationTargetPolicy
+  targetParticipantIds?: string[]
 }
 
 export interface AutomationRuleCreatePayload {
-  name: string;
-  description?: string;
-  status?: AutomationStatus;
-  conversationId: string;
-  trigger: AutomationRuleCreateTriggerPayload;
-  policy?: AutomationRuleCreatePolicyPayload;
-  delivery: AutomationRuleCreateDeliveryPayload;
-  metadata?: Record<string, unknown>;
+  name: string
+  description?: string
+  status?: AutomationStatus
+  conversationId: string
+  trigger: AutomationRuleCreateTriggerPayload
+  policy?: AutomationRuleCreatePolicyPayload
+  delivery: AutomationRuleCreateDeliveryPayload
+  metadata?: Record<string, unknown>
 }
 
-export interface AutomationRuleUpdatePayload
-  extends Partial<Omit<AutomationRuleCreatePayload, "trigger" | "delivery">> {
-  trigger?: Partial<AutomationRuleCreateTriggerPayload>;
-  policy?: Partial<AutomationRuleCreatePolicyPayload>;
-  delivery?: Partial<AutomationRuleCreateDeliveryPayload>;
+export interface AutomationRuleUpdatePayload extends Partial<
+  Omit<AutomationRuleCreatePayload, "trigger" | "delivery">
+> {
+  trigger?: Partial<AutomationRuleCreateTriggerPayload>
+  policy?: Partial<AutomationRuleCreatePolicyPayload>
+  delivery?: Partial<AutomationRuleCreateDeliveryPayload>
 }
 
 export interface AutomationRuleDraft {
-  name: string;
-  description: string;
-  conversationId: string;
-  triggerKind: AutomationTriggerKind;
-  scheduleKind: AutomationScheduleKind;
-  scheduleExpr: string;
-  scheduleTimezone: string;
-  intervalSeconds: string;
-  startsAt: string;
-  activeFrom: string;
-  activeUntil: string;
-  maxTriggerCount: string;
-  eventSourceId: string;
-  matcherText: string;
-  completionStatus: AutomationCompletionStatus;
-  message: string;
-  wakeReason: string;
-  targetPolicy: AutomationTargetPolicy;
-  targetParticipantIds: string;
+  name: string
+  description: string
+  conversationId: string
+  triggerKind: AutomationTriggerKind
+  scheduleKind: AutomationScheduleKind
+  scheduleExpr: string
+  scheduleTimezone: string
+  intervalSeconds: string
+  startsAt: string
+  activeFrom: string
+  activeUntil: string
+  maxTriggerCount: string
+  eventSourceId: string
+  matcherText: string
+  completionStatus: AutomationCompletionStatus
+  message: string
+  wakeReason: string
+  targetPolicy: AutomationTargetPolicy
+  targetParticipantIds: string
 }
 
 export interface AutomationRuleContractIssue {
-  path: string;
-  message: string;
+  path: string
+  message: string
 }
 
 export type AutomationRuleDraftBuildResult =
   | {
-      ok: true;
-      data: AutomationRuleCreatePayload;
+      ok: true
+      data: AutomationRuleCreatePayload
     }
   | {
-      ok: false;
-      error: string;
-      issues: AutomationRuleContractIssue[];
-    };
+      ok: false
+      error: string
+      issues: AutomationRuleContractIssue[]
+    }
 
 function trimString(value: string | undefined) {
-  const trimmed = (value || "").trim();
-  return trimmed || undefined;
+  const trimmed = (value || "").trim()
+  return trimmed || undefined
 }
 
 function cloneRecord(value: Record<string, unknown> | undefined) {
-  return value ? { ...value } : undefined;
+  return value ? { ...value } : undefined
 }
 
 function cloneContentBlocks(value: CanonicalContentBlock[] | undefined) {
-  return value ? [...value] : undefined;
+  return value ? [...value] : undefined
 }
 
 function toDateTimeLocalInput(value: string | undefined) {
-  const trimmed = trimString(value);
-  if (!trimmed) return "";
+  const trimmed = trimString(value)
+  if (!trimmed) return ""
 
-  const parsed = new Date(trimmed);
+  const parsed = new Date(trimmed)
   if (Number.isNaN(parsed.getTime())) {
-    return "";
+    return ""
   }
 
-  const year = parsed.getFullYear();
-  const month = String(parsed.getMonth() + 1).padStart(2, "0");
-  const day = String(parsed.getDate()).padStart(2, "0");
-  const hours = String(parsed.getHours()).padStart(2, "0");
-  const minutes = String(parsed.getMinutes()).padStart(2, "0");
-  return `${year}-${month}-${day}T${hours}:${minutes}`;
+  const year = parsed.getFullYear()
+  const month = String(parsed.getMonth() + 1).padStart(2, "0")
+  const day = String(parsed.getDate()).padStart(2, "0")
+  const hours = String(parsed.getHours()).padStart(2, "0")
+  const minutes = String(parsed.getMinutes()).padStart(2, "0")
+  return `${year}-${month}-${day}T${hours}:${minutes}`
 }
 
 function toIsoString(value: string | undefined, label: string) {
-  const trimmed = trimString(value);
-  if (!trimmed) return undefined;
-  const parsed = new Date(trimmed);
+  const trimmed = trimString(value)
+  if (!trimmed) return undefined
+  const parsed = new Date(trimmed)
   if (Number.isNaN(parsed.getTime())) {
-    throw new Error(`${label} must be a valid date/time`);
+    throw new Error(`${label} must be a valid date/time`)
   }
-  return parsed.toISOString();
+  return parsed.toISOString()
 }
 
 export function parseAutomationIdList(input: string) {
@@ -140,24 +141,24 @@ export function parseAutomationIdList(input: string) {
       input
         .split(/[\n,\s]+/)
         .map((value) => value.trim())
-        .filter(Boolean),
-    ),
-  );
+        .filter(Boolean)
+    )
+  )
 }
 
 export function parseAutomationJsonObjectText(input: string, label: string) {
-  const trimmed = input.trim();
-  if (!trimmed) return {};
+  const trimmed = input.trim()
+  if (!trimmed) return {}
 
-  const parsed = JSON.parse(trimmed) as unknown;
+  const parsed = JSON.parse(trimmed) as unknown
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
-    throw new Error(`${label} must be a JSON object`);
+    throw new Error(`${label} must be a JSON object`)
   }
-  return parsed as Record<string, unknown>;
+  return parsed as Record<string, unknown>
 }
 
 export function createEmptyAutomationRuleDraft(
-  timezone = "UTC",
+  timezone = "UTC"
 ): AutomationRuleDraft {
   return {
     name: "",
@@ -179,11 +180,11 @@ export function createEmptyAutomationRuleDraft(
     wakeReason: "",
     targetPolicy: "all_members",
     targetParticipantIds: "",
-  };
+  }
 }
 
 export function buildAutomationRuleCreatePayloadFromRule(
-  rule: AutomationRule,
+  rule: AutomationRule
 ): AutomationRuleCreatePayload {
   return {
     name: rule.name,
@@ -217,11 +218,11 @@ export function buildAutomationRuleCreatePayloadFromRule(
       targetParticipantIds: [...rule.delivery.targetParticipantIds],
     },
     metadata: cloneRecord(rule.metadata),
-  };
+  }
 }
 
 export function buildAutomationRuleDraftFromRule(
-  rule: AutomationRule,
+  rule: AutomationRule
 ): AutomationRuleDraft {
   return {
     name: rule.name,
@@ -247,14 +248,14 @@ export function buildAutomationRuleDraftFromRule(
     wakeReason: rule.delivery.wakeReasonText || "",
     targetPolicy: rule.delivery.targetPolicy,
     targetParticipantIds: rule.delivery.targetParticipantIds.join("\n"),
-  };
+  }
 }
 
 export function mergeAutomationRuleUpdatePayload(
   rule: AutomationRule,
-  patch: AutomationRuleUpdatePayload,
+  patch: AutomationRuleUpdatePayload
 ): AutomationRuleCreatePayload {
-  const base = buildAutomationRuleCreatePayloadFromRule(rule);
+  const base = buildAutomationRuleCreatePayloadFromRule(rule)
 
   return {
     name: patch.name !== undefined ? patch.name : base.name,
@@ -352,29 +353,31 @@ export function mergeAutomationRuleUpdatePayload(
           : base.delivery.targetParticipantIds,
     },
     metadata:
-      patch.metadata !== undefined ? cloneRecord(patch.metadata) : base.metadata,
-  };
+      patch.metadata !== undefined
+        ? cloneRecord(patch.metadata)
+        : base.metadata,
+  }
 }
 
 export function validateAutomationRuleCreatePayload(
-  payload: AutomationRuleCreatePayload,
+  payload: AutomationRuleCreatePayload
 ): AutomationRuleContractIssue[] {
-  const issues: AutomationRuleContractIssue[] = [];
+  const issues: AutomationRuleContractIssue[] = []
 
   if (!trimString(payload.name)) {
-    issues.push({ path: "name", message: "Name is required" });
+    issues.push({ path: "name", message: "Name is required" })
   }
   if (!trimString(payload.conversationId)) {
     issues.push({
       path: "conversationId",
       message: "conversationId is required",
-    });
+    })
   }
   if (!trimString(payload.delivery.message)) {
     issues.push({
       path: "delivery.message",
       message: "Visible system message is required",
-    });
+    })
   }
 
   if (payload.trigger.triggerKind === "event") {
@@ -382,7 +385,7 @@ export function validateAutomationRuleCreatePayload(
       issues.push({
         path: "trigger.eventSourceId",
         message: "Event trigger requires an event source",
-      });
+      })
     }
   } else {
     const scheduleKind =
@@ -391,12 +394,12 @@ export function validateAutomationRuleCreatePayload(
         ? "at"
         : payload.trigger.intervalSeconds
           ? "interval"
-          : "cron");
+          : "cron")
     if (scheduleKind === "cron" && !trimString(payload.trigger.scheduleExpr)) {
       issues.push({
         path: "trigger.scheduleExpr",
         message: "Cron triggers require a cron expression",
-      });
+      })
     }
     if (
       scheduleKind === "interval" &&
@@ -405,13 +408,13 @@ export function validateAutomationRuleCreatePayload(
       issues.push({
         path: "trigger.intervalSeconds",
         message: "Interval triggers require a positive interval in seconds",
-      });
+      })
     }
     if (scheduleKind === "at" && !trimString(payload.trigger.startsAt)) {
       issues.push({
         path: "trigger.startsAt",
         message: "Point-in-time schedules require a fire time",
-      });
+      })
     }
   }
 
@@ -423,7 +426,7 @@ export function validateAutomationRuleCreatePayload(
     issues.push({
       path: "policy.maxTriggerCount",
       message: "maxTriggerCount must be a positive integer",
-    });
+    })
   }
 
   if (
@@ -435,7 +438,7 @@ export function validateAutomationRuleCreatePayload(
     issues.push({
       path: "policy.activeUntil",
       message: "activeUntil must be later than activeFrom",
-    });
+    })
   }
 
   if (
@@ -449,7 +452,7 @@ export function validateAutomationRuleCreatePayload(
     issues.push({
       path: "trigger.startsAt",
       message: "Point-in-time schedule must not fire before activeFrom",
-    });
+    })
   }
 
   if (
@@ -463,7 +466,7 @@ export function validateAutomationRuleCreatePayload(
     issues.push({
       path: "policy.activeUntil",
       message: "activeUntil must not be earlier than the scheduled fire time",
-    });
+    })
   }
 
   if (
@@ -473,14 +476,14 @@ export function validateAutomationRuleCreatePayload(
     issues.push({
       path: "delivery.targetParticipantIds",
       message: "specified_members requires at least one target participant",
-    });
+    })
   }
 
-  return issues;
+  return issues
 }
 
 export function buildAutomationRuleCreatePayloadFromDraft(
-  draft: AutomationRuleDraft,
+  draft: AutomationRuleDraft
 ): AutomationRuleDraftBuildResult {
   try {
     const trigger: AutomationRuleCreateTriggerPayload =
@@ -488,7 +491,10 @@ export function buildAutomationRuleCreatePayloadFromDraft(
         ? {
             triggerKind: "event",
             eventSourceId: trimString(draft.eventSourceId),
-            matcher: parseAutomationJsonObjectText(draft.matcherText, "matcher"),
+            matcher: parseAutomationJsonObjectText(
+              draft.matcherText,
+              "matcher"
+            ),
           }
         : {
             triggerKind: "schedule",
@@ -506,7 +512,7 @@ export function buildAutomationRuleCreatePayloadFromDraft(
                 ? Number.parseInt(draft.intervalSeconds, 10) || undefined
                 : undefined,
             startsAt: toIsoString(draft.startsAt, "First fire"),
-          };
+          }
 
     const payload: AutomationRuleCreatePayload = {
       name: draft.name.trim(),
@@ -527,28 +533,28 @@ export function buildAutomationRuleCreatePayloadFromDraft(
         targetPolicy: draft.targetPolicy,
         targetParticipantIds: parseAutomationIdList(draft.targetParticipantIds),
       },
-    };
+    }
 
-    const issues = validateAutomationRuleCreatePayload(payload);
+    const issues = validateAutomationRuleCreatePayload(payload)
     if (issues.length > 0) {
       return {
         ok: false,
         error: issues[0]!.message,
         issues,
-      };
+      }
     }
 
     return {
       ok: true,
       data: payload,
-    };
+    }
   } catch (error) {
     const message =
-      error instanceof Error ? error.message : "Invalid trigger configuration";
+      error instanceof Error ? error.message : "Invalid trigger configuration"
     return {
       ok: false,
       error: message,
       issues: [{ path: "draft", message }],
-    };
+    }
   }
 }

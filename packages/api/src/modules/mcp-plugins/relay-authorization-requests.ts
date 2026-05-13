@@ -5,112 +5,110 @@ import type {
   RelayAuthorizationPreset,
   RelayAuthorizationRequestMode,
   RelayAuthorizationRequestedAction,
-} from "@synapse/shared/types";
+} from "@synapse/shared/types"
 import {
   DEFAULT_CONVERSATION_TYPE_MASK,
   maskAllowsConversationType,
   textBlocks,
-} from "@synapse/shared";
-import { sql } from "kysely";
-import { db } from "../../infrastructure/database/kysely.js";
-import {
-  authorizeAction,
-} from "../access/service.js";
-import { buildUserInteractionCandidatesFromRows } from "../ai/session-tool-user-interactions.js";
-import { listConversationParticipants } from "../chat/service.js";
+} from "@synapse/shared"
+import { sql } from "kysely"
+import { db } from "../../infrastructure/database/kysely.js"
+import { authorizeAction } from "../access/service.js"
+import { buildUserInteractionCandidatesFromRows } from "../ai/session-tool-user-interactions.js"
+import { listConversationParticipants } from "../chat/service.js"
 import {
   createRelayAuthorizationInteractionRequest,
   findOpenRelayAuthorizationInteraction,
   getInteractionRequestSummary,
   markRelayAuthorizationInteractionSuperseded,
-} from "../interactions/service.js";
+} from "../interactions/service.js"
 import {
   cancelToolCallTask,
   createToolCallTask,
   type ToolCallTaskRecord,
-} from "../tool-call-tasks/service.js";
-import { listRelayExposureAccessState } from "./relay-access.js";
+} from "../tool-call-tasks/service.js"
+import { listRelayExposureAccessState } from "./relay-access.js"
 
 export interface RelayAuthorizationRequestSource {
-  workspaceId: string;
-  conversationId: string;
-  sessionId: string;
-  actorId: string;
-  sourceToolName: string;
-  conversationKind?: "private" | "group" | "virtual";
-  conversationBoundary?: ConversationBoundary;
-  workspaceMemberId?: string;
-  turnId?: string;
-  sourceToolCallId?: string;
+  workspaceId: string
+  conversationId: string
+  sessionId: string
+  actorId: string
+  sourceToolName: string
+  conversationKind?: "private" | "group" | "virtual"
+  conversationBoundary?: ConversationBoundary
+  workspaceMemberId?: string
+  turnId?: string
+  sourceToolCallId?: string
 }
 
 export interface RelayAuthorizationRequestTarget {
-  relayCapabilityId: string;
-  relayDeviceId: string;
-  relayExposureId: string;
-  requestedToolName: string;
-  relayToolStableKey: string;
-  runtimeSessionId: string;
-  relayDeviceDisplayName?: string;
-  relayExposureDisplayName?: string;
+  relayCapabilityId: string
+  relayDeviceId: string
+  relayExposureId: string
+  requestedToolName: string
+  relayToolStableKey: string
+  runtimeSessionId: string
+  relayDeviceDisplayName?: string
+  relayExposureDisplayName?: string
 }
 
 export interface RelayAuthorizationRequestPlanSnapshot {
-  requestedAction: RelayAuthorizationRequestedAction;
-  grantOptions: RelayAuthorizationGrantOption[];
+  requestedAction: RelayAuthorizationRequestedAction
+  grantOptions: RelayAuthorizationGrantOption[]
 }
 
 export interface CreateRelayAuthorizationRequestParams {
-  source: RelayAuthorizationRequestSource;
-  relayTarget: RelayAuthorizationRequestTarget;
-  authorizationPlan: RelayAuthorizationRequestPlanSnapshot;
-  requestMode: RelayAuthorizationRequestMode;
-  availablePresets: RelayAuthorizationPreset[];
-  reason: string;
-  sourceRequestArgs: Record<string, unknown>;
-  retryNonce?: string;
+  source: RelayAuthorizationRequestSource
+  relayTarget: RelayAuthorizationRequestTarget
+  authorizationPlan: RelayAuthorizationRequestPlanSnapshot
+  requestMode: RelayAuthorizationRequestMode
+  availablePresets: RelayAuthorizationPreset[]
+  reason: string
+  sourceRequestArgs: Record<string, unknown>
+  retryNonce?: string
 }
 
 export interface RelayAuthorizationRequestResult {
-  interaction: InteractionRequestSummary;
-  task: ToolCallTaskRecord | null;
-  availableAuthorizerCount: number;
+  interaction: InteractionRequestSummary
+  task: ToolCallTaskRecord | null
+  availableAuthorizerCount: number
   availableAuthorizers: Array<{
-    participantId: string;
-    workspaceMemberId: string;
-    name: string;
-    label: string;
-  }>;
-  requesterParticipantId: string;
-  reused: boolean;
-  retryNonce: string;
+    participantId: string
+    workspaceMemberId: string
+    name: string
+    label: string
+  }>
+  requesterParticipantId: string
+  reused: boolean
+  retryNonce: string
 }
 
 export interface WaitForRelayAuthorizationResolutionParams<T> {
-  interactionId: string;
-  conversationId: string;
-  createdAt: string;
-  onApproved: (interaction: InteractionRequestSummary) => Promise<T>;
-  maxWaitMs?: number;
+  interactionId: string
+  conversationId: string
+  createdAt: string
+  onApproved: (interaction: InteractionRequestSummary) => Promise<T>
+  maxWaitMs?: number
 }
 
 export type RelayAuthorizationWaitResult<T> =
   | {
-      status: "approved";
-      interaction: InteractionRequestSummary;
-      approvedValue: T;
+      status: "approved"
+      interaction: InteractionRequestSummary
+      approvedValue: T
     }
   | {
-      status: "superseded" | "rejected" | "cancelled" | "expired";
-      interaction: InteractionRequestSummary | null;
-    };
+      status: "superseded" | "rejected" | "cancelled" | "expired"
+      interaction: InteractionRequestSummary | null
+    }
 
 function sleep(ms: number) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise((resolve) => setTimeout(resolve, ms))
 }
 
 function buildWaitingSummary(deviceDisplayName?: string) {
-  return `Waiting for a user to authorize ${deviceDisplayName?.trim() || "the relay device"}.`;
+  return `Waiting for a user to authorize ${deviceDisplayName?.trim() || "the relay device"}.`
 }
 
 async function loadConversationKindAndBoundary(
@@ -118,13 +116,13 @@ async function loadConversationKindAndBoundary(
   fallback?: Pick<
     RelayAuthorizationRequestSource,
     "conversationKind" | "conversationBoundary"
-  >,
+  >
 ) {
   if (fallback?.conversationKind && fallback?.conversationBoundary) {
     return {
       kind: fallback.conversationKind,
       boundary: fallback.conversationBoundary,
-    };
+    }
   }
 
   return db
@@ -132,13 +130,17 @@ async function loadConversationKindAndBoundary(
     .select(["kind", "boundary"])
     .where("id", "=", conversationId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 async function loadRelayCapabilityRequestState(capabilityId: string) {
   return db
     .selectFrom("relay_capabilities as capability")
-    .innerJoin("relay_exposures as exposure", "exposure.id", "capability.exposure_id")
+    .innerJoin(
+      "relay_exposures as exposure",
+      "exposure.id",
+      "capability.exposure_id"
+    )
     .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
     .select([
       "capability.id as capability_id",
@@ -155,77 +157,79 @@ async function loadRelayCapabilityRequestState(capabilityId: string) {
     ])
     .where("capability.id", "=", capabilityId)
     .limit(1)
-    .executeTakeFirst();
+    .executeTakeFirst()
 }
 
 function relayGrantMatchesCurrentActorConversation(params: {
-  target: CreateRelayAuthorizationRequestParams["source"];
-  ownerWorkspaceId: string;
+  target: CreateRelayAuthorizationRequestParams["source"]
+  ownerWorkspaceId: string
   grant: {
     target: {
-      type: "workspace" | "conversation" | "actor" | "actor_in_conversation";
-      actorId?: string;
-      conversationId?: string;
-    };
-    effectiveConversationTypeMask?: number;
-  };
-  conversationKind: "private" | "group" | "virtual";
-  conversationBoundary: ConversationBoundary;
+      type: "workspace" | "conversation" | "actor" | "actor_in_conversation"
+      actorId?: string
+      conversationId?: string
+    }
+    effectiveConversationTypeMask?: number
+  }
+  conversationKind: "private" | "group" | "virtual"
+  conversationBoundary: ConversationBoundary
 }) {
   const grantMask =
-    params.grant.effectiveConversationTypeMask ?? DEFAULT_CONVERSATION_TYPE_MASK;
+    params.grant.effectiveConversationTypeMask ?? DEFAULT_CONVERSATION_TYPE_MASK
   if (
     !maskAllowsConversationType(
       grantMask,
       params.conversationKind,
-      params.conversationBoundary,
+      params.conversationBoundary
     )
   ) {
-    return false;
+    return false
   }
 
   switch (params.grant.target.type) {
     case "workspace":
-      return params.target.workspaceId === params.ownerWorkspaceId;
+      return params.target.workspaceId === params.ownerWorkspaceId
     case "conversation":
-      return params.grant.target.conversationId === params.target.conversationId;
+      return params.grant.target.conversationId === params.target.conversationId
     case "actor":
-      return params.grant.target.actorId === params.target.actorId;
+      return params.grant.target.actorId === params.target.actorId
     case "actor_in_conversation":
       return (
         params.grant.target.actorId === params.target.actorId &&
         params.grant.target.conversationId === params.target.conversationId
-      );
+      )
     default:
-      return false;
+      return false
   }
 }
 
 async function canActorRequestRelayAuthorization(
-  params: CreateRelayAuthorizationRequestParams,
+  params: CreateRelayAuthorizationRequestParams
 ) {
-  const conversation =
-    await loadConversationKindAndBoundary(params.source.conversationId, params.source);
+  const conversation = await loadConversationKindAndBoundary(
+    params.source.conversationId,
+    params.source
+  )
   if (!conversation) {
-    return false;
+    return false
   }
 
   const relayState = await loadRelayCapabilityRequestState(
-    params.relayTarget.relayCapabilityId,
-  );
+    params.relayTarget.relayCapabilityId
+  )
   if (
     !relayState ||
     relayState.capability_status !== "active" ||
     relayState.exposure_runtime_status !== "healthy" ||
     !relayState.has_active_device_session
   ) {
-    return false;
+    return false
   }
 
   const accessState = await listRelayExposureAccessState(
     relayState.owner_workspace_id,
-    relayState.exposure_id,
-  );
+    relayState.exposure_id
+  )
   return accessState.grants.some((grant) =>
     relayGrantMatchesCurrentActorConversation({
       target: params.source,
@@ -233,17 +237,21 @@ async function canActorRequestRelayAuthorization(
       grant,
       conversationKind: conversation.kind,
       conversationBoundary: conversation.boundary,
-    }),
-  );
+    })
+  )
 }
 
 async function hasNewUserFacingConversationMessage(
   conversationId: string,
-  afterIso: string,
+  afterIso: string
 ) {
   const row = await db
     .selectFrom("conversation_items as ci")
-    .leftJoin("conversation_participants as cp", "cp.id", "ci.author_participant_id")
+    .leftJoin(
+      "conversation_participants as cp",
+      "cp.id",
+      "ci.author_participant_id"
+    )
     .select("ci.id")
     .where("ci.conversation_id", "=", conversationId)
     .where("ci.item_type", "=", "message")
@@ -252,43 +260,45 @@ async function hasNewUserFacingConversationMessage(
       eb.or([
         eb("ci.role", "=", "user"),
         eb("cp.participant_kind", "in", ["workspace_member", "external"]),
-      ]),
+      ])
     )
     .limit(1)
-    .executeTakeFirst();
-  return Boolean(row);
+    .executeTakeFirst()
+  return Boolean(row)
 }
 
 export function buildRelayAuthorizationRetryNonce() {
-  return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  return Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
 export async function createRelayAuthorizationRequest(
-  params: CreateRelayAuthorizationRequestParams,
+  params: CreateRelayAuthorizationRequestParams
 ): Promise<RelayAuthorizationRequestResult> {
-  const allMembers = await listConversationParticipants(params.source.conversationId);
+  const allMembers = await listConversationParticipants(
+    params.source.conversationId
+  )
   const requesterMember = allMembers.find(
     (member) =>
-      member.actor_id === params.source.actorId && member.state === "active",
-  );
+      member.actor_id === params.source.actorId && member.state === "active"
+  )
   if (!requesterMember) {
     throw new Error(
-      "Current actor is not an active participant of this conversation",
-    );
+      "Current actor is not an active participant of this conversation"
+    )
   }
 
-  const requesterAllowed = await canActorRequestRelayAuthorization(params);
+  const requesterAllowed = await canActorRequestRelayAuthorization(params)
   if (!requesterAllowed) {
     throw new Error(
-      "Current actor is not allowed to request authorization for this relay capability",
-    );
+      "Current actor is not allowed to request authorization for this relay capability"
+    )
   }
 
-  const candidates = buildUserInteractionCandidatesFromRows(allMembers);
+  const candidates = buildUserInteractionCandidatesFromRows(allMembers)
   if (candidates.length === 0) {
     throw new Error(
-      "This conversation has no active user who could receive a relay authorization request",
-    );
+      "This conversation has no active user who could receive a relay authorization request"
+    )
   }
 
   const authorizerCandidates = await Promise.all(
@@ -299,19 +309,19 @@ export async function createRelayAuthorizationRequest(
         action: "relay_device.authorize_relay_authorization",
         resourceId: params.relayTarget.relayDeviceId,
       }),
-    })),
-  );
+    }))
+  )
   const availableAuthorizers = authorizerCandidates
     .filter((entry) => entry.allowed)
-    .map((entry) => entry.candidate);
+    .map((entry) => entry.candidate)
   if (availableAuthorizers.length === 0) {
     throw new Error(
-      "No active user in this conversation is currently allowed to approve relay authorization for this relay device",
-    );
+      "No active user in this conversation is currently allowed to approve relay authorization for this relay device"
+    )
   }
 
   const retryNonce =
-    params.retryNonce?.trim() || buildRelayAuthorizationRetryNonce();
+    params.retryNonce?.trim() || buildRelayAuthorizationRetryNonce()
 
   if (params.requestMode === "background") {
     const existing = await findOpenRelayAuthorizationInteraction({
@@ -327,7 +337,7 @@ export async function createRelayAuthorizationRequest(
       grantOptions: params.authorizationPlan.grantOptions,
       availablePresets: params.availablePresets,
       requestMode: params.requestMode,
-    });
+    })
 
     if (existing) {
       return {
@@ -338,7 +348,7 @@ export async function createRelayAuthorizationRequest(
         requesterParticipantId: requesterMember.id,
         reused: true,
         retryNonce,
-      };
+      }
     }
   }
 
@@ -354,7 +364,7 @@ export async function createRelayAuthorizationRequest(
     deliveryPolicy: "human_interaction",
     status: "input_required",
     statusMessage: buildWaitingSummary(
-      params.relayTarget.relayDeviceDisplayName,
+      params.relayTarget.relayDeviceDisplayName
     ),
     dispatchStatus: "input_requested",
     supportsCancel: true,
@@ -373,7 +383,7 @@ export async function createRelayAuthorizationRequest(
       sourceRetryNonce: retryNonce,
       sourceRequestArgs: params.sourceRequestArgs,
     },
-  });
+  })
 
   try {
     const interaction = await createRelayAuthorizationInteractionRequest({
@@ -394,7 +404,7 @@ export async function createRelayAuthorizationRequest(
       requestMode: params.requestMode,
       sourceRetryNonce: retryNonce,
       sourceRequestArgs: params.sourceRequestArgs,
-    });
+    })
 
     return {
       interaction,
@@ -404,13 +414,13 @@ export async function createRelayAuthorizationRequest(
       requesterParticipantId: requesterMember.id,
       reused: false,
       retryNonce,
-    };
+    }
   } catch (error) {
     await cancelToolCallTask(task.id, {
       summary: `Relay authorization request for ${params.relayTarget.relayDeviceDisplayName?.trim() || "the relay device"} failed before dispatch.`,
       finalResultPayload: {
         content: textBlocks(
-          `Relay authorization request for ${params.relayTarget.relayDeviceDisplayName?.trim() || "the relay device"} failed before dispatch.`,
+          `Relay authorization request for ${params.relayTarget.relayDeviceDisplayName?.trim() || "the relay device"} failed before dispatch.`
         ),
         isError: true,
       },
@@ -418,64 +428,66 @@ export async function createRelayAuthorizationRequest(
         message: error instanceof Error ? error.message : String(error),
       },
       notifyActor: false,
-    });
-    throw error;
+    })
+    throw error
   }
 }
 
 export async function waitForRelayAuthorizationResolution<T>(
-  params: WaitForRelayAuthorizationResolutionParams<T>,
+  params: WaitForRelayAuthorizationResolutionParams<T>
 ): Promise<RelayAuthorizationWaitResult<T>> {
-  const startedAt = Date.now();
-  const maxWaitMs = params.maxWaitMs ?? 10 * 60 * 1000;
+  const startedAt = Date.now()
+  const maxWaitMs = params.maxWaitMs ?? 10 * 60 * 1000
 
   while (Date.now() - startedAt < maxWaitMs) {
     if (
       await hasNewUserFacingConversationMessage(
         params.conversationId,
-        params.createdAt,
+        params.createdAt
       )
     ) {
-      const superseded =
-        await markRelayAuthorizationInteractionSuperseded(
-          params.interactionId,
-          "Superseded by a newer user message.",
-        );
+      const superseded = await markRelayAuthorizationInteractionSuperseded(
+        params.interactionId,
+        "Superseded by a newer user message."
+      )
       return {
         status: "superseded",
         interaction: superseded,
-      };
+      }
     }
 
-    const interaction = await getInteractionRequestSummary(params.interactionId);
+    const interaction = await getInteractionRequestSummary(params.interactionId)
     if (!interaction) {
-      throw new Error("Authorization interaction could not be reloaded.");
+      throw new Error("Authorization interaction could not be reloaded.")
     }
     if (interaction.status === "pending") {
-      await sleep(1000);
-      continue;
+      await sleep(1000)
+      continue
     }
     if (interaction.status === "approved") {
       return {
         status: "approved",
         interaction,
         approvedValue: await params.onApproved(interaction),
-      };
+      }
     }
-    if (interaction.status === "rejected" || interaction.status === "cancelled") {
+    if (
+      interaction.status === "rejected" ||
+      interaction.status === "cancelled"
+    ) {
       return {
         status: interaction.status,
         interaction,
-      };
+      }
     }
     return {
       status: "expired",
       interaction,
-    };
+    }
   }
 
   return {
     status: "expired",
     interaction: await getInteractionRequestSummary(params.interactionId),
-  };
+  }
 }

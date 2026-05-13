@@ -1,112 +1,152 @@
-import type { ToolCall, ActorAction } from '@synapse/shared';
-import { z } from 'zod';
-import { registerToolPlugin } from './tool-plugins.js';
-import { throwToolError } from './tool-errors.js';
-import { executeActorActions } from '../orchestrator/service.js';
-import { getToolExecutionContext } from './session-tools.js';
-import { getActor } from '../organization/service.js';
+import type { ToolCall, ActorAction } from "@synapse/shared"
+import { z } from "zod"
+import { registerToolPlugin } from "./tool-plugins.js"
+import { throwToolError } from "./tool-errors.js"
+import { executeActorActions } from "../orchestrator/service.js"
+import { getToolExecutionContext } from "./session-tools.js"
+import { getActor } from "../organization/service.js"
 
-const HEX_COLOR_PATTERN = '^[0-9a-fA-F]{6}$';
-const ACCESSORIES_PATTERN = '^variant0[1-4]$';
-const CLOTHING_PATTERN = '^variant(0[1-9]|1[0-9]|2[0-3])$';
-const EYES_PATTERN = '^variant(0[1-9]|1[0-2])$';
-const GLASSES_PATTERN = '^(dark|light)0[1-7]$';
-const BEARD_PATTERN = '^variant0[1-8]$';
-const MOUTH_PATTERN = '^(happy(0[1-9]|1[0-3])|sad(0[1-9]|10))$';
-const HAIR_PATTERN = '^(short(0[1-9]|1[0-9]|2[0-4])|long(0[1-9]|1[0-9]|2[0-1]))$';
-const HAT_PATTERN = '^variant(0[1-9]|10)$';
-const PIXEL_ART_MODE = 'pixel_art' as const;
-const EMOJI_MODE = 'emoji' as const;
+const HEX_COLOR_PATTERN = "^[0-9a-fA-F]{6}$"
+const ACCESSORIES_PATTERN = "^variant0[1-4]$"
+const CLOTHING_PATTERN = "^variant(0[1-9]|1[0-9]|2[0-3])$"
+const EYES_PATTERN = "^variant(0[1-9]|1[0-2])$"
+const GLASSES_PATTERN = "^(dark|light)0[1-7]$"
+const BEARD_PATTERN = "^variant0[1-8]$"
+const MOUTH_PATTERN = "^(happy(0[1-9]|1[0-3])|sad(0[1-9]|10))$"
+const HAIR_PATTERN =
+  "^(short(0[1-9]|1[0-9]|2[0-4])|long(0[1-9]|1[0-9]|2[0-1]))$"
+const HAT_PATTERN = "^variant(0[1-9]|10)$"
+const PIXEL_ART_MODE = "pixel_art" as const
+const EMOJI_MODE = "emoji" as const
 const PIXEL_ART_HINT =
   'Use mode="pixel_art" to generate a transparent DiceBear pixel-art SVG. ' +
-  'Same seed + same parameters will generate the same avatar.';
+  "Same seed + same parameters will generate the same avatar."
 const PIXEL_ART_FIELD_NAMES = new Set([
-  'seed',
-  'accessories',
-  'accessoriesProbability',
-  'clothing',
-  'eyes',
-  'glasses',
-  'glassesProbability',
-  'beard',
-  'beardProbability',
-  'mouth',
-  'hair',
-  'hat',
-  'hatProbability',
-  'accessoriesColor',
-  'clothingColor',
-  'eyesColor',
-  'glassesColor',
-  'hairColor',
-  'hatColor',
-  'mouthColor',
-  'skinColor',
-]);
+  "seed",
+  "accessories",
+  "accessoriesProbability",
+  "clothing",
+  "eyes",
+  "glasses",
+  "glassesProbability",
+  "beard",
+  "beardProbability",
+  "mouth",
+  "hair",
+  "hat",
+  "hatProbability",
+  "accessoriesColor",
+  "clothingColor",
+  "eyesColor",
+  "glassesColor",
+  "hairColor",
+  "hatColor",
+  "mouthColor",
+  "skinColor",
+])
 
 function isLikelyEmojiAvatar(value: string) {
-  const trimmed = value.trim();
+  const trimmed = value.trim()
   return (
     trimmed.length > 0 &&
     trimmed.length <= 16 &&
     !/\s/.test(trimmed) &&
     /[\p{Extended_Pictographic}\p{Emoji_Presentation}]/u.test(trimmed)
-  );
+  )
 }
 
-const emojiAvatarSchema = z.string()
+const emojiAvatarSchema = z
+  .string()
   .trim()
   .min(1)
   .max(16)
-  .refine(isLikelyEmojiAvatar, 'Use a single emoji or short emoji sequence.');
+  .refine(isLikelyEmojiAvatar, "Use a single emoji or short emoji sequence.")
 
-const pixelArtAvatarOptionsSchema = z.object({
-  seed: z.string().trim().min(1).max(80).optional(),
-  accessories: z.string().trim().regex(new RegExp(ACCESSORIES_PATTERN)).optional(),
-  accessoriesProbability: z.coerce.number().int().min(0).max(100).optional(),
-  clothing: z.string().trim().regex(new RegExp(CLOTHING_PATTERN)).optional(),
-  eyes: z.string().trim().regex(new RegExp(EYES_PATTERN)).optional(),
-  glasses: z.string().trim().regex(new RegExp(GLASSES_PATTERN)).optional(),
-  glassesProbability: z.coerce.number().int().min(0).max(100).optional(),
-  beard: z.string().trim().regex(new RegExp(BEARD_PATTERN)).optional(),
-  beardProbability: z.coerce.number().int().min(0).max(100).optional(),
-  mouth: z.string().trim().regex(new RegExp(MOUTH_PATTERN)).optional(),
-  hair: z.string().trim().regex(new RegExp(HAIR_PATTERN)).optional(),
-  hat: z.string().trim().regex(new RegExp(HAT_PATTERN)).optional(),
-  hatProbability: z.coerce.number().int().min(0).max(100).optional(),
-  accessoriesColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
-  clothingColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
-  eyesColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
-  glassesColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
-  hairColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
-  hatColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
-  mouthColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
-  skinColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
-}).strict();
+const pixelArtAvatarOptionsSchema = z
+  .object({
+    seed: z.string().trim().min(1).max(80).optional(),
+    accessories: z
+      .string()
+      .trim()
+      .regex(new RegExp(ACCESSORIES_PATTERN))
+      .optional(),
+    accessoriesProbability: z.coerce.number().int().min(0).max(100).optional(),
+    clothing: z.string().trim().regex(new RegExp(CLOTHING_PATTERN)).optional(),
+    eyes: z.string().trim().regex(new RegExp(EYES_PATTERN)).optional(),
+    glasses: z.string().trim().regex(new RegExp(GLASSES_PATTERN)).optional(),
+    glassesProbability: z.coerce.number().int().min(0).max(100).optional(),
+    beard: z.string().trim().regex(new RegExp(BEARD_PATTERN)).optional(),
+    beardProbability: z.coerce.number().int().min(0).max(100).optional(),
+    mouth: z.string().trim().regex(new RegExp(MOUTH_PATTERN)).optional(),
+    hair: z.string().trim().regex(new RegExp(HAIR_PATTERN)).optional(),
+    hat: z.string().trim().regex(new RegExp(HAT_PATTERN)).optional(),
+    hatProbability: z.coerce.number().int().min(0).max(100).optional(),
+    accessoriesColor: z
+      .string()
+      .trim()
+      .regex(new RegExp(HEX_COLOR_PATTERN))
+      .optional(),
+    clothingColor: z
+      .string()
+      .trim()
+      .regex(new RegExp(HEX_COLOR_PATTERN))
+      .optional(),
+    eyesColor: z
+      .string()
+      .trim()
+      .regex(new RegExp(HEX_COLOR_PATTERN))
+      .optional(),
+    glassesColor: z
+      .string()
+      .trim()
+      .regex(new RegExp(HEX_COLOR_PATTERN))
+      .optional(),
+    hairColor: z
+      .string()
+      .trim()
+      .regex(new RegExp(HEX_COLOR_PATTERN))
+      .optional(),
+    hatColor: z.string().trim().regex(new RegExp(HEX_COLOR_PATTERN)).optional(),
+    mouthColor: z
+      .string()
+      .trim()
+      .regex(new RegExp(HEX_COLOR_PATTERN))
+      .optional(),
+    skinColor: z
+      .string()
+      .trim()
+      .regex(new RegExp(HEX_COLOR_PATTERN))
+      .optional(),
+  })
+  .strict()
 
-const changeAvatarToolInputSchema = z.discriminatedUnion('mode', [
-  z.object({
-    mode: z.literal(EMOJI_MODE),
-    emoji: emojiAvatarSchema,
-  }).strict(),
-  z.object({
-    mode: z.literal(PIXEL_ART_MODE),
-    ...pixelArtAvatarOptionsSchema.shape,
-  }).strict(),
-]);
+const changeAvatarToolInputSchema = z.discriminatedUnion("mode", [
+  z
+    .object({
+      mode: z.literal(EMOJI_MODE),
+      emoji: emojiAvatarSchema,
+    })
+    .strict(),
+  z
+    .object({
+      mode: z.literal(PIXEL_ART_MODE),
+      ...pixelArtAvatarOptionsSchema.shape,
+    })
+    .strict(),
+])
 
-type ChangeAvatarToolInput = z.infer<typeof changeAvatarToolInputSchema>;
+type ChangeAvatarToolInput = z.infer<typeof changeAvatarToolInputSchema>
 
 function normalizeRawChangeAvatarInput(input: Record<string, unknown>) {
   if (input.mode === EMOJI_MODE || input.mode === PIXEL_ART_MODE) {
-    return input;
+    return input
   }
 
-  if (typeof input.emoji === 'string' && input.emoji.trim()) {
+  if (typeof input.emoji === "string" && input.emoji.trim()) {
     return {
       ...input,
       mode: EMOJI_MODE,
-    };
+    }
   }
 
   for (const fieldName of PIXEL_ART_FIELD_NAMES) {
@@ -114,31 +154,34 @@ function normalizeRawChangeAvatarInput(input: Record<string, unknown>) {
       return {
         ...input,
         mode: PIXEL_ART_MODE,
-      };
+      }
     }
   }
 
-  return input;
+  return input
 }
 
 function parseChangeAvatarToolInput(input: Record<string, unknown>) {
   return changeAvatarToolInputSchema.safeParse(
-    normalizeRawChangeAvatarInput(input),
-  );
+    normalizeRawChangeAvatarInput(input)
+  )
 }
 
 function buildCreateMemoryAction(input: Record<string, any>): ActorAction {
   const tags = input.tags
-    ? String(input.tags).split(',').map((t: string) => t.trim()).filter(Boolean)
-    : [];
-  const spaceType = input.spaceType || input.scope || 'participant_private';
-  const importance = Number(input.importance);
-  const confidence = Number(input.confidence);
+    ? String(input.tags)
+        .split(",")
+        .map((t: string) => t.trim())
+        .filter(Boolean)
+    : []
+  const spaceType = input.spaceType || input.scope || "participant_private"
+  const importance = Number(input.importance)
+  const confidence = Number(input.confidence)
   return {
-    type: 'create_memory' as const,
+    type: "create_memory" as const,
     content: input.content,
     metadata: {
-      category: input.category || 'fact',
+      category: input.category || "fact",
       spaceType,
       scope: spaceType,
       importance: Number.isFinite(importance) ? importance : 0.5,
@@ -146,37 +189,37 @@ function buildCreateMemoryAction(input: Record<string, any>): ActorAction {
       textDigest: input.textDigest || undefined,
       tags,
     },
-  };
+  }
 }
 
 function buildRenameSelfAction(input: Record<string, any>): ActorAction {
   return {
-    type: 'rename_self' as const,
+    type: "rename_self" as const,
     content: input.newName,
-  };
+  }
 }
 
 function buildChangeAvatarAction(input: ChangeAvatarToolInput): ActorAction {
   if (input.mode === EMOJI_MODE) {
     return {
-      type: 'change_avatar' as const,
+      type: "change_avatar" as const,
       content: input.emoji,
       metadata: {
         avatarMode: EMOJI_MODE,
         emoji: input.emoji,
       },
-    };
+    }
   }
 
-  const { mode, ...pixelArt } = input;
+  const { mode, ...pixelArt } = input
   return {
-    type: 'change_avatar' as const,
+    type: "change_avatar" as const,
     content: input.seed || PIXEL_ART_MODE,
     metadata: {
       avatarMode: mode,
       pixelArt,
     },
-  };
+  }
 }
 
 /**
@@ -186,55 +229,75 @@ function buildChangeAvatarAction(input: ChangeAvatarToolInput): ActorAction {
  */
 export function registerActionToolPlugins(): void {
   registerToolPlugin({
-    name: 'create_memory',
-    kind: 'callable',
+    name: "create_memory",
+    kind: "callable",
     definition: {
-      name: 'create_memory',
-      description: 'Store a durable, reusable memory for future recall. Use for stable user facts, preferences, decisions, working conventions, relationships, procedures, artifacts, or external reference pointers that should still matter after this turn. Do not use for ephemeral task state, temporary plans, repo facts derivable from files or git, or secrets.',
+      name: "create_memory",
+      description:
+        "Store a durable, reusable memory for future recall. Use for stable user facts, preferences, decisions, working conventions, relationships, procedures, artifacts, or external reference pointers that should still matter after this turn. Do not use for ephemeral task state, temporary plans, repo facts derivable from files or git, or secrets.",
       parameters: {
-        type: 'object',
+        type: "object",
         properties: {
           content: {
-            type: 'string',
-            description: 'The information to remember, written as a standalone reusable statement rather than a chat quote. Expand pronouns to explicit names or roles, include exact entities, convert relative dates to absolute dates when time matters, and include rationale or how-to-apply context for decisions, preferences, procedures, or summaries when useful. May include exact FileRef strings like <FileRef id="..."/>; if you include a FileRef, also include concise natural-language context so the memory can be recalled later.',
+            type: "string",
+            description:
+              'The information to remember, written as a standalone reusable statement rather than a chat quote. Expand pronouns to explicit names or roles, include exact entities, convert relative dates to absolute dates when time matters, and include rationale or how-to-apply context for decisions, preferences, procedures, or summaries when useful. May include exact FileRef strings like <FileRef id="..."/>; if you include a FileRef, also include concise natural-language context so the memory can be recalled later.',
           },
           category: {
-            type: 'string',
-            description: 'Memory category. Use fact for stable profile/state, preference for user or workflow preferences, decision for settled choices, relationship for persistent people/entity links, procedure for reusable instructions, artifact for durable file/resource pointers, and summary only for compact durable takeaways.',
-            enum: ['fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary'],
+            type: "string",
+            description:
+              "Memory category. Use fact for stable profile/state, preference for user or workflow preferences, decision for settled choices, relationship for persistent people/entity links, procedure for reusable instructions, artifact for durable file/resource pointers, and summary only for compact durable takeaways.",
+            enum: [
+              "fact",
+              "preference",
+              "decision",
+              "relationship",
+              "procedure",
+              "artifact",
+              "summary",
+            ],
           },
           spaceType: {
-            type: 'string',
-            description: 'Memory visibility. participant_private = private to you inside the current conversation and best for narrow local context; conversation_shared = shared with everyone in this conversation; actor_private = follows you across conversations and is best for stable user facts or long-lived working agreements.',
-            enum: ['participant_private', 'conversation_shared', 'actor_private'],
+            type: "string",
+            description:
+              "Memory visibility. participant_private = private to you inside the current conversation and best for narrow local context; conversation_shared = shared with everyone in this conversation; actor_private = follows you across conversations and is best for stable user facts or long-lived working agreements.",
+            enum: [
+              "participant_private",
+              "conversation_shared",
+              "actor_private",
+            ],
           },
           importance: {
-            type: 'string',
-            description: 'Importance score from 0.0 to 1.0. Use around 0.5 by default. Raise it for memories likely to matter repeatedly or shape future behavior.',
+            type: "string",
+            description:
+              "Importance score from 0.0 to 1.0. Use around 0.5 by default. Raise it for memories likely to matter repeatedly or shape future behavior.",
           },
           confidence: {
-            type: 'string',
-            description: 'Confidence score from 0.0 to 1.0. Use high confidence only for explicit, directly observed, or otherwise well-established facts.',
+            type: "string",
+            description:
+              "Confidence score from 0.0 to 1.0. Use high confidence only for explicit, directly observed, or otherwise well-established facts.",
           },
           textDigest: {
-            type: 'string',
-            description: 'Optional one-line retrieval hook. Use explicit subject-plus-predicate wording such as "Demo User is a teacher"; avoid pronouns. Strongly recommended for long content or FileRef-backed memories.',
+            type: "string",
+            description:
+              'Optional one-line retrieval hook. Use explicit subject-plus-predicate wording such as "Demo User is a teacher"; avoid pronouns. Strongly recommended for long content or FileRef-backed memories.',
           },
           tags: {
-            type: 'string',
-            description: 'Comma-separated stable tags for retrieval, preferably concrete nouns or topics rather than full sentences.',
+            type: "string",
+            description:
+              "Comma-separated stable tags for retrieval, preferably concrete nouns or topics rather than full sentences.",
           },
         },
-        required: ['content', 'category'],
+        required: ["content", "category"],
       },
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError('No session context available');
+        throwToolError("No session context available")
       }
 
-      const action = buildCreateMemoryAction(input as Record<string, any>);
+      const action = buildCreateMemoryAction(input as Record<string, any>)
       await executeActorActions(
         context.workspaceId,
         context.actorId,
@@ -244,39 +307,40 @@ export function registerActionToolPlugins(): void {
           turnId: context.turnId,
           userId: context.userId,
           conversationId: context.conversationId,
-        },
-      );
+        }
+      )
 
       return JSON.stringify({
         success: true,
-        message: 'Memory saved.',
+        message: "Memory saved.",
         spaceType: action.metadata?.spaceType,
         category: action.metadata?.category,
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
-    name: 'rename_self',
-    kind: 'callable',
+    name: "rename_self",
+    kind: "callable",
     definition: {
-      name: 'rename_self',
-      description: 'Change your own display name. Use when the Boss asks you to change your name or gives you a new name.',
+      name: "rename_self",
+      description:
+        "Change your own display name. Use when the Boss asks you to change your name or gives you a new name.",
       parameters: {
-        type: 'object',
+        type: "object",
         properties: {
-          newName: { type: 'string', description: 'The new name to use' },
+          newName: { type: "string", description: "The new name to use" },
         },
-        required: ['newName'],
+        required: ["newName"],
       },
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError('No session context available');
+        throwToolError("No session context available")
       }
 
-      const action = buildRenameSelfAction(input as Record<string, any>);
+      const action = buildRenameSelfAction(input as Record<string, any>)
       await executeActorActions(
         context.workspaceId,
         context.actorId,
@@ -286,32 +350,32 @@ export function registerActionToolPlugins(): void {
           turnId: context.turnId,
           userId: context.userId,
           conversationId: context.conversationId,
-        },
-      );
+        }
+      )
 
       return JSON.stringify({
         success: true,
         newName: action.content,
         message: `Your display name is now ${action.content}.`,
-      });
+      })
     },
-  });
+  })
 
   registerToolPlugin({
-    name: 'change_avatar',
-    kind: 'callable',
+    name: "change_avatar",
+    kind: "callable",
     definition: {
-      name: 'change_avatar',
+      name: "change_avatar",
       description:
-        'Change your own avatar. ' +
-        'Supports emoji avatars and DiceBear pixel-art transparent SVG avatars. ' +
-        'Prefer pixel_art when the request is for a proper portrait, profile picture, or visual refresh. ' +
-        'Prefer emoji only for lightweight symbolic avatars.',
+        "Change your own avatar. " +
+        "Supports emoji avatars and DiceBear pixel-art transparent SVG avatars. " +
+        "Prefer pixel_art when the request is for a proper portrait, profile picture, or visual refresh. " +
+        "Prefer emoji only for lightweight symbolic avatars.",
       parameters: {
-        type: 'object',
+        type: "object",
         properties: {
           mode: {
-            type: 'string',
+            type: "string",
             enum: [EMOJI_MODE, PIXEL_ART_MODE],
             description:
               `Avatar mode. ${EMOJI_MODE} = switch to an emoji avatar. ` +
@@ -319,116 +383,127 @@ export function registerActionToolPlugins(): void {
               `Do not send both emoji and pixel-art parameters for the same request.`,
           },
           emoji: {
-            type: 'string',
-            description:
-              `Required when mode="${EMOJI_MODE}". Use one emoji or a short emoji sequence, for example 🤖, 🧠, 💼, 🦊.`,
+            type: "string",
+            description: `Required when mode="${EMOJI_MODE}". Use one emoji or a short emoji sequence, for example 🤖, 🧠, 💼, 🦊.`,
           },
           seed: {
-            type: 'string',
+            type: "string",
             description:
               `Optional when mode="${PIXEL_ART_MODE}". Stable seed for deterministic generation. ` +
               `Use when the Boss wants a repeatable look. ${PIXEL_ART_HINT}`,
           },
           accessories: {
-            type: 'string',
-            description: 'Optional pixel-art accessory variant. Allowed: variant01 to variant04.',
+            type: "string",
+            description:
+              "Optional pixel-art accessory variant. Allowed: variant01 to variant04.",
           },
           accessoriesProbability: {
-            type: 'integer',
-            description: 'Optional pixel-art accessory probability from 0 to 100.',
+            type: "integer",
+            description:
+              "Optional pixel-art accessory probability from 0 to 100.",
           },
           clothing: {
-            type: 'string',
-            description: 'Optional pixel-art clothing variant. Allowed: variant01 to variant23.',
+            type: "string",
+            description:
+              "Optional pixel-art clothing variant. Allowed: variant01 to variant23.",
           },
           clothingColor: {
-            type: 'string',
-            description: 'Optional clothing color as 6-digit hex without #, for example 428bca.',
+            type: "string",
+            description:
+              "Optional clothing color as 6-digit hex without #, for example 428bca.",
           },
           eyes: {
-            type: 'string',
-            description: 'Optional eye variant. Allowed: variant01 to variant12.',
+            type: "string",
+            description:
+              "Optional eye variant. Allowed: variant01 to variant12.",
           },
           eyesColor: {
-            type: 'string',
-            description: 'Optional eye color as 6-digit hex without #.',
+            type: "string",
+            description: "Optional eye color as 6-digit hex without #.",
           },
           glasses: {
-            type: 'string',
-            description: 'Optional glasses variant. Allowed: dark01 to dark07, or light01 to light07.',
+            type: "string",
+            description:
+              "Optional glasses variant. Allowed: dark01 to dark07, or light01 to light07.",
           },
           glassesColor: {
-            type: 'string',
-            description: 'Optional glasses color as 6-digit hex without #.',
+            type: "string",
+            description: "Optional glasses color as 6-digit hex without #.",
           },
           glassesProbability: {
-            type: 'integer',
-            description: 'Optional glasses probability from 0 to 100.',
+            type: "integer",
+            description: "Optional glasses probability from 0 to 100.",
           },
           beard: {
-            type: 'string',
-            description: 'Optional beard variant. Allowed: variant01 to variant08.',
+            type: "string",
+            description:
+              "Optional beard variant. Allowed: variant01 to variant08.",
           },
           beardProbability: {
-            type: 'integer',
-            description: 'Optional beard probability from 0 to 100.',
+            type: "integer",
+            description: "Optional beard probability from 0 to 100.",
           },
           mouth: {
-            type: 'string',
-            description: 'Optional mouth variant. Allowed: happy01 to happy13, or sad01 to sad10.',
+            type: "string",
+            description:
+              "Optional mouth variant. Allowed: happy01 to happy13, or sad01 to sad10.",
           },
           mouthColor: {
-            type: 'string',
-            description: 'Optional mouth color as 6-digit hex without #.',
+            type: "string",
+            description: "Optional mouth color as 6-digit hex without #.",
           },
           hair: {
-            type: 'string',
-            description: 'Optional hair variant. Allowed: short01 to short24, or long01 to long21.',
+            type: "string",
+            description:
+              "Optional hair variant. Allowed: short01 to short24, or long01 to long21.",
           },
           hairColor: {
-            type: 'string',
-            description: 'Optional hair color as 6-digit hex without #.',
+            type: "string",
+            description: "Optional hair color as 6-digit hex without #.",
           },
           hat: {
-            type: 'string',
-            description: 'Optional hat variant. Allowed: variant01 to variant10.',
+            type: "string",
+            description:
+              "Optional hat variant. Allowed: variant01 to variant10.",
           },
           hatColor: {
-            type: 'string',
-            description: 'Optional hat color as 6-digit hex without #.',
+            type: "string",
+            description: "Optional hat color as 6-digit hex without #.",
           },
           hatProbability: {
-            type: 'integer',
-            description: 'Optional hat probability from 0 to 100.',
+            type: "integer",
+            description: "Optional hat probability from 0 to 100.",
           },
           skinColor: {
-            type: 'string',
+            type: "string",
             description:
-              'Optional skin color as 6-digit hex without #. Pick natural, readable colors unless the Boss explicitly asks for something stylized.',
+              "Optional skin color as 6-digit hex without #. Pick natural, readable colors unless the Boss explicitly asks for something stylized.",
           },
         },
-        required: ['mode'],
+        required: ["mode"],
       },
     },
     execute: async (input) => {
-      const context = getToolExecutionContext();
+      const context = getToolExecutionContext()
       if (!context) {
-        throwToolError('No session context available');
+        throwToolError("No session context available")
       }
 
-      const parsed = parseChangeAvatarToolInput(input as Record<string, unknown>);
+      const parsed = parseChangeAvatarToolInput(
+        input as Record<string, unknown>
+      )
       if (!parsed.success) {
-        throwToolError('Invalid change_avatar input', {
+        throwToolError("Invalid change_avatar input", {
           details: parsed.error.flatten(),
           extra: {
             guidance:
               `Use mode="${EMOJI_MODE}" with one emoji, or mode="${PIXEL_ART_MODE}" with optional DiceBear pixel-art parameters. ` +
               `For pixel_art, only use allowed variant names, 6-digit hex colors without #, and probabilities from 0 to 100.`,
           },
-        });
+        })
       }
 
-      const action = buildChangeAvatarAction(parsed.data);
+      const action = buildChangeAvatarAction(parsed.data)
       await executeActorActions(
         context.workspaceId,
         context.actorId,
@@ -438,10 +513,10 @@ export function registerActionToolPlugins(): void {
           turnId: context.turnId,
           userId: context.userId,
           conversationId: context.conversationId,
-        },
-      );
+        }
+      )
 
-      const actor = await getActor(context.actorId, context.workspaceId);
+      const actor = await getActor(context.actorId, context.workspaceId)
 
       if (parsed.data.mode === EMOJI_MODE) {
         return JSON.stringify({
@@ -450,7 +525,7 @@ export function registerActionToolPlugins(): void {
           emoji: parsed.data.emoji,
           avatarFileId: actor?.definition.avatarFileId || null,
           message: `Your avatar now uses the emoji ${parsed.data.emoji}.`,
-        });
+        })
       }
 
       return JSON.stringify({
@@ -458,40 +533,43 @@ export function registerActionToolPlugins(): void {
         avatarMode: PIXEL_ART_MODE,
         avatarFileId: actor?.definition.avatarFileId || null,
         avatarUrl: actor?.avatarUrl || null,
-        message: 'Your avatar now uses a generated pixel-art portrait.',
-      });
+        message: "Your avatar now uses a generated pixel-art portrait.",
+      })
     },
-  });
+  })
 }
 
 export function toolCallsToActions(toolCalls: ToolCall[]): ActorAction[] {
   return toolCalls.map((tc) => {
-    const input = tc.input as Record<string, any>;
+    const input = tc.input as Record<string, any>
 
     switch (tc.toolName) {
-      case 'create_memory':
-        return buildCreateMemoryAction(input);
+      case "create_memory":
+        return buildCreateMemoryAction(input)
 
-      case 'rename_self':
-        return buildRenameSelfAction(input);
+      case "rename_self":
+        return buildRenameSelfAction(input)
 
-      case 'change_avatar': {
-        const parsed = parseChangeAvatarToolInput(input);
+      case "change_avatar": {
+        const parsed = parseChangeAvatarToolInput(input)
         return buildChangeAvatarAction(
           parsed.success
             ? parsed.data
             : {
                 mode: EMOJI_MODE,
                 emoji:
-                  typeof input.emoji === 'string' && input.emoji.trim()
+                  typeof input.emoji === "string" && input.emoji.trim()
                     ? input.emoji.trim()
-                    : '🙂',
-              },
-        );
+                    : "🙂",
+              }
+        )
       }
 
       default:
-        return { type: 'respond' as const, content: `Unknown tool: ${tc.toolName}` };
+        return {
+          type: "respond" as const,
+          content: `Unknown tool: ${tc.toolName}`,
+        }
     }
-  });
+  })
 }

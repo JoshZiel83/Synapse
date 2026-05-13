@@ -18,15 +18,12 @@ function isTypingTarget(target: EventTarget | null) {
 function getClosestSectionIndex(sections: HTMLElement[], scrollY: number) {
   const probeY = scrollY + window.innerHeight * 0.18
 
-  return sections.reduce(
-    (closestIndex, section, index) => {
-      const closestDistance = Math.abs(sections[closestIndex].offsetTop - probeY)
-      const currentDistance = Math.abs(section.offsetTop - probeY)
+  return sections.reduce((closestIndex, section, index) => {
+    const closestDistance = Math.abs(sections[closestIndex].offsetTop - probeY)
+    const currentDistance = Math.abs(section.offsetTop - probeY)
 
-      return currentDistance < closestDistance ? index : closestIndex
-    },
-    0
-  )
+    return currentDistance < closestDistance ? index : closestIndex
+  }, 0)
 }
 
 export function LandingSnapScrollController() {
@@ -41,9 +38,13 @@ export function LandingSnapScrollController() {
 
     const getScrollTargets = () => {
       const sections = Array.from(
-        document.querySelectorAll<HTMLElement>("[data-landing-snap-section='true']")
+        document.querySelectorAll<HTMLElement>(
+          "[data-landing-snap-section='true']"
+        )
       )
-      const tail = document.querySelector<HTMLElement>("[data-landing-tail='true']")
+      const tail = document.querySelector<HTMLElement>(
+        "[data-landing-tail='true']"
+      )
 
       if (sections.length === 0) return null
 
@@ -87,7 +88,11 @@ export function LandingSnapScrollController() {
       const scrollY = window.scrollY
 
       if (scrollY >= tailTop - EDGE_TOLERANCE_PX) {
-        if (direction < 0 && scrollY <= tailTop + EDGE_TOLERANCE_PX && !lockedRef.current) {
+        if (
+          direction < 0 &&
+          scrollY <= tailTop + EDGE_TOLERANCE_PX &&
+          !lockedRef.current
+        ) {
           scrollToSection(lastTop)
           return true
         }
@@ -106,7 +111,8 @@ export function LandingSnapScrollController() {
         return false
       }
 
-      if (currentIndex === 0 && scrollY <= firstTop + EDGE_TOLERANCE_PX) return false
+      if (currentIndex === 0 && scrollY <= firstTop + EDGE_TOLERANCE_PX)
+        return false
 
       scrollToSection(sections[Math.max(0, currentIndex - 1)].offsetTop)
       return true
@@ -125,7 +131,11 @@ export function LandingSnapScrollController() {
       const scrollY = window.scrollY
 
       if (scrollY >= tailTop - EDGE_TOLERANCE_PX) {
-        if (event.deltaY < 0 && scrollY <= tailTop + EDGE_TOLERANCE_PX && !lockedRef.current) {
+        if (
+          event.deltaY < 0 &&
+          scrollY <= tailTop + EDGE_TOLERANCE_PX &&
+          !lockedRef.current
+        ) {
           event.preventDefault()
           scrollToSection(lastTop)
         }

@@ -5,9 +5,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import { useWorkspace } from "../workspace-provider"
 import { useChatStore } from "@/stores/chat-store"
 import ConversationList from "./conversation-list"
-import ConversationChat, {
-  ConversationChatSkeleton,
-} from "./conversation-chat"
+import ConversationChat, { ConversationChatSkeleton } from "./conversation-chat"
 import NewConversationDialog from "./new-conversation-dialog"
 import type { ChatComposerSubmitPayload } from "@/components/chat-composer"
 import { MessageSquare } from "lucide-react"
@@ -46,7 +44,9 @@ export default function ChatPage() {
     const currentSelection = useChatStore.getState().selectedConversationId
     if (currentSelection === conversationParam) return
     if (
-      !conversations.some((conversation) => conversation.id === conversationParam)
+      !conversations.some(
+        (conversation) => conversation.id === conversationParam
+      )
     )
       return
     selectConversation(conversationParam)
@@ -63,12 +63,7 @@ export default function ChatPage() {
     if (workspaceId && selectedConversationId && clientInstanceId) {
       loadMessages(workspaceId, selectedConversationId)
     }
-  }, [
-    clientInstanceId,
-    workspaceId,
-    selectedConversationId,
-    loadMessages,
-  ])
+  }, [clientInstanceId, workspaceId, selectedConversationId, loadMessages])
 
   useEffect(() => {
     if (!selectedConversationId || loadingMessages || messages.length === 0) {
@@ -163,7 +158,7 @@ export default function ChatPage() {
 
   return (
     <div className="flex h-full min-h-0 w-full max-w-full min-w-0 overflow-hidden">
-      <div className="flex min-h-0 min-w-0 w-[22rem] shrink-0 flex-col">
+      <div className="flex min-h-0 w-[22rem] min-w-0 shrink-0 flex-col">
         <ConversationList
           conversations={conversations}
           loading={loadingConversations}

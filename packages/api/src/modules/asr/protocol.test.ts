@@ -1,36 +1,31 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { gzipSync } from "node:zlib";
+import test from "node:test"
+import assert from "node:assert/strict"
+import { gzipSync } from "node:zlib"
 import {
   decodeProviderFrame,
   encodeAudioOnlyRequest,
   encodeFullClientRequest,
-} from "./protocol.js";
+} from "./protocol.js"
 
 function buildServerResponseFrame(payload: unknown, isFinal = false) {
-  const serialized = Buffer.from(JSON.stringify(payload), "utf8");
-  const compressed = gzipSync(serialized);
-  const header = Buffer.from([
-    0x11,
-    isFinal ? 0x93 : 0x91,
-    0x11,
-    0x00,
-  ]);
-  const sequence = Buffer.alloc(4);
-  sequence.writeInt32BE(isFinal ? 3 : 2, 0);
-  const payloadSize = Buffer.alloc(4);
-  payloadSize.writeUInt32BE(compressed.length, 0);
-  return Buffer.concat([header, sequence, payloadSize, compressed]);
+  const serialized = Buffer.from(JSON.stringify(payload), "utf8")
+  const compressed = gzipSync(serialized)
+  const header = Buffer.from([0x11, isFinal ? 0x93 : 0x91, 0x11, 0x00])
+  const sequence = Buffer.alloc(4)
+  sequence.writeInt32BE(isFinal ? 3 : 2, 0)
+  const payloadSize = Buffer.alloc(4)
+  payloadSize.writeUInt32BE(compressed.length, 0)
+  return Buffer.concat([header, sequence, payloadSize, compressed])
 }
 
 function buildErrorFrame(code: number, payload: unknown) {
-  const serialized = Buffer.from(JSON.stringify(payload), "utf8");
-  const header = Buffer.from([0x11, 0xf0, 0x10, 0x00]);
-  const errorCode = Buffer.alloc(4);
-  errorCode.writeUInt32BE(code, 0);
-  const payloadSize = Buffer.alloc(4);
-  payloadSize.writeUInt32BE(serialized.length, 0);
-  return Buffer.concat([header, errorCode, payloadSize, serialized]);
+  const serialized = Buffer.from(JSON.stringify(payload), "utf8")
+  const header = Buffer.from([0x11, 0xf0, 0x10, 0x00])
+  const errorCode = Buffer.alloc(4)
+  errorCode.writeUInt32BE(code, 0)
+  const payloadSize = Buffer.alloc(4)
+  payloadSize.writeUInt32BE(serialized.length, 0)
+  return Buffer.concat([header, errorCode, payloadSize, serialized])
 }
 
 test("encodeFullClientRequest uses expected protocol header", () => {
@@ -52,22 +47,22 @@ test("encodeFullClientRequest uses expected protocol header", () => {
       end_window_size: 800,
       force_to_speech_time: 1000,
     },
-  });
+  })
 
-  assert.equal(frame[0], 0x11);
-  assert.equal(frame[1], 0x10);
-  assert.equal(frame[2], 0x11);
-  assert.equal(frame[3], 0x00);
-});
+  assert.equal(frame[0], 0x11)
+  assert.equal(frame[1], 0x10)
+  assert.equal(frame[2], 0x11)
+  assert.equal(frame[3], 0x00)
+})
 
 test("encodeAudioOnlyRequest marks the final packet", () => {
-  const frame = encodeAudioOnlyRequest(Buffer.from([1, 2, 3]), true);
+  const frame = encodeAudioOnlyRequest(Buffer.from([1, 2, 3]), true)
 
-  assert.equal(frame[0], 0x11);
-  assert.equal(frame[1], 0x22);
-  assert.equal(frame[2], 0x01);
-  assert.equal(frame[3], 0x00);
-});
+  assert.equal(frame[0], 0x11)
+  assert.equal(frame[1], 0x22)
+  assert.equal(frame[2], 0x01)
+  assert.equal(frame[3], 0x00)
+})
 
 test("decodeProviderFrame parses full server responses", () => {
   const frame = buildServerResponseFrame({
@@ -77,12 +72,12 @@ test("decodeProviderFrame parses full server responses", () => {
     audio_info: {
       duration: 1200,
     },
-  });
+  })
 
-  const decoded = decodeProviderFrame(frame);
-  assert.equal(decoded.kind, "response");
-  assert.equal(decoded.sequence, 2);
-  assert.equal(decoded.isFinal, false);
+  const decoded = decodeProviderFrame(frame)
+  assert.equal(decoded.kind, "response")
+  assert.equal(decoded.sequence, 2)
+  assert.equal(decoded.isFinal, false)
   assert.deepEqual(decoded.payload, {
     result: {
       text: "你好世界",
@@ -90,18 +85,18 @@ test("decodeProviderFrame parses full server responses", () => {
     audio_info: {
       duration: 1200,
     },
-  });
-});
+  })
+})
 
 test("decodeProviderFrame parses provider error frames", () => {
   const frame = buildErrorFrame(55000031, {
     message: "server busy",
-  });
+  })
 
-  const decoded = decodeProviderFrame(frame);
-  assert.equal(decoded.kind, "error");
-  assert.equal(decoded.code, 55000031);
+  const decoded = decodeProviderFrame(frame)
+  assert.equal(decoded.kind, "error")
+  assert.equal(decoded.code, 55000031)
   assert.deepEqual(decoded.payload, {
     message: "server busy",
-  });
-});
+  })
+})

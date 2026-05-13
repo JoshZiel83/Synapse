@@ -1,24 +1,19 @@
-import type Ionicons from "@expo/vector-icons/Ionicons";
-import type { ComponentProps } from "react";
+import type Ionicons from "@expo/vector-icons/Ionicons"
+import type { ComponentProps } from "react"
 
-export type RootTabKey = "home" | "chats" | "contacts" | "me";
+export type RootTabKey = "home" | "chats" | "contacts" | "me"
 
-type IoniconName = ComponentProps<typeof Ionicons>["name"];
-type RootTabHref = "/" | "/chats" | "/contacts" | "/me";
+type IoniconName = ComponentProps<typeof Ionicons>["name"]
+type RootTabHref = "/" | "/chats" | "/contacts" | "/me"
 
 type RootTabDefinition = {
-  href: RootTabHref;
-  label: string;
-  activeIcon: IoniconName;
-  inactiveIcon: IoniconName;
-};
+  href: RootTabHref
+  label: string
+  activeIcon: IoniconName
+  inactiveIcon: IoniconName
+}
 
-export const ROOT_TAB_ORDER: RootTabKey[] = [
-  "home",
-  "chats",
-  "contacts",
-  "me",
-];
+export const ROOT_TAB_ORDER: RootTabKey[] = ["home", "chats", "contacts", "me"]
 
 export const ROOT_TAB_CONFIG: Record<RootTabKey, RootTabDefinition> = {
   home: {
@@ -45,39 +40,39 @@ export const ROOT_TAB_CONFIG: Record<RootTabKey, RootTabDefinition> = {
     activeIcon: "person",
     inactiveIcon: "person-outline",
   },
-};
+}
 
 function normalizePathname(pathname: string) {
   if (pathname.length > 1 && pathname.endsWith("/")) {
-    return pathname.slice(0, -1);
+    return pathname.slice(0, -1)
   }
 
-  return pathname;
+  return pathname
 }
 
 export function getRootTabFromPathname(pathname: string): RootTabKey | null {
   switch (normalizePathname(pathname)) {
     case "/":
-      return "home";
+      return "home"
     case "/chats":
-      return "chats";
+      return "chats"
     case "/contacts":
-      return "contacts";
+      return "contacts"
     case "/me":
-      return "me";
+      return "me"
     default:
-      return null;
+      return null
   }
 }
 
 export function getRootTabHref(tab: RootTabKey): RootTabHref {
-  return ROOT_TAB_CONFIG[tab].href;
+  return ROOT_TAB_CONFIG[tab].href
 }
 
 export function getRootTabIndex(tab: RootTabKey) {
-  return ROOT_TAB_ORDER.indexOf(tab);
+  return ROOT_TAB_ORDER.indexOf(tab)
 }
 
 export function getRootTabByIndex(index: number) {
-  return ROOT_TAB_ORDER[index] ?? ROOT_TAB_ORDER[0];
+  return ROOT_TAB_ORDER[index] ?? ROOT_TAB_ORDER[0]
 }

@@ -1,6 +1,10 @@
 import { Boxes, LockKeyhole, PlugZap, Search, ShieldCheck } from "lucide-react"
 
-import { LandingReveal, LandingStagger, LandingStaggerItem } from "@/components/landing-motion"
+import {
+  LandingReveal,
+  LandingStagger,
+  LandingStaggerItem,
+} from "@/components/landing-motion"
 import { Card, CardContent } from "@/components/ui/card"
 
 const pluginHighlights = [
@@ -76,23 +80,35 @@ export function LandingPluginMarketSection() {
                     <item.icon className="size-[18px]" />
                   </div>
                   <div>
-                    <div className="text-[15px] font-semibold text-slate-950">{item.title}</div>
-                    <p className="mt-1.5 text-sm leading-6 text-slate-600">{item.description}</p>
+                    <div className="text-[15px] font-semibold text-slate-950">
+                      {item.title}
+                    </div>
+                    <p className="mt-1.5 text-sm leading-6 text-slate-600">
+                      {item.description}
+                    </p>
                   </div>
                 </LandingStaggerItem>
               ))}
             </LandingStagger>
           </LandingReveal>
 
-          <LandingReveal className="relative" delay={0.08} x={28} y={24} scale={0.985}>
-            <div className="absolute -left-8 top-8 size-36 rounded-full bg-sky-200/35 blur-3xl" />
+          <LandingReveal
+            className="relative"
+            delay={0.08}
+            x={28}
+            y={24}
+            scale={0.985}
+          >
+            <div className="absolute top-8 -left-8 size-36 rounded-full bg-sky-200/35 blur-3xl" />
             <div className="absolute -right-4 bottom-6 size-40 rounded-full bg-emerald-200/30 blur-3xl" />
 
             <Card className="relative gap-0 rounded-[34px] border border-white/72 bg-white/92 py-0 shadow-[0_40px_110px_-58px_rgba(15,23,42,0.48)]">
-              <div className="border-b border-border/50 px-5 pb-3 pt-4 lg:px-6">
+              <div className="border-b border-border/50 px-5 pt-4 pb-3 lg:px-6">
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
-                    <div className="text-sm font-semibold text-slate-950">Plugin Marketplace</div>
+                    <div className="text-sm font-semibold text-slate-950">
+                      Plugin Marketplace
+                    </div>
                     <div className="mt-1 text-[11px] text-slate-500">
                       安装到工作区，再分配给你的数字员工
                     </div>
@@ -104,30 +120,52 @@ export function LandingPluginMarketSection() {
                 </div>
               </div>
 
-              <CardContent className="space-y-3 px-5 pb-5 pt-3 lg:px-6 lg:pb-6 lg:pt-3">
-                <LandingReveal className="flex flex-wrap gap-2 text-xs text-slate-500" delay={0.16} y={14}>
-                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1">研究</span>
-                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1">浏览器</span>
-                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1">文档</span>
-                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1">数据</span>
+              <CardContent className="space-y-3 px-5 pt-3 pb-5 lg:px-6 lg:pt-3 lg:pb-6">
+                <LandingReveal
+                  className="flex flex-wrap gap-2 text-xs text-slate-500"
+                  delay={0.16}
+                  y={14}
+                >
+                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1">
+                    研究
+                  </span>
+                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1">
+                    浏览器
+                  </span>
+                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1">
+                    文档
+                  </span>
+                  <span className="rounded-full border border-slate-200 bg-white px-3 py-1">
+                    数据
+                  </span>
                 </LandingReveal>
 
-                <LandingStagger className="grid gap-4 sm:grid-cols-2" delay={0.22} stagger={0.08}>
+                <LandingStagger
+                  className="grid gap-4 sm:grid-cols-2"
+                  delay={0.22}
+                  stagger={0.08}
+                >
                   {pluginCards.map((plugin) => (
                     <LandingStaggerItem
                       key={plugin.name}
                       className="rounded-[26px] border border-slate-200 bg-slate-50/85 p-4 shadow-[0_18px_40px_-32px_rgba(15,23,42,0.32)]"
                     >
                       <div className="flex items-start justify-between gap-3">
-                        <div className={`flex size-11 items-center justify-center rounded-2xl ${plugin.accent}`}>
+                        <div
+                          className={`flex size-11 items-center justify-center rounded-2xl ${plugin.accent}`}
+                        >
                           <Boxes className="size-[18px]" />
                         </div>
                         <div className="rounded-full border border-slate-200 bg-white px-2.5 py-1 text-[11px] leading-none text-slate-500">
                           {plugin.meta}
                         </div>
                       </div>
-                      <div className="mt-4 text-base font-semibold text-slate-950">{plugin.name}</div>
-                      <p className="mt-2 text-sm leading-6 text-slate-600">{plugin.summary}</p>
+                      <div className="mt-4 text-base font-semibold text-slate-950">
+                        {plugin.name}
+                      </div>
+                      <p className="mt-2 text-sm leading-6 text-slate-600">
+                        {plugin.summary}
+                      </p>
                       <div className="mt-4 inline-flex rounded-full bg-slate-950 px-3 py-1.5 text-[11px] leading-none text-white">
                         {plugin.action}
                       </div>

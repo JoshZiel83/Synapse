@@ -6,133 +6,149 @@ import {
   useMemo,
   useState,
   type ReactNode,
-} from 'react';
+} from "react"
 
 import {
   ApiError,
   api,
   setApiAuthToken,
   setApiUnauthorizedHandler,
-} from '@/lib/api';
-import { createChatPersistence } from '@/lib/chat-persistence';
-import { SESSION_TOKEN_KEY } from '@/lib/storage-keys';
-import { deleteStoredValue, readStoredValue, writeStoredValue } from '@/lib/storage';
-import type { AuthMeResponse } from '@/types/api';
-import type { AuthSessionSummary, User } from '@shared';
-const chatPersistence = createChatPersistence();
+} from "@/lib/api"
+import { createChatPersistence } from "@/lib/chat-persistence"
+import { SESSION_TOKEN_KEY } from "@/lib/storage-keys"
+import {
+  deleteStoredValue,
+  readStoredValue,
+  writeStoredValue,
+} from "@/lib/storage"
+import type { AuthMeResponse } from "@/types/api"
+import type { AuthSessionSummary, User } from "@shared"
+const chatPersistence = createChatPersistence()
 
-type SessionStatus = 'loading' | 'authenticated' | 'unauthenticated';
+type SessionStatus = "loading" | "authenticated" | "unauthenticated"
 
 interface SessionContextValue {
-  status: SessionStatus;
-  user: User | null;
-  session: AuthSessionSummary | null;
-  token: string | null;
-  signIn: (email: string, password: string) => Promise<void>;
-  signUp: (name: string, email: string, password: string) => Promise<void>;
-  signOut: () => Promise<void>;
-  refreshSession: () => Promise<void>;
-  updateProfile: (data: { name?: string; avatarFileId?: string | null }) => Promise<void>;
+  status: SessionStatus
+  user: User | null
+  session: AuthSessionSummary | null
+  token: string | null
+  signIn: (email: string, password: string) => Promise<void>
+  signUp: (name: string, email: string, password: string) => Promise<void>
+  signOut: () => Promise<void>
+  refreshSession: () => Promise<void>
+  updateProfile: (data: {
+    name?: string
+    avatarFileId?: string | null
+  }) => Promise<void>
 }
 
-const SessionContext = createContext<SessionContextValue | null>(null);
+const SessionContext = createContext<SessionContextValue | null>(null)
 
 async function persistSessionToken(token: string | null) {
   if (token) {
-    await writeStoredValue(SESSION_TOKEN_KEY, token);
-    return;
+    await writeStoredValue(SESSION_TOKEN_KEY, token)
+    return
   }
 
-  await deleteStoredValue(SESSION_TOKEN_KEY);
+  await deleteStoredValue(SESSION_TOKEN_KEY)
 }
 
 function applySession(
   payload: {
-    token: string | null;
-    response?: AuthMeResponse | { user: User; session: AuthSessionSummary } | null;
+    token: string | null
+    response?:
+      | AuthMeResponse
+      | { user: User; session: AuthSessionSummary }
+      | null
   },
   setState: React.Dispatch<
     React.SetStateAction<{
-      status: SessionStatus;
-      user: User | null;
-      session: AuthSessionSummary | null;
-      token: string | null;
+      status: SessionStatus
+      user: User | null
+      session: AuthSessionSummary | null
+      token: string | null
     }>
-  >,
+  >
 ) {
-  setApiAuthToken(payload.token);
+  setApiAuthToken(payload.token)
   setState({
-    status: payload.response ? 'authenticated' : 'unauthenticated',
+    status: payload.response ? "authenticated" : "unauthenticated",
     token: payload.token,
     user: payload.response?.user ?? null,
     session: payload.response?.session ?? null,
-  });
+  })
 }
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [state, setState] = useState<{
-    status: SessionStatus;
-    user: User | null;
-    session: AuthSessionSummary | null;
-    token: string | null;
+    status: SessionStatus
+    user: User | null
+    session: AuthSessionSummary | null
+    token: string | null
   }>({
-    status: 'loading',
+    status: "loading",
     user: null,
     session: null,
     token: null,
-  });
+  })
 
   const clearSession = useCallback(async () => {
-    await persistSessionToken(null);
-    await chatPersistence.clearAllWorkspaceState();
-    applySession({ token: null }, setState);
-  }, []);
+    await persistSessionToken(null)
+    await chatPersistence.clearAllWorkspaceState()
+    applySession({ token: null }, setState)
+  }, [])
 
   const refreshSession = useCallback(async () => {
-    const storedToken = await readStoredValue(SESSION_TOKEN_KEY);
+    const storedToken = await readStoredValue(SESSION_TOKEN_KEY)
     if (!storedToken) {
-      applySession({ token: null }, setState);
-      return;
+      applySession({ token: null }, setState)
+      return
     }
 
-    setApiAuthToken(storedToken);
+    setApiAuthToken(storedToken)
 
     try {
-      const response = await api.getMe();
-      applySession({ token: storedToken, response }, setState);
+      const response = await api.getMe()
+      applySession({ token: storedToken, response }, setState)
     } catch (error) {
-      if (error instanceof ApiError && (error.status === 401 || error.status === 403)) {
-        await clearSession();
-        return;
+      if (
+        error instanceof ApiError &&
+        (error.status === 401 || error.status === 403)
+      ) {
+        await clearSession()
+        return
       }
 
-      setApiAuthToken(storedToken);
+      setApiAuthToken(storedToken)
       setState((current) => ({
         ...current,
-        status: 'authenticated',
+        status: "authenticated",
         token: storedToken,
-      }));
+      }))
     }
-  }, [clearSession]);
+  }, [clearSession])
 
   useEffect(() => {
-    void refreshSession();
-  }, [refreshSession]);
+    void refreshSession()
+  }, [refreshSession])
 
   useEffect(() => {
-    setApiUnauthorizedHandler(() => clearSession());
+    setApiUnauthorizedHandler(() => clearSession())
     return () => {
-      setApiUnauthorizedHandler(null);
-    };
-  }, [clearSession]);
+      setApiUnauthorizedHandler(null)
+    }
+  }, [clearSession])
 
   const signIn = useCallback(async (email: string, password: string) => {
-    const response = await api.login(email, password);
+    const response = await api.login(email, password)
     if (!response.sessionToken) {
-      throw new ApiError('The server did not return a mobile session token.', 500);
+      throw new ApiError(
+        "The server did not return a mobile session token.",
+        500
+      )
     }
 
-    await persistSessionToken(response.sessionToken);
+    await persistSessionToken(response.sessionToken)
     applySession(
       {
         token: response.sessionToken,
@@ -141,50 +157,56 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           session: response.session,
         },
       },
-      setState,
-    );
-  }, []);
+      setState
+    )
+  }, [])
 
-  const signUp = useCallback(async (name: string, email: string, password: string) => {
-    const response = await api.register(name, email, password);
-    if (!response.sessionToken) {
-      throw new ApiError('The server did not return a mobile session token.', 500);
-    }
+  const signUp = useCallback(
+    async (name: string, email: string, password: string) => {
+      const response = await api.register(name, email, password)
+      if (!response.sessionToken) {
+        throw new ApiError(
+          "The server did not return a mobile session token.",
+          500
+        )
+      }
 
-    await persistSessionToken(response.sessionToken);
-    applySession(
-      {
-        token: response.sessionToken,
-        response: {
-          user: response.user,
-          session: response.session,
+      await persistSessionToken(response.sessionToken)
+      applySession(
+        {
+          token: response.sessionToken,
+          response: {
+            user: response.user,
+            session: response.session,
+          },
         },
-      },
-      setState,
-    );
-  }, []);
+        setState
+      )
+    },
+    []
+  )
 
   const signOut = useCallback(async () => {
     try {
-      await api.logout();
+      await api.logout()
     } catch {
       // Ignore sign out transport issues and clear the local token anyway.
     }
 
-    await clearSession();
-  }, [clearSession]);
+    await clearSession()
+  }, [clearSession])
 
   const updateProfile = useCallback(
     async (data: { name?: string; avatarFileId?: string | null }) => {
-      const response = await api.updateMe(data);
+      const response = await api.updateMe(data)
       setState((current) => ({
         ...current,
         user: response.user,
         session: response.session ?? current.session,
-      }));
+      }))
     },
-    [],
-  );
+    []
+  )
 
   const value = useMemo<SessionContextValue>(
     () => ({
@@ -198,17 +220,29 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       refreshSession,
       updateProfile,
     }),
-    [refreshSession, signIn, signOut, signUp, state.session, state.status, state.token, state.user, updateProfile],
-  );
+    [
+      refreshSession,
+      signIn,
+      signOut,
+      signUp,
+      state.session,
+      state.status,
+      state.token,
+      state.user,
+      updateProfile,
+    ]
+  )
 
-  return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+  return (
+    <SessionContext.Provider value={value}>{children}</SessionContext.Provider>
+  )
 }
 
 export function useSession() {
-  const value = useContext(SessionContext);
+  const value = useContext(SessionContext)
   if (!value) {
-    throw new Error('useSession must be used inside SessionProvider.');
+    throw new Error("useSession must be used inside SessionProvider.")
   }
 
-  return value;
+  return value
 }

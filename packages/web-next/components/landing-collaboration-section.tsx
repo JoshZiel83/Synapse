@@ -1,8 +1,17 @@
 import { BrainCircuit, MessageSquareMore, UsersRound } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { Avatar, AvatarBadge, AvatarFallback, AvatarGroup } from "@/components/ui/avatar"
-import { LandingReveal, LandingStagger, LandingStaggerItem } from "@/components/landing-motion"
+import {
+  Avatar,
+  AvatarBadge,
+  AvatarFallback,
+  AvatarGroup,
+} from "@/components/ui/avatar"
+import {
+  LandingReveal,
+  LandingStagger,
+  LandingStaggerItem,
+} from "@/components/landing-motion"
 import { Card, CardContent } from "@/components/ui/card"
 
 const collaborationFeatures = [
@@ -60,7 +69,8 @@ const collaborationMessages: CollaborationMessage[] = [
     name: "Brief Writer",
     initials: "BW",
     tone: "bg-sky-100 text-sky-950",
-    content: "初稿已提交，核心结论和当前 blocker 已同步进群记忆，后续角色可以直接接着做",
+    content:
+      "初稿已提交，核心结论和当前 blocker 已同步进群记忆，后续角色可以直接接着做",
     meta: "交付完成 · 群记忆已更新",
   },
   {
@@ -83,7 +93,8 @@ const collaborationMessages: CollaborationMessage[] = [
     name: "Risk Analyst",
     initials: "RA",
     tone: "bg-amber-100 text-amber-950",
-    content: "我已读取群记忆当前主要风险是移动 onboarding 回落，建议单列风险栏并保留 ETA 备注",
+    content:
+      "我已读取群记忆当前主要风险是移动 onboarding 回落，建议单列风险栏并保留 ETA 备注",
   },
 ]
 
@@ -132,23 +143,35 @@ export function LandingCollaborationSection() {
                     <feature.icon className="size-[18px]" />
                   </div>
                   <div>
-                    <div className="text-[15px] font-semibold text-slate-950">{feature.title}</div>
-                    <p className="mt-1.5 text-sm leading-6 text-slate-600">{feature.description}</p>
+                    <div className="text-[15px] font-semibold text-slate-950">
+                      {feature.title}
+                    </div>
+                    <p className="mt-1.5 text-sm leading-6 text-slate-600">
+                      {feature.description}
+                    </p>
                   </div>
                 </LandingStaggerItem>
               ))}
             </LandingStagger>
           </LandingReveal>
 
-          <LandingReveal className="relative" delay={0.08} x={28} y={26} scale={0.985}>
-            <div className="absolute -left-10 top-10 size-36 rounded-full bg-sky-200/38 blur-3xl" />
+          <LandingReveal
+            className="relative"
+            delay={0.08}
+            x={28}
+            y={26}
+            scale={0.985}
+          >
+            <div className="absolute top-10 -left-10 size-36 rounded-full bg-sky-200/38 blur-3xl" />
             <div className="absolute -right-4 bottom-8 size-36 rounded-full bg-emerald-200/36 blur-3xl" />
 
             <Card className="relative gap-0 rounded-[34px] border border-white/72 bg-white/92 py-0 shadow-[0_40px_110px_-58px_rgba(15,23,42,0.48)]">
-              <div className="border-b border-border/50 px-5 pb-3 pt-4 lg:px-6">
+              <div className="border-b border-border/50 px-5 pt-4 pb-3 lg:px-6">
                 <div className="flex items-center justify-between gap-4">
                   <div>
-                    <div className="text-sm font-semibold text-slate-950">Board Launch Brief</div>
+                    <div className="text-sm font-semibold text-slate-950">
+                      Board Launch Brief
+                    </div>
                     <div className="mt-1 text-[11px] text-slate-500">
                       系统消息公开状态，群记忆承接上下文
                     </div>
@@ -165,8 +188,12 @@ export function LandingCollaborationSection() {
                 </div>
               </div>
 
-              <CardContent className="px-5 pb-5 pt-3 lg:px-6 lg:pb-6 lg:pt-3">
-                <LandingStagger className="space-y-3.5" delay={0.16} stagger={0.08}>
+              <CardContent className="px-5 pt-3 pb-5 lg:px-6 lg:pt-3 lg:pb-6">
+                <LandingStagger
+                  className="space-y-3.5"
+                  delay={0.16}
+                  stagger={0.08}
+                >
                   {collaborationMessages.map((message, index) => {
                     if (message.kind === "system") {
                       return (
@@ -184,14 +211,28 @@ export function LandingCollaborationSection() {
                     return (
                       <LandingStaggerItem
                         key={`${message.name}-${index}`}
-                        className={cn("flex gap-3", isUser && "flex-row-reverse")}
+                        className={cn(
+                          "flex gap-3",
+                          isUser && "flex-row-reverse"
+                        )}
                       >
                         <div className="pt-1">
-                          <DemoAvatar initials={message.initials} tone={message.tone} active={!isUser} />
+                          <DemoAvatar
+                            initials={message.initials}
+                            tone={message.tone}
+                            active={!isUser}
+                          />
                         </div>
 
-                        <div className={cn("max-w-[84%] space-y-1.5", isUser && "text-right")}>
-                          <div className="text-[11px] font-medium text-slate-500">{message.name}</div>
+                        <div
+                          className={cn(
+                            "max-w-[84%] space-y-1.5",
+                            isUser && "text-right"
+                          )}
+                        >
+                          <div className="text-[11px] font-medium text-slate-500">
+                            {message.name}
+                          </div>
                           <div
                             className={cn(
                               "rounded-[22px] border px-3.5 py-3 text-[13px] leading-6 shadow-[0_16px_30px_-24px_rgba(15,23,42,0.32)]",

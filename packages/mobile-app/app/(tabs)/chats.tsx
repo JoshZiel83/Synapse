@@ -1,1 +1,1 @@
-export { default } from "@/screens/tabs/chats-tab-screen";
+export { default } from "@/screens/tabs/chats-tab-screen"

@@ -7,10 +7,10 @@ import {
   LayoutDashboard,
   Logs,
   Settings2,
-} from 'lucide-react'
-import { useEffect, useRef, useState } from 'react'
+} from "lucide-react"
+import { useEffect, useRef, useState } from "react"
 
-import { Button } from './components/ui/button'
+import { Button } from "./components/ui/button"
 import {
   Dialog,
   DialogContent,
@@ -18,22 +18,29 @@ import {
   DialogFooter,
   DialogHeader,
   DialogTitle,
-} from './components/ui/dialog'
-import { useRelayDesktop } from './hooks/use-relay-desktop'
-import { useSystemTheme } from './hooks/use-system-theme'
-import { callGo } from './lib/wails'
-import { cn } from './lib/utils'
-import { LogsPanel } from './views/logs-panel'
-import { AppsPanel, type AppsPanelHandle } from './views/apps-panel'
-import { PairingPanel } from './views/pairing-panel'
-import { ServersPanel } from './views/servers-panel'
-import { SettingsPanel } from './views/settings-panel'
-import { StatusPanel } from './views/status-panel'
-import { SyncPanel } from './views/sync-panel'
+} from "./components/ui/dialog"
+import { useRelayDesktop } from "./hooks/use-relay-desktop"
+import { useSystemTheme } from "./hooks/use-system-theme"
+import { callGo } from "./lib/wails"
+import { cn } from "./lib/utils"
+import { LogsPanel } from "./views/logs-panel"
+import { AppsPanel, type AppsPanelHandle } from "./views/apps-panel"
+import { PairingPanel } from "./views/pairing-panel"
+import { ServersPanel } from "./views/servers-panel"
+import { SettingsPanel } from "./views/settings-panel"
+import { StatusPanel } from "./views/status-panel"
+import { SyncPanel } from "./views/sync-panel"
 
 declare const window: any
 
-type View = 'status' | 'logs' | 'pairing' | 'apps' | 'servers' | 'sync' | 'settings'
+type View =
+  | "status"
+  | "logs"
+  | "pairing"
+  | "apps"
+  | "servers"
+  | "sync"
+  | "settings"
 
 const navItems: Array<{
   value: View
@@ -41,46 +48,46 @@ const navItems: Array<{
   icon: typeof LayoutDashboard
 }> = [
   {
-    value: 'status',
-    label: 'Start',
+    value: "status",
+    label: "Start",
     icon: LayoutDashboard,
   },
   {
-    value: 'pairing',
-    label: 'Pair',
+    value: "pairing",
+    label: "Pair",
     icon: Link2,
   },
   {
-    value: 'apps',
-    label: 'Apps',
+    value: "apps",
+    label: "Apps",
     icon: Blocks,
   },
   {
-    value: 'servers',
-    label: 'MCP',
+    value: "servers",
+    label: "MCP",
     icon: Cable,
   },
   {
-    value: 'sync',
-    label: 'Sync',
+    value: "sync",
+    label: "Sync",
     icon: ArrowRightLeft,
   },
   {
-    value: 'logs',
-    label: 'Logs',
+    value: "logs",
+    label: "Logs",
     icon: Logs,
   },
   {
-    value: 'settings',
-    label: 'Settings',
+    value: "settings",
+    label: "Settings",
     icon: Settings2,
   },
 ]
 
 function recommendedView(deviceId?: string, serverCount = 0): View {
-  if (!deviceId) return 'pairing'
-  if (serverCount === 0) return 'apps'
-  return 'status'
+  if (!deviceId) return "pairing"
+  if (serverCount === 0) return "apps"
+  return "status"
 }
 
 export default function App() {
@@ -98,8 +105,10 @@ export default function App() {
     actions,
   } = useRelayDesktop()
 
-  const [view, setView] = useState<View>('pairing')
-  const [busy, setBusy] = useState<'starting' | 'stopping' | 'restarting' | null>(null)
+  const [view, setView] = useState<View>("pairing")
+  const [busy, setBusy] = useState<
+    "starting" | "stopping" | "restarting" | null
+  >(null)
   const [pendingView, setPendingView] = useState<View | null>(null)
   const [showUnsavedDialog, setShowUnsavedDialog] = useState(false)
   const [savingBeforeNavigate, setSavingBeforeNavigate] = useState(false)
@@ -115,7 +124,11 @@ export default function App() {
     }
 
     setView((current) => {
-      const next = recommendedView(config.relay?.deviceId, (config.servers || []).filter((server) => server.enabled !== false).length)
+      const next = recommendedView(
+        config.relay?.deviceId,
+        (config.servers || []).filter((server) => server.enabled !== false)
+          .length
+      )
       if (!didInitializeView.current) {
         didInitializeView.current = true
         return next
@@ -129,14 +142,14 @@ export default function App() {
       return
     }
 
-    return window.runtime.EventsOn('window:confirm-close', () => {
+    return window.runtime.EventsOn("window:confirm-close", () => {
       setRememberCloseChoice(false)
       setShowCloseConfirmDialog(true)
     })
   }, [])
 
   async function handleStart() {
-    setBusy('starting')
+    setBusy("starting")
     try {
       await actions.startRelay()
     } catch (cause) {
@@ -147,7 +160,7 @@ export default function App() {
   }
 
   async function handleStop() {
-    setBusy('stopping')
+    setBusy("stopping")
     try {
       await actions.stopRelay()
     } catch (cause) {
@@ -158,7 +171,7 @@ export default function App() {
   }
 
   async function handleRestart() {
-    setBusy('restarting')
+    setBusy("restarting")
     try {
       await actions.restartRelay()
     } catch (cause) {
@@ -178,7 +191,7 @@ export default function App() {
       return
     }
 
-    if (view === 'apps' && appsPanelRef.current?.hasUnsavedChanges()) {
+    if (view === "apps" && appsPanelRef.current?.hasUnsavedChanges()) {
       setPendingView(nextView)
       setShowUnsavedDialog(true)
       return
@@ -211,8 +224,8 @@ export default function App() {
     closeUnsavedDialog()
   }
 
-  async function handleCloseDecision(action: 'tray' | 'quit' | 'cancel') {
-    if (action === 'cancel') {
+  async function handleCloseDecision(action: "tray" | "quit" | "cancel") {
+    if (action === "cancel") {
       setShowCloseConfirmDialog(false)
       setRememberCloseChoice(false)
       return
@@ -220,7 +233,7 @@ export default function App() {
 
     setCloseDialogBusy(true)
     try {
-      await callGo('ConfirmWindowClose', action, rememberCloseChoice)
+      await callGo("ConfirmWindowClose", action, rememberCloseChoice)
       setShowCloseConfirmDialog(false)
       setRememberCloseChoice(false)
     } catch (cause) {
@@ -250,7 +263,10 @@ export default function App() {
                 <button
                   key={item.value}
                   type="button"
-                  className={cn('relay-sidebar__item', active && 'relay-sidebar__item--active')}
+                  className={cn(
+                    "relay-sidebar__item",
+                    active && "relay-sidebar__item--active"
+                  )}
                   onClick={() => handleNavigate(item.value)}
                 >
                   <Icon strokeWidth={1.8} />
@@ -268,37 +284,37 @@ export default function App() {
                 <CircleAlert className="relay-banner__icon" />
                 <span>{banner}</span>
               </div>
-              <Button size="sm" variant="ghost" onClick={() => setBanner('')}>
+              <Button size="sm" variant="ghost" onClick={() => setBanner("")}>
                 Dismiss
               </Button>
             </div>
           ) : null}
 
           <section className="relay-main__content">
-            {view === 'status' ? (
+            {view === "status" ? (
               <StatusPanel
                 config={config}
                 status={status}
                 busy={busy}
-                onOpenPairing={() => handleNavigate('pairing')}
-                onOpenServers={() => handleNavigate('servers')}
+                onOpenPairing={() => handleNavigate("pairing")}
+                onOpenServers={() => handleNavigate("servers")}
                 onStart={() => void handleStart()}
                 onStop={() => void handleStop()}
                 onRestart={() => void handleRestart()}
               />
             ) : null}
 
-            {view === 'logs' ? (
-              <LogsPanel logs={logs} />
-            ) : null}
+            {view === "logs" ? <LogsPanel logs={logs} /> : null}
 
-            {view === 'pairing' ? (
+            {view === "pairing" ? (
               <PairingPanel
-                onClaimPairing={(serverBaseUrl, pairingCode) => actions.claimPairing(serverBaseUrl, pairingCode, '')}
+                onClaimPairing={(serverBaseUrl, pairingCode) =>
+                  actions.claimPairing(serverBaseUrl, pairingCode, "")
+                }
               />
             ) : null}
 
-            {view === 'servers' ? (
+            {view === "servers" ? (
               <ServersPanel
                 config={config}
                 onAddServer={(server) => actions.addServer(server)}
@@ -306,32 +322,44 @@ export default function App() {
               />
             ) : null}
 
-            {view === 'apps' ? (
+            {view === "apps" ? (
               <AppsPanel
                 ref={appsPanelRef}
                 config={config}
-                onGetSuggestedFilesystemRoots={() => actions.getSuggestedFilesystemRoots()}
+                onGetSuggestedFilesystemRoots={() =>
+                  actions.getSuggestedFilesystemRoots()
+                }
                 onSave={(nextConfig) => actions.saveConfig(nextConfig)}
               />
             ) : null}
 
-            {view === 'sync' ? (
+            {view === "sync" ? (
               <SyncPanel
                 config={config}
                 sources={sources}
                 onDetectSources={() => actions.detectSources()}
-                onAddSyncSource={(source, syncMode) => actions.addSyncSource(source, syncMode)}
+                onAddSyncSource={(source, syncMode) =>
+                  actions.addSyncSource(source, syncMode)
+                }
                 onImportServer={(server) => actions.importServers([server])}
-                onRemoveSyncSource={(sourceKey) => actions.removeSyncSource(sourceKey)}
-                onSetSyncSourceMode={(source, syncMode) => actions.setSyncSourceMode(source, syncMode)}
+                onRemoveSyncSource={(sourceKey) =>
+                  actions.removeSyncSource(sourceKey)
+                }
+                onSetSyncSourceMode={(source, syncMode) =>
+                  actions.setSyncSourceMode(source, syncMode)
+                }
               />
             ) : null}
 
-            {view === 'settings' ? (
+            {view === "settings" ? (
               <SettingsPanel
                 config={config}
                 onSaveDesktopSettings={(startup, notifications, security) =>
-                  actions.saveDesktopPreferences(startup, notifications, security)
+                  actions.saveDesktopPreferences(
+                    startup,
+                    notifications,
+                    security
+                  )
                 }
               />
             ) : null}
@@ -339,43 +367,62 @@ export default function App() {
         </main>
       </div>
 
-      <Dialog open={showUnsavedDialog} onOpenChange={(open) => {
-        if (!open) {
-          closeUnsavedDialog()
-        }
-      }}>
+      <Dialog
+        open={showUnsavedDialog}
+        onOpenChange={(open) => {
+          if (!open) {
+            closeUnsavedDialog()
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Save changes before leaving?</DialogTitle>
             <DialogDescription>
-              You have unsaved built-in app changes. Save them before switching menus, or discard them and continue.
+              You have unsaved built-in app changes. Save them before switching
+              menus, or discard them and continue.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter className="mt-6">
-            <Button variant="ghost" onClick={closeUnsavedDialog} disabled={savingBeforeNavigate}>
+            <Button
+              variant="ghost"
+              onClick={closeUnsavedDialog}
+              disabled={savingBeforeNavigate}
+            >
               Stay
             </Button>
-            <Button variant="outline" onClick={handleDiscardAndContinue} disabled={savingBeforeNavigate}>
+            <Button
+              variant="outline"
+              onClick={handleDiscardAndContinue}
+              disabled={savingBeforeNavigate}
+            >
               Discard
             </Button>
-            <Button onClick={() => void handleSaveAndContinue()} disabled={savingBeforeNavigate}>
-              {savingBeforeNavigate ? 'Saving...' : 'Save and Continue'}
+            <Button
+              onClick={() => void handleSaveAndContinue()}
+              disabled={savingBeforeNavigate}
+            >
+              {savingBeforeNavigate ? "Saving..." : "Save and Continue"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      <Dialog open={showCloseConfirmDialog} onOpenChange={(open) => {
-        if (!open && !closeDialogBusy) {
-          setShowCloseConfirmDialog(false)
-          setRememberCloseChoice(false)
-        }
-      }}>
+      <Dialog
+        open={showCloseConfirmDialog}
+        onOpenChange={(open) => {
+          if (!open && !closeDialogBusy) {
+            setShowCloseConfirmDialog(false)
+            setRememberCloseChoice(false)
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Keep Synapse Relay running?</DialogTitle>
             <DialogDescription>
-              The relay is still running. You can keep it active in the system tray or fully exit the desktop app.
+              The relay is still running. You can keep it active in the system
+              tray or fully exit the desktop app.
             </DialogDescription>
           </DialogHeader>
 
@@ -391,13 +438,25 @@ export default function App() {
           </label>
 
           <DialogFooter className="mt-6">
-            <Button variant="ghost" onClick={() => void handleCloseDecision('cancel')} disabled={closeDialogBusy}>
+            <Button
+              variant="ghost"
+              onClick={() => void handleCloseDecision("cancel")}
+              disabled={closeDialogBusy}
+            >
               Cancel
             </Button>
-            <Button variant="outline" onClick={() => void handleCloseDecision('tray')} disabled={closeDialogBusy}>
+            <Button
+              variant="outline"
+              onClick={() => void handleCloseDecision("tray")}
+              disabled={closeDialogBusy}
+            >
               Minimize to Tray
             </Button>
-            <Button variant="destructive" onClick={() => void handleCloseDecision('quit')} disabled={closeDialogBusy}>
+            <Button
+              variant="destructive"
+              onClick={() => void handleCloseDecision("quit")}
+              disabled={closeDialogBusy}
+            >
               Exit App
             </Button>
           </DialogFooter>
@@ -409,7 +468,8 @@ export default function App() {
           <DialogHeader>
             <DialogTitle>Synapse Relay did not close cleanly</DialogTitle>
             <DialogDescription>
-              {crashRecovery?.summary || 'The previous desktop session ended unexpectedly. You can review the local log before continuing.'}
+              {crashRecovery?.summary ||
+                "The previous desktop session ended unexpectedly. You can review the local log before continuing."}
             </DialogDescription>
           </DialogHeader>
 
@@ -421,10 +481,16 @@ export default function App() {
           ) : null}
 
           <DialogFooter className="mt-6">
-            <Button variant="ghost" onClick={() => void handleDismissCrashRecovery()}>
+            <Button
+              variant="ghost"
+              onClick={() => void handleDismissCrashRecovery()}
+            >
               Continue
             </Button>
-            <Button variant="outline" onClick={() => void actions.openDesktopLogDir()}>
+            <Button
+              variant="outline"
+              onClick={() => void actions.openDesktopLogDir()}
+            >
               Open Log Folder
             </Button>
             <Button onClick={() => void actions.openDesktopLogFile()}>

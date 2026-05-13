@@ -1,13 +1,7 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useRouter } from "expo-router";
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import {
-  Pressable,
-  StyleSheet,
-  Text,
-  TextInput,
-  View,
-} from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { useRouter } from "expo-router"
+import { useDeferredValue, useEffect, useMemo, useState } from "react"
+import { Pressable, StyleSheet, Text, TextInput, View } from "react-native"
 
 import {
   Avatar,
@@ -17,36 +11,41 @@ import {
   ScreenScroll,
   SectionBlock,
   SectionTitleRow,
-} from "@/components/ui";
-import { api } from "@/lib/api";
-import { useChat } from "@/providers/chat-provider";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
+} from "@/components/ui"
+import { api } from "@/lib/api"
+import { useChat } from "@/providers/chat-provider"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
 import type {
   ContactHubEntryView,
   ContactHubResponse,
   IdentitySearchMatchView,
   IdentitySearchResponse,
-} from "@/types/api";
-import type { ChatConversationView } from "@shared";
+} from "@/types/api"
+import type { ChatConversationView } from "@shared"
 
-function matchesConversation(conversation: ChatConversationView, query: string) {
-  if (!query) return false;
-  return [
-    conversation.title,
-    conversation.lastItem?.previewText,
-  ]
+function matchesConversation(
+  conversation: ChatConversationView,
+  query: string
+) {
+  if (!query) return false
+  return [conversation.title, conversation.lastItem?.previewText]
     .join(" ")
     .toLowerCase()
-    .includes(query);
+    .includes(query)
 }
 
 function matchesContact(entry: ContactHubEntryView, query: string) {
-  if (!query) return false;
-  return [entry.title, entry.subtitle, entry.workspace.name, entry.relationLabel]
+  if (!query) return false
+  return [
+    entry.title,
+    entry.subtitle,
+    entry.workspace.name,
+    entry.relationLabel,
+  ]
     .join(" ")
     .toLowerCase()
-    .includes(query);
+    .includes(query)
 }
 
 function buildSearchDetailParams(match: IdentitySearchMatchView) {
@@ -61,97 +60,102 @@ function buildSearchDetailParams(match: IdentitySearchMatchView) {
       workspaceSlug: match.workspace.slug,
       state: match.state,
     },
-  };
+  }
 }
 
 function friendStateLabel(match: IdentitySearchMatchView) {
   switch (match.state) {
     case "same_workspace_member":
-      return "同 workspace 用户";
+      return "同 workspace 用户"
     case "friend":
-      return "已是好友";
+      return "已是好友"
     case "pending_request":
-      return "好友申请待处理";
+      return "好友申请待处理"
     default:
-      return "可发起好友申请";
+      return "可发起好友申请"
   }
 }
 
 export default function GlobalSearchScreen() {
-  const router = useRouter();
-  const { workspaceId } = useWorkspace();
-  const { conversations } = useChat();
-  const [query, setQuery] = useState("");
-  const [loading, setLoading] = useState(true);
-  const [hub, setHub] = useState<ContactHubResponse | null>(null);
+  const router = useRouter()
+  const { workspaceId } = useWorkspace()
+  const { conversations } = useChat()
+  const [query, setQuery] = useState("")
+  const [loading, setLoading] = useState(true)
+  const [hub, setHub] = useState<ContactHubResponse | null>(null)
   const [identityResults, setIdentityResults] =
-    useState<IdentitySearchResponse | null>(null);
-  const [friendIdMessage, setFriendIdMessage] = useState<string | null>(null);
+    useState<IdentitySearchResponse | null>(null)
+  const [friendIdMessage, setFriendIdMessage] = useState<string | null>(null)
 
-  const deferredQuery = useDeferredValue(query.trim().toLowerCase());
+  const deferredQuery = useDeferredValue(query.trim().toLowerCase())
 
   useEffect(() => {
     if (!workspaceId) {
-      setLoading(false);
-      return;
+      setLoading(false)
+      return
     }
 
-    let active = true;
-    setLoading(true);
+    let active = true
+    setLoading(true)
     void Promise.all([api.getContactHub(workspaceId)])
       .then(([hubResponse]) => {
-        if (!active) return;
-        setHub(hubResponse);
+        if (!active) return
+        setHub(hubResponse)
       })
       .finally(() => {
         if (active) {
-          setLoading(false);
+          setLoading(false)
         }
-      });
+      })
 
     return () => {
-      active = false;
-    };
-  }, [workspaceId]);
+      active = false
+    }
+  }, [workspaceId])
 
   useEffect(() => {
     if (!workspaceId || !deferredQuery) {
-      setIdentityResults(null);
-      setFriendIdMessage(null);
-      return;
+      setIdentityResults(null)
+      setFriendIdMessage(null)
+      return
     }
 
-    let active = true;
+    let active = true
     void api
       .searchIdentity(workspaceId, deferredQuery)
       .then((result) => {
-        if (!active) return;
-        setIdentityResults(result);
+        if (!active) return
+        setIdentityResults(result)
         if (result.outcome === "invalid") {
-          setFriendIdMessage("好友 ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。");
+          setFriendIdMessage(
+            "好友 ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。"
+          )
         } else if (result.outcome === "not_found") {
-          setFriendIdMessage("没有匹配的好友 ID。");
+          setFriendIdMessage("没有匹配的好友 ID。")
         } else if (result.outcome === "self") {
-          setFriendIdMessage("这是你自己的好友 ID。");
+          setFriendIdMessage("这是你自己的好友 ID。")
         } else {
-          setFriendIdMessage(null);
+          setFriendIdMessage(null)
         }
       })
       .catch((error) => {
-        if (!active) return;
-        setIdentityResults(null);
-        setFriendIdMessage(error instanceof Error ? error.message : "搜索好友 ID 失败。");
-      });
+        if (!active) return
+        setIdentityResults(null)
+        setFriendIdMessage(
+          error instanceof Error ? error.message : "搜索好友 ID 失败。"
+        )
+      })
 
     return () => {
-      active = false;
-    };
-  }, [deferredQuery, workspaceId]);
+      active = false
+    }
+  }, [deferredQuery, workspaceId])
 
   const matchedConversations = useMemo(
-    () => conversations.filter((item) => matchesConversation(item, deferredQuery)),
-    [conversations, deferredQuery],
-  );
+    () =>
+      conversations.filter((item) => matchesConversation(item, deferredQuery)),
+    [conversations, deferredQuery]
+  )
   const matchedContacts = useMemo(
     () =>
       [
@@ -159,8 +163,8 @@ export default function GlobalSearchScreen() {
         ...(hub?.workspaceMembers || []),
         ...(hub?.friends || []),
       ].filter((item) => matchesContact(item, deferredQuery)),
-    [deferredQuery, hub?.friends, hub?.workspaceActors, hub?.workspaceMembers],
-  );
+    [deferredQuery, hub?.friends, hub?.workspaceActors, hub?.workspaceMembers]
+  )
 
   return (
     <ScreenScroll topPadding={0} bottomPadding={56}>
@@ -207,14 +211,20 @@ export default function GlobalSearchScreen() {
           <SectionBlock>
             <SectionTitleRow
               title="会话记录"
-              action={<Text style={styles.countText}>{matchedConversations.length} 条</Text>}
+              action={
+                <Text style={styles.countText}>
+                  {matchedConversations.length} 条
+                </Text>
+              }
             />
             {matchedConversations.length > 0 ? (
               <View style={styles.listShell}>
                 {matchedConversations.map((conversation) => (
                   <Pressable
                     key={conversation.conversationId}
-                    onPress={() => router.push(`/chat/${conversation.conversationId}`)}
+                    onPress={() =>
+                      router.push(`/chat/${conversation.conversationId}`)
+                    }
                     style={({ pressed }) => [
                       styles.rowCard,
                       pressed && styles.rowCardPressed,
@@ -226,11 +236,10 @@ export default function GlobalSearchScreen() {
                       size={44}
                     />
                     <View style={styles.rowBody}>
-                      <Text style={styles.rowTitle}>
-                        {conversation.title}
-                      </Text>
+                      <Text style={styles.rowTitle}>{conversation.title}</Text>
                       <Text numberOfLines={1} style={styles.rowSubtitle}>
-                        {conversation.lastItem?.previewText?.trim() || "打开会话"}
+                        {conversation.lastItem?.previewText?.trim() ||
+                          "打开会话"}
                       </Text>
                     </View>
                     <Pill
@@ -251,7 +260,11 @@ export default function GlobalSearchScreen() {
           <SectionBlock>
             <SectionTitleRow
               title="已有联系人"
-              action={<Text style={styles.countText}>{matchedContacts.length} 条</Text>}
+              action={
+                <Text style={styles.countText}>
+                  {matchedContacts.length} 条
+                </Text>
+              }
             />
             {matchedContacts.length > 0 ? (
               <View style={styles.listShell}>
@@ -319,10 +332,10 @@ export default function GlobalSearchScreen() {
                             contactType: match.contact.kind,
                             contactId: match.contact.id,
                           },
-                        });
-                        return;
+                        })
+                        return
                       }
-                      router.push(buildSearchDetailParams(match));
+                      router.push(buildSearchDetailParams(match))
                     }}
                     style={({ pressed }) => [
                       styles.rowCard,
@@ -340,7 +353,9 @@ export default function GlobalSearchScreen() {
                       <Text numberOfLines={2} style={styles.rowSubtitle}>
                         {match.subtitle}
                       </Text>
-                      <Text style={styles.metaText}>{friendStateLabel(match)}</Text>
+                      <Text style={styles.metaText}>
+                        {friendStateLabel(match)}
+                      </Text>
                     </View>
                     <Feather
                       name="chevron-right"
@@ -361,7 +376,7 @@ export default function GlobalSearchScreen() {
         </>
       )}
     </ScreenScroll>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -447,4 +462,4 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: theme.colors.textSoft,
   },
-});
+})

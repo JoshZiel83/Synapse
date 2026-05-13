@@ -1,38 +1,40 @@
-import type { FastifyReply, FastifyRequest } from 'fastify';
-import { AUTH_SESSION_COOKIE_NAME } from '@synapse/shared';
-import { authenticateRequestSession } from '../../modules/auth/service.js';
+import type { FastifyReply, FastifyRequest } from "fastify"
+import { AUTH_SESSION_COOKIE_NAME } from "@synapse/shared"
+import { authenticateRequestSession } from "../../modules/auth/service.js"
 
 async function attachAuthenticatedRequest(request: FastifyRequest) {
-  const authenticated = await authenticateRequestSession(request);
-  if (!authenticated) return null;
-
-  (request as any).user = {
+  const authenticated = await authenticateRequestSession(request)
+  if (!authenticated) return null
+  ;(request as any).user = {
     userId: authenticated.user.id,
     email: authenticated.user.email,
-  };
-  (request as any).authSession = authenticated.session;
+  }
+  ;(request as any).authSession = authenticated.session
 
-  return authenticated;
+  return authenticated
 }
 
-export async function authMiddleware(request: FastifyRequest, reply: FastifyReply) {
-  const authenticated = await attachAuthenticatedRequest(request);
-  if (authenticated) return;
+export async function authMiddleware(
+  request: FastifyRequest,
+  reply: FastifyReply
+) {
+  const authenticated = await attachAuthenticatedRequest(request)
+  if (authenticated) return
 
   if (request.cookies?.[AUTH_SESSION_COOKIE_NAME]) {
-    reply.clearCookie(AUTH_SESSION_COOKIE_NAME, { path: '/' });
+    reply.clearCookie(AUTH_SESSION_COOKIE_NAME, { path: "/" })
   }
 
   return reply.status(401).send({
-    error: 'Authentication required',
-    code: 'UNAUTHENTICATED',
-  });
+    error: "Authentication required",
+    code: "UNAUTHENTICATED",
+  })
 }
 
 export async function optionalAuth(request: FastifyRequest) {
-  await attachAuthenticatedRequest(request);
+  await attachAuthenticatedRequest(request)
 }
 
 export function getUserId(request: FastifyRequest): string {
-  return (request as any).user?.userId;
+  return (request as any).user?.userId
 }

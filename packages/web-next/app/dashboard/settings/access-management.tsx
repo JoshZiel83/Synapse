@@ -101,12 +101,14 @@ const workspaceAccessOptions: Array<{
   {
     value: "skill_admin",
     label: "Skills",
-    description: "Can manage installed skills, bindings, and skill package rollout.",
+    description:
+      "Can manage installed skills, bindings, and skill package rollout.",
   },
   {
     value: "plugin_admin",
     label: "Plugins",
-    description: "Can manage plugin installations, mounts, and runtime approvals.",
+    description:
+      "Can manage plugin installations, mounts, and runtime approvals.",
   },
   {
     value: "memory_admin",
@@ -235,8 +237,14 @@ const conversationTypeOptions: Array<{
 
 const conversationTypePresets = [
   { label: "All", value: CONVERSATION_TYPE_MASK_PRESETS.ALL },
-  { label: "Internal only", value: CONVERSATION_TYPE_MASK_PRESETS.INTERNAL_ONLY },
-  { label: "External only", value: CONVERSATION_TYPE_MASK_PRESETS.EXTERNAL_ONLY },
+  {
+    label: "Internal only",
+    value: CONVERSATION_TYPE_MASK_PRESETS.INTERNAL_ONLY,
+  },
+  {
+    label: "External only",
+    value: CONVERSATION_TYPE_MASK_PRESETS.EXTERNAL_ONLY,
+  },
   { label: "Group only", value: CONVERSATION_TYPE_MASK_PRESETS.GROUP_ONLY },
   { label: "Private only", value: CONVERSATION_TYPE_MASK_PRESETS.PRIVATE_ONLY },
 ] as const
@@ -270,7 +278,8 @@ function formatConversationTypeKeys(keys: ConversationTypeKey[]) {
   return keys
     .map(
       (key) =>
-        conversationTypeOptions.find((option) => option.key === key)?.label || key
+        conversationTypeOptions.find((option) => option.key === key)?.label ||
+        key
     )
     .join(", ")
 }
@@ -305,9 +314,7 @@ function WorkspaceConversationTypePolicyCard({
       if (exists && current.length === 1) {
         return current
       }
-      return exists
-        ? current.filter((item) => item !== key)
-        : [...current, key]
+      return exists ? current.filter((item) => item !== key) : [...current, key]
     })
   }
 
@@ -355,7 +362,7 @@ function WorkspaceConversationTypePolicyCard({
       </div>
 
       <div className="mt-4 rounded-2xl border border-border bg-muted/20 p-4">
-        <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+        <div className="text-xs font-medium tracking-wide text-muted-foreground uppercase">
           Current default
         </div>
         <div className="mt-2 text-sm font-medium text-foreground">
@@ -406,14 +413,17 @@ export default function AccessManagement({
   const [refreshing, setRefreshing] = useState(false)
   const [workspaceError, setWorkspaceError] = useState<string | null>(null)
   const [platformError, setPlatformError] = useState<string | null>(null)
-  const [workspacePolicyError, setWorkspacePolicyError] = useState<string | null>(
-    null
-  )
+  const [workspacePolicyError, setWorkspacePolicyError] = useState<
+    string | null
+  >(null)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [workspaceConversationTypePolicies, setWorkspaceConversationTypePolicies] =
-    useState<Record<CapabilityConversationTypePolicyResourceFamily, number> | null>(
-      null
-    )
+  const [
+    workspaceConversationTypePolicies,
+    setWorkspaceConversationTypePolicies,
+  ] = useState<Record<
+    CapabilityConversationTypePolicyResourceFamily,
+    number
+  > | null>(null)
   const [workspaceAccessTargetMemberId, setWorkspaceAccessTargetMemberId] =
     useState("")
   const [workspaceAccessKey, setWorkspaceAccessKey] =
@@ -431,9 +441,8 @@ export default function AccessManagement({
   const [revokingPlatformKey, setRevokingPlatformKey] = useState<string | null>(
     null
   )
-  const [savingWorkspacePolicyFamily, setSavingWorkspacePolicyFamily] = useState<
-    CapabilityConversationTypePolicyResourceFamily | null
-  >(null)
+  const [savingWorkspacePolicyFamily, setSavingWorkspacePolicyFamily] =
+    useState<CapabilityConversationTypePolicyResourceFamily | null>(null)
 
   const loadWorkspaceData = useCallback(
     async (targetWorkspaceId: string) => {
@@ -597,11 +606,7 @@ export default function AccessManagement({
     setRevokingWorkspaceKey(key)
     setActionError(null)
     try {
-      await api.revokeWorkspaceAccess(
-        workspaceId,
-        workspaceMemberId,
-        accessKey
-      )
+      await api.revokeWorkspaceAccess(workspaceId, workspaceMemberId, accessKey)
       await loadWorkspaceData(workspaceId)
     } catch (error) {
       setActionError(
@@ -658,10 +663,11 @@ export default function AccessManagement({
     setSavingWorkspacePolicyFamily(family)
     setActionError(null)
     try {
-      const response = await api.updateWorkspaceCapabilityConversationTypePolicies(
-        workspaceId,
-        { policies: { [family]: mask } }
-      )
+      const response =
+        await api.updateWorkspaceCapabilityConversationTypePolicies(
+          workspaceId,
+          { policies: { [family]: mask } }
+        )
       const nextPolicies = Object.fromEntries(
         response.policies.map((policy) => [
           policy.resourceFamily,
@@ -836,8 +842,12 @@ export default function AccessManagement({
                             key={policy.family}
                             label={policy.label}
                             description={policy.description}
-                            value={workspaceConversationTypePolicies[policy.family]}
-                            saving={savingWorkspacePolicyFamily === policy.family}
+                            value={
+                              workspaceConversationTypePolicies[policy.family]
+                            }
+                            saving={
+                              savingWorkspacePolicyFamily === policy.family
+                            }
                             onSave={(mask) =>
                               handleSaveWorkspaceConversationTypePolicy(
                                 policy.family,
@@ -855,7 +865,7 @@ export default function AccessManagement({
                   <div className="grid gap-4 lg:grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_auto]">
                     <div className="flex flex-col gap-2">
                       <Label htmlFor="workspace-access-member">Person</Label>
-                        <Select
+                      <Select
                         value={workspaceAccessTargetMemberId}
                         onValueChange={setWorkspaceAccessTargetMemberId}
                       >
@@ -867,10 +877,7 @@ export default function AccessManagement({
                         </SelectTrigger>
                         <SelectContent>
                           {members.map((member) => (
-                            <SelectItem
-                              key={member.id}
-                              value={member.id}
-                            >
+                            <SelectItem key={member.id} value={member.id}>
                               {member.userName ||
                                 member.userEmail ||
                                 member.userId}

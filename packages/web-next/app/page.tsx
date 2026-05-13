@@ -27,7 +27,7 @@ export default function HomePage() {
       <LandingSnapScrollController />
       <LandingMotionProvider>
         <div className="pointer-events-none absolute inset-x-0 top-0 h-[42rem] bg-[radial-gradient(circle_at_top_left,rgba(45,212,191,0.18),transparent_34%),radial-gradient(circle_at_top_right,rgba(56,189,248,0.2),transparent_32%),linear-gradient(180deg,rgba(15,23,42,0.04),transparent_62%)]" />
-        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(15,23,42,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,0.03)_1px,transparent_1px)] bg-[size:28px_28px] [mask-image:linear-gradient(180deg,rgba(0,0,0,0.7),transparent_85%)]" />
+        <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(rgba(15,23,42,0.03)_1px,transparent_1px),linear-gradient(90deg,rgba(15,23,42,0.03)_1px,transparent_1px)] [mask-image:linear-gradient(180deg,rgba(0,0,0,0.7),transparent_85%)] bg-[size:28px_28px]" />
 
         <header className="fixed inset-x-0 top-4 z-40 px-4 sm:px-6 lg:px-8">
           <div className="mx-auto flex max-w-5xl items-center justify-between gap-6 rounded-full border border-white/70 bg-white/58 px-5 py-3 shadow-[0_24px_70px_-44px_rgba(15,23,42,0.55)] backdrop-blur-2xl lg:px-6">
@@ -39,22 +39,40 @@ export default function HomePage() {
             </Link>
 
             <nav className="hidden items-center gap-6 text-sm text-muted-foreground lg:flex">
-              <Link href="#difference" className="transition-colors hover:text-foreground/90">
+              <Link
+                href="#difference"
+                className="transition-colors hover:text-foreground/90"
+              >
                 定位
               </Link>
-              <Link href="#capabilities" className="transition-colors hover:text-foreground/90">
+              <Link
+                href="#capabilities"
+                className="transition-colors hover:text-foreground/90"
+              >
                 人才
               </Link>
-              <Link href="#plugins" className="transition-colors hover:text-foreground/90">
+              <Link
+                href="#plugins"
+                className="transition-colors hover:text-foreground/90"
+              >
                 插件
               </Link>
-              <Link href="#reach" className="transition-colors hover:text-foreground/90">
+              <Link
+                href="#reach"
+                className="transition-colors hover:text-foreground/90"
+              >
                 接入
               </Link>
-              <Link href="#events" className="transition-colors hover:text-foreground/90">
+              <Link
+                href="#events"
+                className="transition-colors hover:text-foreground/90"
+              >
                 事件
               </Link>
-              <Link href="#trust" className="transition-colors hover:text-foreground/90">
+              <Link
+                href="#trust"
+                className="transition-colors hover:text-foreground/90"
+              >
                 治理
               </Link>
             </nav>
@@ -63,7 +81,7 @@ export default function HomePage() {
 
         <section
           data-landing-snap-section="true"
-          className="landing-snap-section relative mx-auto max-w-7xl px-6 pb-18 pt-28 lg:px-8 lg:pb-24 lg:pt-32"
+          className="landing-snap-section relative mx-auto max-w-7xl px-6 pt-28 pb-18 lg:px-8 lg:pt-32 lg:pb-24"
         >
           <div className="landing-priority-frame flex flex-col gap-8 lg:gap-12">
             <div className="landing-priority-copy mx-auto max-w-4xl text-center">
@@ -85,7 +103,12 @@ export default function HomePage() {
                 <Button asChild size="lg">
                   <Link href="/register">创建团队</Link>
                 </Button>
-                <Button asChild size="lg" variant="outline" className="border-border/70 bg-white/70">
+                <Button
+                  asChild
+                  size="lg"
+                  variant="outline"
+                  className="border-border/70 bg-white/70"
+                >
                   <Link href="#trust">私有部署</Link>
                 </Button>
               </div>
@@ -113,7 +136,10 @@ export default function HomePage() {
           data-landing-tail="true"
           className="relative border-t border-border/50 bg-white/65 py-18 backdrop-blur-sm"
         >
-          <LandingReveal className="mx-auto max-w-5xl px-6 text-center lg:px-8" y={28}>
+          <LandingReveal
+            className="mx-auto max-w-5xl px-6 text-center lg:px-8"
+            y={28}
+          >
             <h2 className="font-display text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl">
               把 AI 从对话工具，升级为组织能力
             </h2>

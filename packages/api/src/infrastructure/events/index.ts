@@ -1,38 +1,38 @@
-import type { EventType, SystemEvent } from '@synapse/shared';
-import { sql } from "kysely";
-import { REDIS_CHANNELS } from '@synapse/shared';
-import { config } from '../../config/index.js';
-import { transaction } from '../database/index.js';
+import type { EventType, SystemEvent } from "@synapse/shared"
+import { sql } from "kysely"
+import { REDIS_CHANNELS } from "@synapse/shared"
+import { config } from "../../config/index.js"
+import { transaction } from "../database/index.js"
 import {
   db,
   executeCompiledQuery,
   executeCompiledSql,
   type TableInsert,
   type TableRow,
-} from "../database/kysely.js";
-import { redisPub, redisSub } from '../redis/index.js';
+} from "../database/kysely.js"
+import { redisPub, redisSub } from "../redis/index.js"
 
 export type Queryable = {
   query: (
     text: string,
-    params?: any[],
-  ) => Promise<{ rows: any[]; rowCount?: number | null }>;
-};
-
-export type TransactionalRealtimeEventType =
-  | 'feed.item.created'
-  | 'chat.sync.event';
-
-type TransactionalRealtimeEvent = SystemEvent & {
-  type: TransactionalRealtimeEventType;
-};
-
-export interface TransactionalRealtimeRecipient {
-  workspaceId: string;
-  workspaceMemberId: string;
+    params?: any[]
+  ) => Promise<{ rows: any[]; rowCount?: number | null }>
 }
 
-type EventHandler = (event: SystemEvent) => void | Promise<void>;
+export type TransactionalRealtimeEventType =
+  | "feed.item.created"
+  | "chat.sync.event"
+
+type TransactionalRealtimeEvent = SystemEvent & {
+  type: TransactionalRealtimeEventType
+}
+
+export interface TransactionalRealtimeRecipient {
+  workspaceId: string
+  workspaceMemberId: string
+}
+
+type EventHandler = (event: SystemEvent) => void | Promise<void>
 
 type RealtimeEventOutboxRow = Pick<
   TableRow<"realtime_event_outbox">,
@@ -42,54 +42,57 @@ type RealtimeEventOutboxRow = Pick<
   | "recipient_workspace_member_id"
   | "workspace_id"
 > & {
-  event_type: TransactionalRealtimeEventType;
-};
+  event_type: TransactionalRealtimeEventType
+}
 
-const handlers: Map<string, Set<EventHandler>> = new Map();
-const TRANSACTIONAL_REALTIME_EVENT_TYPES = new Set<TransactionalRealtimeEventType>([
-  'feed.item.created',
-  'chat.sync.event',
-]);
+const handlers: Map<string, Set<EventHandler>> = new Map()
+const TRANSACTIONAL_REALTIME_EVENT_TYPES =
+  new Set<TransactionalRealtimeEventType>([
+    "feed.item.created",
+    "chat.sync.event",
+  ])
 
-let realtimeOutboxDispatcherRunning = false;
-let realtimeOutboxDispatcherPromise: Promise<void> | null = null;
+let realtimeOutboxDispatcherRunning = false
+let realtimeOutboxDispatcherPromise: Promise<void> | null = null
 
 function isTransactionalRealtimeEventType(
-  type: EventType,
+  type: EventType
 ): type is TransactionalRealtimeEventType {
   return TRANSACTIONAL_REALTIME_EVENT_TYPES.has(
-    type as TransactionalRealtimeEventType,
-  );
+    type as TransactionalRealtimeEventType
+  )
 }
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
-  if (!value) return {};
-  if (typeof value === 'string') {
+  if (!value) return {}
+  if (typeof value === "string") {
     try {
-      const parsed = JSON.parse(value);
-      return parsed && typeof parsed === 'object'
+      const parsed = JSON.parse(value)
+      return parsed && typeof parsed === "object"
         ? (parsed as Record<string, unknown>)
-        : {};
+        : {}
     } catch {
-      return {};
+      return {}
     }
   }
-  return typeof value === 'object' ? (value as Record<string, unknown>) : {};
+  return typeof value === "object" ? (value as Record<string, unknown>) : {}
 }
 
 function eventTimestampToIso(value: string | Date) {
   if (value instanceof Date) {
-    return value.toISOString();
+    return value.toISOString()
   }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? new Date().toISOString() : parsed.toISOString();
+  const parsed = new Date(value)
+  return Number.isNaN(parsed.getTime())
+    ? new Date().toISOString()
+    : parsed.toISOString()
 }
 
 async function wait(ms: number) {
   await new Promise<void>((resolve) => {
-    const timer = setTimeout(resolve, ms);
-    timer.unref?.();
-  });
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+  })
 }
 
 async function claimPendingRealtimeOutboxEntries(limit: number) {
@@ -118,14 +121,14 @@ async function claimPendingRealtimeOutboxEntries(limit: number) {
                 reo.recipient_workspace_member_id,
                 reo.payload,
                 reo.event_timestamp
-    `.compile(db);
+    `.compile(db)
     const result = await executeCompiledSql<RealtimeEventOutboxRow>(
       client,
-      compiled,
-    );
+      compiled
+    )
 
-    return result.rows;
-  });
+    return result.rows
+  })
 }
 
 async function markRealtimeOutboxEntryDispatched(id: string) {
@@ -138,11 +141,11 @@ async function markRealtimeOutboxEntryDispatched(id: string) {
       updated_at: sql`NOW()`,
     })
     .where("id", "=", id)
-    .execute();
+    .execute()
 }
 
 async function markRealtimeOutboxEntryFailed(id: string, error: unknown) {
-  const message = error instanceof Error ? error.message : String(error);
+  const message = error instanceof Error ? error.message : String(error)
   await db
     .updateTable("realtime_event_outbox")
     .set({
@@ -152,86 +155,89 @@ async function markRealtimeOutboxEntryFailed(id: string, error: unknown) {
       updated_at: sql`NOW()`,
     })
     .where("id", "=", id)
-    .execute();
+    .execute()
 }
 
 async function materializeRealtimeOutboxEvent(
-  entry: RealtimeEventOutboxRow,
+  entry: RealtimeEventOutboxRow
 ): Promise<SystemEvent> {
-  const payload = parseJsonObject(entry.payload);
-  const timestamp = eventTimestampToIso(entry.event_timestamp);
+  const payload = parseJsonObject(entry.payload)
+  const timestamp = eventTimestampToIso(entry.event_timestamp)
 
   switch (entry.event_type) {
-    case 'feed.item.created': {
+    case "feed.item.created": {
       const itemId =
-        typeof payload.itemId === 'string' ? payload.itemId.trim() : '';
+        typeof payload.itemId === "string" ? payload.itemId.trim() : ""
       if (!itemId) {
-        throw new Error(`Outbox entry ${entry.id} is missing itemId`);
+        throw new Error(`Outbox entry ${entry.id} is missing itemId`)
       }
-      const { getConversationFeedItemById } = await import(
-        '../../modules/chat/service.js'
-      );
-      const item = await getConversationFeedItemById(itemId);
+      const { getConversationFeedItemById } =
+        await import("../../modules/chat/service.js")
+      const item = await getConversationFeedItemById(itemId)
       if (!item) {
         throw new Error(
-          `Conversation item ${itemId} not found for outbox entry ${entry.id}`,
-        );
+          `Conversation item ${itemId} not found for outbox entry ${entry.id}`
+        )
       }
       return {
-        type: 'feed.item.created',
+        type: "feed.item.created",
         workspaceId: entry.workspace_id,
         recipientWorkspaceMemberId: entry.recipient_workspace_member_id,
         payload: item as unknown as Record<string, unknown>,
         timestamp,
-      };
+      }
     }
-    case 'chat.sync.event':
+    case "chat.sync.event":
       return {
         type: entry.event_type,
         workspaceId: entry.workspace_id,
         recipientWorkspaceMemberId: entry.recipient_workspace_member_id,
         payload,
         timestamp,
-      };
+      }
     default:
-      throw new Error(`Unsupported realtime outbox event type ${entry.event_type}`);
+      throw new Error(
+        `Unsupported realtime outbox event type ${entry.event_type}`
+      )
   }
 }
 
 async function processRealtimeOutboxEntry(entry: RealtimeEventOutboxRow) {
   try {
-    const event = await materializeRealtimeOutboxEvent(entry);
-    await emitEvent(event);
-    await markRealtimeOutboxEntryDispatched(entry.id);
-    return true;
+    const event = await materializeRealtimeOutboxEvent(entry)
+    await emitEvent(event)
+    await markRealtimeOutboxEntryDispatched(entry.id)
+    return true
   } catch (error) {
-    await markRealtimeOutboxEntryFailed(entry.id, error);
+    await markRealtimeOutboxEntryFailed(entry.id, error)
     console.error(
       `[events] Failed to dispatch realtime outbox entry ${entry.id}:`,
-      error,
-    );
-    return false;
+      error
+    )
+    return false
   }
 }
 
 export async function enqueueTransactionalEventDeliveries(
   queryable: Queryable,
   event: {
-    type: TransactionalRealtimeEventType;
-    payload: Record<string, unknown>;
-    timestamp: string;
-    recipients: TransactionalRealtimeRecipient[];
-  },
+    type: TransactionalRealtimeEventType
+    payload: Record<string, unknown>
+    timestamp: string
+    recipients: TransactionalRealtimeRecipient[]
+  }
 ) {
   if (!isTransactionalRealtimeEventType(event.type)) {
-    throw new Error(`Event type ${event.type} does not support transactional outbox`);
+    throw new Error(
+      `Event type ${event.type} does not support transactional outbox`
+    )
   }
 
   const recipients = event.recipients.filter(
-    (recipient) => recipient.workspaceId && recipient.workspaceMemberId,
-  );
+    (recipient) => recipient.workspaceId && recipient.workspaceMemberId
+  )
   if (recipients.length === 0) {
-    return;
+    return
   }
 
   await executeCompiledQuery(
@@ -241,27 +247,27 @@ export async function enqueueTransactionalEventDeliveries(
         available_at: new Date(),
         event_timestamp: event.timestamp,
         event_type: event.type,
-        payload:
-          (event.payload || {}) as TableInsert<"realtime_event_outbox">["payload"],
+        payload: (event.payload ||
+          {}) as TableInsert<"realtime_event_outbox">["payload"],
         workspace_id: recipient.workspaceId,
         recipient_workspace_member_id: recipient.workspaceMemberId,
-      })),
-    ),
-  );
+      }))
+    )
+  )
 }
 
 export async function enqueueTransactionalEvent(
   queryable: Queryable,
-  event: TransactionalRealtimeEvent,
+  event: TransactionalRealtimeEvent
 ) {
   const recipientWorkspaceMemberId =
     typeof event.recipientWorkspaceMemberId === "string"
       ? event.recipientWorkspaceMemberId
-      : "";
+      : ""
   if (!recipientWorkspaceMemberId) {
     throw new Error(
-      `Transactional realtime event ${event.type} requires recipientWorkspaceMemberId`,
-    );
+      `Transactional realtime event ${event.type} requires recipientWorkspaceMemberId`
+    )
   }
 
   return enqueueTransactionalEventDeliveries(queryable, {
@@ -274,23 +280,23 @@ export async function enqueueTransactionalEvent(
         workspaceMemberId: recipientWorkspaceMemberId,
       },
     ],
-  });
+  })
 }
 
 export async function drainRealtimeEventOutbox(
-  batchSize = config.realtime.outboxBatchSize,
+  batchSize = config.realtime.outboxBatchSize
 ) {
-  let processed = 0;
+  let processed = 0
 
   while (true) {
-    const entries = await claimPendingRealtimeOutboxEntries(batchSize);
+    const entries = await claimPendingRealtimeOutboxEntries(batchSize)
     if (entries.length === 0) {
-      return processed;
+      return processed
     }
 
     for (const entry of entries) {
       if (await processRealtimeOutboxEntry(entry)) {
-        processed += 1;
+        processed += 1
       }
     }
   }
@@ -299,90 +305,90 @@ export async function drainRealtimeEventOutbox(
 async function runRealtimeOutboxDispatcherLoop() {
   while (realtimeOutboxDispatcherRunning) {
     try {
-      const processed = await drainRealtimeEventOutbox();
+      const processed = await drainRealtimeEventOutbox()
       if (!realtimeOutboxDispatcherRunning) {
-        break;
+        break
       }
-      await wait(processed > 0 ? 10 : config.realtime.outboxPollMs);
+      await wait(processed > 0 ? 10 : config.realtime.outboxPollMs)
     } catch (error) {
-      console.error('[events] Realtime outbox dispatcher loop failed:', error);
+      console.error("[events] Realtime outbox dispatcher loop failed:", error)
       if (!realtimeOutboxDispatcherRunning) {
-        break;
+        break
       }
-      await wait(config.realtime.outboxPollMs);
+      await wait(config.realtime.outboxPollMs)
     }
   }
 }
 
 export async function startRealtimeEventOutboxDispatcher() {
   if (realtimeOutboxDispatcherRunning) {
-    return;
+    return
   }
-  realtimeOutboxDispatcherRunning = true;
-  realtimeOutboxDispatcherPromise = runRealtimeOutboxDispatcherLoop();
+  realtimeOutboxDispatcherRunning = true
+  realtimeOutboxDispatcherPromise = runRealtimeOutboxDispatcherLoop()
 }
 
 export async function stopRealtimeEventOutboxDispatcher() {
-  realtimeOutboxDispatcherRunning = false;
-  const pending = realtimeOutboxDispatcherPromise;
-  realtimeOutboxDispatcherPromise = null;
+  realtimeOutboxDispatcherRunning = false
+  const pending = realtimeOutboxDispatcherPromise
+  realtimeOutboxDispatcherPromise = null
   if (pending) {
-    await pending;
+    await pending
   }
 }
 
 export async function initEventBus() {
-  await redisSub.subscribe(REDIS_CHANNELS.EVENTS);
+  await redisSub.subscribe(REDIS_CHANNELS.EVENTS)
 
-  redisSub.on('message', async (channel: string, message: string) => {
-    if (channel !== REDIS_CHANNELS.EVENTS) return;
+  redisSub.on("message", async (channel: string, message: string) => {
+    if (channel !== REDIS_CHANNELS.EVENTS) return
 
     try {
-      const event: SystemEvent = JSON.parse(message);
-      const typeHandlers = handlers.get(event.type);
+      const event: SystemEvent = JSON.parse(message)
+      const typeHandlers = handlers.get(event.type)
       if (typeHandlers) {
         for (const handler of typeHandlers) {
           try {
-            await handler(event);
+            await handler(event)
           } catch (err) {
-            console.error(`Event handler error for ${event.type}:`, err);
+            console.error(`Event handler error for ${event.type}:`, err)
           }
         }
       }
 
-      const wildcardHandlers = handlers.get('*');
+      const wildcardHandlers = handlers.get("*")
       if (wildcardHandlers) {
         for (const handler of wildcardHandlers) {
           try {
-            await handler(event);
+            await handler(event)
           } catch (err) {
-            console.error('Wildcard event handler error:', err);
+            console.error("Wildcard event handler error:", err)
           }
         }
       }
     } catch (err) {
-      console.error('Event parse error:', err);
+      console.error("Event parse error:", err)
     }
-  });
+  })
 }
 
 export function onEvent(type: string, handler: EventHandler) {
   if (!handlers.has(type)) {
-    handlers.set(type, new Set());
+    handlers.set(type, new Set())
   }
-  handlers.get(type)!.add(handler);
-  return () => handlers.get(type)?.delete(handler);
+  handlers.get(type)!.add(handler)
+  return () => handlers.get(type)?.delete(handler)
 }
 
 export async function emitEvent(event: SystemEvent) {
-  await redisPub.publish(REDIS_CHANNELS.EVENTS, JSON.stringify(event));
+  await redisPub.publish(REDIS_CHANNELS.EVENTS, JSON.stringify(event))
 }
 
 export async function shutdownEventBus() {
-  await stopRealtimeEventOutboxDispatcher();
+  await stopRealtimeEventOutboxDispatcher()
 
   try {
-    await redisSub.unsubscribe(REDIS_CHANNELS.EVENTS);
+    await redisSub.unsubscribe(REDIS_CHANNELS.EVENTS)
   } catch {
     // Ignore unsubscribe errors during shutdown.
   }

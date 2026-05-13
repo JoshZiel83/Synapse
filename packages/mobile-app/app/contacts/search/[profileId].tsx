@@ -1,7 +1,7 @@
-import Feather from "@expo/vector-icons/Feather";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useState } from "react";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import Feather from "@expo/vector-icons/Feather"
+import { useLocalSearchParams, useRouter } from "expo-router"
+import { useState } from "react"
+import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import {
   Avatar,
@@ -9,57 +9,57 @@ import {
   ScreenScroll,
   SectionBlock,
   SectionTitleRow,
-} from "@/components/ui";
-import { api } from "@/lib/api";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
+} from "@/components/ui"
+import { api } from "@/lib/api"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
 
 type SearchState =
   | "same_workspace_member"
   | "friend"
   | "pending_request"
-  | "requestable";
+  | "requestable"
 
 function statusLabel(state: SearchState) {
   switch (state) {
     case "same_workspace_member":
-      return "同 workspace 用户";
+      return "同 workspace 用户"
     case "friend":
-      return "已是好友";
+      return "已是好友"
     case "pending_request":
-      return "好友申请待处理";
+      return "好友申请待处理"
     default:
-      return "可发起好友申请";
+      return "可发起好友申请"
   }
 }
 
 export default function SearchContactDetailScreen() {
-  const router = useRouter();
-  const { workspaceId } = useWorkspace();
+  const router = useRouter()
+  const { workspaceId } = useWorkspace()
   const params = useLocalSearchParams<{
-    profileId: string;
-    title?: string;
-    subtitle?: string;
-    avatarUrl?: string;
-    workspaceName?: string;
-    workspaceSlug?: string;
-    state?: SearchState;
-  }>();
-  const [submitting, setSubmitting] = useState(false);
-  const [message, setMessage] = useState<string | null>(null);
+    profileId: string
+    title?: string
+    subtitle?: string
+    avatarUrl?: string
+    workspaceName?: string
+    workspaceSlug?: string
+    state?: SearchState
+  }>()
+  const [submitting, setSubmitting] = useState(false)
+  const [message, setMessage] = useState<string | null>(null)
 
-  const state = (params.state || "requestable") as SearchState;
+  const state = (params.state || "requestable") as SearchState
 
   async function handleRequestFriend() {
-    if (!workspaceId || !params.profileId || submitting) return;
+    if (!workspaceId || !params.profileId || submitting) return
 
-    setSubmitting(true);
-    setMessage(null);
+    setSubmitting(true)
+    setMessage(null)
     try {
       const result = await api.requestIdentityProfile(
         workspaceId,
-        params.profileId,
-      );
+        params.profileId
+      )
 
       if (result.contact) {
         router.replace({
@@ -68,8 +68,8 @@ export default function SearchContactDetailScreen() {
             contactType: result.contact.kind,
             contactId: result.contact.id,
           },
-        });
-        return;
+        })
+        return
       }
 
       setMessage(
@@ -79,12 +79,12 @@ export default function SearchContactDetailScreen() {
             ? "好友申请正在等待处理。"
             : result.outcome === "friend_active"
               ? "已经是好友了。"
-              : "操作已提交。",
-      );
+              : "操作已提交。"
+      )
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "发起好友申请失败。");
+      setMessage(error instanceof Error ? error.message : "发起好友申请失败。")
     } finally {
-      setSubmitting(false);
+      setSubmitting(false)
     }
   }
 
@@ -152,7 +152,7 @@ export default function SearchContactDetailScreen() {
         </View>
       </SectionBlock>
     </ScreenScroll>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -233,4 +233,4 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: theme.colors.text,
   },
-});
+})

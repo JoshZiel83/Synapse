@@ -1,18 +1,18 @@
-import test from "node:test";
-import assert from "node:assert/strict";
-import { textBlocks } from "@synapse/shared";
-import { getAssistantSessionMessagePersistence } from "./session-message-persistence.js";
+import test from "node:test"
+import assert from "node:assert/strict"
+import { textBlocks } from "@synapse/shared"
+import { getAssistantSessionMessagePersistence } from "./session-message-persistence.js"
 
 test("does not persist a hidden assistant session message when a turn has only reasoning", () => {
   const persistence = getAssistantSessionMessagePersistence({
     actions: [],
-  });
+  })
 
-  assert.deepEqual(persistence, { kind: "none" });
-});
+  assert.deepEqual(persistence, { kind: "none" })
+})
 
 test("persists visible respond actions", () => {
-  const contentBlocks = textBlocks("Visible reply");
+  const contentBlocks = textBlocks("Visible reply")
   const persistence = getAssistantSessionMessagePersistence({
     actions: [
       {
@@ -21,12 +21,12 @@ test("persists visible respond actions", () => {
         contentBlocks,
       },
     ],
-  });
+  })
 
-  assert.equal(persistence.kind, "respond");
-  assert.equal(persistence.actions.length, 1);
-  assert.deepEqual(persistence.actions[0]?.contentBlocks, contentBlocks);
-});
+  assert.equal(persistence.kind, "respond")
+  assert.equal(persistence.actions.length, 1)
+  assert.deepEqual(persistence.actions[0]?.contentBlocks, contentBlocks)
+})
 
 test("falls back to a silent action marker for non-respond actions", () => {
   const persistence = getAssistantSessionMessagePersistence({
@@ -40,10 +40,10 @@ test("falls back to a silent action marker for non-respond actions", () => {
         content: "Rename me",
       },
     ],
-  });
+  })
 
   assert.deepEqual(persistence, {
     kind: "silent_actions",
     actionNames: ["create_memory", "rename_self"],
-  });
-});
+  })
+})

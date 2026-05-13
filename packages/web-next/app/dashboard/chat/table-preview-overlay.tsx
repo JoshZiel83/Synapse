@@ -3,10 +3,7 @@
 import type { CSSProperties, ReactNode } from "react"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { createPortal } from "react-dom"
-import {
-  Lock,
-  X,
-} from "lucide-react"
+import { Lock, X } from "lucide-react"
 
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { cn } from "@/lib/utils"
@@ -67,7 +64,10 @@ export function TablePreviewOverlay({
     window.addEventListener("orientationchange", updateViewportOrientation)
 
     return () => {
-      screenOrientation?.removeEventListener?.("change", updateViewportOrientation)
+      screenOrientation?.removeEventListener?.(
+        "change",
+        updateViewportOrientation
+      )
       window.removeEventListener("orientationchange", updateViewportOrientation)
     }
   }, [])
@@ -167,7 +167,7 @@ export function TablePreviewOverlay({
         aria-label="Table preview"
         className="grid h-[100dvh] min-h-0 grid-rows-[auto_minmax(0,1fr)]"
       >
-        <div className="border-b border-border bg-background/95 px-4 pb-4 pt-[max(1rem,env(safe-area-inset-top))] backdrop-blur">
+        <div className="border-b border-border bg-background/95 px-4 pt-[max(1rem,env(safe-area-inset-top))] pb-4 backdrop-blur">
           <div className="flex min-h-9 items-center justify-between gap-3">
             <div className="min-w-0 text-base font-medium text-foreground">
               Preview
@@ -215,7 +215,7 @@ export function TablePreviewOverlay({
           className="relative min-h-0 overflow-hidden bg-background pb-[env(safe-area-inset-bottom)]"
         >
           <div
-            className="absolute left-0 top-0 overflow-visible bg-background transition-transform duration-200"
+            className="absolute top-0 left-0 overflow-visible bg-background transition-transform duration-200"
             style={previewStageStyle}
           >
             <div

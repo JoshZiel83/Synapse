@@ -25,19 +25,13 @@ import type {
   ConversationSummary,
   FeedMessage,
 } from "@/stores/chat-store"
-import {
-  api,
-  type ChatInteractionResolveInput,
-} from "@/lib/api"
+import { api, type ChatInteractionResolveInput } from "@/lib/api"
 import ChatAvatar from "./chat-avatar"
 import ChatMemberStrip from "./chat-member-strip"
 import ChatParticipantDetailDialog from "./chat-participant-detail-dialog"
 import MobileConversationDetailsDialog from "./mobile-conversation-details-dialog"
 import TransportKindIcon from "./transport-kind-icon"
-import {
-  getActorRuntimePriority,
-  isActorRuntimeActive,
-} from "./runtime-ui"
+import { getActorRuntimePriority, isActorRuntimeActive } from "./runtime-ui"
 import { useChatStore } from "@/stores/chat-store"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { isActorRuntimeProcessingWorkspaceMember } from "@synapse/shared"
@@ -257,8 +251,7 @@ export default function ConversationChat({
   const initialScrollPendingRef = useRef(true)
   const hasObservedLoadingForConversationRef = useRef(false)
   const [showJumpButton, setShowJumpButton] = useState(false)
-  const [conversationDetailsOpen, setConversationDetailsOpen] =
-    useState(false)
+  const [conversationDetailsOpen, setConversationDetailsOpen] = useState(false)
   const [participantDetailOpen, setParticipantDetailOpen] = useState(false)
   const [selectedParticipantMember, setSelectedParticipantMember] =
     useState<ConversationMember | null>(null)
@@ -316,7 +309,7 @@ export default function ConversationChat({
               : "External participant"
             : member.type === "remote_agent"
               ? member.title || member.role || "Remote agent"
-            : "Workspace user",
+              : "Workspace user",
         searchTerms: buildMentionSearchTerms(member),
       }))
     const outOfConversationActors = workspaceActors
@@ -367,11 +360,17 @@ export default function ConversationChat({
     () =>
       Object.values(actorRuntimes || {})
         .filter((runtime) => isActorRuntimeActive(runtime))
-        .sort((left, right) => getActorRuntimePriority(left) - getActorRuntimePriority(right)),
+        .sort(
+          (left, right) =>
+            getActorRuntimePriority(left) - getActorRuntimePriority(right)
+        ),
     [actorRuntimes]
   )
   const currentTurnRuntimes = useMemo(
-    () => activeRuntimes.filter((runtime) => Boolean(runtime.currentTurnPreview?.turnId)),
+    () =>
+      activeRuntimes.filter((runtime) =>
+        Boolean(runtime.currentTurnPreview?.turnId)
+      ),
     [activeRuntimes]
   )
   const myProcessingRuntimes = useMemo(
@@ -713,7 +712,8 @@ export default function ConversationChat({
                   isUser={
                     msg.author
                       ? msg.author.participantType === "workspace_member" &&
-                        msg.author.workspaceMemberId === currentViewerWorkspaceMemberId
+                        msg.author.workspaceMemberId ===
+                          currentViewerWorkspaceMemberId
                       : msg.role === "user"
                   }
                   status={msg.deliveryStatus}

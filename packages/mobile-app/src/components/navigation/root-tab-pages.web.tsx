@@ -1,22 +1,22 @@
-import { StyleSheet, View } from "react-native";
+import { StyleSheet, View } from "react-native"
 
-import { ROOT_TAB_ORDER, type RootTabKey } from "@/navigation/root-tabs";
+import { ROOT_TAB_ORDER, type RootTabKey } from "@/navigation/root-tabs"
 
 export function RootTabPages({
   selectedTab,
   visitedTabs,
   renderTabPage,
 }: {
-  initialTab: RootTabKey;
-  selectedTab: RootTabKey;
-  visitedTabs: RootTabKey[];
-  onSelectTab: (tab: RootTabKey) => void;
-  renderTabPage: (tab: RootTabKey) => React.ReactNode;
+  initialTab: RootTabKey
+  selectedTab: RootTabKey
+  visitedTabs: RootTabKey[]
+  onSelectTab: (tab: RootTabKey) => void
+  renderTabPage: (tab: RootTabKey) => React.ReactNode
 }) {
   return (
     <View style={styles.webPager}>
       {ROOT_TAB_ORDER.map((tab) => {
-        const isActive = selectedTab === tab;
+        const isActive = selectedTab === tab
 
         return (
           <View
@@ -29,10 +29,10 @@ export function RootTabPages({
           >
             {visitedTabs.includes(tab) ? renderTabPage(tab) : null}
           </View>
-        );
+        )
       })}
     </View>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -48,4 +48,4 @@ const styles = StyleSheet.create({
   webPageInactive: {
     display: "none",
   },
-});
+})

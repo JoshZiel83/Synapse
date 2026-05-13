@@ -1,32 +1,32 @@
-import { sql } from "kysely";
-import { v4 as uuidv4 } from "uuid";
-import { transaction } from "../../infrastructure/database/index.js";
+import { sql } from "kysely"
+import { v4 as uuidv4 } from "uuid"
+import { transaction } from "../../infrastructure/database/index.js"
 import {
   db,
   executeSql,
   executeCompiledQuery,
   executeTakeFirst,
-} from "../../infrastructure/database/kysely.js";
-import { getFileUrlById } from "../files/service.js";
+} from "../../infrastructure/database/kysely.js"
+import { getFileUrlById } from "../files/service.js"
 import {
   authorizeAction,
   resolveWorkspaceAccessSubject,
   userSubject,
   workspaceMemberSubject,
-} from "../access/service.js";
+} from "../access/service.js"
 import {
   createChatConversation,
   listWorkspaceConversationViews,
-} from "../chat/service.js";
-import { getWorkspaceMemberIdentity } from "../chat/workspace-identity.js";
+} from "../chat/service.js"
+import { getWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 import {
   canonicalizeDirectConversationPair,
   directConversationBindingPeer,
   directConversationBindingValues,
   directConversationIdentityKey,
   type DirectConversationIdentity,
-} from "../chat/direct-binding.js";
-import { mapConversationSummaryView } from "../chat/summary-view.js";
+} from "../chat/direct-binding.js"
+import { mapConversationSummaryView } from "../chat/summary-view.js"
 
 export const CONTACT_HUB_KINDS = [
   "workspace-actor",
@@ -35,87 +35,87 @@ export const CONTACT_HUB_KINDS = [
   "friend-actor",
   "friend-remote-agent",
   "friend-member",
-] as const;
+] as const
 
-export type ContactHubKind = (typeof CONTACT_HUB_KINDS)[number];
+export type ContactHubKind = (typeof CONTACT_HUB_KINDS)[number]
 
-type ApprovalMode = "auto" | "manual";
-type AccessPolicy = "workspace_open" | "approval_required";
-type RequestStatus = "pending" | "approved" | "rejected";
-type ContactTargetType = "member" | "actor" | "remote_agent";
+type ApprovalMode = "auto" | "manual"
+type AccessPolicy = "workspace_open" | "approval_required"
+type RequestStatus = "pending" | "approved" | "rejected"
+type ContactTargetType = "member" | "actor" | "remote_agent"
 type IdentitySearchOutcome =
   | "empty"
   | "invalid"
   | "self"
   | "not_found"
-  | "found";
+  | "found"
 type IdentitySearchMatchState =
   | "same_workspace_member"
   | "friend"
   | "pending_request"
-  | "requestable";
+  | "requestable"
 
 type WorkspaceSummary = {
-  id: string;
-  name: string;
-  slug: string;
-};
+  id: string
+  name: string
+  slug: string
+}
 
 type WorkspaceMemberSummary = {
-  workspace: WorkspaceSummary;
-  workspaceMemberId: string;
-  userId: string;
-  name: string;
-  email: string;
-  avatarFileId?: string | null;
-  trustLevel?: string;
-};
+  workspace: WorkspaceSummary
+  workspaceMemberId: string
+  userId: string
+  name: string
+  email: string
+  avatarFileId?: string | null
+  trustLevel?: string
+}
 
 type ActorSummary = {
-  workspace: WorkspaceSummary;
-  actorId: string;
-  name: string;
-  title: string;
-  role: string;
-  avatarFileId?: string | null;
-  avatarEmoji?: string | null;
-  accessPolicy: AccessPolicy;
-  isPublicShared: boolean;
-};
+  workspace: WorkspaceSummary
+  actorId: string
+  name: string
+  title: string
+  role: string
+  avatarFileId?: string | null
+  avatarEmoji?: string | null
+  accessPolicy: AccessPolicy
+  isPublicShared: boolean
+}
 
 type RemoteAgentSummary = {
-  workspace: WorkspaceSummary;
-  remoteAgentId: string;
-  name: string;
-  title: string;
-  runtimeKind: "claude_code" | "codex";
-  avatarFileId?: string | null;
-  avatarEmoji?: string | null;
-  accessPolicy: AccessPolicy;
-  isPublicShared: boolean;
-};
+  workspace: WorkspaceSummary
+  remoteAgentId: string
+  name: string
+  title: string
+  runtimeKind: "claude_code" | "codex"
+  avatarFileId?: string | null
+  avatarEmoji?: string | null
+  accessPolicy: AccessPolicy
+  isPublicShared: boolean
+}
 
 type ContactHubEntry = {
-  kind: ContactHubKind;
-  id: string;
-  targetType: ContactTargetType;
-  title: string;
-  subtitle?: string;
-  avatarUrl?: string;
-  avatarEmoji?: string;
-  workspace: WorkspaceSummary;
-  workspaceMemberId?: string;
-  userId?: string;
-  actorId?: string;
-  remoteAgentId?: string;
-  relationLabel: string;
+  kind: ContactHubKind
+  id: string
+  targetType: ContactTargetType
+  title: string
+  subtitle?: string
+  avatarUrl?: string
+  avatarEmoji?: string
+  workspace: WorkspaceSummary
+  workspaceMemberId?: string
+  userId?: string
+  actorId?: string
+  remoteAgentId?: string
+  relationLabel: string
   directState: {
-    status: "existing" | "available" | "approval_required" | "pending_approval";
-    conversationId?: string;
-  };
-};
+    status: "existing" | "available" | "approval_required" | "pending_approval"
+    conversationId?: string
+  }
+}
 
-const IDENTITY_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{3,31})$/;
+const IDENTITY_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{3,31})$/
 
 function isUniqueViolation(error: unknown) {
   return (
@@ -123,60 +123,62 @@ function isUniqueViolation(error: unknown) {
     error !== null &&
     "code" in error &&
     (error as { code?: unknown }).code === "23505"
-  );
+  )
 }
 
 function toIsoString(value: string | Date | null | undefined) {
-  if (typeof value === "string") return value;
-  if (value instanceof Date) return value.toISOString();
-  return new Date(0).toISOString();
+  if (typeof value === "string") return value
+  if (value instanceof Date) return value.toISOString()
+  return new Date(0).toISOString()
 }
 
 function normalizeIdentityId(value: string) {
-  return value.trim().toLowerCase();
+  return value.trim().toLowerCase()
 }
 
 function validateIdentityId(value: string) {
-  const normalized = normalizeIdentityId(value);
+  const normalized = normalizeIdentityId(value)
   if (!IDENTITY_ID_PATTERN.test(normalized)) {
     throw new Error(
-      "Identity ID must be 4-32 characters using letters, numbers, dot, underscore, or hyphen.",
-    );
+      "Identity ID must be 4-32 characters using letters, numbers, dot, underscore, or hyphen."
+    )
   }
-  return normalized;
+  return normalized
 }
 
 function buildRelationshipQrUrl(token: string) {
-  return `synapse://relationship-qr?token=${encodeURIComponent(token)}`;
+  return `synapse://relationship-qr?token=${encodeURIComponent(token)}`
 }
 
 function workspaceSummary(row: {
-  workspace_id?: string;
-  workspace_name?: string;
-  workspace_slug?: string;
-  id?: string;
-  name?: string;
-  slug?: string;
+  workspace_id?: string
+  workspace_name?: string
+  workspace_slug?: string
+  id?: string
+  name?: string
+  slug?: string
 }) {
   return {
     id: row.workspace_id || row.id || "",
     name: row.workspace_name || row.name || "Unknown workspace",
     slug: row.workspace_slug || row.slug || "",
-  };
+  }
 }
 
-async function getWorkspaceById(workspaceId: string): Promise<WorkspaceSummary | null> {
+async function getWorkspaceById(
+  workspaceId: string
+): Promise<WorkspaceSummary | null> {
   const row = await db
     .selectFrom("workspaces")
     .select(["id", "name", "slug"])
     .where("id", "=", workspaceId)
-    .executeTakeFirst();
-  return row ? workspaceSummary(row) : null;
+    .executeTakeFirst()
+  return row ? workspaceSummary(row) : null
 }
 
 async function getWorkspaceMemberSummaryByUser(
   workspaceId: string,
-  userId: string,
+  userId: string
 ): Promise<WorkspaceMemberSummary | null> {
   const row = await db
     .selectFrom("workspace_members as wm")
@@ -195,8 +197,8 @@ async function getWorkspaceMemberSummaryByUser(
     ])
     .where("wm.workspace_id", "=", workspaceId)
     .where("wm.user_id", "=", userId)
-    .executeTakeFirst();
-  if (!row) return null;
+    .executeTakeFirst()
+  if (!row) return null
   return {
     workspace: workspaceSummary(row),
     workspaceMemberId: row.workspace_member_id,
@@ -205,11 +207,11 @@ async function getWorkspaceMemberSummaryByUser(
     name: row.name,
     email: row.email,
     avatarFileId: row.avatar_file_id,
-  };
+  }
 }
 
 async function getWorkspaceMemberSummaryById(
-  workspaceMemberId: string,
+  workspaceMemberId: string
 ): Promise<WorkspaceMemberSummary | null> {
   const row = await db
     .selectFrom("workspace_members as wm")
@@ -227,8 +229,8 @@ async function getWorkspaceMemberSummaryById(
       "u.avatar_file_id",
     ])
     .where("wm.id", "=", workspaceMemberId)
-    .executeTakeFirst();
-  if (!row) return null;
+    .executeTakeFirst()
+  if (!row) return null
   return {
     workspace: workspaceSummary(row),
     workspaceMemberId: row.workspace_member_id,
@@ -237,7 +239,7 @@ async function getWorkspaceMemberSummaryById(
     name: row.name,
     email: row.email,
     avatarFileId: row.avatar_file_id,
-  };
+  }
 }
 
 async function getMemberRelationshipProfileRow(workspaceMemberId: string) {
@@ -253,11 +255,11 @@ async function getMemberRelationshipProfileRow(workspaceMemberId: string) {
     ])
     .where("subject_type", "=", "member")
     .where("subject_workspace_member_id", "=", workspaceMemberId)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!row) {
-    throw new Error("Relationship profile not found");
+    throw new Error("Relationship profile not found")
   }
-  return row;
+  return row
 }
 
 async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
@@ -280,8 +282,8 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
     ])
     .where("a.id", "=", actorId)
     .where("a.is_active", "=", true)
-    .executeTakeFirst();
-  if (!row) return null;
+    .executeTakeFirst()
+  if (!row) return null
   return {
     workspace: workspaceSummary(row),
     actorId: row.actor_id,
@@ -292,24 +294,24 @@ async function getActorSummary(actorId: string): Promise<ActorSummary | null> {
     avatarEmoji: row.avatar_emoji,
     accessPolicy: row.access_policy as AccessPolicy,
     isPublicShared: Boolean(row.is_public_shared),
-  };
+  }
 }
 
 async function getRemoteAgentSummary(
-  remoteAgentId: string,
+  remoteAgentId: string
 ): Promise<RemoteAgentSummary | null> {
   const result = await executeSql<{
-    remote_agent_id: string;
-    workspace_id: string;
-    workspace_name: string;
-    workspace_slug: string;
-    name: string;
-    title: string;
-    runtime_kind: "claude_code" | "codex";
-    avatar_file_id: string | null;
-    avatar_emoji: string | null;
-    access_policy: AccessPolicy;
-    is_public_shared: boolean;
+    remote_agent_id: string
+    workspace_id: string
+    workspace_name: string
+    workspace_slug: string
+    name: string
+    title: string
+    runtime_kind: "claude_code" | "codex"
+    avatar_file_id: string | null
+    avatar_emoji: string | null
+    access_policy: AccessPolicy
+    is_public_shared: boolean
   }>(
     `
       SELECT
@@ -330,11 +332,11 @@ async function getRemoteAgentSummary(
         AND ra.is_active = TRUE
       LIMIT 1
     `,
-    [remoteAgentId],
-  );
+    [remoteAgentId]
+  )
 
-  const row = result.rows[0];
-  if (!row) return null;
+  const row = result.rows[0]
+  if (!row) return null
   return {
     workspace: workspaceSummary(row),
     remoteAgentId: row.remote_agent_id,
@@ -345,13 +347,13 @@ async function getRemoteAgentSummary(
     avatarEmoji: row.avatar_emoji,
     accessPolicy: row.access_policy,
     isPublicShared: Boolean(row.is_public_shared),
-  };
+  }
 }
 
 function mapMemberFriendEntry(params: {
-  entryId: string;
-  peer: WorkspaceMemberSummary;
-  conversationId?: string;
+  entryId: string
+  peer: WorkspaceMemberSummary
+  conversationId?: string
 }): ContactHubEntry {
   return {
     kind: "friend-member",
@@ -369,13 +371,13 @@ function mapMemberFriendEntry(params: {
     directState: params.conversationId
       ? { status: "existing", conversationId: params.conversationId }
       : { status: "available" },
-  };
+  }
 }
 
 function mapActorFriendEntry(params: {
-  entryId: string;
-  actor: ActorSummary;
-  conversationId?: string;
+  entryId: string
+  actor: ActorSummary
+  conversationId?: string
 }): ContactHubEntry {
   return {
     kind: "friend-actor",
@@ -393,13 +395,13 @@ function mapActorFriendEntry(params: {
     directState: params.conversationId
       ? { status: "existing", conversationId: params.conversationId }
       : { status: "available" },
-  };
+  }
 }
 
 function mapRemoteAgentFriendEntry(params: {
-  entryId: string;
-  remoteAgent: RemoteAgentSummary;
-  conversationId?: string;
+  entryId: string
+  remoteAgent: RemoteAgentSummary
+  conversationId?: string
 }): ContactHubEntry {
   return {
     kind: "friend-remote-agent",
@@ -417,12 +419,12 @@ function mapRemoteAgentFriendEntry(params: {
     directState: params.conversationId
       ? { status: "existing", conversationId: params.conversationId }
       : { status: "available" },
-  };
+  }
 }
 
 function mapWorkspaceMemberEntry(params: {
-  member: WorkspaceMemberSummary;
-  conversationId?: string;
+  member: WorkspaceMemberSummary
+  conversationId?: string
 }): ContactHubEntry {
   return {
     kind: "workspace-member",
@@ -440,13 +442,17 @@ function mapWorkspaceMemberEntry(params: {
     directState: params.conversationId
       ? { status: "existing", conversationId: params.conversationId }
       : { status: "available" },
-  };
+  }
 }
 
 function mapWorkspaceActorEntry(params: {
-  actor: ActorSummary;
-  conversationId?: string;
-  accessState: "existing" | "available" | "approval_required" | "pending_approval";
+  actor: ActorSummary
+  conversationId?: string
+  accessState:
+    | "existing"
+    | "available"
+    | "approval_required"
+    | "pending_approval"
 }): ContactHubEntry {
   return {
     kind: "workspace-actor",
@@ -465,13 +471,17 @@ function mapWorkspaceActorEntry(params: {
       params.accessState === "existing"
         ? { status: "existing", conversationId: params.conversationId }
         : { status: params.accessState },
-  };
+  }
 }
 
 function mapWorkspaceRemoteAgentEntry(params: {
-  remoteAgent: RemoteAgentSummary;
-  conversationId?: string;
-  accessState: "existing" | "available" | "approval_required" | "pending_approval";
+  remoteAgent: RemoteAgentSummary
+  conversationId?: string
+  accessState:
+    | "existing"
+    | "available"
+    | "approval_required"
+    | "pending_approval"
 }): ContactHubEntry {
   return {
     kind: "workspace-remote-agent",
@@ -490,38 +500,42 @@ function mapWorkspaceRemoteAgentEntry(params: {
       params.accessState === "existing"
         ? { status: "existing", conversationId: params.conversationId }
         : { status: params.accessState },
-  };
+  }
 }
 
 async function ensureRelationshipProfile(params: {
-  workspaceId: string;
-  createdByWorkspaceMemberId: string;
-  subjectType: ContactTargetType;
-  subjectWorkspaceMemberId?: string;
-  subjectActorId?: string;
-  subjectRemoteAgentId?: string;
+  workspaceId: string
+  createdByWorkspaceMemberId: string
+  subjectType: ContactTargetType
+  subjectWorkspaceMemberId?: string
+  subjectActorId?: string
+  subjectRemoteAgentId?: string
 }) {
   let queryBuilder = db
     .selectFrom("workspace_relationship_profiles")
     .selectAll()
     .where("workspace_id", "=", params.workspaceId)
-    .where("subject_type", "=", params.subjectType);
+    .where("subject_type", "=", params.subjectType)
   queryBuilder =
     params.subjectType === "member"
       ? queryBuilder.where(
           "subject_workspace_member_id",
           "=",
-          params.subjectWorkspaceMemberId || null,
+          params.subjectWorkspaceMemberId || null
         )
       : params.subjectType === "actor"
-        ? queryBuilder.where("subject_actor_id", "=", params.subjectActorId || null)
+        ? queryBuilder.where(
+            "subject_actor_id",
+            "=",
+            params.subjectActorId || null
+          )
         : queryBuilder.where(
             "subject_remote_agent_id",
             "=",
-            params.subjectRemoteAgentId || null,
-          );
-  const existing = await queryBuilder.executeTakeFirst();
-  if (existing) return existing;
+            params.subjectRemoteAgentId || null
+          )
+  const existing = await queryBuilder.executeTakeFirst()
+  if (existing) return existing
 
   const inserted = await db
     .insertInto("workspace_relationship_profiles")
@@ -532,7 +546,8 @@ async function ensureRelationshipProfile(params: {
         params.subjectType === "member"
           ? params.subjectWorkspaceMemberId || null
           : null,
-      subject_actor_id: params.subjectType === "actor" ? params.subjectActorId || null : null,
+      subject_actor_id:
+        params.subjectType === "actor" ? params.subjectActorId || null : null,
       subject_remote_agent_id:
         params.subjectType === "remote_agent"
           ? params.subjectRemoteAgentId || null
@@ -542,29 +557,29 @@ async function ensureRelationshipProfile(params: {
       approval_mode: "manual",
     })
     .returningAll()
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!inserted) {
-    throw new Error("Failed to create relationship profile");
+    throw new Error("Failed to create relationship profile")
   }
-  return inserted;
+  return inserted
 }
 
 async function updateActorAccessPolicy(params: {
-  workspaceId: string;
-  actorId: string;
-  updatedByWorkspaceMemberId: string;
-  accessPolicy: AccessPolicy;
+  workspaceId: string
+  actorId: string
+  updatedByWorkspaceMemberId: string
+  accessPolicy: AccessPolicy
 }) {
   const actor = await db
     .selectFrom("actors")
     .select(["id", "workspace_id", "access_policy"])
     .where("id", "=", params.actorId)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!actor || actor.workspace_id !== params.workspaceId) {
-    throw new Error("Actor not found");
+    throw new Error("Actor not found")
   }
   if (actor.access_policy === params.accessPolicy) {
-    return actor;
+    return actor
   }
 
   const result = await transaction(async (client) => {
@@ -577,25 +592,25 @@ async function updateActorAccessPolicy(params: {
           updated_at: sql`NOW()`,
         })
         .where("id", "=", params.actorId)
-        .returning(["id", "workspace_id", "access_policy"]),
-    );
+        .returning(["id", "workspace_id", "access_policy"])
+    )
     if (!nextActor) {
-      throw new Error("Actor not found");
+      throw new Error("Actor not found")
     }
-    return nextActor;
-  });
-  return result;
+    return nextActor
+  })
+  return result
 }
 
 async function updateRemoteAgentAccessPolicy(params: {
-  workspaceId: string;
-  remoteAgentId: string;
-  accessPolicy: AccessPolicy;
+  workspaceId: string
+  remoteAgentId: string
+  accessPolicy: AccessPolicy
 }) {
   const result = await executeSql<{
-    id: string;
-    workspace_id: string;
-    access_policy: AccessPolicy;
+    id: string
+    workspace_id: string
+    access_policy: AccessPolicy
   }>(
     `
       UPDATE remote_agents
@@ -606,26 +621,26 @@ async function updateRemoteAgentAccessPolicy(params: {
         AND is_active = TRUE
       RETURNING id, workspace_id, access_policy
     `,
-    [params.remoteAgentId, params.workspaceId, params.accessPolicy],
-  );
-  const row = result.rows[0];
+    [params.remoteAgentId, params.workspaceId, params.accessPolicy]
+  )
+  const row = result.rows[0]
   if (!row) {
-    throw new Error("Remote agent not found");
+    throw new Error("Remote agent not found")
   }
-  return row;
+  return row
 }
 
 async function grantActorAccess(params: {
-  workspaceId: string;
-  actorId: string;
-  requesterWorkspaceMemberId: string;
-  grantedByWorkspaceMemberId: string;
+  workspaceId: string
+  actorId: string
+  requesterWorkspaceMemberId: string
+  grantedByWorkspaceMemberId: string
 }) {
   const requester = await getWorkspaceMemberSummaryById(
-    params.requesterWorkspaceMemberId,
-  );
+    params.requesterWorkspaceMemberId
+  )
   if (!requester || requester.workspace.id !== params.workspaceId) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
 
   await ensureFriendEntry({
@@ -633,19 +648,19 @@ async function grantActorAccess(params: {
     ownerWorkspaceMemberId: requester.workspaceMemberId,
     peerType: "actor",
     peerActorId: params.actorId,
-  });
+  })
 }
 
 async function grantRemoteAgentAccess(params: {
-  workspaceId: string;
-  remoteAgentId: string;
-  requesterWorkspaceMemberId: string;
+  workspaceId: string
+  remoteAgentId: string
+  requesterWorkspaceMemberId: string
 }) {
   const requester = await getWorkspaceMemberSummaryById(
-    params.requesterWorkspaceMemberId,
-  );
+    params.requesterWorkspaceMemberId
+  )
   if (!requester || requester.workspace.id !== params.workspaceId) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
 
   await ensureFriendEntry({
@@ -653,17 +668,17 @@ async function grantRemoteAgentAccess(params: {
     ownerWorkspaceMemberId: requester.workspaceMemberId,
     peerType: "remote_agent",
     peerRemoteAgentId: params.remoteAgentId,
-  });
+  })
 }
 
 async function ensureFriendEntry(params: {
-  workspaceId: string;
-  ownerWorkspaceMemberId: string;
-  peerType: ContactTargetType;
-  peerWorkspaceMemberId?: string;
-  peerActorId?: string;
-  peerRemoteAgentId?: string;
-  sourceRequestId?: string;
+  workspaceId: string
+  ownerWorkspaceMemberId: string
+  peerType: ContactTargetType
+  peerWorkspaceMemberId?: string
+  peerActorId?: string
+  peerRemoteAgentId?: string
+  sourceRequestId?: string
 }) {
   await db
     .insertInto("workspace_friend_entries")
@@ -675,7 +690,8 @@ async function ensureFriendEntry(params: {
         params.peerType === "member"
           ? params.peerWorkspaceMemberId || null
           : null,
-      peer_actor_id: params.peerType === "actor" ? params.peerActorId || null : null,
+      peer_actor_id:
+        params.peerType === "actor" ? params.peerActorId || null : null,
       peer_remote_agent_id:
         params.peerType === "remote_agent"
           ? params.peerRemoteAgentId || null
@@ -683,46 +699,46 @@ async function ensureFriendEntry(params: {
       source_request_id: params.sourceRequestId || null,
     })
     .onConflict((oc) => oc.doNothing())
-    .execute();
+    .execute()
 }
 
 async function findExistingFriendEntry(params: {
-  workspaceId: string;
-  ownerWorkspaceMemberId: string;
-  peerType: ContactTargetType;
-  peerWorkspaceMemberId?: string;
-  peerActorId?: string;
-  peerRemoteAgentId?: string;
+  workspaceId: string
+  ownerWorkspaceMemberId: string
+  peerType: ContactTargetType
+  peerWorkspaceMemberId?: string
+  peerActorId?: string
+  peerRemoteAgentId?: string
 }) {
   let queryBuilder = db
     .selectFrom("workspace_friend_entries")
     .selectAll()
     .where("workspace_id", "=", params.workspaceId)
     .where("owner_workspace_member_id", "=", params.ownerWorkspaceMemberId)
-    .where("peer_type", "=", params.peerType);
+    .where("peer_type", "=", params.peerType)
   queryBuilder =
     params.peerType === "member"
       ? queryBuilder.where(
           "peer_workspace_member_id",
           "=",
-          params.peerWorkspaceMemberId || null,
+          params.peerWorkspaceMemberId || null
         )
       : params.peerType === "actor"
         ? queryBuilder.where("peer_actor_id", "=", params.peerActorId || null)
         : queryBuilder.where(
             "peer_remote_agent_id",
             "=",
-            params.peerRemoteAgentId || null,
-          );
-  return queryBuilder.executeTakeFirst();
+            params.peerRemoteAgentId || null
+          )
+  return queryBuilder.executeTakeFirst()
 }
 
 async function findPendingFriendRequest(params: {
-  requesterWorkspaceMemberId: string;
-  targetType: ContactTargetType;
-  targetWorkspaceMemberId?: string;
-  targetActorId?: string;
-  targetRemoteAgentId?: string;
+  requesterWorkspaceMemberId: string
+  targetType: ContactTargetType
+  targetWorkspaceMemberId?: string
+  targetActorId?: string
+  targetRemoteAgentId?: string
 }) {
   let queryBuilder = db
     .selectFrom("workspace_friend_requests")
@@ -730,38 +746,42 @@ async function findPendingFriendRequest(params: {
     .where(
       "requester_workspace_member_id",
       "=",
-      params.requesterWorkspaceMemberId,
+      params.requesterWorkspaceMemberId
     )
     .where("target_subject_type", "=", params.targetType)
-    .where("status", "=", "pending");
+    .where("status", "=", "pending")
   queryBuilder =
     params.targetType === "member"
       ? queryBuilder.where(
           "target_workspace_member_id",
           "=",
-          params.targetWorkspaceMemberId || null,
+          params.targetWorkspaceMemberId || null
         )
       : params.targetType === "actor"
-        ? queryBuilder.where("target_actor_id", "=", params.targetActorId || null)
+        ? queryBuilder.where(
+            "target_actor_id",
+            "=",
+            params.targetActorId || null
+          )
         : queryBuilder.where(
             "target_remote_agent_id",
             "=",
-            params.targetRemoteAgentId || null,
-          );
-  return queryBuilder.executeTakeFirst();
+            params.targetRemoteAgentId || null
+          )
+  return queryBuilder.executeTakeFirst()
 }
 
 async function createFriendRequest(params: {
-  requesterWorkspaceMemberId: string;
-  targetType: ContactTargetType;
-  targetWorkspaceMemberId?: string;
-  targetActorId?: string;
-  targetRemoteAgentId?: string;
-  profileId?: string;
+  requesterWorkspaceMemberId: string
+  targetType: ContactTargetType
+  targetWorkspaceMemberId?: string
+  targetActorId?: string
+  targetRemoteAgentId?: string
+  profileId?: string
 }) {
-  const existing = await findPendingFriendRequest(params);
+  const existing = await findPendingFriendRequest(params)
   if (existing) {
-    return { request: existing, created: false as const };
+    return { request: existing, created: false as const }
   }
   try {
     const created = await db
@@ -773,7 +793,8 @@ async function createFriendRequest(params: {
           params.targetType === "member"
             ? params.targetWorkspaceMemberId || null
             : null,
-        target_actor_id: params.targetType === "actor" ? params.targetActorId || null : null,
+        target_actor_id:
+          params.targetType === "actor" ? params.targetActorId || null : null,
         target_remote_agent_id:
           params.targetType === "remote_agent"
             ? params.targetRemoteAgentId || null
@@ -782,23 +803,23 @@ async function createFriendRequest(params: {
         status: "pending",
       })
       .returningAll()
-      .executeTakeFirst();
+      .executeTakeFirst()
     if (!created) {
-      throw new Error("Failed to create friend request");
+      throw new Error("Failed to create friend request")
     }
-    return { request: created, created: true as const };
+    return { request: created, created: true as const }
   } catch (error) {
-    if (!isUniqueViolation(error)) throw error;
-    const retry = await findPendingFriendRequest(params);
-    if (!retry) throw error;
-    return { request: retry, created: false as const };
+    if (!isUniqueViolation(error)) throw error
+    const retry = await findPendingFriendRequest(params)
+    if (!retry) throw error
+    return { request: retry, created: false as const }
   }
 }
 
 async function createActorAccessRequest(params: {
-  workspaceId: string;
-  actorId: string;
-  requesterWorkspaceMemberId: string;
+  workspaceId: string
+  actorId: string
+  requesterWorkspaceMemberId: string
 }) {
   const existing = await db
     .selectFrom("actor_access_requests")
@@ -808,12 +829,12 @@ async function createActorAccessRequest(params: {
     .where(
       "requester_workspace_member_id",
       "=",
-      params.requesterWorkspaceMemberId,
+      params.requesterWorkspaceMemberId
     )
     .where("status", "=", "pending")
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (existing) {
-    return { request: existing, created: false as const };
+    return { request: existing, created: false as const }
   }
 
   try {
@@ -826,13 +847,13 @@ async function createActorAccessRequest(params: {
         status: "pending",
       })
       .returningAll()
-      .executeTakeFirst();
+      .executeTakeFirst()
     if (!created) {
-      throw new Error("Failed to create actor access request");
+      throw new Error("Failed to create actor access request")
     }
-    return { request: created, created: true as const };
+    return { request: created, created: true as const }
   } catch (error) {
-    if (!isUniqueViolation(error)) throw error;
+    if (!isUniqueViolation(error)) throw error
     const retry = await db
       .selectFrom("actor_access_requests")
       .selectAll()
@@ -841,19 +862,19 @@ async function createActorAccessRequest(params: {
       .where(
         "requester_workspace_member_id",
         "=",
-        params.requesterWorkspaceMemberId,
+        params.requesterWorkspaceMemberId
       )
       .where("status", "=", "pending")
-      .executeTakeFirst();
-    if (!retry) throw error;
-    return { request: retry, created: false as const };
+      .executeTakeFirst()
+    if (!retry) throw error
+    return { request: retry, created: false as const }
   }
 }
 
 async function createRemoteAgentAccessRequest(params: {
-  workspaceId: string;
-  remoteAgentId: string;
-  requesterWorkspaceMemberId: string;
+  workspaceId: string
+  remoteAgentId: string
+  requesterWorkspaceMemberId: string
 }) {
   const existing = await executeSql<any>(
     `
@@ -869,10 +890,10 @@ async function createRemoteAgentAccessRequest(params: {
       params.workspaceId,
       params.remoteAgentId,
       params.requesterWorkspaceMemberId,
-    ],
-  );
+    ]
+  )
   if (existing.rows[0]) {
-    return { request: existing.rows[0], created: false as const };
+    return { request: existing.rows[0], created: false as const }
   }
 
   try {
@@ -893,14 +914,14 @@ async function createRemoteAgentAccessRequest(params: {
         params.workspaceId,
         params.remoteAgentId,
         params.requesterWorkspaceMemberId,
-      ],
-    );
+      ]
+    )
     if (!created.rows[0]) {
-      throw new Error("Failed to create remote agent access request");
+      throw new Error("Failed to create remote agent access request")
     }
-    return { request: created.rows[0], created: true as const };
+    return { request: created.rows[0], created: true as const }
   } catch (error) {
-    if (!isUniqueViolation(error)) throw error;
+    if (!isUniqueViolation(error)) throw error
     const retry = await executeSql<any>(
       `
         SELECT *
@@ -915,10 +936,10 @@ async function createRemoteAgentAccessRequest(params: {
         params.workspaceId,
         params.remoteAgentId,
         params.requesterWorkspaceMemberId,
-      ],
-    );
-    if (!retry.rows[0]) throw error;
-    return { request: retry.rows[0], created: false as const };
+      ]
+    )
+    if (!retry.rows[0]) throw error
+    return { request: retry.rows[0], created: false as const }
   }
 }
 
@@ -936,32 +957,29 @@ async function loadViewerDirectConversationMap(workspaceMemberId: string) {
           eb("participant_two_kind", "=", "member"),
           eb("participant_two_workspace_member_id", "=", workspaceMemberId),
         ]),
-      ]),
+      ])
     )
-    .execute();
+    .execute()
 
   const viewerIdentity: DirectConversationIdentity = {
     kind: "member",
     workspaceMemberId,
-  };
-  const map = new Map<string, string>();
-  for (const row of rows) {
-    const peer = directConversationBindingPeer(
-      row as any,
-      viewerIdentity,
-    );
-    if (!peer) continue;
-    map.set(directConversationIdentityKey(peer), row.conversation_id);
   }
-  return map;
+  const map = new Map<string, string>()
+  for (const row of rows) {
+    const peer = directConversationBindingPeer(row as any, viewerIdentity)
+    if (!peer) continue
+    map.set(directConversationIdentityKey(peer), row.conversation_id)
+  }
+  return map
 }
 
 async function findDirectConversationId(
   left: DirectConversationIdentity,
-  right: DirectConversationIdentity,
+  right: DirectConversationIdentity
 ) {
-  const pair = canonicalizeDirectConversationPair(left, right);
-  const values = directConversationBindingValues(pair);
+  const pair = canonicalizeDirectConversationPair(left, right)
+  const values = directConversationBindingValues(pair)
   const row = await db
     .selectFrom("direct_conversation_bindings")
     .select(["conversation_id"])
@@ -969,95 +987,100 @@ async function findDirectConversationId(
     .where(
       "participant_one_workspace_member_id",
       "=",
-      values.participant_one_workspace_member_id,
+      values.participant_one_workspace_member_id
     )
     .where("participant_one_actor_id", "=", values.participant_one_actor_id)
     .where(
       "participant_one_remote_agent_id",
       "=",
-      values.participant_one_remote_agent_id,
+      values.participant_one_remote_agent_id
     )
     .where("participant_two_kind", "=", values.participant_two_kind)
     .where(
       "participant_two_workspace_member_id",
       "=",
-      values.participant_two_workspace_member_id,
+      values.participant_two_workspace_member_id
     )
     .where("participant_two_actor_id", "=", values.participant_two_actor_id)
     .where(
       "participant_two_remote_agent_id",
       "=",
-      values.participant_two_remote_agent_id,
+      values.participant_two_remote_agent_id
     )
-    .executeTakeFirst();
-  return row?.conversation_id || null;
+    .executeTakeFirst()
+  return row?.conversation_id || null
 }
 
 async function getActorAccessState(params: {
-  workspaceId: string;
-  userId: string;
-  actor: ActorSummary;
-  conversationId?: string;
-  pendingRequestActorIds: Set<string>;
+  workspaceId: string
+  userId: string
+  actor: ActorSummary
+  conversationId?: string
+  pendingRequestActorIds: Set<string>
 }) {
-  if (params.conversationId) return "existing" as const;
+  if (params.conversationId) return "existing" as const
   const canInvoke = await authorizeAction({
     subject: await resolveWorkspaceAccessSubject(
       params.workspaceId,
-      params.userId,
+      params.userId
     ),
     action: "actor.invoke",
     resourceId: params.actor.actorId,
-  });
+  })
   if (canInvoke || params.actor.accessPolicy === "workspace_open") {
-    return "available" as const;
+    return "available" as const
   }
   if (params.pendingRequestActorIds.has(params.actor.actorId)) {
-    return "pending_approval" as const;
+    return "pending_approval" as const
   }
-  return "approval_required" as const;
+  return "approval_required" as const
 }
 
 async function getRemoteAgentAccessState(params: {
-  workspaceId: string;
-  userId: string;
-  remoteAgent: RemoteAgentSummary;
-  conversationId?: string;
-  pendingRequestRemoteAgentIds: Set<string>;
+  workspaceId: string
+  userId: string
+  remoteAgent: RemoteAgentSummary
+  conversationId?: string
+  pendingRequestRemoteAgentIds: Set<string>
 }) {
-  if (params.conversationId) return "existing" as const;
+  if (params.conversationId) return "existing" as const
   const canInvoke = await authorizeAction({
     subject: await resolveWorkspaceAccessSubject(
       params.workspaceId,
-      params.userId,
+      params.userId
     ),
     action: "remote_agent.invoke",
     resourceId: params.remoteAgent.remoteAgentId,
-  });
+  })
   if (canInvoke || params.remoteAgent.accessPolicy === "workspace_open") {
-    return "available" as const;
+    return "available" as const
   }
-  if (params.pendingRequestRemoteAgentIds.has(params.remoteAgent.remoteAgentId)) {
-    return "pending_approval" as const;
+  if (
+    params.pendingRequestRemoteAgentIds.has(params.remoteAgent.remoteAgentId)
+  ) {
+    return "pending_approval" as const
   }
-  return "approval_required" as const;
+  return "approval_required" as const
 }
 
 async function resolveContactReference(params: {
-  workspaceId: string;
-  userId: string;
-  contactKind: ContactHubKind;
-  contactId: string;
+  workspaceId: string
+  userId: string
+  contactKind: ContactHubKind
+  contactId: string
 }) {
-  const viewer = await getWorkspaceMemberIdentity(params.workspaceId, params.userId);
+  const viewer = await getWorkspaceMemberIdentity(
+    params.workspaceId,
+    params.userId
+  )
 
   if (params.contactKind === "workspace-member") {
-    const member = await getWorkspaceMemberSummaryById(params.contactId);
+    const member = await getWorkspaceMemberSummaryById(params.contactId)
     if (!member || member.workspace.id !== params.workspaceId) {
-      throw new Error("Workspace member not found");
+      throw new Error("Workspace member not found")
     }
     if (viewer && member.workspaceMemberId === viewer.workspaceMemberId) {
-      throw new Error("Cannot open a direct conversation with yourself");
+      throw new Error("Cannot open a direct conversation with yourself")
     }
     return {
       kind: params.contactKind,
@@ -1066,13 +1089,13 @@ async function resolveContactReference(params: {
         kind: "member" as const,
         workspaceMemberId: member.workspaceMemberId,
       },
-    };
+    }
   }
 
   if (params.contactKind === "workspace-actor") {
-    const actor = await getActorSummary(params.contactId);
+    const actor = await getActorSummary(params.contactId)
     if (!actor || actor.workspace.id !== params.workspaceId) {
-      throw new Error("Actor not found");
+      throw new Error("Actor not found")
     }
     return {
       kind: params.contactKind,
@@ -1081,13 +1104,13 @@ async function resolveContactReference(params: {
         kind: "actor" as const,
         actorId: actor.actorId,
       },
-    };
+    }
   }
 
   if (params.contactKind === "workspace-remote-agent") {
-    const remoteAgent = await getRemoteAgentSummary(params.contactId);
+    const remoteAgent = await getRemoteAgentSummary(params.contactId)
     if (!remoteAgent || remoteAgent.workspace.id !== params.workspaceId) {
-      throw new Error("Remote agent not found");
+      throw new Error("Remote agent not found")
     }
     return {
       kind: params.contactKind,
@@ -1096,7 +1119,7 @@ async function resolveContactReference(params: {
         kind: "remote_agent" as const,
         remoteAgentId: remoteAgent.remoteAgentId,
       },
-    };
+    }
   }
 
   const friendEntry = await db
@@ -1105,20 +1128,20 @@ async function resolveContactReference(params: {
     .where("workspace_id", "=", params.workspaceId)
     .where("owner_workspace_member_id", "=", viewer?.workspaceMemberId || "")
     .where("id", "=", params.contactId)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!friendEntry) {
-    throw new Error("Friend not found");
+    throw new Error("Friend not found")
   }
 
   if (params.contactKind === "friend-member") {
     if (!friendEntry.peer_workspace_member_id) {
-      throw new Error("Friend not found");
+      throw new Error("Friend not found")
     }
     const member = await getWorkspaceMemberSummaryById(
-      friendEntry.peer_workspace_member_id,
-    );
+      friendEntry.peer_workspace_member_id
+    )
     if (!member) {
-      throw new Error("Friend not found");
+      throw new Error("Friend not found")
     }
     return {
       kind: params.contactKind,
@@ -1128,18 +1151,18 @@ async function resolveContactReference(params: {
         kind: "member" as const,
         workspaceMemberId: member.workspaceMemberId,
       },
-    };
+    }
   }
 
   if (params.contactKind === "friend-remote-agent") {
     if (!friendEntry.peer_remote_agent_id) {
-      throw new Error("Friend not found");
+      throw new Error("Friend not found")
     }
     const remoteAgent = await getRemoteAgentSummary(
-      friendEntry.peer_remote_agent_id,
-    );
+      friendEntry.peer_remote_agent_id
+    )
     if (!remoteAgent) {
-      throw new Error("Friend not found");
+      throw new Error("Friend not found")
     }
     return {
       kind: params.contactKind,
@@ -1149,15 +1172,15 @@ async function resolveContactReference(params: {
         kind: "remote_agent" as const,
         remoteAgentId: remoteAgent.remoteAgentId,
       },
-    };
+    }
   }
 
   if (!friendEntry.peer_actor_id) {
-    throw new Error("Friend not found");
+    throw new Error("Friend not found")
   }
-  const actor = await getActorSummary(friendEntry.peer_actor_id);
+  const actor = await getActorSummary(friendEntry.peer_actor_id)
   if (!actor) {
-    throw new Error("Friend not found");
+    throw new Error("Friend not found")
   }
   return {
     kind: params.contactKind,
@@ -1167,78 +1190,84 @@ async function resolveContactReference(params: {
       kind: "actor" as const,
       actorId: actor.actorId,
     },
-  };
+  }
 }
 
 async function buildContactHubEntryMap(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   const directConversationMap = viewerWorkspaceMember
     ? await loadViewerDirectConversationMap(
-        viewerWorkspaceMember.workspaceMemberId,
+        viewerWorkspaceMember.workspaceMemberId
       )
-    : new Map<string, string>();
-  const [members, actors, remoteAgentsResult, friendEntries, pendingActorAccessRows, pendingRemoteAgentAccessRows] =
-    await Promise.all([
-      db
-        .selectFrom("workspace_members as wm")
-        .innerJoin("users as u", "u.id", "wm.user_id")
-        .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
-        .select([
-          "wm.id as workspace_member_id",
-          "wm.workspace_id",
-          "w.name as workspace_name",
-          "w.slug as workspace_slug",
-          "wm.user_id",
-          "wm.trust_level",
-          "u.name",
-          "u.email",
-          "u.avatar_file_id",
-        ])
-        .where("wm.workspace_id", "=", params.workspaceId)
-        .where("wm.user_id", "<>", params.userId)
-        .orderBy("u.name", "asc")
-        .execute(),
-      db
-        .selectFrom("actors as a")
-        .innerJoin("workspaces as w", "w.id", "a.workspace_id")
-        .leftJoin("files as avatar_file", "avatar_file.id", "a.avatar_file_id")
-        .select([
-          "a.id as actor_id",
-          "a.workspace_id",
-          "w.name as workspace_name",
-          "w.slug as workspace_slug",
-          "a.name",
-          "a.title",
-          "a.role",
-          "a.access_policy",
-          "a.is_public_shared",
-          "a.avatar_emoji",
-          "avatar_file.id as avatar_file_id",
-        ])
-        .where("a.workspace_id", "=", params.workspaceId)
-        .where("a.is_active", "=", true)
-        .orderBy("a.name", "asc")
-        .execute(),
-      executeSql<{
-        remote_agent_id: string;
-        workspace_id: string;
-        workspace_name: string;
-        workspace_slug: string;
-        name: string;
-        title: string;
-        runtime_kind: "claude_code" | "codex";
-        access_policy: AccessPolicy;
-        is_public_shared: boolean;
-        avatar_emoji: string | null;
-        avatar_file_id: string | null;
-      }>(
-        `
+    : new Map<string, string>()
+  const [
+    members,
+    actors,
+    remoteAgentsResult,
+    friendEntries,
+    pendingActorAccessRows,
+    pendingRemoteAgentAccessRows,
+  ] = await Promise.all([
+    db
+      .selectFrom("workspace_members as wm")
+      .innerJoin("users as u", "u.id", "wm.user_id")
+      .innerJoin("workspaces as w", "w.id", "wm.workspace_id")
+      .select([
+        "wm.id as workspace_member_id",
+        "wm.workspace_id",
+        "w.name as workspace_name",
+        "w.slug as workspace_slug",
+        "wm.user_id",
+        "wm.trust_level",
+        "u.name",
+        "u.email",
+        "u.avatar_file_id",
+      ])
+      .where("wm.workspace_id", "=", params.workspaceId)
+      .where("wm.user_id", "<>", params.userId)
+      .orderBy("u.name", "asc")
+      .execute(),
+    db
+      .selectFrom("actors as a")
+      .innerJoin("workspaces as w", "w.id", "a.workspace_id")
+      .leftJoin("files as avatar_file", "avatar_file.id", "a.avatar_file_id")
+      .select([
+        "a.id as actor_id",
+        "a.workspace_id",
+        "w.name as workspace_name",
+        "w.slug as workspace_slug",
+        "a.name",
+        "a.title",
+        "a.role",
+        "a.access_policy",
+        "a.is_public_shared",
+        "a.avatar_emoji",
+        "avatar_file.id as avatar_file_id",
+      ])
+      .where("a.workspace_id", "=", params.workspaceId)
+      .where("a.is_active", "=", true)
+      .orderBy("a.name", "asc")
+      .execute(),
+    executeSql<{
+      remote_agent_id: string
+      workspace_id: string
+      workspace_name: string
+      workspace_slug: string
+      name: string
+      title: string
+      runtime_kind: "claude_code" | "codex"
+      access_policy: AccessPolicy
+      is_public_shared: boolean
+      avatar_emoji: string | null
+      avatar_file_id: string | null
+    }>(
+      `
           SELECT
             ra.id AS remote_agent_id,
             ra.workspace_id,
@@ -1257,52 +1286,52 @@ async function buildContactHubEntryMap(params: {
             AND ra.is_active = TRUE
           ORDER BY ra.name ASC, ra.created_at ASC
         `,
-        [params.workspaceId],
-      ),
-      db
-        .selectFrom("workspace_friend_entries")
-        .selectAll()
-        .where("workspace_id", "=", params.workspaceId)
-        .where(
-          "owner_workspace_member_id",
-          "=",
-          viewerWorkspaceMember?.workspaceMemberId || "",
-        )
-        .orderBy("created_at", "desc")
-        .execute(),
-      viewerWorkspaceMember
-        ? db
-            .selectFrom("actor_access_requests")
-            .select(["actor_id"])
-            .where("workspace_id", "=", params.workspaceId)
-            .where(
-              "requester_workspace_member_id",
-              "=",
-              viewerWorkspaceMember.workspaceMemberId,
-            )
-            .where("status", "=", "pending")
-            .execute()
-        : Promise.resolve([]),
-      viewerWorkspaceMember
-        ? executeSql<{ remote_agent_id: string }>(
-            `
+      [params.workspaceId]
+    ),
+    db
+      .selectFrom("workspace_friend_entries")
+      .selectAll()
+      .where("workspace_id", "=", params.workspaceId)
+      .where(
+        "owner_workspace_member_id",
+        "=",
+        viewerWorkspaceMember?.workspaceMemberId || ""
+      )
+      .orderBy("created_at", "desc")
+      .execute(),
+    viewerWorkspaceMember
+      ? db
+          .selectFrom("actor_access_requests")
+          .select(["actor_id"])
+          .where("workspace_id", "=", params.workspaceId)
+          .where(
+            "requester_workspace_member_id",
+            "=",
+            viewerWorkspaceMember.workspaceMemberId
+          )
+          .where("status", "=", "pending")
+          .execute()
+      : Promise.resolve([]),
+    viewerWorkspaceMember
+      ? executeSql<{ remote_agent_id: string }>(
+          `
               SELECT remote_agent_id
               FROM remote_agent_access_requests
               WHERE workspace_id = $1
                 AND requester_workspace_member_id = $2
                 AND status = 'pending'
             `,
-            [params.workspaceId, viewerWorkspaceMember.workspaceMemberId],
-          ).then((result) => result.rows)
-        : Promise.resolve([]),
-    ]);
+          [params.workspaceId, viewerWorkspaceMember.workspaceMemberId]
+        ).then((result) => result.rows)
+      : Promise.resolve([]),
+  ])
 
   const pendingActorAccessIds = new Set(
-    pendingActorAccessRows.map((row) => row.actor_id),
-  );
+    pendingActorAccessRows.map((row) => row.actor_id)
+  )
   const pendingRemoteAgentAccessIds = new Set(
-    pendingRemoteAgentAccessRows.map((row) => row.remote_agent_id),
-  );
+    pendingRemoteAgentAccessRows.map((row) => row.remote_agent_id)
+  )
 
   const workspaceMembers = members.map((row) =>
     mapWorkspaceMemberEntry({
@@ -1319,12 +1348,12 @@ async function buildContactHubEntryMap(params: {
         directConversationIdentityKey({
           kind: "member",
           workspaceMemberId: row.workspace_member_id,
-        }),
+        })
       ),
-    }),
-  );
+    })
+  )
 
-  const workspaceActors: ContactHubEntry[] = [];
+  const workspaceActors: ContactHubEntry[] = []
   for (const row of actors) {
     const actor: ActorSummary = {
       workspace: workspaceSummary(row),
@@ -1336,30 +1365,30 @@ async function buildContactHubEntryMap(params: {
       avatarEmoji: row.avatar_emoji,
       accessPolicy: row.access_policy as AccessPolicy,
       isPublicShared: Boolean(row.is_public_shared),
-    };
+    }
     const conversationId = directConversationMap.get(
       directConversationIdentityKey({
         kind: "actor",
         actorId: actor.actorId,
-      }),
-    );
+      })
+    )
     const accessState = await getActorAccessState({
       workspaceId: params.workspaceId,
       userId: params.userId,
       actor,
       conversationId,
       pendingRequestActorIds: pendingActorAccessIds,
-    });
+    })
     workspaceActors.push(
       mapWorkspaceActorEntry({
         actor,
         conversationId,
         accessState,
-      }),
-    );
+      })
+    )
   }
 
-  const workspaceRemoteAgents: ContactHubEntry[] = [];
+  const workspaceRemoteAgents: ContactHubEntry[] = []
   for (const row of remoteAgentsResult.rows) {
     const remoteAgent: RemoteAgentSummary = {
       workspace: workspaceSummary(row),
@@ -1371,36 +1400,36 @@ async function buildContactHubEntryMap(params: {
       avatarEmoji: row.avatar_emoji,
       accessPolicy: row.access_policy,
       isPublicShared: Boolean(row.is_public_shared),
-    };
+    }
     const conversationId = directConversationMap.get(
       directConversationIdentityKey({
         kind: "remote_agent",
         remoteAgentId: remoteAgent.remoteAgentId,
-      }),
-    );
+      })
+    )
     const accessState = await getRemoteAgentAccessState({
       workspaceId: params.workspaceId,
       userId: params.userId,
       remoteAgent,
       conversationId,
       pendingRequestRemoteAgentIds: pendingRemoteAgentAccessIds,
-    });
+    })
     workspaceRemoteAgents.push(
       mapWorkspaceRemoteAgentEntry({
         remoteAgent,
         conversationId,
         accessState,
-      }),
-    );
+      })
+    )
   }
 
-  const friends: ContactHubEntry[] = [];
+  const friends: ContactHubEntry[] = []
   for (const entry of friendEntries) {
     if (entry.peer_type === "member" && entry.peer_workspace_member_id) {
       const peer = await getWorkspaceMemberSummaryById(
-        entry.peer_workspace_member_id,
-      );
-      if (!peer) continue;
+        entry.peer_workspace_member_id
+      )
+      if (!peer) continue
       friends.push(
         mapMemberFriendEntry({
           entryId: entry.id,
@@ -1409,15 +1438,15 @@ async function buildContactHubEntryMap(params: {
             directConversationIdentityKey({
               kind: "member",
               workspaceMemberId: peer.workspaceMemberId,
-            }),
+            })
           ),
-        }),
-      );
-      continue;
+        })
+      )
+      continue
     }
     if (entry.peer_type === "actor" && entry.peer_actor_id) {
-      const actor = await getActorSummary(entry.peer_actor_id);
-      if (!actor) continue;
+      const actor = await getActorSummary(entry.peer_actor_id)
+      if (!actor) continue
       friends.push(
         mapActorFriendEntry({
           entryId: entry.id,
@@ -1426,17 +1455,17 @@ async function buildContactHubEntryMap(params: {
             directConversationIdentityKey({
               kind: "actor",
               actorId: entry.peer_actor_id,
-            }),
+            })
           ),
-        }),
-      );
-      continue;
+        })
+      )
+      continue
     }
     if (entry.peer_type === "remote_agent" && entry.peer_remote_agent_id) {
       const remoteAgent = await getRemoteAgentSummary(
-        entry.peer_remote_agent_id,
-      );
-      if (!remoteAgent) continue;
+        entry.peer_remote_agent_id
+      )
+      if (!remoteAgent) continue
       friends.push(
         mapRemoteAgentFriendEntry({
           entryId: entry.id,
@@ -1445,10 +1474,10 @@ async function buildContactHubEntryMap(params: {
             directConversationIdentityKey({
               kind: "remote_agent",
               remoteAgentId: entry.peer_remote_agent_id,
-            }),
+            })
           ),
-        }),
-      );
+        })
+      )
     }
   }
 
@@ -1457,22 +1486,22 @@ async function buildContactHubEntryMap(params: {
     workspaceActors,
     workspaceRemoteAgents,
     friends,
-  };
+  }
 }
 
 async function createOrApproveFriendship(params: {
-  requesterWorkspaceMemberId: string;
-  targetType: ContactTargetType;
-  targetWorkspaceMemberId?: string;
-  targetActorId?: string;
-  targetRemoteAgentId?: string;
-  sourceRequestId?: string;
+  requesterWorkspaceMemberId: string
+  targetType: ContactTargetType
+  targetWorkspaceMemberId?: string
+  targetActorId?: string
+  targetRemoteAgentId?: string
+  sourceRequestId?: string
 }) {
   const requester = await getWorkspaceMemberSummaryById(
-    params.requesterWorkspaceMemberId,
-  );
+    params.requesterWorkspaceMemberId
+  )
   if (!requester) {
-    throw new Error("Requester workspace member not found");
+    throw new Error("Requester workspace member not found")
   }
 
   await ensureFriendEntry({
@@ -1483,14 +1512,14 @@ async function createOrApproveFriendship(params: {
     peerActorId: params.targetActorId,
     peerRemoteAgentId: params.targetRemoteAgentId,
     sourceRequestId: params.sourceRequestId,
-  });
+  })
 
   if (params.targetType === "member" && params.targetWorkspaceMemberId) {
     const target = await getWorkspaceMemberSummaryById(
-      params.targetWorkspaceMemberId,
-    );
+      params.targetWorkspaceMemberId
+    )
     if (!target) {
-      throw new Error("Target workspace member not found");
+      throw new Error("Target workspace member not found")
     }
     await ensureFriendEntry({
       workspaceId: target.workspace.id,
@@ -1498,34 +1527,35 @@ async function createOrApproveFriendship(params: {
       peerType: "member",
       peerWorkspaceMemberId: requester.workspaceMemberId,
       sourceRequestId: params.sourceRequestId,
-    });
+    })
   }
 }
 
 async function resolveMemberRelationshipProfile(params: {
-  workspaceId: string;
-  userId: string;
-  viewerWorkspaceMemberId: string;
+  workspaceId: string
+  userId: string
+  viewerWorkspaceMemberId: string
   profile: {
-    id: string;
-    workspace_id: string;
-    subject_type: string;
-    subject_workspace_member_id: string | null;
-    approval_mode: ApprovalMode;
-  };
+    id: string
+    workspace_id: string
+    subject_type: string
+    subject_workspace_member_id: string | null
+    approval_mode: ApprovalMode
+  }
 }) {
   if (
     !params.profile.subject_workspace_member_id ||
-    params.profile.subject_workspace_member_id === params.viewerWorkspaceMemberId
+    params.profile.subject_workspace_member_id ===
+      params.viewerWorkspaceMemberId
   ) {
-    return { outcome: "self_scan" as const };
+    return { outcome: "self_scan" as const }
   }
 
   const member = await getWorkspaceMemberSummaryById(
-    params.profile.subject_workspace_member_id,
-  );
+    params.profile.subject_workspace_member_id
+  )
   if (!member) {
-    throw new Error("Relationship profile target not found");
+    throw new Error("Relationship profile target not found")
   }
 
   if (params.profile.workspace_id === params.workspaceId) {
@@ -1535,7 +1565,7 @@ async function resolveMemberRelationshipProfile(params: {
         kind: "workspace-member" as const,
         id: member.workspaceMemberId,
       },
-    };
+    }
   }
 
   const existingFriend = await findExistingFriendEntry({
@@ -1543,7 +1573,7 @@ async function resolveMemberRelationshipProfile(params: {
     ownerWorkspaceMemberId: params.viewerWorkspaceMemberId,
     peerType: "member",
     peerWorkspaceMemberId: params.profile.subject_workspace_member_id,
-  });
+  })
   if (existingFriend) {
     return {
       outcome: "friend_active" as const,
@@ -1551,7 +1581,7 @@ async function resolveMemberRelationshipProfile(params: {
         kind: "friend-member" as const,
         id: existingFriend.id,
       },
-    };
+    }
   }
 
   if (params.profile.approval_mode === "auto") {
@@ -1559,13 +1589,13 @@ async function resolveMemberRelationshipProfile(params: {
       requesterWorkspaceMemberId: params.viewerWorkspaceMemberId,
       targetType: "member",
       targetWorkspaceMemberId: params.profile.subject_workspace_member_id,
-    });
+    })
     const entry = await findExistingFriendEntry({
       workspaceId: params.workspaceId,
       ownerWorkspaceMemberId: params.viewerWorkspaceMemberId,
       peerType: "member",
       peerWorkspaceMemberId: params.profile.subject_workspace_member_id,
-    });
+    })
     return {
       outcome: "friend_active" as const,
       contact: entry
@@ -1574,7 +1604,7 @@ async function resolveMemberRelationshipProfile(params: {
             id: entry.id,
           }
         : undefined,
-    };
+    }
   }
 
   const requestResult = await createFriendRequest({
@@ -1582,42 +1612,42 @@ async function resolveMemberRelationshipProfile(params: {
     targetType: "member",
     targetWorkspaceMemberId: params.profile.subject_workspace_member_id,
     profileId: params.profile.id,
-  });
+  })
   return {
     outcome: requestResult.created
       ? ("friend_request_created" as const)
       : ("friend_request_pending" as const),
     requestId: requestResult.request.id,
-  };
+  }
 }
 
 export async function searchRelationshipsByIdentity(params: {
-  workspaceId: string;
-  userId: string;
-  query: string;
+  workspaceId: string
+  userId: string
+  query: string
 }) {
-  const normalizedQuery = normalizeIdentityId(params.query);
+  const normalizedQuery = normalizeIdentityId(params.query)
   if (!normalizedQuery) {
     return {
       query: normalizedQuery,
       outcome: "empty" as IdentitySearchOutcome,
       matches: [],
-    };
+    }
   }
   if (!IDENTITY_ID_PATTERN.test(normalizedQuery)) {
     return {
       query: normalizedQuery,
       outcome: "invalid" as IdentitySearchOutcome,
       matches: [],
-    };
+    }
   }
 
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
 
   const profile = await db
@@ -1625,18 +1655,18 @@ export async function searchRelationshipsByIdentity(params: {
     .selectAll()
     .where("identity_id", "=", normalizedQuery)
     .where("identity_search_enabled", "=", true)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!profile) {
     return {
       query: normalizedQuery,
       outcome: "not_found" as IdentitySearchOutcome,
       matches: [],
-    };
+    }
   }
 
   const directConversationMap = await loadViewerDirectConversationMap(
-    viewerWorkspaceMember.workspaceMemberId,
-  );
+    viewerWorkspaceMember.workspaceMemberId
+  )
 
   if (profile.subject_type === "member") {
     if (
@@ -1647,26 +1677,26 @@ export async function searchRelationshipsByIdentity(params: {
         query: normalizedQuery,
         outcome: "self" as IdentitySearchOutcome,
         matches: [],
-      };
+      }
     }
 
     const member = profile.subject_workspace_member_id
       ? await getWorkspaceMemberSummaryById(profile.subject_workspace_member_id)
-      : null;
+      : null
     if (!member) {
       return {
         query: normalizedQuery,
         outcome: "not_found" as IdentitySearchOutcome,
         matches: [],
-      };
+      }
     }
 
     const conversationId = directConversationMap.get(
       directConversationIdentityKey({
         kind: "member",
         workspaceMemberId: member.workspaceMemberId,
-      }),
-    );
+      })
+    )
 
     if (member.workspace.id === params.workspaceId) {
       return {
@@ -1692,7 +1722,7 @@ export async function searchRelationshipsByIdentity(params: {
             conversationId,
           },
         ],
-      };
+      }
     }
 
     const existingFriend = await findExistingFriendEntry({
@@ -1700,7 +1730,7 @@ export async function searchRelationshipsByIdentity(params: {
       ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       peerType: "member",
       peerWorkspaceMemberId: member.workspaceMemberId,
-    });
+    })
     if (existingFriend) {
       return {
         query: normalizedQuery,
@@ -1725,14 +1755,14 @@ export async function searchRelationshipsByIdentity(params: {
             conversationId,
           },
         ],
-      };
+      }
     }
 
     const pendingRequest = await findPendingFriendRequest({
       requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       targetType: "member",
       targetWorkspaceMemberId: member.workspaceMemberId,
-    });
+    })
     return {
       query: normalizedQuery,
       outcome: "found" as IdentitySearchOutcome,
@@ -1754,27 +1784,27 @@ export async function searchRelationshipsByIdentity(params: {
           requestId: pendingRequest?.id,
         },
       ],
-    };
+    }
   }
 
   if (profile.subject_type === "remote_agent") {
     const remoteAgent = profile.subject_remote_agent_id
       ? await getRemoteAgentSummary(profile.subject_remote_agent_id)
-      : null;
+      : null
     if (!remoteAgent) {
       return {
         query: normalizedQuery,
         outcome: "not_found" as IdentitySearchOutcome,
         matches: [],
-      };
+      }
     }
 
     const conversationId = directConversationMap.get(
       directConversationIdentityKey({
         kind: "remote_agent",
         remoteAgentId: remoteAgent.remoteAgentId,
-      }),
-    );
+      })
+    )
 
     if (remoteAgent.workspace.id === params.workspaceId) {
       const pendingRemoteAgentRequest = await executeSql<{ id: string }>(
@@ -1791,19 +1821,17 @@ export async function searchRelationshipsByIdentity(params: {
           params.workspaceId,
           remoteAgent.remoteAgentId,
           viewerWorkspaceMember.workspaceMemberId,
-        ],
-      );
+        ]
+      )
       const accessState = await getRemoteAgentAccessState({
         workspaceId: params.workspaceId,
         userId: params.userId,
         remoteAgent,
         conversationId,
         pendingRequestRemoteAgentIds: new Set(
-          pendingRemoteAgentRequest.rows[0]
-            ? [remoteAgent.remoteAgentId]
-            : [],
+          pendingRemoteAgentRequest.rows[0] ? [remoteAgent.remoteAgentId] : []
         ),
-      });
+      })
       return {
         query: normalizedQuery,
         outcome: "found" as IdentitySearchOutcome,
@@ -1828,7 +1856,7 @@ export async function searchRelationshipsByIdentity(params: {
             requestId: pendingRemoteAgentRequest.rows[0]?.id,
           },
         ],
-      };
+      }
     }
 
     const existingFriend = await findExistingFriendEntry({
@@ -1836,7 +1864,7 @@ export async function searchRelationshipsByIdentity(params: {
       ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       peerType: "remote_agent",
       peerRemoteAgentId: remoteAgent.remoteAgentId,
-    });
+    })
     if (existingFriend) {
       return {
         query: normalizedQuery,
@@ -1861,14 +1889,14 @@ export async function searchRelationshipsByIdentity(params: {
             conversationId,
           },
         ],
-      };
+      }
     }
 
     const pendingRequest = await findPendingFriendRequest({
       requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       targetType: "remote_agent",
       targetRemoteAgentId: remoteAgent.remoteAgentId,
-    });
+    })
     return {
       query: normalizedQuery,
       outcome: "found" as IdentitySearchOutcome,
@@ -1884,30 +1912,32 @@ export async function searchRelationshipsByIdentity(params: {
           avatarEmoji: remoteAgent.avatarEmoji || undefined,
           workspace: remoteAgent.workspace,
           remoteAgentId: remoteAgent.remoteAgentId,
-          state: pendingRequest ? ("pending_request" as const) : ("requestable" as const),
+          state: pendingRequest
+            ? ("pending_request" as const)
+            : ("requestable" as const),
           requestId: pendingRequest?.id,
         },
       ],
-    };
+    }
   }
 
   const actor = profile.subject_actor_id
     ? await getActorSummary(profile.subject_actor_id)
-    : null;
+    : null
   if (!actor) {
     return {
       query: normalizedQuery,
       outcome: "not_found" as IdentitySearchOutcome,
       matches: [],
-    };
+    }
   }
 
   const conversationId = directConversationMap.get(
     directConversationIdentityKey({
       kind: "actor",
       actorId: actor.actorId,
-    }),
-  );
+    })
+  )
 
   if (actor.workspace.id === params.workspaceId) {
     const pendingActorRequest = await db
@@ -1918,19 +1948,19 @@ export async function searchRelationshipsByIdentity(params: {
       .where(
         "requester_workspace_member_id",
         "=",
-        viewerWorkspaceMember.workspaceMemberId,
+        viewerWorkspaceMember.workspaceMemberId
       )
       .where("status", "=", "pending")
-      .executeTakeFirst();
+      .executeTakeFirst()
     const accessState = await getActorAccessState({
       workspaceId: params.workspaceId,
       userId: params.userId,
       actor,
       conversationId,
       pendingRequestActorIds: new Set(
-        pendingActorRequest ? [actor.actorId] : [],
+        pendingActorRequest ? [actor.actorId] : []
       ),
-    });
+    })
     return {
       query: normalizedQuery,
       outcome: "found" as IdentitySearchOutcome,
@@ -1955,7 +1985,7 @@ export async function searchRelationshipsByIdentity(params: {
           requestId: pendingActorRequest?.id,
         },
       ],
-    };
+    }
   }
 
   const existingFriend = await findExistingFriendEntry({
@@ -1963,7 +1993,7 @@ export async function searchRelationshipsByIdentity(params: {
     ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     peerType: "actor",
     peerActorId: actor.actorId,
-  });
+  })
   if (existingFriend) {
     return {
       query: normalizedQuery,
@@ -1988,14 +2018,14 @@ export async function searchRelationshipsByIdentity(params: {
           conversationId,
         },
       ],
-    };
+    }
   }
 
   const pendingRequest = await findPendingFriendRequest({
     requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     targetType: "actor",
     targetActorId: actor.actorId,
-  });
+  })
   return {
     query: normalizedQuery,
     outcome: "found" as IdentitySearchOutcome,
@@ -2011,37 +2041,39 @@ export async function searchRelationshipsByIdentity(params: {
         avatarEmoji: actor.avatarEmoji || undefined,
         workspace: actor.workspace,
         actorId: actor.actorId,
-        state: pendingRequest ? ("pending_request" as const) : ("requestable" as const),
+        state: pendingRequest
+          ? ("pending_request" as const)
+          : ("requestable" as const),
         requestId: pendingRequest?.id,
       },
     ],
-  };
+  }
 }
 
 export async function requestRelationshipByIdentityProfile(params: {
-  workspaceId: string;
-  userId: string;
-  profileId: string;
-  requireSearchable?: boolean;
+  workspaceId: string
+  userId: string
+  profileId: string
+  requireSearchable?: boolean
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
 
   const profile = await db
     .selectFrom("workspace_relationship_profiles")
     .selectAll()
     .where("id", "=", params.profileId)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!profile) {
-    throw new Error("Search target not found");
+    throw new Error("Search target not found")
   }
   if (params.requireSearchable !== false && !profile.identity_search_enabled) {
-    throw new Error("Search target not found");
+    throw new Error("Search target not found")
   }
 
   if (profile.subject_type === "member") {
@@ -2056,26 +2088,26 @@ export async function requestRelationshipByIdentityProfile(params: {
         subject_workspace_member_id: profile.subject_workspace_member_id,
         approval_mode: profile.approval_mode as ApprovalMode,
       },
-    });
+    })
   }
 
   if (profile.subject_type === "remote_agent") {
     const remoteAgent = profile.subject_remote_agent_id
       ? await getRemoteAgentSummary(profile.subject_remote_agent_id)
-      : null;
+      : null
     if (!remoteAgent) {
-      throw new Error("Relationship profile target not found");
+      throw new Error("Relationship profile target not found")
     }
 
     if (profile.workspace_id === params.workspaceId) {
       const canInvoke = await authorizeAction({
         subject: await resolveWorkspaceAccessSubject(
           params.workspaceId,
-          params.userId,
+          params.userId
         ),
         action: "remote_agent.invoke",
         resourceId: remoteAgent.remoteAgentId,
-      });
+      })
 
       if (canInvoke || remoteAgent.accessPolicy === "workspace_open") {
         return {
@@ -2084,7 +2116,7 @@ export async function requestRelationshipByIdentityProfile(params: {
             kind: "workspace-remote-agent" as const,
             id: remoteAgent.remoteAgentId,
           },
-        };
+        }
       }
 
       if (profile.approval_mode === "auto") {
@@ -2092,21 +2124,21 @@ export async function requestRelationshipByIdentityProfile(params: {
           workspaceId: params.workspaceId,
           remoteAgentId: remoteAgent.remoteAgentId,
           requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-        });
+        })
         return {
           outcome: "remote_agent_access_granted" as const,
           contact: {
             kind: "workspace-remote-agent" as const,
             id: remoteAgent.remoteAgentId,
           },
-        };
+        }
       }
 
       const requestResult = await createRemoteAgentAccessRequest({
         workspaceId: params.workspaceId,
         remoteAgentId: remoteAgent.remoteAgentId,
         requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-      });
+      })
       return {
         outcome: requestResult.created
           ? ("remote_agent_access_request_created" as const)
@@ -2116,7 +2148,7 @@ export async function requestRelationshipByIdentityProfile(params: {
           kind: "workspace-remote-agent" as const,
           id: remoteAgent.remoteAgentId,
         },
-      };
+      }
     }
 
     const existingFriend = await findExistingFriendEntry({
@@ -2124,7 +2156,7 @@ export async function requestRelationshipByIdentityProfile(params: {
       ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       peerType: "remote_agent",
       peerRemoteAgentId: remoteAgent.remoteAgentId,
-    });
+    })
     if (existingFriend) {
       return {
         outcome: "friend_active" as const,
@@ -2132,7 +2164,7 @@ export async function requestRelationshipByIdentityProfile(params: {
           kind: "friend-remote-agent" as const,
           id: existingFriend.id,
         },
-      };
+      }
     }
 
     if (profile.approval_mode === "auto") {
@@ -2140,13 +2172,13 @@ export async function requestRelationshipByIdentityProfile(params: {
         requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
         targetType: "remote_agent",
         targetRemoteAgentId: remoteAgent.remoteAgentId,
-      });
+      })
       const entry = await findExistingFriendEntry({
         workspaceId: params.workspaceId,
         ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
         peerType: "remote_agent",
         peerRemoteAgentId: remoteAgent.remoteAgentId,
-      });
+      })
       return {
         outcome: "friend_active" as const,
         contact: entry
@@ -2155,7 +2187,7 @@ export async function requestRelationshipByIdentityProfile(params: {
               id: entry.id,
             }
           : undefined,
-      };
+      }
     }
 
     const requestResult = await createFriendRequest({
@@ -2163,31 +2195,31 @@ export async function requestRelationshipByIdentityProfile(params: {
       targetType: "remote_agent",
       targetRemoteAgentId: remoteAgent.remoteAgentId,
       profileId: profile.id,
-    });
+    })
     return {
       outcome: requestResult.created
         ? ("friend_request_created" as const)
         : ("friend_request_pending" as const),
       requestId: requestResult.request.id,
-    };
+    }
   }
 
   const actor = profile.subject_actor_id
     ? await getActorSummary(profile.subject_actor_id)
-    : null;
+    : null
   if (!actor) {
-    throw new Error("Relationship profile target not found");
+    throw new Error("Relationship profile target not found")
   }
 
   if (profile.workspace_id === params.workspaceId) {
     const canInvoke = await authorizeAction({
       subject: await resolveWorkspaceAccessSubject(
         params.workspaceId,
-        params.userId,
+        params.userId
       ),
       action: "actor.invoke",
       resourceId: actor.actorId,
-    });
+    })
 
     if (canInvoke || actor.accessPolicy === "workspace_open") {
       return {
@@ -2196,7 +2228,7 @@ export async function requestRelationshipByIdentityProfile(params: {
           kind: "workspace-actor" as const,
           id: actor.actorId,
         },
-      };
+      }
     }
 
     if (profile.approval_mode === "auto") {
@@ -2205,21 +2237,21 @@ export async function requestRelationshipByIdentityProfile(params: {
         actorId: actor.actorId,
         requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
         grantedByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-      });
+      })
       return {
         outcome: "actor_access_granted" as const,
         contact: {
           kind: "workspace-actor" as const,
           id: actor.actorId,
         },
-      };
+      }
     }
 
     const requestResult = await createActorAccessRequest({
       workspaceId: params.workspaceId,
       actorId: actor.actorId,
       requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-    });
+    })
     return {
       outcome: requestResult.created
         ? ("actor_access_request_created" as const)
@@ -2229,7 +2261,7 @@ export async function requestRelationshipByIdentityProfile(params: {
         kind: "workspace-actor" as const,
         id: actor.actorId,
       },
-    };
+    }
   }
 
   const existingFriend = await findExistingFriendEntry({
@@ -2237,7 +2269,7 @@ export async function requestRelationshipByIdentityProfile(params: {
     ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     peerType: "actor",
     peerActorId: actor.actorId,
-  });
+  })
   if (existingFriend) {
     return {
       outcome: "friend_active" as const,
@@ -2245,7 +2277,7 @@ export async function requestRelationshipByIdentityProfile(params: {
         kind: "friend-actor" as const,
         id: existingFriend.id,
       },
-    };
+    }
   }
 
   if (profile.approval_mode === "auto") {
@@ -2253,13 +2285,13 @@ export async function requestRelationshipByIdentityProfile(params: {
       requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       targetType: "actor",
       targetActorId: actor.actorId,
-    });
+    })
     const entry = await findExistingFriendEntry({
       workspaceId: params.workspaceId,
       ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       peerType: "actor",
       peerActorId: actor.actorId,
-    });
+    })
     return {
       outcome: "friend_active" as const,
       contact: entry
@@ -2268,7 +2300,7 @@ export async function requestRelationshipByIdentityProfile(params: {
             id: entry.id,
           }
         : undefined,
-    };
+    }
   }
 
   const requestResult = await createFriendRequest({
@@ -2276,32 +2308,32 @@ export async function requestRelationshipByIdentityProfile(params: {
     targetType: "actor",
     targetActorId: actor.actorId,
     profileId: profile.id,
-  });
+  })
   return {
     outcome: requestResult.created
       ? ("friend_request_created" as const)
       : ("friend_request_pending" as const),
     requestId: requestResult.request.id,
-  };
+  }
 }
 
 export async function getMemberRelationshipProfile(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     subjectType: "member",
     subjectWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-  });
+  })
   return {
     subjectType: "member" as const,
     approvalMode: profile.approval_mode,
@@ -2309,29 +2341,29 @@ export async function getMemberRelationshipProfile(params: {
     qrUrl: buildRelationshipQrUrl(profile.qr_token),
     identityId: profile.identity_id,
     identitySearchEnabled: profile.identity_search_enabled,
-  };
+  }
 }
 
 export async function updateMemberRelationshipProfile(params: {
-  workspaceId: string;
-  userId: string;
-  approvalMode: ApprovalMode;
-  identityId?: string;
-  identitySearchEnabled?: boolean;
+  workspaceId: string
+  userId: string
+  approvalMode: ApprovalMode
+  identityId?: string
+  identitySearchEnabled?: boolean
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     subjectType: "member",
     subjectWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-  });
+  })
   try {
     const updated = await db
       .updateTable("workspace_relationship_profiles")
@@ -2349,9 +2381,9 @@ export async function updateMemberRelationshipProfile(params: {
       })
       .where("id", "=", profile.id)
       .returningAll()
-      .executeTakeFirst();
+      .executeTakeFirst()
     if (!updated) {
-      throw new Error("Failed to update relationship profile");
+      throw new Error("Failed to update relationship profile")
     }
     return {
       subjectType: "member" as const,
@@ -2360,37 +2392,37 @@ export async function updateMemberRelationshipProfile(params: {
       qrUrl: buildRelationshipQrUrl(updated.qr_token),
       identityId: updated.identity_id,
       identitySearchEnabled: updated.identity_search_enabled,
-    };
+    }
   } catch (error) {
     if (isUniqueViolation(error)) {
-      throw new Error("This identity ID is already taken.");
+      throw new Error("This identity ID is already taken.")
     }
-    throw error;
+    throw error
   }
 }
 
 export async function getActorRelationshipProfile(params: {
-  workspaceId: string;
-  actorId: string;
-  userId: string;
+  workspaceId: string
+  actorId: string
+  userId: string
 }) {
-  const actor = await getActorSummary(params.actorId);
+  const actor = await getActorSummary(params.actorId)
   if (!actor || actor.workspace.id !== params.workspaceId) {
-    throw new Error("Actor not found");
+    throw new Error("Actor not found")
   }
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     subjectType: "actor",
     subjectActorId: params.actorId,
-  });
+  })
   return {
     subjectType: "actor" as const,
     approvalMode: profile.approval_mode,
@@ -2400,31 +2432,31 @@ export async function getActorRelationshipProfile(params: {
     identitySearchEnabled: profile.identity_search_enabled,
     accessPolicy: actor.accessPolicy,
     isPublicShared: actor.isPublicShared,
-  };
+  }
 }
 
 export async function getRemoteAgentRelationshipProfile(params: {
-  workspaceId: string;
-  remoteAgentId: string;
-  userId: string;
+  workspaceId: string
+  remoteAgentId: string
+  userId: string
 }) {
-  const remoteAgent = await getRemoteAgentSummary(params.remoteAgentId);
+  const remoteAgent = await getRemoteAgentSummary(params.remoteAgentId)
   if (!remoteAgent || remoteAgent.workspace.id !== params.workspaceId) {
-    throw new Error("Remote agent not found");
+    throw new Error("Remote agent not found")
   }
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     subjectType: "remote_agent",
     subjectRemoteAgentId: params.remoteAgentId,
-  });
+  })
   return {
     subjectType: "remote_agent" as const,
     approvalMode: profile.approval_mode,
@@ -2434,34 +2466,34 @@ export async function getRemoteAgentRelationshipProfile(params: {
     identitySearchEnabled: profile.identity_search_enabled,
     accessPolicy: remoteAgent.accessPolicy,
     isPublicShared: remoteAgent.isPublicShared,
-  };
+  }
 }
 
 export async function updateActorRelationshipProfile(params: {
-  workspaceId: string;
-  actorId: string;
-  userId: string;
-  approvalMode: ApprovalMode;
-  identityId?: string;
-  identitySearchEnabled?: boolean;
-  accessPolicy?: AccessPolicy;
-  isPublicShared?: boolean;
+  workspaceId: string
+  actorId: string
+  userId: string
+  approvalMode: ApprovalMode
+  identityId?: string
+  identitySearchEnabled?: boolean
+  accessPolicy?: AccessPolicy
+  isPublicShared?: boolean
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     subjectType: "actor",
     subjectActorId: params.actorId,
-  });
+  })
 
-  let updatedProfile;
+  let updatedProfile
   try {
     updatedProfile = await db
       .updateTable("workspace_relationship_profiles")
@@ -2479,28 +2511,28 @@ export async function updateActorRelationshipProfile(params: {
       })
       .where("id", "=", profile.id)
       .returningAll()
-      .executeTakeFirst();
+      .executeTakeFirst()
   } catch (error) {
     if (isUniqueViolation(error)) {
-      throw new Error("This identity ID is already taken.");
+      throw new Error("This identity ID is already taken.")
     }
-    throw error;
+    throw error
   }
   if (!updatedProfile) {
-    throw new Error("Failed to update relationship profile");
+    throw new Error("Failed to update relationship profile")
   }
 
-  const actorSummary = await getActorSummary(params.actorId);
-  let accessPolicy = actorSummary?.accessPolicy;
-  let isPublicShared = actorSummary?.isPublicShared ?? false;
+  const actorSummary = await getActorSummary(params.actorId)
+  let accessPolicy = actorSummary?.accessPolicy
+  let isPublicShared = actorSummary?.isPublicShared ?? false
   if (params.accessPolicy) {
     const actorResult = await updateActorAccessPolicy({
       workspaceId: params.workspaceId,
       actorId: params.actorId,
       updatedByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
       accessPolicy: params.accessPolicy,
-    });
-    accessPolicy = actorResult.access_policy as AccessPolicy;
+    })
+    accessPolicy = actorResult.access_policy as AccessPolicy
   }
   if (typeof params.isPublicShared === "boolean") {
     const actorResult = await db
@@ -2512,11 +2544,11 @@ export async function updateActorRelationshipProfile(params: {
       .where("id", "=", params.actorId)
       .where("workspace_id", "=", params.workspaceId)
       .returning(["is_public_shared"])
-      .executeTakeFirst();
+      .executeTakeFirst()
     if (!actorResult) {
-      throw new Error("Actor not found");
+      throw new Error("Actor not found")
     }
-    isPublicShared = Boolean(actorResult.is_public_shared);
+    isPublicShared = Boolean(actorResult.is_public_shared)
   }
 
   return {
@@ -2528,34 +2560,34 @@ export async function updateActorRelationshipProfile(params: {
     identitySearchEnabled: updatedProfile.identity_search_enabled,
     accessPolicy: accessPolicy || "workspace_open",
     isPublicShared,
-  };
+  }
 }
 
 export async function updateRemoteAgentRelationshipProfile(params: {
-  workspaceId: string;
-  remoteAgentId: string;
-  userId: string;
-  approvalMode: ApprovalMode;
-  identityId?: string;
-  identitySearchEnabled?: boolean;
-  accessPolicy?: AccessPolicy;
-  isPublicShared?: boolean;
+  workspaceId: string
+  remoteAgentId: string
+  userId: string
+  approvalMode: ApprovalMode
+  identityId?: string
+  identitySearchEnabled?: boolean
+  accessPolicy?: AccessPolicy
+  isPublicShared?: boolean
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
     subjectType: "remote_agent",
     subjectRemoteAgentId: params.remoteAgentId,
-  });
+  })
 
-  let updatedProfile;
+  let updatedProfile
   try {
     updatedProfile = await db
       .updateTable("workspace_relationship_profiles")
@@ -2573,28 +2605,28 @@ export async function updateRemoteAgentRelationshipProfile(params: {
       })
       .where("id", "=", profile.id)
       .returningAll()
-      .executeTakeFirst();
+      .executeTakeFirst()
   } catch (error) {
     if (isUniqueViolation(error)) {
-      throw new Error("This identity ID is already taken.");
+      throw new Error("This identity ID is already taken.")
     }
-    throw error;
+    throw error
   }
   if (!updatedProfile) {
-    throw new Error("Failed to update relationship profile");
+    throw new Error("Failed to update relationship profile")
   }
 
-  const remoteAgentSummary = await getRemoteAgentSummary(params.remoteAgentId);
-  let accessPolicy = remoteAgentSummary?.accessPolicy;
-  let isPublicShared = remoteAgentSummary?.isPublicShared ?? false;
+  const remoteAgentSummary = await getRemoteAgentSummary(params.remoteAgentId)
+  let accessPolicy = remoteAgentSummary?.accessPolicy
+  let isPublicShared = remoteAgentSummary?.isPublicShared ?? false
 
   if (params.accessPolicy) {
     const remoteAgentResult = await updateRemoteAgentAccessPolicy({
       workspaceId: params.workspaceId,
       remoteAgentId: params.remoteAgentId,
       accessPolicy: params.accessPolicy,
-    });
-    accessPolicy = remoteAgentResult.access_policy;
+    })
+    accessPolicy = remoteAgentResult.access_policy
   }
 
   if (typeof params.isPublicShared === "boolean") {
@@ -2608,12 +2640,12 @@ export async function updateRemoteAgentRelationshipProfile(params: {
           AND is_active = TRUE
         RETURNING is_public_shared
       `,
-      [params.remoteAgentId, params.workspaceId, params.isPublicShared],
-    );
+      [params.remoteAgentId, params.workspaceId, params.isPublicShared]
+    )
     if (!updateResult.rows[0]) {
-      throw new Error("Remote agent not found");
+      throw new Error("Remote agent not found")
     }
-    isPublicShared = Boolean(updateResult.rows[0].is_public_shared);
+    isPublicShared = Boolean(updateResult.rows[0].is_public_shared)
   }
 
   return {
@@ -2625,29 +2657,29 @@ export async function updateRemoteAgentRelationshipProfile(params: {
     identitySearchEnabled: updatedProfile.identity_search_enabled,
     accessPolicy: accessPolicy || "workspace_open",
     isPublicShared,
-  };
+  }
 }
 
 export async function scanRelationshipQr(params: {
-  workspaceId: string;
-  userId: string;
-  token: string;
+  workspaceId: string
+  userId: string
+  token: string
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
 
   const profile = await db
     .selectFrom("workspace_relationship_profiles")
     .selectAll()
     .where("qr_token", "=", params.token)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!profile) {
-    throw new Error("Relationship QR code not found");
+    throw new Error("Relationship QR code not found")
   }
 
   if (profile.subject_type === "member") {
@@ -2662,7 +2694,7 @@ export async function scanRelationshipQr(params: {
         subject_workspace_member_id: profile.subject_workspace_member_id,
         approval_mode: profile.approval_mode as ApprovalMode,
       },
-    });
+    })
   }
 
   return requestRelationshipByIdentityProfile({
@@ -2670,27 +2702,27 @@ export async function scanRelationshipQr(params: {
     userId: params.userId,
     profileId: profile.id,
     requireSearchable: false,
-  });
+  })
 }
 
 export async function listFriends(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }) {
-  const entries = (await buildContactHubEntryMap(params)).friends;
-  return { friends: entries };
+  const entries = (await buildContactHubEntryMap(params)).friends
+  return { friends: entries }
 }
 
 export async function listFriendRequests(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
 
   const pendingRows = await db
@@ -2698,75 +2730,75 @@ export async function listFriendRequests(params: {
     .selectAll()
     .where("status", "=", "pending")
     .orderBy("created_at", "desc")
-    .execute();
+    .execute()
   const outgoingRows = pendingRows.filter(
     (row) =>
       row.requester_workspace_member_id ===
-      viewerWorkspaceMember.workspaceMemberId,
-  );
+      viewerWorkspaceMember.workspaceMemberId
+  )
 
-  const incoming = [];
+  const incoming = []
   for (const row of pendingRows) {
     if (row.target_subject_type === "member") {
       if (
         row.target_workspace_member_id !==
         viewerWorkspaceMember.workspaceMemberId
       ) {
-        continue;
+        continue
       }
     } else if (row.target_subject_type === "actor" && row.target_actor_id) {
-      const targetActor = await getActorSummary(row.target_actor_id);
+      const targetActor = await getActorSummary(row.target_actor_id)
       if (!targetActor || targetActor.workspace.id !== params.workspaceId) {
-        continue;
+        continue
       }
       const canApprove = await authorizeAction({
         subject: await resolveWorkspaceAccessSubject(
           params.workspaceId,
-          params.userId,
+          params.userId
         ),
         action: "actor.grant",
         resourceId: row.target_actor_id,
-      });
-      if (!canApprove) continue;
+      })
+      if (!canApprove) continue
     } else if (
       row.target_subject_type === "remote_agent" &&
       row.target_remote_agent_id
     ) {
       const targetRemoteAgent = await getRemoteAgentSummary(
-        row.target_remote_agent_id,
-      );
+        row.target_remote_agent_id
+      )
       if (
         !targetRemoteAgent ||
         targetRemoteAgent.workspace.id !== params.workspaceId
       ) {
-        continue;
+        continue
       }
       const canApprove = await authorizeAction({
         subject: await resolveWorkspaceAccessSubject(
           params.workspaceId,
-          params.userId,
+          params.userId
         ),
         action: "remote_agent.grant",
         resourceId: row.target_remote_agent_id,
-      });
-      if (!canApprove) continue;
+      })
+      if (!canApprove) continue
     }
 
     const requester = await getWorkspaceMemberSummaryById(
-      row.requester_workspace_member_id,
-    );
+      row.requester_workspace_member_id
+    )
     const targetMember =
       row.target_subject_type === "member" && row.target_workspace_member_id
         ? await getWorkspaceMemberSummaryById(row.target_workspace_member_id)
-        : null;
+        : null
     const targetActor =
       row.target_subject_type === "actor" && row.target_actor_id
         ? await getActorSummary(row.target_actor_id)
-        : null;
+        : null
     const targetRemoteAgent =
       row.target_subject_type === "remote_agent" && row.target_remote_agent_id
         ? await getRemoteAgentSummary(row.target_remote_agent_id)
-        : null;
+        : null
     incoming.push({
       id: row.id,
       status: row.status,
@@ -2776,23 +2808,23 @@ export async function listFriendRequests(params: {
       targetMember,
       targetActor,
       targetRemoteAgent,
-    });
+    })
   }
 
-  const outgoing = [];
+  const outgoing = []
   for (const row of outgoingRows) {
     const targetMember =
       row.target_subject_type === "member" && row.target_workspace_member_id
         ? await getWorkspaceMemberSummaryById(row.target_workspace_member_id)
-        : null;
+        : null
     const targetActor =
       row.target_subject_type === "actor" && row.target_actor_id
         ? await getActorSummary(row.target_actor_id)
-        : null;
+        : null
     const targetRemoteAgent =
       row.target_subject_type === "remote_agent" && row.target_remote_agent_id
         ? await getRemoteAgentSummary(row.target_remote_agent_id)
-        : null;
+        : null
     outgoing.push({
       id: row.id,
       status: row.status,
@@ -2801,35 +2833,35 @@ export async function listFriendRequests(params: {
       targetMember,
       targetActor,
       targetRemoteAgent,
-    });
+    })
   }
 
-  return { incoming, outgoing };
+  return { incoming, outgoing }
 }
 
 export async function resolveFriendRequest(params: {
-  workspaceId: string;
-  userId: string;
-  requestId: string;
-  decision: "approve" | "reject";
+  workspaceId: string
+  userId: string
+  requestId: string
+  decision: "approve" | "reject"
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
   const request = await db
     .selectFrom("workspace_friend_requests")
     .selectAll()
     .where("id", "=", params.requestId)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!request) {
-    throw new Error("Friend request not found");
+    throw new Error("Friend request not found")
   }
   if (request.status !== "pending") {
-    throw new Error("Friend request has already been resolved");
+    throw new Error("Friend request has already been resolved")
   }
 
   if (request.target_subject_type === "member") {
@@ -2837,47 +2869,50 @@ export async function resolveFriendRequest(params: {
       request.target_workspace_member_id !==
       viewerWorkspaceMember.workspaceMemberId
     ) {
-      throw new Error("Not allowed to resolve this friend request");
+      throw new Error("Not allowed to resolve this friend request")
     }
-  } else if (request.target_subject_type === "actor" && request.target_actor_id) {
-    const targetActor = await getActorSummary(request.target_actor_id);
+  } else if (
+    request.target_subject_type === "actor" &&
+    request.target_actor_id
+  ) {
+    const targetActor = await getActorSummary(request.target_actor_id)
     if (!targetActor || targetActor.workspace.id !== params.workspaceId) {
-      throw new Error("Friend request not found");
+      throw new Error("Friend request not found")
     }
     const canApprove = await authorizeAction({
       subject: await resolveWorkspaceAccessSubject(
         params.workspaceId,
-        params.userId,
+        params.userId
       ),
       action: "actor.grant",
       resourceId: request.target_actor_id,
-    });
+    })
     if (!canApprove) {
-      throw new Error("Not allowed to resolve this friend request");
+      throw new Error("Not allowed to resolve this friend request")
     }
   } else if (
     request.target_subject_type === "remote_agent" &&
     request.target_remote_agent_id
   ) {
     const targetRemoteAgent = await getRemoteAgentSummary(
-      request.target_remote_agent_id,
-    );
+      request.target_remote_agent_id
+    )
     if (
       !targetRemoteAgent ||
       targetRemoteAgent.workspace.id !== params.workspaceId
     ) {
-      throw new Error("Friend request not found");
+      throw new Error("Friend request not found")
     }
     const canApprove = await authorizeAction({
       subject: await resolveWorkspaceAccessSubject(
         params.workspaceId,
-        params.userId,
+        params.userId
       ),
       action: "remote_agent.grant",
       resourceId: request.target_remote_agent_id,
-    });
+    })
     if (!canApprove) {
-      throw new Error("Not allowed to resolve this friend request");
+      throw new Error("Not allowed to resolve this friend request")
     }
   }
 
@@ -2889,39 +2924,38 @@ export async function resolveFriendRequest(params: {
       targetActorId: request.target_actor_id || undefined,
       targetRemoteAgentId: request.target_remote_agent_id || undefined,
       sourceRequestId: request.id,
-    });
+    })
   }
 
   const updated = await db
     .updateTable("workspace_friend_requests")
     .set({
       status: params.decision === "approve" ? "approved" : "rejected",
-      resolved_by_workspace_member_id:
-        viewerWorkspaceMember.workspaceMemberId,
+      resolved_by_workspace_member_id: viewerWorkspaceMember.workspaceMemberId,
       resolved_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
     .where("id", "=", request.id)
     .returningAll()
-    .executeTakeFirst();
+    .executeTakeFirst()
 
   if (!updated) {
-    throw new Error("Failed to resolve friend request");
+    throw new Error("Failed to resolve friend request")
   }
 
-  return updated;
+  return updated
 }
 
 export async function listActorAccessRequests(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
   const [incomingRows, outgoingRows] = await Promise.all([
     db
@@ -2937,57 +2971,57 @@ export async function listActorAccessRequests(params: {
       .where(
         "requester_workspace_member_id",
         "=",
-        viewerWorkspaceMember.workspaceMemberId,
+        viewerWorkspaceMember.workspaceMemberId
       )
       .where("status", "=", "pending")
       .execute(),
-  ]);
+  ])
 
-  const incoming = [];
+  const incoming = []
   for (const row of incomingRows) {
     const canApprove = await authorizeAction({
       subject: await resolveWorkspaceAccessSubject(
         params.workspaceId,
-        params.userId,
+        params.userId
       ),
       action: "actor.grant",
       resourceId: row.actor_id,
-    });
-    if (!canApprove) continue;
+    })
+    if (!canApprove) continue
     incoming.push({
       id: row.id,
       status: row.status,
       createdAt: toIsoString(row.created_at),
       requester: await getWorkspaceMemberSummaryById(
-        row.requester_workspace_member_id,
+        row.requester_workspace_member_id
       ),
       actor: await getActorSummary(row.actor_id),
-    });
+    })
   }
 
-  const outgoing = [];
+  const outgoing = []
   for (const row of outgoingRows) {
     outgoing.push({
       id: row.id,
       status: row.status,
       createdAt: toIsoString(row.created_at),
       actor: await getActorSummary(row.actor_id),
-    });
+    })
   }
 
-  return { incoming, outgoing };
+  return { incoming, outgoing }
 }
 
 export async function listRemoteAgentAccessRequests(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
 
   const [incomingRows, outgoingRows] = await Promise.all([
@@ -2999,7 +3033,7 @@ export async function listRemoteAgentAccessRequests(params: {
           AND status = 'pending'
         ORDER BY created_at DESC
       `,
-      [params.workspaceId],
+      [params.workspaceId]
     ).then((result) => result.rows),
     executeSql<any>(
       `
@@ -3010,79 +3044,79 @@ export async function listRemoteAgentAccessRequests(params: {
           AND status = 'pending'
         ORDER BY created_at DESC
       `,
-      [params.workspaceId, viewerWorkspaceMember.workspaceMemberId],
+      [params.workspaceId, viewerWorkspaceMember.workspaceMemberId]
     ).then((result) => result.rows),
-  ]);
+  ])
 
-  const incoming = [];
+  const incoming = []
   for (const row of incomingRows) {
     const canApprove = await authorizeAction({
       subject: await resolveWorkspaceAccessSubject(
         params.workspaceId,
-        params.userId,
+        params.userId
       ),
       action: "remote_agent.grant",
       resourceId: row.remote_agent_id,
-    });
-    if (!canApprove) continue;
+    })
+    if (!canApprove) continue
     incoming.push({
       id: row.id,
       status: row.status,
       createdAt: toIsoString(row.created_at),
       requester: await getWorkspaceMemberSummaryById(
-        row.requester_workspace_member_id,
+        row.requester_workspace_member_id
       ),
       remoteAgent: await getRemoteAgentSummary(row.remote_agent_id),
-    });
+    })
   }
 
-  const outgoing = [];
+  const outgoing = []
   for (const row of outgoingRows) {
     outgoing.push({
       id: row.id,
       status: row.status,
       createdAt: toIsoString(row.created_at),
       remoteAgent: await getRemoteAgentSummary(row.remote_agent_id),
-    });
+    })
   }
 
-  return { incoming, outgoing };
+  return { incoming, outgoing }
 }
 
 export async function resolveActorAccessRequest(params: {
-  workspaceId: string;
-  userId: string;
-  requestId: string;
-  decision: "approve" | "reject";
+  workspaceId: string
+  userId: string
+  requestId: string
+  decision: "approve" | "reject"
 }) {
   const approverWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!approverWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
   const request = await db
     .selectFrom("actor_access_requests")
     .selectAll()
     .where("id", "=", params.requestId)
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!request || request.workspace_id !== params.workspaceId) {
-    throw new Error("Actor access request not found");
+    throw new Error("Actor access request not found")
   }
   if (request.status !== "pending") {
-    throw new Error("Actor access request has already been resolved");
+    throw new Error("Actor access request has already been resolved")
   }
   const canApprove = await authorizeAction({
     subject: await resolveWorkspaceAccessSubject(
       params.workspaceId,
-      params.userId,
+      params.userId
     ),
     action: "actor.grant",
     resourceId: request.actor_id,
-  });
+  })
   if (!canApprove) {
-    throw new Error("Not allowed to resolve this actor access request");
+    throw new Error("Not allowed to resolve this actor access request")
   }
 
   if (params.decision === "approve") {
@@ -3091,7 +3125,7 @@ export async function resolveActorAccessRequest(params: {
       actorId: request.actor_id,
       requesterWorkspaceMemberId: request.requester_workspace_member_id,
       grantedByWorkspaceMemberId: approverWorkspaceMember.workspaceMemberId,
-    });
+    })
   }
 
   const updated = await db
@@ -3105,25 +3139,25 @@ export async function resolveActorAccessRequest(params: {
     })
     .where("id", "=", request.id)
     .returningAll()
-    .executeTakeFirst();
+    .executeTakeFirst()
   if (!updated) {
-    throw new Error("Failed to resolve actor access request");
+    throw new Error("Failed to resolve actor access request")
   }
-  return updated;
+  return updated
 }
 
 export async function resolveRemoteAgentAccessRequest(params: {
-  workspaceId: string;
-  userId: string;
-  requestId: string;
-  decision: "approve" | "reject";
+  workspaceId: string
+  userId: string
+  requestId: string
+  decision: "approve" | "reject"
 }) {
   const approverWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!approverWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
 
   const requestResult = await executeSql<any>(
@@ -3133,26 +3167,26 @@ export async function resolveRemoteAgentAccessRequest(params: {
       WHERE id = $1
       LIMIT 1
     `,
-    [params.requestId],
-  );
-  const request = requestResult.rows[0];
+    [params.requestId]
+  )
+  const request = requestResult.rows[0]
   if (!request || request.workspace_id !== params.workspaceId) {
-    throw new Error("Remote agent access request not found");
+    throw new Error("Remote agent access request not found")
   }
   if (request.status !== "pending") {
-    throw new Error("Remote agent access request has already been resolved");
+    throw new Error("Remote agent access request has already been resolved")
   }
 
   const canApprove = await authorizeAction({
     subject: await resolveWorkspaceAccessSubject(
       params.workspaceId,
-      params.userId,
+      params.userId
     ),
     action: "remote_agent.grant",
     resourceId: request.remote_agent_id,
-  });
+  })
   if (!canApprove) {
-    throw new Error("Not allowed to resolve this remote agent access request");
+    throw new Error("Not allowed to resolve this remote agent access request")
   }
 
   if (params.decision === "approve") {
@@ -3160,7 +3194,7 @@ export async function resolveRemoteAgentAccessRequest(params: {
       workspaceId: params.workspaceId,
       remoteAgentId: request.remote_agent_id,
       requesterWorkspaceMemberId: request.requester_workspace_member_id,
-    });
+    })
   }
 
   const updated = await executeSql<any>(
@@ -3177,58 +3211,60 @@ export async function resolveRemoteAgentAccessRequest(params: {
       request.id,
       params.decision === "approve" ? "approved" : "rejected",
       approverWorkspaceMember.workspaceMemberId,
-    ],
-  );
+    ]
+  )
   if (!updated.rows[0]) {
-    throw new Error("Failed to resolve remote agent access request");
+    throw new Error("Failed to resolve remote agent access request")
   }
-  return updated.rows[0];
+  return updated.rows[0]
 }
 
 export async function getContactHub(params: {
-  workspaceId: string;
-  userId: string;
+  workspaceId: string
+  userId: string
 }) {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!viewerWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
   const [
     { incoming: friendIncoming },
     { incoming: actorIncoming },
     { incoming: remoteAgentIncoming },
     entries,
-  ] =
-    await Promise.all([
-      listFriendRequests(params),
-      listActorAccessRequests(params),
-      listRemoteAgentAccessRequests(params),
-      buildContactHubEntryMap(params),
-    ]);
+  ] = await Promise.all([
+    listFriendRequests(params),
+    listActorAccessRequests(params),
+    listRemoteAgentAccessRequests(params),
+    buildContactHubEntryMap(params),
+  ])
   const threads = await listWorkspaceConversationViews({
     workspaceId: params.workspaceId,
     workspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-  });
+  })
   const groups = await Promise.all(
     threads
       .filter((thread) => thread.kind === "group")
       .map((thread) =>
-        mapConversationSummaryView({
-          id: thread.conversationId,
-          kind: thread.kind,
-          boundary: thread.boundary,
-          title: thread.title,
-          unread_count: thread.unreadCount,
-          created_at: thread.createdAt,
-          transport_kind: undefined,
-        }, {
-          workspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-        }),
-      ),
-  );
+        mapConversationSummaryView(
+          {
+            id: thread.conversationId,
+            kind: thread.kind,
+            boundary: thread.boundary,
+            title: thread.title,
+            unread_count: thread.unreadCount,
+            created_at: thread.createdAt,
+            transport_kind: undefined,
+          },
+          {
+            workspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
+          }
+        )
+      )
+  )
 
   return {
     requestSummary: {
@@ -3236,97 +3272,98 @@ export async function getContactHub(params: {
       actorAccessPendingCount: actorIncoming.length,
       remoteAgentAccessPendingCount: remoteAgentIncoming.length,
       totalPendingCount:
-        friendIncoming.length + actorIncoming.length + remoteAgentIncoming.length,
+        friendIncoming.length +
+        actorIncoming.length +
+        remoteAgentIncoming.length,
     },
     workspaceActors: entries.workspaceActors,
     workspaceRemoteAgents: entries.workspaceRemoteAgents,
     workspaceMembers: entries.workspaceMembers,
     friends: entries.friends,
     groups,
-  };
+  }
 }
 
 export async function getContactHubDetail(params: {
-  workspaceId: string;
-  userId: string;
-  contactKind: ContactHubKind;
-  contactId: string;
+  workspaceId: string
+  userId: string
+  contactKind: ContactHubKind
+  contactId: string
 }) {
   const hub = await getContactHub({
     workspaceId: params.workspaceId,
     userId: params.userId,
-  });
+  })
   const entry = [
     ...hub.workspaceActors,
     ...((hub as any).workspaceRemoteAgents ?? []),
     ...hub.workspaceMembers,
     ...hub.friends,
   ].find(
-    (item) => item.kind === params.contactKind && item.id === params.contactId,
-  );
+    (item) => item.kind === params.contactKind && item.id === params.contactId
+  )
   if (!entry) {
-    throw new Error("Contact not found");
+    throw new Error("Contact not found")
   }
 
   const relatedGroups = hub.groups.filter((conversation) => {
     if (entry.actorId) {
       return conversation.participants.some(
         (participant) =>
-          participant.type === "actor" &&
-          participant.actorId === entry.actorId,
-      );
+          participant.type === "actor" && participant.actorId === entry.actorId
+      )
     }
     if (entry.remoteAgentId) {
       return conversation.participants.some(
         (participant) =>
           participant.type === "remote_agent" &&
-          participant.remoteAgentId === entry.remoteAgentId,
-      );
+          participant.remoteAgentId === entry.remoteAgentId
+      )
     }
     if (entry.workspaceMemberId) {
       return conversation.participants.some(
         (participant) =>
           participant.type === "workspace_member" &&
-          participant.workspaceMemberId === entry.workspaceMemberId,
-      );
+          participant.workspaceMemberId === entry.workspaceMemberId
+      )
     }
-    return false;
-  });
+    return false
+  })
 
   return {
     contact: entry,
     groups: relatedGroups,
-  };
+  }
 }
 
 export async function openDirectConversation(params: {
-  workspaceId: string;
-  userId: string;
-  contactKind: ContactHubKind;
-  contactId: string;
+  workspaceId: string
+  userId: string
+  contactKind: ContactHubKind
+  contactId: string
 }) {
-  const resolved = await resolveContactReference(params);
+  const resolved = await resolveContactReference(params)
   const requesterWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
-    params.userId,
-  );
+    params.userId
+  )
   if (!requesterWorkspaceMember) {
-    throw new Error("Workspace member not found");
+    throw new Error("Workspace member not found")
   }
   const requesterIdentity: DirectConversationIdentity = {
     kind: "member",
     workspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
-  };
+  }
 
   if (resolved.kind === "workspace-actor" && resolved.actor) {
     const canInvoke = await authorizeAction({
       subject: await resolveWorkspaceAccessSubject(
         params.workspaceId,
-        params.userId,
+        params.userId
       ),
       action: "actor.invoke",
       resourceId: resolved.actor.actorId,
-    });
+    })
 
     if (!canInvoke && resolved.actor.accessPolicy === "approval_required") {
       const profile = await ensureRelationshipProfile({
@@ -3334,25 +3371,27 @@ export async function openDirectConversation(params: {
         createdByWorkspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
         subjectType: "actor",
         subjectActorId: resolved.actor.actorId,
-      });
+      })
       if (profile.approval_mode === "auto") {
         await grantActorAccess({
           workspaceId: params.workspaceId,
           actorId: resolved.actor.actorId,
-          requesterWorkspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
-          grantedByWorkspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
-        });
+          requesterWorkspaceMemberId:
+            requesterWorkspaceMember.workspaceMemberId,
+          grantedByWorkspaceMemberId:
+            requesterWorkspaceMember.workspaceMemberId,
+        })
       } else {
         const accessRequest = await createActorAccessRequest({
           workspaceId: params.workspaceId,
           actorId: resolved.actor.actorId,
           requesterWorkspaceMemberId:
             requesterWorkspaceMember.workspaceMemberId,
-        });
+        })
         return {
           status: "pending_approval" as const,
           requestId: accessRequest.request.id,
-        };
+        }
       }
     }
   }
@@ -3361,74 +3400,81 @@ export async function openDirectConversation(params: {
     const canInvoke = await authorizeAction({
       subject: await resolveWorkspaceAccessSubject(
         params.workspaceId,
-        params.userId,
+        params.userId
       ),
       action: "remote_agent.invoke",
       resourceId: resolved.remoteAgent.remoteAgentId,
-    });
+    })
 
-    if (!canInvoke && resolved.remoteAgent.accessPolicy === "approval_required") {
+    if (
+      !canInvoke &&
+      resolved.remoteAgent.accessPolicy === "approval_required"
+    ) {
       const profile = await ensureRelationshipProfile({
         workspaceId: params.workspaceId,
         createdByWorkspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
         subjectType: "remote_agent",
         subjectRemoteAgentId: resolved.remoteAgent.remoteAgentId,
-      });
+      })
       if (profile.approval_mode === "auto") {
         await grantRemoteAgentAccess({
           workspaceId: params.workspaceId,
           remoteAgentId: resolved.remoteAgent.remoteAgentId,
           requesterWorkspaceMemberId:
             requesterWorkspaceMember.workspaceMemberId,
-        });
+        })
       } else {
         const accessRequest = await createRemoteAgentAccessRequest({
           workspaceId: params.workspaceId,
           remoteAgentId: resolved.remoteAgent.remoteAgentId,
           requesterWorkspaceMemberId:
             requesterWorkspaceMember.workspaceMemberId,
-        });
+        })
         return {
           status: "pending_approval" as const,
           requestId: accessRequest.request.id,
-        };
+        }
       }
     }
   }
 
   const existingConversationId = await findDirectConversationId(
     requesterIdentity,
-    resolved.peerIdentity,
-  );
+    resolved.peerIdentity
+  )
   if (existingConversationId) {
     return {
       status: "ready" as const,
       created: false,
       conversationId: existingConversationId,
-    };
+    }
   }
 
   try {
     const targetWorkspaceMemberId =
       resolved.peerIdentity.kind === "member"
         ? resolved.member?.workspaceMemberId
-        : undefined;
+        : undefined
     if (resolved.peerIdentity.kind === "member" && !targetWorkspaceMemberId) {
-      throw new Error("Peer workspace membership not found");
+      throw new Error("Peer workspace membership not found")
     }
     const created = await createChatConversation({
       workspaceId: params.workspaceId,
       userId: params.userId,
       clientRequestId: uuidv4(),
       kind: "private",
-      actorIds: resolved.peerIdentity.kind === "actor" ? [resolved.peerIdentity.actorId] : [],
+      actorIds:
+        resolved.peerIdentity.kind === "actor"
+          ? [resolved.peerIdentity.actorId]
+          : [],
       remoteAgentIds:
         resolved.peerIdentity.kind === "remote_agent"
           ? [resolved.peerIdentity.remoteAgentId]
           : [],
-      workspaceMemberIds:
-        targetWorkspaceMemberId ? [targetWorkspaceMemberId] : [],
-    });
+      workspaceMemberIds: targetWorkspaceMemberId
+        ? [targetWorkspaceMemberId]
+        : [],
+    })
 
     await db
       .insertInto("direct_conversation_bindings")
@@ -3437,30 +3483,30 @@ export async function openDirectConversation(params: {
         ...directConversationBindingValues(
           canonicalizeDirectConversationPair(
             requesterIdentity,
-            resolved.peerIdentity,
-          ),
+            resolved.peerIdentity
+          )
         ),
       })
-      .execute();
+      .execute()
 
     return {
       status: "ready" as const,
       created: true,
       conversationId: created.conversation.conversationId as string,
-    };
+    }
   } catch (error) {
     if (!isUniqueViolation(error)) {
-      throw error;
+      throw error
     }
     const retryConversationId = await findDirectConversationId(
       requesterIdentity,
-      resolved.peerIdentity,
-    );
-    if (!retryConversationId) throw error;
+      resolved.peerIdentity
+    )
+    if (!retryConversationId) throw error
     return {
       status: "ready" as const,
       created: false,
       conversationId: retryConversationId,
-    };
+    }
   }
 }

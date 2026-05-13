@@ -125,9 +125,21 @@
   body {
     @apply min-h-screen bg-background text-foreground antialiased;
     background-image:
-      radial-gradient(circle at top left, color-mix(in oklab, var(--primary) 18%, transparent) 0, transparent 30%),
-      radial-gradient(circle at bottom right, color-mix(in oklab, var(--primary) 10%, transparent) 0, transparent 28%),
-      linear-gradient(180deg, color-mix(in oklab, var(--background) 94%, white 6%), var(--background));
+      radial-gradient(
+        circle at top left,
+        color-mix(in oklab, var(--primary) 18%, transparent) 0,
+        transparent 30%
+      ),
+      radial-gradient(
+        circle at bottom right,
+        color-mix(in oklab, var(--primary) 10%, transparent) 0,
+        transparent 28%
+      ),
+      linear-gradient(
+        180deg,
+        color-mix(in oklab, var(--background) 94%, white 6%),
+        var(--background)
+      );
   }
 
   #app {
@@ -142,8 +154,11 @@
 
   .relay-sidebar {
     @apply flex h-full flex-col border-r border-sidebar-border bg-sidebar px-3 py-4 text-sidebar-foreground;
-    background-image:
-      linear-gradient(180deg, color-mix(in oklab, var(--sidebar) 92%, white 8%), color-mix(in oklab, var(--sidebar) 86%, black 14%));
+    background-image: linear-gradient(
+      180deg,
+      color-mix(in oklab, var(--sidebar) 92%, white 8%),
+      color-mix(in oklab, var(--sidebar) 86%, black 14%)
+    );
   }
 
   .relay-sidebar__nav {
@@ -186,7 +201,15 @@
 @layer utilities {
   .surface-noise {
     background-image:
-      linear-gradient(135deg, color-mix(in oklab, var(--foreground) 3%, transparent), transparent 45%),
-      radial-gradient(circle at 20% 20%, color-mix(in oklab, var(--primary) 10%, transparent), transparent 24%);
+      linear-gradient(
+        135deg,
+        color-mix(in oklab, var(--foreground) 3%, transparent),
+        transparent 45%
+      ),
+      radial-gradient(
+        circle at 20% 20%,
+        color-mix(in oklab, var(--primary) 10%, transparent),
+        transparent 24%
+      );
   }
 }

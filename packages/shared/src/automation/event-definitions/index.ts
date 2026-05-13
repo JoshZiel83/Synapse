@@ -4,7 +4,7 @@ import type {
   AutomationOccurrenceDisplayContext,
   AutomationEventSourceDefinitionContext,
   AutomationEventSourceTemplate,
-} from "./types.js";
+} from "./types.js"
 import {
   githubIssueCommentEventDefinition,
   githubPullRequestEventDefinition,
@@ -16,58 +16,67 @@ import {
   gitlabPipelineEventDefinition,
   gitlabPushEventDefinition,
   integrationEventDefinitions,
-} from "./integrations.js";
+} from "./integrations.js"
 import {
   relayDeviceOfflineEventDefinition,
   relayDeviceOnlineEventDefinition,
   relayLifecycleEventDefinitions,
-} from "./relay.js";
+} from "./relay.js"
 
-const automationEventDefinitions =
-  [
-    ...relayLifecycleEventDefinitions,
-    ...integrationEventDefinitions,
-  ] satisfies readonly AutomationEventDefinition[];
+const automationEventDefinitions = [
+  ...relayLifecycleEventDefinitions,
+  ...integrationEventDefinitions,
+] satisfies readonly AutomationEventDefinition[]
 
 export function listAutomationEventDefinitions(filters?: {
-  providerKind?: AutomationEventDefinition["providerKind"];
-  managementMode?: AutomationEventDefinition["managementMode"];
+  providerKind?: AutomationEventDefinition["providerKind"]
+  managementMode?: AutomationEventDefinition["managementMode"]
 }) {
   return automationEventDefinitions.filter((definition) => {
-    if (filters?.providerKind && definition.providerKind !== filters.providerKind) {
-      return false;
+    if (
+      filters?.providerKind &&
+      definition.providerKind !== filters.providerKind
+    ) {
+      return false
     }
-    if (filters?.managementMode && definition.managementMode !== filters.managementMode) {
-      return false;
+    if (
+      filters?.managementMode &&
+      definition.managementMode !== filters.managementMode
+    ) {
+      return false
     }
-    return true;
-  });
+    return true
+  })
 }
 
 export function getAutomationEventDefinition(definitionKey: string) {
-  return automationEventDefinitions.find((definition) => definition.definitionKey === definitionKey) || null;
+  return (
+    automationEventDefinitions.find(
+      (definition) => definition.definitionKey === definitionKey
+    ) || null
+  )
 }
 
 export function buildAutomationEventSourceTemplate(
   definitionKey: string,
-  context: AutomationEventSourceDefinitionContext,
+  context: AutomationEventSourceDefinitionContext
 ): AutomationEventSourceTemplate {
-  const definition = getAutomationEventDefinition(definitionKey);
+  const definition = getAutomationEventDefinition(definitionKey)
   if (!definition) {
-    throw new Error(`Unknown automation event definition: ${definitionKey}`);
+    throw new Error(`Unknown automation event definition: ${definitionKey}`)
   }
-  return definition.buildSource(context);
+  return definition.buildSource(context)
 }
 
 export function buildAutomationOccurrenceDisplay(
   definitionKey: string,
-  context: AutomationOccurrenceDisplayContext,
+  context: AutomationOccurrenceDisplayContext
 ): AutomationOccurrenceDisplay | null {
-  const definition = getAutomationEventDefinition(definitionKey);
+  const definition = getAutomationEventDefinition(definitionKey)
   if (!definition?.buildOccurrenceDisplay) {
-    return null;
+    return null
   }
-  return definition.buildOccurrenceDisplay(context);
+  return definition.buildOccurrenceDisplay(context)
 }
 
 export {
@@ -84,11 +93,11 @@ export {
   relayDeviceOfflineEventDefinition,
   relayDeviceOnlineEventDefinition,
   relayLifecycleEventDefinitions,
-};
+}
 export type {
   AutomationEventDefinition,
   AutomationOccurrenceDisplay,
   AutomationOccurrenceDisplayContext,
   AutomationEventSourceDefinitionContext,
   AutomationEventSourceTemplate,
-};
+}

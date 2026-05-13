@@ -1,127 +1,160 @@
-import { emitEvent } from '../../infrastructure/events/index.js';
-import type { ActorAction, ConversationFeedEventPayloadMap, UUID } from '@synapse/shared';
-import { query } from '../../infrastructure/database/index.js';
-import { createMemory } from '../memory/service.js';
-import { createGeneratedActorPixelArtAvatarFile, type PixelArtAvatarOptionsInput } from '../avatar/service.js';
-import { getActor, updateActor, type ActorUpdateSourceInput } from '../organization/service.js';
-import { getSession } from '../session/service.js';
-import { createConversationEvent, listConversationParticipants } from '../chat/service.js';
+import { emitEvent } from "../../infrastructure/events/index.js"
+import type {
+  ActorAction,
+  ConversationFeedEventPayloadMap,
+  UUID,
+} from "@synapse/shared"
+import { query } from "../../infrastructure/database/index.js"
+import { createMemory } from "../memory/service.js"
+import {
+  createGeneratedActorPixelArtAvatarFile,
+  type PixelArtAvatarOptionsInput,
+} from "../avatar/service.js"
+import {
+  getActor,
+  updateActor,
+  type ActorUpdateSourceInput,
+} from "../organization/service.js"
+import { getSession } from "../session/service.js"
+import {
+  createConversationEvent,
+  listConversationParticipants,
+} from "../chat/service.js"
 
-const ACTOR_MEMORY_SPACE_TYPES = new Set(['participant_private', 'conversation_shared', 'actor_private']);
+const ACTOR_MEMORY_SPACE_TYPES = new Set([
+  "participant_private",
+  "conversation_shared",
+  "actor_private",
+])
 const PIXEL_ART_OPTION_KEYS = [
-  'seed',
-  'accessories',
-  'accessoriesProbability',
-  'clothing',
-  'eyes',
-  'glasses',
-  'glassesProbability',
-  'beard',
-  'beardProbability',
-  'mouth',
-  'hair',
-  'hat',
-  'hatProbability',
-  'accessoriesColor',
-  'clothingColor',
-  'eyesColor',
-  'glassesColor',
-  'hairColor',
-  'hatColor',
-  'mouthColor',
-  'skinColor',
-] as const;
+  "seed",
+  "accessories",
+  "accessoriesProbability",
+  "clothing",
+  "eyes",
+  "glasses",
+  "glassesProbability",
+  "beard",
+  "beardProbability",
+  "mouth",
+  "hair",
+  "hat",
+  "hatProbability",
+  "accessoriesColor",
+  "clothingColor",
+  "eyesColor",
+  "glassesColor",
+  "hairColor",
+  "hatColor",
+  "mouthColor",
+  "skinColor",
+] as const
 
 type ActorActionExecutionContext = {
-  sessionId?: UUID;
-  turnId?: UUID;
-  userId?: UUID;
-  conversationId?: UUID;
-};
-
-function parsePixelArtAvatarOptions(value: unknown): PixelArtAvatarOptionsInput {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    return {};
-  }
-
-  const source = value as Record<string, unknown>;
-  const options: Record<string, unknown> = {};
-
-  for (const key of PIXEL_ART_OPTION_KEYS) {
-    const nextValue = source[key];
-    if (typeof nextValue === 'string') {
-      const trimmed = nextValue.trim();
-      if (trimmed) {
-        options[key] = trimmed;
-      }
-      continue;
-    }
-
-    if (typeof nextValue === 'number' && Number.isFinite(nextValue)) {
-      options[key] = nextValue;
-    }
-  }
-
-  return options as PixelArtAvatarOptionsInput;
+  sessionId?: UUID
+  turnId?: UUID
+  userId?: UUID
+  conversationId?: UUID
 }
 
-async function emitUserVisibleSystemNotice<T extends 'memory_saved' | 'memory_updated' | 'actor_renamed' | 'actor_avatar_changed'>(params: {
-  workspaceId: UUID;
-  actorId: UUID;
-  sessionId?: UUID;
-  eventType: T;
-  eventPayload: ConversationFeedEventPayloadMap[T];
-  metadata?: Record<string, unknown>;
+function parsePixelArtAvatarOptions(
+  value: unknown
+): PixelArtAvatarOptionsInput {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {}
+  }
+
+  const source = value as Record<string, unknown>
+  const options: Record<string, unknown> = {}
+
+  for (const key of PIXEL_ART_OPTION_KEYS) {
+    const nextValue = source[key]
+    if (typeof nextValue === "string") {
+      const trimmed = nextValue.trim()
+      if (trimmed) {
+        options[key] = trimmed
+      }
+      continue
+    }
+
+    if (typeof nextValue === "number" && Number.isFinite(nextValue)) {
+      options[key] = nextValue
+    }
+  }
+
+  return options as PixelArtAvatarOptionsInput
+}
+
+async function emitUserVisibleSystemNotice<
+  T extends
+    | "memory_saved"
+    | "memory_updated"
+    | "actor_renamed"
+    | "actor_avatar_changed",
+>(params: {
+  workspaceId: UUID
+  actorId: UUID
+  sessionId?: UUID
+  eventType: T
+  eventPayload: ConversationFeedEventPayloadMap[T]
+  metadata?: Record<string, unknown>
 }): Promise<void> {
-  if (!params.sessionId) return;
+  if (!params.sessionId) return
 
-  const session = await getSession(params.sessionId);
-  if (!session) return;
+  const session = await getSession(params.sessionId)
+  if (!session) return
 
-  const members = await listConversationParticipants(session.conversation_id);
-  const targetUserMembers = members.filter((member: any) => member.state === 'active' && member.user_id);
-  if (targetUserMembers.length === 0) return;
+  const members = await listConversationParticipants(session.conversation_id)
+  const targetUserMembers = members.filter(
+    (member: any) => member.state === "active" && member.user_id
+  )
+  if (targetUserMembers.length === 0) return
 
   await createConversationEvent({
     workspaceId: params.workspaceId,
     conversationId: session.conversation_id,
     sessionId: params.sessionId,
     eventType: params.eventType,
-    timelinePolicy: 'users_only',
-    contextPolicy: 'none',
+    timelinePolicy: "users_only",
+    contextPolicy: "none",
     metadata: {
       ...(params.metadata || {}),
     },
     eventPayload: params.eventPayload,
-    restrictedAudienceParticipantIds: targetUserMembers.map((member: any) => member.id),
-  });
+    restrictedAudienceParticipantIds: targetUserMembers.map(
+      (member: any) => member.id
+    ),
+  })
 }
 
 export async function executeActorActions(
   workspaceId: UUID,
   actorId: UUID,
   actions: ActorAction[],
-  context?: UUID | ActorActionExecutionContext,
+  context?: UUID | ActorActionExecutionContext
 ): Promise<void> {
   const executionContext =
-    typeof context === 'string'
-      ? { sessionId: context }
-      : (context || {});
+    typeof context === "string" ? { sessionId: context } : context || {}
 
   for (const action of actions) {
     switch (action.type) {
-      case 'respond':
-        await handleRespond(workspaceId, actorId, action, executionContext.sessionId);
-        break;
-      case 'create_memory':
-        await handleCreateMemory(workspaceId, actorId, action, executionContext);
-        break;
-      case 'rename_self':
-        await handleRenameSelf(workspaceId, actorId, action, executionContext);
-        break;
-      case 'change_avatar':
-        await handleChangeAvatar(workspaceId, actorId, action, executionContext);
-        break;
+      case "respond":
+        await handleRespond(
+          workspaceId,
+          actorId,
+          action,
+          executionContext.sessionId
+        )
+        break
+      case "create_memory":
+        await handleCreateMemory(workspaceId, actorId, action, executionContext)
+        break
+      case "rename_self":
+        await handleRenameSelf(workspaceId, actorId, action, executionContext)
+        break
+      case "change_avatar":
+        await handleChangeAvatar(workspaceId, actorId, action, executionContext)
+        break
     }
   }
 }
@@ -130,81 +163,95 @@ async function handleRespond(
   workspaceId: UUID,
   actorId: UUID,
   action: ActorAction,
-  sessionId?: UUID,
+  sessionId?: UUID
 ): Promise<void> {
   await emitEvent({
-    type: 'actor.action',
+    type: "actor.action",
     workspaceId,
     payload: { actorId, sessionId, actions: [action] },
     timestamp: new Date().toISOString(),
-  });
+  })
 }
 
 async function handleCreateMemory(
   workspaceId: UUID,
   actorId: UUID,
   action: ActorAction,
-  context: ActorActionExecutionContext,
+  context: ActorActionExecutionContext
 ): Promise<void> {
-  const metadata = action.metadata ?? {};
-  const session = context.sessionId ? await getSession(context.sessionId) : null;
+  const metadata = action.metadata ?? {}
+  const session = context.sessionId ? await getSession(context.sessionId) : null
   const requestedSpaceType =
-    typeof metadata.spaceType === 'string'
+    typeof metadata.spaceType === "string"
       ? metadata.spaceType
-      : typeof metadata.scope === 'string'
+      : typeof metadata.scope === "string"
         ? metadata.scope
-        : 'participant_private';
+        : "participant_private"
   const normalizedRequestedSpaceType =
-    requestedSpaceType === 'actor_in_conversation'
-      ? 'participant_private'
-      : requestedSpaceType === 'conversation'
-        ? 'conversation_shared'
-        : requestedSpaceType === 'actor_global'
-          ? 'actor_private'
-          : requestedSpaceType;
-  const effectiveSpaceType =
-    !ACTOR_MEMORY_SPACE_TYPES.has(normalizedRequestedSpaceType)
-      ? 'participant_private'
-      : (
-          !session?.conversation_id
-            && (normalizedRequestedSpaceType === 'participant_private'
-              || normalizedRequestedSpaceType === 'conversation_shared')
-        )
-        ? 'actor_private'
-        : normalizedRequestedSpaceType;
-  const conversationId = effectiveSpaceType === 'participant_private' || effectiveSpaceType === 'conversation_shared'
-    ? session?.conversation_id
-    : undefined;
+    requestedSpaceType === "actor_in_conversation"
+      ? "participant_private"
+      : requestedSpaceType === "conversation"
+        ? "conversation_shared"
+        : requestedSpaceType === "actor_global"
+          ? "actor_private"
+          : requestedSpaceType
+  const effectiveSpaceType = !ACTOR_MEMORY_SPACE_TYPES.has(
+    normalizedRequestedSpaceType
+  )
+    ? "participant_private"
+    : !session?.conversation_id &&
+        (normalizedRequestedSpaceType === "participant_private" ||
+          normalizedRequestedSpaceType === "conversation_shared")
+      ? "actor_private"
+      : normalizedRequestedSpaceType
+  const conversationId =
+    effectiveSpaceType === "participant_private" ||
+    effectiveSpaceType === "conversation_shared"
+      ? session?.conversation_id
+      : undefined
 
   const memory = await createMemory(workspaceId, {
     spaceType: effectiveSpaceType as any,
-    actorId: effectiveSpaceType === 'participant_private' || effectiveSpaceType === 'actor_private' ? actorId : undefined,
+    actorId:
+      effectiveSpaceType === "participant_private" ||
+      effectiveSpaceType === "actor_private"
+        ? actorId
+        : undefined,
     conversationId,
     workspaceMemberId: undefined,
-    category: ((metadata.category as string | undefined) ?? 'fact') as any,
+    category: ((metadata.category as string | undefined) ?? "fact") as any,
     importance: (metadata.importance as number | undefined) ?? 0.5,
     confidence: (metadata.confidence as number | undefined) ?? 0.8,
     tags: (metadata.tags as string[] | undefined) ?? [],
     content: action.content,
     contentBlocks: action.contentBlocks,
-    textDigest: typeof metadata.textDigest === 'string' ? metadata.textDigest : undefined,
-    sourceItemId: typeof metadata.sourceItemId === 'string' ? metadata.sourceItemId : undefined,
+    textDigest:
+      typeof metadata.textDigest === "string" ? metadata.textDigest : undefined,
+    sourceItemId:
+      typeof metadata.sourceItemId === "string"
+        ? metadata.sourceItemId
+        : undefined,
     sourceTurnId:
-      typeof metadata.sourceTurnId === 'string'
+      typeof metadata.sourceTurnId === "string"
         ? metadata.sourceTurnId
         : context.turnId,
-    supersedesMemoryId: typeof metadata.supersedesMemoryId === 'string' ? metadata.supersedesMemoryId : undefined,
-    metadata: typeof metadata === 'object' ? metadata : {},
-  });
+    supersedesMemoryId:
+      typeof metadata.supersedesMemoryId === "string"
+        ? metadata.supersedesMemoryId
+        : undefined,
+    metadata: typeof metadata === "object" ? metadata : {},
+  })
 
   await emitUserVisibleSystemNotice({
     workspaceId,
     actorId,
     sessionId: context.sessionId,
-    eventType: action.metadata?.supersedesMemoryId ? 'memory_updated' : 'memory_saved',
+    eventType: action.metadata?.supersedesMemoryId
+      ? "memory_updated"
+      : "memory_saved",
     eventPayload: {
       actor: {
-        participantType: 'actor',
+        participantType: "actor",
         actorId,
       },
       memoryId: memory.id,
@@ -217,57 +264,61 @@ async function handleCreateMemory(
       supersedesMemoryId: memory.supersedesMemoryId,
     },
     metadata: {
-      noticeType: action.metadata?.supersedesMemoryId ? 'memory_updated' : 'memory_saved',
+      noticeType: action.metadata?.supersedesMemoryId
+        ? "memory_updated"
+        : "memory_saved",
       actorId,
       memoryId: memory.id,
       memorySpaceType: memory.spaceType,
       memoryCategory: memory.category,
       textDigest: memory.textDigest,
     },
-  });
+  })
 }
 
 async function handleRenameSelf(
   workspaceId: UUID,
   actorId: UUID,
   action: ActorAction,
-  context: ActorActionExecutionContext,
+  context: ActorActionExecutionContext
 ): Promise<void> {
-  const newName = action.content?.trim();
-  if (!newName) return;
+  const newName = action.content?.trim()
+  if (!newName) return
   const source: ActorUpdateSourceInput = {
-    type: 'actor',
+    type: "actor",
     actorId,
     sessionId: context.sessionId,
     turnId: context.turnId,
     conversationId: context.conversationId,
-    reason: 'rename_self',
-  };
-  await updateActor(actorId, workspaceId, { name: newName }, source);
+    reason: "rename_self",
+  }
+  await updateActor(actorId, workspaceId, { name: newName }, source)
 }
 
 async function handleChangeAvatar(
   workspaceId: UUID,
   actorId: UUID,
   action: ActorAction,
-  context: ActorActionExecutionContext,
+  context: ActorActionExecutionContext
 ): Promise<void> {
-  const actor = await getActor(actorId, workspaceId);
-  if (!actor) return;
+  const actor = await getActor(actorId, workspaceId)
+  if (!actor) return
   const source: ActorUpdateSourceInput = {
-    type: 'actor',
+    type: "actor",
     actorId,
     sessionId: context.sessionId,
     turnId: context.turnId,
     conversationId: context.conversationId,
-    reason: 'change_avatar',
-  };
+    reason: "change_avatar",
+  }
 
   const avatarMode =
-    action.metadata?.avatarMode === 'pixel_art' ? 'pixel_art' : 'emoji';
+    action.metadata?.avatarMode === "pixel_art" ? "pixel_art" : "emoji"
 
-  if (avatarMode === 'pixel_art') {
-    const pixelArtOptions = parsePixelArtAvatarOptions(action.metadata?.pixelArt);
+  if (avatarMode === "pixel_art") {
+    const pixelArtOptions = parsePixelArtAvatarOptions(
+      action.metadata?.pixelArt
+    )
     const avatarFile = await createGeneratedActorPixelArtAvatarFile(
       { query },
       {
@@ -277,8 +328,8 @@ async function handleChangeAvatar(
         actorTitle: actor.definition.title,
         uploaderUserId: context.userId || null,
         options: pixelArtOptions,
-      },
-    );
+      }
+    )
 
     const updatedActor = await updateActor(
       actorId,
@@ -287,18 +338,18 @@ async function handleChangeAvatar(
         avatarFileId: avatarFile.fileId,
         avatarEmoji: null,
       },
-      source,
-    );
+      source
+    )
 
     if (updatedActor) {
       await emitUserVisibleSystemNotice({
         workspaceId,
         actorId,
         sessionId: context.sessionId,
-        eventType: 'actor_avatar_changed',
+        eventType: "actor_avatar_changed",
         eventPayload: {
           actor: {
-            participantType: 'actor',
+            participantType: "actor",
             actorId,
             name: updatedActor.definition.name,
             title: updatedActor.definition.title,
@@ -313,20 +364,20 @@ async function handleChangeAvatar(
           sourceTurnId: context.turnId,
         },
         metadata: {
-          noticeType: 'actor_avatar_changed',
+          noticeType: "actor_avatar_changed",
           actorId,
           avatarMode,
         },
-      });
+      })
     }
-    return;
+    return
   }
 
   const emoji =
-    typeof action.metadata?.emoji === 'string'
+    typeof action.metadata?.emoji === "string"
       ? action.metadata.emoji.trim()
-      : action.content?.trim();
-  if (!emoji) return;
+      : action.content?.trim()
+  if (!emoji) return
 
   const updatedActor = await updateActor(
     actorId,
@@ -335,19 +386,19 @@ async function handleChangeAvatar(
       avatarFileId: null,
       avatarEmoji: emoji,
     },
-    source,
-  );
+    source
+  )
 
-  if (!updatedActor) return;
+  if (!updatedActor) return
 
   await emitUserVisibleSystemNotice({
     workspaceId,
     actorId,
     sessionId: context.sessionId,
-    eventType: 'actor_avatar_changed',
+    eventType: "actor_avatar_changed",
     eventPayload: {
       actor: {
-        participantType: 'actor',
+        participantType: "actor",
         actorId,
         name: updatedActor.definition.name,
         title: updatedActor.definition.title,
@@ -362,9 +413,9 @@ async function handleChangeAvatar(
       sourceTurnId: context.turnId,
     },
     metadata: {
-      noticeType: 'actor_avatar_changed',
+      noticeType: "actor_avatar_changed",
       actorId,
       avatarMode,
     },
-  });
+  })
 }

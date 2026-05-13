@@ -1,32 +1,36 @@
-'use client';
-import { create } from 'zustand';
-import type { AttachmentTarget, ReuseScope } from '@synapse/shared';
-import { api } from '@/lib/api';
+"use client"
+import { create } from "zustand"
+import type { AttachmentTarget, ReuseScope } from "@synapse/shared"
+import { api } from "@/lib/api"
 
 interface PluginState {
-  marketplace: any[];
-  categories: any[];
-  installations: any[];
-  organizations: any[];
-  loadingMarketplace: boolean;
-  loadingInstalled: boolean;
+  marketplace: any[]
+  categories: any[]
+  installations: any[]
+  organizations: any[]
+  loadingMarketplace: boolean
+  loadingInstalled: boolean
 
-  loadMarketplace: (search?: string, categorySlugs?: string[]) => Promise<void>;
-  loadCategories: () => Promise<void>;
-  loadOrganizations: () => Promise<void>;
-  loadInstallations: (wsId: string) => Promise<void>;
+  loadMarketplace: (search?: string, categorySlugs?: string[]) => Promise<void>
+  loadCategories: () => Promise<void>
+  loadOrganizations: () => Promise<void>
+  loadInstallations: (wsId: string) => Promise<void>
   installPlugin: (
     wsId: string,
     data: {
-      pluginId: string;
-      attachmentTarget: AttachmentTarget;
-      lifecycleScope?: ReuseScope;
-      configData?: Record<string, unknown>;
-      authSessionIds?: Record<string, string>;
-    },
-  ) => Promise<any>;
-  uninstallPlugin: (wsId: string, installId: string) => Promise<void>;
-  updateInstallation: (wsId: string, installId: string, data: any) => Promise<any>;
+      pluginId: string
+      attachmentTarget: AttachmentTarget
+      lifecycleScope?: ReuseScope
+      configData?: Record<string, unknown>
+      authSessionIds?: Record<string, string>
+    }
+  ) => Promise<any>
+  uninstallPlugin: (wsId: string, installId: string) => Promise<void>
+  updateInstallation: (
+    wsId: string,
+    installId: string,
+    data: any
+  ) => Promise<any>
 }
 
 export const usePluginStore = create<PluginState>((set, get) => ({
@@ -38,64 +42,65 @@ export const usePluginStore = create<PluginState>((set, get) => ({
   loadingInstalled: false,
 
   loadMarketplace: async (search?: string, categorySlugs?: string[]) => {
-    set({ loadingMarketplace: true });
+    set({ loadingMarketplace: true })
     try {
-      const params = new URLSearchParams();
-      if (search) params.set('search', search);
-      if (categorySlugs && categorySlugs.length > 0) params.set('categories', categorySlugs.join(','));
-      const data = await api.getMarketplace(params.toString() || undefined);
-      set({ marketplace: data });
+      const params = new URLSearchParams()
+      if (search) params.set("search", search)
+      if (categorySlugs && categorySlugs.length > 0)
+        params.set("categories", categorySlugs.join(","))
+      const data = await api.getMarketplace(params.toString() || undefined)
+      set({ marketplace: data })
     } catch (err) {
-      console.error('Failed to load marketplace:', err);
+      console.error("Failed to load marketplace:", err)
     } finally {
-      set({ loadingMarketplace: false });
+      set({ loadingMarketplace: false })
     }
   },
 
   loadCategories: async () => {
     try {
-      const data = await api.getPluginCategories();
-      set({ categories: data });
+      const data = await api.getPluginCategories()
+      set({ categories: data })
     } catch (err) {
-      console.error('Failed to load plugin categories:', err);
+      console.error("Failed to load plugin categories:", err)
     }
   },
 
   loadOrganizations: async () => {
     try {
-      const data = await api.getMcpOrganizations();
-      set({ organizations: data });
+      const data = await api.getMcpOrganizations()
+      set({ organizations: data })
     } catch (err) {
-      console.error('Failed to load orgs:', err);
+      console.error("Failed to load orgs:", err)
     }
   },
 
   loadInstallations: async (wsId: string) => {
-    set({ loadingInstalled: true });
+    set({ loadingInstalled: true })
     try {
-      const data = await api.getInstallations(wsId);
-      set({ installations: data });
+      const data = await api.getInstallations(wsId)
+      set({ installations: data })
     } catch (err) {
-      console.error('Failed to load installations:', err);
+      console.error("Failed to load installations:", err)
     } finally {
-      set({ loadingInstalled: false });
+      set({ loadingInstalled: false })
     }
   },
 
   installPlugin: async (wsId, data) => {
-    const installation = await api.installPlugin(wsId, data);
-    await get().loadInstallations(wsId);
-    return installation;
+    const installation = await api.installPlugin(wsId, data)
+    await get().loadInstallations(wsId)
+    return installation
   },
 
   uninstallPlugin: async (wsId: string, installId: string) => {
-    await api.uninstallPlugin(wsId, installId);
-    await get().loadInstallations(wsId);
+    await api.uninstallPlugin(wsId, installId)
+    await get().loadInstallations(wsId)
   },
 
   updateInstallation: async (wsId: string, installId: string, data: any) => {
-    const installation = await api.updateInstallation(wsId, installId, data);
-    await get().loadInstallations(wsId);
-    return installation;
+    const installation = await api.updateInstallation(wsId, installId, data)
+    await get().loadInstallations(wsId)
+    return installation
   },
-}));
+}))

@@ -1,5 +1,5 @@
-'use client';
+"use client"
 
-import SkillsPage from './skills-client';
+import SkillsPage from "./skills-client"
 
-export default SkillsPage;
+export default SkillsPage

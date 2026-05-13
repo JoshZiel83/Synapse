@@ -57,8 +57,14 @@ export function MemoryPathPickerDialog({
   const [submitting, setSubmitting] = useState(false)
   const deferredQuery = useDeferredValue(query)
 
-  const folderMap = useMemo(() => new Map(folders.map((folder) => [folder.id, folder])), [folders])
-  const blockedFolderIds = useMemo(() => new Set(disallowFolderIds || []), [disallowFolderIds])
+  const folderMap = useMemo(
+    () => new Map(folders.map((folder) => [folder.id, folder])),
+    [folders]
+  )
+  const blockedFolderIds = useMemo(
+    () => new Set(disallowFolderIds || []),
+    [disallowFolderIds]
+  )
 
   useEffect(() => {
     if (!open) return
@@ -66,19 +72,24 @@ export function MemoryPathPickerDialog({
     setQuery("")
   }, [folderMap, open, value])
 
-  const activeFolder = folderMap.get(browseFolderId) || folderMap.get("root") || null
+  const activeFolder =
+    folderMap.get(browseFolderId) || folderMap.get("root") || null
 
   const pathSegments = useMemo(
     () => (activeFolder ? getFolderSegments(activeFolder.id, folderMap) : []),
-    [activeFolder, folderMap],
+    [activeFolder, folderMap]
   )
 
   const childFolders = useMemo(
     () =>
       folders
         .filter((folder) => folder.parentId === activeFolder?.id)
-        .sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: "base" })),
-    [activeFolder?.id, folders],
+        .sort((left, right) =>
+          left.label.localeCompare(right.label, undefined, {
+            sensitivity: "base",
+          })
+        ),
+    [activeFolder?.id, folders]
   )
 
   const filteredChildFolders = useMemo(() => {
@@ -86,17 +97,28 @@ export function MemoryPathPickerDialog({
     if (!normalizedQuery) return childFolders
 
     return childFolders.filter((folder) =>
-      [folder.label, folder.description || describeFolderVisibility(folder)].join(" ").toLowerCase().includes(normalizedQuery),
+      [folder.label, folder.description || describeFolderVisibility(folder)]
+        .join(" ")
+        .toLowerCase()
+        .includes(normalizedQuery)
     )
   }, [childFolders, deferredQuery])
 
   const activePathLabel = useMemo(
-    () => (activeFolder ? buildMemoryFolderPathLabel(activeFolder.id, folderMap) || activeFolder.label : ""),
-    [activeFolder, folderMap],
+    () =>
+      activeFolder
+        ? buildMemoryFolderPathLabel(activeFolder.id, folderMap) ||
+          activeFolder.label
+        : "",
+    [activeFolder, folderMap]
   )
 
-  const canConfirm = Boolean(activeFolder?.createPreset) && !blockedFolderIds.has(activeFolder?.id || "")
-  const isBlockedFolder = activeFolder ? blockedFolderIds.has(activeFolder.id) : false
+  const canConfirm =
+    Boolean(activeFolder?.createPreset) &&
+    !blockedFolderIds.has(activeFolder?.id || "")
+  const isBlockedFolder = activeFolder
+    ? blockedFolderIds.has(activeFolder.id)
+    : false
 
   async function handleConfirm() {
     if (!activeFolder?.createPreset || isBlockedFolder) return
@@ -111,7 +133,10 @@ export function MemoryPathPickerDialog({
   }
 
   return (
-    <Dialog open={open} onOpenChange={(nextOpen) => !submitting && onOpenChange(nextOpen)}>
+    <Dialog
+      open={open}
+      onOpenChange={(nextOpen) => !submitting && onOpenChange(nextOpen)}
+    >
       <DialogContent className="max-h-[calc(100vh-4rem)] overflow-hidden p-0 sm:max-w-2xl">
         <div className="flex min-h-0 flex-col">
           <DialogHeader className="border-b border-border/70 px-6 py-5">
@@ -130,20 +155,30 @@ export function MemoryPathPickerDialog({
                           <BreadcrumbPage>{segment.label}</BreadcrumbPage>
                         ) : (
                           <BreadcrumbLink asChild>
-                            <button type="button" onClick={() => setBrowseFolderId(segment.id)}>
+                            <button
+                              type="button"
+                              onClick={() => setBrowseFolderId(segment.id)}
+                            >
                               {segment.label}
                             </button>
                           </BreadcrumbLink>
                         )}
                       </BreadcrumbItem>
-                      {index < pathSegments.length - 1 ? <BreadcrumbSeparator /> : null}
+                      {index < pathSegments.length - 1 ? (
+                        <BreadcrumbSeparator />
+                      ) : null}
                     </Fragment>
                   ))}
                 </BreadcrumbList>
               </Breadcrumb>
 
               {activeFolder?.parentId ? (
-                <Button type="button" variant="outline" size="sm" onClick={() => setBrowseFolderId(activeFolder.parentId!)}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setBrowseFolderId(activeFolder.parentId!)}
+                >
                   <ArrowUp data-icon="inline-start" />
                   Up
                 </Button>
@@ -151,10 +186,16 @@ export function MemoryPathPickerDialog({
             </div>
 
             <div className="rounded-[24px] border border-border/70 bg-muted/20 px-4 py-4">
-              <div className="text-xs font-medium uppercase tracking-[0.16em] text-muted-foreground">Current path</div>
-              <div className="mt-2 text-sm font-medium text-foreground">{activePathLabel || "Memories"}</div>
+              <div className="text-xs font-medium tracking-[0.16em] text-muted-foreground uppercase">
+                Current path
+              </div>
+              <div className="mt-2 text-sm font-medium text-foreground">
+                {activePathLabel || "Memories"}
+              </div>
               <div className="mt-2 text-sm text-muted-foreground">
-                {activeFolder ? describeFolderVisibility(activeFolder) : "Select a path to define visibility."}
+                {activeFolder
+                  ? describeFolderVisibility(activeFolder)
+                  : "Select a path to define visibility."}
               </div>
               <div className="mt-2 text-sm text-muted-foreground">
                 {isBlockedFolder
@@ -166,7 +207,7 @@ export function MemoryPathPickerDialog({
             </div>
 
             <div className="relative">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={query}
                 onChange={(event) => setQuery(event.target.value)}
@@ -179,7 +220,9 @@ export function MemoryPathPickerDialog({
               <div className="flex flex-col p-2">
                 {filteredChildFolders.length === 0 ? (
                   <div className="px-4 py-10 text-center text-sm text-muted-foreground">
-                    {childFolders.length === 0 ? "No deeper paths here." : "No paths match this search."}
+                    {childFolders.length === 0
+                      ? "No deeper paths here."
+                      : "No paths match this search."}
                   </div>
                 ) : (
                   filteredChildFolders.map((folder) => {
@@ -195,9 +238,12 @@ export function MemoryPathPickerDialog({
                           <Icon className="size-4 text-muted-foreground" />
                         </div>
                         <div className="min-w-0 flex-1">
-                          <div className="truncate text-sm font-medium text-foreground">{folder.label}</div>
+                          <div className="truncate text-sm font-medium text-foreground">
+                            {folder.label}
+                          </div>
                           <div className="truncate text-sm text-muted-foreground">
-                            {folder.description || describeFolderVisibility(folder)}
+                            {folder.description ||
+                              describeFolderVisibility(folder)}
                           </div>
                         </div>
                       </button>
@@ -209,10 +255,19 @@ export function MemoryPathPickerDialog({
           </div>
 
           <DialogFooter className="border-t border-border/70 px-6 py-5">
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)} disabled={submitting}>
+            <Button
+              type="button"
+              variant="outline"
+              onClick={() => onOpenChange(false)}
+              disabled={submitting}
+            >
               Cancel
             </Button>
-            <Button type="button" onClick={() => void handleConfirm()} disabled={!canConfirm || submitting}>
+            <Button
+              type="button"
+              onClick={() => void handleConfirm()}
+              disabled={!canConfirm || submitting}
+            >
               {submitting ? "Saving..." : confirmLabel}
             </Button>
           </DialogFooter>

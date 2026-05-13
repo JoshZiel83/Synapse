@@ -1,6 +1,9 @@
 "use client"
 
-import type { ComponentPropsWithoutRef, MouseEvent as ReactMouseEvent } from "react"
+import type {
+  ComponentPropsWithoutRef,
+  MouseEvent as ReactMouseEvent,
+} from "react"
 import type {
   ActorRuntimeState,
   CanonicalContentBlock,
@@ -71,10 +74,7 @@ import type {
 import { cn, resolveFileUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
 import { getRuntimeDetail, getRuntimeLabel } from "./runtime-ui"
-import {
-  buildReplyPreviewText,
-  getEntityDisplayName,
-} from "./reply-utils"
+import { buildReplyPreviewText, getEntityDisplayName } from "./reply-utils"
 import {
   formatTransportKindLabel,
   getAuthorContactHref,
@@ -616,7 +616,9 @@ function buildDraftQuestionAnswers(
 }
 
 function summarizeQuestionFieldAnswer(
-  question: NonNullable<InteractionRequestSummary["userInput"]>["questions"][number]
+  question: NonNullable<
+    InteractionRequestSummary["userInput"]
+  >["questions"][number]
 ) {
   const parts: string[] = []
   if (question.answer?.selectedOptionLabels?.length) {
@@ -657,7 +659,9 @@ function InteractionStatusNote({
           .map((question) => {
             const summary = summarizeQuestionFieldAnswer(question)
             if (!summary) return ""
-            return questionCount > 1 ? `${question.prompt}: ${summary}` : summary
+            return questionCount > 1
+              ? `${question.prompt}: ${summary}`
+              : summary
           })
           .filter((value) => value.length > 0)
           .join(" | ") || "a response"
@@ -771,7 +775,9 @@ function InteractionCard({
     viewerCanResolve &&
     interaction.status === "pending"
   const canResolve =
-    canResolveUserInput || canResolvePlanApproval || canResolveRelayAuthorization
+    canResolveUserInput ||
+    canResolvePlanApproval ||
+    canResolveRelayAuthorization
 
   useEffect(() => {
     setSubmittingAction(null)
@@ -792,8 +798,7 @@ function InteractionCard({
     setSubmitError(null)
     try {
       const commandId =
-        typeof crypto !== "undefined" &&
-        typeof crypto.randomUUID === "function"
+        typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
           ? crypto.randomUUID()
           : `interaction-${Date.now().toString(36)}-${Math.random()
               .toString(16)
@@ -933,7 +938,9 @@ function InteractionCard({
                         </Badge>
                       ) : null}
                     </div>
-                    <div className="text-sm text-foreground">{question.prompt}</div>
+                    <div className="text-sm text-foreground">
+                      {question.prompt}
+                    </div>
                     {question.description ? (
                       <div className="text-xs text-muted-foreground">
                         {question.description}
@@ -1244,7 +1251,7 @@ function InteractionCard({
         </div>
 
         <div className="rounded-2xl border border-border/70 bg-background px-4 py-3">
-          <div className="prose prose-sm max-w-none text-foreground prose-p:my-2 prose-li:my-1 prose-ul:my-2 prose-ol:my-2">
+          <div className="prose prose-sm prose-p:my-2 prose-li:my-1 prose-ul:my-2 prose-ol:my-2 max-w-none text-foreground">
             <ReactMarkdown remarkPlugins={[remarkGfm]}>
               {planApproval.planMarkdown}
             </ReactMarkdown>
@@ -1403,7 +1410,7 @@ function InteractionCard({
                     <div className="min-w-0">
                       <div>{described.summary}</div>
                       {described.detail ? (
-                        <div className="mt-0.5 whitespace-pre-wrap break-all text-xs text-muted-foreground">
+                        <div className="mt-0.5 text-xs break-all whitespace-pre-wrap text-muted-foreground">
                           {described.detail}
                         </div>
                       ) : null}
@@ -1430,7 +1437,7 @@ function InteractionCard({
                       <div className="min-w-0">
                         <div>{described.summary}</div>
                         {described.detail ? (
-                          <div className="mt-0.5 whitespace-pre-wrap break-all text-xs text-muted-foreground">
+                          <div className="mt-0.5 text-xs break-all whitespace-pre-wrap text-muted-foreground">
                             {described.detail}
                           </div>
                         ) : null}
@@ -1488,7 +1495,11 @@ function InteractionCard({
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {relayAuthorization.availablePresets.map((preset) => (
-                  <Badge key={preset} variant="outline" className="rounded-full">
+                  <Badge
+                    key={preset}
+                    variant="outline"
+                    className="rounded-full"
+                  >
                     {formatRelayAuthorizationPresetLabel(preset)}
                   </Badge>
                 ))}
@@ -1501,7 +1512,9 @@ function InteractionCard({
                   key={preset}
                   type="button"
                   variant={preset === "once" ? "default" : "outline"}
-                  disabled={Boolean(submittingAction) || !selectedRelayGrantOptionId}
+                  disabled={
+                    Boolean(submittingAction) || !selectedRelayGrantOptionId
+                  }
                   onClick={() =>
                     selectedRelayGrantOptionId
                       ? void submitResolution(`approve_${preset}`, {
@@ -1625,7 +1638,8 @@ function resolveMentionMember(
     const actor = workspaceActors?.find(
       (candidate) => candidate.id === mention.actorId
     )
-    const fallbackId = mention.actorId || mention.participantId || "unknown-actor"
+    const fallbackId =
+      mention.actorId || mention.participantId || "unknown-actor"
 
     return {
       participantId: mention.participantId || fallbackId,
@@ -2196,9 +2210,8 @@ function InlineMessageSequence({
   }
 
   if (!isUser) {
-    const { markdown, mentionBlocksById } = serializeInlineBlocksToMarkdown(
-      blocks
-    )
+    const { markdown, mentionBlocksById } =
+      serializeInlineBlocksToMarkdown(blocks)
 
     return (
       <MarkdownTextBlock
@@ -2507,10 +2520,8 @@ export default function MessageBubble({
       )
     }
     if (author?.participantType === "workspace_member") {
-      return (
-        author.workspaceMemberId &&
+      return author.workspaceMemberId &&
         author.workspaceMemberId === viewerWorkspaceMemberId
-      )
         ? "You"
         : "Workspace member"
     }
@@ -2602,7 +2613,9 @@ export default function MessageBubble({
 
     const menuWidth = 176
     const optionCount =
-      (selectedText ? 1 : 0) + (canCopyMessage ? 1 : 0) + (canQuoteMessage ? 1 : 0)
+      (selectedText ? 1 : 0) +
+      (canCopyMessage ? 1 : 0) +
+      (canQuoteMessage ? 1 : 0)
     const menuHeight = Math.max(52, optionCount * 40 + 8)
     const nextX = Math.max(
       12,
@@ -2852,10 +2865,14 @@ export default function MessageBubble({
                           {resolvedAuthorName}
                         </span>
                       )}
-                      <span className="shrink-0 text-muted-foreground/40">·</span>
+                      <span className="shrink-0 text-muted-foreground/40">
+                        ·
+                      </span>
                       <button
                         type="button"
-                        onClick={() => setCompactExpanded((current) => !current)}
+                        onClick={() =>
+                          setCompactExpanded((current) => !current)
+                        }
                         className="min-w-0 flex-1 text-left transition-colors hover:text-foreground/80"
                         aria-expanded={compactExpanded}
                       >
@@ -2927,28 +2944,46 @@ export default function MessageBubble({
       <div
         className={`flex w-full max-w-full min-w-0 gap-3 ${isUser ? "flex-row-reverse" : "flex-row"}`}
       >
-      {isUser ? (
-        <ChatAvatar
-          name={viewerUserMember?.name || resolvedAuthorName}
-          avatarUrl={viewerUserMember?.avatarUrl || resolvedAuthorAvatarUrl}
-          entityType="workspace_member"
-          className="mt-1 shrink-0"
-        />
-      ) : isChildResult ? (
-        <Avatar className="mt-1 h-8 w-8 shrink-0">
-          <AvatarFallback className="bg-amber-500 text-xs text-white">
-            <GitBranch className="h-4 w-4" />
-          </AvatarFallback>
-        </Avatar>
-      ) : authorMember && !isMobile ? (
-        <ChatParticipantHoverCard
-          member={authorMember}
-          contactBasePath={contactBasePath}
-        >
-          <span
-            className="mt-1 block shrink-0 rounded-full transition-opacity hover:opacity-90 focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
-            tabIndex={0}
-            aria-label={`View ${resolvedAuthorName}`}
+        {isUser ? (
+          <ChatAvatar
+            name={viewerUserMember?.name || resolvedAuthorName}
+            avatarUrl={viewerUserMember?.avatarUrl || resolvedAuthorAvatarUrl}
+            entityType="workspace_member"
+            className="mt-1 shrink-0"
+          />
+        ) : isChildResult ? (
+          <Avatar className="mt-1 h-8 w-8 shrink-0">
+            <AvatarFallback className="bg-amber-500 text-xs text-white">
+              <GitBranch className="h-4 w-4" />
+            </AvatarFallback>
+          </Avatar>
+        ) : authorMember && !isMobile ? (
+          <ChatParticipantHoverCard
+            member={authorMember}
+            contactBasePath={contactBasePath}
+          >
+            <span
+              className="mt-1 block shrink-0 rounded-full transition-opacity hover:opacity-90 focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
+              tabIndex={0}
+              aria-label={`View ${resolvedAuthorName}`}
+            >
+              <ChatAvatar
+                name={resolvedAuthorName}
+                avatarUrl={resolvedAuthorAvatarUrl}
+                emoji={resolvedAuthorEmoji}
+                entityType={authorEntityType}
+                statusState={authorStatusState}
+                statusLabel={authorStatusLabel}
+                statusDetail={authorStatusDetail}
+              />
+            </span>
+          </ChatParticipantHoverCard>
+        ) : canOpenAuthorDetails ? (
+          <button
+            type="button"
+            onClick={() => onParticipantClick?.(authorMember!)}
+            className="mt-1 shrink-0 rounded-full transition-opacity hover:opacity-90"
+            aria-label={`Open ${resolvedAuthorName}`}
           >
             <ChatAvatar
               name={resolvedAuthorName}
@@ -2959,188 +2994,172 @@ export default function MessageBubble({
               statusLabel={authorStatusLabel}
               statusDetail={authorStatusDetail}
             />
-          </span>
-        </ChatParticipantHoverCard>
-      ) : canOpenAuthorDetails ? (
-        <button
-          type="button"
-          onClick={() => onParticipantClick?.(authorMember!)}
-          className="mt-1 shrink-0 rounded-full transition-opacity hover:opacity-90"
-          aria-label={`Open ${resolvedAuthorName}`}
-        >
+          </button>
+        ) : (
           <ChatAvatar
             name={resolvedAuthorName}
             avatarUrl={resolvedAuthorAvatarUrl}
             emoji={resolvedAuthorEmoji}
             entityType={authorEntityType}
+            className="mt-1 shrink-0"
             statusState={authorStatusState}
             statusLabel={authorStatusLabel}
             statusDetail={authorStatusDetail}
           />
-        </button>
-      ) : (
-        <ChatAvatar
-          name={resolvedAuthorName}
-          avatarUrl={resolvedAuthorAvatarUrl}
-          emoji={resolvedAuthorEmoji}
-          entityType={authorEntityType}
-          className="mt-1 shrink-0"
-          statusState={authorStatusState}
-          statusLabel={authorStatusLabel}
-          statusDetail={authorStatusDetail}
-        />
-      )}
+        )}
 
         <div
           className={`flex w-full max-w-[75%] min-w-0 flex-col ${isUser ? "items-end" : "items-start"}`}
         >
-        {!isUser && resolvedAuthorName && (
-          <div className="mb-1 ml-1 self-start text-xs text-muted-foreground/70">
-            {authorMember && !isMobile ? (
-              <ChatParticipantHoverCard
-                member={authorMember}
-                contactBasePath={contactBasePath}
-              >
-                <span
-                  className="transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
-                  tabIndex={0}
+          {!isUser && resolvedAuthorName && (
+            <div className="mb-1 ml-1 self-start text-xs text-muted-foreground/70">
+              {authorMember && !isMobile ? (
+                <ChatParticipantHoverCard
+                  member={authorMember}
+                  contactBasePath={contactBasePath}
+                >
+                  <span
+                    className="transition-colors hover:text-foreground focus-visible:ring-[3px] focus-visible:ring-ring/40 focus-visible:outline-none"
+                    tabIndex={0}
+                  >
+                    {resolvedAuthorName}
+                  </span>
+                </ChatParticipantHoverCard>
+              ) : authorMember && onParticipantClick ? (
+                <button
+                  type="button"
+                  onClick={() => onParticipantClick(authorMember)}
+                  className="transition-colors hover:text-foreground"
                 >
                   {resolvedAuthorName}
+                </button>
+              ) : authorContactHref ? (
+                <button
+                  type="button"
+                  onClick={() => router.push(authorContactHref)}
+                  className="transition-colors hover:text-foreground"
+                >
+                  {resolvedAuthorName}
+                </button>
+              ) : (
+                <span>{resolvedAuthorName}</span>
+              )}
+              {resolvedAuthorSubtitle ? (
+                <span className="ml-1 text-[11px] text-muted-foreground/50">
+                  · {resolvedAuthorSubtitle}
                 </span>
-              </ChatParticipantHoverCard>
-            ) : authorMember && onParticipantClick ? (
-              <button
-                type="button"
-                onClick={() => onParticipantClick(authorMember)}
-                className="transition-colors hover:text-foreground"
-              >
-                {resolvedAuthorName}
-              </button>
-            ) : authorContactHref ? (
-              <button
-                type="button"
-                onClick={() => router.push(authorContactHref)}
-                className="transition-colors hover:text-foreground"
-              >
-                {resolvedAuthorName}
-              </button>
-            ) : (
-              <span>{resolvedAuthorName}</span>
-            )}
-            {resolvedAuthorSubtitle ? (
-              <span className="ml-1 text-[11px] text-muted-foreground/50">
-                · {resolvedAuthorSubtitle}
-              </span>
-            ) : null}
-          </div>
-        )}
+              ) : null}
+            </div>
+          )}
           <div
             className={`flex w-full max-w-full min-w-0 items-end gap-2 ${isUser ? "justify-end" : "justify-start"}`}
           >
-          {isRetrying ? (
-            <span className="mb-2 inline-flex size-6 items-center justify-center rounded-full border border-destructive/25 bg-destructive/10 text-destructive shadow-sm">
-              <AlertTriangle className="size-3.5" />
-            </span>
-          ) : null}
-          <div
-            className={`max-w-full min-w-0 overflow-hidden rounded-3xl border px-4 py-3 text-sm leading-relaxed shadow-sm ${
-              isUser
-                ? isRetrying
-                  ? "rounded-tr-sm border-destructive/25 bg-destructive/10 text-destructive"
-                  : "rounded-tr-sm border-primary/10 bg-primary text-primary-foreground"
-                : isChildResult
-                  ? "rounded-tl-sm border-amber-500/20 bg-amber-500/10 text-foreground"
-                  : "rounded-tl-sm border-border bg-background text-foreground"
-            } `}
-            onContextMenu={canOpenMessageMenu ? openContextMenu : undefined}
-          >
-            {interaction ? (
-              <InteractionCard
-                interaction={interaction}
-                onResolveInteraction={onResolveInteraction}
-              />
-            ) : (
-              <>
-                {replyTo ? (
-                  <MessageReplyPreview replyTo={replyTo} isUser={isUser} />
-                ) : null}
-                <MessageContentBlocks
-                  blocks={renderedBlocks}
-                  isUser={isUser}
-                  enableTablePreview={enableTablePreview}
-                  conversationMembers={conversationMembers}
-                  workspaceActors={workspaceActors}
-                  contactBasePath={contactBasePath}
+            {isRetrying ? (
+              <span className="mb-2 inline-flex size-6 items-center justify-center rounded-full border border-destructive/25 bg-destructive/10 text-destructive shadow-sm">
+                <AlertTriangle className="size-3.5" />
+              </span>
+            ) : null}
+            <div
+              className={`max-w-full min-w-0 overflow-hidden rounded-3xl border px-4 py-3 text-sm leading-relaxed shadow-sm ${
+                isUser
+                  ? isRetrying
+                    ? "rounded-tr-sm border-destructive/25 bg-destructive/10 text-destructive"
+                    : "rounded-tr-sm border-primary/10 bg-primary text-primary-foreground"
+                  : isChildResult
+                    ? "rounded-tl-sm border-amber-500/20 bg-amber-500/10 text-foreground"
+                    : "rounded-tl-sm border-border bg-background text-foreground"
+              } `}
+              onContextMenu={canOpenMessageMenu ? openContextMenu : undefined}
+            >
+              {interaction ? (
+                <InteractionCard
+                  interaction={interaction}
+                  onResolveInteraction={onResolveInteraction}
                 />
-              </>
-            )}
+              ) : (
+                <>
+                  {replyTo ? (
+                    <MessageReplyPreview replyTo={replyTo} isUser={isUser} />
+                  ) : null}
+                  <MessageContentBlocks
+                    blocks={renderedBlocks}
+                    isUser={isUser}
+                    enableTablePreview={enableTablePreview}
+                    conversationMembers={conversationMembers}
+                    workspaceActors={workspaceActors}
+                    contactBasePath={contactBasePath}
+                  />
+                </>
+              )}
 
-            {/* Citation sources footer */}
-            {!interaction && hasCitations && (
-              <CitationFooter sources={sources} />
-            )}
+              {/* Citation sources footer */}
+              {!interaction && hasCitations && (
+                <CitationFooter sources={sources} />
+              )}
 
-            {/* Server tool calls (web_search / web_fetch) — inside the bubble */}
-            {!interaction && hasServerToolCalls && (
-              <ServerToolCallDisplay calls={serverToolCalls} />
-            )}
+              {/* Server tool calls (web_search / web_fetch) — inside the bubble */}
+              {!interaction && hasServerToolCalls && (
+                <ServerToolCallDisplay calls={serverToolCalls} />
+              )}
+            </div>
           </div>
-        </div>
           <div
             className={`mt-1 inline-flex max-w-full min-w-0 flex-wrap items-center gap-x-2 gap-y-1 ${isUser ? "flex-row-reverse justify-start self-end" : "justify-start self-start"}`}
           >
-          {timestamp && (
-            <span className="text-[10px] text-muted-foreground/50">
-              {new Date(timestamp).toLocaleTimeString([], {
-                hour: "2-digit",
-                minute: "2-digit",
-              })}
-            </span>
-          )}
-          {canRetryModelError ? (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="h-5 w-5 rounded-full text-muted-foreground/60 hover:text-foreground"
-                  disabled={retryPending}
-                  onClick={async () => {
-                    await onRetryModelError?.(messageId)
-                  }}
-                  aria-label="重试"
-                >
-                  {retryPending ? (
-                    <Loader2 className="h-3 w-3 animate-spin" />
-                  ) : (
-                    <RotateCcw className="h-3 w-3" />
-                  )}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                <p>{retryPending ? "正在重试" : "重试"}</p>
-              </TooltipContent>
-            </Tooltip>
-          ) : null}
-          <TransportSummary
-            transport={transport}
-            transportDeliveries={transportDeliveries}
-          />
-          {status === "sending" && (
-            <span className="text-[10px] text-muted-foreground/40">
-              Sending...
-            </span>
-          )}
-          {status === "retrying" && (
-            <span className="text-[10px] text-destructive/80">Retrying...</span>
-          )}
-          {hasToolsUsed && !hasServerToolCalls && (
-            <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/50">
-              <Wrench className="h-2.5 w-2.5" />
-              {formatToolsUsed(toolsUsed)}
-            </span>
-          )}
+            {timestamp && (
+              <span className="text-[10px] text-muted-foreground/50">
+                {new Date(timestamp).toLocaleTimeString([], {
+                  hour: "2-digit",
+                  minute: "2-digit",
+                })}
+              </span>
+            )}
+            {canRetryModelError ? (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-5 w-5 rounded-full text-muted-foreground/60 hover:text-foreground"
+                    disabled={retryPending}
+                    onClick={async () => {
+                      await onRetryModelError?.(messageId)
+                    }}
+                    aria-label="重试"
+                  >
+                    {retryPending ? (
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                    ) : (
+                      <RotateCcw className="h-3 w-3" />
+                    )}
+                  </Button>
+                </TooltipTrigger>
+                <TooltipContent>
+                  <p>{retryPending ? "正在重试" : "重试"}</p>
+                </TooltipContent>
+              </Tooltip>
+            ) : null}
+            <TransportSummary
+              transport={transport}
+              transportDeliveries={transportDeliveries}
+            />
+            {status === "sending" && (
+              <span className="text-[10px] text-muted-foreground/40">
+                Sending...
+              </span>
+            )}
+            {status === "retrying" && (
+              <span className="text-[10px] text-destructive/80">
+                Retrying...
+              </span>
+            )}
+            {hasToolsUsed && !hasServerToolCalls && (
+              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground/50">
+                <Wrench className="h-2.5 w-2.5" />
+                {formatToolsUsed(toolsUsed)}
+              </span>
+            )}
           </div>
         </div>
       </div>

@@ -1,60 +1,58 @@
-import type pg from "pg";
-import type { CapabilityAccessTarget } from "@synapse/shared/types";
-import { transaction } from "../../infrastructure/database/index.js";
+import type pg from "pg"
+import type { CapabilityAccessTarget } from "@synapse/shared/types"
+import { transaction } from "../../infrastructure/database/index.js"
 import {
   db,
   executeSql,
   executeSqlOn,
   executeTakeFirst,
-} from "../../infrastructure/database/kysely.js";
+} from "../../infrastructure/database/kysely.js"
 import {
   accessBindingHasTarget,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   resolveAccessGrantTarget,
   type AccessBindingRow,
-} from "../access/bindings.js";
-import { buildResourceAccessBindingInsertValues } from "../access/binding-storage.js";
+} from "../access/bindings.js"
+import { buildResourceAccessBindingInsertValues } from "../access/binding-storage.js"
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
   validateConversationScopedAccessTarget,
-} from "../access/conversation-type-validation.js";
-import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js";
+} from "../access/conversation-type-validation.js"
+import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js"
 import {
   resolveRelayCapabilityConversationTypeMask,
   resolveRelayDeviceConversationTypeMask,
   resolveRelayGrantConversationTypeMask,
-} from "./relay-policy.js";
-import { incrementMcpVersion } from "./runtime-version.js";
+} from "./relay-policy.js"
+import { incrementMcpVersion } from "./runtime-version.js"
 
-type Queryable = Pick<pg.PoolClient, "query">;
+type Queryable = Pick<pg.PoolClient, "query">
 
 const RELAY_CAPABILITY_PERMISSION_SUMMARY = {
   requiredPermissions: ["use"],
   suggestedAccessTargetType: "workspace" as const,
-  reason: "Relay capability access controls who can use tools from this relay exposure.",
-};
+  reason:
+    "Relay capability access controls who can use tools from this relay exposure.",
+}
 
-function buildRelayGrantPolicyError(
-  code: string,
-  message: string,
-) {
-  const error = new Error(message) as Error & { code: string };
-  error.code = code;
-  return error;
+function buildRelayGrantPolicyError(code: string, message: string) {
+  const error = new Error(message) as Error & { code: string }
+  error.code = code
+  return error
 }
 
 async function loadRelayExposurePolicyState(
   workspaceId: string,
-  exposureId: string,
+  exposureId: string
 ) {
   const result = await executeSql<{
-    id: string;
-    capability_id: string;
-    owner_workspace_id: string;
-    device_conversation_type_mask_override: number | null;
-    capability_conversation_type_mask_override: number | null;
+    id: string
+    capability_id: string
+    owner_workspace_id: string
+    device_conversation_type_mask_override: number | null
+    capability_conversation_type_mask_override: number | null
   }>(
     `SELECT
        e.id,
@@ -70,35 +68,36 @@ async function loadRelayExposurePolicyState(
      WHERE e.id = $1
        AND d.workspace_id = $2
      LIMIT 1`,
-    [exposureId, workspaceId],
-  );
+    [exposureId, workspaceId]
+  )
 
-  return result.rows[0] || null;
+  return result.rows[0] || null
 }
 
 function resolveRelayExposurePolicyMasks(params: {
-  workspaceConversationTypeMask: number;
-  deviceConversationTypeMaskOverride?: number | null;
-  capabilityConversationTypeMaskOverride?: number | null;
+  workspaceConversationTypeMask: number
+  deviceConversationTypeMaskOverride?: number | null
+  capabilityConversationTypeMaskOverride?: number | null
 }) {
   const parentConversationTypeMask = resolveRelayDeviceConversationTypeMask(
     params.workspaceConversationTypeMask,
-    params.deviceConversationTypeMaskOverride,
-  );
-  const effectiveConversationTypeMask = resolveRelayCapabilityConversationTypeMask(
-    parentConversationTypeMask,
-    params.capabilityConversationTypeMaskOverride,
-  );
+    params.deviceConversationTypeMaskOverride
+  )
+  const effectiveConversationTypeMask =
+    resolveRelayCapabilityConversationTypeMask(
+      parentConversationTypeMask,
+      params.capabilityConversationTypeMaskOverride
+    )
   return {
     parentConversationTypeMask,
     effectiveConversationTypeMask,
-  };
+  }
 }
 
 async function listRelayExposureAccessRows(
   workspaceId: string,
   capabilityId: string,
-  includeRevoked = false,
+  includeRevoked = false
 ) {
   const result = await executeSql<AccessBindingRow>(
     `SELECT
@@ -127,29 +126,31 @@ async function listRelayExposureAccessRows(
        AND binding.relay_capability_id = $2::uuid
        ${includeRevoked ? "" : "AND binding.status = 'active'"}
      ORDER BY binding.created_at ASC`,
-    [workspaceId, capabilityId],
-  );
-  return result.rows.map((row) => normalizeAccessBindingRow(row));
+    [workspaceId, capabilityId]
+  )
+  return result.rows.map((row) => normalizeAccessBindingRow(row))
 }
 
 export async function ensureRelayExposureDefaultAccess(params: {
-  workspaceId: string;
-  capabilityId: string;
+  workspaceId: string
+  capabilityId: string
 }) {
   await transaction(async (client) => {
-    const existing = await executeSqlOn<{ id: string }>(client, 
+    const existing = await executeSqlOn<{ id: string }>(
+      client,
       `SELECT id
        FROM resource_access_bindings
        WHERE relay_capability_id = $1::uuid
        LIMIT 1`,
-      [params.capabilityId],
-    );
+      [params.capabilityId]
+    )
 
     if (existing.rows.length > 0) {
-      return;
+      return
     }
 
-    await executeSqlOn<AccessBindingRow>(client,
+    await executeSqlOn<AccessBindingRow>(
+      client,
       `INSERT INTO resource_access_bindings (
          workspace_id,
          resource_type,
@@ -170,18 +171,19 @@ export async function ensureRelayExposureDefaultAccess(params: {
         params.capabilityId,
         params.workspaceId,
         RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
-      ],
-    );
-  });
+      ]
+    )
+  })
 }
 
 export async function touchRelayExposureAccessState(params: {
-  workspaceId: string;
-  deviceId: string;
-  exposureId: string;
+  workspaceId: string
+  deviceId: string
+  exposureId: string
 }) {
   await transaction(async (client) => {
-    await executeSqlOn<{ id: string }>(client,
+    await executeSqlOn<{ id: string }>(
+      client,
       `INSERT INTO relay_capabilities (
          workspace_id,
          exposure_id,
@@ -193,34 +195,39 @@ export async function touchRelayExposureAccessState(params: {
              status = 'active',
              updated_at = NOW()
        RETURNING id`,
-      [params.workspaceId, params.exposureId],
-    );
-  });
-  const state = await loadRelayExposurePolicyState(params.workspaceId, params.exposureId);
+      [params.workspaceId, params.exposureId]
+    )
+  })
+  const state = await loadRelayExposurePolicyState(
+    params.workspaceId,
+    params.exposureId
+  )
   if (!state) {
-    throw new Error("Relay capability was not created for exposure");
+    throw new Error("Relay capability was not created for exposure")
   }
   await ensureRelayExposureDefaultAccess({
     workspaceId: params.workspaceId,
     capabilityId: state.capability_id,
-  });
+  })
 }
 
 export async function listRelayExposureAccessState(
   workspaceId: string,
-  exposureId: string,
+  exposureId: string
 ) {
-  const exposure = await loadRelayExposurePolicyState(workspaceId, exposureId);
+  const exposure = await loadRelayExposurePolicyState(workspaceId, exposureId)
   if (!exposure) {
-    const error = new Error("Relay exposure not found") as Error & { code: string };
-    error.code = "RELAY_EXPOSURE_NOT_FOUND";
-    throw error;
+    const error = new Error("Relay exposure not found") as Error & {
+      code: string
+    }
+    error.code = "RELAY_EXPOSURE_NOT_FOUND"
+    throw error
   }
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       exposure.owner_workspace_id,
-      "relay_capability",
-    );
+      "relay_capability"
+    )
   const { parentConversationTypeMask, effectiveConversationTypeMask } =
     resolveRelayExposurePolicyMasks({
       workspaceConversationTypeMask,
@@ -228,16 +235,17 @@ export async function listRelayExposureAccessState(
         exposure.device_conversation_type_mask_override,
       capabilityConversationTypeMaskOverride:
         exposure.capability_conversation_type_mask_override,
-    });
-  const grants = (await listRelayExposureAccessRows(workspaceId, exposure.capability_id)).map(
-    (row) =>
-      mapAccessBindingToGrant(row, ["use"], undefined, {
-        effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
-          effectiveConversationTypeMask,
-          row.conversation_type_mask_override,
-        ),
-      }),
-  );
+    })
+  const grants = (
+    await listRelayExposureAccessRows(workspaceId, exposure.capability_id)
+  ).map((row) =>
+    mapAccessBindingToGrant(row, ["use"], undefined, {
+      effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
+        effectiveConversationTypeMask,
+        row.conversation_type_mask_override
+      ),
+    })
+  )
   return {
     grants,
     summary: {
@@ -254,43 +262,44 @@ export async function listRelayExposureAccessState(
       isAuthorized: grants.length > 0,
       matchingGrantIds: grants.map((grant) => grant.id),
     },
-  };
+  }
 }
 
 export async function grantRelayExposureAccess(input: {
-  workspaceId: string;
-  exposureId: string;
-  accessTarget?: CapabilityAccessTarget;
-  conversationTypeMaskOverride?: number | null;
-  grantedByWorkspaceMemberId?: string;
-  reason?: string;
+  workspaceId: string
+  exposureId: string
+  accessTarget?: CapabilityAccessTarget
+  conversationTypeMaskOverride?: number | null
+  grantedByWorkspaceMemberId?: string
+  reason?: string
 }) {
   const exposure = await loadRelayExposurePolicyState(
     input.workspaceId,
-    input.exposureId,
-  );
+    input.exposureId
+  )
   if (!exposure) {
-    const error = new Error("Relay exposure not found") as Error & { code: string };
-    error.code = "RELAY_EXPOSURE_NOT_FOUND";
-    throw error;
+    const error = new Error("Relay exposure not found") as Error & {
+      code: string
+    }
+    error.code = "RELAY_EXPOSURE_NOT_FOUND"
+    throw error
   }
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       exposure.owner_workspace_id,
-      "relay_capability",
-    );
-  const { effectiveConversationTypeMask } =
-    resolveRelayExposurePolicyMasks({
-      workspaceConversationTypeMask,
-      deviceConversationTypeMaskOverride:
-        exposure.device_conversation_type_mask_override,
-      capabilityConversationTypeMaskOverride:
-        exposure.capability_conversation_type_mask_override,
-    });
+      "relay_capability"
+    )
+  const { effectiveConversationTypeMask } = resolveRelayExposurePolicyMasks({
+    workspaceConversationTypeMask,
+    deviceConversationTypeMaskOverride:
+      exposure.device_conversation_type_mask_override,
+    capabilityConversationTypeMaskOverride:
+      exposure.capability_conversation_type_mask_override,
+  })
   const target = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: input.accessTarget || { type: "workspace" },
-  });
+  })
   assertGrantConversationTypeOverrideAllowed({
     targetType: target.targetType,
     parentConversationTypeMask: effectiveConversationTypeMask,
@@ -298,11 +307,11 @@ export async function grantRelayExposureAccess(input: {
     buildError: (message) =>
       buildRelayGrantPolicyError(
         "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
-        message,
+        message
       ),
     invalidMaskMessage:
       "Relay exposure grant conversation policy must allow at least one conversation type from the exposure policy.",
-  });
+  })
   await validateConversationScopedAccessTarget({
     targetType: target.targetType,
     conversationId: target.subjectConversationId,
@@ -311,22 +320,21 @@ export async function grantRelayExposureAccess(input: {
     buildError: (message) =>
       buildRelayGrantPolicyError(
         "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
-        message,
+        message
       ),
-  });
+  })
 
-  const existing = (await listRelayExposureAccessRows(
-    input.workspaceId,
-    exposure.capability_id,
-  )).find((row) => accessBindingHasTarget(row, target));
+  const existing = (
+    await listRelayExposureAccessRows(input.workspaceId, exposure.capability_id)
+  ).find((row) => accessBindingHasTarget(row, target))
 
   if (existing) {
     return mapAccessBindingToGrant(existing, ["use"], undefined, {
       effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
         effectiveConversationTypeMask,
-        existing.conversation_type_mask_override,
+        existing.conversation_type_mask_override
       ),
-    });
+    })
   }
   const inserted = await transaction(async (client) => {
     const binding = await executeTakeFirst<AccessBindingRow>(
@@ -344,12 +352,12 @@ export async function grantRelayExposureAccess(input: {
             createdByWorkspaceMemberId:
               input.grantedByWorkspaceMemberId || null,
             reason: input.reason || RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
-          }),
+          })
         )
-        .returningAll(),
-    );
+        .returningAll()
+    )
     if (!binding) {
-      throw new Error("Failed to create relay capability access binding");
+      throw new Error("Failed to create relay capability access binding")
     }
 
     return {
@@ -357,28 +365,33 @@ export async function grantRelayExposureAccess(input: {
         ...binding,
         resource_id: binding.relay_capability_id!,
       } as AccessBindingRow,
-    };
-  });
+    }
+  })
 
-  await incrementMcpVersion(input.workspaceId);
-  return mapAccessBindingToGrant({
-    ...normalizeAccessBindingRow(inserted.binding),
-    subject_actor_id: target.subjectActorId,
-    subject_conversation_id: target.subjectConversationId,
-    subject_conversation_actor_context_id:
-      target.subjectConversationActorContextId,
-  } as AccessBindingRow, ["use"], undefined, {
-    effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
-      effectiveConversationTypeMask,
-      input.conversationTypeMaskOverride,
-    ),
-  });
+  await incrementMcpVersion(input.workspaceId)
+  return mapAccessBindingToGrant(
+    {
+      ...normalizeAccessBindingRow(inserted.binding),
+      subject_actor_id: target.subjectActorId,
+      subject_conversation_id: target.subjectConversationId,
+      subject_conversation_actor_context_id:
+        target.subjectConversationActorContextId,
+    } as AccessBindingRow,
+    ["use"],
+    undefined,
+    {
+      effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
+        effectiveConversationTypeMask,
+        input.conversationTypeMaskOverride
+      ),
+    }
+  )
 }
 
 export async function revokeRelayExposureAccess(input: {
-  workspaceId: string;
-  exposureId: string;
-  bindingId: string;
+  workspaceId: string
+  exposureId: string
+  bindingId: string
 }) {
   const result = await executeSql<AccessBindingRow>(
     `SELECT *, relay_capability_id::text AS resource_id
@@ -392,59 +405,64 @@ export async function revokeRelayExposureAccess(input: {
          LIMIT 1
        )
      LIMIT 1`,
-    [input.bindingId, input.workspaceId, input.exposureId],
-  );
+    [input.bindingId, input.workspaceId, input.exposureId]
+  )
 
   if (result.rows.length === 0) {
-    const error = new Error("Relay exposure access binding not found") as Error & {
-      code: string;
-    };
-    error.code = "RELAY_EXPOSURE_ACCESS_NOT_FOUND";
-    throw error;
+    const error = new Error(
+      "Relay exposure access binding not found"
+    ) as Error & {
+      code: string
+    }
+    error.code = "RELAY_EXPOSURE_ACCESS_NOT_FOUND"
+    throw error
   }
 
-  const binding = normalizeAccessBindingRow(result.rows[0]!);
+  const binding = normalizeAccessBindingRow(result.rows[0]!)
   await transaction(async (client) => {
-    await executeSqlOn(client, 
+    await executeSqlOn(
+      client,
       `UPDATE resource_access_bindings
        SET status = 'revoked',
            revoked_at = NOW()
        WHERE id = $1`,
-      [binding.id],
-    );
-  });
+      [binding.id]
+    )
+  })
 
-  await incrementMcpVersion(input.workspaceId);
+  await incrementMcpVersion(input.workspaceId)
 }
 
 export async function updateRelayExposurePolicy(input: {
-  workspaceId: string;
-  exposureId: string;
-  conversationTypeMaskOverride?: number | null;
+  workspaceId: string
+  exposureId: string
+  conversationTypeMaskOverride?: number | null
 }) {
   if (input.conversationTypeMaskOverride === undefined) {
-    return;
+    return
   }
 
   const exposure = await loadRelayExposurePolicyState(
     input.workspaceId,
-    input.exposureId,
-  );
+    input.exposureId
+  )
   if (!exposure) {
-    const error = new Error("Relay exposure not found") as Error & { code: string };
-    error.code = "RELAY_EXPOSURE_NOT_FOUND";
-    throw error;
+    const error = new Error("Relay exposure not found") as Error & {
+      code: string
+    }
+    error.code = "RELAY_EXPOSURE_NOT_FOUND"
+    throw error
   }
 
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       exposure.owner_workspace_id,
-      "relay_capability",
-    );
+      "relay_capability"
+    )
   const parentConversationTypeMask = resolveRelayDeviceConversationTypeMask(
     workspaceConversationTypeMask,
-    exposure.device_conversation_type_mask_override,
-  );
+    exposure.device_conversation_type_mask_override
+  )
   const nextEffectiveConversationTypeMask =
     assertConversationTypeMaskWithinParent({
       parentConversationTypeMask,
@@ -452,15 +470,15 @@ export async function updateRelayExposurePolicy(input: {
       buildError: (message) =>
         buildRelayGrantPolicyError(
           "RELAY_EXPOSURE_CONVERSATION_POLICY_INVALID",
-          message,
+          message
         ),
       invalidMaskMessage:
         "Relay exposure conversation policy must allow at least one conversation type from the device policy.",
-    });
+    })
   const accessRows = await listRelayExposureAccessRows(
     input.workspaceId,
-    exposure.capability_id,
-  );
+    exposure.capability_id
+  )
   for (const accessRow of accessRows) {
     await validateConversationScopedAccessTarget({
       targetType: accessRow.target_type,
@@ -470,9 +488,9 @@ export async function updateRelayExposurePolicy(input: {
       buildError: (message) =>
         buildRelayGrantPolicyError(
           "RELAY_EXPOSURE_CONVERSATION_POLICY_INVALID",
-          message,
+          message
         ),
-    });
+    })
   }
 
   await executeSql(
@@ -485,54 +503,59 @@ export async function updateRelayExposurePolicy(input: {
      WHERE capability.exposure_id = exposure.id
        AND exposure.id = $1
        AND device.workspace_id = $2`,
-    [input.exposureId, input.workspaceId, input.conversationTypeMaskOverride],
-  );
+    [input.exposureId, input.workspaceId, input.conversationTypeMaskOverride]
+  )
 
-  await incrementMcpVersion(input.workspaceId);
+  await incrementMcpVersion(input.workspaceId)
 }
 
 export async function updateRelayExposureAccessGrant(input: {
-  workspaceId: string;
-  exposureId: string;
-  bindingId: string;
-  conversationTypeMaskOverride?: number | null;
+  workspaceId: string
+  exposureId: string
+  bindingId: string
+  conversationTypeMaskOverride?: number | null
 }) {
   const exposure = await loadRelayExposurePolicyState(
     input.workspaceId,
-    input.exposureId,
-  );
+    input.exposureId
+  )
   if (!exposure) {
-    const error = new Error("Relay exposure not found") as Error & { code: string };
-    error.code = "RELAY_EXPOSURE_NOT_FOUND";
-    throw error;
+    const error = new Error("Relay exposure not found") as Error & {
+      code: string
+    }
+    error.code = "RELAY_EXPOSURE_NOT_FOUND"
+    throw error
   }
 
-  const existing = (await listRelayExposureAccessRows(
-    input.workspaceId,
-    exposure.capability_id,
-    true,
-  )).find((row) => row.id === input.bindingId);
+  const existing = (
+    await listRelayExposureAccessRows(
+      input.workspaceId,
+      exposure.capability_id,
+      true
+    )
+  ).find((row) => row.id === input.bindingId)
   if (!existing) {
-    const error = new Error("Relay exposure access binding not found") as Error & {
-      code: string;
-    };
-    error.code = "RELAY_EXPOSURE_ACCESS_NOT_FOUND";
-    throw error;
+    const error = new Error(
+      "Relay exposure access binding not found"
+    ) as Error & {
+      code: string
+    }
+    error.code = "RELAY_EXPOSURE_ACCESS_NOT_FOUND"
+    throw error
   }
 
   const workspaceConversationTypeMask =
     await getWorkspaceCapabilityConversationTypeMask(
       exposure.owner_workspace_id,
-      "relay_capability",
-    );
-  const { effectiveConversationTypeMask } =
-    resolveRelayExposurePolicyMasks({
-      workspaceConversationTypeMask,
-      deviceConversationTypeMaskOverride:
-        exposure.device_conversation_type_mask_override,
-      capabilityConversationTypeMaskOverride:
-        exposure.capability_conversation_type_mask_override,
-    });
+      "relay_capability"
+    )
+  const { effectiveConversationTypeMask } = resolveRelayExposurePolicyMasks({
+    workspaceConversationTypeMask,
+    deviceConversationTypeMaskOverride:
+      exposure.device_conversation_type_mask_override,
+    capabilityConversationTypeMaskOverride:
+      exposure.capability_conversation_type_mask_override,
+  })
 
   if (input.conversationTypeMaskOverride !== undefined) {
     assertGrantConversationTypeOverrideAllowed({
@@ -542,11 +565,11 @@ export async function updateRelayExposureAccessGrant(input: {
       buildError: (message) =>
         buildRelayGrantPolicyError(
           "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
-          message,
+          message
         ),
       invalidMaskMessage:
         "Relay exposure grant conversation policy must allow at least one conversation type from the exposure policy.",
-    });
+    })
     await validateConversationScopedAccessTarget({
       targetType: existing.target_type,
       conversationId: existing.subject_conversation_id,
@@ -555,9 +578,9 @@ export async function updateRelayExposureAccessGrant(input: {
       buildError: (message) =>
         buildRelayGrantPolicyError(
           "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
-          message,
+          message
         ),
-    });
+    })
   }
 
   if (input.conversationTypeMaskOverride !== undefined) {
@@ -566,58 +589,61 @@ export async function updateRelayExposureAccessGrant(input: {
        SET conversation_type_mask_override = $2
        WHERE id = $1
          AND workspace_id = $3`,
-      [input.bindingId, input.conversationTypeMaskOverride, input.workspaceId],
-    );
+      [input.bindingId, input.conversationTypeMaskOverride, input.workspaceId]
+    )
   }
 
-  const updated = (await listRelayExposureAccessRows(
-    input.workspaceId,
-    exposure.capability_id,
-  )).find((row) => row.id === input.bindingId);
+  const updated = (
+    await listRelayExposureAccessRows(input.workspaceId, exposure.capability_id)
+  ).find((row) => row.id === input.bindingId)
   if (!updated) {
-    const error = new Error("Relay exposure access binding not found") as Error & {
-      code: string;
-    };
-    error.code = "RELAY_EXPOSURE_ACCESS_NOT_FOUND";
-    throw error;
+    const error = new Error(
+      "Relay exposure access binding not found"
+    ) as Error & {
+      code: string
+    }
+    error.code = "RELAY_EXPOSURE_ACCESS_NOT_FOUND"
+    throw error
   }
 
   return mapAccessBindingToGrant(updated, ["use"], undefined, {
     effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
       effectiveConversationTypeMask,
-      updated.conversation_type_mask_override,
+      updated.conversation_type_mask_override
     ),
-  });
+  })
 }
 
 export async function revokeRelayDeviceAccessState(input: {
-  workspaceId: string;
-  deviceId: string;
-  ownerWorkspaceMemberId?: string | null;
-  exposureIds: string[];
+  workspaceId: string
+  deviceId: string
+  ownerWorkspaceMemberId?: string | null
+  exposureIds: string[]
 }) {
-  const activeBindings = input.exposureIds.length > 0
-    ? await executeSql<AccessBindingRow>(
-        `SELECT *, relay_capability_id::text AS resource_id
+  const activeBindings =
+    input.exposureIds.length > 0
+      ? await executeSql<AccessBindingRow>(
+          `SELECT *, relay_capability_id::text AS resource_id
          FROM resource_access_bindings
          WHERE workspace_id = $1
            AND relay_capability_id IN (
              SELECT id FROM relay_capabilities WHERE exposure_id = ANY($2::uuid[])
            )
            AND status = 'active'`,
-        [input.workspaceId, input.exposureIds],
-      )
-    : { rows: [] as AccessBindingRow[] };
+          [input.workspaceId, input.exposureIds]
+        )
+      : { rows: [] as AccessBindingRow[] }
 
   await transaction(async (client) => {
     if (activeBindings.rows.length > 0) {
-      await executeSqlOn(client, 
+      await executeSqlOn(
+        client,
         `UPDATE resource_access_bindings
          SET status = 'revoked',
              revoked_at = NOW()
          WHERE id = ANY($1::uuid[])`,
-        [activeBindings.rows.map((row) => row.id)],
-      );
+        [activeBindings.rows.map((row) => row.id)]
+      )
     }
-  });
+  })
 }

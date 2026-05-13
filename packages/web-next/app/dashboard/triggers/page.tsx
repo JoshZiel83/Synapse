@@ -1,13 +1,13 @@
-"use client";
+"use client"
 
-import Link from "next/link";
-import { useDeferredValue, useEffect, useMemo, useState } from "react";
-import type { AutomationExecution, AutomationRule } from "@synapse/shared";
+import Link from "next/link"
+import { useDeferredValue, useEffect, useMemo, useState } from "react"
+import type { AutomationExecution, AutomationRule } from "@synapse/shared"
 import {
   describeAutomationDelivery,
   describeAutomationPolicy,
   describeAutomationTrigger,
-} from "@synapse/shared";
+} from "@synapse/shared"
 import {
   Clock3,
   Pause,
@@ -17,73 +17,73 @@ import {
   RefreshCw,
   Trash2,
   Zap,
-} from "lucide-react";
-import { toast } from "sonner";
+} from "lucide-react"
+import { toast } from "sonner"
 
-import { useWorkspace } from "@/app/dashboard/workspace-provider";
+import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import {
   AppCard,
   AppCardContent,
   AppCardDescription,
   AppCardHeader,
   AppCardTitle,
-} from "@/components/app-card";
-import { Badge } from "@/components/ui/badge";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+} from "@/components/app-card"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Separator } from "@/components/ui/separator";
-import { api } from "@/lib/api";
-import { cn } from "@/lib/utils";
+} from "@/components/ui/select"
+import { Separator } from "@/components/ui/separator"
+import { api } from "@/lib/api"
+import { cn } from "@/lib/utils"
 
-type TriggerStatus = AutomationRule["status"];
-type TriggerCategory = AutomationRule["category"];
+type TriggerStatus = AutomationRule["status"]
+type TriggerCategory = AutomationRule["category"]
 
 function formatDateTime(value?: string) {
-  if (!value) return "Never";
-  return new Date(value).toLocaleString();
+  if (!value) return "Never"
+  return new Date(value).toLocaleString()
 }
 
 function triggerStatusVariant(status: TriggerStatus) {
   switch (status) {
     case "active":
-      return "secondary";
+      return "secondary"
     case "completed":
-      return "secondary";
+      return "secondary"
     case "paused":
     case "expired":
-      return "outline";
+      return "outline"
     case "error":
     case "archived":
-      return "destructive";
+      return "destructive"
     default:
-      return "outline";
+      return "outline"
   }
 }
 
 function executionStatusVariant(status: AutomationExecution["status"]) {
   switch (status) {
     case "completed":
-      return "secondary";
+      return "secondary"
     case "pending":
     case "running":
     case "skipped":
-      return "outline";
+      return "outline"
     case "failed":
-      return "destructive";
+      return "destructive"
     default:
-      return "outline";
+      return "outline"
   }
 }
 
 function serializeDetails(value: unknown) {
-  return JSON.stringify(value || {}, null, 2);
+  return JSON.stringify(value || {}, null, 2)
 }
 
 function executionOccurrenceTitle(execution: AutomationExecution) {
@@ -91,87 +91,98 @@ function executionOccurrenceTitle(execution: AutomationExecution) {
     execution.occurrenceTitle ||
     execution.occurrenceEventSourceName ||
     execution.occurrenceId
-  );
+  )
 }
 
 function executionOccurrenceSummary(execution: AutomationExecution) {
-  return execution.occurrenceSummary?.trim() || null;
+  return execution.occurrenceSummary?.trim() || null
 }
 
 export default function TriggersPage() {
-  const { workspaceId, workspaceName } = useWorkspace();
-  const [rules, setRules] = useState<AutomationRule[]>([]);
-  const [executions, setExecutions] = useState<AutomationExecution[]>([]);
-  const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null);
-  const [loadingRules, setLoadingRules] = useState(true);
-  const [loadingExecutions, setLoadingExecutions] = useState(false);
-  const [savingRule, setSavingRule] = useState(false);
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState<"all" | TriggerStatus>("all");
-  const [categoryFilter, setCategoryFilter] = useState<"all" | TriggerCategory>("all");
-  const deferredSearch = useDeferredValue(search);
+  const { workspaceId, workspaceName } = useWorkspace()
+  const [rules, setRules] = useState<AutomationRule[]>([])
+  const [executions, setExecutions] = useState<AutomationExecution[]>([])
+  const [selectedRuleId, setSelectedRuleId] = useState<string | null>(null)
+  const [loadingRules, setLoadingRules] = useState(true)
+  const [loadingExecutions, setLoadingExecutions] = useState(false)
+  const [savingRule, setSavingRule] = useState(false)
+  const [search, setSearch] = useState("")
+  const [statusFilter, setStatusFilter] = useState<"all" | TriggerStatus>("all")
+  const [categoryFilter, setCategoryFilter] = useState<"all" | TriggerCategory>(
+    "all"
+  )
+  const deferredSearch = useDeferredValue(search)
 
   async function loadRules() {
-    if (!workspaceId) return;
+    if (!workspaceId) return
 
-    setLoadingRules(true);
+    setLoadingRules(true)
     try {
-      const nextRules = await api.getAutomations(workspaceId);
-      setRules(nextRules);
+      const nextRules = await api.getAutomations(workspaceId)
+      setRules(nextRules)
       setSelectedRuleId((currentId) => {
         if (currentId && nextRules.some((rule) => rule.id === currentId)) {
-          return currentId;
+          return currentId
         }
-        return nextRules[0]?.id || null;
-      });
+        return nextRules[0]?.id || null
+      })
     } catch (error) {
-      console.error("Failed to load automations:", error);
-      toast.error(error instanceof Error ? error.message : "Failed to load triggers");
+      console.error("Failed to load automations:", error)
+      toast.error(
+        error instanceof Error ? error.message : "Failed to load triggers"
+      )
     } finally {
-      setLoadingRules(false);
+      setLoadingRules(false)
     }
   }
 
   async function loadExecutions(ruleId: string) {
-    if (!workspaceId) return;
+    if (!workspaceId) return
 
-    setLoadingExecutions(true);
+    setLoadingExecutions(true)
     try {
-      const nextExecutions = await api.getAutomationExecutions(workspaceId, ruleId);
-      setExecutions(nextExecutions);
+      const nextExecutions = await api.getAutomationExecutions(
+        workspaceId,
+        ruleId
+      )
+      setExecutions(nextExecutions)
     } catch (error) {
-      console.error("Failed to load automation executions:", error);
-      toast.error(error instanceof Error ? error.message : "Failed to load trigger history");
-      setExecutions([]);
+      console.error("Failed to load automation executions:", error)
+      toast.error(
+        error instanceof Error
+          ? error.message
+          : "Failed to load trigger history"
+      )
+      setExecutions([])
     } finally {
-      setLoadingExecutions(false);
+      setLoadingExecutions(false)
     }
   }
 
   useEffect(() => {
-    void loadRules();
-  }, [workspaceId]);
+    void loadRules()
+  }, [workspaceId])
 
   useEffect(() => {
     if (!selectedRuleId) {
-      setExecutions([]);
-      return;
+      setExecutions([])
+      return
     }
-    void loadExecutions(selectedRuleId);
-  }, [selectedRuleId, workspaceId]);
+    void loadExecutions(selectedRuleId)
+  }, [selectedRuleId, workspaceId])
 
   const filteredRules = useMemo(() => {
-    const keyword = deferredSearch.trim().toLowerCase();
+    const keyword = deferredSearch.trim().toLowerCase()
 
     return rules.filter((rule) => {
       if (statusFilter !== "all" && rule.status !== statusFilter) {
-        return false;
+        return false
       }
       if (categoryFilter !== "all" && rule.category !== categoryFilter) {
-        return false;
+        return false
       }
       if (!keyword) {
-        return true;
+        return true
       }
 
       const haystack = [
@@ -183,93 +194,121 @@ export default function TriggersPage() {
         rule.delivery.messageText,
       ]
         .join(" ")
-        .toLowerCase();
-      return haystack.includes(keyword);
-    });
-  }, [categoryFilter, deferredSearch, rules, statusFilter]);
+        .toLowerCase()
+      return haystack.includes(keyword)
+    })
+  }, [categoryFilter, deferredSearch, rules, statusFilter])
 
   const selectedRule = useMemo(
-    () => filteredRules.find((rule) => rule.id === selectedRuleId) || rules.find((rule) => rule.id === selectedRuleId) || null,
-    [filteredRules, rules, selectedRuleId],
-  );
+    () =>
+      filteredRules.find((rule) => rule.id === selectedRuleId) ||
+      rules.find((rule) => rule.id === selectedRuleId) ||
+      null,
+    [filteredRules, rules, selectedRuleId]
+  )
 
   const selectedTriggerDisplay = useMemo(
     () =>
       selectedRule
-        ? describeAutomationTrigger(selectedRule.trigger, { formatTimestamp: formatDateTime })
+        ? describeAutomationTrigger(selectedRule.trigger, {
+            formatTimestamp: formatDateTime,
+          })
         : null,
-    [selectedRule],
-  );
+    [selectedRule]
+  )
   const selectedDeliveryDisplay = useMemo(
-    () => (selectedRule ? describeAutomationDelivery(selectedRule.delivery) : null),
-    [selectedRule],
-  );
+    () =>
+      selectedRule ? describeAutomationDelivery(selectedRule.delivery) : null,
+    [selectedRule]
+  )
   const selectedPolicyDisplay = useMemo(
     () =>
       selectedRule
-        ? describeAutomationPolicy(selectedRule.policy, { formatTimestamp: formatDateTime })
+        ? describeAutomationPolicy(selectedRule.policy, {
+            formatTimestamp: formatDateTime,
+          })
         : null,
-    [selectedRule],
-  );
+    [selectedRule]
+  )
 
-  async function handleUpdateRuleStatus(rule: AutomationRule, status: TriggerStatus) {
-    if (!workspaceId || rule.status === status) return;
+  async function handleUpdateRuleStatus(
+    rule: AutomationRule,
+    status: TriggerStatus
+  ) {
+    if (!workspaceId || rule.status === status) return
 
-    setSavingRule(true);
+    setSavingRule(true)
     try {
-      await api.updateAutomation(workspaceId, rule.id, { status });
-      toast.success(`Trigger marked ${status}`);
-      await loadRules();
+      await api.updateAutomation(workspaceId, rule.id, { status })
+      toast.success(`Trigger marked ${status}`)
+      await loadRules()
       if (selectedRuleId === rule.id) {
-        await loadExecutions(rule.id);
+        await loadExecutions(rule.id)
       }
     } catch (error) {
-      console.error("Failed to update trigger status:", error);
-      toast.error(error instanceof Error ? error.message : "Failed to update trigger");
+      console.error("Failed to update trigger status:", error)
+      toast.error(
+        error instanceof Error ? error.message : "Failed to update trigger"
+      )
     } finally {
-      setSavingRule(false);
+      setSavingRule(false)
     }
   }
 
   async function handleDeleteRule(rule: AutomationRule) {
-    if (!workspaceId) return;
-    if (!window.confirm(`Delete trigger "${rule.name}"? This cannot be undone.`)) {
-      return;
+    if (!workspaceId) return
+    if (
+      !window.confirm(`Delete trigger "${rule.name}"? This cannot be undone.`)
+    ) {
+      return
     }
 
-    setSavingRule(true);
+    setSavingRule(true)
     try {
-      await api.deleteAutomation(workspaceId, rule.id);
-      toast.success("Trigger deleted");
-      await loadRules();
+      await api.deleteAutomation(workspaceId, rule.id)
+      toast.success("Trigger deleted")
+      await loadRules()
     } catch (error) {
-      console.error("Failed to delete trigger:", error);
-      toast.error(error instanceof Error ? error.message : "Failed to delete trigger");
+      console.error("Failed to delete trigger:", error)
+      toast.error(
+        error instanceof Error ? error.message : "Failed to delete trigger"
+      )
     } finally {
-      setSavingRule(false);
+      setSavingRule(false)
     }
   }
 
   if (!workspaceId) {
     return (
-      <div className="px-4 pb-6 pt-6 text-sm text-muted-foreground lg:px-6">
+      <div className="px-4 pt-6 pb-6 text-sm text-muted-foreground lg:px-6">
         Select a workspace to manage automation triggers.
       </div>
-    );
+    )
   }
 
   return (
-    <div className="flex flex-col gap-6 px-4 pb-6 pt-6 lg:px-6">
+    <div className="flex flex-col gap-6 px-4 pt-6 pb-6 lg:px-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold tracking-tight text-foreground">Triggers</h1>
+          <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+            Triggers
+          </h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Manage scheduled wakeups and event subscriptions for {workspaceName || "this workspace"}.
+            Manage scheduled wakeups and event subscriptions for{" "}
+            {workspaceName || "this workspace"}.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
-          <Button type="button" variant="outline" onClick={() => void loadRules()} disabled={loadingRules}>
-            <RefreshCw className={cn(loadingRules && "animate-spin")} data-icon="inline-start" />
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => void loadRules()}
+            disabled={loadingRules}
+          >
+            <RefreshCw
+              className={cn(loadingRules && "animate-spin")}
+              data-icon="inline-start"
+            />
             Refresh
           </Button>
           <Button asChild type="button">
@@ -288,7 +327,8 @@ export default function TriggersPage() {
               <div>
                 <AppCardTitle>Automation Rules</AppCardTitle>
                 <AppCardDescription>
-                  Schedule-based rules and event subscriptions share the same execution pipeline.
+                  Schedule-based rules and event subscriptions share the same
+                  execution pipeline.
                 </AppCardDescription>
               </div>
               <Badge variant="outline">{rules.length}</Badge>
@@ -300,7 +340,12 @@ export default function TriggersPage() {
                 placeholder="Search by name, source, message..."
               />
               <div className="grid gap-3 sm:grid-cols-2">
-                <Select value={statusFilter} onValueChange={(value) => setStatusFilter(value as "all" | TriggerStatus)}>
+                <Select
+                  value={statusFilter}
+                  onValueChange={(value) =>
+                    setStatusFilter(value as "all" | TriggerStatus)
+                  }
+                >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Status" />
                   </SelectTrigger>
@@ -314,14 +359,21 @@ export default function TriggersPage() {
                     <SelectItem value="archived">Archived</SelectItem>
                   </SelectContent>
                 </Select>
-                <Select value={categoryFilter} onValueChange={(value) => setCategoryFilter(value as "all" | TriggerCategory)}>
+                <Select
+                  value={categoryFilter}
+                  onValueChange={(value) =>
+                    setCategoryFilter(value as "all" | TriggerCategory)
+                  }
+                >
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Category" />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All categories</SelectItem>
                     <SelectItem value="schedule">Schedule</SelectItem>
-                    <SelectItem value="event_subscription">Event subscription</SelectItem>
+                    <SelectItem value="event_subscription">
+                      Event subscription
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -338,13 +390,13 @@ export default function TriggersPage() {
               </div>
             ) : (
               filteredRules.map((rule) => {
-                const selected = rule.id === selectedRuleId;
+                const selected = rule.id === selectedRuleId
                 const triggerDisplay = describeAutomationTrigger(rule.trigger, {
                   formatTimestamp: formatDateTime,
-                });
+                })
                 const policyDisplay = describeAutomationPolicy(rule.policy, {
                   formatTimestamp: formatDateTime,
-                });
+                })
                 return (
                   <button
                     key={rule.id}
@@ -354,16 +406,22 @@ export default function TriggersPage() {
                       "rounded-[22px] border px-4 py-4 text-left transition-colors",
                       selected
                         ? "border-primary/30 bg-primary/5"
-                        : "border-border/70 hover:bg-muted/50",
+                        : "border-border/70 hover:bg-muted/50"
                     )}
                   >
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div className="min-w-0">
                         <div className="flex flex-wrap items-center gap-2">
-                          <div className="text-sm font-medium text-foreground">{rule.name}</div>
-                          <Badge variant={triggerStatusVariant(rule.status)}>{rule.status}</Badge>
+                          <div className="text-sm font-medium text-foreground">
+                            {rule.name}
+                          </div>
+                          <Badge variant={triggerStatusVariant(rule.status)}>
+                            {rule.status}
+                          </Badge>
                           <Badge variant="outline">
-                            {rule.category === "schedule" ? "schedule" : "event"}
+                            {rule.category === "schedule"
+                              ? "schedule"
+                              : "event"}
                           </Badge>
                         </div>
                         <div className="mt-1 text-xs text-muted-foreground">
@@ -380,14 +438,21 @@ export default function TriggersPage() {
                       )}
                     </div>
                     <p className="mt-3 line-clamp-2 text-sm text-muted-foreground">
-                      {rule.delivery.wakeReasonText || rule.delivery.messageText || rule.description || "No message"}
+                      {rule.delivery.wakeReasonText ||
+                        rule.delivery.messageText ||
+                        rule.description ||
+                        "No message"}
                     </p>
                     <div className="mt-3 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                      <span>Next {formatDateTime(rule.trigger.nextFireAt)}</span>
-                      <span>Last run {formatDateTime(rule.lastTriggeredAt)}</span>
+                      <span>
+                        Next {formatDateTime(rule.trigger.nextFireAt)}
+                      </span>
+                      <span>
+                        Last run {formatDateTime(rule.lastTriggeredAt)}
+                      </span>
                     </div>
                   </button>
-                );
+                )
               })
             )}
           </AppCardContent>
@@ -402,7 +467,9 @@ export default function TriggersPage() {
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-center gap-2">
                         <AppCardTitle>{selectedRule.name}</AppCardTitle>
-                        <Badge variant={triggerStatusVariant(selectedRule.status)}>
+                        <Badge
+                          variant={triggerStatusVariant(selectedRule.status)}
+                        >
                           {selectedRule.status}
                         </Badge>
                         <Badge variant="outline">{selectedRule.category}</Badge>
@@ -413,7 +480,9 @@ export default function TriggersPage() {
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <Button asChild type="button" variant="outline" size="sm">
-                        <Link href={`/dashboard/triggers/${selectedRule.id}/edit`}>
+                        <Link
+                          href={`/dashboard/triggers/${selectedRule.id}/edit`}
+                        >
                           <PencilLine data-icon="inline-start" />
                           Edit
                         </Link>
@@ -423,7 +492,9 @@ export default function TriggersPage() {
                           type="button"
                           variant="outline"
                           size="sm"
-                          onClick={() => void handleUpdateRuleStatus(selectedRule, "active")}
+                          onClick={() =>
+                            void handleUpdateRuleStatus(selectedRule, "active")
+                          }
                           disabled={savingRule}
                         >
                           <Play data-icon="inline-start" />
@@ -434,7 +505,9 @@ export default function TriggersPage() {
                           type="button"
                           variant="outline"
                           size="sm"
-                          onClick={() => void handleUpdateRuleStatus(selectedRule, "paused")}
+                          onClick={() =>
+                            void handleUpdateRuleStatus(selectedRule, "paused")
+                          }
                           disabled={savingRule}
                         >
                           <Pause data-icon="inline-start" />
@@ -446,7 +519,12 @@ export default function TriggersPage() {
                           type="button"
                           variant="outline"
                           size="sm"
-                          onClick={() => void handleUpdateRuleStatus(selectedRule, "archived")}
+                          onClick={() =>
+                            void handleUpdateRuleStatus(
+                              selectedRule,
+                              "archived"
+                            )
+                          }
                           disabled={savingRule}
                         >
                           Archive
@@ -467,18 +545,26 @@ export default function TriggersPage() {
                 </AppCardHeader>
                 <AppCardContent className="grid gap-6 xl:grid-cols-2">
                   <div className="rounded-[22px] border border-border/70 bg-muted/20 p-4">
-                    <div className="text-sm font-medium text-foreground">Trigger</div>
+                    <div className="text-sm font-medium text-foreground">
+                      Trigger
+                    </div>
                     <dl className="mt-3 grid gap-3 text-sm">
                       <div>
                         <dt className="text-muted-foreground">Kind</dt>
-                        <dd className="font-medium text-foreground">{selectedRule.trigger.triggerKind}</dd>
+                        <dd className="font-medium text-foreground">
+                          {selectedRule.trigger.triggerKind}
+                        </dd>
                       </div>
                       {selectedTriggerDisplay?.details
                         .filter((detail) => detail.label !== "Kind")
                         .map((detail) => (
                           <div key={detail.label}>
-                            <dt className="text-muted-foreground">{detail.label}</dt>
-                            <dd className="font-medium text-foreground">{detail.value}</dd>
+                            <dt className="text-muted-foreground">
+                              {detail.label}
+                            </dt>
+                            <dd className="font-medium text-foreground">
+                              {detail.value}
+                            </dd>
                           </div>
                         ))}
                       <div>
@@ -492,51 +578,75 @@ export default function TriggersPage() {
                       {selectedTriggerDisplay?.description ? (
                         <div>
                           <dt className="text-muted-foreground">Behavior</dt>
-                          <dd className="font-medium text-foreground">{selectedTriggerDisplay.description}</dd>
+                          <dd className="font-medium text-foreground">
+                            {selectedTriggerDisplay.description}
+                          </dd>
                         </div>
                       ) : null}
                     </dl>
                   </div>
 
                   <div className="rounded-[22px] border border-border/70 bg-muted/20 p-4">
-                    <div className="text-sm font-medium text-foreground">Policy</div>
+                    <div className="text-sm font-medium text-foreground">
+                      Policy
+                    </div>
                     <dl className="mt-3 grid gap-3 text-sm">
                       {selectedPolicyDisplay?.details.map((detail) => (
                         <div key={detail.label}>
-                          <dt className="text-muted-foreground">{detail.label}</dt>
-                          <dd className="font-medium text-foreground">{detail.value}</dd>
+                          <dt className="text-muted-foreground">
+                            {detail.label}
+                          </dt>
+                          <dd className="font-medium text-foreground">
+                            {detail.value}
+                          </dd>
                         </div>
                       ))}
                       {selectedPolicyDisplay?.description ? (
                         <div>
                           <dt className="text-muted-foreground">Behavior</dt>
-                          <dd className="font-medium text-foreground">{selectedPolicyDisplay.description}</dd>
+                          <dd className="font-medium text-foreground">
+                            {selectedPolicyDisplay.description}
+                          </dd>
                         </div>
                       ) : null}
                     </dl>
                   </div>
 
                   <div className="rounded-[22px] border border-border/70 bg-muted/20 p-4">
-                    <div className="text-sm font-medium text-foreground">Delivery</div>
+                    <div className="text-sm font-medium text-foreground">
+                      Delivery
+                    </div>
                     <dl className="mt-3 grid gap-3 text-sm">
                       {selectedDeliveryDisplay?.details.map((detail) => (
                         <div key={detail.label}>
-                          <dt className="text-muted-foreground">{detail.label}</dt>
-                          <dd className="whitespace-pre-wrap font-medium text-foreground">{detail.value}</dd>
+                          <dt className="text-muted-foreground">
+                            {detail.label}
+                          </dt>
+                          <dd className="font-medium whitespace-pre-wrap text-foreground">
+                            {detail.value}
+                          </dd>
                         </div>
                       ))}
                       <div>
                         <dt className="text-muted-foreground">Conversation</dt>
-                        <dd className="font-medium text-foreground">{selectedRule.conversationId}</dd>
+                        <dd className="font-medium text-foreground">
+                          {selectedRule.conversationId}
+                        </dd>
                       </div>
                       <div>
-                        <dt className="text-muted-foreground">Created by participant</dt>
-                        <dd className="font-medium text-foreground">{selectedRule.createdByParticipantId}</dd>
+                        <dt className="text-muted-foreground">
+                          Created by participant
+                        </dt>
+                        <dd className="font-medium text-foreground">
+                          {selectedRule.createdByParticipantId}
+                        </dd>
                       </div>
                       {selectedDeliveryDisplay?.description ? (
                         <div>
                           <dt className="text-muted-foreground">Behavior</dt>
-                          <dd className="font-medium text-foreground">{selectedDeliveryDisplay.description}</dd>
+                          <dd className="font-medium text-foreground">
+                            {selectedDeliveryDisplay.description}
+                          </dd>
                         </div>
                       ) : null}
                     </dl>
@@ -550,7 +660,8 @@ export default function TriggersPage() {
                     <div>
                       <AppCardTitle>Execution Log</AppCardTitle>
                       <AppCardDescription>
-                        Trigger configuration and runtime executions are persisted separately for auditability.
+                        Trigger configuration and runtime executions are
+                        persisted separately for auditability.
                       </AppCardDescription>
                     </div>
                     <Button
@@ -560,7 +671,10 @@ export default function TriggersPage() {
                       onClick={() => void loadExecutions(selectedRule.id)}
                       disabled={loadingExecutions}
                     >
-                      <RefreshCw className={cn(loadingExecutions && "animate-spin")} data-icon="inline-start" />
+                      <RefreshCw
+                        className={cn(loadingExecutions && "animate-spin")}
+                        data-icon="inline-start"
+                      />
                       Refresh
                     </Button>
                   </div>
@@ -576,7 +690,10 @@ export default function TriggersPage() {
                     </div>
                   ) : (
                     executions.map((execution, index) => (
-                      <div key={execution.id} className="rounded-[22px] border border-border/70 px-4 py-4">
+                      <div
+                        key={execution.id}
+                        className="rounded-[22px] border border-border/70 px-4 py-4"
+                      >
                         <div className="flex flex-wrap items-start justify-between gap-3">
                           <div className="min-w-0">
                             <div className="text-sm font-medium text-foreground">
@@ -592,33 +709,47 @@ export default function TriggersPage() {
                             ) : null}
                             {executionOccurrenceSummary(execution) ? (
                               <div className="mt-2">
-                                <Badge variant="secondary">{executionOccurrenceSummary(execution)}</Badge>
+                                <Badge variant="secondary">
+                                  {executionOccurrenceSummary(execution)}
+                                </Badge>
                               </div>
                             ) : null}
                           </div>
-                          <Badge variant={executionStatusVariant(execution.status)}>
+                          <Badge
+                            variant={executionStatusVariant(execution.status)}
+                          >
                             {execution.status}
                           </Badge>
                         </div>
                         <div className="mt-3 grid gap-3 text-sm lg:grid-cols-2">
                           <div>
                             <div className="text-muted-foreground">Created</div>
-                            <div className="font-medium text-foreground">{formatDateTime(execution.createdAt)}</div>
+                            <div className="font-medium text-foreground">
+                              {formatDateTime(execution.createdAt)}
+                            </div>
                           </div>
                           <div>
                             <div className="text-muted-foreground">Started</div>
-                            <div className="font-medium text-foreground">{formatDateTime(execution.startedAt)}</div>
+                            <div className="font-medium text-foreground">
+                              {formatDateTime(execution.startedAt)}
+                            </div>
                           </div>
                           <div>
-                            <div className="text-muted-foreground">Completed</div>
-                            <div className="font-medium text-foreground">{formatDateTime(execution.completedAt)}</div>
+                            <div className="text-muted-foreground">
+                              Completed
+                            </div>
+                            <div className="font-medium text-foreground">
+                              {formatDateTime(execution.completedAt)}
+                            </div>
                           </div>
                           <div>
-                            <div className="text-muted-foreground">Occurrence</div>
+                            <div className="text-muted-foreground">
+                              Occurrence
+                            </div>
                             <div className="font-medium text-foreground">
                               {formatDateTime(execution.occurrenceOccurredAt)}
                             </div>
-                            <div className="mt-1 text-xs text-muted-foreground break-all">
+                            <div className="mt-1 text-xs break-all text-muted-foreground">
                               {execution.occurrenceId}
                             </div>
                           </div>
@@ -628,7 +759,9 @@ export default function TriggersPage() {
                             {execution.errorMessage}
                           </div>
                         ) : null}
-                        {index < executions.length - 1 ? <Separator className="mt-4" /> : null}
+                        {index < executions.length - 1 ? (
+                          <Separator className="mt-4" />
+                        ) : null}
                       </div>
                     ))
                   )}
@@ -638,12 +771,13 @@ export default function TriggersPage() {
           ) : (
             <AppCard variant="panel">
               <AppCardContent className="py-16 text-center text-sm text-muted-foreground">
-                Select a trigger to inspect its definition and execution history.
+                Select a trigger to inspect its definition and execution
+                history.
               </AppCardContent>
             </AppCard>
           )}
         </div>
       </div>
     </div>
-  );
+  )
 }

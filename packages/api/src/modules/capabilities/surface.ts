@@ -4,12 +4,12 @@ import type {
   RuntimeActorContext,
   SkillSurfaceItem,
   ToolSurfaceItem,
-} from "@synapse/shared/types";
+} from "@synapse/shared/types"
 import {
   resolveMcpToolsForActor,
   type ResolvedMcpTools,
-} from "../mcp-plugins/tool-resolver.js";
-import { listVisibleSkills } from "../skills/service.js";
+} from "../mcp-plugins/tool-resolver.js"
+import { listVisibleSkills } from "../skills/service.js"
 
 const EMPTY_MCP_TOOLS: ResolvedMcpTools = {
   tools: [],
@@ -18,7 +18,7 @@ const EMPTY_MCP_TOOLS: ResolvedMcpTools = {
   refresh: async () => ({ tools: [], mcpVersion: 0 }),
   setTurnId: () => {},
   shutdown: async () => {},
-};
+}
 
 function mapToolSurfaceItem(toolName: string): ToolSurfaceItem {
   return {
@@ -27,35 +27,34 @@ function mapToolSurfaceItem(toolName: string): ToolSurfaceItem {
     source: toolName.startsWith("relay__")
       ? "relay_capability"
       : "plugin_installation",
-  };
+  }
 }
 
 function mapSkillSurfaceItem(skill: AvailableSkillSummary): SkillSurfaceItem {
   return {
     id: skill.instanceId,
     slug: skill.slug,
-    source: skill.sourceKind === "relay_auto_loaded"
-      ? "auto_activated"
-      : "installed",
-  };
+    source:
+      skill.sourceKind === "relay_auto_loaded" ? "auto_activated" : "installed",
+  }
 }
 
 export async function resolveActorCapabilitySurface(
-  runtimeContext: RuntimeActorContext & { conversationId: string },
+  runtimeContext: RuntimeActorContext & { conversationId: string }
 ): Promise<{
-  runtimeContext: RuntimeActorContext;
-  surface: CapabilitySurface;
-  availableSkills: AvailableSkillSummary[];
-  mcpTools: ResolvedMcpTools;
+  runtimeContext: RuntimeActorContext
+  surface: CapabilitySurface
+  availableSkills: AvailableSkillSummary[]
+  mcpTools: ResolvedMcpTools
 }> {
-  let mcpTools = EMPTY_MCP_TOOLS;
+  let mcpTools = EMPTY_MCP_TOOLS
   try {
-    mcpTools = await resolveMcpToolsForActor(runtimeContext);
+    mcpTools = await resolveMcpToolsForActor(runtimeContext)
   } catch (error: any) {
     console.error(
       "[capabilities] Failed to resolve MCP tools:",
-      error?.message || String(error),
-    );
+      error?.message || String(error)
+    )
   }
 
   const availableSkills = await listVisibleSkills({
@@ -65,7 +64,7 @@ export async function resolveActorCapabilitySurface(
     conversationId: runtimeContext.conversationId,
     conversationKind: runtimeContext.conversationKind,
     conversationBoundary: runtimeContext.conversationBoundary,
-  });
+  })
 
   return {
     runtimeContext,
@@ -76,5 +75,5 @@ export async function resolveActorCapabilitySurface(
     },
     availableSkills,
     mcpTools,
-  };
+  }
 }

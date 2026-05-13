@@ -1,14 +1,14 @@
-import { ShieldCheck } from 'lucide-react'
-import { useState } from 'react'
+import { ShieldCheck } from "lucide-react"
+import { useState } from "react"
 
-import { Button } from '../components/ui/button'
+import { Button } from "../components/ui/button"
 import {
   Field,
   FieldContent,
   FieldGroup,
   FieldLabel,
-} from '../components/ui/field'
-import { Input } from '../components/ui/input'
+} from "../components/ui/field"
+import { Input } from "../components/ui/input"
 
 type ParsedPairingInput = {
   serverBaseUrl: string
@@ -18,52 +18,58 @@ type ParsedPairingInput = {
 function parsePairingInput(source: string): ParsedPairingInput {
   const trimmedSource = source.trim()
   if (!trimmedSource) {
-    return { serverBaseUrl: '', pairingCode: '' }
+    return { serverBaseUrl: "", pairingCode: "" }
   }
 
   try {
     const parsed = new URL(trimmedSource)
-    if (parsed.protocol === 'synapse-relay:') {
+    if (parsed.protocol === "synapse-relay:") {
       return {
-        serverBaseUrl: (parsed.searchParams.get('serverBaseUrl') || '').trim(),
-        pairingCode: (parsed.searchParams.get('code') || '').trim(),
+        serverBaseUrl: (parsed.searchParams.get("serverBaseUrl") || "").trim(),
+        pairingCode: (parsed.searchParams.get("code") || "").trim(),
       }
     }
 
     return {
       serverBaseUrl: parsed.origin,
-      pairingCode: (parsed.searchParams.get('code') || '').trim(),
+      pairingCode: (parsed.searchParams.get("code") || "").trim(),
     }
   } catch {
-    return { serverBaseUrl: '', pairingCode: '' }
+    return { serverBaseUrl: "", pairingCode: "" }
   }
 }
 
 interface PairingPanelProps {
-  onClaimPairing: (serverBaseUrl: string, pairingCode: string) => Promise<string>
+  onClaimPairing: (
+    serverBaseUrl: string,
+    pairingCode: string
+  ) => Promise<string>
 }
 
 export function PairingPanel({ onClaimPairing }: PairingPanelProps) {
-  const [pairingLink, setPairingLink] = useState('')
+  const [pairingLink, setPairingLink] = useState("")
   const [submitting, setSubmitting] = useState(false)
-  const [message, setMessage] = useState('')
-  const [error, setError] = useState('')
+  const [message, setMessage] = useState("")
+  const [error, setError] = useState("")
 
   const parsedInput = parsePairingInput(pairingLink)
 
   async function handleSubmit() {
     if (!parsedInput.serverBaseUrl || !parsedInput.pairingCode) {
-      setError('Paste the full pairing link.')
+      setError("Paste the full pairing link.")
       return
     }
 
     setSubmitting(true)
-    setMessage('')
-    setError('')
+    setMessage("")
+    setError("")
     try {
-      const result = await onClaimPairing(parsedInput.serverBaseUrl, parsedInput.pairingCode)
+      const result = await onClaimPairing(
+        parsedInput.serverBaseUrl,
+        parsedInput.pairingCode
+      )
       setMessage(result)
-      setPairingLink('')
+      setPairingLink("")
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : String(cause))
     } finally {
@@ -74,8 +80,12 @@ export function PairingPanel({ onClaimPairing }: PairingPanelProps) {
   return (
     <section className="flex flex-col gap-5">
       <div>
-        <h1 className="text-[28px] leading-none font-semibold tracking-tight text-foreground">Pair</h1>
-        <div className="mt-3 text-sm text-muted-foreground">Paste the link from the Web console.</div>
+        <h1 className="text-[28px] leading-none font-semibold tracking-tight text-foreground">
+          Pair
+        </h1>
+        <div className="mt-3 text-sm text-muted-foreground">
+          Paste the link from the Web console.
+        </div>
       </div>
       <div className="flex flex-col gap-5">
         <FieldGroup>
@@ -93,9 +103,12 @@ export function PairingPanel({ onClaimPairing }: PairingPanelProps) {
         </FieldGroup>
 
         <div className="flex flex-wrap gap-3">
-          <Button onClick={handleSubmit} disabled={submitting || !pairingLink.trim()}>
+          <Button
+            onClick={handleSubmit}
+            disabled={submitting || !pairingLink.trim()}
+          >
             <ShieldCheck data-icon="inline-start" />
-            {submitting ? 'Pairing...' : 'Bind Device'}
+            {submitting ? "Pairing..." : "Bind Device"}
           </Button>
         </div>
 

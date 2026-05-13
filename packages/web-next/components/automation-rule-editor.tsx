@@ -1,7 +1,7 @@
-"use client";
+"use client"
 
-import Link from "next/link";
-import { useEffect, useMemo, useState } from "react";
+import Link from "next/link"
+import { useEffect, useMemo, useState } from "react"
 import {
   buildAutomationRuleCreatePayloadFromDraft,
   describeAutomationDelivery,
@@ -9,7 +9,7 @@ import {
   describeAutomationTrigger,
   parseAutomationIdList,
   parseAutomationJsonObjectText,
-} from "@synapse/shared";
+} from "@synapse/shared"
 import type {
   AutomationEventSource,
   AutomationRuleCreatePayload,
@@ -17,9 +17,9 @@ import type {
   AutomationScheduleKind,
   AutomationTargetPolicy,
   AutomationTriggerKind,
-} from "@synapse/shared";
-import { ArrowLeft, Plus, RefreshCw, Save } from "lucide-react";
-import { toast } from "sonner";
+} from "@synapse/shared"
+import { ArrowLeft, Plus, RefreshCw, Save } from "lucide-react"
+import { toast } from "sonner"
 
 import {
   AppCard,
@@ -27,35 +27,35 @@ import {
   AppCardDescription,
   AppCardHeader,
   AppCardTitle,
-} from "@/components/app-card";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+} from "@/components/app-card"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import {
   Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
   SelectValue,
-} from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
-import { api } from "@/lib/api";
+} from "@/components/ui/select"
+import { Textarea } from "@/components/ui/textarea"
+import { api } from "@/lib/api"
 
 type AutomationRuleEditorProps = {
-  workspaceId?: string | null;
-  workspaceName?: string | null;
-  title: string;
-  description: string;
-  submitLabel: string;
-  loadingLabel: string;
-  initialDraft: AutomationRuleDraft;
-  loadingInitial?: boolean;
-  includeInactiveEventSources?: boolean;
-  onSubmit: (payload: AutomationRuleCreatePayload) => Promise<void>;
-};
+  workspaceId?: string | null
+  workspaceName?: string | null
+  title: string
+  description: string
+  submitLabel: string
+  loadingLabel: string
+  initialDraft: AutomationRuleDraft
+  loadingInitial?: boolean
+  includeInactiveEventSources?: boolean
+  onSubmit: (payload: AutomationRuleCreatePayload) => Promise<void>
+}
 
 function formatDateTime(value?: string) {
-  if (!value) return "Not scheduled";
-  return new Date(value).toLocaleString();
+  if (!value) return "Not scheduled"
+  return new Date(value).toLocaleString()
 }
 
 export function AutomationRuleEditor({
@@ -70,27 +70,29 @@ export function AutomationRuleEditor({
   includeInactiveEventSources = false,
   onSubmit,
 }: AutomationRuleEditorProps) {
-  const [eventSources, setEventSources] = useState<AutomationEventSource[]>([]);
-  const [formState, setFormState] = useState<AutomationRuleDraft>(initialDraft);
-  const [loadingEventSources, setLoadingEventSources] = useState(true);
-  const [savingTrigger, setSavingTrigger] = useState(false);
+  const [eventSources, setEventSources] = useState<AutomationEventSource[]>([])
+  const [formState, setFormState] = useState<AutomationRuleDraft>(initialDraft)
+  const [loadingEventSources, setLoadingEventSources] = useState(true)
+  const [savingTrigger, setSavingTrigger] = useState(false)
 
   useEffect(() => {
-    setFormState(initialDraft);
-  }, [initialDraft]);
+    setFormState(initialDraft)
+  }, [initialDraft])
 
   const selectedEventSource = useMemo(
-    () => eventSources.find((source) => source.id === formState.eventSourceId) || null,
-    [eventSources, formState.eventSourceId],
-  );
+    () =>
+      eventSources.find((source) => source.id === formState.eventSourceId) ||
+      null,
+    [eventSources, formState.eventSourceId]
+  )
 
   const previewMatcher = useMemo(() => {
     try {
-      return parseAutomationJsonObjectText(formState.matcherText, "matcher");
+      return parseAutomationJsonObjectText(formState.matcherText, "matcher")
     } catch {
-      return {};
+      return {}
     }
-  }, [formState.matcherText]);
+  }, [formState.matcherText])
 
   const triggerPreview = useMemo(() => {
     if (formState.triggerKind === "event") {
@@ -103,9 +105,10 @@ export function AutomationRuleEditor({
         eventProviderRef: selectedEventSource?.providerRef,
         eventSourceIntegration: selectedEventSource?.integration,
         eventIntegrationProvider: selectedEventSource?.integration?.provider,
-        eventIntegrationTargetLabel: selectedEventSource?.integration?.targetLabel,
+        eventIntegrationTargetLabel:
+          selectedEventSource?.integration?.targetLabel,
         matcher: previewMatcher,
-      });
+      })
     }
 
     return describeAutomationTrigger(
@@ -130,8 +133,8 @@ export function AutomationRuleEditor({
             ? formState.startsAt || undefined
             : undefined,
       },
-      { formatTimestamp: formatDateTime },
-    );
+      { formatTimestamp: formatDateTime }
+    )
   }, [
     formState.eventSourceId,
     formState.intervalSeconds,
@@ -143,7 +146,7 @@ export function AutomationRuleEditor({
     formState.triggerKind,
     previewMatcher,
     selectedEventSource,
-  ]);
+  ])
 
   const policyPreview = useMemo(
     () =>
@@ -151,24 +154,27 @@ export function AutomationRuleEditor({
         {
           activeFrom: formState.activeFrom || undefined,
           activeUntil: formState.activeUntil || undefined,
-          maxTriggerCount: Number.parseInt(formState.maxTriggerCount, 10) || undefined,
+          maxTriggerCount:
+            Number.parseInt(formState.maxTriggerCount, 10) || undefined,
           completionStatus: formState.completionStatus,
         },
-        { formatTimestamp: formatDateTime },
+        { formatTimestamp: formatDateTime }
       ),
     [
       formState.activeFrom,
       formState.activeUntil,
       formState.completionStatus,
       formState.maxTriggerCount,
-    ],
-  );
+    ]
+  )
 
   const deliveryPreview = useMemo(
     () =>
       describeAutomationDelivery({
         targetPolicy: formState.targetPolicy,
-        targetParticipantIds: parseAutomationIdList(formState.targetParticipantIds),
+        targetParticipantIds: parseAutomationIdList(
+          formState.targetParticipantIds
+        ),
         messageText: formState.message.trim() || undefined,
         wakeReasonText: formState.wakeReason.trim() || undefined,
       }),
@@ -177,66 +183,70 @@ export function AutomationRuleEditor({
       formState.targetPolicy,
       formState.targetParticipantIds,
       formState.wakeReason,
-    ],
-  );
+    ]
+  )
 
   async function loadEventSources() {
-    if (!workspaceId) return;
+    if (!workspaceId) return
 
-    setLoadingEventSources(true);
+    setLoadingEventSources(true)
     try {
       const sources = await api.getAutomationEventSources(
         workspaceId,
-        includeInactiveEventSources ? undefined : { status: "active" },
-      );
-      setEventSources(sources);
+        includeInactiveEventSources ? undefined : { status: "active" }
+      )
+      setEventSources(sources)
       setFormState((current) => ({
         ...current,
         eventSourceId: current.eventSourceId || sources[0]?.id || "",
-      }));
+      }))
     } catch (error) {
-      console.error("Failed to load event sources for trigger editing:", error);
-      toast.error(error instanceof Error ? error.message : "Failed to load event sources");
+      console.error("Failed to load event sources for trigger editing:", error)
+      toast.error(
+        error instanceof Error ? error.message : "Failed to load event sources"
+      )
     } finally {
-      setLoadingEventSources(false);
+      setLoadingEventSources(false)
     }
   }
 
   useEffect(() => {
-    void loadEventSources();
-  }, [includeInactiveEventSources, workspaceId]);
+    void loadEventSources()
+  }, [includeInactiveEventSources, workspaceId])
 
   async function handleSubmit() {
-    if (!workspaceId) return;
+    if (!workspaceId) return
 
-    const built = buildAutomationRuleCreatePayloadFromDraft(formState);
+    const built = buildAutomationRuleCreatePayloadFromDraft(formState)
     if (!built.ok) {
-      toast.error(built.error);
-      return;
+      toast.error(built.error)
+      return
     }
 
-    setSavingTrigger(true);
+    setSavingTrigger(true)
     try {
-      await onSubmit(built.data);
+      await onSubmit(built.data)
     } catch (error) {
-      console.error("Failed to save trigger:", error);
-      toast.error(error instanceof Error ? error.message : "Failed to save trigger");
+      console.error("Failed to save trigger:", error)
+      toast.error(
+        error instanceof Error ? error.message : "Failed to save trigger"
+      )
     } finally {
-      setSavingTrigger(false);
+      setSavingTrigger(false)
     }
   }
 
   if (!workspaceId) {
     return (
-      <div className="px-4 pb-6 pt-6 text-sm text-muted-foreground lg:px-6">
+      <div className="px-4 pt-6 pb-6 text-sm text-muted-foreground lg:px-6">
         Select a workspace to manage triggers.
       </div>
-    );
+    )
   }
 
   if (loadingInitial) {
     return (
-      <div className="flex flex-col gap-6 px-4 pb-6 pt-6 lg:px-6">
+      <div className="flex flex-col gap-6 px-4 pt-6 pb-6 lg:px-6">
         <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
           <div className="space-y-2">
             <Button asChild type="button" variant="outline" size="sm">
@@ -246,9 +256,13 @@ export function AutomationRuleEditor({
               </Link>
             </Button>
             <div>
-              <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
+              <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+                {title}
+              </h1>
               <p className="mt-1 text-sm text-muted-foreground">
-                {workspaceName ? `${description} Workspace: ${workspaceName}.` : description}
+                {workspaceName
+                  ? `${description} Workspace: ${workspaceName}.`
+                  : description}
               </p>
             </div>
           </div>
@@ -259,11 +273,11 @@ export function AutomationRuleEditor({
           </AppCardContent>
         </AppCard>
       </div>
-    );
+    )
   }
 
   return (
-    <div className="flex flex-col gap-6 px-4 pb-6 pt-6 lg:px-6">
+    <div className="flex flex-col gap-6 px-4 pt-6 pb-6 lg:px-6">
       <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
         <div className="space-y-2">
           <Button asChild type="button" variant="outline" size="sm">
@@ -273,9 +287,13 @@ export function AutomationRuleEditor({
             </Link>
           </Button>
           <div>
-            <h1 className="text-2xl font-semibold tracking-tight text-foreground">{title}</h1>
+            <h1 className="text-2xl font-semibold tracking-tight text-foreground">
+              {title}
+            </h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              {workspaceName ? `${description} Workspace: ${workspaceName}.` : description}
+              {workspaceName
+                ? `${description} Workspace: ${workspaceName}.`
+                : description}
             </p>
           </div>
         </div>
@@ -292,7 +310,11 @@ export function AutomationRuleEditor({
             />
             Refresh Event Sources
           </Button>
-          <Button type="button" onClick={() => void handleSubmit()} disabled={savingTrigger}>
+          <Button
+            type="button"
+            onClick={() => void handleSubmit()}
+            disabled={savingTrigger}
+          >
             {savingTrigger ? (
               <RefreshCw data-icon="inline-start" className="animate-spin" />
             ) : submitLabel.toLowerCase().includes("create") ? (
@@ -309,23 +331,35 @@ export function AutomationRuleEditor({
         <AppCardHeader className="gap-3">
           <AppCardTitle>Trigger Definition</AppCardTitle>
           <AppCardDescription>
-            Triggers can be schedule-based or event-based. Fired automations now always write a notice in the owner conversation and optionally target specific participants.
+            Triggers can be schedule-based or event-based. Fired automations now
+            always write a notice in the owner conversation and optionally
+            target specific participants.
           </AppCardDescription>
         </AppCardHeader>
         <AppCardContent className="grid gap-5">
           <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
-            <div className="text-sm font-medium text-foreground">Trigger Preview</div>
+            <div className="text-sm font-medium text-foreground">
+              Trigger Preview
+            </div>
             <div className="mt-3">
-              <div className="text-sm font-medium text-foreground">{triggerPreview.title}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{triggerPreview.summary}</div>
+              <div className="text-sm font-medium text-foreground">
+                {triggerPreview.title}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {triggerPreview.summary}
+              </div>
               {triggerPreview.description ? (
-                <p className="mt-2 text-sm text-muted-foreground">{triggerPreview.description}</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {triggerPreview.description}
+                </p>
               ) : null}
               <dl className="mt-3 grid gap-2 text-sm md:grid-cols-2">
                 {triggerPreview.details.map((detail) => (
                   <div key={detail.label}>
                     <dt className="text-muted-foreground">{detail.label}</dt>
-                    <dd className="font-medium text-foreground">{detail.value}</dd>
+                    <dd className="font-medium text-foreground">
+                      {detail.value}
+                    </dd>
                   </div>
                 ))}
               </dl>
@@ -333,18 +367,28 @@ export function AutomationRuleEditor({
           </div>
 
           <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
-            <div className="text-sm font-medium text-foreground">Policy Preview</div>
+            <div className="text-sm font-medium text-foreground">
+              Policy Preview
+            </div>
             <div className="mt-3">
-              <div className="text-sm font-medium text-foreground">{policyPreview.title}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{policyPreview.summary}</div>
+              <div className="text-sm font-medium text-foreground">
+                {policyPreview.title}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {policyPreview.summary}
+              </div>
               {policyPreview.description ? (
-                <p className="mt-2 text-sm text-muted-foreground">{policyPreview.description}</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {policyPreview.description}
+                </p>
               ) : null}
               <dl className="mt-3 grid gap-2 text-sm md:grid-cols-2">
                 {policyPreview.details.map((detail) => (
                   <div key={detail.label}>
                     <dt className="text-muted-foreground">{detail.label}</dt>
-                    <dd className="font-medium text-foreground">{detail.value}</dd>
+                    <dd className="font-medium text-foreground">
+                      {detail.value}
+                    </dd>
                   </div>
                 ))}
               </dl>
@@ -352,18 +396,28 @@ export function AutomationRuleEditor({
           </div>
 
           <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
-            <div className="text-sm font-medium text-foreground">Delivery Preview</div>
+            <div className="text-sm font-medium text-foreground">
+              Delivery Preview
+            </div>
             <div className="mt-3">
-              <div className="text-sm font-medium text-foreground">{deliveryPreview.title}</div>
-              <div className="mt-1 text-xs text-muted-foreground">{deliveryPreview.summary}</div>
+              <div className="text-sm font-medium text-foreground">
+                {deliveryPreview.title}
+              </div>
+              <div className="mt-1 text-xs text-muted-foreground">
+                {deliveryPreview.summary}
+              </div>
               {deliveryPreview.description ? (
-                <p className="mt-2 text-sm text-muted-foreground">{deliveryPreview.description}</p>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  {deliveryPreview.description}
+                </p>
               ) : null}
               <dl className="mt-3 grid gap-2 text-sm md:grid-cols-2">
                 {deliveryPreview.details.map((detail) => (
                   <div key={detail.label}>
                     <dt className="text-muted-foreground">{detail.label}</dt>
-                    <dd className="font-medium text-foreground">{detail.value}</dd>
+                    <dd className="font-medium text-foreground">
+                      {detail.value}
+                    </dd>
                   </div>
                 ))}
               </dl>
@@ -372,24 +426,38 @@ export function AutomationRuleEditor({
 
           <div className="grid gap-4 md:grid-cols-2">
             <div className="grid gap-2">
-              <label className="text-sm font-medium text-foreground" htmlFor="trigger-name">
+              <label
+                className="text-sm font-medium text-foreground"
+                htmlFor="trigger-name"
+              >
                 Name
               </label>
               <Input
                 id="trigger-name"
                 value={formState.name}
-                onChange={(event) => setFormState((current) => ({ ...current, name: event.target.value }))}
+                onChange={(event) =>
+                  setFormState((current) => ({
+                    ...current,
+                    name: event.target.value,
+                  }))
+                }
                 placeholder="Morning follow-up"
               />
             </div>
             <div className="grid gap-2">
-              <label className="text-sm font-medium text-foreground" htmlFor="trigger-kind">
+              <label
+                className="text-sm font-medium text-foreground"
+                htmlFor="trigger-kind"
+              >
                 Trigger kind
               </label>
               <Select
                 value={formState.triggerKind}
                 onValueChange={(value) =>
-                  setFormState((current) => ({ ...current, triggerKind: value as AutomationTriggerKind }))
+                  setFormState((current) => ({
+                    ...current,
+                    triggerKind: value as AutomationTriggerKind,
+                  }))
                 }
               >
                 <SelectTrigger id="trigger-kind" className="w-full">
@@ -404,48 +472,73 @@ export function AutomationRuleEditor({
           </div>
 
           <div className="grid gap-2">
-            <label className="text-sm font-medium text-foreground" htmlFor="trigger-description">
+            <label
+              className="text-sm font-medium text-foreground"
+              htmlFor="trigger-description"
+            >
               Description
             </label>
             <Textarea
               id="trigger-description"
               value={formState.description}
-              onChange={(event) => setFormState((current) => ({ ...current, description: event.target.value }))}
+              onChange={(event) =>
+                setFormState((current) => ({
+                  ...current,
+                  description: event.target.value,
+                }))
+              }
               rows={3}
               placeholder="Why this trigger exists and what it is expected to do."
             />
           </div>
 
           <div className="grid gap-2">
-            <label className="text-sm font-medium text-foreground" htmlFor="trigger-conversation-id">
+            <label
+              className="text-sm font-medium text-foreground"
+              htmlFor="trigger-conversation-id"
+            >
               Conversation ID
             </label>
             <Input
               id="trigger-conversation-id"
               value={formState.conversationId}
               onChange={(event) =>
-                setFormState((current) => ({ ...current, conversationId: event.target.value }))
+                setFormState((current) => ({
+                  ...current,
+                  conversationId: event.target.value,
+                }))
               }
               placeholder="Conversation that owns and receives this automation"
             />
           </div>
 
           <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
-            <div className="text-sm font-medium text-foreground">Trigger Setup</div>
+            <div className="text-sm font-medium text-foreground">
+              Trigger Setup
+            </div>
             {formState.triggerKind === "schedule" ? (
               <div className="mt-4 grid gap-4">
                 <div className="grid gap-4 md:grid-cols-3">
                   <div className="grid gap-2">
-                    <label className="text-sm font-medium text-foreground" htmlFor="trigger-schedule-kind">
+                    <label
+                      className="text-sm font-medium text-foreground"
+                      htmlFor="trigger-schedule-kind"
+                    >
                       Schedule kind
                     </label>
                     <Select
                       value={formState.scheduleKind}
                       onValueChange={(value) =>
-                        setFormState((current) => ({ ...current, scheduleKind: value as AutomationScheduleKind }))
+                        setFormState((current) => ({
+                          ...current,
+                          scheduleKind: value as AutomationScheduleKind,
+                        }))
                       }
                     >
-                      <SelectTrigger id="trigger-schedule-kind" className="w-full">
+                      <SelectTrigger
+                        id="trigger-schedule-kind"
+                        className="w-full"
+                      >
                         <SelectValue placeholder="Schedule kind" />
                       </SelectTrigger>
                       <SelectContent>
@@ -457,7 +550,10 @@ export function AutomationRuleEditor({
                   </div>
                   {formState.scheduleKind === "interval" ? (
                     <div className="grid gap-2">
-                      <label className="text-sm font-medium text-foreground" htmlFor="trigger-interval-seconds">
+                      <label
+                        className="text-sm font-medium text-foreground"
+                        htmlFor="trigger-interval-seconds"
+                      >
                         Interval seconds
                       </label>
                       <Input
@@ -466,21 +562,30 @@ export function AutomationRuleEditor({
                         min="1"
                         value={formState.intervalSeconds}
                         onChange={(event) =>
-                          setFormState((current) => ({ ...current, intervalSeconds: event.target.value }))
+                          setFormState((current) => ({
+                            ...current,
+                            intervalSeconds: event.target.value,
+                          }))
                         }
                       />
                     </div>
                   ) : null}
                   {formState.scheduleKind === "cron" ? (
                     <div className="grid gap-2 md:col-span-2">
-                      <label className="text-sm font-medium text-foreground" htmlFor="trigger-schedule-expr">
+                      <label
+                        className="text-sm font-medium text-foreground"
+                        htmlFor="trigger-schedule-expr"
+                      >
                         Cron expression
                       </label>
                       <Input
                         id="trigger-schedule-expr"
                         value={formState.scheduleExpr}
                         onChange={(event) =>
-                          setFormState((current) => ({ ...current, scheduleExpr: event.target.value }))
+                          setFormState((current) => ({
+                            ...current,
+                            scheduleExpr: event.target.value,
+                          }))
                         }
                         placeholder="0 9 * * *"
                       />
@@ -489,25 +594,41 @@ export function AutomationRuleEditor({
                 </div>
                 <div className="grid gap-4 md:grid-cols-3">
                   <div className="grid gap-2">
-                    <label className="text-sm font-medium text-foreground" htmlFor="trigger-starts-at">
-                      {formState.scheduleKind === "at" ? "Fire at" : "First fire"}
+                    <label
+                      className="text-sm font-medium text-foreground"
+                      htmlFor="trigger-starts-at"
+                    >
+                      {formState.scheduleKind === "at"
+                        ? "Fire at"
+                        : "First fire"}
                     </label>
                     <Input
                       id="trigger-starts-at"
                       type="datetime-local"
                       value={formState.startsAt}
-                      onChange={(event) => setFormState((current) => ({ ...current, startsAt: event.target.value }))}
+                      onChange={(event) =>
+                        setFormState((current) => ({
+                          ...current,
+                          startsAt: event.target.value,
+                        }))
+                      }
                     />
                   </div>
                   <div className="grid gap-2">
-                    <label className="text-sm font-medium text-foreground" htmlFor="trigger-timezone">
+                    <label
+                      className="text-sm font-medium text-foreground"
+                      htmlFor="trigger-timezone"
+                    >
                       Timezone
                     </label>
                     <Input
                       id="trigger-timezone"
                       value={formState.scheduleTimezone}
                       onChange={(event) =>
-                        setFormState((current) => ({ ...current, scheduleTimezone: event.target.value }))
+                        setFormState((current) => ({
+                          ...current,
+                          scheduleTimezone: event.target.value,
+                        }))
                       }
                       placeholder="Asia/Shanghai"
                       disabled={formState.scheduleKind !== "cron"}
@@ -518,12 +639,20 @@ export function AutomationRuleEditor({
             ) : (
               <div className="mt-4 grid gap-4">
                 <div className="grid gap-2">
-                  <label className="text-sm font-medium text-foreground" htmlFor="trigger-event-source">
+                  <label
+                    className="text-sm font-medium text-foreground"
+                    htmlFor="trigger-event-source"
+                  >
                     Event source
                   </label>
                   <Select
                     value={formState.eventSourceId}
-                    onValueChange={(value) => setFormState((current) => ({ ...current, eventSourceId: value }))}
+                    onValueChange={(value) =>
+                      setFormState((current) => ({
+                        ...current,
+                        eventSourceId: value,
+                      }))
+                    }
                   >
                     <SelectTrigger id="trigger-event-source" className="w-full">
                       <SelectValue placeholder="Select event source" />
@@ -532,8 +661,12 @@ export function AutomationRuleEditor({
                       {eventSources.length > 0 ? (
                         eventSources.map((source) => (
                           <SelectItem key={source.id} value={source.id}>
-                            {source.name} ({source.providerKind}/{source.sourceKey}
-                            {source.status !== "active" ? `/${source.status}` : ""})
+                            {source.name} ({source.providerKind}/
+                            {source.sourceKey}
+                            {source.status !== "active"
+                              ? `/${source.status}`
+                              : ""}
+                            )
                           </SelectItem>
                         ))
                       ) : (
@@ -545,13 +678,21 @@ export function AutomationRuleEditor({
                   </Select>
                 </div>
                 <div className="grid gap-2">
-                  <label className="text-sm font-medium text-foreground" htmlFor="trigger-matcher-text">
+                  <label
+                    className="text-sm font-medium text-foreground"
+                    htmlFor="trigger-matcher-text"
+                  >
                     Matcher JSON
                   </label>
                   <Textarea
                     id="trigger-matcher-text"
                     value={formState.matcherText}
-                    onChange={(event) => setFormState((current) => ({ ...current, matcherText: event.target.value }))}
+                    onChange={(event) =>
+                      setFormState((current) => ({
+                        ...current,
+                        matcherText: event.target.value,
+                      }))
+                    }
                     rows={6}
                     className="font-mono text-xs"
                   />
@@ -561,32 +702,53 @@ export function AutomationRuleEditor({
           </div>
 
           <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
-            <div className="text-sm font-medium text-foreground">Policy / Termination</div>
+            <div className="text-sm font-medium text-foreground">
+              Policy / Termination
+            </div>
             <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-4">
               <div className="grid gap-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="trigger-active-from">
+                <label
+                  className="text-sm font-medium text-foreground"
+                  htmlFor="trigger-active-from"
+                >
                   Active from
                 </label>
                 <Input
                   id="trigger-active-from"
                   type="datetime-local"
                   value={formState.activeFrom}
-                  onChange={(event) => setFormState((current) => ({ ...current, activeFrom: event.target.value }))}
+                  onChange={(event) =>
+                    setFormState((current) => ({
+                      ...current,
+                      activeFrom: event.target.value,
+                    }))
+                  }
                 />
               </div>
               <div className="grid gap-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="trigger-active-until">
+                <label
+                  className="text-sm font-medium text-foreground"
+                  htmlFor="trigger-active-until"
+                >
                   Active until
                 </label>
                 <Input
                   id="trigger-active-until"
                   type="datetime-local"
                   value={formState.activeUntil}
-                  onChange={(event) => setFormState((current) => ({ ...current, activeUntil: event.target.value }))}
+                  onChange={(event) =>
+                    setFormState((current) => ({
+                      ...current,
+                      activeUntil: event.target.value,
+                    }))
+                  }
                 />
               </div>
               <div className="grid gap-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="trigger-max-count">
+                <label
+                  className="text-sm font-medium text-foreground"
+                  htmlFor="trigger-max-count"
+                >
                   Max trigger count
                 </label>
                 <Input
@@ -595,13 +757,19 @@ export function AutomationRuleEditor({
                   min="1"
                   value={formState.maxTriggerCount}
                   onChange={(event) =>
-                    setFormState((current) => ({ ...current, maxTriggerCount: event.target.value }))
+                    setFormState((current) => ({
+                      ...current,
+                      maxTriggerCount: event.target.value,
+                    }))
                   }
                   placeholder="Unlimited"
                 />
               </div>
               <div className="grid gap-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="trigger-completion-status">
+                <label
+                  className="text-sm font-medium text-foreground"
+                  htmlFor="trigger-completion-status"
+                >
                   On completion
                 </label>
                 <Select
@@ -609,11 +777,15 @@ export function AutomationRuleEditor({
                   onValueChange={(value) =>
                     setFormState((current) => ({
                       ...current,
-                      completionStatus: value as AutomationRuleDraft["completionStatus"],
+                      completionStatus:
+                        value as AutomationRuleDraft["completionStatus"],
                     }))
                   }
                 >
-                  <SelectTrigger id="trigger-completion-status" className="w-full">
+                  <SelectTrigger
+                    id="trigger-completion-status"
+                    className="w-full"
+                  >
                     <SelectValue placeholder="Completion status" />
                   </SelectTrigger>
                   <SelectContent>
@@ -626,16 +798,24 @@ export function AutomationRuleEditor({
           </div>
 
           <div className="rounded-[24px] border border-border/70 bg-muted/20 p-4">
-            <div className="text-sm font-medium text-foreground">Action / Delivery</div>
+            <div className="text-sm font-medium text-foreground">
+              Action / Delivery
+            </div>
             <div className="mt-4 grid gap-4">
               <div className="grid gap-2 md:max-w-sm">
-                <label className="text-sm font-medium text-foreground" htmlFor="trigger-target-policy">
+                <label
+                  className="text-sm font-medium text-foreground"
+                  htmlFor="trigger-target-policy"
+                >
                   Target policy
                 </label>
                 <Select
                   value={formState.targetPolicy}
                   onValueChange={(value) =>
-                    setFormState((current) => ({ ...current, targetPolicy: value as AutomationTargetPolicy }))
+                    setFormState((current) => ({
+                      ...current,
+                      targetPolicy: value as AutomationTargetPolicy,
+                    }))
                   }
                 >
                   <SelectTrigger id="trigger-target-policy" className="w-full">
@@ -643,46 +823,70 @@ export function AutomationRuleEditor({
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all_members">all_members</SelectItem>
-                    <SelectItem value="specified_members">specified_members</SelectItem>
+                    <SelectItem value="specified_members">
+                      specified_members
+                    </SelectItem>
                   </SelectContent>
                 </Select>
               </div>
 
               <div className="grid gap-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="trigger-message">
+                <label
+                  className="text-sm font-medium text-foreground"
+                  htmlFor="trigger-message"
+                >
                   Visible system message
                 </label>
                 <Textarea
                   id="trigger-message"
                   value={formState.message}
-                  onChange={(event) => setFormState((current) => ({ ...current, message: event.target.value }))}
+                  onChange={(event) =>
+                    setFormState((current) => ({
+                      ...current,
+                      message: event.target.value,
+                    }))
+                  }
                   rows={4}
                   placeholder="This system message is shown in the conversation when the trigger fires."
                 />
               </div>
 
               <div className="grid gap-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="trigger-wake-reason">
+                <label
+                  className="text-sm font-medium text-foreground"
+                  htmlFor="trigger-wake-reason"
+                >
                   Wake reason
                 </label>
                 <Textarea
                   id="trigger-wake-reason"
                   value={formState.wakeReason}
-                  onChange={(event) => setFormState((current) => ({ ...current, wakeReason: event.target.value }))}
+                  onChange={(event) =>
+                    setFormState((current) => ({
+                      ...current,
+                      wakeReason: event.target.value,
+                    }))
+                  }
                   rows={3}
                   placeholder="Private reasoning text injected into the woken session context."
                 />
               </div>
 
               <div className="grid gap-2">
-                <label className="text-sm font-medium text-foreground" htmlFor="trigger-target-participants">
+                <label
+                  className="text-sm font-medium text-foreground"
+                  htmlFor="trigger-target-participants"
+                >
                   Target participant IDs
                 </label>
                 <Textarea
                   id="trigger-target-participants"
                   value={formState.targetParticipantIds}
                   onChange={(event) =>
-                    setFormState((current) => ({ ...current, targetParticipantIds: event.target.value }))
+                    setFormState((current) => ({
+                      ...current,
+                      targetParticipantIds: event.target.value,
+                    }))
                   }
                   rows={4}
                   placeholder="Comma, space, or newline separated conversation_participant IDs"
@@ -692,11 +896,12 @@ export function AutomationRuleEditor({
           </div>
 
           <div className="rounded-[22px] border border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
-            Automations now always deliver inside the owner conversation. `wakeReason` is stored separately from the
-            visible notice, and `specified_members` expects conversation participant IDs.
+            Automations now always deliver inside the owner conversation.
+            `wakeReason` is stored separately from the visible notice, and
+            `specified_members` expects conversation participant IDs.
           </div>
         </AppCardContent>
       </AppCard>
     </div>
-  );
+  )
 }

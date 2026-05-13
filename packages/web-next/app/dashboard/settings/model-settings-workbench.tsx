@@ -1,7 +1,7 @@
-'use client';
+"use client"
 
-import { useDeferredValue, useEffect, useMemo, useState } from 'react';
-import { usePathname, useRouter, useSearchParams } from 'next/navigation';
+import { useDeferredValue, useEffect, useMemo, useState } from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
   getDefaultModelBaseUrl,
   getDefaultModelEngineKind,
@@ -9,7 +9,7 @@ import {
   getModelProviderEngineDefinitions,
   listModelProviderDefinitions,
   providerSupportsBuiltinTools,
-} from '@synapse/shared';
+} from "@synapse/shared"
 import {
   ChevronDown,
   Cpu,
@@ -20,247 +20,297 @@ import {
   Search,
   ShieldCheck,
   Trash2,
-} from 'lucide-react';
-import { toast } from 'sonner';
+} from "lucide-react"
+import { toast } from "sonner"
 
-import { useWorkspace } from '../workspace-provider';
-import { useAuthStore } from '@/stores/auth-store';
-import { api } from '@/lib/api';
-import { Badge } from '@/components/ui/badge';
-import { Button } from '@/components/ui/button';
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
-import { Input } from '@/components/ui/input';
-import { Label } from '@/components/ui/label';
-import { Skeleton } from '@/components/ui/skeleton';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import ModelGroupDialog from './model-group-dialog';
+import { useWorkspace } from "../workspace-provider"
+import { useAuthStore } from "@/stores/auth-store"
+import { api } from "@/lib/api"
+import { Badge } from "@/components/ui/badge"
+import { Button } from "@/components/ui/button"
+import {
+  Card,
+  CardContent,
+  CardDescription,
+  CardHeader,
+  CardTitle,
+} from "@/components/ui/card"
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog"
+import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
+import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import ModelGroupDialog from "./model-group-dialog"
 import {
   getEffectiveMaxTokensLimit,
   getKnownModelOptions,
   getModelConfigValidationMessage,
   getSaveErrorMessage,
-} from './model-config-utils';
+} from "./model-config-utils"
 
-type ModelGroupScope = 'workspace' | 'platform' | 'workspace_member';
-type GrantScope = 'platform' | 'workspace' | 'workspace_member' | 'actor';
+type ModelGroupScope = "workspace" | "platform" | "workspace_member"
+type GrantScope = "platform" | "workspace" | "workspace_member" | "actor"
 
 type ModelGroupSummary = {
-  id: string;
-  workspace_id: string | null;
-  owner_type?: 'platform' | 'workspace' | 'workspace_member';
-  owner_workspace_id?: string | null;
-  owner_workspace_member_id?: string | null;
-  name: string;
-  description: string;
-  routing_strategy: string;
-  is_default: boolean;
-  is_active?: boolean;
-  created_at: string;
-};
+  id: string
+  workspace_id: string | null
+  owner_type?: "platform" | "workspace" | "workspace_member"
+  owner_workspace_id?: string | null
+  owner_workspace_member_id?: string | null
+  name: string
+  description: string
+  routing_strategy: string
+  is_default: boolean
+  is_active?: boolean
+  created_at: string
+}
 
 type ModelGroupGrant = {
-  id: string;
-  group_id: string;
-  grant_scope: GrantScope;
-  workspace_id: string | null;
-  workspace_member_id: string | null;
-  actor_id: string | null;
-  status: 'active' | 'revoked';
-  grantedByWorkspaceMemberId?: string | null;
-  reason?: string | null;
-  created_at?: string | null;
-  revoked_at?: string | null;
-};
+  id: string
+  group_id: string
+  grant_scope: GrantScope
+  workspace_id: string | null
+  workspace_member_id: string | null
+  actor_id: string | null
+  status: "active" | "revoked"
+  grantedByWorkspaceMemberId?: string | null
+  reason?: string | null
+  created_at?: string | null
+  revoked_at?: string | null
+}
 
 type ModelItem = {
-  id: string;
-  group_id: string;
-  profile_id: string;
-  current_revision_id: string | null;
-  display_name: string;
-  priority: number;
-  weight: number;
-  is_enabled: boolean;
-  version: number;
-  provider_type: string;
-  engine_kind?: string;
-  base_url: string;
-  model_name: string;
-  max_tokens: number;
-  capability_tags: string[];
-  extra_config?: Record<string, unknown>;
-};
+  id: string
+  group_id: string
+  profile_id: string
+  current_revision_id: string | null
+  display_name: string
+  priority: number
+  weight: number
+  is_enabled: boolean
+  version: number
+  provider_type: string
+  engine_kind?: string
+  base_url: string
+  model_name: string
+  max_tokens: number
+  capability_tags: string[]
+  extra_config?: Record<string, unknown>
+}
 
 type GroupDetail = ModelGroupSummary & {
-  grants: ModelGroupGrant[];
-  items: ModelItem[];
-};
+  grants: ModelGroupGrant[]
+  items: ModelItem[]
+}
 
 type WorkspaceMember = {
-  id: string;
-  userId: string;
-  userName?: string;
-  userEmail?: string;
-};
+  id: string
+  userId: string
+  userName?: string
+  userEmail?: string
+}
 
 type WorkspaceActor = {
-  id: string;
+  id: string
   definition?: {
-    name?: string;
-  };
-  name?: string;
-};
+    name?: string
+  }
+  name?: string
+}
 
 type WorkbenchUser = {
-  id?: string;
-  name?: string;
-  email?: string;
-};
+  id?: string
+  name?: string
+  email?: string
+}
 
 type ConfigDraft = {
-  displayName: string;
-  providerType: string;
-  engineKind: string;
-  apiKey: string;
-  baseUrl: string;
-  modelName: string;
-  maxTokens: string;
-  priority: string;
-  weight: string;
-  isEnabled: boolean;
-  builtinTools: string[];
-  multimodalTypes: string[];
-};
+  displayName: string
+  providerType: string
+  engineKind: string
+  apiKey: string
+  baseUrl: string
+  modelName: string
+  maxTokens: string
+  priority: string
+  weight: string
+  isEnabled: boolean
+  builtinTools: string[]
+  multimodalTypes: string[]
+}
 
 const ANTHROPIC_BUILTIN_TOOLS = [
-  { key: 'web_search', label: 'Web Search' },
-  { key: 'web_fetch', label: 'Web Fetch' },
-];
+  { key: "web_search", label: "Web Search" },
+  { key: "web_fetch", label: "Web Fetch" },
+]
 
 const MULTIMODAL_TYPES = [
-  { key: 'image', label: 'Images' },
-  { key: 'audio', label: 'Audio' },
-  { key: 'video', label: 'Video' },
-  { key: 'document', label: 'Documents' },
-];
+  { key: "image", label: "Images" },
+  { key: "audio", label: "Audio" },
+  { key: "video", label: "Video" },
+  { key: "document", label: "Documents" },
+]
 
-const PROVIDER_OPTIONS = listModelProviderDefinitions();
+const PROVIDER_OPTIONS = listModelProviderDefinitions()
 
 const ROUTING_STRATEGIES = [
-  { value: 'priority_failover', label: 'Priority Failover' },
-  { value: 'weighted_random', label: 'Weighted Random' },
-  { value: 'round_robin', label: 'Round Robin' },
-] as const;
+  { value: "priority_failover", label: "Priority Failover" },
+  { value: "weighted_random", label: "Weighted Random" },
+  { value: "round_robin", label: "Round Robin" },
+] as const
 
 function resolveScope(group: ModelGroupSummary): ModelGroupScope {
-  if (group.owner_type === 'platform' || (!group.owner_type && !group.workspace_id)) {
-    return 'platform';
+  if (
+    group.owner_type === "platform" ||
+    (!group.owner_type && !group.workspace_id)
+  ) {
+    return "platform"
   }
-  if (group.owner_type === 'workspace_member') {
-    return 'workspace_member';
+  if (group.owner_type === "workspace_member") {
+    return "workspace_member"
   }
-  return 'workspace';
+  return "workspace"
 }
 
 function createDraft(item?: ModelItem | null): ConfigDraft {
-  const extraConfig = (item?.extra_config || {}) as Record<string, any>;
-  const multimodal = extraConfig.multimodal || {};
-  const providerType = item?.provider_type || 'anthropic';
-  const engineKind = item?.engine_kind || extraConfig.engine_kind || getDefaultModelEngineKind(providerType);
+  const extraConfig = (item?.extra_config || {}) as Record<string, any>
+  const multimodal = extraConfig.multimodal || {}
+  const providerType = item?.provider_type || "anthropic"
+  const engineKind =
+    item?.engine_kind ||
+    extraConfig.engine_kind ||
+    getDefaultModelEngineKind(providerType)
 
   return {
-    displayName: item?.display_name || '',
+    displayName: item?.display_name || "",
     providerType,
     engineKind,
-    apiKey: '',
+    apiKey: "",
     baseUrl: item?.base_url || getDefaultModelBaseUrl(providerType),
-    modelName: item?.model_name || getDefaultModelName(providerType, engineKind),
+    modelName:
+      item?.model_name || getDefaultModelName(providerType, engineKind),
     maxTokens: String(item?.max_tokens || 4096),
     priority: String(item?.priority ?? 0),
     weight: String(item?.weight ?? 100),
     isEnabled: item ? Boolean(item.is_enabled) : true,
-    builtinTools: Array.isArray(extraConfig.builtin_tools) ? extraConfig.builtin_tools : [],
-    multimodalTypes: multimodal.supported && Array.isArray(multimodal.types) ? multimodal.types : [],
-  };
+    builtinTools: Array.isArray(extraConfig.builtin_tools)
+      ? extraConfig.builtin_tools
+      : [],
+    multimodalTypes:
+      multimodal.supported && Array.isArray(multimodal.types)
+        ? multimodal.types
+        : [],
+  }
 }
 
-async function fetchGroupsForScope(scope: ModelGroupScope, workspaceId: string | null) {
-  if (scope === 'platform') {
-    const response = await api.getPlatformModelGroups();
-    return (response.groups || []) as ModelGroupSummary[];
+async function fetchGroupsForScope(
+  scope: ModelGroupScope,
+  workspaceId: string | null
+) {
+  if (scope === "platform") {
+    const response = await api.getPlatformModelGroups()
+    return (response.groups || []) as ModelGroupSummary[]
   }
-  if (scope === 'workspace_member') {
-    const response = await api.getWorkspaceMemberModelGroups(workspaceId!);
-    return (response.groups || []) as ModelGroupSummary[];
+  if (scope === "workspace_member") {
+    const response = await api.getWorkspaceMemberModelGroups(workspaceId!)
+    return (response.groups || []) as ModelGroupSummary[]
   }
   if (!workspaceId) {
-    return [];
+    return []
   }
-  const response = await api.getModelGroups(workspaceId);
-  return ((response.groups || []) as ModelGroupSummary[]).filter((group) => resolveScope(group) === 'workspace');
+  const response = await api.getModelGroups(workspaceId)
+  return ((response.groups || []) as ModelGroupSummary[]).filter(
+    (group) => resolveScope(group) === "workspace"
+  )
 }
 
-async function fetchGroupDetail(scope: ModelGroupScope, groupId: string, workspaceId: string | null) {
-  if (scope === 'platform') {
-    return api.getPlatformModelGroup(groupId);
+async function fetchGroupDetail(
+  scope: ModelGroupScope,
+  groupId: string,
+  workspaceId: string | null
+) {
+  if (scope === "platform") {
+    return api.getPlatformModelGroup(groupId)
   }
-  if (scope === 'workspace_member') {
-    return api.getWorkspaceMemberModelGroup(workspaceId!, groupId);
+  if (scope === "workspace_member") {
+    return api.getWorkspaceMemberModelGroup(workspaceId!, groupId)
   }
   if (!workspaceId) {
-    throw new Error('Workspace is required');
+    throw new Error("Workspace is required")
   }
-  return api.getModelGroup(workspaceId, groupId);
+  return api.getModelGroup(workspaceId, groupId)
 }
 
 async function updateGroupForScope(
   scope: ModelGroupScope,
   groupId: string,
   workspaceId: string | null,
-  data: Record<string, unknown>,
+  data: Record<string, unknown>
 ) {
-  if (scope === 'platform') {
-    return api.updatePlatformModelGroup(groupId, data);
+  if (scope === "platform") {
+    return api.updatePlatformModelGroup(groupId, data)
   }
-  if (scope === 'workspace_member') {
-    return api.updateWorkspaceMemberModelGroup(workspaceId!, groupId, data);
-  }
-  if (!workspaceId) {
-    throw new Error('Workspace is required');
-  }
-  return api.updateModelGroup(workspaceId, groupId, data);
-}
-
-async function issueGrantForGroup(scope: ModelGroupScope, groupId: string, workspaceId: string | null, data: Record<string, unknown>) {
-  if (scope === 'platform') {
-    return api.issuePlatformModelGroupGrant(groupId, data);
-  }
-  if (scope === 'workspace_member') {
-    return api.issueWorkspaceMemberModelGroupGrant(workspaceId!, groupId, data);
+  if (scope === "workspace_member") {
+    return api.updateWorkspaceMemberModelGroup(workspaceId!, groupId, data)
   }
   if (!workspaceId) {
-    throw new Error('Workspace is required');
+    throw new Error("Workspace is required")
   }
-  return api.issueModelGroupGrant(workspaceId, groupId, data);
+  return api.updateModelGroup(workspaceId, groupId, data)
 }
 
-async function revokeGrantForGroup(scope: ModelGroupScope, groupId: string, workspaceId: string | null, grantId: string) {
-  if (scope === 'platform') {
-    return api.revokePlatformModelGroupGrant(groupId, grantId);
+async function issueGrantForGroup(
+  scope: ModelGroupScope,
+  groupId: string,
+  workspaceId: string | null,
+  data: Record<string, unknown>
+) {
+  if (scope === "platform") {
+    return api.issuePlatformModelGroupGrant(groupId, data)
   }
-  if (scope === 'workspace_member') {
+  if (scope === "workspace_member") {
+    return api.issueWorkspaceMemberModelGroupGrant(workspaceId!, groupId, data)
+  }
+  if (!workspaceId) {
+    throw new Error("Workspace is required")
+  }
+  return api.issueModelGroupGrant(workspaceId, groupId, data)
+}
+
+async function revokeGrantForGroup(
+  scope: ModelGroupScope,
+  groupId: string,
+  workspaceId: string | null,
+  grantId: string
+) {
+  if (scope === "platform") {
+    return api.revokePlatformModelGroupGrant(groupId, grantId)
+  }
+  if (scope === "workspace_member") {
     return api.revokeWorkspaceMemberModelGroupGrant(
       workspaceId!,
       groupId,
       grantId
-    );
+    )
   }
   if (!workspaceId) {
-    throw new Error('Workspace is required');
+    throw new Error("Workspace is required")
   }
-  return api.revokeModelGroupGrant(workspaceId, groupId, grantId);
+  return api.revokeModelGroupGrant(workspaceId, groupId, grantId)
 }
 
 async function saveItemForGroup(
@@ -268,49 +318,54 @@ async function saveItemForGroup(
   groupId: string,
   workspaceId: string | null,
   itemId: string | null,
-  payload: Record<string, unknown>,
+  payload: Record<string, unknown>
 ) {
   if (itemId) {
-    if (scope === 'platform') {
-      return api.updatePlatformModelItem(groupId, itemId, payload);
+    if (scope === "platform") {
+      return api.updatePlatformModelItem(groupId, itemId, payload)
     }
-    if (scope === 'workspace_member') {
+    if (scope === "workspace_member") {
       return api.updateWorkspaceMemberModelItem(
         workspaceId!,
         groupId,
         itemId,
         payload
-      );
+      )
     }
     if (!workspaceId) {
-      throw new Error('Workspace is required');
+      throw new Error("Workspace is required")
     }
-    return api.updateModelItem(workspaceId, groupId, itemId, payload);
+    return api.updateModelItem(workspaceId, groupId, itemId, payload)
   }
 
-  if (scope === 'platform') {
-    return api.addPlatformModelItem(groupId, payload);
+  if (scope === "platform") {
+    return api.addPlatformModelItem(groupId, payload)
   }
-  if (scope === 'workspace_member') {
-    return api.addWorkspaceMemberModelItem(workspaceId!, groupId, payload);
+  if (scope === "workspace_member") {
+    return api.addWorkspaceMemberModelItem(workspaceId!, groupId, payload)
   }
   if (!workspaceId) {
-    throw new Error('Workspace is required');
+    throw new Error("Workspace is required")
   }
-  return api.addModelItem(workspaceId, groupId, payload);
+  return api.addModelItem(workspaceId, groupId, payload)
 }
 
-async function deleteItemForGroup(scope: ModelGroupScope, groupId: string, workspaceId: string | null, itemId: string) {
-  if (scope === 'platform') {
-    return api.deletePlatformModelItem(groupId, itemId);
+async function deleteItemForGroup(
+  scope: ModelGroupScope,
+  groupId: string,
+  workspaceId: string | null,
+  itemId: string
+) {
+  if (scope === "platform") {
+    return api.deletePlatformModelItem(groupId, itemId)
   }
-  if (scope === 'workspace_member') {
-    return api.deleteWorkspaceMemberModelItem(workspaceId!, groupId, itemId);
+  if (scope === "workspace_member") {
+    return api.deleteWorkspaceMemberModelItem(workspaceId!, groupId, itemId)
   }
   if (!workspaceId) {
-    throw new Error('Workspace is required');
+    throw new Error("Workspace is required")
   }
-  return api.deleteModelItem(workspaceId, groupId, itemId);
+  return api.deleteModelItem(workspaceId, groupId, itemId)
 }
 
 function grantTargetLabel(
@@ -319,29 +374,39 @@ function grantTargetLabel(
   members: WorkspaceMember[],
   actors: WorkspaceActor[],
   currentWorkspaceMemberId: string | null,
-  currentUser: WorkbenchUser | null,
+  currentUser: WorkbenchUser | null
 ) {
   switch (grant.grant_scope) {
-    case 'platform':
-      return 'Platform';
-    case 'workspace':
-      return workspaces.find((workspace) => workspace.id === grant.workspace_id)?.name || 'Workspace';
-    case 'workspace_member': {
+    case "platform":
+      return "Platform"
+    case "workspace":
+      return (
+        workspaces.find((workspace) => workspace.id === grant.workspace_id)
+          ?.name || "Workspace"
+      )
+    case "workspace_member": {
       if (
         grant.workspace_member_id &&
         currentWorkspaceMemberId === grant.workspace_member_id
       ) {
-        return currentUser?.name || currentUser?.email || 'Current member';
+        return currentUser?.name || currentUser?.email || "Current member"
       }
-      const member = members.find((item) => item.id === grant.workspace_member_id);
-      return member?.userName || member?.userEmail || grant.workspace_member_id || 'Member';
+      const member = members.find(
+        (item) => item.id === grant.workspace_member_id
+      )
+      return (
+        member?.userName ||
+        member?.userEmail ||
+        grant.workspace_member_id ||
+        "Member"
+      )
     }
-    case 'actor': {
-      const actor = actors.find((item) => item.id === grant.actor_id);
-      return actor?.definition?.name || actor?.name || grant.actor_id || 'Actor';
+    case "actor": {
+      const actor = actors.find((item) => item.id === grant.actor_id)
+      return actor?.definition?.name || actor?.name || grant.actor_id || "Actor"
     }
     default:
-      return 'Target';
+      return "Target"
   }
 }
 
@@ -356,54 +421,58 @@ function GrantDialog({
   currentWorkspaceMemberId,
   currentUser,
 }: {
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onSubmit: (payload: Record<string, unknown>) => Promise<void>;
-  groupScope: ModelGroupScope;
-  workspaces: Array<{ id: string; name: string }>;
-  members: WorkspaceMember[];
-  actors: WorkspaceActor[];
-  currentWorkspaceMemberId: string | null;
-  currentUser: WorkbenchUser | null;
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  onSubmit: (payload: Record<string, unknown>) => Promise<void>
+  groupScope: ModelGroupScope
+  workspaces: Array<{ id: string; name: string }>
+  members: WorkspaceMember[]
+  actors: WorkspaceActor[]
+  currentWorkspaceMemberId: string | null
+  currentUser: WorkbenchUser | null
 }) {
-  const [grantScope, setGrantScope] = useState<GrantScope>('workspace');
-  const [workspaceId, setWorkspaceId] = useState('');
-  const [workspaceMemberId, setWorkspaceMemberId] = useState('');
-  const [actorId, setActorId] = useState('');
-  const [reason, setReason] = useState('');
-  const [saving, setSaving] = useState(false);
+  const [grantScope, setGrantScope] = useState<GrantScope>("workspace")
+  const [workspaceId, setWorkspaceId] = useState("")
+  const [workspaceMemberId, setWorkspaceMemberId] = useState("")
+  const [actorId, setActorId] = useState("")
+  const [reason, setReason] = useState("")
+  const [saving, setSaving] = useState(false)
 
   useEffect(() => {
-    if (!open) return;
-    setGrantScope(groupScope === 'platform' ? 'platform' : 'workspace');
-    setWorkspaceId(workspaces[0]?.id || '');
-    setWorkspaceMemberId(currentWorkspaceMemberId || members[0]?.id || '');
-    setActorId(actors[0]?.id || '');
-    setReason('');
-  }, [actors, currentWorkspaceMemberId, groupScope, members, open, workspaces]);
+    if (!open) return
+    setGrantScope(groupScope === "platform" ? "platform" : "workspace")
+    setWorkspaceId(workspaces[0]?.id || "")
+    setWorkspaceMemberId(currentWorkspaceMemberId || members[0]?.id || "")
+    setActorId(actors[0]?.id || "")
+    setReason("")
+  }, [actors, currentWorkspaceMemberId, groupScope, members, open, workspaces])
 
   const grantScopeOptions: Array<{ value: GrantScope; label: string }> = [
-    ...(groupScope === 'platform' ? [{ value: 'platform' as const, label: 'Platform' }] : []),
-    { value: 'workspace', label: 'Workspace' },
-    { value: 'workspace_member', label: 'Workspace Member' },
-    ...(actors.length > 0 ? [{ value: 'actor' as const, label: 'Actor' }] : []),
-  ];
+    ...(groupScope === "platform"
+      ? [{ value: "platform" as const, label: "Platform" }]
+      : []),
+    { value: "workspace", label: "Workspace" },
+    { value: "workspace_member", label: "Workspace Member" },
+    ...(actors.length > 0 ? [{ value: "actor" as const, label: "Actor" }] : []),
+  ]
 
   const canSubmit =
-    grantScope === 'platform'
+    grantScope === "platform"
       ? true
-      : grantScope === 'workspace'
+      : grantScope === "workspace"
         ? Boolean(workspaceId)
-        : grantScope === 'actor'
+        : grantScope === "actor"
           ? Boolean(workspaceId && actorId)
-          : Boolean(workspaceMemberId);
+          : Boolean(workspaceMemberId)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
           <DialogTitle>New Grant</DialogTitle>
-          <DialogDescription>Grant this model group to a workspace, user, or actor target.</DialogDescription>
+          <DialogDescription>
+            Grant this model group to a workspace, user, or actor target.
+          </DialogDescription>
         </DialogHeader>
 
         <div className="flex flex-col gap-4 py-2">
@@ -411,7 +480,9 @@ function GrantDialog({
             <Label>Grant Scope</Label>
             <select
               value={grantScope}
-              onChange={(event) => setGrantScope(event.target.value as GrantScope)}
+              onChange={(event) =>
+                setGrantScope(event.target.value as GrantScope)
+              }
               className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
             >
               {grantScopeOptions.map((option) => (
@@ -422,7 +493,9 @@ function GrantDialog({
             </select>
           </div>
 
-          {(grantScope === 'workspace' || grantScope === 'workspace_member' || grantScope === 'actor') && (
+          {(grantScope === "workspace" ||
+            grantScope === "workspace_member" ||
+            grantScope === "actor") && (
             <div className="space-y-2">
               <Label>Workspace</Label>
               <select
@@ -439,7 +512,7 @@ function GrantDialog({
             </div>
           )}
 
-          {grantScope === 'workspace_member' && (
+          {grantScope === "workspace_member" && (
             <div className="space-y-2">
               <Label>Workspace Member</Label>
               <select
@@ -456,7 +529,7 @@ function GrantDialog({
             </div>
           )}
 
-          {grantScope === 'actor' && (
+          {grantScope === "actor" && (
             <div className="space-y-2">
               <Label>Actor</Label>
               <select
@@ -490,30 +563,35 @@ function GrantDialog({
           <Button
             disabled={!canSubmit || saving}
             onClick={async () => {
-              setSaving(true);
+              setSaving(true)
               try {
                 await onSubmit({
                   grantScope,
-                  workspaceId: grantScope === 'workspace' || grantScope === 'workspace_member' || grantScope === 'actor' ? workspaceId : undefined,
+                  workspaceId:
+                    grantScope === "workspace" ||
+                    grantScope === "workspace_member" ||
+                    grantScope === "actor"
+                      ? workspaceId
+                      : undefined,
                   workspaceMemberId:
-                    grantScope === 'workspace_member'
+                    grantScope === "workspace_member"
                       ? workspaceMemberId
                       : undefined,
-                  actorId: grantScope === 'actor' ? actorId : undefined,
+                  actorId: grantScope === "actor" ? actorId : undefined,
                   reason: reason.trim() || undefined,
-                });
-                onOpenChange(false);
+                })
+                onOpenChange(false)
               } finally {
-                setSaving(false);
+                setSaving(false)
               }
             }}
           >
-            {saving ? 'Saving...' : 'Create Grant'}
+            {saving ? "Saving..." : "Create Grant"}
           </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
-  );
+  )
 }
 
 function ConfigEditor({
@@ -525,23 +603,31 @@ function ConfigEditor({
   saving,
   isNew,
 }: {
-  draft: ConfigDraft;
-  onChange: (draft: ConfigDraft) => void;
-  onSave: () => void;
-  onDelete?: () => void;
-  onCancel: () => void;
-  saving: boolean;
-  isNew: boolean;
+  draft: ConfigDraft
+  onChange: (draft: ConfigDraft) => void
+  onSave: () => void
+  onDelete?: () => void
+  onCancel: () => void
+  saving: boolean
+  isNew: boolean
 }) {
-  const knownModels = getKnownModelOptions(draft.providerType, draft.engineKind);
-  const maxTokensLimit = getEffectiveMaxTokensLimit(draft.providerType, draft.engineKind, draft.modelName);
+  const knownModels = getKnownModelOptions(draft.providerType, draft.engineKind)
+  const maxTokensLimit = getEffectiveMaxTokensLimit(
+    draft.providerType,
+    draft.engineKind,
+    draft.modelName
+  )
   const modelConfigError = getModelConfigValidationMessage({
     providerType: draft.providerType,
     engineKind: draft.engineKind,
     modelName: draft.modelName,
     maxTokens: draft.maxTokens,
-  });
-  const modelDatalistId = `workbench-model-options-${draft.providerType}-${draft.engineKind}`.replace(/[^a-zA-Z0-9_-]/g, '-');
+  })
+  const modelDatalistId =
+    `workbench-model-options-${draft.providerType}-${draft.engineKind}`.replace(
+      /[^a-zA-Z0-9_-]/g,
+      "-"
+    )
 
   return (
     <div className="grid gap-6 xl:grid-cols-[minmax(0,1.1fr)_minmax(0,0.9fr)]">
@@ -551,7 +637,9 @@ function ConfigEditor({
             <Label>Display Name</Label>
             <Input
               value={draft.displayName}
-              onChange={(event) => onChange({ ...draft, displayName: event.target.value })}
+              onChange={(event) =>
+                onChange({ ...draft, displayName: event.target.value })
+              }
               placeholder="e.g. Claude Sonnet"
             />
           </div>
@@ -562,21 +650,29 @@ function ConfigEditor({
               <select
                 value={draft.providerType}
                 onChange={(event) => {
-                  const nextProviderType = event.target.value;
-                  const nextEngineKind = getDefaultModelEngineKind(nextProviderType);
+                  const nextProviderType = event.target.value
+                  const nextEngineKind =
+                    getDefaultModelEngineKind(nextProviderType)
                   onChange({
                     ...draft,
                     providerType: nextProviderType,
                     engineKind: nextEngineKind,
                     baseUrl: getDefaultModelBaseUrl(nextProviderType),
-                    modelName: getDefaultModelName(nextProviderType, nextEngineKind),
-                    builtinTools: providerSupportsBuiltinTools(nextProviderType) ? draft.builtinTools : [],
-                  });
+                    modelName: getDefaultModelName(
+                      nextProviderType,
+                      nextEngineKind
+                    ),
+                    builtinTools: providerSupportsBuiltinTools(nextProviderType)
+                      ? draft.builtinTools
+                      : [],
+                  })
                 }}
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
               >
                 {PROVIDER_OPTIONS.map((option) => (
-                  <option key={option.providerType} value={option.providerType}>{option.label}</option>
+                  <option key={option.providerType} value={option.providerType}>
+                    {option.label}
+                  </option>
                 ))}
               </select>
             </div>
@@ -584,16 +680,25 @@ function ConfigEditor({
               <Label>Protocol</Label>
               <select
                 value={draft.engineKind}
-                onChange={(event) => onChange({
-                  ...draft,
-                  engineKind: event.target.value,
-                  modelName: getDefaultModelName(draft.providerType, event.target.value),
-                })}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    engineKind: event.target.value,
+                    modelName: getDefaultModelName(
+                      draft.providerType,
+                      event.target.value
+                    ),
+                  })
+                }
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
               >
-                {getModelProviderEngineDefinitions(draft.providerType).map((option) => (
-                  <option key={option.engineKind} value={option.engineKind}>{option.label}</option>
-                ))}
+                {getModelProviderEngineDefinitions(draft.providerType).map(
+                  (option) => (
+                    <option key={option.engineKind} value={option.engineKind}>
+                      {option.label}
+                    </option>
+                  )
+                )}
               </select>
             </div>
           </div>
@@ -603,21 +708,31 @@ function ConfigEditor({
               <Label>Model Name</Label>
               <Input
                 value={draft.modelName}
-                onChange={(event) => onChange({ ...draft, modelName: event.target.value })}
+                onChange={(event) =>
+                  onChange({ ...draft, modelName: event.target.value })
+                }
                 list={knownModels.length > 0 ? modelDatalistId : undefined}
                 placeholder="claude-sonnet-4-20250514"
               />
               {knownModels.length > 0 ? (
                 <p className="text-xs text-muted-foreground">
-                  Suggested models: {knownModels.slice(0, 6).map((model) => model.modelName).join(', ')}
-                  {knownModels.length > 6 ? '...' : ''}
+                  Suggested models:{" "}
+                  {knownModels
+                    .slice(0, 6)
+                    .map((model) => model.modelName)
+                    .join(", ")}
+                  {knownModels.length > 6 ? "..." : ""}
                 </p>
               ) : null}
-              {modelConfigError ? <p className="text-xs text-red-500">{modelConfigError}</p> : null}
+              {modelConfigError ? (
+                <p className="text-xs text-red-500">{modelConfigError}</p>
+              ) : null}
               {knownModels.length > 0 ? (
                 <datalist id={modelDatalistId}>
                   {knownModels.map((model) => (
-                    <option key={model.modelName} value={model.modelName}>{model.label}</option>
+                    <option key={model.modelName} value={model.modelName}>
+                      {model.label}
+                    </option>
                   ))}
                 </datalist>
               ) : null}
@@ -629,8 +744,10 @@ function ConfigEditor({
             <Input
               type="password"
               value={draft.apiKey}
-              onChange={(event) => onChange({ ...draft, apiKey: event.target.value })}
-              placeholder={isNew ? 'sk-...' : '(leave blank to keep current)'}
+              onChange={(event) =>
+                onChange({ ...draft, apiKey: event.target.value })
+              }
+              placeholder={isNew ? "sk-..." : "(leave blank to keep current)"}
             />
           </div>
 
@@ -638,8 +755,13 @@ function ConfigEditor({
             <Label>Base URL</Label>
             <Input
               value={draft.baseUrl}
-              onChange={(event) => onChange({ ...draft, baseUrl: event.target.value })}
-              placeholder={getDefaultModelBaseUrl(draft.providerType) || 'https://api.example.com'}
+              onChange={(event) =>
+                onChange({ ...draft, baseUrl: event.target.value })
+              }
+              placeholder={
+                getDefaultModelBaseUrl(draft.providerType) ||
+                "https://api.example.com"
+              }
             />
           </div>
 
@@ -649,11 +771,15 @@ function ConfigEditor({
               <Input
                 type="number"
                 value={draft.maxTokens}
-                onChange={(event) => onChange({ ...draft, maxTokens: event.target.value })}
+                onChange={(event) =>
+                  onChange({ ...draft, maxTokens: event.target.value })
+                }
                 max={maxTokensLimit}
               />
               {maxTokensLimit ? (
-                <p className="text-xs text-muted-foreground">This model supports up to {maxTokensLimit} output tokens.</p>
+                <p className="text-xs text-muted-foreground">
+                  This model supports up to {maxTokensLimit} output tokens.
+                </p>
               ) : null}
             </div>
             <div className="space-y-2">
@@ -661,7 +787,9 @@ function ConfigEditor({
               <Input
                 type="number"
                 value={draft.priority}
-                onChange={(event) => onChange({ ...draft, priority: event.target.value })}
+                onChange={(event) =>
+                  onChange({ ...draft, priority: event.target.value })
+                }
               />
             </div>
             <div className="space-y-2">
@@ -669,14 +797,21 @@ function ConfigEditor({
               <Input
                 type="number"
                 value={draft.weight}
-                onChange={(event) => onChange({ ...draft, weight: event.target.value })}
+                onChange={(event) =>
+                  onChange({ ...draft, weight: event.target.value })
+                }
               />
             </div>
             <div className="space-y-2">
               <Label>Status</Label>
               <select
-                value={draft.isEnabled ? 'enabled' : 'disabled'}
-                onChange={(event) => onChange({ ...draft, isEnabled: event.target.value === 'enabled' })}
+                value={draft.isEnabled ? "enabled" : "disabled"}
+                onChange={(event) =>
+                  onChange({
+                    ...draft,
+                    isEnabled: event.target.value === "enabled",
+                  })
+                }
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
               >
                 <option value="enabled">Enabled</option>
@@ -695,23 +830,32 @@ function ConfigEditor({
             </CardHeader>
             <CardContent className="flex flex-col gap-3">
               {ANTHROPIC_BUILTIN_TOOLS.map((tool) => {
-                const checked = draft.builtinTools.includes(tool.key);
+                const checked = draft.builtinTools.includes(tool.key)
                 return (
-                  <label key={tool.key} className="flex items-center gap-3 rounded-2xl border border-border p-3">
+                  <label
+                    key={tool.key}
+                    className="flex items-center gap-3 rounded-2xl border border-border p-3"
+                  >
                     <input
                       type="checkbox"
                       checked={checked}
-                      onChange={() => onChange({
-                        ...draft,
-                        builtinTools: checked
-                          ? draft.builtinTools.filter((value) => value !== tool.key)
-                          : [...draft.builtinTools, tool.key],
-                      })}
+                      onChange={() =>
+                        onChange({
+                          ...draft,
+                          builtinTools: checked
+                            ? draft.builtinTools.filter(
+                                (value) => value !== tool.key
+                              )
+                            : [...draft.builtinTools, tool.key],
+                        })
+                      }
                       className="accent-primary"
                     />
-                    <span className="font-medium text-foreground">{tool.label}</span>
+                    <span className="font-medium text-foreground">
+                      {tool.label}
+                    </span>
                   </label>
-                );
+                )
               })}
             </CardContent>
           </Card>
@@ -723,23 +867,32 @@ function ConfigEditor({
           </CardHeader>
           <CardContent className="flex flex-col gap-3">
             {MULTIMODAL_TYPES.map((type) => {
-              const checked = draft.multimodalTypes.includes(type.key);
+              const checked = draft.multimodalTypes.includes(type.key)
               return (
-                <label key={type.key} className="flex items-center gap-3 rounded-2xl border border-border p-3">
+                <label
+                  key={type.key}
+                  className="flex items-center gap-3 rounded-2xl border border-border p-3"
+                >
                   <input
                     type="checkbox"
                     checked={checked}
-                    onChange={() => onChange({
-                      ...draft,
-                      multimodalTypes: checked
-                        ? draft.multimodalTypes.filter((value) => value !== type.key)
-                        : [...draft.multimodalTypes, type.key],
-                    })}
+                    onChange={() =>
+                      onChange({
+                        ...draft,
+                        multimodalTypes: checked
+                          ? draft.multimodalTypes.filter(
+                              (value) => value !== type.key
+                            )
+                          : [...draft.multimodalTypes, type.key],
+                      })
+                    }
                     className="accent-primary"
                   />
-                  <span className="font-medium text-foreground">{type.label}</span>
+                  <span className="font-medium text-foreground">
+                    {type.label}
+                  </span>
                 </label>
-              );
+              )
             })}
           </CardContent>
         </Card>
@@ -747,7 +900,7 @@ function ConfigEditor({
         <div className="flex items-center gap-2">
           <Button onClick={onSave} disabled={saving || !!modelConfigError}>
             <Save data-icon="inline-start" />
-            {saving ? 'Saving...' : 'Save'}
+            {saving ? "Saving..." : "Save"}
           </Button>
           <Button variant="outline" onClick={onCancel}>
             Cancel
@@ -761,218 +914,282 @@ function ConfigEditor({
         </div>
       </div>
     </div>
-  );
+  )
 }
 
 export default function ModelSettingsWorkbench() {
-  const router = useRouter();
-  const pathname = usePathname();
-  const searchParams = useSearchParams();
-  const { workspaceId, currentWorkspaceMemberId } = useWorkspace();
-  const { user } = useAuthStore();
-  const [groups, setGroups] = useState<ModelGroupSummary[]>([]);
-  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null);
-  const [selectedGroup, setSelectedGroup] = useState<GroupDetail | null>(null);
-  const [groupsLoading, setGroupsLoading] = useState(true);
-  const [detailLoading, setDetailLoading] = useState(false);
-  const [activeSection, setActiveSection] = useState<'configs' | 'grants'>('configs');
-  const [groupSearch, setGroupSearch] = useState('');
-  const [groupDialogOpen, setGroupDialogOpen] = useState(false);
-  const [editingGroup, setEditingGroup] = useState<ModelGroupSummary | null>(null);
-  const [grantDialogOpen, setGrantDialogOpen] = useState(false);
-  const [expandedItemId, setExpandedItemId] = useState<string | 'new' | null>(null);
-  const [draft, setDraft] = useState<ConfigDraft>(createDraft());
-  const [savingConfig, setSavingConfig] = useState(false);
-  const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>([]);
-  const [workspaceActors, setWorkspaceActors] = useState<WorkspaceActor[]>([]);
-  const [availableWorkspaces, setAvailableWorkspaces] = useState<Array<{ id: string; name: string }>>([]);
-  const [creatableScopes, setCreatableScopes] =
-    useState<ModelGroupScope[]>(['workspace_member']);
-  const [editingField, setEditingField] = useState<'name' | 'description' | null>(null);
-  const [groupNameDraft, setGroupNameDraft] = useState('');
-  const [groupDescriptionDraft, setGroupDescriptionDraft] = useState('');
-  const [savingGroupField, setSavingGroupField] = useState<'name' | 'description' | null>(null);
-  const [savingGroupSettings, setSavingGroupSettings] = useState<'routing' | 'default' | null>(null);
-  const deferredGroupSearch = useDeferredValue(groupSearch);
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const { workspaceId, currentWorkspaceMemberId } = useWorkspace()
+  const { user } = useAuthStore()
+  const [groups, setGroups] = useState<ModelGroupSummary[]>([])
+  const [selectedGroupId, setSelectedGroupId] = useState<string | null>(null)
+  const [selectedGroup, setSelectedGroup] = useState<GroupDetail | null>(null)
+  const [groupsLoading, setGroupsLoading] = useState(true)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [activeSection, setActiveSection] = useState<"configs" | "grants">(
+    "configs"
+  )
+  const [groupSearch, setGroupSearch] = useState("")
+  const [groupDialogOpen, setGroupDialogOpen] = useState(false)
+  const [editingGroup, setEditingGroup] = useState<ModelGroupSummary | null>(
+    null
+  )
+  const [grantDialogOpen, setGrantDialogOpen] = useState(false)
+  const [expandedItemId, setExpandedItemId] = useState<string | "new" | null>(
+    null
+  )
+  const [draft, setDraft] = useState<ConfigDraft>(createDraft())
+  const [savingConfig, setSavingConfig] = useState(false)
+  const [workspaceMembers, setWorkspaceMembers] = useState<WorkspaceMember[]>(
+    []
+  )
+  const [workspaceActors, setWorkspaceActors] = useState<WorkspaceActor[]>([])
+  const [availableWorkspaces, setAvailableWorkspaces] = useState<
+    Array<{ id: string; name: string }>
+  >([])
+  const [creatableScopes, setCreatableScopes] = useState<ModelGroupScope[]>([
+    "workspace_member",
+  ])
+  const [editingField, setEditingField] = useState<
+    "name" | "description" | null
+  >(null)
+  const [groupNameDraft, setGroupNameDraft] = useState("")
+  const [groupDescriptionDraft, setGroupDescriptionDraft] = useState("")
+  const [savingGroupField, setSavingGroupField] = useState<
+    "name" | "description" | null
+  >(null)
+  const [savingGroupSettings, setSavingGroupSettings] = useState<
+    "routing" | "default" | null
+  >(null)
+  const deferredGroupSearch = useDeferredValue(groupSearch)
 
   async function loadGroups() {
-    setGroupsLoading(true);
+    setGroupsLoading(true)
     try {
-      const [workspaceResult, userResult, platformResult, workspacesResult] = await Promise.allSettled([
-        fetchGroupsForScope('workspace', workspaceId),
-        fetchGroupsForScope('workspace_member', workspaceId),
-        fetchGroupsForScope('platform', workspaceId),
-        api.getWorkspaces(),
-      ]);
+      const [workspaceResult, userResult, platformResult, workspacesResult] =
+        await Promise.allSettled([
+          fetchGroupsForScope("workspace", workspaceId),
+          fetchGroupsForScope("workspace_member", workspaceId),
+          fetchGroupsForScope("platform", workspaceId),
+          api.getWorkspaces(),
+        ])
 
       const nextGroups = [
-        ...(workspaceResult.status === 'fulfilled' ? workspaceResult.value : []),
-        ...(userResult.status === 'fulfilled' ? userResult.value : []),
-        ...(platformResult.status === 'fulfilled' ? platformResult.value : []),
+        ...(workspaceResult.status === "fulfilled"
+          ? workspaceResult.value
+          : []),
+        ...(userResult.status === "fulfilled" ? userResult.value : []),
+        ...(platformResult.status === "fulfilled" ? platformResult.value : []),
       ].sort((left, right) => {
         const rank = (group: ModelGroupSummary) => {
-          const scope = resolveScope(group);
-          return scope === 'workspace' ? 0 : scope === 'workspace_member' ? 1 : 2;
-        };
-        return rank(left) - rank(right) || Number(right.is_default) - Number(left.is_default) || left.name.localeCompare(right.name);
-      });
+          const scope = resolveScope(group)
+          return scope === "workspace"
+            ? 0
+            : scope === "workspace_member"
+              ? 1
+              : 2
+        }
+        return (
+          rank(left) - rank(right) ||
+          Number(right.is_default) - Number(left.is_default) ||
+          left.name.localeCompare(right.name)
+        )
+      })
 
-      setGroups(nextGroups);
+      setGroups(nextGroups)
       setCreatableScopes([
-        ...(workspaceResult.status === 'fulfilled' ? (['workspace'] as ModelGroupScope[]) : []),
-        'workspace_member',
-        ...(platformResult.status === 'fulfilled' ? (['platform'] as ModelGroupScope[]) : []),
-      ]);
+        ...(workspaceResult.status === "fulfilled"
+          ? (["workspace"] as ModelGroupScope[])
+          : []),
+        "workspace_member",
+        ...(platformResult.status === "fulfilled"
+          ? (["platform"] as ModelGroupScope[])
+          : []),
+      ])
 
-      if (workspacesResult.status === 'fulfilled') {
-        const workspaceList = (workspacesResult.value?.data ?? workspacesResult.value ?? []) as Array<{ id: string; name: string }>;
-        setAvailableWorkspaces(workspaceList.map((workspace) => ({ id: workspace.id, name: workspace.name })));
+      if (workspacesResult.status === "fulfilled") {
+        const workspaceList = (workspacesResult.value?.data ??
+          workspacesResult.value ??
+          []) as Array<{ id: string; name: string }>
+        setAvailableWorkspaces(
+          workspaceList.map((workspace) => ({
+            id: workspace.id,
+            name: workspace.name,
+          }))
+        )
       }
 
       setSelectedGroupId((current) => {
-        const requestedGroupId = searchParams.get('groupId');
-        if (requestedGroupId && nextGroups.some((group) => group.id === requestedGroupId)) {
-          return requestedGroupId;
+        const requestedGroupId = searchParams.get("groupId")
+        if (
+          requestedGroupId &&
+          nextGroups.some((group) => group.id === requestedGroupId)
+        ) {
+          return requestedGroupId
         }
         if (current && nextGroups.some((group) => group.id === current)) {
-          return current;
+          return current
         }
-        return nextGroups[0]?.id || null;
-      });
+        return nextGroups[0]?.id || null
+      })
     } catch (error) {
-      console.error('Failed to load editable model groups:', error);
-      setGroups([]);
-      setSelectedGroupId(null);
+      console.error("Failed to load editable model groups:", error)
+      setGroups([])
+      setSelectedGroupId(null)
     } finally {
-      setGroupsLoading(false);
+      setGroupsLoading(false)
     }
   }
 
   async function loadSelectedGroup(groupId: string) {
-    const summary = groups.find((group) => group.id === groupId);
+    const summary = groups.find((group) => group.id === groupId)
     if (!summary) {
-      return;
+      return
     }
 
-    setDetailLoading(true);
+    setDetailLoading(true)
     try {
-      const response = await fetchGroupDetail(resolveScope(summary), groupId, workspaceId);
-      setSelectedGroup(response.group as GroupDetail);
-      setExpandedItemId(null);
-      setDraft(createDraft());
+      const response = await fetchGroupDetail(
+        resolveScope(summary),
+        groupId,
+        workspaceId
+      )
+      setSelectedGroup(response.group as GroupDetail)
+      setExpandedItemId(null)
+      setDraft(createDraft())
     } catch (error) {
-      console.error('Failed to load model group detail:', error);
-      setSelectedGroup(null);
+      console.error("Failed to load model group detail:", error)
+      setSelectedGroup(null)
     } finally {
-      setDetailLoading(false);
+      setDetailLoading(false)
     }
   }
 
   useEffect(() => {
-    void loadGroups();
-  }, [workspaceId]);
+    void loadGroups()
+  }, [workspaceId])
 
   useEffect(() => {
     if (!selectedGroupId) {
-      setSelectedGroup(null);
-      return;
+      setSelectedGroup(null)
+      return
     }
-    void loadSelectedGroup(selectedGroupId);
-  }, [selectedGroupId, groups]);
+    void loadSelectedGroup(selectedGroupId)
+  }, [selectedGroupId, groups])
 
   useEffect(() => {
-    if (!selectedGroupId) return;
-    if (searchParams.get('groupId') === selectedGroupId) return;
+    if (!selectedGroupId) return
+    if (searchParams.get("groupId") === selectedGroupId) return
 
-    const nextParams = new URLSearchParams(searchParams.toString());
-    nextParams.set('groupId', selectedGroupId);
-    router.replace(`${pathname}?${nextParams.toString()}`, { scroll: false });
-  }, [pathname, router, searchParams, selectedGroupId]);
+    const nextParams = new URLSearchParams(searchParams.toString())
+    nextParams.set("groupId", selectedGroupId)
+    router.replace(`${pathname}?${nextParams.toString()}`, { scroll: false })
+  }, [pathname, router, searchParams, selectedGroupId])
 
   useEffect(() => {
     if (!workspaceId) {
-      setWorkspaceMembers([]);
-      setWorkspaceActors([]);
-      return;
+      setWorkspaceMembers([])
+      setWorkspaceActors([])
+      return
     }
 
-    Promise.allSettled([api.getWorkspaceMembers(workspaceId), api.getActors(workspaceId)]).then(([membersResult, actorsResult]) => {
-      if (membersResult.status === 'fulfilled') {
-        const members = membersResult.value?.data ?? membersResult.value ?? [];
-        setWorkspaceMembers(members as WorkspaceMember[]);
+    Promise.allSettled([
+      api.getWorkspaceMembers(workspaceId),
+      api.getActors(workspaceId),
+    ]).then(([membersResult, actorsResult]) => {
+      if (membersResult.status === "fulfilled") {
+        const members = membersResult.value?.data ?? membersResult.value ?? []
+        setWorkspaceMembers(members as WorkspaceMember[])
       } else {
-        setWorkspaceMembers([]);
+        setWorkspaceMembers([])
       }
 
-      if (actorsResult.status === 'fulfilled') {
-        const actors = actorsResult.value?.data ?? actorsResult.value?.actors ?? actorsResult.value ?? [];
-        setWorkspaceActors(actors as WorkspaceActor[]);
+      if (actorsResult.status === "fulfilled") {
+        const actors =
+          actorsResult.value?.data ??
+          actorsResult.value?.actors ??
+          actorsResult.value ??
+          []
+        setWorkspaceActors(actors as WorkspaceActor[])
       } else {
-        setWorkspaceActors([]);
+        setWorkspaceActors([])
       }
-    });
-  }, [workspaceId]);
+    })
+  }, [workspaceId])
 
   useEffect(() => {
-    setGroupNameDraft(selectedGroup?.name || '');
-    setGroupDescriptionDraft(selectedGroup?.description || '');
-    setEditingField(null);
-  }, [selectedGroup?.description, selectedGroup?.id, selectedGroup?.name]);
+    setGroupNameDraft(selectedGroup?.name || "")
+    setGroupDescriptionDraft(selectedGroup?.description || "")
+    setEditingField(null)
+  }, [selectedGroup?.description, selectedGroup?.id, selectedGroup?.name])
 
   const filteredGroups = useMemo(() => {
-    const needle = deferredGroupSearch.trim().toLowerCase();
-    if (!needle) return groups;
+    const needle = deferredGroupSearch.trim().toLowerCase()
+    if (!needle) return groups
     return groups.filter((group) => {
-      const haystack = `${group.name} ${group.description} ${group.routing_strategy}`.toLowerCase();
-      return haystack.includes(needle);
-    });
-  }, [deferredGroupSearch, groups]);
+      const haystack =
+        `${group.name} ${group.description} ${group.routing_strategy}`.toLowerCase()
+      return haystack.includes(needle)
+    })
+  }, [deferredGroupSearch, groups])
 
-  const currentUser = (user || null) as WorkbenchUser | null;
+  const currentUser = (user || null) as WorkbenchUser | null
 
   async function reloadCurrentGroup() {
     if (selectedGroupId) {
-      await loadSelectedGroup(selectedGroupId);
+      await loadSelectedGroup(selectedGroupId)
     }
   }
 
   async function handleIssueGrant(payload: Record<string, unknown>) {
-    if (!selectedGroup) return;
-    const scope = resolveScope(selectedGroup);
-    await issueGrantForGroup(scope, selectedGroup.id, workspaceId, payload);
-    await reloadCurrentGroup();
+    if (!selectedGroup) return
+    const scope = resolveScope(selectedGroup)
+    await issueGrantForGroup(scope, selectedGroup.id, workspaceId, payload)
+    await reloadCurrentGroup()
   }
 
   async function handleRevokeGrant(grantId: string) {
-    if (!selectedGroup) return;
-    const scope = resolveScope(selectedGroup);
-    await revokeGrantForGroup(scope, selectedGroup.id, workspaceId, grantId);
-    await reloadCurrentGroup();
+    if (!selectedGroup) return
+    const scope = resolveScope(selectedGroup)
+    await revokeGrantForGroup(scope, selectedGroup.id, workspaceId, grantId)
+    await reloadCurrentGroup()
   }
 
   async function handleSaveConfig(itemId: string | null) {
-    if (!selectedGroup) return;
-    if (!draft.displayName.trim()) return;
-    if (!itemId && (!draft.apiKey.trim() || !draft.baseUrl.trim() || !draft.modelName.trim())) return;
+    if (!selectedGroup) return
+    if (!draft.displayName.trim()) return
+    if (
+      !itemId &&
+      (!draft.apiKey.trim() || !draft.baseUrl.trim() || !draft.modelName.trim())
+    )
+      return
     const modelConfigError = getModelConfigValidationMessage({
       providerType: draft.providerType,
       engineKind: draft.engineKind,
       modelName: draft.modelName,
       maxTokens: draft.maxTokens,
-    });
+    })
     if (modelConfigError) {
-      toast.error(modelConfigError);
-      return;
+      toast.error(modelConfigError)
+      return
     }
 
-    setSavingConfig(true);
+    setSavingConfig(true)
     try {
-      const extraConfig: Record<string, unknown> = {};
-      if (providerSupportsBuiltinTools(draft.providerType) && draft.builtinTools.length > 0) {
-        extraConfig.builtin_tools = draft.builtinTools;
+      const extraConfig: Record<string, unknown> = {}
+      if (
+        providerSupportsBuiltinTools(draft.providerType) &&
+        draft.builtinTools.length > 0
+      ) {
+        extraConfig.builtin_tools = draft.builtinTools
       }
       if (draft.multimodalTypes.length > 0) {
-        extraConfig.multimodal = { supported: true, types: draft.multimodalTypes };
+        extraConfig.multimodal = {
+          supported: true,
+          types: draft.multimodalTypes,
+        }
       }
 
       const payload: Record<string, unknown> = {
@@ -983,97 +1200,126 @@ export default function ModelSettingsWorkbench() {
         engineKind: draft.engineKind,
         maxTokens: parseInt(draft.maxTokens, 10),
         extraConfig,
-      };
+      }
 
-      if (draft.baseUrl.trim()) payload.baseUrl = draft.baseUrl.trim();
-      if (draft.modelName.trim()) payload.modelName = draft.modelName.trim();
-      if (draft.apiKey.trim()) payload.apiKey = draft.apiKey.trim();
-      if (itemId) payload.isEnabled = draft.isEnabled;
+      if (draft.baseUrl.trim()) payload.baseUrl = draft.baseUrl.trim()
+      if (draft.modelName.trim()) payload.modelName = draft.modelName.trim()
+      if (draft.apiKey.trim()) payload.apiKey = draft.apiKey.trim()
+      if (itemId) payload.isEnabled = draft.isEnabled
 
-      const response = await saveItemForGroup(resolveScope(selectedGroup), selectedGroup.id, workspaceId, itemId, payload);
-      await reloadCurrentGroup();
-      setExpandedItemId(itemId || response?.item?.id || null);
+      const response = await saveItemForGroup(
+        resolveScope(selectedGroup),
+        selectedGroup.id,
+        workspaceId,
+        itemId,
+        payload
+      )
+      await reloadCurrentGroup()
+      setExpandedItemId(itemId || response?.item?.id || null)
     } catch (error) {
-      console.error('Failed to save model config:', error);
-      toast.error(getSaveErrorMessage(error, 'Failed to save model config.'));
+      console.error("Failed to save model config:", error)
+      toast.error(getSaveErrorMessage(error, "Failed to save model config."))
     } finally {
-      setSavingConfig(false);
+      setSavingConfig(false)
     }
   }
 
   async function handleDeleteConfig(itemId: string) {
-    if (!selectedGroup) return;
+    if (!selectedGroup) return
     try {
-      await deleteItemForGroup(resolveScope(selectedGroup), selectedGroup.id, workspaceId, itemId);
-      await reloadCurrentGroup();
-      setExpandedItemId(null);
-      setDraft(createDraft());
+      await deleteItemForGroup(
+        resolveScope(selectedGroup),
+        selectedGroup.id,
+        workspaceId,
+        itemId
+      )
+      await reloadCurrentGroup()
+      setExpandedItemId(null)
+      setDraft(createDraft())
     } catch (error) {
-      console.error('Failed to delete model config:', error);
+      console.error("Failed to delete model config:", error)
     }
   }
 
   async function handleUpdateGroupSettings(
     patch: Record<string, unknown>,
-    savingKey: 'routing' | 'default',
+    savingKey: "routing" | "default"
   ) {
-    if (!selectedGroup) return;
+    if (!selectedGroup) return
 
-    setSavingGroupSettings(savingKey);
+    setSavingGroupSettings(savingKey)
     try {
-      await updateGroupForScope(resolveScope(selectedGroup), selectedGroup.id, workspaceId, patch);
-      await loadGroups();
-      await reloadCurrentGroup();
+      await updateGroupForScope(
+        resolveScope(selectedGroup),
+        selectedGroup.id,
+        workspaceId,
+        patch
+      )
+      await loadGroups()
+      await reloadCurrentGroup()
     } catch (error) {
-      console.error('Failed to update model group settings:', error);
+      console.error("Failed to update model group settings:", error)
     } finally {
-      setSavingGroupSettings(null);
+      setSavingGroupSettings(null)
     }
   }
 
-  async function handleSaveGroupField(field: 'name' | 'description') {
-    if (!selectedGroup) return;
+  async function handleSaveGroupField(field: "name" | "description") {
+    if (!selectedGroup) return
 
-    const nextValue = field === 'name' ? groupNameDraft.trim() : groupDescriptionDraft.trim();
-    const currentValue = field === 'name' ? selectedGroup.name : selectedGroup.description || '';
+    const nextValue =
+      field === "name" ? groupNameDraft.trim() : groupDescriptionDraft.trim()
+    const currentValue =
+      field === "name" ? selectedGroup.name : selectedGroup.description || ""
 
-    if (field === 'name' && !nextValue) {
-      setGroupNameDraft(selectedGroup.name);
-      setEditingField(null);
-      return;
+    if (field === "name" && !nextValue) {
+      setGroupNameDraft(selectedGroup.name)
+      setEditingField(null)
+      return
     }
 
     if (nextValue === currentValue) {
-      setEditingField(null);
-      return;
+      setEditingField(null)
+      return
     }
 
-    setSavingGroupField(field);
+    setSavingGroupField(field)
     try {
-      await updateGroupForScope(resolveScope(selectedGroup), selectedGroup.id, workspaceId, {
-        [field]: nextValue,
-      });
+      await updateGroupForScope(
+        resolveScope(selectedGroup),
+        selectedGroup.id,
+        workspaceId,
+        {
+          [field]: nextValue,
+        }
+      )
       setGroups((current) =>
-        current.map((group) => (group.id === selectedGroup.id ? { ...group, [field]: nextValue } : group)),
-      );
-      setSelectedGroup((current) => (current ? { ...current, [field]: nextValue } : current));
-      setEditingField(null);
+        current.map((group) =>
+          group.id === selectedGroup.id
+            ? { ...group, [field]: nextValue }
+            : group
+        )
+      )
+      setSelectedGroup((current) =>
+        current ? { ...current, [field]: nextValue } : current
+      )
+      setEditingField(null)
     } catch (error) {
-      console.error(`Failed to update model group ${field}:`, error);
-      setGroupNameDraft(selectedGroup.name);
-      setGroupDescriptionDraft(selectedGroup.description || '');
+      console.error(`Failed to update model group ${field}:`, error)
+      setGroupNameDraft(selectedGroup.name)
+      setGroupDescriptionDraft(selectedGroup.description || "")
     } finally {
-      setSavingGroupField(null);
+      setSavingGroupField(null)
     }
   }
 
   return (
     <div className="flex h-full min-h-0 overflow-hidden">
-      <div className="flex w-[340px] shrink-0 min-h-0 flex-col border-r border-border bg-muted/20">
+      <div className="flex min-h-0 w-[340px] shrink-0 flex-col border-r border-border bg-muted/20">
         <div className="border-b border-border px-4 py-4">
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
-              <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+              <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 value={groupSearch}
                 onChange={(event) => setGroupSearch(event.target.value)}
@@ -1085,8 +1331,8 @@ export default function ModelSettingsWorkbench() {
               size="icon"
               aria-label="Create model group"
               onClick={() => {
-                setEditingGroup(null);
-                setGroupDialogOpen(true);
+                setEditingGroup(null)
+                setGroupDialogOpen(true)
               }}
             >
               <Plus />
@@ -1110,15 +1356,23 @@ export default function ModelSettingsWorkbench() {
                     type="button"
                     onClick={() => setSelectedGroupId(group.id)}
                     className={`w-full rounded-2xl border px-3 py-3 text-left transition-colors ${
-                      selectedGroupId === group.id ? 'border-primary bg-accent' : 'border-transparent hover:bg-accent/60'
+                      selectedGroupId === group.id
+                        ? "border-primary bg-accent"
+                        : "border-transparent hover:bg-accent/60"
                     }`}
                   >
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium text-foreground">{group.name}</div>
-                      {group.description ? <div className="mt-1 line-clamp-2 text-sm text-muted-foreground">{group.description}</div> : null}
+                      <div className="truncate text-sm font-medium text-foreground">
+                        {group.name}
+                      </div>
+                      {group.description ? (
+                        <div className="mt-1 line-clamp-2 text-sm text-muted-foreground">
+                          {group.description}
+                        </div>
+                      ) : null}
                     </div>
                   </button>
-                );
+                )
               })}
             </div>
           ) : (
@@ -1126,8 +1380,12 @@ export default function ModelSettingsWorkbench() {
               <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
                 <Cpu className="size-10 text-muted-foreground/60" />
                 <div>
-                  <div className="font-medium text-foreground">No editable groups</div>
-                  <div className="text-sm text-muted-foreground">Create a group or switch workspace.</div>
+                  <div className="font-medium text-foreground">
+                    No editable groups
+                  </div>
+                  <div className="text-sm text-muted-foreground">
+                    Create a group or switch workspace.
+                  </div>
                 </div>
               </CardContent>
             </Card>
@@ -1142,29 +1400,37 @@ export default function ModelSettingsWorkbench() {
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div className="space-y-3">
                   <div className="flex flex-wrap items-center gap-2">
-                    {editingField === 'name' ? (
+                    {editingField === "name" ? (
                       <Input
                         autoFocus
                         value={groupNameDraft}
-                        disabled={savingGroupField === 'name'}
-                        onChange={(event) => setGroupNameDraft(event.target.value)}
-                        onBlur={() => void handleSaveGroupField('name')}
+                        disabled={savingGroupField === "name"}
+                        onChange={(event) =>
+                          setGroupNameDraft(event.target.value)
+                        }
+                        onBlur={() => void handleSaveGroupField("name")}
                         onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            event.currentTarget.blur();
+                          if (event.key === "Enter") {
+                            event.preventDefault()
+                            event.currentTarget.blur()
                           }
-                          if (event.key === 'Escape') {
-                            setGroupNameDraft(selectedGroup.name);
-                            setEditingField(null);
+                          if (event.key === "Escape") {
+                            setGroupNameDraft(selectedGroup.name)
+                            setEditingField(null)
                           }
                         }}
                         className="h-10 max-w-md text-base font-semibold"
                       />
                     ) : (
                       <>
-                        <h1 className="text-xl font-semibold text-foreground">{selectedGroup.name}</h1>
-                        <Button variant="ghost" size="icon-sm" onClick={() => setEditingField('name')}>
+                        <h1 className="text-xl font-semibold text-foreground">
+                          {selectedGroup.name}
+                        </h1>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => setEditingField("name")}
+                        >
                           <Pencil className="size-4" />
                         </Button>
                       </>
@@ -1172,21 +1438,25 @@ export default function ModelSettingsWorkbench() {
                   </div>
 
                   <div className="flex max-w-2xl items-center gap-2 text-sm text-muted-foreground">
-                    {editingField === 'description' ? (
+                    {editingField === "description" ? (
                       <Input
                         autoFocus
                         value={groupDescriptionDraft}
-                        disabled={savingGroupField === 'description'}
-                        onChange={(event) => setGroupDescriptionDraft(event.target.value)}
-                        onBlur={() => void handleSaveGroupField('description')}
+                        disabled={savingGroupField === "description"}
+                        onChange={(event) =>
+                          setGroupDescriptionDraft(event.target.value)
+                        }
+                        onBlur={() => void handleSaveGroupField("description")}
                         onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            event.currentTarget.blur();
+                          if (event.key === "Enter") {
+                            event.preventDefault()
+                            event.currentTarget.blur()
                           }
-                          if (event.key === 'Escape') {
-                            setGroupDescriptionDraft(selectedGroup.description || '');
-                            setEditingField(null);
+                          if (event.key === "Escape") {
+                            setGroupDescriptionDraft(
+                              selectedGroup.description || ""
+                            )
+                            setEditingField(null)
                           }
                         }}
                         placeholder="Add a description"
@@ -1194,26 +1464,38 @@ export default function ModelSettingsWorkbench() {
                       />
                     ) : (
                       <>
-                        <p>{selectedGroup.description || 'Add a description for this model group.'}</p>
-                        <Button variant="ghost" size="icon-sm" onClick={() => setEditingField('description')}>
+                        <p>
+                          {selectedGroup.description ||
+                            "Add a description for this model group."}
+                        </p>
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          onClick={() => setEditingField("description")}
+                        >
                           <Pencil className="size-4" />
                         </Button>
                       </>
                     )}
                   </div>
-
                 </div>
 
                 <div className="flex flex-wrap items-center gap-2">
-                  <Button variant="outline" onClick={() => void reloadCurrentGroup()}>
+                  <Button
+                    variant="outline"
+                    onClick={() => void reloadCurrentGroup()}
+                  >
                     <RefreshCw data-icon="inline-start" />
                     Refresh
                   </Button>
                   <Select
                     value={selectedGroup.routing_strategy}
                     onValueChange={(value) => {
-                      if (value === selectedGroup.routing_strategy) return;
-                      void handleUpdateGroupSettings({ routingStrategy: value }, 'routing');
+                      if (value === selectedGroup.routing_strategy) return
+                      void handleUpdateGroupSettings(
+                        { routingStrategy: value },
+                        "routing"
+                      )
                     }}
                     disabled={savingGroupSettings !== null}
                   >
@@ -1236,7 +1518,12 @@ export default function ModelSettingsWorkbench() {
                     <Button
                       variant="outline"
                       disabled={savingGroupSettings !== null}
-                      onClick={() => void handleUpdateGroupSettings({ isDefault: true }, 'default')}
+                      onClick={() =>
+                        void handleUpdateGroupSettings(
+                          { isDefault: true },
+                          "default"
+                        )
+                      }
                     >
                       Set As Default
                     </Button>
@@ -1245,8 +1532,12 @@ export default function ModelSettingsWorkbench() {
               </div>
             ) : (
               <div>
-                <h1 className="text-xl font-semibold text-foreground">Model Groups</h1>
-                <p className="mt-2 text-sm text-muted-foreground">Select a group from the left to manage grants and configs.</p>
+                <h1 className="text-xl font-semibold text-foreground">
+                  Model Groups
+                </h1>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Select a group from the left to manage grants and configs.
+                </p>
               </div>
             )}
           </div>
@@ -1261,7 +1552,12 @@ export default function ModelSettingsWorkbench() {
             ) : selectedGroup ? (
               <div className="flex flex-col gap-4">
                 <div className="flex items-center justify-between gap-3">
-                  <Tabs value={activeSection} onValueChange={(value) => setActiveSection(value as 'configs' | 'grants')}>
+                  <Tabs
+                    value={activeSection}
+                    onValueChange={(value) =>
+                      setActiveSection(value as "configs" | "grants")
+                    }
+                  >
                     <TabsList>
                       <TabsTrigger value="configs">
                         <Cpu />
@@ -1274,11 +1570,11 @@ export default function ModelSettingsWorkbench() {
                     </TabsList>
                   </Tabs>
 
-                  {activeSection === 'configs' ? (
+                  {activeSection === "configs" ? (
                     <Button
                       onClick={() => {
-                        setExpandedItemId('new');
-                        setDraft(createDraft());
+                        setExpandedItemId("new")
+                        setDraft(createDraft())
                       }}
                     >
                       <Plus data-icon="inline-start" />
@@ -1292,103 +1588,138 @@ export default function ModelSettingsWorkbench() {
                   )}
                 </div>
 
-                {activeSection === 'configs' ? (
+                {activeSection === "configs" ? (
                   <>
-                  {expandedItemId === 'new' ? (
-                    <ConfigEditor
-                      draft={draft}
-                      onChange={setDraft}
-                      onSave={() => void handleSaveConfig(null)}
-                      onCancel={() => {
-                        setExpandedItemId(null);
-                        setDraft(createDraft());
-                      }}
-                      saving={savingConfig}
-                      isNew
-                    />
-                  ) : null}
-
-                  <div className="flex flex-col gap-3">
-                    {selectedGroup.items.map((item) => {
-                      const expanded = expandedItemId === item.id;
-                      return (
-                        <div key={item.id} className="rounded-2xl border border-border">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (expanded) {
-                                setExpandedItemId(null);
-                                setDraft(createDraft());
-                              } else {
-                                setExpandedItemId(item.id);
-                                setDraft(createDraft(item));
-                              }
-                            }}
-                            className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left"
-                          >
-                            <div className="flex min-w-0 items-center gap-3">
-                              <div className={`flex size-10 shrink-0 items-center justify-center rounded-2xl ${
-                                item.is_enabled ? 'bg-emerald-500/10 text-emerald-500' : 'bg-muted text-muted-foreground'
-                              }`}>
-                                <Cpu className="size-4" />
-                              </div>
-                              <div className="min-w-0">
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="truncate font-medium text-foreground">{item.display_name}</span>
-                                  <Badge variant="secondary">v{item.version || 1}</Badge>
-                                  {item.provider_type ? <Badge variant="outline">{item.provider_type}</Badge> : null}
-                                  {item.engine_kind ? <Badge variant="outline">{item.engine_kind}</Badge> : null}
-                                  {!item.is_enabled ? <Badge variant="outline">Disabled</Badge> : null}
-                                </div>
-                                <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-                                  <span>{item.model_name || 'No model configured'}</span>
-                                  <span>Priority {item.priority}</span>
-                                  <span>Weight {item.weight}</span>
-                                </div>
-                              </div>
-                            </div>
-                            <ChevronDown className={`size-4 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`} />
-                          </button>
-
-                          {expanded ? (
-                            <div className="border-t border-border px-4 py-4">
-                              <ConfigEditor
-                                draft={draft}
-                                onChange={setDraft}
-                                onSave={() => void handleSaveConfig(item.id)}
-                                onDelete={() => void handleDeleteConfig(item.id)}
-                                onCancel={() => {
-                                  setExpandedItemId(null);
-                                  setDraft(createDraft());
-                                }}
-                                saving={savingConfig}
-                                isNew={false}
-                              />
-                            </div>
-                          ) : null}
-                        </div>
-                      );
-                    })}
-
-                    {selectedGroup.items.length === 0 && expandedItemId !== 'new' ? (
-                      <Card>
-                        <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
-                          <Cpu className="size-10 text-muted-foreground/60" />
-                          <div>
-                            <div className="font-medium text-foreground">No configs yet</div>
-                            <div className="text-sm text-muted-foreground">Create the first config for this group.</div>
-                          </div>
-                        </CardContent>
-                      </Card>
+                    {expandedItemId === "new" ? (
+                      <ConfigEditor
+                        draft={draft}
+                        onChange={setDraft}
+                        onSave={() => void handleSaveConfig(null)}
+                        onCancel={() => {
+                          setExpandedItemId(null)
+                          setDraft(createDraft())
+                        }}
+                        saving={savingConfig}
+                        isNew
+                      />
                     ) : null}
-                  </div>
+
+                    <div className="flex flex-col gap-3">
+                      {selectedGroup.items.map((item) => {
+                        const expanded = expandedItemId === item.id
+                        return (
+                          <div
+                            key={item.id}
+                            className="rounded-2xl border border-border"
+                          >
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (expanded) {
+                                  setExpandedItemId(null)
+                                  setDraft(createDraft())
+                                } else {
+                                  setExpandedItemId(item.id)
+                                  setDraft(createDraft(item))
+                                }
+                              }}
+                              className="flex w-full items-center justify-between gap-4 px-4 py-4 text-left"
+                            >
+                              <div className="flex min-w-0 items-center gap-3">
+                                <div
+                                  className={`flex size-10 shrink-0 items-center justify-center rounded-2xl ${
+                                    item.is_enabled
+                                      ? "bg-emerald-500/10 text-emerald-500"
+                                      : "bg-muted text-muted-foreground"
+                                  }`}
+                                >
+                                  <Cpu className="size-4" />
+                                </div>
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="truncate font-medium text-foreground">
+                                      {item.display_name}
+                                    </span>
+                                    <Badge variant="secondary">
+                                      v{item.version || 1}
+                                    </Badge>
+                                    {item.provider_type ? (
+                                      <Badge variant="outline">
+                                        {item.provider_type}
+                                      </Badge>
+                                    ) : null}
+                                    {item.engine_kind ? (
+                                      <Badge variant="outline">
+                                        {item.engine_kind}
+                                      </Badge>
+                                    ) : null}
+                                    {!item.is_enabled ? (
+                                      <Badge variant="outline">Disabled</Badge>
+                                    ) : null}
+                                  </div>
+                                  <div className="mt-1 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
+                                    <span>
+                                      {item.model_name || "No model configured"}
+                                    </span>
+                                    <span>Priority {item.priority}</span>
+                                    <span>Weight {item.weight}</span>
+                                  </div>
+                                </div>
+                              </div>
+                              <ChevronDown
+                                className={`size-4 text-muted-foreground transition-transform ${expanded ? "rotate-180" : ""}`}
+                              />
+                            </button>
+
+                            {expanded ? (
+                              <div className="border-t border-border px-4 py-4">
+                                <ConfigEditor
+                                  draft={draft}
+                                  onChange={setDraft}
+                                  onSave={() => void handleSaveConfig(item.id)}
+                                  onDelete={() =>
+                                    void handleDeleteConfig(item.id)
+                                  }
+                                  onCancel={() => {
+                                    setExpandedItemId(null)
+                                    setDraft(createDraft())
+                                  }}
+                                  saving={savingConfig}
+                                  isNew={false}
+                                />
+                              </div>
+                            ) : null}
+                          </div>
+                        )
+                      })}
+
+                      {selectedGroup.items.length === 0 &&
+                      expandedItemId !== "new" ? (
+                        <Card>
+                          <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
+                            <Cpu className="size-10 text-muted-foreground/60" />
+                            <div>
+                              <div className="font-medium text-foreground">
+                                No configs yet
+                              </div>
+                              <div className="text-sm text-muted-foreground">
+                                Create the first config for this group.
+                              </div>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      ) : null}
+                    </div>
                   </>
                 ) : (
                   <div className="flex flex-col gap-3">
                     {selectedGroup.grants
-                      .filter((grant) => grant.status === 'active')
+                      .filter((grant) => grant.status === "active")
                       .map((grant) => (
-                        <div key={grant.id} className="rounded-2xl border border-border px-4 py-4">
+                        <div
+                          key={grant.id}
+                          className="rounded-2xl border border-border px-4 py-4"
+                        >
                           <div className="flex flex-wrap items-start justify-between gap-4">
                             <div>
                               <div className="flex flex-wrap items-center gap-2">
@@ -1402,26 +1733,38 @@ export default function ModelSettingsWorkbench() {
                                     currentUser
                                   )}
                                 </span>
-                                <Badge variant="outline">{grant.grant_scope.replaceAll('_', ' ')}</Badge>
+                                <Badge variant="outline">
+                                  {grant.grant_scope.replaceAll("_", " ")}
+                                </Badge>
                               </div>
                               <div className="mt-1 text-sm text-muted-foreground">
-                                {grant.reason || 'No explicit reason recorded.'}
+                                {grant.reason || "No explicit reason recorded."}
                               </div>
                             </div>
-                            <Button variant="outline" onClick={() => void handleRevokeGrant(grant.id)}>
+                            <Button
+                              variant="outline"
+                              onClick={() => void handleRevokeGrant(grant.id)}
+                            >
                               Revoke
                             </Button>
                           </div>
                         </div>
                       ))}
 
-                    {selectedGroup.grants.filter((grant) => grant.status === 'active').length === 0 ? (
+                    {selectedGroup.grants.filter(
+                      (grant) => grant.status === "active"
+                    ).length === 0 ? (
                       <Card>
                         <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
                           <ShieldCheck className="size-10 text-muted-foreground/60" />
                           <div>
-                            <div className="font-medium text-foreground">No explicit grants</div>
-                            <div className="text-sm text-muted-foreground">Add a grant to share this group with a workspace, member, or actor.</div>
+                            <div className="font-medium text-foreground">
+                              No explicit grants
+                            </div>
+                            <div className="text-sm text-muted-foreground">
+                              Add a grant to share this group with a workspace,
+                              member, or actor.
+                            </div>
                           </div>
                         </CardContent>
                       </Card>
@@ -1433,7 +1776,10 @@ export default function ModelSettingsWorkbench() {
               <Card className="max-w-xl">
                 <CardHeader>
                   <CardTitle>Select a model group</CardTitle>
-                  <CardDescription>Choose a group from the left to manage its grants and configs.</CardDescription>
+                  <CardDescription>
+                    Choose a group from the left to manage its grants and
+                    configs.
+                  </CardDescription>
                 </CardHeader>
               </Card>
             )}
@@ -1444,23 +1790,23 @@ export default function ModelSettingsWorkbench() {
       <ModelGroupDialog
         open={groupDialogOpen}
         onOpenChange={(open) => {
-          setGroupDialogOpen(open);
-          if (!open) setEditingGroup(null);
+          setGroupDialogOpen(open)
+          if (!open) setEditingGroup(null)
         }}
-        scope={editingGroup ? resolveScope(editingGroup) : 'workspace'}
+        scope={editingGroup ? resolveScope(editingGroup) : "workspace"}
         availableScopes={creatableScopes}
         group={editingGroup}
         onSaved={() => {
-          setGroupDialogOpen(false);
-          setEditingGroup(null);
-          void loadGroups();
+          setGroupDialogOpen(false)
+          setEditingGroup(null)
+          void loadGroups()
         }}
       />
 
       <GrantDialog
         open={grantDialogOpen}
         onOpenChange={setGrantDialogOpen}
-        groupScope={selectedGroup ? resolveScope(selectedGroup) : 'workspace'}
+        groupScope={selectedGroup ? resolveScope(selectedGroup) : "workspace"}
         workspaces={availableWorkspaces}
         members={workspaceMembers}
         actors={workspaceActors}
@@ -1469,5 +1815,5 @@ export default function ModelSettingsWorkbench() {
         onSubmit={handleIssueGrant}
       />
     </div>
-  );
+  )
 }

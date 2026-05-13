@@ -1,84 +1,86 @@
-"use client";
+"use client"
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { useEffect, useMemo, useState } from "react"
+import { useRouter } from "next/navigation"
 import {
   buildAutomationRuleDraftFromRule,
   createEmptyAutomationRuleDraft,
-} from "@synapse/shared";
-import type { AutomationRule } from "@synapse/shared";
-import { toast } from "sonner";
+} from "@synapse/shared"
+import type { AutomationRule } from "@synapse/shared"
+import { toast } from "sonner"
 
-import { useWorkspace } from "@/app/dashboard/workspace-provider";
-import { AutomationRuleEditor } from "@/components/automation-rule-editor";
+import { useWorkspace } from "@/app/dashboard/workspace-provider"
+import { AutomationRuleEditor } from "@/components/automation-rule-editor"
 import {
   AppCard,
   AppCardContent,
   AppCardDescription,
   AppCardHeader,
   AppCardTitle,
-} from "@/components/app-card";
-import { api } from "@/lib/api";
+} from "@/components/app-card"
+import { api } from "@/lib/api"
 
 export function AutomationTriggerEditPage({
   triggerId,
 }: {
-  triggerId: string;
+  triggerId: string
 }) {
-  const router = useRouter();
-  const { workspaceId, workspaceName } = useWorkspace();
-  const [rule, setRule] = useState<AutomationRule | null>(null);
-  const [loadingRule, setLoadingRule] = useState(true);
+  const router = useRouter()
+  const { workspaceId, workspaceName } = useWorkspace()
+  const [rule, setRule] = useState<AutomationRule | null>(null)
+  const [loadingRule, setLoadingRule] = useState(true)
 
   useEffect(() => {
-    const currentWorkspaceId = workspaceId;
+    const currentWorkspaceId = workspaceId
     if (typeof currentWorkspaceId !== "string" || !currentWorkspaceId) {
-      setRule(null);
-      setLoadingRule(false);
-      return;
+      setRule(null)
+      setLoadingRule(false)
+      return
     }
 
-    let cancelled = false;
+    let cancelled = false
 
     async function loadRule(activeWorkspaceId: string) {
-      setLoadingRule(true);
+      setLoadingRule(true)
       try {
-        const nextRule = await api.getAutomation(activeWorkspaceId, triggerId);
+        const nextRule = await api.getAutomation(activeWorkspaceId, triggerId)
         if (!cancelled) {
-          setRule(nextRule);
+          setRule(nextRule)
         }
       } catch (error) {
-        console.error("Failed to load trigger for editing:", error);
+        console.error("Failed to load trigger for editing:", error)
         if (!cancelled) {
-          setRule(null);
-          toast.error(error instanceof Error ? error.message : "Failed to load trigger");
+          setRule(null)
+          toast.error(
+            error instanceof Error ? error.message : "Failed to load trigger"
+          )
         }
       } finally {
         if (!cancelled) {
-          setLoadingRule(false);
+          setLoadingRule(false)
         }
       }
     }
 
-    void loadRule(currentWorkspaceId);
+    void loadRule(currentWorkspaceId)
 
     return () => {
-      cancelled = true;
-    };
-  }, [triggerId, workspaceId]);
+      cancelled = true
+    }
+  }, [triggerId, workspaceId])
 
   const initialDraft = useMemo(() => {
     if (rule) {
-      return buildAutomationRuleDraftFromRule(rule);
+      return buildAutomationRuleDraftFromRule(rule)
     }
     return createEmptyAutomationRuleDraft(
-      Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC",
-    );
-  }, [rule]);
+      Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
+    )
+  }, [rule])
 
   if (workspaceId && !loadingRule && !rule) {
     return (
-      <div className="flex flex-col gap-6 px-4 pb-6 pt-6 lg:px-6">
+      <div className="flex flex-col gap-6 px-4 pt-6 pb-6 lg:px-6">
         <AppCard variant="panel">
           <AppCardHeader>
             <AppCardTitle>Trigger Not Available</AppCardTitle>
@@ -87,11 +89,12 @@ export function AutomationTriggerEditPage({
             </AppCardDescription>
           </AppCardHeader>
           <AppCardContent className="text-sm text-muted-foreground">
-            Refresh the triggers list and reopen the editor, or confirm that the rule still exists.
+            Refresh the triggers list and reopen the editor, or confirm that the
+            rule still exists.
           </AppCardContent>
         </AppCard>
       </div>
-    );
+    )
   }
 
   return (
@@ -106,11 +109,11 @@ export function AutomationTriggerEditPage({
       loadingInitial={loadingRule}
       includeInactiveEventSources
       onSubmit={async (payload) => {
-        if (!workspaceId) return;
-        await api.updateAutomation(workspaceId, triggerId, payload);
-        toast.success("Trigger updated");
-        router.push("/dashboard/triggers");
+        if (!workspaceId) return
+        await api.updateAutomation(workspaceId, triggerId, payload)
+        toast.success("Trigger updated")
+        router.push("/dashboard/triggers")
       }}
     />
-  );
+  )
 }

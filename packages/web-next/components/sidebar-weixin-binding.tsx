@@ -381,7 +381,9 @@ export function SidebarWeixinBinding() {
             </div>
           ) : null}
 
-          {!starting && session && ["waiting", "scanned"].includes(session.status) ? (
+          {!starting &&
+          session &&
+          ["waiting", "scanned"].includes(session.status) ? (
             <div className="space-y-3">
               {qrImageUrl ? (
                 <div className="relative mx-auto w-full max-w-72">

@@ -28,7 +28,11 @@ const navItems = [
   { href: "/dashboard", label: "Home", icon: House },
   { href: "/dashboard/chat", label: "Chat", icon: MessageSquare },
   { href: "/dashboard/contacts", label: "Contacts", icon: ContactRound },
-  { href: "/dashboard/remote-agents", label: "Remote Agents", icon: SquareTerminal },
+  {
+    href: "/dashboard/remote-agents",
+    label: "Remote Agents",
+    icon: SquareTerminal,
+  },
   { href: "/dashboard/memories", label: "Memories", icon: Brain },
   { href: "/dashboard/skills", label: "Skills", icon: ScrollText },
   { href: "/dashboard/audit", label: "Audit Log", icon: FileText },

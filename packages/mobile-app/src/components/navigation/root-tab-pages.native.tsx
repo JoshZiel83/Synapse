@@ -1,15 +1,15 @@
 import PagerView, {
   type PagerViewOnPageSelectedEvent,
-} from "react-native-pager-view";
-import { useEffect, useRef } from "react";
-import { StyleSheet, View } from "react-native";
+} from "react-native-pager-view"
+import { useEffect, useRef } from "react"
+import { StyleSheet, View } from "react-native"
 
 import {
   ROOT_TAB_ORDER,
   getRootTabByIndex,
   getRootTabIndex,
   type RootTabKey,
-} from "@/navigation/root-tabs";
+} from "@/navigation/root-tabs"
 
 export function RootTabPages({
   initialTab,
@@ -18,33 +18,33 @@ export function RootTabPages({
   onSelectTab,
   renderTabPage,
 }: {
-  initialTab: RootTabKey;
-  selectedTab: RootTabKey;
-  visitedTabs: RootTabKey[];
-  onSelectTab: (tab: RootTabKey) => void;
-  renderTabPage: (tab: RootTabKey) => React.ReactNode;
+  initialTab: RootTabKey
+  selectedTab: RootTabKey
+  visitedTabs: RootTabKey[]
+  onSelectTab: (tab: RootTabKey) => void
+  renderTabPage: (tab: RootTabKey) => React.ReactNode
 }) {
-  const pagerRef = useRef<PagerView | null>(null);
-  const selectedIndexRef = useRef(getRootTabIndex(initialTab));
+  const pagerRef = useRef<PagerView | null>(null)
+  const selectedIndexRef = useRef(getRootTabIndex(initialTab))
 
   useEffect(() => {
-    const nextIndex = getRootTabIndex(selectedTab);
+    const nextIndex = getRootTabIndex(selectedTab)
     if (nextIndex === selectedIndexRef.current) {
-      return;
+      return
     }
 
-    selectedIndexRef.current = nextIndex;
-    pagerRef.current?.setPage(nextIndex);
-  }, [selectedTab]);
+    selectedIndexRef.current = nextIndex
+    pagerRef.current?.setPage(nextIndex)
+  }, [selectedTab])
 
   function handlePageSelected(event: PagerViewOnPageSelectedEvent) {
-    const nextIndex = event.nativeEvent.position;
+    const nextIndex = event.nativeEvent.position
     if (nextIndex === selectedIndexRef.current) {
-      return;
+      return
     }
 
-    selectedIndexRef.current = nextIndex;
-    onSelectTab(getRootTabByIndex(nextIndex));
+    selectedIndexRef.current = nextIndex
+    onSelectTab(getRootTabByIndex(nextIndex))
   }
 
   return (
@@ -63,7 +63,7 @@ export function RootTabPages({
         </View>
       ))}
     </PagerView>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -73,4 +73,4 @@ const styles = StyleSheet.create({
   page: {
     flex: 1,
   },
-});
+})

@@ -1,8 +1,8 @@
-export * from "./event-definitions/index.js";
-export * from "./delivery-display.js";
-export * from "./occurrence-display.js";
-export * from "./policy-display.js";
-export * from "./trigger-display.js";
+export * from "./event-definitions/index.js"
+export * from "./delivery-display.js"
+export * from "./occurrence-display.js"
+export * from "./policy-display.js"
+export * from "./trigger-display.js"
 export {
   buildAutomationRuleCreatePayloadFromDraft,
   buildAutomationRuleCreatePayloadFromRule,
@@ -12,7 +12,7 @@ export {
   parseAutomationIdList,
   parseAutomationJsonObjectText,
   validateAutomationRuleCreatePayload,
-} from "./rule-contract.js";
+} from "./rule-contract.js"
 export type {
   AutomationRuleContractIssue,
   AutomationRuleCreatePolicyPayload,
@@ -22,4 +22,4 @@ export type {
   AutomationRuleDraft,
   AutomationRuleDraftBuildResult,
   AutomationRuleUpdatePayload,
-} from "./rule-contract.js";
+} from "./rule-contract.js"

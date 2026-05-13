@@ -1,8 +1,8 @@
-import { CameraView, useCameraPermissions } from "expo-camera";
-import { useLocalSearchParams, useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { parseSynapseQrPayload, type ParsedSynapseQrPayload } from "@shared";
-import { Pressable, StyleSheet, Text, View } from "react-native";
+import { CameraView, useCameraPermissions } from "expo-camera"
+import { useLocalSearchParams, useRouter } from "expo-router"
+import { useEffect, useState } from "react"
+import { parseSynapseQrPayload, type ParsedSynapseQrPayload } from "@shared"
+import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import {
   Button,
@@ -10,39 +10,39 @@ import {
   EmptyState,
   ScreenScroll,
   SectionHeader,
-} from "@/components/ui";
-import { api, ApiError } from "@/lib/api";
-import { useWorkspace } from "@/providers/workspace-provider";
-import { theme } from "@/theme/tokens";
-import type { RelationshipScanResponse } from "@/types/api";
+} from "@/components/ui"
+import { api, ApiError } from "@/lib/api"
+import { useWorkspace } from "@/providers/workspace-provider"
+import { theme } from "@/theme/tokens"
+import type { RelationshipScanResponse } from "@/types/api"
 
 function getRelationshipHint(result: RelationshipScanResponse) {
   switch (result.outcome) {
     case "friend_request_created":
-      return "好友申请已发出，等待对方处理。";
+      return "好友申请已发出，等待对方处理。"
     case "friend_request_pending":
-      return "你已经发过好友申请了，等待对方处理。";
+      return "你已经发过好友申请了，等待对方处理。"
     case "actor_access_request_created":
-      return "已提交 Actor 访问申请，等待批准。";
+      return "已提交 Actor 访问申请，等待批准。"
     case "actor_access_pending":
-      return "你已经提交过 Actor 访问申请了。";
+      return "你已经提交过 Actor 访问申请了。"
     default:
-      return "二维码已识别，但当前没有可直接打开的会话。";
+      return "二维码已识别，但当前没有可直接打开的会话。"
   }
 }
 
 export default function UnifiedScanScreen() {
-  const router = useRouter();
+  const router = useRouter()
   const params = useLocalSearchParams<{
-    kind?: string;
-    token?: string;
-    intent?: string;
-  }>();
-  const { workspaceId, workspaceName } = useWorkspace();
-  const [permission, requestPermission] = useCameraPermissions();
-  const [locked, setLocked] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [hint, setHint] = useState<string | null>(null);
+    kind?: string
+    token?: string
+    intent?: string
+  }>()
+  const { workspaceId, workspaceName } = useWorkspace()
+  const [permission, requestPermission] = useCameraPermissions()
+  const [locked, setLocked] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [hint, setHint] = useState<string | null>(null)
 
   async function handleRelationshipResult(result: RelationshipScanResponse) {
     if (
@@ -55,104 +55,103 @@ export default function UnifiedScanScreen() {
       const opened = await api.openDirectConversation(workspaceId, {
         contactKind: result.contact.kind,
         contactId: result.contact.id,
-      });
+      })
       if (opened.conversationId) {
-        router.replace(`/chat/${opened.conversationId}`);
-        return;
+        router.replace(`/chat/${opened.conversationId}`)
+        return
       }
     }
 
     if (result.outcome === "self_scan") {
-      setError("不能扫描自己的二维码。");
-      return;
+      setError("不能扫描自己的二维码。")
+      return
     }
 
-    setHint(getRelationshipHint(result));
+    setHint(getRelationshipHint(result))
   }
 
   async function handleRelationshipToken(token: string) {
     if (!workspaceId) {
-      throw new Error("当前没有可用 workspace，无法处理联系人二维码。");
+      throw new Error("当前没有可用 workspace，无法处理联系人二维码。")
     }
-    const result = await api.scanRelationshipQr(workspaceId, token);
-    await handleRelationshipResult(result);
+    const result = await api.scanRelationshipQr(workspaceId, token)
+    await handleRelationshipResult(result)
   }
 
   async function routeLoginToken(token: string) {
-    router.replace(`/qr-login?token=${encodeURIComponent(token)}`);
+    router.replace(`/qr-login?token=${encodeURIComponent(token)}`)
   }
 
   async function processParsedPayload(parsed: ParsedSynapseQrPayload) {
-    setLocked(true);
-    setError(null);
-    setHint(null);
+    setLocked(true)
+    setError(null)
+    setHint(null)
 
     try {
       if (parsed.kind === "login") {
-        await routeLoginToken(parsed.token);
-        return;
+        await routeLoginToken(parsed.token)
+        return
       }
 
       if (parsed.kind === "relationship") {
-        await handleRelationshipToken(parsed.token);
-        return;
+        await handleRelationshipToken(parsed.token)
+        return
       }
 
       try {
-        await api.resolveQrLogin(parsed.token);
-        await routeLoginToken(parsed.token);
-        return;
+        await api.resolveQrLogin(parsed.token)
+        await routeLoginToken(parsed.token)
+        return
       } catch (loginError) {
         if (
           loginError instanceof ApiError &&
           loginError.status !== 400 &&
           loginError.status !== 404
         ) {
-          throw loginError;
+          throw loginError
         }
       }
 
-      await handleRelationshipToken(parsed.token);
+      await handleRelationshipToken(parsed.token)
     } catch (nextError) {
       setError(
         nextError instanceof Error
           ? nextError.message
-          : "扫码失败，请稍后重试。",
-      );
+          : "扫码失败，请稍后重试。"
+      )
     } finally {
-      setLocked(false);
+      setLocked(false)
     }
   }
 
   function handleScan(payload: { data: string }) {
-    if (locked) return;
+    if (locked) return
 
-    const parsed = parseSynapseQrPayload(payload.data);
+    const parsed = parseSynapseQrPayload(payload.data)
     if (!parsed) {
-      setError("这个二维码不是 Synapse 的登录或联系人二维码。");
-      return;
+      setError("这个二维码不是 Synapse 的登录或联系人二维码。")
+      return
     }
 
-    void processParsedPayload(parsed);
+    void processParsedPayload(parsed)
   }
 
   useEffect(() => {
-    const token =
-      typeof params.token === "string" ? params.token.trim() : "";
+    const token = typeof params.token === "string" ? params.token.trim() : ""
     const kind =
-      typeof params.kind === "string" ? params.kind.trim().toLowerCase() : "";
-    if (!token || locked) return;
-    if (kind !== "login" && kind !== "relationship") return;
+      typeof params.kind === "string" ? params.kind.trim().toLowerCase() : ""
+    if (!token || locked) return
+    if (kind !== "login" && kind !== "relationship") return
 
     void processParsedPayload({
       kind: kind as "login" | "relationship",
       token,
-    });
-  }, [locked, params.kind, params.token, workspaceId]);
+    })
+  }, [locked, params.kind, params.token, workspaceId])
 
-  const hasPermission = permission?.granted;
+  const hasPermission = permission?.granted
   const intent =
-    typeof params.intent === "string" ? params.intent.trim().toLowerCase() : "";
+    typeof params.intent === "string" ? params.intent.trim().toLowerCase() : ""
 
   return (
     <ScreenScroll bottomPadding={32}>
@@ -199,15 +198,16 @@ export default function UnifiedScanScreen() {
             </View>
           </View>
           <Text style={styles.cameraHint}>
-            扫到 Web 登录请求会进入确认页；扫到联系人二维码会自动打开私聊或发起申请。
+            扫到 Web
+            登录请求会进入确认页；扫到联系人二维码会自动打开私聊或发起申请。
           </Text>
           {error ? <Text style={styles.error}>{error}</Text> : null}
           {hint ? <Text style={styles.hint}>{hint}</Text> : null}
           <View style={styles.actions}>
             <Pressable
               onPress={() => {
-                setError(null);
-                setHint(null);
+                setError(null)
+                setHint(null)
               }}
               style={styles.retryLink}
             >
@@ -223,7 +223,7 @@ export default function UnifiedScanScreen() {
         </Card>
       )}
     </ScreenScroll>
-  );
+  )
 }
 
 const styles = StyleSheet.create({
@@ -281,4 +281,4 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: theme.colors.primary,
   },
-});
+})

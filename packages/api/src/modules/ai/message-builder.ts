@@ -2,20 +2,26 @@
  * Message Builder: Convert session_messages DB rows → ConversationMessage[]
  * for structured multi-turn conversation passing to AI providers.
  */
-import type { ConversationMessage, CanonicalContentBlock, CanonicalToolCall, CanonicalToolResult, AssistantToolHistory } from '@synapse/shared';
-import { extractText, textBlocks } from '@synapse/shared';
+import type {
+  ConversationMessage,
+  CanonicalContentBlock,
+  CanonicalToolCall,
+  CanonicalToolResult,
+  AssistantToolHistory,
+} from "@synapse/shared"
+import { extractText, textBlocks } from "@synapse/shared"
 
 interface SessionMessageRow {
-  id: string;
-  role: string;
-  contentBlocks: CanonicalContentBlock[];
-  metadata: Record<string, unknown> | string;
-  created_at: string;
+  id: string
+  role: string
+  contentBlocks: CanonicalContentBlock[]
+  metadata: Record<string, unknown> | string
+  created_at: string
 }
 
 interface BuildOptions {
-  crossTurnToolHistory?: boolean;
-  interrupts?: { type: string; content: string }[];
+  crossTurnToolHistory?: boolean
+  interrupts?: { type: string; content: string }[]
 }
 
 /**
@@ -24,61 +30,71 @@ interface BuildOptions {
  */
 export function buildConversationMessages(
   sessionMessages: SessionMessageRow[],
-  options: BuildOptions = {},
+  options: BuildOptions = {}
 ): ConversationMessage[] {
-  const messages: ConversationMessage[] = [];
+  const messages: ConversationMessage[] = []
 
   for (const msg of sessionMessages) {
-    const meta = typeof msg.metadata === 'string' ? JSON.parse(msg.metadata) : (msg.metadata || {});
-    const messageText = extractText(msg.contentBlocks || []);
+    const meta =
+      typeof msg.metadata === "string"
+        ? JSON.parse(msg.metadata)
+        : msg.metadata || {}
+    const messageText = extractText(msg.contentBlocks || [])
 
     switch (msg.role) {
-      case 'user': {
-        messages.push({ role: 'user', content: msg.contentBlocks });
-        break;
+      case "user": {
+        messages.push({ role: "user", content: msg.contentBlocks })
+        break
       }
 
-      case 'assistant': {
+      case "assistant": {
         // If crossTurnToolHistory is enabled and message has tool history, expand it
         if (options.crossTurnToolHistory && meta.toolHistory) {
-          const toolHistory = meta.toolHistory as AssistantToolHistory;
-          expandToolHistory(messages, messageText, toolHistory);
+          const toolHistory = meta.toolHistory as AssistantToolHistory
+          expandToolHistory(messages, messageText, toolHistory)
         } else {
           messages.push({
-            role: 'assistant',
+            role: "assistant",
             content: msg.contentBlocks,
-          });
+          })
         }
-        break;
+        break
       }
 
-      case 'system':
-        messages.push({ role: 'user', content: textBlocks(`[Task Instruction]: ${messageText}`) });
-        break;
+      case "system":
+        messages.push({
+          role: "user",
+          content: textBlocks(`[Task Instruction]: ${messageText}`),
+        })
+        break
 
-      case 'child_result':
-        messages.push({ role: 'user', content: textBlocks(messageText) });
-        break;
+      case "child_result":
+        messages.push({ role: "user", content: textBlocks(messageText) })
+        break
 
-      case 'tool_result':
-        messages.push({ role: 'user', content: textBlocks(`[Tool Result]: ${messageText}`) });
-        break;
+      case "tool_result":
+        messages.push({
+          role: "user",
+          content: textBlocks(`[Tool Result]: ${messageText}`),
+        })
+        break
     }
   }
 
   // Append interrupts
   if (options.interrupts && options.interrupts.length > 0) {
-    let interruptContent = '[System Notice] The following interrupts need your attention:\n';
+    let interruptContent =
+      "[System Notice] The following interrupts need your attention:\n"
     for (const interrupt of options.interrupts) {
-      interruptContent += `- [${interrupt.type}]: ${interrupt.content}\n`;
+      interruptContent += `- [${interrupt.type}]: ${interrupt.content}\n`
     }
-    messages.push({ role: 'user', content: textBlocks(interruptContent) });
+    messages.push({ role: "user", content: textBlocks(interruptContent) })
   }
 
   // Ensure messages end with user role (required by most APIs)
-  ensureEndsWithUser(messages);
+  ensureEndsWithUser(messages)
 
-  return messages;
+  return messages
 }
 
 /**
@@ -91,11 +107,11 @@ export function buildConversationMessages(
 function expandToolHistory(
   messages: ConversationMessage[],
   finalText: string,
-  toolHistory: AssistantToolHistory,
+  toolHistory: AssistantToolHistory
 ): void {
   if (!toolHistory.rounds || toolHistory.rounds.length === 0) {
-    messages.push({ role: 'assistant', content: textBlocks(finalText) });
-    return;
+    messages.push({ role: "assistant", content: textBlocks(finalText) })
+    return
   }
 
   for (const round of toolHistory.rounds) {
@@ -106,13 +122,13 @@ function expandToolHistory(
       toolName: tc.toolName,
       input: tc.input,
       metadata: tc.metadata,
-    }));
+    }))
 
     messages.push({
-      role: 'assistant',
+      role: "assistant",
       content: round.content || [],
       toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
-    });
+    })
 
     // Tool results
     if (round.toolResults.length > 0) {
@@ -123,14 +139,14 @@ function expandToolHistory(
         content: tr.content,
         isError: tr.isError,
         metadata: tr.metadata,
-      }));
-      messages.push({ role: 'tool_result', results });
+      }))
+      messages.push({ role: "tool_result", results })
     }
   }
 
   // Final assistant message with the response text
   if (finalText) {
-    messages.push({ role: 'assistant', content: textBlocks(finalText) });
+    messages.push({ role: "assistant", content: textBlocks(finalText) })
   }
 }
 
@@ -139,9 +155,9 @@ function expandToolHistory(
  * If it ends with assistant, append a minimal user continuation prompt.
  */
 function ensureEndsWithUser(messages: ConversationMessage[]): void {
-  if (messages.length === 0) return;
-  const last = messages[messages.length - 1];
-  if (last.role !== 'user') {
-    messages.push({ role: 'user', content: textBlocks('Please continue.') });
+  if (messages.length === 0) return
+  const last = messages[messages.length - 1]
+  if (last.role !== "user") {
+    messages.push({ role: "user", content: textBlocks("Please continue.") })
   }
 }

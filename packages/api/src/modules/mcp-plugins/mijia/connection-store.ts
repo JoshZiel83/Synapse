@@ -1,36 +1,38 @@
-import { encrypt } from "../../../infrastructure/crypto/index.js";
+import { encrypt } from "../../../infrastructure/crypto/index.js"
 import {
   db,
   type TableInsert,
-} from "../../../infrastructure/database/kysely.js";
-import { sql } from "kysely";
-import type { MijiaAuthState } from "./types.js";
+} from "../../../infrastructure/database/kysely.js"
+import { sql } from "kysely"
+import type { MijiaAuthState } from "./types.js"
 
 function encryptDeep(value: unknown): unknown {
   if (typeof value === "string") {
-    return encrypt(value);
+    return encrypt(value)
   }
   if (Array.isArray(value)) {
-    return value.map((item) => encryptDeep(item));
+    return value.map((item) => encryptDeep(item))
   }
   if (value && typeof value === "object") {
-    const result: Record<string, unknown> = {};
+    const result: Record<string, unknown> = {}
     for (const [key, nested] of Object.entries(value)) {
-      result[key] = encryptDeep(nested);
+      result[key] = encryptDeep(nested)
     }
-    return result;
+    return result
   }
-  return value;
+  return value
 }
 
 export async function persistMijiaConnectionState(
   connectionId: string,
-  authState: MijiaAuthState,
+  authState: MijiaAuthState
 ) {
   await db
     .updateTable("plugin_connections")
     .set({
-      secret_payload: encryptDeep(authState) as TableInsert<'plugin_connections'>['secret_payload'],
+      secret_payload: encryptDeep(
+        authState
+      ) as TableInsert<"plugin_connections">["secret_payload"],
       expires_at:
         typeof authState.expireTime === "number"
           ? new Date(authState.expireTime).toISOString()
@@ -39,7 +41,7 @@ export async function persistMijiaConnectionState(
       updated_at: sql`NOW()`,
     })
     .where("id", "=", connectionId)
-    .execute();
+    .execute()
 }
 
 export async function markMijiaConnectionExpired(connectionId: string) {
@@ -50,5 +52,5 @@ export async function markMijiaConnectionExpired(connectionId: string) {
       updated_at: sql`NOW()`,
     })
     .where("id", "=", connectionId)
-    .execute();
+    .execute()
 }

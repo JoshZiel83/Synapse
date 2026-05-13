@@ -2,13 +2,7 @@
 
 import Link from "next/link"
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
-import {
-  Bot,
-  Copy,
-  Plus,
-  RefreshCcw,
-  SquareTerminal,
-} from "lucide-react"
+import { Bot, Copy, Plus, RefreshCcw, SquareTerminal } from "lucide-react"
 
 import { useWorkspace } from "../workspace-provider"
 import type {
@@ -162,7 +156,8 @@ export default function RemoteAgentsPage() {
   const [creatingMachine, setCreatingMachine] = useState(false)
   const [creatingAgent, setCreatingAgent] = useState(false)
   const [machineDraft, setMachineDraft] = useState(emptyMachineDraft)
-  const [agentDraft, setAgentDraft] = useState<CreateAgentDraft>(emptyAgentDraft)
+  const [agentDraft, setAgentDraft] =
+    useState<CreateAgentDraft>(emptyAgentDraft)
   const [pairingResult, setPairingResult] =
     useState<RemoteAgentMachinePairingSessionView | null>(null)
   const deferredSearch = useDeferredValue(search.trim().toLowerCase())
@@ -233,17 +228,22 @@ export default function RemoteAgentsPage() {
     if (!workspaceId) return
     setCreatingMachine(true)
     try {
-      const result = await api.createRemoteAgentMachinePairingSession(workspaceId, {
-        title: machineDraft.title.trim() || undefined,
-        description: machineDraft.description.trim() || undefined,
-      })
+      const result = await api.createRemoteAgentMachinePairingSession(
+        workspaceId,
+        {
+          title: machineDraft.title.trim() || undefined,
+          description: machineDraft.description.trim() || undefined,
+        }
+      )
       setPairingResult(result)
       setMachineDialogOpen(false)
       setMachineDraft(emptyMachineDraft)
       await loadConsole(false)
       toast.success("Remote machine created")
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to create machine")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to create machine"
+      )
     } finally {
       setCreatingMachine(false)
     }
@@ -267,7 +267,9 @@ export default function RemoteAgentsPage() {
       toast.success("Remote agent created")
       window.location.href = `/dashboard/remote-agents/agents/${result.remoteAgent.id}`
     } catch (error) {
-      toast.error(error instanceof Error ? error.message : "Failed to create agent")
+      toast.error(
+        error instanceof Error ? error.message : "Failed to create agent"
+      )
     } finally {
       setCreatingAgent(false)
     }
@@ -307,7 +309,10 @@ export default function RemoteAgentsPage() {
                 <Plus className="mr-2 size-4" />
                 Create machine
               </Button>
-              <Button className="rounded-full" onClick={() => setAgentDialogOpen(true)}>
+              <Button
+                className="rounded-full"
+                onClick={() => setAgentDialogOpen(true)}
+              >
                 <Bot className="mr-2 size-4" />
                 Create agent
               </Button>
@@ -329,7 +334,8 @@ export default function RemoteAgentsPage() {
               <div>
                 <CardTitle>Machines</CardTitle>
                 <CardDescription>
-                  Pair a daemon once, then bind one or more RemoteAgents onto it.
+                  Pair a daemon once, then bind one or more RemoteAgents onto
+                  it.
                 </CardDescription>
               </div>
               <Badge variant="outline">{machines.length}</Badge>
@@ -361,7 +367,13 @@ export default function RemoteAgentsPage() {
                       <Badge variant={trustVariant(machine.trustStatus)}>
                         {machine.trustStatus}
                       </Badge>
-                      <Badge variant={machine.lifecycleState === "online" ? "secondary" : "outline"}>
+                      <Badge
+                        variant={
+                          machine.lifecycleState === "online"
+                            ? "secondary"
+                            : "outline"
+                        }
+                      >
                         {machine.lifecycleState || "offline"}
                       </Badge>
                     </div>
@@ -418,11 +430,19 @@ export default function RemoteAgentsPage() {
                       <Badge variant={agent.isActive ? "secondary" : "outline"}>
                         {agent.isActive ? "active" : "disabled"}
                       </Badge>
-                      <Badge variant={runtimeVariant(agent.binding ? "available" : "unsupported_platform")}>
+                      <Badge
+                        variant={runtimeVariant(
+                          agent.binding ? "available" : "unsupported_platform"
+                        )}
+                      >
                         {normalizeRuntimeLabel(agent.runtimeKind)}
                       </Badge>
                       {agent.runtimeSummary ? (
-                        <Badge variant={sessionStateVariant(agent.runtimeSummary.state)}>
+                        <Badge
+                          variant={sessionStateVariant(
+                            agent.runtimeSummary.state
+                          )}
+                        >
                           {sessionStateLabel(agent.runtimeSummary.state)}
                         </Badge>
                       ) : null}
@@ -434,9 +454,7 @@ export default function RemoteAgentsPage() {
                     </p>
                   ) : null}
                   <div className="mt-4 grid gap-2 text-sm text-muted-foreground sm:grid-cols-2">
-                    <div>
-                      Access: {agent.accessPolicy.replace("_", " ")}
-                    </div>
+                    <div>Access: {agent.accessPolicy.replace("_", " ")}</div>
                     <div>
                       Machine: {agent.binding?.machineTitle || "Not bound yet"}
                     </div>
@@ -446,13 +464,17 @@ export default function RemoteAgentsPage() {
                     {agent.runtimeSummary ? (
                       <>
                         <div>
-                          Pending conversations: {agent.runtimeSummary.pendingConversationCount}
+                          Pending conversations:{" "}
+                          {agent.runtimeSummary.pendingConversationCount}
                         </div>
                         <div>
-                          Unread deliveries: {agent.runtimeSummary.unreadDeliveryCount}
+                          Unread deliveries:{" "}
+                          {agent.runtimeSummary.unreadDeliveryCount}
                         </div>
                         <div className="sm:col-span-2">
-                          Status: {agent.runtimeSummary.statusText || "No live status text"}
+                          Status:{" "}
+                          {agent.runtimeSummary.statusText ||
+                            "No live status text"}
                         </div>
                       </>
                     ) : null}
@@ -473,8 +495,8 @@ export default function RemoteAgentsPage() {
           <DialogHeader>
             <DialogTitle>Create remote machine</DialogTitle>
             <DialogDescription>
-              This creates a machine key and daemon command for one workspace-scoped
-              daemon process.
+              This creates a machine key and daemon command for one
+              workspace-scoped daemon process.
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
@@ -590,7 +612,10 @@ export default function RemoteAgentsPage() {
                     }))
                   }
                 >
-                  <SelectTrigger id="agent-runtime" className="w-full rounded-2xl">
+                  <SelectTrigger
+                    id="agent-runtime"
+                    className="w-full rounded-2xl"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -607,19 +632,26 @@ export default function RemoteAgentsPage() {
               <FieldContent>
                 <Select
                   value={agentDraft.accessPolicy}
-                  onValueChange={(value: "workspace_open" | "approval_required") =>
+                  onValueChange={(
+                    value: "workspace_open" | "approval_required"
+                  ) =>
                     setAgentDraft((current) => ({
                       ...current,
                       accessPolicy: value,
                     }))
                   }
                 >
-                  <SelectTrigger id="agent-access" className="w-full rounded-2xl">
+                  <SelectTrigger
+                    id="agent-access"
+                    className="w-full rounded-2xl"
+                  >
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
-                      <SelectItem value="workspace_open">Workspace open</SelectItem>
+                      <SelectItem value="workspace_open">
+                        Workspace open
+                      </SelectItem>
                       <SelectItem value="approval_required">
                         Approval required
                       </SelectItem>
@@ -646,11 +678,14 @@ export default function RemoteAgentsPage() {
               </FieldContent>
             </Field>
             <Field orientation="horizontal">
-              <FieldLabel htmlFor="agent-public-shared">Public sharing</FieldLabel>
+              <FieldLabel htmlFor="agent-public-shared">
+                Public sharing
+              </FieldLabel>
               <FieldContent>
                 <div className="flex items-center justify-between rounded-2xl border border-border/70 px-4 py-3">
                   <div className="text-sm text-muted-foreground">
-                    Allow other workspaces to discover this agent by relationship.
+                    Allow other workspaces to discover this agent by
+                    relationship.
                   </div>
                   <Switch
                     id="agent-public-shared"
@@ -689,13 +724,16 @@ export default function RemoteAgentsPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={Boolean(pairingResult)} onOpenChange={(open) => !open && setPairingResult(null)}>
+      <Dialog
+        open={Boolean(pairingResult)}
+        onOpenChange={(open) => !open && setPairingResult(null)}
+      >
         <DialogContent className="max-w-3xl rounded-[28px]">
           <DialogHeader>
             <DialogTitle>Machine pairing ready</DialogTitle>
             <DialogDescription>
-              Start the daemon on the target machine with this command. The API key
-              is only shown once.
+              Start the daemon on the target machine with this command. The API
+              key is only shown once.
             </DialogDescription>
           </DialogHeader>
           {pairingResult ? (
@@ -710,7 +748,9 @@ export default function RemoteAgentsPage() {
                       {pairingResult.machine.description || "No description"}
                     </div>
                   </div>
-                  <Badge variant={trustVariant(pairingResult.machine.trustStatus)}>
+                  <Badge
+                    variant={trustVariant(pairingResult.machine.trustStatus)}
+                  >
                     {pairingResult.machine.trustStatus}
                   </Badge>
                 </div>
@@ -718,7 +758,9 @@ export default function RemoteAgentsPage() {
 
               <FieldGroup>
                 <Field>
-                  <FieldLabel htmlFor="pairing-api-key">Machine API key</FieldLabel>
+                  <FieldLabel htmlFor="pairing-api-key">
+                    Machine API key
+                  </FieldLabel>
                   <FieldContent>
                     <Textarea
                       id="pairing-api-key"
@@ -729,7 +771,9 @@ export default function RemoteAgentsPage() {
                     <Button
                       variant="outline"
                       className="w-full rounded-full"
-                      onClick={() => void copyText(pairingResult.apiKey, "API key")}
+                      onClick={() =>
+                        void copyText(pairingResult.apiKey, "API key")
+                      }
                     >
                       <Copy className="mr-2 size-4" />
                       Copy API key
@@ -737,7 +781,9 @@ export default function RemoteAgentsPage() {
                   </FieldContent>
                 </Field>
                 <Field>
-                  <FieldLabel htmlFor="pairing-command">Daemon command</FieldLabel>
+                  <FieldLabel htmlFor="pairing-command">
+                    Daemon command
+                  </FieldLabel>
                   <FieldContent>
                     <Textarea
                       id="pairing-command"
@@ -750,7 +796,10 @@ export default function RemoteAgentsPage() {
                         variant="outline"
                         className="rounded-full"
                         onClick={() =>
-                          void copyText(pairingResult.daemonCommand, "Daemon command")
+                          void copyText(
+                            pairingResult.daemonCommand,
+                            "Daemon command"
+                          )
                         }
                       >
                         <Copy className="mr-2 size-4" />
