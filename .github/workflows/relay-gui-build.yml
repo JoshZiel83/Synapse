@@ -106,7 +106,7 @@ jobs:
             relay/internal/nodebundle/assets
             relay/internal/chromemcpbundle/assets
             relay/internal/commandlinebundle/assets
-          key: relay-runtime-bundle-${{ runner.os }}-${{ matrix.suffix }}-${{ env.BUNDLED_NODE_VERSION }}-${{ env.CHROME_DEVTOOLS_MCP_VERSION }}-${{ env.BUNDLED_PYTHON_VERSION }}-${{ env.BUNDLED_PYTHON_STANDALONE_RELEASE }}-${{ env.BUNDLED_WINDOWS_GIT_VERSION }}-${{ env.BUNDLED_FFMPEG_RELEASE_TAG }}-${{ env.COMMANDLINE_PACKAGE_PROFILE }}-${{ hashFiles('.gitmodules', 'relay/cli-anything-wave1.json', 'relay/scripts/prepare-node-bundle.mjs', 'relay/scripts/prepare-chrome-devtools-bundle.mjs', 'relay/scripts/prepare-commandline-bundle.mjs', 'relay/scripts/lib/subprojects.mjs', 'subprojects/cli-anything/**/agent-harness/setup.py', 'subprojects/cli-anything/**/agent-harness/cli_anything/**') }}
+          key: relay-runtime-bundle-${{ runner.os }}-${{ matrix.suffix }}-${{ env.BUNDLED_NODE_VERSION }}-${{ env.CHROME_DEVTOOLS_MCP_VERSION }}-${{ env.BUNDLED_PYTHON_VERSION }}-${{ env.BUNDLED_PYTHON_STANDALONE_RELEASE }}-${{ env.BUNDLED_WINDOWS_GIT_VERSION }}-${{ env.BUNDLED_FFMPEG_RELEASE_TAG }}-${{ env.COMMANDLINE_PACKAGE_PROFILE }}-${{ hashFiles('.gitmodules', 'relay/managed-command-providers.json', 'relay/scripts/prepare-node-bundle.mjs', 'relay/scripts/prepare-chrome-devtools-bundle.mjs', 'relay/scripts/prepare-commandline-bundle.mjs', 'relay/scripts/lib/subprojects.mjs', 'subprojects/cli-anything/**/agent-harness/setup.py', 'subprojects/cli-anything/**/agent-harness/cli_anything/**') }}
 
       - uses: actions/setup-go@v5
         with:

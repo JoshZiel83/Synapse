@@ -54,7 +54,7 @@ The API does not trust arbitrary relay-reported slugs as standalone skills.
 
 Instead, it loads a local manifest:
 
-- `relay/cli-anything-wave1.json`
+- `relay/managed-command-providers.json`
 
 For each manifest entry, it reads the local skill file:
 
