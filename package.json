@@ -22,6 +22,7 @@
     "build:api": "npm run build -w packages/api",
     "build:daemon": "npm run build -w packages/remote-agent-daemon",
     "build:web": "npm run build -w packages/shared && npm run build -w packages/web-next",
+    "audit:business-enums": "node ./scripts/audit-business-enum-literals.mjs",
     "db:bootstrap": "npm run db:bootstrap -w packages/api",
     "db:codegen": "npm run db:codegen -w packages/api",
     "db:seed": "npm run db:seed -w packages/api",

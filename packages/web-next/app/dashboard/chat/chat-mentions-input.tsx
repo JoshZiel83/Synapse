@@ -12,7 +12,7 @@ import ChatAvatar from "./chat-avatar"
 export type MentionableParticipant = {
   id: string
   name: string
-  type: "actor" | "remote_agent" | "workspace_member" | "external"
+  participantType: "actor" | "remote_agent" | "workspace_member" | "external"
   role?: string
   avatarUrl?: string
   emoji?: string
@@ -23,7 +23,7 @@ export type MentionableParticipant = {
 type ParticipantSuggestion = {
   id: string
   display: string
-  type: "actor" | "remote_agent" | "workspace_member" | "external"
+  participantType: "actor" | "remote_agent" | "workspace_member" | "external"
   role?: string
   avatarUrl?: string
   emoji?: string
@@ -121,7 +121,7 @@ export default function ChatMentionsInput({
       participants.map((participant) => ({
         id: participant.id,
         display: participant.name,
-        type: participant.type,
+        participantType: participant.participantType,
         role: participant.role,
         avatarUrl: participant.avatarUrl,
         emoji: participant.emoji,
@@ -197,7 +197,7 @@ export default function ChatMentionsInput({
                 name={participant.display}
                 avatarUrl={participant.avatarUrl}
                 emoji={participant.emoji}
-                entityType={participant.type}
+                entityType={participant.participantType}
                 size="sm"
               />
               <div className="min-w-0 flex-1">
@@ -206,11 +206,11 @@ export default function ChatMentionsInput({
                 </div>
                 <div className="truncate text-[11px] text-muted-foreground">
                   {participant.description ||
-                    (participant.type === "actor"
+                    (participant.participantType === "actor"
                       ? participant.role || "Actor"
-                      : participant.type === "remote_agent"
+                      : participant.participantType === "remote_agent"
                         ? participant.role || "Remote agent"
-                        : participant.type === "external"
+                        : participant.participantType === "external"
                           ? "External participant"
                           : "Workspace user")}
                 </div>

@@ -1,7 +1,16 @@
 "use client"
 
 import { startTransition, useEffect, useMemo, useState } from "react"
-import { buildMobileScanUrl } from "@synapse/shared"
+import {
+  buildMobileScanUrl,
+  CONTACT_DIRECT_STATE,
+  CONTACT_HUB_KIND,
+  CONTACT_TARGET_TYPE,
+  DIRECT_CONVERSATION_OPEN_STATUS,
+  IDENTITY_SEARCH_MATCH_STATE,
+  RELATIONSHIP_ACCESS_POLICY,
+  RELATIONSHIP_APPROVAL_MODE,
+} from "@synapse/shared"
 import QRCode from "qrcode"
 import { useRouter } from "next/navigation"
 import { Bot, Cpu, Inbox, MessageCircle, RefreshCcw, Users } from "lucide-react"
@@ -48,9 +57,9 @@ function ContactAvatar({ entry }: { entry: ContactHubEntryView }) {
         alt={entry.title}
       />
       <AvatarFallback className="rounded-2xl">
-        {entry.targetType === "actor" ? (
+        {entry.targetType === CONTACT_TARGET_TYPE.ACTOR ? (
           <Cpu className="size-4" />
-        ) : entry.targetType === "remote_agent" ? (
+        ) : entry.targetType === CONTACT_TARGET_TYPE.REMOTE_AGENT ? (
           <Bot className="size-4" />
         ) : (
           entry.title.slice(0, 1).toUpperCase()
@@ -106,13 +115,68 @@ function filterConversation(
     .includes(query)
 }
 
+function toggleApprovalMode(current: RelationshipProfileView["approvalMode"]) {
+  return current === RELATIONSHIP_APPROVAL_MODE.AUTO
+    ? RELATIONSHIP_APPROVAL_MODE.MANUAL
+    : RELATIONSHIP_APPROVAL_MODE.AUTO
+}
+
+function toggleAccessPolicy(current: RelationshipProfileView["accessPolicy"]) {
+  return current === RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN
+    ? RELATIONSHIP_ACCESS_POLICY.APPROVAL_REQUIRED
+    : RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN
+}
+
+function getIdentityMatchStateLabel(
+  state: IdentitySearchResponse["matches"][number]["state"]
+) {
+  switch (state) {
+    case IDENTITY_SEARCH_MATCH_STATE.SAME_WORKSPACE_MEMBER:
+      return "Same workspace member"
+    case IDENTITY_SEARCH_MATCH_STATE.FRIEND:
+      return "Already a friend"
+    case IDENTITY_SEARCH_MATCH_STATE.AVAILABLE:
+      return "Available for DM"
+    case IDENTITY_SEARCH_MATCH_STATE.APPROVAL_REQUIRED:
+      return "Approval required"
+    case IDENTITY_SEARCH_MATCH_STATE.PENDING_APPROVAL:
+      return "Approval pending"
+    case IDENTITY_SEARCH_MATCH_STATE.EXISTING:
+      return "Already connected"
+    case IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST:
+      return "Friend request pending"
+    default:
+      return "Can send relationship request"
+  }
+}
+
+function isPendingIdentityMatchState(
+  state: IdentitySearchResponse["matches"][number]["state"]
+) {
+  return (
+    state === IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST ||
+    state === IDENTITY_SEARCH_MATCH_STATE.PENDING_APPROVAL
+  )
+}
+
+function canOpenIdentityMatch(
+  state: IdentitySearchResponse["matches"][number]["state"]
+) {
+  return (
+    state === IDENTITY_SEARCH_MATCH_STATE.SAME_WORKSPACE_MEMBER ||
+    state === IDENTITY_SEARCH_MATCH_STATE.FRIEND ||
+    state === IDENTITY_SEARCH_MATCH_STATE.AVAILABLE ||
+    state === IDENTITY_SEARCH_MATCH_STATE.EXISTING
+  )
+}
+
 function statusBadge(entry: ContactHubEntryView) {
   switch (entry.directState.status) {
-    case "existing":
+    case CONTACT_DIRECT_STATE.EXISTING:
       return <Badge variant="secondary">Existing DM</Badge>
-    case "pending_approval":
+    case CONTACT_DIRECT_STATE.PENDING_APPROVAL:
       return <Badge variant="outline">Pending approval</Badge>
-    case "approval_required":
+    case CONTACT_DIRECT_STATE.APPROVAL_REQUIRED:
       return <Badge variant="outline">Approval required</Badge>
     default:
       return <Badge variant="outline">{entry.relationLabel}</Badge>
@@ -480,7 +544,7 @@ export function ContactHubClient() {
   async function handleOpenDirect(entry: ContactHubEntryView) {
     if (!workspaceId) return
     if (
-      entry.directState.status === "existing" &&
+      entry.directState.status === CONTACT_DIRECT_STATE.EXISTING &&
       entry.directState.conversationId
     ) {
       startTransition(() => {
@@ -495,7 +559,7 @@ export function ContactHubClient() {
       contactKind: entry.kind,
       contactId: entry.id,
     })
-    if (result.status === "pending_approval") {
+    if (result.status === DIRECT_CONVERSATION_OPEN_STATUS.PENDING_APPROVAL) {
       toast.message(
         "Request submitted. Wait for approval before starting a DM."
       )
@@ -565,7 +629,7 @@ export function ContactHubClient() {
 
   async function handleToggleMyApprovalMode() {
     if (!workspaceId || !myProfile) return
-    const nextMode = myProfile.approvalMode === "auto" ? "manual" : "auto"
+    const nextMode = toggleApprovalMode(myProfile.approvalMode)
     const nextProfile = await api.updateMyRelationshipProfile(workspaceId, {
       approvalMode: nextMode,
     })
@@ -576,8 +640,7 @@ export function ContactHubClient() {
 
   async function handleToggleActorApprovalMode() {
     if (!workspaceId || !selectedEntry?.actorId || !selectedActorProfile) return
-    const nextMode =
-      selectedActorProfile.approvalMode === "auto" ? "manual" : "auto"
+    const nextMode = toggleApprovalMode(selectedActorProfile.approvalMode)
     const nextProfile = await api.updateActorRelationshipProfile(
       workspaceId,
       selectedEntry.actorId,
@@ -592,10 +655,7 @@ export function ContactHubClient() {
 
   async function handleToggleActorAccessPolicy() {
     if (!workspaceId || !selectedEntry?.actorId || !selectedActorProfile) return
-    const nextPolicy =
-      selectedActorProfile.accessPolicy === "workspace_open"
-        ? "approval_required"
-        : "workspace_open"
+    const nextPolicy = toggleAccessPolicy(selectedActorProfile.accessPolicy)
     const nextProfile = await api.updateActorRelationshipProfile(
       workspaceId,
       selectedEntry.actorId,
@@ -636,8 +696,7 @@ export function ContactHubClient() {
       !selectedRemoteAgentProfile
     )
       return
-    const nextMode =
-      selectedRemoteAgentProfile.approvalMode === "auto" ? "manual" : "auto"
+    const nextMode = toggleApprovalMode(selectedRemoteAgentProfile.approvalMode)
     const nextProfile = await api.updateRemoteAgentRelationshipProfile(
       workspaceId,
       selectedEntry.remoteAgentId,
@@ -657,10 +716,9 @@ export function ContactHubClient() {
       !selectedRemoteAgentProfile
     )
       return
-    const nextPolicy =
-      selectedRemoteAgentProfile.accessPolicy === "workspace_open"
-        ? "approval_required"
-        : "workspace_open"
+    const nextPolicy = toggleAccessPolicy(
+      selectedRemoteAgentProfile.accessPolicy
+    )
     const nextProfile = await api.updateRemoteAgentRelationshipProfile(
       workspaceId,
       selectedEntry.remoteAgentId,
@@ -792,7 +850,7 @@ export function ContactHubClient() {
                             {request.requester?.name || "Unknown user"}
                           </div>
                           <div className="mt-1 text-sm text-muted-foreground">
-                            {request.targetType === "actor"
+                            {request.targetType === CONTACT_TARGET_TYPE.ACTOR
                               ? `Requested actor ${request.targetActor?.name || "Unknown actor"}`
                               : `Requested friendship from ${request.requester?.workspace.name || "another workspace"}`}
                           </div>
@@ -1010,21 +1068,7 @@ export function ContactHubClient() {
                                 {match.subtitle}
                               </div>
                               <div className="mt-2 text-xs text-muted-foreground">
-                                {match.state === "same_workspace_member"
-                                  ? "Same workspace member"
-                                  : match.state === "friend"
-                                    ? "Already a friend"
-                                    : match.state === "available"
-                                      ? "Available for DM"
-                                      : match.state === "approval_required"
-                                        ? "Approval required"
-                                        : match.state === "pending_approval"
-                                          ? "Approval pending"
-                                          : match.state === "existing"
-                                            ? "Already connected"
-                                            : match.state === "pending_request"
-                                              ? "Friend request pending"
-                                              : "Can send relationship request"}
+                                {getIdentityMatchStateLabel(match.state)}
                               </div>
                               <Button
                                 variant="outline"
@@ -1033,18 +1077,13 @@ export function ContactHubClient() {
                                   void handleFriendIdMatchAction(match)
                                 }
                                 disabled={
-                                  match.state === "pending_request" ||
-                                  match.state === "pending_approval" ||
+                                  isPendingIdentityMatchState(match.state) ||
                                   submittingSearchProfileId === match.profileId
                                 }
                               >
-                                {match.state === "same_workspace_member" ||
-                                match.state === "friend" ||
-                                match.state === "available" ||
-                                match.state === "existing"
+                                {canOpenIdentityMatch(match.state)
                                   ? "Open DM"
-                                  : match.state === "pending_request" ||
-                                      match.state === "pending_approval"
+                                  : isPendingIdentityMatchState(match.state)
                                     ? "Pending"
                                     : submittingSearchProfileId ===
                                         match.profileId
@@ -1246,10 +1285,11 @@ export function ContactHubClient() {
                       onClick={() => void handleOpenDirect(selectedEntry)}
                     >
                       <MessageCircle className="mr-2 size-4" />
-                      {selectedEntry.directState.status === "existing"
+                      {selectedEntry.directState.status ===
+                      CONTACT_DIRECT_STATE.EXISTING
                         ? "Open existing DM"
                         : selectedEntry.directState.status ===
-                            "approval_required"
+                            CONTACT_DIRECT_STATE.APPROVAL_REQUIRED
                           ? "Request access and DM"
                           : "Start DM"}
                     </Button>
@@ -1316,7 +1356,9 @@ export function ContactHubClient() {
                       <Skeleton className="aspect-square rounded-2xl" />
                     )}
                     <p className="text-sm text-muted-foreground">
-                      Approval mode: {myProfile?.approvalMode || "manual"}
+                      Approval mode:{" "}
+                      {myProfile?.approvalMode ||
+                        RELATIONSHIP_APPROVAL_MODE.MANUAL}
                     </p>
                     <Button
                       variant="outline"
@@ -1325,12 +1367,15 @@ export function ContactHubClient() {
                       onClick={() => void handleToggleMyApprovalMode()}
                     >
                       Switch to{" "}
-                      {myProfile?.approvalMode === "auto" ? "manual" : "auto"}
+                      {toggleApprovalMode(
+                        myProfile?.approvalMode ||
+                          RELATIONSHIP_APPROVAL_MODE.MANUAL
+                      )}
                     </Button>
                   </CardContent>
                 </Card>
 
-                {selectedEntry.kind === "workspace-actor" &&
+                {selectedEntry.kind === CONTACT_HUB_KIND.WORKSPACE_ACTOR &&
                 selectedActorProfile ? (
                   <Card>
                     <CardHeader>
@@ -1360,9 +1405,9 @@ export function ContactHubClient() {
                           onClick={() => void handleToggleActorApprovalMode()}
                         >
                           Switch approval to{" "}
-                          {selectedActorProfile.approvalMode === "auto"
-                            ? "manual"
-                            : "auto"}
+                          {toggleApprovalMode(
+                            selectedActorProfile.approvalMode
+                          )}
                         </Button>
                         <Button
                           variant="outline"
@@ -1371,10 +1416,9 @@ export function ContactHubClient() {
                           onClick={() => void handleToggleActorAccessPolicy()}
                         >
                           Switch policy to{" "}
-                          {selectedActorProfile.accessPolicy ===
-                          "workspace_open"
-                            ? "approval_required"
-                            : "workspace_open"}
+                          {toggleAccessPolicy(
+                            selectedActorProfile.accessPolicy
+                          )}
                         </Button>
                         <Button
                           variant="outline"
@@ -1390,7 +1434,8 @@ export function ContactHubClient() {
                   </Card>
                 ) : null}
 
-                {selectedEntry.kind === "workspace-remote-agent" &&
+                {selectedEntry.kind ===
+                  CONTACT_HUB_KIND.WORKSPACE_REMOTE_AGENT &&
                 selectedRemoteAgentProfile ? (
                   <Card>
                     <CardHeader>
@@ -1424,9 +1469,9 @@ export function ContactHubClient() {
                           }
                         >
                           Switch approval to{" "}
-                          {selectedRemoteAgentProfile.approvalMode === "auto"
-                            ? "manual"
-                            : "auto"}
+                          {toggleApprovalMode(
+                            selectedRemoteAgentProfile.approvalMode
+                          )}
                         </Button>
                         <Button
                           variant="outline"
@@ -1437,10 +1482,9 @@ export function ContactHubClient() {
                           }
                         >
                           Switch policy to{" "}
-                          {selectedRemoteAgentProfile.accessPolicy ===
-                          "workspace_open"
-                            ? "approval_required"
-                            : "workspace_open"}
+                          {toggleAccessPolicy(
+                            selectedRemoteAgentProfile.accessPolicy
+                          )}
                         </Button>
                         <Button
                           variant="outline"

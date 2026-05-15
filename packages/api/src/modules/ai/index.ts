@@ -23,6 +23,7 @@ import type {
   NormalizedMcpToolResult,
 } from "@synapse/shared/types"
 import {
+  CONVERSATION_PARTICIPANT_TYPE,
   extractText,
   formatMentionText,
   getDefaultModelEngineKind,
@@ -344,9 +345,9 @@ async function loadToolResolveConversationParticipants(params: {
         type: "actor",
         id: member.actor_id,
         participantId: member.id,
-        name: member.actor_name || "Unknown actor",
-        title: member.actor_title || member.actor_role || "Actor",
-        role: member.actor_role || undefined,
+        name: member.participant_name || "Unknown actor",
+        title: member.participant_title || member.participant_role || "Actor",
+        role: member.participant_role || undefined,
       })
       continue
     }
@@ -678,7 +679,10 @@ export async function actorThink(
       otherParticipantCount:
         currentToolConversationParticipants?.filter(
           (participant) =>
-            !(participant.type === "actor" && participant.id === actor.id)
+            !(
+              participant.type === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+              participant.id === actor.id
+            )
         ).length || 0,
     })
   const buildResolveCtx = (): ToolResolveContext => ({

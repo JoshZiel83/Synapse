@@ -37,13 +37,39 @@ import type {
   CurrentUserWeixinBindingSummary,
   InstalledSkill,
   InteractionRequestSummary,
+  ContactHubDetailResponse,
+  ContactHubEntryView,
+  ContactHubKind,
+  ContactHubResponse,
+  ContactTargetType,
+  DirectConversationOpenResponse,
+  IdentitySearchMatchView,
+  IdentitySearchResponse,
+  RelationshipProfileView,
+  RelationshipScanResponse,
+  RemoteAgentAccessPolicy,
+  RemoteAgentAccessRequestListResponse,
+  RemoteAgentBindingView,
+  RemoteAgentGroupInteractionGrantView,
+  RemoteAgentLifecycleState,
+  RemoteAgentMachineDetailView,
+  RemoteAgentMachinePairingSessionView,
+  RemoteAgentMachineTrustStatus,
+  RemoteAgentMachineView,
+  RemoteAgentRuntimeCapabilityView,
+  RemoteAgentRuntimeCatalogEntryView,
+  RemoteAgentRuntimeCatalogStatus,
+  RemoteAgentRuntimeKind,
+  RemoteAgentRuntimeSummaryView,
+  RemoteAgentView,
+  ActorAccessRequestListResponse,
+  FriendRequestListResponse,
   TransportAccountSummary,
   TransportConnectorCapability,
   TransportExternalUserSummary,
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
   WorkspaceChiefActorPreference,
-  RemoteAgentRuntimeState as SharedRemoteAgentRuntimeState,
   RelayDashboardView,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
@@ -61,9 +87,34 @@ import {
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
 
 export type {
+  ActorAccessRequestListResponse,
   ChatInteractionResolveInput,
   ChatInteractionResolvePayload,
   ChatInteractionResolveResponse,
+  ContactHubDetailResponse,
+  ContactHubEntryView,
+  ContactHubResponse,
+  ContactTargetType,
+  DirectConversationOpenResponse,
+  FriendRequestListResponse,
+  IdentitySearchMatchView,
+  IdentitySearchResponse,
+  RelationshipProfileView,
+  RelationshipScanResponse,
+  RemoteAgentAccessPolicy,
+  RemoteAgentAccessRequestListResponse,
+  RemoteAgentBindingView,
+  RemoteAgentGroupInteractionGrantView,
+  RemoteAgentLifecycleState,
+  RemoteAgentMachineDetailView,
+  RemoteAgentMachinePairingSessionView,
+  RemoteAgentMachineTrustStatus,
+  RemoteAgentMachineView,
+  RemoteAgentRuntimeCapabilityView,
+  RemoteAgentRuntimeCatalogEntryView,
+  RemoteAgentRuntimeKind,
+  RemoteAgentRuntimeSummaryView,
+  RemoteAgentView,
 }
 
 export class ApiError extends Error {
@@ -97,268 +148,8 @@ export interface WorkspaceListResponse {
   }>
 }
 
-export interface RelationshipProfileView {
-  subjectType: "member" | "actor" | "remote_agent"
-  approvalMode: "auto" | "manual"
-  qrToken: string
-  qrUrl: string
-  identityId: string
-  identitySearchEnabled: boolean
-  accessPolicy?: "workspace_open" | "approval_required"
-  isPublicShared?: boolean
-}
-
-export type ContactHubEntryKind =
-  | "workspace-actor"
-  | "workspace-member"
-  | "workspace-remote-agent"
-  | "friend-actor"
-  | "friend-member"
-  | "friend-remote-agent"
-
-export type ContactTargetType = "member" | "actor" | "remote_agent"
-
-export interface ContactHubEntryView {
-  kind: ContactHubEntryKind
-  id: string
-  targetType: ContactTargetType
-  title: string
-  subtitle?: string
-  avatarUrl?: string
-  avatarEmoji?: string
-  workspace: {
-    id: string
-    name: string
-    slug: string
-  }
-  workspaceMemberId?: string
-  userId?: string
-  actorId?: string
-  remoteAgentId?: string
-  relationLabel: string
-  directState: {
-    status: "existing" | "available" | "approval_required" | "pending_approval"
-    conversationId?: string
-  }
-}
-
-export interface ContactHubResponse {
-  requestSummary: {
-    friendPendingCount: number
-    actorAccessPendingCount: number
-    remoteAgentAccessPendingCount: number
-    totalPendingCount: number
-  }
-  workspaceActors: ContactHubEntryView[]
-  workspaceRemoteAgents: ContactHubEntryView[]
-  workspaceMembers: ContactHubEntryView[]
-  friends: ContactHubEntryView[]
-  groups: unknown[]
-}
-
-export interface IdentitySearchMatchView {
-  profileId: string
-  targetType: ContactTargetType
-  title: string
-  subtitle?: string
-  avatarUrl?: string
-  avatarEmoji?: string
-  workspace: {
-    id: string
-    name: string
-    slug: string
-  }
-  workspaceMemberId?: string
-  userId?: string
-  actorId?: string
-  remoteAgentId?: string
-  state:
-    | "same_workspace_member"
-    | "friend"
-    | "pending_request"
-    | "requestable"
-    | "existing"
-    | "available"
-    | "approval_required"
-    | "pending_approval"
-  contact?: { kind: ContactHubEntryKind; id: string }
-  conversationId?: string
-  requestId?: string
-}
-
-export interface IdentitySearchResponse {
-  query: string
-  outcome: "empty" | "invalid" | "self" | "not_found" | "found"
-  matches: IdentitySearchMatchView[]
-}
-
-export interface ContactHubDetailResponse {
-  contact: ContactHubEntryView
-  groups: unknown[]
-}
-
-export interface FriendRequestListResponse {
-  incoming: any[]
-  outgoing: any[]
-}
-
-export interface ActorAccessRequestListResponse {
-  incoming: any[]
-  outgoing: any[]
-}
-
-export interface RemoteAgentAccessRequestListResponse {
-  incoming: any[]
-  outgoing: any[]
-}
-
-export interface RelationshipScanResponse {
-  outcome:
-    | "self_scan"
-    | "same_workspace_member"
-    | "friend_active"
-    | "friend_request_created"
-    | "friend_request_pending"
-    | "actor_access_granted"
-    | "actor_access_request_created"
-    | "actor_access_pending"
-    | "remote_agent_access_granted"
-    | "remote_agent_access_request_created"
-    | "remote_agent_access_pending"
-  requestId?: string
-  contact?: { kind: ContactHubEntryKind; id: string }
-}
-
-export interface DirectConversationOpenResponse {
-  status: "ready" | "pending_approval"
-  created?: boolean
-  conversationId?: string
-  requestId?: string
-}
-
-export type RemoteAgentRuntimeKind = "claude_code" | "codex"
-export type RemoteAgentAccessPolicy = "workspace_open" | "approval_required"
-export type RemoteAgentLifecycleState = "online" | "offline"
-export type RemoteAgentMachineTrustStatus =
-  | "pending"
-  | "active"
-  | "revoked"
-  | "blocked"
-export type RemoteAgentRuntimeStatus =
-  | "available"
-  | "missing_binary"
-  | "broken_path"
-  | "unsupported_platform"
-  | "runtime_error"
-
-export interface RemoteAgentRuntimeCapabilityView {
-  supportsRequestUserInput?: boolean
-  supportsPlanMode?: boolean
-  supportsPersistentSession?: boolean
-  supportsCodexAppServer?: boolean
-  supportsStructuredIo?: boolean
-}
-
-export interface RemoteAgentRuntimeSummaryView {
-  runtimeKind: RemoteAgentRuntimeKind
-  state: SharedRemoteAgentRuntimeState["state"]
-  statusText?: string
-  sessionId?: string
-  activeConversationId?: string
-  activeInteractionId?: string
-  pendingConversationCount: number
-  unreadDeliveryCount: number
-  lastActivityAt?: string
-  lastRunStartedAt?: string
-  lastRunFinishedAt?: string
-  lastError?: string
-  capabilities?: RemoteAgentRuntimeCapabilityView
-}
-
-export interface RemoteAgentGroupInteractionGrantView {
-  workspaceMemberId: string
-  grantedByWorkspaceMemberId?: string
-  createdAt?: string
-  updatedAt?: string
-  userId: string
-  name: string
-  avatarUrl?: string
-}
-
-export interface RemoteAgentBindingView {
-  machineId: string
-  machineTitle?: string
-  status: string
-  runtimePath?: string
-  localRootPath?: string
-  machineLifecycleState?: RemoteAgentLifecycleState
-  runtimeSummary?: RemoteAgentRuntimeSummaryView
-}
-
-export interface RemoteAgentView {
-  id: string
-  workspaceId: string
-  name: string
-  title: string
-  description?: string
-  runtimeKind: RemoteAgentRuntimeKind
-  avatarFileId?: string
-  avatarEmoji?: string
-  accessPolicy: RemoteAgentAccessPolicy
-  isActive: boolean
-  isPublicShared: boolean
-  metadata: Record<string, unknown>
-  createdByWorkspaceMemberId?: string
-  createdAt?: string
-  updatedAt?: string
-  runtimeSummary?: RemoteAgentRuntimeSummaryView
-  binding?: RemoteAgentBindingView
-}
-
-export interface RemoteAgentRuntimeCatalogEntryView {
-  runtimeKind: RemoteAgentRuntimeKind
-  executablePath?: string
-  status: RemoteAgentRuntimeStatus
-  version?: string
-  metadata: Record<string, unknown>
-  lastError?: string
-  lastSeenAt?: string
-}
-
-export interface RemoteAgentMachineView {
-  id: string
-  workspaceId: string
-  title: string
-  description?: string
-  trustStatus: RemoteAgentMachineTrustStatus
-  lifecycleState?: RemoteAgentLifecycleState
-  bindingCount: number
-  lastSeenAt?: string
-  createdAt?: string
-  updatedAt?: string
-}
-
-export interface RemoteAgentMachineDetailView {
-  machine: Omit<RemoteAgentMachineView, "bindingCount"> & {
-    bindingCount?: number
-  }
-  runtimeCatalog: RemoteAgentRuntimeCatalogEntryView[]
-  bindings: Array<{
-    remoteAgentId: string
-    name: string
-    runtimeKind: RemoteAgentRuntimeKind
-    runtimePath?: string
-    localRootPath?: string
-    status: string
-    runtimeSummary?: RemoteAgentRuntimeSummaryView
-  }>
-}
-
-export interface RemoteAgentMachinePairingSessionView {
-  machine: Omit<RemoteAgentMachineView, "bindingCount">
-  apiKey: string
-  daemonCommand: string
-}
+export type ContactHubEntryKind = ContactHubKind
+export type RemoteAgentRuntimeStatus = RemoteAgentRuntimeCatalogStatus
 
 class ApiClient {
   private async fetch(path: string, options: RequestInit = {}) {

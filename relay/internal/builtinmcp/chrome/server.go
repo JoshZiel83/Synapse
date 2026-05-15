@@ -70,7 +70,7 @@ func New(cfg Config) (*Server, error) {
 	if cfg.ConnectionMode == "" {
 		cfg.ConnectionMode = "managed"
 	}
-	if cfg.Channel == "" {
+	if cfg.Channel == "" && cfg.ExecutablePath == "" {
 		cfg.Channel = "stable"
 	}
 	tools, err := staticCatalog(cfg.Slim)

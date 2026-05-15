@@ -450,6 +450,33 @@ func TestValidateBuiltinChromeServer(t *testing.T) {
 	}
 }
 
+func TestApplyBuiltinDefaultsDoesNotForceChromeChannelWhenExecutablePathIsSet(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	data := []byte(`
+servers:
+  - name: chrome-browser
+    transport: builtin
+    builtin:
+      kind: chrome
+      chrome:
+        executable_path: /usr/bin/google-chrome-stable
+`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("load config: %v", err)
+	}
+	if len(cfg.Servers) != 1 || cfg.Servers[0].Builtin == nil || cfg.Servers[0].Builtin.Chrome == nil {
+		t.Fatalf("expected builtin chrome server, got %+v", cfg.Servers)
+	}
+	if got := cfg.Servers[0].Builtin.Chrome.Channel; got != "" {
+		t.Fatalf("chrome channel = %q, want empty when executable_path is set", got)
+	}
+}
+
 func TestValidateBuiltinCommandlineServer(t *testing.T) {
 	cfg := &Config{
 		Relay: RelayConfig{

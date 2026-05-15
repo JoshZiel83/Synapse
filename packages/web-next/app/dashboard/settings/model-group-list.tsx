@@ -3,99 +3,46 @@
 import Link from "next/link"
 import { useEffect, useState } from "react"
 import { useRouter } from "next/navigation"
+import {
+  MODEL_GROUP_OWNER_TYPE,
+  type ModelGroupOwnerType,
+  type ModelGroupRoutingStrategy,
+} from "@synapse/shared"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
 import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
-import {
-  Cpu,
-  Plus,
-  RefreshCw,
-  Globe2,
-  Building2,
-  ChevronRight,
-  Star,
-  UserRound,
-} from "lucide-react"
+import { Cpu, Plus, RefreshCw, ChevronRight, Star } from "lucide-react"
 import ModelGroupDialog from "./model-group-dialog"
-
-type ModelGroupScope = "workspace" | "platform" | "workspace_member" | "all"
+import {
+  getModelGroupScopeMeta,
+  getModelGroupStrategyLabel,
+  resolveModelGroupScope,
+  type ModelGroupScope,
+  type ModelGroupScopeFilter,
+} from "./model-group-shared"
 
 interface ModelGroup {
   id: string
   workspace_id: string | null
-  owner_type?: "platform" | "workspace" | "workspace_member"
+  owner_type?: ModelGroupOwnerType
   owner_workspace_id?: string | null
   owner_workspace_member_id?: string | null
   name: string
   description: string
-  routing_strategy: string
+  routing_strategy: ModelGroupRoutingStrategy
   is_default: boolean
   is_active?: boolean
   created_at: string
-}
-
-function strategyLabel(value: string) {
-  switch (value) {
-    case "weighted_random":
-      return "Weighted Random"
-    case "round_robin":
-      return "Round Robin"
-    case "priority_failover":
-      return "Priority Failover"
-    default:
-      return value
-  }
-}
-
-function resolveScope(group: ModelGroup): Exclude<ModelGroupScope, "all"> {
-  if (
-    group.owner_type === "platform" ||
-    (!group.owner_type && !group.workspace_id)
-  ) {
-    return "platform"
-  }
-  if (group.owner_type === "workspace_member") {
-    return "workspace_member"
-  }
-  return "workspace"
-}
-
-function scopeVisual(scope: Exclude<ModelGroupScope, "all">) {
-  switch (scope) {
-    case "platform":
-      return {
-        label: "Platform",
-        icon: Globe2,
-        badgeClassName: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-      }
-    case "workspace_member":
-      return {
-        label: "Member",
-        icon: UserRound,
-        badgeClassName: "bg-violet-500/10 text-violet-400 border-violet-500/20",
-      }
-    default:
-      return {
-        label: "Workspace",
-        icon: Building2,
-        badgeClassName:
-          "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-      }
-  }
 }
 
 export default function ModelGroupList({
   scope = "all",
   detailOrigin,
 }: {
-  scope?: ModelGroupScope
-  detailOrigin?:
-    | "workspace"
-    | "workspace-member"
-    | "workspace_member"
-    | "platform"
+  scope?: ModelGroupScopeFilter
+  detailOrigin?: ModelGroupScope | "workspace-member"
 }) {
   const router = useRouter()
   const { workspaceId } = useWorkspace()
@@ -105,16 +52,21 @@ export default function ModelGroupList({
   const [editGroup, setEditGroup] = useState<ModelGroup | null>(null)
 
   const loadGroups = async () => {
-    if (scope !== "platform" && scope !== "workspace_member" && !workspaceId)
+    if (
+      scope !== MODEL_GROUP_OWNER_TYPE.PLATFORM &&
+      scope !== MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER &&
+      !workspaceId
+    ) {
       return
+    }
     setLoading(true)
     try {
       let nextGroups: ModelGroup[] = []
 
-      if (scope === "platform") {
+      if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
         const response = await api.getPlatformModelGroups()
         nextGroups = response.groups || []
-      } else if (scope === "workspace_member") {
+      } else if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
         const response = await api.getWorkspaceMemberModelGroups(workspaceId!)
         nextGroups = response.groups || []
       } else {
@@ -122,9 +74,10 @@ export default function ModelGroupList({
         nextGroups = response.groups || []
       }
 
-      if (scope === "workspace") {
+      if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE) {
         nextGroups = nextGroups.filter(
-          (group) => resolveScope(group) === "workspace"
+          (group) =>
+            resolveModelGroupScope(group) === MODEL_GROUP_OWNER_TYPE.WORKSPACE
         )
       }
 
@@ -152,9 +105,9 @@ export default function ModelGroupList({
   }
 
   const emptyLabel =
-    scope === "platform"
+    scope === MODEL_GROUP_OWNER_TYPE.PLATFORM
       ? "No platform model groups configured"
-      : scope === "workspace_member"
+      : scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER
         ? "No member model groups configured"
         : "No workspace model groups configured"
 
@@ -208,15 +161,17 @@ export default function ModelGroupList({
               key={group.id}
               group={group}
               onSelect={() => {
-                const resolved = resolveScope(group)
+                const resolved = resolveModelGroupScope(group)
                 const params = new URLSearchParams()
-                if (resolved !== "workspace") {
+                if (resolved !== MODEL_GROUP_OWNER_TYPE.WORKSPACE) {
                   params.set("scope", resolved)
                 }
                 params.set(
                   "origin",
                   detailOrigin ||
-                    (resolved === "workspace" ? "workspace" : resolved)
+                    (resolved === MODEL_GROUP_OWNER_TYPE.WORKSPACE
+                      ? MODEL_GROUP_OWNER_TYPE.WORKSPACE
+                      : resolved)
                 )
                 router.push(
                   `/models/group/${group.id}/setting?${params.toString()}`
@@ -235,7 +190,7 @@ export default function ModelGroupList({
           setDialogOpen(open)
           if (!open) setEditGroup(null)
         }}
-        scope={scope === "all" ? "workspace" : scope}
+        scope={scope === "all" ? MODEL_GROUP_OWNER_TYPE.WORKSPACE : scope}
         group={editGroup}
         onSaved={handleCreated}
       />
@@ -250,26 +205,24 @@ function GroupCard({
   onEdit,
 }: {
   group: ModelGroup
-  detailOrigin?:
-    | "workspace"
-    | "workspace-member"
-    | "workspace_member"
-    | "platform"
+  detailOrigin?: ModelGroupScope | "workspace-member"
   onSelect: () => void
   onEdit: () => void
 }) {
-  const resolvedScope = resolveScope(group)
-  const scopeMeta = scopeVisual(resolvedScope)
+  const resolvedScope = resolveModelGroupScope(group)
+  const scopeMeta = getModelGroupScopeMeta(resolvedScope)
   const ScopeIcon = scopeMeta.icon
   const params = new URLSearchParams()
 
-  if (resolvedScope !== "workspace") {
+  if (resolvedScope !== MODEL_GROUP_OWNER_TYPE.WORKSPACE) {
     params.set("scope", resolvedScope)
   }
   params.set(
     "origin",
     detailOrigin ||
-      (resolvedScope === "workspace" ? "workspace" : resolvedScope)
+      (resolvedScope === MODEL_GROUP_OWNER_TYPE.WORKSPACE
+        ? MODEL_GROUP_OWNER_TYPE.WORKSPACE
+        : resolvedScope)
   )
 
   return (
@@ -297,7 +250,7 @@ function GroupCard({
             </div>
             <div className="mt-1 flex flex-wrap items-center gap-3">
               <span className="text-xs text-muted-foreground">
-                {strategyLabel(group.routing_strategy)}
+                {getModelGroupStrategyLabel(group.routing_strategy)}
               </span>
               {group.description ? (
                 <span className="max-w-xs truncate text-xs text-muted-foreground/60">

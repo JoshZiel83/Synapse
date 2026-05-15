@@ -5,7 +5,11 @@ import type {
   ProviderContextManifest,
   ProviderContextWindow,
 } from "@synapse/shared"
-import { buildConversationMessageRef, textBlock } from "@synapse/shared"
+import {
+  CONVERSATION_PARTICIPANT_TYPE,
+  buildConversationMessageRef,
+  textBlock,
+} from "@synapse/shared"
 import type {
   CanonicalContextItem,
   ConversationEntityRef,
@@ -371,7 +375,8 @@ function compileManifestMessage(
     const isSelf =
       (manifest.selfParticipantId &&
         participant.participantId === manifest.selfParticipantId) ||
-      (participant.type === "actor" && participant.id === manifest.selfActorId)
+      (participant.type === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+        participant.id === manifest.selfActorId)
     content.push(
       toXmlTextBlock(
         selfClosingXmlTag("participant", {

@@ -2,6 +2,11 @@
 
 import Link from "next/link"
 import { useEffect, useState } from "react"
+import {
+  MODEL_GROUP_OWNER_TYPE,
+  type ModelGroupOwnerType,
+  type ModelGroupRoutingStrategy,
+} from "@synapse/shared"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
 import { Card, CardContent } from "@/components/ui/card"
@@ -16,14 +21,16 @@ import {
   PowerOff,
   History,
   RefreshCw,
-  Globe2,
-  UserRound,
-  Building2,
 } from "lucide-react"
 import ModelItemDialog from "./model-item-dialog"
 import ModelItemVersions from "./model-item-versions"
-
-type ModelGroupScope = "workspace" | "platform" | "workspace_member" | "auto"
+import {
+  getModelGroupScopeMeta,
+  getModelGroupScopeLabel,
+  getModelGroupStrategyLabel,
+  type ModelGroupScope,
+  type ModelGroupScopeAuto,
+} from "./model-group-shared"
 
 interface ModelItem {
   id: string
@@ -47,46 +54,24 @@ interface GroupDetail {
   id: string
   name: string
   description: string
-  routing_strategy: string
+  routing_strategy: ModelGroupRoutingStrategy
   is_default: boolean
   workspace_id: string | null
-  owner_type?: "platform" | "workspace" | "workspace_member"
+  owner_type?: ModelGroupOwnerType
   owner_workspace_id?: string | null
   owner_workspace_member_id?: string | null
   items: ModelItem[]
 }
 
-function groupScopeLabel(scope: Exclude<ModelGroupScope, "auto">) {
-  switch (scope) {
-    case "platform":
-      return "Platform"
-    case "workspace_member":
-      return "Member"
-    default:
-      return "Workspace"
-  }
-}
-
-function groupScopeIcon(scope: Exclude<ModelGroupScope, "auto">) {
-  switch (scope) {
-    case "platform":
-      return Globe2
-    case "workspace_member":
-      return UserRound
-    default:
-      return Building2
-  }
-}
-
 async function fetchGroupByScope(
-  scope: Exclude<ModelGroupScope, "auto">,
+  scope: ModelGroupScope,
   groupId: string,
   workspaceId: string | null
 ) {
-  if (scope === "platform") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.getPlatformModelGroup(groupId)
   }
-  if (scope === "workspace_member") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
     if (!workspaceId) {
       throw new Error("Workspace is required")
     }
@@ -105,7 +90,7 @@ export default function ModelGroupDetail({
   onBack,
 }: {
   groupId: string
-  scope?: ModelGroupScope
+  scope?: ModelGroupScopeAuto
   backHref?: string
   onBack?: () => void
 }) {
@@ -115,8 +100,9 @@ export default function ModelGroupDetail({
   const [itemDialogOpen, setItemDialogOpen] = useState(false)
   const [editItem, setEditItem] = useState<ModelItem | null>(null)
   const [versionsItemId, setVersionsItemId] = useState<string | null>(null)
-  const [resolvedScope, setResolvedScope] =
-    useState<Exclude<ModelGroupScope, "auto">>("workspace")
+  const [resolvedScope, setResolvedScope] = useState<ModelGroupScope>(
+    MODEL_GROUP_OWNER_TYPE.WORKSPACE
+  )
 
   const loadGroup = async () => {
     setLoading(true)
@@ -131,30 +117,34 @@ export default function ModelGroupDetail({
       if (workspaceId) {
         try {
           const response = await fetchGroupByScope(
-            "workspace",
+            MODEL_GROUP_OWNER_TYPE.WORKSPACE,
             groupId,
             workspaceId
           )
           setGroup(response.group)
-          setResolvedScope("workspace")
+          setResolvedScope(MODEL_GROUP_OWNER_TYPE.WORKSPACE)
           return
         } catch {}
       }
 
       try {
         const response = await fetchGroupByScope(
-          "workspace_member",
+          MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER,
           groupId,
           workspaceId
         )
         setGroup(response.group)
-        setResolvedScope("workspace_member")
+        setResolvedScope(MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER)
         return
       } catch {}
 
-      const response = await fetchGroupByScope("platform", groupId, workspaceId)
+      const response = await fetchGroupByScope(
+        MODEL_GROUP_OWNER_TYPE.PLATFORM,
+        groupId,
+        workspaceId
+      )
       setGroup(response.group)
-      setResolvedScope("platform")
+      setResolvedScope(MODEL_GROUP_OWNER_TYPE.PLATFORM)
     } catch (err) {
       console.error("Failed to load model group:", err)
       setGroup(null)
@@ -169,11 +159,11 @@ export default function ModelGroupDetail({
 
   const handleToggleItem = async (item: ModelItem) => {
     try {
-      if (resolvedScope === "platform") {
+      if (resolvedScope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
         await api.updatePlatformModelItem(groupId, item.id, {
           isEnabled: !item.is_enabled,
         })
-      } else if (resolvedScope === "workspace_member") {
+      } else if (resolvedScope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
         await api.updateWorkspaceMemberModelItem(
           workspaceId!,
           groupId,
@@ -195,9 +185,9 @@ export default function ModelGroupDetail({
 
   const handleDeleteItem = async (itemId: string) => {
     try {
-      if (resolvedScope === "platform") {
+      if (resolvedScope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
         await api.deletePlatformModelItem(groupId, itemId)
-      } else if (resolvedScope === "workspace_member") {
+      } else if (resolvedScope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
         await api.deleteWorkspaceMemberModelItem(workspaceId!, groupId, itemId)
       } else if (workspaceId) {
         await api.deleteModelItem(workspaceId, groupId, itemId)
@@ -225,20 +215,8 @@ export default function ModelGroupDetail({
     )
   }
 
-  const strategyLabel = (value: string) => {
-    switch (value) {
-      case "weighted_random":
-        return "Weighted Random"
-      case "round_robin":
-        return "Round Robin"
-      case "priority_failover":
-        return "Priority Failover"
-      default:
-        return value
-    }
-  }
-
-  const ScopeIcon = groupScopeIcon(resolvedScope)
+  const scopeMeta = getModelGroupScopeMeta(resolvedScope)
+  const ScopeIcon = scopeMeta.icon
 
   return (
     <div className="flex flex-col gap-6">
@@ -271,11 +249,11 @@ export default function ModelGroupDetail({
             </h2>
             <div className="flex flex-wrap items-center gap-2">
               <Badge className="border-blue-500/20 bg-blue-500/10 text-xs text-blue-400">
-                {strategyLabel(group.routing_strategy)}
+                {getModelGroupStrategyLabel(group.routing_strategy)}
               </Badge>
               <Badge variant="outline" className="text-xs">
                 <ScopeIcon className="mr-1 h-3 w-3" />
-                {groupScopeLabel(resolvedScope)}
+                {getModelGroupScopeLabel(resolvedScope)}
               </Badge>
               {group.is_default ? (
                 <Badge className="border-amber-500/20 bg-amber-500/10 text-xs text-amber-400">

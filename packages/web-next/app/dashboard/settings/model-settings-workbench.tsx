@@ -3,12 +3,19 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
+  MODEL_GROUP_GRANT_SCOPE,
+  MODEL_GROUP_GRANT_STATUS,
+  MODEL_GROUP_OWNER_TYPE,
   getDefaultModelBaseUrl,
   getDefaultModelEngineKind,
   getDefaultModelName,
   getModelProviderEngineDefinitions,
   listModelProviderDefinitions,
   providerSupportsBuiltinTools,
+  type ModelGroupGrantScope,
+  type ModelGroupGrantStatus,
+  type ModelGroupOwnerType,
+  type ModelGroupRoutingStrategy,
 } from "@synapse/shared"
 import {
   ChevronDown,
@@ -61,19 +68,24 @@ import {
   getModelConfigValidationMessage,
   getSaveErrorMessage,
 } from "./model-config-utils"
+import {
+  MODEL_GROUP_ROUTING_OPTIONS,
+  getModelGroupGrantScopeLabel,
+  resolveModelGroupScope,
+  type ModelGroupScope,
+} from "./model-group-shared"
 
-type ModelGroupScope = "workspace" | "platform" | "workspace_member"
-type GrantScope = "platform" | "workspace" | "workspace_member" | "actor"
+type GrantScope = ModelGroupGrantScope
 
 type ModelGroupSummary = {
   id: string
   workspace_id: string | null
-  owner_type?: "platform" | "workspace" | "workspace_member"
+  owner_type?: ModelGroupOwnerType
   owner_workspace_id?: string | null
   owner_workspace_member_id?: string | null
   name: string
   description: string
-  routing_strategy: string
+  routing_strategy: ModelGroupRoutingStrategy
   is_default: boolean
   is_active?: boolean
   created_at: string
@@ -82,11 +94,11 @@ type ModelGroupSummary = {
 type ModelGroupGrant = {
   id: string
   group_id: string
-  grant_scope: GrantScope
+  grant_scope: ModelGroupGrantScope
   workspace_id: string | null
   workspace_member_id: string | null
   actor_id: string | null
-  status: "active" | "revoked"
+  status: ModelGroupGrantStatus
   grantedByWorkspaceMemberId?: string | null
   reason?: string | null
   created_at?: string | null
@@ -167,25 +179,6 @@ const MULTIMODAL_TYPES = [
 
 const PROVIDER_OPTIONS = listModelProviderDefinitions()
 
-const ROUTING_STRATEGIES = [
-  { value: "priority_failover", label: "Priority Failover" },
-  { value: "weighted_random", label: "Weighted Random" },
-  { value: "round_robin", label: "Round Robin" },
-] as const
-
-function resolveScope(group: ModelGroupSummary): ModelGroupScope {
-  if (
-    group.owner_type === "platform" ||
-    (!group.owner_type && !group.workspace_id)
-  ) {
-    return "platform"
-  }
-  if (group.owner_type === "workspace_member") {
-    return "workspace_member"
-  }
-  return "workspace"
-}
-
 function createDraft(item?: ModelItem | null): ConfigDraft {
   const extraConfig = (item?.extra_config || {}) as Record<string, any>
   const multimodal = extraConfig.multimodal || {}
@@ -221,11 +214,11 @@ async function fetchGroupsForScope(
   scope: ModelGroupScope,
   workspaceId: string | null
 ) {
-  if (scope === "platform") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     const response = await api.getPlatformModelGroups()
     return (response.groups || []) as ModelGroupSummary[]
   }
-  if (scope === "workspace_member") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
     const response = await api.getWorkspaceMemberModelGroups(workspaceId!)
     return (response.groups || []) as ModelGroupSummary[]
   }
@@ -234,7 +227,8 @@ async function fetchGroupsForScope(
   }
   const response = await api.getModelGroups(workspaceId)
   return ((response.groups || []) as ModelGroupSummary[]).filter(
-    (group) => resolveScope(group) === "workspace"
+    (group) =>
+      resolveModelGroupScope(group) === MODEL_GROUP_OWNER_TYPE.WORKSPACE
   )
 }
 
@@ -243,10 +237,10 @@ async function fetchGroupDetail(
   groupId: string,
   workspaceId: string | null
 ) {
-  if (scope === "platform") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.getPlatformModelGroup(groupId)
   }
-  if (scope === "workspace_member") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
     return api.getWorkspaceMemberModelGroup(workspaceId!, groupId)
   }
   if (!workspaceId) {
@@ -261,10 +255,10 @@ async function updateGroupForScope(
   workspaceId: string | null,
   data: Record<string, unknown>
 ) {
-  if (scope === "platform") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.updatePlatformModelGroup(groupId, data)
   }
-  if (scope === "workspace_member") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
     return api.updateWorkspaceMemberModelGroup(workspaceId!, groupId, data)
   }
   if (!workspaceId) {
@@ -279,10 +273,10 @@ async function issueGrantForGroup(
   workspaceId: string | null,
   data: Record<string, unknown>
 ) {
-  if (scope === "platform") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.issuePlatformModelGroupGrant(groupId, data)
   }
-  if (scope === "workspace_member") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
     return api.issueWorkspaceMemberModelGroupGrant(workspaceId!, groupId, data)
   }
   if (!workspaceId) {
@@ -297,10 +291,10 @@ async function revokeGrantForGroup(
   workspaceId: string | null,
   grantId: string
 ) {
-  if (scope === "platform") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.revokePlatformModelGroupGrant(groupId, grantId)
   }
-  if (scope === "workspace_member") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
     return api.revokeWorkspaceMemberModelGroupGrant(
       workspaceId!,
       groupId,
@@ -321,10 +315,10 @@ async function saveItemForGroup(
   payload: Record<string, unknown>
 ) {
   if (itemId) {
-    if (scope === "platform") {
+    if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
       return api.updatePlatformModelItem(groupId, itemId, payload)
     }
-    if (scope === "workspace_member") {
+    if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
       return api.updateWorkspaceMemberModelItem(
         workspaceId!,
         groupId,
@@ -338,10 +332,10 @@ async function saveItemForGroup(
     return api.updateModelItem(workspaceId, groupId, itemId, payload)
   }
 
-  if (scope === "platform") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.addPlatformModelItem(groupId, payload)
   }
-  if (scope === "workspace_member") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
     return api.addWorkspaceMemberModelItem(workspaceId!, groupId, payload)
   }
   if (!workspaceId) {
@@ -356,10 +350,10 @@ async function deleteItemForGroup(
   workspaceId: string | null,
   itemId: string
 ) {
-  if (scope === "platform") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.deletePlatformModelItem(groupId, itemId)
   }
-  if (scope === "workspace_member") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
     return api.deleteWorkspaceMemberModelItem(workspaceId!, groupId, itemId)
   }
   if (!workspaceId) {
@@ -377,14 +371,14 @@ function grantTargetLabel(
   currentUser: WorkbenchUser | null
 ) {
   switch (grant.grant_scope) {
-    case "platform":
+    case MODEL_GROUP_GRANT_SCOPE.PLATFORM:
       return "Platform"
-    case "workspace":
+    case MODEL_GROUP_GRANT_SCOPE.WORKSPACE:
       return (
         workspaces.find((workspace) => workspace.id === grant.workspace_id)
           ?.name || "Workspace"
       )
-    case "workspace_member": {
+    case MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER: {
       if (
         grant.workspace_member_id &&
         currentWorkspaceMemberId === grant.workspace_member_id
@@ -401,7 +395,7 @@ function grantTargetLabel(
         "Member"
       )
     }
-    case "actor": {
+    case MODEL_GROUP_GRANT_SCOPE.ACTOR: {
       const actor = actors.find((item) => item.id === grant.actor_id)
       return actor?.definition?.name || actor?.name || grant.actor_id || "Actor"
     }
@@ -431,7 +425,9 @@ function GrantDialog({
   currentWorkspaceMemberId: string | null
   currentUser: WorkbenchUser | null
 }) {
-  const [grantScope, setGrantScope] = useState<GrantScope>("workspace")
+  const [grantScope, setGrantScope] = useState<GrantScope>(
+    MODEL_GROUP_GRANT_SCOPE.WORKSPACE
+  )
   const [workspaceId, setWorkspaceId] = useState("")
   const [workspaceMemberId, setWorkspaceMemberId] = useState("")
   const [actorId, setActorId] = useState("")
@@ -440,7 +436,11 @@ function GrantDialog({
 
   useEffect(() => {
     if (!open) return
-    setGrantScope(groupScope === "platform" ? "platform" : "workspace")
+    setGrantScope(
+      groupScope === MODEL_GROUP_OWNER_TYPE.PLATFORM
+        ? MODEL_GROUP_GRANT_SCOPE.PLATFORM
+        : MODEL_GROUP_GRANT_SCOPE.WORKSPACE
+    )
     setWorkspaceId(workspaces[0]?.id || "")
     setWorkspaceMemberId(currentWorkspaceMemberId || members[0]?.id || "")
     setActorId(actors[0]?.id || "")
@@ -448,20 +448,25 @@ function GrantDialog({
   }, [actors, currentWorkspaceMemberId, groupScope, members, open, workspaces])
 
   const grantScopeOptions: Array<{ value: GrantScope; label: string }> = [
-    ...(groupScope === "platform"
-      ? [{ value: "platform" as const, label: "Platform" }]
+    ...(groupScope === MODEL_GROUP_OWNER_TYPE.PLATFORM
+      ? [{ value: MODEL_GROUP_GRANT_SCOPE.PLATFORM, label: "Platform" }]
       : []),
-    { value: "workspace", label: "Workspace" },
-    { value: "workspace_member", label: "Workspace Member" },
-    ...(actors.length > 0 ? [{ value: "actor" as const, label: "Actor" }] : []),
+    { value: MODEL_GROUP_GRANT_SCOPE.WORKSPACE, label: "Workspace" },
+    {
+      value: MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER,
+      label: "Workspace Member",
+    },
+    ...(actors.length > 0
+      ? [{ value: MODEL_GROUP_GRANT_SCOPE.ACTOR, label: "Actor" }]
+      : []),
   ]
 
   const canSubmit =
-    grantScope === "platform"
+    grantScope === MODEL_GROUP_GRANT_SCOPE.PLATFORM
       ? true
-      : grantScope === "workspace"
+      : grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE
         ? Boolean(workspaceId)
-        : grantScope === "actor"
+        : grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR
           ? Boolean(workspaceId && actorId)
           : Boolean(workspaceMemberId)
 
@@ -493,9 +498,9 @@ function GrantDialog({
             </select>
           </div>
 
-          {(grantScope === "workspace" ||
-            grantScope === "workspace_member" ||
-            grantScope === "actor") && (
+          {(grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE ||
+            grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER ||
+            grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR) && (
             <div className="space-y-2">
               <Label>Workspace</Label>
               <select
@@ -512,7 +517,7 @@ function GrantDialog({
             </div>
           )}
 
-          {grantScope === "workspace_member" && (
+          {grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER && (
             <div className="space-y-2">
               <Label>Workspace Member</Label>
               <select
@@ -529,7 +534,7 @@ function GrantDialog({
             </div>
           )}
 
-          {grantScope === "actor" && (
+          {grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR && (
             <div className="space-y-2">
               <Label>Actor</Label>
               <select
@@ -568,16 +573,19 @@ function GrantDialog({
                 await onSubmit({
                   grantScope,
                   workspaceId:
-                    grantScope === "workspace" ||
-                    grantScope === "workspace_member" ||
-                    grantScope === "actor"
+                    grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE ||
+                    grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER ||
+                    grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR
                       ? workspaceId
                       : undefined,
                   workspaceMemberId:
-                    grantScope === "workspace_member"
+                    grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER
                       ? workspaceMemberId
                       : undefined,
-                  actorId: grantScope === "actor" ? actorId : undefined,
+                  actorId:
+                    grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR
+                      ? actorId
+                      : undefined,
                   reason: reason.trim() || undefined,
                 })
                 onOpenChange(false)
@@ -950,7 +958,7 @@ export default function ModelSettingsWorkbench() {
     Array<{ id: string; name: string }>
   >([])
   const [creatableScopes, setCreatableScopes] = useState<ModelGroupScope[]>([
-    "workspace_member",
+    MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER,
   ])
   const [editingField, setEditingField] = useState<
     "name" | "description" | null
@@ -970,9 +978,12 @@ export default function ModelSettingsWorkbench() {
     try {
       const [workspaceResult, userResult, platformResult, workspacesResult] =
         await Promise.allSettled([
-          fetchGroupsForScope("workspace", workspaceId),
-          fetchGroupsForScope("workspace_member", workspaceId),
-          fetchGroupsForScope("platform", workspaceId),
+          fetchGroupsForScope(MODEL_GROUP_OWNER_TYPE.WORKSPACE, workspaceId),
+          fetchGroupsForScope(
+            MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER,
+            workspaceId
+          ),
+          fetchGroupsForScope(MODEL_GROUP_OWNER_TYPE.PLATFORM, workspaceId),
           api.getWorkspaces(),
         ])
 
@@ -984,10 +995,10 @@ export default function ModelSettingsWorkbench() {
         ...(platformResult.status === "fulfilled" ? platformResult.value : []),
       ].sort((left, right) => {
         const rank = (group: ModelGroupSummary) => {
-          const scope = resolveScope(group)
-          return scope === "workspace"
+          const scope = resolveModelGroupScope(group)
+          return scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE
             ? 0
-            : scope === "workspace_member"
+            : scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER
               ? 1
               : 2
         }
@@ -1001,11 +1012,11 @@ export default function ModelSettingsWorkbench() {
       setGroups(nextGroups)
       setCreatableScopes([
         ...(workspaceResult.status === "fulfilled"
-          ? (["workspace"] as ModelGroupScope[])
+          ? ([MODEL_GROUP_OWNER_TYPE.WORKSPACE] as ModelGroupScope[])
           : []),
-        "workspace_member",
+        MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER,
         ...(platformResult.status === "fulfilled"
-          ? (["platform"] as ModelGroupScope[])
+          ? ([MODEL_GROUP_OWNER_TYPE.PLATFORM] as ModelGroupScope[])
           : []),
       ])
 
@@ -1052,7 +1063,7 @@ export default function ModelSettingsWorkbench() {
     setDetailLoading(true)
     try {
       const response = await fetchGroupDetail(
-        resolveScope(summary),
+        resolveModelGroupScope(summary),
         groupId,
         workspaceId
       )
@@ -1145,14 +1156,14 @@ export default function ModelSettingsWorkbench() {
 
   async function handleIssueGrant(payload: Record<string, unknown>) {
     if (!selectedGroup) return
-    const scope = resolveScope(selectedGroup)
+    const scope = resolveModelGroupScope(selectedGroup)
     await issueGrantForGroup(scope, selectedGroup.id, workspaceId, payload)
     await reloadCurrentGroup()
   }
 
   async function handleRevokeGrant(grantId: string) {
     if (!selectedGroup) return
-    const scope = resolveScope(selectedGroup)
+    const scope = resolveModelGroupScope(selectedGroup)
     await revokeGrantForGroup(scope, selectedGroup.id, workspaceId, grantId)
     await reloadCurrentGroup()
   }
@@ -1208,7 +1219,7 @@ export default function ModelSettingsWorkbench() {
       if (itemId) payload.isEnabled = draft.isEnabled
 
       const response = await saveItemForGroup(
-        resolveScope(selectedGroup),
+        resolveModelGroupScope(selectedGroup),
         selectedGroup.id,
         workspaceId,
         itemId,
@@ -1228,7 +1239,7 @@ export default function ModelSettingsWorkbench() {
     if (!selectedGroup) return
     try {
       await deleteItemForGroup(
-        resolveScope(selectedGroup),
+        resolveModelGroupScope(selectedGroup),
         selectedGroup.id,
         workspaceId,
         itemId
@@ -1250,7 +1261,7 @@ export default function ModelSettingsWorkbench() {
     setSavingGroupSettings(savingKey)
     try {
       await updateGroupForScope(
-        resolveScope(selectedGroup),
+        resolveModelGroupScope(selectedGroup),
         selectedGroup.id,
         workspaceId,
         patch
@@ -1286,7 +1297,7 @@ export default function ModelSettingsWorkbench() {
     setSavingGroupField(field)
     try {
       await updateGroupForScope(
-        resolveScope(selectedGroup),
+        resolveModelGroupScope(selectedGroup),
         selectedGroup.id,
         workspaceId,
         {
@@ -1503,7 +1514,7 @@ export default function ModelSettingsWorkbench() {
                       <SelectValue placeholder="Routing Strategy" />
                     </SelectTrigger>
                     <SelectContent>
-                      {ROUTING_STRATEGIES.map((strategy) => (
+                      {MODEL_GROUP_ROUTING_OPTIONS.map((strategy) => (
                         <SelectItem key={strategy.value} value={strategy.value}>
                           {strategy.label}
                         </SelectItem>
@@ -1714,7 +1725,10 @@ export default function ModelSettingsWorkbench() {
                 ) : (
                   <div className="flex flex-col gap-3">
                     {selectedGroup.grants
-                      .filter((grant) => grant.status === "active")
+                      .filter(
+                        (grant) =>
+                          grant.status === MODEL_GROUP_GRANT_STATUS.ACTIVE
+                      )
                       .map((grant) => (
                         <div
                           key={grant.id}
@@ -1734,7 +1748,9 @@ export default function ModelSettingsWorkbench() {
                                   )}
                                 </span>
                                 <Badge variant="outline">
-                                  {grant.grant_scope.replaceAll("_", " ")}
+                                  {getModelGroupGrantScopeLabel(
+                                    grant.grant_scope
+                                  )}
                                 </Badge>
                               </div>
                               <div className="mt-1 text-sm text-muted-foreground">
@@ -1752,7 +1768,8 @@ export default function ModelSettingsWorkbench() {
                       ))}
 
                     {selectedGroup.grants.filter(
-                      (grant) => grant.status === "active"
+                      (grant) =>
+                        grant.status === MODEL_GROUP_GRANT_STATUS.ACTIVE
                     ).length === 0 ? (
                       <Card>
                         <CardContent className="flex flex-col items-center gap-3 py-12 text-center">
@@ -1793,7 +1810,11 @@ export default function ModelSettingsWorkbench() {
           setGroupDialogOpen(open)
           if (!open) setEditingGroup(null)
         }}
-        scope={editingGroup ? resolveScope(editingGroup) : "workspace"}
+        scope={
+          editingGroup
+            ? resolveModelGroupScope(editingGroup)
+            : MODEL_GROUP_OWNER_TYPE.WORKSPACE
+        }
         availableScopes={creatableScopes}
         group={editingGroup}
         onSaved={() => {
@@ -1806,7 +1827,11 @@ export default function ModelSettingsWorkbench() {
       <GrantDialog
         open={grantDialogOpen}
         onOpenChange={setGrantDialogOpen}
-        groupScope={selectedGroup ? resolveScope(selectedGroup) : "workspace"}
+        groupScope={
+          selectedGroup
+            ? resolveModelGroupScope(selectedGroup)
+            : MODEL_GROUP_OWNER_TYPE.WORKSPACE
+        }
         workspaces={availableWorkspaces}
         members={workspaceMembers}
         actors={workspaceActors}

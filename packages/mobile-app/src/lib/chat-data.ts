@@ -2,6 +2,11 @@ import Feather from "@expo/vector-icons/Feather"
 
 import { isUuid } from "@/lib/ids"
 import {
+  CONVERSATION_ITEM_SCOPE,
+  CONVERSATION_ITEM_SURFACE,
+  CONVERSATION_ITEM_TYPE,
+  CONVERSATION_KIND,
+  CONVERSATION_PARTICIPANT_TYPE,
   extractText,
   summarizeConversationEvent,
   type CanonicalContentBlock,
@@ -408,7 +413,8 @@ export function getConversationViewerParticipant(
 
   return conversation.participants.find(
     (participant) =>
-      participant.participantType === "workspace_member" &&
+      participant.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
       participant.workspaceMemberId === workspaceMemberId
   )
 }
@@ -426,11 +432,11 @@ export function getParticipantDisplayName(
   }
 
   switch (participant?.participantType) {
-    case "actor":
+    case CONVERSATION_PARTICIPANT_TYPE.ACTOR:
       return "Actor"
-    case "external":
+    case CONVERSATION_PARTICIPANT_TYPE.EXTERNAL:
       return "External"
-    case "workspace_member":
+    case CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER:
       return "成员"
     default:
       return "系统"
@@ -446,7 +452,8 @@ function getConversationPeerParticipant(
       (participant) =>
         participant.state === "active" &&
         !(
-          participant.participantType === "workspace_member" &&
+          participant.participantType ===
+            CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
           participant.workspaceMemberId === workspaceMemberId
         )
     ) ?? conversation.participants[0]
@@ -457,7 +464,7 @@ export function getConversationDisplayName(
   conversation: ChatConversationView,
   workspaceMemberId?: string | null
 ) {
-  if (conversation.kind === "private") {
+  if (conversation.kind === CONVERSATION_KIND.PRIVATE) {
     const peer = getConversationPeerParticipant(conversation, workspaceMemberId)
     return getParticipantDisplayName(peer) || conversation.title || "聊天"
   }
@@ -501,13 +508,15 @@ export function getConversationAvatarSpec(
     return { name: peer.avatarEmoji }
   }
 
-  if (peer?.participantType === "actor") {
+  if (peer?.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     return { name, icon: "cpu" }
   }
-  if (peer?.participantType === "workspace_member") {
+  if (
+    peer?.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+  ) {
     return { name, icon: "user" }
   }
-  if (peer?.participantType === "external") {
+  if (peer?.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
     return { name, icon: "globe" }
   }
 
@@ -526,11 +535,11 @@ export function buildPreviewTextFromItem(
     return text
   }
 
-  if (item.itemType === "event") {
+  if (item.itemType === CONVERSATION_ITEM_TYPE.EVENT) {
     return summarizeConversationEvent(item.subtype, item.eventPayload)
   }
 
-  if (item.itemType === "message") {
+  if (item.itemType === CONVERSATION_ITEM_TYPE.MESSAGE) {
     return "Attachment"
   }
 
@@ -638,11 +647,11 @@ export function buildOptimisticChatItem(
     conversationId: outbox.conversationId,
     sequence: outbox.optimisticSequence,
     clientMessageId: outbox.clientMessageId,
-    itemType: "message",
+    itemType: CONVERSATION_ITEM_TYPE.MESSAGE,
     role: "user",
     subtype: "chat.message",
-    scope: "shared",
-    surface: "visible",
+    scope: CONVERSATION_ITEM_SCOPE.SHARED,
+    surface: CONVERSATION_ITEM_SURFACE.VISIBLE,
     authorParticipantId: viewerParticipantId?.participantId,
     author: viewerParticipantId
       ? {
@@ -776,7 +785,7 @@ export function getMentionableConversationParticipants(
   return (conversation?.participants ?? []).filter(
     (participant) =>
       participant.state === "active" &&
-      participant.participantType !== "system" &&
+      participant.participantType !== CONVERSATION_PARTICIPANT_TYPE.SYSTEM &&
       participant.participantId !== viewerParticipantId
   )
 }
@@ -846,11 +855,11 @@ export function getEntityDisplayName(
   }
 
   switch (entity?.participantType) {
-    case "actor":
+    case CONVERSATION_PARTICIPANT_TYPE.ACTOR:
       return "Actor"
-    case "external":
+    case CONVERSATION_PARTICIPANT_TYPE.EXTERNAL:
       return "External"
-    case "workspace_member":
+    case CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER:
       return "成员"
     default:
       return "系统"
@@ -880,11 +889,11 @@ export function getEntityAvatarSpec(
 
   const name = getEntityDisplayName(entity)
   switch (entity?.participantType) {
-    case "actor":
+    case CONVERSATION_PARTICIPANT_TYPE.ACTOR:
       return { name, icon: "cpu" as const }
-    case "external":
+    case CONVERSATION_PARTICIPANT_TYPE.EXTERNAL:
       return { name, icon: "globe" as const }
-    case "workspace_member":
+    case CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER:
       return { name, icon: "user" as const }
     default:
       return { name, icon: "message-circle" as const }

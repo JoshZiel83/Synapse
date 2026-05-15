@@ -1,3 +1,8 @@
+import {
+  CONVERSATION_BOUNDARY,
+  CONVERSATION_KIND,
+  CONVERSATION_PARTICIPANT_TYPE,
+} from "@synapse/shared"
 import { getFileUrlById } from "../files/service.js"
 import { listConversationParticipants } from "./service.js"
 
@@ -5,15 +10,15 @@ export function mapConversationParticipant(row: any) {
   if (row.remote_agent_id) {
     return {
       participantId: row.id,
-      type: "remote_agent" as const,
+      participantType: CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT,
       remoteAgentId: row.remote_agent_id,
       id: row.remote_agent_id,
-      name: row.actor_name || "Remote Agent",
-      title: row.actor_title || undefined,
-      role: row.actor_role || "remote_agent",
-      emoji: row.actor_avatar_emoji || undefined,
-      avatarUrl: row.actor_avatar_file_id
-        ? getFileUrlById(row.actor_avatar_file_id)
+      name: row.participant_name || "Remote Agent",
+      title: row.participant_title || undefined,
+      role: row.participant_role || "remote_agent",
+      avatarEmoji: row.participant_avatar_emoji || undefined,
+      avatarUrl: row.participant_avatar_file_id
+        ? getFileUrlById(row.participant_avatar_file_id)
         : undefined,
       state: row.state,
     }
@@ -22,24 +27,24 @@ export function mapConversationParticipant(row: any) {
   if (row.actor_id) {
     return {
       participantId: row.id,
-      type: "actor" as const,
+      participantType: CONVERSATION_PARTICIPANT_TYPE.ACTOR,
       actorId: row.actor_id,
       id: row.actor_id,
-      name: row.actor_name || "Unknown",
-      title: row.actor_title || undefined,
-      role: row.actor_role || "specialist",
-      emoji: row.actor_avatar_emoji || undefined,
-      avatarUrl: row.actor_avatar_file_id
-        ? getFileUrlById(row.actor_avatar_file_id)
+      name: row.participant_name || "Unknown",
+      title: row.participant_title || undefined,
+      role: row.participant_role || "specialist",
+      avatarEmoji: row.participant_avatar_emoji || undefined,
+      avatarUrl: row.participant_avatar_file_id
+        ? getFileUrlById(row.participant_avatar_file_id)
         : undefined,
       state: row.state,
     }
   }
 
-  if (row.participant_kind === "external") {
+  if (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
     return {
       participantId: row.id,
-      type: "external" as const,
+      participantType: CONVERSATION_PARTICIPANT_TYPE.EXTERNAL,
       id: row.id,
       name:
         row.transport_display_name ||
@@ -51,7 +56,7 @@ export function mapConversationParticipant(row: any) {
 
   return {
     participantId: row.id,
-    type: "workspace_member" as const,
+    participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
     workspaceMemberId: row.workspace_member_id || undefined,
     id: row.workspace_member_id,
     name: row.user_name || "User",
@@ -81,23 +86,25 @@ function buildConversationPresentation(params: {
     (participant) => participant.state === "active"
   )
   const peer =
-    row.kind === "private"
+    row.kind === CONVERSATION_KIND.PRIVATE
       ? activeParticipants.find(
           (participant) =>
             !(
-              participant.type === "workspace_member" &&
+              participant.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
               participant.workspaceMemberId === viewerWorkspaceMemberId
             )
         ) || activeParticipants[0]
       : undefined
 
   const directPeerNames =
-    row.kind === "private"
+    row.kind === CONVERSATION_KIND.PRIVATE
       ? activeParticipants
           .filter(
             (participant) =>
               !(
-                participant.type === "workspace_member" &&
+                participant.participantType ===
+                  CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
                 participant.workspaceMemberId === viewerWorkspaceMemberId
               )
           )
@@ -106,7 +113,7 @@ function buildConversationPresentation(params: {
       : []
 
   const title =
-    row.kind === "private" && directPeerNames.length > 0
+    row.kind === CONVERSATION_KIND.PRIVATE && directPeerNames.length > 0
       ? directPeerNames.join(", ")
       : row.title ||
         activeParticipants
@@ -117,23 +124,27 @@ function buildConversationPresentation(params: {
         "Untitled thread"
 
   const chatType =
-    row.kind === "private"
-      ? "direct"
-      : row.kind === "group"
-        ? "group"
-        : "virtual"
-  const boundaryLabel = row.boundary === "external" ? "External" : "Internal"
-  const canRename = row.kind !== "private" && canManageConversation
+    row.kind === CONVERSATION_KIND.PRIVATE
+      ? ("direct" as const)
+      : row.kind === CONVERSATION_KIND.GROUP
+        ? ("group" as const)
+        : ("virtual" as const)
+  const boundaryLabel =
+    row.boundary === CONVERSATION_BOUNDARY.EXTERNAL ? "External" : "Internal"
+  const canRename =
+    row.kind !== CONVERSATION_KIND.PRIVATE && canManageConversation
   const canManageConversationParticipants =
-    row.kind !== "private" && canManageParticipants
+    row.kind !== CONVERSATION_KIND.PRIVATE && canManageParticipants
 
   return {
     chatType,
     title,
     avatarUrl:
-      row.kind === "private" ? peer?.avatarUrl : row.avatar_url || undefined,
+      row.kind === CONVERSATION_KIND.PRIVATE
+        ? peer?.avatarUrl
+        : row.avatar_url || undefined,
     subtitle:
-      row.kind === "private"
+      row.kind === CONVERSATION_KIND.PRIVATE
         ? `${boundaryLabel} direct chat`
         : `${boundaryLabel} group chat`,
     peer,
@@ -155,7 +166,8 @@ export async function mapConversationSummaryView(
     mapConversationParticipant
   )
   const actorParticipants = mappedParticipants.filter(
-    (participant: any) => participant.type === "actor"
+    (participant: any) =>
+      participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
   )
   const hasOpenLane = conversationParticipants.some(
     (participant: any) =>
@@ -174,7 +186,7 @@ export async function mapConversationSummaryView(
       ? viewerMembership.role_key
       : "member"
   const canManageConversation =
-    row.kind !== "private" &&
+    row.kind !== CONVERSATION_KIND.PRIVATE &&
     (viewerConversationRole === "owner" || viewerConversationRole === "admin")
   const canManageParticipants = canManageConversation
   const presentation = buildConversationPresentation({
@@ -189,14 +201,18 @@ export async function mapConversationSummaryView(
     id: row.id,
     kind: row.kind,
     boundary: row.boundary,
-    status: hasOpenLane ? "active" : "completed",
+    status: hasOpenLane ? ("active" as const) : ("completed" as const),
     transportKind: row.transport_kind || undefined,
     participants: mappedParticipants,
+    members: mappedParticipants,
     actorParticipants,
     lastMessage: row.last_message
       ? {
           content: row.last_message,
-          role: row.last_message_sender_type === "user" ? "user" : "assistant",
+          role:
+            row.last_message_sender_type === "user"
+              ? ("user" as const)
+              : ("assistant" as const),
           actorName: row.last_message_sender_name,
           createdAt: row.last_message_at,
         }

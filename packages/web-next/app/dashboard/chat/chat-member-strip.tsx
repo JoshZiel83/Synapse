@@ -33,30 +33,34 @@ function orderMembers(
   runtimeByRemoteAgent?: Record<string, RemoteAgentRuntimeState>
 ) {
   return [...members].sort((left, right) => {
-    const leftIsAgent = left.type === "actor" || left.type === "remote_agent"
-    const rightIsAgent = right.type === "actor" || right.type === "remote_agent"
+    const leftIsAgent =
+      left.participantType === "actor" ||
+      left.participantType === "remote_agent"
+    const rightIsAgent =
+      right.participantType === "actor" ||
+      right.participantType === "remote_agent"
     if (!leftIsAgent || !rightIsAgent) {
       if (leftIsAgent !== rightIsAgent) {
         return leftIsAgent ? -1 : 1
       }
-      if (left.type === right.type) return 0
-      return left.type.localeCompare(right.type)
+      if (left.participantType === right.participantType) return 0
+      return left.participantType.localeCompare(right.participantType)
     }
 
     const leftPriority =
-      left.type === "actor"
+      left.participantType === "actor"
         ? getActorRuntimePriority(runtimeByActor?.[left.id])
         : getRemoteAgentRuntimePriority(runtimeByRemoteAgent?.[left.id])
     const rightPriority =
-      right.type === "actor"
+      right.participantType === "actor"
         ? getActorRuntimePriority(runtimeByActor?.[right.id])
         : getRemoteAgentRuntimePriority(runtimeByRemoteAgent?.[right.id])
 
     if (leftPriority !== rightPriority) {
       return leftPriority - rightPriority
     }
-    if (left.type !== right.type) {
-      return left.type === "actor" ? -1 : 1
+    if (left.participantType !== right.participantType) {
+      return left.participantType === "actor" ? -1 : 1
     }
     return left.name.localeCompare(right.name)
   })
@@ -102,9 +106,9 @@ export default function ChatMemberStrip({
     <AvatarGroup className={cn("items-center", className)}>
       {visibleMembers.map((member) => {
         const runtime =
-          member.type === "actor"
+          member.participantType === "actor"
             ? runtimeByActor?.[member.id]
-            : member.type === "remote_agent"
+            : member.participantType === "remote_agent"
               ? runtimeByRemoteAgent?.[member.id]
               : undefined
         const href = getConversationMemberContactHref(member, contactBasePath)
@@ -115,10 +119,10 @@ export default function ChatMemberStrip({
             name={member.name}
             avatarUrl={member.avatarUrl}
             emoji={member.emoji}
-            entityType={member.type}
+            entityType={member.participantType}
             size={size}
             statusState={
-              member.type === "remote_agent"
+              member.participantType === "remote_agent"
                 ? remoteAgentRuntimeToAvatarStatus(
                     runtime as RemoteAgentRuntimeState | undefined
                   )
@@ -141,7 +145,7 @@ export default function ChatMemberStrip({
         )
         return !isMobile ? (
           <ChatParticipantHoverCard
-            key={`${member.type}-${member.id}`}
+            key={`${member.participantType}-${member.id}`}
             member={member}
             contactBasePath={contactBasePath}
           >
@@ -149,7 +153,7 @@ export default function ChatMemberStrip({
           </ChatParticipantHoverCard>
         ) : canOpen ? (
           <button
-            key={`${member.type}-${member.id}`}
+            key={`${member.participantType}-${member.id}`}
             type="button"
             onClick={() => {
               if (onMemberClick) {
@@ -168,7 +172,7 @@ export default function ChatMemberStrip({
           </button>
         ) : (
           <div
-            key={`${member.type}-${member.id}`}
+            key={`${member.participantType}-${member.id}`}
             title={`${member.name} · ${subtitle}`}
           >
             {avatar}

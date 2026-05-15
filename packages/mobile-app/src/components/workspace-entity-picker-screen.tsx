@@ -1,9 +1,11 @@
 import Feather from "@expo/vector-icons/Feather"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import { useEffect, useMemo, useRef, useState } from "react"
+import { CONTACT_TARGET_TYPE, CONVERSATION_KIND } from "@shared"
 import { Pressable, RefreshControl, StyleSheet, Text, View } from "react-native"
 
 import {
+  ALPHABET_ENTITY_TARGET_TYPE,
   AlphabetIndexedEntityList,
   type AlphabetIndexedEntityItem,
 } from "@/components/alphabet-indexed-entity-list"
@@ -16,14 +18,22 @@ import { theme } from "@/theme/tokens"
 import type { ContactHubEntryView, ContactHubResponse } from "@/types/api"
 import type { Actor } from "@shared"
 
-export type WorkspaceEntityPickerMode = "actor" | "group"
+export const WORKSPACE_ENTITY_PICKER_MODE = {
+  ACTOR: "actor",
+  GROUP: "group",
+} as const
+
+export type WorkspaceEntityPickerMode =
+  (typeof WORKSPACE_ENTITY_PICKER_MODE)[keyof typeof WORKSPACE_ENTITY_PICKER_MODE]
 
 function getEntryKey(entry: ContactHubEntryView) {
   return `${entry.kind}:${entry.id}`
 }
 
-function mapEntryTargetType(entry: ContactHubEntryView): "actor" | "user" {
-  return entry.targetType === "actor" ? "actor" : "user"
+function mapEntryTargetType(entry: ContactHubEntryView) {
+  return entry.targetType === CONTACT_TARGET_TYPE.ACTOR
+    ? ALPHABET_ENTITY_TARGET_TYPE.ACTOR
+    : ALPHABET_ENTITY_TARGET_TYPE.USER
 }
 
 function uniqueIds(values: Array<string | undefined>) {
@@ -151,7 +161,7 @@ export function WorkspaceEntityPickerScreen({
     }
 
     try {
-      if (mode === "actor") {
+      if (mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR) {
         const response = await api.getActors(workspaceId)
         setActors(response.actors.filter((actor) => actor.isActive))
         setHub(null)
@@ -165,7 +175,7 @@ export function WorkspaceEntityPickerScreen({
       setError(
         nextError instanceof Error
           ? nextError.message
-          : mode === "actor"
+          : mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR
             ? "Actor 列表加载失败。"
             : "可选联系人加载失败。"
       )
@@ -191,7 +201,11 @@ export function WorkspaceEntityPickerScreen({
   )
 
   useEffect(() => {
-    if (mode !== "group" || initializedSelectionRef.current || loading) {
+    if (
+      mode !== WORKSPACE_ENTITY_PICKER_MODE.GROUP ||
+      initializedSelectionRef.current ||
+      loading
+    ) {
       return
     }
 
@@ -263,7 +277,9 @@ export function WorkspaceEntityPickerScreen({
     try {
       if (
         selectedEntries.some(
-          (entry) => entry.targetType === "member" && !entry.workspaceMemberId
+          (entry) =>
+            entry.targetType === CONTACT_TARGET_TYPE.MEMBER &&
+            !entry.workspaceMemberId
         )
       ) {
         throw new Error(
@@ -272,7 +288,7 @@ export function WorkspaceEntityPickerScreen({
       }
 
       const created = await createConversation({
-        kind: "group",
+        kind: CONVERSATION_KIND.GROUP,
         actorIds: selectedActorIds,
         workspaceMemberIds: selectedWorkspaceMemberIds,
       })
@@ -292,14 +308,14 @@ export function WorkspaceEntityPickerScreen({
   }
 
   const items = useMemo<AlphabetIndexedEntityItem[]>(() => {
-    if (mode === "actor") {
+    if (mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR) {
       return actors.map((actor) => ({
         key: actor.id,
         title: actor.definition.name,
         subtitle:
           actor.definition.role || actor.definition.title || "工作区 Actor",
         avatarUrl: actor.avatarUrl || null,
-        targetType: "actor",
+        targetType: ALPHABET_ENTITY_TARGET_TYPE.ACTOR,
         onPress: () => void handleSelectActor(actor),
       }))
     }
@@ -326,14 +342,19 @@ export function WorkspaceEntityPickerScreen({
     })
   }, [actors, groupEntries, mode, selectedKeys, submitting, workspaceId])
 
-  const title = mode === "actor" ? "选择Actor" : "发起群聊"
+  const title =
+    mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR ? "选择Actor" : "发起群聊"
   const emptyState = (
     <View style={styles.emptyWrap}>
       <EmptyState
-        icon={mode === "actor" ? "cpu" : "users"}
-        title={mode === "actor" ? "当前没有可选 Actor" : "当前没有可选对象"}
+        icon={mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR ? "cpu" : "users"}
+        title={
+          mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR
+            ? "当前没有可选 Actor"
+            : "当前没有可选对象"
+        }
         description={
-          mode === "actor"
+          mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR
             ? "请先在工作区里创建或启用一个 Actor。"
             : "当前工作区里还没有可以发起群聊的对象。"
         }
@@ -347,7 +368,7 @@ export function WorkspaceEntityPickerScreen({
         <PickerHeader
           title={title}
           onBack={() => router.back()}
-          confirmVisible={mode === "group"}
+          confirmVisible={mode === WORKSPACE_ENTITY_PICKER_MODE.GROUP}
           confirmDisabled={selectedEntries.length === 0 || submitting}
           confirmLabel="完成"
           onConfirm={() => void handleCreateGroup()}
@@ -357,7 +378,9 @@ export function WorkspaceEntityPickerScreen({
           <View style={styles.stateWrap}>
             <LoadingBlock
               label={
-                mode === "actor" ? "正在加载 Actor..." : "正在加载可选对象..."
+                mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR
+                  ? "正在加载 Actor..."
+                  : "正在加载可选对象..."
               }
             />
           </View>
@@ -366,7 +389,9 @@ export function WorkspaceEntityPickerScreen({
             <EmptyState
               icon="alert-circle"
               title={
-                mode === "actor" ? "Actor 列表加载失败" : "群聊列表加载失败"
+                mode === WORKSPACE_ENTITY_PICKER_MODE.ACTOR
+                  ? "Actor 列表加载失败"
+                  : "群聊列表加载失败"
               }
               description={error}
             />

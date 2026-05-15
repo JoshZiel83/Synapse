@@ -30,6 +30,8 @@ import { useChat } from "@/providers/chat-provider"
 import { useWorkspace } from "@/providers/workspace-provider"
 import { theme } from "@/theme/tokens"
 import {
+  CONVERSATION_KIND,
+  CONVERSATION_PARTICIPANT_TYPE,
   getActorRuntimePriority,
   isActorRuntimeActive,
   isActorRuntimeProcessingWorkspaceMember,
@@ -92,9 +94,10 @@ export default function ChatDetailScreen() {
     ? getConversationDisplayName(conversation, workspaceMemberId)
     : "聊天"
   const directActorParticipant =
-    conversation?.kind === "private"
+    conversation?.kind === CONVERSATION_KIND.PRIVATE
       ? (conversation.participants.find(
-          (participant) => participant.participantType === "actor"
+          (participant) =>
+            participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
         ) ?? null)
       : null
   const directActorRuntime = directActorParticipant?.actorId
@@ -391,7 +394,8 @@ export default function ChatDetailScreen() {
                       runtime={runtime}
                       participant={conversation.participants.find(
                         (participant) =>
-                          participant.participantType === "actor" &&
+                          participant.participantType ===
+                            CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
                           participant.actorId === runtime.actorId
                       )}
                     />
@@ -427,7 +431,8 @@ export default function ChatDetailScreen() {
                       runtime={runtime}
                       participant={conversation.participants.find(
                         (participant) =>
-                          participant.participantType === "actor" &&
+                          participant.participantType ===
+                            CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
                           participant.actorId === runtime.actorId
                       )}
                     />

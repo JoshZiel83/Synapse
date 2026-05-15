@@ -1,6 +1,7 @@
 import Feather from "@expo/vector-icons/Feather"
 import { useRouter } from "expo-router"
 import { useEffect, useState } from "react"
+import { CONTACT_TARGET_TYPE } from "@shared"
 import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import {
@@ -137,14 +138,18 @@ export default function ContactRequestsScreen() {
                   <View key={request.id} style={styles.rowCard}>
                     <Avatar
                       name={request.requester?.name || "User"}
-                      icon={request.targetType === "actor" ? "cpu" : "user"}
+                      icon={
+                        request.targetType === CONTACT_TARGET_TYPE.ACTOR
+                          ? "cpu"
+                          : "user"
+                      }
                     />
                     <View style={styles.rowBody}>
                       <Text style={styles.rowTitle}>
                         {request.requester?.name || "未命名用户"}
                       </Text>
                       <Text style={styles.rowSubtitle}>
-                        {request.targetType === "actor"
+                        {request.targetType === CONTACT_TARGET_TYPE.ACTOR
                           ? `申请添加 Actor：${request.targetActor?.name || "未知 Actor"}`
                           : `申请添加好友 · ${request.requester?.workspace.name || ""}`}
                       </Text>
@@ -241,7 +246,7 @@ export default function ContactRequestsScreen() {
                 {friendOutgoing.map((request) => (
                   <View key={request.id} style={styles.outgoingRow}>
                     <Text style={styles.rowTitle}>
-                      {request.targetType === "actor"
+                      {request.targetType === CONTACT_TARGET_TYPE.ACTOR
                         ? request.targetActor?.name || "未知 Actor"
                         : request.targetMember?.name ||
                           request.targetMember?.email ||

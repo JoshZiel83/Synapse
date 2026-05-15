@@ -19,12 +19,17 @@ import {
 import { Avatar } from "@/components/ui"
 import { theme } from "@/theme/tokens"
 
+export const ALPHABET_ENTITY_TARGET_TYPE = {
+  ACTOR: "actor",
+  USER: "user",
+} as const
+
 export type AlphabetIndexedEntityItem = {
   key: string
   title: string
   subtitle?: string
   avatarUrl?: string | null
-  targetType: "actor" | "user"
+  targetType: (typeof ALPHABET_ENTITY_TARGET_TYPE)[keyof typeof ALPHABET_ENTITY_TARGET_TYPE]
   onPress: () => void
   leadingAccessory?: React.ReactNode
   trailingAccessory?: React.ReactNode
@@ -224,10 +229,14 @@ export function AlphabetIndexedEntityList({
                       <Avatar
                         name={item.title}
                         uri={item.avatarUrl || undefined}
-                        icon={item.targetType === "actor" ? "cpu" : "user"}
+                        icon={
+                          item.targetType === ALPHABET_ENTITY_TARGET_TYPE.ACTOR
+                            ? "cpu"
+                            : "user"
+                        }
                         size={40}
                       />
-                      {item.targetType === "actor" ? (
+                      {item.targetType === ALPHABET_ENTITY_TARGET_TYPE.ACTOR ? (
                         <View style={styles.actorBadge}>
                           <MaterialCommunityIcons
                             name="robot-outline"

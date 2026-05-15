@@ -7,9 +7,11 @@ import type {
   ConversationReplyRef,
   RemoteAgentRuntimeState,
 } from "@synapse/shared"
+import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import { useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import ChatComposer, {
+  CHAT_COMPOSER_MENTION_TARGET_TYPE,
   type ChatComposerParticipant,
   type ChatComposerSubmitPayload,
 } from "@/components/chat-composer"
@@ -54,16 +56,19 @@ interface ConversationChatProps {
 
 function summarizeMemberCounts(conversation: ConversationSummary) {
   const workspaceMemberCount = conversation.members.filter(
-    (member) => member.type === "workspace_member"
+    (member) =>
+      member.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
   ).length
   const actorCount = conversation.members.filter(
-    (member) => member.type === "actor"
+    (member) => member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
   ).length
   const remoteAgentCount = conversation.members.filter(
-    (member) => member.type === "remote_agent"
+    (member) =>
+      member.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
   ).length
   const externalCount = conversation.members.filter(
-    (member) => member.type === "external"
+    (member) =>
+      member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
   ).length
   const workspaceMemberLabel = `${workspaceMemberCount} member${workspaceMemberCount === 1 ? "" : "s"}`
   const actorLabel = `${actorCount} actor${actorCount === 1 ? "" : "s"}`
@@ -262,16 +267,22 @@ export default function ConversationChat({
   const mentionableParticipants = useMemo<ChatComposerParticipant[]>(() => {
     const inConversationActorIds = new Set(
       conversation.members
-        .filter((member) => member.type === "actor")
+        .filter(
+          (member) =>
+            member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+        )
         .map((member) => member.id)
     )
     const inConversationActors = conversation.members
-      .filter((member) => member.type === "actor")
+      .filter(
+        (member) =>
+          member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+      )
       .map((member) => ({
         id: member.id,
         name: member.name,
-        type: "actor" as const,
-        targetType: "actor" as const,
+        participantType: CONVERSATION_PARTICIPANT_TYPE.ACTOR,
+        targetType: CHAT_COMPOSER_MENTION_TARGET_TYPE.ACTOR,
         participantId: member.participantId,
         actorId: member.id,
         inGroup: true,
@@ -283,18 +294,29 @@ export default function ConversationChat({
         searchTerms: buildMentionSearchTerms(member),
       }))
     const inConversationParticipants = conversation.members
-      .filter((member) => member.type !== "actor")
+      .filter(
+        (member) =>
+          member.participantType !== CONVERSATION_PARTICIPANT_TYPE.ACTOR
+      )
       .map((member) => ({
         id: member.participantId,
         name: member.name,
-        type: member.type,
-        targetType: "participant" as const,
+        participantType: member.participantType,
+        targetType: CHAT_COMPOSER_MENTION_TARGET_TYPE.PARTICIPANT,
         participantId: member.participantId,
-        actorId: member.type === "actor" ? member.id : undefined,
+        actorId:
+          member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+            ? member.id
+            : undefined,
         workspaceMemberId:
-          member.type === "workspace_member" ? member.id : undefined,
+          member.participantType ===
+          CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+            ? member.id
+            : undefined,
         externalUserKey:
-          member.type === "external" ? member.externalUserKey : undefined,
+          member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
+            ? member.externalUserKey
+            : undefined,
         transportAddressId: member.transportAddressId,
         transportKind: member.transportKind,
         inGroup: true,
@@ -303,11 +325,12 @@ export default function ConversationChat({
         avatarUrl: member.avatarUrl,
         emoji: member.emoji,
         description:
-          member.type === "external"
+          member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
             ? member.linkedWorkspaceMemberName
               ? `External participant · linked to ${member.linkedWorkspaceMemberName}`
               : "External participant"
-            : member.type === "remote_agent"
+            : member.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
               ? member.title || member.role || "Remote agent"
               : "Workspace user",
         searchTerms: buildMentionSearchTerms(member),
@@ -319,8 +342,8 @@ export default function ConversationChat({
         return {
           id: normalized.id,
           name: normalized.name,
-          type: "actor" as const,
-          targetType: "actor" as const,
+          participantType: CONVERSATION_PARTICIPANT_TYPE.ACTOR,
+          targetType: CHAT_COMPOSER_MENTION_TARGET_TYPE.ACTOR,
           actorId: normalized.id,
           inGroup: false,
           role: normalized.role,
@@ -347,7 +370,10 @@ export default function ConversationChat({
     () =>
       Object.fromEntries(
         conversation.members
-          .filter((member) => member.type === "actor")
+          .filter(
+            (member) =>
+              member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+          )
           .map((member) => [member.id, member])
       ),
     [conversation.members]
@@ -703,7 +729,8 @@ export default function ConversationChat({
                       : undefined
                   }
                   remoteAgentRuntime={
-                    msg.author?.participantType === "remote_agent" &&
+                    msg.author?.participantType ===
+                      CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
                     msg.author.remoteAgentId
                       ? remoteAgentRuntimes?.[msg.author.remoteAgentId]
                       : undefined
@@ -711,7 +738,8 @@ export default function ConversationChat({
                   timestamp={msg.createdAt}
                   isUser={
                     msg.author
-                      ? msg.author.participantType === "workspace_member" &&
+                      ? msg.author.participantType ===
+                          CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
                         msg.author.workspaceMemberId ===
                           currentViewerWorkspaceMemberId
                       : msg.role === "user"

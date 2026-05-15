@@ -1,9 +1,14 @@
 import Feather from "@expo/vector-icons/Feather"
+import {
+  CONVERSATION_PARTICIPANT_TYPE,
+  type ConversationParticipantType,
+} from "@shared"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import { useMemo, useState } from "react"
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native"
 
 import {
+  ALPHABET_ENTITY_TARGET_TYPE,
   AlphabetIndexedEntityList,
   type AlphabetIndexedEntityItem,
 } from "@/components/alphabet-indexed-entity-list"
@@ -18,20 +23,15 @@ import { useChat } from "@/providers/chat-provider"
 import { theme } from "@/theme/tokens"
 
 function buildParticipantSubtitle(participant: {
-  participantType:
-    | "actor"
-    | "remote_agent"
-    | "workspace_member"
-    | "external"
-    | "system"
+  participantType: ConversationParticipantType
   title?: string
   role?: string
 }) {
   const fallback =
-    participant.participantType === "actor" ||
-    participant.participantType === "remote_agent"
+    participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR ||
+    participant.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
       ? "工作区 Actor"
-      : participant.participantType === "external"
+      : participant.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
         ? "外部联系人"
         : "工作区成员"
 
@@ -78,7 +78,10 @@ export function ChatMentionPickerScreen() {
         title: participant.name,
         subtitle: buildParticipantSubtitle(participant),
         avatarUrl: participant.avatarUrl || null,
-        targetType: participant.participantType === "actor" ? "actor" : "user",
+        targetType:
+          participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+            ? ALPHABET_ENTITY_TARGET_TYPE.ACTOR
+            : ALPHABET_ENTITY_TARGET_TYPE.USER,
         onPress: () => {
           if (!conversationId) {
             return

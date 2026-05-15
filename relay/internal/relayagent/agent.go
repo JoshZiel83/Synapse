@@ -2,6 +2,7 @@ package relayagent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"sync"
@@ -29,6 +30,26 @@ type RecentLogsParams struct {
 
 type StatusParams struct {
 	IncludeServers bool `json:"includeServers"`
+}
+
+type VFSPathParams struct {
+	Path string `json:"path"`
+}
+
+type VFSWriteParams struct {
+	Path       string `json:"path"`
+	DataBase64 string `json:"dataBase64"`
+}
+
+type VFSReadResponse struct {
+	DataBase64 string `json:"dataBase64"`
+	MimeType   string `json:"mimeType,omitempty"`
+	Writable   bool   `json:"writable,omitempty"`
+}
+
+type VFSWriteResponse struct {
+	DataBase64 string `json:"dataBase64"`
+	MimeType   string `json:"mimeType,omitempty"`
 }
 
 type Agent struct {
@@ -137,6 +158,57 @@ func (a *Agent) handleRPC(ctx context.Context, method string, raw json.RawMessag
 			}
 		}
 		return a.controller.GetRecentLogs(params.Count), nil
+	case "vfs.list":
+		var params VFSPathParams
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, invalidParams(err)
+		}
+		result, err := a.controller.VFSList(params.Path)
+		if err != nil {
+			return nil, internalError(err)
+		}
+		return result, nil
+	case "vfs.stat":
+		var params VFSPathParams
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, invalidParams(err)
+		}
+		result, err := a.controller.VFSStat(params.Path)
+		if err != nil {
+			return nil, internalError(err)
+		}
+		return result, nil
+	case "vfs.read":
+		var params VFSPathParams
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, invalidParams(err)
+		}
+		result, err := a.controller.VFSRead(params.Path)
+		if err != nil {
+			return nil, internalError(err)
+		}
+		return VFSReadResponse{
+			DataBase64: base64.StdEncoding.EncodeToString(result.Data),
+			MimeType:   result.MimeType,
+			Writable:   result.Writable,
+		}, nil
+	case "vfs.write":
+		var params VFSWriteParams
+		if err := json.Unmarshal(raw, &params); err != nil {
+			return nil, invalidParams(err)
+		}
+		data, err := base64.StdEncoding.DecodeString(params.DataBase64)
+		if err != nil {
+			return nil, invalidParams(err)
+		}
+		result, err := a.controller.VFSWrite(params.Path, data)
+		if err != nil {
+			return nil, internalError(err)
+		}
+		return VFSWriteResponse{
+			DataBase64: base64.StdEncoding.EncodeToString(result.Data),
+			MimeType:   result.MimeType,
+		}, nil
 	case "app.quit":
 		go func() {
 			_ = a.Stop()

@@ -1,5 +1,11 @@
 "use client"
 
+import {
+  RELATIONSHIP_ACCESS_POLICY,
+  RELATIONSHIP_APPROVAL_MODE,
+  REMOTE_AGENT_RUNTIME_KIND,
+  REMOTE_AGENT_RUNTIME_STATE,
+} from "@synapse/shared"
 import Link from "next/link"
 import QRCode from "qrcode"
 import { useParams } from "next/navigation"
@@ -51,19 +57,51 @@ function formatDateTime(value?: string) {
   return new Date(value).toLocaleString()
 }
 
+function toggleApprovalMode(current: RelationshipProfileView["approvalMode"]) {
+  return current === RELATIONSHIP_APPROVAL_MODE.AUTO
+    ? RELATIONSHIP_APPROVAL_MODE.MANUAL
+    : RELATIONSHIP_APPROVAL_MODE.AUTO
+}
+
+function approvalModeLabel(value?: RelationshipProfileView["approvalMode"]) {
+  return value || RELATIONSHIP_APPROVAL_MODE.MANUAL
+}
+
+function toggleAccessPolicy(current?: RelationshipProfileView["accessPolicy"]) {
+  return current === RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN
+    ? RELATIONSHIP_ACCESS_POLICY.APPROVAL_REQUIRED
+    : RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN
+}
+
+function accessPolicyLabel(
+  value?:
+    | RelationshipProfileView["accessPolicy"]
+    | RemoteAgentView["accessPolicy"]
+) {
+  switch (value) {
+    case RELATIONSHIP_ACCESS_POLICY.APPROVAL_REQUIRED:
+      return "approval required"
+    case RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN:
+    default:
+      return "workspace open"
+  }
+}
+
 function runtimeLabel(value: string) {
-  return value === "claude_code" ? "Claude Code" : "Codex CLI"
+  return value === REMOTE_AGENT_RUNTIME_KIND.CLAUDE_CODE
+    ? "Claude Code"
+    : "Codex CLI"
 }
 
 function sessionStateVariant(state?: RemoteAgentRuntimeSummaryView["state"]) {
   switch (state) {
-    case "running":
-    case "plan_drafting":
+    case REMOTE_AGENT_RUNTIME_STATE.RUNNING:
+    case REMOTE_AGENT_RUNTIME_STATE.PLAN_DRAFTING:
       return "secondary"
-    case "waiting_user_input":
-    case "waiting_plan_approval":
+    case REMOTE_AGENT_RUNTIME_STATE.WAITING_USER_INPUT:
+    case REMOTE_AGENT_RUNTIME_STATE.WAITING_PLAN_APPROVAL:
       return "default"
-    case "error":
+    case REMOTE_AGENT_RUNTIME_STATE.ERROR:
       return "destructive"
     default:
       return "outline"
@@ -72,14 +110,14 @@ function sessionStateVariant(state?: RemoteAgentRuntimeSummaryView["state"]) {
 
 function sessionStateLabel(state?: RemoteAgentRuntimeSummaryView["state"]) {
   switch (state) {
-    case "waiting_user_input":
+    case REMOTE_AGENT_RUNTIME_STATE.WAITING_USER_INPUT:
       return "waiting input"
-    case "waiting_plan_approval":
+    case REMOTE_AGENT_RUNTIME_STATE.WAITING_PLAN_APPROVAL:
       return "waiting approval"
-    case "plan_drafting":
+    case REMOTE_AGENT_RUNTIME_STATE.PLAN_DRAFTING:
       return "planning"
     default:
-      return state || "offline"
+      return state || REMOTE_AGENT_RUNTIME_STATE.OFFLINE
   }
 }
 
@@ -337,11 +375,12 @@ export default function RemoteAgentDetailPage() {
     if (!workspaceId || !remoteAgentId || !profile) return
     setSavingProfile(true)
     try {
+      const nextApprovalMode = toggleApprovalMode(profile.approvalMode)
       const nextProfile = await api.updateRemoteAgentRelationshipProfile(
         workspaceId,
         remoteAgentId,
         {
-          approvalMode: profile.approvalMode === "auto" ? "manual" : "auto",
+          approvalMode: nextApprovalMode,
           identityId: identityIdDraft.trim() || undefined,
           identitySearchEnabled,
           accessPolicy: profile.accessPolicy,
@@ -352,7 +391,9 @@ export default function RemoteAgentDetailPage() {
       setIdentityIdDraft(nextProfile.identityId)
       setIdentitySearchEnabled(nextProfile.identitySearchEnabled)
       applyProfileToAgent(nextProfile)
-      toast.success(`Approval mode switched to ${nextProfile.approvalMode}`)
+      toast.success(
+        `Approval mode switched to ${approvalModeLabel(nextProfile.approvalMode)}`
+      )
     } catch (error) {
       toast.error(
         error instanceof Error
@@ -368,6 +409,7 @@ export default function RemoteAgentDetailPage() {
     if (!workspaceId || !remoteAgentId || !profile) return
     setSavingProfile(true)
     try {
+      const nextAccessPolicy = toggleAccessPolicy(profile.accessPolicy)
       const nextProfile = await api.updateRemoteAgentRelationshipProfile(
         workspaceId,
         remoteAgentId,
@@ -375,16 +417,15 @@ export default function RemoteAgentDetailPage() {
           approvalMode: profile.approvalMode,
           identityId: identityIdDraft.trim() || undefined,
           identitySearchEnabled,
-          accessPolicy:
-            profile.accessPolicy === "workspace_open"
-              ? "approval_required"
-              : "workspace_open",
+          accessPolicy: nextAccessPolicy,
           isPublicShared: profile.isPublicShared,
         }
       )
       setProfile(nextProfile)
       applyProfileToAgent(nextProfile)
-      toast.success(`Access policy switched to ${nextProfile.accessPolicy}`)
+      toast.success(
+        `Access policy switched to ${accessPolicyLabel(nextProfile.accessPolicy)}`
+      )
     } catch (error) {
       toast.error(
         error instanceof Error
@@ -530,7 +571,7 @@ export default function RemoteAgentDetailPage() {
                     {runtimeLabel(agent.runtimeKind)}
                   </Badge>
                   <Badge variant="outline">
-                    {agent.accessPolicy.replace("_", " ")}
+                    {accessPolicyLabel(agent.accessPolicy)}
                   </Badge>
                   <Badge
                     variant={agent.isPublicShared ? "secondary" : "outline"}
@@ -968,15 +1009,15 @@ export default function RemoteAgentDetailPage() {
                   <Skeleton className="aspect-square rounded-[24px]" />
                 )}
                 <div className="rounded-[24px] border border-border/70 p-4 text-sm text-muted-foreground">
-                  <div>Approval mode: {profile.approvalMode}</div>
+                  <div>
+                    Approval mode: {approvalModeLabel(profile.approvalMode)}
+                  </div>
                   <div>
                     Search visibility:{" "}
                     {profile.identitySearchEnabled ? "on" : "off"}
                   </div>
                   <div>
-                    Access policy:{" "}
-                    {profile.accessPolicy?.replace("_", " ") ||
-                      "workspace open"}
+                    Access policy: {accessPolicyLabel(profile.accessPolicy)}
                   </div>
                 </div>
               </div>
@@ -1022,7 +1063,9 @@ export default function RemoteAgentDetailPage() {
                     disabled={savingProfile}
                   >
                     Switch to{" "}
-                    {profile.approvalMode === "auto" ? "manual" : "auto"}
+                    {approvalModeLabel(
+                      toggleApprovalMode(profile.approvalMode)
+                    )}
                   </Button>
                   <Button
                     variant="outline"
@@ -1031,9 +1074,9 @@ export default function RemoteAgentDetailPage() {
                     disabled={savingProfile}
                   >
                     Policy:{" "}
-                    {profile.accessPolicy === "workspace_open"
-                      ? "approval required"
-                      : "workspace open"}
+                    {accessPolicyLabel(
+                      toggleAccessPolicy(profile.accessPolicy)
+                    )}
                   </Button>
                   <Button
                     variant="outline"

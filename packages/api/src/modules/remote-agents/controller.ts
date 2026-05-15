@@ -1,12 +1,16 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
 import { z } from "zod"
+import {
+  RELATIONSHIP_ACCESS_POLICIES,
+  REMOTE_AGENT_RUNTIME_KINDS,
+} from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
-  ackRemoteAgentDeliveries,
   bindRemoteAgent,
   checkRemoteAgentMessages,
+  completeRemoteAgentDeliveries,
   createRemoteAgent,
   createRemoteAgentPlanApprovalInteraction,
   createRemoteAgentMachinePairingSession,
@@ -26,8 +30,8 @@ import {
   updateRemoteAgent,
 } from "./service.js"
 
-const runtimeKindSchema = z.enum(["claude_code", "codex"])
-const accessPolicySchema = z.enum(["workspace_open", "approval_required"])
+const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
+const accessPolicySchema = z.enum(RELATIONSHIP_ACCESS_POLICIES)
 
 const createRemoteAgentSchema = z.object({
   name: z.string().trim().min(1).max(255),
@@ -88,8 +92,7 @@ const sendMessageSchema = z.object({
   metadata: z.record(z.any()).optional(),
 })
 
-const ackDeliveriesSchema = z.object({
-  remoteAgentId: z.string().uuid(),
+const completeDeliveriesSchema = z.object({
   deliveryIds: z.array(z.string().uuid()).min(1),
 })
 
@@ -507,21 +510,25 @@ export default async function remoteAgentsController(app: FastifyInstance) {
     )
 
     app.post<{
+      Params: { remoteAgentId: string }
       Body: unknown
-    }>(`${prefix}/remote-agents/ack-deliveries`, async (request, reply) => {
-      try {
-        const body = ackDeliveriesSchema.parse(request.body)
-        return reply.send(
-          await ackRemoteAgentDeliveries({
-            remoteAgentId: body.remoteAgentId,
-            machineKey: getMachineKeyFromHeaders(request),
-            deliveryIds: body.deliveryIds,
-          })
-        )
-      } catch (error) {
-        return sendServiceError(reply, error)
+    }>(
+      `${prefix}/remote-agents/:remoteAgentId/complete-deliveries`,
+      async (request, reply) => {
+        try {
+          const body = completeDeliveriesSchema.parse(request.body)
+          return reply.send(
+            await completeRemoteAgentDeliveries({
+              remoteAgentId: request.params.remoteAgentId,
+              machineKey: getMachineKeyFromHeaders(request),
+              deliveryIds: body.deliveryIds,
+            })
+          )
+        } catch (error) {
+          return sendServiceError(reply, error)
+        }
       }
-    })
+    )
 
     app.get<{
       Params: { remoteAgentId: string; conversationId: string }

@@ -14,7 +14,10 @@ import type {
   InteractionRequestSummary,
   RemoteAgentRuntimeState,
 } from "@synapse/shared"
-import { INTERACTION_REQUEST_KIND } from "@synapse/shared"
+import {
+  CONVERSATION_PARTICIPANT_TYPE,
+  INTERACTION_REQUEST_KIND,
+} from "@synapse/shared"
 import type {
   RelayAuthorizationGrantSpec,
   RelayAuthorizationPreset,
@@ -1622,19 +1625,20 @@ function resolveMentionMember(
         (mention.participantId &&
           member.participantId === mention.participantId) ||
         (mention.actorId &&
-          member.type === "actor" &&
+          member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
           member.id === mention.actorId) ||
         (mention.workspaceMemberId &&
-          member.type === "workspace_member" &&
+          member.participantType ===
+            CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
           member.id === mention.workspaceMemberId) ||
         (mention.externalUserKey &&
-          member.type === "external" &&
+          member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
           member.externalUserKey === mention.externalUserKey)
     ) || null
 
   if (matchedMember) return matchedMember
 
-  if (mention.participantType === "actor") {
+  if (mention.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     const actor = workspaceActors?.find(
       (candidate) => candidate.id === mention.actorId
     )
@@ -1643,7 +1647,7 @@ function resolveMentionMember(
 
     return {
       participantId: mention.participantId || fallbackId,
-      type: "actor" as const,
+      participantType: CONVERSATION_PARTICIPANT_TYPE.ACTOR,
       id: mention.actorId || actor?.id || fallbackId,
       name: mention.name || actor?.name || "Unknown actor",
       role: mention.role || actor?.role,
@@ -1653,15 +1657,33 @@ function resolveMentionMember(
     }
   }
 
-  if (mention.participantType === "workspace_member") {
+  if (
+    mention.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+  ) {
     const fallbackId =
       mention.workspaceMemberId || mention.participantId || "unknown-user"
 
     return {
       participantId: mention.participantId || fallbackId,
-      type: "workspace_member" as const,
+      participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
       id: mention.workspaceMemberId || fallbackId,
       name: mention.name || "Unknown user",
+      role: mention.role,
+      title: mention.title,
+      emoji: mention.avatarEmoji,
+      avatarUrl: mention.avatarUrl,
+    }
+  }
+
+  if (mention.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
+    const fallbackId =
+      mention.remoteAgentId || mention.participantId || "unknown-remote-agent"
+
+    return {
+      participantId: mention.participantId || fallbackId,
+      participantType: CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT,
+      id: mention.remoteAgentId || fallbackId,
+      name: mention.name || "Unknown remote agent",
       role: mention.role,
       title: mention.title,
       emoji: mention.avatarEmoji,
@@ -1674,7 +1696,7 @@ function resolveMentionMember(
 
   return {
     participantId: mention.participantId || fallbackId,
-    type: "external" as const,
+    participantType: CONVERSATION_PARTICIPANT_TYPE.EXTERNAL,
     id: fallbackId,
     name: mention.name || "Unknown participant",
     role: mention.role,
@@ -2443,7 +2465,8 @@ export default function MessageBubble({
     if (!viewerWorkspaceMemberId) return undefined
     return conversationMembers?.find(
       (member) =>
-        member.type === "workspace_member" &&
+        member.participantType ===
+          CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
         member.id === viewerWorkspaceMemberId
     )
   }, [conversationMembers, viewerWorkspaceMemberId])
@@ -2459,15 +2482,25 @@ export default function MessageBubble({
     isMobile && authorMember && onParticipantClick
   )
   const authorEntityType = useMemo(() => {
-    if (author?.participantType === "external") return "external" as const
-    if (author?.participantType === "workspace_member")
-      return "workspace_member" as const
-    if (author?.participantType === "remote_agent")
-      return "remote_agent" as const
-    return "actor" as const
+    if (author?.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
+      return CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
+    }
+    if (
+      author?.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+    ) {
+      return CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+    }
+    if (
+      author?.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
+    ) {
+      return CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
+    }
+    return CONVERSATION_PARTICIPANT_TYPE.ACTOR
   }, [author?.participantType])
   const resolvedAuthorName = useMemo(() => {
-    if (author?.participantType === "workspace_member") {
+    if (
+      author?.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+    ) {
       if (
         author.workspaceMemberId &&
         author.workspaceMemberId === viewerWorkspaceMemberId
@@ -2475,27 +2508,29 @@ export default function MessageBubble({
         return "You"
       return author.name || authorMember?.name || "User"
     }
-    if (author?.participantType === "external") {
+    if (author?.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
       return author.name || authorMember?.name || "External participant"
     }
-    if (author?.participantType === "remote_agent") {
+    if (
+      author?.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
+    ) {
       return author.name || authorMember?.name || "Remote agent"
     }
-    if (author?.participantType === "actor") {
+    if (author?.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
       return author.name || actorName || authorMember?.name || "Actor"
     }
     return actorName || (isUser ? "You" : "Member")
   }, [actorName, author, authorMember, isUser, viewerWorkspaceMemberId])
   const resolvedAuthorAvatarUrl =
-    authorEntityType === "actor"
+    authorEntityType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
       ? actorAvatarUrl || author?.avatarUrl || authorMember?.avatarUrl
       : authorMember?.avatarUrl || author?.avatarUrl
   const resolvedAuthorEmoji =
-    authorEntityType === "actor"
+    authorEntityType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
       ? actorEmoji || author?.avatarEmoji || authorMember?.emoji
       : authorMember?.emoji || author?.avatarEmoji
   const resolvedAuthorSubtitle = useMemo(() => {
-    if (author?.participantType === "actor") {
+    if (author?.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
       return (
         actorRole ||
         author?.title ||
@@ -2505,12 +2540,14 @@ export default function MessageBubble({
         "Actor"
       )
     }
-    if (author?.participantType === "external") {
+    if (author?.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
       return authorMember
         ? getConversationMemberSubtitle(authorMember)
         : "External participant"
     }
-    if (author?.participantType === "remote_agent") {
+    if (
+      author?.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
+    ) {
       return (
         author?.title ||
         author?.role ||
@@ -2519,7 +2556,9 @@ export default function MessageBubble({
         "Remote agent"
       )
     }
-    if (author?.participantType === "workspace_member") {
+    if (
+      author?.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+    ) {
       return author.workspaceMemberId &&
         author.workspaceMemberId === viewerWorkspaceMemberId
         ? "You"
@@ -2528,21 +2567,27 @@ export default function MessageBubble({
     return undefined
   }, [actorRole, author, authorMember, viewerWorkspaceMemberId])
   const authorStatusState =
-    authorEntityType === "actor"
+    authorEntityType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
       ? runtimeToAvatarStatus(actorRuntime)
-      : authorEntityType === "remote_agent"
+      : authorEntityType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
         ? remoteAgentRuntimeToAvatarStatus(remoteAgentRuntime)
         : undefined
   const authorStatusLabel =
-    authorEntityType === "actor" || authorEntityType === "remote_agent"
+    authorEntityType === CONVERSATION_PARTICIPANT_TYPE.ACTOR ||
+    authorEntityType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
       ? getRuntimeLabel(
-          authorEntityType === "actor" ? actorRuntime : remoteAgentRuntime
+          authorEntityType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+            ? actorRuntime
+            : remoteAgentRuntime
         )
       : undefined
   const authorStatusDetail =
-    authorEntityType === "actor" || authorEntityType === "remote_agent"
+    authorEntityType === CONVERSATION_PARTICIPANT_TYPE.ACTOR ||
+    authorEntityType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
       ? getRuntimeDetail(
-          authorEntityType === "actor" ? actorRuntime : remoteAgentRuntime
+          authorEntityType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+            ? actorRuntime
+            : remoteAgentRuntime
         )
       : undefined
 
@@ -2948,7 +2993,7 @@ export default function MessageBubble({
           <ChatAvatar
             name={viewerUserMember?.name || resolvedAuthorName}
             avatarUrl={viewerUserMember?.avatarUrl || resolvedAuthorAvatarUrl}
-            entityType="workspace_member"
+            entityType={CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER}
             className="mt-1 shrink-0"
           />
         ) : isChildResult ? (

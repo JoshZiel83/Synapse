@@ -1,6 +1,11 @@
 import Feather from "@expo/vector-icons/Feather"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import { useEffect, useState } from "react"
+import {
+  CONTACT_DIRECT_STATE,
+  CONTACT_TARGET_TYPE,
+  DIRECT_CONVERSATION_OPEN_STATUS,
+} from "@shared"
 import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import {
@@ -18,19 +23,15 @@ import { useWorkspace } from "@/providers/workspace-provider"
 import { theme } from "@/theme/tokens"
 import type { ContactHubDetailResponse, ContactHubEntryView } from "@/types/api"
 
-type ContactType =
-  | "workspace-actor"
-  | "workspace-member"
-  | "friend-actor"
-  | "friend-member"
+type ContactType = ContactHubEntryView["kind"]
 
 function directButtonLabel(entry: ContactHubEntryView) {
   switch (entry.directState.status) {
-    case "existing":
+    case CONTACT_DIRECT_STATE.EXISTING:
       return "进入已有私聊"
-    case "pending_approval":
+    case CONTACT_DIRECT_STATE.PENDING_APPROVAL:
       return "等待批准"
-    case "approval_required":
+    case CONTACT_DIRECT_STATE.APPROVAL_REQUIRED:
       return "申请访问并发起私聊"
     default:
       return "发起私聊"
@@ -84,7 +85,7 @@ export default function ContactDetailScreen() {
     if (!workspaceId || !detail?.contact || submitting) return
 
     if (
-      detail.contact.directState.status === "existing" &&
+      detail.contact.directState.status === CONTACT_DIRECT_STATE.EXISTING &&
       detail.contact.directState.conversationId
     ) {
       router.push(`/chat/${detail.contact.directState.conversationId}`)
@@ -99,7 +100,7 @@ export default function ContactDetailScreen() {
         contactId: detail.contact.id,
       })
 
-      if (result.status === "pending_approval") {
+      if (result.status === DIRECT_CONVERSATION_OPEN_STATUS.PENDING_APPROVAL) {
         setActionMessage("已提交申请，等待对方批准后才能发起私聊。")
         return
       }
@@ -156,7 +157,14 @@ export default function ContactDetailScreen() {
                 name={detail.contact.title}
                 uri={detail.contact.avatarUrl}
                 size={68}
-                icon={detail.contact.targetType === "actor" ? "cpu" : "user"}
+                icon={
+                  detail.contact.targetType === CONTACT_TARGET_TYPE.ACTOR
+                    ? "cpu"
+                    : detail.contact.targetType ===
+                        CONTACT_TARGET_TYPE.REMOTE_AGENT
+                      ? "terminal"
+                      : "user"
+                }
               />
               <View style={styles.heroBody}>
                 <Text style={styles.heroTitle}>{detail.contact.title}</Text>
@@ -183,7 +191,12 @@ export default function ContactDetailScreen() {
               <View style={styles.metaRow}>
                 <Text style={styles.metaLabel}>类型</Text>
                 <Text style={styles.metaValue}>
-                  {detail.contact.targetType === "actor" ? "Actor" : "成员"}
+                  {detail.contact.targetType === CONTACT_TARGET_TYPE.ACTOR
+                    ? "Actor"
+                    : detail.contact.targetType ===
+                        CONTACT_TARGET_TYPE.REMOTE_AGENT
+                      ? "Remote agent"
+                      : "成员"}
                 </Text>
               </View>
               <View style={styles.metaRow}>
@@ -195,12 +208,14 @@ export default function ContactDetailScreen() {
               <View style={styles.metaRow}>
                 <Text style={styles.metaLabel}>私聊状态</Text>
                 <Text style={styles.metaValue}>
-                  {detail.contact.directState.status === "existing"
+                  {detail.contact.directState.status ===
+                  CONTACT_DIRECT_STATE.EXISTING
                     ? "已有单聊"
-                    : detail.contact.directState.status === "pending_approval"
+                    : detail.contact.directState.status ===
+                        CONTACT_DIRECT_STATE.PENDING_APPROVAL
                       ? "等待批准"
                       : detail.contact.directState.status ===
-                          "approval_required"
+                          CONTACT_DIRECT_STATE.APPROVAL_REQUIRED
                         ? "需要申请"
                         : "可直接发起"}
                 </Text>

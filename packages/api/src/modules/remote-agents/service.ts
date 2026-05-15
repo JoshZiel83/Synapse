@@ -1,5 +1,25 @@
 import crypto, { createHash, randomBytes } from "node:crypto"
 import type { FastifyInstance } from "fastify"
+import {
+  RELATIONSHIP_ACCESS_POLICY,
+  REMOTE_AGENT_MACHINE_LIFECYCLE_STATE,
+  REMOTE_AGENT_MACHINE_TRUST_STATUS,
+  REMOTE_AGENT_RUNTIME_CATALOG_STATUS,
+  REMOTE_AGENT_RUNTIME_STATE,
+  type RemoteAgentAccessPolicy,
+  type RemoteAgentLifecycleState,
+  type RemoteAgentMachineDetailView,
+  type RemoteAgentMachinePairingSessionView,
+  type RemoteAgentMachineTrustStatus,
+  type RemoteAgentMachineView,
+  type RemoteAgentRuntimeCapabilityView,
+  type RemoteAgentRuntimeCatalogEntryView,
+  type RemoteAgentRuntimeKind,
+  type RemoteAgentRuntimeStateType,
+  type RemoteAgentRuntimeSummaryView,
+  type RemoteAgentRuntimeState,
+  type RemoteAgentView,
+} from "@synapse/shared"
 import { config } from "../../config/index.js"
 import { transaction } from "../../infrastructure/database/index.js"
 import {
@@ -17,24 +37,7 @@ import {
 import { getFileUrlById } from "../files/service.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
 
-type RemoteAgentRuntimeKind = "claude_code" | "codex"
-type RemoteAgentAccessPolicy = "workspace_open" | "approval_required"
-type RemoteAgentRuntimeState =
-  | "offline"
-  | "idle"
-  | "running"
-  | "waiting_user_input"
-  | "plan_drafting"
-  | "waiting_plan_approval"
-  | "error"
-
-type RuntimeCapabilities = {
-  supportsRequestUserInput?: boolean
-  supportsPlanMode?: boolean
-  supportsPersistentSession?: boolean
-  supportsCodexAppServer?: boolean
-  supportsStructuredIo?: boolean
-}
+type RuntimeCapabilities = RemoteAgentRuntimeCapabilityView
 
 type MachineConnection = {
   machineId: string
@@ -47,12 +50,7 @@ type MachineConnection = {
 type RuntimeCatalogEntry = {
   runtimeKind: RemoteAgentRuntimeKind
   executablePath?: string
-  status:
-    | "available"
-    | "missing_binary"
-    | "broken_path"
-    | "unsupported_platform"
-    | "runtime_error"
+  status: (typeof REMOTE_AGENT_RUNTIME_CATALOG_STATUS)[keyof typeof REMOTE_AGENT_RUNTIME_CATALOG_STATUS]
   version?: string
   metadata?: Record<string, unknown>
   lastError?: string
@@ -61,7 +59,7 @@ type RuntimeCatalogEntry = {
 type RuntimeStatusMessage = {
   type: "agent:status"
   remoteAgentId: string
-  state: RemoteAgentRuntimeState
+  state: RemoteAgentRuntimeStateType
   statusText?: string
   conversationId?: string | null
   interactionId?: string | null
@@ -82,6 +80,8 @@ type DeliveryRow = {
 }
 
 const machineConnections = new Map<string, MachineConnection>()
+const deliveryInFlightByMachine = new Map<string, Map<string, number>>()
+const DELIVERY_IN_FLIGHT_TTL_MS = 5_000
 
 function toIso(value: string | Date | null | undefined) {
   if (typeof value === "string") return value
@@ -106,6 +106,56 @@ function safeSend(connection: MachineConnection, payload: unknown) {
     return true
   } catch {
     return false
+  }
+}
+
+function pruneInFlightDeliveryMap(machineId: string, now = Date.now()) {
+  const current = deliveryInFlightByMachine.get(machineId)
+  if (!current) {
+    return new Map<string, number>()
+  }
+  for (const [deliveryId, expiresAt] of current) {
+    if (expiresAt <= now) {
+      current.delete(deliveryId)
+    }
+  }
+  if (current.size === 0) {
+    deliveryInFlightByMachine.delete(machineId)
+    return new Map<string, number>()
+  }
+  return current
+}
+
+function markInFlightDeliveries(
+  machineId: string,
+  deliveryIds: string[],
+  now = Date.now()
+) {
+  if (deliveryIds.length === 0) {
+    return
+  }
+  const current = pruneInFlightDeliveryMap(machineId, now)
+  for (const deliveryId of deliveryIds) {
+    current.set(deliveryId, now + DELIVERY_IN_FLIGHT_TTL_MS)
+  }
+  if (current.size > 0) {
+    deliveryInFlightByMachine.set(machineId, current)
+  }
+}
+
+function clearInFlightDeliveries(machineId: string, deliveryIds: string[]) {
+  if (deliveryIds.length === 0) {
+    return
+  }
+  const current = deliveryInFlightByMachine.get(machineId)
+  if (!current) {
+    return
+  }
+  for (const deliveryId of deliveryIds) {
+    current.delete(deliveryId)
+  }
+  if (current.size === 0) {
+    deliveryInFlightByMachine.delete(machineId)
   }
 }
 
@@ -155,7 +205,7 @@ async function loadBoundRemoteAgentsForMachine(machineId: string) {
 
 async function setMachineLifecycleState(
   machineId: string,
-  state: "online" | "offline",
+  state: RemoteAgentLifecycleState,
   queryable: Queryable = {
     query: (text, params) => executeSql(text, params),
   }
@@ -243,6 +293,65 @@ async function startBoundRemoteAgents(machineId: string) {
       machineId,
       remoteAgentIds: bindings.map((binding) => binding.remote_agent_id),
     })
+    await replayResolvedRemoteAgentInteractions({
+      machineId,
+      remoteAgentIds: bindings.map((binding) => binding.remote_agent_id),
+    })
+  }
+}
+
+async function replayResolvedRemoteAgentInteractions(params: {
+  machineId: string
+  remoteAgentIds: string[]
+}) {
+  if (params.remoteAgentIds.length === 0) {
+    return
+  }
+  const connection = machineConnections.get(params.machineId)
+  if (!connection) {
+    return
+  }
+
+  const rows = await executeSql<{
+    remote_agent_id: string
+    active_interaction_id: string
+    status: string
+  }>(
+    `
+      SELECT
+        binding.remote_agent_id,
+        binding.active_interaction_id,
+        interaction.status
+      FROM remote_agent_bindings binding
+      INNER JOIN interaction_requests interaction
+        ON interaction.id = binding.active_interaction_id
+      WHERE binding.machine_id = $1
+        AND binding.remote_agent_id = ANY($2::uuid[])
+        AND binding.active_interaction_id IS NOT NULL
+        AND interaction.status <> 'pending'
+    `,
+    [params.machineId, params.remoteAgentIds]
+  )
+
+  if (rows.rows.length === 0) {
+    return
+  }
+
+  const { getInteractionRequestSummary } =
+    await import("../interactions/service.js")
+  for (const row of rows.rows) {
+    const interaction = await getInteractionRequestSummary(
+      row.active_interaction_id
+    )
+    if (!interaction) {
+      continue
+    }
+    safeSend(connection, {
+      type: "agent:interaction:resolved",
+      remoteAgentId: row.remote_agent_id,
+      interactionId: row.active_interaction_id,
+      interaction,
+    })
   }
 }
 
@@ -254,11 +363,11 @@ async function updateRemoteAgentRuntimeStatus(
   }
 ) {
   const runStatus =
-    message.state === "offline"
+    message.state === REMOTE_AGENT_RUNTIME_STATE.OFFLINE
       ? "cancelled"
-      : message.state === "error"
+      : message.state === REMOTE_AGENT_RUNTIME_STATE.ERROR
         ? "failed"
-        : message.state === "idle"
+        : message.state === REMOTE_AGENT_RUNTIME_STATE.IDLE
           ? "completed"
           : "running"
   const runId =
@@ -417,10 +526,25 @@ async function notifyPendingRemoteAgentDeliveries(params: {
   for (const [machineId, deliveries] of grouped) {
     const connection = machineConnections.get(machineId)
     if (!connection) continue
-    safeSend(connection, {
+    const now = Date.now()
+    const inFlight = pruneInFlightDeliveryMap(machineId, now)
+    const pendingForSend = deliveries.filter(
+      (delivery) => !inFlight.has(delivery.deliveryId)
+    )
+    if (pendingForSend.length === 0) {
+      continue
+    }
+    const sent = safeSend(connection, {
       type: "agent:deliver",
-      deliveries,
+      deliveries: pendingForSend,
     })
+    if (sent) {
+      markInFlightDeliveries(
+        machineId,
+        pendingForSend.map((delivery) => delivery.deliveryId),
+        now
+      )
+    }
   }
 }
 
@@ -450,7 +574,10 @@ async function authenticateMachineForRemoteAgent(params: {
     throw new Error("Machine key is required")
   }
   const machine = await loadMachineByApiKey(params.machineKey)
-  if (!machine || machine.trust_status !== "active") {
+  if (
+    !machine ||
+    machine.trust_status !== REMOTE_AGENT_MACHINE_TRUST_STATUS.ACTIVE
+  ) {
     throw new Error("Machine authentication failed")
   }
 
@@ -510,7 +637,7 @@ async function loadConversationHostWorkspaceId(
 
 function mapRuntimeSummaryFromRow(row: {
   runtime_kind: RemoteAgentRuntimeKind
-  runtime_state?: RemoteAgentRuntimeState | null
+  runtime_state?: RemoteAgentRuntimeStateType | null
   status_text?: string | null
   last_session_id?: string | null
   active_conversation_id?: string | null
@@ -522,10 +649,10 @@ function mapRuntimeSummaryFromRow(row: {
   capabilities?: unknown
   pending_conversation_count?: string | number | null
   unread_delivery_count?: string | number | null
-}) {
+}): RemoteAgentRuntimeSummaryView {
   return {
     runtimeKind: row.runtime_kind,
-    state: row.runtime_state ?? "offline",
+    state: row.runtime_state ?? REMOTE_AGENT_RUNTIME_STATE.OFFLINE,
     statusText: row.status_text ?? undefined,
     sessionId: row.last_session_id ?? undefined,
     activeConversationId: row.active_conversation_id ?? undefined,
@@ -649,7 +776,7 @@ export async function loadRemoteAgentRuntimeSnapshot(
   const result = await executeSqlOn<{
     remote_agent_id: string
     runtime_kind: RemoteAgentRuntimeKind
-    runtime_state: RemoteAgentRuntimeState
+    runtime_state: RemoteAgentRuntimeStateType
     status_text: string | null
     active_conversation_id: string | null
     active_interaction_id: string | null
@@ -806,7 +933,7 @@ async function mapRemoteAgentRow(row: {
   runtime_path?: string | null
   local_root_path?: string | null
   machine_lifecycle_state?: string | null
-  runtime_state?: RemoteAgentRuntimeState | null
+  runtime_state?: RemoteAgentRuntimeStateType | null
   status_text?: string | null
   last_session_id?: string | null
   active_conversation_id?: string | null
@@ -1011,7 +1138,7 @@ export async function createRemoteAgent(params: {
       params.runtimeKind,
       params.avatarFileId ?? null,
       params.avatarEmoji ?? null,
-      params.accessPolicy ?? "workspace_open",
+      params.accessPolicy ?? RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
       params.isPublicShared === true,
       JSON.stringify(params.metadata ?? {}),
       identity.workspaceMemberId,
@@ -1341,12 +1468,7 @@ export async function bindRemoteAgent(params: {
 
   const catalogResult = await executeSql<{
     executable_path: string | null
-    status:
-      | "available"
-      | "missing_binary"
-      | "broken_path"
-      | "unsupported_platform"
-      | "runtime_error"
+    status: RemoteAgentRuntimeCatalogEntryView["status"]
     last_error: string | null
   }>(
     `
@@ -1364,7 +1486,7 @@ export async function bindRemoteAgent(params: {
     if (!catalogEntry) {
       throw new Error("Machine has not reported runtime availability yet")
     }
-    if (catalogEntry.status !== "available") {
+    if (catalogEntry.status !== REMOTE_AGENT_RUNTIME_CATALOG_STATUS.AVAILABLE) {
       const detail = catalogEntry.last_error?.trim()
         ? `: ${catalogEntry.last_error.trim()}`
         : ""
@@ -1569,7 +1691,7 @@ export async function createRemoteAgentUserInputInteraction(params: {
   await updateRemoteAgentRuntimeStatus(access.machineId, {
     type: "agent:status",
     remoteAgentId: params.remoteAgentId,
-    state: "waiting_user_input",
+    state: REMOTE_AGENT_RUNTIME_STATE.WAITING_USER_INPUT,
     statusText: params.title,
     conversationId: params.conversationId,
     interactionId: interaction.id,
@@ -1624,7 +1746,7 @@ export async function createRemoteAgentPlanApprovalInteraction(params: {
   await updateRemoteAgentRuntimeStatus(access.machineId, {
     type: "agent:status",
     remoteAgentId: params.remoteAgentId,
-    state: "waiting_plan_approval",
+    state: REMOTE_AGENT_RUNTIME_STATE.WAITING_PLAN_APPROVAL,
     statusText: params.title,
     conversationId: params.conversationId,
     interactionId: interaction.id,
@@ -1802,15 +1924,15 @@ export async function checkRemoteAgentMessages(params: {
   }
 }
 
-export async function ackRemoteAgentDeliveries(params: {
+export async function completeRemoteAgentDeliveries(params: {
   remoteAgentId: string
   machineKey: string
   deliveryIds: string[]
 }) {
-  await authenticateMachineForRemoteAgent(params)
+  const machine = await authenticateMachineForRemoteAgent(params)
   const uniqueIds = [...new Set(params.deliveryIds.filter(Boolean))]
   if (uniqueIds.length === 0) {
-    return { acked: 0 }
+    return { completed: 0 }
   }
 
   const rows = await executeSql<{
@@ -1836,13 +1958,17 @@ export async function ackRemoteAgentDeliveries(params: {
   await executeSql(
     `
       UPDATE remote_agent_message_deliveries
-      SET status = 'acked',
+      SET status = 'completed',
           last_acked_at = NOW(),
           updated_at = NOW()
       WHERE remote_agent_id = $1
         AND id = ANY($2::uuid[])
     `,
     [params.remoteAgentId, uniqueIds]
+  )
+  clearInFlightDeliveries(
+    machine.machineId,
+    rows.rows.map((row) => row.id)
   )
 
   const byConversation = new Map<string, { sequence: number; itemId: string }>()
@@ -1892,7 +2018,7 @@ export async function ackRemoteAgentDeliveries(params: {
   }
 
   return {
-    acked: uniqueIds.length,
+    completed: rows.rows.length,
   }
 }
 
@@ -2090,6 +2216,7 @@ async function finalizeMachineSession(
   closeReason?: string
 ) {
   machineConnections.delete(connection.machineId)
+  deliveryInFlightByMachine.delete(connection.machineId)
   await executeSql(
     `
       UPDATE remote_agent_machine_sessions
@@ -2101,7 +2228,10 @@ async function finalizeMachineSession(
     `,
     [connection.sessionId, closeReason ?? null]
   )
-  await setMachineLifecycleState(connection.machineId, "offline")
+  await setMachineLifecycleState(
+    connection.machineId,
+    REMOTE_AGENT_MACHINE_LIFECYCLE_STATE.OFFLINE
+  )
   const bindings = await loadBoundRemoteAgentsForMachine(connection.machineId)
   for (const binding of bindings) {
     await executeSql(
@@ -2110,7 +2240,6 @@ async function finalizeMachineSession(
         SET runtime_state = 'offline',
             status_text = $2,
             active_conversation_id = NULL,
-            active_interaction_id = NULL,
             last_run_finished_at = NOW(),
             updated_at = NOW()
         WHERE remote_agent_id = $1
@@ -2129,7 +2258,10 @@ export async function handleRemoteAgentDaemonConnection(
   const requestUrl = new URL(req.url, config.app.baseUrl)
   const apiKey = requestUrl.searchParams.get("key")?.trim() || ""
   const machine = await loadMachineByApiKey(apiKey)
-  if (!machine || machine.trust_status !== "active") {
+  if (
+    !machine ||
+    machine.trust_status !== REMOTE_AGENT_MACHINE_TRUST_STATUS.ACTIVE
+  ) {
     try {
       socket.send(
         JSON.stringify({
@@ -2171,7 +2303,10 @@ export async function handleRemoteAgentDaemonConnection(
     ready: false,
   }
   machineConnections.set(machine.id, connection)
-  await setMachineLifecycleState(machine.id, "online")
+  await setMachineLifecycleState(
+    machine.id,
+    REMOTE_AGENT_MACHINE_LIFECYCLE_STATE.ONLINE
+  )
 
   try {
     socket.send(
@@ -2228,20 +2363,6 @@ export async function handleRemoteAgentDaemonConnection(
 
     if (message?.type === "runtime:catalog" && Array.isArray(message.catalog)) {
       await upsertRuntimeCatalog(machine.id, message.catalog)
-      return
-    }
-
-    if (
-      message?.type === "agent:deliver:ack" &&
-      Array.isArray(message.deliveryIds)
-    ) {
-      await ackRemoteAgentDeliveries({
-        remoteAgentId: String(message.remoteAgentId || ""),
-        machineKey: apiKey,
-        deliveryIds: message.deliveryIds.filter(
-          (value: unknown): value is string => typeof value === "string"
-        ),
-      })
       return
     }
 

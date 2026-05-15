@@ -43,7 +43,7 @@ CREATE TYPE remote_agent_machine_sessions_transport AS ENUM ('websocket');
 CREATE TYPE remote_agent_bindings_status AS ENUM ('active', 'disabled', 'error');
 CREATE TYPE remote_agent_bindings_runtime_state AS ENUM ('offline', 'idle', 'running', 'waiting_user_input', 'plan_drafting', 'waiting_plan_approval', 'error');
 CREATE TYPE remote_agent_runs_status AS ENUM ('queued', 'running', 'completed', 'failed', 'cancelled');
-CREATE TYPE remote_agent_message_deliveries_status AS ENUM ('pending', 'acked', 'completed', 'failed');
+CREATE TYPE remote_agent_message_deliveries_status AS ENUM ('pending', 'completed', 'failed');
 CREATE TYPE remote_agent_runtime_catalog_status AS ENUM ('available', 'missing_binary', 'broken_path', 'unsupported_platform', 'runtime_error');
 CREATE TYPE relationship_approval_mode AS ENUM ('auto', 'manual');
 CREATE TYPE relationship_request_status AS ENUM ('pending', 'approved', 'rejected');
