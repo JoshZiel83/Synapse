@@ -67,6 +67,7 @@ import {
 import { buildNormalizedMessageContent } from "../chat/message-content.js"
 import { buildDefaultUserMention } from "./inline-ref-resolver.js"
 import { runMemorySearch } from "../memory/service.js"
+import { sortAvailableSkillsForDiscovery } from "../skills/discovery-order.js"
 import { readVisibleSkill } from "../skills/service.js"
 import {
   listAutomationEventSources,
@@ -1140,21 +1141,31 @@ export function registerCallableToolPlugins(): void {
       },
     },
     resolve: (ctx) => {
-      const availableSkills = ctx.availableSkills || []
+      const availableSkills = sortAvailableSkillsForDiscovery(
+        ctx.availableSkills || []
+      )
       if (availableSkills.length === 0) {
         return { active: false, definition: null as any }
       }
       const skillNames: string[] = Array.from(
         new Set(availableSkills.map((skill) => skill.slug))
       )
-      const skillList = availableSkills
-        .map((skill) => `\`${skill.slug}\`: ${skill.description}`)
-        .join("; ")
+      const previewSkills = skillNames
+        .slice(0, 12)
+        .map((skill) => `\`${skill}\``)
+      const moreCount = skillNames.length - previewSkills.length
+      const availabilityHint =
+        moreCount > 0
+          ? `${previewSkills.join(", ")}, and ${moreCount} more listed in the Available Skills section.`
+          : `${previewSkills.join(", ")}.`
       return {
         active: true,
         definition: {
           name: "read_skill",
-          description: `Read the contents of an available skill package. Available skills: ${skillList}`,
+          description:
+            `Read the contents of an available skill package. ` +
+            `Use the exact slug from the Available Skills section. ` +
+            `Currently available: ${availabilityHint}`,
           parameters: {
             type: "object",
             properties: {

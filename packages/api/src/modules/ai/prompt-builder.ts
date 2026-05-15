@@ -13,6 +13,7 @@ import {
   isPlanCollaborationMode,
   isPlanDraftingCollaborationMode,
 } from "@synapse/shared/utils"
+import { sortAvailableSkillsForDiscovery } from "../skills/discovery-order.js"
 import { buildReplyToRefUsageGuidance } from "./session-tool-guidance.js"
 
 export interface ConversationParticipantInfo {
@@ -388,11 +389,12 @@ export function buildActorPrompt(
   )
 
   if (availableSkills && availableSkills.length > 0) {
+    const orderedSkills = sortAvailableSkillsForDiscovery(availableSkills)
     parts.push(
       `# Available Skills\n` +
         `These skills are available on demand. Do not assume their detailed contents are already loaded.\n` +
         `If one skill clearly matches the task, call \`read_skill\` to read its description or a referenced attachment before using it.\n` +
-        availableSkills
+        orderedSkills
           .map(
             (skill) =>
               `- \`${skill.slug}\`${skill.sourceKind === "relay_auto_loaded" ? " (relay auto-loaded)" : ""}: ${skill.description}`
