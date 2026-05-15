@@ -10,18 +10,18 @@ import { Card, CardContent } from "@/components/ui/card"
 const pluginHighlights = [
   {
     icon: ShieldCheck,
-    title: "官方上架",
-    description: "内置和官方维护插件直接可用，不用自己先搭一层",
+    title: "官方维护",
+    description: "内置和官方维护能力直接可用，不必再自己先搭一层集成。",
   },
   {
     icon: PlugZap,
-    title: "一键安装",
-    description: "装到工作区后，角色就能按授权拿来工作",
+    title: "装到工作区",
+    description: "插件先进入工作区，再按角色、会话或团队范围发放给合适的人。",
   },
   {
     icon: LockKeyhole,
     title: "统一授权",
-    description: "谁能装、谁能用、在哪能用，都在同一处管理",
+    description: "谁能装、谁能用、在哪些范围生效，都能在同一处管理。",
   },
 ] as const
 
@@ -35,21 +35,21 @@ const pluginCards = [
   },
   {
     name: "Browser Operator",
-    summary: "让数字员工直接操作浏览器完成真实页面任务",
+    summary: "让数字员工直接操作浏览器，完成真实页面里的执行任务。",
     meta: "官方维护",
-    action: "分配给角色",
+    action: "授权给角色",
     accent: "bg-emerald-100 text-emerald-900",
   },
   {
     name: "Docs Connector",
-    summary: "把文档、知识库和附件接到同一套工作链里",
-    meta: "团队常用",
+    summary: "把文档、知识库和附件接进同一条工作链里。",
+    meta: "工作区常用",
     action: "安装并授权",
     accent: "bg-amber-100 text-amber-900",
   },
   {
     name: "SQL Access",
-    summary: "让分析和运营角色按权限读取结构化数据",
+    summary: "让分析和运营角色按权限读取结构化数据。",
     meta: "受控访问",
     action: "配置访问范围",
     accent: "bg-violet-100 text-violet-900",
@@ -67,10 +67,10 @@ export function LandingPluginMarketSection() {
         <div className="grid gap-12 lg:grid-cols-[0.84fr_1.16fr] lg:items-center lg:gap-14">
           <LandingReveal className="max-w-xl" x={-24}>
             <h2 className="font-display text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
-              官方插件市场，装上就能干活
+              插件先进入工作区，再交给角色去用
             </h2>
             <p className="mt-4 text-base leading-7 text-slate-600 sm:text-lg">
-              不用先拼工具链把官方插件装进工作区，再按角色和权限分配，数字员工就能直接开始调用能力
+              搜索、安装、分配、授权都在同一个后台完成。插件先成为工作区资源，再交给合适的角色和会话去调用
             </p>
 
             <LandingStagger className="mt-8 space-y-4" delay={0.08}>
@@ -107,10 +107,10 @@ export function LandingPluginMarketSection() {
                 <div className="flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <div className="text-sm font-semibold text-slate-950">
-                      Plugin Marketplace
+                      官方插件市场
                     </div>
                     <div className="mt-1 text-[11px] text-slate-500">
-                      安装到工作区，再分配给你的数字员工
+                      先安装到工作区，再按规则分配给数字团队
                     </div>
                   </div>
                   <div className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-500">

@@ -411,7 +411,9 @@
         delete nextPendingReads[conversationId];
       }
     }
-    for (const [conversationId, entry] of Object.entries(nextState.pendingReads)) {
+    for (const [conversationId, entry] of Object.entries(
+      nextState.pendingReads
+    )) {
       if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
         nextPendingReads[conversationId] = entry;
       }
@@ -421,7 +423,10 @@
       workspaceId: nextState.workspaceId,
       workspaceMemberId: nextState.workspaceMemberId || nextWorkspaceState.workspaceMemberId,
       clientInstanceId: nextState.clientInstanceId || nextWorkspaceState.clientInstanceId,
-      inboxCursor: Math.max(nextWorkspaceState.inboxCursor || 0, nextState.inboxCursor || 0),
+      inboxCursor: Math.max(
+        nextWorkspaceState.inboxCursor || 0,
+        nextState.inboxCursor || 0
+      ),
       lastBootstrappedAt: latestIsoTimestamp(
         nextWorkspaceState.lastBootstrappedAt,
         nextState.lastBootstrappedAt
@@ -432,7 +437,10 @@
   }
   function resolveApiUrl(apiBase, path) {
     const base = typeof apiBase === "string" && apiBase.trim() ? apiBase.trim() : "/api/v1";
-    return new URL(`${base.replace(/\/$/, "")}${path}`, scope.location.origin).toString();
+    return new URL(
+      `${base.replace(/\/$/, "")}${path}`,
+      scope.location.origin
+    ).toString();
   }
   scope.addEventListener("install", (event) => {
     event.waitUntil(scope.skipWaiting());
@@ -594,7 +602,9 @@
   async function broadcast(message) {
     try {
       if ("BroadcastChannel" in scope) {
-        const channel = new BroadcastChannel(CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL);
+        const channel = new BroadcastChannel(
+          CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL
+        );
         channel.postMessage(message);
         channel.close();
       }

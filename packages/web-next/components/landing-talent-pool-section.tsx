@@ -226,10 +226,10 @@ export function LandingTalentPoolSection() {
       <div className="relative mx-auto max-w-7xl px-6 lg:px-8">
         <LandingReveal className="mx-auto max-w-3xl text-center">
           <h2 className="font-display text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
-            开箱即用的人才市场
+            按岗位搭团队，而不是堆一排 Bot
           </h2>
           <p className="mt-4 text-base leading-7 text-slate-600 sm:text-lg">
-            一键招募，持续培养，自主记忆，成为独属于你的人才
+            研究、写作、运营、客服、招聘等角色可以直接上岗，再随着你的记忆、权限和流程持续成长
           </p>
         </LandingReveal>
       </div>

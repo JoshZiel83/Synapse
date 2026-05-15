@@ -17,18 +17,18 @@ import { cn } from "@/lib/utils"
 const eventHighlights = [
   {
     icon: BellRing,
-    title: "万物触发",
-    description: "人、服务、消息和系统事件都能发起工作",
+    title: "多源触发",
+    description: "人、服务、消息和系统信号都能成为工作的入口。",
   },
   {
     icon: Workflow,
-    title: "自动路由",
-    description: "事件进来后，角色、群聊和能力会自动到位",
+    title: "自动拉起",
+    description: "事件进来后，群聊、角色和资源会自动就位。",
   },
   {
     icon: AlarmClockCheck,
-    title: "持续监听",
-    description: "定时器、Webhook 和系统状态变化可以持续触发",
+    title: "持续值守",
+    description: "定时任务、Webhook 和系统状态变化都能长期运行和唤醒团队。",
   },
 ] as const
 
@@ -36,21 +36,21 @@ const eventSources = [
   {
     icon: ServerCog,
     title: "自定义服务器推送",
-    meta: "服务器把异常事件直接推入运行时",
+    meta: "把异常事件直接推入当前运行时。",
     badge: "已触发",
     active: true,
   },
   {
     icon: MessageSquareText,
     title: "飞书 IM 接入",
-    meta: "群消息、@提及和机器人指令都能接入",
+    meta: "群消息、@ 提及和机器人指令都能接入。",
     badge: "等待中",
     active: false,
   },
   {
     icon: AlarmClockCheck,
     title: "定时触发",
-    meta: "按时巡检、日报和周期任务自动开始",
+    meta: "巡检、日报和周期任务都能按时自动开始。",
     badge: "已配置",
     active: false,
   },
@@ -58,28 +58,28 @@ const eventSources = [
 
 const workflowSteps = [
   {
-    title: "新建 incident 群聊",
-    meta: "系统自动创建战情群",
+    title: "创建 incident 群聊",
+    meta: "系统自动拉起战情群。",
     state: "done",
   },
   {
-    title: "拉入 SRE Actor",
-    meta: "值班角色自动入场",
+    title: "拉入值班 SRE",
+    meta: "值班角色自动入场。",
     state: "done",
   },
   {
     title: "调用内网日志服务",
-    meta: "通过本地接入查询错误日志",
+    meta: "通过本地接入查询错误日志。",
     state: "active",
   },
   {
-    title: "拉入诊断 Actor",
-    meta: "按规则补充数据库和服务诊断角色",
+    title: "拉入诊断角色",
+    meta: "按规则补充数据库和服务诊断角色。",
     state: "pending",
   },
   {
-    title: "更新群记忆",
-    meta: "把结论和 blocker 写回群记忆",
+    title: "更新共享记忆",
+    meta: "把结论和 blocker 写回共享记忆。",
     state: "pending",
   },
 ] as const
@@ -97,11 +97,11 @@ export function LandingEventDrivenSection() {
         <div className="grid gap-12 lg:grid-cols-[0.82fr_1.18fr] lg:items-center lg:gap-14">
           <LandingReveal className="max-w-xl" x={-24}>
             <h2 className="font-display text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
-              人不是唯一入口，事件也能驱动团队
+              工作不一定从你开口开始，事件也能直接叫醒团队
             </h2>
             <p className="mt-4 text-base leading-7 text-slate-600 sm:text-lg">
-              自定义服务器推送、飞书 IM
-              接入和定时触发，都能直接进入同一套运行时，自动拉起群聊、角色和工作流
+              定时任务、Webhook、IM
+              消息和系统信号都能直接进入同一套运行时，自动开群、拉人、接资源
             </p>
 
             <LandingStagger className="mt-8 space-y-4" delay={0.08}>
