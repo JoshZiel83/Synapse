@@ -24,18 +24,19 @@ import {
 const accessHighlights = [
   {
     icon: LaptopMinimal,
-    title: "云端发起，本地执行",
-    description: "任务在云端协作，执行可以继续落到你的电脑和浏览器",
+    title: "云上协作，本地执行",
+    description:
+      "任务在云端被分工和讨论，真正执行可以继续落到你的设备和浏览器。",
   },
   {
     icon: Server,
-    title: "继续接入公司内部服务",
-    description: "内网系统、共享服务和内部 API 也能进入同一套工作链",
+    title: "设备和内网都能接入",
+    description: "文件系统、数据库、共享服务和内部 API 都能进入同一套工作链。",
   },
   {
     icon: ShieldCheck,
     title: "连接之后仍然受控",
-    description: "访问范围、调用动作和执行轨迹都可以继续被治理",
+    description: "访问范围、调用动作和执行轨迹都可以继续被治理和审计。",
   },
 ] as const
 
@@ -101,10 +102,11 @@ export function LandingLocalAccessSection() {
         <div className="grid gap-12 lg:grid-cols-[0.84fr_1.16fr] lg:items-center lg:gap-14">
           <LandingReveal className="max-w-xl" x={-24}>
             <h2 className="font-display text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
-              云端本地双协同
+              云端协作，执行继续落到设备和内网
             </h2>
             <p className="mt-4 text-base leading-7 text-slate-600 sm:text-lg">
-              云端里的数字团队不只停留在网页上需要时，它可以继续触达你的设备、浏览器和公司内部服务，把真实执行接进来
+              团队在 Web
+              里协作，但真正执行不必只停留在云端。浏览器、文件系统、数据库和内网服务都可以在边界清楚的前提下继续接进来
             </p>
 
             <LandingStagger className="mt-8 space-y-4" delay={0.08}>

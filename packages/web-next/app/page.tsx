@@ -10,15 +10,16 @@ import { LandingLocalAccessSection } from "@/components/landing-local-access-sec
 import { LandingMotionProvider } from "@/components/landing-motion-provider"
 import { LandingPluginMarketSection } from "@/components/landing-plugin-market-section"
 import { LandingReveal } from "@/components/landing-motion"
+import { LandingShareNetworkSection } from "@/components/landing-share-network-section"
 import { LandingSnapScrollController } from "@/components/landing-snap-scroll-controller"
 import { LandingTalentPoolSection } from "@/components/landing-talent-pool-section"
 import { LandingTeamGovernanceSection } from "@/components/landing-team-governance-section"
 import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = {
-  title: "让 AI 成为数字员工",
+  title: "把 AI 组织成团队",
   description:
-    "Synapse 是云端数字员工组织运行时，让岗位、记忆、权限、工具和协作关系在同一套中枢里持续运转",
+    "Synapse 是面向团队的 AI 协作运行时，让可共享的同事、记忆、授权、插件、本地执行与远端 Agent 在同一套中枢里协同运转。",
 }
 
 export default function HomePage() {
@@ -43,13 +44,19 @@ export default function HomePage() {
                 href="#difference"
                 className="transition-colors hover:text-foreground/90"
               >
-                定位
+                协作
+              </Link>
+              <Link
+                href="#sharing"
+                className="transition-colors hover:text-foreground/90"
+              >
+                共享
               </Link>
               <Link
                 href="#capabilities"
                 className="transition-colors hover:text-foreground/90"
               >
-                人才
+                角色
               </Link>
               <Link
                 href="#plugins"
@@ -61,7 +68,7 @@ export default function HomePage() {
                 href="#reach"
                 className="transition-colors hover:text-foreground/90"
               >
-                接入
+                执行
               </Link>
               <Link
                 href="#events"
@@ -93,7 +100,8 @@ export default function HomePage() {
                 className="animate-fade-up mx-auto mt-6 max-w-2xl text-base leading-7 text-slate-600 sm:text-lg"
                 style={{ animationDelay: "160ms" }}
               >
-                把协作、记忆和授权收进同一套数字组织运行时
+                不是再多一个聊天框，而是把角色、群聊、记忆、授权和执行放进同一个
+                AI 组织运行时
               </p>
 
               <div
@@ -109,7 +117,7 @@ export default function HomePage() {
                   variant="outline"
                   className="border-border/70 bg-white/70"
                 >
-                  <Link href="#trust">私有部署</Link>
+                  <Link href="#trust">了解私有部署</Link>
                 </Button>
               </div>
             </div>
@@ -121,6 +129,8 @@ export default function HomePage() {
         </section>
 
         <LandingCollaborationSection />
+
+        <LandingShareNetworkSection />
 
         <LandingTalentPoolSection />
 
@@ -141,17 +151,18 @@ export default function HomePage() {
             y={28}
           >
             <h2 className="font-display text-4xl font-semibold tracking-tight text-slate-950 sm:text-5xl">
-              把 AI 从对话工具，升级为组织能力
+              把 AI 从聊天窗口，升级成团队能力
             </h2>
             <p className="mx-auto mt-4 max-w-2xl text-lg leading-8 text-slate-600">
-              你不需要再围着单个聊天框搭流程让岗位、记忆、权限、工具和设备协作关系都进入同一个中枢
+              不再围着单个 Bot
+              临时拼流程，让角色、记忆、资源授权、事件唤醒和执行环境都进入同一个中枢
             </p>
             <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
               <Button asChild size="lg">
                 <Link href="/register">创建团队</Link>
               </Button>
               <Button asChild size="lg" variant="outline">
-                <Link href="#trust">私有部署</Link>
+                <Link href="#trust">了解私有部署</Link>
               </Button>
             </div>
           </LandingReveal>

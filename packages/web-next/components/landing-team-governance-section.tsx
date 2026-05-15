@@ -22,17 +22,17 @@ const teamEnvironment = ["团队工具", "共享角色", "统一权限"] as cons
 const roleRows = [
   {
     role: "平台管理员",
-    summary: "管理成员、模型和工作区",
+    summary: "管理成员、模型组和平台级配置。",
     tone: "bg-slate-950 text-white",
   },
   {
     role: "工作区管理员",
-    summary: "安装插件、分配角色、配置设备",
+    summary: "安装插件、分配角色、配置设备和资源。",
     tone: "bg-sky-100 text-sky-950",
   },
   {
     role: "成员",
-    summary: "发起任务、查看结果、使用被授权能力",
+    summary: "发起任务、查看结果、使用被授权能力。",
     tone: "bg-slate-100 text-slate-700",
   },
 ] as const
@@ -41,22 +41,22 @@ const auditItems = [
   {
     time: "09:42",
     action: "Browser Operator 装入团队环境",
-    detail: "由工作区管理员发起",
+    detail: "由工作区管理员发起。",
   },
   {
     time: "09:45",
     action: "Risk Analyst 获得 SQL Access",
-    detail: "权限范围限制为只读查询",
+    detail: "权限范围限制为只读查询。",
   },
   {
     time: "09:47",
     action: "Celine 在个人环境启用 Docs Connector",
-    detail: "仅个人可见，不影响团队环境",
+    detail: "仅个人可见，不影响团队环境。",
   },
   {
     time: "09:52",
-    action: "凌晨巡检任务触发并写入群记忆",
-    detail: "事件链路完整记录",
+    action: "凌晨巡检任务触发并写入共享记忆",
+    detail: "事件链路完整记录。",
   },
 ] as const
 
@@ -72,10 +72,10 @@ export function LandingTeamGovernanceSection() {
       <div className="landing-priority-frame relative mx-auto flex max-w-7xl flex-col px-6 lg:px-8">
         <LandingReveal className="landing-priority-copy mx-auto max-w-3xl text-center">
           <h2 className="font-display text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl">
-            团队管理，要像你熟悉的后台一样直观
+            管理数字团队，也该像管理真实团队一样清楚
           </h2>
           <p className="mt-4 text-base leading-7 text-slate-600 sm:text-lg">
-            个人环境与团队环境并行，权限边界清楚，关键动作可追溯管理数字团队，也应该像管理真实团队一样清楚
+            个人环境和团队环境并行，角色权限、资源归属和关键动作都能看清、回收、追溯
           </p>
         </LandingReveal>
 
@@ -97,10 +97,10 @@ export function LandingTeamGovernanceSection() {
                     </div>
                     <div>
                       <div className="text-sm font-semibold text-slate-950">
-                        团队和个人并存
+                        个人和团队并行
                       </div>
                       <div className="mt-1 text-[11px] text-slate-500">
-                        个人可配自己的工具，也可共享；团队也能统一配置团队工具
+                        个人可以保留自己的工具和记忆，团队也能统一配置公共能力
                       </div>
                     </div>
                   </div>
@@ -121,7 +121,7 @@ export function LandingTeamGovernanceSection() {
                               个人环境
                             </div>
                             <div className="mt-1 text-[11px] text-slate-500">
-                              给自己配工具，也可选择共享
+                              给自己配工具，也可以选择共享给团队
                             </div>
                           </div>
                         </div>
@@ -161,7 +161,7 @@ export function LandingTeamGovernanceSection() {
                               团队环境
                             </div>
                             <div className="mt-1 text-[11px] text-slate-500">
-                              团队也能直接统一配置，多人复用
+                              统一配置公共能力，供多人复用
                             </div>
                           </div>
                         </div>
@@ -192,7 +192,7 @@ export function LandingTeamGovernanceSection() {
                     </div>
                     <div>
                       <div className="text-sm font-semibold text-slate-950">
-                        权限管理
+                        权限分层
                       </div>
                       <div className="mt-1 text-[11px] text-slate-500">
                         谁能装、谁能用、谁能改，一眼看清
@@ -241,7 +241,7 @@ export function LandingTeamGovernanceSection() {
                     </div>
                     <div>
                       <div className="text-sm font-semibold text-slate-950">
-                        日志审计
+                        审计留痕
                       </div>
                       <div className="mt-1 text-[11px] text-slate-500">
                         关键动作和环境变化都有记录
