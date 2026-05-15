@@ -33,7 +33,9 @@ export function LandingSnapScrollController() {
 
   useEffect(() => {
     const isEnabled = () =>
-      window.matchMedia("(min-width: 1024px) and (pointer: fine)").matches &&
+      window.matchMedia(
+        "(min-width: 1024px) and (pointer: fine) and (min-height: 1000px)"
+      ).matches &&
       !window.matchMedia("(prefers-reduced-motion: reduce)").matches
 
     const getScrollTargets = () => {
