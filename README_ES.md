@@ -131,7 +131,7 @@ Requisitos previos:
 Clona el repositorio y levanta la base local:
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/zai-org/Synapse
 cd Synapse
 
 npm ci

@@ -131,7 +131,7 @@ Synapse 正在探索一种面向部分本地 runtime 的虚拟文件系统投影
 克隆仓库并启动本地基础环境：
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/zai-org/Synapse
 cd Synapse
 
 npm ci

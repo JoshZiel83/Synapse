@@ -127,7 +127,7 @@ Prerequisites:
 Clone the repo and start the core local stack:
 
 ```bash
-git clone <repo-url>
+git clone https://github.com/zai-org/Synapse
 cd Synapse
 
 npm ci
