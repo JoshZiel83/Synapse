@@ -1,5 +1,6 @@
 "use client"
 
+import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import type { ComponentProps, ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { ArrowUpRight, Link2 } from "lucide-react"
@@ -32,13 +33,13 @@ function CompactDetail({ label, value }: { label: string; value: string }) {
 }
 
 function getCompactNote(member: ConversationMember) {
-  if (member.type === "actor") {
+  if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     return member.title || member.role || "Actor"
   }
-  if (member.type === "remote_agent") {
+  if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
     return member.title || member.role || "Remote agent"
   }
-  if (member.type === "external") {
+  if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
     if (member.linkedWorkspaceMemberName) {
       return `Linked to ${member.linkedWorkspaceMemberName}`
     }
@@ -92,7 +93,7 @@ export default function ChatParticipantHoverCard({
                 name={member.name}
                 avatarUrl={member.avatarUrl}
                 emoji={member.emoji}
-                entityType={member.type}
+                entityType={member.participantType}
                 size="lg"
                 className="size-12"
               />
@@ -120,7 +121,8 @@ export default function ChatParticipantHoverCard({
                     {transportLabel}
                   </Badge>
                 ) : null}
-                {member.type === "external" &&
+                {member.participantType ===
+                  CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
                 member.linkedWorkspaceMemberName ? (
                   <Badge variant="secondary" className="rounded-full">
                     <Link2 data-icon="inline-start" />
@@ -133,7 +135,9 @@ export default function ChatParticipantHoverCard({
 
           <div className="rounded-2xl border border-border/70 bg-muted/20 p-3">
             <CompactDetail label="Info" value={compactNote} />
-            {member.type === "external" && member.externalUserKey ? (
+            {member.participantType ===
+              CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
+            member.externalUserKey ? (
               <div className="mt-2 rounded-xl bg-background px-2.5 py-2 font-mono text-[11px] text-muted-foreground ring-1 ring-border/70">
                 {member.externalUserKey}
               </div>

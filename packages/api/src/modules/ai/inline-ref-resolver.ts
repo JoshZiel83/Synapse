@@ -1,4 +1,5 @@
 import {
+  CONVERSATION_PARTICIPANT_TYPE,
   mentionBlock,
   textBlock,
   type CanonicalContentBlock,
@@ -125,27 +126,41 @@ function uniqueMatch(
 
 function normalizeMentionType(
   value: string
-): "actor" | "workspace_member" | "external" | null {
+):
+  | typeof CONVERSATION_PARTICIPANT_TYPE.ACTOR
+  | typeof CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+  | typeof CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
+  | null {
   const normalized = value.trim().toLowerCase()
-  if (normalized === "actor") return "actor"
-  if (normalized === "user" || normalized === "workspace_member") {
-    return "workspace_member"
+  if (normalized === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
+    return CONVERSATION_PARTICIPANT_TYPE.ACTOR
   }
-  if (normalized === "external") return "external"
+  if (
+    normalized === "user" ||
+    normalized === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+  ) {
+    return CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+  }
+  if (normalized === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
+    return CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
+  }
   return null
 }
 
 function matchesMentionTypeAndId(
   candidate: ConversationEntityRef,
-  participantType: "actor" | "workspace_member" | "external",
+  participantType:
+    | typeof CONVERSATION_PARTICIPANT_TYPE.ACTOR
+    | typeof CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+    | typeof CONVERSATION_PARTICIPANT_TYPE.EXTERNAL,
   id: string
 ): boolean {
   if (candidate.participantType !== participantType) return false
 
-  if (participantType === "actor") {
+  if (participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     return candidate.actorId === id || candidate.participantId === id
   }
-  if (participantType === "workspace_member") {
+  if (participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER) {
     return candidate.workspaceMemberId === id || candidate.participantId === id
   }
   return (
@@ -156,10 +171,12 @@ function matchesMentionTypeAndId(
 }
 
 function preferredMentionId(candidate: ConversationEntityRef): string | null {
-  if (candidate.participantType === "actor") {
+  if (candidate.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     return candidate.actorId || candidate.participantId || null
   }
-  if (candidate.participantType === "workspace_member") {
+  if (
+    candidate.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+  ) {
     return candidate.workspaceMemberId || candidate.participantId || null
   }
   return (
@@ -231,7 +248,9 @@ function resolveMentionFromName(
   if (GENERIC_USER_KEYS.has(normalized)) {
     if (options.defaultUser) return { mention: options.defaultUser }
     const userMatches = candidates.filter(
-      (candidate) => candidate.participantType === "workspace_member"
+      (candidate) =>
+        candidate.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
     )
     const match = uniqueMatch(userMatches)
     if (match) {
@@ -446,9 +465,9 @@ export async function resolveInlineReferenceSegments(
 export function conversationParticipantEntryToEntityRef(
   participant: ConversationParticipantEntry
 ): ConversationEntityRef {
-  if (participant.type === "actor") {
+  if (participant.type === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     return {
-      participantType: "actor",
+      participantType: CONVERSATION_PARTICIPANT_TYPE.ACTOR,
       actorId: participant.id,
       participantId: participant.participantId,
       name: participant.name,
@@ -457,9 +476,9 @@ export function conversationParticipantEntryToEntityRef(
     }
   }
 
-  if (participant.type === "workspace_member") {
+  if (participant.type === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER) {
     return {
-      participantType: "workspace_member",
+      participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
       workspaceMemberId: participant.id,
       participantId: participant.participantId,
       name: participant.name,
@@ -469,7 +488,7 @@ export function conversationParticipantEntryToEntityRef(
   }
 
   return {
-    participantType: "external",
+    participantType: CONVERSATION_PARTICIPANT_TYPE.EXTERNAL,
     workspaceMemberId: participant.linkedWorkspaceMemberId,
     participantId: participant.participantId,
     externalUserKey: participant.externalUserKey,
@@ -485,7 +504,7 @@ export function buildDefaultUserMention(params: {
 }): ConversationEntityRef | undefined {
   if (!params.workspaceMemberId) return undefined
   return {
-    participantType: "workspace_member",
+    participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
     workspaceMemberId: params.workspaceMemberId,
     name: params.userName || "User",
   }

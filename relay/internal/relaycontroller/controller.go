@@ -14,6 +14,7 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/mcp"
 	"github.com/PekingSpades/Synapse/relay/internal/relay"
 	"github.com/PekingSpades/Synapse/relay/internal/relaypaths"
+	"github.com/PekingSpades/Synapse/relay/internal/vfs"
 )
 
 type StatusInfo struct {
@@ -48,6 +49,9 @@ type Controller struct {
 
 	engineMu sync.RWMutex
 	engine   *relay.Engine
+
+	vfsMu      sync.Mutex
+	vfsService *vfs.Service
 
 	authFailureMu        sync.RWMutex
 	authFailureCode      string
@@ -144,6 +148,13 @@ func (c *Controller) ApplyConfig(cfg *config.Config) (ApplyConfigResult, error) 
 	c.cfg = config.Clone(cfg)
 	c.cfgMu.Unlock()
 
+	c.vfsMu.Lock()
+	if c.vfsService != nil {
+		c.vfsService.Close()
+		c.vfsService = nil
+	}
+	c.vfsMu.Unlock()
+
 	engine := c.currentEngine()
 	if engine != nil {
 		engine.UpdateConfig(config.Clone(cfg))
@@ -228,6 +239,13 @@ func (c *Controller) RestartRelay() error {
 }
 
 func (c *Controller) Shutdown() error {
+	c.vfsMu.Lock()
+	if c.vfsService != nil {
+		c.vfsService.Close()
+		c.vfsService = nil
+	}
+	c.vfsMu.Unlock()
+
 	engine := c.currentEngine()
 	if engine == nil {
 		return nil
@@ -317,6 +335,61 @@ func (c *Controller) currentEngine() *relay.Engine {
 	c.engineMu.RLock()
 	defer c.engineMu.RUnlock()
 	return c.engine
+}
+
+func (c *Controller) VFSList(pathValue string) ([]vfs.Entry, error) {
+	service, err := c.getVFSService()
+	if err != nil {
+		return nil, err
+	}
+	return service.List(pathValue)
+}
+
+func (c *Controller) VFSStat(pathValue string) (vfs.Entry, error) {
+	service, err := c.getVFSService()
+	if err != nil {
+		return vfs.Entry{}, err
+	}
+	return service.Stat(pathValue)
+}
+
+func (c *Controller) VFSRead(pathValue string) (vfs.ReadResult, error) {
+	service, err := c.getVFSService()
+	if err != nil {
+		return vfs.ReadResult{}, err
+	}
+	return service.Read(pathValue)
+}
+
+func (c *Controller) VFSWrite(pathValue string, data []byte) (vfs.WriteResult, error) {
+	service, err := c.getVFSService()
+	if err != nil {
+		return vfs.WriteResult{}, err
+	}
+	return service.Write(pathValue, data)
+}
+
+func (c *Controller) getVFSService() (*vfs.Service, error) {
+	c.vfsMu.Lock()
+	defer c.vfsMu.Unlock()
+
+	if c.vfsService != nil {
+		return c.vfsService, nil
+	}
+
+	relaypaths.SetCurrent(c.paths)
+	service, err := vfs.New(c.paths, c.GetConfig())
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+	if err := service.Start(ctx); err != nil {
+		service.Close()
+		return nil, err
+	}
+	c.vfsService = service
+	return c.vfsService, nil
 }
 
 func (c *Controller) setAuthFailure(code, message string, permanent bool) {

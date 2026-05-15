@@ -2,6 +2,7 @@ package relayagent
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 
 	"github.com/PekingSpades/Synapse/relay/internal/cloud"
@@ -96,4 +97,37 @@ func (c *Client) GetRecentLogs(ctx context.Context, count int) ([]relaycontrolle
 
 func (c *Client) Quit(ctx context.Context) error {
 	return c.rpc.Call(ctx, "app.quit", map[string]interface{}{}, nil)
+}
+
+func (c *Client) VFSList(ctx context.Context, path string) ([]map[string]interface{}, error) {
+	var result []map[string]interface{}
+	err := c.rpc.Call(ctx, "vfs.list", VFSPathParams{Path: path}, &result)
+	return result, err
+}
+
+func (c *Client) VFSStat(ctx context.Context, path string) (map[string]interface{}, error) {
+	var result map[string]interface{}
+	err := c.rpc.Call(ctx, "vfs.stat", VFSPathParams{Path: path}, &result)
+	return result, err
+}
+
+func (c *Client) VFSRead(ctx context.Context, path string) (VFSReadResponse, []byte, error) {
+	var result VFSReadResponse
+	if err := c.rpc.Call(ctx, "vfs.read", VFSPathParams{Path: path}, &result); err != nil {
+		return VFSReadResponse{}, nil, err
+	}
+	data, err := base64.StdEncoding.DecodeString(result.DataBase64)
+	return result, data, err
+}
+
+func (c *Client) VFSWrite(ctx context.Context, path string, data []byte) (VFSWriteResponse, []byte, error) {
+	var result VFSWriteResponse
+	if err := c.rpc.Call(ctx, "vfs.write", VFSWriteParams{
+		Path:       path,
+		DataBase64: base64.StdEncoding.EncodeToString(data),
+	}, &result); err != nil {
+		return VFSWriteResponse{}, nil, err
+	}
+	decoded, err := base64.StdEncoding.DecodeString(result.DataBase64)
+	return result, decoded, err
 }

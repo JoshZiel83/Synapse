@@ -127,6 +127,12 @@ jobs:
         run: |
           echo "Selected CLI platforms: ${{ needs.prepare-matrix.outputs.selected_platforms }}"
 
+      - name: Install Linux FUSE build dependencies
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libfuse-dev libfuse2t64
+
       - name: Prepare shared Node runtime
         run: node relay/scripts/prepare-node-bundle.mjs --target-platform=${{ matrix.goos }}-${{ matrix.goarch }} --node-version=${{ env.BUNDLED_NODE_VERSION }}
 
@@ -145,6 +151,23 @@ jobs:
         run: |
           go build -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}" \
             -o ../synapse-relay-${{ matrix.suffix }}${{ matrix.ext }} ./cmd/synapse-relay
+
+      - name: Run Relay VFS unit/build validation
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        working-directory: relay
+        run: |
+          bash scripts/validate-vfs-unit.sh
+
+      - name: Build Linux mount helper
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        working-directory: relay
+        env:
+          CGO_ENABLED: "1"
+          GOOS: linux
+          GOARCH: amd64
+        run: |
+          go build -tags 'relay_fuse,desktop_cua' -ldflags="-s -w -X main.Version=${{ steps.version.outputs.version }}" \
+            -o ../synapse-relay-mount-linux-amd64 ./cmd/synapse-relay-mount
 
       - name: Upload artifacts to Tencent COS
         if: startsWith(github.ref, 'refs/tags/') || env.ENABLE_COS_UPLOAD == 'true'
@@ -244,6 +267,14 @@ jobs:
         with:
           name: synapse-relay-${{ matrix.suffix }}
           path: synapse-relay-${{ matrix.suffix }}${{ matrix.ext }}
+
+      - name: Upload Linux mount helper artifact
+        if: matrix.goos == 'linux' && matrix.goarch == 'amd64'
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: synapse-relay-mount-linux-amd64
+          path: synapse-relay-mount-linux-amd64
 
   release:
     needs: build

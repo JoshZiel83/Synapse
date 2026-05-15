@@ -1,4 +1,6 @@
 import {
+  CONVERSATION_BOUNDARY,
+  CONVERSATION_KIND,
   CONVERSATION_TYPE_KEYS,
   CONVERSATION_TYPE_MASK_BITS,
   CONVERSATION_TYPE_MASK_PRESETS,
@@ -46,9 +48,9 @@ export function nowISO(): string {
   return new Date().toISOString()
 }
 
-export const GROUP_CONVERSATION_KIND = "group"
-export const PRIVATE_CONVERSATION_KIND = "private"
-export const VIRTUAL_CONVERSATION_KIND = "virtual"
+export const GROUP_CONVERSATION_KIND = CONVERSATION_KIND.GROUP
+export const PRIVATE_CONVERSATION_KIND = CONVERSATION_KIND.PRIVATE
+export const VIRTUAL_CONVERSATION_KIND = CONVERSATION_KIND.VIRTUAL
 export const THREAD_CONVERSATION_KINDS = [
   GROUP_CONVERSATION_KIND,
   PRIVATE_CONVERSATION_KIND,
@@ -124,10 +126,14 @@ export function resolveConversationTypeKey(
     return "virtual"
   }
   if (kind === PRIVATE_CONVERSATION_KIND) {
-    return boundary === "external" ? "external_private" : "internal_private"
+    return boundary === CONVERSATION_BOUNDARY.EXTERNAL
+      ? "external_private"
+      : "internal_private"
   }
   if (kind === GROUP_CONVERSATION_KIND) {
-    return boundary === "external" ? "external_group" : "internal_group"
+    return boundary === CONVERSATION_BOUNDARY.EXTERNAL
+      ? "external_group"
+      : "internal_group"
   }
   return null
 }

@@ -16,13 +16,13 @@ import {
 
 function summarizeMemberCounts(conversation: ConversationSummary) {
   const workspaceMemberCount = conversation.members.filter(
-    (member) => member.type === "workspace_member"
+    (member) => member.participantType === "workspace_member"
   ).length
   const actorCount = conversation.members.filter(
-    (member) => member.type === "actor"
+    (member) => member.participantType === "actor"
   ).length
   const externalCount = conversation.members.filter(
-    (member) => member.type === "external"
+    (member) => member.participantType === "external"
   ).length
   const memberLabel = `${workspaceMemberCount} member${workspaceMemberCount === 1 ? "" : "s"}`
   const actorLabel = `${actorCount} actor${actorCount === 1 ? "" : "s"}`
@@ -32,8 +32,8 @@ function summarizeMemberCounts(conversation: ConversationSummary) {
 
 function orderMembers(members: ConversationMember[]) {
   return [...members].sort((left, right) => {
-    if (left.type !== right.type) {
-      return left.type === "actor" ? -1 : 1
+    if (left.participantType !== right.participantType) {
+      return left.participantType === "actor" ? -1 : 1
     }
 
     return left.name.localeCompare(right.name)
@@ -124,7 +124,7 @@ export default function MobileConversationDetailsDialog({
                   const canOpen = Boolean(onMemberClick || href)
                   return (
                     <button
-                      key={`${member.type}-${member.id}`}
+                      key={`${member.participantType}-${member.id}`}
                       type="button"
                       onClick={() => {
                         if (onMemberClick) {
@@ -142,7 +142,7 @@ export default function MobileConversationDetailsDialog({
                         name={member.name}
                         avatarUrl={member.avatarUrl}
                         emoji={member.emoji}
-                        entityType={member.type}
+                        entityType={member.participantType}
                         size="lg"
                         className="size-12"
                       />

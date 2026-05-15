@@ -1,5 +1,14 @@
 当前系统处于初期设计实现阶段，不要考虑兼容旧数据。
 
+## 业务枚举与分支判断规范
+
+- 跨 `packages/api`、`packages/web-next`、`packages/mobile-app` 共享的业务枚举与协议值，统一定义在 `packages/shared`，禁止在消费端重复声明同义字符串联合或手抄枚举数组。
+- 业务分支判断禁止直接写原始业务字符串字面量，例如 `participant.type === "actor"`、`status === "pending_approval"`、`z.enum(["workspace_open", "approval_required"])` 这类写法不再允许。
+- 统一写法为 shared 常量成员比较，例如 `participant.type === CONVERSATION_PARTICIPANT_TYPE.ACTOR`，以及 `z.enum(RELATIONSHIP_ACCESS_POLICIES)`。
+- 共享业务枚举统一使用 `const object + values tuple + 派生 type` 模式；不要只写裸联合类型。
+- 数据库已有 enum 的业务值，以 `packages/shared` 为应用层真源，`packages/api/src/infrastructure/database/enum-compat.ts` 负责与 DB 生成类型做编译期对齐。
+- 纯 UI 文案、临时交互状态、展示 label、样式 key 不纳入这一条；但文案选择逻辑里涉及业务枚举时，仍必须使用 shared 常量。
+
 ## Backend 更新与重启
 
 - 修改 `packages/api` 或任何会影响后端运行时行为、配置加载、数据库访问、权限逻辑的代码后，需要通过 `systemctl` 重启后端服务，不能只假设热更新或旧进程会自动生效。

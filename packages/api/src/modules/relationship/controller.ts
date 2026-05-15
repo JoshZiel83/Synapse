@@ -1,10 +1,14 @@
 import type { FastifyInstance, FastifyReply } from "fastify"
 import { z } from "zod"
+import {
+  CONTACT_HUB_KINDS,
+  RELATIONSHIP_ACCESS_POLICIES,
+  RELATIONSHIP_APPROVAL_MODES,
+} from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
-  CONTACT_HUB_KINDS,
   getActorRelationshipProfile,
   getContactHub,
   getContactHubDetail,
@@ -26,8 +30,8 @@ import {
   updateRemoteAgentRelationshipProfile,
 } from "./service.js"
 
-const approvalModeSchema = z.enum(["auto", "manual"])
-const actorAccessPolicySchema = z.enum(["workspace_open", "approval_required"])
+const approvalModeSchema = z.enum(RELATIONSHIP_APPROVAL_MODES)
+const actorAccessPolicySchema = z.enum(RELATIONSHIP_ACCESS_POLICIES)
 const contactKindSchema = z.enum(CONTACT_HUB_KINDS)
 
 const scanSchema = z.object({

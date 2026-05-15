@@ -1,6 +1,18 @@
 import { randomUUID } from "crypto"
 import {
   buildConversationMessageRef,
+  CONVERSATION_BOUNDARY,
+  CONVERSATION_ITEM_SCOPE,
+  CONVERSATION_ITEM_SCOPES,
+  CONVERSATION_ITEM_ROLE,
+  CONVERSATION_ITEM_ROLES,
+  CONVERSATION_ITEM_SURFACE,
+  CONVERSATION_ITEM_SURFACES,
+  CONVERSATION_ITEM_TYPE,
+  CONVERSATION_ITEM_TYPES,
+  CONVERSATION_KIND,
+  CONVERSATION_KINDS,
+  CONVERSATION_PARTICIPANT_TYPE,
   normalizeCanonicalContentBlocks,
   parseConversationMessageRef,
   extractText,
@@ -22,7 +34,9 @@ import {
   type ChatSyncEventPayloadMap,
   type ChatSyncEventType,
   type ChatSyncResponse,
+  type ConversationBoundary,
   type ConversationMessageSubtype,
+  type ConversationParticipantType,
   type ConversationReplyRef,
 } from "@synapse/shared"
 import type {
@@ -75,18 +89,12 @@ export interface ChatServiceError extends Error {
   details?: Record<string, unknown>
 }
 
-type ConversationKind = "group" | "private" | "virtual"
-type ConversationBoundary = "internal" | "external"
-type ParticipantKind =
-  | "workspace_member"
-  | "actor"
-  | "remote_agent"
-  | "external"
-  | "system"
-type ItemScope = "shared" | "private"
-type ItemSurface = "visible" | "internal"
-type ItemType = "message" | "event" | "summary" | "control"
-type ItemRole = "user" | "assistant" | "system" | "tool"
+type ConversationKind = (typeof CONVERSATION_KINDS)[number]
+type ParticipantKind = ConversationParticipantType
+type ItemScope = (typeof CONVERSATION_ITEM_SCOPES)[number]
+type ItemSurface = (typeof CONVERSATION_ITEM_SURFACES)[number]
+type ItemType = (typeof CONVERSATION_ITEM_TYPES)[number]
+type ItemRole = (typeof CONVERSATION_ITEM_ROLES)[number]
 type NonEventItemType = Exclude<ItemType, "event">
 
 export interface ConversationItemPartInput {
@@ -131,16 +139,16 @@ type ParticipantRow = {
   left_at: string | Date | null
   user_id: string | null
   user_name: string | null
-  actor_name: string | null
-  actor_title: string | null
-  actor_role: string | null
+  participant_name: string | null
+  participant_title: string | null
+  participant_role: string | null
   actor_docs: unknown
   actor_can_represent_user: boolean | null
   actor_specialties: unknown
   actor_config: unknown
   actor_current_version: number | string | null
-  actor_avatar_emoji: string | null
-  actor_avatar_file_id: string | null
+  participant_avatar_emoji: string | null
+  participant_avatar_file_id: string | null
   user_avatar_file_id: string | null
   transport_address_id: string | null
   transport_kind: string | null
@@ -484,32 +492,38 @@ function asParticipantTransportKind(
 }
 
 function participantDisplayName(row: ParticipantRow): string {
-  if (row.participant_kind === "workspace_member") {
+  if (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER) {
     if (typeof row.user_name === "string" && row.user_name.trim()) {
       return row.user_name.trim()
     }
   }
-  if (row.participant_kind === "actor") {
-    if (typeof row.actor_name === "string" && row.actor_name.trim()) {
-      return row.actor_name.trim()
+  if (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
+    if (
+      typeof row.participant_name === "string" &&
+      row.participant_name.trim()
+    ) {
+      return row.participant_name.trim()
     }
   }
-  if (row.participant_kind === "remote_agent") {
-    if (typeof row.actor_name === "string" && row.actor_name.trim()) {
-      return row.actor_name.trim()
+  if (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
+    if (
+      typeof row.participant_name === "string" &&
+      row.participant_name.trim()
+    ) {
+      return row.participant_name.trim()
     }
   }
   if (
-    (row.participant_kind === "external" ||
-      row.participant_kind === "system") &&
+    (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
+      row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
     typeof row.transport_display_name === "string" &&
     row.transport_display_name.trim()
   ) {
     return row.transport_display_name.trim()
   }
   if (
-    (row.participant_kind === "external" ||
-      row.participant_kind === "system") &&
+    (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
+      row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
     typeof row.display_name === "string" &&
     row.display_name.trim()
   ) {
@@ -521,25 +535,27 @@ function participantDisplayName(row: ParticipantRow): string {
   if (typeof row.user_name === "string" && row.user_name.trim()) {
     return row.user_name.trim()
   }
-  if (typeof row.actor_name === "string" && row.actor_name.trim()) {
-    return row.actor_name.trim()
+  if (typeof row.participant_name === "string" && row.participant_name.trim()) {
+    return row.participant_name.trim()
   }
   if (typeof row.display_name === "string" && row.display_name.trim()) {
     return row.display_name.trim()
   }
-  return row.participant_kind === "system" ? "System" : "Unknown"
+  return row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
+    ? "System"
+    : "Unknown"
 }
 
 function participantAvatarUrl(row: ParticipantRow): string | undefined {
   const fileId =
-    row.actor_avatar_file_id ??
+    row.participant_avatar_file_id ??
     row.user_avatar_file_id ??
     row.linked_user_avatar_file_id
   return fileId ? getFileUrlById(fileId) : undefined
 }
 
 function participantAvatarEmoji(row: ParticipantRow): string | undefined {
-  return row.actor_avatar_emoji ?? undefined
+  return row.participant_avatar_emoji ?? undefined
 }
 
 function previewTextFromItem(item: ChatConversationItem | undefined): string {
@@ -565,12 +581,13 @@ function computeConversationTitle(params: {
     (participant) => participant.state === "active"
   )
   const labels =
-    params.kind === "private"
+    params.kind === CONVERSATION_KIND.PRIVATE
       ? active
           .filter(
             (participant) =>
               !(
-                participant.participantType === "workspace_member" &&
+                participant.participantType ===
+                  CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
                 participant.workspaceMemberId === params.viewerWorkspaceMemberId
               )
           )
@@ -579,7 +596,7 @@ function computeConversationTitle(params: {
 
   const uniqueLabels = [...new Set(labels.filter(Boolean))]
   if (uniqueLabels.length === 0) {
-    return params.kind === "private"
+    return params.kind === CONVERSATION_KIND.PRIVATE
       ? "Direct message"
       : "Untitled conversation"
   }
@@ -599,34 +616,36 @@ function buildConversationPresentation(params: {
     (participant) => participant.state === "active"
   )
   const peer =
-    params.kind === "private"
+    params.kind === CONVERSATION_KIND.PRIVATE
       ? (activeParticipants.find(
           (participant) =>
             !(
-              participant.participantType === "workspace_member" &&
+              participant.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
               participant.workspaceMemberId === params.viewerWorkspaceMemberId
             )
         ) ?? activeParticipants[0])
       : undefined
   const avatarParticipants =
-    params.kind === "private"
+    params.kind === CONVERSATION_KIND.PRIVATE
       ? peer
         ? [peer]
         : activeParticipants.slice(0, 1)
       : activeParticipants.slice(0, 4)
-  const boundaryLabel = params.boundary === "external" ? "External" : "Internal"
+  const boundaryLabel =
+    params.boundary === CONVERSATION_BOUNDARY.EXTERNAL ? "External" : "Internal"
 
   return {
     chatType:
-      params.kind === "private"
+      params.kind === CONVERSATION_KIND.PRIVATE
         ? "direct"
-        : params.kind === "group"
+        : params.kind === CONVERSATION_KIND.GROUP
           ? "group"
           : "virtual",
     subtitle:
-      params.kind === "private"
+      params.kind === CONVERSATION_KIND.PRIVATE
         ? `${boundaryLabel} direct chat`
-        : params.kind === "virtual"
+        : params.kind === CONVERSATION_KIND.VIRTUAL
           ? `${boundaryLabel} virtual chat`
           : `${boundaryLabel} group chat`,
     avatarParticipantIds: avatarParticipants.map(
@@ -824,9 +843,9 @@ async function listConversationParticipantRows(
         cp.left_at,
         wm.user_id,
         u.name AS user_name,
-        ${actorNameExpr} AS actor_name,
-        ${actorTitleExpr} AS actor_title,
-        ${actorRoleExpr} AS actor_role,
+        ${actorNameExpr} AS participant_name,
+        ${actorTitleExpr} AS participant_title,
+        ${actorRoleExpr} AS participant_role,
         CASE
           WHEN ra.id IS NOT NULL THEN '[]'::jsonb
           ELSE COALESCE(
@@ -851,8 +870,8 @@ async function listConversationParticipantRows(
         ${actorSpecialtiesExpr} AS actor_specialties,
         ${actorConfigExpr} AS actor_config,
         ${actorCurrentVersionExpr} AS actor_current_version,
-        a.avatar_emoji AS actor_avatar_emoji,
-        a.avatar_file_id AS actor_avatar_file_id,
+        a.avatar_emoji AS participant_avatar_emoji,
+        a.avatar_file_id AS participant_avatar_file_id,
         u.avatar_file_id AS user_avatar_file_id,
         primary_address.id AS transport_address_id,
         primary_address.transport_kind,
@@ -932,16 +951,16 @@ async function getWorkspaceMemberConversationParticipantRow(
         cp.left_at,
         wm.user_id,
         u.name AS user_name,
-        COALESCE(ra.name, a.name) AS actor_name,
-        COALESCE(ra.title, a.title) AS actor_title,
-        COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text) AS actor_role,
+        COALESCE(ra.name, a.name) AS participant_name,
+        COALESCE(ra.title, a.title) AS participant_title,
+        COALESCE(CASE WHEN ra.id IS NOT NULL THEN 'remote_agent' END, a.role::text) AS participant_role,
         '[]'::jsonb AS actor_docs,
         a.can_represent_user AS actor_can_represent_user,
         a.specialties AS actor_specialties,
         a.config AS actor_config,
         a.current_version AS actor_current_version,
-        COALESCE(ra.avatar_emoji, a.avatar_emoji) AS actor_avatar_emoji,
-        COALESCE(ra.avatar_file_id, a.avatar_file_id) AS actor_avatar_file_id,
+        COALESCE(ra.avatar_emoji, a.avatar_emoji) AS participant_avatar_emoji,
+        COALESCE(ra.avatar_file_id, a.avatar_file_id) AS participant_avatar_file_id,
         u.avatar_file_id AS user_avatar_file_id,
         primary_address.id AS transport_address_id,
         primary_address.transport_kind,
@@ -1232,7 +1251,8 @@ async function loadConversationViews(
     const viewerMembership = conversationParticipants.find(
       (participant) =>
         participant.state === "active" &&
-        participant.participant_kind === "workspace_member" &&
+        participant.participant_kind ===
+          CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
         participant.workspace_member_id === workspaceMemberId
     )
     const viewerConversationRole =
@@ -1965,7 +1985,8 @@ async function prepareConversationItemWrite(
   }
 ): Promise<PreparedConversationItemWrite> {
   const activeParticipants =
-    params.scope === "shared" && params.surface === "visible"
+    params.scope === CONVERSATION_ITEM_SCOPE.SHARED &&
+    params.surface === CONVERSATION_ITEM_SURFACE.VISIBLE
       ? await listConversationParticipantRows(
           queryable,
           [params.conversationId],
@@ -2513,7 +2534,9 @@ export async function createConversation(params: {
       id,
       params.kind,
       params.boundary ?? "internal",
-      params.boundary === "external" ? null : (params.workspaceId ?? null),
+      params.boundary === CONVERSATION_BOUNDARY.EXTERNAL
+        ? null
+        : (params.workspaceId ?? null),
       params.title?.trim() || null,
       params.createdByWorkspaceMemberId ?? null,
       JSON.stringify(params.metadata ?? {}),
@@ -3257,7 +3280,10 @@ export async function createConversationItem(params: {
       throw new Error("Failed to hydrate conversation item")
     }
 
-    if (params.scope === "shared" && params.surface === "visible") {
+    if (
+      params.scope === CONVERSATION_ITEM_SCOPE.SHARED &&
+      params.surface === CONVERSATION_ITEM_SURFACE.VISIBLE
+    ) {
       await syncVisibleSharedItem({
         queryable,
         workspaceId: params.workspaceId,
@@ -3662,8 +3688,8 @@ function participantRowToEntityRef(
     transportAddressId: participant.transport_address_id ?? undefined,
     transportKind,
     name: participantDisplayName(participant),
-    title: participant.actor_title ?? undefined,
-    role: participant.actor_role ?? participant.role_key,
+    title: participant.participant_title ?? undefined,
+    role: participant.participant_role ?? participant.role_key,
     avatarUrl: participantAvatarUrl(participant),
     avatarEmoji: participantAvatarEmoji(participant),
   }
@@ -3740,7 +3766,7 @@ function conversationItemDetailToChatItem(
     createdAt: item.createdAt,
   }
 
-  if (item.itemType === "event") {
+  if (item.itemType === CONVERSATION_ITEM_TYPE.EVENT) {
     return {
       ...baseItem,
       itemType: "event",
@@ -3929,7 +3955,7 @@ export function conversationItemDetailToFeedItem(
       Boolean(participant)
     )
 
-  if (item.itemType === "event") {
+  if (item.itemType === CONVERSATION_ITEM_TYPE.EVENT) {
     return conversationEventDetailToFeedItem(item, author, restrictedAudience)
   }
 
@@ -4851,7 +4877,11 @@ export async function getChatConversationMessages(params: {
 
   const runtimeMap = await getConversationRuntimeMap([params.conversationId])
   const remoteAgentIds = conversation.participants
-    .filter((participant) => participant.participantType === "remote_agent")
+    .filter(
+      (participant) =>
+        participant.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
+    )
     .map((participant) => participant.remoteAgentId)
     .filter((value): value is string => Boolean(value))
   const runtimeByRemoteAgent: Record<string, any> = {}

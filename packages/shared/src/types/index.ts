@@ -3,12 +3,23 @@ import {
   ACTOR_ROLES,
   ACCESS_TARGET_TYPES,
   CAPABILITY_ACCESS_TARGET_TYPES,
+  CONTACT_DIRECT_STATES,
+  CONTACT_HUB_KINDS,
+  CONTACT_TARGET_TYPES,
   ATTACHMENT_TARGET_TYPES,
   AUTH_CLIENT_TYPES,
   AUTH_QR_LOGIN_STATUSES,
   AUTH_SESSION_PERSISTENCES,
   AUTH_TRANSPORTS,
   CANONICAL_FILE_CATEGORIES,
+  CONVERSATION_ITEM_ROLES,
+  CONVERSATION_ITEM_SCOPES,
+  CONVERSATION_ITEM_SURFACES,
+  CONVERSATION_ITEM_TYPES,
+  CONVERSATION_KINDS,
+  CONVERSATION_PARTICIPANT_TYPE,
+  CONVERSATION_PARTICIPANT_STATES,
+  CONVERSATION_PARTICIPANT_TYPES,
   FILE_ORIGIN_SYSTEMS,
   FILE_ORIGIN_FAMILIES,
   USER_UPLOAD_FILE_ORIGIN_SYSTEMS,
@@ -31,6 +42,8 @@ import {
   INTERACTION_REQUEST_KIND,
   INTERACTION_REQUEST_KINDS,
   INTERACTION_REQUEST_STATUSES,
+  IDENTITY_SEARCH_MATCH_STATES,
+  IDENTITY_SEARCH_OUTCOMES,
   MEMORY_CATEGORIES,
   MEMORY_INDEX_STATUSES,
   MEMORY_ITEM_STATES,
@@ -45,6 +58,11 @@ import {
   PLAN_APPROVAL_DECISIONS,
   TARGETED_INTERACTION_REQUEST_KINDS,
   REUSE_SCOPES,
+  RELATIONSHIP_ACCESS_POLICIES,
+  RELATIONSHIP_APPROVAL_MODES,
+  RELATIONSHIP_PROFILE_SUBJECT_TYPES,
+  RELATIONSHIP_REQUEST_STATUSES,
+  RELATIONSHIP_SCAN_OUTCOMES,
   RELAY_ACCESS_DENIAL_KINDS,
   RELAY_ACCESS_DENIAL_RESOLUTIONS,
   RELAY_AUTHORIZATION_BROWSER_ACTIONS,
@@ -69,6 +87,16 @@ import {
   SESSION_WAKEUP_SOURCE_TYPES,
   SESSION_WAKEUP_STATUSES,
   TASK_NOTICE_STATUSES,
+  DIRECT_CONVERSATION_OPEN_STATUSES,
+  MODEL_GROUP_GRANT_SCOPES,
+  MODEL_GROUP_GRANT_STATUSES,
+  MODEL_GROUP_OWNER_TYPES,
+  MODEL_GROUP_ROUTING_STRATEGIES,
+  REMOTE_AGENT_MACHINE_LIFECYCLE_STATES,
+  REMOTE_AGENT_MACHINE_TRUST_STATUSES,
+  REMOTE_AGENT_RUNTIME_CATALOG_STATUSES,
+  REMOTE_AGENT_RUNTIME_KINDS,
+  REMOTE_AGENT_RUNTIME_STATES,
   PLAN_CHECKLIST_STEP_STATUSES,
   TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
   TRANSPORT_ACCOUNT_OWNER_SCOPES,
@@ -1054,18 +1082,39 @@ export interface ActorRuntimeState {
   updatedAt: Timestamp
 }
 
+export type RelationshipProfileSubjectType =
+  (typeof RELATIONSHIP_PROFILE_SUBJECT_TYPES)[number]
+export type RelationshipApprovalMode =
+  (typeof RELATIONSHIP_APPROVAL_MODES)[number]
+export type RelationshipAccessPolicy =
+  (typeof RELATIONSHIP_ACCESS_POLICIES)[number]
+export type RelationshipRequestStatus =
+  (typeof RELATIONSHIP_REQUEST_STATUSES)[number]
+export type ContactTargetType = (typeof CONTACT_TARGET_TYPES)[number]
+export type ContactHubKind = (typeof CONTACT_HUB_KINDS)[number]
+export type ContactDirectStateType = (typeof CONTACT_DIRECT_STATES)[number]
+export type IdentitySearchOutcome = (typeof IDENTITY_SEARCH_OUTCOMES)[number]
+export type IdentitySearchMatchState =
+  (typeof IDENTITY_SEARCH_MATCH_STATES)[number]
+export type RelationshipScanOutcome =
+  (typeof RELATIONSHIP_SCAN_OUTCOMES)[number]
+export type DirectConversationOpenStatus =
+  (typeof DIRECT_CONVERSATION_OPEN_STATUSES)[number]
+
+export type RemoteAgentRuntimeKind = (typeof REMOTE_AGENT_RUNTIME_KINDS)[number]
+export type RemoteAgentAccessPolicy = RelationshipAccessPolicy
 export type RemoteAgentRuntimeStateType =
-  | "offline"
-  | "idle"
-  | "running"
-  | "waiting_user_input"
-  | "plan_drafting"
-  | "waiting_plan_approval"
-  | "error"
+  (typeof REMOTE_AGENT_RUNTIME_STATES)[number]
+export type RemoteAgentRuntimeCatalogStatus =
+  (typeof REMOTE_AGENT_RUNTIME_CATALOG_STATUSES)[number]
+export type RemoteAgentMachineTrustStatus =
+  (typeof REMOTE_AGENT_MACHINE_TRUST_STATUSES)[number]
+export type RemoteAgentLifecycleState =
+  (typeof REMOTE_AGENT_MACHINE_LIFECYCLE_STATES)[number]
 
 export interface RemoteAgentRuntimeState {
   remoteAgentId: UUID
-  runtimeKind: "claude_code" | "codex"
+  runtimeKind: RemoteAgentRuntimeKind
   state: RemoteAgentRuntimeStateType
   statusText?: string
   activeConversationId?: UUID
@@ -1081,6 +1130,348 @@ export interface RemoteAgentRuntimeState {
     at: Timestamp
   }
   updatedAt: Timestamp
+}
+
+export interface RelationshipWorkspaceSummary {
+  id: UUID
+  name: string
+  slug: string
+}
+
+export interface RelationshipProfileView {
+  subjectType: RelationshipProfileSubjectType
+  approvalMode: RelationshipApprovalMode
+  qrToken: string
+  qrUrl: string
+  identityId: string
+  identitySearchEnabled: boolean
+  accessPolicy?: RelationshipAccessPolicy
+  isPublicShared?: boolean
+}
+
+export interface ContactHubEntryRef {
+  kind: ContactHubKind
+  id: string
+}
+
+export interface ContactHubDirectState {
+  status: ContactDirectStateType
+  conversationId?: string
+}
+
+export interface ContactHubEntryView {
+  kind: ContactHubKind
+  id: string
+  targetType: ContactTargetType
+  title: string
+  subtitle?: string
+  avatarUrl?: string
+  avatarEmoji?: string
+  workspace: RelationshipWorkspaceSummary
+  workspaceMemberId?: string
+  userId?: string
+  actorId?: string
+  remoteAgentId?: string
+  relationLabel: string
+  directState: ContactHubDirectState
+}
+
+export interface IdentitySearchMatchView {
+  profileId: UUID
+  targetType: ContactTargetType
+  title: string
+  subtitle?: string
+  avatarUrl?: string
+  avatarEmoji?: string
+  workspace: RelationshipWorkspaceSummary
+  workspaceMemberId?: string
+  userId?: string
+  actorId?: string
+  remoteAgentId?: string
+  state: IdentitySearchMatchState
+  contact?: ContactHubEntryRef
+  conversationId?: UUID
+  requestId?: UUID
+}
+
+export interface IdentitySearchResponse {
+  query: string
+  outcome: IdentitySearchOutcome
+  matches: IdentitySearchMatchView[]
+}
+
+export interface RelationshipMemberSummaryView {
+  workspace: RelationshipWorkspaceSummary
+  workspaceMemberId: UUID
+  userId: UUID
+  name: string
+  email: string
+  avatarFileId?: UUID | null
+  trustLevel?: string
+}
+
+export interface RelationshipActorSummaryView {
+  workspace: RelationshipWorkspaceSummary
+  actorId: UUID
+  name: string
+  title: string
+  role: string
+  avatarFileId?: UUID | null
+  avatarEmoji?: string | null
+  accessPolicy: RelationshipAccessPolicy
+  isPublicShared: boolean
+}
+
+export interface RelationshipRemoteAgentSummaryView {
+  workspace: RelationshipWorkspaceSummary
+  remoteAgentId: UUID
+  name: string
+  title: string
+  runtimeKind: RemoteAgentRuntimeKind
+  avatarFileId?: UUID | null
+  avatarEmoji?: string | null
+  accessPolicy: RelationshipAccessPolicy
+  isPublicShared: boolean
+}
+
+export interface FriendRequestView {
+  id: UUID
+  status: RelationshipRequestStatus
+  createdAt: Timestamp
+  requester?: RelationshipMemberSummaryView | null
+  targetType: ContactTargetType
+  targetMember?: RelationshipMemberSummaryView | null
+  targetActor?: RelationshipActorSummaryView | null
+  targetRemoteAgent?: RelationshipRemoteAgentSummaryView | null
+}
+
+export interface FriendRequestListResponse {
+  incoming: FriendRequestView[]
+  outgoing: FriendRequestView[]
+}
+
+export interface ActorAccessRequestView {
+  id: UUID
+  status: RelationshipRequestStatus
+  createdAt: Timestamp
+  requester?: RelationshipMemberSummaryView | null
+  actor?: RelationshipActorSummaryView | null
+}
+
+export interface ActorAccessRequestListResponse {
+  incoming: ActorAccessRequestView[]
+  outgoing: ActorAccessRequestView[]
+}
+
+export interface RemoteAgentAccessRequestView {
+  id: UUID
+  status: RelationshipRequestStatus
+  createdAt: Timestamp
+  requester?: RelationshipMemberSummaryView | null
+  remoteAgent?: RelationshipRemoteAgentSummaryView | null
+}
+
+export interface RemoteAgentAccessRequestListResponse {
+  incoming: RemoteAgentAccessRequestView[]
+  outgoing: RemoteAgentAccessRequestView[]
+}
+
+export interface ConversationParticipantView {
+  memberId?: UUID
+  participantId?: UUID
+  participantType?: Exclude<ConversationParticipantType, "system">
+  id?: UUID
+  workspaceMemberId?: UUID
+  actorId?: UUID
+  remoteAgentId?: UUID
+  name?: string
+  title?: string
+  role?: string
+  conversationRole?: string
+  avatarUrl?: string
+  avatarEmoji?: string
+  state?: (typeof CONVERSATION_PARTICIPANT_STATES)[number]
+}
+
+export interface ConversationMessagePreview {
+  content: string
+  role: Exclude<(typeof CONVERSATION_ITEM_ROLES)[number], "tool">
+  actorName?: string
+  createdAt: Timestamp
+}
+
+export interface ConversationPresentationView {
+  chatType: "direct" | "group" | "virtual"
+  title: string
+  avatarUrl?: string
+  subtitle?: string
+  peer?: ConversationParticipantView
+  canRename?: boolean
+  canManageMembers?: boolean
+}
+
+export interface ConversationSummaryView {
+  id: UUID
+  kind: (typeof CONVERSATION_KINDS)[number]
+  boundary: ConversationBoundary
+  status: "active" | "completed"
+  transportKind?: string
+  participants: ConversationParticipantView[]
+  members?: ConversationParticipantView[]
+  lastMessage?: ConversationMessagePreview
+  unreadCount: number
+  createdAt: Timestamp
+  title: string
+  name: string
+  avatarUrl?: string
+  presentation?: ConversationPresentationView
+  permissions?: {
+    canManage?: boolean
+    canManageMembers?: boolean
+  }
+  viewerParticipantId?: UUID
+  viewerWorkspaceMemberId?: UUID
+}
+
+export interface ContactHubResponse {
+  requestSummary: {
+    friendPendingCount: number
+    actorAccessPendingCount: number
+    remoteAgentAccessPendingCount: number
+    totalPendingCount: number
+  }
+  workspaceActors: ContactHubEntryView[]
+  workspaceRemoteAgents: ContactHubEntryView[]
+  workspaceMembers: ContactHubEntryView[]
+  friends: ContactHubEntryView[]
+  groups: ConversationSummaryView[]
+}
+
+export interface ContactHubDetailResponse {
+  contact: ContactHubEntryView
+  groups: ConversationSummaryView[]
+}
+
+export interface RelationshipScanResponse {
+  outcome: RelationshipScanOutcome
+  requestId?: UUID
+  contact?: ContactHubEntryRef
+}
+
+export interface DirectConversationOpenResponse {
+  status: DirectConversationOpenStatus
+  created?: boolean
+  conversationId?: UUID
+  requestId?: UUID
+}
+
+export interface RemoteAgentRuntimeCapabilityView {
+  supportsRequestUserInput?: boolean
+  supportsPlanMode?: boolean
+  supportsPersistentSession?: boolean
+  supportsCodexAppServer?: boolean
+  supportsStructuredIo?: boolean
+}
+
+export interface RemoteAgentRuntimeSummaryView {
+  runtimeKind: RemoteAgentRuntimeKind
+  state: RemoteAgentRuntimeState["state"]
+  statusText?: string
+  sessionId?: string
+  activeConversationId?: UUID
+  activeInteractionId?: UUID
+  pendingConversationCount: number
+  unreadDeliveryCount: number
+  lastActivityAt?: Timestamp
+  lastRunStartedAt?: Timestamp
+  lastRunFinishedAt?: Timestamp
+  lastError?: string
+  capabilities?: RemoteAgentRuntimeCapabilityView
+}
+
+export interface RemoteAgentGroupInteractionGrantView {
+  workspaceMemberId: UUID
+  grantedByWorkspaceMemberId?: UUID
+  createdAt?: Timestamp
+  updatedAt?: Timestamp
+  userId: UUID
+  name: string
+  avatarUrl?: string
+}
+
+export interface RemoteAgentBindingView {
+  machineId: UUID
+  machineTitle?: string
+  status: string
+  runtimePath?: string
+  localRootPath?: string
+  machineLifecycleState?: RemoteAgentLifecycleState
+  runtimeSummary?: RemoteAgentRuntimeSummaryView
+}
+
+export interface RemoteAgentView {
+  id: UUID
+  workspaceId: UUID
+  name: string
+  title: string
+  description?: string
+  runtimeKind: RemoteAgentRuntimeKind
+  avatarFileId?: UUID
+  avatarEmoji?: string
+  accessPolicy: RemoteAgentAccessPolicy
+  isActive: boolean
+  isPublicShared: boolean
+  metadata: Record<string, unknown>
+  createdByWorkspaceMemberId?: UUID
+  createdAt?: Timestamp
+  updatedAt?: Timestamp
+  runtimeSummary?: RemoteAgentRuntimeSummaryView
+  binding?: RemoteAgentBindingView
+}
+
+export interface RemoteAgentRuntimeCatalogEntryView {
+  runtimeKind: RemoteAgentRuntimeKind
+  executablePath?: string
+  status: RemoteAgentRuntimeCatalogStatus
+  version?: string
+  metadata: Record<string, unknown>
+  lastError?: string
+  lastSeenAt?: Timestamp
+}
+
+export interface RemoteAgentMachineView {
+  id: UUID
+  workspaceId: UUID
+  title: string
+  description?: string
+  trustStatus: RemoteAgentMachineTrustStatus
+  lifecycleState?: RemoteAgentLifecycleState
+  bindingCount: number
+  lastSeenAt?: Timestamp
+  createdAt?: Timestamp
+  updatedAt?: Timestamp
+}
+
+export interface RemoteAgentMachineDetailView {
+  machine: Omit<RemoteAgentMachineView, "bindingCount"> & {
+    bindingCount?: number
+  }
+  runtimeCatalog: RemoteAgentRuntimeCatalogEntryView[]
+  bindings: Array<{
+    remoteAgentId: UUID
+    name: string
+    runtimeKind: RemoteAgentRuntimeKind
+    runtimePath?: string
+    localRootPath?: string
+    status: string
+    runtimeSummary?: RemoteAgentRuntimeSummaryView
+  }>
+}
+
+export interface RemoteAgentMachinePairingSessionView {
+  machine: Omit<RemoteAgentMachineView, "bindingCount">
+  apiKey: string
+  daemonCommand: string
 }
 
 export interface SessionMessage {
@@ -1140,23 +1531,25 @@ export interface ServerToolSearchResult {
 }
 
 // ============ Model Groups ============
-export type RoutingStrategy =
-  | "weighted_random"
-  | "round_robin"
-  | "priority_failover"
+export type ModelGroupRoutingStrategy =
+  (typeof MODEL_GROUP_ROUTING_STRATEGIES)[number]
+export type ModelGroupOwnerType = (typeof MODEL_GROUP_OWNER_TYPES)[number]
+export type ModelGroupGrantScope = (typeof MODEL_GROUP_GRANT_SCOPES)[number]
+export type ModelGroupGrantStatus = (typeof MODEL_GROUP_GRANT_STATUSES)[number]
+export type RoutingStrategy = ModelGroupRoutingStrategy
 export type ProviderType = string
 export type AIRequestType = "actor_think" | "ai_complete"
 export type AIRequestStatus = "success" | "error" | "timeout"
 
 export interface ModelGroup {
   id: UUID
-  ownerType?: "platform" | "workspace" | "workspace_member"
+  ownerType?: ModelGroupOwnerType
   ownerWorkspaceId?: UUID | null
   ownerWorkspaceMemberId?: UUID | null
   workspaceId?: UUID
   name: string
   description: string
-  routingStrategy: RoutingStrategy
+  routingStrategy: ModelGroupRoutingStrategy
   isDefault: boolean
   isActive: boolean
   createdByWorkspaceMemberId?: UUID
@@ -1203,11 +1596,11 @@ export interface ActorModelGroup {
 export interface ModelGroupGrant {
   id: UUID
   groupId: UUID
-  grantScope: "platform" | "workspace" | "workspace_member" | "actor"
+  grantScope: ModelGroupGrantScope
   workspaceId?: UUID | null
   workspaceMemberId?: UUID | null
   actorId?: UUID | null
-  status: "active" | "revoked"
+  status: ModelGroupGrantStatus
   grantedByWorkspaceMemberId?: UUID | null
   reason?: string | null
   createdAt?: Timestamp | null
@@ -1272,7 +1665,7 @@ export interface ModelAttemptPolicy {
 export interface ResolvedModelPlan {
   groupId: UUID
   groupName: string
-  routingStrategy: "weighted_random" | "round_robin" | "priority_failover"
+  routingStrategy: ModelGroupRoutingStrategy
   attemptPolicy: ModelAttemptPolicy
   candidates: ResolvedModelConfig[]
 }
@@ -2732,11 +3125,7 @@ export interface McpSetupStep {
 }
 
 export type ConversationParticipantType =
-  | "actor"
-  | "remote_agent"
-  | "workspace_member"
-  | "external"
-  | "system"
+  (typeof CONVERSATION_PARTICIPANT_TYPES)[number]
 
 export type TransportKind = (typeof TRANSPORT_KINDS)[number]
 export type TransportConnectionMode =
@@ -2766,7 +3155,7 @@ export interface ConversationReplyRef {
   itemId: UUID
   ref?: string
   sequence?: number
-  itemType: "message" | "event" | "summary" | "control"
+  itemType: (typeof CONVERSATION_ITEM_TYPES)[number]
   subtype: string
   author?: ConversationEntityRef
   previewText: string
@@ -2777,7 +3166,7 @@ export interface ConversationReplyRef {
 
 export type ConversationParticipantRef = ConversationEntityRef & {
   participantId: UUID
-  participantType: "actor" | "remote_agent" | "workspace_member" | "external"
+  participantType: Exclude<ConversationParticipantType, "system">
 }
 
 export interface TransportConnectorCapability {
@@ -3677,7 +4066,8 @@ export function summarizeConversationEvent(
     if (interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
       const targetName =
         interaction.target?.name?.trim() ||
-        (interaction.requester?.participantType === "remote_agent"
+        (interaction.requester?.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
           ? "the group"
           : "a user")
       const prompt = interaction.userInput?.title?.trim() || "A question"
@@ -3691,7 +4081,8 @@ export function summarizeConversationEvent(
     if (interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL) {
       const targetName =
         interaction.target?.name?.trim() ||
-        (interaction.requester?.participantType === "remote_agent"
+        (interaction.requester?.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
           ? "the group"
           : "a user")
       const title = interaction.planApproval?.title?.trim() || "Plan approval"
@@ -3767,7 +4158,7 @@ export interface ChatParticipantSummary extends Omit<
   participantType: ConversationParticipantType
   name: string
   roleKey: string
-  state: "active" | "left" | "removed"
+  state: (typeof CONVERSATION_PARTICIPANT_STATES)[number]
   metadata: Record<string, unknown>
   joinedAt: Timestamp
   leftAt?: Timestamp
@@ -3782,10 +4173,10 @@ interface ChatConversationItemBase {
   sessionId?: UUID
   turnId?: UUID
   clientMessageId?: UUID
-  itemType: "message" | "event" | "summary" | "control"
-  role: "user" | "assistant" | "system" | "tool"
-  scope: "shared" | "private"
-  surface: "visible" | "internal"
+  itemType: (typeof CONVERSATION_ITEM_TYPES)[number]
+  role: (typeof CONVERSATION_ITEM_ROLES)[number]
+  scope: (typeof CONVERSATION_ITEM_SCOPES)[number]
+  surface: (typeof CONVERSATION_ITEM_SURFACES)[number]
   authorParticipantId?: UUID
   author?: ConversationEntityRef
   replyToItemId?: UUID
@@ -3843,8 +4234,8 @@ export interface ChatConversationView {
   conversationId: UUID
   workspaceId: UUID
   title: string
-  kind: "group" | "private" | "virtual"
-  boundary: "internal" | "external"
+  kind: (typeof CONVERSATION_KINDS)[number]
+  boundary: ConversationBoundary
   status: "active" | "completed"
   unreadCount: number
   muted: boolean
@@ -3983,8 +4374,8 @@ export interface ChatConversationCreateExternalParticipantRequest {
 
 export interface ChatConversationCreateRequest {
   clientRequestId: UUID
-  kind: "group" | "private" | "virtual"
-  boundary?: "internal" | "external"
+  kind: (typeof CONVERSATION_KINDS)[number]
+  boundary?: ConversationBoundary
   title?: string
   workspaceMemberIds?: UUID[]
   actorIds?: UUID[]

@@ -1,12 +1,22 @@
 import type {
   Actor,
+  ActorAccessRequestListResponse,
   AuthQrLoginResolveResponse,
   AuthQrLoginStatusResponse,
   AuthResponse,
   AuthSessionSummary,
+  ContactHubDetailResponse,
+  ContactHubEntryView,
+  ContactHubResponse,
   ConversationFeedItem,
   ConversationFeedPage,
+  DirectConversationOpenResponse,
   FileRecordView,
+  FriendRequestListResponse,
+  IdentitySearchMatchView,
+  IdentitySearchResponse,
+  RelationshipProfileView,
+  RelationshipScanResponse,
   User,
   WorkspaceChiefActorPreference,
 } from "@shared"
@@ -126,175 +136,27 @@ export interface UploadAssetInput {
   file?: Blob | File | null
 }
 
-export interface RelationshipProfileView {
-  subjectType: "user" | "actor"
-  approvalMode: "auto" | "manual"
-  qrToken: string
-  qrUrl: string
-  accessPolicy?: "workspace_open" | "approval_required"
-}
-
 export interface FriendIdProfileView {
   friendId: string
   searchByIdEnabled: boolean
 }
 
-export interface ContactHubEntryRef {
-  kind:
-    | "workspace-actor"
-    | "workspace-member"
-    | "friend-actor"
-    | "friend-member"
-  id: string
-}
-
-export interface IdentitySearchMatchView {
-  profileId: string
-  targetType: "member" | "actor"
-  title: string
-  subtitle?: string
-  avatarUrl?: string
-  avatarEmoji?: string
-  workspace: WorkspaceInfo
-  workspaceMemberId?: string
-  userId?: string
-  actorId?: string
-  state:
-    | "same_workspace_member"
-    | "friend"
-    | "pending_request"
-    | "requestable"
-    | "existing"
-    | "available"
-    | "approval_required"
-    | "pending_approval"
-  contact?: ContactHubEntryRef
-  conversationId?: string
-  requestId?: string
-}
-
-export interface IdentitySearchResponse {
-  query: string
-  outcome: "empty" | "invalid" | "self" | "not_found" | "found"
-  matches: IdentitySearchMatchView[]
-}
-
-export interface ContactHubEntryView {
-  kind:
-    | "workspace-actor"
-    | "workspace-member"
-    | "friend-actor"
-    | "friend-member"
-  id: string
-  targetType: "member" | "actor"
-  title: string
-  subtitle?: string
-  avatarUrl?: string
-  avatarEmoji?: string
-  workspace: WorkspaceInfo
-  workspaceMemberId?: string
-  userId?: string
-  actorId?: string
-  relationLabel: string
-  directState: {
-    status: "existing" | "available" | "approval_required" | "pending_approval"
-    conversationId?: string
-  }
-}
-
-export interface RelationshipMemberSummaryView {
-  workspace: WorkspaceInfo
-  workspaceMemberId: string
-  userId: string
-  name: string
-  email: string
-  avatarFileId?: string | null
-  trustLevel?: string
-}
-
-export interface RelationshipActorSummaryView {
-  workspace: WorkspaceInfo
-  actorId: string
-  name: string
-  title: string
-  role: string
-  avatarStoredName?: string | null
-  avatarEmoji?: string | null
-  accessPolicy: "workspace_open" | "approval_required"
-}
-
-export interface FriendRequestView {
-  id: string
-  status: "pending" | "approved" | "rejected"
-  createdAt: string
-  requester?: RelationshipMemberSummaryView | null
-  targetType: "member" | "actor"
-  targetMember?: RelationshipMemberSummaryView | null
-  targetActor?: RelationshipActorSummaryView | null
-}
-
-export interface FriendRequestListResponse {
-  incoming: FriendRequestView[]
-  outgoing: FriendRequestView[]
-}
-
-export interface ActorAccessRequestView {
-  id: string
-  status: "pending" | "approved" | "rejected"
-  createdAt: string
-  requester?: RelationshipMemberSummaryView | null
-  actor?: RelationshipActorSummaryView | null
-}
-
-export interface ActorAccessRequestListResponse {
-  incoming: ActorAccessRequestView[]
-  outgoing: ActorAccessRequestView[]
-}
-
-export interface ContactHubResponse {
-  requestSummary: {
-    friendPendingCount: number
-    actorAccessPendingCount: number
-    totalPendingCount: number
-  }
-  workspaceActors: ContactHubEntryView[]
-  workspaceMembers: ContactHubEntryView[]
-  friends: ContactHubEntryView[]
-  groups: ConversationSummaryView[]
-}
-
-export interface ContactHubDetailResponse {
-  contact: ContactHubEntryView
-  groups: ConversationSummaryView[]
-}
-
-export interface RelationshipScanResponse {
-  outcome:
-    | "self_scan"
-    | "same_workspace_member"
-    | "friend_active"
-    | "friend_request_created"
-    | "friend_request_pending"
-    | "actor_access_granted"
-    | "actor_access_request_created"
-    | "actor_access_pending"
-  requestId?: string
-  contact?: ContactHubEntryRef
-}
-
-export interface DirectConversationOpenResponse {
-  status: "ready" | "pending_approval"
-  created?: boolean
-  conversationId?: string
-  requestId?: string
-}
-
 export type {
   Actor,
+  ActorAccessRequestListResponse,
   AuthQrLoginResolveResponse,
   AuthQrLoginStatusResponse,
   AuthResponse,
+  ContactHubDetailResponse,
+  ContactHubEntryView,
+  ContactHubResponse,
   ConversationFeedPage,
+  DirectConversationOpenResponse,
   FileRecordView,
+  FriendRequestListResponse,
+  IdentitySearchMatchView,
+  IdentitySearchResponse,
+  RelationshipProfileView,
+  RelationshipScanResponse,
   WorkspaceChiefActorPreference,
 }

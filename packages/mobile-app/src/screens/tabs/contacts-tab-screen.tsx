@@ -1,6 +1,7 @@
 import Feather from "@expo/vector-icons/Feather"
 import { useRouter } from "expo-router"
 import { useEffect, useMemo, useState } from "react"
+import { CONTACT_TARGET_TYPE } from "@shared"
 import {
   Modal,
   Pressable,
@@ -11,6 +12,7 @@ import {
 } from "react-native"
 
 import {
+  ALPHABET_ENTITY_TARGET_TYPE,
   AlphabetIndexedEntityList,
   type AlphabetIndexedEntityItem,
 } from "@/components/alphabet-indexed-entity-list"
@@ -29,13 +31,20 @@ import { useWorkspace } from "@/providers/workspace-provider"
 import { theme } from "@/theme/tokens"
 import type { ContactHubEntryView, ContactHubResponse } from "@/types/api"
 
-type ContactFilter = "all" | "friend" | "actor" | "workspace-member"
+const CONTACT_FILTER = {
+  ALL: "all",
+  FRIEND: "friend",
+  ACTOR: "actor",
+  WORKSPACE_MEMBER: "workspace-member",
+} as const
+
+type ContactFilter = (typeof CONTACT_FILTER)[keyof typeof CONTACT_FILTER]
 
 const FILTER_OPTIONS: Array<{ value: ContactFilter; label: string }> = [
-  { value: "all", label: "默认" },
-  { value: "friend", label: "好友" },
-  { value: "actor", label: "Actor" },
-  { value: "workspace-member", label: "Workspace Member" },
+  { value: CONTACT_FILTER.ALL, label: "默认" },
+  { value: CONTACT_FILTER.FRIEND, label: "好友" },
+  { value: CONTACT_FILTER.ACTOR, label: "Actor" },
+  { value: CONTACT_FILTER.WORKSPACE_MEMBER, label: "Workspace Member" },
 ]
 
 function compareText(left: string, right: string) {
@@ -72,7 +81,7 @@ export default function ContactsTabScreen() {
   const [loading, setLoading] = useState(true)
   const [refreshing, setRefreshing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [filter, setFilter] = useState<ContactFilter>("all")
+  const [filter, setFilter] = useState<ContactFilter>(CONTACT_FILTER.ALL)
   const [filterMenuOpen, setFilterMenuOpen] = useState(false)
 
   async function loadHub(isRefreshing = false) {
@@ -113,13 +122,13 @@ export default function ContactsTabScreen() {
       ...(hub?.friends || []),
     ]
 
-    if (filter === "friend") {
+    if (filter === CONTACT_FILTER.FRIEND) {
       return [...(hub?.friends || [])].sort(compareEntries)
     }
-    if (filter === "actor") {
+    if (filter === CONTACT_FILTER.ACTOR) {
       return [...(hub?.workspaceActors || [])].sort(compareEntries)
     }
-    if (filter === "workspace-member") {
+    if (filter === CONTACT_FILTER.WORKSPACE_MEMBER) {
       return [...(hub?.workspaceMembers || [])].sort(compareEntries)
     }
     return [...all].sort(compareEntries)
@@ -132,7 +141,10 @@ export default function ContactsTabScreen() {
         title: entry.title,
         subtitle: entry.subtitle || entry.workspace.name,
         avatarUrl: entry.avatarUrl || null,
-        targetType: entry.targetType === "actor" ? "actor" : "user",
+        targetType:
+          entry.targetType === CONTACT_TARGET_TYPE.ACTOR
+            ? ALPHABET_ENTITY_TARGET_TYPE.ACTOR
+            : ALPHABET_ENTITY_TARGET_TYPE.USER,
         trailingAccessory: isFriendEntry(entry) ? (
           <Pill label="好友" tone="primary" />
         ) : undefined,

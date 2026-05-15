@@ -17,12 +17,17 @@ import (
 	"github.com/PekingSpades/Synapse/relay/internal/importer"
 	"github.com/PekingSpades/Synapse/relay/internal/relay"
 	"github.com/PekingSpades/Synapse/relay/internal/relaypaths"
+	"github.com/PekingSpades/Synapse/relay/internal/vfscli"
 )
 
 var Version = "dev"
 
 func main() {
 	relaypaths.SetCurrent(relaypaths.ResolveStandaloneProfile(relaypaths.DefaultHostPaths(relaypaths.HostCLI)))
+
+	if len(os.Args) > 1 && os.Args[1] == "vfs" {
+		os.Exit(vfscli.Run(os.Args[2:]))
+	}
 
 	configPath := flag.String("c", "", "path to config file")
 	showVersion := flag.Bool("version", false, "show version")

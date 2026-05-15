@@ -724,7 +724,7 @@ func applyBuiltinDefaults(server *ServerConfig) {
 		if strings.TrimSpace(server.Builtin.Chrome.ConnectionMode) == "" {
 			server.Builtin.Chrome.ConnectionMode = "managed"
 		}
-		if strings.TrimSpace(server.Builtin.Chrome.Channel) == "" {
+		if strings.TrimSpace(server.Builtin.Chrome.Channel) == "" && strings.TrimSpace(server.Builtin.Chrome.ExecutablePath) == "" {
 			server.Builtin.Chrome.Channel = "stable"
 		}
 		if server.Builtin.Chrome.Headless == nil {

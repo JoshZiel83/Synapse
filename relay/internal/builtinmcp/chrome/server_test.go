@@ -94,3 +94,30 @@ func TestFullChromeCatalogDescriptionsAddRoutingGuidance(t *testing.T) {
 		t.Fatalf("expected select_page description to mention page selection flow, got %q", descriptions["select_page"])
 	}
 }
+
+func TestNewDefaultsStableChannelWithoutExecutablePath(t *testing.T) {
+	server, err := New(Config{
+		StableKey:  "chrome-default",
+		InstanceID: "chrome_default",
+	})
+	if err != nil {
+		t.Fatalf("new chrome server: %v", err)
+	}
+	if got := server.cfg.Channel; got != "stable" {
+		t.Fatalf("channel = %q, want stable", got)
+	}
+}
+
+func TestNewDoesNotForceChannelWhenExecutablePathIsSet(t *testing.T) {
+	server, err := New(Config{
+		StableKey:      "chrome-explicit-bin",
+		InstanceID:     "chrome_default",
+		ExecutablePath: "/usr/bin/google-chrome-stable",
+	})
+	if err != nil {
+		t.Fatalf("new chrome server: %v", err)
+	}
+	if got := server.cfg.Channel; got != "" {
+		t.Fatalf("channel = %q, want empty when executable_path is set", got)
+	}
+}

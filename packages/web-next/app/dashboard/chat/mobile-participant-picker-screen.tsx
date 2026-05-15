@@ -1,5 +1,6 @@
 "use client"
 
+import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import { ArrowLeft, AtSign, Check, Search } from "lucide-react"
 
@@ -36,6 +37,18 @@ function getSearchHaystack(participant: MentionableParticipant) {
   ]
     .join(" ")
     .toLowerCase()
+}
+
+function getParticipantTypeLabel(
+  participantType: MentionableParticipant["participantType"]
+) {
+  if (participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER) {
+    return "member"
+  }
+  if (participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
+    return "remote agent"
+  }
+  return participantType
 }
 
 export function MobileParticipantPickerScreen({
@@ -185,7 +198,7 @@ export function MobileParticipantPickerScreen({
                   name={participant.name}
                   avatarUrl={participant.avatarUrl}
                   emoji={participant.emoji}
-                  entityType={participant.type}
+                  entityType={participant.participantType}
                   size="lg"
                 />
                 <div className="min-w-0 flex-1">
@@ -194,20 +207,12 @@ export function MobileParticipantPickerScreen({
                       {participant.name}
                     </span>
                     <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-                      {participant.type === "workspace_member"
-                        ? "member"
-                        : participant.type === "remote_agent"
-                          ? "remote agent"
-                          : participant.type}
+                      {getParticipantTypeLabel(participant.participantType)}
                     </span>
                   </div>
                   <p className="mt-1 text-sm text-muted-foreground">
                     {participant.description ||
-                      (participant.type === "workspace_member"
-                        ? "member"
-                        : participant.type === "remote_agent"
-                          ? "remote agent"
-                          : participant.type)}
+                      getParticipantTypeLabel(participant.participantType)}
                   </p>
                 </div>
                 <div

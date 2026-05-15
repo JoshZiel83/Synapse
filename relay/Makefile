@@ -1,7 +1,7 @@
 VERSION ?= dev
 LDFLAGS = -s -w -X main.Version=$(VERSION)
 
-.PHONY: cli cli-desktop gui gui-dev gui-windows-installer clean test cli-all
+.PHONY: cli cli-desktop mount-fuse gui gui-dev gui-windows-installer clean test cli-all test-vfs-unit validate-vfs-browser-headless validate-vfs-fuse-linux-headless validate-vfs-linux-headless
 
 # CLI binary (no CGO, pure Go)
 cli:
@@ -10,6 +10,10 @@ cli:
 # CLI binary with built-in desktop CUA support (requires CGO + desktop libs)
 cli-desktop:
 	CGO_ENABLED=1 go build -tags=desktop_cua -ldflags="$(LDFLAGS)" -o synapse-relay-desktop ./cmd/synapse-relay
+
+# FUSE mount helper (requires CGO + platform FUSE runtime/headers)
+mount-fuse:
+	CGO_ENABLED=1 go build -tags="relay_fuse,desktop_cua" -ldflags="$(LDFLAGS)" -o synapse-relay-mount ./cmd/synapse-relay-mount
 
 # GUI binary (requires Wails + WebView libs)
 gui:
@@ -30,6 +34,18 @@ clean:
 
 test:
 	go test ./...
+
+test-vfs-unit:
+	bash scripts/validate-vfs-unit.sh
+
+validate-vfs-browser-headless:
+	bash scripts/validate-vfs-browser-headless.sh
+
+validate-vfs-fuse-linux-headless:
+	bash scripts/validate-vfs-fuse-linux-headless.sh
+
+validate-vfs-linux-headless:
+	bash scripts/validate-vfs-linux-headless.sh
 
 # Cross-compilation targets (CLI only, CGO_ENABLED=0)
 cli-linux-amd64:

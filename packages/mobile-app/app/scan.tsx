@@ -1,7 +1,11 @@
 import { CameraView, useCameraPermissions } from "expo-camera"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import { useEffect, useState } from "react"
-import { parseSynapseQrPayload, type ParsedSynapseQrPayload } from "@shared"
+import {
+  RELATIONSHIP_SCAN_OUTCOME,
+  parseSynapseQrPayload,
+  type ParsedSynapseQrPayload,
+} from "@shared"
 import { Pressable, StyleSheet, Text, View } from "react-native"
 
 import {
@@ -18,14 +22,17 @@ import type { RelationshipScanResponse } from "@/types/api"
 
 function getRelationshipHint(result: RelationshipScanResponse) {
   switch (result.outcome) {
-    case "friend_request_created":
+    case RELATIONSHIP_SCAN_OUTCOME.FRIEND_REQUEST_CREATED:
       return "好友申请已发出，等待对方处理。"
-    case "friend_request_pending":
+    case RELATIONSHIP_SCAN_OUTCOME.FRIEND_REQUEST_PENDING:
       return "你已经发过好友申请了，等待对方处理。"
-    case "actor_access_request_created":
+    case RELATIONSHIP_SCAN_OUTCOME.ACTOR_ACCESS_REQUEST_CREATED:
       return "已提交 Actor 访问申请，等待批准。"
-    case "actor_access_pending":
+    case RELATIONSHIP_SCAN_OUTCOME.ACTOR_ACCESS_PENDING:
+    case RELATIONSHIP_SCAN_OUTCOME.REMOTE_AGENT_ACCESS_PENDING:
       return "你已经提交过 Actor 访问申请了。"
+    case RELATIONSHIP_SCAN_OUTCOME.REMOTE_AGENT_ACCESS_REQUEST_CREATED:
+      return "已提交 Remote agent 访问申请，等待批准。"
     default:
       return "二维码已识别，但当前没有可直接打开的会话。"
   }
@@ -48,9 +55,11 @@ export default function UnifiedScanScreen() {
     if (
       workspaceId &&
       result.contact &&
-      (result.outcome === "same_workspace_member" ||
-        result.outcome === "friend_active" ||
-        result.outcome === "actor_access_granted")
+      (result.outcome === RELATIONSHIP_SCAN_OUTCOME.SAME_WORKSPACE_MEMBER ||
+        result.outcome === RELATIONSHIP_SCAN_OUTCOME.FRIEND_ACTIVE ||
+        result.outcome === RELATIONSHIP_SCAN_OUTCOME.ACTOR_ACCESS_GRANTED ||
+        result.outcome ===
+          RELATIONSHIP_SCAN_OUTCOME.REMOTE_AGENT_ACCESS_GRANTED)
     ) {
       const opened = await api.openDirectConversation(workspaceId, {
         contactKind: result.contact.kind,
@@ -62,7 +71,7 @@ export default function UnifiedScanScreen() {
       }
     }
 
-    if (result.outcome === "self_scan") {
+    if (result.outcome === RELATIONSHIP_SCAN_OUTCOME.SELF_SCAN) {
       setError("不能扫描自己的二维码。")
       return
     }

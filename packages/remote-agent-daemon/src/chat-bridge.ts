@@ -15,6 +15,20 @@ type BridgeConfig = {
   stateFile?: string
 }
 
+type ExposedDelivery = {
+  deliveryId: string
+  conversationId: string
+  itemId: string
+  sequence: number
+}
+
+type BridgeState = {
+  lastConversationId?: string | null
+  lastToolName?: string | null
+  updatedAt?: string
+  exposedDeliveries?: Record<string, ExposedDelivery[]>
+}
+
 function parseArgs(argv: string[]): BridgeConfig {
   const args = new Map<string, string>()
   for (let index = 0; index < argv.length; index += 1) {
@@ -104,32 +118,44 @@ function jsonToolResult<T extends Record<string, unknown>>(
   }
 }
 
-function updateBridgeState(
-  config: BridgeConfig,
-  patch: Partial<{
-    lastConversationId: string | null
-    lastToolName: string | null
-    updatedAt: string
-  }>
-) {
+function loadBridgeState(config: BridgeConfig): BridgeState {
+  if (!config.stateFile) {
+    return {}
+  }
+  try {
+    if (!existsSync(config.stateFile)) {
+      return {}
+    }
+    const raw = readFileSync(config.stateFile, "utf8").trim()
+    if (!raw) {
+      return {}
+    }
+    const parsed = JSON.parse(raw) as BridgeState
+    return parsed && typeof parsed === "object" ? parsed : {}
+  } catch {
+    return {}
+  }
+}
+
+function writeBridgeState(config: BridgeConfig, state: BridgeState) {
+  if (!config.stateFile) {
+    return
+  }
+  writeFileSync(config.stateFile, JSON.stringify(state, null, 2), "utf8")
+}
+
+function updateBridgeState(config: BridgeConfig, patch: Partial<BridgeState>) {
   if (!config.stateFile) {
     return
   }
   try {
-    const current =
-      existsSync(config.stateFile) &&
-      readFileSync(config.stateFile, "utf8").trim()
-        ? (JSON.parse(readFileSync(config.stateFile, "utf8")) as Record<
-            string,
-            unknown
-          >)
-        : {}
+    const current = loadBridgeState(config)
     const next = {
       ...current,
       ...patch,
       updatedAt: patch.updatedAt ?? new Date().toISOString(),
     }
-    writeFileSync(config.stateFile, JSON.stringify(next, null, 2), "utf8")
+    writeBridgeState(config, next)
   } catch {}
 }
 
@@ -172,8 +198,7 @@ async function main() {
   server.registerTool(
     "check_messages",
     {
-      description:
-        "Return pending message deliveries for this remote agent. Calling this also acknowledges the returned deliveries.",
+      description: "Return pending message deliveries for this remote agent.",
       inputSchema: {
         limit: z.number().int().min(1).max(500).optional(),
       },
@@ -185,29 +210,34 @@ async function main() {
       updateBridgeState(config, {
         lastToolName: "check_messages",
       })
-      const result = await requestJson<{
-        deliveries: Array<{ deliveryId: string }>
-      }>(
+      const result = await requestJson<{ deliveries: ExposedDelivery[] }>(
         config,
         `/api/v1/internal/remote-agents/${config.remoteAgentId}/check-messages`,
         undefined,
         { limit }
       )
-
       if (result.deliveries.length > 0) {
-        await requestJson(
-          config,
-          "/api/v1/internal/remote-agents/ack-deliveries",
-          {
-            method: "POST",
-            body: JSON.stringify({
-              remoteAgentId: config.remoteAgentId,
-              deliveryIds: result.deliveries.map(
-                (delivery) => delivery.deliveryId
-              ),
-            }),
+        const state = loadBridgeState(config)
+        const exposedDeliveries = {
+          ...(state.exposedDeliveries ?? {}),
+        }
+        for (const delivery of result.deliveries) {
+          const current = exposedDeliveries[delivery.conversationId] ?? []
+          if (
+            !current.some((entry) => entry.deliveryId === delivery.deliveryId)
+          ) {
+            current.push(delivery)
           }
-        )
+          exposedDeliveries[delivery.conversationId] = current.sort(
+            (left, right) => left.sequence - right.sequence
+          )
+        }
+        writeBridgeState(config, {
+          ...state,
+          lastToolName: "check_messages",
+          exposedDeliveries,
+          updatedAt: new Date().toISOString(),
+        })
       }
 
       return jsonToolResult(result)
@@ -244,6 +274,54 @@ async function main() {
           limit,
         }
       )
+      const state = loadBridgeState(config)
+      const exposed = state.exposedDeliveries?.[conversationId] ?? []
+      const itemIds = new Set(
+        result.items
+          .map((item) =>
+            item &&
+            typeof item === "object" &&
+            typeof (item as { id?: unknown }).id === "string"
+              ? (item as { id: string }).id
+              : null
+          )
+          .filter((itemId): itemId is string => Boolean(itemId))
+      )
+      const completedDeliveries = exposed.filter((delivery) =>
+        itemIds.has(delivery.itemId)
+      )
+      if (completedDeliveries.length > 0) {
+        await requestJson(
+          config,
+          `/api/v1/internal/remote-agents/${config.remoteAgentId}/complete-deliveries`,
+          {
+            method: "POST",
+            body: JSON.stringify({
+              deliveryIds: completedDeliveries.map(
+                (delivery) => delivery.deliveryId
+              ),
+            }),
+          }
+        )
+      }
+      if (state.exposedDeliveries) {
+        const remaining = exposed.filter(
+          (delivery) =>
+            !completedDeliveries.some(
+              (entry) => entry.deliveryId === delivery.deliveryId
+            )
+        )
+        writeBridgeState(config, {
+          ...state,
+          lastConversationId: conversationId,
+          lastToolName: "read_history",
+          exposedDeliveries: {
+            ...state.exposedDeliveries,
+            [conversationId]: remaining,
+          },
+          updatedAt: new Date().toISOString(),
+        })
+      }
       return jsonToolResult(result)
     }
   )

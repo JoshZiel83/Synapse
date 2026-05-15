@@ -1,17 +1,20 @@
 "use client"
 
-import type { ConversationEntityRef } from "@synapse/shared"
+import {
+  CONVERSATION_PARTICIPANT_TYPE,
+  type ConversationEntityRef,
+} from "@synapse/shared"
 
 import type { ConversationMember } from "@/stores/chat-store"
 
 export function getConversationMemberSubtitle(member: ConversationMember) {
-  if (member.type === "actor") {
+  if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     return member.title || member.role || "Actor"
   }
-  if (member.type === "remote_agent") {
+  if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
     return member.title || member.role || "Remote agent"
   }
-  if (member.type === "external") {
+  if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
     return member.linkedWorkspaceMemberName
       ? `External participant · linked to ${member.linkedWorkspaceMemberName}`
       : "External participant"
@@ -23,9 +26,12 @@ export function getConversationMemberSubtitle(member: ConversationMember) {
 }
 
 export function getConversationMemberTypeLabel(member: ConversationMember) {
-  if (member.type === "actor") return "Actor"
-  if (member.type === "remote_agent") return "Remote agent"
-  if (member.type === "external") return "External participant"
+  if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR)
+    return "Actor"
+  if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT)
+    return "Remote agent"
+  if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL)
+    return "External participant"
   return "Workspace user"
 }
 
@@ -47,16 +53,21 @@ export function getConversationMemberContactHref(
   member: ConversationMember,
   basePath = "/dashboard/contacts"
 ) {
-  if (member.type === "actor") {
+  if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     return `${basePath}?kind=actor&id=${member.id}`
   }
-  if (member.type === "remote_agent") {
+  if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
     return `${basePath}?kind=remote_agent&id=${member.id}`
   }
-  if (member.type === "workspace_member") {
+  if (
+    member.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+  ) {
     return `${basePath}?kind=member&id=${member.id}`
   }
-  if (member.type === "external" && member.linkedWorkspaceMemberId) {
+  if (
+    member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
+    member.linkedWorkspaceMemberId
+  ) {
     return `${basePath}?kind=member&id=${member.linkedWorkspaceMemberId}`
   }
   return undefined
@@ -73,32 +84,34 @@ export function resolveAuthorMember(
       return true
     }
     if (
-      author.participantType === "actor" &&
-      member.type === "actor" &&
+      author.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+      member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
       author.actorId &&
       member.id === author.actorId
     ) {
       return true
     }
     if (
-      author.participantType === "workspace_member" &&
-      member.type === "workspace_member" &&
+      author.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
+      member.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
       author.workspaceMemberId &&
       member.id === author.workspaceMemberId
     ) {
       return true
     }
     if (
-      author.participantType === "remote_agent" &&
-      member.type === "remote_agent" &&
+      author.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
+      member.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
       author.remoteAgentId &&
       member.id === author.remoteAgentId
     ) {
       return true
     }
     if (
-      author.participantType === "external" &&
-      member.type === "external" &&
+      author.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
+      member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
       author.externalUserKey &&
       member.externalUserKey === author.externalUserKey
     ) {
@@ -117,14 +130,21 @@ export function getAuthorContactHref(
   if (authorMember) {
     return getConversationMemberContactHref(authorMember, basePath)
   }
-  if (author?.participantType === "actor" && author.actorId) {
+  if (
+    author?.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+    author.actorId
+  ) {
     return `${basePath}?kind=actor&id=${author.actorId}`
   }
-  if (author?.participantType === "remote_agent" && author.remoteAgentId) {
+  if (
+    author?.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
+    author.remoteAgentId
+  ) {
     return `${basePath}?kind=remote_agent&id=${author.remoteAgentId}`
   }
   if (
-    author?.participantType === "workspace_member" &&
+    author?.participantType ===
+      CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
     author.workspaceMemberId
   ) {
     return `${basePath}?kind=member&id=${author.workspaceMemberId}`

@@ -1,5 +1,6 @@
 "use client"
 
+import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import type { ReactNode } from "react"
 import { useRouter } from "next/navigation"
 import { ArrowUpRight } from "lucide-react"
@@ -56,7 +57,7 @@ function ParticipantDetailBody({
             name={member.name}
             avatarUrl={member.avatarUrl}
             emoji={member.emoji}
-            entityType={member.type}
+            entityType={member.participantType}
             size="lg"
             className="size-16 shrink-0"
           />
@@ -76,22 +77,26 @@ function ParticipantDetailBody({
             </div>
             <p className="mt-1 text-sm text-muted-foreground">{subtitle}</p>
             <div className="mt-3 flex flex-wrap gap-2">
-              {member.type === "actor" ? (
+              {member.participantType ===
+              CONVERSATION_PARTICIPANT_TYPE.ACTOR ? (
                 <Badge variant="secondary" className="rounded-full">
                   {actorRole}
                 </Badge>
-              ) : member.type === "remote_agent" ? (
+              ) : member.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT ? (
                 <Badge variant="secondary" className="rounded-full">
                   {remoteAgentRole}
                 </Badge>
               ) : null}
-              {member.type === "external" &&
+              {member.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
               member.linkedWorkspaceMemberName ? (
                 <Badge variant="secondary" className="rounded-full">
                   Linked to {member.linkedWorkspaceMemberName}
                 </Badge>
               ) : null}
-              {member.type === "external" &&
+              {member.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
               !member.linkedWorkspaceMemberName ? (
                 <Badge variant="outline" className="rounded-full">
                   No workspace link
@@ -110,12 +115,15 @@ function ParticipantDetailBody({
             </div>
             <div className="grid gap-4">
               <DetailItem label="Participant type" value={typeLabel} />
-              {member.type === "actor" ? (
+              {member.participantType ===
+              CONVERSATION_PARTICIPANT_TYPE.ACTOR ? (
                 <DetailItem label="Role" value={actorRole} />
-              ) : member.type === "remote_agent" ? (
+              ) : member.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT ? (
                 <DetailItem label="Role" value={remoteAgentRole} />
               ) : null}
-              {member.type === "workspace_member" ? (
+              {member.participantType ===
+              CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER ? (
                 <DetailItem
                   label="Workspace identity"
                   value={
@@ -125,13 +133,16 @@ function ParticipantDetailBody({
                   }
                 />
               ) : null}
-              {member.type !== "actor" && transportLabel ? (
+              {member.participantType !== CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+              transportLabel ? (
                 <DetailItem
                   label="Transport"
                   value={transportLabel || "Unknown transport"}
                 />
               ) : null}
-              {member.type === "external" && member.externalUserKey ? (
+              {member.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.EXTERNAL &&
+              member.externalUserKey ? (
                 <DetailItem
                   label="External user key"
                   value={
@@ -144,7 +155,7 @@ function ParticipantDetailBody({
             </div>
           </section>
 
-          {member.type === "external" ? (
+          {member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ? (
             <section className="rounded-3xl border border-border/70 bg-background p-4 shadow-sm">
               <div className="mb-4 text-xs font-medium tracking-[0.18em] text-muted-foreground/80 uppercase">
                 Workspace link
@@ -159,7 +170,7 @@ function ParticipantDetailBody({
                   <ChatAvatar
                     name={member.linkedWorkspaceMemberName}
                     avatarUrl={member.linkedUserAvatarUrl}
-                    entityType="workspace_member"
+                    entityType={CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER}
                     size="default"
                     className="shrink-0"
                   />

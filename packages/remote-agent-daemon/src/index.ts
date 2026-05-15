@@ -118,6 +118,9 @@ interface RuntimeDriver {
 
 type SessionState = {
   sessionId?: string
+  pendingInteraction?: PendingInteraction
+  latestPlanDraft?: LatestPlanDraft | null
+  lastConversationId?: string
 }
 
 const DEFAULT_HEARTBEAT_MS = 30_000
@@ -292,6 +295,53 @@ function buildPlanRevisionPrompt(note?: string) {
   ]
     .filter(Boolean)
     .join(" ")
+}
+
+function buildResolvedUserInputPrompt(interaction: Record<string, any>) {
+  const title =
+    typeof interaction.userInput?.title === "string"
+      ? interaction.userInput.title.trim()
+      : "User input"
+  const questions = Array.isArray(interaction.userInput?.questions)
+    ? interaction.userInput.questions
+    : []
+  const answerLines = questions
+    .map((question: Record<string, any>) => {
+      const prompt =
+        typeof question.prompt === "string" && question.prompt.trim()
+          ? question.prompt.trim()
+          : typeof question.title === "string" && question.title.trim()
+            ? question.title.trim()
+            : typeof question.id === "string"
+              ? question.id
+              : "Question"
+      const labels = Array.isArray(question.answer?.selectedOptionLabels)
+        ? question.answer.selectedOptionLabels.filter(
+            (value: unknown): value is string =>
+              typeof value === "string" && value.trim().length > 0
+          )
+        : []
+      const selected = labels.length > 0 ? labels.join(", ") : undefined
+      const text =
+        typeof question.answer?.text === "string" && question.answer.text.trim()
+          ? question.answer.text.trim()
+          : undefined
+      const otherText =
+        typeof question.answer?.otherText === "string" &&
+        question.answer.otherText.trim()
+          ? question.answer.otherText.trim()
+          : undefined
+      const value = [selected, text, otherText].filter(Boolean).join(" | ")
+      return value ? `- ${prompt}: ${value}` : null
+    })
+    .filter((line: string | null): line is string => Boolean(line))
+  return [
+    `The Synapse user answered your input request: ${title}.`,
+    answerLines.length > 0
+      ? answerLines.join("\n")
+      : "Review the latest conversation state for the submitted answers.",
+    "Continue the task using those answers.",
+  ].join("\n")
 }
 
 function buildBootstrapPrompt(params: {
@@ -1331,6 +1381,11 @@ class ManagedRemoteAgent {
     const storedState = readSessionState(this.stateFile)
     this.sessionId =
       message.sessionId ?? storedState.sessionId ?? this.sessionId
+    this.pendingInteraction =
+      storedState.pendingInteraction ?? this.pendingInteraction
+    this.latestPlanDraft = storedState.latestPlanDraft ?? this.latestPlanDraft
+    this.lastConversationId =
+      storedState.lastConversationId ?? this.lastConversationId
     log(
       "info",
       `remote-agent:${this.params.remoteAgentId}`,
@@ -1343,6 +1398,17 @@ class ManagedRemoteAgent {
         sessionId: this.sessionId ?? undefined,
       }
     )
+    this.persistSession()
+    if (this.pendingInteraction) {
+      this.publishStatus(
+        this.pendingInteraction.kind === "plan_approval"
+          ? "waiting_plan_approval"
+          : "waiting_user_input",
+        "Waiting for a response in Synapse",
+        this.pendingInteraction.conversationId
+      )
+      return
+    }
     this.publishStatus("idle", "Ready", undefined)
   }
 
@@ -1358,8 +1424,6 @@ class ManagedRemoteAgent {
     this.driver = null
     this.running = false
     this.pendingWake = false
-    this.pendingInteraction = null
-    this.latestPlanDraft = null
     log(
       "warn",
       `remote-agent:${this.params.remoteAgentId}`,
@@ -1368,6 +1432,7 @@ class ManagedRemoteAgent {
         reason,
       }
     )
+    this.persistSession()
     this.publishStatus("offline", reason, undefined)
   }
 
@@ -1382,6 +1447,7 @@ class ManagedRemoteAgent {
     ]
     if (uniqueConversationIds.length === 1) {
       this.lastConversationId = uniqueConversationIds[0]
+      this.persistSession()
     }
     log(
       "debug",
@@ -1395,15 +1461,37 @@ class ManagedRemoteAgent {
   }
 
   async resolveInteraction(message: InteractionResolvedMessage) {
-    if (
-      !this.pendingInteraction ||
-      this.pendingInteraction.interactionId !== message.interactionId
-    ) {
+    const interaction = message.interaction || {}
+    const pending =
+      this.pendingInteraction?.interactionId === message.interactionId
+        ? this.pendingInteraction
+        : null
+    const resolvedConversationId =
+      typeof interaction.conversationId === "string" &&
+      interaction.conversationId
+        ? interaction.conversationId
+        : pending?.conversationId
+
+    if (!pending) {
+      log(
+        "warn",
+        `remote-agent:${this.params.remoteAgentId}`,
+        "Resolved interaction arrived without a matching pending request; falling back to a synthetic prompt",
+        {
+          interactionId: message.interactionId,
+          status:
+            typeof interaction.status === "string"
+              ? interaction.status
+              : undefined,
+        }
+      )
+      await this.handleResolvedInteractionFallback(
+        interaction,
+        resolvedConversationId
+      )
       return
     }
 
-    const interaction = message.interaction || {}
-    const pending = this.pendingInteraction
     log(
       "info",
       `remote-agent:${this.params.remoteAgentId}`,
@@ -1450,24 +1538,23 @@ class ManagedRemoteAgent {
       })
       if (!wrote) {
         log(
-          "error",
+          "warn",
           `remote-agent:${this.params.remoteAgentId}`,
-          "Failed to deliver resolved interaction to runtime",
+          "Failed to deliver resolved interaction to the live runtime; falling back to a synthetic prompt",
           {
             interactionId: message.interactionId,
             protocol: pending.protocol,
             requestId: pending.requestId,
           }
         )
-        this.publishStatus(
-          "error",
-          "Resolved interaction could not be delivered to the local runtime",
-          pending.conversationId,
-          "Runtime stdin is not writable"
+        await this.handleResolvedInteractionFallback(
+          interaction,
+          pending.conversationId
         )
         return
       }
       this.pendingInteraction = null
+      this.persistSession()
       log(
         "info",
         `remote-agent:${this.params.remoteAgentId}`,
@@ -1497,24 +1584,23 @@ class ManagedRemoteAgent {
         })
         if (!wrote) {
           log(
-            "error",
+            "warn",
             `remote-agent:${this.params.remoteAgentId}`,
-            "Failed to deliver resolved interaction to runtime",
+            "Failed to deliver resolved interaction to the live runtime; falling back to a synthetic prompt",
             {
               interactionId: message.interactionId,
               protocol: pending.protocol,
               requestId: pending.requestId,
             }
           )
-          this.publishStatus(
-            "error",
-            "Resolved interaction could not be delivered to the local runtime",
-            pending.conversationId,
-            "Runtime stdin is not writable"
+          await this.handleResolvedInteractionFallback(
+            interaction,
+            pending.conversationId
           )
           return
         }
         this.pendingInteraction = null
+        this.persistSession()
         log(
           "info",
           `remote-agent:${this.params.remoteAgentId}`,
@@ -1538,12 +1624,14 @@ class ManagedRemoteAgent {
           ? interaction.resolutionNote
           : undefined
       this.pendingInteraction = null
+      this.persistSession()
       if (interaction.status === "approved") {
         this.pendingSyntheticPrompts.push(buildPlanApprovedPrompt(note))
       } else {
         this.pendingSyntheticPrompts.push(buildPlanRevisionPrompt(note))
       }
       this.latestPlanDraft = null
+      this.persistSession()
       log(
         "info",
         `remote-agent:${this.params.remoteAgentId}`,
@@ -1562,6 +1650,59 @@ class ManagedRemoteAgent {
     }
   }
 
+  private async handleResolvedInteractionFallback(
+    interaction: Record<string, any>,
+    conversationId?: string
+  ) {
+    const kind = typeof interaction.kind === "string" ? interaction.kind : null
+    const status =
+      typeof interaction.status === "string" ? interaction.status : null
+    const note =
+      typeof interaction.resolutionNote === "string"
+        ? interaction.resolutionNote
+        : undefined
+
+    if (kind === "user_input" && status === "answered") {
+      this.pendingInteraction = null
+      this.pendingSyntheticPrompts.push(
+        buildResolvedUserInputPrompt(interaction)
+      )
+      this.persistSession()
+      this.publishStatus("idle", "Input received; resuming", conversationId)
+      await this.wake()
+      return
+    }
+
+    if (
+      kind === "plan_approval" &&
+      (status === "approved" || status === "rejected")
+    ) {
+      this.pendingInteraction = null
+      this.latestPlanDraft = null
+      this.pendingSyntheticPrompts.push(
+        status === "approved"
+          ? buildPlanApprovedPrompt(note)
+          : buildPlanRevisionPrompt(note)
+      )
+      this.persistSession()
+      this.publishStatus("idle", "Plan decision received", conversationId)
+      await this.wake()
+      return
+    }
+
+    log(
+      "warn",
+      `remote-agent:${this.params.remoteAgentId}`,
+      "Resolved interaction could not be replayed",
+      {
+        interactionId:
+          typeof interaction.id === "string" ? interaction.id : undefined,
+        kind: kind ?? undefined,
+        status: status ?? undefined,
+      }
+    )
+  }
+
   private workingDirectory() {
     return this.localRootPath || path.join(this.stateDirectory, "workspace")
   }
@@ -1570,6 +1711,9 @@ class ManagedRemoteAgent {
     if (!this.stateFile) return
     writeSessionState(this.stateFile, {
       sessionId: this.sessionId,
+      pendingInteraction: this.pendingInteraction ?? undefined,
+      latestPlanDraft: this.latestPlanDraft ?? undefined,
+      lastConversationId: this.lastConversationId,
     })
   }
 
@@ -1597,6 +1741,7 @@ class ManagedRemoteAgent {
         this.running = true
         this.pendingWake = false
         this.latestPlanDraft = null
+        this.persistSession()
         log(
           "info",
           `remote-agent:${this.params.remoteAgentId}`,
@@ -1637,6 +1782,7 @@ class ManagedRemoteAgent {
     this.pendingDeliveries.length = 0
     this.pendingDeliveryIds.clear()
     this.latestPlanDraft = null
+    this.persistSession()
     const resolvedRuntime = this.resolveRuntimePathForLaunch()
     if (!resolvedRuntime.ok) {
       this.running = false
@@ -1963,6 +2109,7 @@ class ManagedRemoteAgent {
             done: step.status === "completed",
           })),
         }
+        this.persistSession()
         this.publishStatus(
           "plan_drafting",
           "Drafting a plan",
@@ -1994,6 +2141,7 @@ class ManagedRemoteAgent {
     const bridgeState = readBridgeState(this.bridgeStateFile)
     if (bridgeState.lastConversationId) {
       this.lastConversationId = bridgeState.lastConversationId
+      this.persistSession()
       return bridgeState.lastConversationId
     }
     return this.lastConversationId
@@ -2140,6 +2288,7 @@ class ManagedRemoteAgent {
         originalInput: input,
       })
       this.pendingInteraction = interaction
+      this.persistSession()
       this.publishStatus(
         "waiting_user_input",
         "Waiting for user input",
@@ -2167,6 +2316,7 @@ class ManagedRemoteAgent {
         originalInput: input,
       })
       this.pendingInteraction = interaction
+      this.persistSession()
       this.publishStatus(
         "waiting_plan_approval",
         "Waiting for plan approval",
@@ -2240,6 +2390,7 @@ class ManagedRemoteAgent {
           : [],
       })
       this.pendingInteraction = interaction
+      this.persistSession()
       this.publishStatus(
         "waiting_user_input",
         "Waiting for user input",
@@ -2426,6 +2577,7 @@ class ManagedRemoteAgent {
         checklist: planDraft.checklist,
       })
       this.pendingInteraction = interaction
+      this.persistSession()
       this.publishStatus(
         "waiting_plan_approval",
         "Waiting for plan approval",

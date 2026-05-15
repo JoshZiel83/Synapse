@@ -1,5 +1,37 @@
 import { sql } from "kysely"
 import { v4 as uuidv4 } from "uuid"
+import {
+  CONTACT_DIRECT_STATE,
+  CONTACT_HUB_KIND,
+  CONVERSATION_KIND,
+  CONVERSATION_PARTICIPANT_TYPE,
+  DIRECT_CONVERSATION_OPEN_STATUS,
+  IDENTITY_SEARCH_MATCH_STATE,
+  IDENTITY_SEARCH_OUTCOME,
+  RELATIONSHIP_ACCESS_POLICY,
+  RELATIONSHIP_APPROVAL_MODE,
+  RELATIONSHIP_PROFILE_SUBJECT_TYPE,
+  RELATIONSHIP_SCAN_OUTCOME,
+  type ActorAccessRequestListResponse,
+  type ContactHubDetailResponse,
+  type ContactHubEntryView,
+  type ContactHubKind,
+  type ContactHubResponse,
+  type ContactTargetType,
+  type DirectConversationOpenResponse,
+  type FriendRequestListResponse,
+  type IdentitySearchMatchState,
+  type IdentitySearchOutcome,
+  type IdentitySearchResponse,
+  type RelationshipAccessPolicy,
+  type RelationshipActorSummaryView,
+  type RelationshipApprovalMode,
+  type RelationshipMemberSummaryView,
+  type RelationshipProfileView,
+  type RelationshipRemoteAgentSummaryView,
+  type RelationshipScanResponse,
+  type RemoteAgentAccessRequestListResponse,
+} from "@synapse/shared"
 import { transaction } from "../../infrastructure/database/index.js"
 import {
   db,
@@ -28,32 +60,8 @@ import {
 } from "../chat/direct-binding.js"
 import { mapConversationSummaryView } from "../chat/summary-view.js"
 
-export const CONTACT_HUB_KINDS = [
-  "workspace-actor",
-  "workspace-remote-agent",
-  "workspace-member",
-  "friend-actor",
-  "friend-remote-agent",
-  "friend-member",
-] as const
-
-export type ContactHubKind = (typeof CONTACT_HUB_KINDS)[number]
-
-type ApprovalMode = "auto" | "manual"
-type AccessPolicy = "workspace_open" | "approval_required"
-type RequestStatus = "pending" | "approved" | "rejected"
-type ContactTargetType = "member" | "actor" | "remote_agent"
-type IdentitySearchOutcome =
-  | "empty"
-  | "invalid"
-  | "self"
-  | "not_found"
-  | "found"
-type IdentitySearchMatchState =
-  | "same_workspace_member"
-  | "friend"
-  | "pending_request"
-  | "requestable"
+type ApprovalMode = RelationshipApprovalMode
+type AccessPolicy = RelationshipAccessPolicy
 
 type WorkspaceSummary = {
   id: string
@@ -61,59 +69,10 @@ type WorkspaceSummary = {
   slug: string
 }
 
-type WorkspaceMemberSummary = {
-  workspace: WorkspaceSummary
-  workspaceMemberId: string
-  userId: string
-  name: string
-  email: string
-  avatarFileId?: string | null
-  trustLevel?: string
-}
-
-type ActorSummary = {
-  workspace: WorkspaceSummary
-  actorId: string
-  name: string
-  title: string
-  role: string
-  avatarFileId?: string | null
-  avatarEmoji?: string | null
-  accessPolicy: AccessPolicy
-  isPublicShared: boolean
-}
-
-type RemoteAgentSummary = {
-  workspace: WorkspaceSummary
-  remoteAgentId: string
-  name: string
-  title: string
-  runtimeKind: "claude_code" | "codex"
-  avatarFileId?: string | null
-  avatarEmoji?: string | null
-  accessPolicy: AccessPolicy
-  isPublicShared: boolean
-}
-
-type ContactHubEntry = {
-  kind: ContactHubKind
-  id: string
-  targetType: ContactTargetType
-  title: string
-  subtitle?: string
-  avatarUrl?: string
-  avatarEmoji?: string
-  workspace: WorkspaceSummary
-  workspaceMemberId?: string
-  userId?: string
-  actorId?: string
-  remoteAgentId?: string
-  relationLabel: string
-  directState: {
-    status: "existing" | "available" | "approval_required" | "pending_approval"
-    conversationId?: string
-  }
-}
+type WorkspaceMemberSummary = RelationshipMemberSummaryView
+type ActorSummary = RelationshipActorSummaryView
+type RemoteAgentSummary = RelationshipRemoteAgentSummaryView
+type ContactHubEntry = ContactHubEntryView
 
 const IDENTITY_ID_PATTERN = /^[a-z0-9](?:[a-z0-9._-]{3,31})$/
 
@@ -356,9 +315,9 @@ function mapMemberFriendEntry(params: {
   conversationId?: string
 }): ContactHubEntry {
   return {
-    kind: "friend-member",
+    kind: CONTACT_HUB_KIND.FRIEND_MEMBER,
     id: params.entryId,
-    targetType: "member",
+    targetType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.MEMBER,
     title: params.peer.name || params.peer.email || "Unknown member",
     subtitle: `${params.peer.workspace.name} · ${params.peer.email}`,
     avatarUrl: params.peer.avatarFileId
@@ -369,8 +328,11 @@ function mapMemberFriendEntry(params: {
     userId: params.peer.userId,
     relationLabel: "Friend",
     directState: params.conversationId
-      ? { status: "existing", conversationId: params.conversationId }
-      : { status: "available" },
+      ? {
+          status: CONTACT_DIRECT_STATE.EXISTING,
+          conversationId: params.conversationId,
+        }
+      : { status: CONTACT_DIRECT_STATE.AVAILABLE },
   }
 }
 
@@ -380,9 +342,9 @@ function mapActorFriendEntry(params: {
   conversationId?: string
 }): ContactHubEntry {
   return {
-    kind: "friend-actor",
+    kind: CONTACT_HUB_KIND.FRIEND_ACTOR,
     id: params.entryId,
-    targetType: "actor",
+    targetType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.ACTOR,
     title: params.actor.name,
     subtitle: `${params.actor.workspace.name} · ${params.actor.title}`,
     avatarUrl: params.actor.avatarFileId
@@ -393,8 +355,11 @@ function mapActorFriendEntry(params: {
     actorId: params.actor.actorId,
     relationLabel: "Friend",
     directState: params.conversationId
-      ? { status: "existing", conversationId: params.conversationId }
-      : { status: "available" },
+      ? {
+          status: CONTACT_DIRECT_STATE.EXISTING,
+          conversationId: params.conversationId,
+        }
+      : { status: CONTACT_DIRECT_STATE.AVAILABLE },
   }
 }
 
@@ -404,9 +369,9 @@ function mapRemoteAgentFriendEntry(params: {
   conversationId?: string
 }): ContactHubEntry {
   return {
-    kind: "friend-remote-agent",
+    kind: CONTACT_HUB_KIND.FRIEND_REMOTE_AGENT,
     id: params.entryId,
-    targetType: "remote_agent",
+    targetType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.REMOTE_AGENT,
     title: params.remoteAgent.name,
     subtitle: `${params.remoteAgent.workspace.name} · ${params.remoteAgent.title}`,
     avatarUrl: params.remoteAgent.avatarFileId
@@ -417,8 +382,11 @@ function mapRemoteAgentFriendEntry(params: {
     remoteAgentId: params.remoteAgent.remoteAgentId,
     relationLabel: "Friend",
     directState: params.conversationId
-      ? { status: "existing", conversationId: params.conversationId }
-      : { status: "available" },
+      ? {
+          status: CONTACT_DIRECT_STATE.EXISTING,
+          conversationId: params.conversationId,
+        }
+      : { status: CONTACT_DIRECT_STATE.AVAILABLE },
   }
 }
 
@@ -427,9 +395,9 @@ function mapWorkspaceMemberEntry(params: {
   conversationId?: string
 }): ContactHubEntry {
   return {
-    kind: "workspace-member",
+    kind: CONTACT_HUB_KIND.WORKSPACE_MEMBER,
     id: params.member.workspaceMemberId,
-    targetType: "member",
+    targetType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.MEMBER,
     title: params.member.name || params.member.email || "Unknown member",
     subtitle: `${params.member.email} · ${params.member.trustLevel || "member"}`,
     avatarUrl: params.member.avatarFileId
@@ -440,24 +408,23 @@ function mapWorkspaceMemberEntry(params: {
     userId: params.member.userId,
     relationLabel: "Workspace member",
     directState: params.conversationId
-      ? { status: "existing", conversationId: params.conversationId }
-      : { status: "available" },
+      ? {
+          status: CONTACT_DIRECT_STATE.EXISTING,
+          conversationId: params.conversationId,
+        }
+      : { status: CONTACT_DIRECT_STATE.AVAILABLE },
   }
 }
 
 function mapWorkspaceActorEntry(params: {
   actor: ActorSummary
   conversationId?: string
-  accessState:
-    | "existing"
-    | "available"
-    | "approval_required"
-    | "pending_approval"
+  accessState: ContactHubEntry["directState"]["status"]
 }): ContactHubEntry {
   return {
-    kind: "workspace-actor",
+    kind: CONTACT_HUB_KIND.WORKSPACE_ACTOR,
     id: params.actor.actorId,
-    targetType: "actor",
+    targetType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.ACTOR,
     title: params.actor.name,
     subtitle: params.actor.title,
     avatarUrl: params.actor.avatarFileId
@@ -468,8 +435,11 @@ function mapWorkspaceActorEntry(params: {
     actorId: params.actor.actorId,
     relationLabel: "Workspace actor",
     directState:
-      params.accessState === "existing"
-        ? { status: "existing", conversationId: params.conversationId }
+      params.accessState === CONTACT_DIRECT_STATE.EXISTING
+        ? {
+            status: CONTACT_DIRECT_STATE.EXISTING,
+            conversationId: params.conversationId,
+          }
         : { status: params.accessState },
   }
 }
@@ -477,16 +447,12 @@ function mapWorkspaceActorEntry(params: {
 function mapWorkspaceRemoteAgentEntry(params: {
   remoteAgent: RemoteAgentSummary
   conversationId?: string
-  accessState:
-    | "existing"
-    | "available"
-    | "approval_required"
-    | "pending_approval"
+  accessState: ContactHubEntry["directState"]["status"]
 }): ContactHubEntry {
   return {
-    kind: "workspace-remote-agent",
+    kind: CONTACT_HUB_KIND.WORKSPACE_REMOTE_AGENT,
     id: params.remoteAgent.remoteAgentId,
-    targetType: "remote_agent",
+    targetType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.REMOTE_AGENT,
     title: params.remoteAgent.name,
     subtitle: params.remoteAgent.title,
     avatarUrl: params.remoteAgent.avatarFileId
@@ -497,8 +463,11 @@ function mapWorkspaceRemoteAgentEntry(params: {
     remoteAgentId: params.remoteAgent.remoteAgentId,
     relationLabel: "Workspace agent",
     directState:
-      params.accessState === "existing"
-        ? { status: "existing", conversationId: params.conversationId }
+      params.accessState === CONTACT_DIRECT_STATE.EXISTING
+        ? {
+            status: CONTACT_DIRECT_STATE.EXISTING,
+            conversationId: params.conversationId,
+          }
         : { status: params.accessState },
   }
 }
@@ -1018,7 +987,7 @@ async function getActorAccessState(params: {
   conversationId?: string
   pendingRequestActorIds: Set<string>
 }) {
-  if (params.conversationId) return "existing" as const
+  if (params.conversationId) return CONTACT_DIRECT_STATE.EXISTING
   const canInvoke = await authorizeAction({
     subject: await resolveWorkspaceAccessSubject(
       params.workspaceId,
@@ -1027,13 +996,16 @@ async function getActorAccessState(params: {
     action: "actor.invoke",
     resourceId: params.actor.actorId,
   })
-  if (canInvoke || params.actor.accessPolicy === "workspace_open") {
-    return "available" as const
+  if (
+    canInvoke ||
+    params.actor.accessPolicy === RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN
+  ) {
+    return CONTACT_DIRECT_STATE.AVAILABLE
   }
   if (params.pendingRequestActorIds.has(params.actor.actorId)) {
-    return "pending_approval" as const
+    return CONTACT_DIRECT_STATE.PENDING_APPROVAL
   }
-  return "approval_required" as const
+  return CONTACT_DIRECT_STATE.APPROVAL_REQUIRED
 }
 
 async function getRemoteAgentAccessState(params: {
@@ -1043,7 +1015,7 @@ async function getRemoteAgentAccessState(params: {
   conversationId?: string
   pendingRequestRemoteAgentIds: Set<string>
 }) {
-  if (params.conversationId) return "existing" as const
+  if (params.conversationId) return CONTACT_DIRECT_STATE.EXISTING
   const canInvoke = await authorizeAction({
     subject: await resolveWorkspaceAccessSubject(
       params.workspaceId,
@@ -1052,15 +1024,19 @@ async function getRemoteAgentAccessState(params: {
     action: "remote_agent.invoke",
     resourceId: params.remoteAgent.remoteAgentId,
   })
-  if (canInvoke || params.remoteAgent.accessPolicy === "workspace_open") {
-    return "available" as const
+  if (
+    canInvoke ||
+    params.remoteAgent.accessPolicy ===
+      RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN
+  ) {
+    return CONTACT_DIRECT_STATE.AVAILABLE
   }
   if (
     params.pendingRequestRemoteAgentIds.has(params.remoteAgent.remoteAgentId)
   ) {
-    return "pending_approval" as const
+    return CONTACT_DIRECT_STATE.PENDING_APPROVAL
   }
-  return "approval_required" as const
+  return CONTACT_DIRECT_STATE.APPROVAL_REQUIRED
 }
 
 async function resolveContactReference(params: {
@@ -2320,7 +2296,7 @@ export async function requestRelationshipByIdentityProfile(params: {
 export async function getMemberRelationshipProfile(params: {
   workspaceId: string
   userId: string
-}) {
+}): Promise<RelationshipProfileView> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -2331,11 +2307,11 @@ export async function getMemberRelationshipProfile(params: {
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-    subjectType: "member",
+    subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.MEMBER,
     subjectWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
   })
   return {
-    subjectType: "member" as const,
+    subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.MEMBER,
     approvalMode: profile.approval_mode,
     qrToken: profile.qr_token,
     qrUrl: buildRelationshipQrUrl(profile.qr_token),
@@ -2350,7 +2326,7 @@ export async function updateMemberRelationshipProfile(params: {
   approvalMode: ApprovalMode
   identityId?: string
   identitySearchEnabled?: boolean
-}) {
+}): Promise<RelationshipProfileView> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -2361,7 +2337,7 @@ export async function updateMemberRelationshipProfile(params: {
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-    subjectType: "member",
+    subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.MEMBER,
     subjectWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
   })
   try {
@@ -2386,7 +2362,7 @@ export async function updateMemberRelationshipProfile(params: {
       throw new Error("Failed to update relationship profile")
     }
     return {
-      subjectType: "member" as const,
+      subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.MEMBER,
       approvalMode: updated.approval_mode,
       qrToken: updated.qr_token,
       qrUrl: buildRelationshipQrUrl(updated.qr_token),
@@ -2405,7 +2381,7 @@ export async function getActorRelationshipProfile(params: {
   workspaceId: string
   actorId: string
   userId: string
-}) {
+}): Promise<RelationshipProfileView> {
   const actor = await getActorSummary(params.actorId)
   if (!actor || actor.workspace.id !== params.workspaceId) {
     throw new Error("Actor not found")
@@ -2420,11 +2396,11 @@ export async function getActorRelationshipProfile(params: {
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-    subjectType: "actor",
+    subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.ACTOR,
     subjectActorId: params.actorId,
   })
   return {
-    subjectType: "actor" as const,
+    subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.ACTOR,
     approvalMode: profile.approval_mode,
     qrToken: profile.qr_token,
     qrUrl: buildRelationshipQrUrl(profile.qr_token),
@@ -2439,7 +2415,7 @@ export async function getRemoteAgentRelationshipProfile(params: {
   workspaceId: string
   remoteAgentId: string
   userId: string
-}) {
+}): Promise<RelationshipProfileView> {
   const remoteAgent = await getRemoteAgentSummary(params.remoteAgentId)
   if (!remoteAgent || remoteAgent.workspace.id !== params.workspaceId) {
     throw new Error("Remote agent not found")
@@ -2454,11 +2430,11 @@ export async function getRemoteAgentRelationshipProfile(params: {
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-    subjectType: "remote_agent",
+    subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.REMOTE_AGENT,
     subjectRemoteAgentId: params.remoteAgentId,
   })
   return {
-    subjectType: "remote_agent" as const,
+    subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.REMOTE_AGENT,
     approvalMode: profile.approval_mode,
     qrToken: profile.qr_token,
     qrUrl: buildRelationshipQrUrl(profile.qr_token),
@@ -2478,7 +2454,7 @@ export async function updateActorRelationshipProfile(params: {
   identitySearchEnabled?: boolean
   accessPolicy?: AccessPolicy
   isPublicShared?: boolean
-}) {
+}): Promise<RelationshipProfileView> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -2489,7 +2465,7 @@ export async function updateActorRelationshipProfile(params: {
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-    subjectType: "actor",
+    subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.ACTOR,
     subjectActorId: params.actorId,
   })
 
@@ -2552,13 +2528,13 @@ export async function updateActorRelationshipProfile(params: {
   }
 
   return {
-    subjectType: "actor" as const,
+    subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.ACTOR,
     approvalMode: updatedProfile.approval_mode,
     qrToken: updatedProfile.qr_token,
     qrUrl: buildRelationshipQrUrl(updatedProfile.qr_token),
     identityId: updatedProfile.identity_id,
     identitySearchEnabled: updatedProfile.identity_search_enabled,
-    accessPolicy: accessPolicy || "workspace_open",
+    accessPolicy: accessPolicy || RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
     isPublicShared,
   }
 }
@@ -2572,7 +2548,7 @@ export async function updateRemoteAgentRelationshipProfile(params: {
   identitySearchEnabled?: boolean
   accessPolicy?: AccessPolicy
   isPublicShared?: boolean
-}) {
+}): Promise<RelationshipProfileView> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -2583,7 +2559,7 @@ export async function updateRemoteAgentRelationshipProfile(params: {
   const profile = await ensureRelationshipProfile({
     workspaceId: params.workspaceId,
     createdByWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-    subjectType: "remote_agent",
+    subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.REMOTE_AGENT,
     subjectRemoteAgentId: params.remoteAgentId,
   })
 
@@ -2649,13 +2625,13 @@ export async function updateRemoteAgentRelationshipProfile(params: {
   }
 
   return {
-    subjectType: "remote_agent" as const,
+    subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.REMOTE_AGENT,
     approvalMode: updatedProfile.approval_mode,
     qrToken: updatedProfile.qr_token,
     qrUrl: buildRelationshipQrUrl(updatedProfile.qr_token),
     identityId: updatedProfile.identity_id,
     identitySearchEnabled: updatedProfile.identity_search_enabled,
-    accessPolicy: accessPolicy || "workspace_open",
+    accessPolicy: accessPolicy || RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
     isPublicShared,
   }
 }
@@ -3222,7 +3198,7 @@ export async function resolveRemoteAgentAccessRequest(params: {
 export async function getContactHub(params: {
   workspaceId: string
   userId: string
-}) {
+}): Promise<ContactHubResponse> {
   const viewerWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
     params.userId
@@ -3247,7 +3223,7 @@ export async function getContactHub(params: {
   })
   const groups = await Promise.all(
     threads
-      .filter((thread) => thread.kind === "group")
+      .filter((thread) => thread.kind === CONVERSATION_KIND.GROUP)
       .map((thread) =>
         mapConversationSummaryView(
           {
@@ -3289,7 +3265,7 @@ export async function getContactHubDetail(params: {
   userId: string
   contactKind: ContactHubKind
   contactId: string
-}) {
+}): Promise<ContactHubDetailResponse> {
   const hub = await getContactHub({
     workspaceId: params.workspaceId,
     userId: params.userId,
@@ -3310,20 +3286,23 @@ export async function getContactHubDetail(params: {
     if (entry.actorId) {
       return conversation.participants.some(
         (participant) =>
-          participant.type === "actor" && participant.actorId === entry.actorId
+          participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+          participant.actorId === entry.actorId
       )
     }
     if (entry.remoteAgentId) {
       return conversation.participants.some(
         (participant) =>
-          participant.type === "remote_agent" &&
+          participant.participantType ===
+            CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
           participant.remoteAgentId === entry.remoteAgentId
       )
     }
     if (entry.workspaceMemberId) {
       return conversation.participants.some(
         (participant) =>
-          participant.type === "workspace_member" &&
+          participant.participantType ===
+            CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
           participant.workspaceMemberId === entry.workspaceMemberId
       )
     }
@@ -3341,7 +3320,7 @@ export async function openDirectConversation(params: {
   userId: string
   contactKind: ContactHubKind
   contactId: string
-}) {
+}): Promise<DirectConversationOpenResponse> {
   const resolved = await resolveContactReference(params)
   const requesterWorkspaceMember = await getWorkspaceMemberIdentity(
     params.workspaceId,
@@ -3351,11 +3330,11 @@ export async function openDirectConversation(params: {
     throw new Error("Workspace member not found")
   }
   const requesterIdentity: DirectConversationIdentity = {
-    kind: "member",
+    kind: RELATIONSHIP_PROFILE_SUBJECT_TYPE.MEMBER,
     workspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
   }
 
-  if (resolved.kind === "workspace-actor" && resolved.actor) {
+  if (resolved.kind === CONTACT_HUB_KIND.WORKSPACE_ACTOR && resolved.actor) {
     const canInvoke = await authorizeAction({
       subject: await resolveWorkspaceAccessSubject(
         params.workspaceId,
@@ -3365,14 +3344,18 @@ export async function openDirectConversation(params: {
       resourceId: resolved.actor.actorId,
     })
 
-    if (!canInvoke && resolved.actor.accessPolicy === "approval_required") {
+    if (
+      !canInvoke &&
+      resolved.actor.accessPolicy ===
+        RELATIONSHIP_ACCESS_POLICY.APPROVAL_REQUIRED
+    ) {
       const profile = await ensureRelationshipProfile({
         workspaceId: params.workspaceId,
         createdByWorkspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
-        subjectType: "actor",
+        subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.ACTOR,
         subjectActorId: resolved.actor.actorId,
       })
-      if (profile.approval_mode === "auto") {
+      if (profile.approval_mode === RELATIONSHIP_APPROVAL_MODE.AUTO) {
         await grantActorAccess({
           workspaceId: params.workspaceId,
           actorId: resolved.actor.actorId,
@@ -3389,14 +3372,17 @@ export async function openDirectConversation(params: {
             requesterWorkspaceMember.workspaceMemberId,
         })
         return {
-          status: "pending_approval" as const,
+          status: DIRECT_CONVERSATION_OPEN_STATUS.PENDING_APPROVAL,
           requestId: accessRequest.request.id,
         }
       }
     }
   }
 
-  if (resolved.kind === "workspace-remote-agent" && resolved.remoteAgent) {
+  if (
+    resolved.kind === CONTACT_HUB_KIND.WORKSPACE_REMOTE_AGENT &&
+    resolved.remoteAgent
+  ) {
     const canInvoke = await authorizeAction({
       subject: await resolveWorkspaceAccessSubject(
         params.workspaceId,
@@ -3408,15 +3394,16 @@ export async function openDirectConversation(params: {
 
     if (
       !canInvoke &&
-      resolved.remoteAgent.accessPolicy === "approval_required"
+      resolved.remoteAgent.accessPolicy ===
+        RELATIONSHIP_ACCESS_POLICY.APPROVAL_REQUIRED
     ) {
       const profile = await ensureRelationshipProfile({
         workspaceId: params.workspaceId,
         createdByWorkspaceMemberId: requesterWorkspaceMember.workspaceMemberId,
-        subjectType: "remote_agent",
+        subjectType: RELATIONSHIP_PROFILE_SUBJECT_TYPE.REMOTE_AGENT,
         subjectRemoteAgentId: resolved.remoteAgent.remoteAgentId,
       })
-      if (profile.approval_mode === "auto") {
+      if (profile.approval_mode === RELATIONSHIP_APPROVAL_MODE.AUTO) {
         await grantRemoteAgentAccess({
           workspaceId: params.workspaceId,
           remoteAgentId: resolved.remoteAgent.remoteAgentId,
@@ -3431,7 +3418,7 @@ export async function openDirectConversation(params: {
             requesterWorkspaceMember.workspaceMemberId,
         })
         return {
-          status: "pending_approval" as const,
+          status: DIRECT_CONVERSATION_OPEN_STATUS.PENDING_APPROVAL,
           requestId: accessRequest.request.id,
         }
       }
@@ -3444,7 +3431,7 @@ export async function openDirectConversation(params: {
   )
   if (existingConversationId) {
     return {
-      status: "ready" as const,
+      status: DIRECT_CONVERSATION_OPEN_STATUS.READY,
       created: false,
       conversationId: existingConversationId,
     }
@@ -3452,23 +3439,27 @@ export async function openDirectConversation(params: {
 
   try {
     const targetWorkspaceMemberId =
-      resolved.peerIdentity.kind === "member"
+      resolved.peerIdentity.kind === RELATIONSHIP_PROFILE_SUBJECT_TYPE.MEMBER
         ? resolved.member?.workspaceMemberId
         : undefined
-    if (resolved.peerIdentity.kind === "member" && !targetWorkspaceMemberId) {
+    if (
+      resolved.peerIdentity.kind === RELATIONSHIP_PROFILE_SUBJECT_TYPE.MEMBER &&
+      !targetWorkspaceMemberId
+    ) {
       throw new Error("Peer workspace membership not found")
     }
     const created = await createChatConversation({
       workspaceId: params.workspaceId,
       userId: params.userId,
       clientRequestId: uuidv4(),
-      kind: "private",
+      kind: CONVERSATION_KIND.PRIVATE,
       actorIds:
-        resolved.peerIdentity.kind === "actor"
+        resolved.peerIdentity.kind === RELATIONSHIP_PROFILE_SUBJECT_TYPE.ACTOR
           ? [resolved.peerIdentity.actorId]
           : [],
       remoteAgentIds:
-        resolved.peerIdentity.kind === "remote_agent"
+        resolved.peerIdentity.kind ===
+        RELATIONSHIP_PROFILE_SUBJECT_TYPE.REMOTE_AGENT
           ? [resolved.peerIdentity.remoteAgentId]
           : [],
       workspaceMemberIds: targetWorkspaceMemberId
@@ -3490,7 +3481,7 @@ export async function openDirectConversation(params: {
       .execute()
 
     return {
-      status: "ready" as const,
+      status: DIRECT_CONVERSATION_OPEN_STATUS.READY,
       created: true,
       conversationId: created.conversation.conversationId as string,
     }
@@ -3504,7 +3495,7 @@ export async function openDirectConversation(params: {
     )
     if (!retryConversationId) throw error
     return {
-      status: "ready" as const,
+      status: DIRECT_CONVERSATION_OPEN_STATUS.READY,
       created: false,
       conversationId: retryConversationId,
     }

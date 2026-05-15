@@ -62,6 +62,7 @@ import {
   listRelayAutoLoadedSkills,
   readRelayAutoLoadedSkill,
 } from "./relay-auto-skills.js"
+import { compareAvailableSkillDiscoveryOrder } from "./discovery-order.js"
 import {
   SKILL_ENTRY_PATH,
   buildSyntheticEntryFile,
@@ -3612,9 +3613,7 @@ export async function listVisibleSkills(input: {
     }
   }
 
-  return Array.from(combined.values()).sort((left, right) =>
-    left.slug.localeCompare(right.slug)
-  )
+  return Array.from(combined.values()).sort(compareAvailableSkillDiscoveryOrder)
 }
 
 export async function readVisibleSkill(input: {

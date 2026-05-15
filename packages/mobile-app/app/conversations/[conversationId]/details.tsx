@@ -1,4 +1,10 @@
 import Feather from "@expo/vector-icons/Feather"
+import {
+  CONVERSATION_BOUNDARY,
+  CONVERSATION_KIND,
+  CONVERSATION_PARTICIPANT_STATE,
+  CONVERSATION_PARTICIPANT_TYPE,
+} from "@shared"
 import { useLocalSearchParams, useRouter } from "expo-router"
 import { useEffect, useMemo } from "react"
 import { Pressable, StyleSheet, Text, View } from "react-native"
@@ -57,7 +63,10 @@ export default function ConversationDetailScreen() {
   ])
 
   const activeCount = useMemo(
-    () => members.filter((member) => member.state !== "removed").length,
+    () =>
+      members.filter(
+        (member) => member.state !== CONVERSATION_PARTICIPANT_STATE.REMOVED
+      ).length,
     [members]
   )
 
@@ -98,11 +107,15 @@ export default function ConversationDetailScreen() {
               <View style={styles.heroBody}>
                 <Text style={styles.heroTitle}>{conversation.title}</Text>
                 <Text style={styles.heroSubtitle}>
-                  {`${conversation.kind === "private" ? "单聊" : "群聊"} · ${activeCount} 位成员`}
+                  {`${conversation.kind === CONVERSATION_KIND.PRIVATE ? "单聊" : "群聊"} · ${activeCount} 位成员`}
                 </Text>
               </View>
               <Pill
-                label={conversation.boundary === "external" ? "外部" : "内部"}
+                label={
+                  conversation.boundary === CONVERSATION_BOUNDARY.EXTERNAL
+                    ? "外部"
+                    : "内部"
+                }
                 tone="primary"
               />
             </View>
@@ -128,9 +141,11 @@ export default function ConversationDetailScreen() {
                       name={getParticipantDisplayName(member)}
                       uri={member.avatarUrl}
                       icon={
-                        member.participantType === "actor"
+                        member.participantType ===
+                        CONVERSATION_PARTICIPANT_TYPE.ACTOR
                           ? "cpu"
-                          : member.participantType === "external"
+                          : member.participantType ===
+                              CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
                             ? "globe"
                             : "user"
                       }
@@ -142,16 +157,21 @@ export default function ConversationDetailScreen() {
                       </Text>
                       <Text style={styles.rowSubtitle}>
                         {member.title ||
-                          (member.participantType === "workspace_member"
+                          (member.participantType ===
+                          CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
                             ? "成员"
-                            : member.participantType === "actor"
+                            : member.participantType ===
+                                CONVERSATION_PARTICIPANT_TYPE.ACTOR
                               ? "Actor"
                               : "会话成员")}
                       </Text>
                     </View>
                     <Pill
                       label={
-                        member.participantType === "actor" ? "角色" : "成员"
+                        member.participantType ===
+                        CONVERSATION_PARTICIPANT_TYPE.ACTOR
+                          ? "角色"
+                          : "成员"
                       }
                     />
                   </View>

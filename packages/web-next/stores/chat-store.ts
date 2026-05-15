@@ -46,7 +46,7 @@ export interface ConversationParticipant {
 
 export interface ConversationMember {
   participantId: string
-  type: "actor" | "remote_agent" | "workspace_member" | "external"
+  participantType: "actor" | "remote_agent" | "workspace_member" | "external"
   id: string
   workspaceMemberId?: string
   remoteAgentId?: string
@@ -659,6 +659,11 @@ function resolveConversationTransportKind(conversation: ChatConversationView) {
 function toConversationMember(
   participant: ChatConversationView["participants"][number]
 ): ConversationMember {
+  if (participant.participantType === "system") {
+    throw new Error(
+      "system participants should not be mapped into conversation members"
+    )
+  }
   const id =
     participant.actorId ||
     participant.remoteAgentId ||
@@ -668,14 +673,7 @@ function toConversationMember(
 
   return {
     participantId: participant.participantId,
-    type:
-      participant.participantType === "workspace_member"
-        ? "workspace_member"
-        : participant.participantType === "remote_agent"
-          ? "remote_agent"
-          : participant.participantType === "external"
-            ? "external"
-            : "actor",
+    participantType: participant.participantType,
     id,
     workspaceMemberId: participant.workspaceMemberId,
     remoteAgentId: participant.remoteAgentId,
@@ -749,7 +747,8 @@ function rawConversationToSummary(
   snapshot: ChatWorkspaceSnapshot
 ): ConversationSummary {
   const activeParticipants = conversation.participants.filter(
-    (participant) => participant.state === "active"
+    (participant) =>
+      participant.state === "active" && participant.participantType !== "system"
   )
   const title = getConversationDisplayName(
     conversation,
@@ -1063,7 +1062,7 @@ function applyRuntimeToConversationMembers(
   return {
     ...conversation,
     members: conversation.members.map((member) =>
-      member.type === "actor" && member.id === runtime.actorId
+      member.participantType === "actor" && member.id === runtime.actorId
         ? { ...member, sessionStatus: runtime.laneState }
         : member
     ),
@@ -1075,7 +1074,7 @@ function deriveConversationStatus(
   runtimesForConversation?: Record<string, ActorRuntimeState>
 ) {
   const actorMembers = conversation.members.filter(
-    (member) => member.type === "actor"
+    (member) => member.participantType === "actor"
   )
   if (actorMembers.length === 0) return "completed" as const
   const hasOpenLane = actorMembers.some((member) => {

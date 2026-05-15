@@ -1,6 +1,12 @@
 import Feather from "@expo/vector-icons/Feather"
 import { useRouter } from "expo-router"
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
+import {
+  CONTACT_TARGET_TYPE,
+  CONVERSATION_KIND,
+  IDENTITY_SEARCH_MATCH_STATE,
+  IDENTITY_SEARCH_OUTCOME,
+} from "@shared"
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native"
 
 import {
@@ -65,11 +71,11 @@ function buildSearchDetailParams(match: IdentitySearchMatchView) {
 
 function friendStateLabel(match: IdentitySearchMatchView) {
   switch (match.state) {
-    case "same_workspace_member":
+    case IDENTITY_SEARCH_MATCH_STATE.SAME_WORKSPACE_MEMBER:
       return "同 workspace 用户"
-    case "friend":
+    case IDENTITY_SEARCH_MATCH_STATE.FRIEND:
       return "已是好友"
-    case "pending_request":
+    case IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST:
       return "好友申请待处理"
     default:
       return "可发起好友申请"
@@ -126,13 +132,13 @@ export default function GlobalSearchScreen() {
       .then((result) => {
         if (!active) return
         setIdentityResults(result)
-        if (result.outcome === "invalid") {
+        if (result.outcome === IDENTITY_SEARCH_OUTCOME.INVALID) {
           setFriendIdMessage(
             "好友 ID 需为 4-32 位，只能包含字母、数字、点、下划线或短横线。"
           )
-        } else if (result.outcome === "not_found") {
+        } else if (result.outcome === IDENTITY_SEARCH_OUTCOME.NOT_FOUND) {
           setFriendIdMessage("没有匹配的好友 ID。")
-        } else if (result.outcome === "self") {
+        } else if (result.outcome === IDENTITY_SEARCH_OUTCOME.SELF) {
           setFriendIdMessage("这是你自己的好友 ID。")
         } else {
           setFriendIdMessage(null)
@@ -243,7 +249,11 @@ export default function GlobalSearchScreen() {
                       </Text>
                     </View>
                     <Pill
-                      label={conversation.kind === "private" ? "单聊" : "群聊"}
+                      label={
+                        conversation.kind === CONVERSATION_KIND.PRIVATE
+                          ? "单聊"
+                          : "群聊"
+                      }
                     />
                   </Pressable>
                 ))}
@@ -288,7 +298,11 @@ export default function GlobalSearchScreen() {
                     <Avatar
                       name={entry.title}
                       uri={entry.avatarUrl}
-                      icon={entry.targetType === "actor" ? "cpu" : "user"}
+                      icon={
+                        entry.targetType === CONTACT_TARGET_TYPE.ACTOR
+                          ? "cpu"
+                          : "user"
+                      }
                       size={44}
                     />
                     <View style={styles.rowBody}>

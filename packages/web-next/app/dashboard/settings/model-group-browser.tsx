@@ -2,25 +2,17 @@
 
 import { useDeferredValue, useEffect, useMemo, useState } from "react"
 import {
+  MODEL_GROUP_OWNER_TYPE,
   getDefaultModelBaseUrl,
   getDefaultModelEngineKind,
   getDefaultModelName,
   getModelProviderEngineDefinitions,
   listModelProviderDefinitions,
   providerSupportsBuiltinTools,
+  type ModelGroupOwnerType,
+  type ModelGroupRoutingStrategy,
 } from "@synapse/shared"
-import {
-  Building2,
-  Cpu,
-  Globe2,
-  Plus,
-  RefreshCw,
-  Save,
-  Search,
-  Star,
-  Trash2,
-  UserRound,
-} from "lucide-react"
+import { Cpu, Plus, RefreshCw, Save, Search, Star, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { useWorkspace } from "../workspace-provider"
@@ -45,18 +37,22 @@ import {
   getModelConfigValidationMessage,
   getSaveErrorMessage,
 } from "./model-config-utils"
-
-type ModelGroupScope = "workspace" | "platform" | "workspace_member"
+import {
+  getModelGroupScopeMeta,
+  getModelGroupStrategyLabel,
+  resolveModelGroupScope,
+  type ModelGroupScope,
+} from "./model-group-shared"
 
 type ModelGroupSummary = {
   id: string
   workspace_id: string | null
-  owner_type?: "platform" | "workspace" | "workspace_member"
+  owner_type?: ModelGroupOwnerType
   owner_workspace_id?: string | null
   owner_workspace_member_id?: string | null
   name: string
   description: string
-  routing_strategy: string
+  routing_strategy: ModelGroupRoutingStrategy
   is_default: boolean
   is_active?: boolean
   created_at: string
@@ -122,56 +118,6 @@ const MULTIMODAL_TYPES = [
 
 const PROVIDER_OPTIONS = listModelProviderDefinitions()
 
-function resolveScope(group: ModelGroupSummary): ModelGroupScope {
-  if (
-    group.owner_type === "platform" ||
-    (!group.owner_type && !group.workspace_id)
-  ) {
-    return "platform"
-  }
-  if (group.owner_type === "workspace_member") {
-    return "workspace_member"
-  }
-  return "workspace"
-}
-
-function strategyLabel(value: string) {
-  switch (value) {
-    case "weighted_random":
-      return "Weighted Random"
-    case "round_robin":
-      return "Round Robin"
-    case "priority_failover":
-      return "Priority Failover"
-    default:
-      return value
-  }
-}
-
-function scopeVisual(scope: ModelGroupScope) {
-  switch (scope) {
-    case "platform":
-      return {
-        label: "Platform",
-        icon: Globe2,
-        badgeClassName: "bg-blue-500/10 text-blue-400 border-blue-500/20",
-      }
-    case "workspace_member":
-      return {
-        label: "Member",
-        icon: UserRound,
-        badgeClassName: "bg-violet-500/10 text-violet-400 border-violet-500/20",
-      }
-    default:
-      return {
-        label: "Workspace",
-        icon: Building2,
-        badgeClassName:
-          "bg-emerald-500/10 text-emerald-400 border-emerald-500/20",
-      }
-  }
-}
-
 function createFormState(item?: ModelItem | null): ModelItemFormState {
   const extraConfig = (item?.extra_config || {}) as Record<string, any>
   const multimodal = extraConfig.multimodal || {}
@@ -208,10 +154,10 @@ async function fetchGroupDetail(
   groupId: string,
   workspaceId: string | null
 ) {
-  if (scope === "platform") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
     return api.getPlatformModelGroup(groupId)
   }
-  if (scope === "workspace_member") {
+  if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
     if (!workspaceId) {
       throw new Error("Workspace is required")
     }
@@ -232,8 +178,8 @@ function GroupListItem({
   selected: boolean
   onSelect: () => void
 }) {
-  const resolvedScope = resolveScope(group)
-  const scopeMeta = scopeVisual(resolvedScope)
+  const resolvedScope = resolveModelGroupScope(group)
+  const scopeMeta = getModelGroupScopeMeta(resolvedScope)
   const ScopeIcon = scopeMeta.icon
 
   return (
@@ -267,7 +213,7 @@ function GroupListItem({
             </Badge>
           </div>
           <div className="mt-1 text-sm text-muted-foreground">
-            {strategyLabel(group.routing_strategy)}
+            {getModelGroupStrategyLabel(group.routing_strategy)}
           </div>
           {group.description ? (
             <div className="mt-1 truncate text-sm text-muted-foreground">
@@ -388,7 +334,7 @@ export default function ModelGroupBrowser({
   )
 
   async function loadGroups() {
-    if (scope === "workspace" && !workspaceId) {
+    if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE && !workspaceId) {
       return
     }
 
@@ -396,16 +342,17 @@ export default function ModelGroupBrowser({
     try {
       let nextGroups: ModelGroupSummary[] = []
 
-      if (scope === "platform") {
+      if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
         const response = await api.getPlatformModelGroups()
         nextGroups = response.groups || []
-      } else if (scope === "workspace_member") {
+      } else if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
         const response = await api.getWorkspaceMemberModelGroups(workspaceId!)
         nextGroups = response.groups || []
       } else {
         const response = await api.getModelGroups(workspaceId!)
         nextGroups = (response.groups || []).filter(
-          (group: ModelGroupSummary) => resolveScope(group) === "workspace"
+          (group: ModelGroupSummary) =>
+            resolveModelGroupScope(group) === MODEL_GROUP_OWNER_TYPE.WORKSPACE
         )
       }
 
@@ -480,9 +427,9 @@ export default function ModelGroupBrowser({
   }, [deferredGroupSearch, groups])
 
   const emptyLabel =
-    scope === "platform"
+    scope === MODEL_GROUP_OWNER_TYPE.PLATFORM
       ? "No platform model groups configured"
-      : scope === "workspace_member"
+      : scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER
         ? "No member model groups configured"
         : "No workspace model groups configured"
 
@@ -501,9 +448,9 @@ export default function ModelGroupBrowser({
     if (!selectedGroup || !currentItem) return
 
     try {
-      if (scope === "platform") {
+      if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
         await api.deletePlatformModelItem(selectedGroup.id, currentItem.id)
-      } else if (scope === "workspace_member") {
+      } else if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
         await api.deleteWorkspaceMemberModelItem(
           workspaceId!,
           selectedGroup.id,
@@ -566,13 +513,13 @@ export default function ModelGroupBrowser({
         if (itemDraft.baseUrl.trim()) payload.baseUrl = itemDraft.baseUrl.trim()
         if (itemDraft.apiKey.trim()) payload.apiKey = itemDraft.apiKey.trim()
 
-        if (scope === "platform") {
+        if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
           await api.updatePlatformModelItem(
             selectedGroup.id,
             currentItem.id,
             payload
           )
-        } else if (scope === "workspace_member") {
+        } else if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
           await api.updateWorkspaceMemberModelItem(
             workspaceId!,
             selectedGroup.id,
@@ -604,9 +551,9 @@ export default function ModelGroupBrowser({
         }
 
         let response
-        if (scope === "platform") {
+        if (scope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
           response = await api.addPlatformModelItem(selectedGroup.id, payload)
-        } else if (scope === "workspace_member") {
+        } else if (scope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
           response = await api.addWorkspaceMemberModelItem(
             workspaceId!,
             selectedGroup.id,
@@ -712,7 +659,9 @@ export default function ModelGroupBrowser({
                   </div>
                   <div className="mt-1 flex flex-wrap items-center gap-2">
                     <Badge variant="secondary">
-                      {strategyLabel(selectedGroup.routing_strategy)}
+                      {getModelGroupStrategyLabel(
+                        selectedGroup.routing_strategy
+                      )}
                     </Badge>
                     {selectedGroup.is_default ? (
                       <Badge variant="outline">Default</Badge>
@@ -1202,7 +1151,9 @@ export default function ModelGroupBrowser({
                             Strategy
                           </span>
                           <span className="font-medium text-foreground">
-                            {strategyLabel(selectedGroup.routing_strategy)}
+                            {getModelGroupStrategyLabel(
+                              selectedGroup.routing_strategy
+                            )}
                           </span>
                         </div>
                         <Separator />

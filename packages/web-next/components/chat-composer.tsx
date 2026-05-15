@@ -12,11 +12,13 @@ import {
 } from "react"
 import { Extension } from "@tiptap/core"
 import {
+  CONVERSATION_PARTICIPANT_TYPE,
   fileRefBlock,
   mentionBlock,
   textBlock,
   type CanonicalContentBlock,
   type ConversationEntityRef,
+  type ConversationParticipantType,
   type ConversationReplyRef,
   type FileRecordView,
 } from "@synapse/shared"
@@ -70,7 +72,13 @@ const ATTACHMENT_SUGGESTION_KEY = new PluginKey("chat-composer-attachments")
 const EMOJI_SUGGESTION_KEY = new PluginKey("chat-composer-emojis")
 
 type SuggestionTrigger = "@" | "#" | ":"
-type MentionTargetType = "participant" | "actor" | "attachment"
+export const CHAT_COMPOSER_MENTION_TARGET_TYPE = {
+  PARTICIPANT: "participant",
+  ACTOR: "actor",
+  ATTACHMENT: "attachment",
+} as const
+type MentionTargetType =
+  (typeof CHAT_COMPOSER_MENTION_TARGET_TYPE)[keyof typeof CHAT_COMPOSER_MENTION_TARGET_TYPE]
 
 type PendingAttachmentStatus = "uploading" | "uploaded" | "failed"
 
@@ -112,7 +120,7 @@ type ComposerSuggestionItem = {
   emoji?: string
   inGroup?: boolean
   native?: string
-  participantType?: ChatComposerParticipant["type"]
+  participantType?: ChatComposerParticipant["participantType"]
   participantId?: string
   actorId?: string
   workspaceMemberId?: string
@@ -131,8 +139,14 @@ type SuggestionListHandle = {
 export type ChatComposerParticipant = {
   id: string
   name: string
-  type: "actor" | "remote_agent" | "workspace_member" | "external"
-  targetType?: "actor" | "participant"
+  participantType: Exclude<
+    ConversationParticipantType,
+    typeof CONVERSATION_PARTICIPANT_TYPE.SYSTEM
+  >
+  targetType?: Exclude<
+    MentionTargetType,
+    typeof CHAT_COMPOSER_MENTION_TARGET_TYPE.ATTACHMENT
+  >
   inGroup?: boolean
   role?: string
   title?: string
@@ -298,7 +312,9 @@ function filterParticipants(
     .map((participant) => {
       const targetType =
         participant.targetType ||
-        (participant.type === "actor" ? "actor" : "participant")
+        (participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+          ? CHAT_COMPOSER_MENTION_TARGET_TYPE.ACTOR
+          : CHAT_COMPOSER_MENTION_TARGET_TYPE.PARTICIPANT)
 
       return {
         id: participant.id,
@@ -307,16 +323,20 @@ function filterParticipants(
         trigger: "@",
         kind: "participant" as const,
         targetType,
-        participantType: participant.type,
+        participantType: participant.participantType,
         avatarUrl: participant.avatarUrl,
         emoji: participant.emoji,
         inGroup: participant.inGroup,
         participantId:
           participant.participantId ||
-          (targetType === "participant" ? participant.id : undefined),
+          (targetType === CHAT_COMPOSER_MENTION_TARGET_TYPE.PARTICIPANT
+            ? participant.id
+            : undefined),
         actorId:
           participant.actorId ||
-          (participant.type === "actor" ? participant.id : undefined),
+          (participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+            ? participant.id
+            : undefined),
         workspaceMemberId: participant.workspaceMemberId,
         externalUserKey: participant.externalUserKey,
         transportAddressId: participant.transportAddressId,
@@ -362,12 +382,15 @@ function collectComposerDraftState(
     const attrs = node.attrs as ComposerMentionNodeAttrs
     if (!attrs.id) return true
 
-    if (attrs.targetType === "actor" || attrs.targetType === "participant") {
+    if (
+      attrs.targetType === CHAT_COMPOSER_MENTION_TARGET_TYPE.ACTOR ||
+      attrs.targetType === CHAT_COMPOSER_MENTION_TARGET_TYPE.PARTICIPANT
+    ) {
       mentionCount += 1
       return true
     }
 
-    if (attrs.targetType === "attachment") {
+    if (attrs.targetType === CHAT_COMPOSER_MENTION_TARGET_TYPE.ATTACHMENT) {
       citedAttachmentIds.add(attrs.id)
     }
 
@@ -407,13 +430,17 @@ function buildMentionRef(
     ...(attrs.avatarEmoji ? { avatarEmoji: attrs.avatarEmoji } : {}),
   }
 
-  if (!mention.actorId && participantType === "actor" && attrs.id) {
+  if (
+    !mention.actorId &&
+    participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+    attrs.id
+  ) {
     mention.actorId = attrs.id
   }
 
   if (
     !mention.participantId &&
-    attrs.targetType === "participant" &&
+    attrs.targetType === CHAT_COMPOSER_MENTION_TARGET_TYPE.PARTICIPANT &&
     attrs.id
   ) {
     mention.participantId = attrs.id
@@ -455,7 +482,7 @@ function buildComposerContentBlocks(
       const attrs = node.attrs as ComposerMentionNodeAttrs
       const label = attrs.label?.trim() || attrs.id || "unknown"
 
-      if (attrs.targetType === "attachment") {
+      if (attrs.targetType === CHAT_COMPOSER_MENTION_TARGET_TYPE.ATTACHMENT) {
         appendText(`#${label}`)
         return
       }
@@ -500,7 +527,10 @@ function removeAttachmentMentions(
     if (node.type.name !== "mention") return true
 
     const attrs = node.attrs as ComposerMentionNodeAttrs
-    if (attrs.targetType === "attachment" && attrs.id === attachmentId) {
+    if (
+      attrs.targetType === CHAT_COMPOSER_MENTION_TARGET_TYPE.ATTACHMENT &&
+      attrs.id === attachmentId
+    ) {
       positions.push({ from: pos, to: pos + node.nodeSize })
     }
 
@@ -598,7 +628,10 @@ const ComposerSuggestionList = forwardRef<
                   name={item.label}
                   avatarUrl={item.avatarUrl}
                   emoji={item.emoji}
-                  entityType={item.participantType || "workspace_member"}
+                  entityType={
+                    item.participantType ||
+                    CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+                  }
                   size="sm"
                 />
               ) : item.kind === "emoji" ? (
@@ -708,7 +741,7 @@ const ComposerMention = Mention.extend({
     return {
       ...this.parent?.(),
       targetType: {
-        default: "participant",
+        default: CHAT_COMPOSER_MENTION_TARGET_TYPE.PARTICIPANT,
         parseHTML: (element) => element.getAttribute("data-target-type"),
         renderHTML: (attributes) =>
           attributes.targetType
@@ -870,8 +903,11 @@ export default function ChatComposer({
               "@"
             const targetType =
               (node.attrs.targetType as MentionTargetType | undefined) ||
-              (trigger === "#" ? "attachment" : "participant")
-            const isAttachment = targetType === "attachment"
+              (trigger === "#"
+                ? CHAT_COMPOSER_MENTION_TARGET_TYPE.ATTACHMENT
+                : CHAT_COMPOSER_MENTION_TARGET_TYPE.PARTICIPANT)
+            const isAttachment =
+              targetType === CHAT_COMPOSER_MENTION_TARGET_TYPE.ATTACHMENT
 
             return [
               "span",

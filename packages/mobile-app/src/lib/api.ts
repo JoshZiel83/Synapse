@@ -40,6 +40,7 @@ import type {
   AuthQrLoginStatusResponse,
   AuthResponse,
   ContactHubDetailResponse,
+  ContactHubEntryView,
   ContactHubResponse,
   DirectConversationOpenResponse,
   FriendIdProfileView,
@@ -419,11 +420,7 @@ class ApiClient {
 
   getContactHubDetail(
     workspaceId: string,
-    contactKind:
-      | "workspace-actor"
-      | "workspace-member"
-      | "friend-actor"
-      | "friend-member",
+    contactKind: ContactHubEntryView["kind"],
     contactId: string
   ): Promise<ContactHubDetailResponse> {
     return this.request<ContactHubDetailResponse>(
@@ -476,11 +473,7 @@ class ApiClient {
   openDirectConversation(
     workspaceId: string,
     input: {
-      contactKind:
-        | "workspace-actor"
-        | "workspace-member"
-        | "friend-actor"
-        | "friend-member"
+      contactKind: ContactHubEntryView["kind"]
       contactId: string
     }
   ): Promise<DirectConversationOpenResponse> {

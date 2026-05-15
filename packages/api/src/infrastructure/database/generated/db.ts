@@ -574,7 +574,6 @@ export type RemoteAgentMachinesTrustStatus =
   | "revoked"
 
 export type RemoteAgentMessageDeliveriesStatus =
-  | "acked"
   | "completed"
   | "failed"
   | "pending"

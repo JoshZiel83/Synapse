@@ -176,7 +176,7 @@ export default function DashboardHomePage() {
       availableActors.map((actor) => ({
         id: actor.id,
         name: actor.name,
-        type: "actor",
+        participantType: "actor",
         targetType: "actor",
         actorId: actor.id,
         role: actor.role,

@@ -1,6 +1,12 @@
 "use client"
 
 import { useState, useEffect } from "react"
+import {
+  MODEL_GROUP_OWNER_TYPE,
+  MODEL_GROUP_ROUTING_STRATEGY,
+  type ModelGroupOwnerType,
+  type ModelGroupRoutingStrategy,
+} from "@synapse/shared"
 import { useWorkspace } from "../workspace-provider"
 import { api } from "@/lib/api"
 import { Button } from "@/components/ui/button"
@@ -14,38 +20,24 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
+import {
+  MODEL_GROUP_ROUTING_OPTIONS,
+  type ModelGroupScope,
+} from "./model-group-shared"
 
 interface ModelGroupDialogProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  scope?: "workspace" | "platform" | "workspace_member"
-  availableScopes?: Array<"workspace" | "platform" | "workspace_member">
+  scope?: ModelGroupScope
+  availableScopes?: ModelGroupScope[]
   group: any | null // null = create, object = edit
   onSaved: () => void
 }
 
-const STRATEGIES = [
-  {
-    value: "priority_failover",
-    label: "Priority Failover",
-    desc: "Use highest-priority model, fall back on failure",
-  },
-  {
-    value: "weighted_random",
-    label: "Weighted Random",
-    desc: "Randomly select by weight distribution",
-  },
-  {
-    value: "round_robin",
-    label: "Round Robin",
-    desc: "Cycle through models evenly",
-  },
-]
-
 export default function ModelGroupDialog({
   open,
   onOpenChange,
-  scope = "workspace",
+  scope = MODEL_GROUP_OWNER_TYPE.WORKSPACE,
   availableScopes,
   group,
   onSaved,
@@ -53,24 +45,26 @@ export default function ModelGroupDialog({
   const { workspaceId } = useWorkspace()
   const [name, setName] = useState("")
   const [description, setDescription] = useState("")
-  const [strategy, setStrategy] = useState("priority_failover")
+  const [strategy, setStrategy] = useState<ModelGroupRoutingStrategy>(
+    MODEL_GROUP_ROUTING_STRATEGY.PRIORITY_FAILOVER
+  )
   const [isDefault, setIsDefault] = useState(false)
-  const [selectedScope, setSelectedScope] = useState<
-    "workspace" | "platform" | "workspace_member"
-  >(scope)
+  const [selectedScope, setSelectedScope] = useState<ModelGroupOwnerType>(scope)
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
     if (group) {
       setName(group.name || "")
       setDescription(group.description || "")
-      setStrategy(group.routing_strategy || "priority_failover")
+      setStrategy(
+        group.routing_strategy || MODEL_GROUP_ROUTING_STRATEGY.PRIORITY_FAILOVER
+      )
       setIsDefault(group.is_default || false)
       setSelectedScope(scope)
     } else {
       setName("")
       setDescription("")
-      setStrategy("priority_failover")
+      setStrategy(MODEL_GROUP_ROUTING_STRATEGY.PRIORITY_FAILOVER)
       setIsDefault(false)
       setSelectedScope(availableScopes?.[0] || scope)
     }
@@ -78,7 +72,12 @@ export default function ModelGroupDialog({
 
   const handleSave = async () => {
     const effectiveScope = group ? scope : selectedScope
-    if ((!workspaceId && effectiveScope === "workspace") || !name.trim()) return
+    if (
+      (!workspaceId && effectiveScope === MODEL_GROUP_OWNER_TYPE.WORKSPACE) ||
+      !name.trim()
+    ) {
+      return
+    }
     setSaving(true)
     try {
       const data = {
@@ -87,13 +86,13 @@ export default function ModelGroupDialog({
         routingStrategy: strategy,
         isDefault,
       }
-      if (effectiveScope === "platform") {
+      if (effectiveScope === MODEL_GROUP_OWNER_TYPE.PLATFORM) {
         if (group) {
           await api.updatePlatformModelGroup(group.id, data)
         } else {
           await api.createPlatformModelGroup(data)
         }
-      } else if (effectiveScope === "workspace_member") {
+      } else if (effectiveScope === MODEL_GROUP_OWNER_TYPE.WORKSPACE_MEMBER) {
         if (group) {
           await api.updateWorkspaceMemberModelGroup(
             workspaceId!,
@@ -137,20 +136,15 @@ export default function ModelGroupDialog({
               <select
                 value={selectedScope}
                 onChange={(event) =>
-                  setSelectedScope(
-                    event.target.value as
-                      | "workspace"
-                      | "platform"
-                      | "workspace_member"
-                  )
+                  setSelectedScope(event.target.value as ModelGroupOwnerType)
                 }
                 className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm outline-none"
               >
                 {availableScopes?.map((option) => (
                   <option key={option} value={option}>
-                    {option === "workspace"
+                    {option === MODEL_GROUP_OWNER_TYPE.WORKSPACE
                       ? "Workspace"
-                      : option === "platform"
+                      : option === MODEL_GROUP_OWNER_TYPE.PLATFORM
                         ? "Platform"
                         : "Member"}
                   </option>
@@ -182,7 +176,7 @@ export default function ModelGroupDialog({
           <div className="space-y-2">
             <Label>Routing Strategy</Label>
             <div className="grid gap-2">
-              {STRATEGIES.map((s) => (
+              {MODEL_GROUP_ROUTING_OPTIONS.map((s) => (
                 <label
                   key={s.value}
                   className={`flex cursor-pointer items-start gap-3 rounded-lg border p-3 transition-all ${

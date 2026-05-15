@@ -1,6 +1,7 @@
 import Feather from "@expo/vector-icons/Feather"
 import { useRouter } from "expo-router"
 import { useDeferredValue, useEffect, useState } from "react"
+import { CONTACT_TARGET_TYPE, IDENTITY_SEARCH_MATCH_STATE } from "@shared"
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native"
 
 import {
@@ -36,17 +37,17 @@ function buildSearchDetailParams(match: IdentitySearchMatchView) {
 
 function requestStateLabel(match: IdentitySearchMatchView) {
   switch (match.state) {
-    case "same_workspace_member":
+    case IDENTITY_SEARCH_MATCH_STATE.SAME_WORKSPACE_MEMBER:
       return "同工作区成员"
-    case "friend":
-    case "existing":
+    case IDENTITY_SEARCH_MATCH_STATE.FRIEND:
+    case IDENTITY_SEARCH_MATCH_STATE.EXISTING:
       return "已建立关系"
-    case "pending_request":
-    case "pending_approval":
+    case IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST:
+    case IDENTITY_SEARCH_MATCH_STATE.PENDING_APPROVAL:
       return "等待处理"
-    case "approval_required":
+    case IDENTITY_SEARCH_MATCH_STATE.APPROVAL_REQUIRED:
       return "需要批准"
-    case "available":
+    case IDENTITY_SEARCH_MATCH_STATE.AVAILABLE:
       return "可直接发起"
     default:
       return "可发起连接"
@@ -66,8 +67,12 @@ export default function DiscoverContactsScreen() {
   const [message, setMessage] = useState<string | null>(null)
   const deferredSearch = useDeferredValue(search)
 
-  const actors = matches.filter((match) => match.targetType === "actor")
-  const members = matches.filter((match) => match.targetType === "member")
+  const actors = matches.filter(
+    (match) => match.targetType === CONTACT_TARGET_TYPE.ACTOR
+  )
+  const members = matches.filter(
+    (match) => match.targetType === CONTACT_TARGET_TYPE.MEMBER
+  )
 
   useEffect(() => {
     let cancelled = false
@@ -143,7 +148,11 @@ export default function DiscoverContactsScreen() {
       setMatches((current) =>
         current.map((item) =>
           item.profileId === match.profileId
-            ? { ...item, state: "pending_request", requestId: result.requestId }
+            ? {
+                ...item,
+                state: IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST,
+                requestId: result.requestId,
+              }
             : item
         )
       )
@@ -247,8 +256,10 @@ export default function DiscoverContactsScreen() {
                             ? "查看详情"
                             : submittingProfileId === actor.profileId
                               ? "处理中..."
-                              : actor.state === "pending_request" ||
-                                  actor.state === "pending_approval"
+                              : actor.state ===
+                                    IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST ||
+                                  actor.state ===
+                                    IDENTITY_SEARCH_MATCH_STATE.PENDING_APPROVAL
                                 ? "等待处理"
                                 : "发起连接"
                         }
@@ -256,8 +267,10 @@ export default function DiscoverContactsScreen() {
                         onPress={() => void handleRequest(actor)}
                         disabled={
                           !!submittingProfileId ||
-                          actor.state === "pending_request" ||
-                          actor.state === "pending_approval"
+                          actor.state ===
+                            IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST ||
+                          actor.state ===
+                            IDENTITY_SEARCH_MATCH_STATE.PENDING_APPROVAL
                         }
                         style={styles.actionButton}
                       />
@@ -312,8 +325,10 @@ export default function DiscoverContactsScreen() {
                             ? "查看详情"
                             : submittingProfileId === member.profileId
                               ? "处理中..."
-                              : member.state === "pending_request" ||
-                                  member.state === "pending_approval"
+                              : member.state ===
+                                    IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST ||
+                                  member.state ===
+                                    IDENTITY_SEARCH_MATCH_STATE.PENDING_APPROVAL
                                 ? "等待处理"
                                 : "发起连接"
                         }
@@ -321,8 +336,10 @@ export default function DiscoverContactsScreen() {
                         onPress={() => void handleRequest(member)}
                         disabled={
                           !!submittingProfileId ||
-                          member.state === "pending_request" ||
-                          member.state === "pending_approval"
+                          member.state ===
+                            IDENTITY_SEARCH_MATCH_STATE.PENDING_REQUEST ||
+                          member.state ===
+                            IDENTITY_SEARCH_MATCH_STATE.PENDING_APPROVAL
                         }
                         style={styles.actionButton}
                       />
