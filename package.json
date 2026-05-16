@@ -35,7 +35,6 @@
     "@types/react-dom": "^19.2.3"
   },
   "devDependencies": {
-    "@slock-ai/daemon": "^0.32.1",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
     "lint-staged": "^16.4.0",
