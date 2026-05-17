@@ -59,7 +59,8 @@ export function MobileLandingNav() {
 
           <div className="flex items-center gap-1.5">
             <Link
-              href="/"
+              href="/?desktop=1"
+              prefetch={false}
               className="flex items-center gap-1 rounded-full border border-slate-200/80 bg-white/70 px-2.5 py-1 text-[11px] text-slate-500 transition-colors active:bg-white"
               title="访问桌面版"
             >

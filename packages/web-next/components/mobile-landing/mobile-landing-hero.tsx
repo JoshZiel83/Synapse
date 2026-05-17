@@ -49,7 +49,7 @@ export function MobileLandingHero() {
           AI 协作运行时
         </m.div>
 
-        <div className="mt-4">
+        <div className="mt-4 [&>div]:!mt-0 [&>div]:!text-[clamp(1.5rem,8.5vw,2.8rem)]">
           <LandingHeroHeadline />
         </div>
 
