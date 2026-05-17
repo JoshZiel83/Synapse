@@ -1,6 +1,14 @@
 "use client"
 
-import { Boxes, LockKeyhole, PlugZap, ShieldCheck } from "lucide-react"
+import {
+  AppWindow,
+  Database,
+  FileText,
+  LockKeyhole,
+  PlugZap,
+  Search,
+  ShieldCheck,
+} from "lucide-react"
 
 import {
   MobileReveal,
@@ -32,24 +40,28 @@ const plugins = [
     summary: "网页搜索、文档读取、OCR",
     accent: "bg-sky-100 text-sky-900",
     meta: "官方维护",
+    icon: Search,
   },
   {
     name: "Browser Operator",
     summary: "让数字员工操作真实浏览器",
     accent: "bg-emerald-100 text-emerald-900",
     meta: "官方维护",
+    icon: AppWindow,
   },
   {
     name: "Docs Connector",
     summary: "文档、知识库、附件接入",
     accent: "bg-amber-100 text-amber-900",
     meta: "工作区常用",
+    icon: FileText,
   },
   {
     name: "SQL Access",
     summary: "受控读取结构化数据",
     accent: "bg-violet-100 text-violet-900",
     meta: "受控访问",
+    icon: Database,
   },
 ] as const
 
@@ -109,7 +121,7 @@ export function MobileLandingPlugins() {
                   <div
                     className={`flex size-8 items-center justify-center rounded-xl ${plugin.accent}`}
                   >
-                    <Boxes className="size-[14px]" />
+                    <plugin.icon className="size-[14px]" />
                   </div>
                   <span className="rounded-full border border-slate-200 bg-white px-1.5 py-0.5 text-[9px] leading-none text-slate-500">
                     {plugin.meta}
