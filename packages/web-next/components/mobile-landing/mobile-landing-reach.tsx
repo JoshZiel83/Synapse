@@ -4,7 +4,6 @@ import Image from "next/image"
 import { m } from "framer-motion"
 import {
   AppWindow,
-  CalendarDays,
   Database,
   Github,
   HardDrive,
