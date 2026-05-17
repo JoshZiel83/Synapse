@@ -15,6 +15,19 @@ const PROTECTED_PREFIXES = [
   "/platfrom",
 ]
 
+const MOBILE_UA_REGEX =
+  /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini|Mobile Safari|Mobile\/[\d.]+ Safari/i
+const TABLET_UA_REGEX = /iPad|Tablet/i
+
+function shouldRedirectToMobile(request: NextRequest) {
+  const { pathname, searchParams } = request.nextUrl
+  if (pathname !== "/") return false
+  if (searchParams.has("desktop")) return false
+  const userAgent = request.headers.get("user-agent") || ""
+  if (TABLET_UA_REGEX.test(userAgent)) return false
+  return MOBILE_UA_REGEX.test(userAgent)
+}
+
 function isProtectedPath(pathname: string) {
   return PROTECTED_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
@@ -42,6 +55,12 @@ async function hasValidSession(request: NextRequest) {
 
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl
+
+  if (shouldRedirectToMobile(request)) {
+    const redirectUrl = request.nextUrl.clone()
+    redirectUrl.pathname = "/m"
+    return NextResponse.redirect(redirectUrl)
+  }
 
   if (!isProtectedPath(pathname)) {
     return NextResponse.next()
