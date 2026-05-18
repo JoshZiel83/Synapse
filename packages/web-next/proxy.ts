@@ -19,13 +19,24 @@ const MOBILE_UA_REGEX =
   /Android|webOS|iPhone|iPod|BlackBerry|IEMobile|Opera Mini|Mobile Safari|Mobile\/[\d.]+ Safari/i
 const TABLET_UA_REGEX = /iPad|Tablet/i
 
+function isMobileUA(userAgent: string) {
+  if (!userAgent) return false
+  if (TABLET_UA_REGEX.test(userAgent)) return false
+  return MOBILE_UA_REGEX.test(userAgent)
+}
+
 function shouldRedirectToMobile(request: NextRequest) {
   const { pathname, searchParams } = request.nextUrl
   if (pathname !== "/") return false
   if (searchParams.has("desktop")) return false
-  const userAgent = request.headers.get("user-agent") || ""
-  if (TABLET_UA_REGEX.test(userAgent)) return false
-  return MOBILE_UA_REGEX.test(userAgent)
+  return isMobileUA(request.headers.get("user-agent") || "")
+}
+
+function shouldRedirectToDesktop(request: NextRequest) {
+  const { pathname, searchParams } = request.nextUrl
+  if (pathname !== "/m") return false
+  if (searchParams.has("mobile")) return false
+  return !isMobileUA(request.headers.get("user-agent") || "")
 }
 
 function isProtectedPath(pathname: string) {
@@ -59,6 +70,12 @@ export async function proxy(request: NextRequest) {
   if (shouldRedirectToMobile(request)) {
     const redirectUrl = request.nextUrl.clone()
     redirectUrl.pathname = "/m"
+    return NextResponse.redirect(redirectUrl)
+  }
+
+  if (shouldRedirectToDesktop(request)) {
+    const redirectUrl = request.nextUrl.clone()
+    redirectUrl.pathname = "/"
     return NextResponse.redirect(redirectUrl)
   }
 

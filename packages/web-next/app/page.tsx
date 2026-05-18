@@ -14,6 +14,7 @@ import { LandingShareNetworkSection } from "@/components/landing-share-network-s
 import { LandingSnapScrollController } from "@/components/landing-snap-scroll-controller"
 import { LandingTalentPoolSection } from "@/components/landing-talent-pool-section"
 import { LandingTeamGovernanceSection } from "@/components/landing-team-governance-section"
+import { DesktopMobileHint } from "@/components/desktop-mobile-hint"
 import { Button } from "@/components/ui/button"
 
 export const metadata: Metadata = {
@@ -168,6 +169,7 @@ export default function HomePage() {
           </LandingReveal>
         </section>
       </LandingMotionProvider>
+      <DesktopMobileHint />
     </main>
   )
 }
