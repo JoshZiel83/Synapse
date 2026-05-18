@@ -68,7 +68,6 @@ export function MobileLandingGovernance() {
       className="bg-[linear-gradient(180deg,rgba(247,250,255,0.55),rgba(255,255,255,0.96))]"
     >
       <MobileSectionHeader
-        eyebrow="治理"
         title="管理数字团队，像管理真实团队一样清楚"
         subtitle="个人 / 团队并行 · 权限可见 · 关键动作可追溯"
       />

@@ -72,7 +72,6 @@ export function MobileLandingPlugins() {
       className="bg-[linear-gradient(180deg,rgba(247,250,255,0.45),rgba(255,255,255,0.96))]"
     >
       <MobileSectionHeader
-        eyebrow="插件"
         title="插件先进入工作区，再交给角色"
         subtitle="搜索、安装、分配、授权同一个后台搞定"
       />

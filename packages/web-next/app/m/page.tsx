@@ -13,6 +13,18 @@ import { MobileLandingPlugins } from "@/components/mobile-landing/mobile-landing
 import { MobileLandingReach } from "@/components/mobile-landing/mobile-landing-reach"
 import { MobileLandingShare } from "@/components/mobile-landing/mobile-landing-share"
 import { MobileLandingTalent } from "@/components/mobile-landing/mobile-landing-talent"
+import { MobileSectionRail } from "@/components/mobile-landing/mobile-section-rail"
+
+const railSections = [
+  { id: "hero", title: "首页" },
+  { id: "collab", title: "协作" },
+  { id: "sharing", title: "共享" },
+  { id: "roles", title: "角色" },
+  { id: "plugins", title: "插件" },
+  { id: "reach", title: "执行" },
+  { id: "events", title: "事件" },
+  { id: "trust", title: "治理" },
+]
 
 export default function MobileHomePage() {
   return (
@@ -21,7 +33,9 @@ export default function MobileHomePage() {
 
       <LandingMotionProvider>
         <MobileLandingNav />
-        <MobileLandingHero />
+        <div id="hero">
+          <MobileLandingHero />
+        </div>
         <MobileLandingCollaboration />
         <MobileLandingShare />
         <MobileLandingTalent />
@@ -31,6 +45,7 @@ export default function MobileHomePage() {
         <MobileLandingGovernance />
         <MobileLandingTail />
         <MobileLandingStickyCta />
+        <MobileSectionRail sections={railSections} />
       </LandingMotionProvider>
     </main>
   )

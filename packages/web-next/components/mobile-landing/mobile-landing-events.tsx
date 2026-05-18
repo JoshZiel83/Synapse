@@ -55,7 +55,6 @@ export function MobileLandingEvents() {
   return (
     <MobileSection id="events">
       <MobileSectionHeader
-        eyebrow="事件"
         title="工作不一定从你开口开始"
         subtitle="Webhook、IM、定时与系统信号都能直接叫醒团队"
       />

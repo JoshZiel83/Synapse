@@ -43,7 +43,6 @@ export function MobileLandingShare() {
       <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-72 bg-[radial-gradient(120%_80%_at_50%_0%,rgba(56,189,248,0.12),transparent_60%)]" />
 
       <MobileSectionHeader
-        eyebrow="共享"
         title="像加同事一样，把 Agent 接进来"
         subtitle="共享的 Actor 能在群聊里申请授权"
       />

@@ -3,13 +3,10 @@
 import { useCallback, useEffect, useState } from "react"
 import useEmblaCarousel from "embla-carousel-react"
 import { m } from "framer-motion"
+import { ChevronLeft, ChevronRight } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import {
-  MobileReveal,
-  MobileSection,
-  MobileSectionHeader,
-} from "./mobile-landing-primitives"
+import { MobileSection, MobileSectionHeader } from "./mobile-landing-primitives"
 
 type Role = {
   name: string
@@ -134,13 +131,12 @@ export function MobileLandingTalent() {
   return (
     <MobileSection id="roles">
       <MobileSectionHeader
-        eyebrow="角色"
         title="按岗位搭团队，而不是堆一排 Bot"
-        subtitle="研究、写作、运营、客服等角色直接上岗，跟你的记忆持续成长"
+        subtitle="研究、写作、运营、客服等角色直接上岗，也支持自定义岗位"
       />
 
       <div className="relative -mx-5 mt-7">
-        <div className="overflow-hidden" ref={emblaRef}>
+        <div className="overflow-x-clip py-5" ref={emblaRef}>
           <div className="flex">
             {roles.map((role, idx) => (
               <div
@@ -199,7 +195,9 @@ export function MobileLandingTalent() {
           </div>
         </div>
 
-        <div className="mt-4 flex items-center justify-center gap-1.5">
+        <SwipeHint />
+
+        <div className="mt-2 flex items-center justify-center gap-1.5">
           {roles.map((role, idx) => (
             <button
               key={role.name}
@@ -216,14 +214,36 @@ export function MobileLandingTalent() {
           ))}
         </div>
       </div>
-
-      <MobileReveal
-        y={14}
-        delay={0.18}
-        className="mx-auto mt-6 max-w-md rounded-2xl border border-white/72 bg-white/72 p-3 text-center text-[11.5px] leading-[1.6] text-slate-500 backdrop-blur"
-      >
-        左右滑动浏览角色 · 后续支持自定义岗位
-      </MobileReveal>
     </MobileSection>
+  )
+}
+
+function SwipeHint() {
+  return (
+    <div
+      aria-hidden="true"
+      className="pointer-events-none mt-3 flex items-center justify-center gap-2 text-slate-400"
+    >
+      <m.span
+        animate={{ x: [-2, -6, -2] }}
+        transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+        className="inline-flex"
+      >
+        <ChevronLeft className="size-3.5" />
+      </m.span>
+      <m.span
+        initial={false}
+        animate={{ scale: [1, 1.05, 1], opacity: [0.6, 1, 0.6] }}
+        transition={{ duration: 1.8, repeat: Infinity, ease: "easeInOut" }}
+        className="block size-1.5 rounded-full bg-slate-400"
+      />
+      <m.span
+        animate={{ x: [2, 6, 2] }}
+        transition={{ duration: 1.6, repeat: Infinity, ease: "easeInOut" }}
+        className="inline-flex"
+      >
+        <ChevronRight className="size-3.5" />
+      </m.span>
+    </div>
   )
 }

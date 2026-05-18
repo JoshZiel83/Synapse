@@ -56,7 +56,6 @@ export function MobileLandingCollaboration() {
   return (
     <MobileSection id="collab">
       <MobileSectionHeader
-        eyebrow="协作"
         title="同一条群聊，就是同一个协作现场"
         subtitle="拉人、分工、交付、沉淀都发生在同一处"
       />
