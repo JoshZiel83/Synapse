@@ -1,3 +1,5 @@
+"use client"
+
 import {
   BookOpenText,
   BrainCircuit,
@@ -18,6 +20,7 @@ import {
 import { LandingReveal } from "@/components/landing-motion"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent } from "@/components/ui/card"
+import { LandingHeroCarousel } from "@/components/landing-hero-carousel"
 
 const participants = [
   { name: "Lin", tone: "bg-slate-950 text-white" },
@@ -287,7 +290,20 @@ export function LandingHeroStack() {
       <div className="animate-float-slow absolute top-10 left-10 size-36 rounded-full bg-sky-300/22 blur-3xl" />
       <div className="animate-float-slow absolute top-18 right-12 size-40 rounded-full bg-emerald-200/28 blur-3xl [animation-delay:1.1s]" />
 
-      <div className="relative mx-auto h-full max-w-6xl [perspective:2400px]">
+      {/* Stacked layout at lg+. Below lg the cards previously dog-piled
+          vertically; now we hand off to the carousel so they take less
+          space and read better. */}
+      <div className="lg:hidden">
+        <LandingHeroCarousel
+          slides={[
+            { id: "chat", node: <ChatSurface /> },
+            { id: "memory", node: <MemorySurface /> },
+            { id: "tools", node: <ToolSurface /> },
+          ]}
+        />
+      </div>
+
+      <div className="relative mx-auto hidden h-full max-w-6xl [perspective:2400px] lg:block">
         <div className="relative h-full min-h-[520px] sm:min-h-[620px] lg:min-h-[640px]">
           <div className="relative z-30 mx-auto max-w-4xl lg:absolute lg:top-8 lg:left-1/2 lg:mt-0 lg:w-[44%] lg:[transform:translate3d(-50%,0,90px)]">
             <LandingReveal delay={0.12} y={28} scale={0.985}>
