@@ -168,8 +168,9 @@ export default function HomePage() {
             </div>
           </LandingReveal>
         </section>
+
+        <DesktopMobileHint />
       </LandingMotionProvider>
-      <DesktopMobileHint />
     </main>
   )
 }

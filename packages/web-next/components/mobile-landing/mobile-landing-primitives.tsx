@@ -85,7 +85,7 @@ export function MobileSection({
     <section
       id={id}
       className={cn(
-        "relative scroll-mt-[calc(env(safe-area-inset-top)+4rem)] px-5 py-14",
+        "relative scroll-mt-[calc(env(safe-area-inset-top)+4rem)] px-5 py-14 pr-8",
         className
       )}
     >

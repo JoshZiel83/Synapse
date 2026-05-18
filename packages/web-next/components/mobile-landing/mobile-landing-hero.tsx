@@ -134,7 +134,7 @@ export function MobileLandingHero() {
   )
 
   return (
-    <section className="relative px-5 pt-[calc(env(safe-area-inset-top)+5.25rem)] pb-12">
+    <section className="relative px-5 pt-[calc(env(safe-area-inset-top)+5.25rem)] pr-8 pb-12">
       <div className="pointer-events-none absolute inset-x-0 top-0 -z-10 h-[28rem] bg-[radial-gradient(120%_85%_at_50%_0%,rgba(56,189,248,0.22),transparent_60%),radial-gradient(120%_60%_at_20%_28%,rgba(45,212,191,0.18),transparent_55%)]" />
 
       <div className="mx-auto max-w-md text-center">
@@ -148,7 +148,7 @@ export function MobileLandingHero() {
           AI 协作运行时
         </m.div>
 
-        <div className="mt-4 [&>div]:!mt-0 [&>div]:!text-[clamp(1.5rem,8.5vw,2.8rem)]">
+        <div className="mt-4 [&>div]:!mt-0 [&>div]:!text-[clamp(1.25rem,6.8vw,2.4rem)]">
           <LandingHeroHeadline />
         </div>
 
