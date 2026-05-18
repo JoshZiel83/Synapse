@@ -39,6 +39,7 @@ export function MobileLandingNav() {
   return (
     <>
       <header
+        data-mobile-nav=""
         className={`fixed inset-x-0 top-0 z-40 px-3 pt-[max(0.5rem,env(safe-area-inset-top))] transition-all duration-300 ${
           scrolled ? "pb-2" : "pb-3"
         }`}

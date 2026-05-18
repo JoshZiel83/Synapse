@@ -82,9 +82,13 @@ export function MobileSectionRail({ sections }: { sections: RailSection[] }) {
       if (!section) return
       const el = document.getElementById(section.id)
       if (!el) return
+      // Measure the sticky nav so the section header doesn't tuck under it.
+      const nav = document.querySelector<HTMLElement>("[data-mobile-nav]")
+      const headerHeight =
+        idx === 0 || !nav ? 0 : nav.getBoundingClientRect().bottom + 8
       const rect = el.getBoundingClientRect()
-      const top = rect.top + window.scrollY - 8
-      window.scrollTo({ top, behavior: "smooth" })
+      const top = rect.top + window.scrollY - headerHeight
+      window.scrollTo({ top: Math.max(top, 0), behavior: "smooth" })
     },
     [sections]
   )

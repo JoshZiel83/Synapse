@@ -1,6 +1,13 @@
 "use client"
 
-import { useCallback, useEffect, useMemo, useState } from "react"
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react"
 
 const headlineSteps = [
   { lead: "像", tail: "一样思考" },
@@ -23,11 +30,21 @@ function HumanMark() {
   )
 }
 
-function StaticChar({ char }: { char: string }) {
+function StaticChar({
+  char,
+  widthPx,
+}: {
+  char: string
+  widthPx: number | null
+}) {
   return (
     <span
       className="inline-flex items-center justify-center"
-      style={{ height: CHAR_HEIGHT, lineHeight: CHAR_HEIGHT }}
+      style={{
+        height: CHAR_HEIGHT,
+        lineHeight: CHAR_HEIGHT,
+        width: widthPx ? `${widthPx}px` : undefined,
+      }}
     >
       {char}
     </span>
@@ -38,10 +55,12 @@ function RollingChar({
   currentChar,
   nextChar,
   isAnimating,
+  widthPx,
 }: {
   currentChar: string
   nextChar: string
   isAnimating: boolean
+  widthPx: number | null
 }) {
   const offset = isAnimating ? `-${CHAR_HEIGHT}` : "0px"
 
@@ -51,7 +70,7 @@ function RollingChar({
       style={{
         height: CHAR_HEIGHT,
         lineHeight: CHAR_HEIGHT,
-        minWidth: "1em",
+        width: widthPx ? `${widthPx}px` : "1em",
       }}
     >
       <span
@@ -84,19 +103,22 @@ function HeadlineChar({
   currentChar,
   nextChar,
   isAnimating,
+  widthPx,
 }: {
   currentChar: string
   nextChar: string
   isAnimating: boolean
+  widthPx: number | null
 }) {
   if (currentChar === nextChar) {
-    return <StaticChar char={currentChar} />
+    return <StaticChar char={currentChar} widthPx={widthPx} />
   }
   return (
     <RollingChar
       currentChar={currentChar}
       nextChar={nextChar}
       isAnimating={isAnimating}
+      widthPx={widthPx}
     />
   )
 }
@@ -106,10 +128,75 @@ function getStepChars(stepIndex: number) {
   return [step.lead, ...Array.from(step.tail)]
 }
 
+const positionCharSets: string[][] = (() => {
+  const length = getStepChars(0).length
+  const sets: string[][] = []
+  for (let position = 0; position < length; position++) {
+    const seen = new Set<string>()
+    for (let stepIndex = 0; stepIndex < headlineSteps.length; stepIndex++) {
+      seen.add(getStepChars(stepIndex)[position])
+    }
+    sets.push(Array.from(seen))
+  }
+  return sets
+})()
+
+/**
+ * Measures the widest glyph at each position in the current font, so each
+ * rolling slot can be pinned to that width and won't shift as we cycle.
+ */
+function usePositionWidths() {
+  const probeRef = useRef<HTMLDivElement | null>(null)
+  const [widths, setWidths] = useState<number[] | null>(null)
+
+  useLayoutEffect(() => {
+    const node = probeRef.current
+    if (!node) return
+
+    const measure = () => {
+      const next: number[] = []
+      const groups = node.querySelectorAll<HTMLElement>("[data-position]")
+      groups.forEach((group) => {
+        let max = 0
+        group.querySelectorAll<HTMLElement>("[data-glyph]").forEach((glyph) => {
+          const rect = glyph.getBoundingClientRect()
+          if (rect.width > max) max = rect.width
+        })
+        next.push(Math.ceil(max + 0.5))
+      })
+      setWidths((prev) => {
+        if (
+          prev &&
+          prev.length === next.length &&
+          prev.every((value, idx) => value === next[idx])
+        ) {
+          return prev
+        }
+        return next
+      })
+    }
+
+    measure()
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure)
+      return () => window.removeEventListener("resize", measure)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(measure).catch(() => undefined)
+    }
+    return () => observer.disconnect()
+  }, [])
+
+  return { probeRef, widths }
+}
+
 export function LandingHeroHeadline() {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [nextIndex, setNextIndex] = useState(headlineSteps.length > 1 ? 1 : 0)
   const [isAnimating, setIsAnimating] = useState(false)
+  const { probeRef, widths } = usePositionWidths()
 
   useEffect(() => {
     if (headlineSteps.length < 2 || isAnimating) return
@@ -137,13 +224,16 @@ export function LandingHeroHeadline() {
         currentChar={currentChars[i]}
         nextChar={nextChars[i]}
         isAnimating={isAnimating}
+        widthPx={widths ? widths[i] : null}
       />
     ),
-    [currentChars, nextChars, isAnimating]
+    [currentChars, nextChars, isAnimating, widths]
   )
 
   return (
-    <div className="font-display animate-fade-up mt-6 text-[clamp(2rem,7vw,5rem)] leading-[0.96] font-semibold tracking-tight text-slate-950">
+    <div className="font-display animate-fade-up relative mt-6 text-[clamp(2rem,7vw,5rem)] leading-[0.96] font-semibold tracking-tight text-slate-950">
+      <ProbeStrip ref={probeRef} />
+
       <div className="inline-flex max-w-full flex-nowrap items-center justify-center gap-x-1 leading-none whitespace-nowrap sm:gap-x-1.5">
         <span>让 AI</span>
         <span className="inline-flex items-center text-primary">
@@ -154,6 +244,36 @@ export function LandingHeroHeadline() {
           {currentChars.slice(1).map((_, idx) => renderChar(idx + 1))}
         </span>
       </div>
+    </div>
+  )
+}
+
+const ProbeStrip = function ProbeStrip({
+  ref,
+}: {
+  ref: React.Ref<HTMLDivElement>
+}) {
+  return (
+    <div
+      ref={ref}
+      aria-hidden="true"
+      className="pointer-events-none invisible absolute -top-[9999px] left-0 inline-flex font-semibold"
+      style={{ font: "inherit" }}
+    >
+      {positionCharSets.map((chars, position) => (
+        <span key={position} data-position={position} className="inline-flex">
+          {chars.map((char) => (
+            <span
+              key={char}
+              data-glyph={char}
+              className="inline-flex items-center justify-center"
+              style={{ height: CHAR_HEIGHT, lineHeight: CHAR_HEIGHT }}
+            >
+              {char}
+            </span>
+          ))}
+        </span>
+      ))}
     </div>
   )
 }
