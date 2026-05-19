@@ -196,7 +196,3 @@ This repository currently ships with a self-hosting path centered on a single Ub
 - mobile web exported as static assets from `packages/mobile-app`
 
 See [`deploy.md`](deploy.md) for the production deployment path used in this repo.
-
-## License
-
-This repository is licensed under [CC BY-NC-SA 4.0](LICENSE). Review the license carefully before commercial use or redistribution.

@@ -200,7 +200,3 @@ npm run web
 - mobile web 由 `packages/mobile-app` 静态导出
 
 生产部署路径见 [`deploy.md`](deploy.md)。
-
-## 许可证
-
-本仓库使用 [CC BY-NC-SA 4.0](LICENSE) 协议。若涉及商用、再分发或二次发布，请先仔细阅读许可条款。

@@ -200,7 +200,3 @@ Hoy el repositorio trae una ruta de autoalojamiento pensada para una sola máqui
 - el mobile web exportado estáticamente desde `packages/mobile-app`
 
 Consulta [`deploy.md`](deploy.md) para el flujo de despliegue en producción usado por este repositorio.
-
-## Licencia
-
-Este repositorio se distribuye bajo [CC BY-NC-SA 4.0](LICENSE). Léela con atención antes de usarlo con fines comerciales o redistribuirlo.
