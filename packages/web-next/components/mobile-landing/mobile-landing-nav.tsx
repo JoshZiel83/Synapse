@@ -3,8 +3,10 @@
 import { useState, useEffect } from "react"
 import Image from "next/image"
 import Link from "next/link"
-import { Menu, X, MonitorSmartphone } from "lucide-react"
+import { Github, Menu, X, MonitorSmartphone } from "lucide-react"
 import { AnimatePresence, m } from "framer-motion"
+
+import { IS_REPO_LINK_MODE, SYNAPSE_REPO_URL } from "@/lib/repo-link-mode"
 
 const navItems = [
   { href: "#collab", label: "协作" },
@@ -119,20 +121,35 @@ export function MobileLandingNav() {
               ))}
             </ul>
             <div className="mt-2 flex gap-2 px-2 pt-1 pb-2">
-              <Link
-                href="/register"
-                onClick={() => setOpen(false)}
-                className="flex-1 rounded-full bg-slate-950 px-4 py-2.5 text-center text-sm font-medium text-white"
-              >
-                创建团队
-              </Link>
-              <Link
-                href="/login"
-                onClick={() => setOpen(false)}
-                className="flex-1 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-center text-sm font-medium text-slate-700"
-              >
-                登录
-              </Link>
+              {IS_REPO_LINK_MODE ? (
+                <a
+                  href={SYNAPSE_REPO_URL}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  onClick={() => setOpen(false)}
+                  className="flex flex-1 items-center justify-center gap-2 rounded-full bg-slate-950 px-4 py-2.5 text-center text-sm font-medium text-white"
+                >
+                  <Github className="size-4" />
+                  GitHub 开源仓库
+                </a>
+              ) : (
+                <>
+                  <Link
+                    href="/register"
+                    onClick={() => setOpen(false)}
+                    className="flex-1 rounded-full bg-slate-950 px-4 py-2.5 text-center text-sm font-medium text-white"
+                  >
+                    创建团队
+                  </Link>
+                  <Link
+                    href="/login"
+                    onClick={() => setOpen(false)}
+                    className="flex-1 rounded-full border border-slate-200 bg-white px-4 py-2.5 text-center text-sm font-medium text-slate-700"
+                  >
+                    登录
+                  </Link>
+                </>
+              )}
             </div>
           </m.nav>
         ) : null}

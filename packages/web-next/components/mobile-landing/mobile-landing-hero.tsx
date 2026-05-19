@@ -8,6 +8,7 @@ import {
   BookOpenText,
   ChevronRight,
   Database,
+  Github,
   Globe,
   LockKeyhole,
   ShieldCheck,
@@ -17,6 +18,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import { LandingHeroHeadline } from "@/components/landing-hero-headline"
+import { IS_REPO_LINK_MODE, SYNAPSE_REPO_URL } from "@/lib/repo-link-mode"
 
 const ease: [number, number, number, number] = [0.22, 1, 0.36, 1]
 
@@ -167,12 +169,24 @@ export function MobileLandingHero() {
           transition={{ duration: 0.55, delay: 0.28, ease }}
           className="mt-6 flex flex-col items-stretch gap-2"
         >
-          <Link
-            href="/register"
-            className="rounded-full bg-slate-950 px-5 py-3.5 text-[15px] font-semibold text-white shadow-[0_18px_32px_-16px_rgba(15,23,42,0.55)] transition-transform active:scale-[0.98]"
-          >
-            创建团队
-          </Link>
+          {IS_REPO_LINK_MODE ? (
+            <a
+              href={SYNAPSE_REPO_URL}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center justify-center gap-2 rounded-full bg-slate-950 px-5 py-3.5 text-[15px] font-semibold text-white shadow-[0_18px_32px_-16px_rgba(15,23,42,0.55)] transition-transform active:scale-[0.98]"
+            >
+              <Github className="size-4" />
+              GitHub 开源仓库
+            </a>
+          ) : (
+            <Link
+              href="/register"
+              className="rounded-full bg-slate-950 px-5 py-3.5 text-[15px] font-semibold text-white shadow-[0_18px_32px_-16px_rgba(15,23,42,0.55)] transition-transform active:scale-[0.98]"
+            >
+              创建团队
+            </Link>
+          )}
           <Link
             href="#trust"
             className="rounded-full border border-slate-200/90 bg-white/85 px-5 py-3.5 text-[15px] font-semibold text-slate-800 backdrop-blur transition-colors active:bg-white"

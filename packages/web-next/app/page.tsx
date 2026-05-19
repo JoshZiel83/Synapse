@@ -1,6 +1,7 @@
 import type { Metadata } from "next"
 import Image from "next/image"
 import Link from "next/link"
+import { Github } from "lucide-react"
 
 import { LandingCollaborationSection } from "@/components/landing-collaboration-section"
 import { LandingEventDrivenSection } from "@/components/landing-event-driven-section"
@@ -15,7 +16,9 @@ import { LandingSnapScrollController } from "@/components/landing-snap-scroll-co
 import { LandingTalentPoolSection } from "@/components/landing-talent-pool-section"
 import { LandingTeamGovernanceSection } from "@/components/landing-team-governance-section"
 import { DesktopMobileHint } from "@/components/desktop-mobile-hint"
+import { RepoLinkStaticRedirect } from "@/components/repo-link-static-redirect"
 import { Button } from "@/components/ui/button"
+import { IS_REPO_LINK_MODE, SYNAPSE_REPO_URL } from "@/lib/repo-link-mode"
 
 export const metadata: Metadata = {
   title: "把 AI 组织成团队",
@@ -26,6 +29,7 @@ export const metadata: Metadata = {
 export default function HomePage() {
   return (
     <main className="relative min-h-screen overflow-x-hidden bg-[linear-gradient(180deg,#f3f9ff_0%,#f6f8fb_36%,#ffffff_100%)] text-foreground">
+      <RepoLinkStaticRedirect page="desktop" />
       <LandingSnapScrollController />
       <LandingMotionProvider>
         <div className="pointer-events-none absolute inset-x-0 top-0 h-[42rem] bg-[radial-gradient(circle_at_top_left,rgba(45,212,191,0.18),transparent_34%),radial-gradient(circle_at_top_right,rgba(56,189,248,0.2),transparent_32%),linear-gradient(180deg,rgba(15,23,42,0.04),transparent_62%)]" />
@@ -109,9 +113,22 @@ export default function HomePage() {
                 className="animate-fade-up mt-8 flex flex-wrap items-center justify-center gap-3"
                 style={{ animationDelay: "240ms" }}
               >
-                <Button asChild size="lg">
-                  <Link href="/register">创建团队</Link>
-                </Button>
+                {IS_REPO_LINK_MODE ? (
+                  <Button asChild size="lg">
+                    <a
+                      href={SYNAPSE_REPO_URL}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                    >
+                      <Github data-icon="inline-start" className="size-4" />
+                      GitHub 开源仓库
+                    </a>
+                  </Button>
+                ) : (
+                  <Button asChild size="lg">
+                    <Link href="/register">创建团队</Link>
+                  </Button>
+                )}
                 <Button
                   asChild
                   size="lg"
@@ -159,9 +176,22 @@ export default function HomePage() {
               临时拼流程，让角色、记忆、资源授权、事件唤醒和执行环境都进入同一个中枢
             </p>
             <div className="mt-8 flex flex-wrap items-center justify-center gap-3">
-              <Button asChild size="lg">
-                <Link href="/register">创建团队</Link>
-              </Button>
+              {IS_REPO_LINK_MODE ? (
+                <Button asChild size="lg">
+                  <a
+                    href={SYNAPSE_REPO_URL}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    <Github data-icon="inline-start" className="size-4" />
+                    GitHub 开源仓库
+                  </a>
+                </Button>
+              ) : (
+                <Button asChild size="lg">
+                  <Link href="/register">创建团队</Link>
+                </Button>
+              )}
               <Button asChild size="lg" variant="outline">
                 <Link href="#trust">了解私有部署</Link>
               </Button>
