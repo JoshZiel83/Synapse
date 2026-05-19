@@ -1,11 +1,12 @@
 "use client"
 
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
-  type TransitionEvent,
 } from "react"
 
 const headlineSteps = [
@@ -17,104 +18,9 @@ const headlineSteps = [
 ] as const
 
 const IDLE_MS = 2100
-const TRANSITION_MS = 460
-const FALLBACK_HEIGHT = "1.24em"
-const rollingWordClass =
-  "box-border flex items-center justify-center whitespace-nowrap py-[0.06em] leading-[1.12]"
-
-function RollingWord({
-  currentWord,
-  nextWord,
-  minWidthClass,
-  isAnimating,
-  onTransitionEnd,
-}: {
-  currentWord: string
-  nextWord: string
-  minWidthClass: string
-  isAnimating: boolean
-  onTransitionEnd?: (event: TransitionEvent<HTMLSpanElement>) => void
-}) {
-  const currentProbeRef = useRef<HTMLSpanElement | null>(null)
-  const nextProbeRef = useRef<HTMLSpanElement | null>(null)
-  const [itemHeight, setItemHeight] = useState<number | null>(null)
-
-  useLayoutEffect(() => {
-    const currentNode = currentProbeRef.current
-    const nextNode = nextProbeRef.current
-    if (!currentNode || !nextNode) return
-
-    const updateHeight = () => {
-      const nextHeight = Math.ceil(
-        Math.max(
-          currentNode.getBoundingClientRect().height,
-          nextNode.getBoundingClientRect().height
-        )
-      )
-
-      if (nextHeight > 0) {
-        setItemHeight((previousHeight) =>
-          previousHeight === nextHeight ? previousHeight : nextHeight
-        )
-      }
-    }
-
-    updateHeight()
-
-    if (typeof ResizeObserver === "undefined") return
-
-    const observer = new ResizeObserver(updateHeight)
-    observer.observe(currentNode)
-    observer.observe(nextNode)
-    return () => observer.disconnect()
-  }, [currentWord, nextWord])
-
-  const windowHeight = itemHeight ? `${itemHeight}px` : FALLBACK_HEIGHT
-  const itemStyle = { height: windowHeight }
-  const offset = isAnimating ? `-${windowHeight}` : "0px"
-
-  return (
-    <span className={`relative inline-flex align-middle ${minWidthClass}`}>
-      <span
-        className="relative overflow-hidden"
-        style={{ height: windowHeight }}
-      >
-        <span
-          className="flex flex-col will-change-transform"
-          style={{
-            transform: `translate3d(0, ${offset}, 0)`,
-            transition: isAnimating
-              ? `transform ${TRANSITION_MS}ms cubic-bezier(0.77, 0, 0.18, 1)`
-              : "none",
-          }}
-          onTransitionEnd={onTransitionEnd}
-        >
-          <span className={rollingWordClass} style={itemStyle}>
-            {currentWord}
-          </span>
-          <span className={rollingWordClass} style={itemStyle}>
-            {nextWord}
-          </span>
-        </span>
-      </span>
-
-      <span
-        ref={currentProbeRef}
-        aria-hidden="true"
-        className={`pointer-events-none absolute top-0 left-0 -z-10 opacity-0 ${rollingWordClass}`}
-      >
-        {currentWord}
-      </span>
-      <span
-        ref={nextProbeRef}
-        aria-hidden="true"
-        className={`pointer-events-none absolute top-0 left-0 -z-10 opacity-0 ${rollingWordClass}`}
-      >
-        {nextWord}
-      </span>
-    </span>
-  )
-}
+const TRANSITION_MS = 480
+const TRANSITION_EASING = "cubic-bezier(0.77, 0, 0.18, 1)"
+const CHAR_HEIGHT = "1.12em"
 
 function HumanMark() {
   return (
@@ -124,61 +30,250 @@ function HumanMark() {
   )
 }
 
+function StaticChar({
+  char,
+  widthPx,
+}: {
+  char: string
+  widthPx: number | null
+}) {
+  return (
+    <span
+      className="inline-flex items-center justify-center"
+      style={{
+        height: CHAR_HEIGHT,
+        lineHeight: CHAR_HEIGHT,
+        width: widthPx ? `${widthPx}px` : undefined,
+      }}
+    >
+      {char}
+    </span>
+  )
+}
+
+function RollingChar({
+  currentChar,
+  nextChar,
+  isAnimating,
+  widthPx,
+}: {
+  currentChar: string
+  nextChar: string
+  isAnimating: boolean
+  widthPx: number | null
+}) {
+  const offset = isAnimating ? `-${CHAR_HEIGHT}` : "0px"
+
+  return (
+    <span
+      className="relative inline-block overflow-hidden align-baseline"
+      style={{
+        height: CHAR_HEIGHT,
+        lineHeight: CHAR_HEIGHT,
+        width: widthPx ? `${widthPx}px` : "1em",
+      }}
+    >
+      <span
+        className="flex flex-col will-change-transform"
+        style={{
+          transform: `translate3d(0, ${offset}, 0)`,
+          transition: isAnimating
+            ? `transform ${TRANSITION_MS}ms ${TRANSITION_EASING}`
+            : "none",
+        }}
+      >
+        <span
+          className="flex items-center justify-center"
+          style={{ height: CHAR_HEIGHT, lineHeight: CHAR_HEIGHT }}
+        >
+          {currentChar}
+        </span>
+        <span
+          className="flex items-center justify-center"
+          style={{ height: CHAR_HEIGHT, lineHeight: CHAR_HEIGHT }}
+        >
+          {nextChar}
+        </span>
+      </span>
+    </span>
+  )
+}
+
+function HeadlineChar({
+  currentChar,
+  nextChar,
+  isAnimating,
+  widthPx,
+}: {
+  currentChar: string
+  nextChar: string
+  isAnimating: boolean
+  widthPx: number | null
+}) {
+  if (currentChar === nextChar) {
+    return <StaticChar char={currentChar} widthPx={widthPx} />
+  }
+  return (
+    <RollingChar
+      currentChar={currentChar}
+      nextChar={nextChar}
+      isAnimating={isAnimating}
+      widthPx={widthPx}
+    />
+  )
+}
+
+function getStepChars(stepIndex: number) {
+  const step = headlineSteps[stepIndex]
+  return [step.lead, ...Array.from(step.tail)]
+}
+
+const positionCharSets: string[][] = (() => {
+  const length = getStepChars(0).length
+  const sets: string[][] = []
+  for (let position = 0; position < length; position++) {
+    const seen = new Set<string>()
+    for (let stepIndex = 0; stepIndex < headlineSteps.length; stepIndex++) {
+      seen.add(getStepChars(stepIndex)[position])
+    }
+    sets.push(Array.from(seen))
+  }
+  return sets
+})()
+
+/**
+ * Measures the widest glyph at each position in the current font, so each
+ * rolling slot can be pinned to that width and won't shift as we cycle.
+ */
+function usePositionWidths() {
+  const probeRef = useRef<HTMLDivElement | null>(null)
+  const [widths, setWidths] = useState<number[] | null>(null)
+
+  useLayoutEffect(() => {
+    const node = probeRef.current
+    if (!node) return
+
+    const measure = () => {
+      const next: number[] = []
+      const groups = node.querySelectorAll<HTMLElement>("[data-position]")
+      groups.forEach((group) => {
+        let max = 0
+        group.querySelectorAll<HTMLElement>("[data-glyph]").forEach((glyph) => {
+          const rect = glyph.getBoundingClientRect()
+          if (rect.width > max) max = rect.width
+        })
+        next.push(Math.ceil(max + 0.5))
+      })
+      setWidths((prev) => {
+        if (
+          prev &&
+          prev.length === next.length &&
+          prev.every((value, idx) => value === next[idx])
+        ) {
+          return prev
+        }
+        return next
+      })
+    }
+
+    measure()
+    if (typeof ResizeObserver === "undefined") {
+      window.addEventListener("resize", measure)
+      return () => window.removeEventListener("resize", measure)
+    }
+    const observer = new ResizeObserver(measure)
+    observer.observe(node)
+    if (document.fonts && document.fonts.ready) {
+      document.fonts.ready.then(measure).catch(() => undefined)
+    }
+    return () => observer.disconnect()
+  }, [])
+
+  return { probeRef, widths }
+}
+
 export function LandingHeroHeadline() {
   const [currentIndex, setCurrentIndex] = useState(0)
   const [nextIndex, setNextIndex] = useState(headlineSteps.length > 1 ? 1 : 0)
   const [isAnimating, setIsAnimating] = useState(false)
+  const { probeRef, widths } = usePositionWidths()
 
   useEffect(() => {
     if (headlineSteps.length < 2 || isAnimating) return
-
-    const timer = window.setTimeout(() => {
-      setIsAnimating(true)
-    }, IDLE_MS)
-
+    const timer = window.setTimeout(() => setIsAnimating(true), IDLE_MS)
     return () => window.clearTimeout(timer)
   }, [currentIndex, isAnimating])
 
-  const currentStep = headlineSteps[currentIndex]
-  const nextStep = headlineSteps[nextIndex]
+  useEffect(() => {
+    if (!isAnimating) return
+    const timer = window.setTimeout(() => {
+      setCurrentIndex(nextIndex)
+      setNextIndex((nextIndex + 1) % headlineSteps.length)
+      setIsAnimating(false)
+    }, TRANSITION_MS + 40)
+    return () => window.clearTimeout(timer)
+  }, [isAnimating, nextIndex])
 
-  const handleTransitionEnd = (event: TransitionEvent<HTMLSpanElement>) => {
-    if (
-      event.target !== event.currentTarget ||
-      event.propertyName !== "transform" ||
-      !isAnimating
-    ) {
-      return
-    }
+  const currentChars = useMemo(() => getStepChars(currentIndex), [currentIndex])
+  const nextChars = useMemo(() => getStepChars(nextIndex), [nextIndex])
 
-    setCurrentIndex(nextIndex)
-    setNextIndex((nextIndex + 1) % headlineSteps.length)
-    setIsAnimating(false)
-  }
+  const renderChar = useCallback(
+    (i: number) => (
+      <HeadlineChar
+        key={`${i}-${currentChars[i]}-${nextChars[i]}`}
+        currentChar={currentChars[i]}
+        nextChar={nextChars[i]}
+        isAnimating={isAnimating}
+        widthPx={widths ? widths[i] : null}
+      />
+    ),
+    [currentChars, nextChars, isAnimating, widths]
+  )
 
   return (
-    <div className="font-display animate-fade-up mt-6 text-[clamp(2rem,7vw,5rem)] leading-[0.96] font-semibold tracking-tight text-slate-950">
+    <div className="font-display animate-fade-up relative mt-6 text-[clamp(2rem,7vw,5rem)] leading-[0.96] font-semibold tracking-tight text-slate-950">
+      <ProbeStrip ref={probeRef} />
+
       <div className="inline-flex max-w-full flex-nowrap items-center justify-center gap-x-1 leading-none whitespace-nowrap sm:gap-x-1.5">
         <span>让 AI</span>
-        <span className="text-primary">
-          <RollingWord
-            currentWord={currentStep.lead}
-            nextWord={nextStep.lead}
-            minWidthClass="min-w-[1.15em]"
-            isAnimating={isAnimating}
-          />
+        <span className="inline-flex items-center text-primary">
+          {renderChar(0)}
         </span>
         <HumanMark />
-        <span className="text-primary">
-          <RollingWord
-            currentWord={currentStep.tail}
-            nextWord={nextStep.tail}
-            minWidthClass="min-w-[4.25em] sm:min-w-[4.9em]"
-            isAnimating={isAnimating}
-            onTransitionEnd={handleTransitionEnd}
-          />
+        <span className="inline-flex items-center text-primary">
+          {currentChars.slice(1).map((_, idx) => renderChar(idx + 1))}
         </span>
       </div>
+    </div>
+  )
+}
+
+const ProbeStrip = function ProbeStrip({
+  ref,
+}: {
+  ref: React.Ref<HTMLDivElement>
+}) {
+  return (
+    <div
+      ref={ref}
+      aria-hidden="true"
+      className="pointer-events-none invisible absolute -top-[9999px] left-0 inline-flex font-semibold"
+      style={{ font: "inherit" }}
+    >
+      {positionCharSets.map((chars, position) => (
+        <span key={position} data-position={position} className="inline-flex">
+          {chars.map((char) => (
+            <span
+              key={char}
+              data-glyph={char}
+              className="inline-flex items-center justify-center"
+              style={{ height: CHAR_HEIGHT, lineHeight: CHAR_HEIGHT }}
+            >
+              {char}
+            </span>
+          ))}
+        </span>
+      ))}
     </div>
   )
 }

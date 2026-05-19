@@ -2,6 +2,7 @@ import { NextResponse } from "next/server"
 import type { NextRequest } from "next/server"
 import { AUTH_SESSION_COOKIE_NAME, buildLoginRedirect } from "./lib/auth"
 import { buildApiProxyUrl } from "./lib/api-origin"
+import { isMobileUserAgent } from "./lib/is-mobile-user-agent"
 
 const PROTECTED_PREFIXES = [
   "/dashboard",
@@ -14,6 +15,20 @@ const PROTECTED_PREFIXES = [
   "/welcome",
   "/platfrom",
 ]
+
+function shouldRedirectToMobile(request: NextRequest) {
+  const { pathname, searchParams } = request.nextUrl
+  if (pathname !== "/") return false
+  if (searchParams.has("desktop")) return false
+  return isMobileUserAgent(request.headers.get("user-agent") || "")
+}
+
+function shouldRedirectToDesktop(request: NextRequest) {
+  const { pathname, searchParams } = request.nextUrl
+  if (pathname !== "/m") return false
+  if (searchParams.has("mobile")) return false
+  return !isMobileUserAgent(request.headers.get("user-agent") || "")
+}
 
 function isProtectedPath(pathname: string) {
   return PROTECTED_PREFIXES.some(
@@ -42,6 +57,18 @@ async function hasValidSession(request: NextRequest) {
 
 export async function proxy(request: NextRequest) {
   const { pathname, search } = request.nextUrl
+
+  if (shouldRedirectToMobile(request)) {
+    const redirectUrl = request.nextUrl.clone()
+    redirectUrl.pathname = "/m"
+    return NextResponse.redirect(redirectUrl)
+  }
+
+  if (shouldRedirectToDesktop(request)) {
+    const redirectUrl = request.nextUrl.clone()
+    redirectUrl.pathname = "/"
+    return NextResponse.redirect(redirectUrl)
+  }
 
   if (!isProtectedPath(pathname)) {
     return NextResponse.next()
