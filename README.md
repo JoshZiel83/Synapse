@@ -16,8 +16,8 @@
 
 <p align="center">
   <strong>English (US)</strong> ·
-  <a href="./README_CN.md">Chinese (Simplified)</a> ·
-  <a href="./README_ES.md">Spanish</a>
+  <a href="./README_CN.md">简体中文</a> ·
+  <a href="./README_ES.md">Español</a>
 </p>
 
 <p align="center">
