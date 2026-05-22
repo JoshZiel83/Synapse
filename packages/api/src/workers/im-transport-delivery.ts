@@ -288,8 +288,13 @@ export function startImTransportDeliveryWorker() {
         })
         return { success: true, reason: "not outbound" }
       }
-      if (link.deliveryStatus !== "pending") {
-        return { success: true, reason: "already processed" }
+      // Allow BullMQ retries: pending or failed are eligible to (re-)send.
+      // sent/skipped are terminal and short-circuit.
+      if (link.deliveryStatus === "sent" || link.deliveryStatus === "skipped") {
+        return {
+          success: true,
+          reason: `already ${link.deliveryStatus}`,
+        }
       }
       if (link.account.status !== "active") {
         await updateTransportMessageLinkStatus({
