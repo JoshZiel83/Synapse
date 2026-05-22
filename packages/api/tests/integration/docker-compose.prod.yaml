@@ -1,0 +1,52 @@
+name: synapse-canonical-content-blocks-prod
+
+# Worktree-isolated production-style stack for build/health verification.
+# Brings up the real Dockerfile.api image + isolated postgres + redis on
+# private ports, so we can verify the production build still works without
+# colliding with other worktrees' deploys.
+#
+# Reuses the test postgres/redis container names (synapse-cb-postgres-test /
+# synapse-cb-redis-test) by hostname inside the project's network. Bring up
+# the test stack first via scripts/up.sh.
+#
+# Usage:
+#   bash packages/api/tests/integration/scripts/up.sh
+#   docker compose -p synapse-canonical-content-blocks \
+#     -f packages/api/tests/integration/docker-compose.test.yaml \
+#     -f packages/api/tests/integration/docker-compose.prod.yaml \
+#     up -d --build api
+#   curl -sS http://127.0.0.1:38001/api/v1/health
+
+services:
+  api:
+    build:
+      context: ../../../..
+      dockerfile: infrastructure/Dockerfile.api
+    container_name: synapse-cb-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://synapse:test_password@postgres-test:5432/synapse_test
+      REDIS_URL: redis://redis-test:6379
+      JWT_SECRET: cb_test_jwt_secret_do_not_use_in_prod
+      JWT_REFRESH_SECRET: cb_test_jwt_refresh_secret_do_not_use_in_prod
+      APP_BASE_URL: http://127.0.0.1:38001
+      BASE_URL: http://127.0.0.1:38001
+      NODE_ENV: production
+      PORT: "3001"
+      HOST: "0.0.0.0"
+      PLATFORM_ADMIN_EMAILS: cb-demo@synapse.dev
+      STORAGE_DIR: /app/storage/files
+      MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: "false"
+      MEMORY_MODEL_CACHE_DIR: /app/storage/models/memory
+    ports:
+      - "127.0.0.1:38001:3001"
+    volumes:
+      - api_storage_cb:/app/storage
+    depends_on:
+      postgres-test:
+        condition: service_healthy
+      redis-test:
+        condition: service_healthy
+
+volumes:
+  api_storage_cb:

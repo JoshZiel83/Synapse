@@ -1,0 +1,50 @@
+name: synapse-canonical-content-blocks
+
+# Worktree-isolated test stack for canonical-content-blocks worktree.
+# Ports are NOT defaults (5432/6379) — they're 55433/56380 to avoid
+# conflicts with other worktrees on this shared machine.
+#
+# Run via:
+#   bash packages/api/tests/integration/scripts/up.sh
+#   bash packages/api/tests/integration/scripts/down.sh
+
+services:
+  postgres-test:
+    image: pgvector/pgvector:pg16
+    container_name: synapse-cb-postgres-test
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: synapse
+      POSTGRES_PASSWORD: test_password
+      POSTGRES_DB: synapse_test
+    ports:
+      - "127.0.0.1:55433:5432"
+    volumes:
+      - pgdata_cb_test:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synapse"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  redis-test:
+    image: redis:7-alpine
+    container_name: synapse-cb-redis-test
+    restart: unless-stopped
+    command:
+      - redis-server
+      - --appendonly
+      - "yes"
+    ports:
+      - "127.0.0.1:56380:6379"
+    volumes:
+      - redisdata_cb_test:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  pgdata_cb_test:
+  redisdata_cb_test:
