@@ -22,7 +22,7 @@ import { fileURLToPath } from "node:url"
 import { resolveRequiredSubprojectRoot } from "./lib/subprojects.mjs"
 
 const DEFAULT_NODE_VERSION = "24.14.1"
-const DEFAULT_PYTHON_VERSION = "3.14.1"
+const DEFAULT_PYTHON_VERSION = "3.13.10"
 const DEFAULT_PYTHON_STANDALONE_RELEASE = "20251202"
 const DEFAULT_WINDOWS_GIT_VERSION = "2.49.0.windows.1"
 const DEFAULT_FFMPEG_RELEASE_TAG = "n7.1-2"
@@ -49,7 +49,7 @@ const PYTHON_DISTRIBUTIONS = {
   },
   "darwin-amd64": {
     distribution: "x86_64-apple-darwin-install_only_stripped",
-    pipPlatform: "macosx_10_13_x86_64",
+    pipPlatform: "macosx_11_0_x86_64",
   },
   "darwin-arm64": {
     distribution: "aarch64-apple-darwin-install_only_stripped",
@@ -128,7 +128,7 @@ const PYTHON_REQUIREMENTS = [
   "lxml==6.0.2",
   "mutagen==1.47.0",
   "openpyxl==3.1.5",
-  "pandas==3.0.2",
+  "pandas==2.3.2",
   "pdfplumber==0.11.4",
   "Pillow==12.2.0",
   "pydub==0.25.1",
@@ -249,6 +249,28 @@ function getNativeTargetPlatform() {
     return ""
   }
   return `${os}-${arch}`
+}
+
+function pythonMajorMinor(version) {
+  return version.split(".").slice(0, 2).join(".")
+}
+
+function pythonAbiTag(version) {
+  return `cp${pythonMajorMinor(version).replace(".", "")}`
+}
+
+function addTargetPythonPipArgs(pipArgs, pythonVersion, pythonSpec) {
+  pipArgs.push(
+    "--only-binary=:all:",
+    "--implementation",
+    "cp",
+    "--python-version",
+    pythonMajorMinor(pythonVersion),
+    "--abi",
+    pythonAbiTag(pythonVersion),
+    "--platform",
+    pythonSpec.pipPlatform
+  )
 }
 
 function shortHash(value) {
@@ -632,9 +654,9 @@ async function installPythonPackages(
       "--implementation",
       "cp",
       "--python-version",
-      pythonVersion.split(".").slice(0, 2).join("."),
+      pythonMajorMinor(pythonVersion),
       "--abi",
-      `cp${pythonVersion.split(".").slice(0, 2).join("")}`,
+      pythonAbiTag(pythonVersion),
       "--platform",
       pythonSpec.pipPlatform,
       "--target",
@@ -1177,7 +1199,8 @@ async function installManagedPythonPackages(
   pythonVersion,
   targetDirectory,
   providers,
-  providerRoots
+  providerRoots,
+  nativePythonExecutable = ""
 ) {
   const pythonSpec = PYTHON_DISTRIBUTIONS[targetPlatform]
   if (!pythonSpec) {
@@ -1186,6 +1209,8 @@ async function installManagedPythonPackages(
 
   const hostPython =
     process.env.PYTHON || (process.platform === "win32" ? "python" : "python3")
+  const canRunTargetPython =
+    targetPlatform === getNativeTargetPlatform() && nativePythonExecutable
   for (const provider of providers) {
     if (
       provider.runtime?.type !== "python_package" ||
@@ -1200,6 +1225,10 @@ async function installManagedPythonPackages(
     console.log(
       `Installing ${provider.displayName} ${installSpec.version} for ${targetPlatform}`
     )
+    const pipPython =
+      installSpec.allowSourceDists && canRunTargetPython
+        ? nativePythonExecutable
+        : hostPython
     const pipArgs = [
       "-m",
       "pip",
@@ -1210,24 +1239,11 @@ async function installManagedPythonPackages(
       "--target",
       targetDirectory,
     ]
-    const shouldAllowSourceDists =
-      installSpec.allowSourceDists &&
-      targetPlatform === getNativeTargetPlatform()
-    if (!shouldAllowSourceDists) {
-      pipArgs.push(
-        "--only-binary=:all:",
-        "--implementation",
-        "cp",
-        "--python-version",
-        pythonVersion.split(".").slice(0, 2).join("."),
-        "--abi",
-        `cp${pythonVersion.split(".").slice(0, 2).join("")}`,
-        "--platform",
-        pythonSpec.pipPlatform
-      )
+    if (pipPython === hostPython) {
+      addTargetPythonPipArgs(pipArgs, pythonVersion, pythonSpec)
     }
     pipArgs.push(installSpec.installSpec)
-    await runCommand(hostPython, pipArgs, {
+    await runCommand(pipPython, pipArgs, {
       shell: process.platform === "win32",
     })
   }
@@ -1237,7 +1253,8 @@ async function installCliAnythingExtraPythonPackages(
   targetPlatform,
   pythonVersion,
   targetDirectory,
-  capabilities
+  capabilities,
+  nativePythonExecutable = ""
 ) {
   const pythonSpec = PYTHON_DISTRIBUTIONS[targetPlatform]
   if (!pythonSpec) {
@@ -1257,6 +1274,9 @@ async function installCliAnythingExtraPythonPackages(
 
   const hostPython =
     process.env.PYTHON || (process.platform === "win32" ? "python" : "python3")
+  const canRunTargetPython =
+    targetPlatform === getNativeTargetPlatform() && nativePythonExecutable
+  const pipPython = canRunTargetPython ? nativePythonExecutable : hostPython
   const pipArgs = [
     "-m",
     "pip",
@@ -1268,25 +1288,15 @@ async function installCliAnythingExtraPythonPackages(
     targetDirectory,
   ]
 
-  if (targetPlatform !== getNativeTargetPlatform()) {
-    pipArgs.push(
-      "--only-binary=:all:",
-      "--implementation",
-      "cp",
-      "--python-version",
-      pythonVersion.split(".").slice(0, 2).join("."),
-      "--abi",
-      `cp${pythonVersion.split(".").slice(0, 2).join("")}`,
-      "--platform",
-      pythonSpec.pipPlatform
-    )
+  if (pipPython === hostPython) {
+    addTargetPythonPipArgs(pipArgs, pythonVersion, pythonSpec)
   }
 
   pipArgs.push(...requirements)
   console.log(
     `Installing CLI-Anything extra Python packages for ${targetPlatform}: ${requirements.join(", ")}`
   )
-  await runCommand(hostPython, pipArgs, {
+  await runCommand(pipPython, pipArgs, {
     shell: process.platform === "win32",
   })
 }
@@ -1621,6 +1631,12 @@ async function main() {
       pythonExtractDir,
       pythonSpec.archiveType
     )
+    const {
+      executable: sourcePythonBinary,
+      runtimeRoot: pythonRuntimeRoot,
+      binaryRelativePath: pythonBinaryPathInsideRuntime,
+    } = await findPythonRuntime(pythonExtractDir, options.targetPlatform)
+    await ensureExists(sourcePythonBinary)
 
     console.log(
       `Installing bundled Python packages (${options.packageProfile})`
@@ -1635,13 +1651,15 @@ async function main() {
       options.pythonVersion,
       pythonPackageDir,
       managedProviderManifest,
-      providerRoots
+      providerRoots,
+      sourcePythonBinary
     )
     await installCliAnythingExtraPythonPackages(
       options.targetPlatform,
       options.pythonVersion,
       pythonPackageDir,
-      activeCliAnythingCapabilities
+      activeCliAnythingCapabilities,
+      sourcePythonBinary
     )
 
     const ffmpegDownloadPath = join(
@@ -1694,12 +1712,6 @@ async function main() {
       )
     }
 
-    const {
-      executable: sourcePythonBinary,
-      runtimeRoot: pythonRuntimeRoot,
-      binaryRelativePath: pythonBinaryPathInsideRuntime,
-    } = await findPythonRuntime(pythonExtractDir, options.targetPlatform)
-    await ensureExists(sourcePythonBinary)
     await copyDirectory(
       pythonRuntimeRoot,
       join(assetsDir, COMMANDLINE_PYTHON_HOME_DIR)

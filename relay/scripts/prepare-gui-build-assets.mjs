@@ -2,11 +2,15 @@
 
 import {
   cp,
+  chmod,
+  lstat,
   mkdir,
   readFile,
   readdir,
+  readlink,
   rm,
   stat,
+  symlink,
   writeFile,
 } from "node:fs/promises"
 import { tmpdir } from "node:os"
@@ -35,7 +39,7 @@ const runtimeOutput = args["runtime-output"]
 await mkdir(buildRoot, { recursive: true })
 await mkdir(windowsInstallerRoot, { recursive: true })
 
-await cp(
+await copyPath(
   join(repoRoot, "packages", "web-next", "public", "synapse.png"),
   join(buildRoot, "appicon.png"),
   { force: true }
@@ -227,7 +231,7 @@ async function stageRuntimeBundle(
   await mkdir(targetDir, { recursive: true })
 
   for (const entry of await readdir(sourceDir)) {
-    await cp(join(sourceDir, entry), join(targetDir, entry), {
+    await copyPath(join(sourceDir, entry), join(targetDir, entry), {
       recursive: true,
       force: true,
     })
@@ -255,4 +259,44 @@ async function readPreparedManifest(sourceDir, name) {
     )
   }
   return manifest
+}
+
+async function copyPath(source, target, options = {}) {
+  try {
+    await cp(source, target, options)
+    return
+  } catch (error) {
+    if (!["EACCES", "ENOTSUP", "EXDEV"].includes(error?.code)) {
+      throw error
+    }
+  }
+
+  await copyPathPortable(source, target, Boolean(options.force))
+}
+
+async function copyPathPortable(source, target, force) {
+  const metadata = await lstat(source)
+  if (force) {
+    await rm(target, { recursive: true, force: true })
+  }
+
+  if (metadata.isDirectory()) {
+    await mkdir(target, { recursive: true })
+    await chmod(target, metadata.mode & 0o777).catch(() => {})
+    for (const entry of await readdir(source)) {
+      await copyPathPortable(join(source, entry), join(target, entry), force)
+    }
+    return
+  }
+
+  await mkdir(dirname(target), { recursive: true })
+  if (metadata.isSymbolicLink()) {
+    const linkTarget = await readlink(source)
+    await symlink(linkTarget, target)
+    return
+  }
+
+  const data = await readFile(source)
+  await writeFile(target, data)
+  await chmod(target, metadata.mode & 0o777).catch(() => {})
 }

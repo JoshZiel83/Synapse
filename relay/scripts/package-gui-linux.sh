@@ -43,10 +43,12 @@ if [[ ! -f "$binary_path" ]]; then
 fi
 
 binary_path="$(cd "$(dirname "$binary_path")" && pwd)/$(basename "$binary_path")"
-portable_root="synapse-relay-gui-${suffix}-portable"
-portable_archive="synapse-relay-gui-${suffix}-portable.tar.gz"
-deb_output="synapse-relay-gui-${suffix}.deb"
-appimage_output="synapse-relay-gui-${suffix}.AppImage"
+output_root="$(pwd)"
+portable_name="synapse-relay-gui-${suffix}-portable"
+portable_root="${output_root}/${portable_name}"
+portable_archive="${output_root}/synapse-relay-gui-${suffix}-portable.tar.gz"
+deb_output="${output_root}/synapse-relay-gui-${suffix}.deb"
+appimage_output="${output_root}/synapse-relay-gui-${suffix}.AppImage"
 
 package_version="${version#v}"
 if [[ ! "$package_version" =~ ^[0-9] ]]; then
@@ -61,11 +63,27 @@ case "$suffix" in
     ;;
 esac
 
+icon_source="${repo_root}/packages/web-next/public/synapse.png"
+write_png_icon_256() {
+  local target="$1"
+  mkdir -p "$(dirname "$target")"
+  if command -v magick >/dev/null 2>&1; then
+    magick "$icon_source" -resize 256x256 "$target"
+    return 0
+  fi
+  if command -v convert >/dev/null 2>&1; then
+    convert "$icon_source" -resize 256x256 "$target"
+    return 0
+  fi
+  echo "ImageMagick is required to prepare a 256x256 Linux package icon" >&2
+  exit 1
+}
+
 rm -rf "$portable_root"
 mkdir -p "$portable_root"
 install -m 0755 "$binary_path" "$portable_root/synapse-relay-gui"
 node "${repo_root}/relay/scripts/prepare-gui-build-assets.mjs" --runtime-output="${portable_root}/runtime"
-tar -czf "$portable_archive" "$portable_root"
+tar -czf "$portable_archive" -C "$output_root" "$portable_name"
 
 work_dir="$(mktemp -d)"
 cleanup() {
@@ -83,7 +101,7 @@ mkdir -p \
   "${deb_root}/DEBIAN"
 install -m 0755 "$binary_path" "${install_root}/synapse-relay-gui"
 node "${repo_root}/relay/scripts/prepare-gui-build-assets.mjs" --runtime-output="${install_root}/runtime"
-install -m 0644 "${repo_root}/packages/web-next/public/synapse.png" "${deb_root}/usr/share/icons/hicolor/256x256/apps/synapse-relay-gui.png"
+write_png_icon_256 "${deb_root}/usr/share/icons/hicolor/256x256/apps/synapse-relay-gui.png"
 ln -s /opt/synapse-relay-gui/synapse-relay-gui "${deb_root}/usr/bin/synapse-relay-gui"
 
 cat >"${deb_root}/usr/share/applications/synapse-relay-gui.desktop" <<'EOF'
@@ -116,11 +134,9 @@ mkdir -p \
   "${appdir}/usr/bin" \
   "${appdir}/usr/lib/synapse-relay-gui" \
   "${appdir}/usr/share/applications" \
-  "${appdir}/usr/share/icons/hicolor/256x256/apps" \
-  "${appdir}/usr/share/metainfo"
+  "${appdir}/usr/share/icons/hicolor/256x256/apps"
 install -m 0755 "$binary_path" "${appdir}/usr/bin/synapse-relay-gui-bin"
-node "${repo_root}/relay/scripts/prepare-gui-build-assets.mjs" --runtime-output="${appdir}/usr/lib/synapse-relay-gui/runtime"
-install -m 0644 "${repo_root}/packages/web-next/public/synapse.png" "${appdir}/usr/share/icons/hicolor/256x256/apps/synapse-relay-gui.png"
+write_png_icon_256 "${appdir}/usr/share/icons/hicolor/256x256/apps/synapse-relay-gui.png"
 
 cat >"${appdir}/usr/share/applications/synapse-relay-gui.desktop" <<'EOF'
 [Desktop Entry]
@@ -134,32 +150,29 @@ Terminal=false
 StartupWMClass=Synapse Relay
 EOF
 
-cat >"${appdir}/usr/share/metainfo/synapse-relay-gui.appdata.xml" <<'EOF'
-<?xml version="1.0" encoding="UTF-8"?>
-<component type="desktop-application">
-  <id>synapse-relay-gui.desktop</id>
-  <name>Synapse Relay</name>
-  <summary>Synapse Relay desktop client</summary>
-  <metadata_license>CC0-1.0</metadata_license>
-  <project_license>Proprietary</project_license>
-  <description>
-    <p>Synapse Relay desktop client with packaged runtimes for local automation and tool relay.</p>
-  </description>
-  <launchable type="desktop-id">synapse-relay-gui.desktop</launchable>
-</component>
-EOF
-
 linuxdeploy="${work_dir}/linuxdeploy-x86_64.AppImage"
 appimagetool="${work_dir}/appimagetool-x86_64.AppImage"
 curl -fsSL "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" -o "$linuxdeploy"
 curl -fsSL "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" -o "$appimagetool"
 chmod +x "$linuxdeploy" "$appimagetool"
 
+cat >"${appdir}/usr/bin/synapse-relay-gui" <<'EOF'
+#!/bin/sh
+set -eu
+HERE="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+APPDIR="$(CDPATH= cd -- "${HERE}/../.." && pwd)"
+export SYNAPSE_RELAY_PACKAGED_ROOT="${APPDIR}/usr/lib/synapse-relay-gui"
+exec "${APPDIR}/usr/bin/synapse-relay-gui-bin" "$@"
+EOF
+chmod 0755 "${appdir}/usr/bin/synapse-relay-gui"
+
 APPIMAGE_EXTRACT_AND_RUN=1 "$linuxdeploy" \
   --appdir "$appdir" \
   -e "${appdir}/usr/bin/synapse-relay-gui-bin" \
   -d "${appdir}/usr/share/applications/synapse-relay-gui.desktop" \
   -i "${appdir}/usr/share/icons/hicolor/256x256/apps/synapse-relay-gui.png"
+
+node "${repo_root}/relay/scripts/prepare-gui-build-assets.mjs" --runtime-output="${appdir}/usr/lib/synapse-relay-gui/runtime"
 
 cat >"${appdir}/usr/bin/synapse-relay-gui" <<'EOF'
 #!/bin/sh
