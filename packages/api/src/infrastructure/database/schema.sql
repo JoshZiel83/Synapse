@@ -1819,6 +1819,9 @@ CREATE TABLE transport_message_links (
   direction transport_message_links_direction NOT NULL,
   delivery_status transport_message_links_delivery_status NOT NULL DEFAULT 'pending',
   external_message_id VARCHAR(255),
+  external_reply_to_id VARCHAR(255),
+  external_thread_id VARCHAR(255),
+  external_emoji_reactions JSONB NOT NULL DEFAULT '{}',
   metadata JSONB NOT NULL DEFAULT '{}',
   delivered_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1832,6 +1835,9 @@ CREATE INDEX idx_transport_message_links_endpoint
   ON transport_message_links(transport_endpoint_id, created_at DESC);
 CREATE INDEX idx_transport_message_links_status
   ON transport_message_links(delivery_status, created_at DESC);
+CREATE INDEX idx_transport_message_links_reply_to
+  ON transport_message_links(transport_endpoint_id, external_reply_to_id)
+  WHERE external_reply_to_id IS NOT NULL;
 
 -- ============ Turns ============
 CREATE TABLE turns (
