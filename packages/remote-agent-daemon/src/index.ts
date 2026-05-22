@@ -40,10 +40,12 @@ type DaemonConfig = {
 type AgentStartMessage = {
   type: "agent:start"
   remoteAgentId: string
+  conversationId?: string
   runtimeKind: RuntimeKind
   runtimePath?: string | null
   localRootPath?: string | null
   sessionId?: string | null
+  fencingToken?: string
   serverUrl?: string
 }
 
@@ -1385,7 +1387,9 @@ class ManagedRemoteAgent {
       storedState.pendingInteraction ?? this.pendingInteraction
     this.latestPlanDraft = storedState.latestPlanDraft ?? this.latestPlanDraft
     this.lastConversationId =
-      storedState.lastConversationId ?? this.lastConversationId
+      message.conversationId ??
+      storedState.lastConversationId ??
+      this.lastConversationId
     log(
       "info",
       `remote-agent:${this.params.remoteAgentId}`,
@@ -2029,6 +2033,7 @@ class ManagedRemoteAgent {
           this.params.daemon.send({
             type: "agent:session",
             remoteAgentId: this.params.remoteAgentId,
+            conversationId: this.resolveConversationId(),
             sessionId: event.sessionId,
           })
         }
