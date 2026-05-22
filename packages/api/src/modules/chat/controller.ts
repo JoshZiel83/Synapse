@@ -44,7 +44,6 @@ import {
 } from "../interactions/service.js"
 
 const CHAT_BASE_PATH = "/api/v1/workspaces/:workspaceId/chat"
-const CONVERSATION_BASE_PATH = "/api/v1/workspaces/:workspaceId/conversations"
 
 const jsonRecordSchema = z.record(z.any()).optional()
 
@@ -467,7 +466,7 @@ export default async function chatController(app: FastifyInstance) {
       interactionId: string
     }
   }>(
-    `${CONVERSATION_BASE_PATH}/:conversationId/interactions/:interactionId/respond`,
+    `${CHAT_BASE_PATH}/conversations/:conversationId/interactions/:interactionId/respond`,
     async (request, reply) => {
       try {
         const params = chatInteractionParamsSchema.parse(request.params)

@@ -1162,7 +1162,7 @@ class ApiClient {
       contactId: string
     }
   ): Promise<DirectConversationOpenResponse> {
-    return this.fetch(`/workspaces/${wsId}/direct-conversations/open`, {
+    return this.fetch(`/workspaces/${wsId}/chat/direct-conversations/open`, {
       method: "POST",
       body: JSON.stringify(input),
     })
@@ -1299,7 +1299,7 @@ class ApiClient {
     itemId: string
   ) {
     return this.fetch(
-      `/workspaces/${workspaceId}/conversations/${threadId}/messages/${itemId}/retry`,
+      `/workspaces/${workspaceId}/chat/conversations/${threadId}/messages/${itemId}/retry`,
       {
         method: "POST",
       }
@@ -1465,7 +1465,7 @@ class ApiClient {
     data: ChatInteractionResolveInput
   ): Promise<ChatInteractionResolveResponse> {
     return this.fetch(
-      `/workspaces/${workspaceId}/conversations/${threadId}/interactions/${interactionId}/respond`,
+      `/workspaces/${workspaceId}/chat/conversations/${threadId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(data),

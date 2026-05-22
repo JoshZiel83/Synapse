@@ -405,7 +405,7 @@ class ApiClient {
     }
   ): Promise<DirectConversationOpenResponse> {
     return this.request<DirectConversationOpenResponse>(
-      `/workspaces/${workspaceId}/direct-conversations/open`,
+      `/workspaces/${workspaceId}/chat/direct-conversations/open`,
       {
         method: "POST",
         body: JSON.stringify(input),
@@ -583,7 +583,7 @@ class ApiClient {
     input: ChatInteractionResolveInput
   ): Promise<ChatInteractionResolveResponse> {
     return this.request<ChatInteractionResolveResponse>(
-      `/workspaces/${workspaceId}/conversations/${conversationId}/interactions/${interactionId}/respond`,
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(input),
