@@ -6,6 +6,7 @@ import {
   textBlocks,
   type RelayHiddenToolBinding,
   type ToolDefinition,
+  type ToolResultOrigin,
 } from "@synapse/shared"
 import type {
   NormalizedMcpToolResult,
@@ -184,24 +185,45 @@ function clearRelayToolRuntimeContexts(sessionId: string) {
   }
 }
 
-function buildRelayBinaryMetadata(
+function buildRelayToolOrigin(
   context: RelayToolRuntimeContext,
   namespacedToolName: string
-): Record<string, unknown> {
+): ToolResultOrigin {
   return {
-    source: {
-      kind: "relay_mcp",
-      relayCapabilityId: context.capabilityId,
-      deviceId: context.deviceId,
-      deviceDisplayName: context.deviceDisplayName,
-      exposureId: context.exposureId,
-      exposureStableKey: context.exposureStableKey,
-      exposureDisplayName: context.exposureDisplayName,
-      runtimeSessionId: context.runtimeSessionId,
-      visibleToolName: context.visibleToolName,
-      relayToolStableKey: context.relayToolStableKey,
-      namespacedToolName,
-    },
+    kind: "mcp_relay",
+    deviceId: context.deviceId,
+    deviceName: context.deviceDisplayName,
+    exposureId: context.exposureId,
+    exposureStableKey: context.exposureStableKey,
+    exposureName: context.exposureDisplayName,
+    runtimeSessionId: context.runtimeSessionId,
+    visibleToolName: context.visibleToolName,
+    namespacedToolName,
+  }
+}
+
+function buildMcpInstanceOrigin(
+  instance: { transport?: string },
+  pluginSlug: string | undefined,
+  pluginDisplayName: string | undefined,
+  relayContext: RelayToolRuntimeContext | undefined,
+  namespacedToolName: string
+): ToolResultOrigin {
+  if (instance.transport === "relay" && relayContext) {
+    return buildRelayToolOrigin(relayContext, namespacedToolName)
+  }
+  if (instance.transport === "builtin") {
+    return {
+      kind: "callable_plugin",
+      pluginKey: pluginSlug || namespacedToolName,
+      pluginName: pluginDisplayName,
+    }
+  }
+  // stdio / http remote MCP servers
+  return {
+    kind: "mcp_remote",
+    serverKey: pluginSlug || namespacedToolName,
+    serverName: pluginDisplayName,
   }
 }
 
@@ -1298,18 +1320,16 @@ export async function resolveMcpToolsForActor(
         instance.transport === "relay"
           ? getRelayToolRuntimeContext(params.sessionId, namespacedToolName)
           : undefined
-      return await normalizeMcpToolResult(
-        rawOutput,
-        params.workspaceId,
-        relayContext
-          ? {
-              binaryMetadata: buildRelayBinaryMetadata(
-                relayContext,
-                namespacedToolName
-              ),
-            }
-          : undefined
+      const origin = buildMcpInstanceOrigin(
+        instance,
+        `${orgSlug}/${pluginSlug}`,
+        instance.pluginSlug || pluginSlug,
+        relayContext,
+        namespacedToolName
       )
+      return await normalizeMcpToolResult(rawOutput, params.workspaceId, {
+        origin,
+      })
     } catch (error: any) {
       isError = true
       errorMessage = error.message

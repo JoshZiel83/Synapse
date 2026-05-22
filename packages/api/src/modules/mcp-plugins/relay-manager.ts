@@ -5,6 +5,7 @@ import type {
   RelayHiddenToolBinding,
   RelayOperationError,
   RelayVisibleToolDefinition,
+  ToolResultOrigin,
 } from "@synapse/shared"
 import type {
   RelayAuthorizationGrantSpec,
@@ -765,7 +766,7 @@ function resolveRelayOperationTimeoutMs(
   return Math.max(1_000, timeoutSec * 1_000 + 30_000)
 }
 
-function buildAsyncRelayBinaryMetadata(params: {
+function buildAsyncRelayOrigin(params: {
   deviceId: string
   deviceDisplayName: string
   exposureId: string
@@ -774,19 +775,17 @@ function buildAsyncRelayBinaryMetadata(params: {
   runtimeSessionId: string
   visibleToolName: string
   namespacedToolName: string
-}) {
+}): ToolResultOrigin {
   return {
-    source: {
-      kind: "relay_mcp",
-      deviceId: params.deviceId,
-      deviceDisplayName: params.deviceDisplayName,
-      exposureId: params.exposureId,
-      exposureStableKey: params.exposureStableKey,
-      exposureDisplayName: params.exposureDisplayName,
-      runtimeSessionId: params.runtimeSessionId,
-      visibleToolName: params.visibleToolName,
-      namespacedToolName: params.namespacedToolName,
-    },
+    kind: "mcp_relay",
+    deviceId: params.deviceId,
+    deviceName: params.deviceDisplayName,
+    exposureId: params.exposureId,
+    exposureStableKey: params.exposureStableKey,
+    exposureName: params.exposureDisplayName,
+    runtimeSessionId: params.runtimeSessionId,
+    visibleToolName: params.visibleToolName,
+    namespacedToolName: params.namespacedToolName,
   }
 }
 
@@ -3697,9 +3696,9 @@ async function finalizeAsyncRelayOperation(
     msg.result,
     operation.workspace_id,
     {
-      binaryMetadata:
+      origin:
         operation.runtime_session_id && operation.exposure_stable_key
-          ? buildAsyncRelayBinaryMetadata({
+          ? buildAsyncRelayOrigin({
               deviceId: operation.device_id,
               deviceDisplayName:
                 operation.device_display_name || "Relay device",

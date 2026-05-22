@@ -12,6 +12,7 @@ import type {
   AssistantToolHistory,
   ConversationParticipantEntry,
   ToolResolveContext,
+  ToolResultOrigin,
   CanonicalContentBlock,
   ProviderContextWindow,
   AvailableSkillSummary,
@@ -1239,10 +1240,7 @@ export async function actorThink(
           callableResults.push(res)
 
           if (executionEnabled && callRow && attempt) {
-            const blocks =
-              typeof res.content === "string"
-                ? textBlocks(res.content)
-                : textBlocks(JSON.stringify(res.content))
+            const blocks = res.content
             await finalizeToolExecutionAttempt({
               attemptId: attempt.id,
               status: res.isError ? "error" : "success",
@@ -1287,6 +1285,8 @@ export async function actorThink(
           toolName: string
           content: CanonicalContentBlock[]
           isError?: boolean
+          structuredContent?: Record<string, unknown>
+          origin?: ToolResultOrigin
           metadata?: Record<string, unknown>
         }[] = []
         let mcpReplanRequired = false
@@ -1376,8 +1376,15 @@ export async function actorThink(
                 }
               )
               let normalizedContent = normalizedResult.content
+              // metadata persisted to tool_results.metadata JSONB carries
+              // origin + structuredContent so we can rehydrate them when the
+              // session is later replayed. The CanonicalToolResult also gets
+              // origin/structuredContent as first-class fields below.
               let metadata: Record<string, unknown> = {
                 ...(normalizedResult.metadata || {}),
+                ...(normalizedResult.origin
+                  ? { origin: normalizedResult.origin }
+                  : {}),
                 ...(normalizedResult.structuredContent
                   ? { structuredContent: normalizedResult.structuredContent }
                   : {}),
@@ -1389,6 +1396,12 @@ export async function actorThink(
                 toolName: tc.toolName,
                 content: normalizedContent,
                 isError: normalizedResult.isError,
+                ...(normalizedResult.structuredContent
+                  ? { structuredContent: normalizedResult.structuredContent }
+                  : {}),
+                ...(normalizedResult.origin
+                  ? { origin: normalizedResult.origin }
+                  : {}),
                 metadata,
               })
               allSupplementalBlocks.push(
@@ -1504,14 +1517,30 @@ export async function actorThink(
           })
         )
         const roundToolResults: CanonicalToolResult[] = toolResults.map(
-          (tr) => ({
-            toolCallId: tr.toolCallId,
-            providerCallId: tr.providerCallId,
-            toolName: tr.toolName,
-            content: tr.content,
-            isError: tr.isError,
-            metadata: tr.metadata,
-          })
+          (tr) => {
+            // mcpResults carry origin/structuredContent; ToolResult from
+            // executeCallableTools (the ToolPlugin path) doesn't — synthesize
+            // a {kind:"builtin"} origin so every CanonicalToolResult.origin
+            // is filled.
+            const trAny = tr as any
+            const origin =
+              trAny.origin ||
+              ({ kind: "builtin", toolKind: tr.toolName } as const)
+            const structuredContent = trAny.structuredContent
+            const base: CanonicalToolResult = {
+              toolCallId: tr.toolCallId,
+              providerCallId: tr.providerCallId,
+              toolName: tr.toolName,
+              content: tr.content,
+              isError: tr.isError,
+              metadata: tr.metadata,
+              origin,
+            }
+            if (structuredContent !== undefined) {
+              base.structuredContent = structuredContent
+            }
+            return base
+          }
         )
         const roundContentBlocks: CanonicalContentBlock[] = []
         if (finalTextContent)
