@@ -43,7 +43,7 @@ interface ActiveStatusSession {
 
 const activeSessions = new Map<string, ActiveStatusSession>()
 
-const RECENT_INBOUND_WINDOW_MS = 60 * 60 * 1000 // 1 hour — wide enough for delayed turns
+const RECENT_INBOUND_WINDOW_MS = 5 * 60 * 1000 // 5 min fallback window
 
 interface InboundLinkLookup {
   externalMessageId: string
@@ -64,6 +64,62 @@ async function resolveConversationIdForSession(
   return row?.conversation_id || null
 }
 
+/**
+ * Precise binding: look up the inbound transport_message_link via the
+ * currently-running turn's trigger_item_id, so we react on the exact
+ * message that woke this turn instead of "most recent in conversation
+ * within an hour".
+ */
+async function findInboundLinkForSessionTurn(
+  sessionId: string
+): Promise<InboundLinkLookup | null> {
+  const turnRow = await db
+    .selectFrom("turns")
+    .select(["trigger_item_id"])
+    .where("session_id", "=", sessionId)
+    .where("status", "in", ["pending", "running"] as any)
+    .orderBy("started_at", "desc")
+    .limit(1)
+    .executeTakeFirst()
+  const itemId = turnRow?.trigger_item_id
+  if (!itemId) return null
+
+  const row = await db
+    .selectFrom("transport_message_links")
+    .innerJoin(
+      "transport_endpoints",
+      "transport_endpoints.id",
+      "transport_message_links.transport_endpoint_id"
+    )
+    .innerJoin(
+      "transport_accounts",
+      "transport_accounts.id",
+      "transport_message_links.transport_account_id"
+    )
+    .select([
+      "transport_message_links.external_message_id as externalMessageId",
+      "transport_endpoints.external_id as endpointExternalId",
+      "transport_accounts.transport_kind as transportKind",
+      "transport_accounts.id as transportAccountId",
+    ])
+    .where("transport_message_links.item_id", "=", itemId)
+    .where("transport_message_links.direction", "=", "inbound")
+    .limit(1)
+    .executeTakeFirst()
+  if (!row || !row.externalMessageId) return null
+  return {
+    externalMessageId: row.externalMessageId,
+    endpointExternalId: row.endpointExternalId,
+    transportKind: String(row.transportKind),
+    transportAccountId: String(row.transportAccountId),
+  }
+}
+
+/**
+ * Fallback used when no turn is found yet (event arrived before turn row
+ * persisted). Wider lookup by conversation + last hour. NEVER blindly
+ * react on this lookup — it's a best-effort grace path.
+ */
 async function findRecentInboundLinkForConversation(
   conversationId: string
 ): Promise<InboundLinkLookup | null> {
@@ -108,10 +164,21 @@ async function ensureControllerForSession(input: {
   workspaceId: string
   conversationId: string
 }): Promise<StatusReactionController | null> {
-  const link = await findRecentInboundLinkForConversation(input.conversationId)
+  // Prefer precise binding via the current turn's trigger_item_id.
+  // Fall back to the conversation+time window heuristic only if no
+  // turn row exists yet (race) — never as the steady-state path.
+  let link = await findInboundLinkForSessionTurn(input.sessionId)
+  if (!link) {
+    link = await findRecentInboundLinkForConversation(input.conversationId)
+    if (link) {
+      console.log(
+        `[im:status] precise turn lookup failed for sid=${input.sessionId.slice(0, 8)}; using fallback window`
+      )
+    }
+  }
   if (!link) {
     console.log(
-      `[im:status] no inbound link found for cid=${input.conversationId.slice(0, 8)}`
+      `[im:status] no inbound link found for sid=${input.sessionId.slice(0, 8)}`
     )
     return null
   }

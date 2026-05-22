@@ -25,7 +25,11 @@ import { parseFeishuMentions, renderFeishuMention } from "./mentions.js"
 import { sendFeishuMessage } from "./outbound.js"
 import { createFeishuReactionAdapter } from "./reactions.js"
 
-let lastWebhookStartContext: AccountStartContext | null = null
+// One AccountStartContext per active account so that the webhook handler can
+// route the inbound event into the right ingest pipeline. Previously a single
+// lastWebhookStartContext got overwritten on every startAccount, which broke
+// multi-account and multi-restart workflows.
+const webhookContexts = new Map<string, AccountStartContext>()
 
 export const feishuConnector: TransportConnector = {
   transportKind: "feishu",
@@ -47,11 +51,16 @@ export const feishuConnector: TransportConnector = {
   },
 
   async startAccount(ctx) {
-    if (ctx.account.connectionMode === "webhook") {
-      // Remember context so webhook handler can emit inbound back into it
-      lastWebhookStartContext = ctx
+    // Remember the context per-account so the webhook handler can route
+    // inbound events back through the right ingest pipeline.
+    webhookContexts.set(ctx.account.id, ctx)
+    const running = await startFeishuAccount(ctx)
+    return {
+      stop: async () => {
+        webhookContexts.delete(ctx.account.id)
+        await running.stop()
+      },
     }
-    return startFeishuAccount(ctx)
   },
 
   async sendMessage(input) {
@@ -89,10 +98,14 @@ export const feishuConnector: TransportConnector = {
   async handleWebhook(
     input: WebhookHandlerInput
   ): Promise<WebhookHandlerResult> {
-    if (!lastWebhookStartContext) {
-      return { statusCode: 503, body: { error: "no active webhook context" } }
+    const ctx = webhookContexts.get(input.account.id)
+    if (!ctx) {
+      return {
+        statusCode: 503,
+        body: { error: `no active runtime for account ${input.account.id}` },
+      }
     }
-    return handleFeishuWebhook(lastWebhookStartContext, input)
+    return handleFeishuWebhook(ctx, input)
   },
 }
 
