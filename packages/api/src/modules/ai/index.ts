@@ -1508,12 +1508,7 @@ export async function actorThink(
             toolCallId: tr.toolCallId,
             providerCallId: tr.providerCallId,
             toolName: tr.toolName,
-            content:
-              typeof tr.content === "string"
-                ? textBlocks(tr.content)
-                : Array.isArray(tr.content)
-                  ? normalizeCanonicalContentBlocks(tr.content as any[])
-                  : textBlocks(JSON.stringify(tr.content)),
+            content: tr.content,
             isError: tr.isError,
             metadata: tr.metadata,
           })

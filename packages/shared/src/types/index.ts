@@ -2252,7 +2252,8 @@ export interface ToolResult {
   toolCallId: string
   providerCallId?: string
   toolName: string
-  content: string | unknown[] // string for text-only, array for multimodal (MCP content blocks)
+  content: CanonicalContentBlock[]
+  structuredContent?: Record<string, unknown>
   isError?: boolean
   metadata?: Record<string, unknown>
 }
@@ -2367,7 +2368,25 @@ export interface ToolPlugin {
         active: boolean
         definition: ToolDefinition
       }>
-  execute?: (input: Record<string, unknown>) => Promise<string>
+  // Callable tools return content as CanonicalContentBlock[]. Authors can
+  // either return just the blocks (most common) or the richer result object
+  // when they need structuredContent / isError / metadata. The executor
+  // (executeCallableTools) handles the union and lifts everything into the
+  // canonical ToolResult shape so downstream code never sees plain strings.
+  execute?: (
+    input: Record<string, unknown>
+  ) => Promise<CallableToolResult | CanonicalContentBlock[]>
+}
+
+// Return shape for ToolPlugin.execute when the plugin needs to attach
+// structuredContent, isError, or metadata alongside its blocks. For the
+// simple text-only case, prefer `textResult("hello")` which produces this
+// shape; or just return `textBlocks("hello")` if no extra fields are needed.
+export interface CallableToolResult {
+  content: CanonicalContentBlock[]
+  structuredContent?: Record<string, unknown>
+  isError?: boolean
+  metadata?: Record<string, unknown>
 }
 
 export interface AIResponse {
@@ -4984,6 +5003,27 @@ export function normalizeCanonicalContentBlocks(
 /** Wrap a plain string into CanonicalContentBlock[] */
 export function textBlocks(s: string): CanonicalContentBlock[] {
   return [textBlock(s)]
+}
+
+/**
+ * Convenience constructor for the common text-only CallableToolResult.
+ * Equivalent to `{ content: textBlocks(text), ...opts }` but easier to read
+ * in plugin handlers that return plain text plus an isError flag.
+ */
+export function textResult(
+  text: string,
+  opts?: {
+    isError?: boolean
+    structuredContent?: Record<string, unknown>
+    metadata?: Record<string, unknown>
+  }
+): CallableToolResult {
+  const result: CallableToolResult = { content: textBlocks(text) }
+  if (opts?.isError !== undefined) result.isError = opts.isError
+  if (opts?.structuredContent !== undefined)
+    result.structuredContent = opts.structuredContent
+  if (opts?.metadata !== undefined) result.metadata = opts.metadata
+  return result
 }
 
 /**

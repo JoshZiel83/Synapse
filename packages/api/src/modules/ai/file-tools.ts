@@ -1,4 +1,8 @@
-import { FILE_ORIGIN_SYSTEMS, type ToolDefinition } from "@synapse/shared"
+import {
+  FILE_ORIGIN_SYSTEMS,
+  textResult,
+  type ToolDefinition,
+} from "@synapse/shared"
 import { saveFromBase64 } from "../../infrastructure/storage/file-io.js"
 import {
   buildActorOutputOrigin,
@@ -267,11 +271,13 @@ export function registerActorFileToolPlugins(): void {
         )
       }
 
-      return JSON.stringify({
-        success: true,
-        ...buildFileToolPayload(detail),
-        note: PROTECTED_LINK_NOTE,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          ...buildFileToolPayload(detail),
+          note: PROTECTED_LINK_NOTE,
+        })
+      )
     },
   })
 
@@ -293,15 +299,17 @@ export function registerActorFileToolPlugins(): void {
 
       const detail = await resolveWorkspaceFileDetail(parsed.data.fileRef)
 
-      return JSON.stringify({
-        success: true,
-        fileId: detail.id,
-        fileRef: buildFileRef(detail.id),
-        byIdUrl: getFileUrlById(detail.id),
-        url: detail.url,
-        fullUrl: detail.fullUrl,
-        note: PROTECTED_LINK_NOTE,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          fileId: detail.id,
+          fileRef: buildFileRef(detail.id),
+          byIdUrl: getFileUrlById(detail.id),
+          url: detail.url,
+          fullUrl: detail.fullUrl,
+          note: PROTECTED_LINK_NOTE,
+        })
+      )
     },
   })
 
@@ -323,11 +331,13 @@ export function registerActorFileToolPlugins(): void {
 
       const detail = await resolveWorkspaceFileDetail(parsed.data.fileRef)
 
-      return JSON.stringify({
-        success: true,
-        ...buildFileToolPayload(detail),
-        note: PROTECTED_LINK_NOTE,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          ...buildFileToolPayload(detail),
+          note: PROTECTED_LINK_NOTE,
+        })
+      )
     },
   })
 }

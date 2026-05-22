@@ -1,5 +1,8 @@
 import {
   maskAllowsConversationType,
+  textBlocks,
+  type CallableToolResult,
+  type CanonicalContentBlock,
   type ToolDefinition,
   type ToolCall,
   type ToolResult,
@@ -65,6 +68,16 @@ export async function resolveBuiltinTools(
   return tools
 }
 
+// Coerce the plugin's loosely-typed return into the canonical CallableToolResult.
+function coerceCallableReturn(
+  ret: CallableToolResult | CanonicalContentBlock[]
+): CallableToolResult {
+  if (Array.isArray(ret)) {
+    return { content: ret }
+  }
+  return ret
+}
+
 /**
  * Execute callable tool calls. Only dispatches to tools with kind='callable' and an execute handler.
  */
@@ -79,7 +92,7 @@ export async function executeCallableTools(
         toolCallId: tc.callId,
         providerCallId: tc.providerCallId,
         toolName: tc.toolName,
-        content: `Error: unknown callable tool "${tc.toolName}"`,
+        content: textBlocks(`Error: unknown callable tool "${tc.toolName}"`),
         isError: true,
         metadata: {
           toolError: {
@@ -92,12 +105,18 @@ export async function executeCallableTools(
       continue
     }
     try {
-      const content = await plugin.execute(tc.input)
+      const raw = await plugin.execute(tc.input)
+      const result = coerceCallableReturn(raw)
       results.push({
         toolCallId: tc.callId,
         providerCallId: tc.providerCallId,
         toolName: tc.toolName,
-        content,
+        content: result.content,
+        ...(result.structuredContent !== undefined
+          ? { structuredContent: result.structuredContent }
+          : {}),
+        ...(result.isError !== undefined ? { isError: result.isError } : {}),
+        ...(result.metadata !== undefined ? { metadata: result.metadata } : {}),
       })
     } catch (err: any) {
       const errorMessage = getToolErrorMessage(err)
@@ -105,7 +124,9 @@ export async function executeCallableTools(
         toolCallId: tc.callId,
         providerCallId: tc.providerCallId,
         toolName: tc.toolName,
-        content: `Error executing tool "${tc.toolName}": ${errorMessage}`,
+        content: textBlocks(
+          `Error executing tool "${tc.toolName}": ${errorMessage}`
+        ),
         isError: true,
         metadata: getToolErrorMetadata(err),
       })

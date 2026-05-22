@@ -3,7 +3,6 @@ import { basename, join } from "node:path"
 import {
   textBlocks,
   type AvailableSkillSummary,
-  type CanonicalContentBlock,
   type CapabilityAccessTarget,
 } from "@synapse/shared"
 import { resolveRepoPath } from "../../config/repo-paths.js"
@@ -639,9 +638,7 @@ export async function readRelayAutoLoadedSkill(input: {
       asset: {
         path: SKILL_DESCRIPTION_ASSET_PATH,
         textContent: definition.markdown,
-        contentBlocks: textBlocks(
-          definition.markdown
-        ) as CanonicalContentBlock[],
+        contentBlocks: textBlocks(definition.markdown),
       },
     }
   }
@@ -654,9 +651,7 @@ export async function readRelayAutoLoadedSkill(input: {
       asset: {
         path: SKILL_DESCRIPTION_ASSET_PATH,
         textContent: definition.markdown,
-        contentBlocks: textBlocks(
-          definition.markdown
-        ) as CanonicalContentBlock[],
+        contentBlocks: textBlocks(definition.markdown),
       },
     }
   }
@@ -672,7 +667,7 @@ export async function readRelayAutoLoadedSkill(input: {
     asset: {
       path: normalizedTarget,
       textContent,
-      contentBlocks: textBlocks(textContent) as CanonicalContentBlock[],
+      contentBlocks: textBlocks(textContent),
     },
   }
 }
