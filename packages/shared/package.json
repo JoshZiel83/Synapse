@@ -29,7 +29,8 @@
   },
   "scripts": {
     "build": "tsc",
-    "dev": "tsc --watch"
+    "dev": "tsc --watch",
+    "test": "tsx --test \"src/**/*.test.ts\""
   },
   "devDependencies": {
     "typescript": "^5.4.0"

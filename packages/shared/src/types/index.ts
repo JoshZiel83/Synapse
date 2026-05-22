@@ -1953,12 +1953,62 @@ export interface CanonicalToolCall {
   metadata?: Record<string, unknown>
 }
 
+// Provenance of a CanonicalToolResult — what produced it and where it came from.
+// Set at the ingest boundary (mcp-plugins/result-normalizer, callable executor,
+// model response media ingest, builtin tool dispatch). Downstream consumers
+// (FE display, audit logs, debugging tools) read this to attribute results.
+export type ToolResultOrigin =
+  | {
+      kind: "mcp_remote"
+      serverKey: string
+      serverName?: string
+    }
+  | {
+      kind: "mcp_relay"
+      deviceId: string
+      deviceName?: string
+      exposureId?: string
+      exposureStableKey: string
+      exposureName?: string
+      runtimeSessionId?: string
+      visibleToolName?: string
+      namespacedToolName?: string
+    }
+  | {
+      kind: "callable_plugin"
+      pluginKey: string
+      pluginName?: string
+    }
+  | {
+      kind: "builtin"
+      toolKind: string
+    }
+  | {
+      kind: "model_response"
+      providerType: ProviderType
+    }
+
+export const TOOL_RESULT_ORIGIN_KINDS = [
+  "mcp_remote",
+  "mcp_relay",
+  "callable_plugin",
+  "builtin",
+  "model_response",
+] as const
+export type ToolResultOriginKind = (typeof TOOL_RESULT_ORIGIN_KINDS)[number]
+
 export interface CanonicalToolResult {
   toolCallId: string
   providerCallId?: string
   toolName: string
   content: CanonicalContentBlock[]
+  // MCP protocol structured output (JSON sidecar to content blocks). Surface
+  // as first-class so FE/audit and the LLM context compiler can use it without
+  // grovelling through metadata.
+  structuredContent?: Record<string, unknown>
   isError?: boolean
+  // Where this result came from. Filled at the ingest boundary.
+  origin?: ToolResultOrigin
   metadata?: Record<string, unknown>
 }
 
@@ -2211,6 +2261,10 @@ export interface NormalizedMcpToolResult {
   content: CanonicalContentBlock[]
   isError?: boolean
   structuredContent?: Record<string, unknown>
+  // Provenance of the result (transport / device / plugin). Filled by the
+  // ingest pipeline so downstream code can attribute the result without
+  // tracking it out-of-band.
+  origin?: ToolResultOrigin
   metadata?: Record<string, unknown>
   rawResult?: unknown
 }
@@ -4930,6 +4984,64 @@ export function normalizeCanonicalContentBlocks(
 /** Wrap a plain string into CanonicalContentBlock[] */
 export function textBlocks(s: string): CanonicalContentBlock[] {
   return [textBlock(s)]
+}
+
+/**
+ * Type guard for ToolResultOrigin. Validates the discriminator and the
+ * required fields per kind. Use at trust boundaries (e.g., when reading
+ * a metadata column from the DB) before passing to downstream code that
+ * relies on origin being correctly shaped.
+ */
+export function isToolResultOrigin(value: unknown): value is ToolResultOrigin {
+  if (!value || typeof value !== "object") return false
+  const v = value as Record<string, unknown>
+  switch (v.kind) {
+    case "mcp_remote":
+      return typeof v.serverKey === "string"
+    case "mcp_relay":
+      return (
+        typeof v.deviceId === "string" &&
+        typeof v.exposureStableKey === "string"
+      )
+    case "callable_plugin":
+      return typeof v.pluginKey === "string"
+    case "builtin":
+      return typeof v.toolKind === "string"
+    case "model_response":
+      return typeof v.providerType === "string"
+    default:
+      return false
+  }
+}
+
+/**
+ * Convenience constructor for CanonicalToolResult. Defaults isError=false
+ * when not provided; leaves optional fields undefined when not provided
+ * (do not store empty objects/arrays — keeps DB JSONB small).
+ */
+export function canonicalToolResult(input: {
+  toolCallId: string
+  providerCallId?: string
+  toolName: string
+  content: CanonicalContentBlock[]
+  structuredContent?: Record<string, unknown>
+  isError?: boolean
+  origin?: ToolResultOrigin
+  metadata?: Record<string, unknown>
+}): CanonicalToolResult {
+  const result: CanonicalToolResult = {
+    toolCallId: input.toolCallId,
+    toolName: input.toolName,
+    content: input.content,
+  }
+  if (input.providerCallId !== undefined)
+    result.providerCallId = input.providerCallId
+  if (input.structuredContent !== undefined)
+    result.structuredContent = input.structuredContent
+  if (input.isError !== undefined) result.isError = input.isError
+  if (input.origin !== undefined) result.origin = input.origin
+  if (input.metadata !== undefined) result.metadata = input.metadata
+  return result
 }
 
 function createActorDocId(): UUID {
