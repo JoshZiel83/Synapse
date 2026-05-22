@@ -1,0 +1,52 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$REPO_ROOT"
+
+if [ -f "$REPO_ROOT/.env" ]; then
+  set -a
+  # shellcheck disable=SC1091
+  source "$REPO_ROOT/.env"
+  set +a
+fi
+
+PRIMARY_DOMAIN="${SYNAPSE_PUBLIC_DOMAIN:?SYNAPSE_PUBLIC_DOMAIN is required in .env. Run SYNAPSE_PUBLIC_DOMAIN=<domain> ./setup.sh first.}"
+WWW_DOMAIN="${SYNAPSE_WWW_DOMAIN:-www.${PRIMARY_DOMAIN}}"
+MOBILE_SHORT_DOMAIN="${SYNAPSE_MOBILE_SHORT_DOMAIN:-m.${PRIMARY_DOMAIN}}"
+MOBILE_DOMAIN="${SYNAPSE_MOBILE_DOMAIN:-mobile.${PRIMARY_DOMAIN}}"
+EMAIL="${LETSENCRYPT_EMAIL:-admin@${PRIMARY_DOMAIN}}"
+CERT_NAME="${LETSENCRYPT_CERT_NAME:-${PRIMARY_DOMAIN}}"
+DOMAINS=(
+  "$PRIMARY_DOMAIN"
+  "$WWW_DOMAIN"
+  "$MOBILE_SHORT_DOMAIN"
+  "$MOBILE_DOMAIN"
+)
+
+domain_args=()
+declare -A seen_domains=()
+for domain in "${DOMAINS[@]}"; do
+  if [ -z "$domain" ] || [ -n "${seen_domains[$domain]:-}" ]; then
+    continue
+  fi
+  seen_domains[$domain]=1
+  domain_args+=("-d" "$domain")
+done
+
+docker compose --profile production stop nginx >/dev/null 2>&1 || true
+docker compose --profile certbot up -d acme-http
+
+cleanup() {
+  docker compose --profile certbot stop acme-http >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
+
+docker compose --profile certbot run --rm certbot certonly \
+  --webroot \
+  --webroot-path /var/www/certbot \
+  --cert-name "$CERT_NAME" \
+  --email "$EMAIL" \
+  --agree-tos \
+  --no-eff-email \
+  "${domain_args[@]}"

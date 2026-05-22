@@ -10,9 +10,11 @@
     "start": "node dist/index.js",
     "test": "tsx --test \"src/**/*.test.ts\"",
     "db:bootstrap": "tsx src/infrastructure/database/bootstrap.ts && npm run db:codegen",
+    "db:bootstrap:runtime": "tsx src/infrastructure/database/bootstrap.ts",
     "db:seed": "tsx src/infrastructure/database/seed.ts",
     "db:seed:builtin-mcp": "tsx src/infrastructure/database/seed-builtin-mcp-plugins.ts",
     "db:rebuild": "tsx src/infrastructure/database/rebuild.ts && npm run db:codegen",
+    "db:rebuild:runtime": "tsx src/infrastructure/database/rebuild.ts",
     "db:codegen": "kysely-codegen --config-file .kysely-codegenrc.json",
     "db:codegen:verify": "npm run db:codegen -- --verify",
     "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts"

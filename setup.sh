@@ -3,7 +3,39 @@ set -euo pipefail
 
 ENV_FILE="$(cd "$(dirname "$0")" && pwd)/.env"
 WEB_ENV_FILE="$(cd "$(dirname "$0")" && pwd)/packages/web-next/.env.local"
-DOMAIN="${SYNAPSE_PUBLIC_DOMAIN:-change-me.example.com}"
+
+read_env_value() {
+  local key="$1"
+  if [ -f "$ENV_FILE" ]; then
+    sed -n "s/^${key}=//p" "$ENV_FILE" | tail -n 1
+  fi
+}
+
+host_from_url() {
+  local value="$1"
+  value="${value#http://}"
+  value="${value#https://}"
+  value="${value%%/*}"
+  value="${value%%:*}"
+  printf '%s' "$value"
+}
+
+existing_public_domain="$(read_env_value SYNAPSE_PUBLIC_DOMAIN)"
+existing_app_base_url="$(read_env_value APP_BASE_URL)"
+existing_app_base_host="$(host_from_url "$existing_app_base_url")"
+
+DOMAIN="${SYNAPSE_PUBLIC_DOMAIN:-${existing_public_domain:-${existing_app_base_host:-change-me.example.com}}}"
+WWW_DOMAIN="${SYNAPSE_WWW_DOMAIN:-$(read_env_value SYNAPSE_WWW_DOMAIN)}"
+MOBILE_SHORT_DOMAIN="${SYNAPSE_MOBILE_SHORT_DOMAIN:-$(read_env_value SYNAPSE_MOBILE_SHORT_DOMAIN)}"
+MOBILE_DOMAIN="${SYNAPSE_MOBILE_DOMAIN:-$(read_env_value SYNAPSE_MOBILE_DOMAIN)}"
+LETSENCRYPT_CERT_NAME_VALUE="${LETSENCRYPT_CERT_NAME:-$(read_env_value LETSENCRYPT_CERT_NAME)}"
+LETSENCRYPT_EMAIL_VALUE="${LETSENCRYPT_EMAIL:-$(read_env_value LETSENCRYPT_EMAIL)}"
+
+WWW_DOMAIN="${WWW_DOMAIN:-www.$DOMAIN}"
+MOBILE_SHORT_DOMAIN="${MOBILE_SHORT_DOMAIN:-m.$DOMAIN}"
+MOBILE_DOMAIN="${MOBILE_DOMAIN:-mobile.$DOMAIN}"
+LETSENCRYPT_CERT_NAME_VALUE="${LETSENCRYPT_CERT_NAME_VALUE:-$DOMAIN}"
+LETSENCRYPT_EMAIL_VALUE="${LETSENCRYPT_EMAIL_VALUE:-admin@$DOMAIN}"
 APP_URL="https://$DOMAIN"
 API_PROXY_ORIGIN="${SYNAPSE_API_PROXY_ORIGIN:-http://localhost:3001}"
 SELECTED_AI_PROVIDER="${SYNAPSE_AI_PROVIDER:-}"
@@ -34,8 +66,28 @@ generate_password() {
   openssl rand -base64 32 | tr -d '/+=' | head -c 32
 }
 
+ensure_env_var() {
+  local file="$1"
+  local key="$2"
+  local value="$3"
+
+  if [ ! -f "$file" ]; then
+    return
+  fi
+
+  if ! grep -q "^${key}=" "$file"; then
+    {
+      printf '\n'
+      printf '%s=%s\n' "$key" "$value"
+    } >> "$file"
+    ENV_FILES_UPDATED=true
+    echo "Added $key to $file"
+  fi
+}
+
 ROOT_ENV_CREATED=false
 WEB_ENV_CREATED=false
+ENV_FILES_UPDATED=false
 
 if [ ! -f "$ENV_FILE" ]; then
   POSTGRES_PASSWORD=$(generate_password)
@@ -63,8 +115,17 @@ JWT_REFRESH_SECRET=$JWT_REFRESH_SECRET
 APP_SECRET=$APP_SECRET
 MCP_ENCRYPTION_KEY=$MCP_ENCRYPTION_KEY
 
+# Deployment domains
+SYNAPSE_PUBLIC_DOMAIN=$DOMAIN
+SYNAPSE_WWW_DOMAIN=$WWW_DOMAIN
+SYNAPSE_MOBILE_SHORT_DOMAIN=$MOBILE_SHORT_DOMAIN
+SYNAPSE_MOBILE_DOMAIN=$MOBILE_DOMAIN
+LETSENCRYPT_CERT_NAME=$LETSENCRYPT_CERT_NAME_VALUE
+LETSENCRYPT_EMAIL=$LETSENCRYPT_EMAIL_VALUE
+
 # Application URLs
 APP_BASE_URL=$APP_URL
+BASE_URL=$APP_URL
 NEXT_PUBLIC_APP_URL=$APP_URL
 NEXT_PUBLIC_SITE_URL=$APP_URL
 
@@ -74,6 +135,8 @@ HOST=localhost
 DATABASE_URL=postgresql://synapse:${POSTGRES_PASSWORD}@localhost:5432/synapse
 REDIS_URL=redis://:${REDIS_PASSWORD}@localhost:6379
 PLATFORM_ADMIN_EMAILS=demo@synapse.dev
+MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD=true
+MEMORY_MODEL_CACHE_DIR=/app/storage/models/memory
 
 # Realtime ASR (Volcengine / Doubao Seed ASR Streaming 2.0)
 ASR_PROVIDER=volcengine
@@ -89,6 +152,8 @@ VOLCENGINE_ASR_IDLE_TIMEOUT_MS=15000
 # Frontend runtime
 NEXT_PUBLIC_API_URL=/api/v1
 NEXT_PUBLIC_WS_URL=wss://$DOMAIN
+EXPO_PUBLIC_API_URL=$APP_URL/api/v1
+EXPO_BASE_URL=/mobile
 
 # AI provider
 AI_PROVIDER=$SELECTED_AI_PROVIDER
@@ -104,6 +169,21 @@ EOF
 else
   echo ".env already exists at $ENV_FILE"
 fi
+
+ensure_env_var "$ENV_FILE" SYNAPSE_PUBLIC_DOMAIN "$DOMAIN"
+ensure_env_var "$ENV_FILE" SYNAPSE_WWW_DOMAIN "$WWW_DOMAIN"
+ensure_env_var "$ENV_FILE" SYNAPSE_MOBILE_SHORT_DOMAIN "$MOBILE_SHORT_DOMAIN"
+ensure_env_var "$ENV_FILE" SYNAPSE_MOBILE_DOMAIN "$MOBILE_DOMAIN"
+ensure_env_var "$ENV_FILE" LETSENCRYPT_CERT_NAME "$LETSENCRYPT_CERT_NAME_VALUE"
+ensure_env_var "$ENV_FILE" LETSENCRYPT_EMAIL "$LETSENCRYPT_EMAIL_VALUE"
+ensure_env_var "$ENV_FILE" APP_BASE_URL "$APP_URL"
+ensure_env_var "$ENV_FILE" BASE_URL "$APP_URL"
+ensure_env_var "$ENV_FILE" NEXT_PUBLIC_API_URL "/api/v1"
+ensure_env_var "$ENV_FILE" NEXT_PUBLIC_WS_URL "wss://$DOMAIN"
+ensure_env_var "$ENV_FILE" NEXT_PUBLIC_APP_URL "$APP_URL"
+ensure_env_var "$ENV_FILE" NEXT_PUBLIC_SITE_URL "$APP_URL"
+ensure_env_var "$ENV_FILE" EXPO_PUBLIC_API_URL "$APP_URL/api/v1"
+ensure_env_var "$ENV_FILE" EXPO_BASE_URL "/mobile"
 
 if [ ! -f "$WEB_ENV_FILE" ]; then
   mkdir -p "$(dirname "$WEB_ENV_FILE")"
@@ -125,7 +205,13 @@ else
   echo "Web env already exists at $WEB_ENV_FILE"
 fi
 
-if [ "$ROOT_ENV_CREATED" = false ] && [ "$WEB_ENV_CREATED" = false ]; then
+ensure_env_var "$WEB_ENV_FILE" NEXT_PUBLIC_API_URL "/api/v1"
+ensure_env_var "$WEB_ENV_FILE" NEXT_PUBLIC_WS_URL "wss://$DOMAIN"
+ensure_env_var "$WEB_ENV_FILE" NEXT_PUBLIC_APP_URL "$APP_URL"
+ensure_env_var "$WEB_ENV_FILE" NEXT_PUBLIC_SITE_URL "$APP_URL"
+ensure_env_var "$WEB_ENV_FILE" API_PROXY_ORIGIN "$API_PROXY_ORIGIN"
+
+if [ "$ROOT_ENV_CREATED" = false ] && [ "$WEB_ENV_CREATED" = false ] && [ "$ENV_FILES_UPDATED" = false ]; then
   echo "No env files were created."
   exit 0
 fi
@@ -133,9 +219,9 @@ fi
 echo "Local secrets and URLs have been initialized."
 echo ""
 echo "Next steps:"
-echo "  1. Install docker + nginx on the host if they are missing"
-echo "  2. Run: sudo docker compose up -d postgres redis"
-echo "  3. Run: npm ci"
-echo "  4. Run: npm run db:migrate -w packages/api"
-echo "  5. Enable services: sudo systemctl enable --now synapse-api synapse-web"
-echo "  6. For remote web dev only: start synapse-web-dev manually and use SSH port forwarding to 127.0.0.1:3002"
+echo "  1. Install Docker and Docker Compose on the host if they are missing"
+echo "  2. Run: docker compose --profile production build api web mobile-web"
+echo "  3. Run: docker compose up -d postgres redis"
+echo "  4. Run: docker compose --profile production run --rm api npm run db:rebuild:runtime -w packages/api"
+echo "  5. Run: ./infrastructure/scripts/issue-cert.sh"
+echo "  6. Run: docker compose --profile production up -d api web mobile-web nginx"

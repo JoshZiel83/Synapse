@@ -1,16 +1,27 @@
-FROM node:20-alpine AS builder
+FROM node:20-bookworm-slim AS builder
 WORKDIR /app
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends ca-certificates git \
+  && rm -rf /var/lib/apt/lists/*
+RUN git init
+RUN npm config set registry https://registry.npmmirror.com \
+  && npm config set fetch-retries 5 \
+  && npm config set fetch-retry-mintimeout 20000 \
+  && npm config set fetch-retry-maxtimeout 120000
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/api/package.json packages/api/
 RUN npm ci --workspace=packages/shared --workspace=packages/api
 COPY tsconfig.base.json ./
+COPY .setup/ .setup/
 COPY packages/shared/ packages/shared/
 COPY packages/api/ packages/api/
 RUN npx tsc -b packages/shared
+RUN npm run build -w packages/api
+RUN cp packages/api/src/infrastructure/database/schema.sql packages/api/dist/infrastructure/database/schema.sql
 
-FROM node:20-alpine
+FROM node:20-bookworm-slim
 WORKDIR /app
 COPY --from=builder /app/ ./
 EXPOSE 3001
-CMD ["npx", "tsx", "packages/api/src/index.ts"]
+CMD ["node", "packages/api/dist/index.js"]

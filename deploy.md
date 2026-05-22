@@ -1,181 +1,195 @@
-# Synapse Host Deploy
+# Synapse Docker Deploy
 
-This repository is deployed on a single Ubuntu host with:
+This repository is deployed on a single Ubuntu host with Docker Compose:
 
-- local `nginx`
-- `systemd` for API and web
-- Docker for PostgreSQL and Redis
-- desktop web on a production Next.js server
-- optional localhost-only Next dev server for remote debugging over SSH
+- `postgres` and `redis` for local infrastructure
+- `api` for the Fastify backend
+- `web` for the production Next.js desktop app
+- `mobile-web` for the exported Expo mobile web static site
+- `nginx` as the public TLS entrypoint
+- Dockerized Certbot for Let's Encrypt certificates and renewal
 
-## 1. Host prerequisites
+## 1. Host Prerequisites
 
-Install the host packages:
+Install Docker and Compose:
 
 ```bash
-sudo apt-get update
-sudo apt-get install -y docker.io docker-compose-v2 nginx
-sudo systemctl enable --now docker nginx
+apt-get update
+apt-get install -y docker.io docker-compose-v2
+systemctl enable --now docker
 ```
 
-## 2. Local env files
+The public host must allow inbound TCP `80` and `443`.
 
-Generate the local-only env files:
+## 2. DNS
+
+Point these hostnames at the server IP:
+
+- primary domain, for example `<primary-domain>`
+- `www.<primary-domain>`
+- `m.<primary-domain>`
+- `mobile.<primary-domain>`
+
+After generating `.env`, you can verify with:
 
 ```bash
-./setup.sh
+set -a; . ./.env; set +a
+getent ahostsv4 "$SYNAPSE_PUBLIC_DOMAIN" "$SYNAPSE_WWW_DOMAIN" "$SYNAPSE_MOBILE_SHORT_DOMAIN" "$SYNAPSE_MOBILE_DOMAIN"
 ```
 
-This creates:
+## 3. Local Env
 
-- `.env`
-- `packages/web-next/.env.local`
-
-Optional web env:
-
-- `NEXT_ALLOWED_DEV_ORIGINS` for extra Next dev origins, as a comma-separated list of hostnames or URLs
-
-Before starting the API in any environment, fill the Volcengine realtime ASR variables in `.env`:
-
-- `ASR_PROVIDER=volcengine`
-- `VOLCENGINE_ASR_APP_ID`
-- `VOLCENGINE_ASR_ACCESS_TOKEN`
-- `VOLCENGINE_ASR_SECRET_KEY`
-- `VOLCENGINE_ASR_RESOURCE_ID=volc.seedasr.sauc.duration`
-- `VOLCENGINE_ASR_WS_URL=wss://openspeech.bytedance.com/api/v3/sauc/bigmodel_async`
-- `VOLCENGINE_ASR_MAX_CONCURRENCY=3`
-- `VOLCENGINE_ASR_CONNECT_TIMEOUT_MS=10000`
-- `VOLCENGINE_ASR_IDLE_TIMEOUT_MS=15000`
-
-Default seeded platform admin:
-
-- email: `demo@synapse.dev`
-- password: `demo1234`
-
-## 3. Infrastructure containers
-
-Start the local-only infrastructure containers:
+Generate local-only secrets and public URLs:
 
 ```bash
-sudo docker compose up -d postgres redis
+SYNAPSE_PUBLIC_DOMAIN=<primary-domain> ./setup.sh
 ```
 
-Notes:
+This creates `.env` and `packages/web-next/.env.local`. Do not commit either file.
 
-- Redis is bound to loopback and requires a password from `.env`
+`setup.sh` stores the concrete production hostnames in local-only `.env` variables:
 
-## 4. Application dependencies
+- `SYNAPSE_PUBLIC_DOMAIN`
+- `SYNAPSE_WWW_DOMAIN`
+- `SYNAPSE_MOBILE_SHORT_DOMAIN`
+- `SYNAPSE_MOBILE_DOMAIN`
+- `LETSENCRYPT_CERT_NAME`
+- `LETSENCRYPT_EMAIL`
 
-Install Node dependencies:
+Before using real AI or ASR flows, fill the relevant provider variables in `.env`, including `AI_PROVIDER`, `AI_API_KEY`, `AI_BASE_URL`, `AI_MODEL`, and the Volcengine ASR variables if ASR is required.
+
+## 4. Build and Initialize
+
+Build production images:
 
 ```bash
-npm ci
+docker compose --profile production build api web mobile-web
 ```
 
-## 5. Database initialization
-
-For full reset plus seed data:
+Start infrastructure:
 
 ```bash
-bash -lc 'set -a && source ./.env && set +a && npm run db:reset -w packages/api'
+docker compose up -d postgres redis
+```
+
+For a fresh demo environment with seeded users, workspace, official actors, skills, and plugins:
+
+```bash
+docker compose --profile production run --rm api npm run db:rebuild:runtime -w packages/api
 ```
 
 For schema-only initialization:
 
 ```bash
-bash -lc 'set -a && source ./.env && set +a && npm run db:migrate -w packages/api'
+docker compose --profile production run --rm api npm run db:bootstrap:runtime -w packages/api
 ```
 
-## 6. Systemd services
+Seeded demo accounts:
 
-Install and enable the services:
+- `demo@synapse.dev` / `demo1234`
+- `yihang@synapse.dev` / `demo1234`
+
+## 5. TLS Certificates
+
+Issue a SAN certificate for all public hostnames:
 
 ```bash
-sudo install -m 644 infrastructure/systemd/synapse-api.service infrastructure/systemd/synapse-web.service infrastructure/systemd/synapse-web-dev.service -t /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl enable --now synapse-api synapse-web
+./infrastructure/scripts/issue-cert.sh
 ```
 
-Important:
+The public nginx config enables OCSP stapling with the Let's Encrypt chain.
 
-- On hosts with `synapse-api.service` enabled, do not also start the API manually with `npm run start -w packages/api`, `node dist/index.js`, or `npm run dev -w packages/api`.
-- `synapse-api.service` is the only supported API process on the host. A second API instance can grab port `3001`, trigger `EADDRINUSE`, and cause repeated restart attempts.
-- `infrastructure/scripts/start-api.sh` now refuses to start when port `3001` is already in use, and exits with status `200`. The unit file treats that exit code as non-restartable to avoid restart storms.
-- `synapse-web.service` is the only public web entrypoint and binds `127.0.0.1:3000` for nginx to proxy.
-- `synapse-web-dev.service` binds `127.0.0.1:3002` only. Keep it disabled by default and start it only when you need remote dev debugging.
-
-For remote web development:
+Install the renewal cron:
 
 ```bash
-sudo systemctl start synapse-web-dev
-ssh -L 3002:127.0.0.1:3002 <user>@<host>
+install -m 644 infrastructure/cron/synapse-certbot-renew /etc/cron.d/synapse-certbot-renew
 ```
 
-Then open `http://127.0.0.1:3002` locally through the tunnel.
-
-## 7. Nginx
-
-Do not commit the real `infrastructure/nginx.conf`.
-It is intentionally gitignored.
-
-Create a local config from `infrastructure/nginx.conf.template` and replace:
-
-- `{{SERVER_NAME}}`
-- `{{API_UPSTREAM}}`
-- `{{WEB_UPSTREAM}}`
-- `{{TLS_CERT_PATH}}`
-- `{{TLS_KEY_PATH}}`
-
-Install it:
+Manual renewal:
 
 ```bash
-sudo install -d -m 755 /etc/nginx/certs /etc/nginx/sites-available /etc/nginx/sites-enabled
-sudo install -m 644 infrastructure/nginx.conf /etc/nginx/sites-available/synapse.conf
-sudo ln -sfn /etc/nginx/sites-available/synapse.conf /etc/nginx/sites-enabled/synapse.conf
-sudo rm -f /etc/nginx/sites-enabled/default
-sudo nginx -t
-sudo systemctl reload nginx
+./infrastructure/scripts/renew-cert.sh
+```
+
+## 6. Start Production
+
+Start or update the public stack:
+
+```bash
+docker compose --profile production up -d api web mobile-web nginx
+```
+
+Service routing:
+
+- `https://${SYNAPSE_PUBLIC_DOMAIN}/` and `https://${SYNAPSE_WWW_DOMAIN}/` serve desktop web.
+- `https://${SYNAPSE_MOBILE_SHORT_DOMAIN}/` and `https://${SYNAPSE_MOBILE_DOMAIN}/` redirect to `/mobile/`.
+- `/api/`, `/ws`, and `/files/` are proxied to the API.
+- `/mobile/` is proxied to the `mobile-web` static nginx container.
+
+## 7. Updates
+
+API update:
+
+```bash
+docker compose --profile production up -d --build api
+```
+
+Desktop web update:
+
+```bash
+docker compose --profile production up -d --build web nginx
+```
+
+Mobile web update:
+
+```bash
+docker compose --profile production up -d --build mobile-web nginx
+```
+
+Nginx config update:
+
+```bash
+docker compose --profile production up -d --force-recreate nginx
 ```
 
 ## 8. Verification
 
-Check services:
+Check containers:
 
 ```bash
-systemctl is-active synapse-api synapse-web nginx docker
+docker compose --profile production ps
 ```
 
-Check health:
+Check health and routes:
 
 ```bash
-curl -sS http://localhost:3001/api/v1/health
-curl -sS https://<your-domain>/api/v1/health
-curl -I http://127.0.0.1:3000
+set -a; . ./.env; set +a
+curl -sS http://127.0.0.1:3001/api/v1/health
+curl -sS "https://${SYNAPSE_PUBLIC_DOMAIN}/api/v1/health"
+curl -I "https://${SYNAPSE_PUBLIC_DOMAIN}/"
+curl -I "https://${SYNAPSE_WWW_DOMAIN}/"
+curl -I "https://${SYNAPSE_MOBILE_SHORT_DOMAIN}/"
+curl -I "https://${SYNAPSE_MOBILE_SHORT_DOMAIN}/mobile/"
+```
+
+Check certificate and OCSP stapling:
+
+```bash
+set -a; . ./.env; set +a
+openssl s_client -connect "${SYNAPSE_PUBLIC_DOMAIN}:443" -servername "$SYNAPSE_PUBLIC_DOMAIN" -status </dev/null
 ```
 
 ## 9. Troubleshooting
 
-If a session shows `Recovered after the previous worker stopped while this turn was still running.`:
-
-- A previous API worker exited while a turn was still marked `running`. The message is a recovery marker, not a model response.
-- First check for duplicate API processes:
+Inspect logs:
 
 ```bash
-systemctl status synapse-api.service --no-pager
-ss -ltnp | rg ':3001'
-ps -eo pid,ppid,lstart,etime,cmd | rg 'node dist/index.js|npm run start -w packages/api|tsx watch src/index.ts'
+docker compose --profile production logs --tail=100 api
+docker compose --profile production logs --tail=100 web
+docker compose --profile production logs --tail=100 mobile-web
+docker compose --profile production logs --tail=100 nginx
 ```
 
-- If port `3001` is owned by a user-session process instead of `synapse-api.service`, stop the stray process and then restart the service:
+If nginx fails with missing certificate files, run `./infrastructure/scripts/issue-cert.sh` before starting `nginx`.
 
-```bash
-sudo systemctl stop synapse-api.service
-kill <stray-pid>
-sudo systemctl start synapse-api.service
-```
-
-- If you need to confirm whether the service is looping on startup, inspect the API journal:
-
-```bash
-journalctl -u synapse-api.service -n 100 --no-pager
-```
+If ports `80` or `443` are already in use, stop the conflicting process before starting the public stack.

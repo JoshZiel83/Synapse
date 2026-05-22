@@ -191,12 +191,12 @@ Dentro de `packages/mobile-app` también puedes usar `npm run ios` o `npm run an
 
 ## Despliegue
 
-Hoy el repositorio trae una ruta de autoalojamiento pensada para una sola máquina Ubuntu:
+Hoy el repositorio trae una ruta de autoalojamiento basada en Docker Compose para una sola máquina Ubuntu:
 
-- `systemd` para la API y la web de escritorio
-- `nginx` como punto de entrada público
 - PostgreSQL y Redis en Docker
-- la web de escritorio servida desde `packages/web-next`
-- el mobile web exportado estáticamente desde `packages/mobile-app`
+- API y web de escritorio ejecutadas en contenedores Docker
+- nginx en Docker como punto de entrada TLS público
+- mobile web exportado desde `packages/mobile-app` y servido bajo `/mobile/`
+- Certbot en Docker para certificados Let's Encrypt y renovación
 
 Consulta [`deploy.md`](deploy.md) para el flujo de despliegue en producción usado por este repositorio.
