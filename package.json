@@ -6,7 +6,8 @@
     "packages/shared",
     "packages/api",
     "packages/remote-agent-daemon",
-    "packages/web-next"
+    "packages/web-next",
+    "packages/e2e"
   ],
   "scripts": {
     "dev:api": "npm run dev -w packages/api",
