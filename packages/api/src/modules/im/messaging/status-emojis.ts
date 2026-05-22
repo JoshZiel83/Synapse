@@ -37,22 +37,20 @@ export const DEFAULT_STATUS_EMOJIS: Record<StatusLevel, string> = {
 }
 
 /**
- * Feishu emoji_type values (uppercase identifiers from Feishu's emoji table).
- * Some entries are best-effort; if Feishu rejects them at runtime the connector
- * should log and fall back to a known-safe code (e.g. "DONE" or "OK").
- *
- * Source: https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce
+ * Feishu emoji_type values (validated against
+ * https://open.feishu.cn/document/server-docs/im-v1/message-reaction/emojis-introduce).
+ * Identifier casing matches Feishu exactly (THUMBSUP uppercase, OnIt mixed).
  */
 export const DEFAULT_FEISHU_EMOJI_TYPES: Record<StatusLevel, string> = {
-  queued: "EYES",
-  thinking: "THINKING",
-  tool: "HAMMERANDWRENCH",
-  coding: "COMPUTER",
-  web: "GLOBESHOWINGEUROPEAFRICA",
-  done: "DONE",
-  error: "X",
-  stall: "HOURGLASSNOTDONE",
-  stall_hard: "WARNING",
+  queued: "OnIt", // "on it / got it" — best semantic match for 👀 queued
+  thinking: "THINKING", // 🧠 — exact match in Feishu's table
+  tool: "HAMMER", // 🛠️ — closest tool icon
+  coding: "STRIVE", // 💻 — Feishu has no laptop; "strive" implies focused work
+  web: "Get", // 🌐 — Feishu has no globe; "Get" implies fetching
+  done: "DONE", // ✅ — exact match
+  error: "ERROR", // ❌ — exact match
+  stall: "Typing", // ⏳ — Feishu's typing indicator looks like a slow ellipsis
+  stall_hard: "Alarm", // ⚠️ — alert / attention required
 }
 
 /**

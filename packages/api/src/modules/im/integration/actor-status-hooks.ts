@@ -35,13 +35,25 @@ interface ActiveStatusSession {
 
 const activeSessions = new Map<string, ActiveStatusSession>()
 
-const RECENT_INBOUND_WINDOW_MS = 5 * 60 * 1000 // 5 min — turn should start within this
+const RECENT_INBOUND_WINDOW_MS = 60 * 60 * 1000 // 1 hour — wide enough for delayed turns
 
 interface InboundLinkLookup {
   externalMessageId: string
   endpointExternalId: string
   transportKind: string
   transportAccountId: string
+}
+
+async function resolveConversationIdForSession(
+  sessionId: string
+): Promise<string | null> {
+  const row = await db
+    .selectFrom("sessions")
+    .select("conversation_id")
+    .where("id", "=", sessionId)
+    .limit(1)
+    .executeTakeFirst()
+  return row?.conversation_id || null
 }
 
 async function findRecentInboundLinkForConversation(
@@ -93,14 +105,27 @@ async function ensureControllerForSession(input: {
 
   const link = await findRecentInboundLinkForConversation(input.conversationId)
   if (!link) {
-    // Not an IM-originated turn (e.g. web composer), no reactions
+    console.log(
+      `[im:status] no inbound link found for cid=${input.conversationId.slice(0, 8)}`
+    )
     return null
   }
+  console.log(
+    `[im:status] link found: kind=${link.transportKind} externalMsgId=${link.externalMessageId.slice(0, 12)} acct=${link.transportAccountId.slice(0, 8)}`
+  )
   const connector = tryGetConnector(link.transportKind as any)
-  if (!connector) return null
+  if (!connector) {
+    console.log(`[im:status] no connector registered for ${link.transportKind}`)
+    return null
+  }
 
   const account = await getTransportAccountById(link.transportAccountId)
-  if (!account || account.workspaceId !== input.workspaceId) return null
+  if (!account || account.workspaceId !== input.workspaceId) {
+    console.log(
+      `[im:status] account mismatch: acct=${account?.id?.slice(0, 8)} acct.ws=${account?.workspaceId?.slice(0, 8)} ev.ws=${input.workspaceId.slice(0, 8)}`
+    )
+    return null
+  }
 
   const adapter = connector.createStatusReactionAdapter({
     account,
@@ -109,7 +134,11 @@ async function ensureControllerForSession(input: {
       endpointExternalId: link.endpointExternalId,
     },
   })
-  if (!adapter) return null
+  if (!adapter) {
+    console.log(`[im:status] connector returned null adapter`)
+    return null
+  }
+  console.log(`[im:status] adapter created, registering controller`)
 
   const controller = createStatusReactionController({
     adapter,
@@ -151,14 +180,35 @@ export function installActorStatusHooks(): () => void {
     onEvent("actor.thinking", async (event) => {
       const payload = event.payload as Record<string, unknown>
       const sessionId = String(payload.sessionId || "")
-      const conversationId = String(payload.conversationId || "")
-      if (!sessionId || !conversationId) return
+      let conversationId = String(payload.conversationId || "")
+      if (!sessionId) return
+      if (!conversationId) {
+        const looked = await resolveConversationIdForSession(sessionId)
+        if (!looked) {
+          console.log(
+            `[im:status] no conversationId for sid=${sessionId.slice(0, 8)}`
+          )
+          return
+        }
+        conversationId = looked
+      }
+      console.log(
+        `[im:status] actor.thinking sid=${sessionId.slice(0, 8)} cid=${conversationId.slice(0, 8)} ws=${event.workspaceId.slice(0, 8)}`
+      )
       const controller = await ensureControllerForSession({
         sessionId,
         workspaceId: event.workspaceId,
         conversationId,
       })
-      if (!controller) return
+      if (!controller) {
+        console.log(
+          `[im:status] no controller for sid=${sessionId.slice(0, 8)}`
+        )
+        return
+      }
+      console.log(
+        `[im:status] dispatching queued → thinking for sid=${sessionId.slice(0, 8)}`
+      )
       controller.set("queued")
       controller.set("thinking")
     })
