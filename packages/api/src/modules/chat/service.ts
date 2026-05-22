@@ -5827,3 +5827,95 @@ export async function broadcastTypingState(params: {
   })
   return { broadcast: true }
 }
+
+// ============ Stage 16: assistant message retry ============
+
+/**
+ * Re-trigger an actor turn after a model_error_notice item. Looks up the
+ * conversation item by id, verifies it's a retry-able error notice owned
+ * by an accessible conversation, then enqueues a session wakeup that will
+ * run another turn. UI calls this when the user taps "retry" on a failed
+ * assistant message.
+ */
+export async function retryAssistantMessage(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  itemId: string
+}): Promise<{
+  retryEnqueued: boolean
+  sessionId: string
+  actorId: string
+}> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  await requireConversationAccess(
+    rootQueryable(),
+    params.conversationId,
+    identity.workspaceMemberId
+  )
+
+  const item = await getConversationFeedItemById(params.itemId)
+  if (!item || item.conversationId !== params.conversationId) {
+    throw createChatError(404, "item_not_found", "Conversation item not found")
+  }
+  if (item.kind !== "message" || item.messageType !== "model_error_notice") {
+    throw createChatError(
+      400,
+      "item_not_retryable",
+      "Only model error notices can be retried"
+    )
+  }
+
+  const metadata = (item.metadata ?? {}) as Record<string, unknown>
+  const retrySessionId =
+    typeof metadata.retrySessionId === "string" ? metadata.retrySessionId : null
+  if (!retrySessionId) {
+    throw createChatError(
+      400,
+      "retry_metadata_missing",
+      "model_error_notice is missing retrySessionId in metadata"
+    )
+  }
+
+  const authorParticipantId =
+    typeof item.author?.participantId === "string"
+      ? item.author.participantId
+      : null
+  const actorId =
+    typeof item.author?.actorId === "string" ? item.author.actorId : null
+  if (!actorId) {
+    throw createChatError(
+      400,
+      "retry_actor_missing",
+      "model_error_notice has no actor author"
+    )
+  }
+
+  const { enqueueSessionWakeup } = await import("../session/runtime.js")
+  await enqueueSessionWakeup({
+    sessionId: retrySessionId,
+    actorId,
+    workspaceId: params.workspaceId,
+    sourceType: "user_message",
+    sourceItemId: params.itemId,
+    sourceParticipantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
+    sourceParticipantId: authorParticipantId ?? undefined,
+    sourceName: "retry",
+    summary: "user requested retry of failed assistant turn",
+    metadata: {
+      source: "chat.message_retry",
+      retryItemId: params.itemId,
+      conversationId: params.conversationId,
+    },
+    trigger: "user_message",
+  })
+
+  return {
+    retryEnqueued: true,
+    sessionId: retrySessionId,
+    actorId,
+  }
+}

@@ -39,6 +39,7 @@ import {
   listChatPushTokens,
   deleteChatPushToken,
   broadcastTypingState,
+  retryAssistantMessage,
 } from "./service.js"
 import {
   canUserViewInteraction,
@@ -830,4 +831,31 @@ export default async function chatController(app: FastifyInstance) {
       return replyChatError(reply, error)
     }
   })
+
+  // Retry a failed assistant turn (e.g. after a model_error_notice).
+  app.post<{
+    Params: { workspaceId: string; conversationId: string; itemId: string }
+  }>(
+    `${CHAT_BASE_PATH}/conversations/:conversationId/messages/:itemId/retry`,
+    async (request, reply) => {
+      try {
+        const params = z
+          .object({
+            workspaceId: chatUuidSchema,
+            conversationId: chatUuidSchema,
+            itemId: chatUuidSchema,
+          })
+          .parse(request.params)
+        const response = await retryAssistantMessage({
+          workspaceId: params.workspaceId,
+          userId: getRequestUserId(request),
+          conversationId: params.conversationId,
+          itemId: params.itemId,
+        })
+        return reply.send(response)
+      } catch (error) {
+        return replyChatError(reply, error)
+      }
+    }
+  )
 }
