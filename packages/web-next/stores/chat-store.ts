@@ -11,6 +11,10 @@ import {
   type PendingConversationRead,
   type StoredChatQueueState,
 } from "@/lib/chat-persistence"
+import {
+  isChatServiceWorkerActive,
+  requestChatServiceWorkerSync,
+} from "@/lib/chat-service-worker"
 import { createUuid } from "@/lib/uuid"
 import type {
   ActorRuntimeState,
@@ -1340,6 +1344,15 @@ async function flushPendingReadsInternal(snapshot: ChatWorkspaceSnapshot) {
     return snapshot
   }
 
+  // S10: when the service worker is actively controlling the page, it owns
+  // read-watermark flushing exclusively. The main-thread store still tracks
+  // pendingReads optimistically (so the unread badge clears immediately) but
+  // skips the POST — the SW will pick the entries up via the shared IDB
+  // queue and broadcast `chat:queue-updated` when done.
+  if (isChatServiceWorkerActive()) {
+    return snapshot
+  }
+
   let nextSnapshot = snapshot
   const pendingReads = Object.values(snapshot.pendingReads).sort(
     (left, right) => left.readUpToSequence - right.readUpToSequence
@@ -1371,6 +1384,17 @@ async function flushOutboxInternal(
   loadedMessageItems: ChatConversationItem[]
 ) {
   if (!snapshot.clientInstanceId) {
+    return {
+      snapshot,
+      loadedMessageItems,
+      retryAttemptCount: null as number | null,
+    }
+  }
+
+  // S10: when the service worker is the active flush owner, the main thread
+  // skips POSTing outbox entries. The SW reads the same IDB queue and
+  // POSTs once per clientMessageId, then broadcasts `chat:queue-updated`.
+  if (isChatServiceWorkerActive()) {
     return {
       snapshot,
       loadedMessageItems,
@@ -2051,6 +2075,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     void queuePersistSnapshot(snapshot, nextSnapshot)
 
     if (!nextSnapshot.clientInstanceId) {
+      return
+    }
+
+    // S10: when SW is active, it owns the POST. We've already optimistically
+    // updated local state + persisted; the SW will pick the pendingRead up
+    // from the shared IDB queue.
+    if (isChatServiceWorkerActive()) {
+      void requestChatServiceWorkerSync("mark-conversation-read")
       return
     }
 
