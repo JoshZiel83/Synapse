@@ -465,7 +465,7 @@ export async function resolveInlineReferenceSegments(
 export function conversationParticipantEntryToEntityRef(
   participant: ConversationParticipantEntry
 ): ConversationEntityRef {
-  if (participant.type === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
+  if (participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     return {
       participantType: CONVERSATION_PARTICIPANT_TYPE.ACTOR,
       actorId: participant.id,
@@ -476,7 +476,10 @@ export function conversationParticipantEntryToEntityRef(
     }
   }
 
-  if (participant.type === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER) {
+  if (
+    participant.participantType ===
+    CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
+  ) {
     return {
       participantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
       workspaceMemberId: participant.id,

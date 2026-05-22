@@ -1089,11 +1089,11 @@ async function resolveDirectUserPrivateContext(
   const participantTwoActorId =
     row.participant_two_kind === "actor" ? row.participant_two_actor_id : null
   const participantOneWorkspaceMemberId =
-    row.participant_one_kind === "member"
+    row.participant_one_kind === "workspace_member"
       ? row.participant_one_workspace_member_id
       : null
   const participantTwoWorkspaceMemberId =
-    row.participant_two_kind === "member"
+    row.participant_two_kind === "workspace_member"
       ? row.participant_two_workspace_member_id
       : null
 

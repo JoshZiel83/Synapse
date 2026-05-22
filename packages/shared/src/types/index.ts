@@ -2184,7 +2184,7 @@ export interface NormalizedMcpToolResult {
 // ============ Tool Plugin System ============
 
 export interface ConversationParticipantEntry {
-  type: "actor" | "workspace_member" | "external"
+  participantType: "actor" | "workspace_member" | "external"
   id: string
   name: string
   title?: string

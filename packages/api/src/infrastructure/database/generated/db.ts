@@ -431,7 +431,10 @@ export type RelationshipApprovalMode = "auto" | "manual"
 
 export type RelationshipRequestStatus = "approved" | "pending" | "rejected"
 
-export type RelationshipTargetType = "actor" | "member" | "remote_agent"
+export type RelationshipTargetType =
+  | "actor"
+  | "remote_agent"
+  | "workspace_member"
 
 export type RelayAuthorizationGrantsRetention = "consume_once" | "until_revoked"
 

@@ -7,9 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION = "2026-05-22-s9"
+const CURRENT_SCHEMA_VERSION = "2026-05-22-s17"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "rename conversation_participants.participant_kind -> participant_type and ENUM type to match"
+  "rename relationship_target_type ENUM value 'member' -> 'workspace_member' (used by relationship + direct-conversation-binding tables)"
 
 /**
  * Incremental DDL applied to non-empty existing databases. Each step is
@@ -71,6 +71,26 @@ const INCREMENTAL_MIGRATIONS: IncrementalMigration[] = [
           WHERE typname = 'conversation_participants_kind'
         ) THEN
           ALTER TYPE conversation_participants_kind RENAME TO conversation_participants_type;
+        END IF;
+      END
+      $$;
+    `,
+  },
+  {
+    version: "2026-05-22-s17",
+    description:
+      "rename relationship_target_type ENUM value 'member' -> 'workspace_member' (relationship + direct-conversation-binding columns)",
+    sql: `
+      DO $$
+      BEGIN
+        IF EXISTS (
+          SELECT 1
+          FROM pg_enum e
+          JOIN pg_type t ON t.oid = e.enumtypid
+          WHERE t.typname = 'relationship_target_type'
+            AND e.enumlabel = 'member'
+        ) THEN
+          ALTER TYPE relationship_target_type RENAME VALUE 'member' TO 'workspace_member';
         END IF;
       END
       $$;

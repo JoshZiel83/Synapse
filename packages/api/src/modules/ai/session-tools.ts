@@ -113,7 +113,7 @@ type InviteableActor = {
 }
 
 type SendToCandidate = {
-  type: "actor" | "workspace_member" | "external"
+  participantType: "actor" | "workspace_member" | "external"
   participantId: string
   actorId?: string
   workspaceMemberId?: string
@@ -260,9 +260,9 @@ function buildSendToDefinition(params: {
 }): ToolDefinition {
   const rosterDesc = params.otherParticipants
     .map((member) =>
-      member.type === "workspace_member"
+      member.participantType === "workspace_member"
         ? `"${member.name}" (workspace member)`
-        : member.type === "external"
+        : member.participantType === "external"
           ? `"${member.name}" (external${member.linkedWorkspaceMemberName ? `, linked to workspace user ${member.linkedWorkspaceMemberName}` : ""})`
           : `"${member.name}" (actor${member.title ? ", " + member.title : ""})`
     )
@@ -368,7 +368,7 @@ function formatWeekdayInZone(date: Date, timeZone: string) {
 function buildSendToMention(candidate: SendToCandidate): ConversationEntityRef {
   return {
     participantId: candidate.participantId,
-    participantType: candidate.type,
+    participantType: candidate.participantType,
     actorId: candidate.actorId,
     workspaceMemberId: candidate.workspaceMemberId,
     externalUserKey: candidate.externalUserKey,
@@ -433,7 +433,7 @@ function buildSendToCandidates(
       const name = participant.actor_name || "Unknown actor"
       const title = participant.actor_title || participant.actor_role || "Actor"
       candidates.push({
-        type: "actor",
+        participantType: "actor",
         participantId: participant.id,
         actorId: participant.actor_id,
         title: participant.actor_title || undefined,
@@ -456,7 +456,7 @@ function buildSendToCandidates(
         ? `, reachable via ${transportKind === "feishu" ? "Feishu" : "WeChat"}`
         : ""
       candidates.push({
-        type: "workspace_member",
+        participantType: "workspace_member",
         participantId: participant.id,
         workspaceMemberId: participant.workspace_member_id,
         name,
@@ -484,7 +484,7 @@ function buildSendToCandidates(
         )
       )
       candidates.push({
-        type: "external",
+        participantType: "external",
         participantId: participant.id,
         externalUserKey:
           (participant.transport_external_id as string | null) || undefined,
@@ -1332,7 +1332,7 @@ export function registerCallableToolPlugins(): void {
         return { active: false, definition: null as any }
       }
       const otherParticipants = conversationParticipants.filter(
-        (m) => m.type === "workspace_member" || m.id !== ctx.actorId
+        (m) => m.participantType === "workspace_member" || m.id !== ctx.actorId
       )
       if (otherParticipants.length === 0) {
         return { active: false, definition: null as any }

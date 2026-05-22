@@ -57,7 +57,7 @@ export function buildUserInteractionCandidatesFromEntries(
   const candidates: UserInteractionCandidate[] = []
 
   for (const participant of participants) {
-    if (participant.type !== "workspace_member") continue
+    if (participant.participantType !== "workspace_member") continue
     if (!participant.participantId) continue
 
     const name = participant.name.trim() || "User"

@@ -24,6 +24,7 @@ import type {
   ChatConversationView,
   ChatSyncEvent,
   ConversationEntityRef,
+  ServerToolCall,
   ConversationFeedEventPayloadMap,
   ConversationFeedEventType,
   ConversationMessageTransportContext,
@@ -90,13 +91,6 @@ export interface ConversationSummary {
     canManage?: boolean
     canManageMembers?: boolean
   }
-}
-
-export interface ServerToolCall {
-  type: "web_search" | "web_fetch"
-  query?: string
-  url?: string
-  results?: { url: string; title: string; pageAge?: string }[]
 }
 
 export interface FeedMessage {

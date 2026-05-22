@@ -342,7 +342,7 @@ async function loadToolResolveConversationParticipants(params: {
     if (member.state !== "active") continue
     if (member.actor_id) {
       entries.push({
-        type: "actor",
+        participantType: "actor",
         id: member.actor_id,
         participantId: member.id,
         name: member.participant_name || "Unknown actor",
@@ -367,7 +367,7 @@ async function loadToolResolveConversationParticipants(params: {
           ? member.transport_kind
           : undefined
       entries.push({
-        type: "workspace_member",
+        participantType: "workspace_member",
         id: workspaceMemberId,
         participantId: member.id,
         name: member.user_name || "User",
@@ -382,7 +382,7 @@ async function loadToolResolveConversationParticipants(params: {
       const linkedWorkspaceMemberName =
         (member.linked_user_name as string | null) || undefined
       entries.push({
-        type: "external",
+        participantType: "external",
         id:
           (member.linked_user_id as string | null) ||
           (member.transport_external_id as string | null) ||
@@ -680,7 +680,8 @@ export async function actorThink(
         currentToolConversationParticipants?.filter(
           (participant) =>
             !(
-              participant.type === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+              participant.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
               participant.id === actor.id
             )
         ).length || 0,

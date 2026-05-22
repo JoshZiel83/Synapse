@@ -38,7 +38,7 @@ export const WORKSPACE_ACCESS_KEYS = [
 ] as const
 
 export const RELATIONSHIP_PROFILE_SUBJECT_TYPE = {
-  MEMBER: "member",
+  MEMBER: "workspace_member",
   ACTOR: "actor",
   REMOTE_AGENT: "remote_agent",
 } as const
@@ -74,7 +74,7 @@ export const RELATIONSHIP_REQUEST_STATUSES = [
   RELATIONSHIP_REQUEST_STATUS.REJECTED,
 ] as const
 export const CONTACT_TARGET_TYPE = {
-  MEMBER: "member",
+  MEMBER: "workspace_member",
   ACTOR: "actor",
   REMOTE_AGENT: "remote_agent",
 } as const

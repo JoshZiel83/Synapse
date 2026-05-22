@@ -327,7 +327,7 @@ export function startSessionThinkingWorker() {
           )
           if (selfParticipant) {
             participantEntries.push({
-              type: "actor",
+              participantType: "actor",
               id: actorId,
               participantId: selfParticipant.id,
               name:
@@ -349,7 +349,7 @@ export function startSessionThinkingWorker() {
               member.state === "active"
             ) {
               participantEntries.push({
-                type: "actor",
+                participantType: "actor",
                 id: member.actor_id,
                 participantId: member.id,
                 name: member.actor_name,
@@ -368,7 +368,7 @@ export function startSessionThinkingWorker() {
                 )
               }
               participantEntries.push({
-                type: "workspace_member",
+                participantType: "workspace_member",
                 id: workspaceMemberId,
                 participantId: member.id,
                 name: member.user_name || "User",
@@ -381,7 +381,7 @@ export function startSessionThinkingWorker() {
               const linkedUserName =
                 (member.linked_user_name as string | null) || undefined
               participantEntries.push({
-                type: "external",
+                participantType: "external",
                 id:
                   (member.linked_user_id as string | null) ||
                   (member.transport_external_id as string | null) ||

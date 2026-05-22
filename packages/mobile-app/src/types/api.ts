@@ -61,61 +61,14 @@ export interface ContactWorkspaceRef {
   slug: string
 }
 
-export interface ConversationParticipantView {
-  memberId?: string
-  participantId?: string
-  type?: "actor" | "workspace_member" | "external"
-  id?: string
-  workspaceMemberId?: string
-  actorId?: string
-  name?: string
-  title?: string
-  role?: string
-  conversationRole?: string
-  avatarUrl?: string
-  avatarEmoji?: string
-  state?: string
-}
+export type {
+  ConversationParticipantView,
+  ConversationMessagePreview,
+  ConversationPresentationView,
+  ConversationSummaryView,
+} from "@shared"
 
-export interface ConversationMessagePreview {
-  content: string
-  role: "user" | "assistant" | "system"
-  actorName?: string
-  createdAt: string
-}
-
-export interface ConversationPresentationView {
-  chatType: "direct" | "group" | "virtual"
-  title: string
-  avatarUrl?: string
-  subtitle?: string
-  peer?: ConversationParticipantView
-  canRename?: boolean
-  canManageMembers?: boolean
-}
-
-export interface ConversationSummaryView {
-  id: string
-  kind: "private" | "group" | "virtual"
-  boundary: "internal" | "external"
-  status: "active" | "completed"
-  transportKind?: string
-  participants: ConversationParticipantView[]
-  members: ConversationParticipantView[]
-  lastMessage?: ConversationMessagePreview
-  unreadCount: number
-  createdAt: string
-  title: string
-  name: string
-  avatarUrl?: string
-  presentation?: ConversationPresentationView
-  permissions?: {
-    canManage?: boolean
-    canManageMembers?: boolean
-  }
-  viewerParticipantId?: string
-  viewerWorkspaceMemberId?: string
-}
+import type { ConversationParticipantView } from "@shared"
 
 export interface ConversationMemberListResponse {
   members: ConversationParticipantView[]
