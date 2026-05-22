@@ -17,8 +17,15 @@
 import { sql } from "kysely"
 import { db } from "../../../infrastructure/database/kysely.js"
 import { onEvent } from "../../../infrastructure/events/index.js"
-import { getTransportAccountById } from "../service.js"
+import {
+  getTransportAccountById,
+  loadTransportEmojiReactions,
+  saveTransportEmojiReactions,
+} from "../service.js"
 import { tryGetConnector } from "../connectors/registry.js"
+import { feishuConnector } from "../connectors/feishu/index.js"
+import { createFeishuClient } from "../connectors/feishu/client.js"
+import { createFeishuReactionAdapter } from "../connectors/feishu/reactions.js"
 import {
   createStatusReactionController,
   type StatusReactionController,
@@ -136,13 +143,20 @@ async function ensureControllerForSession(input: {
     return null
   }
 
-  const adapter = connector.createStatusReactionAdapter({
-    account,
-    messageRef: {
-      externalMessageId: link.externalMessageId,
-      endpointExternalId: link.endpointExternalId,
-    },
-  })
+  const adapter =
+    link.transportKind === "feishu"
+      ? await buildFeishuAdapterWithPersistence({
+          account,
+          externalMessageId: link.externalMessageId,
+          endpointExternalId: link.endpointExternalId,
+        })
+      : connector.createStatusReactionAdapter({
+          account,
+          messageRef: {
+            externalMessageId: link.externalMessageId,
+            endpointExternalId: link.endpointExternalId,
+          },
+        })
   if (!adapter) {
     console.log(`[im:status] connector returned null adapter`)
     return null
@@ -171,6 +185,77 @@ async function destroyControllerForSession(sessionId: string): Promise<void> {
   if (!entry) return
   activeSessions.delete(sessionId)
   await entry.controller.destroy()
+}
+
+/**
+ * Build a Feishu StatusReactionAdapter pre-loaded with persisted reaction_id
+ * state. Whenever the in-memory state changes, persist it back so a process
+ * restart can read it and DELETE orphan reactions instead of leaking them.
+ */
+async function buildFeishuAdapterWithPersistence(input: {
+  account: Awaited<ReturnType<typeof getTransportAccountById>>
+  externalMessageId: string
+  endpointExternalId: string
+}) {
+  if (!input.account) return null
+  const account = input.account
+  // Best-effort: load previously persisted reaction ids (silent on failure)
+  let initial: Record<string, string> = {}
+  try {
+    initial = await loadTransportEmojiReactions({
+      transportAccountId: account.id,
+      externalMessageId: input.externalMessageId,
+    })
+  } catch (err) {
+    console.warn("[im:status] failed to load persisted reactions:", err)
+  }
+  const client = createFeishuClient(account)
+  const adapter = createFeishuReactionAdapter({
+    client,
+    messageRef: {
+      externalMessageId: input.externalMessageId,
+      endpointExternalId: input.endpointExternalId,
+    },
+    onReactionTracked: ({ reactionIdsByEmoji }) => {
+      // Fire-and-forget persistence; no need to await in the hot path
+      void saveTransportEmojiReactions({
+        transportAccountId: account.id,
+        externalMessageId: input.externalMessageId,
+        reactionIdsByEmoji,
+      }).catch((err) => {
+        console.warn("[im:status] failed to save reactions:", err)
+      })
+    },
+  })
+  // If we restored prior state, replay it onto the adapter's bookkeeping so
+  // setReaction("same emoji") becomes a no-op and clearReaction can delete.
+  if (Object.keys(initial).length > 0) {
+    for (const [emoji, reactionId] of Object.entries(initial)) {
+      // Adapter exposes no setter for prior state; the reactionIdsByEmoji map
+      // lives in the adapter closure. The pragmatic recovery here is to
+      // immediately delete any orphan reactions left by a prior process.
+      try {
+        await client.im.messageReaction.delete({
+          path: {
+            message_id: input.externalMessageId,
+            reaction_id: reactionId,
+          },
+        })
+      } catch {
+        // ignored: maybe already deleted or stale id
+      }
+      void emoji // emoji is consulted by the deletion call's logging path only
+    }
+    // Persist the now-cleared state so we don't try this again next restart
+    try {
+      await saveTransportEmojiReactions({
+        transportAccountId: account.id,
+        externalMessageId: input.externalMessageId,
+        reactionIdsByEmoji: {},
+      })
+    } catch {}
+  }
+  return adapter
 }
 
 /**

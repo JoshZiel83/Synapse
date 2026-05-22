@@ -2167,3 +2167,50 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
     itemMetadata: parseJsonObject(row.item_metadata),
   }
 }
+
+/**
+ * Read the persisted glyph → reaction_id map from transport_message_links.
+ * Used by StatusReactionController to recover state after a process restart
+ * so it can DELETE any orphan reactions instead of leaking them on Feishu.
+ */
+export async function loadTransportEmojiReactions(input: {
+  transportAccountId: string
+  externalMessageId: string
+}): Promise<Record<string, string>> {
+  const row = await db
+    .selectFrom("transport_message_links")
+    .select("external_emoji_reactions")
+    .where("transport_account_id", "=", input.transportAccountId)
+    .where("external_message_id", "=", input.externalMessageId)
+    .where("direction", "=", "inbound")
+    .limit(1)
+    .executeTakeFirst()
+  const raw = row?.external_emoji_reactions
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return {}
+  const out: Record<string, string> = {}
+  for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+    if (typeof v === "string") out[k] = v
+  }
+  return out
+}
+
+/**
+ * Persist the current glyph → reaction_id map on the inbound link row.
+ * Called by the adapter on every add/delete so a restart can recover.
+ */
+export async function saveTransportEmojiReactions(input: {
+  transportAccountId: string
+  externalMessageId: string
+  reactionIdsByEmoji: Record<string, string>
+}): Promise<void> {
+  await db
+    .updateTable("transport_message_links")
+    .set({
+      external_emoji_reactions: sql`${JSON.stringify(input.reactionIdsByEmoji)}::jsonb`,
+      updated_at: sql`NOW()`,
+    })
+    .where("transport_account_id", "=", input.transportAccountId)
+    .where("external_message_id", "=", input.externalMessageId)
+    .where("direction", "=", "inbound")
+    .execute()
+}
