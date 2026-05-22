@@ -16,6 +16,11 @@ import {
   loadTransportMessageLinkForDelivery,
   updateTransportMessageLinkStatus,
 } from "../modules/im/service.js"
+import { tryGetConnector } from "../modules/im/connectors/registry.js"
+import {
+  decodeFromConversationItem,
+  type EncodedContentBlock,
+} from "../modules/im/messaging/canonical-encoding.js"
 import { registerWorker } from "./registry.js"
 
 function nonEmptyString(value: unknown) {
@@ -350,31 +355,71 @@ export function startImTransportDeliveryWorker() {
         return { success: true, reason: "external author" }
       }
       try {
-        const deliveryResult =
-          link.transportKind === "feishu"
-            ? await deliverViaFeishu({
-                account: link.account,
-                endpoint: {
-                  endpointType: link.endpoint.endpointType,
-                  externalId: link.endpoint.externalId,
-                },
-                item,
-              })
-            : await deliverViaWeixin({
-                account: link.account,
-                endpoint: {
-                  externalId: link.endpoint.externalId,
-                  metadata: link.endpoint.metadata,
-                },
-                item,
-              })
+        const connector = tryGetConnector(link.transportKind)
+        let deliveryResult: { externalMessageId: string }
+        if (connector && link.transportKind === "feishu") {
+          // New path: route through TransportConnector. Build a CanonicalMessage
+          // from the item, resolve mentions, then let the connector render +
+          // send. The legacy deliverViaFeishu remains for now but is unused.
+          const message = decodeFromConversationItem({
+            content: item.content,
+            contentBlocks: item.contentBlocks as EncodedContentBlock[],
+            transportMetadata:
+              ((item as unknown as { metadata?: Record<string, unknown> })
+                .metadata?.transport as Record<string, unknown>) || undefined,
+          })
+          const mentions = await resolveTransportMentionRecipients({
+            transportKind: link.transportKind,
+            transportAccountId: link.account.id,
+            endpointType: link.endpoint.endpointType,
+            endpointExternalId: link.endpoint.externalId,
+            item,
+          })
+          // Re-attach mention parts with externalId so the connector renders <at> markup
+          for (const m of mentions) {
+            message.parts.push({
+              type: "mention",
+              externalId: m.externalId,
+              displayName: m.displayName || m.externalId,
+            })
+          }
+          deliveryResult = await connector.sendMessage({
+            account: link.account,
+            endpoint: {
+              endpointType: link.endpoint.endpointType,
+              externalId: link.endpoint.externalId,
+              metadata: link.endpoint.metadata,
+            },
+            message,
+          })
+        } else {
+          const res =
+            link.transportKind === "feishu"
+              ? await deliverViaFeishu({
+                  account: link.account,
+                  endpoint: {
+                    endpointType: link.endpoint.endpointType,
+                    externalId: link.endpoint.externalId,
+                  },
+                  item,
+                })
+              : await deliverViaWeixin({
+                  account: link.account,
+                  endpoint: {
+                    externalId: link.endpoint.externalId,
+                    metadata: link.endpoint.metadata,
+                  },
+                  item,
+                })
+          deliveryResult = { externalMessageId: res.messageId }
+        }
 
         await updateTransportMessageLinkStatus({
           linkId,
           status: "sent",
-          externalMessageId: deliveryResult.messageId,
+          externalMessageId: deliveryResult.externalMessageId,
         })
-        return { success: true, messageId: deliveryResult.messageId }
+        return { success: true, messageId: deliveryResult.externalMessageId }
       } catch (error: any) {
         await updateTransportMessageLinkStatus({
           linkId,
