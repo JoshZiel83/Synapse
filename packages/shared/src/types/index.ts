@@ -1490,7 +1490,11 @@ export interface SessionInterrupt {
   id: UUID
   targetSessionId: UUID
   type: SessionInterruptType
+  // Plain-text snapshot of the interrupt content (legacy / FE display).
   content: string
+  // Optional canonical content blocks; preferred over `content` when present
+  // for context-builder consumption. New code should populate this.
+  contentBlocks?: CanonicalContentBlock[]
   fromSessionId?: UUID
   isConsumed: boolean
   createdAt: Timestamp
@@ -2080,6 +2084,7 @@ export interface CanonicalSystemNoticeItem extends CanonicalContextItemBase {
   noticeType:
     | "interrupt"
     | "task_instruction"
+    | "wakeup"
     | "legacy_tool_result"
     | "generic"
   parts: CanonicalContentBlock[]

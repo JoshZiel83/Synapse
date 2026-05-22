@@ -314,15 +314,18 @@ export function conversationItemToContextItem(
 function buildInterruptNotice(interrupt: {
   type: string
   content: string
+  contentBlocks?: CanonicalContentBlock[]
 }): CanonicalContextItem {
+  const parts =
+    interrupt.contentBlocks && interrupt.contentBlocks.length > 0
+      ? interrupt.contentBlocks
+      : textBlocks(interrupt.content)
   return {
     kind: "system_notice",
     noticeType: "interrupt",
     scope: "private",
     surface: "internal",
-    parts: textBlocks(
-      `[System Interrupt - ${interrupt.type}]: ${interrupt.content}`
-    ),
+    parts,
     metadata: {
       interruptType: interrupt.type,
     },
@@ -344,13 +347,19 @@ function buildWakeupNotice(
     itemId: `wakeup:${wakeup.wakeupId}`,
     scope: "private",
     surface: "internal",
-    noticeType: "task_instruction",
-    parts: textBlocks(`[Wakeup - ${title}]: ${reason}`),
+    // noticeType identifies this as a wakeup notice; the body holds the
+    // raw reason without a bracket-prefix. compileSystemNoticeItem wraps
+    // these in <system_notice noticeType="wakeup"> so the LLM has the
+    // semantic tag without us injecting it into the text payload.
+    noticeType: "wakeup",
+    parts: textBlocks(reason),
     metadata: {
       wakeupId: wakeup.wakeupId,
       sourceType: wakeup.sourceType,
+      sourceName: wakeup.sourceName,
       summary: wakeup.summary,
       reasonText: wakeup.reasonText,
+      title,
     },
   }
 }
@@ -571,7 +580,11 @@ export function buildSessionContextItems(
           scope: "shared",
           surface: "visible",
           noticeType: "task_instruction",
-          parts: textBlocks(`[Task Instruction]: ${sessionMessageText(msg)}`),
+          // Body holds the raw instruction; compileSystemNoticeItem wraps
+          // it in <system_notice noticeType="task_instruction"> so the
+          // model can read the semantic tag from the XML, not from a
+          // baked-in text prefix.
+          parts: msg.contentBlocks,
           metadata: meta,
         })
         break
@@ -588,13 +601,17 @@ export function buildSessionContextItems(
           scope: "private",
           surface: "internal",
           noticeType: "generic",
-          parts: textBlocks(sessionMessageText(msg)),
+          parts: msg.contentBlocks,
           metadata: meta,
         })
         break
       }
 
       case "tool_result": {
+        // Legacy session_message row that predates the structured
+        // tool_calls/tool_results tables. Keep the noticeType for
+        // discoverability but no longer prepend "[Tool Result]: " to the
+        // payload — the XML wrapper at compile time carries the semantic.
         items.push({
           kind: "system_notice",
           itemId: msg.id,
@@ -605,7 +622,7 @@ export function buildSessionContextItems(
           scope: "private",
           surface: "internal",
           noticeType: "legacy_tool_result",
-          parts: textBlocks(`[Tool Result]: ${sessionMessageText(msg)}`),
+          parts: msg.contentBlocks,
           metadata: meta,
         })
         break
@@ -657,9 +674,7 @@ export function buildConversationContextItems(params: {
       scope: "private",
       surface: "internal",
       noticeType: "legacy_tool_result",
-      parts: textBlocks(
-        `[Tool Result]: ${extractText(sessionMessage.contentBlocks)}`
-      ),
+      parts: sessionMessage.contentBlocks,
       metadata: parseMetadata(sessionMessage.metadata),
     })
   }
