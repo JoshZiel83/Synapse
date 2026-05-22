@@ -8,6 +8,9 @@ import type {
 } from "@synapse/shared/types"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { redis } from "../../infrastructure/redis/index.js"
+import { tryGetConnector } from "./connectors/registry.js"
+import type { InboundEnvelope } from "./connectors/types.js"
+import { derivePlainText } from "./messaging/canonical-message.js"
 import {
   createConversation,
   createConversationItem,
@@ -83,6 +86,34 @@ type WeixinMessage = {
   create_time_ms?: number
   item_list?: WeixinMessageItem[]
   context_token?: string
+}
+
+function connectorEnvelopeToLegacyInbound(
+  envelope: InboundEnvelope,
+  account: TransportAccountSummary
+): GenericInboundMessage {
+  const content =
+    envelope.message.plainText || derivePlainText(envelope.message.parts)
+  return {
+    account,
+    endpointType: envelope.endpointType,
+    endpointExternalId: envelope.endpointExternalId,
+    endpointDisplayName: envelope.endpointDisplayName,
+    externalMessageId: envelope.externalMessageId,
+    senderExternalId: envelope.sender.externalId,
+    senderDisplayName: envelope.sender.displayName,
+    content,
+    metadata: {
+      ...(envelope.raw || {}),
+      transport: {
+        canonicalParts: envelope.message.parts,
+        externalReplyToId: envelope.externalReplyToId,
+        externalThreadId: envelope.externalThreadId,
+      },
+    },
+    senderMetadata: envelope.sender.metadata,
+    endpointMetadata: envelope.endpointMetadata,
+  }
 }
 
 type GenericInboundMessage = {
@@ -877,19 +908,37 @@ async function startRuntimeForAccount(
   const fingerprint = accountFingerprint(account)
 
   const run = async () => {
-    if (account.transportKind === "feishu") {
-      const { appId, appSecret } = getFeishuCredentials(account)
-      const dispatcher = createFeishuEventDispatcher(account)
-      const client = new Lark.WSClient({
-        appId,
-        appSecret,
-        loggerLevel: Lark.LoggerLevel.info,
+    // Prefer the new TransportConnector path when a connector is registered
+    // for this transport_kind. The old per-kind if/else fall-throughs below
+    // remain for transports that haven't been ported yet (weixin in v1).
+    const connector = tryGetConnector(account.transportKind)
+    if (connector) {
+      const running = await connector.startAccount({
+        account,
+        signal: abortController.signal,
+        emitInbound: async (envelope) => {
+          await ingestInboundTransportMessage(
+            connectorEnvelopeToLegacyInbound(envelope, account)
+          )
+        },
+        logger: {
+          debug: () => {},
+          info: (msg, fields) =>
+            console.log(`[im:${account.transportKind}] ${msg}`, fields || ""),
+          warn: (msg, fields) =>
+            console.warn(`[im:${account.transportKind}] ${msg}`, fields || ""),
+          error: (msg, err, fields) =>
+            console.error(
+              `[im:${account.transportKind}] ${msg}`,
+              err,
+              fields || ""
+            ),
+        },
       })
-      client.start({ eventDispatcher: dispatcher })
       try {
         await waitForAbort(abortController.signal)
       } finally {
-        client.close({ force: true })
+        await running.stop().catch(() => undefined)
       }
       return
     }
