@@ -19,9 +19,7 @@ export type Queryable = {
   ) => Promise<{ rows: any[]; rowCount?: number | null }>
 }
 
-export type TransactionalRealtimeEventType =
-  | "feed.item.created"
-  | "chat.sync.event"
+export type TransactionalRealtimeEventType = "chat.sync.event"
 
 type TransactionalRealtimeEvent = SystemEvent & {
   type: TransactionalRealtimeEventType
@@ -47,10 +45,7 @@ type RealtimeEventOutboxRow = Pick<
 
 const handlers: Map<string, Set<EventHandler>> = new Map()
 const TRANSACTIONAL_REALTIME_EVENT_TYPES =
-  new Set<TransactionalRealtimeEventType>([
-    "feed.item.created",
-    "chat.sync.event",
-  ])
+  new Set<TransactionalRealtimeEventType>(["chat.sync.event"])
 
 let realtimeOutboxDispatcherRunning = false
 let realtimeOutboxDispatcherPromise: Promise<void> | null = null
@@ -165,28 +160,6 @@ async function materializeRealtimeOutboxEvent(
   const timestamp = eventTimestampToIso(entry.event_timestamp)
 
   switch (entry.event_type) {
-    case "feed.item.created": {
-      const itemId =
-        typeof payload.itemId === "string" ? payload.itemId.trim() : ""
-      if (!itemId) {
-        throw new Error(`Outbox entry ${entry.id} is missing itemId`)
-      }
-      const { getConversationFeedItemById } =
-        await import("../../modules/chat/service.js")
-      const item = await getConversationFeedItemById(itemId)
-      if (!item) {
-        throw new Error(
-          `Conversation item ${itemId} not found for outbox entry ${entry.id}`
-        )
-      }
-      return {
-        type: "feed.item.created",
-        workspaceId: entry.workspace_id,
-        recipientWorkspaceMemberId: entry.recipient_workspace_member_id,
-        payload: item as unknown as Record<string, unknown>,
-        timestamp,
-      }
-    }
     case "chat.sync.event":
       return {
         type: entry.event_type,

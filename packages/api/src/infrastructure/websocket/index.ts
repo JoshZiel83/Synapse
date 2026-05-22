@@ -99,7 +99,9 @@ function mapInternalEventToSocketEvent(
     case "session.status.changed":
     case "session.thinking":
     case "actor.version_changed":
-    case "feed.item.created":
+      // These events ARE emitted by the session-thinking worker but the chat
+      // WS never surfaces them to clients (chat clients re-read state via the
+      // /chat/sync replay channel). Dropping here is the canonical sink.
       return null
     default:
       return event
