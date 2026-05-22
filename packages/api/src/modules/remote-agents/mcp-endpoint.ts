@@ -16,6 +16,7 @@ import {
 } from "./service.js"
 import { requireRemoteAgentConversationAccess } from "../chat/service.js"
 import { executeSql } from "../../infrastructure/database/kysely.js"
+import { registerConversationPluginsOnMcpServer } from "../mcp-plugins/remote-agent-plugin-projection.js"
 
 type EndpointKey = string
 
@@ -220,6 +221,7 @@ async function ensureTransport(params: {
   remoteAgentId: string
   conversationId: string
   machineKey: string
+  workspaceId: string
 }) {
   const key = endpointKey(params.remoteAgentId, params.conversationId)
   const existing = transports.get(key)
@@ -232,6 +234,18 @@ async function ensureTransport(params: {
   })
   const server = buildPerConversationMcpServer(params)
   await server.connect(transport)
+  await registerConversationPluginsOnMcpServer({
+    server,
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId,
+  }).catch((error) => {
+    console.error(
+      "[remote-agent mcp] plugin projection failed for",
+      params.remoteAgentId,
+      params.conversationId,
+      error
+    )
+  })
   const active: ActiveTransport = {
     transport,
     server,
@@ -254,11 +268,13 @@ export async function handleRemoteAgentMcpRequest(
   reply: FastifyReply
 ) {
   const machineKey = getMachineKeyFromHeaders(request)
+  let workspaceId: string
   try {
-    await authenticateMachineForRemoteAgent({
+    const auth = await authenticateMachineForRemoteAgent({
       remoteAgentId: request.params.remoteAgentId,
       machineKey,
     })
+    workspaceId = auth.workspaceId
     await requireRemoteAgentConversationAccess(
       { query: (text: string, values?: any[]) => executeSql(text, values) },
       request.params.conversationId,
@@ -273,6 +289,7 @@ export async function handleRemoteAgentMcpRequest(
     remoteAgentId: request.params.remoteAgentId,
     conversationId: request.params.conversationId,
     machineKey,
+    workspaceId,
   })
 
   reply.hijack()
