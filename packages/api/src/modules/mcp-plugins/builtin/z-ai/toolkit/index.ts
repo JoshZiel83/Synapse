@@ -1,5 +1,8 @@
 import { ToolDefinition } from "@synapse/shared"
-import type { BuiltinPluginHandler } from "../../index.js"
+import type {
+  BuiltinPluginExecuteResult,
+  BuiltinPluginHandler,
+} from "../../index.js"
 import type { SubFeature } from "./types.js"
 import { searchFeature } from "./search.js"
 import { readerFeature } from "./reader.js"
@@ -63,7 +66,7 @@ export const zAiToolkitHandler: BuiltinPluginHandler & {
     toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<unknown> {
+  ): Promise<BuiltinPluginExecuteResult> {
     const apiKey = config.apiKey as string
     if (!apiKey) {
       throw new Error(

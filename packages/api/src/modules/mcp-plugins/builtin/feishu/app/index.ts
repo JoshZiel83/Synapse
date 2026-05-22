@@ -1,4 +1,7 @@
-import type { BuiltinPluginHandler } from "../../index.js"
+import type {
+  BuiltinPluginExecuteResult,
+  BuiltinPluginHandler,
+} from "../../index.js"
 import { FEISHU_FEATURES } from "../../../feishu/features.js"
 import {
   executeFeishuTool,
@@ -18,7 +21,11 @@ export const feishuAppHandler: BuiltinPluginHandler = {
     return getFeishuToolDefinitions(config)
   },
 
-  async execute(toolName, input, config) {
-    return executeFeishuTool(toolName, input, config)
+  async execute(toolName, input, config): Promise<BuiltinPluginExecuteResult> {
+    return (await executeFeishuTool(
+      toolName,
+      input,
+      config
+    )) as BuiltinPluginExecuteResult
   },
 }

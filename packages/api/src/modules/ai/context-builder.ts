@@ -7,7 +7,10 @@ import type {
   CanonicalToolCall,
   CanonicalToolResult,
 } from "@synapse/shared"
-import { buildConversationMessageRef } from "@synapse/shared"
+import {
+  buildConversationMessageRef,
+  isToolResultOrigin,
+} from "@synapse/shared"
 import type {
   CanonicalContextAuthor,
   CanonicalContextItem,
@@ -410,14 +413,26 @@ function expandToolHistoryContextItems(
       metadata: toolCall.metadata,
     }))
     const toolResults: CanonicalToolResult[] = round.toolResults.map(
-      (toolResult) => ({
-        toolCallId: toolResult.toolCallId,
-        providerCallId: toolResult.providerCallId,
-        toolName: toolResult.toolName,
-        content: toolResult.content,
-        isError: toolResult.isError,
-        metadata: toolResult.metadata,
-      })
+      (toolResult) => {
+        const item: CanonicalToolResult = {
+          toolCallId: toolResult.toolCallId,
+          providerCallId: toolResult.providerCallId,
+          toolName: toolResult.toolName,
+          content: toolResult.content,
+          isError: toolResult.isError,
+          metadata: toolResult.metadata,
+        }
+        // Phase 1+ first-class fields — carry them through, otherwise the
+        // context window forgets where the result came from and what its
+        // structured sidecar said. Was missed in the original Phase 5.
+        if (toolResult.structuredContent !== undefined) {
+          item.structuredContent = toolResult.structuredContent
+        }
+        if (toolResult.origin !== undefined) {
+          item.origin = toolResult.origin
+        }
+        return item
+      }
     )
 
     items.push({
@@ -486,6 +501,70 @@ interface SessionMessageRow {
 
 function sessionMessageText(message: SessionMessageRow) {
   return extractText(message.contentBlocks || [])
+}
+
+// Convert a session_message row with role="tool_result" into a structured
+// CanonicalToolResultBatchContextItem. Phase 4+ writers persist
+// toolCallId/toolName/origin/structuredContent/isError under msg.metadata so
+// the batch can be reconstructed without extra DB lookups. For legacy rows
+// (no metadata structure), synthetic identifiers derived from msg.id keep
+// the batch well-formed; origin defaults to a placeholder mcp_remote kind.
+function buildToolResultBatchFromSessionMessage(
+  msg: SessionMessageRow,
+  meta: Record<string, unknown>,
+  options: {
+    scope: "shared" | "private"
+    surface: "visible" | "internal"
+  }
+): CanonicalContextItem {
+  const toolCallId =
+    typeof meta.toolCallId === "string" && meta.toolCallId.length > 0
+      ? (meta.toolCallId as string)
+      : `legacy-tool-call:${msg.id}`
+  const toolName =
+    typeof meta.toolName === "string" && meta.toolName.length > 0
+      ? (meta.toolName as string)
+      : "unknown_tool"
+  const providerCallId =
+    typeof meta.providerCallId === "string" && meta.providerCallId.length > 0
+      ? (meta.providerCallId as string)
+      : undefined
+  const isError =
+    typeof meta.isError === "boolean" ? (meta.isError as boolean) : undefined
+  const structuredContent =
+    meta.structuredContent && typeof meta.structuredContent === "object"
+      ? (meta.structuredContent as Record<string, unknown>)
+      : undefined
+  const origin = isToolResultOrigin(meta.origin)
+    ? meta.origin
+    : ({ kind: "mcp_remote", serverKey: "unknown_legacy" } as const)
+  const innerMetadata =
+    meta.innerMetadata && typeof meta.innerMetadata === "object"
+      ? (meta.innerMetadata as Record<string, unknown>)
+      : undefined
+
+  const toolResult: CanonicalToolResult = {
+    toolCallId,
+    providerCallId,
+    toolName,
+    content: msg.contentBlocks,
+    isError,
+    structuredContent,
+    origin,
+    metadata: innerMetadata,
+  }
+
+  return {
+    kind: "tool_result_batch",
+    itemId: msg.id,
+    conversationId: msg.conversationId,
+    sessionId: msg.sessionId,
+    sequence: msg.sequence,
+    createdAt: msg.createdAt,
+    scope: options.scope,
+    surface: options.surface,
+    toolResults: [toolResult],
+  }
 }
 
 export function buildSessionContextItems(
@@ -608,23 +687,17 @@ export function buildSessionContextItems(
       }
 
       case "tool_result": {
-        // Legacy session_message row that predates the structured
-        // tool_calls/tool_results tables. Keep the noticeType for
-        // discoverability but no longer prepend "[Tool Result]: " to the
-        // payload — the XML wrapper at compile time carries the semantic.
-        items.push({
-          kind: "system_notice",
-          itemId: msg.id,
-          conversationId: msg.conversationId,
-          sessionId: msg.sessionId,
-          sequence: msg.sequence,
-          createdAt: msg.createdAt,
-          scope: "private",
-          surface: "internal",
-          noticeType: "legacy_tool_result",
-          parts: msg.contentBlocks,
-          metadata: meta,
-        })
+        // Persisted tool_result session_message → structured tool_result_batch
+        // context item. If the writer preserved toolCallId/toolName/origin in
+        // metadata (Phase 4+ writers do), restore them verbatim; otherwise
+        // fall back to synthetic IDs derived from msg.id so the batch is
+        // still well-formed.
+        items.push(
+          buildToolResultBatchFromSessionMessage(msg, meta, {
+            scope: "private",
+            surface: "internal",
+          })
+        )
         break
       }
     }
@@ -664,19 +737,13 @@ export function buildConversationContextItems(params: {
 
   for (const sessionMessage of params.sessionMessages) {
     if (sessionMessage.role !== "tool_result") continue
-    items.push({
-      kind: "system_notice",
-      itemId: sessionMessage.id,
-      conversationId: sessionMessage.conversationId,
-      sessionId: sessionMessage.sessionId,
-      sequence: sessionMessage.sequence,
-      createdAt: sessionMessage.createdAt,
-      scope: "private",
-      surface: "internal",
-      noticeType: "legacy_tool_result",
-      parts: sessionMessage.contentBlocks,
-      metadata: parseMetadata(sessionMessage.metadata),
-    })
+    items.push(
+      buildToolResultBatchFromSessionMessage(
+        sessionMessage,
+        parseMetadata(sessionMessage.metadata),
+        { scope: "private", surface: "internal" }
+      )
+    )
   }
 
   const lastSequence =

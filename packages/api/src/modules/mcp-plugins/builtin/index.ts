@@ -1,4 +1,24 @@
-import { ToolDefinition } from "@synapse/shared"
+import type {
+  CallableToolResult,
+  CanonicalContentBlock,
+  ToolDefinition,
+} from "@synapse/shared"
+
+/**
+ * Allowed return shapes for built-in plugin handlers (and sub-features).
+ * The downstream normalizeMcpToolResult understands all three:
+ *  - `string` → wrapped as a single text block
+ *  - `CanonicalContentBlock[]` → array form, passed through the ingest funnel
+ *  - `CallableToolResult` envelope `{content, isError?, structuredContent?, metadata?}` →
+ *    full MCP-like result, structuredContent + isError preserved
+ *
+ * Was `Promise<unknown>` before Phase 7c, which let handlers leak typed
+ * bugs through to runtime normalization.
+ */
+export type BuiltinPluginExecuteResult =
+  | string
+  | CanonicalContentBlock[]
+  | CallableToolResult
 
 export interface BuiltinPluginHandler {
   getTools(): ToolDefinition[]
@@ -7,7 +27,7 @@ export interface BuiltinPluginHandler {
     toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<unknown>
+  ): Promise<BuiltinPluginExecuteResult>
 }
 
 const registry = new Map<string, BuiltinPluginHandler>()

@@ -39,22 +39,58 @@ test("buildSessionContextItems: system message body has no [Task Instruction] pr
   assert.doesNotMatch(text, /\[Task Instruction\]/)
 })
 
-test("buildSessionContextItems: tool_result session message has no [Tool Result] prefix", () => {
+test("buildSessionContextItems: tool_result session message becomes tool_result_batch (not legacy system_notice)", () => {
   const items = buildSessionContextItems([
     {
       id: "msg-2",
       sessionId: "sess-1",
       role: "tool_result",
       contentBlocks: textBlocks("file contents: hello"),
-      metadata: {},
+      metadata: {
+        toolCallId: "call-42",
+        toolName: "View",
+        origin: {
+          kind: "mcp_relay",
+          deviceId: "dev-1",
+          exposureStableKey: "synapse.builtin.filesystem.v1",
+        },
+        structuredContent: { path: "/tmp/x", lines: 1 },
+        isError: false,
+      },
     },
   ])
   assert.equal(items.length, 1)
-  assert.equal(items[0].kind, "system_notice")
-  assert.equal((items[0] as any).noticeType, "legacy_tool_result")
-  const text = bodyText(items[0])
+  assert.equal(items[0].kind, "tool_result_batch")
+  const batch = items[0] as any
+  assert.equal(batch.toolResults.length, 1)
+  const tr = batch.toolResults[0]
+  assert.equal(tr.toolCallId, "call-42")
+  assert.equal(tr.toolName, "View")
+  assert.equal(tr.isError, false)
+  assert.deepEqual(tr.structuredContent, { path: "/tmp/x", lines: 1 })
+  assert.equal(tr.origin.kind, "mcp_relay")
+  assert.equal(tr.origin.deviceId, "dev-1")
+  const text = extractText(tr.content)
   assert.equal(text, "file contents: hello")
   assert.doesNotMatch(text, /\[Tool Result\]/)
+})
+
+test("buildSessionContextItems: legacy tool_result row (no metadata) still becomes tool_result_batch with synthetic ids", () => {
+  const items = buildSessionContextItems([
+    {
+      id: "msg-legacy-1",
+      sessionId: "sess-1",
+      role: "tool_result",
+      contentBlocks: textBlocks("legacy payload"),
+      metadata: {},
+    },
+  ])
+  assert.equal(items[0].kind, "tool_result_batch")
+  const tr = (items[0] as any).toolResults[0]
+  assert.equal(tr.toolCallId, "legacy-tool-call:msg-legacy-1")
+  assert.equal(tr.toolName, "unknown_tool")
+  assert.equal(tr.origin.kind, "mcp_remote")
+  assert.equal(tr.origin.serverKey, "unknown_legacy")
 })
 
 test("buildSessionContextItems: child_result body has no prefix", () => {
@@ -139,9 +175,10 @@ test("buildSessionContextItems: wakeup body has no [Wakeup - X] prefix and uses 
   assert.doesNotMatch(text, /\[Wakeup/)
 })
 
-test("conversationItemToContextItem: tool_result_batch via crossTurnToolHistory has no string prefix in tool result", () => {
-  // Validates that the structured tool_result_batch path (the preferred
-  // post-Phase-4 representation) produces well-formed batch items.
+test("conversationItemToContextItem: tool_result_batch via crossTurnToolHistory preserves origin + structuredContent + no string prefix", () => {
+  // Validates that the structured tool_result_batch path carries the new
+  // first-class fields (Phase 1+) through expandToolHistoryContextItems
+  // (previously was dropping them on the floor).
   const items = buildSessionContextItems(
     [
       {
@@ -167,6 +204,11 @@ test("conversationItemToContextItem: tool_result_batch via crossTurnToolHistory 
                     toolName: "lookup",
                     content: textBlocks("result body, no prefix"),
                     isError: false,
+                    structuredContent: { hit: true, score: 0.9 },
+                    origin: {
+                      kind: "mcp_remote",
+                      serverKey: "github",
+                    },
                   },
                 ],
               },
@@ -181,9 +223,10 @@ test("conversationItemToContextItem: tool_result_batch via crossTurnToolHistory 
   const batch = items.find((i) => i.kind === "tool_result_batch") as any
   assert.ok(batch, "tool_result_batch should be emitted")
   assert.equal(batch.toolResults.length, 1)
-  assert.equal(batch.toolResults[0].toolCallId, "c-1")
-  assert.equal(
-    extractText(batch.toolResults[0].content),
-    "result body, no prefix"
-  )
+  const tr = batch.toolResults[0]
+  assert.equal(tr.toolCallId, "c-1")
+  assert.deepEqual(tr.structuredContent, { hit: true, score: 0.9 })
+  assert.equal(tr.origin.kind, "mcp_remote")
+  assert.equal(tr.origin.serverKey, "github")
+  assert.equal(extractText(tr.content), "result body, no prefix")
 })

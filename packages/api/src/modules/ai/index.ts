@@ -1241,14 +1241,35 @@ export async function actorThink(
 
           if (executionEnabled && callRow && attempt) {
             const blocks = res.content
+            // Phase 7b: synthesize a {kind:"builtin"} origin for the
+            // ToolPlugin (registerToolPlugin) path so tool_results.metadata
+            // always carries origin alongside structuredContent. Reading
+            // this back via context-builder's tool_result_batch path
+            // restores the discriminator without any out-of-band lookup.
+            const persistedMetadata: Record<string, unknown> = {
+              ...(res.metadata || {}),
+              origin: { kind: "builtin", toolKind: tc.toolName },
+              ...((res as any).structuredContent !== undefined
+                ? { structuredContent: (res as any).structuredContent }
+                : {}),
+              toolCallId: tc.callId,
+              toolName: tc.toolName,
+              ...(tc.providerCallId
+                ? { providerCallId: tc.providerCallId }
+                : {}),
+              ...(res.isError !== undefined ? { isError: res.isError } : {}),
+            }
+            // Phase 7b: res.content is strictly CanonicalContentBlock[] post
+            // Phase 3, so the old `typeof res.content === "string"` check is
+            // dead. Use extractText to get a meaningful error message body.
+            const errorMessage = res.isError
+              ? extractText(blocks) || `Tool ${tc.toolName} failed`
+              : undefined
             await finalizeToolExecutionAttempt({
               attemptId: attempt.id,
               status: res.isError ? "error" : "success",
               isError: res.isError,
-              errorMessage:
-                res.isError && typeof res.content === "string"
-                  ? res.content
-                  : undefined,
+              errorMessage,
               durationMs: Date.now() - attemptStart,
               responsePayload: res,
             })
@@ -1256,11 +1277,8 @@ export async function actorThink(
               toolCallId: callRow.id,
               attemptId: attempt.id,
               isError: res.isError,
-              errorMessage:
-                res.isError && typeof res.content === "string"
-                  ? res.content
-                  : undefined,
-              metadata: res.metadata,
+              errorMessage,
+              metadata: persistedMetadata,
               parts: blocksToToolResultParts(blocks),
             })
             await updateToolCallStatus(
@@ -1382,6 +1400,14 @@ export async function actorThink(
               // origin/structuredContent as first-class fields below.
               let metadata: Record<string, unknown> = {
                 ...(normalizedResult.metadata || {}),
+                toolCallId: tc.callId,
+                toolName: tc.toolName,
+                ...(tc.providerCallId
+                  ? { providerCallId: tc.providerCallId }
+                  : {}),
+                ...(normalizedResult.isError !== undefined
+                  ? { isError: normalizedResult.isError }
+                  : {}),
                 ...(normalizedResult.origin
                   ? { origin: normalizedResult.origin }
                   : {}),

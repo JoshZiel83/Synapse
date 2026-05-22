@@ -1,4 +1,7 @@
-import type { BuiltinPluginHandler } from "../../index.js"
+import type {
+  BuiltinPluginExecuteResult,
+  BuiltinPluginHandler,
+} from "../../index.js"
 import { amapToolDefinitions, executeAmapTool } from "./tool-specs.js"
 
 export const amapOpenapiHandler: BuiltinPluginHandler = {
@@ -6,7 +9,7 @@ export const amapOpenapiHandler: BuiltinPluginHandler = {
     return amapToolDefinitions
   },
 
-  async execute(toolName, input, config) {
+  async execute(toolName, input, config): Promise<BuiltinPluginExecuteResult> {
     return executeAmapTool(toolName, input, config)
   },
 }

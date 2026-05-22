@@ -1,4 +1,7 @@
-import type { BuiltinPluginHandler } from "../../index.js"
+import type {
+  BuiltinPluginExecuteResult,
+  BuiltinPluginHandler,
+} from "../../index.js"
 import type { MijiaAuthState } from "../../../mijia/types.js"
 import { MijiaCloudClient } from "../../../mijia/cloud-client.js"
 import {
@@ -51,10 +54,15 @@ export const mijiaSmarthomeHandler: BuiltinPluginHandler & {
     return getMijiaToolDefinitions(config)
   },
 
-  async execute(toolName, input, config) {
+  async execute(toolName, input, config): Promise<BuiltinPluginExecuteResult> {
     const { client, connectionId } = getClient(config)
     try {
-      return await executeMijiaTool(toolName, input, config, client)
+      return (await executeMijiaTool(
+        toolName,
+        input,
+        config,
+        client
+      )) as BuiltinPluginExecuteResult
     } catch (error) {
       if (
         connectionId &&

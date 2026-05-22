@@ -1,4 +1,7 @@
-import type { BuiltinPluginHandler } from "../../index.js"
+import type {
+  BuiltinPluginExecuteResult,
+  BuiltinPluginHandler,
+} from "../../index.js"
 import { aminerToolDefinitions, executeAminerTool } from "./tool-specs.js"
 
 export const aminerOpenapiHandler: BuiltinPluginHandler = {
@@ -6,7 +9,7 @@ export const aminerOpenapiHandler: BuiltinPluginHandler = {
     return aminerToolDefinitions
   },
 
-  async execute(toolName, input, config) {
+  async execute(toolName, input, config): Promise<BuiltinPluginExecuteResult> {
     return executeAminerTool(toolName, input, config)
   },
 }

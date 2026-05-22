@@ -1,4 +1,5 @@
-import { ToolDefinition } from "@synapse/shared"
+import type { ToolDefinition } from "@synapse/shared"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 
 export interface SubFeature {
   featureKey: string
@@ -7,5 +8,5 @@ export interface SubFeature {
     toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<unknown>
+  ): Promise<BuiltinPluginExecuteResult>
 }

@@ -2089,12 +2089,7 @@ interface CanonicalContextItemBase {
 
 export interface CanonicalSystemNoticeItem extends CanonicalContextItemBase {
   kind: "system_notice"
-  noticeType:
-    | "interrupt"
-    | "task_instruction"
-    | "wakeup"
-    | "legacy_tool_result"
-    | "generic"
+  noticeType: "interrupt" | "task_instruction" | "wakeup" | "generic"
   parts: CanonicalContentBlock[]
 }
 

@@ -3827,6 +3827,10 @@ async function finalizeAsyncRelayOperation(
         typeof normalizedResult.structuredContent === "object"
           ? normalizedResult.structuredContent
           : undefined,
+      // Phase 7d: origin must survive the async round-trip — without this,
+      // any consumer rehydrating the task result loses the relay device /
+      // exposure attribution that buildAsyncRelayOrigin filled in upstream.
+      origin: normalizedResult.origin,
       metadata:
         normalizedResult.metadata &&
         typeof normalizedResult.metadata === "object"

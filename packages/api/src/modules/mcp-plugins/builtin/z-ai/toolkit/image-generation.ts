@@ -12,7 +12,12 @@
  * Image URLs in the response are temporary (valid for 30 days).
  * @see https://docs.bigmodel.cn/api-reference/模型-api/图像生成
  */
-import { FILE_ORIGIN_SYSTEMS, ToolDefinition } from "@synapse/shared"
+import {
+  CanonicalContentBlock,
+  FILE_ORIGIN_SYSTEMS,
+  textBlock,
+  ToolDefinition,
+} from "@synapse/shared"
 import type { SubFeature } from "./types.js"
 import { saveFromUrl } from "../../../../../infrastructure/storage/file-io.js"
 import { pluginOutputFileRef } from "../../../file-ref.js"
@@ -96,7 +101,7 @@ export const imageGenFeature: SubFeature = {
     toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<string | unknown[]> {
+  ): Promise<string | CanonicalContentBlock[]> {
     const apiKey = config.apiKey as string
     if (!apiKey) throw new Error("ZhipuAI API key not configured.")
 
@@ -177,7 +182,7 @@ export const imageGenFeature: SubFeature = {
 
       // Return canonical file_ref block — already saved, ingest pipeline will pass through
       return [
-        { type: "text", text: `Generated image: ${fileRecord.originalName}` },
+        textBlock(`Generated image: ${fileRecord.originalName}`),
         pluginOutputFileRef(fileRecord),
       ]
     } catch (error) {
