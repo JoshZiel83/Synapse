@@ -11,6 +11,7 @@ import { redis } from "../../infrastructure/redis/index.js"
 import { tryGetConnector } from "./connectors/registry.js"
 import type { InboundEnvelope } from "./connectors/types.js"
 import { derivePlainText } from "./messaging/canonical-message.js"
+import { mergeInboundMetadata } from "./ingest-metadata.js"
 import {
   createConversation,
   createConversationItem,
@@ -652,6 +653,24 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
   const normalizedContent =
     nonEmptyString(params.content) ||
     `[${params.account.transportKind} message]`
+  // Deep-merge metadata so connector-supplied transport fields (e.g.
+  // canonicalParts, externalReplyToId, externalThreadId) extend rather than
+  // overwrite the runtime-built transport descriptor below. Runtime-built
+  // keys always win to prevent connector payloads from spoofing identity.
+  const mergedMetadata = mergeInboundMetadata(
+    {
+      direction: "inbound",
+      transportKind: params.account.transportKind,
+      transportAccountId: params.account.id,
+      endpointType: params.endpointType,
+      endpointExternalId: params.endpointExternalId,
+      externalMessageId: params.externalMessageId,
+      transportAddressId: senderAddress.id,
+      senderExternalId: params.senderExternalId,
+    },
+    params.metadata
+  )
+
   const item = await createConversationItem({
     workspaceId: binding.workspaceId,
     conversationId: binding.conversationId,
@@ -661,19 +680,7 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
     subtype: "chat.message",
     role: "user",
     authorParticipantId: senderParticipant.id,
-    metadata: {
-      transport: {
-        direction: "inbound",
-        transportKind: params.account.transportKind,
-        transportAccountId: params.account.id,
-        endpointType: params.endpointType,
-        endpointExternalId: params.endpointExternalId,
-        externalMessageId: params.externalMessageId,
-        transportAddressId: senderAddress.id,
-        senderExternalId: params.senderExternalId,
-      },
-      ...(params.metadata || {}),
-    },
+    metadata: mergedMetadata,
     parts: [
       {
         type: "text",
@@ -682,12 +689,27 @@ async function ingestInboundTransportMessage(params: GenericInboundMessage) {
     ],
   })
 
+  // Extract reply/thread ids the connector put in incoming transport metadata
+  // (see ingest-metadata.ts merge rules). Persist them onto their own columns.
+  const mergedTransport =
+    (mergedMetadata.transport as Record<string, unknown> | undefined) || {}
+  const externalReplyToId =
+    typeof mergedTransport.externalReplyToId === "string"
+      ? mergedTransport.externalReplyToId
+      : undefined
+  const externalThreadId =
+    typeof mergedTransport.externalThreadId === "string"
+      ? mergedTransport.externalThreadId
+      : undefined
+
   const link = await queueConversationTransportProjection({
     workspaceId: binding.workspaceId,
     conversationId: binding.conversationId,
     itemId: item.id,
     direction: "inbound",
     externalMessageId: params.externalMessageId,
+    externalReplyToId,
+    externalThreadId,
     metadata: {
       transportKind: params.account.transportKind,
       senderExternalId: params.senderExternalId,

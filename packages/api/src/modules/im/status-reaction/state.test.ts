@@ -210,10 +210,77 @@ test("stall: idle non-terminal currentLevel held > stallSoftMs becomes stall", (
   ).next
   s = reduceStatus(s, { type: "tick", at: 800 }, CFG).next // → in_flight
   s = reduceStatus(s, { type: "apply_finished", at: 900 }, CFG).next // → idle
-  const r = reduceStatus(s, { type: "tick", at: 900 + CFG.stallSoftMs }, CFG)
+  const r = reduceStatus(s, { type: "tick", at: CFG.stallSoftMs }, CFG)
   assert.equal(r.next.phase, "in_flight")
   assert.equal(r.next.inFlightLevel, "stall")
   assert.deepEqual(r.effect, { kind: "set_reaction", level: "stall" })
+})
+
+test("REGRESSION: real path 10s soft stall → continued idle → 30s hard stall", () => {
+  // Walk the actual lifecycle: caller sets thinking at t=0, the controller
+  // applies it; nothing else happens; a tick at stallSoftMs promotes to
+  // stall; then nothing else happens; a tick at stallHardMs MUST promote
+  // to stall_hard. Previously broken because the !isStallStatus guard
+  // skipped this branch once currentLevel became "stall".
+  let s = reduceStatus(
+    INITIAL_STATUS_STATE,
+    { type: "request_set", level: "thinking", at: 0 },
+    CFG
+  ).next
+  s = reduceStatus(s, { type: "tick", at: 800 }, CFG).next // → in_flight
+  s = reduceStatus(s, { type: "apply_finished", at: 900 }, CFG).next // → idle, thinking
+  // Soft stall fires
+  s = reduceStatus(s, { type: "tick", at: CFG.stallSoftMs }, CFG).next
+  assert.equal(s.inFlightLevel, "stall")
+  s = reduceStatus(
+    s,
+    { type: "apply_finished", at: CFG.stallSoftMs + 100 },
+    CFG
+  ).next
+  assert.equal(s.currentLevel, "stall")
+  assert.equal(s.phase, "idle")
+  // Now the critical step: continued ticks while at stall must escalate
+  // to stall_hard at CFG.stallHardMs (measured from lastActiveSince=0).
+  const r = reduceStatus(s, { type: "tick", at: CFG.stallHardMs }, CFG)
+  assert.equal(r.next.phase, "in_flight")
+  assert.equal(r.next.inFlightLevel, "stall_hard")
+  assert.deepEqual(r.effect, { kind: "set_reaction", level: "stall_hard" })
+})
+
+test("stall: lastActiveSince is bumped by request_set, resets stall timer", () => {
+  // After stall fires, if the caller then drives the level back to thinking
+  // (real activity), the stall ladder resets — a fresh stallSoftMs window
+  // must pass before stall fires again.
+  let s = reduceStatus(
+    INITIAL_STATUS_STATE,
+    { type: "request_set", level: "thinking", at: 0 },
+    CFG
+  ).next
+  s = reduceStatus(s, { type: "tick", at: 800 }, CFG).next
+  s = reduceStatus(s, { type: "apply_finished", at: 900 }, CFG).next
+  s = reduceStatus(s, { type: "tick", at: CFG.stallSoftMs }, CFG).next
+  s = reduceStatus(
+    s,
+    { type: "apply_finished", at: CFG.stallSoftMs + 100 },
+    CFG
+  ).next
+  // Caller indicates real activity again
+  s = reduceStatus(
+    s,
+    { type: "request_set", level: "coding", at: CFG.stallSoftMs + 200 },
+    CFG
+  ).next
+  assert.equal(s.lastActiveSince, CFG.stallSoftMs + 200)
+  // A tick at the OLD stallHardMs boundary must NOT fire stall_hard now —
+  // it should fire the pending "coding" set_reaction (or noop) instead.
+  const r = reduceStatus(s, { type: "tick", at: CFG.stallHardMs - 100 }, CFG)
+  if (r.effect.kind === "set_reaction") {
+    assert.notEqual(
+      r.effect.level,
+      "stall_hard",
+      "stall_hard must not fire after a real activity reset the timer"
+    )
+  }
 })
 
 test("stall_hard fires after stallHardMs without intermediate progress", () => {

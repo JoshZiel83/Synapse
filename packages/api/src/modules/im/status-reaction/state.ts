@@ -56,6 +56,13 @@ export interface StatusState {
   pendingSince: number | null
   /** When the current displayed level was applied (used for stall detection). */
   currentLevelSince: number | null
+  /**
+   * Timestamp of the last "real" activity (non-stall set). Used to measure
+   * how long the controller has been idle even across the stall→stall_hard
+   * escalation. NOT reset when the controller itself promotes the level to
+   * stall, only when the caller pushes a real status change.
+   */
+  lastActiveSince: number | null
   /** When terminal_hold started. */
   terminalSince: number | null
   /** Last terminal kind. */
@@ -69,6 +76,7 @@ export const INITIAL_STATUS_STATE: StatusState = {
   inFlightLevel: null,
   pendingSince: null,
   currentLevelSince: null,
+  lastActiveSince: null,
   terminalSince: null,
   terminalKind: null,
 }
@@ -166,6 +174,7 @@ function handleRequestSet(
         desiredLevel: null,
         pendingSince: null,
         inFlightLevel: level,
+        lastActiveSince: at,
         terminalKind: level as "done" | "error",
         terminalSince: null,
       },
@@ -177,7 +186,7 @@ function handleRequestSet(
   if (state.phase === "in_flight") {
     // Queue as desired; will be picked up when current in-flight finishes
     return {
-      next: { ...state, desiredLevel: level },
+      next: { ...state, desiredLevel: level, lastActiveSince: at },
       effect: { kind: "noop" },
     }
   }
@@ -189,6 +198,7 @@ function handleRequestSet(
       phase: "pending",
       desiredLevel: level,
       pendingSince: at,
+      lastActiveSince: at,
     },
     effect: { kind: "schedule_tick", afterMs: cfg.debounceMs },
   }
@@ -300,15 +310,19 @@ function handleTick(
     }
   }
 
-  // Idle with non-stall current level: check stall
+  // Stall ladder: when idle and not terminal, escalate by elapsed time since
+  // the LAST caller-driven activity (lastActiveSince). The previous version
+  // used currentLevelSince which gets reset when the controller itself
+  // promotes to stall, leaving stall_hard unreachable. lastActiveSince is
+  // only bumped by request_set, so the timer keeps ticking through
+  // stall→stall_hard.
   if (
     state.phase === "idle" &&
     state.currentLevel !== null &&
-    state.currentLevelSince !== null &&
-    !isStallStatus(state.currentLevel) &&
+    state.lastActiveSince !== null &&
     !isTerminalStatus(state.currentLevel)
   ) {
-    const elapsed = at - state.currentLevelSince
+    const elapsed = at - state.lastActiveSince
     if (elapsed >= cfg.stallHardMs && state.currentLevel !== "stall_hard") {
       return {
         next: {
@@ -319,7 +333,11 @@ function handleTick(
         effect: { kind: "set_reaction", level: "stall_hard" },
       }
     }
-    if (elapsed >= cfg.stallSoftMs && state.currentLevel !== "stall") {
+    if (
+      elapsed >= cfg.stallSoftMs &&
+      state.currentLevel !== "stall" &&
+      state.currentLevel !== "stall_hard"
+    ) {
       return {
         next: {
           ...state,
@@ -327,6 +345,17 @@ function handleTick(
           inFlightLevel: "stall",
         },
         effect: { kind: "set_reaction", level: "stall" },
+      }
+    }
+    // Still idle non-terminal — schedule the next tick to keep watching.
+    if (elapsed < cfg.stallHardMs) {
+      const nextDelay =
+        elapsed < cfg.stallSoftMs
+          ? cfg.stallSoftMs - elapsed
+          : cfg.stallHardMs - elapsed
+      return {
+        next: state,
+        effect: { kind: "schedule_tick", afterMs: Math.max(nextDelay, 100) },
       }
     }
   }

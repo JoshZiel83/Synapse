@@ -1964,6 +1964,8 @@ export async function queueConversationTransportProjection(params: {
   itemId: string
   direction?: "inbound" | "outbound"
   externalMessageId?: string
+  externalReplyToId?: string
+  externalThreadId?: string
   metadata?: Record<string, unknown>
 }) {
   const direction = params.direction || "outbound"
@@ -1994,6 +1996,8 @@ export async function queueConversationTransportProjection(params: {
       direction,
       delivery_status: "pending",
       external_message_id: params.externalMessageId || null,
+      external_reply_to_id: params.externalReplyToId || null,
+      external_thread_id: params.externalThreadId || null,
       metadata: {
         bindingId: binding.id,
         endpointType: binding.endpoint.endpointType,
@@ -2008,6 +2012,8 @@ export async function queueConversationTransportProjection(params: {
         .columns(["item_id", "transport_endpoint_id", "direction"])
         .doUpdateSet({
           external_message_id: sql`COALESCE(excluded.external_message_id, transport_message_links.external_message_id)`,
+          external_reply_to_id: sql`COALESCE(excluded.external_reply_to_id, transport_message_links.external_reply_to_id)`,
+          external_thread_id: sql`COALESCE(excluded.external_thread_id, transport_message_links.external_thread_id)`,
           metadata: sql`transport_message_links.metadata || excluded.metadata`,
           updated_at: sql`NOW()`,
         })

@@ -68,3 +68,33 @@ test("system_marker label flows into text", () => {
   )
   assert.equal(out, "[音频]")
 })
+
+test("image part falls back to [图片] when render is reached without degrade", () => {
+  // Direct call to render WITHOUT degradation — this is the codepath that
+  // would silently drop image parts if rendered before. Now it emits a
+  // visible placeholder.
+  const out = renderTextWithMentions(
+    buildCanonicalMessage([
+      { type: "text", text: "see:" },
+      {
+        type: "image",
+        fileRef: { url: "https://x", mime: "image/png" },
+      },
+    ])
+  )
+  assert.equal(out, "see: [图片]")
+})
+
+test("file part falls back to [文件 name] when render is reached without degrade", () => {
+  const out = renderTextWithMentions(
+    buildCanonicalMessage([{ type: "file", fileRef: { name: "report.pdf" } }])
+  )
+  assert.equal(out, "[文件 report.pdf]")
+})
+
+test("file part without name falls back to [文件]", () => {
+  const out = renderTextWithMentions(
+    buildCanonicalMessage([{ type: "file", fileRef: { name: "" } }])
+  )
+  assert.equal(out, "[文件]")
+})

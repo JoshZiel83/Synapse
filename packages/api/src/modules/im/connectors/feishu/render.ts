@@ -75,7 +75,18 @@ export function renderTextWithMentions(msg: CanonicalMessage): string {
       case "system_marker":
         if (part.label) fragments.push(part.label)
         break
-      // image/file/card/reaction: degradation should have handled
+      // V1 fallback for non-degraded image/file: emit a visible placeholder
+      // instead of silently dropping the part. Real image/file outbound
+      // needs Lark im.image.create / im.file.create upload first.
+      case "image":
+        fragments.push("[图片]")
+        break
+      case "file":
+        fragments.push(
+          part.fileRef.name ? `[文件 ${part.fileRef.name}]` : "[文件]"
+        )
+        break
+      // card and reaction are handled outside the text path
       default:
         break
     }
