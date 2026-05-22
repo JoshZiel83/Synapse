@@ -331,6 +331,64 @@
   function sameStoredChatQueueState(left, right) {
     return JSON.stringify(left) === JSON.stringify(right);
   }
+  function latestIsoTimestamp(currentValue, nextValue) {
+    if (!currentValue) return nextValue;
+    if (!nextValue) return currentValue;
+    return new Date(currentValue).getTime() >= new Date(nextValue).getTime() ? currentValue : nextValue;
+  }
+  function sameStoredEntry(left, right) {
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+  function mergeStoredQueueTransition(currentState, previousState, nextState) {
+    const nextWorkspaceState = currentState.workspaceMemberId && nextState.workspaceMemberId && currentState.workspaceMemberId !== nextState.workspaceMemberId ? createEmptyStoredChatQueueState(nextState.workspaceId) : currentState.workspaceId === nextState.workspaceId ? currentState : createEmptyStoredChatQueueState(nextState.workspaceId);
+    const previousOutbox = previousState?.outbox ?? {};
+    const previousPendingReads = previousState?.pendingReads ?? {};
+    const nextOutbox = { ...nextWorkspaceState.outbox };
+    const nextPendingReads = { ...nextWorkspaceState.pendingReads };
+    for (const clientMessageId of Object.keys(previousOutbox)) {
+      if (!(clientMessageId in nextState.outbox)) {
+        delete nextOutbox[clientMessageId];
+      }
+    }
+    for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
+      if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
+        nextOutbox[clientMessageId] = entry;
+      }
+    }
+    for (const conversationId of Object.keys(previousPendingReads)) {
+      if (!(conversationId in nextState.pendingReads)) {
+        const currentEntry = nextPendingReads[conversationId];
+        const previousEntry = previousPendingReads[conversationId];
+        if (currentEntry && previousEntry && currentEntry.readUpToSequence > previousEntry.readUpToSequence) {
+          continue;
+        }
+        delete nextPendingReads[conversationId];
+      }
+    }
+    for (const [conversationId, entry] of Object.entries(
+      nextState.pendingReads
+    )) {
+      if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
+        nextPendingReads[conversationId] = entry;
+      }
+    }
+    return {
+      ...nextWorkspaceState,
+      workspaceId: nextState.workspaceId,
+      workspaceMemberId: nextState.workspaceMemberId ?? nextWorkspaceState.workspaceMemberId,
+      clientInstanceId: nextState.clientInstanceId ?? nextWorkspaceState.clientInstanceId,
+      inboxCursor: Math.max(
+        nextWorkspaceState.inboxCursor,
+        nextState.inboxCursor
+      ),
+      lastBootstrappedAt: latestIsoTimestamp(
+        nextWorkspaceState.lastBootstrappedAt,
+        nextState.lastBootstrappedAt
+      ),
+      pendingReads: nextPendingReads,
+      outbox: nextOutbox
+    };
+  }
 
   // lib/workers/web-chat-service-worker.ts
   var CHAT_WORKER_DB_NAME = "synapse-web-chat-worker";
@@ -372,68 +430,6 @@
   async function clearAuthContext() {
     const database = await getWorkerDatabase();
     await database.delete(CHAT_WORKER_AUTH_CONTEXT_STORE, "active");
-  }
-  function sameStoredEntry(left, right) {
-    return JSON.stringify(left ?? null) === JSON.stringify(right ?? null);
-  }
-  function latestIsoTimestamp(currentValue, nextValue) {
-    if (!currentValue) {
-      return nextValue;
-    }
-    if (!nextValue) {
-      return currentValue;
-    }
-    return new Date(currentValue).getTime() >= new Date(nextValue).getTime() ? currentValue : nextValue;
-  }
-  function mergeStoredQueueTransition(currentState, previousState, nextState) {
-    const nextWorkspaceState = currentState.workspaceMemberId && nextState.workspaceMemberId && currentState.workspaceMemberId !== nextState.workspaceMemberId ? createEmptyStoredChatQueueState(nextState.workspaceId) : currentState.workspaceId === nextState.workspaceId ? currentState : createEmptyStoredChatQueueState(nextState.workspaceId);
-    const previousOutbox = previousState?.outbox ?? {};
-    const previousPendingReads = previousState?.pendingReads ?? {};
-    const nextOutbox = { ...nextWorkspaceState.outbox };
-    const nextPendingReads = { ...nextWorkspaceState.pendingReads };
-    for (const clientMessageId of Object.keys(previousOutbox)) {
-      if (!(clientMessageId in nextState.outbox)) {
-        delete nextOutbox[clientMessageId];
-      }
-    }
-    for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
-      if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
-        nextOutbox[clientMessageId] = entry;
-      }
-    }
-    for (const conversationId of Object.keys(previousPendingReads)) {
-      if (!(conversationId in nextState.pendingReads)) {
-        const currentEntry = nextPendingReads[conversationId];
-        const previousEntry = previousPendingReads[conversationId];
-        if (currentEntry && previousEntry && currentEntry.readUpToSequence > previousEntry.readUpToSequence) {
-          continue;
-        }
-        delete nextPendingReads[conversationId];
-      }
-    }
-    for (const [conversationId, entry] of Object.entries(
-      nextState.pendingReads
-    )) {
-      if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
-        nextPendingReads[conversationId] = entry;
-      }
-    }
-    return {
-      ...nextWorkspaceState,
-      workspaceId: nextState.workspaceId,
-      workspaceMemberId: nextState.workspaceMemberId || nextWorkspaceState.workspaceMemberId,
-      clientInstanceId: nextState.clientInstanceId || nextWorkspaceState.clientInstanceId,
-      inboxCursor: Math.max(
-        nextWorkspaceState.inboxCursor || 0,
-        nextState.inboxCursor || 0
-      ),
-      lastBootstrappedAt: latestIsoTimestamp(
-        nextWorkspaceState.lastBootstrappedAt,
-        nextState.lastBootstrappedAt
-      ),
-      pendingReads: nextPendingReads,
-      outbox: nextOutbox
-    };
   }
   function resolveApiUrl(apiBase, path) {
     const base = typeof apiBase === "string" && apiBase.trim() ? apiBase.trim() : "/api/v1";

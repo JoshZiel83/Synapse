@@ -214,3 +214,93 @@ export function sameStoredChatQueueState(
 ) {
   return JSON.stringify(left) === JSON.stringify(right)
 }
+
+// ---- Shared queue-transition merge (used by both chat-store and the
+// service worker so the two cannot drift) ----
+
+function latestIsoTimestamp(
+  currentValue?: string,
+  nextValue?: string
+): string | undefined {
+  if (!currentValue) return nextValue
+  if (!nextValue) return currentValue
+  return new Date(currentValue).getTime() >= new Date(nextValue).getTime()
+    ? currentValue
+    : nextValue
+}
+
+function sameStoredEntry(left: unknown, right: unknown) {
+  return JSON.stringify(left) === JSON.stringify(right)
+}
+
+export function mergeStoredQueueTransition(
+  currentState: StoredChatQueueState,
+  previousState: StoredChatQueueState | null,
+  nextState: StoredChatQueueState
+): StoredChatQueueState {
+  const nextWorkspaceState =
+    currentState.workspaceMemberId &&
+    nextState.workspaceMemberId &&
+    currentState.workspaceMemberId !== nextState.workspaceMemberId
+      ? createEmptyStoredChatQueueState(nextState.workspaceId)
+      : currentState.workspaceId === nextState.workspaceId
+        ? currentState
+        : createEmptyStoredChatQueueState(nextState.workspaceId)
+
+  const previousOutbox = previousState?.outbox ?? {}
+  const previousPendingReads = previousState?.pendingReads ?? {}
+  const nextOutbox = { ...nextWorkspaceState.outbox }
+  const nextPendingReads = { ...nextWorkspaceState.pendingReads }
+
+  for (const clientMessageId of Object.keys(previousOutbox)) {
+    if (!(clientMessageId in nextState.outbox)) {
+      delete nextOutbox[clientMessageId]
+    }
+  }
+  for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
+    if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
+      nextOutbox[clientMessageId] = entry
+    }
+  }
+
+  for (const conversationId of Object.keys(previousPendingReads)) {
+    if (!(conversationId in nextState.pendingReads)) {
+      const currentEntry = nextPendingReads[conversationId]
+      const previousEntry = previousPendingReads[conversationId]
+      if (
+        currentEntry &&
+        previousEntry &&
+        currentEntry.readUpToSequence > previousEntry.readUpToSequence
+      ) {
+        continue
+      }
+      delete nextPendingReads[conversationId]
+    }
+  }
+  for (const [conversationId, entry] of Object.entries(
+    nextState.pendingReads
+  )) {
+    if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
+      nextPendingReads[conversationId] = entry
+    }
+  }
+
+  return {
+    ...nextWorkspaceState,
+    workspaceId: nextState.workspaceId,
+    workspaceMemberId:
+      nextState.workspaceMemberId ?? nextWorkspaceState.workspaceMemberId,
+    clientInstanceId:
+      nextState.clientInstanceId ?? nextWorkspaceState.clientInstanceId,
+    inboxCursor: Math.max(
+      nextWorkspaceState.inboxCursor,
+      nextState.inboxCursor
+    ),
+    lastBootstrappedAt: latestIsoTimestamp(
+      nextWorkspaceState.lastBootstrappedAt,
+      nextState.lastBootstrappedAt
+    ),
+    pendingReads: nextPendingReads,
+    outbox: nextOutbox,
+  }
+}

@@ -5,6 +5,7 @@ import { api } from "@/lib/api"
 import {
   createEmptyStoredChatQueueState,
   loadStoredChatQueueState,
+  mergeStoredQueueTransition,
   updateStoredChatQueueState,
   type PendingOutboxMessage as PersistedOutboxEntry,
   type PendingConversationRead,
@@ -304,82 +305,16 @@ function latestIsoTimestamp(
     ? currentValue
     : nextValue
 }
+void latestIsoTimestamp
 
-function sameStoredEntry(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right)
-}
-
-function mergeStoredQueueTransition(
+function mergeStoredQueueTransitionLocal(
   currentState: StoredChatQueueState,
   previousState: StoredChatQueueState | null,
   nextState: StoredChatQueueState
 ) {
-  const nextWorkspaceState =
-    currentState.workspaceMemberId &&
-    nextState.workspaceMemberId &&
-    currentState.workspaceMemberId !== nextState.workspaceMemberId
-      ? createEmptyStoredChatQueueState(nextState.workspaceId)
-      : currentState.workspaceId === nextState.workspaceId
-        ? currentState
-        : createEmptyStoredChatQueueState(nextState.workspaceId)
-
-  const previousOutbox = previousState?.outbox ?? {}
-  const previousPendingReads = previousState?.pendingReads ?? {}
-  const nextOutbox = { ...nextWorkspaceState.outbox }
-  const nextPendingReads = { ...nextWorkspaceState.pendingReads }
-
-  for (const clientMessageId of Object.keys(previousOutbox)) {
-    if (!(clientMessageId in nextState.outbox)) {
-      delete nextOutbox[clientMessageId]
-    }
-  }
-  for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
-    if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
-      nextOutbox[clientMessageId] = entry
-    }
-  }
-
-  for (const conversationId of Object.keys(previousPendingReads)) {
-    if (!(conversationId in nextState.pendingReads)) {
-      const currentEntry = nextPendingReads[conversationId]
-      const previousEntry = previousPendingReads[conversationId]
-      if (
-        currentEntry &&
-        previousEntry &&
-        currentEntry.readUpToSequence > previousEntry.readUpToSequence
-      ) {
-        continue
-      }
-      delete nextPendingReads[conversationId]
-    }
-  }
-  for (const [conversationId, entry] of Object.entries(
-    nextState.pendingReads
-  )) {
-    if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
-      nextPendingReads[conversationId] = entry
-    }
-  }
-
-  return {
-    ...nextWorkspaceState,
-    workspaceId: nextState.workspaceId,
-    workspaceMemberId:
-      nextState.workspaceMemberId ?? nextWorkspaceState.workspaceMemberId,
-    clientInstanceId:
-      nextState.clientInstanceId ?? nextWorkspaceState.clientInstanceId,
-    inboxCursor: Math.max(
-      nextWorkspaceState.inboxCursor,
-      nextState.inboxCursor
-    ),
-    lastBootstrappedAt: latestIsoTimestamp(
-      nextWorkspaceState.lastBootstrappedAt,
-      nextState.lastBootstrappedAt
-    ),
-    pendingReads: nextPendingReads,
-    outbox: nextOutbox,
-  }
+  return mergeStoredQueueTransition(currentState, previousState, nextState)
 }
+void mergeStoredQueueTransitionLocal
 
 function queuePersistSnapshot(
   previousSnapshot: ChatWorkspaceSnapshot | null,
