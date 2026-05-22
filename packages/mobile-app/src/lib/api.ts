@@ -502,6 +502,12 @@ class ApiClient {
       title?: string
       workspaceMemberIds?: string[]
       actorIds?: string[]
+      remoteAgentIds?: string[]
+      externalParticipants?: Array<{
+        displayName: string
+        metadata?: Record<string, unknown>
+        transportAddressIds?: string[]
+      }>
       metadata?: Record<string, unknown>
     }
   ): Promise<ChatConversationCreateResponse> {
@@ -516,6 +522,8 @@ class ApiClient {
           title: input.title,
           workspaceMemberIds: input.workspaceMemberIds ?? [],
           actorIds: input.actorIds ?? [],
+          remoteAgentIds: input.remoteAgentIds ?? [],
+          externalParticipants: input.externalParticipants ?? [],
           metadata: input.metadata,
         }),
       }

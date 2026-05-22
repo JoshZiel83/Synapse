@@ -47,6 +47,35 @@ const CHAT_BASE_PATH = "/api/v1/workspaces/:workspaceId/chat"
 
 const jsonRecordSchema = z.record(z.any()).optional()
 
+const textBlockSchema = z.object({
+  id: chatUuidSchema.optional(),
+  type: z.literal("text"),
+  text: z.string(),
+})
+
+const fileRefBlockSchema = z.object({
+  id: chatUuidSchema.optional(),
+  type: z.literal("file_ref"),
+  fileId: chatUuidSchema,
+  url: z.string().min(1),
+  mimeType: z.string().min(1),
+  originalName: z.string().min(1),
+  sizeBytes: z.number().int().nonnegative(),
+  category: z.enum(["image", "audio", "video", "document"]),
+})
+
+const mentionBlockSchema = z.object({
+  id: chatUuidSchema.optional(),
+  type: z.literal("mention"),
+  mention: z.record(z.any()),
+})
+
+const canonicalContentBlockSchema = z.discriminatedUnion("type", [
+  textBlockSchema,
+  fileRefBlockSchema,
+  mentionBlockSchema,
+])
+
 const createConversationSchema = z.object({
   clientRequestId: chatUuidSchema,
   kind: z.enum(CONVERSATION_KINDS),
@@ -140,7 +169,7 @@ const syncQuerySchema = z.object({
 })
 
 const sendMessageSchema = z.object({
-  contentBlocks: z.array(z.any()).min(1),
+  contentBlocks: z.array(canonicalContentBlockSchema).min(1),
   clientMessageId: chatUuidSchema,
   replyToItemId: chatUuidSchema.optional(),
   clientInstanceId: chatUuidSchema,
@@ -419,7 +448,7 @@ export default async function chatController(app: FastifyInstance) {
           conversationId: params.conversationId,
           clientInstanceId: body.clientInstanceId,
           clientMessageId: body.clientMessageId,
-          contentBlocks: body.contentBlocks,
+          contentBlocks: body.contentBlocks as never,
           replyToItemId: body.replyToItemId,
           metadata: body.metadata,
         })

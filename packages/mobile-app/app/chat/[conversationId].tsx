@@ -208,6 +208,11 @@ export default function ChatDetailScreen() {
     }
 
     lastReportedReadRef.current = nextKey
+    // NOTE: we send confirmedMaxSequence for both readUpTo and lastVisible
+    // because the mobile list virtualization doesn't currently expose a
+    // distinct viewport-top sequence. The wire protocol differentiates them
+    // (so a scrolled-up user could send readUpTo < lastVisible) but the
+    // mobile UI treats "loaded" as equivalent to "seen".
     void markConversationRead(
       conversationId,
       confirmedMaxSequence,

@@ -171,6 +171,12 @@ interface ChatState {
   selectConversation: (conversationId: string | null) => void
   setVisibleConversation: (conversationId: string | null) => void
   loadMessages: (workspaceId: string, conversationId: string) => Promise<void>
+  loadOlderMessages: (
+    workspaceId: string,
+    conversationId: string,
+    beforeSequence: number,
+    limit?: number
+  ) => Promise<{ items: FeedMessage[]; hasMoreBefore: boolean } | null>
   sendMessage: (
     workspaceId: string,
     conversationId: string,
@@ -1788,6 +1794,47 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  loadOlderMessages: async (
+    workspaceId,
+    conversationId,
+    beforeSequence,
+    limit = 100
+  ) => {
+    const currentSnapshot = get().snapshot
+    if (!currentSnapshot?.clientInstanceId) {
+      return null
+    }
+    try {
+      const response = await api.getChatConversationMessages(
+        workspaceId,
+        conversationId,
+        {
+          clientInstanceId: currentSnapshot.clientInstanceId,
+          beforeSequence,
+          limit,
+        }
+      )
+      set((state) => {
+        if (state.selectedConversationId !== conversationId) {
+          return state
+        }
+        return {
+          loadedMessageItems: mergeRawItems(
+            response.items,
+            state.loadedMessageItems
+          ),
+        }
+      })
+      return {
+        items: response.items as never,
+        hasMoreBefore: response.hasMoreBefore,
+      }
+    } catch (error) {
+      console.error("Failed to load older messages:", error)
+      return null
+    }
+  },
+
   sendMessage: async (workspaceId, conversationId, input) => {
     const snapshot = get().snapshot
     if (!snapshot || snapshot.workspaceId !== workspaceId) {
@@ -1990,18 +2037,18 @@ export const useChatStore = create<ChatState>((set, get) => ({
     contentBlocks,
     title
   ) => {
+    // NOTE: `content` and `contentBlocks` were previously stuffed into
+    // `metadata.initialContent` / `metadata.initialContentBlocks`, but the
+    // backend has never read those fields. If we want an "initial message on
+    // create" feature, the right thing is to issue a separate sendMessage
+    // call after creating the conversation.
+    void content
+    void contentBlocks
     const response = await api.createChatConversation(workspaceId, {
       clientRequestId: createUuid("conversation"),
       kind,
       title,
       actorIds,
-      metadata:
-        content || (contentBlocks && contentBlocks.length > 0)
-          ? {
-              initialContent: content,
-              initialContentBlocks: contentBlocks,
-            }
-          : undefined,
     })
 
     if (get().activeWorkspaceId === workspaceId && get().snapshot) {
