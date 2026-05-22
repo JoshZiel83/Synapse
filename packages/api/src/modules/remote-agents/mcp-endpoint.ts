@@ -2,8 +2,9 @@ import { randomUUID } from "node:crypto"
 import type { FastifyRequest, FastifyReply } from "fastify"
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
-import { textBlock } from "@synapse/shared"
-import { z } from "zod"
+import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js"
+import { textBlock, type ToolDefinition } from "@synapse/shared"
+import { z, type ZodTypeAny } from "zod"
 import {
   authenticateMachineForRemoteAgent,
   checkRemoteAgentMessages,
@@ -16,25 +17,20 @@ import {
 } from "./service.js"
 import { requireRemoteAgentConversationAccess } from "../chat/service.js"
 import { executeSql } from "../../infrastructure/database/kysely.js"
-import { registerConversationPluginsOnMcpServer } from "../mcp-plugins/remote-agent-plugin-projection.js"
-
-type EndpointKey = string
+import { resolveMcpToolsForRemoteAgent } from "../mcp-plugins/tool-resolver.js"
 
 type ActiveTransport = {
   transport: StreamableHTTPServerTransport
   server: McpServer
   remoteAgentId: string
   conversationId: string
-  machineKey: string
+  shutdown: () => Promise<void>
   lastActivityAt: number
 }
 
-const transports = new Map<EndpointKey, ActiveTransport>()
+/** Map of MCP session id → live transport. Stateful Streamable-HTTP mode. */
+const transportsBySessionId = new Map<string, ActiveTransport>()
 const IDLE_TIMEOUT_MS = 10 * 60_000
-
-function endpointKey(remoteAgentId: string, conversationId: string) {
-  return `${remoteAgentId}:${conversationId}`
-}
 
 function jsonToolResult<T extends Record<string, unknown>>(
   structuredContent: T
@@ -50,19 +46,49 @@ function jsonToolResult<T extends Record<string, unknown>>(
   }
 }
 
-function buildPerConversationMcpServer(params: {
+function jsonSchemaPropertyToZod(prop: unknown): ZodTypeAny {
+  if (!prop || typeof prop !== "object") return z.any()
+  const p = prop as { type?: string | string[]; enum?: unknown[] }
+  if (Array.isArray(p.enum) && p.enum.every((v) => typeof v === "string")) {
+    return z.enum(p.enum as [string, ...string[]])
+  }
+  const t = Array.isArray(p.type) ? p.type[0] : p.type
+  switch (t) {
+    case "string":
+      return z.string()
+    case "number":
+    case "integer":
+      return z.number()
+    case "boolean":
+      return z.boolean()
+    case "array":
+      return z.array(z.any())
+    case "object":
+      return z.record(z.any())
+    default:
+      return z.any()
+  }
+}
+
+function toolDefinitionToZodShape(
+  def: ToolDefinition
+): Record<string, ZodTypeAny> {
+  const shape: Record<string, ZodTypeAny> = {}
+  const required = new Set(def.parameters?.required ?? [])
+  for (const [key, prop] of Object.entries(def.parameters?.properties ?? {})) {
+    const base = jsonSchemaPropertyToZod(prop)
+    shape[key] = required.has(key) ? base : base.optional()
+  }
+  return shape
+}
+
+function registerImTools(params: {
+  server: McpServer
   remoteAgentId: string
   conversationId: string
   machineKey: string
 }) {
-  const server = new McpServer(
-    {
-      name: "synapse",
-      version: "0.1.0",
-    },
-    { capabilities: { logging: {} } }
-  )
-
+  const { server } = params
   server.registerTool(
     "list_conversations",
     {
@@ -84,9 +110,7 @@ function buildPerConversationMcpServer(params: {
     "check_messages",
     {
       description: "Return pending message deliveries for this remote agent.",
-      inputSchema: {
-        limit: z.number().int().min(1).max(500).optional(),
-      },
+      inputSchema: { limit: z.number().int().min(1).max(500).optional() },
       outputSchema: { deliveries: z.array(z.any()) },
     },
     async ({ limit }) => {
@@ -200,15 +224,65 @@ function buildPerConversationMcpServer(params: {
       return jsonToolResult(result)
     }
   )
+}
 
-  return server
+async function registerResolvedTools(params: {
+  server: McpServer
+  workspaceId: string
+  remoteAgentId: string
+  conversationId: string
+  sessionKey: string
+}): Promise<() => Promise<void>> {
+  // The resolver evaluates resource_access_bindings exactly like an actor
+  // would (workspace + conversation grants for the remote-agent path) and
+  // returns ready-to-execute plugin + relay tool definitions. We mount each
+  // one as a passthrough that calls back into the same executor.
+  const resolved = await resolveMcpToolsForRemoteAgent({
+    workspaceId: params.workspaceId,
+    remoteAgentId: params.remoteAgentId,
+    conversationId: params.conversationId,
+    sessionId: params.sessionKey,
+  })
+  for (const def of resolved.tools as ToolDefinition[]) {
+    try {
+      params.server.registerTool(
+        def.name,
+        {
+          description: def.description,
+          inputSchema: toolDefinitionToZodShape(def),
+        },
+        async (input: Record<string, unknown>) => {
+          const output = await resolved.executor(def.name, input ?? {})
+          return {
+            content: Array.isArray(output.content)
+              ? (output.content as any)
+              : [
+                  {
+                    type: "text" as const,
+                    text: JSON.stringify(output, null, 2),
+                  },
+                ],
+            isError: output.isError ?? undefined,
+          }
+        }
+      )
+    } catch (error) {
+      console.warn(
+        "[remote-agent mcp] tool registration skipped",
+        def.name,
+        error instanceof Error ? error.message : error
+      )
+    }
+  }
+  return resolved.shutdown
 }
 
 function reapIdleTransports() {
   const now = Date.now()
-  for (const [key, active] of transports) {
+  for (const [sessionId, active] of transportsBySessionId) {
     if (now - active.lastActivityAt > IDLE_TIMEOUT_MS) {
-      transports.delete(key)
+      transportsBySessionId.delete(sessionId)
+      void active.shutdown().catch(() => undefined)
       void active.server.close().catch(() => undefined)
       void active.transport.close().catch(() => undefined)
     }
@@ -217,47 +291,67 @@ function reapIdleTransports() {
 
 setInterval(reapIdleTransports, 60_000).unref?.()
 
-async function ensureTransport(params: {
+function extractMcpSessionId(request: FastifyRequest): string | undefined {
+  const raw = request.headers["mcp-session-id"]
+  if (Array.isArray(raw)) return raw[0]
+  if (typeof raw === "string" && raw.trim()) return raw.trim()
+  return undefined
+}
+
+async function createSessionTransport(params: {
   remoteAgentId: string
   conversationId: string
   machineKey: string
   workspaceId: string
-}) {
-  const key = endpointKey(params.remoteAgentId, params.conversationId)
-  const existing = transports.get(key)
-  if (existing) {
-    existing.lastActivityAt = Date.now()
-    return existing
-  }
-  const transport = new StreamableHTTPServerTransport({
-    sessionIdGenerator: undefined,
-  })
-  const server = buildPerConversationMcpServer(params)
-  await server.connect(transport)
-  await registerConversationPluginsOnMcpServer({
+}): Promise<ActiveTransport> {
+  const sessionKey = `remote_agent_mcp:${params.remoteAgentId}:${params.conversationId}:${randomUUID()}`
+  const server = new McpServer(
+    { name: "synapse", version: "0.1.0" },
+    { capabilities: { logging: {} } }
+  )
+  registerImTools({
     server,
-    workspaceId: params.workspaceId,
+    remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
-  }).catch((error) => {
+    machineKey: params.machineKey,
+  })
+  let pluginShutdown: () => Promise<void> = async () => undefined
+  try {
+    pluginShutdown = await registerResolvedTools({
+      server,
+      workspaceId: params.workspaceId,
+      remoteAgentId: params.remoteAgentId,
+      conversationId: params.conversationId,
+      sessionKey,
+    })
+  } catch (error) {
     console.error(
-      "[remote-agent mcp] plugin projection failed for",
+      "[remote-agent mcp] resolveMcpToolsForRemoteAgent failed",
       params.remoteAgentId,
       params.conversationId,
       error
     )
+  }
+  let storedSessionId: string | undefined
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    onsessioninitialized: (id) => {
+      storedSessionId = id
+      transportsBySessionId.set(id, active)
+    },
   })
   const active: ActiveTransport = {
     transport,
     server,
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
-    machineKey: params.machineKey,
+    shutdown: pluginShutdown,
     lastActivityAt: Date.now(),
   }
-  transports.set(key, active)
   transport.onclose = () => {
-    transports.delete(key)
+    if (storedSessionId) transportsBySessionId.delete(storedSessionId)
   }
+  await server.connect(transport)
   return active
 }
 
@@ -285,12 +379,38 @@ export async function handleRemoteAgentMcpRequest(
     return reply.code(401).send({ error: message })
   }
 
-  const active = await ensureTransport({
-    remoteAgentId: request.params.remoteAgentId,
-    conversationId: request.params.conversationId,
-    machineKey,
-    workspaceId,
-  })
+  const sessionId = extractMcpSessionId(request)
+  let active: ActiveTransport | undefined
+  if (sessionId) {
+    active = transportsBySessionId.get(sessionId)
+    if (
+      active &&
+      (active.remoteAgentId !== request.params.remoteAgentId ||
+        active.conversationId !== request.params.conversationId)
+    ) {
+      // Mcp-Session-Id is global. Cross-(agent, conversation) reuse would let
+      // a different agent's session be commandeered just by including the id;
+      // refuse instead of silently routing.
+      return reply.code(404).send({ error: "Unknown MCP session id" })
+    }
+  }
+  if (!active) {
+    if (sessionId) {
+      return reply.code(404).send({ error: "Unknown MCP session id" })
+    }
+    if (!isInitializeRequest((request as any).body)) {
+      return reply
+        .code(400)
+        .send({ error: "First request must be an MCP initialize" })
+    }
+    active = await createSessionTransport({
+      remoteAgentId: request.params.remoteAgentId,
+      conversationId: request.params.conversationId,
+      machineKey,
+      workspaceId,
+    })
+  }
+  active.lastActivityAt = Date.now()
 
   reply.hijack()
   try {
@@ -314,9 +434,10 @@ export async function handleRemoteAgentMcpRequest(
 }
 
 export function __clearMcpEndpointStateForTest() {
-  for (const active of transports.values()) {
+  for (const active of transportsBySessionId.values()) {
+    void active.shutdown().catch(() => undefined)
     void active.server.close().catch(() => undefined)
     void active.transport.close().catch(() => undefined)
   }
-  transports.clear()
+  transportsBySessionId.clear()
 }
