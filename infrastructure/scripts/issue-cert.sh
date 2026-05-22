@@ -11,6 +11,13 @@ if [ -f "$REPO_ROOT/.env" ]; then
   set +a
 fi
 
+DEPLOY_MODE="${SYNAPSE_DEPLOY_MODE:-tls}"
+if [ "$DEPLOY_MODE" = "http" ]; then
+  echo "SYNAPSE_DEPLOY_MODE=http does not use Let's Encrypt certificates." >&2
+  echo "Switch to SYNAPSE_DEPLOY_MODE=tls before running issue-cert.sh." >&2
+  exit 1
+fi
+
 PRIMARY_DOMAIN="${SYNAPSE_PUBLIC_DOMAIN:?SYNAPSE_PUBLIC_DOMAIN is required in .env. Run SYNAPSE_PUBLIC_DOMAIN=<domain> ./setup.sh first.}"
 WWW_DOMAIN="${SYNAPSE_WWW_DOMAIN:-www.${PRIMARY_DOMAIN}}"
 MOBILE_SHORT_DOMAIN="${SYNAPSE_MOBILE_SHORT_DOMAIN:-m.${PRIMARY_DOMAIN}}"
@@ -34,7 +41,7 @@ for domain in "${DOMAINS[@]}"; do
   domain_args+=("-d" "$domain")
 done
 
-docker compose --profile production stop nginx >/dev/null 2>&1 || true
+docker compose --profile production --profile tls stop nginx >/dev/null 2>&1 || true
 docker compose --profile certbot up -d acme-http
 
 cleanup() {

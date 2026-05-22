@@ -133,7 +133,22 @@ services:
       - web
       - mobile-web
     profiles:
-      - production
+      - tls
+
+  nginx-http:
+    image: nginx:alpine
+    container_name: synapse-nginx-http
+    restart: unless-stopped
+    ports:
+      - "${SYNAPSE_HTTP_PORT:-80}:80"
+    volumes:
+      - ./infrastructure/nginx/public-http.conf.template:/etc/nginx/templates/default.conf.template:ro
+    depends_on:
+      - api
+      - web
+      - mobile-web
+    profiles:
+      - http
 
   acme-http:
     image: nginx:alpine

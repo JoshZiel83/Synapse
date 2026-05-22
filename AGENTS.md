@@ -15,6 +15,8 @@
 - 修改任何会影响生产运行的代码、配置、数据库访问、权限逻辑、前端构建产物或 nginx 路由后，都需要重新构建并拉起对应 Compose 服务，不能只假设热更新或旧容器会自动生效。
 - 常用检查命令：
   - `docker compose --profile production ps`
+  - `docker compose --profile production --profile tls ps`
+  - `docker compose --profile production --profile http ps`
   - `docker compose --profile production logs --tail=100 api`
   - `docker compose --profile production logs --tail=100 web`
   - `docker compose --profile production logs --tail=100 mobile-web`
@@ -35,7 +37,8 @@
 - 线上 nginx 将手机端 web 挂在子路径 `/mobile`。
 - 桌面端 web 继续走根路径 `/`，由 nginx 反代 `packages/web-next`。
 - 移动端静态站由 `mobile-web` 容器内的 nginx 提供，配置在 `infrastructure/nginx/mobile-web.conf`。
-- 公网入口由 `nginx` 容器提供，模板配置在 `infrastructure/nginx/public.conf.template`，真实域名从本机 `.env` 注入。
+- TLS 公网入口由 `nginx` 容器提供，模板配置在 `infrastructure/nginx/public.conf.template`，真实域名从本机 `.env` 注入。
+- HTTP-only 公网入口由 `nginx-http` 容器提供，模板配置在 `infrastructure/nginx/public-http.conf.template`，用于纯 IP/端口部署，不启用证书、不监听 443、不跳转 HTTPS。
 - `${SYNAPSE_MOBILE_SHORT_DOMAIN}` 与 `${SYNAPSE_MOBILE_DOMAIN}` 的根路径会跳转到 `/mobile/`。
 
 ## Mobile Web 构建与发布
@@ -47,9 +50,11 @@
   - `cd packages/mobile-app`
   - `npm run build:chat-worker`
 - 生产构建与发布命令：
-  - `docker compose --profile production up -d --build mobile-web nginx`
+  - TLS: `docker compose --profile production --profile tls up -d --build mobile-web nginx`
+  - HTTP-only: `docker compose --profile production --profile http up -d --build mobile-web nginx-http`
 - 如果公网 nginx 配置有变更，需要重建或重启 `nginx` 容器：
-  - `docker compose --profile production up -d --force-recreate nginx`
+  - TLS: `docker compose --profile production --profile tls up -d --force-recreate nginx`
+  - HTTP-only: `docker compose --profile production --profile http up -d --force-recreate nginx-http`
 
 ## 额外说明
 
@@ -62,9 +67,11 @@
 - 公网桌面端 web 根路径 `/` 不是直接暴露 `next dev`，而是由 `web` 容器运行 `packages/web-next` 的 production build。
 - 修改 `packages/web-next` 或任何会影响桌面端 web 运行结果的共享前端代码、资源、样式、路由、metadata、`public` 文件后，不能只看 dev server；必须重新构建前端镜像并重启 `web` 容器。
 - 重启命令：
-  - `docker compose --profile production up -d --build web nginx`
+  - TLS: `docker compose --profile production --profile tls up -d --build web nginx`
+  - HTTP-only: `docker compose --profile production --profile http up -d --build web nginx-http`
 - 重启后必须检查服务状态，确认新的前端构建产物已经成功加载：
-  - `docker compose --profile production ps web nginx`
+  - `docker compose --profile production --profile tls ps web nginx`
+  - `docker compose --profile production --profile http ps web nginx-http`
   - `curl -I http://127.0.0.1:3000`
 - 如果需要手动验证 production 构建是否能通过，优先运行：
   - `npm run build -w packages/web-next`
@@ -73,13 +80,14 @@
 ## TLS 证书与续期
 
 - 生产证书由 Dockerized Certbot 管理，证书卷挂载到公网 `nginx` 容器。
+- `SYNAPSE_DEPLOY_MODE=http` 不使用证书；不要运行 `issue-cert.sh`，也不需要安装证书续期 cron。
 - 首次签发命令：
   - `./infrastructure/scripts/issue-cert.sh`
 - 续期命令：
   - `./infrastructure/scripts/renew-cert.sh`
 - 续期 cron 模板在 `infrastructure/cron/synapse-certbot-renew`。
 - 公网 nginx 已启用 OCSP stapling；证书变更后需要 reload nginx：
-  - `docker compose --profile production exec -T nginx nginx -s reload`
+  - `docker compose --profile production --profile tls exec -T nginx nginx -s reload`
 
 ## Web Chat Worker 构建
 
