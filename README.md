@@ -187,12 +187,12 @@ You can also use `npm run ios` or `npm run android` inside `packages/mobile-app`
 
 ## Deployment
 
-This repository currently ships with a self-hosting path centered on a single Ubuntu host:
+This repository currently ships with a self-hosting path centered on a single Ubuntu host and Docker Compose:
 
-- `systemd` for the API and desktop web services
-- `nginx` as the public entrypoint
 - Dockerized PostgreSQL and Redis for local infrastructure
-- desktop web served from `packages/web-next`
-- mobile web exported as static assets from `packages/mobile-app`
+- Dockerized API and desktop web services
+- Dockerized nginx as the public TLS entrypoint
+- Dockerized mobile web exported from `packages/mobile-app` and served under `/mobile/`
+- Dockerized Certbot for Let's Encrypt certificates and renewal
 
 See [`deploy.md`](deploy.md) for the production deployment path used in this repo.

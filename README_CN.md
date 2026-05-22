@@ -191,12 +191,12 @@ npm run web
 
 ## 部署
 
-当前仓库提供的是一条面向单机 Ubuntu 主机的自托管路径：
+当前仓库提供的是一条面向单机 Ubuntu 主机、以 Docker Compose 为核心的自托管路径：
 
-- `systemd` 负责 API 与桌面 Web 进程
-- `nginx` 作为公网入口
 - PostgreSQL 与 Redis 通过 Docker 运行
-- 桌面端由 `packages/web-next` 提供
-- mobile web 由 `packages/mobile-app` 静态导出
+- API 与桌面 Web 通过 Docker 容器运行
+- Dockerized nginx 作为公网 TLS 入口
+- mobile web 由 `packages/mobile-app` 静态导出，并通过容器化 nginx 挂在 `/mobile/`
+- Let's Encrypt 证书与续期由 Dockerized Certbot 管理
 
 生产部署路径见 [`deploy.md`](deploy.md)。
