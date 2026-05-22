@@ -57,7 +57,7 @@ CREATE TYPE model_group_grants_status AS ENUM ('active', 'revoked');
 CREATE TYPE sessions_channel_type AS ENUM ('web', 'api', 'bridge');
 CREATE TYPE sessions_status AS ENUM ('idle', 'queued', 'running', 'blocked', 'closed');
 CREATE TYPE sessions_collaboration_mode AS ENUM ('default', 'plan_drafting', 'plan_awaiting_approval');
-CREATE TYPE conversation_participants_kind AS ENUM ('workspace_member', 'actor', 'remote_agent', 'external', 'system');
+CREATE TYPE conversation_participants_type AS ENUM ('workspace_member', 'actor', 'remote_agent', 'external', 'system');
 CREATE TYPE conversation_participants_state AS ENUM ('active', 'left', 'removed');
 CREATE TYPE chat_client_instances_status AS ENUM ('active', 'revoked');
 CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin');
@@ -1589,7 +1589,7 @@ CREATE INDEX idx_conversation_item_parts_item ON conversation_item_parts(item_id
 CREATE TABLE conversation_participants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  participant_kind conversation_participants_kind NOT NULL,
+  participant_type conversation_participants_type NOT NULL,
   workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
   actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
@@ -1601,10 +1601,10 @@ CREATE TABLE conversation_participants (
   joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   left_at TIMESTAMPTZ,
   CHECK (
-    (participant_kind = 'workspace_member' AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (participant_kind = 'actor' AND actor_id IS NOT NULL AND workspace_member_id IS NULL AND remote_agent_id IS NULL) OR
-    (participant_kind = 'remote_agent' AND remote_agent_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL) OR
-    (participant_kind IN ('external', 'system') AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL)
+    (participant_type = 'workspace_member' AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
+    (participant_type = 'actor' AND actor_id IS NOT NULL AND workspace_member_id IS NULL AND remote_agent_id IS NULL) OR
+    (participant_type = 'remote_agent' AND remote_agent_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL) OR
+    (participant_type IN ('external', 'system') AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL)
   )
 );
 

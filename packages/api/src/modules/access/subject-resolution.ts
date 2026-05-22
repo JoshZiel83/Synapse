@@ -38,7 +38,7 @@ export async function isActorActiveConversationParticipant(
     .selectFrom("conversation_participants")
     .select("id")
     .where("conversation_id", "=", conversationId)
-    .where("participant_kind", "=", "actor")
+    .where("participant_type", "=", "actor")
     .where("actor_id", "=", actorId)
     .where("state", "=", "active")
     .limit(1)

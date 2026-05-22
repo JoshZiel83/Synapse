@@ -467,7 +467,7 @@ function buildSendToCandidates(
       continue
     }
 
-    if (participant.participant_kind === "external") {
+    if (participant.participant_type === "external") {
       const linkedWorkspaceMemberName =
         (participant.linked_user_name as string | null) || undefined
       const name =

@@ -9,7 +9,7 @@ export type UserInteractionCandidate = {
 
 export type UserInteractionParticipantRow = {
   id: string
-  participant_kind: string
+  participant_type: string
   state: "active" | "left" | "removed"
   workspace_member_id: string | null
   user_name: string | null
@@ -35,7 +35,7 @@ export function buildUserInteractionCandidatesFromRows(
 
   for (const participant of participants) {
     if (participant.state !== "active") continue
-    if (participant.participant_kind !== "workspace_member") continue
+    if (participant.participant_type !== "workspace_member") continue
     if (!participant.workspace_member_id) continue
 
     const name = participant.user_name?.trim() || "User"

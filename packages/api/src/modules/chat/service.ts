@@ -126,7 +126,7 @@ type ConversationBaseRow = {
 type ParticipantRow = {
   id: string
   conversation_id: string
-  participant_kind: ParticipantKind
+  participant_type: ParticipantKind
   workspace_member_id: string | null
   actor_id: string | null
   remote_agent_id: string | null
@@ -492,12 +492,12 @@ function asParticipantTransportKind(
 }
 
 function participantDisplayName(row: ParticipantRow): string {
-  if (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER) {
+  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER) {
     if (typeof row.user_name === "string" && row.user_name.trim()) {
       return row.user_name.trim()
     }
   }
-  if (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
+  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     if (
       typeof row.participant_name === "string" &&
       row.participant_name.trim()
@@ -505,7 +505,7 @@ function participantDisplayName(row: ParticipantRow): string {
       return row.participant_name.trim()
     }
   }
-  if (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
+  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
     if (
       typeof row.participant_name === "string" &&
       row.participant_name.trim()
@@ -514,16 +514,16 @@ function participantDisplayName(row: ParticipantRow): string {
     }
   }
   if (
-    (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
-      row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
+    (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
+      row.participant_type === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
     typeof row.transport_display_name === "string" &&
     row.transport_display_name.trim()
   ) {
     return row.transport_display_name.trim()
   }
   if (
-    (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
-      row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
+    (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
+      row.participant_type === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
     typeof row.display_name === "string" &&
     row.display_name.trim()
   ) {
@@ -541,7 +541,7 @@ function participantDisplayName(row: ParticipantRow): string {
   if (typeof row.display_name === "string" && row.display_name.trim()) {
     return row.display_name.trim()
   }
-  return row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
+  return row.participant_type === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
     ? "System"
     : "Unknown"
 }
@@ -830,7 +830,7 @@ async function listConversationParticipantRows(
       SELECT
         cp.id,
         cp.conversation_id,
-        cp.participant_kind,
+        cp.participant_type,
         cp.workspace_member_id,
         cp.actor_id,
         cp.remote_agent_id,
@@ -938,7 +938,7 @@ async function getWorkspaceMemberConversationParticipantRow(
       SELECT
         cp.id,
         cp.conversation_id,
-        cp.participant_kind,
+        cp.participant_type,
         cp.workspace_member_id,
         cp.actor_id,
         cp.remote_agent_id,
@@ -1251,7 +1251,7 @@ async function loadConversationViews(
     const viewerMembership = conversationParticipants.find(
       (participant) =>
         participant.state === "active" &&
-        participant.participant_kind ===
+        participant.participant_type ===
           CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
         participant.workspace_member_id === workspaceMemberId
     )
@@ -2163,7 +2163,7 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
       )
     : undefined
   const sourceParticipantType =
-    params.sourceParticipantType ?? authorParticipant?.participant_kind
+    params.sourceParticipantType ?? authorParticipant?.participant_type
   if (
     !sourceParticipantType ||
     sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
@@ -2307,7 +2307,7 @@ async function insertParticipant(
   queryable: Queryable,
   params: {
     conversationId: string
-    participantKind: ParticipantKind
+    participantType: ParticipantKind
     workspaceMemberId?: string
     actorId?: string
     remoteAgentId?: string
@@ -2325,7 +2325,7 @@ async function insertParticipant(
       INSERT INTO conversation_participants (
         id,
         conversation_id,
-        participant_kind,
+        participant_type,
         workspace_member_id,
         actor_id,
         remote_agent_id,
@@ -2341,7 +2341,7 @@ async function insertParticipant(
     [
       participantId,
       params.conversationId,
-      params.participantKind,
+      params.participantType,
       params.workspaceMemberId ?? null,
       params.actorId ?? null,
       params.remoteAgentId ?? null,
@@ -2608,7 +2608,7 @@ export async function createConversationForWorkspaceMember(params: {
       for (const member of memberRows) {
         await ensureConversationParticipant({
           conversationId: conversation.id as string,
-          participantKind: "workspace_member",
+          participantType: "workspace_member",
           workspaceMemberId: member.id,
           displayName: member.user_name,
           roleKey:
@@ -2639,7 +2639,7 @@ export async function createConversationForWorkspaceMember(params: {
       for (const actor of actorRows) {
         await ensureConversationParticipant({
           conversationId: conversation.id as string,
-          participantKind: "actor",
+          participantType: "actor",
           actorId: actor.id,
           displayName: actor.name,
           queryable,
@@ -2662,7 +2662,7 @@ export async function createConversationForWorkspaceMember(params: {
       for (const remoteAgent of remoteAgentRows) {
         await ensureConversationParticipant({
           conversationId: conversation.id as string,
-          participantKind: "remote_agent",
+          participantType: "remote_agent",
           remoteAgentId: remoteAgent.id,
           displayName: remoteAgent.name,
           queryable,
@@ -2673,7 +2673,7 @@ export async function createConversationForWorkspaceMember(params: {
     for (const externalParticipant of externalParticipants) {
       await ensureConversationParticipant({
         conversationId: conversation.id as string,
-        participantKind: "external",
+        participantType: "external",
         displayName: externalParticipant.displayName,
         metadata: externalParticipant.metadata,
         transportAddressIds: externalParticipant.transportAddressIds,
@@ -2759,7 +2759,7 @@ export async function getConversationParticipant(params: {
 
 export async function ensureConversationParticipant(params: {
   conversationId: string
-  participantKind: ParticipantKind
+  participantType: ParticipantKind
   workspaceMemberId?: string
   actorId?: string
   remoteAgentId?: string
@@ -2777,19 +2777,19 @@ export async function ensureConversationParticipant(params: {
   }
 
   if (
-    params.participantKind === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
     !params.workspaceMemberId
   ) {
     throw new Error("workspaceMemberId is required for workspace participants")
   }
   if (
-    params.participantKind === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
     !params.actorId
   ) {
     throw new Error("actorId is required for actor participants")
   }
   if (
-    params.participantKind === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
     !params.remoteAgentId
   ) {
     throw new Error("remoteAgentId is required for remote agent participants")
@@ -2801,7 +2801,7 @@ export async function ensureConversationParticipant(params: {
       SELECT id, state
       FROM conversation_participants
       WHERE conversation_id = $1
-        AND participant_kind = $2
+        AND participant_type = $2
         AND (
           ($2 = 'workspace_member' AND workspace_member_id = $3)
           OR ($2 = 'actor' AND actor_id = $4)
@@ -2815,7 +2815,7 @@ export async function ensureConversationParticipant(params: {
     `,
     [
       params.conversationId,
-      params.participantKind,
+      params.participantType,
       params.workspaceMemberId ?? null,
       params.actorId ?? null,
       params.remoteAgentId ?? null,
@@ -2890,7 +2890,7 @@ export async function ensureConversationParticipant(params: {
 
   const inserted = await insertParticipant(queryable, {
     conversationId: params.conversationId,
-    participantKind: params.participantKind,
+    participantType: params.participantType,
     workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
     remoteAgentId: params.remoteAgentId,
@@ -2939,7 +2939,7 @@ export async function addConversationParticipants(params: {
       for (const member of memberRows) {
         await ensureConversationParticipant({
           conversationId: params.conversationId,
-          participantKind: "workspace_member",
+          participantType: "workspace_member",
           workspaceMemberId: member.id,
           displayName: member.user_name,
           queryable,
@@ -2968,7 +2968,7 @@ export async function addConversationParticipants(params: {
       for (const actor of actorRows) {
         await ensureConversationParticipant({
           conversationId: params.conversationId,
-          participantKind: "actor",
+          participantType: "actor",
           actorId: actor.id,
           displayName: actor.name,
           queryable,
@@ -2991,7 +2991,7 @@ export async function addConversationParticipants(params: {
       for (const remoteAgent of remoteAgentRows) {
         await ensureConversationParticipant({
           conversationId: params.conversationId,
-          participantKind: "remote_agent",
+          participantType: "remote_agent",
           remoteAgentId: remoteAgent.id,
           displayName: remoteAgent.name,
           queryable,
@@ -3002,7 +3002,7 @@ export async function addConversationParticipants(params: {
     for (const externalParticipant of externalParticipants) {
       await ensureConversationParticipant({
         conversationId: params.conversationId,
-        participantKind: "external",
+        participantType: "external",
         displayName: externalParticipant.displayName,
         metadata: externalParticipant.metadata,
         transportAddressIds: externalParticipant.transportAddressIds,
@@ -3688,7 +3688,7 @@ function participantRowToEntityRef(
   const transportKind = asParticipantTransportKind(participant.transport_kind)
   return {
     participantId: participant.id,
-    participantType: participant.participant_kind,
+    participantType: participant.participant_type,
     workspaceMemberId: participant.workspace_member_id ?? undefined,
     actorId: participant.actor_id ?? undefined,
     remoteAgentId: participant.remote_agent_id ?? undefined,
@@ -3716,7 +3716,7 @@ function participantRowToChatParticipantSummary(
   return {
     participantId: participant.id,
     conversationId: participant.conversation_id,
-    participantType: participant.participant_kind,
+    participantType: participant.participant_type,
     workspaceMemberId: entity.workspaceMemberId,
     actorId: entity.actorId,
     externalUserKey: entity.externalUserKey,
@@ -4416,7 +4416,7 @@ export async function createChatConversation(params: {
     for (const member of memberRows) {
       await insertParticipant(client, {
         conversationId: newConversationId,
-        participantKind: "workspace_member",
+        participantType: "workspace_member",
         workspaceMemberId: member.id,
         displayName: member.user_name,
         roleKey: member.id === creator.workspaceMemberId ? "owner" : "member",
@@ -4432,7 +4432,7 @@ export async function createChatConversation(params: {
     for (const actor of actorRows) {
       await insertParticipant(client, {
         conversationId: newConversationId,
-        participantKind: "actor",
+        participantType: "actor",
         actorId: actor.id,
         displayName: actor.name,
         roleKey: "member",
@@ -4443,7 +4443,7 @@ export async function createChatConversation(params: {
     for (const remoteAgent of remoteAgentRows) {
       await insertParticipant(client, {
         conversationId: newConversationId,
-        participantKind: "remote_agent",
+        participantType: "remote_agent",
         remoteAgentId: remoteAgent.id,
         displayName: remoteAgent.name,
         roleKey: "member",
@@ -4454,7 +4454,7 @@ export async function createChatConversation(params: {
     for (const external of externalParticipants) {
       await insertParticipant(client, {
         conversationId: newConversationId,
-        participantKind: "external",
+        participantType: "external",
         displayName: external.displayName,
         roleKey: "member",
         metadata: external.metadata ?? {},
@@ -5550,7 +5550,7 @@ async function loadParticipantById(
   const result = await executeSqlOn<{
     id: string
     conversation_id: string
-    participant_kind: ParticipantKind
+    participant_type: ParticipantKind
     workspace_member_id: string | null
     actor_id: string | null
     remote_agent_id: string | null
@@ -5559,7 +5559,7 @@ async function loadParticipantById(
   }>(
     queryable,
     `
-      SELECT id, conversation_id, participant_kind,
+      SELECT id, conversation_id, participant_type,
              workspace_member_id, actor_id, remote_agent_id,
              display_name, state
       FROM conversation_participants
@@ -5629,13 +5629,13 @@ export async function removeChatConversationParticipant(params: {
           : {
               participantId: access.participant.id,
               participantType: access.participant
-                .participant_kind as ParticipantKind,
+                .participant_type as ParticipantKind,
               workspaceMemberId: identity.workspaceMemberId,
             },
         participants: [
           {
             participantId: target.id,
-            participantType: target.participant_kind as Exclude<
+            participantType: target.participant_type as Exclude<
               ParticipantKind,
               "system"
             >,

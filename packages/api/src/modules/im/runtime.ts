@@ -522,7 +522,7 @@ async function resolveDefaultWakeTarget(
 
   const target = await ensureConversationParticipant({
     conversationId: binding.conversationId,
-    participantKind: "actor",
+    participantType: "actor",
     actorId,
   })
 

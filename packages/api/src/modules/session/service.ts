@@ -184,7 +184,7 @@ async function requireActiveActorConversationParticipant(
       .selectFrom("conversation_participants")
       .select("id")
       .where("conversation_id", "=", conversationId)
-      .where("participant_kind", "=", "actor")
+      .where("participant_type", "=", "actor")
       .where("actor_id", "=", actorId)
       .where("state", "=", "active")
       .limit(1)
@@ -388,7 +388,7 @@ async function resolveSessionMessageAuthor(params: {
     const actorJoinVersionId = await getActorJoinVersionId(params.fromActorId)
     return ensureConversationParticipant({
       conversationId: params.conversationId,
-      participantKind: "actor",
+      participantType: "actor",
       actorId: params.fromActorId,
       actorJoinVersionId,
     })
@@ -397,7 +397,7 @@ async function resolveSessionMessageAuthor(params: {
   if (params.fromWorkspaceMemberId) {
     return ensureConversationParticipant({
       conversationId: params.conversationId,
-      participantKind: "workspace_member",
+      participantType: "workspace_member",
       workspaceMemberId: params.fromWorkspaceMemberId,
     })
   }
@@ -468,7 +468,7 @@ export async function createSession(params: {
 
   await ensureConversationParticipant({
     conversationId: finalConversationId,
-    participantKind: "actor",
+    participantType: "actor",
     actorId,
     actorJoinVersionId: await getActorJoinVersionId(actorId),
   })
@@ -483,7 +483,7 @@ export async function createSession(params: {
     resolvedWorkspaceMemberId = workspaceMember.workspaceMemberId
     await ensureConversationParticipant({
       conversationId: finalConversationId,
-      participantKind: "workspace_member",
+      participantType: "workspace_member",
       workspaceMemberId: resolvedWorkspaceMemberId,
     })
   }

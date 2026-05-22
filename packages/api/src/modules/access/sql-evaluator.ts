@@ -321,11 +321,11 @@ async function hasActiveConversationMembership(params: {
 
   if (params.workspaceMemberId) {
     query = query
-      .where("participant_kind", "=", "workspace_member")
+      .where("participant_type", "=", "workspace_member")
       .where("workspace_member_id", "=", params.workspaceMemberId)
   } else if (params.actorId) {
     query = query
-      .where("participant_kind", "=", "actor")
+      .where("participant_type", "=", "actor")
       .where("actor_id", "=", params.actorId)
   } else {
     return null

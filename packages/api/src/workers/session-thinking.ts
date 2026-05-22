@@ -400,7 +400,7 @@ export function startSessionThinkingWorker() {
                 role: "Workspace member",
               })
             } else if (
-              member.participant_kind === "external" &&
+              member.participant_type === "external" &&
               member.state === "active"
             ) {
               const linkedUserName =

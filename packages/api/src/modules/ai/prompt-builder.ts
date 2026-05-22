@@ -18,7 +18,7 @@ import { buildReplyToRefUsageGuidance } from "./session-tool-guidance.js"
 
 export interface ConversationParticipantInfo {
   id?: string
-  participant_kind?: string
+  participant_type?: string
   actor_id?: string
   user_id?: string
   actor_name?: string
@@ -255,7 +255,7 @@ function hasHumanConversationParticipant(
   return participants.some(
     (participant) =>
       Boolean(participant.user_id) ||
-      participant.participant_kind === "external" ||
+      participant.participant_type === "external" ||
       Boolean(participant.transport_external_id)
   )
 }
@@ -441,11 +441,11 @@ export function buildActorPrompt(
       conversationParticipants.find((member) => member.user_id)?.user_name ||
       conversationParticipants.find(
         (member) =>
-          member.participant_kind === "external" || member.transport_external_id
+          member.participant_type === "external" || member.transport_external_id
       )?.transport_display_name ||
       conversationParticipants.find(
         (member) =>
-          member.participant_kind === "external" || member.transport_external_id
+          member.participant_type === "external" || member.transport_external_id
       )?.display_name ||
       "User"
     const roster = [
@@ -469,7 +469,7 @@ export function buildActorPrompt(
           return [buildRosterEntry(member)]
         }
         if (
-          member.participant_kind === "external" ||
+          member.participant_type === "external" ||
           member.transport_external_id
         ) {
           const externalName =
