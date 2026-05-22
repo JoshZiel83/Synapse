@@ -1,5 +1,4 @@
 import { pool } from "../../infrastructure/database/index.js"
-import { emitEvent } from "../../infrastructure/events/index.js"
 import {
   db,
   executeCompiledQuery,
@@ -704,22 +703,12 @@ export async function addSessionMessage(params: {
           .executeTakeFirst()
       )?.name
     }
-    await emitEvent({
-      type: "session.message.new",
-      workspaceId,
-      payload: {
-        sessionId,
-        messageId: item.id,
-        role,
-        contentBlocks: normalizedMessage.contentBlocks,
-        fromActorId,
-        actorName,
-        fromWorkspaceMemberId,
-        metadata: normalizedMessage.normalizedMetadata,
-        createdAt: item.createdAt,
-      },
-      timestamp: nowISO(),
-    })
+    // session.message.new event emit removed (S13): no subscribers remain.
+    void normalizedMessage
+    void item
+    void actorName
+    void role
+    void fromWorkspaceMemberId
   }
 
   return {
