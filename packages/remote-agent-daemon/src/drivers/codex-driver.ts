@@ -3,6 +3,19 @@ import { existsSync } from "node:fs"
 import path from "node:path"
 import process from "node:process"
 import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk"
+// codex app-server protocol v2 typed schema. Regenerate after bumping the local
+// `codex` binary with:
+//   codex app-server generate-ts --out packages/remote-agent-daemon/src/codex/generated
+//   find packages/remote-agent-daemon/src/codex/generated -name "*.ts" -exec sed -i -E 's#^(import type \{[^}]+\} from )"(\./|\.\./)([^"]+)";#\1"\2\3.js";#' {} +
+//   sed -i 's|export \* as v2 from "./v2";|export * as v2 from "./v2/index.js";|' packages/remote-agent-daemon/src/codex/generated/index.ts
+import type { InitializeParams } from "../codex/generated/InitializeParams.js"
+import type { ThreadStartParams } from "../codex/generated/v2/ThreadStartParams.js"
+import type { ThreadResumeParams } from "../codex/generated/v2/ThreadResumeParams.js"
+import type { TurnStartParams } from "../codex/generated/v2/TurnStartParams.js"
+import type { ToolRequestUserInputParams } from "../codex/generated/v2/ToolRequestUserInputParams.js"
+import type { ToolRequestUserInputResponse } from "../codex/generated/v2/ToolRequestUserInputResponse.js"
+import type { TurnPlanUpdatedNotification } from "../codex/generated/v2/TurnPlanUpdatedNotification.js"
+import type { ThreadStartedNotification } from "../codex/generated/v2/ThreadStartedNotification.js"
 import type {
   AgentDriver,
   AgentSession,
@@ -195,6 +208,10 @@ function mcpServerConfigToCodexFlags(
     flags.push("-c", `mcp_servers.${name}.startup_timeout_sec=30`)
     flags.push("-c", `mcp_servers.${name}.tool_timeout_sec=300`)
     flags.push("-c", `mcp_servers.${name}.enabled=true`)
+    flags.push(
+      "-c",
+      `mcp_servers.${name}.default_tools_approval_mode="approve"`
+    )
   }
   return flags
 }
@@ -253,8 +270,11 @@ class CodexAgentSession implements AgentSession {
         title: "Synapse Remote Agent",
         version: "0.1.0",
       },
-      capabilities: { experimentalApi: true },
-    })
+      capabilities: {
+        experimentalApi: true,
+        requestAttestation: false,
+      },
+    } satisfies InitializeParams)
   }
 
   private handleStdoutLine(line: string) {
@@ -301,14 +321,14 @@ class CodexAgentSession implements AgentSession {
             cwd: this.workingDirectory,
             approvalPolicy: "never",
             config: defaultThreadConfig(),
-          })
+          } satisfies ThreadResumeParams)
         } else {
           this.sendRequest("thread/start", {
             cwd: this.workingDirectory,
             approvalPolicy: "never",
-            sandbox: "danger-full-access",
+            sandbox: "workspace-write",
             config: defaultThreadConfig(),
-          })
+          } satisfies ThreadStartParams)
         }
         break
       case "collaborationMode/list":
@@ -344,31 +364,32 @@ class CodexAgentSession implements AgentSession {
   private handleServerNotification(method: string, params: any) {
     switch (method) {
       case "thread/started": {
+        const notification = params as ThreadStartedNotification
         const threadId =
-          typeof params?.thread?.id === "string" ? params.thread.id : undefined
+          (notification as unknown as { thread?: { id?: string } })?.thread
+            ?.id ?? undefined
         if (threadId && threadId !== this.threadId) {
           this.threadId = threadId
           this.eventQueue.push({ kind: "session_started", sessionId: threadId })
         }
         break
       }
-      case "turn/plan/updated":
+      case "turn/plan/updated": {
+        const notification = params as TurnPlanUpdatedNotification
         this.eventQueue.push({
           kind: "plan_updated",
-          explanation:
-            typeof params?.explanation === "string"
-              ? params.explanation
-              : undefined,
-          plan: Array.isArray(params?.plan)
-            ? params.plan
-                .map((step: any) => ({
+          explanation: notification?.explanation ?? undefined,
+          plan: Array.isArray(notification?.plan)
+            ? notification.plan
+                .map((step) => ({
                   step: String(step?.step ?? ""),
                   status: String(step?.status ?? "pending"),
                 }))
-                .filter((step: { step: string }) => Boolean(step.step))
+                .filter((step) => Boolean(step.step))
             : [],
         })
         break
+      }
       case "turn/completed":
         if (params?.turn?.error?.message) {
           this.eventQueue.push({
@@ -389,18 +410,18 @@ class CodexAgentSession implements AgentSession {
     params: any
   ) {
     if (method === "item/tool/requestUserInput") {
+      const typed = params as ToolRequestUserInputParams
       const requestId = `codex-req-${String(id)}`
       this.pendingPermissions.set(requestId, (decision) => {
         if (decision.behavior === "allow") {
+          const answers =
+            (decision.updatedInput?.answers as
+              | ToolRequestUserInputResponse["answers"]
+              | undefined) ?? {}
           writeJsonLine(this.child, {
             jsonrpc: "2.0",
             id,
-            result: {
-              answers:
-                (decision.updatedInput?.answers as
-                  | Record<string, unknown>
-                  | undefined) ?? {},
-            },
+            result: { answers } satisfies ToolRequestUserInputResponse,
           })
         } else {
           writeJsonLine(this.child, {
@@ -414,14 +435,18 @@ class CodexAgentSession implements AgentSession {
         kind: "user_input_requested",
         requestId,
         title:
-          (params?.questions?.[0]?.question as string | undefined)?.trim() ||
+          (typed?.questions?.[0]?.question as string | undefined)?.trim() ||
           "Question from Codex",
-        questions: Array.isArray(params?.questions)
-          ? (params.questions as Array<Record<string, unknown>>)
+        questions: Array.isArray(typed?.questions)
+          ? (typed.questions as unknown as Array<Record<string, unknown>>)
           : [],
       })
       return
     }
+    // With approval_policy="never" + sandbox_mode="workspace-write" + per-MCP
+    // default_tools_approval_mode="approve", these approval RPCs should rarely
+    // arrive. Keep a defensive accept fallback so the runtime never deadlocks
+    // when the binary's policy negotiation lags one turn behind our config.
     if (
       method === "item/commandExecution/requestApproval" ||
       method === "item/fileChange/requestApproval" ||
@@ -461,21 +486,21 @@ class CodexAgentSession implements AgentSession {
   private startTurn(prompt: string) {
     if (!this.threadId) return
     this.currentPrompt = prompt
-    this.sendRequest("turn/start", {
+    const params: TurnStartParams = {
       threadId: this.threadId,
-      input: [{ type: "text", text: prompt }],
+      input: [{ type: "text", text: prompt, text_elements: [] }],
       cwd: this.workingDirectory,
       approvalPolicy: "never",
-      sandboxPolicy: { type: "dangerFullAccess" },
-      collaborationMode: {
-        mode: "default",
-        settings: {
-          model: this.currentModel || "gpt-5.4",
-          reasoning_effort: null,
-          developer_instructions: null,
-        },
+      sandboxPolicy: {
+        type: "workspaceWrite",
+        writableRoots: [],
+        networkAccess: true,
+        excludeTmpdirEnvVar: false,
+        excludeSlashTmp: false,
       },
-    })
+      ...(this.currentModel ? { model: this.currentModel } : {}),
+    }
+    this.sendRequest("turn/start", params as unknown as Record<string, unknown>)
   }
 
   async send(prompt: string, _options?: SendPromptOptions) {
