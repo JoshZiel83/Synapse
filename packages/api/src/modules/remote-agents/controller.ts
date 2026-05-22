@@ -16,6 +16,7 @@ import {
   createRemoteAgentMachinePairingSession,
   createRemoteAgentUserInputInteraction,
   deleteRemoteAgent,
+  failRemoteAgentDeliveries,
   getMachineKeyFromHeaders,
   getRemoteAgent,
   getRemoteAgentConversationHistory,
@@ -94,6 +95,11 @@ const sendMessageSchema = z.object({
 
 const completeDeliveriesSchema = z.object({
   deliveryIds: z.array(z.string().uuid()).min(1),
+})
+
+const failDeliveriesSchema = z.object({
+  deliveryIds: z.array(z.string().uuid()).min(1),
+  reason: z.string().trim().max(2000).optional(),
 })
 
 const internalUserInputInteractionSchema = z.object({
@@ -522,6 +528,28 @@ export default async function remoteAgentsController(app: FastifyInstance) {
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
               deliveryIds: body.deliveryIds,
+            })
+          )
+        } catch (error) {
+          return sendServiceError(reply, error)
+        }
+      }
+    )
+
+    app.post<{
+      Params: { remoteAgentId: string }
+      Body: unknown
+    }>(
+      `${prefix}/remote-agents/:remoteAgentId/fail-deliveries`,
+      async (request, reply) => {
+        try {
+          const body = failDeliveriesSchema.parse(request.body)
+          return reply.send(
+            await failRemoteAgentDeliveries({
+              remoteAgentId: request.params.remoteAgentId,
+              machineKey: getMachineKeyFromHeaders(request),
+              deliveryIds: body.deliveryIds,
+              reason: body.reason,
             })
           )
         } catch (error) {

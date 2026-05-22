@@ -70,6 +70,10 @@ import { startAutomationExecutionWorker } from "./workers/automation-execution.j
 import { startImTransportDeliveryWorker } from "./workers/im-transport-delivery.js"
 import { startMemoryIndexingWorker } from "./workers/memory-indexing.js"
 import { startFileParsingWorker } from "./workers/file-parsing.js"
+import {
+  ensureRemoteAgentDeliveryRetryJob,
+  startRemoteAgentDeliveryRetryWorker,
+} from "./workers/remote-agent-delivery-retry.js"
 import { shutdownAllWorkers } from "./workers/registry.js"
 import { shutdownQueues } from "./workers/queues.js"
 import {
@@ -269,6 +273,8 @@ async function main() {
   startImTransportDeliveryWorker()
   startMemoryIndexingWorker()
   startFileParsingWorker()
+  await ensureRemoteAgentDeliveryRetryJob()
+  startRemoteAgentDeliveryRetryWorker()
   void warmMemoryEmbeddingRuntime().catch((err) => {
     console.error("Failed to warm memory embedding runtime:", err)
   })

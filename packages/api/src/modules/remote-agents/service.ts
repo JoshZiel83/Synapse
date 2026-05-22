@@ -36,6 +36,7 @@ import {
 } from "../chat/service.js"
 import { getFileUrlById } from "../files/service.js"
 import { requireWorkspaceMemberIdentity } from "../chat/workspace-identity.js"
+import { nextAttemptAt, shouldFailDelivery } from "./delivery-retry.js"
 
 type RuntimeCapabilities = RemoteAgentRuntimeCapabilityView
 
@@ -647,6 +648,7 @@ async function loadPendingRemoteAgentDeliveries(params: {
   const where: string[] = [
     "delivery.status = 'pending'",
     "binding.status = 'active'",
+    "(delivery.next_attempt_at IS NULL OR delivery.next_attempt_at <= NOW())",
   ]
 
   if (params.machineId) {
@@ -736,8 +738,149 @@ async function notifyPendingRemoteAgentDeliveries(params: {
         pendingForSend.map((delivery) => delivery.deliveryId),
         now
       )
+    } else {
+      await scheduleDeliveryRetry(
+        machineId,
+        pendingForSend.map((delivery) => delivery.deliveryId),
+        "WebSocket push failed"
+      )
     }
   }
+}
+
+async function scheduleDeliveryRetry(
+  machineId: string | null,
+  deliveryIds: string[],
+  reason: string,
+  queryable: Queryable = {
+    query: (text, params) => executeSql(text, params),
+  }
+) {
+  if (deliveryIds.length === 0) return
+  if (machineId) {
+    clearInFlightDeliveries(machineId, deliveryIds)
+  }
+  const updated = await executeSqlOn<{
+    id: string
+    attempts: number
+  }>(
+    queryable,
+    `
+      UPDATE remote_agent_message_deliveries
+      SET attempts = attempts + 1,
+          last_failure_reason = $2,
+          updated_at = NOW()
+      WHERE id = ANY($1::uuid[])
+        AND status = 'pending'
+      RETURNING id, attempts
+    `,
+    [deliveryIds, reason]
+  )
+  const now = new Date()
+  for (const row of updated.rows) {
+    if (shouldFailDelivery(row.attempts)) {
+      await executeSqlOn(
+        queryable,
+        `
+          UPDATE remote_agent_message_deliveries
+          SET status = 'failed',
+              next_attempt_at = NULL,
+              updated_at = NOW()
+          WHERE id = $1
+        `,
+        [row.id]
+      )
+      continue
+    }
+    const scheduled = nextAttemptAt(now, row.attempts)
+    await executeSqlOn(
+      queryable,
+      `
+        UPDATE remote_agent_message_deliveries
+        SET next_attempt_at = $2,
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [row.id, scheduled.toISOString()]
+    )
+  }
+}
+
+export async function failRemoteAgentDeliveries(params: {
+  remoteAgentId: string
+  machineKey: string
+  deliveryIds: string[]
+  reason?: string
+}) {
+  const machine = await authenticateMachineForRemoteAgent(params)
+  const uniqueIds = [...new Set(params.deliveryIds.filter(Boolean))]
+  if (uniqueIds.length === 0) {
+    return { rescheduled: 0 }
+  }
+  const owned = await executeSql<{ id: string }>(
+    `
+      SELECT id
+      FROM remote_agent_message_deliveries
+      WHERE remote_agent_id = $1
+        AND id = ANY($2::uuid[])
+        AND status = 'pending'
+    `,
+    [params.remoteAgentId, uniqueIds]
+  )
+  const ownedIds = owned.rows.map((row) => row.id)
+  if (ownedIds.length === 0) {
+    return { rescheduled: 0 }
+  }
+  await scheduleDeliveryRetry(
+    machine.machineId,
+    ownedIds,
+    params.reason?.trim() || "Daemon reported failure"
+  )
+  return { rescheduled: ownedIds.length }
+}
+
+export async function runDueRemoteAgentDeliveryRetries() {
+  const dueRows = await executeSql<{
+    delivery_id: string
+    remote_agent_id: string
+    machine_id: string | null
+  }>(
+    `
+      SELECT
+        delivery.id AS delivery_id,
+        delivery.remote_agent_id,
+        binding.machine_id
+      FROM remote_agent_message_deliveries delivery
+      LEFT JOIN remote_agent_bindings binding
+        ON binding.remote_agent_id = delivery.remote_agent_id
+       AND binding.status = 'active'
+      WHERE delivery.status = 'pending'
+        AND delivery.next_attempt_at IS NOT NULL
+        AND delivery.next_attempt_at <= NOW()
+      ORDER BY delivery.next_attempt_at ASC
+      LIMIT 200
+    `
+  )
+  if (dueRows.rows.length === 0) {
+    return { rechecked: 0 }
+  }
+
+  const byMachine = new Map<string, string[]>()
+  for (const row of dueRows.rows) {
+    if (!row.machine_id) continue
+    const list = byMachine.get(row.machine_id) ?? []
+    list.push(row.remote_agent_id)
+    byMachine.set(row.machine_id, list)
+  }
+
+  for (const [machineId, remoteAgentIds] of byMachine) {
+    await notifyPendingRemoteAgentDeliveries({
+      machineId,
+      remoteAgentIds: [...new Set(remoteAgentIds)],
+    })
+  }
+
+  return { rechecked: dueRows.rows.length }
 }
 
 function parseMachineKeyFromRequest(request: {
