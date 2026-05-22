@@ -1,238 +1,38 @@
 /**
- * Content Ingest: normalize arbitrary binary content (MCP results, model responses)
- * into platform file storage and return CanonicalContentBlock[].
+ * Model response media ingest: when an LLM provider returns binary
+ * content blocks (e.g., Anthropic image blocks), persist them to the file
+ * store as canonical file_ref blocks. Other block kinds (text/tool_use)
+ * are handled upstream by the provider adapter — we only care about
+ * media that needs to land in our storage layer.
+ *
+ * The unified ingest funnel (files/ingest.ts) handles the actual binary
+ * download/save; we just filter to the relevant block kinds and supply
+ * the right ToolResultOrigin.
  */
-import {
-  normalizeCanonicalContentBlocks,
-  textBlock,
-  type CanonicalContentBlock,
-  type ProviderType,
-} from "@synapse/shared"
-import { FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
-import {
-  saveFromBase64,
-  saveFromUrl,
-  type FileRecord,
-} from "../../infrastructure/storage/file-io.js"
-import {
-  buildModelOutputOrigin,
-  buildToolOutputOrigin,
-  resolveModelResponseMediaOriginSystem,
-  toCanonicalFileRefBlock,
-} from "../files/service.js"
+import { type CanonicalContentBlock, type ProviderType } from "@synapse/shared"
+import { ingestToolOutput } from "../files/ingest.js"
 
-function fileRecordToFileRef(rec: FileRecord): CanonicalContentBlock {
-  return toCanonicalFileRefBlock(rec)
-}
-
-/**
- * Normalize MCP tool result content into CanonicalContentBlock[].
- * - string → wrapped as [{ type: 'text', text }]
- * - unknown[] (MCP content blocks) → binary stored to files table, returns CanonicalContentBlock[]
- */
-export async function ingestToolResultContent(
-  content: string | unknown[],
-  workspaceId: string
-): Promise<CanonicalContentBlock[]> {
-  if (typeof content === "string") return [textBlock(content)]
-
-  const blocks: CanonicalContentBlock[] = []
-
-  for (const raw of content) {
-    const block = raw as any
-    if (!block || typeof block !== "object") {
-      blocks.push(textBlock(String(raw)))
-      continue
-    }
-
-    switch (block.type) {
-      case "text":
-        blocks.push(textBlock(block.text || ""))
-        break
-
-      case "file_ref":
-        // Already-ingested canonical block — pass through directly
-        blocks.push(...normalizeCanonicalContentBlocks([block]))
-        break
-
-      case "image": {
-        try {
-          // Case 1: Anthropic-native format { source: { type: "base64", media_type, data } }
-          if (block.source?.data) {
-            const mimeType = block.source.media_type || "image/png"
-            const rec = await saveFromBase64(
-              block.source.data,
-              `mcp-image.${mimeType.split("/")[1] || "png"}`,
-              mimeType,
-              workspaceId,
-              null,
-              buildToolOutputOrigin({
-                system: FILE_ORIGIN_SYSTEMS.MCP_TOOL_RESULT_INGEST,
-              })
-            )
-            blocks.push(fileRecordToFileRef(rec))
-            break
-          }
-          // Case 2: Anthropic URL format { source: { type: "url", url } }
-          if (block.source?.type === "url" && block.source?.url) {
-            const rec = await saveFromUrl(
-              block.source.url,
-              workspaceId,
-              null,
-              "mcp-image.png",
-              buildToolOutputOrigin({
-                system: FILE_ORIGIN_SYSTEMS.MCP_TOOL_RESULT_INGEST,
-              })
-            )
-            blocks.push(fileRecordToFileRef(rec))
-            break
-          }
-          // Case 3: MCP standard format { data, mimeType }
-          if (block.data) {
-            const mimeType = block.mimeType || block.mime_type || "image/png"
-            const rec = await saveFromBase64(
-              block.data,
-              `mcp-image.${mimeType.split("/")[1] || "png"}`,
-              mimeType,
-              workspaceId,
-              null,
-              buildToolOutputOrigin({
-                system: FILE_ORIGIN_SYSTEMS.MCP_TOOL_RESULT_INGEST,
-              })
-            )
-            blocks.push(fileRecordToFileRef(rec))
-            break
-          }
-          blocks.push(
-            textBlock(
-              `[Image: missing data, keys=${Object.keys(block).join(",")}]`
-            )
-          )
-        } catch (err: any) {
-          console.error("[content-ingest] Failed to ingest image:", err.message)
-          blocks.push(textBlock(`[Image: ingest failed - ${err.message}]`))
-        }
-        break
-      }
-
-      case "audio": {
-        try {
-          if (block.data) {
-            const mimeType = block.mimeType || block.mime_type || "audio/wav"
-            const rec = await saveFromBase64(
-              block.data,
-              `mcp-audio.${mimeType.split("/")[1] || "wav"}`,
-              mimeType,
-              workspaceId,
-              null,
-              buildToolOutputOrigin({
-                system: FILE_ORIGIN_SYSTEMS.MCP_TOOL_RESULT_INGEST,
-              })
-            )
-            blocks.push(fileRecordToFileRef(rec))
-            break
-          }
-          blocks.push(textBlock("[Audio: missing data]"))
-        } catch (err: any) {
-          console.error("[content-ingest] Failed to ingest audio:", err.message)
-          blocks.push(textBlock(`[Audio: ingest failed - ${err.message}]`))
-        }
-        break
-      }
-
-      case "resource": {
-        try {
-          if (block.resource?.text) {
-            blocks.push(textBlock(block.resource.text))
-          } else if (block.resource?.blob && block.resource?.mimeType) {
-            const mimeType = block.resource.mimeType
-            const ext = mimeType.split("/")[1] || "bin"
-            const rec = await saveFromBase64(
-              block.resource.blob,
-              `mcp-resource.${ext}`,
-              mimeType,
-              workspaceId,
-              null,
-              buildToolOutputOrigin({
-                system: FILE_ORIGIN_SYSTEMS.MCP_TOOL_RESULT_INGEST,
-              })
-            )
-            blocks.push(fileRecordToFileRef(rec))
-          } else {
-            blocks.push(textBlock(JSON.stringify(block)))
-          }
-        } catch (err: any) {
-          console.error(
-            "[content-ingest] Failed to ingest resource:",
-            err.message
-          )
-          blocks.push(textBlock(JSON.stringify(block)))
-        }
-        break
-      }
-
-      default:
-        // Pass through as text
-        blocks.push(textBlock(JSON.stringify(block)))
-        break
-    }
-  }
-
-  return blocks
-}
-
-/**
- * Ingest media content blocks from model API response into platform file storage.
- * Returns CanonicalContentBlock[] (file_ref blocks) for embedding into ToolRound.content.
- */
 export async function ingestResponseMedia(
   rawBlocks: unknown[],
   providerType: ProviderType,
   workspaceId: string
 ): Promise<CanonicalContentBlock[]> {
-  const blocks: CanonicalContentBlock[] = []
+  if (!Array.isArray(rawBlocks) || rawBlocks.length === 0) return []
 
   if (providerType === "anthropic") {
-    for (const block of rawBlocks as any[]) {
-      if (block.type !== "image") continue
-      try {
-        if (block.source?.data) {
-          const mimeType = block.source.media_type || "image/png"
-          const rec = await saveFromBase64(
-            block.source.data,
-            `model-image.${mimeType.split("/")[1] || "png"}`,
-            mimeType,
-            workspaceId,
-            null,
-            buildModelOutputOrigin({
-              system: resolveModelResponseMediaOriginSystem(providerType),
-              providerKey: providerType,
-            })
-          )
-          blocks.push(fileRecordToFileRef(rec))
-        } else if (block.source?.type === "url" && block.source?.url) {
-          const rec = await saveFromUrl(
-            block.source.url,
-            workspaceId,
-            null,
-            "model-image.png",
-            buildModelOutputOrigin({
-              system: resolveModelResponseMediaOriginSystem(providerType),
-              providerKey: providerType,
-            })
-          )
-          blocks.push(fileRecordToFileRef(rec))
-        }
-      } catch (err: any) {
-        console.error(
-          "[content-ingest] Failed to ingest response media:",
-          err.message
-        )
-      }
-    }
+    const imageBlocks = rawBlocks.filter(
+      (block) =>
+        block && typeof block === "object" && (block as any).type === "image"
+    )
+    if (imageBlocks.length === 0) return []
+    return ingestToolOutput(imageBlocks, {
+      workspaceId,
+      origin: { kind: "model_response", providerType },
+    })
   }
 
-  // OpenAI: future-proof — when their API returns media blocks, handle similarly
+  // OpenAI: future-proof — when their API returns inline media blocks,
+  // they should follow the same shape and route through the same ingest.
 
-  return blocks
+  return []
 }
