@@ -163,6 +163,13 @@ interface ChatState {
   remoteAgentRuntimeMap: Record<string, RemoteAgentRuntimeState>
   runtimeSeqMap: Record<string, number>
   totalUnread: number
+  /**
+   * Active typing participants per conversation.
+   * key = conversationId; value = { workspaceMemberId: expireAtMs }
+   * Entries auto-expire 5s after the last `started` event with no follow-up
+   * `stopped` — checked at read time, no separate timer.
+   */
+  typingByConversation: Record<string, Record<string, number>>
 
   snapshot: ChatWorkspaceSnapshot | null
   loadedMessageItems: ChatConversationItem[]
@@ -214,6 +221,16 @@ interface ChatState {
     runtimeSeq: number
     snapshot: ActorRuntimeState
   }) => void
+  handleTypingEvent: (payload: {
+    conversationId: string
+    fromWorkspaceMemberId: string
+    state: "started" | "stopped"
+    occurredAt: string
+  }) => void
+  sendTypingState: (
+    conversationId: string,
+    state: "started" | "stopped"
+  ) => Promise<void>
   handleInteractionUpdated: (payload: {
     conversationId: string
     interactionId: string
@@ -1523,6 +1540,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   remoteAgentRuntimeMap: {},
   runtimeSeqMap: {},
   totalUnread: 0,
+  typingByConversation: {},
   snapshot: null,
   loadedMessageItems: [],
 
@@ -2200,6 +2218,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
         totalUnread: sumConversationUnread(conversations),
       }
     })
+  },
+
+  handleTypingEvent: (payload) => {
+    const ownMember = get().snapshot?.workspaceMemberId
+    if (payload.fromWorkspaceMemberId === ownMember) {
+      // Don't show our own typing back to ourselves.
+      return
+    }
+    set((state) => {
+      const current = state.typingByConversation[payload.conversationId] || {}
+      const next = { ...current }
+      if (payload.state === "stopped") {
+        delete next[payload.fromWorkspaceMemberId]
+      } else {
+        // expire 5 seconds after the started event
+        next[payload.fromWorkspaceMemberId] = Date.now() + 5_000
+      }
+      return {
+        typingByConversation: {
+          ...state.typingByConversation,
+          [payload.conversationId]:
+            Object.keys(next).length > 0 ? next : (undefined as never),
+        },
+      }
+    })
+  },
+
+  sendTypingState: async (conversationId, state) => {
+    const snapshot = get().snapshot
+    if (!snapshot) return
+    try {
+      await api.sendChatTypingState(snapshot.workspaceId, conversationId, state)
+    } catch (error) {
+      // Typing is best-effort, never throw.
+      console.debug("Failed to send typing state:", error)
+    }
   },
 
   handleInteractionUpdated: (payload) => {

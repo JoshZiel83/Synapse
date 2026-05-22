@@ -8,7 +8,7 @@ import type {
   RemoteAgentRuntimeState,
 } from "@synapse/shared"
 import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import ChatComposer, {
   CHAT_COMPOSER_MENTION_TARGET_TYPE,
@@ -590,7 +590,58 @@ export default function ConversationChat({
     setTimeout(() => {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     }, 50)
+    // Make sure we send a final `stopped` typing state on submit so the
+    // indicator on the recipient side disappears promptly.
+    void sendTypingState(conversation.id, "stopped")
+    lastTypingSentRef.current = "stopped"
   }
+
+  const sendTypingState = useChatStore((state) => state.sendTypingState)
+  const typersForConversation = useChatStore(
+    (state) => state.typingByConversation[conversation.id]
+  )
+  const activeTypers = useMemo(() => {
+    if (!typersForConversation) return [] as string[]
+    const now = Date.now()
+    return Object.entries(typersForConversation)
+      .filter(([, expireAt]) => expireAt > now)
+      .map(([memberId]) => memberId)
+  }, [typersForConversation])
+
+  // Debounced typing emit: send "started" on first keystroke, then re-send
+  // "started" at most every 3s while typing; send "stopped" after 4s of
+  // silence.
+  const lastTypingSentRef = useRef<"started" | "stopped" | null>(null)
+  const typingStartedAtRef = useRef<number>(0)
+  const typingStoppedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+  const handleTypingHeartbeat = useCallback(() => {
+    const now = Date.now()
+    if (
+      lastTypingSentRef.current !== "started" ||
+      now - typingStartedAtRef.current > 3_000
+    ) {
+      void sendTypingState(conversation.id, "started")
+      lastTypingSentRef.current = "started"
+      typingStartedAtRef.current = now
+    }
+    if (typingStoppedTimerRef.current) {
+      clearTimeout(typingStoppedTimerRef.current)
+    }
+    typingStoppedTimerRef.current = setTimeout(() => {
+      void sendTypingState(conversation.id, "stopped")
+      lastTypingSentRef.current = "stopped"
+    }, 4_000)
+  }, [conversation.id, sendTypingState])
+
+  useEffect(() => {
+    return () => {
+      if (typingStoppedTimerRef.current) {
+        clearTimeout(typingStoppedTimerRef.current)
+      }
+    }
+  }, [])
 
   return (
     <div
@@ -809,6 +860,21 @@ export default function ConversationChat({
             <span className="text-xs text-muted-foreground">{workingHint}</span>
           </div>
         )}
+        {/* Typing indicator (other participants currently typing) */}
+        {activeTypers.length > 0 && (
+          <div className="mb-2 flex items-center gap-2 px-1">
+            <div className="flex gap-0.5">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:120ms]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:240ms]" />
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {activeTypers.length === 1
+                ? "Someone is typing…"
+                : `${activeTypers.length} people are typing…`}
+            </span>
+          </div>
+        )}
         <ChatComposer
           workspaceId={workspaceId || null}
           participants={mentionableParticipants}
@@ -817,6 +883,7 @@ export default function ConversationChat({
           replyTo={replyTo}
           onCancelReply={() => setReplyTo(null)}
           onSubmit={handleComposerSubmit}
+          onTyping={handleTypingHeartbeat}
         />
       </div>
       {usesExternalMentionPicker ? (

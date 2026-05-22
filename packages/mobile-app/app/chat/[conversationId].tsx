@@ -1,7 +1,7 @@
 import Feather from "@expo/vector-icons/Feather"
 import * as Clipboard from "expo-clipboard"
 import { useLocalSearchParams, useRouter } from "expo-router"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   KeyboardAvoidingView,
   Platform,
@@ -53,6 +53,8 @@ export default function ChatDetailScreen() {
     getConversationItems,
     getConversationMeta,
     getConversationRuntimes,
+    getTypingMembers,
+    sendTypingState,
     loadOlderMessages,
     markConversationRead,
     refreshConversation,
@@ -219,6 +221,44 @@ export default function ChatDetailScreen() {
       confirmedMaxSequence
     )
   }, [confirmedMaxSequence, conversation, conversationId, markConversationRead])
+
+  // Debounced typing emit + auto-stop.
+  const lastTypingSentRef = useRef<"started" | "stopped" | null>(null)
+  const typingStartedAtRef = useRef<number>(0)
+  const typingStoppedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+  const handleTypingHeartbeat = useCallback(() => {
+    if (!conversationId) return
+    const now = Date.now()
+    if (
+      lastTypingSentRef.current !== "started" ||
+      now - typingStartedAtRef.current > 3_000
+    ) {
+      void sendTypingState(conversationId, "started")
+      lastTypingSentRef.current = "started"
+      typingStartedAtRef.current = now
+    }
+    if (typingStoppedTimerRef.current) {
+      clearTimeout(typingStoppedTimerRef.current)
+    }
+    typingStoppedTimerRef.current = setTimeout(() => {
+      void sendTypingState(conversationId, "stopped")
+      lastTypingSentRef.current = "stopped"
+    }, 4_000)
+  }, [conversationId, sendTypingState])
+  useEffect(() => {
+    return () => {
+      if (typingStoppedTimerRef.current) {
+        clearTimeout(typingStoppedTimerRef.current)
+      }
+    }
+  }, [])
+
+  const typingMembers = useMemo(
+    () => (conversationId ? getTypingMembers(conversationId) : []),
+    [conversationId, getTypingMembers]
+  )
 
   const messageNodes = useMemo(
     () =>
@@ -446,6 +486,16 @@ export default function ChatDetailScreen() {
               )}
             </ScrollView>
 
+            {typingMembers.length > 0 ? (
+              <View style={styles.typingRow}>
+                <Text style={styles.typingText}>
+                  {typingMembers.length === 1
+                    ? "Someone is typing…"
+                    : `${typingMembers.length} people are typing…`}
+                </Text>
+              </View>
+            ) : null}
+
             <ChatComposer
               workspaceId={conversation.workspaceId}
               conversationId={conversationId}
@@ -454,7 +504,11 @@ export default function ChatDetailScreen() {
               disabled={status !== "ready" || !clientInstanceId}
               replyTo={replyTo}
               onCancelReply={() => setReplyTo(null)}
-              onSend={(payload) => sendMessage(conversationId, payload)}
+              onSend={async (payload) => {
+                await sendMessage(conversationId, payload)
+                void sendTypingState(conversationId, "stopped")
+              }}
+              onTyping={handleTypingHeartbeat}
             />
           </>
         )}
@@ -505,6 +559,15 @@ export default function ChatDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  typingRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+  },
+  typingText: {
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    fontStyle: "italic",
   },
   header: {
     minHeight: 48,

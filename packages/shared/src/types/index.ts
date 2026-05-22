@@ -836,6 +836,7 @@ export type EventType =
   | "relay.connected"
   | "relay.disconnected"
   | "relay.servers_updated"
+  | "chat.typing"
 
 export interface SystemEvent {
   type: EventType
@@ -4561,6 +4562,7 @@ export type ChatSocketEventType =
   | "server.shutdown"
   | "chat.sync.event"
   | "runtime.updated"
+  | "chat.typing"
 
 export interface ChatSocketEventPayloadMap {
   "auth.ok": {
@@ -4582,6 +4584,12 @@ export interface ChatSocketEventPayloadMap {
     conversationId: UUID
     runtimeSeq: number
     snapshot: ActorRuntimeState
+  }
+  "chat.typing": {
+    conversationId: UUID
+    fromWorkspaceMemberId: UUID
+    state: "started" | "stopped"
+    occurredAt: Timestamp
   }
 }
 

@@ -5817,10 +5817,13 @@ export async function broadcastTypingState(params: {
   await emitEvent({
     type: "chat.typing",
     workspaceId: params.workspaceId,
-    conversationId: params.conversationId,
-    fromWorkspaceMemberId: identity.workspaceMemberId,
-    state: params.state,
-    occurredAt: new Date().toISOString(),
-  } as never)
+    payload: {
+      conversationId: params.conversationId,
+      fromWorkspaceMemberId: identity.workspaceMemberId,
+      state: params.state,
+      occurredAt: new Date().toISOString(),
+    },
+    timestamp: new Date().toISOString(),
+  })
   return { broadcast: true }
 }

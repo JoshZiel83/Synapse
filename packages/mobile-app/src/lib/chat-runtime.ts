@@ -41,6 +41,8 @@ export interface ChatRuntimeState {
   activeWorkspaceId: string | null
   snapshot: ChatWorkspaceSnapshot | null
   runtimeByConversationId: Record<string, Record<string, ActorRuntimeState>>
+  /** conversationId -> workspaceMemberId -> expireAtMs */
+  typingByConversation: Record<string, Record<string, number>>
 }
 
 type ChatRuntimeListener = (state: ChatRuntimeState) => void
@@ -128,6 +130,7 @@ export class ChatRuntime {
     activeWorkspaceId: null,
     snapshot: null,
     runtimeByConversationId: {},
+    typingByConversation: {},
   }
 
   subscribe(listener: ChatRuntimeListener) {
@@ -187,6 +190,7 @@ export class ChatRuntime {
       activeWorkspaceId: null,
       snapshot: null,
       runtimeByConversationId: {},
+      typingByConversation: {},
     })
   }
 
@@ -339,6 +343,43 @@ export class ChatRuntime {
           },
         },
       })
+    }
+
+    if (event.type === "chat.typing") {
+      const payload = (event as ChatSocketEvent<"chat.typing">).payload
+      const ownMember = this.state.snapshot?.workspaceMemberId
+      if (payload.fromWorkspaceMemberId === ownMember) {
+        return
+      }
+      const current =
+        this.state.typingByConversation[payload.conversationId] ?? {}
+      const next = { ...current }
+      if (payload.state === "stopped") {
+        delete next[payload.fromWorkspaceMemberId]
+      } else {
+        next[payload.fromWorkspaceMemberId] = Date.now() + 5_000
+      }
+      const nextByConv = { ...this.state.typingByConversation }
+      if (Object.keys(next).length > 0) {
+        nextByConv[payload.conversationId] = next
+      } else {
+        delete nextByConv[payload.conversationId]
+      }
+      this.replaceState({
+        ...this.state,
+        typingByConversation: nextByConv,
+      })
+    }
+  }
+
+  async sendTypingState(conversationId: string, state: "started" | "stopped") {
+    const snapshot = this.state.snapshot
+    if (!snapshot) return
+    try {
+      await api.sendChatTypingState(snapshot.workspaceId, conversationId, state)
+    } catch (error) {
+      // Typing is best-effort.
+      console.debug("Failed to send typing state:", error)
     }
   }
 

@@ -58,6 +58,11 @@ interface ChatContextValue {
   getConversationRuntimes: (
     conversationId: string
   ) => Record<string, ActorRuntimeState>
+  getTypingMembers: (conversationId: string) => string[]
+  sendTypingState: (
+    conversationId: string,
+    state: "started" | "stopped"
+  ) => Promise<void>
   refreshInbox: () => Promise<void>
   refreshConversation: (
     conversationId: string
@@ -334,6 +339,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [runtimeState.runtimeByConversationId]
   )
 
+  const getTypingMembers = useCallback(
+    (conversationId: string): string[] => {
+      const map = runtimeState.typingByConversation[conversationId]
+      if (!map) return []
+      const now = Date.now()
+      return Object.entries(map)
+        .filter(([, expireAt]) => expireAt > now)
+        .map(([memberId]) => memberId)
+    },
+    [runtimeState.typingByConversation]
+  )
+
+  const sendTypingState = useCallback(
+    (conversationId: string, state: "started" | "stopped") =>
+      chatRuntime.sendTypingState(conversationId, state),
+    []
+  )
+
   const refreshInbox = useCallback(() => chatRuntime.refreshInbox(), [])
 
   const refreshConversation = useCallback(
@@ -414,6 +437,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       getConversationItems,
       getConversationMeta,
       getConversationRuntimes,
+      getTypingMembers,
+      sendTypingState,
       refreshInbox,
       refreshConversation,
       loadOlderMessages,
@@ -431,6 +456,8 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       getConversationItems,
       getConversationMeta,
       getConversationRuntimes,
+      getTypingMembers,
+      sendTypingState,
       loadOlderMessages,
       markConversationRead,
       refreshConversation,

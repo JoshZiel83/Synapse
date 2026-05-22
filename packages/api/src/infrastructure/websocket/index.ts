@@ -95,6 +95,30 @@ function mapInternalEventToSocketEvent(
         type: "runtime.updated",
         payload: event.payload as ChatSocketEventPayloadMap["runtime.updated"],
       }
+    case "chat.typing": {
+      const typingPayload = event.payload as {
+        conversationId?: string
+        fromWorkspaceMemberId?: string
+        state?: "started" | "stopped"
+        occurredAt?: string
+      }
+      if (
+        !typingPayload.conversationId ||
+        !typingPayload.fromWorkspaceMemberId ||
+        !typingPayload.state
+      ) {
+        return null
+      }
+      return {
+        type: "chat.typing",
+        payload: {
+          conversationId: typingPayload.conversationId,
+          fromWorkspaceMemberId: typingPayload.fromWorkspaceMemberId,
+          state: typingPayload.state,
+          occurredAt: typingPayload.occurredAt ?? new Date().toISOString(),
+        },
+      }
+    }
     case "session.message.new":
     case "session.status.changed":
     case "session.thinking":
@@ -182,6 +206,8 @@ function getConversationIdFromSocketEvent(
       return (event.payload as ChatSocketEventPayloadMap["chat.sync.event"])
         .conversationId
     case "runtime.updated":
+      return (event.payload as { conversationId: string }).conversationId
+    case "chat.typing":
       return (event.payload as { conversationId: string }).conversationId
     default:
       return undefined
