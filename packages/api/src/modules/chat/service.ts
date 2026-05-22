@@ -5342,3 +5342,354 @@ export async function updateChatConversationReadWatermark(
     }
   })
 }
+
+// ============ Stage 3: conversation CRUD ============
+
+export async function listChatConversations(params: {
+  workspaceId: string
+  userId: string
+}) {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const conversations = await loadConversationViews(
+    rootQueryable(),
+    params.workspaceId,
+    identity.workspaceMemberId
+  )
+  return {
+    workspaceMemberId: identity.workspaceMemberId,
+    conversations,
+  }
+}
+
+export async function getChatConversationDetail(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+}) {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const queryable = rootQueryable()
+  await requireConversationAccess(
+    queryable,
+    params.conversationId,
+    identity.workspaceMemberId
+  )
+  const view = await loadConversationView(
+    queryable,
+    params.workspaceId,
+    identity.workspaceMemberId,
+    params.conversationId
+  )
+  if (!view) {
+    throw createChatError(
+      404,
+      "conversation_not_found",
+      "Conversation not found"
+    )
+  }
+  return { conversation: view }
+}
+
+export async function patchChatConversation(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  title?: string | null
+  metadata?: Record<string, unknown>
+}) {
+  if (params.title === undefined && params.metadata === undefined) {
+    throw createChatError(
+      400,
+      "invalid_patch",
+      "At least one of title or metadata must be provided"
+    )
+  }
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  return transaction(async (client) => {
+    await requireConversationAccess(
+      client,
+      params.conversationId,
+      identity.workspaceMemberId
+    )
+
+    const setFragments: string[] = []
+    const values: unknown[] = []
+    let position = 1
+    if (params.title !== undefined) {
+      setFragments.push(`title = $${position++}`)
+      values.push(params.title?.trim() || null)
+    }
+    if (params.metadata !== undefined) {
+      setFragments.push(`metadata = $${position++}::jsonb`)
+      values.push(JSON.stringify(params.metadata))
+    }
+    setFragments.push("updated_at = NOW()")
+    values.push(params.conversationId)
+
+    await executeSqlOn(
+      client,
+      `UPDATE conversations SET ${setFragments.join(", ")} WHERE id = $${position}`,
+      values
+    )
+
+    const recipients = await listConversationRealtimeRecipients(
+      params.conversationId,
+      client
+    )
+    await syncConversationUpsertForWorkspaceMembers(
+      client,
+      params.workspaceId,
+      recipients.map((r) => r.workspaceMemberId),
+      params.conversationId
+    )
+
+    const view = await loadConversationView(
+      client,
+      params.workspaceId,
+      identity.workspaceMemberId,
+      params.conversationId
+    )
+    if (!view) {
+      throw createChatError(
+        404,
+        "conversation_not_found",
+        "Conversation not found"
+      )
+    }
+    return { conversation: view }
+  })
+}
+
+export async function addChatConversationParticipants(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  workspaceMemberIds?: string[]
+  actorIds?: string[]
+  remoteAgentIds?: string[]
+  externalParticipants?: ConversationCreateExternalParticipantInput[]
+}) {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  return transaction(async (client) => {
+    await requireConversationAccess(
+      client,
+      params.conversationId,
+      identity.workspaceMemberId
+    )
+
+    await addConversationParticipants({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      workspaceMemberIds: params.workspaceMemberIds,
+      actorIds: params.actorIds,
+      remoteAgentIds: params.remoteAgentIds,
+      externalParticipants: params.externalParticipants,
+      queryable: client,
+    })
+
+    const recipients = await listConversationRealtimeRecipients(
+      params.conversationId,
+      client
+    )
+    await syncConversationUpsertForWorkspaceMembers(
+      client,
+      params.workspaceId,
+      recipients.map((r) => r.workspaceMemberId),
+      params.conversationId
+    )
+
+    const view = await loadConversationView(
+      client,
+      params.workspaceId,
+      identity.workspaceMemberId,
+      params.conversationId
+    )
+    if (!view) {
+      throw createChatError(
+        404,
+        "conversation_not_found",
+        "Conversation not found"
+      )
+    }
+    return { conversation: view }
+  })
+}
+
+async function setParticipantState(
+  queryable: Queryable,
+  participantId: string,
+  state: "removed" | "left"
+) {
+  await executeSqlOn(
+    queryable,
+    `
+      UPDATE conversation_participants
+      SET state = $2, left_at = COALESCE(left_at, NOW())
+      WHERE id = $1
+    `,
+    [participantId, state]
+  )
+}
+
+async function loadParticipantById(
+  queryable: Queryable,
+  conversationId: string,
+  participantId: string
+) {
+  const result = await executeSqlOn<{
+    id: string
+    conversation_id: string
+    participant_kind: ParticipantKind
+    workspace_member_id: string | null
+    actor_id: string | null
+    remote_agent_id: string | null
+    display_name: string | null
+    state: string
+  }>(
+    queryable,
+    `
+      SELECT id, conversation_id, participant_kind,
+             workspace_member_id, actor_id, remote_agent_id,
+             display_name, state
+      FROM conversation_participants
+      WHERE conversation_id = $1 AND id = $2
+      LIMIT 1
+    `,
+    [conversationId, participantId]
+  )
+  return result.rows[0] ?? null
+}
+
+export async function removeChatConversationParticipant(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  participantId: string
+}) {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  return transaction(async (client) => {
+    const access = await requireConversationAccess(
+      client,
+      params.conversationId,
+      identity.workspaceMemberId
+    )
+
+    const target = await loadParticipantById(
+      client,
+      params.conversationId,
+      params.participantId
+    )
+    if (!target) {
+      throw createChatError(
+        404,
+        "participant_not_found",
+        "Participant not found in this conversation"
+      )
+    }
+    if (target.state !== "active") {
+      throw createChatError(
+        409,
+        "participant_not_active",
+        "Participant is already left or removed"
+      )
+    }
+
+    const isSelfRemoval = target.id === access.participant.id
+    const eventType = isSelfRemoval ? "participant_left" : "participant_kicked"
+
+    await setParticipantState(
+      client,
+      target.id,
+      isSelfRemoval ? "left" : "removed"
+    )
+
+    await createConversationEvent({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      eventType,
+      authorParticipantId: access.participant.id,
+      eventPayload: {
+        batchId: crypto.randomUUID(),
+        initiator: isSelfRemoval
+          ? undefined
+          : {
+              participantId: access.participant.id,
+              participantType: access.participant
+                .participant_kind as ParticipantKind,
+              workspaceMemberId: identity.workspaceMemberId,
+            },
+        participants: [
+          {
+            participantId: target.id,
+            participantType: target.participant_kind as Exclude<
+              ParticipantKind,
+              "system"
+            >,
+            workspaceMemberId: target.workspace_member_id ?? undefined,
+            actorId: target.actor_id ?? undefined,
+            remoteAgentId: target.remote_agent_id ?? undefined,
+            name: target.display_name ?? undefined,
+          },
+        ],
+      } as never,
+      queryable: client,
+    })
+
+    const recipients = await listConversationRealtimeRecipients(
+      params.conversationId,
+      client
+    )
+    await syncConversationUpsertForWorkspaceMembers(
+      client,
+      params.workspaceId,
+      [
+        ...recipients.map((r) => r.workspaceMemberId),
+        // Include the removed member so their own view drops the conversation.
+        ...(target.workspace_member_id ? [target.workspace_member_id] : []),
+      ],
+      params.conversationId
+    )
+
+    return {
+      conversationId: params.conversationId,
+      participantId: target.id,
+      state: isSelfRemoval ? "left" : "removed",
+    }
+  })
+}
+
+export async function leaveChatConversation(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+}) {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const access = await requireConversationAccess(
+    rootQueryable(),
+    params.conversationId,
+    identity.workspaceMemberId
+  )
+  return removeChatConversationParticipant({
+    workspaceId: params.workspaceId,
+    userId: params.userId,
+    conversationId: params.conversationId,
+    participantId: access.participant.id,
+  })
+}

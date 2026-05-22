@@ -29,6 +29,12 @@ import {
   sendChatConversationMessage,
   touchChatClientInstance,
   updateChatConversationReadWatermark,
+  listChatConversations,
+  getChatConversationDetail,
+  patchChatConversation,
+  addChatConversationParticipants,
+  removeChatConversationParticipant,
+  leaveChatConversation,
 } from "./service.js"
 import {
   canUserViewInteraction,
@@ -86,6 +92,48 @@ const conversationMessagesQuerySchema = z
       message: "afterSequence and beforeSequence cannot both be provided",
     }
   )
+
+const patchConversationSchema = z
+  .object({
+    title: z.string().trim().min(1).max(255).nullable().optional(),
+    metadata: jsonRecordSchema,
+  })
+  .refine(
+    (value) => value.title !== undefined || value.metadata !== undefined,
+    { message: "At least one of title or metadata must be provided" }
+  )
+
+const addParticipantsSchema = z
+  .object({
+    workspaceMemberIds: z.array(chatUuidSchema).optional().default([]),
+    actorIds: z.array(chatUuidSchema).optional().default([]),
+    remoteAgentIds: z.array(chatUuidSchema).optional().default([]),
+    externalParticipants: z
+      .array(
+        z.object({
+          displayName: z.string().trim().min(1).max(255),
+          metadata: jsonRecordSchema,
+          transportAddressIds: z.array(chatUuidSchema).optional().default([]),
+        })
+      )
+      .optional()
+      .default([]),
+  })
+  .refine(
+    (value) =>
+      value.workspaceMemberIds.length +
+        value.actorIds.length +
+        value.remoteAgentIds.length +
+        value.externalParticipants.length >
+      0,
+    { message: "At least one participant identifier is required" }
+  )
+
+const removeParticipantParamsSchema = z.object({
+  workspaceId: chatUuidSchema,
+  conversationId: chatUuidSchema,
+  participantId: chatUuidSchema,
+})
 
 const syncQuerySchema = z.object({
   cursor: z.coerce.number().int().min(0).optional(),
@@ -530,6 +578,131 @@ export default async function chatController(app: FastifyInstance) {
             code: "interaction_resolution_failed",
           })
         }
+      } catch (error) {
+        return replyChatError(reply, error)
+      }
+    }
+  )
+
+  // ====== Stage 3: conversation CRUD ======
+
+  app.get<{
+    Params: { workspaceId: string }
+  }>(`${CHAT_BASE_PATH}/conversations`, async (request, reply) => {
+    try {
+      const params = chatWorkspaceParamsSchema.parse(request.params)
+      const response = await listChatConversations({
+        workspaceId: params.workspaceId,
+        userId: getRequestUserId(request),
+      })
+      return reply.send(response)
+    } catch (error) {
+      return replyChatError(reply, error)
+    }
+  })
+
+  app.get<{
+    Params: { workspaceId: string; conversationId: string }
+  }>(
+    `${CHAT_BASE_PATH}/conversations/:conversationId`,
+    async (request, reply) => {
+      try {
+        const params = chatConversationParamsSchema.parse(request.params)
+        const response = await getChatConversationDetail({
+          workspaceId: params.workspaceId,
+          userId: getRequestUserId(request),
+          conversationId: params.conversationId,
+        })
+        return reply.send(response)
+      } catch (error) {
+        return replyChatError(reply, error)
+      }
+    }
+  )
+
+  app.patch<{
+    Params: { workspaceId: string; conversationId: string }
+  }>(
+    `${CHAT_BASE_PATH}/conversations/:conversationId`,
+    async (request, reply) => {
+      try {
+        const params = chatConversationParamsSchema.parse(request.params)
+        const body = patchConversationSchema.parse(request.body)
+        const response = await patchChatConversation({
+          workspaceId: params.workspaceId,
+          userId: getRequestUserId(request),
+          conversationId: params.conversationId,
+          title: body.title,
+          metadata: body.metadata,
+        })
+        return reply.send(response)
+      } catch (error) {
+        return replyChatError(reply, error)
+      }
+    }
+  )
+
+  app.post<{
+    Params: { workspaceId: string; conversationId: string }
+  }>(
+    `${CHAT_BASE_PATH}/conversations/:conversationId/participants`,
+    async (request, reply) => {
+      try {
+        const params = chatConversationParamsSchema.parse(request.params)
+        const body = addParticipantsSchema.parse(request.body)
+        const response = await addChatConversationParticipants({
+          workspaceId: params.workspaceId,
+          userId: getRequestUserId(request),
+          conversationId: params.conversationId,
+          workspaceMemberIds: body.workspaceMemberIds,
+          actorIds: body.actorIds,
+          remoteAgentIds: body.remoteAgentIds,
+          externalParticipants: body.externalParticipants,
+        })
+        return reply.status(201).send(response)
+      } catch (error) {
+        return replyChatError(reply, error)
+      }
+    }
+  )
+
+  app.delete<{
+    Params: {
+      workspaceId: string
+      conversationId: string
+      participantId: string
+    }
+  }>(
+    `${CHAT_BASE_PATH}/conversations/:conversationId/participants/:participantId`,
+    async (request, reply) => {
+      try {
+        const params = removeParticipantParamsSchema.parse(request.params)
+        const response = await removeChatConversationParticipant({
+          workspaceId: params.workspaceId,
+          userId: getRequestUserId(request),
+          conversationId: params.conversationId,
+          participantId: params.participantId,
+        })
+        return reply.send(response)
+      } catch (error) {
+        return replyChatError(reply, error)
+      }
+    }
+  )
+
+  app.post<{
+    Params: { workspaceId: string; conversationId: string }
+  }>(
+    `${CHAT_BASE_PATH}/conversations/:conversationId/leave`,
+    async (request, reply) => {
+      try {
+        const params = chatConversationParamsSchema.parse(request.params)
+        const response = await leaveChatConversation({
+          workspaceId: params.workspaceId,
+          userId: getRequestUserId(request),
+          conversationId: params.conversationId,
+        })
+        return reply.send(response)
       } catch (error) {
         return replyChatError(reply, error)
       }
