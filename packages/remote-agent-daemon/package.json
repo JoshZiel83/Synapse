@@ -5,8 +5,7 @@
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "synapse-remote-agent-daemon": "./dist/index.js",
-    "synapse-remote-agent-chat-bridge": "./dist/chat-bridge.js"
+    "synapse-remote-agent-daemon": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc",

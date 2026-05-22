@@ -5,7 +5,6 @@ import { existsSync, mkdirSync, writeFileSync } from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import process from "node:process"
-import { fileURLToPath } from "node:url"
 import WebSocket from "ws"
 import { ClaudeDriver } from "./drivers/claude-driver.js"
 import { CodexDriver } from "./drivers/codex-driver.js"
@@ -79,9 +78,6 @@ const DEFAULT_RECONNECT_MS = 3_000
 const MACHINE_DIR_ROOT =
   process.env.SYNAPSE_REMOTE_AGENT_STATE_DIR?.trim() ||
   path.join(os.homedir(), ".synapse", "remote-agents")
-const CHAT_BRIDGE_PATH = fileURLToPath(
-  new URL("./chat-bridge.js", import.meta.url)
-)
 const LOG_LEVEL_WEIGHTS: Record<LogLevel, number> = {
   error: 0,
   warn: 1,
@@ -200,8 +196,8 @@ function buildWakePrompt() {
     "You have unread Synapse messages.",
     "The runtime's built-in request_user_input tool is wired to Synapse and will render an interaction card for the user when you call it.",
     "If the user explicitly asks you to use require user input, or asks for a multiple-choice clarification, use that built-in tool instead of replying that you cannot show a prompt.",
-    "Call check_messages first.",
-    "Then use read_history for the relevant conversation(s), reply with send_message when action is needed, and stop when finished.",
+    "Call mcp__synapse__check_messages first.",
+    "Then use mcp__synapse__read_history for the relevant conversation(s), reply with mcp__synapse__send_message when action is needed, and stop when finished.",
     "If there is nothing actionable, stop without sending any message.",
   ].join(" ")
 }
@@ -285,17 +281,17 @@ function buildBootstrapPrompt(params: {
     `Conversation id: ${params.conversationId}.`,
     `Primary working directory: ${params.workingDirectory}.`,
     "",
-    "Use the MCP chat tools to communicate with Synapse:",
-    "- check_messages",
-    "- list_conversations",
-    "- read_history",
-    "- send_message",
-    "- search_messages",
+    "Use the MCP tools under the `synapse` server to communicate with Synapse:",
+    "- mcp__synapse__check_messages",
+    "- mcp__synapse__list_conversations",
+    "- mcp__synapse__read_history",
+    "- mcp__synapse__send_message",
+    "- mcp__synapse__search_messages",
     "",
     "Rules:",
     "- Do not use shell, curl, or custom network requests to talk to Synapse; only use the MCP chat tools.",
     "- This runtime is scoped to a single conversation; do not address messages to other conversations.",
-    "- Always call check_messages after a wake-up before deciding what to do.",
+    "- Always call mcp__synapse__check_messages after a wake-up before deciding what to do.",
     "- Read enough history before replying so your response is grounded in the conversation.",
     "- If you need structured clarification or confirmation from the user, use the runtime's built-in user-input tool instead of asking in plain chat when that tool is available.",
     "- If there is no actionable work, stop without sending a message.",
@@ -646,7 +642,6 @@ class ManagedRemoteAgent {
         runtimePath,
         rootDirectory: this.stateDirectory,
         localRootPath: this.localRootPath,
-        chatBridgePath: CHAT_BRIDGE_PATH,
         serverUrl: this.params.config.serverUrl,
         machineKey: this.params.config.apiKey,
         proxyEnabled: this.params.config.proxyEnabled,

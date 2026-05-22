@@ -36,7 +36,6 @@ export type ConversationRuntimeSpec = {
   runtimePath?: string
   rootDirectory: string
   localRootPath?: string
-  chatBridgePath: string
   serverUrl: string
   machineKey: string
   proxyEnabled?: boolean
@@ -157,23 +156,24 @@ export class ConversationRuntime {
   }
 
   private buildStdioBridgeMcpServers() {
+    const url = new URL(
+      `/api/v1/internal/remote-agents/${this.spec.remoteAgentId}/mcp/${this.spec.conversationId}`,
+      this.spec.serverUrl
+    )
     return {
-      chat: {
-        type: "stdio" as const,
-        command: process.execPath,
-        args: [
-          this.spec.chatBridgePath,
-          "--remote-agent-id",
-          this.spec.remoteAgentId,
-          "--server-url",
-          this.spec.serverUrl,
-          "--machine-key",
-          this.spec.machineKey,
-          "--state-file",
-          this.bridgeStateFile,
-        ],
+      synapse: {
+        type: "http" as const,
+        url: url.toString(),
+        headers: {
+          Authorization: `Bearer ${this.spec.machineKey}`,
+        },
       },
     }
+  }
+
+  /** @deprecated kept until callers stop reading the field; bridgeStateFile is no longer used by the HTTP MCP path. */
+  getBridgeStateFile() {
+    return this.bridgeStateFile
   }
 
   private async drainEvents(session: AgentSession) {

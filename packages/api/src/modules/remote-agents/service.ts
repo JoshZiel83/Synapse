@@ -901,7 +901,7 @@ function parseMachineKeyFromRequest(request: {
   return header || ""
 }
 
-async function authenticateMachineForRemoteAgent(params: {
+export async function authenticateMachineForRemoteAgent(params: {
   remoteAgentId: string
   machineKey: string
 }) {

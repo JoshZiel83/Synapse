@@ -30,6 +30,7 @@ import {
   updateRemoteAgentGroupInteractionGrants,
   updateRemoteAgent,
 } from "./service.js"
+import { handleRemoteAgentMcpRequest } from "./mcp-endpoint.js"
 
 const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
 const accessPolicySchema = z.enum(RELATIONSHIP_ACCESS_POLICIES)
@@ -421,6 +422,17 @@ export default async function remoteAgentsController(app: FastifyInstance) {
   )
 
   for (const prefix of internalPrefixes) {
+    const mcpRoute = `${prefix}/remote-agents/:remoteAgentId/mcp/:conversationId`
+    app.post<{
+      Params: { remoteAgentId: string; conversationId: string }
+    }>(mcpRoute, handleRemoteAgentMcpRequest)
+    app.get<{
+      Params: { remoteAgentId: string; conversationId: string }
+    }>(mcpRoute, handleRemoteAgentMcpRequest)
+    app.delete<{
+      Params: { remoteAgentId: string; conversationId: string }
+    }>(mcpRoute, handleRemoteAgentMcpRequest)
+
     app.post<{
       Params: { remoteAgentId: string }
       Body: unknown
