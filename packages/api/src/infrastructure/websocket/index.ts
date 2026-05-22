@@ -318,6 +318,32 @@ function handleUnsubscribe(clientId: string, msg: Record<string, unknown>) {
   client.subscriptions.delete(key)
 }
 
+async function handleInboundTyping(
+  client: { workspaceId: string; workspaceMemberId: string; userId: string },
+  msg: Record<string, unknown>
+) {
+  const conversationId =
+    typeof msg.conversationId === "string" && msg.conversationId.trim()
+      ? msg.conversationId.trim()
+      : ""
+  const state =
+    msg.state === "started" || msg.state === "stopped" ? msg.state : null
+  if (!conversationId || !state) return
+
+  try {
+    const { broadcastTypingState } =
+      await import("../../modules/chat/service.js")
+    await broadcastTypingState({
+      workspaceId: client.workspaceId,
+      userId: client.userId,
+      conversationId,
+      state,
+    })
+  } catch {
+    // Inbound typing is best-effort.
+  }
+}
+
 export function setupWebSocket(app: FastifyInstance) {
   appRef = app
   void initAuthSessionRegistry().catch((error) => {
@@ -510,6 +536,11 @@ export function setupWebSocket(app: FastifyInstance) {
             client.pongTimer = undefined
           }
         }
+
+        if (msg.type === "typing") {
+          await handleInboundTyping(client, msg)
+          return
+        }
       } catch {
         // Ignore malformed websocket frames.
       }
@@ -587,6 +618,19 @@ export function setupWebSocket(app: FastifyInstance) {
       }
 
       if (outbound.type === "runtime.updated") {
+        if (conversationId && hasConversationTopic && isConversationAllowed) {
+          safeSendSocketEvent(clientId, outbound)
+        }
+        continue
+      }
+
+      if (outbound.type === "chat.typing") {
+        const typingPayload =
+          outbound.payload as ChatSocketEventPayloadMap["chat.typing"]
+        // Don't echo the typer's own event back to themselves.
+        if (client.workspaceMemberId === typingPayload.fromWorkspaceMemberId) {
+          continue
+        }
         if (conversationId && hasConversationTopic && isConversationAllowed) {
           safeSendSocketEvent(clientId, outbound)
         }
