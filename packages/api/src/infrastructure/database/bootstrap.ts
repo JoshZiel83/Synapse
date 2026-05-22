@@ -11,6 +11,73 @@ const CURRENT_SCHEMA_VERSION = "2026-05-22-s9"
 const CURRENT_SCHEMA_DESCRIPTION =
   "rename conversation_participants.participant_kind -> participant_type and ENUM type to match"
 
+/**
+ * Incremental DDL applied to non-empty existing databases. Each step is
+ * idempotent (guards via IF NOT EXISTS or PL/pgSQL existence checks) so it
+ * can be re-run safely.
+ *
+ * For a fresh DB the full schema.sql is applied once and every version below
+ * is recorded as already-applied (since the DDL is folded in).
+ */
+interface IncrementalMigration {
+  version: string
+  description: string
+  sql: string
+}
+
+const INCREMENTAL_MIGRATIONS: IncrementalMigration[] = [
+  {
+    version: "2026-05-22-s7",
+    description:
+      "add chat_push_tokens for S7 push notification token registration",
+    sql: `
+      CREATE TABLE IF NOT EXISTS chat_push_tokens (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
+        platform TEXT NOT NULL CHECK (platform IN ('ios','android','web')),
+        token TEXT NOT NULL,
+        device_label TEXT,
+        metadata JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        UNIQUE (workspace_member_id, token)
+      );
+      CREATE INDEX IF NOT EXISTS idx_chat_push_tokens_workspace_member
+        ON chat_push_tokens(workspace_member_id);
+    `,
+  },
+  {
+    version: "2026-05-22-s9",
+    description:
+      "rename conversation_participants.participant_kind -> participant_type and matching ENUM type",
+    sql: `
+      DO $$
+      BEGIN
+        -- Rename column conversation_participants.participant_kind -> participant_type if still old.
+        IF EXISTS (
+          SELECT 1
+          FROM information_schema.columns
+          WHERE table_schema = 'public'
+            AND table_name = 'conversation_participants'
+            AND column_name = 'participant_kind'
+        ) THEN
+          ALTER TABLE conversation_participants RENAME COLUMN participant_kind TO participant_type;
+        END IF;
+
+        -- Rename ENUM type conversation_participants_kind -> conversation_participants_type if still old.
+        IF EXISTS (
+          SELECT 1
+          FROM pg_type
+          WHERE typname = 'conversation_participants_kind'
+        ) THEN
+          ALTER TYPE conversation_participants_kind RENAME TO conversation_participants_type;
+        END IF;
+      END
+      $$;
+    `,
+  },
+]
+
 async function ensureSchemaMigrationsTable() {
   await executeSql(`
     CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -32,6 +99,13 @@ async function countBusinessTables() {
   return Number.parseInt(result.rows[0]?.count || "0", 10)
 }
 
+async function loadAppliedSchemaVersions() {
+  const result = await executeSql<{ version: string }>(
+    `SELECT version FROM schema_migrations`
+  )
+  return new Set(result.rows.map((row) => row.version))
+}
+
 async function hasCurrentSchemaVersion() {
   const result = await executeSql<{ exists: boolean }>(
     `SELECT EXISTS (
@@ -44,13 +118,39 @@ async function hasCurrentSchemaVersion() {
   return result.rows[0]?.exists === true
 }
 
-async function recordCurrentSchemaVersion() {
+async function recordSchemaVersion(version: string, description: string) {
   await executeSql(
     `INSERT INTO schema_migrations (version, description)
      VALUES ($1, $2)
      ON CONFLICT (version) DO NOTHING`,
-    [CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_DESCRIPTION]
+    [version, description]
   )
+}
+
+async function recordCurrentSchemaVersion() {
+  await recordSchemaVersion(CURRENT_SCHEMA_VERSION, CURRENT_SCHEMA_DESCRIPTION)
+}
+
+async function recordAllKnownMigrationsAsApplied() {
+  for (const migration of INCREMENTAL_MIGRATIONS) {
+    await recordSchemaVersion(migration.version, migration.description)
+  }
+  await recordCurrentSchemaVersion()
+}
+
+async function applyIncrementalMigrations() {
+  const applied = await loadAppliedSchemaVersions()
+  let appliedAny = false
+  for (const migration of INCREMENTAL_MIGRATIONS) {
+    if (applied.has(migration.version)) continue
+    console.log(
+      `[migrate] Applying ${migration.version}: ${migration.description}`
+    )
+    await executeSql(migration.sql)
+    await recordSchemaVersion(migration.version, migration.description)
+    appliedAny = true
+  }
+  return appliedAny
 }
 
 async function applyBootstrapSchema() {
@@ -61,34 +161,35 @@ export async function bootstrapDatabaseSchema() {
   console.log("Checking database schema bootstrap state...")
 
   await ensureSchemaMigrationsTable()
-
-  if (await hasCurrentSchemaVersion()) {
-    const tableCount = await countBusinessTables()
-    console.log(
-      `Database schema is already at version ${CURRENT_SCHEMA_VERSION} (${tableCount} public tables).`
-    )
-    return { bootstrapped: false, upgraded: false, tableCount }
-  }
-
   const tableCount = await countBusinessTables()
 
-  try {
-    if (tableCount === 0) {
+  // Fresh DB: apply the full bootstrap schema and mark every known migration
+  // as applied (since the DDL is folded into schema.sql).
+  if (tableCount === 0) {
+    try {
       await applyBootstrapSchema()
       console.log("Database schema bootstrap completed successfully")
       await ensureSchemaMigrationsTable()
-      await recordCurrentSchemaVersion()
+      await recordAllKnownMigrationsAsApplied()
       return { bootstrapped: true, upgraded: false, tableCount: 0 }
+    } catch (error) {
+      console.error("Database bootstrap failed:", error)
+      throw error
     }
-
-    console.log(
-      `Database already contains ${tableCount} public tables. Skipping schema bootstrap; rebuild the database to apply the current schema.`
-    )
-    return { bootstrapped: false, upgraded: false, tableCount }
-  } catch (error) {
-    console.error("Database bootstrap/upgrade failed:", error)
-    throw error
   }
+
+  // Existing DB: run any incremental migrations that haven't been applied.
+  const upgraded = await applyIncrementalMigrations()
+  // Defensive: record the current schema version so older deployments that
+  // pre-date the incremental table get aligned.
+  if (await hasCurrentSchemaVersion()) {
+    console.log(
+      `Database schema is already at version ${CURRENT_SCHEMA_VERSION} (${tableCount} public tables).`
+    )
+  } else {
+    await recordCurrentSchemaVersion()
+  }
+  return { bootstrapped: false, upgraded, tableCount }
 }
 
 export async function rebuildDatabaseSchema() {
@@ -104,7 +205,7 @@ export async function rebuildDatabaseSchema() {
   try {
     await applyBootstrapSchema()
     await ensureSchemaMigrationsTable()
-    await recordCurrentSchemaVersion()
+    await recordAllKnownMigrationsAsApplied()
     console.log("Database schema rebuild completed successfully")
   } catch (error) {
     console.error("Database schema rebuild failed:", error)
