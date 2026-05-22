@@ -30,6 +30,7 @@ import {
 
 interface ActiveStatusSession {
   controller: StatusReactionController
+  externalMessageId: string
   startedAt: number
 }
 
@@ -100,15 +101,23 @@ async function ensureControllerForSession(input: {
   workspaceId: string
   conversationId: string
 }): Promise<StatusReactionController | null> {
-  const existing = activeSessions.get(input.sessionId)
-  if (existing) return existing.controller
-
   const link = await findRecentInboundLinkForConversation(input.conversationId)
   if (!link) {
     console.log(
       `[im:status] no inbound link found for cid=${input.conversationId.slice(0, 8)}`
     )
     return null
+  }
+
+  // If we have a cached controller for this session but it's for a different
+  // (older) inbound message, destroy it first so the new message gets its own.
+  const existing = activeSessions.get(input.sessionId)
+  if (existing) {
+    if (existing.externalMessageId === link.externalMessageId) {
+      return existing.controller
+    }
+    activeSessions.delete(input.sessionId)
+    void existing.controller.destroy()
   }
   console.log(
     `[im:status] link found: kind=${link.transportKind} externalMsgId=${link.externalMessageId.slice(0, 12)} acct=${link.transportAccountId.slice(0, 8)}`
@@ -151,6 +160,7 @@ async function ensureControllerForSession(input: {
   })
   activeSessions.set(input.sessionId, {
     controller,
+    externalMessageId: link.externalMessageId,
     startedAt: Date.now(),
   })
   return controller
