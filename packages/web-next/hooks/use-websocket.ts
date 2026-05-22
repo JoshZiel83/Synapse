@@ -176,14 +176,7 @@ export function useWebSocket({
       try {
         const msg = JSON.parse(e.data) as Record<string, unknown>
         const rawType = typeof msg.type === "string" ? msg.type : ""
-        const normalizedType =
-          rawType === "auth_ok"
-            ? "auth.ok"
-            : rawType === "auth_error"
-              ? "auth.error"
-              : rawType === "server_shutdown"
-                ? "server.shutdown"
-                : rawType
+        const normalizedType = rawType
         const normalizedMessage = {
           ...msg,
           type: normalizedType,

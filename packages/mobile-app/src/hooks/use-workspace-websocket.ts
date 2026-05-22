@@ -185,14 +185,7 @@ function ensureSharedSocket() {
     try {
       const parsed = JSON.parse(event.data) as Record<string, unknown>
       const rawType = typeof parsed.type === "string" ? parsed.type : ""
-      const normalizedType =
-        rawType === "auth_ok"
-          ? "auth.ok"
-          : rawType === "auth_error"
-            ? "auth.error"
-            : rawType === "server_shutdown"
-              ? "server.shutdown"
-              : rawType
+      const normalizedType = rawType
 
       const normalized = {
         ...parsed,

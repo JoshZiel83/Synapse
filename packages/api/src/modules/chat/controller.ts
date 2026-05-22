@@ -1,5 +1,12 @@
 import type { FastifyInstance } from "fastify"
 import { ZodError, z } from "zod"
+import {
+  CONVERSATION_BOUNDARIES,
+  CONVERSATION_KINDS,
+  INTERACTION_DECISIONS,
+  PLAN_APPROVAL_DECISIONS,
+  RELAY_AUTHORIZATION_PRESETS,
+} from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { requireWorkspaceMemberIdentity } from "./workspace-identity.js"
 import {
@@ -37,8 +44,8 @@ const jsonRecordSchema = z.record(z.any()).optional()
 
 const createConversationSchema = z.object({
   clientRequestId: chatUuidSchema,
-  kind: z.enum(["group", "private", "virtual"]),
-  boundary: z.enum(["internal", "external"]).optional(),
+  kind: z.enum(CONVERSATION_KINDS),
+  boundary: z.enum(CONVERSATION_BOUNDARIES).optional(),
   title: z.string().trim().min(1).max(255).optional(),
   workspaceMemberIds: z.array(chatUuidSchema).optional().default([]),
   actorIds: z.array(chatUuidSchema).optional().default([]),
@@ -120,15 +127,15 @@ const resolveInteractionUserInputSchema = resolveInteractionCommandSchema
 
 const resolveInteractionPlanApprovalSchema = resolveInteractionCommandSchema
   .extend({
-    decision: z.enum(["approve", "revise"]),
+    decision: z.enum(PLAN_APPROVAL_DECISIONS),
     note: z.string().trim().optional(),
   })
   .strict()
 
 const resolveInteractionRelayApproveSchema = resolveInteractionCommandSchema
   .extend({
-    decision: z.literal("approve"),
-    preset: z.enum(["once", "actor", "conversation", "workspace"]),
+    decision: z.literal(INTERACTION_DECISIONS[0]),
+    preset: z.enum(RELAY_AUTHORIZATION_PRESETS),
     selectedGrantOptionId: z.string().trim().min(1),
     note: z.string().trim().optional(),
   })
@@ -136,7 +143,7 @@ const resolveInteractionRelayApproveSchema = resolveInteractionCommandSchema
 
 const resolveInteractionRelayRejectSchema = resolveInteractionCommandSchema
   .extend({
-    decision: z.literal("reject"),
+    decision: z.literal(INTERACTION_DECISIONS[1]),
     note: z.string().trim().optional(),
   })
   .strict()
@@ -475,7 +482,7 @@ export default async function chatController(app: FastifyInstance) {
                   answers: body.answers,
                   note: body.note,
                 }
-              : body.decision === "reject"
+              : body.decision === INTERACTION_DECISIONS[1]
                 ? {
                     ...resolveParamsBase,
                     decision: body.decision,

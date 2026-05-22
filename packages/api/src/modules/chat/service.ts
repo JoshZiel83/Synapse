@@ -2164,7 +2164,10 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
     : undefined
   const sourceParticipantType =
     params.sourceParticipantType ?? authorParticipant?.participant_kind
-  if (!sourceParticipantType || sourceParticipantType === "system") {
+  if (
+    !sourceParticipantType ||
+    sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
+  ) {
     return [] as PendingActorWakeup[]
   }
 
@@ -2188,12 +2191,14 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
   }
 
   const sourceType =
-    sourceParticipantType === "actor" ? "actor_message" : "user_message"
+    sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+      ? "actor_message"
+      : "user_message"
   const sourceParticipantId =
     params.sourceParticipantId ??
-    (sourceParticipantType === "workspace_member"
+    (sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
       ? (authorParticipant?.workspace_member_id ?? undefined)
-      : sourceParticipantType === "actor"
+      : sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
         ? (authorParticipant?.actor_id ?? undefined)
         : (itemRow.author_participant_id ?? undefined))
   const sourceName =
@@ -2772,15 +2777,21 @@ export async function ensureConversationParticipant(params: {
   }
 
   if (
-    params.participantKind === "workspace_member" &&
+    params.participantKind === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
     !params.workspaceMemberId
   ) {
     throw new Error("workspaceMemberId is required for workspace participants")
   }
-  if (params.participantKind === "actor" && !params.actorId) {
+  if (
+    params.participantKind === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+    !params.actorId
+  ) {
     throw new Error("actorId is required for actor participants")
   }
-  if (params.participantKind === "remote_agent" && !params.remoteAgentId) {
+  if (
+    params.participantKind === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
+    !params.remoteAgentId
+  ) {
     throw new Error("remoteAgentId is required for remote agent participants")
   }
 

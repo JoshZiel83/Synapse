@@ -192,7 +192,7 @@ function closeClient(clientId: string, message: string, closeCode = 1008) {
 
   if (client.ws.readyState === 1) {
     try {
-      client.ws.send(JSON.stringify({ type: "auth_error", message }))
+      client.ws.send(JSON.stringify({ type: "auth.error", message }))
     } catch {}
   }
 
@@ -321,7 +321,7 @@ export function setupWebSocket(app: FastifyInstance) {
       try {
         socket.send(
           JSON.stringify({
-            type: "server_shutdown",
+            type: "server.shutdown",
             message: "Synapse API server is shutting down",
             retryable: true,
           })
@@ -340,7 +340,7 @@ export function setupWebSocket(app: FastifyInstance) {
       try {
         socket.send(
           JSON.stringify({
-            type: "server_shutdown",
+            type: "server.shutdown",
             message: "Synapse API server is shutting down",
             retryable: true,
           })
@@ -360,7 +360,7 @@ export function setupWebSocket(app: FastifyInstance) {
       try {
         socket.send(
           JSON.stringify({
-            type: "server_shutdown",
+            type: "server.shutdown",
             message: "Synapse API server is shutting down",
             retryable: true,
           })
@@ -616,7 +616,7 @@ export async function shutdownWebSockets(
       try {
         client.ws.send(
           JSON.stringify({
-            type: "server_shutdown",
+            type: "server.shutdown",
             message: reason,
             retryable: true,
           })

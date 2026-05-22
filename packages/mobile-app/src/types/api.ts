@@ -121,10 +121,6 @@ export interface ConversationMemberListResponse {
   members: ConversationParticipantView[]
 }
 
-export interface ConversationCreateResponse {
-  conversationId: string
-}
-
 export interface ConversationSendResponse {
   item: ConversationFeedItem
 }
