@@ -1479,19 +1479,6 @@ export async function updateTransportSessionSettings(params: {
   )
 }
 
-export async function deleteConversationTransportBinding(params: {
-  workspaceId: string
-  conversationId: string
-}) {
-  const row = await db
-    .deleteFrom("conversation_transport_bindings")
-    .where("workspace_id", "=", params.workspaceId)
-    .where("conversation_id", "=", params.conversationId)
-    .returning("id")
-    .executeTakeFirst()
-  return Boolean(row)
-}
-
 export async function ensureTransportAddress(params: {
   workspaceId: string
   transportAccountId: string

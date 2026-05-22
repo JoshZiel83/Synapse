@@ -46,13 +46,11 @@ import type {
   FriendIdProfileView,
   IdentitySearchResponse,
   FriendRequestListResponse,
-  RelationshipProfileView,
   RelationshipScanResponse,
   UploadAssetInput,
   WorkspaceChiefActorPreference,
   WorkspaceInfo,
   WorkspaceListResponse,
-  WorkspaceMemberListResponse,
 } from "@/types/api"
 import type { FileRecordView } from "@shared"
 
@@ -129,22 +127,6 @@ function asArray<T>(value: unknown): T[] {
 }
 
 function normalizeWorkspaceListResponse(data: unknown): WorkspaceListResponse {
-  if (Array.isArray(data)) {
-    return { data }
-  }
-
-  if (data && typeof data === "object") {
-    return {
-      data: asArray((data as { data?: unknown }).data),
-    }
-  }
-
-  return { data: [] }
-}
-
-function normalizeWorkspaceMemberListResponse(
-  data: unknown
-): WorkspaceMemberListResponse {
   if (Array.isArray(data)) {
     return { data }
   }
@@ -288,25 +270,9 @@ class ApiClient {
     })
   }
 
-  getWorkspaceMembers(
-    workspaceId: string
-  ): Promise<WorkspaceMemberListResponse> {
-    return this.request<unknown>(`/workspaces/${workspaceId}/members`).then(
-      normalizeWorkspaceMemberListResponse
-    )
-  }
-
   getActors(workspaceId: string): Promise<ActorListResponse> {
     return this.request<unknown>(`/workspaces/${workspaceId}/actors`).then(
       normalizeActorListResponse
-    )
-  }
-
-  getMyRelationshipProfile(
-    workspaceId: string
-  ): Promise<RelationshipProfileView> {
-    return this.request<RelationshipProfileView>(
-      `/workspaces/${workspaceId}/me/friend-profile`
     )
   }
 
@@ -325,45 +291,6 @@ class ApiClient {
   ): Promise<FriendIdProfileView> {
     return this.request<FriendIdProfileView>(
       `/workspaces/${workspaceId}/me/friend-id`,
-      {
-        method: "PUT",
-        body: JSON.stringify(input),
-      }
-    )
-  }
-
-  updateMyRelationshipProfile(
-    workspaceId: string,
-    input: { approvalMode: "auto" | "manual" }
-  ): Promise<RelationshipProfileView> {
-    return this.request<RelationshipProfileView>(
-      `/workspaces/${workspaceId}/me/friend-profile`,
-      {
-        method: "PUT",
-        body: JSON.stringify(input),
-      }
-    )
-  }
-
-  getActorRelationshipProfile(
-    workspaceId: string,
-    actorId: string
-  ): Promise<RelationshipProfileView> {
-    return this.request<RelationshipProfileView>(
-      `/workspaces/${workspaceId}/actors/${actorId}/friend-profile`
-    )
-  }
-
-  updateActorRelationshipProfile(
-    workspaceId: string,
-    actorId: string,
-    input: {
-      approvalMode: "auto" | "manual"
-      accessPolicy?: "workspace_open" | "approval_required"
-    }
-  ): Promise<RelationshipProfileView> {
-    return this.request<RelationshipProfileView>(
-      `/workspaces/${workspaceId}/actors/${actorId}/friend-profile`,
       {
         method: "PUT",
         body: JSON.stringify(input),

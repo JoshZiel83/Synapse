@@ -1293,36 +1293,6 @@ class ApiClient {
   }
 
   // Actor lanes
-  createSession(
-    wsId: string,
-    actorId: string,
-    content: string,
-    channelType?: string
-  ) {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/sessions`, {
-      method: "POST",
-      body: JSON.stringify({ content, channelType: channelType || "web" }),
-    })
-  }
-  sendSessionMessage(wsId: string, sessionId: string, content: string) {
-    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ content }),
-    })
-  }
-  getSession(wsId: string, sessionId: string) {
-    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}`)
-  }
-  getSessionMessages(wsId: string, sessionId: string) {
-    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/messages`)
-  }
-  getActorSessions(wsId: string, actorId: string, status?: string) {
-    const params = status ? `?status=${status}` : ""
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/sessions${params}`)
-  }
-  getSessionTree(wsId: string, sessionId: string) {
-    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/tree`)
-  }
   retryConversationMessage(
     workspaceId: string,
     threadId: string,
@@ -1334,11 +1304,6 @@ class ApiClient {
         method: "POST",
       }
     )
-  }
-  cancelSession(wsId: string, sessionId: string) {
-    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}`, {
-      method: "DELETE",
-    })
   }
 
   getChatBootstrap(workspaceId: string): Promise<ChatBootstrapResponse> {

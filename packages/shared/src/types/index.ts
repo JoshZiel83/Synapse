@@ -477,37 +477,6 @@ export const WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, WorkItemStatus[]> = {
   failed: [],
 }
 
-// ============ Communication Protocol ============
-export type MessageType =
-  | "assign"
-  | "accept"
-  | "reject"
-  | "info_request"
-  | "info_response"
-  | "progress"
-  | "escalate"
-  | "assist_request"
-  | "assist_response"
-  | "transfer"
-  | "complete"
-  | "feedback"
-  | "rework"
-  | "user_message"
-
-export interface Message {
-  id: UUID
-  workspaceId: UUID
-  workItemId?: UUID
-  type: MessageType
-  fromActorId?: UUID
-  toActorId?: UUID
-  fromWorkspaceMemberId?: UUID
-  toWorkspaceMemberId?: UUID
-  content: string
-  metadata: Record<string, unknown>
-  createdAt: Timestamp
-}
-
 // ============ Memory ============
 export type MemorySpaceType = (typeof MEMORY_SPACE_TYPES)[number]
 export type MemoryScope = (typeof MEMORY_SCOPES)[number]
@@ -4122,25 +4091,6 @@ export function summarizeConversationEvent(
 export type ConversationFeedItem =
   | ConversationFeedMessageItem
   | ConversationFeedEventItem
-
-export interface ConversationSummary {
-  id: UUID
-  workspaceId: UUID
-  title: string
-  avatarUrl?: string
-  createdAt: Timestamp
-  updatedAt: Timestamp
-  unreadCount: number
-  lastItem?: {
-    itemId: UUID
-    sequence: number
-    kind: ConversationFeedItem["kind"]
-    role?: "user" | "assistant" | "system"
-    previewText: string
-    authorName?: string
-    createdAt: Timestamp
-  }
-}
 
 export interface ConversationFeedPage {
   items: ConversationFeedItem[]
