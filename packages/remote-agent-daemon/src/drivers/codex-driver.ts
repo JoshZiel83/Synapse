@@ -179,18 +179,49 @@ function defaultThreadConfig() {
   }
 }
 
+function bearerTokenEnvVarName(serverName: string) {
+  return `SYNAPSE_MCP_BEARER_${serverName.toUpperCase().replace(/[^A-Z0-9_]/g, "_")}`
+}
+
+export type CodexSpawnFlags = {
+  args: string[]
+  env: Record<string, string>
+}
+
 function mcpServerConfigToCodexFlags(
   servers: Record<string, McpServerConfig> | undefined
-): string[] {
-  if (!servers) return []
+): CodexSpawnFlags {
   const flags: string[] = []
+  const env: Record<string, string> = {}
+  if (!servers) return { args: flags, env }
   for (const [name, server] of Object.entries(servers)) {
     if ("type" in server && server.type === "http") {
       flags.push("-c", `mcp_servers.${name}.url=${JSON.stringify(server.url)}`)
-      if (server.headers) {
+      // Authorization MUST come from an env var, not a CLI argument: process
+      // args show up in `ps`, log lines, and the kernel's audit trail; the
+      // codex protocol exposes `bearer_token_env_var` exactly so the secret
+      // never leaves the parent process's env. Other (non-auth) headers can
+      // still ride through http_headers since they're not sensitive.
+      const headers: Record<string, string> = {}
+      for (const [key, value] of Object.entries(server.headers ?? {})) {
+        if (typeof value !== "string") continue
+        if (/^authorization$/i.test(key)) {
+          const envName = bearerTokenEnvVarName(name)
+          const bearer = value.replace(/^Bearer\s+/i, "").trim()
+          if (!bearer) continue
+          env[envName] = bearer
+          flags.push(
+            "-c",
+            `mcp_servers.${name}.bearer_token_env_var="${envName}"`
+          )
+          continue
+        }
+        headers[key] = value
+      }
+      if (Object.keys(headers).length > 0) {
         flags.push(
           "-c",
-          `mcp_servers.${name}.http_headers=${JSON.stringify(server.headers)}`
+          `mcp_servers.${name}.http_headers=${JSON.stringify(headers)}`
         )
       }
     } else if ("command" in server) {
@@ -213,12 +244,14 @@ function mcpServerConfigToCodexFlags(
       `mcp_servers.${name}.default_tools_approval_mode="approve"`
     )
   }
-  return flags
+  return { args: flags, env }
 }
+
+/** Test-only: re-export the flag splitter so the test suite can poke at it. */
+export const __mcpServerConfigToCodexFlagsForTest = mcpServerConfigToCodexFlags
 
 class CodexAgentSession implements AgentSession {
   readonly runtimeKind = "codex" as const
-
   private child: ChildProcess | null = null
   private threadId: string | undefined
   private currentModel: string | undefined
@@ -445,8 +478,11 @@ class CodexAgentSession implements AgentSession {
     }
     // With approval_policy="never" + sandbox_mode="workspace-write" + per-MCP
     // default_tools_approval_mode="approve", these approval RPCs should rarely
-    // arrive. Keep a defensive accept fallback so the runtime never deadlocks
-    // when the binary's policy negotiation lags one turn behind our config.
+    // arrive. When they do, that's a contract violation by the binary's policy
+    // negotiation, not a user intent — fail safe by DENYING the action rather
+    // than rubber-stamping it. A surprise file/network/permission grant from
+    // a defensive fallback would be worse than the turn stalling out: we'd be
+    // letting a sandbox-escape policy desync sneak through silently.
     if (
       method === "item/commandExecution/requestApproval" ||
       method === "item/fileChange/requestApproval" ||
@@ -455,7 +491,11 @@ class CodexAgentSession implements AgentSession {
       writeJsonLine(this.child, {
         jsonrpc: "2.0",
         id,
-        result: { decision: "accept" },
+        result: { decision: "deny" },
+      })
+      this.eventQueue.push({
+        kind: "error",
+        message: `Codex requested ${method} after approval_policy=never; denied by daemon fallback`,
       })
       return
     }
@@ -592,7 +632,7 @@ export class CodexDriver implements AgentDriver {
       process.platform === "win32" && runtimePath.endsWith(".js")
 
     const mcpFlags = mcpServerConfigToCodexFlags(spec.mcpServers)
-    const args = ["app-server", "--listen", "stdio://", ...mcpFlags]
+    const args = ["app-server", "--listen", "stdio://", ...mcpFlags.args]
 
     const child = isWindowsJsEntry
       ? spawn(process.execPath, [runtimePath, ...args], {
@@ -601,6 +641,7 @@ export class CodexDriver implements AgentDriver {
           env: {
             ...process.env,
             ...spec.childEnvOverlay,
+            ...mcpFlags.env,
             FORCE_COLOR: "0",
             NO_COLOR: "1",
           },
@@ -611,6 +652,7 @@ export class CodexDriver implements AgentDriver {
           env: {
             ...process.env,
             ...spec.childEnvOverlay,
+            ...mcpFlags.env,
             FORCE_COLOR: "0",
             NO_COLOR: "1",
           },

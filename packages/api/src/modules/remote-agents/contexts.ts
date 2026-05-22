@@ -68,11 +68,12 @@ export function pickRepresentativeContext<
 
 /**
  * Returns true if the server should emit `agent:start` for a (remote_agent, conversation)
- * pair on daemon (re)connect. Mirrors the WHERE clause in loadActiveConversationContextsForMachine.
+ * pair on daemon (re)connect. Mirrors the WHERE clause in
+ * loadAgentStartTargetsForMachine: dispatch is gated on actual work being
+ * queued, never on having a stale runtime_session_id alone.
  */
 export function shouldDispatchAgentStart(input: {
-  runtimeSessionId: string | null
   hasPendingDelivery: boolean
 }) {
-  return Boolean(input.runtimeSessionId) || input.hasPendingDelivery
+  return input.hasPendingDelivery
 }

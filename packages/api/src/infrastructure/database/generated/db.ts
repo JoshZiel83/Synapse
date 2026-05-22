@@ -2137,16 +2137,11 @@ export interface RemoteAgentAccessRequests {
 }
 
 export interface RemoteAgentBindings {
-  active_conversation_id: string | null
-  active_interaction_id: string | null
   capabilities: Generated<Json>
   created_at: Generated<Timestamp | null>
   id: Generated<string>
   last_activity_at: Timestamp | null
   last_error: string | null
-  last_run_finished_at: Timestamp | null
-  last_run_started_at: Timestamp | null
-  last_session_id: string | null
   local_root_path: string | null
   machine_id: string
   remote_agent_id: string
@@ -2159,12 +2154,21 @@ export interface RemoteAgentBindings {
 }
 
 export interface RemoteAgentConversationContexts {
+  active_interaction_id: string | null
   active_plan_approval_interaction_id: string | null
   collaboration_mode: Generated<string>
   collaboration_state: Generated<Json>
   conversation_id: string
   created_at: Generated<Timestamp | null>
+  last_activity_at: Timestamp | null
+  last_error: string | null
+  last_run_finished_at: Timestamp | null
+  last_run_started_at: Timestamp | null
   remote_agent_id: string
+  runtime_kind: RemoteAgentsRuntimeKind | null
+  runtime_session_id: string | null
+  runtime_state: Generated<RemoteAgentBindingsRuntimeState>
+  status_text: string | null
   updated_at: Generated<Timestamp | null>
 }
 
@@ -2207,6 +2211,7 @@ export interface RemoteAgentMachineSessions {
   close_reason: string | null
   created_at: Generated<Timestamp | null>
   ended_at: Timestamp | null
+  fencing_token: Generated<string>
   id: Generated<string>
   last_heartbeat_at: Timestamp | null
   machine_id: string
@@ -2224,6 +2229,8 @@ export interface RemoteAgentMessageDeliveries {
   id: Generated<string>
   item_id: string
   last_acked_at: Timestamp | null
+  last_failure_reason: string | null
+  next_attempt_at: Timestamp | null
   remote_agent_id: string
   status: Generated<RemoteAgentMessageDeliveriesStatus>
   updated_at: Generated<Timestamp>

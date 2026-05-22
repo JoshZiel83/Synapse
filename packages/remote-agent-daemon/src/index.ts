@@ -488,10 +488,15 @@ class DaemonSupervisor {
           const agent = this.getOrCreateAgent(start.remoteAgentId)
           await agent.configure(start)
           if (start.conversationId) {
+            // Server only sends agent:start for pairs with pending work, so
+            // bootstrapping the runtime here is enough — its initial prompt
+            // tells the agent to call check_messages immediately, and the
+            // subsequent agent:deliver (queued right after agent:start by
+            // startBoundRemoteAgents) is a no-op while a wake is in flight.
             await agent.ensureRuntimeForConversation({
               conversationId: start.conversationId,
               resumeSessionId: start.sessionId ?? undefined,
-              wake: true,
+              wake: false,
             })
           }
           return
@@ -566,6 +571,11 @@ class ManagedRemoteAgent {
     PendingInteractionRecord
   >()
   private readonly latestPlanByConversation = new Map<string, LatestPlanDraft>()
+  // Deliveries we've routed into a conversation runtime but haven't yet been
+  // observed completing (via the chat-bridge complete-deliveries path) or
+  // failing. On runtime crash / stop, we POST these back to the server's
+  // fail-deliveries endpoint so the backoff worker can reschedule.
+  private readonly pendingDeliveryIds = new Map<string, Set<string>>()
 
   constructor(
     private readonly params: {
@@ -575,6 +585,63 @@ class ManagedRemoteAgent {
       getMachineId: () => string | null
     }
   ) {}
+
+  private trackPendingDeliveries(
+    conversationId: string,
+    deliveryIds: string[]
+  ) {
+    if (deliveryIds.length === 0) return
+    let set = this.pendingDeliveryIds.get(conversationId)
+    if (!set) {
+      set = new Set<string>()
+      this.pendingDeliveryIds.set(conversationId, set)
+    }
+    for (const id of deliveryIds) set.add(id)
+  }
+
+  private drainPendingDeliveries(conversationId: string): string[] {
+    const set = this.pendingDeliveryIds.get(conversationId)
+    if (!set || set.size === 0) return []
+    const ids = [...set]
+    this.pendingDeliveryIds.delete(conversationId)
+    return ids
+  }
+
+  private async reportDeliveryFailure(
+    deliveryIds: string[],
+    reason: string,
+    conversationId?: string
+  ) {
+    if (deliveryIds.length === 0) return
+    if (conversationId) {
+      const set = this.pendingDeliveryIds.get(conversationId)
+      if (set) {
+        for (const id of deliveryIds) set.delete(id)
+        if (set.size === 0) this.pendingDeliveryIds.delete(conversationId)
+      }
+    }
+    try {
+      await requestJson(
+        this.params.config.serverUrl,
+        this.params.config.apiKey,
+        `/api/v1/internal/remote-agents/${this.params.remoteAgentId}/fail-deliveries`,
+        {
+          method: "POST",
+          body: JSON.stringify({ deliveryIds, reason: reason.slice(0, 2000) }),
+        }
+      )
+    } catch (error) {
+      log(
+        "warn",
+        `remote-agent:${this.params.remoteAgentId}`,
+        "Failed to report delivery failure to server (will retry on next worker tick)",
+        {
+          deliveryIds,
+          error: error instanceof Error ? error.message : String(error),
+        }
+      )
+    }
+  }
 
   async configure(message: AgentStartMessage) {
     this.runtimeKind = message.runtimeKind
@@ -604,13 +671,14 @@ class ManagedRemoteAgent {
   }) {
     const driver = tryGetDriver(this.runtimeKind)
     if (!driver) {
+      const reason = `No driver registered for ${this.runtimeKind}`
       this.publishStatus({
         conversationId: params.conversationId,
         state: "error",
-        statusText: `No driver registered for ${this.runtimeKind}`,
-        lastError: `No driver registered for ${this.runtimeKind}`,
+        statusText: reason,
+        lastError: reason,
       })
-      return
+      throw new Error(reason)
     }
     const detected = driver.detect()
     const runtimePath = this.runtimePath?.trim() || detected.executablePath
@@ -622,7 +690,7 @@ class ManagedRemoteAgent {
         statusText: reason,
         lastError: reason,
       })
-      return
+      throw new Error(reason)
     }
 
     let runtime = this.runtimes.get(params.conversationId)
@@ -671,10 +739,29 @@ class ManagedRemoteAgent {
       byConversation.set(delivery.conversationId, list)
     }
     for (const [conversationId, items] of byConversation) {
-      await this.ensureRuntimeForConversation({
-        conversationId,
-        wake: true,
-      })
+      const deliveryIds = items.map((item) => item.deliveryId)
+      this.trackPendingDeliveries(conversationId, deliveryIds)
+      const hasRuntime = this.runtimes.has(conversationId)
+      try {
+        await this.ensureRuntimeForConversation({
+          conversationId,
+          // A fresh runtime starts with the bootstrap prompt, which already
+          // instructs the agent to check_messages; piling another wake prompt
+          // on top would duplicate the turn. An existing runtime needs the
+          // wake nudge to notice new work.
+          wake: hasRuntime,
+        })
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        log(
+          "error",
+          `remote-agent:${this.params.remoteAgentId}`,
+          "Routing deliveries to conversation runtime failed; reporting back to server",
+          { conversationId, count: items.length, error: message }
+        )
+        await this.reportDeliveryFailure(deliveryIds, message)
+        continue
+      }
       log(
         "debug",
         `remote-agent:${this.params.remoteAgentId}`,
@@ -813,6 +900,10 @@ class ManagedRemoteAgent {
         await runtime.close(reason)
       } catch {}
       this.runtimes.delete(conversationId)
+      const ids = this.drainPendingDeliveries(conversationId)
+      if (ids.length > 0) {
+        void this.reportDeliveryFailure(ids, reason, conversationId)
+      }
     }
     this.publishStatus({
       conversationId: null,
@@ -855,6 +946,10 @@ class ManagedRemoteAgent {
           statusText: message,
           lastError: message,
         })
+        const ids = this.drainPendingDeliveries(conversationId)
+        if (ids.length > 0) {
+          void this.reportDeliveryFailure(ids, message, conversationId)
+        }
       },
       onUserInputRequested: async (conversationId, event) => {
         try {

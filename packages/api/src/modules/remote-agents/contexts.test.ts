@@ -101,32 +101,17 @@ test("pickRepresentativeContext handles missing lastActivityAt as least recent",
   assert.equal(pick?.conversationId, "c-known")
 })
 
-test("shouldDispatchAgentStart returns true when a session id is known", () => {
-  assert.equal(
-    shouldDispatchAgentStart({
-      runtimeSessionId: "sess-abc",
-      hasPendingDelivery: false,
-    }),
-    true
-  )
+test("shouldDispatchAgentStart returns true only when a delivery is pending", () => {
+  assert.equal(shouldDispatchAgentStart({ hasPendingDelivery: true }), true)
+  assert.equal(shouldDispatchAgentStart({ hasPendingDelivery: false }), false)
 })
 
-test("shouldDispatchAgentStart returns true on pending delivery even without a session", () => {
+test("shouldDispatchAgentStart does NOT wake an idle context just because a session id is known", () => {
+  // The old behavior accepted an idle context if a runtime_session_id was on
+  // file; the refactored dispatch path drops that — daemons reconnect into a
+  // quiet state and only wake when there is queued work.
   assert.equal(
-    shouldDispatchAgentStart({
-      runtimeSessionId: null,
-      hasPendingDelivery: true,
-    }),
-    true
-  )
-})
-
-test("shouldDispatchAgentStart returns false when there is no session and no work", () => {
-  assert.equal(
-    shouldDispatchAgentStart({
-      runtimeSessionId: null,
-      hasPendingDelivery: false,
-    }),
+    shouldDispatchAgentStart({ hasPendingDelivery: false } as never),
     false
   )
 })

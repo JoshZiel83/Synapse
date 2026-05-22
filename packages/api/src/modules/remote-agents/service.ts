@@ -326,48 +326,41 @@ async function updateConversationRuntimeStatus(
   )
 }
 
-async function loadActiveConversationContextsForMachine(machineId: string) {
+async function loadAgentStartTargetsForMachine(machineId: string) {
+  // Only emit agent:start for (agent, conversation) pairs that have actual work
+  // queued up. A daemon reconnect must never wake idle conversations whose
+  // session id we happen to have on file — that's the "agent:start storm" the
+  // refactor was meant to kill. Pending delivery is the only legitimate trigger
+  // for waking a runtime; the per-conversation context's runtime_session_id is
+  // passed along so the driver can resume in-place once it's waking.
   const result = await executeSql<{
     remote_agent_id: string
     conversation_id: string
     runtime_kind: RemoteAgentRuntimeKind
     runtime_session_id: string | null
-    runtime_state: RemoteAgentRuntimeStateType
-    has_pending_delivery: boolean
   }>(
     `
       SELECT
         binding.remote_agent_id,
-        ctx.conversation_id,
+        delivery.conversation_id,
         binding.runtime_kind,
-        ctx.runtime_session_id,
-        ctx.runtime_state,
-        EXISTS (
-          SELECT 1
-          FROM remote_agent_message_deliveries delivery
-          WHERE delivery.remote_agent_id = binding.remote_agent_id
-            AND delivery.conversation_id = ctx.conversation_id
-            AND delivery.status = 'pending'
-        ) AS has_pending_delivery
+        ctx.runtime_session_id
       FROM remote_agent_bindings binding
       INNER JOIN remote_agents agent ON agent.id = binding.remote_agent_id
+      INNER JOIN (
+        SELECT DISTINCT remote_agent_id, conversation_id
+        FROM remote_agent_message_deliveries
+        WHERE status = 'pending'
+          AND (next_attempt_at IS NULL OR next_attempt_at <= NOW())
+      ) delivery
+        ON delivery.remote_agent_id = binding.remote_agent_id
       LEFT JOIN remote_agent_conversation_contexts ctx
         ON ctx.remote_agent_id = binding.remote_agent_id
+        AND ctx.conversation_id = delivery.conversation_id
       WHERE binding.machine_id = $1
         AND binding.status = 'active'
         AND agent.is_active = TRUE
-        AND ctx.conversation_id IS NOT NULL
-        AND (
-          ctx.runtime_session_id IS NOT NULL
-          OR EXISTS (
-            SELECT 1
-            FROM remote_agent_message_deliveries delivery
-            WHERE delivery.remote_agent_id = binding.remote_agent_id
-              AND delivery.conversation_id = ctx.conversation_id
-              AND delivery.status = 'pending'
-          )
-        )
-      ORDER BY ctx.last_activity_at DESC NULLS LAST, ctx.conversation_id ASC
+      ORDER BY ctx.last_activity_at DESC NULLS LAST, delivery.conversation_id ASC
     `,
     [machineId]
   )
@@ -454,20 +447,19 @@ async function startBoundRemoteAgents(machineId: string) {
     bindings.map((row) => [row.remote_agent_id, row])
   )
 
-  const activeContexts =
-    await loadActiveConversationContextsForMachine(machineId)
+  const targets = await loadAgentStartTargetsForMachine(machineId)
 
-  for (const ctx of activeContexts) {
-    const binding = bindingByAgentId.get(ctx.remote_agent_id)
+  for (const target of targets) {
+    const binding = bindingByAgentId.get(target.remote_agent_id)
     if (!binding) continue
     safeSend(connection, {
       type: "agent:start",
-      remoteAgentId: ctx.remote_agent_id,
-      conversationId: ctx.conversation_id,
+      remoteAgentId: target.remote_agent_id,
+      conversationId: target.conversation_id,
       runtimeKind: binding.runtime_kind,
       runtimePath: binding.runtime_path,
       localRootPath: binding.local_root_path,
-      sessionId: ctx.runtime_session_id,
+      sessionId: target.runtime_session_id,
       fencingToken: connection.fencingToken,
       serverUrl: config.app.baseUrl,
     })
@@ -2751,6 +2743,17 @@ export async function handleRemoteAgentDaemonConnection(
     try {
       message = JSON.parse(String(raw))
     } catch {
+      return
+    }
+
+    // Fencing guard: once a newer daemon connects with the same machine key,
+    // the older socket is closed via 4001, but in-flight messages from the
+    // older connection can still arrive between "close initiated" and
+    // "close completed". Drop them so they never write to DB or trigger
+    // outbound traffic; only the current active connection (whose fencing
+    // token matches the one we minted) gets to mutate state.
+    const active = machineConnections.get(machine.id)
+    if (!active || active.fencingToken !== fencingToken) {
       return
     }
 
