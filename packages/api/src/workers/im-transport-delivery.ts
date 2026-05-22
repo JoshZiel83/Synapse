@@ -134,7 +134,7 @@ async function postWeixinMessage(params: {
 }
 
 async function resolveTransportMentionRecipients(params: {
-  transportKind: "feishu" | "weixin"
+  transportKind: "feishu" | "weixin" | "wecom"
   transportAccountId: string
   endpointType: "direct" | "group"
   endpointExternalId: string
@@ -356,63 +356,43 @@ export function startImTransportDeliveryWorker() {
       }
       try {
         const connector = tryGetConnector(link.transportKind)
-        let deliveryResult: { externalMessageId: string }
-        if (connector && link.transportKind === "feishu") {
-          // New path: route through TransportConnector. Build a CanonicalMessage
-          // from the item, resolve mentions, then let the connector render +
-          // send. The legacy deliverViaFeishu remains for now but is unused.
-          const message = decodeFromConversationItem({
-            content: item.content,
-            contentBlocks: item.contentBlocks as EncodedContentBlock[],
-            transportMetadata:
-              ((item as unknown as { metadata?: Record<string, unknown> })
-                .metadata?.transport as Record<string, unknown>) || undefined,
-          })
-          const mentions = await resolveTransportMentionRecipients({
-            transportKind: link.transportKind,
-            transportAccountId: link.account.id,
-            endpointType: link.endpoint.endpointType,
-            endpointExternalId: link.endpoint.externalId,
-            item,
-          })
-          // Re-attach mention parts with externalId so the connector renders <at> markup
-          for (const m of mentions) {
-            message.parts.push({
-              type: "mention",
-              externalId: m.externalId,
-              displayName: m.displayName || m.externalId,
-            })
-          }
-          deliveryResult = await connector.sendMessage({
-            account: link.account,
-            endpoint: {
-              endpointType: link.endpoint.endpointType,
-              externalId: link.endpoint.externalId,
-              metadata: link.endpoint.metadata,
-            },
-            message,
-          })
-        } else {
-          const res =
-            link.transportKind === "feishu"
-              ? await deliverViaFeishu({
-                  account: link.account,
-                  endpoint: {
-                    endpointType: link.endpoint.endpointType,
-                    externalId: link.endpoint.externalId,
-                  },
-                  item,
-                })
-              : await deliverViaWeixin({
-                  account: link.account,
-                  endpoint: {
-                    externalId: link.endpoint.externalId,
-                    metadata: link.endpoint.metadata,
-                  },
-                  item,
-                })
-          deliveryResult = { externalMessageId: res.messageId }
+        if (!connector) {
+          throw new Error(
+            `no TransportConnector registered for transport_kind=${link.transportKind}`
+          )
         }
+        // Build the CanonicalMessage from the conversation item, resolve
+        // mentions, then hand to the connector to render + send.
+        const message = decodeFromConversationItem({
+          content: item.content,
+          contentBlocks: item.contentBlocks as EncodedContentBlock[],
+          transportMetadata:
+            ((item as unknown as { metadata?: Record<string, unknown> })
+              .metadata?.transport as Record<string, unknown>) || undefined,
+        })
+        const mentions = await resolveTransportMentionRecipients({
+          transportKind: link.transportKind,
+          transportAccountId: link.account.id,
+          endpointType: link.endpoint.endpointType,
+          endpointExternalId: link.endpoint.externalId,
+          item,
+        })
+        for (const m of mentions) {
+          message.parts.push({
+            type: "mention",
+            externalId: m.externalId,
+            displayName: m.displayName || m.externalId,
+          })
+        }
+        const deliveryResult = await connector.sendMessage({
+          account: link.account,
+          endpoint: {
+            endpointType: link.endpoint.endpointType,
+            externalId: link.endpoint.externalId,
+            metadata: link.endpoint.metadata,
+          },
+          message,
+        })
 
         await updateTransportMessageLinkStatus({
           linkId,

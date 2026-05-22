@@ -965,9 +965,12 @@ async function startRuntimeForAccount(
       return
     }
 
-    if (account.transportKind === "weixin") {
-      await pollWeixinAccount(account, abortController.signal)
-    }
+    // No connector registered — log and exit. The legacy weixin pollWeixinAccount
+    // branch is gone; the weixin connector now handles long-poll. This branch is
+    // reachable only if a TRANSPORT_KIND is added to the enum without a connector.
+    console.warn(
+      `[im] no TransportConnector for transport_kind=${account.transportKind}`
+    )
   }
 
   const promise = run()
