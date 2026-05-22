@@ -1,0 +1,606 @@
+import { execSync, spawn, type ChildProcess } from "node:child_process"
+import { existsSync } from "node:fs"
+import path from "node:path"
+import process from "node:process"
+import type { McpServerConfig } from "@anthropic-ai/claude-agent-sdk"
+import type {
+  AgentDriver,
+  AgentSession,
+  AgentSessionEvent,
+  PermissionDecision,
+  RuntimeCatalogEntry,
+  SendPromptOptions,
+  SessionSpec,
+} from "./types.js"
+
+type JsonRpcMethod =
+  | "initialize"
+  | "collaborationMode/list"
+  | "thread/start"
+  | "thread/resume"
+  | "turn/start"
+
+function trimFirstLine(value: string) {
+  return value
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .find(Boolean)
+}
+
+function which(binary: string) {
+  try {
+    const command = process.platform === "win32" ? "where" : "which"
+    const output = execSync(`${command} ${binary}`, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    })
+    return output
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .find(Boolean)
+  } catch {
+    return undefined
+  }
+}
+
+function resolveWindowsCodexEntry() {
+  const explicit = process.env.SYNAPSE_CODEX_PATH?.trim()
+  if (explicit) return explicit
+  try {
+    const globalRoot = execSync("npm root -g", {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    }).trim()
+    const candidate = path.join(
+      globalRoot,
+      "@openai",
+      "codex",
+      "bin",
+      "codex.js"
+    )
+    if (existsSync(candidate)) return candidate
+  } catch {}
+  const codexPath = which("codex")
+  if (!codexPath) return undefined
+  const fromCmdDir = path.join(
+    path.dirname(codexPath),
+    "node_modules",
+    "@openai",
+    "codex",
+    "bin",
+    "codex.js"
+  )
+  if (existsSync(fromCmdDir)) return fromCmdDir
+  return codexPath
+}
+
+function detectCodexBinary(): { path?: string; version?: string } {
+  const path =
+    process.platform === "win32"
+      ? resolveWindowsCodexEntry()
+      : process.env.SYNAPSE_CODEX_PATH?.trim() || which("codex")
+  if (!path) return {}
+  let version: string | undefined
+  try {
+    const probeArgs = ["--version"]
+    const probe =
+      process.platform === "win32" && path.endsWith(".js")
+        ? execSync(`"${process.execPath}" "${path}" --version`, {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          })
+        : execSync(`${path} ${probeArgs.join(" ")}`, {
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+          })
+    version = trimFirstLine(probe.toString())
+  } catch {
+    // best-effort
+  }
+  return { path, version }
+}
+
+class EventQueue {
+  private readonly queued: AgentSessionEvent[] = []
+  private readonly waiters: Array<(event: AgentSessionEvent | null) => void> =
+    []
+  private closed = false
+
+  push(event: AgentSessionEvent) {
+    if (this.closed) return
+    const waiter = this.waiters.shift()
+    if (waiter) {
+      waiter(event)
+      return
+    }
+    this.queued.push(event)
+  }
+
+  close() {
+    if (this.closed) return
+    this.closed = true
+    for (const waiter of this.waiters) waiter(null)
+    this.waiters.length = 0
+  }
+
+  async *iterator(): AsyncGenerator<AgentSessionEvent> {
+    while (true) {
+      const queued = this.queued.shift()
+      if (queued) {
+        yield queued
+        continue
+      }
+      if (this.closed) return
+      const next = await new Promise<AgentSessionEvent | null>((resolve) => {
+        this.waiters.push(resolve)
+      })
+      if (!next) return
+      yield next
+    }
+  }
+}
+
+function safeJsonParse<T = unknown>(value: string): T | null {
+  try {
+    return JSON.parse(value) as T
+  } catch {
+    return null
+  }
+}
+
+function splitLines(buffer: string) {
+  const parts = buffer.split(/\r?\n/)
+  const remainder = parts.pop() ?? ""
+  return { lines: parts, remainder }
+}
+
+function writeJsonLine(processRef: ChildProcess | null, payload: unknown) {
+  if (!processRef?.stdin?.writable) return false
+  processRef.stdin.write(`${JSON.stringify(payload)}\n`)
+  return true
+}
+
+function defaultThreadConfig() {
+  return {
+    "features.default_mode_request_user_input": true,
+  }
+}
+
+function mcpServerConfigToCodexFlags(
+  servers: Record<string, McpServerConfig> | undefined
+): string[] {
+  if (!servers) return []
+  const flags: string[] = []
+  for (const [name, server] of Object.entries(servers)) {
+    if ("type" in server && server.type === "http") {
+      flags.push("-c", `mcp_servers.${name}.url=${JSON.stringify(server.url)}`)
+      if (server.headers) {
+        flags.push(
+          "-c",
+          `mcp_servers.${name}.http_headers=${JSON.stringify(server.headers)}`
+        )
+      }
+    } else if ("command" in server) {
+      flags.push(
+        "-c",
+        `mcp_servers.${name}.command=${JSON.stringify(server.command)}`
+      )
+      if (server.args) {
+        flags.push(
+          "-c",
+          `mcp_servers.${name}.args=${JSON.stringify(server.args)}`
+        )
+      }
+    }
+    flags.push("-c", `mcp_servers.${name}.startup_timeout_sec=30`)
+    flags.push("-c", `mcp_servers.${name}.tool_timeout_sec=300`)
+    flags.push("-c", `mcp_servers.${name}.enabled=true`)
+  }
+  return flags
+}
+
+class CodexAgentSession implements AgentSession {
+  readonly runtimeKind = "codex" as const
+
+  private child: ChildProcess | null = null
+  private threadId: string | undefined
+  private currentModel: string | undefined
+  private requestSeq = 0
+  private readonly pendingRequests = new Map<string, JsonRpcMethod>()
+  private readonly pendingPermissions = new Map<
+    string,
+    (decision: PermissionDecision) => void
+  >()
+  private stdoutBuffer = ""
+  private readonly eventQueue = new EventQueue()
+  private currentPrompt: string
+
+  constructor(
+    readonly remoteAgentId: string,
+    readonly conversationId: string,
+    readonly workingDirectory: string,
+    initialPrompt: string,
+    initialThreadId: string | undefined,
+    private mcpServers: Record<string, McpServerConfig> | undefined
+  ) {
+    this.threadId = initialThreadId
+    this.currentPrompt = initialPrompt
+  }
+
+  get sessionId() {
+    return this.threadId
+  }
+
+  attach(child: ChildProcess) {
+    this.child = child
+    child.stdout?.on("data", (chunk: Buffer | string) => {
+      this.stdoutBuffer += String(chunk)
+      const { lines, remainder } = splitLines(this.stdoutBuffer)
+      this.stdoutBuffer = remainder
+      for (const line of lines) this.handleStdoutLine(line)
+    })
+    child.once("exit", (code, signal) => {
+      this.eventQueue.push({
+        kind: "error",
+        message: `codex app-server exited (code=${code ?? "?"} signal=${signal ?? "?"})`,
+      })
+      this.eventQueue.push({ kind: "turn_completed" })
+      this.eventQueue.close()
+    })
+    this.sendRequest("initialize", {
+      clientInfo: {
+        name: "synapse_remote_agent",
+        title: "Synapse Remote Agent",
+        version: "0.1.0",
+      },
+      capabilities: { experimentalApi: true },
+    })
+  }
+
+  private handleStdoutLine(line: string) {
+    const event = safeJsonParse<any>(line)
+    if (!event || typeof event !== "object") return
+
+    if (event.id && "result" in event) {
+      const requestId = String(event.id)
+      const method = this.pendingRequests.get(requestId)
+      this.pendingRequests.delete(requestId)
+      this.handleResult(method, event.result)
+      return
+    }
+
+    if (event.id && "error" in event) {
+      this.eventQueue.push({
+        kind: "error",
+        message: String(
+          event.error?.message ?? "codex app-server request failed"
+        ),
+      })
+      this.eventQueue.push({ kind: "turn_completed" })
+      return
+    }
+
+    if (typeof event.method === "string" && "id" in event) {
+      this.handleServerRequest(event.id, event.method, event.params ?? {})
+      return
+    }
+
+    if (typeof event.method === "string") {
+      this.handleServerNotification(event.method, event.params ?? {})
+    }
+  }
+
+  private handleResult(method: JsonRpcMethod | undefined, result: any) {
+    switch (method) {
+      case "initialize":
+        this.sendNotification("initialized")
+        this.sendRequest("collaborationMode/list", {})
+        if (this.threadId) {
+          this.sendRequest("thread/resume", {
+            threadId: this.threadId,
+            cwd: this.workingDirectory,
+            approvalPolicy: "never",
+            config: defaultThreadConfig(),
+          })
+        } else {
+          this.sendRequest("thread/start", {
+            cwd: this.workingDirectory,
+            approvalPolicy: "never",
+            sandbox: "danger-full-access",
+            config: defaultThreadConfig(),
+          })
+        }
+        break
+      case "collaborationMode/list":
+        // no-op; we just need it acked
+        break
+      case "thread/start":
+      case "thread/resume": {
+        const thread = result?.thread
+        const threadId =
+          typeof thread?.id === "string"
+            ? thread.id
+            : typeof thread?.threadId === "string"
+              ? thread.threadId
+              : this.threadId
+        if (threadId && threadId !== this.threadId) {
+          this.threadId = threadId
+          this.eventQueue.push({ kind: "session_started", sessionId: threadId })
+        }
+        if (typeof result?.model === "string") {
+          this.currentModel = result.model
+        }
+        this.startTurn(this.currentPrompt)
+        break
+      }
+      case "turn/start":
+        // ack only; turn lifecycle comes via notifications.
+        break
+      default:
+        break
+    }
+  }
+
+  private handleServerNotification(method: string, params: any) {
+    switch (method) {
+      case "thread/started": {
+        const threadId =
+          typeof params?.thread?.id === "string" ? params.thread.id : undefined
+        if (threadId && threadId !== this.threadId) {
+          this.threadId = threadId
+          this.eventQueue.push({ kind: "session_started", sessionId: threadId })
+        }
+        break
+      }
+      case "turn/plan/updated":
+        this.eventQueue.push({
+          kind: "plan_updated",
+          explanation:
+            typeof params?.explanation === "string"
+              ? params.explanation
+              : undefined,
+          plan: Array.isArray(params?.plan)
+            ? params.plan
+                .map((step: any) => ({
+                  step: String(step?.step ?? ""),
+                  status: String(step?.status ?? "pending"),
+                }))
+                .filter((step: { step: string }) => Boolean(step.step))
+            : [],
+        })
+        break
+      case "turn/completed":
+        if (params?.turn?.error?.message) {
+          this.eventQueue.push({
+            kind: "error",
+            message: String(params.turn.error.message),
+          })
+        }
+        this.eventQueue.push({ kind: "turn_completed" })
+        break
+      default:
+        break
+    }
+  }
+
+  private handleServerRequest(
+    id: string | number,
+    method: string,
+    params: any
+  ) {
+    if (method === "item/tool/requestUserInput") {
+      const requestId = `codex-req-${String(id)}`
+      this.pendingPermissions.set(requestId, (decision) => {
+        if (decision.behavior === "allow") {
+          writeJsonLine(this.child, {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              answers:
+                (decision.updatedInput?.answers as
+                  | Record<string, unknown>
+                  | undefined) ?? {},
+            },
+          })
+        } else {
+          writeJsonLine(this.child, {
+            jsonrpc: "2.0",
+            id,
+            error: { code: -32000, message: decision.message },
+          })
+        }
+      })
+      this.eventQueue.push({
+        kind: "user_input_requested",
+        requestId,
+        title:
+          (params?.questions?.[0]?.question as string | undefined)?.trim() ||
+          "Question from Codex",
+        questions: Array.isArray(params?.questions)
+          ? (params.questions as Array<Record<string, unknown>>)
+          : [],
+      })
+      return
+    }
+    if (
+      method === "item/commandExecution/requestApproval" ||
+      method === "item/fileChange/requestApproval" ||
+      method === "item/permissions/requestApproval"
+    ) {
+      writeJsonLine(this.child, {
+        jsonrpc: "2.0",
+        id,
+        result: { decision: "accept" },
+      })
+      return
+    }
+    if (method === "mcpServer/elicitation/request") {
+      writeJsonLine(this.child, {
+        jsonrpc: "2.0",
+        id,
+        result: { action: "cancel", content: null },
+      })
+      return
+    }
+  }
+
+  private sendRequest(method: JsonRpcMethod, params: Record<string, unknown>) {
+    const id = `req-${++this.requestSeq}`
+    this.pendingRequests.set(id, method)
+    writeJsonLine(this.child, { jsonrpc: "2.0", id, method, params })
+  }
+
+  private sendNotification(method: string, params?: Record<string, unknown>) {
+    writeJsonLine(this.child, {
+      jsonrpc: "2.0",
+      method,
+      ...(params ? { params } : {}),
+    })
+  }
+
+  private startTurn(prompt: string) {
+    if (!this.threadId) return
+    this.currentPrompt = prompt
+    this.sendRequest("turn/start", {
+      threadId: this.threadId,
+      input: [{ type: "text", text: prompt }],
+      cwd: this.workingDirectory,
+      approvalPolicy: "never",
+      sandboxPolicy: { type: "dangerFullAccess" },
+      collaborationMode: {
+        mode: "default",
+        settings: {
+          model: this.currentModel || "gpt-5.4",
+          reasoning_effort: null,
+          developer_instructions: null,
+        },
+      },
+    })
+  }
+
+  async send(prompt: string, _options?: SendPromptOptions) {
+    if (!prompt.trim() || !this.threadId) {
+      this.currentPrompt = prompt
+      return
+    }
+    this.startTurn(prompt)
+  }
+
+  async setMcpServers(servers: Record<string, McpServerConfig>) {
+    // Codex app-server has no runtime setMcpServers RPC; reconfiguring requires
+    // a fresh process. Stash the desired config so a future Phase 4b restart hook
+    // can honor it without a contract change.
+    this.mcpServers = servers
+  }
+
+  async respondPermission(
+    requestId: string,
+    decision: PermissionDecision
+  ): Promise<void> {
+    const waiter = this.pendingPermissions.get(requestId)
+    if (!waiter) {
+      throw new Error(`No pending permission request with id ${requestId}`)
+    }
+    this.pendingPermissions.delete(requestId)
+    waiter(decision)
+  }
+
+  events(): AsyncIterable<AgentSessionEvent> {
+    return this.eventQueue.iterator()
+  }
+
+  async close(_reason: string) {
+    this.eventQueue.close()
+    for (const [id, waiter] of this.pendingPermissions) {
+      waiter({ behavior: "deny", message: "session closed" })
+      this.pendingPermissions.delete(id)
+    }
+    if (this.child && this.child.exitCode === null && !this.child.killed) {
+      try {
+        this.child.kill()
+      } catch {
+        // ignore
+      }
+    }
+    this.child = null
+  }
+}
+
+export class CodexDriver implements AgentDriver {
+  readonly runtimeKind = "codex" as const
+
+  detect(): RuntimeCatalogEntry {
+    const probe = detectCodexBinary()
+    if (!probe.path) {
+      return { runtimeKind: this.runtimeKind, status: "missing_binary" }
+    }
+    return {
+      runtimeKind: this.runtimeKind,
+      executablePath: probe.path,
+      status: "available",
+      version: probe.version,
+    }
+  }
+
+  async createSession(spec: SessionSpec): Promise<AgentSession> {
+    const gitDirectory = path.join(spec.workingDirectory, ".git")
+    if (!existsSync(gitDirectory)) {
+      execSync("git init", {
+        cwd: spec.workingDirectory,
+        stdio: ["ignore", "pipe", "pipe"],
+      })
+      execSync('git add -A && git commit --allow-empty -m "init"', {
+        cwd: spec.workingDirectory,
+        stdio: ["ignore", "pipe", "pipe"],
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: "synapse",
+          GIT_AUTHOR_EMAIL: "synapse@local",
+          GIT_COMMITTER_NAME: "synapse",
+          GIT_COMMITTER_EMAIL: "synapse@local",
+        },
+      })
+    }
+
+    const runtimePath = spec.runtimePath || detectCodexBinary().path || "codex"
+    const isWindowsJsEntry =
+      process.platform === "win32" && runtimePath.endsWith(".js")
+
+    const mcpFlags = mcpServerConfigToCodexFlags(spec.mcpServers)
+    const args = ["app-server", "--listen", "stdio://", ...mcpFlags]
+
+    const child = isWindowsJsEntry
+      ? spawn(process.execPath, [runtimePath, ...args], {
+          cwd: spec.workingDirectory,
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            ...spec.childEnvOverlay,
+            FORCE_COLOR: "0",
+            NO_COLOR: "1",
+          },
+        })
+      : spawn(runtimePath, args, {
+          cwd: spec.workingDirectory,
+          stdio: ["pipe", "pipe", "pipe"],
+          env: {
+            ...process.env,
+            ...spec.childEnvOverlay,
+            FORCE_COLOR: "0",
+            NO_COLOR: "1",
+          },
+          shell: process.platform === "win32",
+        })
+
+    const session = new CodexAgentSession(
+      spec.remoteAgentId,
+      spec.conversationId,
+      spec.workingDirectory,
+      spec.initialPrompt,
+      spec.resumeSessionId,
+      spec.mcpServers
+    )
+    session.attach(child)
+    return session
+  }
+}

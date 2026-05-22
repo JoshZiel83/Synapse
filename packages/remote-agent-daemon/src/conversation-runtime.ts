@@ -1,0 +1,263 @@
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import path from "node:path"
+import { getDriver } from "./drivers/registry.js"
+import { buildAgentChildEnv } from "./drivers/proxy-env.js"
+import type {
+  AgentSession,
+  AgentSessionEvent,
+  PermissionDecision,
+  RuntimeKind,
+} from "./drivers/types.js"
+
+export type ConversationRuntimeCallbacks = {
+  onSessionStarted(conversationId: string, sessionId: string): void
+  onTurnCompleted(conversationId: string): void
+  onError(conversationId: string, message: string): void
+  onUserInputRequested(
+    conversationId: string,
+    event: Extract<AgentSessionEvent, { kind: "user_input_requested" }>
+  ): Promise<void>
+  onPlanApprovalRequested(
+    conversationId: string,
+    event: Extract<AgentSessionEvent, { kind: "plan_approval_requested" }>
+  ): Promise<void>
+  onPlanUpdated(
+    conversationId: string,
+    event: Extract<AgentSessionEvent, { kind: "plan_updated" }>
+  ): void
+  onAssistantMessage(conversationId: string, text: string): void
+  onClosed(conversationId: string, reason: string): void
+}
+
+export type ConversationRuntimeSpec = {
+  remoteAgentId: string
+  conversationId: string
+  runtimeKind: RuntimeKind
+  runtimePath?: string
+  rootDirectory: string
+  localRootPath?: string
+  chatBridgePath: string
+  serverUrl: string
+  machineKey: string
+  proxyEnabled?: boolean
+  proxyUrl?: string
+  resumeSessionId?: string
+  initialPrompt: string
+  callbacks: ConversationRuntimeCallbacks
+}
+
+function ensureDirectory(dir: string) {
+  mkdirSync(dir, { recursive: true })
+}
+
+export type BridgeStateView = {
+  lastConversationId?: string
+  lastToolName?: string
+  updatedAt?: string
+}
+
+export function readBridgeState(filePath: string): BridgeStateView {
+  try {
+    if (!filePath || !existsSync(filePath)) return {}
+    const raw = readFileSync(filePath, "utf8").trim()
+    if (!raw) return {}
+    const parsed = JSON.parse(raw)
+    if (!parsed || typeof parsed !== "object") return {}
+    return {
+      lastConversationId:
+        typeof parsed.lastConversationId === "string"
+          ? parsed.lastConversationId
+          : undefined,
+      lastToolName:
+        typeof parsed.lastToolName === "string"
+          ? parsed.lastToolName
+          : undefined,
+      updatedAt:
+        typeof parsed.updatedAt === "string" ? parsed.updatedAt : undefined,
+    }
+  } catch {
+    return {}
+  }
+}
+
+export class ConversationRuntime {
+  private session: AgentSession | null = null
+  private currentSessionId: string | undefined
+  private starting: Promise<void> | null = null
+  private closed = false
+  readonly workingDirectory: string
+  readonly bridgeStateFile: string
+  readonly conversationDirectory: string
+
+  constructor(private readonly spec: ConversationRuntimeSpec) {
+    this.currentSessionId = spec.resumeSessionId
+    this.conversationDirectory = path.join(
+      spec.rootDirectory,
+      "conversations",
+      spec.conversationId
+    )
+    this.workingDirectory =
+      spec.localRootPath ?? path.join(this.conversationDirectory, "workspace")
+    this.bridgeStateFile = path.join(
+      this.conversationDirectory,
+      "bridge-state.json"
+    )
+    ensureDirectory(this.conversationDirectory)
+    ensureDirectory(this.workingDirectory)
+  }
+
+  get conversationId() {
+    return this.spec.conversationId
+  }
+
+  get remoteAgentId() {
+    return this.spec.remoteAgentId
+  }
+
+  get runtimeKind() {
+    return this.spec.runtimeKind
+  }
+
+  get sessionId() {
+    return this.currentSessionId
+  }
+
+  /** Start (or restart) the underlying AgentSession. Subsequent calls are no-ops if a session is alive. */
+  async ensureStarted(initialPrompt?: string) {
+    if (this.session) return
+    if (this.starting) return this.starting
+    this.starting = this.startInternal(
+      initialPrompt ?? this.spec.initialPrompt
+    ).finally(() => {
+      this.starting = null
+    })
+    await this.starting
+  }
+
+  private async startInternal(initialPrompt: string) {
+    if (this.closed) return
+    const driver = getDriver(this.spec.runtimeKind)
+    const childEnvOverlay = buildAgentChildEnv({
+      enabled: this.spec.proxyEnabled,
+      proxyUrl: this.spec.proxyUrl,
+    })
+    const mcpServers = this.buildStdioBridgeMcpServers()
+    const session = await driver.createSession({
+      remoteAgentId: this.spec.remoteAgentId,
+      conversationId: this.spec.conversationId,
+      workingDirectory: this.workingDirectory,
+      resumeSessionId: this.currentSessionId,
+      runtimePath: this.spec.runtimePath,
+      mcpServers,
+      initialPrompt,
+      childEnvOverlay,
+    })
+    this.session = session
+    void this.drainEvents(session)
+  }
+
+  private buildStdioBridgeMcpServers() {
+    return {
+      chat: {
+        type: "stdio" as const,
+        command: process.execPath,
+        args: [
+          this.spec.chatBridgePath,
+          "--remote-agent-id",
+          this.spec.remoteAgentId,
+          "--server-url",
+          this.spec.serverUrl,
+          "--machine-key",
+          this.spec.machineKey,
+          "--state-file",
+          this.bridgeStateFile,
+        ],
+      },
+    }
+  }
+
+  private async drainEvents(session: AgentSession) {
+    for await (const event of session.events()) {
+      if (this.closed) return
+      try {
+        switch (event.kind) {
+          case "session_started":
+            if (this.currentSessionId !== event.sessionId) {
+              this.currentSessionId = event.sessionId
+              this.spec.callbacks.onSessionStarted(
+                this.spec.conversationId,
+                event.sessionId
+              )
+            }
+            break
+          case "assistant_message":
+            this.spec.callbacks.onAssistantMessage(
+              this.spec.conversationId,
+              event.text
+            )
+            break
+          case "user_input_requested":
+            await this.spec.callbacks.onUserInputRequested(
+              this.spec.conversationId,
+              event
+            )
+            break
+          case "plan_approval_requested":
+            await this.spec.callbacks.onPlanApprovalRequested(
+              this.spec.conversationId,
+              event
+            )
+            break
+          case "plan_updated":
+            this.spec.callbacks.onPlanUpdated(this.spec.conversationId, event)
+            break
+          case "turn_completed":
+            this.spec.callbacks.onTurnCompleted(this.spec.conversationId)
+            break
+          case "error":
+            this.spec.callbacks.onError(this.spec.conversationId, event.message)
+            break
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        this.spec.callbacks.onError(this.spec.conversationId, message)
+      }
+    }
+  }
+
+  async sendPrompt(prompt: string) {
+    if (this.closed) return
+    if (!this.session) {
+      await this.ensureStarted(prompt)
+      return
+    }
+    await this.session.send(prompt)
+  }
+
+  async respondPermission(requestId: string, decision: PermissionDecision) {
+    if (!this.session) {
+      throw new Error("Cannot respond to permission: session not active")
+    }
+    await this.session.respondPermission(requestId, decision)
+  }
+
+  async setMcpServers(servers: Parameters<AgentSession["setMcpServers"]>[0]) {
+    if (!this.session) return
+    await this.session.setMcpServers(servers)
+  }
+
+  async close(reason: string) {
+    if (this.closed) return
+    this.closed = true
+    const session = this.session
+    this.session = null
+    if (session) {
+      try {
+        await session.close(reason)
+      } catch {
+        // ignore
+      }
+    }
+    this.spec.callbacks.onClosed(this.spec.conversationId, reason)
+  }
+}
