@@ -1293,23 +1293,13 @@ class ApiClient {
   }
 
   // Actor lanes
-  createSession(
-    wsId: string,
-    actorId: string,
-    content: string,
-    channelType?: string
-  ) {
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/sessions`, {
-      method: "POST",
-      body: JSON.stringify({ content, channelType: channelType || "web" }),
-    })
-  }
-  sendSessionMessage(wsId: string, sessionId: string, content: string) {
-    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/messages`, {
-      method: "POST",
-      body: JSON.stringify({ content }),
-    })
-  }
+  // NOTE: createSession + sendSessionMessage were removed in the
+  // canonical-content-blocks refactor. They sent {content: string} but the
+  // session controller requires {contentBlocks: CanonicalContentBlock[]},
+  // so they would have failed Zod validation at runtime. There were no
+  // callers anywhere in web-next. If you need to programmatically create
+  // sessions from the FE, build a proper helper that constructs
+  // CanonicalContentBlock[] via composer/textBlocks and posts it.
   getSession(wsId: string, sessionId: string) {
     return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}`)
   }

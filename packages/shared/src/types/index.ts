@@ -1502,6 +1502,14 @@ export interface SessionInterrupt {
 
 export interface ActorAction {
   type: "respond" | "create_memory" | "rename_self" | "change_avatar"
+  /**
+   * Derived plaintext snapshot of the action body — computed from
+   * `contentBlocks` via `extractText(...)`. Treat as read-only; new
+   * code should write to `contentBlocks` and let the API recompute
+   * `content` at the boundary. Persisted on the wire for legacy
+   * consumers (e.g. analytics that don't understand blocks) but
+   * MUST NOT be the source of truth.
+   */
   content: string
   contentBlocks?: CanonicalContentBlock[]
   targetActorId?: UUID
@@ -3831,6 +3839,13 @@ export interface ConversationFeedMessageItem {
   replyToItemId?: UUID
   replyTo?: ConversationReplyRef
   restrictedAudience?: ConversationEntityRef[]
+  /**
+   * Derived plaintext snapshot of the message — produced by the API via
+   * `extractText(contentBlocks)`. Treat as read-only on the consumer side;
+   * `contentBlocks` is the source of truth (carries file_ref / mention
+   * structure that `content` cannot represent). Do not mutate `content`
+   * independently of `contentBlocks`.
+   */
   content: string
   contentBlocks: CanonicalContentBlock[]
   metadata: Record<string, unknown>
@@ -4260,6 +4275,11 @@ interface ChatConversationItemBase {
   replyToItemId?: UUID
   replyTo?: ConversationReplyRef
   causedByItemId?: UUID
+  /**
+   * Derived plaintext snapshot of the item — produced by the API via
+   * `extractText(contentBlocks)`. Treat as read-only; `contentBlocks` is
+   * authoritative. Do not mutate `content` without rebuilding the blocks.
+   */
   content: string
   contentBlocks: CanonicalContentBlock[]
   metadata: Record<string, unknown>

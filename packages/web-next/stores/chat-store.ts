@@ -851,7 +851,21 @@ function outboxEntryToMessage(
 
 function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
   if (item.itemType === "event") {
-    const content = summarizeConversationEvent(item.subtype, item.eventPayload)
+    // The API has already rendered authoritative contentBlocks for the
+    // event (see event-registry.ts renderTimeline). Pass them through
+    // verbatim — re-deriving via summarizeConversationEvent loses any
+    // file_ref / mention structure the API attached. The plain `content`
+    // string is kept as a display-only derivation for legacy consumers.
+    const blocks =
+      Array.isArray(item.contentBlocks) && item.contentBlocks.length > 0
+        ? item.contentBlocks
+        : textBlocks(
+            summarizeConversationEvent(item.subtype, item.eventPayload)
+          )
+    const content =
+      typeof item.content === "string" && item.content.length > 0
+        ? item.content
+        : summarizeConversationEvent(item.subtype, item.eventPayload)
     const interaction =
       item.subtype === "interaction_requested" &&
       item.eventPayload &&
@@ -869,7 +883,7 @@ function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
       role: "system",
       messageType: item.subtype,
       content,
-      contentBlocks: textBlocks(content),
+      contentBlocks: blocks,
       author: item.author,
       fromActorId: item.author?.actorId,
       fromWorkspaceMemberId: item.author?.workspaceMemberId,
