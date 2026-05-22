@@ -686,6 +686,33 @@ export class ChatRuntime {
     await this.flushOutbox()
   }
 
+  /**
+   * Reset a retrying/failed outbox entry's attempt count and immediately
+   * re-attempt the flush. Used by the manual "retry" button.
+   */
+  async retryMessage(clientMessageId: string) {
+    const current = this.state.snapshot
+    if (!current) return
+    const entry = current.outbox[clientMessageId]
+    if (!entry) return
+
+    this.updateSnapshot((snapshotValue) => ({
+      ...snapshotValue,
+      outbox: {
+        ...snapshotValue.outbox,
+        [clientMessageId]: {
+          ...entry,
+          status: "sending",
+          attemptCount: 0,
+          firstFailedAt: undefined,
+          lastErrorMessage: undefined,
+        },
+      },
+    }))
+
+    await this.flushOutbox()
+  }
+
   async createConversation(input: {
     workspaceId?: string
     kind: "group" | "private" | "virtual"

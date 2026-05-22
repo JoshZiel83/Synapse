@@ -77,6 +77,7 @@ interface ChatContextValue {
     conversationId: string,
     input: ChatComposerSendPayload
   ) => Promise<void>
+  retryMessage: (clientMessageId: string) => Promise<void>
   respondInteraction: (
     conversationId: string,
     interactionId: string,
@@ -389,6 +390,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     []
   )
 
+  const retryMessage = useCallback(
+    (clientMessageId: string) => chatRuntime.retryMessage(clientMessageId),
+    []
+  )
+
   const respondInteraction = useCallback(
     async (
       conversationId: string,
@@ -444,6 +450,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       loadOlderMessages,
       markConversationRead,
       sendMessage,
+      retryMessage,
       respondInteraction,
       createConversation,
       clearLocalState,
@@ -463,6 +470,7 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       refreshConversation,
       refreshInbox,
       respondInteraction,
+      retryMessage,
       runtimeState.error,
       runtimeState.snapshot?.clientInstanceId,
       runtimeState.snapshot?.workspaceMemberId,

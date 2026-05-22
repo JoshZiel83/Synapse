@@ -59,6 +59,7 @@ export default function ChatDetailScreen() {
     markConversationRead,
     refreshConversation,
     respondInteraction,
+    retryMessage,
     sendMessage,
     status,
     clientInstanceId,
@@ -288,9 +289,10 @@ export default function ChatDetailScreen() {
                   })
               : undefined
           }
+          onRetry={retryMessage}
         />
       )),
-    [conversation, items, respondInteraction, viewerParticipantId]
+    [conversation, items, respondInteraction, retryMessage, viewerParticipantId]
   )
 
   async function handleRefresh() {

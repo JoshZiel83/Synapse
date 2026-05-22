@@ -272,6 +272,7 @@ export function MessageItem({
   viewerParticipantId,
   onResolveInteraction,
   onLongPress,
+  onRetry,
 }: {
   item: MobileChatItem
   viewerParticipantId?: string
@@ -280,6 +281,8 @@ export function MessageItem({
     input: ChatInteractionResolveInput
   ) => Promise<InteractionRequestSummary>
   onLongPress?: (event: GestureResponderEvent) => void
+  /** Invoked when the user taps "Retry" on a failed outbox entry. */
+  onRetry?: (clientMessageId: string) => void
 }) {
   if (item.itemType === "event") {
     const interaction =
@@ -384,6 +387,25 @@ export function MessageItem({
             >
               {localDeliveryStatus === "retrying" ? "待重试" : "发送中"}
             </Text>
+          ) : null}
+          {localDeliveryStatus === "retrying" &&
+          onRetry &&
+          item.localOnly &&
+          item.clientMessageId ? (
+            <Pressable
+              onPress={() => onRetry(item.clientMessageId!)}
+              hitSlop={6}
+            >
+              <Text
+                style={[
+                  styles.deliveryStatus,
+                  mine && styles.deliveryStatusMine,
+                  styles.retryButton,
+                ]}
+              >
+                重试
+              </Text>
+            </Pressable>
           ) : null}
           <Text style={[styles.timestamp, mine && styles.timestampMine]}>
             {formatTimestamp(item.createdAt)}
@@ -545,6 +567,10 @@ const styles = StyleSheet.create({
   },
   deliveryStatusMine: {
     color: theme.colors.primary,
+  },
+  retryButton: {
+    color: theme.colors.primary,
+    textDecorationLine: "underline",
   },
   imageAttachment: {
     width: 220,
