@@ -40,6 +40,30 @@ const hookSubscribers = new Map<string, HookSubscriber>()
 let sharedSocket: WebSocket | null = null
 let sharedReconnectTimer: ReturnType<typeof setTimeout> | null = null
 let sharedReconnectAttempts = 0
+const MAX_RECONNECT_ATTEMPTS = 20
+const PING_WATCHDOG_MS = 45_000
+let pingWatchdogTimer: ReturnType<typeof setTimeout> | null = null
+
+function clearPingWatchdog() {
+  if (pingWatchdogTimer) {
+    clearTimeout(pingWatchdogTimer)
+    pingWatchdogTimer = null
+  }
+}
+
+function resetPingWatchdog() {
+  clearPingWatchdog()
+  pingWatchdogTimer = setTimeout(() => {
+    // No ping from server in 45s — close so onclose triggers a reconnect.
+    if (sharedSocket && sharedSocket.readyState === sharedSocket.OPEN) {
+      try {
+        sharedSocket.close()
+      } catch {
+        // ignore
+      }
+    }
+  }, PING_WATCHDOG_MS)
+}
 let sharedAuthenticated = false
 let sharedSentSubscriptions = new Map<string, string>()
 let sharedActiveToken: string | null = null
@@ -196,6 +220,7 @@ function ensureSharedSocket() {
         sharedAuthenticated = true
         syncSharedSubscriptions()
         dispatchConnected()
+        resetPingWatchdog()
         return
       }
 
@@ -206,6 +231,7 @@ function ensureSharedSocket() {
 
       if (normalizedType === "ping") {
         socket.send(JSON.stringify({ type: "pong" }))
+        resetPingWatchdog()
         return
       }
 
@@ -219,8 +245,16 @@ function ensureSharedSocket() {
     sharedAuthenticated = false
     sharedSentSubscriptions.clear()
     sharedSocket = null
+    clearPingWatchdog()
 
     if (!getSharedToken()) {
+      return
+    }
+
+    if (sharedReconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+      // Match the web client's 20-attempt cap: stop trying so a stale token
+      // doesn't cause endless retries. A fresh auth flow will reset the
+      // counter by calling resetSharedReconnect().
       return
     }
 

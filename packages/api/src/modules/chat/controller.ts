@@ -35,6 +35,10 @@ import {
   addChatConversationParticipants,
   removeChatConversationParticipant,
   leaveChatConversation,
+  registerChatPushToken,
+  listChatPushTokens,
+  deleteChatPushToken,
+  broadcastTypingState,
 } from "./service.js"
 import {
   canUserViewInteraction,
@@ -161,6 +165,17 @@ const removeParticipantParamsSchema = z.object({
   workspaceId: chatUuidSchema,
   conversationId: chatUuidSchema,
   participantId: chatUuidSchema,
+})
+
+const pushTokenSchema = z.object({
+  platform: z.enum(["ios", "android", "web"]),
+  token: z.string().trim().min(1).max(2048),
+  deviceLabel: z.string().trim().min(1).max(255).optional(),
+  metadata: jsonRecordSchema,
+})
+
+const typingSchema = z.object({
+  state: z.enum(["started", "stopped"]),
 })
 
 const syncQuerySchema = z.object({
@@ -736,4 +751,83 @@ export default async function chatController(app: FastifyInstance) {
       }
     }
   )
+
+  // ====== Stage 7: typing + push token registration ======
+
+  app.post<{
+    Params: { workspaceId: string; conversationId: string }
+  }>(
+    `${CHAT_BASE_PATH}/conversations/:conversationId/typing`,
+    async (request, reply) => {
+      try {
+        const params = chatConversationParamsSchema.parse(request.params)
+        const body = typingSchema.parse(request.body)
+        const response = await broadcastTypingState({
+          workspaceId: params.workspaceId,
+          userId: getRequestUserId(request),
+          conversationId: params.conversationId,
+          state: body.state,
+        })
+        return reply.send(response)
+      } catch (error) {
+        return replyChatError(reply, error)
+      }
+    }
+  )
+
+  app.post<{
+    Params: { workspaceId: string }
+  }>(`${CHAT_BASE_PATH}/push-tokens`, async (request, reply) => {
+    try {
+      const params = chatWorkspaceParamsSchema.parse(request.params)
+      const body = pushTokenSchema.parse(request.body)
+      const response = await registerChatPushToken({
+        workspaceId: params.workspaceId,
+        userId: getRequestUserId(request),
+        platform: body.platform,
+        token: body.token,
+        deviceLabel: body.deviceLabel,
+        metadata: body.metadata,
+      })
+      return reply.status(201).send(response)
+    } catch (error) {
+      return replyChatError(reply, error)
+    }
+  })
+
+  app.get<{
+    Params: { workspaceId: string }
+  }>(`${CHAT_BASE_PATH}/push-tokens`, async (request, reply) => {
+    try {
+      const params = chatWorkspaceParamsSchema.parse(request.params)
+      const response = await listChatPushTokens({
+        workspaceId: params.workspaceId,
+        userId: getRequestUserId(request),
+      })
+      return reply.send(response)
+    } catch (error) {
+      return replyChatError(reply, error)
+    }
+  })
+
+  app.delete<{
+    Params: { workspaceId: string; tokenId: string }
+  }>(`${CHAT_BASE_PATH}/push-tokens/:tokenId`, async (request, reply) => {
+    try {
+      const params = z
+        .object({
+          workspaceId: chatUuidSchema,
+          tokenId: chatUuidSchema,
+        })
+        .parse(request.params)
+      const response = await deleteChatPushToken({
+        workspaceId: params.workspaceId,
+        userId: getRequestUserId(request),
+        tokenId: params.tokenId,
+      })
+      return reply.send(response)
+    } catch (error) {
+      return replyChatError(reply, error)
+    }
+  })
 }

@@ -5693,3 +5693,134 @@ export async function leaveChatConversation(params: {
     participantId: access.participant.id,
   })
 }
+
+// ============ Stage 7: push tokens + typing ============
+
+export interface ChatPushTokenRow {
+  id: string
+  workspaceMemberId: string
+  platform: "ios" | "android" | "web"
+  token: string
+  deviceLabel: string | null
+  createdAt: string
+  lastSeenAt: string
+}
+
+function mapPushTokenRow(row: Record<string, unknown>): ChatPushTokenRow {
+  return {
+    id: String(row.id),
+    workspaceMemberId: String(row.workspace_member_id),
+    platform: row.platform as "ios" | "android" | "web",
+    token: String(row.token),
+    deviceLabel: (row.device_label as string | null) ?? null,
+    createdAt: toIso(row.created_at as string),
+    lastSeenAt: toIso(row.last_seen_at as string),
+  }
+}
+
+export async function registerChatPushToken(params: {
+  workspaceId: string
+  userId: string
+  platform: "ios" | "android" | "web"
+  token: string
+  deviceLabel?: string
+  metadata?: Record<string, unknown>
+}): Promise<{ token: ChatPushTokenRow }> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const result = await executeSql<Record<string, unknown>>(
+    `
+      INSERT INTO chat_push_tokens (workspace_member_id, platform, token, device_label, metadata)
+      VALUES ($1, $2, $3, $4, $5::jsonb)
+      ON CONFLICT (workspace_member_id, token)
+      DO UPDATE SET platform = EXCLUDED.platform,
+                    device_label = EXCLUDED.device_label,
+                    metadata = EXCLUDED.metadata,
+                    last_seen_at = NOW()
+      RETURNING id, workspace_member_id, platform, token, device_label,
+                created_at, last_seen_at
+    `,
+    [
+      identity.workspaceMemberId,
+      params.platform,
+      params.token,
+      params.deviceLabel ?? null,
+      JSON.stringify(params.metadata ?? {}),
+    ]
+  )
+  const row = result.rows[0]
+  if (!row) throw new Error("Failed to register push token")
+  return { token: mapPushTokenRow(row) }
+}
+
+export async function listChatPushTokens(params: {
+  workspaceId: string
+  userId: string
+}): Promise<{ tokens: ChatPushTokenRow[] }> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const result = await executeSql<Record<string, unknown>>(
+    `
+      SELECT id, workspace_member_id, platform, token, device_label,
+             created_at, last_seen_at
+      FROM chat_push_tokens
+      WHERE workspace_member_id = $1
+      ORDER BY last_seen_at DESC
+    `,
+    [identity.workspaceMemberId]
+  )
+  return { tokens: result.rows.map(mapPushTokenRow) }
+}
+
+export async function deleteChatPushToken(params: {
+  workspaceId: string
+  userId: string
+  tokenId: string
+}): Promise<{ deleted: boolean }> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const result = await executeSql<{ id: string }>(
+    `
+      DELETE FROM chat_push_tokens
+      WHERE id = $1 AND workspace_member_id = $2
+      RETURNING id
+    `,
+    [params.tokenId, identity.workspaceMemberId]
+  )
+  return { deleted: result.rows.length > 0 }
+}
+
+export async function broadcastTypingState(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  state: "started" | "stopped"
+}): Promise<{ broadcast: boolean }> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  await requireConversationAccess(
+    rootQueryable(),
+    params.conversationId,
+    identity.workspaceMemberId
+  )
+  // Fan out via the event bus. Subscribers (WS bridge) will publish to other
+  // participants. Typing is intentionally ephemeral — no DB persistence.
+  const { emitEvent } = await import("../../infrastructure/events/index.js")
+  await emitEvent({
+    type: "chat.typing",
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId,
+    fromWorkspaceMemberId: identity.workspaceMemberId,
+    state: params.state,
+    occurredAt: new Date().toISOString(),
+  } as never)
+  return { broadcast: true }
+}

@@ -7,9 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION = "2026-04-06-01"
+const CURRENT_SCHEMA_VERSION = "2026-05-22-s7"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "canonicalize interaction revisions, commands, and replayable sync events"
+  "add chat_push_tokens for S7 push notification token registration"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

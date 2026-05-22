@@ -3570,3 +3570,19 @@ CREATE INDEX idx_relay_authorization_grants_actor
   ON relay_authorization_grants(actor_id, relay_capability_id, status, created_at DESC);
 CREATE INDEX idx_relay_authorization_grants_conversation
   ON relay_authorization_grants(conversation_id, relay_capability_id, status, created_at DESC);
+
+-- ============ Chat push notification tokens (S7) ============
+CREATE TABLE IF NOT EXISTS chat_push_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL CHECK (platform IN ('ios','android','web')),
+  token TEXT NOT NULL,
+  device_label TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (workspace_member_id, token)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_push_tokens_workspace_member
+  ON chat_push_tokens(workspace_member_id);

@@ -1466,6 +1466,43 @@ class ApiClient {
     )
   }
 
+  sendChatTypingState(
+    workspaceId: string,
+    conversationId: string,
+    state: "started" | "stopped"
+  ) {
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/typing`,
+      { method: "POST", body: JSON.stringify({ state }) }
+    )
+  }
+
+  registerChatPushToken(
+    workspaceId: string,
+    input: {
+      platform: "ios" | "android" | "web"
+      token: string
+      deviceLabel?: string
+      metadata?: Record<string, unknown>
+    }
+  ) {
+    return this.fetch(`/workspaces/${workspaceId}/chat/push-tokens`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  listChatPushTokens(workspaceId: string) {
+    return this.fetch(`/workspaces/${workspaceId}/chat/push-tokens`)
+  }
+
+  deleteChatPushToken(workspaceId: string, tokenId: string) {
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/push-tokens/${tokenId}`,
+      { method: "DELETE" }
+    )
+  }
+
   resolveChatInteraction(
     workspaceId: string,
     threadId: string,

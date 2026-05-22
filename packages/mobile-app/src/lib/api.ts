@@ -626,6 +626,47 @@ class ApiClient {
     )
   }
 
+  sendChatTypingState(
+    workspaceId: string,
+    conversationId: string,
+    state: "started" | "stopped"
+  ) {
+    return this.request<{ broadcast: boolean }>(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/typing`,
+      { method: "POST", body: JSON.stringify({ state }) }
+    )
+  }
+
+  registerChatPushToken(
+    workspaceId: string,
+    input: {
+      platform: "ios" | "android" | "web"
+      token: string
+      deviceLabel?: string
+      metadata?: Record<string, unknown>
+    }
+  ) {
+    return this.request<{
+      token: { id: string; platform: string; createdAt: string }
+    }>(`/workspaces/${workspaceId}/chat/push-tokens`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  listChatPushTokens(workspaceId: string) {
+    return this.request<{ tokens: Array<{ id: string; platform: string }> }>(
+      `/workspaces/${workspaceId}/chat/push-tokens`
+    )
+  }
+
+  deleteChatPushToken(workspaceId: string, tokenId: string) {
+    return this.request<{ deleted: boolean }>(
+      `/workspaces/${workspaceId}/chat/push-tokens/${tokenId}`,
+      { method: "DELETE" }
+    )
+  }
+
   async uploadAsset(
     workspaceId: string,
     asset: UploadAssetInput,
