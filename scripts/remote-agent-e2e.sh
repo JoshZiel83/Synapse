@@ -68,21 +68,18 @@ probe_free_port() {
   exit 1
 }
 
-load_or_assign_ports() {
+load_state() {
   if [ -f "$STATE_FILE" ]; then
     # shellcheck disable=SC1090
     . "$STATE_FILE"
+    export RAE_POSTGRES_PORT RAE_REDIS_PORT RAE_API_PORT \
+      RAE_WORKSPACE_ID RAE_REMOTE_AGENT_ID RAE_MACHINE_ID SYNAPSE_MACHINE_KEY
+    return 0
   fi
-  if [ -z "${RAE_POSTGRES_PORT:-}" ] || ! is_port_free "$RAE_POSTGRES_PORT"; then
-    RAE_POSTGRES_PORT=$(probe_free_port 55000 55999)
-  fi
-  if [ -z "${RAE_REDIS_PORT:-}" ] || ! is_port_free "$RAE_REDIS_PORT"; then
-    RAE_REDIS_PORT=$(probe_free_port 56000 56999)
-  fi
-  if [ -z "${RAE_API_PORT:-}" ] || ! is_port_free "$RAE_API_PORT"; then
-    RAE_API_PORT=$(probe_free_port 53000 53999)
-  fi
-  export RAE_POSTGRES_PORT RAE_REDIS_PORT RAE_API_PORT
+  return 1
+}
+
+persist_state() {
   cat >"$STATE_FILE" <<EOF
 RAE_STACK_ID=$RAE_STACK_ID
 RAE_POSTGRES_PORT=$RAE_POSTGRES_PORT
@@ -101,6 +98,33 @@ EOF
   if [ -n "${RAE_MACHINE_ID:-}" ]; then
     printf 'RAE_MACHINE_ID=%s\n' "$RAE_MACHINE_ID" >>"$STATE_FILE"
   fi
+}
+
+require_state() {
+  if ! load_state; then
+    echo "No state file for stack '$RAE_STACK_ID' at $STATE_FILE; run 'bash $0 up' first" >&2
+    exit 1
+  fi
+  : "${RAE_POSTGRES_PORT:?missing RAE_POSTGRES_PORT in state}"
+  : "${RAE_REDIS_PORT:?missing RAE_REDIS_PORT in state}"
+  : "${RAE_API_PORT:?missing RAE_API_PORT in state}"
+}
+
+assign_fresh_ports() {
+  # Only called by `up`. Preserves saved values if they're still free, otherwise
+  # probes a free range.
+  load_state || true
+  if [ -z "${RAE_POSTGRES_PORT:-}" ] || ! is_port_free "$RAE_POSTGRES_PORT"; then
+    RAE_POSTGRES_PORT=$(probe_free_port 55000 55999)
+  fi
+  if [ -z "${RAE_REDIS_PORT:-}" ] || ! is_port_free "$RAE_REDIS_PORT"; then
+    RAE_REDIS_PORT=$(probe_free_port 56000 56999)
+  fi
+  if [ -z "${RAE_API_PORT:-}" ] || ! is_port_free "$RAE_API_PORT"; then
+    RAE_API_PORT=$(probe_free_port 53000 53999)
+  fi
+  export RAE_POSTGRES_PORT RAE_REDIS_PORT RAE_API_PORT
+  persist_state
   printf 'stack=%s postgres=%s redis=%s api=%s state=%s\n' \
     "$RAE_STACK_ID" "$RAE_POSTGRES_PORT" "$RAE_REDIS_PORT" "$RAE_API_PORT" "$STATE_FILE"
 }
@@ -157,7 +181,7 @@ bootstrap_schema() {
 }
 
 cmd_up() {
-  load_or_assign_ports
+  assign_fresh_ports
   ensure_machine_key
   compose build rae-api rae-daemon
   compose up -d rae-postgres rae-redis
@@ -173,7 +197,7 @@ cmd_up() {
 }
 
 cmd_logs() {
-  load_or_assign_ports
+  require_state
   compose logs --tail=200 "$@"
 }
 
@@ -181,17 +205,17 @@ api_login() {
   require_jq
   curl -fsS -X POST "http://127.0.0.1:$RAE_API_PORT/api/v1/auth/login" \
     -H "content-type: application/json" \
-    -d '{"email":"demo@synapse.dev","password":"demo1234","transport":"bearer"}'
+    -d '{"email":"demo@synapse.dev","password":"demo1234","transport":"token"}'
 }
 
 cmd_seed() {
-  load_or_assign_ports
+  require_state
   require_jq
   echo "Logging in as demo@synapse.dev…"
   local login_resp
   login_resp=$(api_login)
   local token
-  token=$(printf '%s' "$login_resp" | jq -r '.session.accessToken // .accessToken // empty')
+  token=$(printf '%s' "$login_resp" | jq -r '.sessionToken // empty')
   if [ -z "$token" ] || [ "$token" = "null" ]; then
     echo "login failed: $login_resp" >&2
     exit 1
@@ -202,7 +226,7 @@ cmd_seed() {
   workspaces_resp=$(curl -fsS -H "authorization: Bearer $token" \
     "http://127.0.0.1:$RAE_API_PORT/api/v1/workspaces")
   RAE_WORKSPACE_ID=$(printf '%s' "$workspaces_resp" \
-    | jq -r '.workspaces[0].id // .[0].id // empty')
+    | jq -r '.data[0].id // .workspaces[0].id // empty')
   if [ -z "$RAE_WORKSPACE_ID" ]; then
     echo "no workspace found: $workspaces_resp" >&2
     exit 1
@@ -238,10 +262,10 @@ cmd_seed() {
     "http://127.0.0.1:$RAE_API_PORT/api/v1/workspaces/$RAE_WORKSPACE_ID/remote-agents/$RAE_REMOTE_AGENT_ID/bind" \
     -H "authorization: Bearer $token" \
     -H "content-type: application/json" \
-    -d "{\"machineId\":\"$RAE_MACHINE_ID\",\"runtimeKind\":\"claude_code\"}" \
+    -d "{\"machineId\":\"$RAE_MACHINE_ID\",\"runtimeKind\":\"claude_code\",\"runtimePath\":\"/usr/local/bin/claude\"}" \
     >/dev/null
 
-  load_or_assign_ports  # rewrites STATE_FILE with new env vars
+  persist_state
   echo "Restarting daemon with the new machine api-key…"
   compose up -d --force-recreate rae-daemon
   echo "Seed complete. Run: bash $0 verify"
@@ -256,19 +280,34 @@ create_conversation_with_agent() {
     -H "content-type: application/json" \
     -d "$(jq -n --arg t "$title" --arg ra "$RAE_REMOTE_AGENT_ID" --arg cid "$(uuidgen)" \
         '{clientRequestId: $cid, kind: "group", boundary: "internal", title: $t, remoteAgentIds: [$ra]}')" \
-    | jq -r '.conversation.id // .id'
+    | jq -r '.conversation.conversationId // .conversation.id // .id'
+}
+
+register_client_instance() {
+  local token="$1"
+  # Server generates the id; return it.
+  curl -fsS -X POST \
+    "http://127.0.0.1:$RAE_API_PORT/api/v1/workspaces/$RAE_WORKSPACE_ID/chat/client-instances" \
+    -H "authorization: Bearer $token" \
+    -H "content-type: application/json" \
+    -d '{"platform":"rae-e2e","deviceLabel":"rae-e2e","metadata":{}}' \
+    | jq -r '.clientInstanceId // .id'
 }
 
 send_user_message() {
   local token="$1"
   local conv_id="$2"
   local text="$3"
+  if [ -z "${RAE_CLIENT_INSTANCE_ID:-}" ]; then
+    RAE_CLIENT_INSTANCE_ID=$(register_client_instance "$token")
+    export RAE_CLIENT_INSTANCE_ID
+  fi
   curl -fsS -X POST \
     "http://127.0.0.1:$RAE_API_PORT/api/v1/workspaces/$RAE_WORKSPACE_ID/chat/conversations/$conv_id/messages" \
     -H "authorization: Bearer $token" \
     -H "content-type: application/json" \
-    -d "$(jq -n --arg t "$text" --arg cmid "$(uuidgen)" \
-        '{clientMessageId: $cmid, contentBlocks: [{type:"text", text:$t}]}')" \
+    -d "$(jq -n --arg t "$text" --arg cmid "$(uuidgen)" --arg cinst "$RAE_CLIENT_INSTANCE_ID" \
+        '{clientInstanceId: $cinst, clientMessageId: $cmid, contentBlocks: [{type:"text", text:$t}]}')" \
     >/dev/null
 }
 
@@ -291,7 +330,7 @@ wait_for_db_row() {
 }
 
 cmd_verify() {
-  load_or_assign_ports
+  require_state
   require_jq
   : "${SYNAPSE_MACHINE_KEY:?run 'bash $0 seed' first}"
   : "${RAE_WORKSPACE_ID:?run 'bash $0 seed' first}"
@@ -320,7 +359,7 @@ cmd_verify() {
   echo "  ok"
 
   local token
-  token=$(api_login | jq -r '.session.accessToken // .accessToken')
+  token=$(api_login | jq -r '.sessionToken')
 
   echo "[5/11] per-conversation context isolation (two conversations → two context rows)"
   local conv_a conv_b
@@ -396,10 +435,18 @@ cmd_verify() {
     = "3"
   echo "  ok"
 
-  echo "[11/11] codex driver detectable (binding flip would route through new driver registry)"
-  docker exec "rae-$RAE_STACK_ID-daemon" \
-    sh -c 'command -v codex >/dev/null && command -v claude >/dev/null' \
-    && echo "  ok"
+  echo "[11/11] codex + claude binaries present in daemon image"
+  local daemon_image
+  daemon_image=$(compose config --format json 2>/dev/null \
+    | jq -r '.services."rae-daemon".image // empty')
+  if [ -z "$daemon_image" ]; then
+    # `compose config` omits the synthesized image name when a build context is
+    # in use; fall back to docker compose's deterministic project_service tag.
+    daemon_image="rae-${RAE_STACK_ID}-rae-daemon"
+  fi
+  docker run --rm --entrypoint sh "$daemon_image" \
+    -c 'command -v codex >/dev/null && command -v claude >/dev/null'
+  echo "  ok"
 
   echo
   echo "All 11 assertions passed for stack rae-$RAE_STACK_ID"

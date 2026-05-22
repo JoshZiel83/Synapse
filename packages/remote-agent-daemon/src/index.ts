@@ -1061,6 +1061,33 @@ async function main() {
   const config = parseArgs(process.argv.slice(2))
   activeLogLevel = config.logLevel
   ensureDirectory(MACHINE_DIR_ROOT)
+  // Per-conversation runtimes spawn subprocesses (claude / codex) whose stdin
+  // can disconnect mid-stream when the child exits (e.g. claude --print
+  // terminates after a single turn or the codex app-server hits an internal
+  // error). The SDKs surface those failures as EPIPE on the underlying socket,
+  // which Node bubbles up as an uncaught exception by default and would tear
+  // down the entire daemon, dropping every other conversation runtime that was
+  // healthy. Catch them at process-scope so a single bad session degrades to a
+  // logged error instead.
+  process.on("uncaughtException", (error) => {
+    const isEpipe =
+      (error as NodeJS.ErrnoException)?.code === "EPIPE" ||
+      /EPIPE|write after end/i.test(
+        error instanceof Error ? error.message : String(error)
+      )
+    log(isEpipe ? "warn" : "error", "daemon", "uncaught exception", {
+      message: error instanceof Error ? error.message : String(error),
+      code: (error as NodeJS.ErrnoException)?.code,
+      ...(isEpipe
+        ? {}
+        : { stack: error instanceof Error ? error.stack : undefined }),
+    })
+  })
+  process.on("unhandledRejection", (reason) => {
+    log("error", "daemon", "unhandled rejection", {
+      message: reason instanceof Error ? reason.message : String(reason),
+    })
+  })
   const supervisor = new DaemonSupervisor(config)
   await supervisor.run()
 }
