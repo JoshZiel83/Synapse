@@ -739,11 +739,11 @@ export type TransportAccountsOwnerScope = "workspace" | "workspace_member"
 
 export type TransportAccountsStatus = "active" | "disabled" | "error"
 
-export type TransportAccountsTransportKind = "feishu" | "weixin"
+export type TransportAccountsTransportKind = "feishu" | "wecom" | "weixin"
 
 export type TransportAddressesAddressType = "bot" | "system" | "user"
 
-export type TransportAddressesTransportKind = "feishu" | "weixin"
+export type TransportAddressesTransportKind = "feishu" | "wecom" | "weixin"
 
 export type TransportEndpointsEndpointType = "direct" | "group"
 
@@ -755,7 +755,7 @@ export type TransportMessageLinksDeliveryStatus =
 
 export type TransportMessageLinksDirection = "inbound" | "outbound"
 
-export type TransportMessageLinksTransportKind = "feishu" | "weixin"
+export type TransportMessageLinksTransportKind = "feishu" | "wecom" | "weixin"
 
 export type TurnsStatus = "cancelled" | "completed" | "failed" | "running"
 
@@ -2627,7 +2627,10 @@ export interface TransportMessageLinks {
   delivered_at: Timestamp | null
   delivery_status: Generated<TransportMessageLinksDeliveryStatus>
   direction: TransportMessageLinksDirection
+  external_emoji_reactions: Generated<Json>
   external_message_id: string | null
+  external_reply_to_id: string | null
+  external_thread_id: string | null
   id: Generated<string>
   item_id: string
   metadata: Generated<Json>

@@ -6,6 +6,7 @@ import type {
 } from "@synapse/shared/types"
 import { FEISHU_CONNECTOR_CAPABILITY } from "./feishu.js"
 import { WEIXIN_CONNECTOR_CAPABILITY } from "./weixin.js"
+import { WECOM_CONNECTOR_CAPABILITY } from "./wecom/capabilities.js"
 
 const CONNECTOR_CAPABILITIES: Record<
   TransportKind,
@@ -13,6 +14,7 @@ const CONNECTOR_CAPABILITIES: Record<
 > = {
   feishu: FEISHU_CONNECTOR_CAPABILITY,
   weixin: WEIXIN_CONNECTOR_CAPABILITY,
+  wecom: WECOM_CONNECTOR_CAPABILITY,
 }
 
 export function listTransportConnectorCapabilities() {

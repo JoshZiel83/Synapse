@@ -4,6 +4,7 @@ import imPublicController from "./public-controller.js"
 
 // Side-effect: connector self-registration into modules/im/connectors/registry.ts
 import "./connectors/feishu/index.js"
+import "./connectors/wecom/index.js"
 
 export default async function imModule(app: FastifyInstance) {
   await app.register(imPublicController)

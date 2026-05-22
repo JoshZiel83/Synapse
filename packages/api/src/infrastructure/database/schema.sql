@@ -60,14 +60,14 @@ CREATE TYPE sessions_collaboration_mode AS ENUM ('default', 'plan_drafting', 'pl
 CREATE TYPE conversation_participants_kind AS ENUM ('workspace_member', 'actor', 'remote_agent', 'external', 'system');
 CREATE TYPE conversation_participants_state AS ENUM ('active', 'left', 'removed');
 CREATE TYPE chat_client_instances_status AS ENUM ('active', 'revoked');
-CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin');
+CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
 CREATE TYPE transport_accounts_owner_scope AS ENUM ('workspace', 'workspace_member');
 CREATE TYPE transport_accounts_inbound_actor_mode AS ENUM ('none', 'specified_actor', 'follow_owner_chief_actor');
 CREATE TYPE transport_accounts_connection_mode AS ENUM ('webhook', 'long_connection');
 CREATE TYPE transport_accounts_status AS ENUM ('active', 'disabled', 'error');
 CREATE TYPE transport_endpoints_endpoint_type AS ENUM ('direct', 'group');
 CREATE TYPE conversation_transport_bindings_inbound_actor_mode AS ENUM ('inherit_account', 'none', 'specified_actor');
-CREATE TYPE transport_addresses_transport_kind AS ENUM ('feishu', 'weixin');
+CREATE TYPE transport_addresses_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
 CREATE TYPE transport_addresses_address_type AS ENUM ('user', 'bot', 'system');
 CREATE TYPE conversation_items_scope AS ENUM ('shared', 'private');
 CREATE TYPE conversation_items_surface AS ENUM ('visible', 'internal');
@@ -77,7 +77,7 @@ CREATE TYPE conversation_items_event_timeline_policy AS ENUM ('none', 'all_membe
 CREATE TYPE conversation_items_event_context_policy AS ENUM ('none', 'shared', 'actor_private', 'targeted_members');
 CREATE TYPE conversation_item_parts_part_type AS ENUM ('text', 'file_ref', 'json');
 CREATE TYPE conversation_item_targets_target_kind AS ENUM ('to', 'cc', 'visible');
-CREATE TYPE transport_message_links_transport_kind AS ENUM ('feishu', 'weixin');
+CREATE TYPE transport_message_links_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
 CREATE TYPE transport_message_links_direction AS ENUM ('inbound', 'outbound');
 CREATE TYPE transport_message_links_delivery_status AS ENUM ('pending', 'sent', 'failed', 'skipped');
 CREATE TYPE turns_status AS ENUM ('running', 'completed', 'failed', 'cancelled');

@@ -14,3 +14,9 @@ ALTER TABLE transport_message_links
 CREATE INDEX IF NOT EXISTS idx_transport_message_links_reply_to
   ON transport_message_links(transport_endpoint_id, external_reply_to_id)
   WHERE external_reply_to_id IS NOT NULL;
+
+-- Future-proof: add wecom transport_kind value for the v2 enterprise WeChat
+-- connector. ADD VALUE is fast-path in PostgreSQL (no table rewrite).
+ALTER TYPE transport_accounts_transport_kind ADD VALUE IF NOT EXISTS 'wecom';
+ALTER TYPE transport_addresses_transport_kind ADD VALUE IF NOT EXISTS 'wecom';
+ALTER TYPE transport_message_links_transport_kind ADD VALUE IF NOT EXISTS 'wecom';
