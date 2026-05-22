@@ -381,6 +381,11 @@ function extractAssistantText(message: { message?: any }): string {
   return parts.join("")
 }
 
+/** Test-only re-exports so we can pin the pure helpers without spawning the SDK. */
+export const __extractAssistantTextForTest = extractAssistantText
+export const __buildPermissionResultForDecisionForTest =
+  buildPermissionResultForDecision
+
 export class ClaudeDriver implements AgentDriver {
   readonly runtimeKind = "claude_code" as const
 

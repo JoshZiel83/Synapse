@@ -336,23 +336,23 @@ cmd_verify() {
   : "${RAE_WORKSPACE_ID:?run 'bash $0 seed' first}"
   : "${RAE_REMOTE_AGENT_ID:?run 'bash $0 seed' first}"
   : "${RAE_MACHINE_ID:?run 'bash $0 seed' first}"
-  echo "Phase 6 verify suite…"
+  echo "Phase 6 verify suite (15 assertions)…"
 
-  echo "[1/11] api health"
+  echo "[1/15] api health"
   curl -fsS "http://127.0.0.1:$RAE_API_PORT/api/v1/health" >/dev/null
   echo "  ok"
 
-  echo "[2/11] schema_migrations at 2026-05-22-01"
+  echo "[2/15] schema_migrations at 2026-05-22-01"
   test "$(run_psql "SELECT version FROM schema_migrations ORDER BY applied_at DESC LIMIT 1")" \
     = "2026-05-22-01"
   echo "  ok"
 
-  echo "[3/11] daemon WebSocket connected"
+  echo "[3/15] daemon WebSocket connected"
   compose logs --tail=100 rae-daemon 2>/dev/null \
     | grep -q "WebSocket connected"
   echo "  ok"
 
-  echo "[4/11] reverse-MCP endpoint rejects empty Bearer (401)"
+  echo "[4/15] reverse-MCP endpoint rejects empty Bearer (401)"
   test "$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST "http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/00000000-0000-0000-0000-000000000000")" \
     = 401
@@ -361,18 +361,18 @@ cmd_verify() {
   local token
   token=$(api_login | jq -r '.sessionToken')
 
-  echo "[5/11] per-conversation context isolation (two conversations → two context rows)"
+  echo "[5/15] per-conversation context isolation (two conversations → two context rows)"
   local conv_a conv_b
   conv_a=$(create_conversation_with_agent "$token" "rae-e2e-a")
   conv_b=$(create_conversation_with_agent "$token" "rae-e2e-b")
   send_user_message "$token" "$conv_a" "hello from conv-a"
   send_user_message "$token" "$conv_b" "hello from conv-b"
   wait_for_db_row \
-    "SELECT COUNT(DISTINCT conversation_id)::text FROM remote_agent_conversation_contexts WHERE remote_agent_id='$RAE_REMOTE_AGENT_ID'" \
+    "SELECT COUNT(*)::text FROM remote_agent_conversation_contexts WHERE remote_agent_id='$RAE_REMOTE_AGENT_ID' AND conversation_id IN ('$conv_a','$conv_b')" \
     "2" 30
   echo "  ok (conversations $conv_a / $conv_b)"
 
-  echo "[6/11] reverse-MCP endpoint passes auth on a valid conversation (POST tools/list)"
+  echo "[6/15] reverse-MCP endpoint passes auth on a valid conversation (POST tools/list)"
   local mcp_url="http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/$conv_a"
   local mcp_resp
   mcp_resp=$(curl -fsS -X POST "$mcp_url" \
@@ -384,7 +384,7 @@ cmd_verify() {
     || { echo "  initialize failed: $mcp_resp"; exit 1; }
   echo "  ok"
 
-  echo "[7/11] reverse-MCP endpoint denies a different remote_agent's conversation (401)"
+  echo "[7/15] reverse-MCP endpoint denies a different remote_agent's conversation (401)"
   local fake_conv=00000000-0000-0000-0000-000000000099
   test "$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST "http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/$fake_conv" \
@@ -394,7 +394,7 @@ cmd_verify() {
     = 401
   echo "  ok"
 
-  echo "[8/11] machine connection is fenced (second WS with same key forces first close)"
+  echo "[8/15] machine connection is fenced (second WS with same key forces first close)"
   # Open a competing WebSocket from the host using node's ws (already a daemon dep)
   PORT="$RAE_API_PORT" KEY="$SYNAPSE_MACHINE_KEY" \
     node --input-type=module -e "
@@ -416,7 +416,7 @@ cmd_verify() {
     echo "  warn: did not observe a fenced log entry; the supervising connect may have already reclaimed"
   fi
 
-  echo "[9/11] SOCKS5 proxy routing (claude/codex env baseline)"
+  echo "[9/15] SOCKS5 proxy routing (claude/codex env baseline)"
   # Validate that the daemon container CAN reach example.invalid/ai-gateway via SOCKS5
   # when proxychains4 is engaged, and CANNOT without it. Skip if the proxy is
   # unreachable from the host (CI box without the tunnel).
@@ -430,12 +430,12 @@ cmd_verify() {
     echo "  skip (host <redacted-local-proxy> SOCKS5 not reachable from this box)"
   fi
 
-  echo "[10/11] delivery retry table tracks attempts + next_attempt_at columns"
+  echo "[10/15] delivery retry table tracks attempts + next_attempt_at columns"
   test "$(run_psql "SELECT COUNT(*)::text FROM information_schema.columns WHERE table_name='remote_agent_message_deliveries' AND column_name IN ('attempts','next_attempt_at','last_failure_reason')")" \
     = "3"
   echo "  ok"
 
-  echo "[11/11] codex + claude binaries present in daemon image"
+  echo "[11/15] codex + claude binaries present in daemon image"
   local daemon_image
   daemon_image=$(compose config --format json 2>/dev/null \
     | jq -r '.services."rae-daemon".image // empty')
@@ -448,8 +448,132 @@ cmd_verify() {
     -c 'command -v codex >/dev/null && command -v claude >/dev/null'
   echo "  ok"
 
+  echo "[12/15] distinct runtime_session_id per conversation (when CC has talked at all)"
+  local session_ids
+  session_ids=$(run_psql "SELECT runtime_session_id FROM remote_agent_conversation_contexts WHERE remote_agent_id='$RAE_REMOTE_AGENT_ID' AND conversation_id IN ('$conv_a','$conv_b') AND runtime_session_id IS NOT NULL ORDER BY conversation_id")
+  local distinct_count
+  distinct_count=$(printf '%s\n' "$session_ids" | sort -u | grep -c . || true)
+  local total_count
+  total_count=$(printf '%s\n' "$session_ids" | grep -c . || true)
+  if [ "$total_count" -lt 2 ]; then
+    echo "  skip (only $total_count session id populated; CC didn't reach the model in this env)"
+  else
+    test "$distinct_count" = "$total_count" \
+      || { echo "  FAIL: $total_count rows but only $distinct_count distinct session_ids → sessions are bleeding across conversations"; exit 1; }
+    echo "  ok ($total_count contexts, all distinct)"
+  fi
+
+  echo "[13/15] /fail-deliveries increments attempts and persists last_failure_reason"
+  # Pause the daemon so it can't auto-ack the test delivery before we observe
+  # it. Send a message under the lock to mint a fresh pending delivery,
+  # then drive /fail-deliveries with that id and assert the row mutates.
+  docker pause "rae-$RAE_STACK_ID-daemon" >/dev/null
+  trap 'docker unpause "rae-$RAE_STACK_ID-daemon" >/dev/null 2>&1 || true' RETURN
+  local conv_retry
+  conv_retry=$(create_conversation_with_agent "$token" "rae-e2e-retry")
+  send_user_message "$token" "$conv_retry" "retry probe"
+  local delivery_id
+  delivery_id=$(wait_for_delivery_id "$conv_retry" 30)
+  test -n "$delivery_id" \
+    || { echo "  FAIL: no pending delivery materialized for $conv_retry"; docker unpause "rae-$RAE_STACK_ID-daemon" >/dev/null; exit 1; }
+  local before_attempts
+  before_attempts=$(run_psql "SELECT attempts::text FROM remote_agent_message_deliveries WHERE id='$delivery_id'")
+  curl -fsS -X POST \
+    "http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/fail-deliveries" \
+    -H "authorization: Bearer $SYNAPSE_MACHINE_KEY" \
+    -H "content-type: application/json" \
+    -d "$(jq -n --arg d "$delivery_id" '{deliveryIds: [$d], reason: "rae-e2e probe"}')" \
+    >/dev/null
+  local after_attempts
+  after_attempts=$(run_psql "SELECT attempts::text FROM remote_agent_message_deliveries WHERE id='$delivery_id'")
+  test "$after_attempts" -gt "$before_attempts" \
+    || { echo "  FAIL: attempts did not increment ($before_attempts → $after_attempts)"; docker unpause "rae-$RAE_STACK_ID-daemon" >/dev/null; exit 1; }
+  local reason
+  reason=$(run_psql "SELECT last_failure_reason FROM remote_agent_message_deliveries WHERE id='$delivery_id'")
+  test "$reason" = "rae-e2e probe" \
+    || { echo "  FAIL: last_failure_reason not recorded ('$reason')"; docker unpause "rae-$RAE_STACK_ID-daemon" >/dev/null; exit 1; }
+  docker unpause "rae-$RAE_STACK_ID-daemon" >/dev/null
+  trap - RETURN
+  echo "  ok ($before_attempts → $after_attempts, reason '$reason')"
+
+  echo "[14/15] reverse-MCP tools/list returns the IM tool surface via Mcp-Session-Id"
+  local mcp_url_a="http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/$conv_a"
+  local init_headers_path init_body_path
+  init_headers_path=$(mktemp)
+  init_body_path=$(mktemp)
+  curl -fsS -D "$init_headers_path" -o "$init_body_path" -X POST "$mcp_url_a" \
+    -H "authorization: Bearer $SYNAPSE_MACHINE_KEY" \
+    -H "content-type: application/json" \
+    -H "accept: application/json, text/event-stream" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"rae-verify","version":"0"}}}'
+  local mcp_session
+  mcp_session=$(awk 'BEGIN{IGNORECASE=1} /^mcp-session-id:/ { gsub(/\r/, "", $2); print $2; exit }' "$init_headers_path")
+  test -n "$mcp_session" \
+    || { echo "  FAIL: no Mcp-Session-Id returned by initialize"; exit 1; }
+  local tools_resp
+  tools_resp=$(curl -fsS -X POST "$mcp_url_a" \
+    -H "authorization: Bearer $SYNAPSE_MACHINE_KEY" \
+    -H "content-type: application/json" \
+    -H "accept: application/json, text/event-stream" \
+    -H "mcp-session-id: $mcp_session" \
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')
+  # The response can be JSON or an SSE event stream; either way the body
+  # contains the tool names.
+  for tool in list_conversations check_messages read_history send_message search_messages; do
+    printf '%s' "$tools_resp" | grep -q "\"name\":\"$tool\"" \
+      || { echo "  FAIL: tools/list missing $tool"; printf 'response:\n%s\n' "$tools_resp" | head -c 500; exit 1; }
+  done
+  rm -f "$init_headers_path" "$init_body_path"
+  echo "  ok (session=${mcp_session:0:8}…, all 5 IM tools present)"
+
+  echo "[15/15] interaction endpoints accept daemon-style user-input + plan-approval requests"
+  # We can't deterministically force a real LLM to emit AskUserQuestion or
+  # ExitPlanMode in CI, but we can exercise the server-side contract the
+  # daemon uses: POST /interactions/user-input + /interactions/plan-approval
+  # must persist an interaction_requests row tied to the right conversation.
+  local before_interactions
+  before_interactions=$(run_psql "SELECT COUNT(*)::text FROM interaction_requests")
+  local user_input_run_key="rae-e2e:user-input:$(uuidgen)"
+  curl -fsS -X POST \
+    "http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/interactions/user-input" \
+    -H "authorization: Bearer $SYNAPSE_MACHINE_KEY" \
+    -H "content-type: application/json" \
+    -d "$(jq -n --arg c "$conv_a" --arg k "$user_input_run_key" \
+        '{conversationId: $c, runKey: $k, title: "rae-e2e probe question", questions: [{id:"q1", header:"q1", type:"single_select", prompt:"Pick one", required:true, allowOther:false, options:[{id:"a", label:"a"},{id:"b", label:"b"}]}]}')" \
+    >/dev/null
+  local plan_run_key="rae-e2e:plan:$(uuidgen)"
+  curl -fsS -X POST \
+    "http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/interactions/plan-approval" \
+    -H "authorization: Bearer $SYNAPSE_MACHINE_KEY" \
+    -H "content-type: application/json" \
+    -d "$(jq -n --arg c "$conv_a" --arg k "$plan_run_key" \
+        '{conversationId: $c, runKey: $k, title: "rae-e2e probe plan", planMarkdown: "- [ ] step 1\n- [ ] step 2"}')" \
+    >/dev/null
+  local after_interactions
+  after_interactions=$(run_psql "SELECT COUNT(*)::text FROM interaction_requests")
+  test "$after_interactions" -gt "$before_interactions" \
+    || { echo "  FAIL: interaction_requests did not grow ($before_interactions → $after_interactions)"; exit 1; }
+  echo "  ok (interaction_requests $before_interactions → $after_interactions)"
+
   echo
-  echo "All 11 assertions passed for stack rae-$RAE_STACK_ID"
+  echo "All 15 assertions passed for stack rae-$RAE_STACK_ID"
+}
+
+wait_for_delivery_id() {
+  local conversation_id="$1"
+  local timeout="${2:-30}"
+  local elapsed=0
+  while [ "$elapsed" -lt "$timeout" ]; do
+    local got
+    got=$(run_psql "SELECT id FROM remote_agent_message_deliveries WHERE remote_agent_id='$RAE_REMOTE_AGENT_ID' AND conversation_id='$conversation_id' AND status='pending' ORDER BY created_at DESC LIMIT 1" 2>/dev/null || true)
+    if [ -n "$got" ]; then
+      printf '%s' "$got"
+      return 0
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  return 1
 }
 
 cmd_down() {
