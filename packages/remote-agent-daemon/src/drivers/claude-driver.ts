@@ -411,6 +411,7 @@ export class ClaudeDriver implements AgentDriver {
 
     const options: ClaudeQueryOptions = {
       cwd: spec.workingDirectory,
+      additionalDirectories: spec.additionalDirectories,
       permissionMode: "bypassPermissions",
       allowDangerouslySkipPermissions: true,
       canUseTool: session.buildCanUseTool(),

@@ -571,7 +571,7 @@ class ManagedRemoteAgent {
   >()
   private readonly latestPlanByConversation = new Map<string, LatestPlanDraft>()
   // Deliveries we've routed into a conversation runtime but haven't yet been
-  // observed completing (via the chat-bridge complete-deliveries path) or
+  // observed completing (via the reverse-MCP complete-deliveries tool) or
   // failing. On runtime crash / stop, we POST these back to the server's
   // fail-deliveries endpoint so the backoff worker can reschedule.
   private readonly pendingDeliveryIds = new Map<string, Set<string>>()
@@ -927,8 +927,10 @@ class ManagedRemoteAgent {
         })
       },
       onAssistantMessage: (_conversationId, _text) => {
-        // Assistant output is delivered to Synapse via the chat-bridge MCP send_message tool.
-        // We don't republish it through WS to keep the control plane focused on lifecycle.
+        // Assistant output is delivered to Synapse via the reverse-MCP
+        // send_message tool (registered on the per-conversation McpServer).
+        // We don't republish it through WS to keep the control plane focused
+        // on lifecycle.
       },
       onTurnCompleted: (conversationId) => {
         this.publishStatus({

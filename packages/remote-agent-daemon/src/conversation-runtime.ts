@@ -100,8 +100,17 @@ export class ConversationRuntime {
       "conversations",
       spec.conversationId
     )
-    this.workingDirectory =
-      spec.localRootPath ?? path.join(this.conversationDirectory, "workspace")
+    // cwd is ALWAYS per-conversation, regardless of whether the operator
+    // configured a `localRootPath`. CC writes its session transcript to
+    // ~/.claude/projects/<encoded-cwd>/<sessionId>.jsonl, so two conversations
+    // sharing one cwd would collide on disk: the project directory ends up
+    // polluted across sessions and CC's resume / file-checkpoint heuristics
+    // can pick up the wrong conversation's history. The plan calls this out
+    // explicitly — "cwd 必须按 conversation 隔离" — so we keep workspace
+    // scratch under conversationDirectory and surface the operator-provided
+    // localRootPath via additionalDirectories instead (claude SDK supports
+    // it directly; codex sees the cwd-only sandbox view).
+    this.workingDirectory = path.join(this.conversationDirectory, "workspace")
     this.bridgeStateFile = path.join(
       this.conversationDirectory,
       "bridge-state.json"
@@ -149,6 +158,9 @@ export class ConversationRuntime {
       remoteAgentId: this.spec.remoteAgentId,
       conversationId: this.spec.conversationId,
       workingDirectory: this.workingDirectory,
+      additionalDirectories: this.spec.localRootPath
+        ? [this.spec.localRootPath]
+        : undefined,
       resumeSessionId: this.currentSessionId,
       runtimePath: this.spec.runtimePath,
       mcpServers,

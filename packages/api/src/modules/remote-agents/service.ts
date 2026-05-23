@@ -682,6 +682,87 @@ async function loadPendingRemoteAgentDeliveries(params: {
   )
 }
 
+async function sendAgentStartPrefix(
+  connection: MachineConnection,
+  pendingForSend: Array<{ remoteAgentId: string; conversationId: string }>,
+  machineId: string
+) {
+  const pairs = new Map<
+    string,
+    { remoteAgentId: string; conversationId: string }
+  >()
+  for (const delivery of pendingForSend) {
+    const key = `${delivery.remoteAgentId}:${delivery.conversationId}`
+    if (!pairs.has(key)) {
+      pairs.set(key, {
+        remoteAgentId: delivery.remoteAgentId,
+        conversationId: delivery.conversationId,
+      })
+    }
+  }
+  if (pairs.size === 0) return
+  const remoteAgentIds = [
+    ...new Set([...pairs.values()].map((pair) => pair.remoteAgentId)),
+  ]
+  const bindingsResult = await executeSql<{
+    remote_agent_id: string
+    runtime_kind: RemoteAgentRuntimeKind
+    runtime_path: string | null
+    local_root_path: string | null
+  }>(
+    `
+      SELECT remote_agent_id, runtime_kind, runtime_path, local_root_path
+      FROM remote_agent_bindings
+      WHERE machine_id = $1
+        AND status = 'active'
+        AND remote_agent_id = ANY($2::uuid[])
+    `,
+    [machineId, remoteAgentIds]
+  )
+  const bindingByAgent = new Map(
+    bindingsResult.rows.map((row) => [row.remote_agent_id, row])
+  )
+  const sessionResult = await executeSql<{
+    remote_agent_id: string
+    conversation_id: string
+    runtime_session_id: string | null
+  }>(
+    `
+      SELECT remote_agent_id, conversation_id, runtime_session_id
+      FROM remote_agent_conversation_contexts
+      WHERE remote_agent_id = ANY($1::uuid[])
+        AND conversation_id = ANY($2::uuid[])
+    `,
+    [
+      remoteAgentIds,
+      [...new Set([...pairs.values()].map((pair) => pair.conversationId))],
+    ]
+  )
+  const sessionByPair = new Map(
+    sessionResult.rows.map((row) => [
+      `${row.remote_agent_id}:${row.conversation_id}`,
+      row.runtime_session_id,
+    ])
+  )
+  for (const pair of pairs.values()) {
+    const binding = bindingByAgent.get(pair.remoteAgentId)
+    if (!binding) continue
+    safeSend(connection, {
+      type: "agent:start",
+      remoteAgentId: pair.remoteAgentId,
+      conversationId: pair.conversationId,
+      runtimeKind: binding.runtime_kind,
+      runtimePath: binding.runtime_path,
+      localRootPath: binding.local_root_path,
+      sessionId:
+        sessionByPair.get(`${pair.remoteAgentId}:${pair.conversationId}`) ??
+        null,
+      fencingToken: connection.fencingToken,
+      serverUrl: config.app.baseUrl,
+    })
+  }
+}
+
 async function notifyPendingRemoteAgentDeliveries(params: {
   machineId?: string
   conversationId?: string
@@ -720,6 +801,15 @@ async function notifyPendingRemoteAgentDeliveries(params: {
     if (pendingForSend.length === 0) {
       continue
     }
+    // Prefix each batch with agent:start frames so the daemon ALWAYS knows
+    // which driver to spawn for an unfamiliar (agent, conversation). Without
+    // this the daemon's ManagedRemoteAgent falls back to its default
+    // runtimeKind ("claude_code") when agent:deliver arrives for an agent
+    // it has never seen — that silently routes Codex agents through the
+    // Claude driver. configure() + ensureRuntimeForConversation are
+    // idempotent, so re-sending the prefix on every batch is cheap and
+    // robust.
+    await sendAgentStartPrefix(connection, pendingForSend, machineId)
     const sent = safeSend(connection, {
       type: "agent:deliver",
       deliveries: pendingForSend,

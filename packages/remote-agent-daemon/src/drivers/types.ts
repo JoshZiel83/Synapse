@@ -61,6 +61,13 @@ export type SessionSpec = {
   remoteAgentId: string
   conversationId: string
   workingDirectory: string
+  /**
+   * Additional filesystem roots the runtime can read / edit beyond the cwd.
+   * Use this for operator-configured project roots: cwd stays per-conversation
+   * (so CC's session transcript files don't collide across conversations) and
+   * the operator's `localRootPath` shows up here.
+   */
+  additionalDirectories?: string[]
   resumeSessionId?: string
   runtimePath?: string
   mcpServers?: Record<string, McpServerConfig>

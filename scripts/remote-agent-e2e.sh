@@ -336,23 +336,23 @@ cmd_verify() {
   : "${RAE_WORKSPACE_ID:?run 'bash $0 seed' first}"
   : "${RAE_REMOTE_AGENT_ID:?run 'bash $0 seed' first}"
   : "${RAE_MACHINE_ID:?run 'bash $0 seed' first}"
-  echo "Phase 6 verify suite (15 assertions)…"
+  echo "Phase 6 verify suite (16 assertions)…"
 
-  echo "[1/15] api health"
+  echo "[1/16] api health"
   curl -fsS "http://127.0.0.1:$RAE_API_PORT/api/v1/health" >/dev/null
   echo "  ok"
 
-  echo "[2/15] schema_migrations at 2026-05-22-01"
+  echo "[2/16] schema_migrations at 2026-05-22-01"
   test "$(run_psql "SELECT version FROM schema_migrations ORDER BY applied_at DESC LIMIT 1")" \
     = "2026-05-22-01"
   echo "  ok"
 
-  echo "[3/15] daemon WebSocket connected"
+  echo "[3/16] daemon WebSocket connected"
   compose logs --tail=100 rae-daemon 2>/dev/null \
     | grep -q "WebSocket connected"
   echo "  ok"
 
-  echo "[4/15] reverse-MCP endpoint rejects empty Bearer (401)"
+  echo "[4/16] reverse-MCP endpoint rejects empty Bearer (401)"
   test "$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST "http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/00000000-0000-0000-0000-000000000000")" \
     = 401
@@ -361,7 +361,7 @@ cmd_verify() {
   local token
   token=$(api_login | jq -r '.sessionToken')
 
-  echo "[5/15] per-conversation context isolation (two conversations → two context rows)"
+  echo "[5/16] per-conversation context isolation (two conversations → two context rows)"
   local conv_a conv_b
   conv_a=$(create_conversation_with_agent "$token" "rae-e2e-a")
   conv_b=$(create_conversation_with_agent "$token" "rae-e2e-b")
@@ -372,7 +372,7 @@ cmd_verify() {
     "2" 30
   echo "  ok (conversations $conv_a / $conv_b)"
 
-  echo "[6/15] reverse-MCP endpoint passes auth on a valid conversation (POST tools/list)"
+  echo "[6/16] reverse-MCP endpoint passes auth on a valid conversation (POST tools/list)"
   local mcp_url="http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/$conv_a"
   local mcp_resp
   mcp_resp=$(curl -fsS -X POST "$mcp_url" \
@@ -384,7 +384,7 @@ cmd_verify() {
     || { echo "  initialize failed: $mcp_resp"; exit 1; }
   echo "  ok"
 
-  echo "[7/15] reverse-MCP endpoint denies a conversation the agent isn't a participant of (403)"
+  echo "[7/16] reverse-MCP endpoint denies a conversation the agent isn't a participant of (403)"
   local fake_conv=00000000-0000-0000-0000-000000000099
   test "$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST "http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/$fake_conv" \
@@ -394,7 +394,7 @@ cmd_verify() {
     = 403
   echo "  ok"
 
-  echo "[8/15] machine connection is fenced (second WS with same key forces first close)"
+  echo "[8/16] machine connection is fenced (second WS with same key forces first close)"
   # Open a competing WebSocket from the host using node's ws (already a daemon dep)
   PORT="$RAE_API_PORT" KEY="$SYNAPSE_MACHINE_KEY" \
     node --input-type=module -e "
@@ -416,7 +416,7 @@ cmd_verify() {
     echo "  warn: did not observe a fenced log entry; the supervising connect may have already reclaimed"
   fi
 
-  echo "[9/15] SOCKS5 proxy routing (claude/codex env baseline)"
+  echo "[9/16] SOCKS5 proxy routing (claude/codex env baseline)"
   # Validate that the daemon container CAN reach example.invalid/ai-gateway via SOCKS5
   # when proxychains4 is engaged, and CANNOT without it. Skip if the proxy is
   # unreachable from the host (CI box without the tunnel).
@@ -430,12 +430,12 @@ cmd_verify() {
     echo "  skip (host <redacted-local-proxy> SOCKS5 not reachable from this box)"
   fi
 
-  echo "[10/15] delivery retry table tracks attempts + next_attempt_at columns"
+  echo "[10/16] delivery retry table tracks attempts + next_attempt_at columns"
   test "$(run_psql "SELECT COUNT(*)::text FROM information_schema.columns WHERE table_name='remote_agent_message_deliveries' AND column_name IN ('attempts','next_attempt_at','last_failure_reason')")" \
     = "3"
   echo "  ok"
 
-  echo "[11/15] codex + claude binaries present in daemon image"
+  echo "[11/16] codex + claude binaries present in daemon image"
   local daemon_image
   daemon_image=$(compose config --format json 2>/dev/null \
     | jq -r '.services."rae-daemon".image // empty')
@@ -448,7 +448,7 @@ cmd_verify() {
     -c 'command -v codex >/dev/null && command -v claude >/dev/null'
   echo "  ok"
 
-  echo "[12/15] distinct runtime_session_id per conversation (when CC has talked at all)"
+  echo "[12/16] distinct runtime_session_id per conversation (when CC has talked at all)"
   local session_ids
   session_ids=$(run_psql "SELECT runtime_session_id FROM remote_agent_conversation_contexts WHERE remote_agent_id='$RAE_REMOTE_AGENT_ID' AND conversation_id IN ('$conv_a','$conv_b') AND runtime_session_id IS NOT NULL ORDER BY conversation_id")
   local distinct_count
@@ -463,7 +463,7 @@ cmd_verify() {
     echo "  ok ($total_count contexts, all distinct)"
   fi
 
-  echo "[13/15] /fail-deliveries increments attempts and persists last_failure_reason"
+  echo "[13/16] /fail-deliveries increments attempts and persists last_failure_reason"
   # Pause the daemon so it can't auto-ack the test delivery before we observe
   # it. Send a message under the lock to mint a fresh pending delivery,
   # then drive /fail-deliveries with that id and assert the row mutates.
@@ -496,7 +496,7 @@ cmd_verify() {
   trap - RETURN
   echo "  ok ($before_attempts → $after_attempts, reason '$reason')"
 
-  echo "[14/15] reverse-MCP tools/list returns the IM tool surface via Mcp-Session-Id"
+  echo "[14/16] reverse-MCP tools/list returns the IM tool surface via Mcp-Session-Id"
   local mcp_url_a="http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/$conv_a"
   local init_headers_path init_body_path
   init_headers_path=$(mktemp)
@@ -526,7 +526,7 @@ cmd_verify() {
   rm -f "$init_headers_path" "$init_body_path"
   echo "  ok (session=${mcp_session:0:8}…, all 5 IM tools present)"
 
-  echo "[15/15] interaction endpoints accept daemon-style user-input + plan-approval requests"
+  echo "[15/16] interaction endpoints accept daemon-style user-input + plan-approval requests"
   # We can't deterministically force a real LLM to emit AskUserQuestion or
   # ExitPlanMode in CI, but we can exercise the server-side contract the
   # daemon uses: POST /interactions/user-input + /interactions/plan-approval
@@ -555,8 +555,56 @@ cmd_verify() {
     || { echo "  FAIL: interaction_requests did not grow ($before_interactions → $after_interactions)"; exit 1; }
   echo "  ok (interaction_requests $before_interactions → $after_interactions)"
 
+  echo "[16/16] codex driver dispatch — new codex remote_agent routes through CodexDriver"
+  # Build a sibling remote_agent with runtime_kind=codex, bind it to the same
+  # machine (passing the codex binary path so the catalog-availability check
+  # is skipped), wire it into a conversation, send a message. The server now
+  # prefixes agent:start before agent:deliver in notifyPendingRemoteAgentDeliveries
+  # — without that fix the daemon would default the new agent to claude_code
+  # and spawn ClaudeDriver instead of CodexDriver, so this assertion is the
+  # functional check that the prefix lands.
+  local codex_agent_resp
+  codex_agent_resp=$(curl -fsS -X POST \
+    "http://127.0.0.1:$RAE_API_PORT/api/v1/workspaces/$RAE_WORKSPACE_ID/remote-agents" \
+    -H "authorization: Bearer $token" \
+    -H "content-type: application/json" \
+    -d '{"name":"e2e-codex","title":"E2E Codex","runtimeKind":"codex"}')
+  local codex_agent_id
+  codex_agent_id=$(printf '%s' "$codex_agent_resp" | jq -r '.remoteAgent.id')
+  curl -fsS -X POST \
+    "http://127.0.0.1:$RAE_API_PORT/api/v1/workspaces/$RAE_WORKSPACE_ID/remote-agents/$codex_agent_id/bind" \
+    -H "authorization: Bearer $token" \
+    -H "content-type: application/json" \
+    -d "{\"machineId\":\"$RAE_MACHINE_ID\",\"runtimeKind\":\"codex\",\"runtimePath\":\"/usr/local/bin/codex\"}" \
+    >/dev/null
+  local codex_conv
+  codex_conv=$(curl -fsS -X POST \
+    "http://127.0.0.1:$RAE_API_PORT/api/v1/workspaces/$RAE_WORKSPACE_ID/chat/conversations" \
+    -H "authorization: Bearer $token" \
+    -H "content-type: application/json" \
+    -d "$(jq -n --arg t "rae-e2e-codex" --arg ra "$codex_agent_id" --arg cid "$(uuidgen)" \
+        '{clientRequestId: $cid, kind: "group", boundary: "internal", title: $t, remoteAgentIds: [$ra]}')" \
+    | jq -r '.conversation.conversationId')
+  send_user_message "$token" "$codex_conv" "hello codex"
+  # Wait for the daemon to log the codex-runtimeKind agent:start it would
+  # only emit if the dispatch prefix actually carried runtimeKind=codex.
+  local found=
+  local elapsed=0
+  while [ "$elapsed" -lt 30 ]; do
+    if compose logs --tail=500 rae-daemon 2>/dev/null \
+      | grep -qE "remote-agent:$codex_agent_id.*runtimeKind\":\"codex\""; then
+      found=1
+      break
+    fi
+    sleep 1
+    elapsed=$((elapsed + 1))
+  done
+  test -n "$found" \
+    || { echo "  FAIL: daemon never received a codex-runtimeKind agent:start for $codex_agent_id"; exit 1; }
+  echo "  ok (codex agent $codex_agent_id → daemon dispatched runtimeKind=codex)"
+
   echo
-  echo "All 15 assertions passed for stack rae-$RAE_STACK_ID"
+  echo "All 16 assertions passed for stack rae-$RAE_STACK_ID"
 }
 
 wait_for_delivery_id() {
