@@ -21,28 +21,34 @@
  * land, so the next restart finds a clean slate.
  *
  * ─── Multi-replica safety ───
- * Events are delivered via Redis pub/sub fan-out (see
- * infrastructure/events/index.ts:onEvent), so every replica that has
- * subscribed will fire this hook. In a multi-replica deployment that
- * means N replicas will each try to create/delete reactions for the
- * same inbound message — duplicate platform calls + races.
+ * actor.thinking / session.thinking / actor.action / session.status.changed
+ * are delivered through Redis pub/sub fan-out (see
+ * infrastructure/events/index.ts:onEvent), so every replica subscribed
+ * to the bus runs this hook in parallel. Without coordination they'd
+ * each try to create/delete the same Feishu reaction or weixin typing
+ * — duplicate platform calls + a race on `external_emoji_reactions`.
  *
- * V1 deployments run a single API replica, which is correct by
- * construction. Before adding a second replica, the plan calls for
- * extracting this hook into dedicated `workers/im-status-reaction.ts`
- * and `workers/im-typing.ts` BullMQ workers (one consumer per queue)
- * so only one replica processes each event. See
- * docs/im-transport-design.md for the contract.
+ * The hook resolves this by grabbing a per-(account, externalMessageId)
+ * Redis claim before constructing the controllers. The first replica
+ * to call ensureControllersForSession for a given inbound message wins
+ * the claim and proceeds; everyone else returns null and silently
+ * skips. The claim is renewed on each subsequent event for that
+ * session and released on terminal events / shutdown.
  */
 
 import { db } from "../../../infrastructure/database/kysely.js"
 import { onEvent } from "../../../infrastructure/events/index.js"
+import { redis } from "../../../infrastructure/redis/index.js"
 import {
   getTransportAccountById,
   loadTransportEmojiReactions,
   saveTransportEmojiReactions,
 } from "../service.js"
 import { tryGetConnector } from "../connectors/registry.js"
+import {
+  createStatusClaimClient,
+  type ClaimRedisLike,
+} from "../status-reaction/claim.js"
 import {
   createStatusReactionController,
   type StatusReactionController,
@@ -56,10 +62,17 @@ import {
   resolveSessionThinkingStatus,
 } from "./status-resolver.js"
 
+// One claim client per process, bound to the application-wide Redis.
+// The claim itself is per-(account, externalMessageId), so a single
+// client is enough.
+const statusClaim = createStatusClaimClient(redis as unknown as ClaimRedisLike)
+
 interface ActiveStatusSession {
   reaction: StatusReactionController
   typing: TypingController
   externalMessageId: string
+  transportAccountId: string
+  claimToken: string
   startedAt: number
 }
 
@@ -205,12 +218,23 @@ async function ensureControllersForSession(input: {
 
   const existing = activeSessions.get(input.sessionId)
   if (existing && existing.externalMessageId === link.externalMessageId) {
+    // Same message as before — extend the claim so a long turn doesn't
+    // expire mid-stream and let another replica steal in. Best-effort:
+    // if renew fails, the next event will surface that via a missing
+    // claim and tear down cleanly.
+    void statusClaim
+      .renew(
+        {
+          transportAccountId: existing.transportAccountId,
+          externalMessageId: existing.externalMessageId,
+        },
+        existing.claimToken
+      )
+      .catch(() => undefined)
     return existing
   }
   if (existing) {
-    activeSessions.delete(input.sessionId)
-    void existing.reaction.destroy()
-    void existing.typing.destroy()
+    await destroyControllersForSession(input.sessionId)
   }
 
   const connector = tryGetConnector(link.transportKind as any)
@@ -219,10 +243,21 @@ async function ensureControllersForSession(input: {
   const account = await getTransportAccountById(link.transportAccountId)
   if (!account || account.workspaceId !== input.workspaceId) return null
 
-  // Reaction adapter — connector wires the onPersist callback into its own
-  // tracking. No platform-specific code here.
+  // Multi-replica claim: only the replica that wins this SETNX runs the
+  // controllers for this (account, externalMessageId). Everyone else
+  // returns null and silently drops the event.
   const accountId = account.id
   const externalMessageId = link.externalMessageId
+  const claimToken = await statusClaim.acquire({
+    transportAccountId: accountId,
+    externalMessageId,
+  })
+  if (!claimToken) {
+    return null
+  }
+
+  // Reaction adapter — connector wires the onPersist callback into its own
+  // tracking. No platform-specific code here.
 
   // Load any reaction ids the previous process persisted on this inbound
   // message, so we can both (a) seed the new adapter's id map so
@@ -306,6 +341,8 @@ async function ensureControllersForSession(input: {
     reaction: reactionController,
     typing: typingController,
     externalMessageId,
+    transportAccountId: accountId,
+    claimToken,
     startedAt: Date.now(),
   }
   activeSessions.set(input.sessionId, entry)
@@ -318,6 +355,18 @@ async function destroyControllersForSession(sessionId: string): Promise<void> {
   activeSessions.delete(sessionId)
   await entry.reaction.destroy()
   await entry.typing.destroy()
+  // Release the claim so a subsequent inbound message on the same
+  // account can be handled by whatever replica wins next, including
+  // ones that didn't see this round of events.
+  await statusClaim
+    .release(
+      {
+        transportAccountId: entry.transportAccountId,
+        externalMessageId: entry.externalMessageId,
+      },
+      entry.claimToken
+    )
+    .catch(() => undefined)
 }
 
 let installed = false
