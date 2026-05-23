@@ -250,12 +250,18 @@ export default function ConversationChat({
   const handleInteractionUpdated = useChatStore(
     (state) => state.handleInteractionUpdated
   )
+  const loadOlderMessages = useChatStore((state) => state.loadOlderMessages)
   const currentViewerWorkspaceMemberId = currentWorkspaceMemberId || ""
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const initialScrollPendingRef = useRef(true)
   const hasObservedLoadingForConversationRef = useRef(false)
   const [showJumpButton, setShowJumpButton] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  // `null` = unknown (default), `true` = more older messages exist, `false`
+  // = the API said it's reached the start. Reset whenever the conversation
+  // changes since the new conversation has a fresh history.
+  const [hasMoreOlder, setHasMoreOlder] = useState<boolean | null>(null)
   const [conversationDetailsOpen, setConversationDetailsOpen] = useState(false)
   const [participantDetailOpen, setParticipantDetailOpen] = useState(false)
   const [selectedParticipantMember, setSelectedParticipantMember] =
@@ -442,7 +448,48 @@ export default function ConversationChat({
     initialScrollPendingRef.current = true
     hasObservedLoadingForConversationRef.current = false
     setShowJumpButton(false)
+    setHasMoreOlder(null)
+    setLoadingOlder(false)
   }, [conversation.id])
+
+  const handleLoadOlder = async () => {
+    if (!workspaceId || loadingOlder || hasMoreOlder === false) return
+    const earliestSequence = messages.length > 0 ? messages[0].sequence : null
+    if (earliestSequence === null) return
+    setLoadingOlder(true)
+    try {
+      // Capture viewport height so we can preserve scroll position when the
+      // older messages get prepended — without this the list would jump
+      // upward and dump the user back to the new content's top edge.
+      const el = scrollRef.current
+      const previousScrollHeight = el?.scrollHeight ?? 0
+      const previousScrollTop = el?.scrollTop ?? 0
+
+      const result = await loadOlderMessages(
+        workspaceId,
+        conversation.id,
+        earliestSequence
+      )
+
+      if (result) {
+        setHasMoreOlder(result.hasMoreBefore)
+      }
+
+      // After React paints the new items the scroll height grew; bump
+      // scrollTop by the delta so the user stays anchored on the message
+      // they were reading.
+      requestAnimationFrame(() => {
+        const next = scrollRef.current
+        if (!next) return
+        const delta = next.scrollHeight - previousScrollHeight
+        if (delta > 0) {
+          next.scrollTop = previousScrollTop + delta
+        }
+      })
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
 
   useEffect(() => {
     if (!initialScrollPendingRef.current) return
@@ -757,7 +804,22 @@ export default function ConversationChat({
                 </div>
               </div>
             ) : (
-              messages.map((msg) => (
+              <>
+                {hasMoreOlder !== false ? (
+                  <div className="flex justify-center pt-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={loadingOlder}
+                      onClick={() => void handleLoadOlder()}
+                    >
+                      {loadingOlder
+                        ? "Loading earlier messages..."
+                        : "Load earlier messages"}
+                    </Button>
+                  </div>
+                ) : null}
+                {messages.map((msg) => (
                 <MessageBubble
                   key={msg.id}
                   kind={msg.kind}
@@ -820,7 +882,8 @@ export default function ConversationChat({
                   onRetryModelError={handleRetryModelError}
                   onQuoteMessage={setReplyTo}
                 />
-              ))
+              ))}
+              </>
             )}
 
             {!loading
