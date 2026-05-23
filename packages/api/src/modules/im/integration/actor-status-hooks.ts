@@ -207,12 +207,28 @@ async function ensureControllersForSession(input: {
   // tracking. No platform-specific code here.
   const accountId = account.id
   const externalMessageId = link.externalMessageId
+
+  // Load any reaction ids the previous process persisted on this inbound
+  // message, so we can both (a) seed the new adapter's id map so
+  // removeReaction has something to delete, and (b) walk that map to clean
+  // them up before we draw the new status sequence.
+  let persistedReactions: Record<string, string> = {}
+  try {
+    persistedReactions = await loadTransportEmojiReactions({
+      transportAccountId: accountId,
+      externalMessageId,
+    })
+  } catch (err) {
+    console.warn("[im:status] failed to load persisted reactions:", err)
+  }
+
   const reactionAdapter = connector.createStatusReactionAdapter({
     account,
     messageRef: {
       externalMessageId,
       endpointExternalId: link.endpointExternalId,
     },
+    initialReactionIdsByEmoji: persistedReactions,
     onPersist: ({ reactionIdsByEmoji }) => {
       void saveTransportEmojiReactions({
         transportAccountId: accountId,
@@ -225,32 +241,18 @@ async function ensureControllersForSession(input: {
   })
 
   // Reaction state recovery: ask the connector to delete any orphan
-  // reactions left by a previous process. We do this by calling
-  // removeReaction on each persisted glyph. Adapters that don't track
-  // ids just ignore — orphans stay only on platforms with stable ids
-  // (currently Feishu).
-  if (reactionAdapter) {
-    try {
-      const persisted = await loadTransportEmojiReactions({
-        transportAccountId: accountId,
-        externalMessageId,
-      })
-      for (const glyph of Object.keys(persisted)) {
-        try {
-          await reactionAdapter.removeReaction?.(glyph)
-        } catch {
-          // ignored: orphan delete is best-effort
-        }
+  // reactions left by a previous process. The adapter was seeded with
+  // `persistedReactions` above, so removeReaction(glyph) now has the
+  // platform reaction_id to actually delete. The onPersist callback
+  // fires after each delete and walks the saved map down to {}, so we
+  // don't need a separate clearing write.
+  if (reactionAdapter && Object.keys(persistedReactions).length > 0) {
+    for (const glyph of Object.keys(persistedReactions)) {
+      try {
+        await reactionAdapter.removeReaction?.(glyph)
+      } catch {
+        // best-effort
       }
-      if (Object.keys(persisted).length > 0) {
-        await saveTransportEmojiReactions({
-          transportAccountId: accountId,
-          externalMessageId,
-          reactionIdsByEmoji: {},
-        }).catch(() => undefined)
-      }
-    } catch (err) {
-      console.warn("[im:status] orphan reaction recovery failed:", err)
     }
   }
 

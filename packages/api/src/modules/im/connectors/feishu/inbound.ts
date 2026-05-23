@@ -94,7 +94,6 @@ export async function startFeishuAccount(
 }
 
 export async function handleFeishuWebhook(
-  ctx: AccountStartContext,
   input: WebhookHandlerInput
 ): Promise<WebhookHandlerResult> {
   const account = input.account
@@ -137,7 +136,7 @@ export async function handleFeishuWebhook(
     "im.message.receive_v1": async (data) => {
       const envelope = envelopeFromEvent(account, data as FeishuMessageEvent)
       if (envelope) {
-        await ctx.emitInbound(envelope)
+        await input.emitInbound(envelope)
       }
     },
   })

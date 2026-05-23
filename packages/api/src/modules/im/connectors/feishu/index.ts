@@ -1,15 +1,11 @@
 /**
  * Feishu TransportConnector assembly + registry registration.
  *
- * Importing this module side-effects the global connector registry
- * (the connector becomes the new authoritative path; the legacy
- * `connectors/feishu.ts` capability constant export remains during
- * the transition).
+ * Importing this module side-effects the global connector registry.
  */
 
 import { registerConnector } from "../registry.js"
 import type {
-  AccountStartContext,
   TransportConnector,
   WebhookHandlerInput,
   WebhookHandlerResult,
@@ -24,12 +20,6 @@ import { handleFeishuWebhook, startFeishuAccount } from "./inbound.js"
 import { parseFeishuMentions, renderFeishuMention } from "./mentions.js"
 import { sendFeishuMessage } from "./outbound.js"
 import { createFeishuReactionAdapter } from "./reactions.js"
-
-// One AccountStartContext per active account so that the webhook handler can
-// route the inbound event into the right ingest pipeline. Previously a single
-// lastWebhookStartContext got overwritten on every startAccount, which broke
-// multi-account and multi-restart workflows.
-const webhookContexts = new Map<string, AccountStartContext>()
 
 export const feishuConnector: TransportConnector = {
   transportKind: "feishu",
@@ -51,13 +41,9 @@ export const feishuConnector: TransportConnector = {
   },
 
   async startAccount(ctx) {
-    // Remember the context per-account so the webhook handler can route
-    // inbound events back through the right ingest pipeline.
-    webhookContexts.set(ctx.account.id, ctx)
     const running = await startFeishuAccount(ctx)
     return {
       stop: async () => {
-        webhookContexts.delete(ctx.account.id)
         await running.stop()
       },
     }
@@ -78,6 +64,7 @@ export const feishuConnector: TransportConnector = {
       return createFeishuReactionAdapter({
         client,
         messageRef: input.messageRef,
+        initialReactionIdsByEmoji: input.initialReactionIdsByEmoji,
         onReactionTracked: input.onPersist
           ? ({ reactionIdsByEmoji }) => input.onPersist!({ reactionIdsByEmoji })
           : undefined,
@@ -102,14 +89,7 @@ export const feishuConnector: TransportConnector = {
   async handleWebhook(
     input: WebhookHandlerInput
   ): Promise<WebhookHandlerResult> {
-    const ctx = webhookContexts.get(input.account.id)
-    if (!ctx) {
-      return {
-        statusCode: 503,
-        body: { error: `no active runtime for account ${input.account.id}` },
-      }
-    }
-    return handleFeishuWebhook(ctx, input)
+    return handleFeishuWebhook(input)
   },
 }
 

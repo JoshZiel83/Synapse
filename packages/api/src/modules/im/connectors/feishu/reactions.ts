@@ -6,9 +6,9 @@
  * before adding a new one (Feishu reactions accumulate; we want exactly
  * one "live" status reaction at a time).
  *
- * In-memory only for V1: reaction_ids are not persisted, so on process
- * restart we lose the ability to clean up old reactions. Commit 10 will
- * add a JSONB column for this.
+ * The id map is seeded from `initialReactionIdsByEmoji` on construction so
+ * the orphan-recovery path (restart → load persisted ids → removeReaction
+ * each glyph) can actually delete the previous process's leftovers.
  */
 
 import type * as Lark from "@larksuiteoapi/node-sdk"
@@ -24,6 +24,12 @@ export interface FeishuReactionAdapterDeps {
   messageRef: MessageRef
   /** Optional reverse lookup: emoji glyph → Feishu emoji_type. */
   emojiTypeMap?: Record<string, string>
+  /**
+   * Seed map of glyph → Feishu reaction_id loaded from durable storage on
+   * process restart. Lets the orphan-recovery code delete reactions left
+   * over by a previous process.
+   */
+  initialReactionIdsByEmoji?: Record<string, string>
   /** Optional callback to persist reactionIds for restart safety. */
   onReactionTracked?: (state: {
     activeEmoji: string | null
@@ -60,7 +66,9 @@ export function createFeishuReactionAdapter(
   deps: FeishuReactionAdapterDeps
 ): StatusReactionAdapter {
   const emojiTypeMap = deps.emojiTypeMap ?? defaultEmojiGlyphToFeishuType()
-  const reactionIdsByEmoji = new Map<string, string>()
+  const reactionIdsByEmoji = new Map<string, string>(
+    Object.entries(deps.initialReactionIdsByEmoji || {})
+  )
   let activeEmoji: string | null = null
   const logger = deps.logger ?? NOOP_LOGGER
 

@@ -47,14 +47,23 @@ import {
 
 // ───────────────────────── Assertions ─────────────────────────
 
-function assertTransportAccountConfiguration(params: {
+/**
+ * Validate credentials via the connector and return the connector's
+ * normalized form when available. The normalized form is what should be
+ * persisted to the DB (it has alias keys merged, whitespace trimmed, etc.).
+ *
+ * Disabled accounts skip validation entirely — they may legitimately have
+ * blank or expired credentials waiting to be filled in.
+ */
+function validateAndNormalizeAccountCredentials(params: {
   transportKind: TransportKind
   connectionMode: TransportConnectionMode
   status: "active" | "disabled" | "error"
   credentials?: Record<string, unknown>
-}) {
+}): Record<string, unknown> {
+  const original = params.credentials || {}
   if (params.status === "disabled") {
-    return
+    return original
   }
   const connector = tryGetConnector(params.transportKind)
   if (!connector) {
@@ -64,7 +73,7 @@ function assertTransportAccountConfiguration(params: {
   }
   const result = connector.validateCredentials({
     connectionMode: params.connectionMode,
-    credentials: params.credentials || {},
+    credentials: original,
   })
   if (!result.ok) {
     const message = result.errors?.length
@@ -72,6 +81,7 @@ function assertTransportAccountConfiguration(params: {
       : `${params.transportKind} credentials are invalid`
     throw new Error(message)
   }
+  return result.normalized || original
 }
 
 function readPendingAutoLinkWorkspaceMemberId(
@@ -429,7 +439,7 @@ export async function createTransportAccount(params: {
 }) {
   assertSupportedConnectionMode(params.transportKind, params.connectionMode)
   const nextStatus = params.status || "active"
-  assertTransportAccountConfiguration({
+  const normalizedCredentials = validateAndNormalizeAccountCredentials({
     transportKind: params.transportKind,
     connectionMode: params.connectionMode,
     status: nextStatus,
@@ -465,8 +475,8 @@ export async function createTransportAccount(params: {
       inbound_actor_id: inboundActorId,
       connection_mode: params.connectionMode,
       status: nextStatus,
-      credentials: (params.credentials ||
-        {}) as TableInsert<"transport_accounts">["credentials"],
+      credentials:
+        normalizedCredentials as TableInsert<"transport_accounts">["credentials"],
       config: (params.config ||
         {}) as TableInsert<"transport_accounts">["config"],
       metadata: (params.metadata ||
@@ -511,9 +521,15 @@ export async function updateTransportAccount(params: {
   )
   const nextStatus =
     params.status || (existing.status as "active" | "disabled" | "error")
-  const nextCredentials = params.credentials
-    ? params.credentials
-    : parseJsonObject(existing.credentials)
+  // Merge incoming credential fields on top of existing ones. Feishu
+  // (and any future connector with multiple credential fields) accepts
+  // partial updates: PUT {encryptKey: "…"} should leave appId/appSecret
+  // intact. If the caller wants a clean replacement they must send the
+  // full credential object.
+  const existingCredentials = parseJsonObject(existing.credentials)
+  const mergedCredentials = params.credentials
+    ? { ...existingCredentials, ...params.credentials }
+    : existingCredentials
   const nextOwnerScope =
     params.ownerScope ||
     (existing.owner_scope as TransportAccountOwnerScope | undefined) ||
@@ -525,11 +541,11 @@ export async function updateTransportAccount(params: {
         ? params.ownerWorkspaceMemberId
         : (existing.owner_workspace_member_id as string | null | undefined) ||
           null
-  assertTransportAccountConfiguration({
+  const normalizedCredentials = validateAndNormalizeAccountCredentials({
     transportKind: existing.transport_kind as TransportKind,
     connectionMode: nextConnectionMode,
     status: nextStatus,
-    credentials: nextCredentials,
+    credentials: mergedCredentials,
   })
   const resolvedOwnerWorkspaceMemberId = await assertTransportAccountOwner({
     workspaceId: params.workspaceId,
@@ -566,7 +582,7 @@ export async function updateTransportAccount(params: {
       connection_mode: nextConnectionMode,
       status: nextStatus,
       credentials:
-        nextCredentials as TableInsert<"transport_accounts">["credentials"],
+        normalizedCredentials as TableInsert<"transport_accounts">["credentials"],
       config: (params.config !== undefined
         ? params.config
         : parseJsonObject(

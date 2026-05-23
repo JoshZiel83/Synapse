@@ -128,6 +128,15 @@ export interface WebhookHandlerInput {
   account: TransportAccountSummary
   headers: Record<string, unknown>
   body: unknown
+  /**
+   * Where the connector should push normalized inbound events. Supplied by
+   * the HTTP layer (public-controller.ts) — typically a thin wrapper around
+   * `ingestInboundEnvelope`. Webhook accounts don't go through the runtime
+   * reconcile loop (which is long_connection-only), so the connector cannot
+   * assume there's a per-account context already registered for it.
+   */
+  emitInbound: (envelope: InboundEnvelope) => Promise<void>
+  logger?: ConnectorLogger
 }
 
 export interface WebhookHandlerResult {
@@ -162,10 +171,17 @@ export interface TransportConnector {
    * so the caller can persist {glyph → reaction_id} into durable storage
    * for cross-restart cleanup. Connectors that can't track reaction ids
    * may pass an empty map.
+   *
+   * `initialReactionIdsByEmoji` seeds the adapter's internal id map on
+   * construction. Used by the orphan-recovery path on restart: the caller
+   * loads the persisted map from durable storage and passes it in so that
+   * subsequent `removeReaction(glyph)` calls actually have the platform
+   * reaction_id to delete.
    */
   createStatusReactionAdapter(input: {
     account: TransportAccountSummary
     messageRef: MessageRef
+    initialReactionIdsByEmoji?: Record<string, string>
     onPersist?: (state: { reactionIdsByEmoji: Record<string, string> }) => void
   }): StatusReactionAdapter | null
 

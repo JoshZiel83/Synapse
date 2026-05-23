@@ -211,5 +211,8 @@ export async function handleFeishuWebhookRequest(params: {
     account,
     headers: params.headers,
     body: params.body,
+    emitInbound: async (envelope) => {
+      await ingestInboundEnvelope({ account, envelope })
+    },
   })
 }
