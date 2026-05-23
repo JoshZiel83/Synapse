@@ -77,13 +77,30 @@ async function findInboundLinkForSessionTurn(
     .selectFrom("turns")
     .select(["trigger_item_id"])
     .where("session_id", "=", sessionId)
-    .where("status", "in", ["pending", "running"] as any)
+    .where("status", "=", "running")
     .orderBy("started_at", "desc")
     .limit(1)
     .executeTakeFirst()
   const itemId = turnRow?.trigger_item_id
-  if (!itemId) return null
+  if (!itemId) {
+    // Turn might not yet have transitioned to running (race) or already
+    // completed. Try the most-recent-by-started-at as fallback.
+    const fallback = await db
+      .selectFrom("turns")
+      .select(["trigger_item_id"])
+      .where("session_id", "=", sessionId)
+      .orderBy("started_at", "desc")
+      .limit(1)
+      .executeTakeFirst()
+    if (!fallback?.trigger_item_id) return null
+    return findInboundLinkByItemId(fallback.trigger_item_id)
+  }
+  return findInboundLinkByItemId(itemId)
+}
 
+async function findInboundLinkByItemId(
+  itemId: string
+): Promise<InboundLinkLookup | null> {
   const row = await db
     .selectFrom("transport_message_links")
     .innerJoin(
