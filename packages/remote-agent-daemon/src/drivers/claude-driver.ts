@@ -437,6 +437,20 @@ export class ClaudeDriver implements AgentDriver {
       allowDangerouslySkipPermissions: true,
       canUseTool: session.buildCanUseTool(),
       mcpServers: spec.mcpServers,
+      // Wire the SDK's stderr callback so the claude subprocess's death
+      // throes (config errors, OAuth failures, MCP wiring complaints) land
+      // in daemon logs instead of being silently consumed. Without this the
+      // only signal of a startup crash was the downstream EPIPE storm.
+      stderr: (data: string) => {
+        const text = data.trim()
+        if (!text) return
+        // Use stderr to keep the daemon's stdout clean for its own JSON log
+        // stream; tag each line so log scrapers can group them under the
+        // owning conversation.
+        process.stderr.write(
+          `[claude-stderr] ${spec.remoteAgentId} ${spec.conversationId} ${text}\n`
+        )
+      },
       env: {
         ...process.env,
         ...spec.childEnvOverlay,

@@ -587,7 +587,7 @@ cmd_verify() {
   plugin_item_id=${plugin_row%% *}
   plugin_version_id=${plugin_row##* }
   local plugin_install_id
-  plugin_install_id=$(run_psql "INSERT INTO plugin_installations (workspace_id, catalog_item_id, catalog_version_id, display_name, attachment_target_type, status) VALUES ('$RAE_WORKSPACE_ID', '$plugin_item_id', '$plugin_version_id', 'rae-e2e z-ai', 'workspace', 'active') RETURNING id")
+  plugin_install_id=$(run_psql "INSERT INTO plugin_installations (workspace_id, catalog_item_id, catalog_version_id, display_name, attachment_target_type, status) VALUES ('$RAE_WORKSPACE_ID', '$plugin_item_id', '$plugin_version_id', 'rae-e2e z-ai', 'workspace', 'active') RETURNING id" | head -n1 | tr -d '[:space:]')
   test -n "$plugin_install_id" \
     || { echo "  FAIL: could not create plugin_installations row"; exit 1; }
   run_psql "INSERT INTO resource_access_bindings (workspace_id, resource_type, plugin_installation_id, target_type, subject_conversation_id, status) VALUES ('$RAE_WORKSPACE_ID', 'plugin_installation', '$plugin_install_id', 'conversation', '$conv_a', 'active')" >/dev/null
