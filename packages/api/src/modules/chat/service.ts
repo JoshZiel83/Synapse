@@ -1657,6 +1657,40 @@ async function requireConversationAccess(
   }
 }
 
+/**
+ * Same as requireConversationAccess + asserts the viewer has management
+ * rights (kind != "private" AND role_key in ('owner','admin')). Throws
+ * 403 conversation_manage_denied otherwise. Used by PATCH conversation,
+ * POST participants, DELETE participants.
+ */
+async function requireConversationManagement(
+  queryable: Queryable,
+  conversationId: string,
+  workspaceMemberId: string
+) {
+  const access = await requireConversationAccess(
+    queryable,
+    conversationId,
+    workspaceMemberId
+  )
+  if (access.baseRow.kind === CONVERSATION_KIND.PRIVATE) {
+    throw createChatError(
+      403,
+      "conversation_manage_denied",
+      "Private conversations cannot be managed"
+    )
+  }
+  const roleKey = access.participant.role_key
+  if (roleKey !== "owner" && roleKey !== "admin") {
+    throw createChatError(
+      403,
+      "conversation_manage_denied",
+      "Only conversation owners or admins can perform this action"
+    )
+  }
+  return access
+}
+
 type PendingActorWakeup = {
   actorId: string
   sessionId: string
@@ -5414,7 +5448,7 @@ export async function patchChatConversation(params: {
     params.userId
   )
   return transaction(async (client) => {
-    await requireConversationAccess(
+    await requireConversationManagement(
       client,
       params.conversationId,
       identity.workspaceMemberId
@@ -5482,7 +5516,7 @@ export async function addChatConversationParticipants(params: {
     params.userId
   )
   return transaction(async (client) => {
-    await requireConversationAccess(
+    await requireConversationManagement(
       client,
       params.conversationId,
       identity.workspaceMemberId
@@ -5609,6 +5643,15 @@ export async function removeChatConversationParticipant(params: {
     }
 
     const isSelfRemoval = target.id === access.participant.id
+    // Kicking someone else requires conversation management rights;
+    // removing yourself ("leave") only requires being a participant.
+    if (!isSelfRemoval) {
+      await requireConversationManagement(
+        client,
+        params.conversationId,
+        identity.workspaceMemberId
+      )
+    }
     const eventType = isSelfRemoval ? "participant_left" : "participant_kicked"
 
     await setParticipantState(

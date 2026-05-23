@@ -97,7 +97,7 @@ test("PATCH /chat/conversations/:cid renames the conversation", async () => {
       method: "POST",
       json: {
         clientRequestId: clientRequestId(),
-        kind: "private",
+        kind: "group",
         boundary: "internal",
         title: "before",
       },
