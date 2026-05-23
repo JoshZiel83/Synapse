@@ -28,6 +28,8 @@ import {
   extractText,
   formatMentionText,
   getDefaultModelEngineKind,
+  isToolResultOrigin,
+  MCP_TOOL_NAMESPACE_SEPARATOR,
   normalizeCanonicalContentBlocks,
   resolveThreadSemantics,
   textBlock,
@@ -408,6 +410,24 @@ async function loadToolResolveConversationParticipants(params: {
   }
 
   return entries
+}
+
+// Best-effort origin synthesizer for situations where we know a tool is in
+// the MCP family (because it has a namespaced `org__plugin__tool` shape)
+// but we couldn't get to the real instance.transport to distinguish
+// remote/relay/callable. Used in the replan-skip path of appendMcpFailureResult
+// where the tool didn't actually run.
+function deriveOriginFromNamespacedToolName(
+  namespacedToolName: string
+): ToolResultOrigin {
+  const parts = namespacedToolName.split(MCP_TOOL_NAMESPACE_SEPARATOR)
+  if (parts.length >= 2) {
+    return {
+      kind: "mcp_remote",
+      serverKey: `${parts[0]}/${parts[1]}`,
+    }
+  }
+  return { kind: "mcp_remote", serverKey: namespacedToolName }
 }
 
 function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
@@ -1317,15 +1337,31 @@ export async function actorThink(
             message: string
             metadata?: Record<string, unknown>
             responsePayload?: unknown
+            // Phase 8 review: origin must be carried into failures so audit
+            // trails attribute the failure to the right transport (mcp_relay /
+            // mcp_remote / callable_plugin) instead of falling back to the
+            // synthesized {kind:"builtin"} default.
+            origin?: ToolResultOrigin
           }) => {
             const content = textBlocks(params.message)
+            const failureMetadata: Record<string, unknown> = {
+              ...(params.metadata || {}),
+              toolCallId: params.tc.callId,
+              toolName: params.tc.toolName,
+              ...(params.tc.providerCallId
+                ? { providerCallId: params.tc.providerCallId }
+                : {}),
+              isError: true,
+              ...(params.origin ? { origin: params.origin } : {}),
+            }
             mcpResults.push({
               toolCallId: params.tc.callId,
               providerCallId: params.tc.providerCallId,
               toolName: params.tc.toolName,
               content,
               isError: true,
-              metadata: params.metadata,
+              ...(params.origin ? { origin: params.origin } : {}),
+              metadata: failureMetadata,
             })
 
             if (executionEnabled && params.callRow) {
@@ -1354,7 +1390,7 @@ export async function actorThink(
                   attemptId: attemptRow.id,
                   isError: true,
                   errorMessage: params.message,
-                  metadata: params.metadata,
+                  metadata: failureMetadata,
                   parts: blocksToToolResultParts(content),
                 })
                 await updateToolCallStatus(params.callRow.id, "failed")
@@ -1467,6 +1503,14 @@ export async function actorThink(
                 classifiedError.message,
                 classifiedError.requiresReplan
               )
+              // tool-resolver attaches origin to the thrown error (when it
+              // can derive transport from the instance lookup). If for some
+              // reason it's missing, leave origin undefined and let the
+              // downstream roundToolResults map handle it.
+              const failureOrigin: ToolResultOrigin | undefined =
+                isToolResultOrigin((err as any)?.origin)
+                  ? (err as any).origin
+                  : undefined
               await appendMcpFailureResult({
                 tc,
                 callRow,
@@ -1490,6 +1534,7 @@ export async function actorThink(
                     ? { requiresReplan: true }
                     : {}),
                 },
+                origin: failureOrigin,
               })
 
               if (classifiedError.requiresReplan) {
@@ -1517,6 +1562,15 @@ export async function actorThink(
                       requiresReplan: true,
                       skippedDueToReplan: true,
                     },
+                    // Skipped MCP calls didn't actually run, so we can't
+                    // inherit a real origin from a thrown error. Derive a
+                    // best-guess mcp_remote origin from the namespaced tool
+                    // name so the audit trail still attributes correctly
+                    // and the roundToolResults fallback doesn't mis-tag as
+                    // {kind:"builtin"}.
+                    origin: deriveOriginFromNamespacedToolName(
+                      skippedTc.toolName
+                    ),
                     responsePayload: {
                       error: skippedMessage,
                       code: "tool_replan_required",
@@ -1542,16 +1596,27 @@ export async function actorThink(
             input: tc.input,
           })
         )
+        const callableResultIds = new Set(
+          callableResults.map((r) => r.toolCallId)
+        )
         const roundToolResults: CanonicalToolResult[] = toolResults.map(
           (tr) => {
-            // mcpResults carry origin/structuredContent; ToolResult from
-            // executeCallableTools (the ToolPlugin path) doesn't — synthesize
-            // a {kind:"builtin"} origin so every CanonicalToolResult.origin
-            // is filled.
+            // Both callableResults and mcpResults now carry origin (Phase
+            // 7b/7d/8). Distinguish their fallback semantics:
+            //   - callable path: synth {kind:"builtin", toolKind: toolName}
+            //     (these are ToolPlugin-style runtime tools like
+            //     create_memory; "builtin" is the right discriminator)
+            //   - mcp path: synth a derived mcp_remote origin from the
+            //     namespaced tool name (Phase 8 bug: was falling back to
+            //     "builtin" for MCP failures, mis-tagging audit + context)
             const trAny = tr as any
-            const origin =
-              trAny.origin ||
-              ({ kind: "builtin", toolKind: tr.toolName } as const)
+            const isCallableEntry = callableResultIds.has(tr.toolCallId)
+            const fallbackOrigin: ToolResultOrigin = isCallableEntry
+              ? { kind: "builtin", toolKind: tr.toolName }
+              : deriveOriginFromNamespacedToolName(tr.toolName)
+            const origin = isToolResultOrigin(trAny.origin)
+              ? trAny.origin
+              : fallbackOrigin
             const structuredContent = trAny.structuredContent
             const base: CanonicalToolResult = {
               toolCallId: tr.toolCallId,

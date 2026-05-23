@@ -138,7 +138,71 @@ test("tool_result rehydration recovers original tool metadata (residual after st
   assert.equal(tr.metadata.structuredContent, undefined)
 })
 
-test("buildSessionContextItems: child_result body has no prefix", () => {
+test("buildSessionContextItems: executionToolResults map overrides metadata-based reconstruction", () => {
+  // Phase 9: when the caller pre-loads tool_calls/tool_results data, that
+  // map is authoritative — the session_message.metadata is only a cached
+  // projection, the execution tables are source of truth.
+  const executionMap = new Map<string, any>()
+  executionMap.set("call-99", {
+    toolCallId: "call-99",
+    toolName: "real_tool",
+    content: textBlocks("authoritative payload from tool_results table"),
+    isError: false,
+    origin: { kind: "mcp_relay", deviceId: "dev-x", exposureStableKey: "k" },
+    structuredContent: { authoritative: true },
+  })
+
+  const items = buildSessionContextItems(
+    [
+      {
+        id: "msg-x",
+        sessionId: "sess-1",
+        role: "tool_result",
+        contentBlocks: textBlocks("stale projection text"),
+        metadata: {
+          toolCallId: "call-99",
+          toolName: "wrong_tool_name_from_metadata",
+          origin: { kind: "callable_plugin", pluginKey: "wrong" },
+        },
+      },
+    ],
+    { executionToolResults: executionMap }
+  )
+
+  const tr = (items[0] as any).toolResults[0]
+  assert.equal(tr.toolName, "real_tool", "tool_calls table wins over metadata")
+  assert.equal(tr.origin.kind, "mcp_relay", "tool_results.metadata origin wins")
+  assert.deepEqual(tr.structuredContent, { authoritative: true })
+  assert.equal(
+    extractText(tr.content),
+    "authoritative payload from tool_results table"
+  )
+})
+
+test("buildSessionContextItems: missing executionToolResults entry falls back to metadata", () => {
+  const executionMap = new Map<string, any>() // empty
+  const items = buildSessionContextItems(
+    [
+      {
+        id: "msg-y",
+        sessionId: "sess-1",
+        role: "tool_result",
+        contentBlocks: textBlocks("from metadata"),
+        metadata: {
+          toolCallId: "call-not-in-map",
+          toolName: "fallback_tool",
+          origin: { kind: "mcp_remote", serverKey: "github" },
+        },
+      },
+    ],
+    { executionToolResults: executionMap }
+  )
+  const tr = (items[0] as any).toolResults[0]
+  assert.equal(tr.toolName, "fallback_tool")
+  assert.equal(tr.origin.serverKey, "github")
+})
+
+test("buildSessionContextItems: child_result becomes tool_result_batch with child_actor origin", () => {
   const items = buildSessionContextItems([
     {
       id: "msg-3",
@@ -149,9 +213,12 @@ test("buildSessionContextItems: child_result body has no prefix", () => {
     },
   ])
   assert.equal(items.length, 1)
-  assert.equal(items[0].kind, "system_notice")
-  assert.equal((items[0] as any).noticeType, "generic")
-  assert.equal(bodyText(items[0]), "child agent reply")
+  assert.equal(items[0].kind, "tool_result_batch")
+  const tr = (items[0] as any).toolResults[0]
+  assert.equal(tr.toolName, "child_actor")
+  assert.equal(tr.origin.kind, "builtin")
+  assert.equal(tr.origin.toolKind, "child_actor")
+  assert.equal(extractText(tr.content), "child agent reply")
 })
 
 test("buildSessionContextItems: interrupt body has no [System Interrupt - X] prefix", () => {

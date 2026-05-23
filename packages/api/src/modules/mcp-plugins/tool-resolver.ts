@@ -1314,25 +1314,37 @@ export async function resolveMcpToolsForActor(
     let isError = false
     let errorMessage: string | undefined
 
+    // Compute origin up-front so it's available in the catch path. Without
+    // this, a failing instance.execute() would lose attribution and the
+    // ai/index.ts roundToolResults fallback would mis-tag the failure as
+    // {kind:"builtin"} (Phase 8 review gap).
+    const relayContext =
+      instance.transport === "relay"
+        ? getRelayToolRuntimeContext(params.sessionId, namespacedToolName)
+        : undefined
+    const origin = buildMcpInstanceOrigin(
+      instance,
+      `${orgSlug}/${pluginSlug}`,
+      instance.pluginSlug || pluginSlug,
+      relayContext,
+      namespacedToolName
+    )
+
     try {
       rawOutput = await instance.execute(toolName, input, executionContext)
-      const relayContext =
-        instance.transport === "relay"
-          ? getRelayToolRuntimeContext(params.sessionId, namespacedToolName)
-          : undefined
-      const origin = buildMcpInstanceOrigin(
-        instance,
-        `${orgSlug}/${pluginSlug}`,
-        instance.pluginSlug || pluginSlug,
-        relayContext,
-        namespacedToolName
-      )
       return await normalizeMcpToolResult(rawOutput, params.workspaceId, {
         origin,
       })
     } catch (error: any) {
       isError = true
       errorMessage = error.message
+      // Attach origin so ai/index.ts:appendMcpFailureResult can persist it
+      // alongside the failure metadata.
+      if (error && typeof error === "object" && !error.origin) {
+        try {
+          error.origin = origin
+        } catch {}
+      }
       throw error
     } finally {
       const durationMs = Date.now() - startTime

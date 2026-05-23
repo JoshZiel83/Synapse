@@ -3799,6 +3799,11 @@ async function finalizeAsyncRelayOperation(
           typeof normalizedResult.structuredContent === "object"
             ? normalizedResult.structuredContent
             : undefined,
+        // Phase 8 review: error path was dropping origin (only the success
+        // path at the bottom of finalizeAsyncRelayOperation had it). Keep
+        // attribution intact for failures too — audit needs to know which
+        // relay/exposure errored, not just that *something* errored.
+        origin: normalizedResult.origin,
         metadata:
           normalizedResult.metadata &&
           typeof normalizedResult.metadata === "object"

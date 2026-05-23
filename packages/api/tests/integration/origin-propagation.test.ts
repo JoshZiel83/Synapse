@@ -231,3 +231,42 @@ test("Origin survives all 5 ToolResultOrigin kinds through the JSONB column", as
     )
   }
 })
+
+test("Failure path: origin persisted into tool_results.metadata even when isError=true", async () => {
+  // Mirrors the shape that ai/index.ts:appendMcpFailureResult writes after
+  // Phase 9 — verifying that origin doesn't get dropped on the way through
+  // the failure branch (previous bug: origin was only on success path).
+  if (!client || !seed) throw new Error("fixtures missing")
+  const toolCallId = await buildToolCall({
+    toolKind: "mcp_plugin",
+    toolName: "github__find_issue",
+  })
+  await createToolResult({
+    toolCallId,
+    isError: true,
+    errorMessage: "GitHub returned 503 — service unavailable",
+    parts: [
+      { type: "text", text: "GitHub returned 503 — service unavailable" },
+    ],
+    metadata: {
+      // shape produced by appendMcpFailureResult post Phase 9:
+      toolCallId: "call-fail-1",
+      toolName: "github__find_issue",
+      isError: true,
+      origin: { kind: "mcp_remote", serverKey: "github/openapi" },
+      errorCode: "upstream_unavailable",
+    },
+  })
+
+  const rows = await client.query<{ metadata: any; is_error: boolean }>(
+    "SELECT metadata, is_error FROM tool_results WHERE tool_call_id = $1",
+    [toolCallId]
+  )
+  assert.equal(rows.rows.length, 1)
+  assert.equal(rows.rows[0].is_error, true)
+  const meta = rows.rows[0].metadata
+  assert.equal(meta.origin.kind, "mcp_remote")
+  assert.equal(meta.origin.serverKey, "github/openapi")
+  assert.equal(meta.isError, true)
+  assert.equal(meta.errorCode, "upstream_unavailable")
+})
