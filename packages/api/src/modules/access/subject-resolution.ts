@@ -132,7 +132,15 @@ export async function buildConversationCapabilitySubjects(params: {
       )) || undefined
   }
 
-  if (!context && params.sessionId) {
+  // The session→context fallback only makes sense for the actor path:
+  // conversation_actor_context.session_id is a UUID column and the row only
+  // exists for human actors. Remote agents have no actor identity and no
+  // matching context row, so calling this lookup with the synthetic cache key
+  // we use for reverse-MCP sessions ("remote_agent_mcp:…") would crash the
+  // SQL driver and silently mask plugin/relay tool resolution. Gating on
+  // actorId keeps the actor flow unchanged while making the remote-agent
+  // flow correct-by-construction.
+  if (!context && params.actorId && params.sessionId) {
     context =
       (await getConversationActorContextBySessionId(params.sessionId)) ||
       undefined

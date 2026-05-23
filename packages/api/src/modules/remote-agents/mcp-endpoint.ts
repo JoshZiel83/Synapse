@@ -324,7 +324,13 @@ async function createSessionTransport(params: {
   conversationKind: "private" | "group" | "virtual"
   conversationBoundary: ConversationBoundary
 }): Promise<ActiveTransport> {
-  const sessionKey = `remote_agent_mcp:${params.remoteAgentId}:${params.conversationId}:${randomUUID()}`
+  // sessionId is used downstream as a cache scope (relay tool runtime context
+  // map keys, "session:<id>:turn:<uuid>" reuse keys) AND historically fed into
+  // a UUID-typed column lookup in subject-resolution. The subject-resolution
+  // path is now gated on actorId so non-UUID values are safe there, but we
+  // still hand the resolver a real UUID so any future caller that treats
+  // sessionId as a UUID does not silently break the reverse-MCP surface.
+  const sessionKey = randomUUID()
   const server = new McpServer(
     { name: "synapse", version: "0.1.0" },
     { capabilities: { logging: {} } }
@@ -335,25 +341,21 @@ async function createSessionTransport(params: {
     conversationId: params.conversationId,
     machineKey: params.machineKey,
   })
-  let pluginShutdown: () => Promise<void> = async () => undefined
-  try {
-    pluginShutdown = await registerResolvedTools({
-      server,
-      workspaceId: params.workspaceId,
-      remoteAgentId: params.remoteAgentId,
-      conversationId: params.conversationId,
-      conversationKind: params.conversationKind,
-      conversationBoundary: params.conversationBoundary,
-      sessionKey,
-    })
-  } catch (error) {
-    console.error(
-      "[remote-agent mcp] resolveMcpToolsForRemoteAgent failed",
-      params.remoteAgentId,
-      params.conversationId,
-      error
-    )
-  }
+  // Deliberately NOT wrapped in try/catch: an earlier version swallowed the
+  // resolver failure and mounted only the IM tools, which meant a UUID-column
+  // crash in the resolver looked like a clean tools/list to the caller while
+  // plugin/relay grants silently disappeared. Re-throwing here makes the
+  // failure surface as an initialize HTTP 500 — the loud failure mode is the
+  // correct one for the "tool projection" acceptance point in the plan.
+  const pluginShutdown = await registerResolvedTools({
+    server,
+    workspaceId: params.workspaceId,
+    remoteAgentId: params.remoteAgentId,
+    conversationId: params.conversationId,
+    conversationKind: params.conversationKind,
+    conversationBoundary: params.conversationBoundary,
+    sessionKey,
+  })
   let storedSessionId: string | undefined
   const transport = new StreamableHTTPServerTransport({
     sessionIdGenerator: () => randomUUID(),
