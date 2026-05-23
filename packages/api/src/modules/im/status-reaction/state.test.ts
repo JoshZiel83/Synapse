@@ -321,7 +321,7 @@ test("destroy when no reaction was set is noop (no clear)", () => {
   assert.deepEqual(r.effect, { kind: "noop" })
 })
 
-test("apply_failed still moves out of in_flight (no infinite loop)", () => {
+test("apply_failed does NOT advance currentLevel (the platform never updated)", () => {
   let s = reduceStatus(
     INITIAL_STATUS_STATE,
     { type: "request_set", level: "thinking", at: 0 },
@@ -329,9 +329,140 @@ test("apply_failed still moves out of in_flight (no infinite loop)", () => {
   ).next
   s = reduceStatus(s, { type: "tick", at: 800 }, CFG).next
   assert.equal(s.phase, "in_flight")
+  assert.equal(s.inFlightLevel, "thinking")
+
   const r = reduceStatus(s, { type: "apply_failed", at: 900 }, CFG)
-  // We DO update currentLevel optimistically on apply_failed, matching apply_finished
-  // behavior (the next set will retry). Test that we exit in_flight.
+  // Exits in_flight so we don't loop
   assert.equal(r.next.phase, "idle")
   assert.equal(r.next.inFlightLevel, null)
+  // Crucially: currentLevel did NOT advance. Optimistic apply was the
+  // bug — it caused the next set("thinking") to no-op via the
+  // identity check, leaving the platform stuck on the previous emoji.
+  assert.equal(r.next.currentLevel, null)
+  assert.equal(r.next.currentLevelSince, null)
+})
+
+test("apply_failed: same level retried by caller does NOT no-op (because currentLevel didn't advance)", () => {
+  // Walk through the regression scenario directly: set thinking → fail
+  // → caller retries set thinking. The retry must produce a fresh
+  // pending window, not a no-op.
+  let s = reduceStatus(
+    INITIAL_STATUS_STATE,
+    { type: "request_set", level: "thinking", at: 0 },
+    CFG
+  ).next
+  s = reduceStatus(s, { type: "tick", at: 800 }, CFG).next
+  s = reduceStatus(s, { type: "apply_failed", at: 900 }, CFG).next
+  const retry = reduceStatus(
+    s,
+    { type: "request_set", level: "thinking", at: 1000 },
+    CFG
+  )
+  assert.equal(retry.next.phase, "pending")
+  assert.equal(retry.next.desiredLevel, "thinking")
+  assert.deepEqual(retry.effect, {
+    kind: "schedule_tick",
+    afterMs: CFG.debounceMs,
+  })
+})
+
+test("apply_failed with newer queued desired drains the queue (might succeed)", () => {
+  // Caller dispatched "thinking" → in_flight; then "tool" arrived while
+  // in_flight (queued as desiredLevel); the "thinking" apply failed.
+  // We should kick off the "tool" apply immediately.
+  let s = reduceStatus(
+    INITIAL_STATUS_STATE,
+    { type: "request_set", level: "thinking", at: 0 },
+    CFG
+  ).next
+  s = reduceStatus(s, { type: "tick", at: 800 }, CFG).next
+  s = reduceStatus(s, { type: "request_set", level: "tool", at: 850 }, CFG).next
+  assert.equal(s.desiredLevel, "tool")
+
+  const r = reduceStatus(s, { type: "apply_failed", at: 900 }, CFG)
+  assert.equal(r.next.phase, "in_flight")
+  assert.equal(r.next.inFlightLevel, "tool")
+  assert.equal(r.next.desiredLevel, null)
+  assert.deepEqual(r.effect, { kind: "set_reaction", level: "tool" })
+  // Still no advance on currentLevel — the new dispatch is the next
+  // chance to actually land a level.
+  assert.equal(r.next.currentLevel, null)
+})
+
+test("apply_failed after a previous success: currentLevel stays at the last good level", () => {
+  // First a successful "thinking" apply, then a failed "tool" apply.
+  // currentLevel must remain "thinking" so future stall checks and
+  // identity-skip behavior reflect what the platform actually shows.
+  let s = reduceStatus(
+    INITIAL_STATUS_STATE,
+    { type: "request_set", level: "thinking", at: 0 },
+    CFG
+  ).next
+  s = reduceStatus(s, { type: "tick", at: 800 }, CFG).next
+  s = reduceStatus(s, { type: "apply_finished", at: 900 }, CFG).next
+  assert.equal(s.currentLevel, "thinking")
+
+  s = reduceStatus(
+    s,
+    { type: "request_set", level: "tool", at: 1000 },
+    CFG
+  ).next
+  s = reduceStatus(s, { type: "tick", at: 1800 }, CFG).next
+  assert.equal(s.inFlightLevel, "tool")
+
+  const r = reduceStatus(s, { type: "apply_failed", at: 1900 }, CFG)
+  assert.equal(r.next.phase, "idle")
+  assert.equal(r.next.currentLevel, "thinking", "platform still shows thinking")
+  // Since we still have a (non-terminal) currentLevel showing, we keep
+  // a stall watch going.
+  assert.deepEqual(r.effect, {
+    kind: "schedule_tick",
+    afterMs: CFG.stallSoftMs,
+  })
+})
+
+test("apply_failed: nothing was ever displayed → idle with no stall tick", () => {
+  // currentLevel is null and the in-flight failed. There's nothing to
+  // watch for stalling on, so the effect is noop. (A stall tick on an
+  // empty slot would be meaningless and just churn the clock.)
+  let s = reduceStatus(
+    INITIAL_STATUS_STATE,
+    { type: "request_set", level: "thinking", at: 0 },
+    CFG
+  ).next
+  s = reduceStatus(s, { type: "tick", at: 800 }, CFG).next
+  const r = reduceStatus(s, { type: "apply_failed", at: 900 }, CFG)
+  assert.equal(r.next.phase, "idle")
+  assert.equal(r.next.currentLevel, null)
+  assert.deepEqual(r.effect, { kind: "noop" })
+})
+
+test("apply_failed on a terminal does NOT enter terminal_hold", () => {
+  // request_set('done') → in_flight with terminalKind=done. The
+  // platform call fails. We must NOT enter terminal_hold (there's no
+  // emoji to hold) — drop to idle and clear terminalKind so a fresh
+  // done()/error() from the caller can retry.
+  let s = reduceStatus(
+    INITIAL_STATUS_STATE,
+    { type: "request_set", level: "done", at: 0 },
+    CFG
+  ).next
+  assert.equal(s.phase, "in_flight")
+  assert.equal(s.terminalKind, "done")
+
+  const r = reduceStatus(s, { type: "apply_failed", at: 50 }, CFG)
+  assert.notEqual(r.next.phase, "terminal_hold")
+  assert.equal(r.next.phase, "idle")
+  assert.equal(r.next.terminalKind, null)
+  assert.equal(r.next.currentLevel, null)
+  // Caller can now retry; not a no-op despite "done" usually being
+  // terminal — handleRequestSet treats terminal_requested as the
+  // "always re-dispatch" path.
+  const retry = reduceStatus(
+    r.next,
+    { type: "request_set", level: "done", at: 100 },
+    CFG
+  )
+  assert.equal(retry.next.phase, "in_flight")
+  assert.deepEqual(retry.effect, { kind: "set_reaction", level: "done" })
 })

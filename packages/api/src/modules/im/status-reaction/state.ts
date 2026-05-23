@@ -133,7 +133,7 @@ export function reduceStatus(
     }
 
     case "apply_failed": {
-      return handleApplyFinished(state, event.at, cfg, /*ok*/ false)
+      return handleApplyFailed(state, cfg)
     }
 
     case "tick": {
@@ -256,6 +256,86 @@ function handleApplyFinished(
       pendingSince: null,
     },
     effect: { kind: "schedule_tick", afterMs: cfg.stallSoftMs },
+  }
+}
+
+/**
+ * The adapter call we just dispatched threw / returned an error. The
+ * platform did NOT update — it still shows whatever currentLevel was
+ * before we tried.
+ *
+ * Failure semantics (intentionally pessimistic):
+ *
+ *   - Do NOT advance `currentLevel` to the failed `inFlightLevel`. If
+ *     we did, a follow-up `set(sameLevel)` would no-op via the
+ *     identity check in handleRequestSet (line 159-166) and we'd
+ *     never retry. Similarly the stall ladder would compare against
+ *     a level the platform never showed.
+ *
+ *   - `currentLevelSince` is likewise untouched — the displayed level
+ *     didn't change, so its age didn't reset.
+ *
+ *   - `inFlightLevel` clears so the controller is unblocked for the
+ *     next dispatch.
+ *
+ *   - If the caller queued a newer `desiredLevel` while we were in
+ *     flight, fire that one now — it might be a different level that
+ *     succeeds where the previous failed (e.g. transient platform
+ *     glitch on one specific emoji), and it's at least the user's
+ *     most recent intent.
+ *
+ *   - On a failed terminal: do NOT enter terminal_hold. The terminal
+ *     emoji was never displayed; there is nothing to hold. Drop back
+ *     to idle and clear `terminalKind` so a fresh `done()` / `error()`
+ *     from the caller can retry. (The controller's caller is the
+ *     actor-status hook, which doesn't retry terminals automatically
+ *     today — but at least the reducer doesn't lie about the
+ *     platform state.)
+ */
+function handleApplyFailed(
+  state: StatusState,
+  cfg: StatusConfig
+): StatusTransition {
+  const baseNext: StatusState = {
+    ...state,
+    inFlightLevel: null,
+    // currentLevel / currentLevelSince intentionally unchanged
+    terminalKind: state.phase === "terminal_hold" ? state.terminalKind : null,
+  }
+
+  // Newer desire queued during the failed apply → try it.
+  if (
+    state.desiredLevel !== null &&
+    state.desiredLevel !== state.currentLevel
+  ) {
+    return {
+      next: {
+        ...baseNext,
+        phase: "in_flight",
+        inFlightLevel: state.desiredLevel,
+        desiredLevel: null,
+        pendingSince: null,
+      },
+      effect: { kind: "set_reaction", level: state.desiredLevel },
+    }
+  }
+
+  // Settled. Only schedule a stall watch if the platform actually has a
+  // (non-terminal) reaction showing — i.e. some previous apply did
+  // succeed. If currentLevel is null nothing's displayed, so a stall
+  // tick would be meaningless.
+  const scheduleStall =
+    state.currentLevel !== null && !isTerminalStatus(state.currentLevel)
+  return {
+    next: {
+      ...baseNext,
+      phase: "idle",
+      desiredLevel: null,
+      pendingSince: null,
+    },
+    effect: scheduleStall
+      ? { kind: "schedule_tick", afterMs: cfg.stallSoftMs }
+      : { kind: "noop" },
   }
 }
 
