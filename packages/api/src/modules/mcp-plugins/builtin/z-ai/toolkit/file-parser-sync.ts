@@ -5,6 +5,7 @@ import {
   ToolDefinition,
 } from "@synapse/shared"
 import type { SubFeature } from "./types.js"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 import {
   saveFromUrl,
   fileToBuffer,
@@ -128,7 +129,7 @@ export const fileParserSyncFeature: SubFeature = {
     _toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<string | CanonicalContentBlock[]> {
+  ): Promise<BuiltinPluginExecuteResult> {
     const apiKey = config.apiKey as string
     if (!apiKey) throw new Error("ZhipuAI API key not configured.")
 

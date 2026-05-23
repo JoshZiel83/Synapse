@@ -1,3 +1,4 @@
+import { textBlocks } from "@synapse/shared"
 import type {
   BuiltinPluginExecuteResult,
   BuiltinPluginHandler,
@@ -10,6 +11,6 @@ export const amapOpenapiHandler: BuiltinPluginHandler = {
   },
 
   async execute(toolName, input, config): Promise<BuiltinPluginExecuteResult> {
-    return executeAmapTool(toolName, input, config)
+    return textBlocks(await executeAmapTool(toolName, input, config))
   },
 }

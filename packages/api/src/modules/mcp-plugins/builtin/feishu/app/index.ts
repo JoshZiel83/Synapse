@@ -22,10 +22,6 @@ export const feishuAppHandler: BuiltinPluginHandler = {
   },
 
   async execute(toolName, input, config): Promise<BuiltinPluginExecuteResult> {
-    return (await executeFeishuTool(
-      toolName,
-      input,
-      config
-    )) as BuiltinPluginExecuteResult
+    return executeFeishuTool(toolName, input, config)
   },
 }

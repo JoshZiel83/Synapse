@@ -6,8 +6,9 @@
  * Supported audio: .wav, .mp3, ≤ 25 MB, ≤ 30 seconds
  * @see https://docs.bigmodel.cn/api-reference/模型-api/语音转文本
  */
-import { ToolDefinition } from "@synapse/shared"
+import { textBlocks, ToolDefinition } from "@synapse/shared"
 import type { SubFeature } from "./types.js"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 import {
   fileRefProperty,
   resolveAudioFileRefToBase64,
@@ -75,7 +76,7 @@ export const sttFeature: SubFeature = {
     toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<string> {
+  ): Promise<BuiltinPluginExecuteResult> {
     const apiKey = config.apiKey as string
     if (!apiKey) throw new Error("ZhipuAI API key not configured.")
 
@@ -118,7 +119,7 @@ export const sttFeature: SubFeature = {
 
       const result = (await response.json()) as { text?: string }
 
-      return result.text || "No transcription result"
+      return textBlocks(result.text || "No transcription result")
     } catch (error) {
       throw normalizeZhipuTransportError("语音转文本 API", error)
     } finally {

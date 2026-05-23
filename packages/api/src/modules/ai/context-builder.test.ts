@@ -93,6 +93,51 @@ test("buildSessionContextItems: legacy tool_result row (no metadata) still becom
   assert.equal(tr.origin.serverKey, "unknown_legacy")
 })
 
+test("tool_result rehydration recovers original tool metadata (residual after stripping reserved keys)", () => {
+  // ai/index.ts:1249 writes the writer-flattened shape:
+  //   { ...res.metadata, origin, toolCallId, toolName, providerCallId, isError, structuredContent }
+  // The reader must restore CanonicalToolResult.metadata as the residual
+  // (everything except the reserved keys above). The old reader looked for
+  // a non-existent `innerMetadata` wrapper and silently dropped everything.
+  const items = buildSessionContextItems([
+    {
+      id: "msg-tr-meta",
+      sessionId: "sess-1",
+      role: "tool_result",
+      contentBlocks: textBlocks("payload"),
+      metadata: {
+        // reserved keys consumed by the rehydrator:
+        toolCallId: "call-99",
+        toolName: "lookup",
+        origin: {
+          kind: "callable_plugin",
+          pluginKey: "amap/openapi",
+        },
+        structuredContent: { hits: 3 },
+        isError: false,
+        // residual: the original CanonicalToolResult.metadata fields
+        // (mcp execution attempt info, plugin trace ids, etc.)
+        attemptId: "att-1",
+        traceId: "trc-deadbeef",
+        latencyMs: 234,
+      },
+    },
+  ])
+  const tr = (items[0] as any).toolResults[0]
+  assert.equal(tr.toolCallId, "call-99")
+  assert.equal(tr.toolName, "lookup")
+  assert.equal(tr.origin.pluginKey, "amap/openapi")
+  assert.deepEqual(tr.structuredContent, { hits: 3 })
+  // The non-reserved keys flow back into CanonicalToolResult.metadata.
+  assert.equal(tr.metadata.attemptId, "att-1")
+  assert.equal(tr.metadata.traceId, "trc-deadbeef")
+  assert.equal(tr.metadata.latencyMs, 234)
+  // Reserved keys must NOT leak into the inner metadata.
+  assert.equal(tr.metadata.toolCallId, undefined)
+  assert.equal(tr.metadata.origin, undefined)
+  assert.equal(tr.metadata.structuredContent, undefined)
+})
+
 test("buildSessionContextItems: child_result body has no prefix", () => {
   const items = buildSessionContextItems([
     {

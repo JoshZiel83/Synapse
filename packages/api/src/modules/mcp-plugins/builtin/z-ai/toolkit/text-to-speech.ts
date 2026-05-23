@@ -1,10 +1,6 @@
-import {
-  CanonicalContentBlock,
-  FILE_ORIGIN_SYSTEMS,
-  textBlock,
-  ToolDefinition,
-} from "@synapse/shared"
+import { FILE_ORIGIN_SYSTEMS, textBlock, ToolDefinition } from "@synapse/shared"
 import type { SubFeature } from "./types.js"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 import { saveFromBuffer } from "../../../../../infrastructure/storage/file-io.js"
 import { pluginOutputFileRef } from "../../../file-ref.js"
 import {
@@ -84,7 +80,7 @@ export const ttsFeature: SubFeature = {
     toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<string | CanonicalContentBlock[]> {
+  ): Promise<BuiltinPluginExecuteResult> {
     const apiKey = config.apiKey as string
     if (!apiKey) throw new Error("ZhipuAI API key not configured.")
 

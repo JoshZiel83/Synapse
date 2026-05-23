@@ -29,8 +29,10 @@ async function simulateHandlerInvocation(
   })
 }
 
-test("handler returning plain string → canonical text block + origin attribution", async () => {
-  const result = await simulateHandlerInvocation("simple string result")
+test("handler returning textBlocks(text) → canonical text block + origin attribution", async () => {
+  const result = await simulateHandlerInvocation(
+    textBlocks("simple string result")
+  )
   assert.equal(result.content.length, 1)
   assert.equal(result.content[0].type, "text")
   assert.equal((result.content[0] as any).text, "simple string result")

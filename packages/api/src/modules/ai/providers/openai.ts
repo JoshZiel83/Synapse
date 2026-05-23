@@ -7,7 +7,12 @@ import type {
   CanonicalContentBlock,
   ProviderContextWindow,
 } from "@synapse/shared"
-import { extractText, formatMentionText, textBlock } from "@synapse/shared"
+import {
+  extractText,
+  formatMentionText,
+  formatStructuredContentForProvider,
+  textBlock,
+} from "@synapse/shared"
 import { randomUUID } from "crypto"
 import type { AIProvider, AIProviderConfig, FileRefSegment } from "./types.js"
 import {
@@ -338,10 +343,16 @@ export class OpenAIChatCompletionsProvider implements AIProvider {
               tr.content,
               multimodal
             )
+            // OpenAI's tool message content is plain string. Append the
+            // MCP structuredContent (if any) as a tagged JSON suffix so
+            // the LLM still receives the structured sidecar payload.
+            const structuredSuffix = formatStructuredContentForProvider(
+              tr.structuredContent
+            )
             result.push({
               role: "tool",
               tool_call_id: tr.providerCallId || tr.toolCallId,
-              content: textFallback,
+              content: textFallback + structuredSuffix,
             })
           }
           break

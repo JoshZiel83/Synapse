@@ -503,6 +503,31 @@ function sessionMessageText(message: SessionMessageRow) {
   return extractText(message.contentBlocks || [])
 }
 
+// Keys that ai/index.ts writes flat into tool_results.metadata alongside
+// the original CanonicalToolResult.metadata fields. When rehydrating, we
+// pull them out individually and the residual is the original tool metadata.
+const TOOL_RESULT_METADATA_RESERVED_KEYS = new Set([
+  "toolCallId",
+  "toolName",
+  "providerCallId",
+  "isError",
+  "origin",
+  "structuredContent",
+])
+
+function extractInnerMetadata(
+  meta: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  const residual: Record<string, unknown> = {}
+  let hasAny = false
+  for (const [key, value] of Object.entries(meta)) {
+    if (TOOL_RESULT_METADATA_RESERVED_KEYS.has(key)) continue
+    residual[key] = value
+    hasAny = true
+  }
+  return hasAny ? residual : undefined
+}
+
 // Convert a session_message row with role="tool_result" into a structured
 // CanonicalToolResultBatchContextItem. Phase 4+ writers persist
 // toolCallId/toolName/origin/structuredContent/isError under msg.metadata so
@@ -538,10 +563,10 @@ function buildToolResultBatchFromSessionMessage(
   const origin = isToolResultOrigin(meta.origin)
     ? meta.origin
     : ({ kind: "mcp_remote", serverKey: "unknown_legacy" } as const)
-  const innerMetadata =
-    meta.innerMetadata && typeof meta.innerMetadata === "object"
-      ? (meta.innerMetadata as Record<string, unknown>)
-      : undefined
+  // The writer (ai/index.ts) flattens the original tool metadata into
+  // tool_results.metadata next to the reserved keys above (no
+  // `innerMetadata` wrapper). Recover by stripping the reserved keys.
+  const innerMetadata = extractInnerMetadata(meta)
 
   const toolResult: CanonicalToolResult = {
     toolCallId,

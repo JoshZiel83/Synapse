@@ -6,17 +6,21 @@ import type {
 
 /**
  * Allowed return shapes for built-in plugin handlers (and sub-features).
- * The downstream normalizeMcpToolResult understands all three:
- *  - `string` → wrapped as a single text block
+ * The downstream normalizeMcpToolResult understands both:
  *  - `CanonicalContentBlock[]` → array form, passed through the ingest funnel
  *  - `CallableToolResult` envelope `{content, isError?, structuredContent?, metadata?}` →
  *    full MCP-like result, structuredContent + isError preserved
+ *
+ * Plain strings are NOT permitted at the type level — authors must wrap text
+ * with `textBlocks(...)` or `textResult(...)` from `@synapse/shared`. The
+ * runtime normalizer still accepts strings defensively for malformed third-
+ * party returns, but the typed surface forces canonical content blocks at
+ * the handler boundary.
  *
  * Was `Promise<unknown>` before Phase 7c, which let handlers leak typed
  * bugs through to runtime normalization.
  */
 export type BuiltinPluginExecuteResult =
-  | string
   | CanonicalContentBlock[]
   | CallableToolResult
 

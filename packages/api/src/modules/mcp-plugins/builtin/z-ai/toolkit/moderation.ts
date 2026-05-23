@@ -1,5 +1,6 @@
-import { ToolDefinition } from "@synapse/shared"
+import { textBlocks, ToolDefinition } from "@synapse/shared"
 import type { SubFeature } from "./types.js"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 import {
   fileRefProperty,
   fileRefsProperty,
@@ -73,7 +74,7 @@ export const moderationFeature: SubFeature = {
     _toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<string> {
+  ): Promise<BuiltinPluginExecuteResult> {
     const apiKey = config.apiKey as string
     if (!apiKey) throw new Error("ZhipuAI API key not configured.")
 
@@ -167,7 +168,7 @@ export const moderationFeature: SubFeature = {
         }
       }
 
-      return lines.join("\n")
+      return textBlocks(lines.join("\n"))
     } catch (error) {
       throw normalizeZhipuTransportError("内容安全 API", error)
     } finally {

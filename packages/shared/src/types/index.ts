@@ -5047,6 +5047,33 @@ export function textResult(
 }
 
 /**
+ * Format a CanonicalToolResult.structuredContent payload as an XML-tagged
+ * JSON suffix suitable for inclusion in provider tool_result content.
+ *
+ * Returns empty string when there is nothing to emit. Otherwise wraps the
+ * JSON in `<structured_content>...</structured_content>` so the LLM has a
+ * clear, parseable marker around the sidecar payload (distinct from the
+ * primary text output). The XML tag matches the wrapping convention
+ * context-compiler.ts uses for system_notice / event items.
+ *
+ * Callers append this to whatever string they're about to send to the
+ * provider — Anthropic appends as a tool_result content text block,
+ * OpenAI / OpenAI-Responses / BigModel append as a string suffix.
+ */
+export function formatStructuredContentForProvider(
+  structuredContent: unknown
+): string {
+  if (!structuredContent || typeof structuredContent !== "object") return ""
+  try {
+    const json = JSON.stringify(structuredContent, null, 2)
+    if (!json || json === "{}" || json === "null") return ""
+    return `\n\n<structured_content>\n${json}\n</structured_content>`
+  } catch {
+    return ""
+  }
+}
+
+/**
  * Type guard for ToolResultOrigin. Validates the discriminator and the
  * required fields per kind. Use at trust boundaries (e.g., when reading
  * a metadata column from the DB) before passing to downstream code that

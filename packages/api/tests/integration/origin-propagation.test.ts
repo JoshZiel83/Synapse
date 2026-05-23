@@ -1,20 +1,33 @@
 // Integration test: ToolResultOrigin survives the full DB persistence
 // round-trip via createToolResult → tool_results.metadata JSONB.
 //
-// This is the "are we actually persisting origin?" check for both the
-// MCP path (where the metadata is constructed in ai/index.ts:1401) and
-// the callable path (constructed in ai/index.ts:1242).
+// **MUST be run via scripts/run-test.sh** (not bare `node --test`) — Node's
+// ESM static imports load before any top-of-file `process.env = ...` runs,
+// so by the time we'd set DATABASE_URL/REDIS_URL the redis client and
+// pg pool in transitively-imported modules have already grabbed defaults
+// (production redis on :6379, default DB URL). The wrapper script sets
+// these in the parent process before invoking node.
 //
-// Prerequisites: bash packages/api/tests/integration/scripts/up.sh
+// Run:
+//   bash packages/api/tests/integration/scripts/up.sh
+//   bash packages/api/tests/integration/scripts/run-test.sh \
+//     packages/api/tests/integration/origin-propagation.test.ts
 
-// Pin REDIS_URL + DATABASE_URL to the test stack BEFORE importing any API
-// module that opens those connections at import time. Otherwise importing
-// `execution/service.js` triggers the default redis client to spam NOAUTH
-// against the production redis on :6379.
-process.env.DATABASE_URL =
-  process.env.DATABASE_URL ||
-  "postgresql://synapse:test_password@127.0.0.1:55433/synapse_test"
-process.env.REDIS_URL = process.env.REDIS_URL || "redis://127.0.0.1:56380"
+// Fail fast if someone runs us via plain `node --test` — the dependent
+// modules have already opened the wrong connections at this point, and the
+// error message you'd otherwise see ("password authentication failed for
+// user 'synapse'" + redis NOAUTH spam) is misleading.
+if (
+  !process.env.DATABASE_URL ||
+  !process.env.DATABASE_URL.includes(":55433/")
+) {
+  throw new Error(
+    "origin-propagation.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh " +
+      "(DATABASE_URL must point at the worktree-isolated test postgres on 127.0.0.1:55433). " +
+      "Direct `node --test` invocation does not work because ESM static imports load " +
+      "config/redis/pg modules before any top-of-file env assignment can take effect."
+  )
+}
 
 import { after, before, test } from "node:test"
 import assert from "node:assert/strict"

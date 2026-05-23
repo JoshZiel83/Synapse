@@ -7,7 +7,12 @@ import type {
   CanonicalContentBlock,
   ProviderContextWindow,
 } from "@synapse/shared"
-import { extractText, formatMentionText, textBlock } from "@synapse/shared"
+import {
+  extractText,
+  formatMentionText,
+  formatStructuredContentForProvider,
+  textBlock,
+} from "@synapse/shared"
 import { randomUUID } from "crypto"
 import type { AIProvider, AIProviderConfig, FileRefSegment } from "./types.js"
 import {
@@ -420,10 +425,13 @@ export class OpenAIResponsesProvider implements AIProvider {
               resultItem.content,
               multimodal
             )
+            const structuredSuffix = formatStructuredContentForProvider(
+              resultItem.structuredContent
+            )
             result.push({
               type: "function_call_output",
               call_id: resultItem.providerCallId || resultItem.toolCallId,
-              output: textFallback,
+              output: textFallback + structuredSuffix,
             })
           }
           break

@@ -1,9 +1,12 @@
 import { randomUUID } from "node:crypto"
 import {
   FILE_ORIGIN_SYSTEMS,
+  textBlock,
+  textBlocks,
   type ToolDefinition,
   type ToolParameterProperty,
 } from "@synapse/shared"
+import type { BuiltinPluginExecuteResult } from "../builtin/index.js"
 import {
   fileToBuffer,
   saveFromBuffer,
@@ -23,6 +26,26 @@ import {
 
 type JsonObject = Record<string, unknown>
 
+/**
+ * Wrap a Feishu API JSON response into a CallableToolResult that preserves
+ * the structured payload via structuredContent while still surfacing a
+ * human-readable JSON text block. Without this wrapper, the runtime
+ * normalizer would also stringify the object, but at the type level
+ * BuiltinPluginExecuteResult no longer accepts arbitrary objects — every
+ * sub-feature must produce canonical content blocks at its handler
+ * boundary.
+ */
+function jsonResult(value: unknown): BuiltinPluginExecuteResult {
+  const structured =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : { value }
+  return {
+    content: textBlocks(JSON.stringify(value)),
+    structuredContent: structured,
+  }
+}
+
 type FeishuToolSpec = {
   name: string
   feature: FeishuFeatureKey
@@ -30,7 +53,7 @@ type FeishuToolSpec = {
   execute: (
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ) => Promise<unknown>
+  ) => Promise<BuiltinPluginExecuteResult>
 }
 
 const jsonObjectProperty = (description: string): ToolParameterProperty => ({
@@ -617,14 +640,16 @@ const feishuToolSpecs: FeishuToolSpec[] = [
     },
     async execute(input, config) {
       const { client } = createFeishuApiClient(config)
-      return client.requestJson({
-        path: "/open-apis/search/v1/user",
-        query: {
-          query: asString(input.query),
-          page_size: asNumber(input.pageSize, 20) || 20,
-          page_token: asString(input.pageToken) || undefined,
-        },
-      })
+      return jsonResult(
+        await client.requestJson({
+          path: "/open-apis/search/v1/user",
+          query: {
+            query: asString(input.query),
+            page_size: asNumber(input.pageSize, 20) || 20,
+            page_token: asString(input.pageToken) || undefined,
+          },
+        })
+      )
     },
   },
   {
@@ -649,9 +674,11 @@ const feishuToolSpecs: FeishuToolSpec[] = [
       const { client } = createFeishuApiClient(config)
       const userId = asString(input.userId)
       if (!userId) {
-        return client.requestJson({
-          path: "/open-apis/authen/v1/user_info",
-        })
+        return jsonResult(
+          await client.requestJson({
+            path: "/open-apis/authen/v1/user_info",
+          })
+        )
       }
 
       const data = await client.requestJson<{ users?: unknown[] }>({
@@ -665,9 +692,9 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         },
       })
 
-      return {
+      return jsonResult({
         user: Array.isArray(data.users) ? data.users[0] || null : null,
-      }
+      })
     },
   },
   {
@@ -709,15 +736,17 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         body.filter = { member_ids: memberIds }
       }
 
-      return client.requestJson({
-        path: "/open-apis/im/v2/chats/search",
-        method: "POST",
-        query: {
-          page_size: asNumber(input.pageSize, 20) || 20,
-          page_token: asString(input.pageToken) || undefined,
-        },
-        body,
-      })
+      return jsonResult(
+        await client.requestJson({
+          path: "/open-apis/im/v2/chats/search",
+          method: "POST",
+          query: {
+            page_size: asNumber(input.pageSize, 20) || 20,
+            page_token: asString(input.pageToken) || undefined,
+          },
+          body,
+        })
+      )
     },
   },
   {
@@ -764,29 +793,31 @@ const feishuToolSpecs: FeishuToolSpec[] = [
       const { client } = createFeishuApiClient(config)
       const chatId = await resolveChatIdFromInput(client, input)
 
-      return client.requestJson({
-        path: "/open-apis/im/v1/messages",
-        query: {
-          container_id_type: "chat",
-          container_id: chatId,
-          sort_type:
-            asString(input.sort) === "asc"
-              ? "ByCreateTimeAsc"
-              : "ByCreateTimeDesc",
-          page_size: Math.min(
-            Math.max(asNumber(input.pageSize, 50) || 50, 1),
-            50
-          ),
-          page_token: asString(input.pageToken) || undefined,
-          card_msg_content_type: "raw_card_content",
-          start_time: input.startTime
-            ? toUnixTimestampSeconds(input.startTime, "startTime")
-            : undefined,
-          end_time: input.endTime
-            ? toUnixTimestampSeconds(input.endTime, "endTime")
-            : undefined,
-        },
-      })
+      return jsonResult(
+        await client.requestJson({
+          path: "/open-apis/im/v1/messages",
+          query: {
+            container_id_type: "chat",
+            container_id: chatId,
+            sort_type:
+              asString(input.sort) === "asc"
+                ? "ByCreateTimeAsc"
+                : "ByCreateTimeDesc",
+            page_size: Math.min(
+              Math.max(asNumber(input.pageSize, 50) || 50, 1),
+              50
+            ),
+            page_token: asString(input.pageToken) || undefined,
+            card_msg_content_type: "raw_card_content",
+            start_time: input.startTime
+              ? toUnixTimestampSeconds(input.startTime, "startTime")
+              : undefined,
+            end_time: input.endTime
+              ? toUnixTimestampSeconds(input.endTime, "endTime")
+              : undefined,
+          },
+        })
+      )
     },
   },
   {
@@ -862,18 +893,20 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         body.filter = filter
       }
 
-      return client.requestJson({
-        path: "/open-apis/im/v1/messages/search",
-        method: "POST",
-        query: {
-          page_size: Math.min(
-            Math.max(asNumber(input.pageSize, 20) || 20, 1),
-            50
-          ),
-          page_token: asString(input.pageToken) || undefined,
-        },
-        body,
-      })
+      return jsonResult(
+        await client.requestJson({
+          path: "/open-apis/im/v1/messages/search",
+          method: "POST",
+          query: {
+            page_size: Math.min(
+              Math.max(asNumber(input.pageSize, 20) || 20, 1),
+              50
+            ),
+            page_token: asString(input.pageToken) || undefined,
+          },
+          body,
+        })
+      )
     },
   },
   {
@@ -919,21 +952,23 @@ const feishuToolSpecs: FeishuToolSpec[] = [
 
       const receiveIdType = userId ? "open_id" : "chat_id"
       const receiveId = userId || chatId
-      return client.requestJson({
-        path: "/open-apis/im/v1/messages",
-        method: "POST",
-        query: {
-          receive_id_type: receiveIdType,
-        },
-        body: {
-          receive_id: receiveId,
-          msg_type: "text",
-          content: JSON.stringify({ text }),
-          ...(asString(input.idempotencyKey)
-            ? { uuid: asString(input.idempotencyKey) }
-            : {}),
-        },
-      })
+      return jsonResult(
+        await client.requestJson({
+          path: "/open-apis/im/v1/messages",
+          method: "POST",
+          query: {
+            receive_id_type: receiveIdType,
+          },
+          body: {
+            receive_id: receiveId,
+            msg_type: "text",
+            content: JSON.stringify({ text }),
+            ...(asString(input.idempotencyKey)
+              ? { uuid: asString(input.idempotencyKey) }
+              : {}),
+          },
+        })
+      )
     },
   },
   {
@@ -965,13 +1000,15 @@ const feishuToolSpecs: FeishuToolSpec[] = [
     async execute(input, config) {
       const { client } = createFeishuApiClient(config)
       const calendarId = asString(input.calendarId) || "primary"
-      return client.requestJson({
-        path: `/open-apis/calendar/v4/calendars/${encodeURIComponent(calendarId)}/events/instance_view`,
-        query: {
-          start_time: toUnixTimestampSeconds(input.startTime, "startTime"),
-          end_time: toUnixTimestampSeconds(input.endTime, "endTime"),
-        },
-      })
+      return jsonResult(
+        await client.requestJson({
+          path: `/open-apis/calendar/v4/calendars/${encodeURIComponent(calendarId)}/events/instance_view`,
+          query: {
+            start_time: toUnixTimestampSeconds(input.startTime, "startTime"),
+            end_time: toUnixTimestampSeconds(input.endTime, "endTime"),
+          },
+        })
+      )
     },
   },
   {
@@ -1055,7 +1092,7 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         })
       }
 
-      return event
+      return jsonResult(event)
     },
   },
   {
@@ -1097,14 +1134,14 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         body: buildFeishuDocSearchRequest(input),
       })
 
-      return {
+      return jsonResult({
         total: typeof data.total === "number" ? data.total : 0,
         has_more: Boolean(data.has_more),
         page_token: asString(data.page_token) || undefined,
         results: addIsoTimeFieldsToDocSearchResults(
           Array.isArray(data.res_units) ? data.res_units : []
         ),
-      }
+      })
     },
   },
   {
@@ -1150,13 +1187,13 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         }),
       ])
 
-      return {
+      return jsonResult({
         document_id: documentId,
         title: asString(metadata.document?.title),
         revision_id: metadata.document?.revision_id,
         content_type: "text/plain",
         content: asString(rawContent.content),
-      }
+      })
     },
   },
   {
@@ -1224,12 +1261,12 @@ const feishuToolSpecs: FeishuToolSpec[] = [
           path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}`,
         })
 
-        return {
+        return jsonResult({
           document_id: documentId,
           title: asString(metadata.document?.title),
           revision_id: metadata.document?.revision_id,
           inserted_blocks: writeResult.insertedBlocks,
-        }
+        })
       } catch (error) {
         const reason = error instanceof Error ? error.message : "Unknown error"
         throw new Error(
@@ -1312,7 +1349,7 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         path: `/open-apis/docx/v1/documents/${encodeURIComponent(documentId)}`,
       })
 
-      return {
+      return jsonResult({
         document_id: documentId,
         mode,
         title: asString(metadata.document?.title),
@@ -1320,7 +1357,7 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         insert_index: insertIndex,
         inserted_blocks: writeResult.insertedBlocks,
         cleared_blocks: clearedBlocks,
-      }
+      })
     },
   },
   {
@@ -1437,13 +1474,13 @@ const feishuToolSpecs: FeishuToolSpec[] = [
           }),
         })
 
-        return {
+        return jsonResult({
           document_id: documentId,
           block_id: targets.blockId,
           file_token: fileToken,
           type: mediaType,
           file_name: record.originalName,
-        }
+        })
       } catch (error) {
         try {
           await rollback()
@@ -1524,10 +1561,9 @@ const feishuToolSpecs: FeishuToolSpec[] = [
       )
 
       return [
-        {
-          type: "text",
-          text: `Downloaded Feishu ${mediaType} ${token} as ${saved.originalName}.`,
-        },
+        textBlock(
+          `Downloaded Feishu ${mediaType} ${token} as ${saved.originalName}.`
+        ),
         pluginOutputFileRef(saved),
       ]
     },
@@ -1565,12 +1601,14 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         throw new Error("spreadsheetToken and range are required.")
       }
 
-      return client.requestJson({
-        path: `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(token)}/values/${encodeURIComponent(range)}`,
-        query: {
-          valueRenderOption: asString(input.valueRenderOption) || undefined,
-        },
-      })
+      return jsonResult(
+        await client.requestJson({
+          path: `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(token)}/values/${encodeURIComponent(range)}`,
+          query: {
+            valueRenderOption: asString(input.valueRenderOption) || undefined,
+          },
+        })
+      )
     },
   },
   {
@@ -1604,16 +1642,18 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         throw new Error("spreadsheetToken and range are required.")
       }
 
-      return client.requestJson({
-        path: `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(token)}/values`,
-        method: "PUT",
-        body: {
-          valueRange: {
-            range,
-            values,
+      return jsonResult(
+        await client.requestJson({
+          path: `/open-apis/sheets/v2/spreadsheets/${encodeURIComponent(token)}/values`,
+          method: "PUT",
+          body: {
+            valueRange: {
+              range,
+              values,
+            },
           },
-        },
-      })
+        })
+      )
     },
   },
   {
@@ -1649,15 +1689,17 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         throw new Error("appToken and tableId are required.")
       }
 
-      return client.requestJson({
-        path: `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records`,
-        query: {
-          view_id: asString(input.viewId) || undefined,
-          filter: asString(input.filter) || undefined,
-          page_size: asNumber(input.pageSize, 20) || 20,
-          page_token: asString(input.pageToken) || undefined,
-        },
-      })
+      return jsonResult(
+        await client.requestJson({
+          path: `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records`,
+          query: {
+            view_id: asString(input.viewId) || undefined,
+            filter: asString(input.filter) || undefined,
+            page_size: asNumber(input.pageSize, 20) || 20,
+            page_token: asString(input.pageToken) || undefined,
+          },
+        })
+      )
     },
   },
   {
@@ -1685,13 +1727,15 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         throw new Error("appToken and tableId are required.")
       }
 
-      return client.requestJson({
-        path: `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records`,
-        method: "POST",
-        body: {
-          fields,
-        },
-      })
+      return jsonResult(
+        await client.requestJson({
+          path: `/open-apis/bitable/v1/apps/${encodeURIComponent(appToken)}/tables/${encodeURIComponent(tableId)}/records`,
+          method: "POST",
+          body: {
+            fields,
+          },
+        })
+      )
     },
   },
   {
@@ -1759,14 +1803,16 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         }
       }
 
-      return client.requestJson({
-        path: "/open-apis/task/v2/tasks",
-        method: "POST",
-        query: {
-          user_id_type: "open_id",
-        },
-        body,
-      })
+      return jsonResult(
+        await client.requestJson({
+          path: "/open-apis/task/v2/tasks",
+          method: "POST",
+          query: {
+            user_id_type: "open_id",
+          },
+          body,
+        })
+      )
     },
   },
   {
@@ -1810,11 +1856,13 @@ const feishuToolSpecs: FeishuToolSpec[] = [
         asString(input.fileName) || record.originalName
       )
 
-      return client.requestJson({
-        path: "/open-apis/drive/v1/files/upload_all",
-        method: "POST",
-        body: form,
-      })
+      return jsonResult(
+        await client.requestJson({
+          path: "/open-apis/drive/v1/files/upload_all",
+          method: "POST",
+          body: form,
+        })
+      )
     },
   },
   {
@@ -1873,10 +1921,9 @@ const feishuToolSpecs: FeishuToolSpec[] = [
       )
 
       return [
-        {
-          type: "text",
-          text: `Downloaded Feishu Drive file ${fileToken} as ${saved.originalName}.`,
-        },
+        textBlock(
+          `Downloaded Feishu Drive file ${fileToken} as ${saved.originalName}.`
+        ),
         pluginOutputFileRef(saved),
       ]
     },
@@ -1903,7 +1950,7 @@ export async function executeFeishuTool(
   toolName: string,
   input: Record<string, unknown>,
   config: Record<string, unknown>
-) {
+): Promise<BuiltinPluginExecuteResult> {
   const tool = feishuToolMap.get(toolName)
   if (!tool) {
     throw new Error(`Unknown Feishu tool '${toolName}'.`)

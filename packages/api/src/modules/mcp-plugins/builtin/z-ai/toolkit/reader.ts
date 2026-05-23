@@ -1,5 +1,6 @@
-import { ToolDefinition } from "@synapse/shared"
+import { textBlocks, ToolDefinition } from "@synapse/shared"
 import type { SubFeature } from "./types.js"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 import {
   normalizeZhipuTransportError,
   throwZhipuApiError,
@@ -78,7 +79,7 @@ export const readerFeature: SubFeature = {
     toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<string> {
+  ): Promise<BuiltinPluginExecuteResult> {
     const apiKey = config.apiKey as string
     if (!apiKey) throw new Error("ZhipuAI API key not configured.")
 
@@ -152,7 +153,7 @@ export const readerFeature: SubFeature = {
           : "No page content returned.",
       ].filter(Boolean)
 
-      return sections.join("\n\n")
+      return textBlocks(sections.join("\n\n"))
     } catch (error) {
       throw normalizeZhipuTransportError("网页阅读 API", error)
     } finally {

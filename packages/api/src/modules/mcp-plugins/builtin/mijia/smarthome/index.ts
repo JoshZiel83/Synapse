@@ -57,12 +57,7 @@ export const mijiaSmarthomeHandler: BuiltinPluginHandler & {
   async execute(toolName, input, config): Promise<BuiltinPluginExecuteResult> {
     const { client, connectionId } = getClient(config)
     try {
-      return (await executeMijiaTool(
-        toolName,
-        input,
-        config,
-        client
-      )) as BuiltinPluginExecuteResult
+      return await executeMijiaTool(toolName, input, config, client)
     } catch (error) {
       if (
         connectionId &&
