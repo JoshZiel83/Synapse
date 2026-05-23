@@ -919,11 +919,16 @@ class ManagedRemoteAgent {
           conversationId,
           sessionId,
         })
+        // A fresh session means we're starting clean — any error from the
+        // previous lifecycle is stale by definition. Use the empty-string
+        // sentinel so the server clears last_error instead of preserving
+        // (the COALESCE path) or leaving it alone.
         this.publishStatus({
           conversationId,
           state: "running",
           statusText: "Session connected",
           sessionId,
+          lastError: "",
         })
       },
       onAssistantMessage: (_conversationId, _text) => {
@@ -932,11 +937,19 @@ class ManagedRemoteAgent {
         // We don't republish it through WS to keep the control plane focused
         // on lifecycle.
       },
-      onTurnCompleted: (conversationId) => {
+      onTurnCompleted: (conversationId, info) => {
+        // Turn ended cleanly: clear last_error so the UI doesn't show a
+        // stale alarm. Turn ended with an error: leave it alone (the
+        // corresponding onError already wrote the message; we don't want
+        // turn_completed to clobber it). The wire convention is:
+        //   lastError: ""     -> server clears
+        //   lastError: null   -> server preserves (COALESCE)
+        //   lastError: "msg"  -> server sets
         this.publishStatus({
           conversationId,
           state: "idle",
           statusText: "Idle",
+          lastError: info.hadError ? null : "",
         })
       },
       onError: (conversationId, message) => {
@@ -1083,7 +1096,13 @@ class ManagedRemoteAgent {
     sessionId?: string
     interactionId?: string
     runKey?: string
-    lastError?: string
+    /**
+     * Server interprets:
+     *   "" (empty string)  -> clear last_error in DB
+     *   non-empty string   -> set last_error
+     *   undefined / null   -> COALESCE (preserve existing)
+     */
+    lastError?: string | null
   }) {
     const conversationId = params.conversationId ?? undefined
     const bridgeLast = conversationId

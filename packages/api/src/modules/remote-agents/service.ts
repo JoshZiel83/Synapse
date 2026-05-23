@@ -310,23 +310,25 @@ async function updateConversationRuntimeStatus(
             ELSE remote_agent_conversation_contexts.last_run_finished_at
           END,
           last_activity_at = NOW(),
-          -- last_error semantics: the daemon publishes status on every
-          -- lifecycle transition (session_started -> running, error -> error,
-          -- turn_completed -> idle, etc.) but only the error path attaches a
-          -- message. Before this change we ran
-          --     last_error = EXCLUDED.last_error
-          -- which meant the immediately-following turn_completed -> idle
-          -- (with lastError unset/null on the wire) overwrote the real error
-          -- with NULL. Net effect: operators saw runtime_state=idle and
-          -- last_error=NULL even though the SDK had just blown up, and the
-          -- only surviving signal was the EPIPE log line. That diagnostic
-          -- gap is what hid the claude-refuses-root bug.
-          --
-          -- COALESCE preserves the prior message when the daemon doesn't
-          -- attach one, and a new explicit non-null value replaces it.
-          -- There is no explicit clear path; the next error replaces it,
-          -- and a successful run leaves the historical reason visible.
-          last_error = COALESCE(EXCLUDED.last_error, remote_agent_conversation_contexts.last_error),
+          -- last_error semantics (mirrored in remote_agent_bindings below
+          -- and remote_agent_runs further down):
+          --   NULL          -> COALESCE preserves the prior value
+          --   empty string  -> explicit clear (set to NULL)
+          --   non-empty     -> set to the new message
+          -- The daemon uses NULL when it has nothing to say about errors
+          -- this update (plain idle/running ticks), empty string when a
+          -- turn finished cleanly or a fresh session started (the "no
+          -- alarm anymore" signal), and the message itself on error events.
+          -- Before this scheme the unconditional assignment last_error =
+          -- EXCLUDED.last_error caused the turn_completed -> idle update
+          -- fired ~ms after an error to wipe the message; operators then
+          -- saw idle + NULL even
+          -- though the SDK had just blown up.
+          last_error = CASE
+            WHEN EXCLUDED.last_error IS NULL THEN remote_agent_conversation_contexts.last_error
+            WHEN EXCLUDED.last_error = '' THEN NULL
+            ELSE EXCLUDED.last_error
+          END,
           updated_at = NOW()
     `,
     [
@@ -612,7 +614,17 @@ async function updateRemoteAgentRuntimeStatus(
       SET runtime_state = $3::remote_agent_bindings_runtime_state,
           status_text = $4,
           last_activity_at = NOW(),
-          last_error = $5,
+          -- Same NULL/empty-string/non-empty sentinel as the contexts
+          -- upsert above. Binding-level last_error is what the runtime
+          -- snapshot (loadRemoteAgentRuntimeSnapshot) returns to the
+          -- agent overview and the per-conversation chat snapshot, so
+          -- the same "don't let idle wipe the error" rule has to apply
+          -- here or the UI keeps losing transient SDK failures.
+          last_error = CASE
+            WHEN $5::text IS NULL THEN remote_agent_bindings.last_error
+            WHEN $5::text = '' THEN NULL
+            ELSE $5::text
+          END,
           capabilities = CASE
             WHEN $6::jsonb IS NULL THEN capabilities
             ELSE COALESCE(capabilities, '{}'::jsonb) || $6::jsonb
@@ -1159,7 +1171,15 @@ async function ensureRemoteAgentRun(params: {
         SET conversation_id = COALESCE($2, conversation_id),
             status = $3::remote_agent_runs_status,
             status_text = $4,
-            last_error = $5,
+            -- Same NULL/empty/non-empty sentinel as the contexts and
+            -- bindings updates: a successful run-update tick shouldn't
+            -- clobber the error message that a previous tick recorded
+            -- for this run row.
+            last_error = CASE
+              WHEN $5::text IS NULL THEN remote_agent_runs.last_error
+              WHEN $5::text = '' THEN NULL
+              ELSE $5::text
+            END,
             started_at = COALESCE(
               started_at,
               CASE WHEN $3::text = 'running' THEN NOW() ELSE NULL END

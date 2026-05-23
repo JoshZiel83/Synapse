@@ -11,7 +11,13 @@ import type {
 
 export type ConversationRuntimeCallbacks = {
   onSessionStarted(conversationId: string, sessionId: string): void
-  onTurnCompleted(conversationId: string): void
+  /**
+   * `hadError` is true when the SDK pushed an `error` event between this
+   * session start and now. Used by the index.ts layer to decide whether to
+   * clear last_error in the published status (clean turn → clear; errored
+   * turn → preserve the message the corresponding onError already set).
+   */
+  onTurnCompleted(conversationId: string, info: { hadError: boolean }): void
   onError(conversationId: string, message: string): void
   onUserInputRequested(
     conversationId: string,
@@ -89,6 +95,11 @@ export class ConversationRuntime {
   private currentSessionId: string | undefined
   private starting: Promise<void> | null = null
   private closed = false
+  // Tracks whether the SDK pushed an `error` event in the current turn so
+  // turn_completed can tell the index.ts layer whether to clear last_error.
+  // Reset whenever a new session starts or a turn completes — each turn
+  // gets a fresh slate.
+  private errorInCurrentTurn = false
   readonly workingDirectory: string
   readonly bridgeStateFile: string
   readonly conversationDirectory: string
@@ -200,6 +211,7 @@ export class ConversationRuntime {
           case "session_started":
             if (this.currentSessionId !== event.sessionId) {
               this.currentSessionId = event.sessionId
+              this.errorInCurrentTurn = false
               this.spec.callbacks.onSessionStarted(
                 this.spec.conversationId,
                 event.sessionId
@@ -228,9 +240,13 @@ export class ConversationRuntime {
             this.spec.callbacks.onPlanUpdated(this.spec.conversationId, event)
             break
           case "turn_completed":
-            this.spec.callbacks.onTurnCompleted(this.spec.conversationId)
+            this.spec.callbacks.onTurnCompleted(this.spec.conversationId, {
+              hadError: this.errorInCurrentTurn,
+            })
+            this.errorInCurrentTurn = false
             break
           case "error":
+            this.errorInCurrentTurn = true
             this.spec.callbacks.onError(this.spec.conversationId, event.message)
             break
         }
