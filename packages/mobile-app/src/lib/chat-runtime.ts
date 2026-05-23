@@ -24,6 +24,7 @@ import {
   type ActorRuntimeState,
   extractText,
   summarizeConversationEvent,
+  type ChatConversationCreateInput,
   type ChatConversationCreateResponse,
   type ChatConversationItem,
   type ChatConversationMessagesPage,
@@ -713,14 +714,11 @@ export class ChatRuntime {
     await this.flushOutbox()
   }
 
-  async createConversation(input: {
-    workspaceId?: string
-    kind: "group" | "private" | "virtual"
-    title?: string
-    actorIds?: string[]
-    workspaceMemberIds?: string[]
-    boundary?: "internal" | "external"
-  }): Promise<ChatConversationCreateResponse> {
+  async createConversation(
+    input: Omit<ChatConversationCreateInput, "clientRequestId"> & {
+      workspaceId?: string
+    }
+  ): Promise<ChatConversationCreateResponse> {
     const workspaceId = input.workspaceId ?? this.state.activeWorkspaceId
     if (!workspaceId) {
       throw new Error("No active workspace")

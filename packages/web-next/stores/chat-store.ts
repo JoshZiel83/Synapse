@@ -24,6 +24,7 @@ import type {
   ChatConversationView,
   ChatSyncEvent,
   ConversationEntityRef,
+  ConversationParticipantType,
   ServerToolCall,
   ConversationFeedEventPayloadMap,
   ConversationFeedEventType,
@@ -52,7 +53,7 @@ export interface ConversationParticipant {
 
 export interface ConversationMember {
   participantId: string
-  participantType: "actor" | "remote_agent" | "workspace_member" | "external"
+  participantType: Exclude<ConversationParticipantType, "system">
   id: string
   workspaceMemberId?: string
   remoteAgentId?: string

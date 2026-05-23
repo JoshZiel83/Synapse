@@ -24,6 +24,7 @@ import type {
   ChatClientInstanceCreateInput,
   ChatClientInstanceRegistrationResponse,
   ChatClientInstanceTouchInput,
+  ChatConversationCreateInput,
   ChatConversationCreateResponse,
   ChatConversationMessagesPage,
   ChatConversationMessagesQuery,
@@ -1373,21 +1374,7 @@ class ApiClient {
 
   createChatConversation(
     workspaceId: string,
-    input: {
-      clientRequestId: string
-      kind: "group" | "private" | "virtual"
-      boundary?: "internal" | "external"
-      title?: string
-      workspaceMemberIds?: string[]
-      actorIds?: string[]
-      remoteAgentIds?: string[]
-      externalParticipants?: Array<{
-        displayName: string
-        metadata?: Record<string, unknown>
-        transportAddressIds?: string[]
-      }>
-      metadata?: Record<string, unknown>
-    }
+    input: ChatConversationCreateInput
   ): Promise<ChatConversationCreateResponse> {
     return this.fetch(`/workspaces/${workspaceId}/chat/conversations`, {
       method: "POST",

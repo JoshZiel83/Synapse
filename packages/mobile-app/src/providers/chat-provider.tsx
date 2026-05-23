@@ -37,6 +37,7 @@ import { useSession } from "@/providers/session-provider"
 import { useWorkspace } from "@/providers/workspace-provider"
 import {
   type ActorRuntimeState,
+  type ChatConversationCreateInput,
   type ChatConversationCreateResponse,
   type ChatConversationMessagesPage,
   type ChatConversationView,
@@ -83,13 +84,11 @@ interface ChatContextValue {
     interactionId: string,
     input: ChatInteractionResolveInput
   ) => Promise<InteractionRequestSummary>
-  createConversation: (input: {
-    kind: "group" | "private" | "virtual"
-    title?: string
-    actorIds?: string[]
-    workspaceMemberIds?: string[]
-    boundary?: "internal" | "external"
-  }) => Promise<ChatConversationCreateResponse>
+  createConversation: (
+    input: Omit<ChatConversationCreateInput, "clientRequestId"> & {
+      workspaceId?: string
+    }
+  ) => Promise<ChatConversationCreateResponse>
   clearLocalState: () => Promise<void>
 }
 
@@ -418,13 +417,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   )
 
   const createConversation = useCallback(
-    (input: {
-      kind: "group" | "private" | "virtual"
-      title?: string
-      actorIds?: string[]
-      workspaceMemberIds?: string[]
-      boundary?: "internal" | "external"
-    }) => chatRuntime.createConversation(input),
+    (
+      input: Omit<ChatConversationCreateInput, "clientRequestId"> & {
+        workspaceId?: string
+      }
+    ) => chatRuntime.createConversation(input),
     []
   )
 
