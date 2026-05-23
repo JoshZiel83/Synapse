@@ -86,6 +86,58 @@ test("duplicate read-watermark POST bumps duplicate_watermark_post_total", async
   )
 })
 
+test("first read-watermark POST on a fresh conversation does NOT bump duplicate_watermark_post_total", async () => {
+  // Regression for the S37 false positive: the previous heuristic
+  // compared nextSequence to toNumber(undefined) (=0) when no
+  // conversation_participant_states row existed yet. If the first POST
+  // shipped readUpToSequence=0 (the common case on an empty
+  // conversation), it was wrongly counted as a duplicate even though
+  // it was the inaugural write. Now the counter requires an existing
+  // row before firing.
+  const base = createApiClient()
+  const ctx = await registerTestUser(base)
+  const ws = await createTestWorkspace(ctx.client)
+  const created = await ctx.client.json<{
+    conversation: { conversationId: string }
+  }>(`/workspaces/${ws.id}/chat/conversations`, {
+    method: "POST",
+    json: {
+      clientRequestId: uuid(),
+      kind: "private",
+      boundary: "internal",
+      title: "s37-watermark-first-post",
+    },
+  })
+  const conversationId = created.conversation.conversationId
+  const instance = await ctx.client.json<{ clientInstanceId: string }>(
+    `/workspaces/${ws.id}/chat/client-instances`,
+    { method: "POST", json: { platform: "test" } }
+  )
+
+  const before = await readDedupCounters(ctx.client)
+  const beforeWatermark = before.duplicate_watermark_post_total ?? 0
+
+  await ctx.client.json(
+    `/workspaces/${ws.id}/chat/conversations/${conversationId}/read-watermark`,
+    {
+      method: "POST",
+      json: {
+        clientInstanceId: instance.clientInstanceId,
+        readUpToSequence: 0,
+        lastVisibleSequence: 0,
+      },
+    }
+  )
+
+  const after = await readDedupCounters(ctx.client)
+  const afterWatermark = after.duplicate_watermark_post_total ?? 0
+  assert.equal(
+    afterWatermark,
+    beforeWatermark,
+    `the first read-watermark POST on a fresh conversation must NOT increment duplicate_watermark_post_total (before=${beforeWatermark} after=${afterWatermark})`
+  )
+})
+
 test("duplicate clientMessageId send-message bumps duplicate_clientmessageid_send_total", async () => {
   const base = createApiClient()
   const ctx = await registerTestUser(base)

@@ -5266,10 +5266,11 @@ export async function updateChatConversationReadWatermark(
 
     const existingState = await executeSqlOn<{
       read_watermark_sequence: string | number
+      last_read_at: Date | string | null
     }>(
       client,
       `
-        SELECT read_watermark_sequence
+        SELECT read_watermark_sequence, last_read_at
         FROM conversation_participant_states
         WHERE conversation_id = $1
           AND participant_id = $2
@@ -5277,18 +5278,24 @@ export async function updateChatConversationReadWatermark(
       `,
       [params.conversationId, access.participant.id]
     )
-    const nextSequence = Math.max(
-      toNumber(existingState.rows[0]?.read_watermark_sequence),
-      requestedSequence
-    )
+    const existingRow = existingState.rows[0]
+    const existingSequence = toNumber(existingRow?.read_watermark_sequence)
+    const nextSequence = Math.max(existingSequence, requestedSequence)
     // S6 dedup observability: if the request didn't actually advance the
     // watermark, it's a duplicate POST — the main thread and the SW
     // both flushed the same pending-read. Count it so we can monitor
     // whether the mutex (isChatServiceWorkerActive guard, S23) is
     // holding.
-    if (
-      nextSequence === toNumber(existingState.rows[0]?.read_watermark_sequence)
-    ) {
+    //
+    // S37: require an EXISTING USER-INITIATED watermark before counting.
+    // Adding a participant pre-inserts a row with sequence=0 and
+    // last_read_at=NULL (see ensureConversationParticipant). The user's
+    // first POST with readUpTo=0 collides with that pre-initialized row
+    // but isn't actually a duplicate — it's the inaugural mark. Use
+    // last_read_at as the "user has marked something before" signal.
+    const userHasMarkedBefore =
+      Boolean(existingRow) && existingRow!.last_read_at !== null
+    if (userHasMarkedBefore && nextSequence === existingSequence) {
       recordDuplicateWatermarkPost()
     }
     const lastReadItemId = await getLastItemAtOrBeforeSequence(
