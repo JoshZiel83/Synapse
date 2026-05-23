@@ -1,6 +1,7 @@
 import type { FastifyInstance } from "fastify"
 import { ZodError, z } from "zod"
 import {
+  CanonicalContentBlockSchema,
   CHAT_TYPING_STATES,
   CONVERSATION_BOUNDARIES,
   CONVERSATION_KINDS,
@@ -54,34 +55,10 @@ const CHAT_BASE_PATH = "/api/v1/workspaces/:workspaceId/chat"
 
 const jsonRecordSchema = z.record(z.any()).optional()
 
-const textBlockSchema = z.object({
-  id: chatUuidSchema.optional(),
-  type: z.literal("text"),
-  text: z.string(),
-})
-
-const fileRefBlockSchema = z.object({
-  id: chatUuidSchema.optional(),
-  type: z.literal("file_ref"),
-  fileId: chatUuidSchema,
-  url: z.string().min(1),
-  mimeType: z.string().min(1),
-  originalName: z.string().min(1),
-  sizeBytes: z.number().int().nonnegative(),
-  category: z.enum(["image", "audio", "video", "document"]),
-})
-
-const mentionBlockSchema = z.object({
-  id: chatUuidSchema.optional(),
-  type: z.literal("mention"),
-  mention: z.record(z.any()),
-})
-
-const canonicalContentBlockSchema = z.discriminatedUnion("type", [
-  textBlockSchema,
-  fileRefBlockSchema,
-  mentionBlockSchema,
-])
+// CanonicalContentBlock zod is owned by @synapse/shared so any future
+// consumer (relay-imported messages, CLI ingest, etc.) validates against
+// the same shape the chat HTTP API enforces here.
+const canonicalContentBlockSchema = CanonicalContentBlockSchema
 
 const createConversationSchema = z.object({
   clientRequestId: chatUuidSchema,
