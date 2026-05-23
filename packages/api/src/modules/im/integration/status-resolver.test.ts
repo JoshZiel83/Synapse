@@ -104,9 +104,38 @@ test("decision: hard error (health=error) → terminal-error", () => {
   )
 })
 
-test("decision: phase=error alone → terminal-error (health may not yet be set)", () => {
+test("decision: phase=error alone is NOT terminal (may be inherited stale phase from cache)", () => {
+  // The runtime snapshot builder inherits cached phase when overrides
+  // don't supply one. A previously-blocked session re-enqueued via
+  // enqueueSessionWakeup() emits {laneState:"queued", health:"ok"} with
+  // no phase override, so phase="error" leaks through from the previous
+  // failure. Without corroborating health/laneState, the IM hook must
+  // treat this as a non-actionable churn event, not a terminal cleanup —
+  // otherwise it tears down the controllers right as the next turn starts.
   assert.deepEqual(
-    decideRuntimeUpdateAction({ laneState: "running", phase: "error" }),
+    decideRuntimeUpdateAction({
+      laneState: "queued",
+      health: "ok",
+      phase: "error",
+    }),
+    { kind: "noop" }
+  )
+  assert.deepEqual(
+    decideRuntimeUpdateAction({
+      laneState: "running",
+      health: "ok",
+      phase: "error",
+    }),
+    { kind: "noop" }
+  )
+})
+
+test("decision: phase=error WITH corroborating laneState=blocked → terminal-error", () => {
+  // This is the canonical hard-failure shape session-thinking publishes
+  // on the catch-all error path. health="error" is also set in practice
+  // but laneState alone is enough corroboration.
+  assert.deepEqual(
+    decideRuntimeUpdateAction({ laneState: "blocked", phase: "error" }),
     { kind: "terminal-error" }
   )
 })

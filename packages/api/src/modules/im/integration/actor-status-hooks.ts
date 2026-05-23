@@ -3,10 +3,16 @@
  * AND TypingController.
  *
  * Subscribes to the existing event bus (packages/api/src/infrastructure/events)
- * for actor.thinking / session.thinking / actor.action / session.status.changed
- * and dispatches to whichever connector matches the originating inbound IM
- * message. No transport-specific imports here; the connector layer owns the
- * specifics.
+ * for actor.thinking / actor.action / runtime.updated and dispatches to
+ * whichever connector matches the originating inbound IM message. No
+ * transport-specific imports here; the connector layer owns the specifics.
+ *
+ * NOTE on the event set: session.thinking + session.status.changed were
+ * deleted in S13 (worktree-im-api-refactor). runtime.updated, emitted by
+ * publishSessionRuntime() with a full ActorRuntimeState snapshot, now
+ * carries both signals (phase transitions and lane/health terminal
+ * transitions). The runtime.updated handler dispatches through the pure
+ * decideRuntimeUpdateAction() in ./status-resolver.ts.
  *
  * Per-(sessionId × externalMessageId) the hook creates two controllers:
  *   - StatusReactionController (for platforms with canReact, e.g. Feishu)
@@ -21,12 +27,12 @@
  * land, so the next restart finds a clean slate.
  *
  * ─── Multi-replica safety ───
- * actor.thinking / session.thinking / actor.action / session.status.changed
- * are delivered through Redis pub/sub fan-out (see
- * infrastructure/events/index.ts:onEvent), so every replica subscribed
- * to the bus runs this hook in parallel. Without coordination they'd
- * each try to create/delete the same Feishu reaction or weixin typing
- * — duplicate platform calls + a race on `external_emoji_reactions`.
+ * actor.thinking / actor.action / runtime.updated are delivered through
+ * Redis pub/sub fan-out (see infrastructure/events/index.ts:onEvent), so
+ * every replica subscribed to the bus runs this hook in parallel. Without
+ * coordination they'd each try to create/delete the same Feishu reaction
+ * or weixin typing — duplicate platform calls + a race on
+ * `external_emoji_reactions`.
  *
  * The hook resolves this by grabbing a per-(account, externalMessageId)
  * Redis claim before constructing the controllers. The first replica
@@ -396,8 +402,8 @@ export function installActorStatusHooks(): () => void {
       entry.reaction.set("queued")
       entry.reaction.set("thinking")
       // Typing starts when the actor begins thinking; the controller
-      // self-stops after first model output via session.thinking handler
-      // below, or at terminal events.
+      // self-stops on the first runtime.updated phase transition (via
+      // the handler below) or at terminal events.
       entry.typing.start()
     })
   )

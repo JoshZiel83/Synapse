@@ -113,12 +113,25 @@ export function resolveRuntimePhaseStatus(phase: string): StatusLevel | null {
  *
  * Behavior tables encoded here:
  *   health === "error"                              → terminal-error
- *   phase  === "error"                              → terminal-error
  *   laneState === "closed"                          → terminal-error
+ *   phase === "error" AND (health === "error"
+ *     OR laneState ∈ {"blocked","closed"})         → terminal-error
  *   laneState === "idle" AND phase === "idle"       → terminal-done
  *   phase ∈ {"thinking","tool","responding"}        → set-level
  *   everything else (incl. laneState="queued", phase="blocked", phase="idle"
- *     while laneState != "idle")                    → noop
+ *     while laneState != "idle", and the inherited
+ *     "queued + ok + stale error phase" case)       → noop
+ *
+ * Why phase="error" alone is NOT terminal: the runtime snapshot builder in
+ * packages/api/src/modules/session/runtime.ts inherits cached fields when
+ * the publisher does not override them. After a session goes "blocked" with
+ * phase="error" and is later re-enqueued via enqueueSessionWakeup(),
+ * publishSessionRuntime currently emits {laneState:"queued", health:"ok"}
+ * with no phase override — the snapshot inherits phase="error" from the
+ * stale cache even though the session is actually about to run again.
+ * Treating that as terminal would tear down the IM controllers right when
+ * the user is expecting the next turn to start. We require a corroborating
+ * health/laneState signal so the stale phase alone doesn't fool us.
  */
 export type RuntimeUpdateDecision =
   | { kind: "terminal-error" }
@@ -135,7 +148,17 @@ export function decideRuntimeUpdateAction(snapshot: {
   const health = String(snapshot.health || "")
   const phase = String(snapshot.phase || "")
 
-  if (health === "error" || phase === "error" || laneState === "closed") {
+  if (health === "error" || laneState === "closed") {
+    return { kind: "terminal-error" }
+  }
+  // phase="error" alone is unreliable — it can be inherited from a stale
+  // Redis cache when a previously-blocked session is re-enqueued without
+  // an explicit phase override (see file header). Only treat as terminal
+  // when corroborated by health or laneState.
+  if (
+    phase === "error" &&
+    (health === "error" || laneState === "blocked" || laneState === "closed")
+  ) {
     return { kind: "terminal-error" }
   }
   if (laneState === "idle" && phase === "idle") {
