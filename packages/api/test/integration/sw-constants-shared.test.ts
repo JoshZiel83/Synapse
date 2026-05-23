@@ -1,0 +1,139 @@
+/**
+ * S31: web + mobile SW broadcast / IDB / sync-tag constants must come
+ * from @synapse/shared. Until this stage each client redeclared its
+ * own value (web "synapse.web.chat.worker" / "synapse-web-chat-queue",
+ * mobile "synapse.chat.worker" / "synapse-chat-web-queue"), so the two
+ * clients literally lived in different IDB databases and broadcast on
+ * different channels even though they were doing the same job. Now both
+ * are aliased back to the canonical shared values.
+ *
+ * Note we don't pin the literal value here — that's deliberate. Pinning
+ * "synapse-chat-queue" everywhere would make a future rename a two-test
+ * change for no real coverage. The actual invariant is "all four
+ * constants resolve to the same string."
+ */
+
+import { test } from "node:test"
+import assert from "node:assert/strict"
+import { readFile } from "node:fs/promises"
+import path from "node:path"
+import { fileURLToPath } from "node:url"
+import {
+  CHAT_QUEUE_BROADCAST_CHANNEL,
+  CHAT_QUEUE_DB_NAME,
+  CHAT_SERVICE_WORKER_SYNC_TAG,
+  CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG,
+} from "@synapse/shared"
+
+const here = path.dirname(fileURLToPath(import.meta.url))
+const repoRoot = path.resolve(here, "..", "..", "..", "..")
+
+const webSwConstantsPath = path.join(
+  repoRoot,
+  "packages",
+  "web-next",
+  "lib",
+  "chat-service-worker-constants.ts"
+)
+const webPersistencePath = path.join(
+  repoRoot,
+  "packages",
+  "web-next",
+  "lib",
+  "chat-persistence.ts"
+)
+const mobileStorageKeysPath = path.join(
+  repoRoot,
+  "packages",
+  "mobile-app",
+  "src",
+  "lib",
+  "storage-keys.ts"
+)
+const mobileQueueStoragePath = path.join(
+  repoRoot,
+  "packages",
+  "mobile-app",
+  "src",
+  "lib",
+  "chat-web-queue-storage.ts"
+)
+
+test("shared chat-queue constants are well-formed", () => {
+  // Sanity guards so the rest of the test doesn't pass on accident.
+  assert.ok(
+    typeof CHAT_QUEUE_BROADCAST_CHANNEL === "string" &&
+      CHAT_QUEUE_BROADCAST_CHANNEL.length > 0
+  )
+  assert.ok(
+    typeof CHAT_QUEUE_DB_NAME === "string" && CHAT_QUEUE_DB_NAME.length > 0
+  )
+  assert.ok(
+    typeof CHAT_SERVICE_WORKER_SYNC_TAG === "string" &&
+      CHAT_SERVICE_WORKER_SYNC_TAG.length > 0
+  )
+  assert.ok(
+    typeof CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG === "string" &&
+      CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG.length > 0
+  )
+})
+
+test("web SW constants module re-exports / aliases from @synapse/shared", async () => {
+  const body = await readFile(webSwConstantsPath, "utf8")
+  assert.match(
+    body,
+    /from\s+"@synapse\/shared"/,
+    "web chat-service-worker-constants.ts must source values from @synapse/shared"
+  )
+  assert.equal(
+    /=\s*"synapse\.web\.chat\.worker"/.test(body),
+    false,
+    "web must no longer hardcode 'synapse.web.chat.worker' — alias to CHAT_QUEUE_BROADCAST_CHANNEL"
+  )
+  assert.equal(
+    /=\s*"synapse-web-chat-sync"/.test(body),
+    false,
+    "web must no longer hardcode 'synapse-web-chat-sync' — alias to CHAT_SERVICE_WORKER_SYNC_TAG"
+  )
+})
+
+test("web chat-persistence sources CHAT_QUEUE_DB_NAME from @synapse/shared", async () => {
+  const body = await readFile(webPersistencePath, "utf8")
+  assert.match(
+    body,
+    /import \{[^}]*CHAT_QUEUE_DB_NAME[^}]*\}\s+from\s+"@synapse\/shared"/s,
+    "chat-persistence.ts must import CHAT_QUEUE_DB_NAME from @synapse/shared"
+  )
+  assert.equal(
+    /=\s*"synapse-web-chat-queue"/.test(body),
+    false,
+    "chat-persistence.ts must not redeclare the IDB name; it has to alias the shared constant"
+  )
+})
+
+test("mobile storage-keys aliases the SW constants to the shared values", async () => {
+  const body = await readFile(mobileStorageKeysPath, "utf8")
+  assert.match(
+    body,
+    /import \{[^}]*CHAT_QUEUE_BROADCAST_CHANNEL[^}]*\}\s+from\s+"@shared"/s,
+    "mobile storage-keys.ts must import CHAT_QUEUE_BROADCAST_CHANNEL from @shared"
+  )
+  assert.equal(
+    /=\s*"synapse\.chat\.worker"/.test(body),
+    false,
+    "mobile must no longer hardcode 'synapse.chat.worker' — alias the shared channel"
+  )
+})
+
+test("mobile chat-web-queue-storage aliases CHAT_QUEUE_DB_NAME from @shared", async () => {
+  const body = await readFile(mobileQueueStoragePath, "utf8")
+  assert.match(
+    body,
+    /import \{[^}]*CHAT_QUEUE_DB_NAME[^}]*\}\s+from\s+"@shared"/s
+  )
+  assert.equal(
+    /=\s*"synapse-chat-web-queue"/.test(body),
+    false,
+    "mobile chat-web-queue-storage.ts must not redeclare the IDB name"
+  )
+})

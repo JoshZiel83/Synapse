@@ -3,6 +3,8 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb"
 
 import {
+  CHAT_QUEUE_DB_NAME,
+  CHAT_QUEUE_DB_VERSION,
   CHAT_QUEUE_STATE_STORE,
   createEmptyStoredChatQueueState,
   mergeStoredQueueTransition,
@@ -14,6 +16,8 @@ import {
 } from "@synapse/shared"
 
 export {
+  CHAT_QUEUE_DB_NAME,
+  CHAT_QUEUE_DB_VERSION,
   CHAT_QUEUE_STATE_STORE,
   createEmptyStoredChatQueueState,
   mergeStoredQueueTransition,
@@ -25,12 +29,6 @@ export type {
   PendingOutboxMessage,
   StoredChatQueueState,
 }
-
-// IDB names are kept web-specific (so legacy users with data already in
-// the old DB don't lose it). The merge/normalize/types now live in shared
-// so the worker and the store share one implementation.
-export const CHAT_QUEUE_DB_NAME = "synapse-web-chat-queue"
-export const CHAT_QUEUE_DB_VERSION = 1
 
 interface ChatQueueStateRow {
   workspaceId: string

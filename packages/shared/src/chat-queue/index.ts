@@ -8,6 +8,14 @@ export const CHAT_QUEUE_DB_VERSION = 1
 export const CHAT_QUEUE_STATE_STORE = "workspace_queue_states"
 export const CHAT_QUEUE_BROADCAST_CHANNEL = "synapse-chat-queue"
 
+// Web/mobile SW background-sync registration tags. Sharing the names
+// means the SW reaches the same tag regardless of which client
+// installed it, and any future "sync tag X means flush the chat queue"
+// listener can live in one place.
+export const CHAT_SERVICE_WORKER_SYNC_TAG = "synapse-chat-sync"
+export const CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG =
+  "synapse-chat-periodic-sync"
+
 export interface PendingConversationRead {
   conversationId: string
   readUpToSequence: number

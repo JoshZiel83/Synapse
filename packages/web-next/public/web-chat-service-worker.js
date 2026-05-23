@@ -236,11 +236,6 @@
     }
   }));
 
-  // lib/chat-service-worker-constants.ts
-  var CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL = "synapse.web.chat.worker";
-  var CHAT_WEB_SERVICE_WORKER_SYNC_TAG = "synapse-web-chat-sync";
-  var CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG = "synapse-web-chat-periodic-sync";
-
   // ../shared/dist/constants/enums.js
   var RELATIONSHIP_PROFILE_SUBJECT_TYPE = {
     MEMBER: "workspace_member",
@@ -1518,7 +1513,12 @@
   ];
 
   // ../shared/dist/chat-queue/index.js
+  var CHAT_QUEUE_DB_NAME = "synapse-chat-queue";
+  var CHAT_QUEUE_DB_VERSION = 1;
   var CHAT_QUEUE_STATE_STORE = "workspace_queue_states";
+  var CHAT_QUEUE_BROADCAST_CHANNEL = "synapse-chat-queue";
+  var CHAT_SERVICE_WORKER_SYNC_TAG = "synapse-chat-sync";
+  var CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG = "synapse-chat-periodic-sync";
   function createEmptyStoredChatQueueState(workspaceId) {
     return {
       version: 3,
@@ -1611,8 +1611,6 @@
   }
 
   // lib/chat-persistence.ts
-  var CHAT_QUEUE_DB_NAME = "synapse-web-chat-queue";
-  var CHAT_QUEUE_DB_VERSION = 1;
   var queueDbPromise = null;
   function getQueueDatabase() {
     if (!queueDbPromise) {
@@ -1723,13 +1721,13 @@
   });
   scope.addEventListener("sync", (event) => {
     const syncEvent = event;
-    if (syncEvent.tag === CHAT_WEB_SERVICE_WORKER_SYNC_TAG) {
+    if (syncEvent.tag === CHAT_SERVICE_WORKER_SYNC_TAG) {
       syncEvent.waitUntil(runSyncPass(null, "background-sync"));
     }
   });
   scope.addEventListener("periodicsync", (event) => {
     const syncEvent = event;
-    if (syncEvent.tag === CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG) {
+    if (syncEvent.tag === CHAT_SERVICE_WORKER_PERIODIC_SYNC_TAG) {
       syncEvent.waitUntil(runSyncPass(null, "periodic-sync"));
     }
   });
@@ -1858,7 +1856,7 @@
     try {
       if ("BroadcastChannel" in scope) {
         const channel = new BroadcastChannel(
-          CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL
+          CHAT_QUEUE_BROADCAST_CHANNEL
         );
         channel.postMessage(message);
         channel.close();
