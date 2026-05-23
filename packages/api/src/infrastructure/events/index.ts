@@ -2,7 +2,7 @@ import type { EventType, SystemEvent } from "@synapse/shared"
 import { sql } from "kysely"
 import { REDIS_CHANNELS } from "@synapse/shared"
 import { config } from "../../config/index.js"
-import { transaction } from "../database/index.js"
+import { query, transaction } from "../database/index.js"
 import {
   db,
   executeCompiledQuery,
@@ -275,10 +275,57 @@ export async function drainRealtimeEventOutbox(
   }
 }
 
+/**
+ * GC dispatched/failed outbox rows older than the configured retention.
+ * The original S8 plan called for dropping the realtime_event_outbox
+ * table entirely; that's not viable because chat.sync.event still uses
+ * it as a transactional outbox (see service.ts:enqueueTransactionalEvent).
+ * Instead, keep the table but trim stale rows so it doesn't grow without
+ * bound. Failed rows are kept on the same schedule so ops still has a
+ * debug window before they vanish. Returns the number of rows deleted
+ * so the dispatcher loop can log it.
+ */
+export async function gcRealtimeEventOutbox(
+  retentionHours = config.realtime.outboxRetentionHours
+) {
+  if (retentionHours < 0) return 0
+  // One DELETE statement on the pool — no need for an explicit
+  // transaction. Indexed on (status, available_at, created_at) so the
+  // status filter is cheap.
+  const result = await query(
+    `
+      DELETE FROM realtime_event_outbox
+       WHERE status IN ('dispatched', 'failed')
+         AND updated_at < NOW() - ($1 || ' hours')::interval
+    `,
+    [String(retentionHours)]
+  )
+  return result.rowCount ?? 0
+}
+
 async function runRealtimeOutboxDispatcherLoop() {
+  let lastGcAt = 0
   while (realtimeOutboxDispatcherRunning) {
     try {
       const processed = await drainRealtimeEventOutbox()
+
+      // Periodic GC of dispatched/failed rows. Bounded by
+      // outboxGcIntervalMs so it doesn't run on every drain iteration.
+      const now = Date.now()
+      if (now - lastGcAt >= config.realtime.outboxGcIntervalMs) {
+        lastGcAt = now
+        try {
+          const gced = await gcRealtimeEventOutbox()
+          if (gced > 0) {
+            console.info(
+              `[events] realtime_event_outbox GC: pruned ${gced} dispatched/failed rows`
+            )
+          }
+        } catch (gcError) {
+          console.error("[events] realtime_event_outbox GC failed:", gcError)
+        }
+      }
+
       if (!realtimeOutboxDispatcherRunning) {
         break
       }

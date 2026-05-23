@@ -51,6 +51,7 @@ import {
   resolveInteractionRequest,
 } from "../interactions/service.js"
 import { getChatDedupCountersSnapshot } from "./observability.js"
+import { gcRealtimeEventOutbox } from "../../infrastructure/events/index.js"
 
 const CHAT_BASE_PATH = "/api/v1/workspaces/:workspaceId/chat"
 
@@ -281,6 +282,24 @@ export default async function chatController(app: FastifyInstance) {
   // can't probe the counter; no per-workspace data is exposed.
   app.get("/api/v1/_debug/chat/dedup-counters", async (_request, reply) => {
     return reply.send(getChatDedupCountersSnapshot())
+  })
+
+  // Authenticated debug endpoint that forces a realtime_event_outbox GC
+  // pass and returns the number of pruned rows. The dispatcher loop
+  // runs the same GC periodically (see infrastructure/events/index.ts);
+  // this endpoint lets the S39 integration test trigger it on demand
+  // without waiting for the loop's interval. Optional `?hours=N` query
+  // overrides the retention window for the call.
+  app.post<{
+    Querystring: { hours?: string }
+  }>("/api/v1/_debug/chat/realtime-outbox-gc", async (request, reply) => {
+    const hours = request.query?.hours
+      ? Number.parseInt(request.query.hours, 10)
+      : undefined
+    const deleted = await gcRealtimeEventOutbox(
+      Number.isFinite(hours) ? (hours as number) : undefined
+    )
+    return reply.send({ deleted })
   })
 
   app.get<{
