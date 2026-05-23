@@ -125,14 +125,6 @@ const EVENT_SPECS: Record<ConversationFeedEventType, ConversationEventSpec> = {
       textBlocks(summarizeConversationEvent(eventType, payload)),
     renderContext: noContext,
   },
-  actor_version_changed: {
-    timelinePolicy: "all_members",
-    contextPolicy: "shared",
-    renderTimeline: ({ eventType, payload }) =>
-      textBlocks(summarizeConversationEvent(eventType, payload)),
-    renderContext: ({ eventType, payload }) =>
-      textBlocks(summarizeConversationEvent(eventType, payload)),
-  },
   automation_notice: {
     timelinePolicy: "all_members",
     contextPolicy: "shared",

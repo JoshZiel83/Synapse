@@ -3310,28 +3310,6 @@ export interface ConversationMessageTransportDelivery {
   metadata: Record<string, unknown>
 }
 
-export interface ActorVersionDocChangeWire {
-  docId: UUID
-  key: ActorDocKey
-  title: string
-  changeType: "added" | "updated" | "removed"
-  visibility: ActorDocVisibility
-  priority: number
-  fieldChanges?: ActorDocFieldChange[]
-  summaryText?: string
-}
-
-export interface ActorVersionFieldChangeWire {
-  field: ActorVersionChangedField
-  before?: unknown
-  after?: unknown
-  summaryText?: string
-}
-
-export type ActorVersionChangeWire =
-  | ({ kind: "field" } & ActorVersionFieldChangeWire)
-  | ({ kind: "doc" } & ActorVersionDocChangeWire)
-
 export type InteractionRequestKind = (typeof INTERACTION_REQUEST_KINDS)[number]
 export type TargetedInteractionRequestKind =
   (typeof TARGETED_INTERACTION_REQUEST_KINDS)[number]
@@ -3613,7 +3591,6 @@ export type ConversationFeedEventType =
   | "memory_updated"
   | "actor_renamed"
   | "actor_avatar_changed"
-  | "actor_version_changed"
   | "automation_notice"
   | "interaction_requested"
   | "task_notice"
@@ -3672,13 +3649,6 @@ export interface ConversationFeedEventPayloadMap {
     oldAvatarUrl?: string
     newAvatarUrl?: string
     sourceTurnId?: UUID
-  }
-  actor_version_changed: {
-    actor: ConversationEntityRef
-    fromVersion: number
-    toVersion: number
-    changes: ActorVersionChangeWire[]
-    source?: ActorVersionSource
   }
   automation_notice: {
     automationId: UUID
@@ -3896,80 +3866,6 @@ export function summarizeConversationEvent(
       return `Actor avatar updated to ${avatarEmoji}.`
     }
     return "Actor avatar updated."
-  }
-
-  if (eventType === "actor_version_changed") {
-    const actor =
-      eventPayload.actor && typeof eventPayload.actor === "object"
-        ? (eventPayload.actor as { name?: string })
-        : undefined
-    const actorName =
-      typeof actor?.name === "string" ? actor.name.trim() : "An actor"
-    const fromVersion =
-      typeof eventPayload.fromVersion === "number"
-        ? eventPayload.fromVersion
-        : null
-    const toVersion =
-      typeof eventPayload.toVersion === "number" ? eventPayload.toVersion : null
-    const changes = Array.isArray(eventPayload.changes)
-      ? eventPayload.changes
-          .filter(
-            (
-              change: unknown
-            ): change is {
-              kind?: string
-              summaryText?: string
-              title?: string
-              changeType?: string
-              field?: string
-            } => !!change && typeof change === "object"
-          )
-          .map((change) => {
-            const summaryText =
-              typeof change.summaryText === "string"
-                ? change.summaryText.trim()
-                : ""
-            if (summaryText) return summaryText
-            if (change.kind === "field" && typeof change.field === "string") {
-              return `${change.field} changed.`
-            }
-            if (change.kind === "doc") {
-              const title =
-                typeof change.title === "string" ? change.title.trim() : "a doc"
-              const changeType =
-                typeof change.changeType === "string"
-                  ? change.changeType.trim()
-                  : "updated"
-              return `Doc ${changeType}: ${title}.`
-            }
-            return ""
-          })
-          .filter((value: string): value is string => Boolean(value))
-      : []
-    const source =
-      eventPayload.source && typeof eventPayload.source === "object"
-        ? (eventPayload.source as { type?: string })
-        : undefined
-
-    const fragments: string[] = []
-    if (fromVersion !== null && toVersion !== null) {
-      fragments.push(
-        `${actorName} updated from v${fromVersion} to v${toVersion}.`
-      )
-    } else {
-      fragments.push(`${actorName} updated their profile.`)
-    }
-    if (changes.length > 0) {
-      fragments.push(...changes)
-    } else {
-      fragments.push("Profile details changed.")
-    }
-    if (source?.type === "workspace_member") {
-      fragments.push("Updated by a workspace member.")
-    } else if (source?.type === "actor") {
-      fragments.push("Updated by the actor.")
-    }
-    return fragments.join(" ")
   }
 
   if (eventType === "automation_notice") {
