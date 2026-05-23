@@ -24,6 +24,6 @@
 
 ## E2E 验证
 
-独立于 dev / production stack：`bash scripts/remote-agent-e2e.sh up | verify | down`。Stack 命名空间按 `RAE_STACK_ID`（默认 = 当前 worktree 分支名截断）唯一化，端口动态探测，确保多 worktree 共存。
+合入 dev 后,使用 dev 分支的独立部署测试容器(`packages/api/tests/integration/` 下的 `docker-compose.test.yaml` 等)进行验证。
 
-子进程访问 `provider-specific AI endpoint` 必须经宿主机 SOCKS5（<redacted-local-proxy>）；CC/Codex 子进程的 env 由 `drivers/proxy-env.ts:buildAgentChildEnv()` 统一注入 `HTTPS_PROXY=<redacted-outbound-proxy>` 等。
+子进程访问 `provider-specific AI endpoint` 必须经宿主机 SOCKS5(<redacted-local-proxy>);CC/Codex 子进程的 env 由 `drivers/proxy-env.ts:buildAgentChildEnv()` 统一注入 `HTTPS_PROXY=<redacted-outbound-proxy>` 等。
