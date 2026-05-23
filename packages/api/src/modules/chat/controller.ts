@@ -1,10 +1,12 @@
 import type { FastifyInstance } from "fastify"
 import { ZodError, z } from "zod"
 import {
+  CHAT_TYPING_STATES,
   CONVERSATION_BOUNDARIES,
   CONVERSATION_KINDS,
   INTERACTION_DECISIONS,
   PLAN_APPROVAL_DECISIONS,
+  PUSH_TOKEN_PLATFORMS,
   RELAY_AUTHORIZATION_PRESETS,
 } from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
@@ -169,14 +171,14 @@ const removeParticipantParamsSchema = z.object({
 })
 
 const pushTokenSchema = z.object({
-  platform: z.enum(["ios", "android", "web"]),
+  platform: z.enum(PUSH_TOKEN_PLATFORMS),
   token: z.string().trim().min(1).max(2048),
   deviceLabel: z.string().trim().min(1).max(255).optional(),
   metadata: jsonRecordSchema,
 })
 
 const typingSchema = z.object({
-  state: z.enum(["started", "stopped"]),
+  state: z.enum(CHAT_TYPING_STATES),
 })
 
 const syncQuerySchema = z.object({

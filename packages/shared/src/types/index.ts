@@ -107,6 +107,7 @@ import {
   TRANSPORT_ENDPOINT_TYPES,
   TRANSPORT_KINDS,
 } from "../constants/enums.js"
+import type { ChatTypingState } from "../constants/enums.js"
 
 export * from "./relay.js"
 
@@ -4583,7 +4584,7 @@ export interface ChatSocketEventPayloadMap {
   "chat.typing": {
     conversationId: UUID
     fromWorkspaceMemberId: UUID
-    state: "started" | "stopped"
+    state: ChatTypingState
     occurredAt: Timestamp
   }
 }
