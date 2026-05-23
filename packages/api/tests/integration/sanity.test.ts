@@ -57,7 +57,7 @@ test("sanity: relay pairs, connects, appears in dashboard", async () => {
     apiBaseUrl: api!.baseUrl,
     sessionToken: seed!.sessionToken,
     workspaceId: seed!.workspaceId,
-    displayName: "cb-test-sanity",
+    displayName: "int-test-sanity",
     mcpServers: [{ name: "text-only", script: "text-only.mjs" }],
     silent: false,
   })

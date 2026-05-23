@@ -76,7 +76,7 @@ before(async () => {
     apiBaseUrl: api.baseUrl,
     sessionToken: seed.sessionToken,
     workspaceId: seed.workspaceId,
-    displayName: "cb-test-ingest",
+    displayName: "int-test-ingest",
     mcpServers: EXPECTED_SERVERS.map((name) => ({
       name,
       script: `${name}.mjs`,

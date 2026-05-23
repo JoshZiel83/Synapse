@@ -147,12 +147,12 @@ export async function seedMinimal(
     workspaceSlugSuffix?: string
   } = {}
 ): Promise<MinimalSeed> {
-  const email = opts.email || "cb-test@synapse.dev"
+  const email = opts.email || "int-test@synapse.dev"
   const workspaceName = opts.workspaceName || "Canonical Content Blocks Test"
   const workspaceSlug = (
     opts.workspaceSlugSuffix
-      ? `cb-test-${opts.workspaceSlugSuffix}`
-      : `cb-test-${crypto.randomBytes(3).toString("hex")}`
+      ? `int-test-${opts.workspaceSlugSuffix}`
+      : `int-test-${crypto.randomBytes(3).toString("hex")}`
   ).toLowerCase()
   const sessionToken = generateSessionToken()
   const sessionExpiresAt = new Date(

@@ -53,7 +53,7 @@ async function createPairingSession(opts: {
         "content-type": "application/json",
         authorization: `Bearer ${opts.sessionToken}`,
       },
-      body: JSON.stringify({ title: opts.title ?? "cb-test-relay" }),
+      body: JSON.stringify({ title: opts.title ?? "int-test-relay" }),
     }
   )
   if (res.status !== 201) {
@@ -82,7 +82,7 @@ function runPair(opts: {
       "--pair",
       `--server-base-url=${opts.apiBaseUrl}`,
       `--pairing-code=${opts.pairingCode}`,
-      `--display-name=${opts.displayName ?? "cb-test-relay"}`,
+      `--display-name=${opts.displayName ?? "int-test-relay"}`,
     ],
     {
       env: { ...process.env, HOME: opts.homeDir },
@@ -154,7 +154,7 @@ export async function pairAndStartRelay(opts: {
   mcpServers: MockMcpServerSpec[]
   silent?: boolean
 }): Promise<RelayHandle> {
-  const homeDir = mkdtempSync(join(tmpdir(), "synapse-cb-test-relay-home-"))
+  const homeDir = mkdtempSync(join(tmpdir(), "synapse-int-test-relay-home-"))
 
   // synapse-relay --pair calls config.LoadOrDefault(path), which still fails
   // if the file doesn't exist. Pre-create an empty config in the profile dir.

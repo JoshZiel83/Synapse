@@ -83,7 +83,7 @@ export async function spawnApi(
     )
   }
 
-  const storageDir = mkdtempSync(join(tmpdir(), "synapse-cb-test-storage-"))
+  const storageDir = mkdtempSync(join(tmpdir(), "synapse-int-test-storage-"))
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     PORT: String(TEST_API_PORT),
@@ -94,9 +94,9 @@ export async function spawnApi(
     STORAGE_DIR: join(storageDir, "files"),
     BASE_URL: TEST_API_BASE_URL,
     APP_BASE_URL: TEST_API_BASE_URL,
-    JWT_SECRET: "cb_test_jwt_secret",
-    JWT_REFRESH_SECRET: "cb_test_jwt_refresh_secret",
-    PLATFORM_ADMIN_EMAILS: "cb-test@synapse.dev",
+    JWT_SECRET: "int_test_jwt_secret",
+    JWT_REFRESH_SECRET: "int_test_jwt_refresh_secret",
+    PLATFORM_ADMIN_EMAILS: "int-test@synapse.dev",
     MEMORY_ALLOW_RUNTIME_MODEL_DOWNLOAD: "false",
     ...(opts.extraEnv || {}),
   }

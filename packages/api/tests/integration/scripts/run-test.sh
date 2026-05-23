@@ -21,9 +21,9 @@ fi
 export DATABASE_URL="${DATABASE_URL:-postgresql://synapse:test_password@127.0.0.1:55433/synapse_test}"
 export REDIS_URL="${REDIS_URL:-redis://127.0.0.1:56380}"
 export NODE_ENV="${NODE_ENV:-test}"
-export STORAGE_DIR="${STORAGE_DIR:-/tmp/synapse-cb-runtest-storage}"
-export JWT_SECRET="${JWT_SECRET:-cb_test_jwt_secret}"
-export JWT_REFRESH_SECRET="${JWT_REFRESH_SECRET:-cb_test_jwt_refresh_secret}"
+export STORAGE_DIR="${STORAGE_DIR:-/tmp/synapse-int-runtest-storage}"
+export JWT_SECRET="${JWT_SECRET:-int_test_jwt_secret}"
+export JWT_REFRESH_SECRET="${JWT_REFRESH_SECRET:-int_test_jwt_refresh_secret}"
 export BASE_URL="${BASE_URL:-http://127.0.0.1:38091}"
 
 # Some module-load-time code may also try to connect at import time; isolate

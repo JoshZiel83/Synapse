@@ -3,7 +3,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INTEGRATION_DIR="$(dirname "$SCRIPT_DIR")"
-PROJECT_NAME="synapse-canonical-content-blocks"
+PROJECT_NAME="synapse-int-test"
 COMPOSE_FILE="$INTEGRATION_DIR/docker-compose.test.yaml"
 
 KEEP_VOLUMES="${KEEP_VOLUMES:-0}"

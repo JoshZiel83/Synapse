@@ -6,7 +6,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 INTEGRATION_DIR="$(dirname "$SCRIPT_DIR")"
-PROJECT_NAME="synapse-canonical-content-blocks"
+PROJECT_NAME="synapse-int-test"
 COMPOSE_FILE="$INTEGRATION_DIR/docker-compose.test.yaml"
 
 # Conflict detection — fail loud if our chosen ports are occupied by something else.
@@ -16,8 +16,8 @@ for port in 55433 56380; do
     own_container=$(docker ps --format '{{.Names}} {{.Ports}}' 2>/dev/null \
       | grep ":${port}->" \
       | awk '{print $1}' || true)
-    if [[ -z "$own_container" || "$own_container" != synapse-cb-* ]]; then
-      echo "[up.sh] Port ${port} is in use by something that's not a synapse-cb-* container."
+    if [[ -z "$own_container" || "$own_container" != synapse-int-* ]]; then
+      echo "[up.sh] Port ${port} is in use by something that's not a synapse-int-* container."
       echo "[up.sh] Run 'ss -tlnp | grep ${port}' or 'docker ps' to find the owner."
       exit 1
     fi

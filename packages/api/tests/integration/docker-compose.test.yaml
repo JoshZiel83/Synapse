@@ -1,8 +1,8 @@
-name: synapse-canonical-content-blocks
+name: synapse-int-test
 
-# Worktree-isolated test stack for canonical-content-blocks worktree.
-# Ports are NOT defaults (5432/6379) — they're 55433/56380 to avoid
-# conflicts with other worktrees on this shared machine.
+# Isolated postgres+redis for the API integration test suite. Ports are
+# NOT the production defaults (5432/6379) — they're 55433/56380 so this
+# stack can coexist with a running production deployment on the same host.
 #
 # Run via:
 #   bash packages/api/tests/integration/scripts/up.sh
@@ -11,7 +11,7 @@ name: synapse-canonical-content-blocks
 services:
   postgres-test:
     image: pgvector/pgvector:pg16
-    container_name: synapse-cb-postgres-test
+    container_name: synapse-int-postgres-test
     restart: unless-stopped
     environment:
       POSTGRES_USER: synapse
@@ -20,7 +20,7 @@ services:
     ports:
       - "127.0.0.1:55433:5432"
     volumes:
-      - pgdata_cb_test:/var/lib/postgresql/data
+      - pgdata_int_test:/var/lib/postgresql/data
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U synapse"]
       interval: 3s
@@ -29,7 +29,7 @@ services:
 
   redis-test:
     image: redis:7-alpine
-    container_name: synapse-cb-redis-test
+    container_name: synapse-int-redis-test
     restart: unless-stopped
     command:
       - redis-server
@@ -38,7 +38,7 @@ services:
     ports:
       - "127.0.0.1:56380:6379"
     volumes:
-      - redisdata_cb_test:/data
+      - redisdata_int_test:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 3s
@@ -46,5 +46,5 @@ services:
       retries: 15
 
 volumes:
-  pgdata_cb_test:
-  redisdata_cb_test:
+  pgdata_int_test:
+  redisdata_int_test:
