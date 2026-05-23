@@ -740,6 +740,15 @@ export class ChatRuntime {
       },
     }))
 
+    // Same SW-mutex rule as sendMessage/markConversationRead — when the
+    // SW is alive on web it owns the actual POST and the provider's
+    // queue-change effect will trigger the sync once the optimistic
+    // update lands. Falling through to flushOutbox would mean both the
+    // SW and the main thread re-POST the same clientMessageId.
+    if (isChatServiceWorkerActive()) {
+      return
+    }
+
     await this.flushOutbox()
   }
 
@@ -759,7 +768,10 @@ export class ChatRuntime {
       title: input.title,
       actorIds: input.actorIds ?? [],
       workspaceMemberIds: input.workspaceMemberIds ?? [],
+      remoteAgentIds: input.remoteAgentIds ?? [],
+      externalParticipants: input.externalParticipants ?? [],
       boundary: input.boundary,
+      metadata: input.metadata,
     })
 
     if (this.state.activeWorkspaceId === workspaceId) {

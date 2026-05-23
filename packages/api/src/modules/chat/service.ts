@@ -3753,6 +3753,7 @@ function participantRowToChatParticipantSummary(
     participantType: participant.participant_type,
     workspaceMemberId: entity.workspaceMemberId,
     actorId: entity.actorId,
+    remoteAgentId: entity.remoteAgentId,
     externalUserKey: entity.externalUserKey,
     transportAddressId: entity.transportAddressId,
     transportKind: entity.transportKind,

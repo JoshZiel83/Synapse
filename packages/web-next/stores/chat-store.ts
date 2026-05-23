@@ -19,6 +19,7 @@ import { createUuid } from "@/lib/uuid"
 import type {
   ActorRuntimeState,
   CanonicalContentBlock,
+  ChatConversationCreateInput,
   ChatConversationItem,
   ChatConversationReadWatermarkResponse,
   ChatConversationView,
@@ -200,9 +201,13 @@ interface ChatState {
     workspaceId: string,
     kind: "private" | "group",
     actorIds: string[],
-    content?: string,
-    contentBlocks?: CanonicalContentBlock[],
-    title?: string
+    options?: {
+      title?: string
+      workspaceMemberIds?: string[]
+      remoteAgentIds?: string[]
+      externalParticipants?: ChatConversationCreateInput["externalParticipants"]
+      metadata?: Record<string, unknown>
+    }
   ) => Promise<string>
   markConversationRead: (
     conversationId: string,
@@ -1992,26 +1997,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return syncPromise
   },
 
-  createWorkspaceThread: async (
-    workspaceId,
-    kind,
-    actorIds,
-    content,
-    contentBlocks,
-    title
-  ) => {
-    // NOTE: `content` and `contentBlocks` were previously stuffed into
-    // `metadata.initialContent` / `metadata.initialContentBlocks`, but the
-    // backend has never read those fields. If we want an "initial message on
-    // create" feature, the right thing is to issue a separate sendMessage
-    // call after creating the conversation.
-    void content
-    void contentBlocks
+  createWorkspaceThread: async (workspaceId, kind, actorIds, options) => {
     const response = await api.createChatConversation(workspaceId, {
       clientRequestId: createUuid("conversation"),
       kind,
-      title,
+      title: options?.title,
       actorIds,
+      workspaceMemberIds: options?.workspaceMemberIds ?? [],
+      remoteAgentIds: options?.remoteAgentIds ?? [],
+      externalParticipants: options?.externalParticipants ?? [],
+      metadata: options?.metadata,
     })
 
     if (get().activeWorkspaceId === workspaceId && get().snapshot) {

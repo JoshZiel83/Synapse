@@ -206,7 +206,6 @@ export default function DashboardHomePage() {
     if (!workspaceId) return
 
     const launchPayload = payload ?? pendingLaunchPayload
-    const message = launchPayload?.plainText.trim() || ""
     const actorIds = Array.from(
       new Set(groupedActors.map((actor) => actor.id).filter(Boolean))
     )
@@ -229,14 +228,9 @@ export default function DashboardHomePage() {
     setErrorMessage(null)
 
     const [groupResult, preferenceResult] = await Promise.allSettled([
-      createWorkspaceThread(
-        workspaceId,
-        "group",
-        actorIds,
-        message || undefined,
-        launchPayload.contentBlocks,
-        threadTitle || undefined
-      ),
+      createWorkspaceThread(workspaceId, "group", actorIds, {
+        title: threadTitle || undefined,
+      }),
       saveAsDefault && primaryActor
         ? api.updateWorkspaceChiefActorPreference(workspaceId, {
             chiefActorId: primaryActor.id,
