@@ -17,6 +17,7 @@ import {
   type PendingChatOutboxMessage,
 } from "@/lib/chat-data"
 import { createChatPersistence } from "@/lib/chat-persistence"
+import { isChatServiceWorkerActive } from "@/lib/chat-web-service-worker"
 import type { ChatComposerSendPayload } from "@/lib/chat-compose"
 import { getDeviceLabel } from "@/lib/config"
 import { createId } from "@/lib/ids"
@@ -304,6 +305,14 @@ export class ChatRuntime {
         }
 
         if (this.state.activeWorkspaceId !== workspaceId) {
+          return
+        }
+
+        // When the SW is owning the flush (see markConversationRead +
+        // sendMessage above), the provider triggers it on every queue
+        // change. Calling flushPendingReads/flushOutbox here would race
+        // the SW and double-POST.
+        if (isChatServiceWorkerActive()) {
           return
         }
 
@@ -622,6 +631,17 @@ export class ChatRuntime {
       return
     }
 
+    // When the chat service worker has taken control on web, it is the
+    // single owner of read-watermark POSTs (the provider re-broadcasts
+    // queue changes to the SW via requestChatServiceWorkerSync). The
+    // main thread doing a direct POST here would mean two writes per
+    // mark — see S6 ("主线程与 SW 互斥、一次只 POST 一次"). On native
+    // and on web before the SW activates, the main thread still POSTs
+    // so the user's read state isn't lost.
+    if (isChatServiceWorkerActive()) {
+      return
+    }
+
     const clientInstanceId = current.clientInstanceId
     try {
       const response = await api.updateChatConversationReadWatermark(
@@ -683,6 +703,15 @@ export class ChatRuntime {
         [clientMessageId]: outboxEntry,
       },
     }))
+
+    // The SW polls the outbox via requestChatServiceWorkerSync() that
+    // the provider fires when the queue changes; it owns the outbox
+    // flush whenever it has activated. Skip the main-thread flush in
+    // that case to avoid double-POSTing the same clientMessageId. On
+    // native (no SW) or web before SW activation, fall through.
+    if (isChatServiceWorkerActive()) {
+      return
+    }
 
     await this.flushOutbox()
   }
