@@ -16,6 +16,7 @@
 import { test } from "node:test"
 import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
+import { execFileSync } from "node:child_process"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
 import {
@@ -182,5 +183,98 @@ test("bundled service workers carry the shared chat-queue strings", async () => 
     mobileBundle.includes("synapse.chat.worker"),
     false,
     "mobile SW bundle still contains stale 'synapse.chat.worker' string"
+  )
+})
+
+test("zod does NOT leak into either SW bundle", async () => {
+  // S34 moved CanonicalContentBlockSchema into @synapse/shared but
+  // initially exported it from the root barrel — at which point every
+  // module that imports from `@synapse/shared` / `@shared` (including
+  // the chat service workers via the queue constants) transitively
+  // dragged zod into the worker bundles, ballooning them by hundreds
+  // of kB. S36 moved the schemas to the `/schemas` subpath so this
+  // doesn't happen. Guard the invariant so a future "let me just add
+  // X to the root barrel" doesn't quietly bloat the workers again.
+  const webBundle = await readFile(
+    path.join(
+      repoRoot,
+      "packages",
+      "web-next",
+      "public",
+      "web-chat-service-worker.js"
+    ),
+    "utf8"
+  )
+  const mobileBundle = await readFile(
+    path.join(
+      repoRoot,
+      "packages",
+      "mobile-app",
+      "public",
+      "chat-service-worker.js"
+    ),
+    "utf8"
+  )
+  for (const [name, bundle] of [
+    ["web", webBundle] as const,
+    ["mobile", mobileBundle] as const,
+  ]) {
+    // zod's runtime exposes its namespace as `z.ZodObject`, `z.ZodEnum`,
+    // etc.; bundlers rename `z` but the class names survive. Grep for
+    // a representative name that doesn't collide with anything else
+    // shipped in the SW.
+    assert.equal(
+      /\bZodDiscriminatedUnion\b|\bZodEffects\b/.test(bundle),
+      false,
+      `${name} SW bundle contains zod runtime — something in @synapse/shared / @shared root barrel is dragging zod in. Use the @synapse/shared/schemas subpath instead.`
+    )
+  }
+})
+
+test("regenerating the SW bundles produces no diff vs the committed artifacts", async () => {
+  // If someone changes a shared module the SW transitively imports but
+  // forgets to re-run `npm run build:chat-worker`, the committed bundle
+  // silently drifts from the source. This test forces a regeneration
+  // and compares byte-for-byte against the on-disk artifact. Catches
+  // the exact S31 / S36 mistake at PR time.
+  const webBundlePath = path.join(
+    repoRoot,
+    "packages",
+    "web-next",
+    "public",
+    "web-chat-service-worker.js"
+  )
+  const mobileBundlePath = path.join(
+    repoRoot,
+    "packages",
+    "mobile-app",
+    "public",
+    "chat-service-worker.js"
+  )
+
+  const webBefore = await readFile(webBundlePath, "utf8")
+  const mobileBefore = await readFile(mobileBundlePath, "utf8")
+
+  execFileSync("npm", ["run", "build:chat-worker", "-w", "packages/web-next"], {
+    cwd: repoRoot,
+    stdio: "ignore",
+  })
+  execFileSync("npm", ["run", "build:chat-worker"], {
+    cwd: path.join(repoRoot, "packages", "mobile-app"),
+    stdio: "ignore",
+  })
+
+  const webAfter = await readFile(webBundlePath, "utf8")
+  const mobileAfter = await readFile(mobileBundlePath, "utf8")
+
+  assert.equal(
+    webAfter,
+    webBefore,
+    "web SW bundle drifted from source — run `npm run build:chat-worker -w packages/web-next` and commit"
+  )
+  assert.equal(
+    mobileAfter,
+    mobileBefore,
+    "mobile SW bundle drifted from source — run `npm run build:chat-worker` in packages/mobile-app and commit"
   )
 })

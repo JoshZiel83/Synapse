@@ -1,7 +1,6 @@
 import type { FastifyInstance } from "fastify"
 import { ZodError, z } from "zod"
 import {
-  CanonicalContentBlockSchema,
   CHAT_TYPING_STATES,
   CONVERSATION_BOUNDARIES,
   CONVERSATION_KINDS,
@@ -10,6 +9,7 @@ import {
   PUSH_TOKEN_PLATFORMS,
   RELAY_AUTHORIZATION_PRESETS,
 } from "@synapse/shared"
+import { CanonicalContentBlockSchema } from "@synapse/shared/schemas"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { requireWorkspaceMemberIdentity } from "./workspace-identity.js"
 import {

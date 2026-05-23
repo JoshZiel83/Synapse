@@ -16,7 +16,7 @@ import assert from "node:assert/strict"
 import { readFile } from "node:fs/promises"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
-import { CanonicalContentBlockSchema } from "@synapse/shared"
+import { CanonicalContentBlockSchema } from "@synapse/shared/schemas"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
 const chatControllerPath = path.resolve(
@@ -71,12 +71,12 @@ test("CanonicalContentBlockSchema rejects file_ref blocks missing required field
   assert.equal(result.success, false)
 })
 
-test("chat controller sources CanonicalContentBlockSchema from @synapse/shared", async () => {
+test("chat controller sources CanonicalContentBlockSchema from @synapse/shared/schemas", async () => {
   const body = await readFile(chatControllerPath, "utf8")
   assert.match(
     body,
-    /import \{[^}]*CanonicalContentBlockSchema[^}]*\}\s+from\s+"@synapse\/shared"/s,
-    "controller.ts must pull the canonical content-block schema from @synapse/shared"
+    /import \{[^}]*CanonicalContentBlockSchema[^}]*\}\s+from\s+"@synapse\/shared\/schemas"/s,
+    "controller.ts must pull the canonical content-block schema from @synapse/shared/schemas — the subpath, not the root barrel, so the SW worker bundles don't pull in zod"
   )
 })
 
