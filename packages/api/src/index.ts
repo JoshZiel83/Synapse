@@ -68,6 +68,7 @@ import {
 } from "./workers/automation-scheduler.js"
 import { startAutomationExecutionWorker } from "./workers/automation-execution.js"
 import { startImTransportDeliveryWorker } from "./workers/im-transport-delivery.js"
+import { installActorStatusHooks } from "./modules/im/integration/actor-status-hooks.js"
 import { startMemoryIndexingWorker } from "./workers/memory-indexing.js"
 import { startFileParsingWorker } from "./workers/file-parsing.js"
 import {
@@ -271,6 +272,7 @@ async function main() {
   startAutomationExecutionWorker()
   startSessionThinkingWorker()
   startImTransportDeliveryWorker()
+  installActorStatusHooks()
   startMemoryIndexingWorker()
   startFileParsingWorker()
   await ensureRemoteAgentDeliveryRetryJob()

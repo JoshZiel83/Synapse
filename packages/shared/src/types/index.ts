@@ -3395,6 +3395,14 @@ export interface TransportMessageLink {
   direction: "inbound" | "outbound"
   deliveryStatus: TransportDeliveryStatus
   externalMessageId?: string
+  /** Platform reply-to id (Feishu parent_id). Populated on inbound when
+   *  the user replied to a previous message. */
+  externalReplyToId?: string
+  /** Platform thread id (Feishu thread_id). */
+  externalThreadId?: string
+  /** Emoji glyph → platform reaction_id map maintained by
+   *  StatusReactionAdapter so a restart can clean orphan reactions. */
+  externalEmojiReactions?: Record<string, string>
   metadata: Record<string, unknown>
   deliveredAt?: Timestamp
   createdAt: Timestamp

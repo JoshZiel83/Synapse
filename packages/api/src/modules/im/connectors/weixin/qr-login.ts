@@ -1,3 +1,13 @@
+/**
+ * Personal-WeChat (ilinkai) QR-code login flow.
+ *
+ * Migrated from modules/im/weixin-qr.ts so the QR-scan path lives inside
+ * the weixin connector boundary alongside the runtime, outbound, typing,
+ * etc. Sessions are now stored in Redis (qr-session-store.ts), so
+ * multi-replica deployments share QR state and a restart mid-scan doesn't
+ * orphan the user.
+ */
+
 import crypto from "node:crypto"
 import type {
   TransportAccountInboundActorMode,
@@ -12,35 +22,19 @@ import {
   getTransportAccountById,
   getTransportAccountByWorkspaceKindAndKey,
   updateTransportAccount,
-} from "./service.js"
-import { refreshTransportRuntimeManager } from "./runtime.js"
+} from "../../service.js"
+import { refreshTransportRuntimeManager } from "../../runtime.js"
+import {
+  deleteQrSession,
+  getQrSession,
+  setQrSession,
+  type ActiveWeixinQrLogin,
+} from "./qr-session-store.js"
 
 const DEFAULT_WEIXIN_BASE_URL = "https://ilinkai.weixin.qq.com"
 const ACTIVE_LOGIN_TTL_MS = 5 * 60_000
 const QR_LONG_POLL_TIMEOUT_MS = 25_000
 const DEFAULT_BOT_TYPE = "3"
-
-type ActiveWeixinQrLogin = {
-  sessionId: string
-  workspaceId: string
-  qrcode: string
-  qrCodeUrl: string
-  baseUrl: string
-  botType: string
-  displayName?: string
-  ownerScope: TransportAccountOwnerScope
-  ownerWorkspaceMemberId?: string | null
-  inboundActorMode: TransportAccountInboundActorMode
-  inboundActorId?: string | null
-  status: WeixinQrLoginStatus
-  message: string
-  createdAt: number
-  updatedAt: number
-  expiresAt: number
-  transportAccountId?: string
-  botId?: string
-  scannerUserId?: string
-}
 
 type WeixinQrCodeResponse = {
   qrcode?: string
@@ -55,8 +49,6 @@ type WeixinQrStatusResponse = {
   ilink_user_id?: string
 }
 
-const activeWeixinQrLogins = new Map<string, ActiveWeixinQrLogin>()
-
 function nowIso() {
   return new Date().toISOString()
 }
@@ -69,26 +61,8 @@ function normalizeBaseUrl(baseUrl?: string) {
   return nonEmptyString(baseUrl) || DEFAULT_WEIXIN_BASE_URL
 }
 
-function buildSessionKey(workspaceId: string, sessionId: string) {
-  return `${workspaceId}:${sessionId}`
-}
-
 function isFresh(session: ActiveWeixinQrLogin) {
   return Date.now() < session.expiresAt
-}
-
-function purgeExpiredSessions() {
-  const now = Date.now()
-  for (const [key, session] of activeWeixinQrLogins.entries()) {
-    if (session.expiresAt > now) continue
-    if (session.status === "confirmed") continue
-    activeWeixinQrLogins.set(key, {
-      ...session,
-      status: "expired",
-      message: "QR code expired. Generate a new one.",
-      updatedAt: now,
-    })
-  }
 }
 
 async function fetchWeixinJson<T>(params: {
@@ -139,9 +113,7 @@ async function pollWeixinQrStatus(params: { baseUrl: string; qrcode: string }) {
   return fetchWeixinJson<WeixinQrStatusResponse>({
     url: url.toString(),
     timeoutMs: QR_LONG_POLL_TIMEOUT_MS,
-    headers: {
-      "iLink-App-ClientVersion": "1",
-    },
+    headers: { "iLink-App-ClientVersion": "1" },
   })
 }
 
@@ -230,26 +202,18 @@ async function persistWeixinAccount(params: {
         inboundActorMode: params.session.inboundActorMode,
         inboundActorId: params.session.inboundActorId ?? null,
         connectionMode: "long_connection",
-        credentials: {
-          token: params.botToken,
-        },
-        config: {
-          baseUrl: resolvedBaseUrl,
-        },
+        credentials: { token: params.botToken },
+        config: { baseUrl: resolvedBaseUrl },
         metadata,
       })
     } catch (error: any) {
-      if (error?.code !== "23505") {
-        throw error
-      }
+      if (error?.code !== "23505") throw error
       const concurrent = await getTransportAccountByWorkspaceKindAndKey({
         workspaceId: params.session.workspaceId,
         transportKind: "weixin",
         accountKey,
       })
-      if (!concurrent) {
-        throw error
-      }
+      if (!concurrent) throw error
       account = await updateTransportAccount({
         workspaceId: params.session.workspaceId,
         accountId: concurrent.id,
@@ -268,10 +232,7 @@ async function persistWeixinAccount(params: {
           ...(concurrent.config || {}),
           baseUrl: resolvedBaseUrl,
         },
-        metadata: {
-          ...(concurrent.metadata || {}),
-          ...metadata,
-        },
+        metadata: { ...(concurrent.metadata || {}), ...metadata },
       })
     }
   }
@@ -292,31 +253,30 @@ async function persistWeixinAccount(params: {
     })
   }
 
-  await refreshTransportRuntimeManager().catch((error) => {
-    console.error("[im] Failed to refresh transport runtime manager:", error)
-  })
-
+  // Wake the reconcile loop so the new account's runtime starts immediately
+  await refreshTransportRuntimeManager()
   return account
 }
 
 export function getWeixinQrLoginSessionOwner(params: {
   workspaceId: string
   sessionId: string
-}) {
-  purgeExpiredSessions()
-  const existing = activeWeixinQrLogins.get(
-    buildSessionKey(params.workspaceId, params.sessionId)
-  )
-  if (!existing) {
-    return null
-  }
-  return {
-    ownerScope: existing.ownerScope,
-    ownerWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
-  }
+}): Promise<{
+  ownerScope: TransportAccountOwnerScope
+  ownerWorkspaceMemberId: string | null
+} | null> {
+  return getQrSession(params.workspaceId, params.sessionId).then((existing) => {
+    if (!existing) return null
+    return {
+      ownerScope: existing.ownerScope,
+      ownerWorkspaceMemberId: existing.ownerWorkspaceMemberId || null,
+    }
+  })
 }
 
-async function buildSummary(session: ActiveWeixinQrLogin) {
+async function buildSummary(
+  session: ActiveWeixinQrLogin
+): Promise<WeixinQrLoginSessionSummary> {
   const transportAccount = session.transportAccountId
     ? await getTransportAccountById(session.transportAccountId)
     : null
@@ -345,9 +305,7 @@ export async function startWeixinQrLoginSession(params: {
   ownerWorkspaceMemberId?: string | null
   inboundActorMode?: TransportAccountInboundActorMode
   inboundActorId?: string | null
-}) {
-  purgeExpiredSessions()
-
+}): Promise<WeixinQrLoginSessionSummary> {
   const baseUrl = normalizeBaseUrl(params.baseUrl)
   const botType = nonEmptyString(params.botType) || DEFAULT_BOT_TYPE
   const qr = await fetchWeixinQrCode({ baseUrl, botType })
@@ -376,23 +334,16 @@ export async function startWeixinQrLoginSession(params: {
     updatedAt: now,
     expiresAt: now + ACTIVE_LOGIN_TTL_MS,
   }
-  activeWeixinQrLogins.set(
-    buildSessionKey(params.workspaceId, session.sessionId),
-    session
-  )
+  await setQrSession(session)
   return buildSummary(session)
 }
 
 export async function getWeixinQrLoginSession(params: {
   workspaceId: string
   sessionId: string
-}) {
-  purgeExpiredSessions()
-  const key = buildSessionKey(params.workspaceId, params.sessionId)
-  const existing = activeWeixinQrLogins.get(key)
-  if (!existing) {
-    return null
-  }
+}): Promise<WeixinQrLoginSessionSummary | null> {
+  const existing = await getQrSession(params.workspaceId, params.sessionId)
+  if (!existing) return null
 
   if (!isFresh(existing) && existing.status !== "confirmed") {
     const expired: ActiveWeixinQrLogin = {
@@ -401,7 +352,7 @@ export async function getWeixinQrLoginSession(params: {
       message: "QR code expired. Generate a new one.",
       updatedAt: Date.now(),
     }
-    activeWeixinQrLogins.set(key, expired)
+    await setQrSession(expired)
     return buildSummary(expired)
   }
 
@@ -451,7 +402,7 @@ export async function getWeixinQrLoginSession(params: {
       }
     }
 
-    activeWeixinQrLogins.set(key, nextSession)
+    await setQrSession(nextSession)
     return buildSummary(nextSession)
   } catch (error) {
     const failed: ActiveWeixinQrLogin = {
@@ -463,7 +414,9 @@ export async function getWeixinQrLoginSession(params: {
           : "WeChat QR login failed. Try again.",
       updatedAt: Date.now(),
     }
-    activeWeixinQrLogins.set(key, failed)
+    await setQrSession(failed)
     return buildSummary(failed)
   }
 }
+
+export { deleteQrSession }

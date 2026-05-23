@@ -1,0 +1,325 @@
+/**
+ * CanonicalMessage: platform-neutral message representation.
+ *
+ * Used as the boundary type between transport connectors and the IM ingest/delivery layers.
+ * Each connector parses inbound payloads into CanonicalMessage and renders outbound payloads
+ * from CanonicalMessage. The chat layer persists `plainText` to `conversation_items.content`
+ * and `parts` to `conversation_items.metadata.transport.canonicalParts` (JSONB).
+ *
+ * Adding a new connector should not require changes to this file.
+ */
+
+export type CanonicalMessageSchemaVersion = 1
+export const CANONICAL_MESSAGE_SCHEMA_VERSION: CanonicalMessageSchemaVersion = 1
+
+export interface CanonicalFileRef {
+  fileId?: string
+  url?: string
+  mime?: string
+  name?: string
+  sizeBytes?: number
+  width?: number
+  height?: number
+}
+
+export type CanonicalCardSchema = "feishu_interactive_v1"
+
+export type CanonicalSystemMarker =
+  | "image_placeholder"
+  | "voice_placeholder"
+  | "video_placeholder"
+  | "file_placeholder"
+  | "card_placeholder"
+  | "unknown_placeholder"
+
+export type CanonicalPart =
+  | { type: "text"; text: string }
+  | {
+      type: "mention"
+      externalId?: string
+      participantId?: string
+      displayName: string
+    }
+  | { type: "image"; fileRef: CanonicalFileRef }
+  | { type: "file"; fileRef: CanonicalFileRef & { name: string } }
+  | {
+      type: "card"
+      schema: CanonicalCardSchema
+      payload: Record<string, unknown>
+      fallbackText: string
+    }
+  | {
+      type: "quote"
+      quoted: { externalMessageId?: string; preview: string }
+    }
+  | {
+      type: "reaction"
+      emoji: string
+      target: { externalMessageId: string }
+    }
+  | {
+      type: "system_marker"
+      marker: CanonicalSystemMarker
+      label?: string
+      original?: Record<string, unknown>
+    }
+
+export interface CanonicalMessage {
+  schemaVersion: CanonicalMessageSchemaVersion
+  parts: CanonicalPart[]
+  /**
+   * Derived plaintext suitable for the legacy `conversation_items.content` column,
+   * for search, and as a fallback for capability-limited transports.
+   */
+  plainText: string
+}
+
+const SYSTEM_MARKER_LABELS: Record<CanonicalSystemMarker, string> = {
+  image_placeholder: "[图片]",
+  voice_placeholder: "[语音]",
+  video_placeholder: "[视频]",
+  file_placeholder: "[文件]",
+  card_placeholder: "[卡片]",
+  unknown_placeholder: "[消息]",
+}
+
+/**
+ * Build a CanonicalMessage from parts, computing plainText automatically.
+ * Use this rather than constructing literals directly so plainText stays in sync.
+ */
+export function buildCanonicalMessage(
+  parts: CanonicalPart[]
+): CanonicalMessage {
+  return {
+    schemaVersion: CANONICAL_MESSAGE_SCHEMA_VERSION,
+    parts: parts.slice(),
+    plainText: derivePlainText(parts),
+  }
+}
+
+/**
+ * Convenience constructor for a single text part.
+ */
+export function textOnlyMessage(text: string): CanonicalMessage {
+  return buildCanonicalMessage([{ type: "text", text }])
+}
+
+/**
+ * Derive plaintext from parts. Each part contributes a textual representation;
+ * adjacent fragments are joined with a single space. Empty fragments are dropped.
+ *
+ * Pure function. Whitespace is collapsed on the boundary between parts but
+ * preserved within a single text part.
+ */
+export function derivePlainText(parts: CanonicalPart[]): string {
+  const out: string[] = []
+  for (const part of parts) {
+    const fragment = renderPartAsPlainText(part)
+    if (fragment) {
+      out.push(fragment)
+    }
+  }
+  return out.join(" ").trim()
+}
+
+function renderPartAsPlainText(part: CanonicalPart): string {
+  switch (part.type) {
+    case "text":
+      return part.text
+    case "mention":
+      return `@${part.displayName}`
+    case "image":
+      return SYSTEM_MARKER_LABELS.image_placeholder
+    case "file":
+      return part.fileRef.name
+        ? `[文件 ${part.fileRef.name}]`
+        : SYSTEM_MARKER_LABELS.file_placeholder
+    case "card":
+      return part.fallbackText || SYSTEM_MARKER_LABELS.card_placeholder
+    case "quote":
+      return part.quoted.preview ? `> ${part.quoted.preview}` : ""
+    case "reaction":
+      return part.emoji
+    case "system_marker":
+      return part.label || SYSTEM_MARKER_LABELS[part.marker]
+  }
+}
+
+/**
+ * Stable serialization of CanonicalMessage suitable for JSONB columns.
+ * Returns a plain object that is JSON-roundtrip-safe.
+ */
+export function serializeCanonicalMessage(message: CanonicalMessage): {
+  schemaVersion: CanonicalMessageSchemaVersion
+  parts: CanonicalPart[]
+  plainText: string
+} {
+  return {
+    schemaVersion: message.schemaVersion,
+    parts: message.parts.map(clonePart),
+    plainText: message.plainText,
+  }
+}
+
+function clonePart(part: CanonicalPart): CanonicalPart {
+  return JSON.parse(JSON.stringify(part)) as CanonicalPart
+}
+
+/**
+ * Parse a serialized CanonicalMessage from JSONB or other untrusted input.
+ * Unknown part types are converted to a `system_marker` of kind `unknown_placeholder`,
+ * preserving the original payload in `original` for debugging.
+ * Missing or wrong-shaped input yields an empty message.
+ */
+export function parseCanonicalMessage(input: unknown): CanonicalMessage {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return buildCanonicalMessage([])
+  }
+  const raw = input as Record<string, unknown>
+  const partsRaw = Array.isArray(raw.parts) ? raw.parts : []
+  const parts: CanonicalPart[] = []
+  for (const candidate of partsRaw) {
+    const part = parsePart(candidate)
+    if (part) {
+      parts.push(part)
+    }
+  }
+  return buildCanonicalMessage(parts)
+}
+
+function parsePart(input: unknown): CanonicalPart | null {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return null
+  }
+  const raw = input as Record<string, unknown>
+  const type = typeof raw.type === "string" ? raw.type : ""
+  switch (type) {
+    case "text": {
+      const text = typeof raw.text === "string" ? raw.text : ""
+      return { type: "text", text }
+    }
+    case "mention": {
+      const mention: CanonicalPart & { type: "mention" } = {
+        type: "mention",
+        displayName: typeof raw.displayName === "string" ? raw.displayName : "",
+      }
+      if (typeof raw.externalId === "string") {
+        mention.externalId = raw.externalId
+      }
+      if (typeof raw.participantId === "string") {
+        mention.participantId = raw.participantId
+      }
+      return mention
+    }
+    case "image":
+      return { type: "image", fileRef: parseFileRef(raw.fileRef) }
+    case "file": {
+      const fileRef = parseFileRef(raw.fileRef)
+      return {
+        type: "file",
+        fileRef: { ...fileRef, name: fileRef.name || "file" },
+      }
+    }
+    case "card": {
+      const schema =
+        raw.schema === "feishu_interactive_v1"
+          ? raw.schema
+          : "feishu_interactive_v1"
+      const payload =
+        raw.payload &&
+        typeof raw.payload === "object" &&
+        !Array.isArray(raw.payload)
+          ? (raw.payload as Record<string, unknown>)
+          : {}
+      const fallbackText =
+        typeof raw.fallbackText === "string" ? raw.fallbackText : ""
+      return { type: "card", schema, payload, fallbackText }
+    }
+    case "quote": {
+      const quotedRaw =
+        raw.quoted &&
+        typeof raw.quoted === "object" &&
+        !Array.isArray(raw.quoted)
+          ? (raw.quoted as Record<string, unknown>)
+          : {}
+      const quoted: { externalMessageId?: string; preview: string } = {
+        preview: typeof quotedRaw.preview === "string" ? quotedRaw.preview : "",
+      }
+      if (typeof quotedRaw.externalMessageId === "string") {
+        quoted.externalMessageId = quotedRaw.externalMessageId
+      }
+      return { type: "quote", quoted }
+    }
+    case "reaction": {
+      const emoji = typeof raw.emoji === "string" ? raw.emoji : ""
+      const targetRaw =
+        raw.target &&
+        typeof raw.target === "object" &&
+        !Array.isArray(raw.target)
+          ? (raw.target as Record<string, unknown>)
+          : {}
+      const externalMessageId =
+        typeof targetRaw.externalMessageId === "string"
+          ? targetRaw.externalMessageId
+          : ""
+      return {
+        type: "reaction",
+        emoji,
+        target: { externalMessageId },
+      }
+    }
+    case "system_marker": {
+      const marker = isSystemMarker(raw.marker)
+        ? raw.marker
+        : "unknown_placeholder"
+      const part: CanonicalPart & { type: "system_marker" } = {
+        type: "system_marker",
+        marker,
+      }
+      if (typeof raw.label === "string") {
+        part.label = raw.label
+      }
+      if (
+        raw.original &&
+        typeof raw.original === "object" &&
+        !Array.isArray(raw.original)
+      ) {
+        part.original = raw.original as Record<string, unknown>
+      }
+      return part
+    }
+    default:
+      return {
+        type: "system_marker",
+        marker: "unknown_placeholder",
+        original: raw,
+      }
+  }
+}
+
+function parseFileRef(input: unknown): CanonicalFileRef {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return {}
+  }
+  const raw = input as Record<string, unknown>
+  return {
+    fileId: typeof raw.fileId === "string" ? raw.fileId : undefined,
+    url: typeof raw.url === "string" ? raw.url : undefined,
+    mime: typeof raw.mime === "string" ? raw.mime : undefined,
+    name: typeof raw.name === "string" ? raw.name : undefined,
+    sizeBytes: typeof raw.sizeBytes === "number" ? raw.sizeBytes : undefined,
+    width: typeof raw.width === "number" ? raw.width : undefined,
+    height: typeof raw.height === "number" ? raw.height : undefined,
+  }
+}
+
+function isSystemMarker(input: unknown): input is CanonicalSystemMarker {
+  return (
+    input === "image_placeholder" ||
+    input === "voice_placeholder" ||
+    input === "video_placeholder" ||
+    input === "file_placeholder" ||
+    input === "card_placeholder" ||
+    input === "unknown_placeholder"
+  )
+}
