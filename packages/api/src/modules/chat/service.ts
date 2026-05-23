@@ -5894,7 +5894,7 @@ export async function retryAssistantMessage(params: {
     params.workspaceId,
     params.userId
   )
-  await requireConversationAccess(
+  const access = await requireConversationAccess(
     rootQueryable(),
     params.conversationId,
     identity.workspaceMemberId
@@ -5923,10 +5923,6 @@ export async function retryAssistantMessage(params: {
     )
   }
 
-  const authorParticipantId =
-    typeof item.author?.participantId === "string"
-      ? item.author.participantId
-      : null
   const actorId =
     typeof item.author?.actorId === "string" ? item.author.actorId : null
   if (!actorId) {
@@ -5937,6 +5933,12 @@ export async function retryAssistantMessage(params: {
     )
   }
 
+  // S19: the wakeup "source" is the caller (the user clicking retry),
+  // NOT the original assistant author. The downstream model-error notice
+  // path in session-thinking.ts:922 expects sourceParticipantType="workspace_member"
+  // to come with sourceParticipantId = workspace_members.id (NOT a
+  // conversation_participants.id) so it can re-query the participant
+  // via getConversationParticipant({workspaceMemberId}).
   const { enqueueSessionWakeup } = await import("../session/runtime.js")
   await enqueueSessionWakeup({
     sessionId: retrySessionId,
@@ -5945,13 +5947,14 @@ export async function retryAssistantMessage(params: {
     sourceType: "user_message",
     sourceItemId: params.itemId,
     sourceParticipantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
-    sourceParticipantId: authorParticipantId ?? undefined,
-    sourceName: "retry",
+    sourceParticipantId: identity.workspaceMemberId,
+    sourceName: access.participant.user_name ?? "user",
     summary: "user requested retry of failed assistant turn",
     metadata: {
       source: "chat.message_retry",
       retryItemId: params.itemId,
       conversationId: params.conversationId,
+      retryByParticipantId: access.participant.id,
     },
     trigger: "user_message",
   })
