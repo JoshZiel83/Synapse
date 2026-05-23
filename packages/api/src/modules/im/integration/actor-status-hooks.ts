@@ -58,8 +58,8 @@ import {
   type TypingController,
 } from "../typing/controller.js"
 import {
+  decideRuntimeUpdateAction,
   resolveActorActionStatus,
-  resolveSessionThinkingStatus,
 } from "./status-resolver.js"
 
 // One claim client per process, bound to the application-wide Redis.
@@ -403,15 +403,51 @@ export function installActorStatusHooks(): () => void {
   )
 
   unsubscribers.push(
-    onEvent("session.thinking", async (event) => {
-      const sessionId = String(event.payload.sessionId || "")
+    onEvent("runtime.updated", async (event) => {
+      // Replaces the removed session.thinking + session.status.changed
+      // handlers. publishSessionRuntime() now drives all phase / lane /
+      // health transitions via this single event, carrying a full
+      // ActorRuntimeState snapshot.
+      const snapshot = (event.payload as { snapshot?: unknown })?.snapshot as
+        | {
+            sessionId?: unknown
+            laneState?: unknown
+            health?: unknown
+            phase?: unknown
+          }
+        | undefined
+      if (!snapshot || typeof snapshot !== "object") return
+      const sessionId = String(snapshot.sessionId || "")
+      if (!sessionId) return
       const entry = activeSessions.get(sessionId)
       if (!entry) return
-      const level = resolveSessionThinkingStatus(event.payload)
-      entry.reaction.set(level)
-      // First sign of real model activity → stop the typing indicator so
-      // the user sees text arriving instead of an ever-present "typing…".
-      entry.typing.stop()
+
+      const decision = decideRuntimeUpdateAction(snapshot)
+      switch (decision.kind) {
+        case "terminal-error":
+          entry.reaction.error()
+          entry.typing.stop()
+          setTimeout(() => {
+            void destroyControllersForSession(sessionId)
+          }, 5_000)
+          return
+        case "terminal-done":
+          entry.reaction.done()
+          entry.typing.stop()
+          setTimeout(() => {
+            void destroyControllersForSession(sessionId)
+          }, 5_000)
+          return
+        case "set-level":
+          // The reaction controller debounces same-level sets, so duplicate
+          // runtime.updated events from unrelated snapshot churn (turn
+          // previews, wakeup count changes) are safe.
+          entry.reaction.set(decision.level)
+          entry.typing.stop()
+          return
+        case "noop":
+          return
+      }
     })
   )
 
@@ -429,28 +465,6 @@ export function installActorStatusHooks(): () => void {
         }, 5_000)
       } else {
         entry.reaction.set(level)
-      }
-    })
-  )
-
-  unsubscribers.push(
-    onEvent("session.status.changed", async (event) => {
-      const sessionId = String(event.payload.sessionId || "")
-      const status = String(event.payload.status || "")
-      const entry = activeSessions.get(sessionId)
-      if (!entry) return
-      if (status === "error" || status === "failed") {
-        entry.reaction.error()
-        entry.typing.stop()
-        setTimeout(() => {
-          void destroyControllersForSession(sessionId)
-        }, 5_000)
-      } else if (status === "idle" || status === "completed") {
-        entry.reaction.done()
-        entry.typing.stop()
-        setTimeout(() => {
-          void destroyControllersForSession(sessionId)
-        }, 5_000)
       }
     })
   )

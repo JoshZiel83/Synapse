@@ -1,9 +1,11 @@
 /**
  * Pure: derive a StatusLevel from an actor lifecycle event payload.
  *
- * The events come from packages/api/src/infrastructure/events: `actor.thinking`
- * (turn start), `session.thinking` (phase changes), `actor.action` (tool calls
- * issued / turn complete).
+ * The events come from packages/api/src/infrastructure/events:
+ *  - `actor.thinking` (turn start)
+ *  - `actor.action` (tool calls issued / turn complete)
+ *  - `runtime.updated` (phase / lane / health transitions; replaced the old
+ *     session.thinking and session.status.changed events removed in S13)
  *
  * Returns null for events we should ignore (e.g. an `actor.action` with no
  * tool calls is treated as "completion" by the caller, not via this resolver).
@@ -45,8 +47,9 @@ export function resolveActorActionStatus(
 }
 
 /**
- * Inspect a `session.thinking` payload's `status` / `phase` fields.
- * Returns the most appropriate StatusLevel, defaulting to "thinking".
+ * Inspect a free-form phase/status payload (originally for the now-removed
+ * `session.thinking` event; kept as a general-purpose status-text → level
+ * mapper). Returns the most appropriate StatusLevel, defaulting to "thinking".
  */
 export function resolveSessionThinkingStatus(
   payload: Record<string, unknown>
@@ -67,6 +70,82 @@ export function resolveSessionThinkingStatus(
   if (status.includes("coding") || status.includes("editing")) return "coding"
   if (status.includes("search") || status.includes("fetch")) return "web"
   return "thinking"
+}
+
+/**
+ * Map an ActorRuntimePhase value (carried by `runtime.updated` snapshots) to
+ * the StatusLevel the reaction controller renders.
+ *
+ * Returns null for phases the reaction controller should not change to
+ * mid-flight: "idle" / "error" terminal handling lives in the runtime.updated
+ * handler itself (they trigger reaction.done() / reaction.error() with full
+ * cleanup); "blocked" is a wait state where the previously-displayed reaction
+ * should remain visible.
+ */
+export function resolveRuntimePhaseStatus(phase: string): StatusLevel | null {
+  switch (phase) {
+    case "thinking":
+      return "thinking"
+    case "tool":
+      return "tool"
+    case "responding":
+      return "coding"
+    default:
+      return null
+  }
+}
+
+/**
+ * What the `runtime.updated` handler should do for a given snapshot, expressed
+ * as a tagged union so it can be unit-tested without spinning up the full
+ * event bus or controller graph.
+ *
+ *  - terminal-error: hard failure path (lastError, blocked-with-error, etc.).
+ *    The handler should call reaction.error() + typing.stop() and schedule
+ *    cleanup.
+ *  - terminal-done: clean completion. Same as terminal-error but reaction.done().
+ *  - set-level: in-flight phase update — reaction.set(level) + typing.stop()
+ *    (the snapshot is the first sign of actual server-side activity, so any
+ *    lingering "typing…" indicator should yield to the reaction).
+ *  - noop: snapshot has no actionable phase/lane/health change for IM (e.g.
+ *    laneState="queued" + phase="idle" follow-up-pending, or laneState="running"
+ *    + phase="blocked" wait state).
+ *
+ * Behavior tables encoded here:
+ *   health === "error"                              → terminal-error
+ *   phase  === "error"                              → terminal-error
+ *   laneState === "closed"                          → terminal-error
+ *   laneState === "idle" AND phase === "idle"       → terminal-done
+ *   phase ∈ {"thinking","tool","responding"}        → set-level
+ *   everything else (incl. laneState="queued", phase="blocked", phase="idle"
+ *     while laneState != "idle")                    → noop
+ */
+export type RuntimeUpdateDecision =
+  | { kind: "terminal-error" }
+  | { kind: "terminal-done" }
+  | { kind: "set-level"; level: StatusLevel }
+  | { kind: "noop" }
+
+export function decideRuntimeUpdateAction(snapshot: {
+  laneState?: unknown
+  health?: unknown
+  phase?: unknown
+}): RuntimeUpdateDecision {
+  const laneState = String(snapshot.laneState || "")
+  const health = String(snapshot.health || "")
+  const phase = String(snapshot.phase || "")
+
+  if (health === "error" || phase === "error" || laneState === "closed") {
+    return { kind: "terminal-error" }
+  }
+  if (laneState === "idle" && phase === "idle") {
+    return { kind: "terminal-done" }
+  }
+  const level = resolveRuntimePhaseStatus(phase)
+  if (level !== null) {
+    return { kind: "set-level", level }
+  }
+  return { kind: "noop" }
 }
 
 /** True if a status level represents a terminal state. */
