@@ -176,7 +176,9 @@ async function main() {
   }
 
   await startRealtimeEventOutboxDispatcher()
-  startChatDedupCounterLogger()
+  if (process.env.CHAT_DEDUP_LOGGER === "1") {
+    startChatDedupCounterLogger()
+  }
 
   try {
     const platformAdmins = await syncConfiguredPlatformAdmins()

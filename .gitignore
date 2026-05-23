@@ -4,7 +4,6 @@ dist/
 .next/
 .env
 .env.local
-.env.staging.local
 *.log
 .DS_Store
 coverage/
@@ -19,9 +18,6 @@ infrastructure/nginx.conf
 
 # Build caches
 *.tsbuildinfo
-
-# Playwright MCP
-.playwright-mcp/
 
 # Relay agent
 relay/synapse-relay
@@ -46,6 +42,3 @@ relay/internal/commandlinebundle/assets/sp/
 # Local reference checkouts
 .refer/
 .workbuddy/
-packages/e2e/test-results/
-packages/e2e/playwright-report/
-packages/e2e/node_modules/

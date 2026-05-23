@@ -2,17 +2,13 @@
  * Stage 0 smoke test for the integration harness.
  *
  * Verifies:
- * 1. The staging API health endpoint is reachable.
+ * 1. The API health endpoint is reachable.
  * 2. /auth/register creates a user and returns a token.
  * 3. The chat bootstrap endpoint responds for the new user's default workspace.
  *
- * Run:
- *   source infrastructure/scripts/staging-env.sh
- *   npm run test:integration -w packages/api
- *
- * Or directly:
- *   STAGING_API_URL=http://127.0.0.1:<NGINX_PORT>/api/v1 \
- *     tsx --test packages/api/test/integration/smoke.test.ts
+ * Run with STAGING_API_URL pointed at a running API:
+ *   STAGING_API_URL=http://127.0.0.1:38001/api/v1 \
+ *     npm run test:integration -w packages/api
  */
 
 import { test } from "node:test"

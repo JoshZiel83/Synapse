@@ -1,12 +1,11 @@
 /**
  * Integration test harness for the Synapse API.
  *
- * Strategy: BLACK-BOX. Tests issue HTTP requests against a running staging
- * API (host configured via STAGING_API_URL env var, defaults to
- * http://127.0.0.1:${NGINX_PORT}/api/v1).
+ * Strategy: BLACK-BOX. Tests issue HTTP requests against a running API
+ * (host+port configured via STAGING_API_URL env var).
  *
  * Tests must not assume state of the database; use random IDs and emails to
- * avoid collisions with other test runs sharing the same staging DB.
+ * avoid collisions with other test runs sharing the same DB.
  *
  * Later stages may add white-box helpers (per-process Fastify boot + temp
  * schema isolation) on top of this file.
@@ -33,14 +32,11 @@ function resolveBaseUrl(): string {
   if (explicit && explicit.trim().length > 0) {
     return explicit.replace(/\/$/, "")
   }
-  const host = process.env.SYNAPSE_STAGING_HOST || "127.0.0.1"
-  const port = process.env.NGINX_PORT
-  if (!port) {
-    throw new Error(
-      "STAGING_API_URL not set and NGINX_PORT missing. Did you `source infrastructure/scripts/staging-env.sh`?"
-    )
-  }
-  return `http://${host}:${port}/api/v1`
+  throw new Error(
+    "STAGING_API_URL is required for integration tests. " +
+      "Point it at a running API, e.g. http://127.0.0.1:38001/api/v1 " +
+      "from the integration test stack at packages/api/tests/integration/."
+  )
 }
 
 export function createApiClient(options?: {

@@ -29,10 +29,12 @@ const uuid = () =>
     .join("-")
 
 function pgConfig() {
-  // Connect to the staging postgres on its host-bound port from this
-  // worktree's .env.staging.local (already exported by staging-env.sh).
+  // Connect to the integration test postgres on its host-bound port.
   const port = Number.parseInt(process.env.PG_PORT || "0", 10)
-  if (!port) throw new Error("PG_PORT not set; source staging-env.sh first")
+  if (!port)
+    throw new Error(
+      "PG_PORT not set; export it to point at the integration test postgres"
+    )
   return {
     host: process.env.SYNAPSE_STAGING_HOST || "127.0.0.1",
     port,
