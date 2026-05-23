@@ -121,8 +121,15 @@ const EMPTY_WEIXIN_FORM: WeixinFormState = {
   inboundActorId: "",
 }
 
-function prettyTransportKind(kind: "feishu" | "weixin") {
-  return kind === "feishu" ? "Feishu" : "WeChat"
+function prettyTransportKind(kind: "feishu" | "weixin" | "wecom") {
+  switch (kind) {
+    case "feishu":
+      return "Feishu"
+    case "weixin":
+      return "WeChat"
+    case "wecom":
+      return "WeCom"
+  }
 }
 
 function prettyTransportAccountOwnerScope(scope: TransportAccountOwnerScope) {
