@@ -7,9 +7,11 @@
  *
  * Pure function. Does not mutate input.
  *
- * Note: MessageCapabilities is defined locally for this commit. In commit 3 it
- * gets re-exported from `connectors/types.ts` as the canonical definition;
- * this file's definition becomes a re-export at that point.
+ * The MessageCapabilities type is owned here; per-connector instances live in
+ * `connectors/<kind>/capabilities.ts` and are the single source of truth at
+ * runtime. Do NOT add named capability constants here — tests should import
+ * from the connector files so they exercise the same descriptor the runtime
+ * uses.
  */
 
 import {
@@ -30,34 +32,23 @@ export interface MessageCapabilities {
   supportsImage: boolean
   supportsFile: boolean
   maxTextBytes: number
-}
-
-export const FEISHU_CAPABILITIES: MessageCapabilities = {
-  canEdit: true,
-  canReact: true,
-  canTyping: false,
-  canSendCard: true,
-  canStream: true,
-  supportsGroup: true,
-  supportsMention: true,
-  supportsReply: true,
-  supportsImage: true,
-  supportsFile: true,
-  maxTextBytes: 30_000,
-}
-
-export const WEIXIN_CAPABILITIES: MessageCapabilities = {
-  canEdit: false,
-  canReact: false,
-  canTyping: true,
-  canSendCard: false,
-  canStream: false,
-  supportsGroup: false,
-  supportsMention: false,
-  supportsReply: false,
-  supportsImage: false,
-  supportsFile: false,
-  maxTextBytes: 5_000,
+  /**
+   * How to pick the recipient address for a mention sent to a direct (1:1)
+   * endpoint.
+   *
+   *   - `"attached_only"`: only addresses already attached to the mentioned
+   *     participant in this conversation are valid. Used by platforms where
+   *     the bot can only @ users it has previously seen speak (Feishu).
+   *
+   *   - `"self_only"`: the only addressable peer in a direct chat is the
+   *     endpoint's externalId itself. Used by platforms where 1:1 chats
+   *     contain exactly one human (personal WeChat).
+   *
+   * Group endpoints always require attached-only resolution regardless of
+   * this flag, since group mentions must be people who actually exist in
+   * the group.
+   */
+  directMentionPolicy: "attached_only" | "self_only"
 }
 
 /**

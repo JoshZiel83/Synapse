@@ -26,4 +26,7 @@ export const FEISHU_MESSAGE_CAPABILITIES: MessageCapabilities = {
   supportsImage: false,
   supportsFile: false,
   maxTextBytes: 30_000,
+  // Feishu bot can only @ users it has previously seen in the conversation;
+  // resolve mentions against the attached-address set even in 1:1 chats.
+  directMentionPolicy: "attached_only",
 }

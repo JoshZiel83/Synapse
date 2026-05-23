@@ -28,4 +28,7 @@ export const WEIXIN_MESSAGE_CAPABILITIES: MessageCapabilities = {
   supportsImage: false,
   supportsFile: false,
   maxTextBytes: 5_000,
+  // Personal WeChat 1:1 chats contain exactly one human; the only
+  // mention you can address is the peer themselves.
+  directMentionPolicy: "self_only",
 }

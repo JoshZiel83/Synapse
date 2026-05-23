@@ -28,4 +28,5 @@ export const WECOM_MESSAGE_CAPABILITIES: MessageCapabilities = {
   supportsImage: false,
   supportsFile: false,
   maxTextBytes: 0,
+  directMentionPolicy: "attached_only",
 }

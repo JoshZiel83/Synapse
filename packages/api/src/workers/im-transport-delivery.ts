@@ -12,6 +12,7 @@ import {
   updateTransportMessageLinkStatus,
 } from "../modules/im/service.js"
 import { tryGetConnector } from "../modules/im/connectors/registry.js"
+import type { MessageCapabilities } from "../modules/im/messaging/degradation.js"
 import {
   decodeFromConversationItem,
   type EncodedContentBlock,
@@ -23,7 +24,7 @@ function nonEmptyString(value: unknown) {
 }
 
 async function resolveTransportMentionRecipients(params: {
-  transportKind: "feishu" | "weixin" | "wecom"
+  capabilities: MessageCapabilities
   transportAccountId: string
   endpointType: "direct" | "group"
   endpointExternalId: string
@@ -34,6 +35,11 @@ async function resolveTransportMentionRecipients(params: {
     { externalId: string; displayName?: string }
   >()
 
+  const useAttachedAddressOnly =
+    params.endpointType === "group" ||
+    (params.endpointType === "direct" &&
+      params.capabilities.directMentionPolicy === "attached_only")
+
   for (const block of params.item.contentBlocks) {
     if (block.type !== "mention") {
       continue
@@ -41,9 +47,6 @@ async function resolveTransportMentionRecipients(params: {
     const participantId = block.mention.participantId || ""
     if (!participantId) continue
 
-    const useAttachedAddressOnly =
-      params.endpointType === "group" ||
-      (params.endpointType === "direct" && params.transportKind === "feishu")
     const address = useAttachedAddressOnly
       ? await getPrimaryTransportAddressForParticipant({
           conversationParticipantId: participantId,
@@ -57,7 +60,7 @@ async function resolveTransportMentionRecipients(params: {
     if (!externalId) continue
     if (
       params.endpointType === "direct" &&
-      params.transportKind !== "feishu" &&
+      params.capabilities.directMentionPolicy === "self_only" &&
       externalId !== params.endpointExternalId
     ) {
       continue
@@ -174,7 +177,7 @@ export function startImTransportDeliveryWorker() {
               .metadata?.transport as Record<string, unknown>) || undefined,
         })
         const mentions = await resolveTransportMentionRecipients({
-          transportKind: link.transportKind,
+          capabilities: connector.messageCapabilities,
           transportAccountId: link.account.id,
           endpointType: link.endpoint.endpointType,
           endpointExternalId: link.endpoint.externalId,

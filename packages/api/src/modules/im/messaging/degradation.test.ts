@@ -3,17 +3,28 @@ import assert from "node:assert/strict"
 import { buildCanonicalMessage } from "./canonical-message.js"
 import {
   degradeForCapabilities,
-  FEISHU_CAPABILITIES,
   truncateToBytes,
-  WEIXIN_CAPABILITIES,
   type MessageCapabilities,
 } from "./degradation.js"
+import { FEISHU_MESSAGE_CAPABILITIES } from "../connectors/feishu/capabilities.js"
+import { WEIXIN_MESSAGE_CAPABILITIES } from "../connectors/weixin/capabilities.js"
 
-test("Feishu capabilities pass through all part types unchanged", () => {
+// Import the actual production capability descriptors. Tests previously
+// imported parallel constants from degradation.ts that drifted from the
+// real connector values (e.g. Feishu image/file was true in the constant
+// but false on the real connector after the V1 capability tightening) —
+// keep these two pointers identical.
+const FEISHU_CAPABILITIES = FEISHU_MESSAGE_CAPABILITIES
+const WEIXIN_CAPABILITIES = WEIXIN_MESSAGE_CAPABILITIES
+
+test("Feishu capabilities pass through chat-like part types unchanged", () => {
+  // Note: Feishu's V1 capability has supportsImage/supportsFile = false
+  // because native upload (im.image.create / im.file.create) is not yet
+  // wired in render.ts. Image therefore degrades to a system_marker — see
+  // the dedicated test below.
   const msg = buildCanonicalMessage([
     { type: "text", text: "hi" },
     { type: "mention", displayName: "alice", externalId: "ou_a" },
-    { type: "image", fileRef: { url: "https://x/img.png" } },
     {
       type: "card",
       schema: "feishu_interactive_v1",
@@ -29,9 +40,33 @@ test("Feishu capabilities pass through all part types unchanged", () => {
   ])
   const out = degradeForCapabilities(msg, FEISHU_CAPABILITIES)
   assert.equal(out.parts.length, msg.parts.length)
-  assert.equal(out.parts[2].type, "image")
-  assert.equal(out.parts[3].type, "card")
-  assert.equal(out.parts[5].type, "reaction")
+  assert.equal(out.parts[0].type, "text")
+  assert.equal(out.parts[1].type, "mention")
+  assert.equal(out.parts[2].type, "card")
+  assert.equal(out.parts[3].type, "quote")
+  assert.equal(out.parts[4].type, "reaction")
+})
+
+test("Feishu V1 capability degrades image to system_marker (native upload not wired)", () => {
+  const msg = buildCanonicalMessage([
+    { type: "image", fileRef: { url: "https://x/img.png" } },
+  ])
+  const out = degradeForCapabilities(msg, FEISHU_CAPABILITIES)
+  assert.equal(out.parts[0].type, "system_marker")
+  if (out.parts[0].type === "system_marker") {
+    assert.equal(out.parts[0].marker, "image_placeholder")
+  }
+})
+
+test("Feishu V1 capability degrades file to [文件 name] text (native upload not wired)", () => {
+  const msg = buildCanonicalMessage([
+    { type: "file", fileRef: { name: "spec.pdf" } },
+  ])
+  const out = degradeForCapabilities(msg, FEISHU_CAPABILITIES)
+  assert.equal(out.parts[0].type, "text")
+  if (out.parts[0].type === "text") {
+    assert.equal(out.parts[0].text, "[文件 spec.pdf]")
+  }
 })
 
 test("WeChat capabilities flatten mention to text and drop reactions", () => {

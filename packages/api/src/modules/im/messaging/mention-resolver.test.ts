@@ -1,6 +1,8 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { buildCanonicalMessage } from "./canonical-message.js"
+import { FEISHU_MESSAGE_CAPABILITIES } from "../connectors/feishu/capabilities.js"
+import { WEIXIN_MESSAGE_CAPABILITIES } from "../connectors/weixin/capabilities.js"
 import {
   resolveMentionRecipients,
   shouldUseAttachedAddressOnly,
@@ -17,11 +19,25 @@ function makeDeps(
   }
 }
 
-test("shouldUseAttachedAddressOnly: groups always; direct only for feishu", () => {
-  assert.equal(shouldUseAttachedAddressOnly("feishu", "group"), true)
-  assert.equal(shouldUseAttachedAddressOnly("weixin", "group"), true)
-  assert.equal(shouldUseAttachedAddressOnly("feishu", "direct"), true)
-  assert.equal(shouldUseAttachedAddressOnly("weixin", "direct"), false)
+test("shouldUseAttachedAddressOnly: groups always; direct policy-driven", () => {
+  assert.equal(
+    shouldUseAttachedAddressOnly(FEISHU_MESSAGE_CAPABILITIES, "group"),
+    true
+  )
+  assert.equal(
+    shouldUseAttachedAddressOnly(WEIXIN_MESSAGE_CAPABILITIES, "group"),
+    true
+  )
+  assert.equal(
+    shouldUseAttachedAddressOnly(FEISHU_MESSAGE_CAPABILITIES, "direct"),
+    true,
+    "feishu: attached_only policy keeps direct mentions attached"
+  )
+  assert.equal(
+    shouldUseAttachedAddressOnly(WEIXIN_MESSAGE_CAPABILITIES, "direct"),
+    false,
+    "weixin: self_only policy uses reachable lookup then filters"
+  )
 })
 
 test("resolves feishu group mentions via attached lookup only", () => {
@@ -42,7 +58,7 @@ test("resolves feishu group mentions via attached lookup only", () => {
   return resolveMentionRecipients(
     {
       parts: msg.parts,
-      transportKind: "feishu",
+      capabilities: FEISHU_MESSAGE_CAPABILITIES,
       transportAccountId: "acc",
       endpointType: "group",
       endpointExternalId: "oc_g",
@@ -64,7 +80,7 @@ test("weixin direct uses reachable lookup and requires externalId === endpoint",
   const out = await resolveMentionRecipients(
     {
       parts: msg.parts,
-      transportKind: "weixin",
+      capabilities: WEIXIN_MESSAGE_CAPABILITIES,
       transportAccountId: "acc",
       endpointType: "direct",
       endpointExternalId: "wx_target",
@@ -87,7 +103,7 @@ test("weixin direct accepts mention when externalId matches endpoint", async () 
   const out = await resolveMentionRecipients(
     {
       parts: msg.parts,
-      transportKind: "weixin",
+      capabilities: WEIXIN_MESSAGE_CAPABILITIES,
       transportAccountId: "acc",
       endpointType: "direct",
       endpointExternalId: "wx_target",
@@ -106,7 +122,7 @@ test("mention without participantId is skipped", async () => {
   const out = await resolveMentionRecipients(
     {
       parts: msg.parts,
-      transportKind: "feishu",
+      capabilities: FEISHU_MESSAGE_CAPABILITIES,
       transportAccountId: "acc",
       endpointType: "group",
       endpointExternalId: "oc_g",
@@ -126,7 +142,7 @@ test("falls back to mention.displayName when address has none", async () => {
   const out = await resolveMentionRecipients(
     {
       parts: msg.parts,
-      transportKind: "feishu",
+      capabilities: FEISHU_MESSAGE_CAPABILITIES,
       transportAccountId: "acc",
       endpointType: "group",
       endpointExternalId: "oc_g",
@@ -150,7 +166,7 @@ test("duplicate mentions resolve to one recipient (first-wins)", async () => {
   const out = await resolveMentionRecipients(
     {
       parts: msg.parts,
-      transportKind: "feishu",
+      capabilities: FEISHU_MESSAGE_CAPABILITIES,
       transportAccountId: "acc",
       endpointType: "group",
       endpointExternalId: "oc_g",
@@ -170,7 +186,7 @@ test("address with empty/whitespace externalId is dropped", async () => {
   const out = await resolveMentionRecipients(
     {
       parts: msg.parts,
-      transportKind: "feishu",
+      capabilities: FEISHU_MESSAGE_CAPABILITIES,
       transportAccountId: "acc",
       endpointType: "group",
       endpointExternalId: "oc_g",
@@ -178,4 +194,32 @@ test("address with empty/whitespace externalId is dropped", async () => {
     deps
   )
   assert.deepEqual(out, [])
+})
+
+test("feishu direct uses attached lookup (matches V1 bot semantics)", async () => {
+  const calls: string[] = []
+  const deps = makeDeps({
+    loadAttachedAddress: async ({ conversationParticipantId }) => {
+      calls.push(`attached:${conversationParticipantId}`)
+      return { externalId: "ou_a", displayName: "Alice" }
+    },
+    loadReachableAddress: async () => {
+      throw new Error("should not be called for feishu direct")
+    },
+  })
+  const msg = buildCanonicalMessage([
+    { type: "mention", participantId: "p1", displayName: "alice" },
+  ])
+  const out = await resolveMentionRecipients(
+    {
+      parts: msg.parts,
+      capabilities: FEISHU_MESSAGE_CAPABILITIES,
+      transportAccountId: "acc",
+      endpointType: "direct",
+      endpointExternalId: "ou_b",
+    },
+    deps
+  )
+  assert.deepEqual(out, [{ externalId: "ou_a", displayName: "Alice" }])
+  assert.deepEqual(calls, ["attached:p1"])
 })

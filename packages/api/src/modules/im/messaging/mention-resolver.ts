@@ -8,19 +8,27 @@
  *
  * This file exposes the pure rules; IO (DB lookups) is injected via a resolver.
  *
- * Group endpoints use a stricter rule: only addresses that are explicitly
- * attached to the participant via conversation_participant_addresses are valid
- * (so we don't accidentally @ someone who's never been in this chat).
- * Direct endpoints with feishu also use the attached-only rule (the bot only
- * knows mentions that have actually spoken in the conversation).
- * Direct endpoints with weixin require the mention's externalId to match the
- * endpoint's externalId (you can only @ the single person in the direct chat).
+ * Address-lookup scope is driven by capability flags, not by hardcoded
+ * transport_kind checks:
+ *
+ *   - Group endpoints always require "attached only" — you can only @
+ *     people who are actually in the group.
+ *
+ *   - Direct endpoints look at `capabilities.directMentionPolicy`:
+ *       - "attached_only": resolve against attached addresses (Feishu — bot
+ *         only knows users it has seen speak).
+ *       - "self_only": only the endpoint peer is mentionable; any other
+ *         resolved externalId is dropped (personal WeChat — 1:1 has one
+ *         peer).
+ *
+ * The capability lives in `connectors/<kind>/capabilities.ts` so adding a
+ * new IM is purely a connector change.
  */
 
 import type { CanonicalPart } from "./canonical-message.js"
+import type { MessageCapabilities } from "./degradation.js"
 
 export type TransportEndpointType = "direct" | "group"
-export type TransportKind = string
 
 export interface ResolvedMention {
   externalId: string
@@ -33,12 +41,11 @@ export interface ParticipantAddressLookup {
 }
 
 /**
- * Async resolver signature, injected by the caller. Two flavors:
- *   - "attached only": only addresses explicitly attached to the participant in
- *     this conversation (conversation_participant_addresses); used for groups
- *     and for direct flows on Feishu.
- *   - "reachable": broader — any address under the account, even if not
- *     attached; used for direct flows on transports that allow it.
+ * Async resolver signature, injected by the caller.
+ *   - `loadAttachedAddress`: only addresses explicitly attached to the
+ *     participant in this conversation (conversation_participant_addresses).
+ *   - `loadReachableAddress`: broader — any address under the account, even
+ *     if not attached.
  */
 export interface MentionResolverDeps {
   loadAttachedAddress(input: {
@@ -53,7 +60,7 @@ export interface MentionResolverDeps {
 
 export interface ResolveMentionsInput {
   parts: readonly CanonicalPart[]
-  transportKind: TransportKind
+  capabilities: MessageCapabilities
   transportAccountId: string
   endpointType: TransportEndpointType
   endpointExternalId: string
@@ -61,9 +68,9 @@ export interface ResolveMentionsInput {
 
 /**
  * Walk the parts, pick mentions with participantId, resolve each via the
- * appropriate lookup based on transport rules, and return the deduplicated
- * recipient list. Mentions without participantId or that resolve to nothing
- * are silently dropped.
+ * appropriate lookup based on the capability policy, and return the
+ * deduplicated recipient list. Mentions without participantId or that
+ * resolve to nothing are silently dropped.
  *
  * Order: first appearance in `parts` wins; later duplicates are ignored.
  */
@@ -79,7 +86,7 @@ export async function resolveMentionRecipients(
     if (!participantId) continue
 
     const useAttached = shouldUseAttachedAddressOnly(
-      input.transportKind,
+      input.capabilities,
       input.endpointType
     )
     const address = useAttached
@@ -96,10 +103,11 @@ export async function resolveMentionRecipients(
 
     if (
       input.endpointType === "direct" &&
-      input.transportKind !== "feishu" &&
+      input.capabilities.directMentionPolicy === "self_only" &&
       externalId !== input.endpointExternalId
     ) {
-      // For weixin direct chat, you can only mention the single peer.
+      // Direct chat with self-only policy: only the endpoint peer is
+      // addressable. Skip anyone else who happened to resolve.
       continue
     }
 
@@ -119,16 +127,17 @@ export async function resolveMentionRecipients(
 
 /**
  * Whether the resolver should restrict candidates to addresses explicitly
- * attached to the participant in this conversation. Group endpoints always do;
- * direct endpoints do for Feishu (so the bot only @ s users it has seen).
+ * attached to the participant in this conversation. Group endpoints always
+ * do; direct endpoints follow the connector's directMentionPolicy.
  */
 export function shouldUseAttachedAddressOnly(
-  transportKind: TransportKind,
+  capabilities: MessageCapabilities,
   endpointType: TransportEndpointType
 ): boolean {
   return (
     endpointType === "group" ||
-    (endpointType === "direct" && transportKind === "feishu")
+    (endpointType === "direct" &&
+      capabilities.directMentionPolicy === "attached_only")
   )
 }
 
