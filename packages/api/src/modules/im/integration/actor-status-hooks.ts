@@ -15,8 +15,24 @@
  * platform.
  *
  * Reaction persistence (orphan cleanup on restart) is handled generically:
- * the hook passes an onPersist callback into createStatusReactionAdapter and
- * the connector wires it.
+ * the hook loads the persisted glyph → reaction_id map, seeds the adapter
+ * with it (so removeReaction actually has ids to delete), then runs the
+ * orphan-delete pass. onPersist walks the DB row down to {} as deletes
+ * land, so the next restart finds a clean slate.
+ *
+ * ─── Multi-replica safety ───
+ * Events are delivered via Redis pub/sub fan-out (see
+ * infrastructure/events/index.ts:onEvent), so every replica that has
+ * subscribed will fire this hook. In a multi-replica deployment that
+ * means N replicas will each try to create/delete reactions for the
+ * same inbound message — duplicate platform calls + races.
+ *
+ * V1 deployments run a single API replica, which is correct by
+ * construction. Before adding a second replica, the plan calls for
+ * extracting this hook into dedicated `workers/im-status-reaction.ts`
+ * and `workers/im-typing.ts` BullMQ workers (one consumer per queue)
+ * so only one replica processes each event. See
+ * docs/im-transport-design.md for the contract.
  */
 
 import { db } from "../../../infrastructure/database/kysely.js"

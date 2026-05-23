@@ -32,7 +32,6 @@ import type {
   TransportKind,
   TransportSessionSummary,
 } from "@synapse/shared/types"
-import { tryGetConnector } from "../connectors/registry.js"
 import { assertSupportedConnectionMode } from "../connectors/index.js"
 import {
   assertWorkspaceMember,
@@ -54,35 +53,19 @@ import {
  *
  * Disabled accounts skip validation entirely — they may legitimately have
  * blank or expired credentials waiting to be filled in.
+ *
+ * Pure: implementation lives in service/account-credentials.ts (kept
+ * DB-free so its tests don't drag in the pg.Pool). Re-exported here for
+ * back-compat.
  */
-function validateAndNormalizeAccountCredentials(params: {
-  transportKind: TransportKind
-  connectionMode: TransportConnectionMode
-  status: "active" | "disabled" | "error"
-  credentials?: Record<string, unknown>
-}): Record<string, unknown> {
-  const original = params.credentials || {}
-  if (params.status === "disabled") {
-    return original
-  }
-  const connector = tryGetConnector(params.transportKind)
-  if (!connector) {
-    throw new Error(
-      `No connector registered for transport_kind=${params.transportKind}`
-    )
-  }
-  const result = connector.validateCredentials({
-    connectionMode: params.connectionMode,
-    credentials: original,
-  })
-  if (!result.ok) {
-    const message = result.errors?.length
-      ? result.errors.join("; ")
-      : `${params.transportKind} credentials are invalid`
-    throw new Error(message)
-  }
-  return result.normalized || original
-}
+export {
+  mergeAccountCredentials,
+  validateAndNormalizeAccountCredentials,
+} from "./account-credentials.js"
+import {
+  mergeAccountCredentials,
+  validateAndNormalizeAccountCredentials,
+} from "./account-credentials.js"
 
 function readPendingAutoLinkWorkspaceMemberId(
   metadata: Record<string, unknown>
@@ -526,10 +509,10 @@ export async function updateTransportAccount(params: {
   // partial updates: PUT {encryptKey: "…"} should leave appId/appSecret
   // intact. If the caller wants a clean replacement they must send the
   // full credential object.
-  const existingCredentials = parseJsonObject(existing.credentials)
-  const mergedCredentials = params.credentials
-    ? { ...existingCredentials, ...params.credentials }
-    : existingCredentials
+  const mergedCredentials = mergeAccountCredentials(
+    parseJsonObject(existing.credentials),
+    params.credentials
+  )
   const nextOwnerScope =
     params.ownerScope ||
     (existing.owner_scope as TransportAccountOwnerScope | undefined) ||
