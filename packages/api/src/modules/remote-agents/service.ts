@@ -617,35 +617,74 @@ async function updateRemoteAgentRuntimeStatus(
   await executeSqlOn(
     queryable,
     `
-      UPDATE remote_agent_bindings
-      SET runtime_state = $3::remote_agent_bindings_runtime_state,
-          status_text = $4,
-          last_activity_at = NOW(),
-          -- Same NULL/empty-string/non-empty sentinel as the contexts
-          -- upsert above. Binding-level last_error is what the runtime
-          -- snapshot (loadRemoteAgentRuntimeSnapshot) returns to the
-          -- agent overview and the per-conversation chat snapshot, so
-          -- the same "don't let idle wipe the error" rule has to apply
-          -- here or the UI keeps losing transient SDK failures.
-          last_error = CASE
-            WHEN $5::text IS NULL THEN remote_agent_bindings.last_error
-            WHEN $5::text = '' THEN NULL
-            ELSE $5::text
+      -- Aggregate binding fields from per-conversation contexts so the
+      -- "machine overall" view doesn't oscillate as different conversations
+      -- publish lifecycle ticks. Previously we wrote $3/$4/$5 directly,
+      -- which meant a turn_completed -> idle from conversation A could
+      -- overwrite a fresh running from conversation B (or vice versa), so
+      -- the agent-overview page bounced between conversation states.
+      --
+      -- Aggregation rules (mirror LATEST_CONVERSATION_CONTEXT_LATERAL):
+      --   runtime_state, status_text -> the "most active" context row
+      --     (running/waiting > idle > error > offline, tiebreak by
+      --     last_activity_at DESC). Falls back to 'offline' when no
+      --     contexts exist.
+      --   last_error -> the most recently active context that has a
+      --     non-null error message; preserves any reported failure across
+      --     idle updates from other conversations.
+      --   last_activity_at -> MAX across contexts; never moves backwards
+      --     even if a stale-activity update arrives from a quiet
+      --     conversation.
+      WITH ctxs AS (
+        SELECT runtime_state, status_text, last_activity_at, last_error
+        FROM remote_agent_conversation_contexts
+        WHERE remote_agent_id = $1
+      ),
+      top_ctx AS (
+        SELECT runtime_state, status_text, last_activity_at
+        FROM ctxs
+        ORDER BY
+          CASE runtime_state
+            WHEN 'running' THEN 0
+            WHEN 'waiting_user_input' THEN 0
+            WHEN 'plan_drafting' THEN 0
+            WHEN 'waiting_plan_approval' THEN 0
+            WHEN 'idle' THEN 1
+            WHEN 'error' THEN 2
+            ELSE 3
           END,
+          last_activity_at DESC NULLS LAST
+        LIMIT 1
+      ),
+      latest_error AS (
+        SELECT last_error
+        FROM ctxs
+        WHERE last_error IS NOT NULL
+        ORDER BY last_activity_at DESC NULLS LAST
+        LIMIT 1
+      )
+      UPDATE remote_agent_bindings binding
+      SET runtime_state = COALESCE(
+            (SELECT runtime_state FROM top_ctx),
+            'offline'::remote_agent_bindings_runtime_state
+          ),
+          status_text = (SELECT status_text FROM top_ctx),
+          last_activity_at = GREATEST(
+            COALESCE((SELECT last_activity_at FROM ctxs ORDER BY last_activity_at DESC NULLS LAST LIMIT 1), NOW()),
+            binding.last_activity_at
+          ),
+          last_error = (SELECT last_error FROM latest_error),
           capabilities = CASE
-            WHEN $6::jsonb IS NULL THEN capabilities
-            ELSE COALESCE(capabilities, '{}'::jsonb) || $6::jsonb
+            WHEN $3::jsonb IS NULL THEN binding.capabilities
+            ELSE COALESCE(binding.capabilities, '{}'::jsonb) || $3::jsonb
           END,
           updated_at = NOW()
-      WHERE remote_agent_id = $1
-        AND machine_id = $2
+      WHERE binding.remote_agent_id = $1
+        AND binding.machine_id = $2
     `,
     [
       message.remoteAgentId,
       machineId,
-      message.state,
-      message.statusText ?? null,
-      message.lastError ?? null,
       message.capabilities ? JSON.stringify(message.capabilities) : null,
     ]
   )
@@ -1386,24 +1425,31 @@ export async function loadRemoteAgentRuntimeSnapshot(
   if (!row) {
     return null
   }
-  // When scoped to a specific conversation, the per-context fields are the
-  // authoritative source for what the UI should show for THAT conversation.
-  // Fall back to the binding-level fields when no context row exists for
-  // that conversation (the agent hasn't been activated there yet) or when
-  // the caller wants the global agent view (no conversationId passed).
+  // Scoped to a conversation: the per-context row is the *only* authority
+  // for what that conversation's view should show. Falling back to binding
+  // when the context row is missing would leak some sibling conversation's
+  // state into A's view (binding now aggregates across contexts; even with
+  // aggregation, the right answer for "conversation A has never started"
+  // is 'offline' for THIS conversation, not the aggregate of others).
+  // Unscoped: keep the historical agent-overview behavior — binding state
+  // is the aggregate, so use it directly.
   const scopedToConversation = conversationId !== null
   const runtimeState = scopedToConversation
-    ? (row.ctx_runtime_state ?? row.runtime_state)
+    ? (row.ctx_runtime_state ?? "offline")
     : row.runtime_state
   const statusText = scopedToConversation
-    ? (row.ctx_status_text ?? row.status_text)
+    ? row.ctx_status_text
     : row.status_text
   const lastErrorMessage = scopedToConversation
     ? row.ctx_last_error
     : row.last_error
-  const lastErrorActivityAt = scopedToConversation
-    ? (row.ctx_last_activity_at ?? row.last_activity_at)
+  // last_activity_at must follow the same scoping: scoped reads the
+  // context's activity stamp (when the agent last did anything in THIS
+  // conversation), unscoped reads binding's aggregate.
+  const lastActivityAt = scopedToConversation
+    ? row.ctx_last_activity_at
     : row.last_activity_at
+  const lastErrorActivityAt = lastActivityAt
   const updatedAt = toIso(row.updated_at) ?? new Date().toISOString()
   const lastErrorAt = toIso(lastErrorActivityAt) || toIso(row.updated_at)
   return {
@@ -1416,7 +1462,7 @@ export async function loadRemoteAgentRuntimeSnapshot(
     sessionId: row.latest_runtime_session_id ?? undefined,
     pendingConversationCount: Number(row.pending_conversation_count ?? 0),
     unreadDeliveryCount: Number(row.unread_delivery_count ?? 0),
-    lastActivityAt: toIso(row.last_activity_at),
+    lastActivityAt: toIso(lastActivityAt),
     lastRunStartedAt: toIso(row.latest_last_run_started_at),
     lastRunFinishedAt: toIso(row.latest_last_run_finished_at),
     lastError:
