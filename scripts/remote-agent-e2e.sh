@@ -181,8 +181,14 @@ bootstrap_schema() {
 }
 
 cmd_up() {
-  assign_fresh_ports
+  # Order matters: SYNAPSE_MACHINE_KEY must exist before assign_fresh_ports
+  # because that function calls persist_state(), and we want the key persisted
+  # in the state file so `down` (and any other downstream subcommand on a
+  # never-seeded stack) can satisfy the compose file's
+  # `${SYNAPSE_MACHINE_KEY:?...}` reference without the caller having to
+  # hand-export a placeholder.
   ensure_machine_key
+  assign_fresh_ports
   compose build rae-api rae-daemon
   compose up -d rae-postgres rae-redis
   bootstrap_schema
@@ -395,7 +401,15 @@ cmd_verify() {
   echo "  ok"
 
   echo "[8/16] machine connection is fenced (second WS with same key forces first close)"
-  # Open a competing WebSocket from the host using node's ws (already a daemon dep)
+  # Authoritative check: the DB column `fencing_token` on the *active*
+  # remote_agent_machine_sessions row must change after a competing connect
+  # comes in with the same machine key. Log grep is a flaky proxy because
+  # the daemon reconnects fast enough to overwrite the log lines we'd be
+  # racing. Schema-level state is the only observation that survives that.
+  local fencing_before
+  fencing_before=$(run_psql "SELECT fencing_token FROM remote_agent_machine_sessions WHERE machine_id='$RAE_MACHINE_ID' AND status='active' ORDER BY started_at DESC LIMIT 1")
+  test -n "$fencing_before" \
+    || { echo "  FAIL: no active machine_session row to fence (machine $RAE_MACHINE_ID)"; exit 1; }
   PORT="$RAE_API_PORT" KEY="$SYNAPSE_MACHINE_KEY" \
     node --input-type=module -e "
       import WebSocket from '$ROOT_DIR/node_modules/ws/wrapper.mjs';
@@ -408,27 +422,50 @@ cmd_verify() {
       });
       setTimeout(() => { try { ws.close(); } catch {}; process.exit(0); }, 4000);
     " >/dev/null 2>&1 || true
-  sleep 2
-  if compose logs --tail=200 rae-daemon 2>/dev/null \
-    | grep -qE "Server fenced this connection|WebSocket closed"; then
-    echo "  ok"
-  else
-    echo "  warn: did not observe a fenced log entry; the supervising connect may have already reclaimed"
-  fi
+  # Give the server a moment to issue the fenced close AND for the daemon's
+  # reconnect (which generates a fresh fencing_token) to land in the DB.
+  local fencing_after=""
+  local fence_elapsed=0
+  while [ "$fence_elapsed" -lt 20 ]; do
+    fencing_after=$(run_psql "SELECT fencing_token FROM remote_agent_machine_sessions WHERE machine_id='$RAE_MACHINE_ID' AND status='active' ORDER BY started_at DESC LIMIT 1")
+    if [ -n "$fencing_after" ] && [ "$fencing_after" != "$fencing_before" ]; then
+      break
+    fi
+    sleep 1
+    fence_elapsed=$((fence_elapsed + 1))
+  done
+  test -n "$fencing_after" && [ "$fencing_after" != "$fencing_before" ] \
+    || { echo "  FAIL: fencing_token did not change after competing connect ($fencing_before → $fencing_after)"; exit 1; }
+  echo "  ok (fencing_token rotated $fencing_before → $fencing_after)"
 
   echo "[9/16] SOCKS5 proxy routing (claude/codex env baseline)"
-  # Validate that the daemon container CAN reach example.invalid/ai-gateway via SOCKS5
-  # when proxychains4 is engaged, and CANNOT without it. Skip if the proxy is
-  # unreachable from the host (CI box without the tunnel).
-  if curl -fsS --max-time 3 --socks5-hostname <redacted-local-proxy> \
-      https://example.invalid/ai-gateway/ >/dev/null 2>&1; then
-    docker exec "rae-$RAE_STACK_ID-daemon" \
-      curl -fsS --max-time 5 --socks5-hostname <redacted-local-proxy> \
-        https://example.invalid/ai-gateway/ >/dev/null
-    echo "  ok (proxy route reachable)"
-  else
-    echo "  skip (host <redacted-local-proxy> SOCKS5 not reachable from this box)"
+  # The host setup *requires* a SOCKS5 tunnel at <redacted-local-proxy> for
+  # provider-specific AI endpoint — that is the production environment the daemon will run in.
+  # If the tunnel isn't reachable, the daemon's CC/Codex spawn will silently
+  # blackhole every model call, which is the exact failure mode we want this
+  # assertion to catch loudly. Hard fail instead of skip.
+  #
+  # We check "did we complete the TCP+TLS+HTTP handshake?" by inspecting the
+  # numeric HTTP code curl received. The gateway root path returns 404, which
+  # is a perfectly valid sign of "I reached the server" — using `-f` would
+  # treat that as failure and miss the actual fault mode (timeout / connect
+  # refused / SOCKS protocol error).
+  local socks_code
+  socks_code=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
+    --socks5-hostname <redacted-local-proxy> https://example.invalid/ai-gateway/ 2>/dev/null || echo "000")
+  if [ "$socks_code" = "000" ]; then
+    echo "  FAIL: host SOCKS5 tunnel <redacted-local-proxy> is not reachable — daemon model traffic would blackhole"
+    exit 1
   fi
+  local socks_code_container
+  socks_code_container=$(docker exec "rae-$RAE_STACK_ID-daemon" \
+    curl -sS -o /dev/null -w '%{http_code}' --max-time 5 \
+      --socks5-hostname <redacted-local-proxy> https://example.invalid/ai-gateway/ 2>/dev/null || echo "000")
+  if [ "$socks_code_container" = "000" ]; then
+    echo "  FAIL: daemon container cannot reach example.invalid/ai-gateway via SOCKS5 (host net mode + <redacted-local-proxy>)"
+    exit 1
+  fi
+  echo "  ok (proxy reachable: host HTTP $socks_code, daemon container HTTP $socks_code_container)"
 
   echo "[10/16] delivery retry table tracks attempts + next_attempt_at columns"
   test "$(run_psql "SELECT COUNT(*)::text FROM information_schema.columns WHERE table_name='remote_agent_message_deliveries' AND column_name IN ('attempts','next_attempt_at','last_failure_reason')")" \
@@ -448,20 +485,31 @@ cmd_verify() {
     -c 'command -v codex >/dev/null && command -v claude >/dev/null'
   echo "  ok"
 
-  echo "[12/16] distinct runtime_session_id per conversation (when CC has talked at all)"
-  local session_ids
-  session_ids=$(run_psql "SELECT runtime_session_id FROM remote_agent_conversation_contexts WHERE remote_agent_id='$RAE_REMOTE_AGENT_ID' AND conversation_id IN ('$conv_a','$conv_b') AND runtime_session_id IS NOT NULL ORDER BY conversation_id")
+  echo "[12/16] distinct runtime_session_id per conversation (no session bleed)"
+  # Wait up to 60s for both contexts to populate runtime_session_id. CC writes
+  # the id only after the SDK's "system/init" event lands, which requires the
+  # model to actually respond. The SOCKS5 assertion above already proved the
+  # tunnel works, so a missing session_id here is a real session-routing bug,
+  # not an environment skip. Hard fail when only one (or zero) shows up.
+  local total_count=0
+  local session_ids=""
+  local iso_elapsed=0
+  while [ "$iso_elapsed" -lt 60 ]; do
+    session_ids=$(run_psql "SELECT runtime_session_id FROM remote_agent_conversation_contexts WHERE remote_agent_id='$RAE_REMOTE_AGENT_ID' AND conversation_id IN ('$conv_a','$conv_b') AND runtime_session_id IS NOT NULL ORDER BY conversation_id")
+    total_count=$(printf '%s\n' "$session_ids" | grep -c . || true)
+    if [ "$total_count" -ge 2 ]; then
+      break
+    fi
+    sleep 2
+    iso_elapsed=$((iso_elapsed + 2))
+  done
+  test "$total_count" -ge 2 \
+    || { echo "  FAIL: only $total_count runtime_session_id populated after ${iso_elapsed}s — session routing or model call broken"; exit 1; }
   local distinct_count
   distinct_count=$(printf '%s\n' "$session_ids" | sort -u | grep -c . || true)
-  local total_count
-  total_count=$(printf '%s\n' "$session_ids" | grep -c . || true)
-  if [ "$total_count" -lt 2 ]; then
-    echo "  skip (only $total_count session id populated; CC didn't reach the model in this env)"
-  else
-    test "$distinct_count" = "$total_count" \
-      || { echo "  FAIL: $total_count rows but only $distinct_count distinct session_ids → sessions are bleeding across conversations"; exit 1; }
-    echo "  ok ($total_count contexts, all distinct)"
-  fi
+  test "$distinct_count" = "$total_count" \
+    || { echo "  FAIL: $total_count rows but only $distinct_count distinct session_ids → sessions are bleeding across conversations"; exit 1; }
+  echo "  ok ($total_count contexts, all distinct)"
 
   echo "[13/16] /fail-deliveries increments attempts and persists last_failure_reason"
   # Pause the daemon so it can't auto-ack the test delivery before we observe
@@ -496,11 +544,12 @@ cmd_verify() {
   trap - RETURN
   echo "  ok ($before_attempts → $after_attempts, reason '$reason')"
 
-  echo "[14/16] reverse-MCP tools/list returns the IM tool surface via Mcp-Session-Id"
+  echo "[14/16] reverse-MCP tools/list returns IM surface AND a conversation-granted plugin's tools"
   local mcp_url_a="http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/$conv_a"
   local init_headers_path init_body_path
   init_headers_path=$(mktemp)
   init_body_path=$(mktemp)
+  # ---- Step A: tools/list with NO plugin grants yet → IM-only baseline. -----
   curl -fsS -D "$init_headers_path" -o "$init_body_path" -X POST "$mcp_url_a" \
     -H "authorization: Bearer $SYNAPSE_MACHINE_KEY" \
     -H "content-type: application/json" \
@@ -509,7 +558,7 @@ cmd_verify() {
   local mcp_session
   mcp_session=$(awk 'BEGIN{IGNORECASE=1} /^mcp-session-id:/ { gsub(/\r/, "", $2); print $2; exit }' "$init_headers_path")
   test -n "$mcp_session" \
-    || { echo "  FAIL: no Mcp-Session-Id returned by initialize"; exit 1; }
+    || { echo "  FAIL: no Mcp-Session-Id returned by initialize (resolver may have thrown — initialize is now fail-loud)"; exit 1; }
   local tools_resp
   tools_resp=$(curl -fsS -X POST "$mcp_url_a" \
     -H "authorization: Bearer $SYNAPSE_MACHINE_KEY" \
@@ -517,14 +566,60 @@ cmd_verify() {
     -H "accept: application/json, text/event-stream" \
     -H "mcp-session-id: $mcp_session" \
     -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')
-  # The response can be JSON or an SSE event stream; either way the body
-  # contains the tool names.
   for tool in list_conversations check_messages read_history send_message search_messages; do
     printf '%s' "$tools_resp" | grep -q "\"name\":\"$tool\"" \
       || { echo "  FAIL: tools/list missing $tool"; printf 'response:\n%s\n' "$tools_resp" | head -c 500; exit 1; }
   done
-  rm -f "$init_headers_path" "$init_body_path"
-  echo "  ok (session=${mcp_session:0:8}…, all 5 IM tools present)"
+  # ---- Step B: grant a builtin plugin to conv_a via SQL, then re-initialize. ----
+  # We use the z-ai/toolkit builtin (requiresHandshake=false, transport=builtin)
+  # so the install row doesn't need an OAuth dance. The publisher slug is
+  # normalized to lowercase-with-hyphens at seed time, so it lives in DB as
+  # "z-ai" even though the source manifest says slug: "z_ai".
+  # Bindings.target_type = 'conversation' is the exact code path that the
+  # resolver's loadConversationTargetedResourceIds backfill is supposed to
+  # surface for remote agents — without that backfill, a remote agent never
+  # sees conversation-scoped grants because it has no conversation_actor_context.
+  local plugin_row
+  plugin_row=$(run_psql "SELECT item.id || ' ' || cv.id FROM catalog_items item JOIN publishers p ON p.id = item.publisher_id JOIN catalog_versions cv ON cv.catalog_item_id = item.id WHERE p.slug = 'z-ai' AND item.slug = 'toolkit' ORDER BY cv.created_at DESC LIMIT 1")
+  test -n "$plugin_row" \
+    || { echo "  FAIL: builtin plugin z-ai/toolkit not seeded; cannot exercise plugin projection path"; exit 1; }
+  local plugin_item_id plugin_version_id
+  plugin_item_id=${plugin_row%% *}
+  plugin_version_id=${plugin_row##* }
+  local plugin_install_id
+  plugin_install_id=$(run_psql "INSERT INTO plugin_installations (workspace_id, catalog_item_id, catalog_version_id, display_name, attachment_target_type, status) VALUES ('$RAE_WORKSPACE_ID', '$plugin_item_id', '$plugin_version_id', 'rae-e2e z-ai', 'workspace', 'active') RETURNING id")
+  test -n "$plugin_install_id" \
+    || { echo "  FAIL: could not create plugin_installations row"; exit 1; }
+  run_psql "INSERT INTO resource_access_bindings (workspace_id, resource_type, plugin_installation_id, target_type, subject_conversation_id, status) VALUES ('$RAE_WORKSPACE_ID', 'plugin_installation', '$plugin_install_id', 'conversation', '$conv_a', 'active')" >/dev/null
+  # New MCP session so the resolver re-evaluates with the fresh grant.
+  local init_headers_b init_body_b
+  init_headers_b=$(mktemp)
+  init_body_b=$(mktemp)
+  curl -fsS -D "$init_headers_b" -o "$init_body_b" -X POST "$mcp_url_a" \
+    -H "authorization: Bearer $SYNAPSE_MACHINE_KEY" \
+    -H "content-type: application/json" \
+    -H "accept: application/json, text/event-stream" \
+    -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"rae-verify-2","version":"0"}}}'
+  local mcp_session_b
+  mcp_session_b=$(awk 'BEGIN{IGNORECASE=1} /^mcp-session-id:/ { gsub(/\r/, "", $2); print $2; exit }' "$init_headers_b")
+  test -n "$mcp_session_b" \
+    || { echo "  FAIL: post-grant initialize returned no Mcp-Session-Id — resolver likely threw"; exit 1; }
+  local tools_resp_b
+  tools_resp_b=$(curl -fsS -X POST "$mcp_url_a" \
+    -H "authorization: Bearer $SYNAPSE_MACHINE_KEY" \
+    -H "content-type: application/json" \
+    -H "accept: application/json, text/event-stream" \
+    -H "mcp-session-id: $mcp_session_b" \
+    -d '{"jsonrpc":"2.0","id":2,"method":"tools/list"}')
+  # Namespace is `<publisher>__<plugin>__<tool>` for the unique case, or
+  # `<publisher>__<plugin>_<installShort>__<tool>` when the same publisher/plugin
+  # appears more than once in the workspace (the e2e adds a second install on
+  # top of the builtin's default workspace install, so we land in the suffixed
+  # branch). Accept both forms.
+  printf '%s' "$tools_resp_b" | grep -qE '"name":"z-ai__toolkit(_[a-z0-9]+)?__[A-Za-z0-9_]+"' \
+    || { echo "  FAIL: tools/list did not include any z-ai__toolkit*__* tool after granting plugin to conversation $conv_a"; printf 'response:\n%s\n' "$tools_resp_b" | head -c 1200; exit 1; }
+  rm -f "$init_headers_path" "$init_body_path" "$init_headers_b" "$init_body_b"
+  echo "  ok (IM surface present, plugin projection live: z-ai__toolkit*__* via conv-target binding)"
 
   echo "[15/16] interaction endpoints accept daemon-style user-input + plan-approval requests"
   # We can't deterministically force a real LLM to emit AskUserQuestion or
@@ -631,7 +726,13 @@ cmd_down() {
   fi
   # shellcheck disable=SC1090
   . "$STATE_FILE"
-  export RAE_POSTGRES_PORT RAE_REDIS_PORT RAE_API_PORT
+  # compose down still parses the yml, which references
+  # ${SYNAPSE_MACHINE_KEY:?...}. State files written by an old version of
+  # cmd_up (or any flow that didn't reach the seed step) may not carry the
+  # key; fall back to a deterministic placeholder so the parse succeeds.
+  # The actual value does not matter for teardown.
+  : "${SYNAPSE_MACHINE_KEY:=sk_machine_placeholder_for_teardown}"
+  export RAE_POSTGRES_PORT RAE_REDIS_PORT RAE_API_PORT SYNAPSE_MACHINE_KEY
   echo "Tearing down stack rae-$RAE_STACK_ID…"
   compose down -v --remove-orphans
   rm -f "$STATE_FILE"
