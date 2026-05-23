@@ -1,5 +1,5 @@
 /**
- * S39/S40: realtime_event_outbox GC.
+ * S39/S40/S41: realtime_event_outbox GC.
  *
  * The S8 plan called for dropping the realtime_event_outbox table after
  * a 24h empty-table verification. That plan assumed all consumers would
@@ -18,9 +18,15 @@
  *    'pending'), so deleting failed rows would silently drop events
  *    the dispatcher still intends to retry. Test asserts a 48h-old
  *    failed row survives the GC.
- *  - The /_debug/chat/realtime-outbox-gc endpoint is platform-admin
- *    only because it's a globally destructive op (no workspace
- *    scope). Test asserts a regular workspace owner gets 403.
+ *
+ * S41 hardening:
+ *  - The /_debug/chat/realtime-outbox-gc endpoint requires platform
+ *    `super_admin` specifically — NOT the broader isPlatformAdmin set
+ *    (which also admits workspace_admin and model_admin). The GC is a
+ *    process-wide, cross-workspace destructive op; only super_admin
+ *    is an appropriate floor. Tests cover: plain workspace owner →
+ *    403, workspace_admin → 403, model_admin → 403, super_admin →
+ *    200.
  */
 
 import { test } from "node:test"

@@ -19,6 +19,14 @@ COPY packages/api/ packages/api/
 RUN npx tsc -b packages/shared
 RUN npm run build -w packages/api
 RUN cp packages/api/src/infrastructure/database/schema.sql packages/api/dist/infrastructure/database/schema.sql
+# tsc only emits .ts → .js, so non-TS assets (svg icons, etc.) under
+# src/ never reach dist/. The runtime entry resolves these via
+# `import.meta.url` from dist/ (see mcp-plugins/service.ts), so we
+# mirror the asset tree from src/ to dist/ explicitly. If more
+# non-TS asset dirs appear, add them here.
+RUN mkdir -p packages/api/dist/modules/mcp-plugins/builtin-plugins \
+  && cp -r packages/api/src/modules/mcp-plugins/builtin-plugins/assets \
+       packages/api/dist/modules/mcp-plugins/builtin-plugins/assets
 
 FROM node:20-bookworm-slim
 WORKDIR /app
