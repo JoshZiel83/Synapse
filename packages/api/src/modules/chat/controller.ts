@@ -50,6 +50,7 @@ import {
   getInteractionRequestSummary,
   resolveInteractionRequest,
 } from "../interactions/service.js"
+import { getChatDedupCountersSnapshot } from "./observability.js"
 
 const CHAT_BASE_PATH = "/api/v1/workspaces/:workspaceId/chat"
 
@@ -272,6 +273,15 @@ function replyChatError(reply: any, error: unknown) {
 
 export default async function chatController(app: FastifyInstance) {
   app.addHook("onRequest", authMiddleware)
+
+  // Authenticated read-only debug endpoint: returns the in-process
+  // duplicate_*_total counters maintained in ./observability.ts. Useful
+  // for the S6 dedup integration tests and for an ops dashboard. Auth
+  // is required (via the onRequest hook above) so anonymous callers
+  // can't probe the counter; no per-workspace data is exposed.
+  app.get("/api/v1/_debug/chat/dedup-counters", async (_request, reply) => {
+    return reply.send(getChatDedupCountersSnapshot())
+  })
 
   app.get<{
     Params: { workspaceId: string }

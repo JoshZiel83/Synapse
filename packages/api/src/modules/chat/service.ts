@@ -74,6 +74,10 @@ import {
   renderConversationEventTimelineBlocks,
 } from "./event-registry.js"
 import {
+  recordDuplicateClientMessageIdSend,
+  recordDuplicateWatermarkPost,
+} from "./observability.js"
+import {
   requireWorkspaceMemberIdentity,
   type WorkspaceMemberIdentity,
 } from "./workspace-identity.js"
@@ -3224,6 +3228,10 @@ export async function createConversationItem(params: {
       !!params.clientMessageId &&
       !!params.authorParticipantId
     if (isDuplicate) {
+      // S6 dedup observability: a duplicate clientMessageId reaching the
+      // server means main thread + SW both flushed the same outbox
+      // entry. Counter is exposed via getChatDedupCountersSnapshot().
+      recordDuplicateClientMessageIdSend()
       const duplicateItems = await buildChatConversationItems(queryable, [
         insertedItem,
       ])
@@ -5273,6 +5281,16 @@ export async function updateChatConversationReadWatermark(
       toNumber(existingState.rows[0]?.read_watermark_sequence),
       requestedSequence
     )
+    // S6 dedup observability: if the request didn't actually advance the
+    // watermark, it's a duplicate POST — the main thread and the SW
+    // both flushed the same pending-read. Count it so we can monitor
+    // whether the mutex (isChatServiceWorkerActive guard, S23) is
+    // holding.
+    if (
+      nextSequence === toNumber(existingState.rows[0]?.read_watermark_sequence)
+    ) {
+      recordDuplicateWatermarkPost()
+    }
     const lastReadItemId = await getLastItemAtOrBeforeSequence(
       client,
       params.conversationId,
