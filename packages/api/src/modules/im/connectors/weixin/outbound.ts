@@ -60,11 +60,12 @@ export async function sendWeixinMessage(
   )
   const rendered = renderWeixinMessage(degraded)
 
+  const clientId = crypto.randomUUID()
   const body = JSON.stringify({
     msg: {
       from_user_id: "",
       to_user_id: endpointExternalId,
-      client_id: crypto.randomUUID(),
+      client_id: clientId,
       message_type: 2,
       message_state: 2,
       item_list: [{ type: 1, text_item: { text: rendered.text } }],
@@ -84,5 +85,30 @@ export async function sendWeixinMessage(
   if (!response.ok) {
     throw new Error(`Weixin send failed with ${response.status}: ${text}`)
   }
-  return { externalMessageId: crypto.randomUUID(), raw: text }
+
+  // Parse the protocol response for a real message id. ilink returns
+  // shapes like { ret, errcode, msg_id?, msg?: { message_id?, items?: [...] } }
+  // depending on version. Fall back to the client_id we sent so the row
+  // still has a stable key for dedupe.
+  let externalMessageId: string | undefined
+  try {
+    const parsed = text ? JSON.parse(text) : {}
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const p = parsed as Record<string, any>
+      externalMessageId =
+        nonEmpty(p.msg_id) ||
+        nonEmpty(p.message_id) ||
+        nonEmpty(p.msg?.message_id) ||
+        nonEmpty(p.msg?.msg_id) ||
+        (Array.isArray(p.msg?.item_list)
+          ? nonEmpty(p.msg.item_list[0]?.msg_id)
+          : undefined)
+    }
+  } catch {
+    // Non-JSON body — fall through to client_id fallback
+  }
+  return {
+    externalMessageId: externalMessageId || clientId,
+    raw: text,
+  }
 }

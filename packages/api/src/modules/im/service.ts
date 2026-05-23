@@ -26,6 +26,7 @@ import { v4 as uuidv4 } from "uuid"
 import { enqueueTransportDeliveryJobs } from "../../workers/queues.js"
 import { ensureConversationParticipant } from "../chat/service.js"
 import { activateConversationParticipant } from "../chat/participant-activation.js"
+import { tryGetConnector } from "./connectors/registry.js"
 import {
   assertSupportedConnectionMode,
   assertSupportedEndpointType,
@@ -78,46 +79,21 @@ function assertTransportAccountConfiguration(params: {
   if (params.status === "disabled") {
     return
   }
-
-  const credentials = params.credentials || {}
-
-  if (params.transportKind === "feishu") {
-    const appId = readTrimmedString(credentials, "appId", "appID", "cliAppId")
-    const appSecret = readTrimmedString(
-      credentials,
-      "appSecret",
-      "app_secret",
-      "cliAppSecret"
+  const connector = tryGetConnector(params.transportKind)
+  if (!connector) {
+    throw new Error(
+      `No connector registered for transport_kind=${params.transportKind}`
     )
-    if (!appId || !appSecret) {
-      throw new Error("Feishu account requires appId and appSecret")
-    }
-
-    if (params.connectionMode === "webhook") {
-      const verificationToken = readTrimmedString(
-        credentials,
-        "verificationToken",
-        "verification_token"
-      )
-      const encryptKey = readTrimmedString(
-        credentials,
-        "encryptKey",
-        "encrypt_key"
-      )
-      if (!verificationToken || !encryptKey) {
-        throw new Error(
-          "Feishu webhook mode requires verificationToken and encryptKey"
-        )
-      }
-    }
-    return
   }
-
-  if (params.transportKind === "weixin") {
-    const token = readTrimmedString(credentials, "token")
-    if (!token) {
-      throw new Error("Weixin account requires token")
-    }
+  const result = connector.validateCredentials({
+    connectionMode: params.connectionMode,
+    credentials: params.credentials || {},
+  })
+  if (!result.ok) {
+    const message = result.errors?.length
+      ? result.errors.join("; ")
+      : `${params.transportKind} credentials are invalid`
+    throw new Error(message)
   }
 }
 
@@ -500,6 +476,19 @@ async function assertConversationParticipantType(params: {
 }
 
 function normalizeTransportMessageLinkRow(row: any) {
+  const rawReactions = row.external_emoji_reactions
+  const reactions: Record<string, string> = {}
+  if (
+    rawReactions &&
+    typeof rawReactions === "object" &&
+    !Array.isArray(rawReactions)
+  ) {
+    for (const [k, v] of Object.entries(
+      rawReactions as Record<string, unknown>
+    )) {
+      if (typeof v === "string") reactions[k] = v
+    }
+  }
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -511,6 +500,9 @@ function normalizeTransportMessageLinkRow(row: any) {
     direction: row.direction as "inbound" | "outbound",
     deliveryStatus: row.delivery_status as TransportDeliveryStatus,
     externalMessageId: row.external_message_id || undefined,
+    externalReplyToId: row.external_reply_to_id || undefined,
+    externalThreadId: row.external_thread_id || undefined,
+    externalEmojiReactions: reactions,
     metadata: parseJsonObject(row.metadata),
     deliveredAt: toIsoString(row.delivered_at),
     createdAt: toIsoString(row.created_at),
