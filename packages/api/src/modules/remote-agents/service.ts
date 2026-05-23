@@ -612,6 +612,32 @@ async function updateRemoteAgentRuntimeStatus(
       },
       queryable
     )
+  } else if (message.state === REMOTE_AGENT_RUNTIME_STATE.OFFLINE) {
+    // Agent-wide stop (daemon sent state=offline without a conversationId,
+    // typically from stopAll() during agent:stop handling). Propagate
+    // offline to every per-conversation context so the binding aggregation
+    // below resolves to offline instead of resurrecting whichever
+    // running/idle state the contexts last reported. Without this,
+    // "online stop" looks the same as "ignore the stop" on the UI.
+    //
+    // Disconnect tear-down is handled separately by the machine
+    // finalizer (setMachineLifecycleState + the offline UPDATE down at
+    // line ~2829), which still drives bindings to offline directly. This
+    // branch covers the in-process stop where the daemon stays connected.
+    await executeSqlOn(
+      queryable,
+      `
+        UPDATE remote_agent_conversation_contexts
+        SET runtime_state = 'offline'::remote_agent_bindings_runtime_state,
+            status_text = $2,
+            last_activity_at = NOW(),
+            last_run_finished_at = COALESCE(last_run_finished_at, NOW()),
+            updated_at = NOW()
+        WHERE remote_agent_id = $1
+          AND runtime_state != 'offline'
+      `,
+      [message.remoteAgentId, message.statusText ?? null]
+    )
   }
 
   await executeSqlOn(

@@ -342,18 +342,18 @@ cmd_verify() {
   : "${RAE_WORKSPACE_ID:?run 'bash $0 seed' first}"
   : "${RAE_REMOTE_AGENT_ID:?run 'bash $0 seed' first}"
   : "${RAE_MACHINE_ID:?run 'bash $0 seed' first}"
-  echo "Phase 6 verify suite (16 assertions)…"
+  echo "Phase 6 verify suite (17 assertions)…"
 
-  echo "[1/16] api health"
+  echo "[1/17] api health"
   curl -fsS "http://127.0.0.1:$RAE_API_PORT/api/v1/health" >/dev/null
   echo "  ok"
 
-  echo "[2/16] schema_migrations at 2026-05-22-01"
+  echo "[2/17] schema_migrations at 2026-05-22-01"
   test "$(run_psql "SELECT version FROM schema_migrations ORDER BY applied_at DESC LIMIT 1")" \
     = "2026-05-22-01"
   echo "  ok"
 
-  echo "[3/16] daemon WebSocket connected"
+  echo "[3/17] daemon WebSocket connected"
   # Query authoritative DB state instead of grepping daemon logs. The old
   # `compose logs --tail=100 | grep "WebSocket connected"` was fragile on
   # long-running stacks where the line scrolled out of the tail window even
@@ -376,7 +376,7 @@ cmd_verify() {
     || { echo "  FAIL: no active remote_agent_machine_sessions row after ${ws_elapsed}s (daemon not connected to server)"; exit 1; }
   echo "  ok ($ws_count active machine session row)"
 
-  echo "[4/16] reverse-MCP endpoint rejects empty Bearer (401)"
+  echo "[4/17] reverse-MCP endpoint rejects empty Bearer (401)"
   test "$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST "http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/00000000-0000-0000-0000-000000000000")" \
     = 401
@@ -385,7 +385,7 @@ cmd_verify() {
   local token
   token=$(api_login | jq -r '.sessionToken')
 
-  echo "[5/16] per-conversation context isolation (two conversations → two context rows)"
+  echo "[5/17] per-conversation context isolation (two conversations → two context rows)"
   local conv_a conv_b
   conv_a=$(create_conversation_with_agent "$token" "rae-e2e-a")
   conv_b=$(create_conversation_with_agent "$token" "rae-e2e-b")
@@ -396,7 +396,7 @@ cmd_verify() {
     "2" 30
   echo "  ok (conversations $conv_a / $conv_b)"
 
-  echo "[6/16] reverse-MCP endpoint passes auth on a valid conversation (POST tools/list)"
+  echo "[6/17] reverse-MCP endpoint passes auth on a valid conversation (POST tools/list)"
   local mcp_url="http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/$conv_a"
   local mcp_resp
   mcp_resp=$(curl -fsS -X POST "$mcp_url" \
@@ -408,7 +408,7 @@ cmd_verify() {
     || { echo "  initialize failed: $mcp_resp"; exit 1; }
   echo "  ok"
 
-  echo "[7/16] reverse-MCP endpoint denies a conversation the agent isn't a participant of (403)"
+  echo "[7/17] reverse-MCP endpoint denies a conversation the agent isn't a participant of (403)"
   local fake_conv=00000000-0000-0000-0000-000000000099
   test "$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST "http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/$fake_conv" \
@@ -418,7 +418,7 @@ cmd_verify() {
     = 403
   echo "  ok"
 
-  echo "[8/16] machine connection is fenced (second WS with same key forces first close)"
+  echo "[8/17] machine connection is fenced (second WS with same key forces first close)"
   # Authoritative check: the DB column `fencing_token` on the *active*
   # remote_agent_machine_sessions row must change after a competing connect
   # comes in with the same machine key. Log grep is a flaky proxy because
@@ -456,7 +456,7 @@ cmd_verify() {
     || { echo "  FAIL: fencing_token did not change after competing connect ($fencing_before → $fencing_after)"; exit 1; }
   echo "  ok (fencing_token rotated $fencing_before → $fencing_after)"
 
-  echo "[9/16] SOCKS5 proxy routing (claude/codex env baseline)"
+  echo "[9/17] SOCKS5 proxy routing (claude/codex env baseline)"
   # The host setup *requires* a SOCKS5 tunnel at <redacted-local-proxy> for
   # provider-specific AI endpoint — that is the production environment the daemon will run in.
   # If the tunnel isn't reachable, the daemon's CC/Codex spawn will silently
@@ -485,12 +485,12 @@ cmd_verify() {
   fi
   echo "  ok (proxy reachable: host HTTP $socks_code, daemon container HTTP $socks_code_container)"
 
-  echo "[10/16] delivery retry table tracks attempts + next_attempt_at columns"
+  echo "[10/17] delivery retry table tracks attempts + next_attempt_at columns"
   test "$(run_psql "SELECT COUNT(*)::text FROM information_schema.columns WHERE table_name='remote_agent_message_deliveries' AND column_name IN ('attempts','next_attempt_at','last_failure_reason')")" \
     = "3"
   echo "  ok"
 
-  echo "[11/16] codex + claude binaries present in daemon image"
+  echo "[11/17] codex + claude binaries present in daemon image"
   local daemon_image
   daemon_image=$(compose config --format json 2>/dev/null \
     | jq -r '.services."rae-daemon".image // empty')
@@ -503,7 +503,7 @@ cmd_verify() {
     -c 'command -v codex >/dev/null && command -v claude >/dev/null'
   echo "  ok"
 
-  echo "[12/16] distinct runtime_session_id per conversation (no session bleed)"
+  echo "[12/17] distinct runtime_session_id per conversation (no session bleed)"
   # Wait up to 60s for both contexts to populate runtime_session_id. CC writes
   # the id only after the SDK's "system/init" event lands, which requires the
   # model to actually respond. The SOCKS5 assertion above already proved the
@@ -529,7 +529,7 @@ cmd_verify() {
     || { echo "  FAIL: $total_count rows but only $distinct_count distinct session_ids → sessions are bleeding across conversations"; exit 1; }
   echo "  ok ($total_count contexts, all distinct)"
 
-  echo "[13/16] /fail-deliveries increments attempts and persists last_failure_reason"
+  echo "[13/17] /fail-deliveries increments attempts and persists last_failure_reason"
   # Pause the daemon so it can't auto-ack the test delivery before we observe
   # it. Send a message under the lock to mint a fresh pending delivery,
   # then drive /fail-deliveries with that id and assert the row mutates.
@@ -562,7 +562,7 @@ cmd_verify() {
   trap - RETURN
   echo "  ok ($before_attempts → $after_attempts, reason '$reason')"
 
-  echo "[14/16] reverse-MCP tools/list returns IM surface AND a conversation-granted plugin's tools"
+  echo "[14/17] reverse-MCP tools/list returns IM surface AND a conversation-granted plugin's tools"
   local mcp_url_a="http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/$conv_a"
   local init_headers_path init_body_path
   init_headers_path=$(mktemp)
@@ -639,7 +639,7 @@ cmd_verify() {
   rm -f "$init_headers_path" "$init_body_path" "$init_headers_b" "$init_body_b"
   echo "  ok (IM surface present, plugin projection live: z-ai__toolkit*__* via conv-target binding)"
 
-  echo "[15/16] interaction endpoints accept daemon-style user-input + plan-approval requests"
+  echo "[15/17] interaction endpoints accept daemon-style user-input + plan-approval requests"
   # We can't deterministically force a real LLM to emit AskUserQuestion or
   # ExitPlanMode in CI, but we can exercise the server-side contract the
   # daemon uses: POST /interactions/user-input + /interactions/plan-approval
@@ -668,7 +668,7 @@ cmd_verify() {
     || { echo "  FAIL: interaction_requests did not grow ($before_interactions → $after_interactions)"; exit 1; }
   echo "  ok (interaction_requests $before_interactions → $after_interactions)"
 
-  echo "[16/16] codex driver dispatch — new codex remote_agent routes through CodexDriver"
+  echo "[16/17] codex driver dispatch — new codex remote_agent routes through CodexDriver"
   # Build a sibling remote_agent with runtime_kind=codex, bind it to the same
   # machine (passing the codex binary path so the catalog-availability check
   # is skipped), wire it into a conversation, send a message. The server now
@@ -716,8 +716,74 @@ cmd_verify() {
     || { echo "  FAIL: daemon never received a codex-runtimeKind agent:start for $codex_agent_id"; exit 1; }
   echo "  ok (codex agent $codex_agent_id → daemon dispatched runtimeKind=codex)"
 
+  echo "[17/17] online stop (offline status without conversationId) flips all contexts to offline"
+  # Daemon's stopAll() (called when the server sends agent:stop while the
+  # daemon is still connected) publishes a single agent:status with
+  # state='offline' and no conversationId. The naive server path used to
+  # skip the per-conversation update for messages with no conversationId,
+  # which combined with the new binding-from-contexts aggregation meant
+  # the binding would resurrect whichever running/idle states the still-
+  # untouched contexts last reported — UI sees "stopped" turn into
+  # "running" again within milliseconds. The disconnect path is fine
+  # because a separate machine finalizer sets every binding to offline;
+  # this covers the in-process stop case.
+  #
+  # Reproduce by opening our own WS as the bound machine, sending the
+  # exact message stopAll() would emit, and confirming all contexts went
+  # to offline + binding aggregated to offline. We pre-mark contexts as
+  # 'running' so the test can't pass by accident — the SQL has to actively
+  # write the new state. The real daemon will reconnect (fenced by us)
+  # and republish whatever it currently has, which restores normal state.
+  run_psql "UPDATE remote_agent_conversation_contexts SET runtime_state='running', status_text='pre-stop probe' WHERE remote_agent_id='$RAE_REMOTE_AGENT_ID'" >/dev/null
+  local pre_running
+  pre_running=$(run_psql "SELECT COUNT(*)::text FROM remote_agent_conversation_contexts WHERE remote_agent_id='$RAE_REMOTE_AGENT_ID' AND runtime_state='running'")
+  test "${pre_running:-0}" -ge 1 \
+    || { echo "  FAIL: setup expected at least one running context, got $pre_running"; exit 1; }
+  PORT="$RAE_API_PORT" KEY="$SYNAPSE_MACHINE_KEY" AGENT="$RAE_REMOTE_AGENT_ID" \
+    node --input-type=module -e "
+      import WebSocket from '$ROOT_DIR/node_modules/ws/wrapper.mjs';
+      const url = new URL('/ws/remote-agents', 'http://127.0.0.1:' + process.env.PORT);
+      url.protocol = 'ws:';
+      url.searchParams.set('key', process.env.KEY);
+      const ws = new WebSocket(url);
+      ws.on('open', () => {
+        ws.send(JSON.stringify({ type: 'ready', runtimeCatalog: [] }));
+        setTimeout(() => {
+          ws.send(JSON.stringify({
+            type: 'agent:status',
+            remoteAgentId: process.env.AGENT,
+            state: 'offline',
+            statusText: 'rae-e2e online-stop probe',
+            conversationId: null,
+            interactionId: null,
+            sessionId: null,
+            lastError: null,
+            runKey: null,
+          }));
+          setTimeout(() => { try { ws.close(); } catch {}; process.exit(0); }, 1500);
+        }, 500);
+      });
+    " >/dev/null 2>&1 || true
+  local stop_elapsed=0
+  local still_running=0
+  while [ "$stop_elapsed" -lt 15 ]; do
+    still_running=$(run_psql "SELECT COUNT(*)::text FROM remote_agent_conversation_contexts WHERE remote_agent_id='$RAE_REMOTE_AGENT_ID' AND runtime_state != 'offline'")
+    if [ "${still_running:-0}" = "0" ]; then
+      break
+    fi
+    sleep 1
+    stop_elapsed=$((stop_elapsed + 1))
+  done
+  test "${still_running:-0}" = "0" \
+    || { echo "  FAIL: $still_running contexts still non-offline after ${stop_elapsed}s — server skipped the agent-wide offline propagation"; exit 1; }
+  local binding_state
+  binding_state=$(run_psql "SELECT binding.runtime_state FROM remote_agent_bindings binding WHERE binding.remote_agent_id='$RAE_REMOTE_AGENT_ID' LIMIT 1")
+  test "$binding_state" = "offline" \
+    || { echo "  FAIL: binding state is '$binding_state', expected 'offline' after agent-wide stop"; exit 1; }
+  echo "  ok (all contexts -> offline, binding aggregate -> offline)"
+
   echo
-  echo "All 16 assertions passed for stack rae-$RAE_STACK_ID"
+  echo "All 17 assertions passed for stack rae-$RAE_STACK_ID"
 }
 
 wait_for_delivery_id() {
