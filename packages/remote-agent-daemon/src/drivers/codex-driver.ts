@@ -271,7 +271,8 @@ class CodexAgentSession implements AgentSession {
     readonly workingDirectory: string,
     initialPrompt: string,
     initialThreadId: string | undefined,
-    private mcpServers: Record<string, McpServerConfig> | undefined
+    private mcpServers: Record<string, McpServerConfig> | undefined,
+    private readonly writableRoots: string[]
   ) {
     this.threadId = initialThreadId
     this.currentPrompt = initialPrompt
@@ -598,7 +599,11 @@ class CodexAgentSession implements AgentSession {
       approvalPolicy: "never",
       sandboxPolicy: {
         type: "workspaceWrite",
-        writableRoots: [],
+        // cwd is implicitly writable; writableRoots adds extra paths. The
+        // operator's localRootPath (passed via SessionSpec.additionalDirectories)
+        // is the project tree they actually want codex to edit — without it,
+        // codex can only mutate the per-conversation scratch dir.
+        writableRoots: this.writableRoots,
         networkAccess: true,
         excludeTmpdirEnvVar: false,
         excludeSlashTmp: false,
@@ -730,7 +735,8 @@ export class CodexDriver implements AgentDriver {
       spec.workingDirectory,
       spec.initialPrompt,
       spec.resumeSessionId,
-      spec.mcpServers
+      spec.mcpServers,
+      spec.additionalDirectories ?? []
     )
     session.attach(child)
     return session
