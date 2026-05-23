@@ -1,5 +1,5 @@
 /**
- * S39: realtime_event_outbox GC.
+ * S39/S40: realtime_event_outbox GC.
  *
  * The S8 plan called for dropping the realtime_event_outbox table after
  * a 24h empty-table verification. That plan assumed all consumers would
@@ -9,11 +9,18 @@
  * underlying DB write commits. Dropping the table would break the chat
  * sync spine.
  *
- * Instead we add a GC pass: dispatched/failed rows older than the
- * configured retention window get deleted, so the table doesn't grow
- * forever. The test inserts synthetic rows via direct SQL, calls the
- * authenticated /_debug GC endpoint, and asserts the right rows are
- * deleted while pending rows and recent rows survive.
+ * Instead we add a GC pass: dispatched rows older than the configured
+ * retention window get deleted, so the table doesn't grow forever.
+ *
+ * S40 hardening:
+ *  - GC only deletes status='dispatched'. 'failed' is a retryable
+ *    status (claimPendingRealtimeOutboxEntries treats it the same as
+ *    'pending'), so deleting failed rows would silently drop events
+ *    the dispatcher still intends to retry. Test asserts a 48h-old
+ *    failed row survives the GC.
+ *  - The /_debug/chat/realtime-outbox-gc endpoint is platform-admin
+ *    only because it's a globally destructive op (no workspace
+ *    scope). Test asserts a regular workspace owner gets 403.
  */
 
 import { test } from "node:test"
@@ -38,6 +45,33 @@ function pgConfig() {
   }
 }
 
+async function grantPlatformAdmin(pg: Client, userId: string) {
+  await pg.query(
+    `INSERT INTO platform_access_bindings
+       (user_id, access_key, source, assigned_by_user_id)
+     VALUES ($1, 'super_admin', 'manual', NULL)
+     ON CONFLICT (user_id, access_key) DO NOTHING`,
+    [userId]
+  )
+}
+
+test("debug GC endpoint rejects non-platform-admin callers with 403", async () => {
+  const base = createApiClient()
+  const ctx = await registerTestUser(base)
+  // Plain workspace owner — not a platform admin.
+  const res = await ctx.client.fetch(
+    "/_debug/chat/realtime-outbox-gc?hours=24",
+    { method: "POST", json: {} }
+  )
+  assert.equal(
+    res.status,
+    403,
+    "non-platform-admin must be rejected from the global GC endpoint"
+  )
+  const body = (await res.json().catch(() => ({}))) as { code?: string }
+  assert.equal(body.code, "platform_admin_required")
+})
+
 test("GC deletes dispatched rows older than retention but spares fresh dispatched rows", async () => {
   const base = createApiClient()
   const ctx = await registerTestUser(base)
@@ -49,6 +83,8 @@ test("GC deletes dispatched rows older than retention but spares fresh dispatche
   const pg = new Client(pgConfig())
   await pg.connect()
   try {
+    await grantPlatformAdmin(pg, ctx.user.id)
+
     const staleId = randomUUID()
     const freshId = randomUUID()
 
@@ -65,8 +101,6 @@ test("GC deletes dispatched rows older than retention but spares fresh dispatche
       [staleId, ws.id, bootstrap.workspaceMemberId, freshId]
     )
 
-    // Force a GC pass via the debug endpoint with the default 24h
-    // retention.
     const result = await ctx.client.json<{ deleted: number }>(
       "/_debug/chat/realtime-outbox-gc?hours=24",
       { method: "POST", json: {} }
@@ -113,11 +147,9 @@ test("GC never deletes 'pending' rows, regardless of age", async () => {
   const pg = new Client(pgConfig())
   await pg.connect()
   try {
+    await grantPlatformAdmin(pg, ctx.user.id)
+
     const pendingId = randomUUID()
-    // Even with an ancient updated_at, status='pending' means the
-    // dispatcher will still try to deliver this row — must not be GC'd.
-    // Set available_at far in the future so the dispatcher doesn't
-    // claim it out from under us during the test.
     await pg.query(
       `INSERT INTO realtime_event_outbox
         (id, event_type, workspace_id, recipient_workspace_member_id,
@@ -146,6 +178,72 @@ test("GC never deletes 'pending' rows, regardless of age", async () => {
 
     await pg.query(`DELETE FROM realtime_event_outbox WHERE id = $1`, [
       pendingId,
+    ])
+  } finally {
+    await pg.end().catch(() => undefined)
+  }
+})
+
+test("GC never deletes 'failed' rows — they're retryable, not terminal", async () => {
+  // The audit's S40 finding: the original GC happily deleted
+  // status='failed' rows older than the retention window. But the
+  // claim query at events/index.ts:99 treats 'failed' as a retryable
+  // state (`WHERE status IN ('pending','failed')`), and
+  // markRealtimeOutboxEntryFailed only pushes available_at out by at
+  // most ~30s. So a 'failed' row with an old updated_at is either
+  // currently in a retry backoff or stuck in a loop that needs ops
+  // attention — it's NEVER safe to silently drop. With hours=0 (or
+  // any misuse of the debug endpoint) the pre-S40 GC would have
+  // dropped live realtime events.
+  const base = createApiClient()
+  const ctx = await registerTestUser(base)
+  const ws = await createTestWorkspace(ctx.client)
+  const bootstrap = await ctx.client.json<{ workspaceMemberId: string }>(
+    `/workspaces/${ws.id}/chat/bootstrap`
+  )
+
+  const pg = new Client(pgConfig())
+  await pg.connect()
+  try {
+    await grantPlatformAdmin(pg, ctx.user.id)
+
+    const failedId = randomUUID()
+    await pg.query(
+      `INSERT INTO realtime_event_outbox
+        (id, event_type, workspace_id, recipient_workspace_member_id,
+         payload, event_timestamp, status, available_at,
+         attempts, last_error, created_at, updated_at)
+       VALUES
+        ($1, 'chat.sync.event', $2, $3, '{}'::jsonb, NOW(),
+         'failed', NOW() + INTERVAL '1 hour', 3, 'stub-failure',
+         NOW() - INTERVAL '48 hours', NOW() - INTERVAL '48 hours')`,
+      [failedId, ws.id, bootstrap.workspaceMemberId]
+    )
+
+    // Even with hours=0 — the most aggressive setting possible —
+    // 'failed' must not be GC'd.
+    await ctx.client.json("/_debug/chat/realtime-outbox-gc?hours=0", {
+      method: "POST",
+      json: {},
+    })
+
+    const survived = await pg.query(
+      `SELECT id, status FROM realtime_event_outbox WHERE id = $1`,
+      [failedId]
+    )
+    assert.equal(
+      survived.rows.length,
+      1,
+      "failed rows are retryable — GC must NOT delete them, even at hours=0"
+    )
+    assert.equal(
+      survived.rows[0].status,
+      "failed",
+      "the row must remain in 'failed' status untouched"
+    )
+
+    await pg.query(`DELETE FROM realtime_event_outbox WHERE id = $1`, [
+      failedId,
     ])
   } finally {
     await pg.end().catch(() => undefined)

@@ -276,14 +276,25 @@ export async function drainRealtimeEventOutbox(
 }
 
 /**
- * GC dispatched/failed outbox rows older than the configured retention.
+ * GC dispatched outbox rows older than the configured retention.
  * The original S8 plan called for dropping the realtime_event_outbox
  * table entirely; that's not viable because chat.sync.event still uses
  * it as a transactional outbox (see service.ts:enqueueTransactionalEvent).
  * Instead, keep the table but trim stale rows so it doesn't grow without
- * bound. Failed rows are kept on the same schedule so ops still has a
- * debug window before they vanish. Returns the number of rows deleted
- * so the dispatcher loop can log it.
+ * bound.
+ *
+ * S40 — IMPORTANT: this function deletes ONLY `status='dispatched'`
+ * rows. `failed` is NOT a terminal status: claimPendingRealtimeOutbox
+ * Entries() above retries `WHERE status IN ('pending','failed') AND
+ * available_at <= NOW()`, and markRealtimeOutboxEntryFailed() backs
+ * available_at off by at most ~30s. A failed row with an old
+ * updated_at is either currently retrying or stuck in a loop that
+ * needs ops attention. In both cases GC'ing it would silently drop a
+ * realtime event the dispatcher still intends to deliver. If we later
+ * want to drop chronically-failing rows we should first add a
+ * terminal `dead_letter` status capped by attempts and only GC that.
+ *
+ * Returns the number of rows deleted so the dispatcher loop can log it.
  */
 export async function gcRealtimeEventOutbox(
   retentionHours = config.realtime.outboxRetentionHours
@@ -295,7 +306,7 @@ export async function gcRealtimeEventOutbox(
   const result = await query(
     `
       DELETE FROM realtime_event_outbox
-       WHERE status IN ('dispatched', 'failed')
+       WHERE status = 'dispatched'
          AND updated_at < NOW() - ($1 || ' hours')::interval
     `,
     [String(retentionHours)]
