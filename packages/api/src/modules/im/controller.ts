@@ -486,7 +486,10 @@ export default async function imController(app: FastifyInstance) {
 
       const { workspaceId, sessionId } = request.params
       const workspaceMemberId = (request as any).workspaceMember?.id as string
-      const owner = getWeixinQrLoginSessionOwner({ workspaceId, sessionId })
+      const owner = await getWeixinQrLoginSessionOwner({
+        workspaceId,
+        sessionId,
+      })
       if (
         !owner ||
         owner.ownerScope !== "workspace_member" ||
