@@ -29,7 +29,7 @@ import {
   getWeixinQrLoginSession,
   getWeixinQrLoginSessionOwner,
   startWeixinQrLoginSession,
-} from "./weixin-qr.js"
+} from "./connectors/weixin/qr-login.js"
 import { refreshTransportRuntimeManager } from "./runtime.js"
 
 const transportAccountOwnerCreateShape = {
