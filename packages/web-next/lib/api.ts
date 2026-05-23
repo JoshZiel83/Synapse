@@ -78,6 +78,10 @@ import type {
   WorkspaceCapabilityConversationTypePoliciesView,
 } from "@synapse/shared"
 import {
+  normalizeConversationCatalogEntry,
+  type ConversationCatalogEntry,
+} from "@synapse/shared"
+import {
   isChatInteractionResolveConflictResponse,
   type ChatInteractionResolvePayload,
   type FileRecordView,
@@ -1308,6 +1312,13 @@ class ApiClient {
 
   getChatBootstrap(workspaceId: string): Promise<ChatBootstrapResponse> {
     return this.fetch(`/workspaces/${workspaceId}/chat/bootstrap`)
+  }
+
+  async loadConversationCatalog(
+    workspaceId: string
+  ): Promise<ConversationCatalogEntry[]> {
+    const bootstrap = await this.getChatBootstrap(workspaceId)
+    return bootstrap.conversations.map(normalizeConversationCatalogEntry)
   }
 
   getChatSync(

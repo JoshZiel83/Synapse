@@ -1,14 +1,17 @@
-"use client"
-
-import {
-  resolveConversationTypeKey,
-  type ChatConversationView,
-} from "@synapse/shared"
+import { resolveConversationTypeKey } from "../utils/index.js"
 import type {
+  ChatConversationView,
   ChatParticipantSummary,
   ConversationTypeKey,
-} from "@synapse/shared/types"
-import { api } from "@/lib/api"
+} from "../types/index.js"
+
+/**
+ * Compact projection of ChatConversationView used by UI surfaces that just
+ * need a list of {id, title, kind, type-key, unread, participants} (plugin
+ * filters, skill installers, memory browser, etc.). Lives in shared so
+ * both web-next and any future client can map the same way without
+ * duplicating the projection logic.
+ */
 
 export type ConversationCatalogParticipant = {
   participantId: string
@@ -32,16 +35,12 @@ export type ConversationCatalogEntry = {
 
 function buildConversationTitle(conversation: ChatConversationView) {
   const explicitTitle = conversation.title?.trim()
-  if (explicitTitle) {
-    return explicitTitle
-  }
+  if (explicitTitle) return explicitTitle
 
   const participantNames = conversation.participants
-    .map((participant) => participant.name?.trim())
-    .filter((value): value is string => Boolean(value))
-  if (participantNames.length > 0) {
-    return participantNames.join(", ")
-  }
+    .map((participant: ChatParticipantSummary) => participant.name?.trim())
+    .filter((value: string | undefined): value is string => Boolean(value))
+  if (participantNames.length > 0) return participantNames.join(", ")
 
   return "Untitled conversation"
 }
@@ -60,7 +59,9 @@ export function normalizeConversationCatalogEntry(
     ),
     unreadCount: conversation.unreadCount,
     participants: conversation.participants.map(
-      (participant): ConversationCatalogParticipant => ({
+      (
+        participant: ChatParticipantSummary
+      ): ConversationCatalogParticipant => ({
         participantId: participant.participantId,
         participantType: participant.participantType,
         actorId: participant.actorId,
@@ -73,7 +74,8 @@ export function normalizeConversationCatalogEntry(
   }
 }
 
-export async function loadConversationCatalog(workspaceId: string) {
-  const bootstrap = await api.getChatBootstrap(workspaceId)
-  return bootstrap.conversations.map(normalizeConversationCatalogEntry)
+export function mapConversationsToCatalog(
+  conversations: ChatConversationView[]
+): ConversationCatalogEntry[] {
+  return conversations.map(normalizeConversationCatalogEntry)
 }

@@ -825,7 +825,6 @@ export type EventType =
   | "memory.created"
   | "actor.thinking"
   | "actor.action"
-  | "feed.item.created"
   | "chat.sync.event"
   | "runtime.updated"
   | "mcp.config.changed"
