@@ -78,6 +78,10 @@ import {
 import { shutdownAllWorkers } from "./workers/registry.js"
 import { shutdownQueues } from "./workers/queues.js"
 import {
+  startChatDedupCounterLogger,
+  stopChatDedupCounterLogger,
+} from "./modules/chat/observability.js"
+import {
   getMemoryEmbeddingRuntimeHealth,
   shutdownMemoryEmbeddingRuntime,
   warmMemoryEmbeddingRuntime,
@@ -177,6 +181,9 @@ async function main() {
   }
 
   await startRealtimeEventOutboxDispatcher()
+  if (process.env.CHAT_DEDUP_LOGGER === "1") {
+    startChatDedupCounterLogger()
+  }
 
   try {
     const platformAdmins = await syncConfiguredPlatformAdmins()
@@ -364,6 +371,7 @@ async function main() {
       ).catch((err) => {
         app.log.error({ err }, "Event bus shutdown timed out")
       })
+      stopChatDedupCounterLogger()
       await waitWithTimeout(
         "plugin instance shutdown",
         shutdownAllInstances(),

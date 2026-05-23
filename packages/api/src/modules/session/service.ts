@@ -1,5 +1,4 @@
 import { pool } from "../../infrastructure/database/index.js"
-import { emitEvent } from "../../infrastructure/events/index.js"
 import {
   db,
   executeCompiledQuery,
@@ -184,7 +183,7 @@ async function requireActiveActorConversationParticipant(
       .selectFrom("conversation_participants")
       .select("id")
       .where("conversation_id", "=", conversationId)
-      .where("participant_kind", "=", "actor")
+      .where("participant_type", "=", "actor")
       .where("actor_id", "=", actorId)
       .where("state", "=", "active")
       .limit(1)
@@ -388,7 +387,7 @@ async function resolveSessionMessageAuthor(params: {
     const actorJoinVersionId = await getActorJoinVersionId(params.fromActorId)
     return ensureConversationParticipant({
       conversationId: params.conversationId,
-      participantKind: "actor",
+      participantType: "actor",
       actorId: params.fromActorId,
       actorJoinVersionId,
     })
@@ -397,7 +396,7 @@ async function resolveSessionMessageAuthor(params: {
   if (params.fromWorkspaceMemberId) {
     return ensureConversationParticipant({
       conversationId: params.conversationId,
-      participantKind: "workspace_member",
+      participantType: "workspace_member",
       workspaceMemberId: params.fromWorkspaceMemberId,
     })
   }
@@ -468,7 +467,7 @@ export async function createSession(params: {
 
   await ensureConversationParticipant({
     conversationId: finalConversationId,
-    participantKind: "actor",
+    participantType: "actor",
     actorId,
     actorJoinVersionId: await getActorJoinVersionId(actorId),
   })
@@ -483,7 +482,7 @@ export async function createSession(params: {
     resolvedWorkspaceMemberId = workspaceMember.workspaceMemberId
     await ensureConversationParticipant({
       conversationId: finalConversationId,
-      participantKind: "workspace_member",
+      participantType: "workspace_member",
       workspaceMemberId: resolvedWorkspaceMemberId,
     })
   }
@@ -704,22 +703,12 @@ export async function addSessionMessage(params: {
           .executeTakeFirst()
       )?.name
     }
-    await emitEvent({
-      type: "session.message.new",
-      workspaceId,
-      payload: {
-        sessionId,
-        messageId: item.id,
-        role,
-        contentBlocks: normalizedMessage.contentBlocks,
-        fromActorId,
-        actorName,
-        fromWorkspaceMemberId,
-        metadata: normalizedMessage.normalizedMetadata,
-        createdAt: item.createdAt,
-      },
-      timestamp: nowISO(),
-    })
+    // session.message.new event emit removed (S13): no subscribers remain.
+    void normalizedMessage
+    void item
+    void actorName
+    void role
+    void fromWorkspaceMemberId
   }
 
   return {

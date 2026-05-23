@@ -50,6 +50,21 @@ export const config = {
   realtime: {
     outboxBatchSize: parseInt(process.env.REALTIME_OUTBOX_BATCH_SIZE || "100"),
     outboxPollMs: parseInt(process.env.REALTIME_OUTBOX_POLL_MS || "500"),
+    // How long to keep dispatched outbox rows for ops debugging
+    // before GC sweeps them. Default 24h matches the plan's
+    // verification window. Set to 0 to delete-on-dispatch (no debug
+    // window). 'failed' rows are NEVER GC'd regardless of retention
+    // because the dispatcher still retries them — see
+    // gcRealtimeEventOutbox in infrastructure/events/index.ts.
+    outboxRetentionHours: parseInt(
+      process.env.REALTIME_OUTBOX_RETENTION_HOURS || "24"
+    ),
+    // How often the dispatcher loop runs the GC sweep. 1 minute is
+    // fine — GC just trims stale rows; missing a window doesn't lose
+    // events.
+    outboxGcIntervalMs: parseInt(
+      process.env.REALTIME_OUTBOX_GC_INTERVAL_MS || "60000"
+    ),
   },
   asr: {
     provider: process.env.ASR_PROVIDER || "volcengine",

@@ -375,13 +375,13 @@ function compileManifestMessage(
     const isSelf =
       (manifest.selfParticipantId &&
         participant.participantId === manifest.selfParticipantId) ||
-      (participant.type === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+      (participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
         participant.id === manifest.selfActorId)
     content.push(
       toXmlTextBlock(
         selfClosingXmlTag("participant", {
           participantId: participant.participantId,
-          participantType: participant.type,
+          participantType: participant.participantType,
           name: participant.name,
           title: participant.title,
           role: participant.role,

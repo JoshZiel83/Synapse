@@ -65,7 +65,6 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { api } from "@/lib/api"
-import { loadConversationCatalog } from "@/lib/conversation-catalog"
 import { cn } from "@/lib/utils"
 import { useAuthStore } from "@/stores/auth-store"
 
@@ -169,7 +168,7 @@ export default function MemoryBrowser() {
       const [memoryData, actorData, conversationData] = await Promise.all([
         api.getMemories(workspaceId),
         api.getActors(workspaceId),
-        loadConversationCatalog(workspaceId),
+        api.loadConversationCatalog(workspaceId),
       ])
 
       setMemories(

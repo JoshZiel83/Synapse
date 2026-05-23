@@ -224,7 +224,7 @@ export type ConversationItemsSurface = "internal" | "visible"
 
 export type ConversationItemTargetsTargetKind = "cc" | "to" | "visible"
 
-export type ConversationParticipantsKind =
+export type ConversationParticipantsType =
   | "actor"
   | "external"
   | "remote_agent"
@@ -431,7 +431,10 @@ export type RelationshipApprovalMode = "auto" | "manual"
 
 export type RelationshipRequestStatus = "approved" | "pending" | "rejected"
 
-export type RelationshipTargetType = "actor" | "member" | "remote_agent"
+export type RelationshipTargetType =
+  | "actor"
+  | "remote_agent"
+  | "workspace_member"
 
 export type RelayAuthorizationGrantsRetention = "consume_once" | "until_revoked"
 
@@ -1339,7 +1342,7 @@ export interface ConversationParticipants {
   joined_at: Generated<Timestamp>
   left_at: Timestamp | null
   metadata: Generated<Json>
-  participant_kind: ConversationParticipantsKind
+  participant_type: ConversationParticipantsType
   remote_agent_id: string | null
   role_key: Generated<string>
   state: Generated<ConversationParticipantsState>

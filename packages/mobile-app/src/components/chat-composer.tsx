@@ -311,6 +311,7 @@ export function ChatComposer({
   replyTo,
   onCancelReply,
   onSend,
+  onTyping,
 }: {
   workspaceId: string
   conversationId: string
@@ -320,6 +321,8 @@ export function ChatComposer({
   replyTo?: ConversationReplyRef | null
   onCancelReply?: () => void
   onSend: (payload: ChatComposerSendPayload) => Promise<void>
+  /** Best-effort callback fired on every keystroke; consumer debounces. */
+  onTyping?: () => void
 }) {
   const router = useRouter()
   const { height: windowHeight } = useWindowDimensions()
@@ -739,6 +742,7 @@ export function ChatComposer({
     if (nextText.length === 0) {
       setInputHeight(DEFAULT_INPUT_HEIGHT)
     }
+    onTyping?.()
 
     const mentionTriggerIndex = findInsertedMentionTrigger(
       previousText,

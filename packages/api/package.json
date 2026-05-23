@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "tsx --test \"src/**/*.test.ts\"",
+    "test:integration": "tsx --test \"test/integration/**/*.test.ts\"",
     "db:bootstrap": "tsx src/infrastructure/database/bootstrap.ts && npm run db:codegen",
     "db:bootstrap:runtime": "tsx src/infrastructure/database/bootstrap.ts",
     "db:seed": "tsx src/infrastructure/database/seed.ts",

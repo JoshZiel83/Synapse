@@ -11,6 +11,7 @@ import type {
   ChatClientInstanceCreateInput,
   ChatClientInstanceRegistrationResponse,
   ChatClientInstanceTouchInput,
+  ChatConversationCreateInput,
   ChatConversationCreateResponse,
   ChatConversationMessagesQuery,
   ChatConversationMessagesPage,
@@ -46,13 +47,11 @@ import type {
   FriendIdProfileView,
   IdentitySearchResponse,
   FriendRequestListResponse,
-  RelationshipProfileView,
   RelationshipScanResponse,
   UploadAssetInput,
   WorkspaceChiefActorPreference,
   WorkspaceInfo,
   WorkspaceListResponse,
-  WorkspaceMemberListResponse,
 } from "@/types/api"
 import type { FileRecordView } from "@shared"
 
@@ -129,22 +128,6 @@ function asArray<T>(value: unknown): T[] {
 }
 
 function normalizeWorkspaceListResponse(data: unknown): WorkspaceListResponse {
-  if (Array.isArray(data)) {
-    return { data }
-  }
-
-  if (data && typeof data === "object") {
-    return {
-      data: asArray((data as { data?: unknown }).data),
-    }
-  }
-
-  return { data: [] }
-}
-
-function normalizeWorkspaceMemberListResponse(
-  data: unknown
-): WorkspaceMemberListResponse {
   if (Array.isArray(data)) {
     return { data }
   }
@@ -288,25 +271,9 @@ class ApiClient {
     })
   }
 
-  getWorkspaceMembers(
-    workspaceId: string
-  ): Promise<WorkspaceMemberListResponse> {
-    return this.request<unknown>(`/workspaces/${workspaceId}/members`).then(
-      normalizeWorkspaceMemberListResponse
-    )
-  }
-
   getActors(workspaceId: string): Promise<ActorListResponse> {
     return this.request<unknown>(`/workspaces/${workspaceId}/actors`).then(
       normalizeActorListResponse
-    )
-  }
-
-  getMyRelationshipProfile(
-    workspaceId: string
-  ): Promise<RelationshipProfileView> {
-    return this.request<RelationshipProfileView>(
-      `/workspaces/${workspaceId}/me/friend-profile`
     )
   }
 
@@ -325,45 +292,6 @@ class ApiClient {
   ): Promise<FriendIdProfileView> {
     return this.request<FriendIdProfileView>(
       `/workspaces/${workspaceId}/me/friend-id`,
-      {
-        method: "PUT",
-        body: JSON.stringify(input),
-      }
-    )
-  }
-
-  updateMyRelationshipProfile(
-    workspaceId: string,
-    input: { approvalMode: "auto" | "manual" }
-  ): Promise<RelationshipProfileView> {
-    return this.request<RelationshipProfileView>(
-      `/workspaces/${workspaceId}/me/friend-profile`,
-      {
-        method: "PUT",
-        body: JSON.stringify(input),
-      }
-    )
-  }
-
-  getActorRelationshipProfile(
-    workspaceId: string,
-    actorId: string
-  ): Promise<RelationshipProfileView> {
-    return this.request<RelationshipProfileView>(
-      `/workspaces/${workspaceId}/actors/${actorId}/friend-profile`
-    )
-  }
-
-  updateActorRelationshipProfile(
-    workspaceId: string,
-    actorId: string,
-    input: {
-      approvalMode: "auto" | "manual"
-      accessPolicy?: "workspace_open" | "approval_required"
-    }
-  ): Promise<RelationshipProfileView> {
-    return this.request<RelationshipProfileView>(
-      `/workspaces/${workspaceId}/actors/${actorId}/friend-profile`,
       {
         method: "PUT",
         body: JSON.stringify(input),
@@ -478,7 +406,7 @@ class ApiClient {
     }
   ): Promise<DirectConversationOpenResponse> {
     return this.request<DirectConversationOpenResponse>(
-      `/workspaces/${workspaceId}/direct-conversations/open`,
+      `/workspaces/${workspaceId}/chat/direct-conversations/open`,
       {
         method: "POST",
         body: JSON.stringify(input),
@@ -568,15 +496,7 @@ class ApiClient {
 
   createChatConversation(
     workspaceId: string,
-    input: {
-      clientRequestId: string
-      kind: "group" | "private" | "virtual"
-      boundary?: "internal" | "external"
-      title?: string
-      workspaceMemberIds?: string[]
-      actorIds?: string[]
-      metadata?: Record<string, unknown>
-    }
+    input: ChatConversationCreateInput
   ): Promise<ChatConversationCreateResponse> {
     return this.request<ChatConversationCreateResponse>(
       `/workspaces/${workspaceId}/chat/conversations`,
@@ -589,6 +509,8 @@ class ApiClient {
           title: input.title,
           workspaceMemberIds: input.workspaceMemberIds ?? [],
           actorIds: input.actorIds ?? [],
+          remoteAgentIds: input.remoteAgentIds ?? [],
+          externalParticipants: input.externalParticipants ?? [],
           metadata: input.metadata,
         }),
       }
@@ -656,7 +578,7 @@ class ApiClient {
     input: ChatInteractionResolveInput
   ): Promise<ChatInteractionResolveResponse> {
     return this.request<ChatInteractionResolveResponse>(
-      `/workspaces/${workspaceId}/conversations/${conversationId}/interactions/${interactionId}/respond`,
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(input),
@@ -688,6 +610,47 @@ class ApiClient {
           clientInstanceId: input.clientInstanceId,
         }),
       }
+    )
+  }
+
+  sendChatTypingState(
+    workspaceId: string,
+    conversationId: string,
+    state: "started" | "stopped"
+  ) {
+    return this.request<{ broadcast: boolean }>(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/typing`,
+      { method: "POST", body: JSON.stringify({ state }) }
+    )
+  }
+
+  registerChatPushToken(
+    workspaceId: string,
+    input: {
+      platform: "ios" | "android" | "web"
+      token: string
+      deviceLabel?: string
+      metadata?: Record<string, unknown>
+    }
+  ) {
+    return this.request<{
+      token: { id: string; platform: string; createdAt: string }
+    }>(`/workspaces/${workspaceId}/chat/push-tokens`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  listChatPushTokens(workspaceId: string) {
+    return this.request<{ tokens: Array<{ id: string; platform: string }> }>(
+      `/workspaces/${workspaceId}/chat/push-tokens`
+    )
+  }
+
+  deleteChatPushToken(workspaceId: string, tokenId: string) {
+    return this.request<{ deleted: boolean }>(
+      `/workspaces/${workspaceId}/chat/push-tokens/${tokenId}`,
+      { method: "DELETE" }
     )
   }
 

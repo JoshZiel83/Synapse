@@ -91,7 +91,6 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { api } from "@/lib/api"
-import { loadConversationCatalog } from "@/lib/conversation-catalog"
 import { resolveFileUrl } from "@/lib/utils"
 
 type ActorOption = {
@@ -2607,7 +2606,7 @@ export function WorkspaceSkillCreationPage() {
 
     Promise.all([
       api.getActors(workspaceId),
-      loadConversationCatalog(workspaceId),
+      api.loadConversationCatalog(workspaceId),
       api.getWorkspaceMembers(workspaceId),
     ])
       .then(([actorsResponse, conversationsResponse, membersResponse]) => {
@@ -3220,7 +3219,7 @@ export function MarketplaceSkillPreviewPage({ skillId }: { skillId: string }) {
       ] = await Promise.all([
         api.getSkillMarketplaceItem(skillId, workspaceId),
         api.getActors(workspaceId),
-        loadConversationCatalog(workspaceId),
+        api.loadConversationCatalog(workspaceId),
         api.getWorkspaceMembers(workspaceId),
       ])
 

@@ -74,6 +74,10 @@ import {
   renderConversationEventTimelineBlocks,
 } from "./event-registry.js"
 import {
+  recordDuplicateClientMessageIdSend,
+  recordDuplicateWatermarkPost,
+} from "./observability.js"
+import {
   requireWorkspaceMemberIdentity,
   type WorkspaceMemberIdentity,
 } from "./workspace-identity.js"
@@ -126,7 +130,7 @@ type ConversationBaseRow = {
 type ParticipantRow = {
   id: string
   conversation_id: string
-  participant_kind: ParticipantKind
+  participant_type: ParticipantKind
   workspace_member_id: string | null
   actor_id: string | null
   remote_agent_id: string | null
@@ -492,12 +496,12 @@ function asParticipantTransportKind(
 }
 
 function participantDisplayName(row: ParticipantRow): string {
-  if (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER) {
+  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER) {
     if (typeof row.user_name === "string" && row.user_name.trim()) {
       return row.user_name.trim()
     }
   }
-  if (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
+  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     if (
       typeof row.participant_name === "string" &&
       row.participant_name.trim()
@@ -505,7 +509,7 @@ function participantDisplayName(row: ParticipantRow): string {
       return row.participant_name.trim()
     }
   }
-  if (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
+  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT) {
     if (
       typeof row.participant_name === "string" &&
       row.participant_name.trim()
@@ -514,16 +518,16 @@ function participantDisplayName(row: ParticipantRow): string {
     }
   }
   if (
-    (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
-      row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
+    (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
+      row.participant_type === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
     typeof row.transport_display_name === "string" &&
     row.transport_display_name.trim()
   ) {
     return row.transport_display_name.trim()
   }
   if (
-    (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
-      row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
+    (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL ||
+      row.participant_type === CONVERSATION_PARTICIPANT_TYPE.SYSTEM) &&
     typeof row.display_name === "string" &&
     row.display_name.trim()
   ) {
@@ -541,7 +545,7 @@ function participantDisplayName(row: ParticipantRow): string {
   if (typeof row.display_name === "string" && row.display_name.trim()) {
     return row.display_name.trim()
   }
-  return row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
+  return row.participant_type === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
     ? "System"
     : "Unknown"
 }
@@ -830,7 +834,7 @@ async function listConversationParticipantRows(
       SELECT
         cp.id,
         cp.conversation_id,
-        cp.participant_kind,
+        cp.participant_type,
         cp.workspace_member_id,
         cp.actor_id,
         cp.remote_agent_id,
@@ -938,7 +942,7 @@ async function getWorkspaceMemberConversationParticipantRow(
       SELECT
         cp.id,
         cp.conversation_id,
-        cp.participant_kind,
+        cp.participant_type,
         cp.workspace_member_id,
         cp.actor_id,
         cp.remote_agent_id,
@@ -1251,7 +1255,7 @@ async function loadConversationViews(
     const viewerMembership = conversationParticipants.find(
       (participant) =>
         participant.state === "active" &&
-        participant.participant_kind ===
+        participant.participant_type ===
           CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
         participant.workspace_member_id === workspaceMemberId
     )
@@ -1655,6 +1659,40 @@ async function requireConversationAccess(
     participant,
     baseRow,
   }
+}
+
+/**
+ * Same as requireConversationAccess + asserts the viewer has management
+ * rights (kind != "private" AND role_key in ('owner','admin')). Throws
+ * 403 conversation_manage_denied otherwise. Used by PATCH conversation,
+ * POST participants, DELETE participants.
+ */
+async function requireConversationManagement(
+  queryable: Queryable,
+  conversationId: string,
+  workspaceMemberId: string
+) {
+  const access = await requireConversationAccess(
+    queryable,
+    conversationId,
+    workspaceMemberId
+  )
+  if (access.baseRow.kind === CONVERSATION_KIND.PRIVATE) {
+    throw createChatError(
+      403,
+      "conversation_manage_denied",
+      "Private conversations cannot be managed"
+    )
+  }
+  const roleKey = access.participant.role_key
+  if (roleKey !== "owner" && roleKey !== "admin") {
+    throw createChatError(
+      403,
+      "conversation_manage_denied",
+      "Only conversation owners or admins can perform this action"
+    )
+  }
+  return access
 }
 
 type PendingActorWakeup = {
@@ -2163,8 +2201,11 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
       )
     : undefined
   const sourceParticipantType =
-    params.sourceParticipantType ?? authorParticipant?.participant_kind
-  if (!sourceParticipantType || sourceParticipantType === "system") {
+    params.sourceParticipantType ?? authorParticipant?.participant_type
+  if (
+    !sourceParticipantType ||
+    sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
+  ) {
     return [] as PendingActorWakeup[]
   }
 
@@ -2188,12 +2229,14 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
   }
 
   const sourceType =
-    sourceParticipantType === "actor" ? "actor_message" : "user_message"
+    sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+      ? "actor_message"
+      : "user_message"
   const sourceParticipantId =
     params.sourceParticipantId ??
-    (sourceParticipantType === "workspace_member"
+    (sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
       ? (authorParticipant?.workspace_member_id ?? undefined)
-      : sourceParticipantType === "actor"
+      : sourceParticipantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
         ? (authorParticipant?.actor_id ?? undefined)
         : (itemRow.author_participant_id ?? undefined))
   const sourceName =
@@ -2302,7 +2345,7 @@ async function insertParticipant(
   queryable: Queryable,
   params: {
     conversationId: string
-    participantKind: ParticipantKind
+    participantType: ParticipantKind
     workspaceMemberId?: string
     actorId?: string
     remoteAgentId?: string
@@ -2320,7 +2363,7 @@ async function insertParticipant(
       INSERT INTO conversation_participants (
         id,
         conversation_id,
-        participant_kind,
+        participant_type,
         workspace_member_id,
         actor_id,
         remote_agent_id,
@@ -2336,7 +2379,7 @@ async function insertParticipant(
     [
       participantId,
       params.conversationId,
-      params.participantKind,
+      params.participantType,
       params.workspaceMemberId ?? null,
       params.actorId ?? null,
       params.remoteAgentId ?? null,
@@ -2603,7 +2646,7 @@ export async function createConversationForWorkspaceMember(params: {
       for (const member of memberRows) {
         await ensureConversationParticipant({
           conversationId: conversation.id as string,
-          participantKind: "workspace_member",
+          participantType: "workspace_member",
           workspaceMemberId: member.id,
           displayName: member.user_name,
           roleKey:
@@ -2634,7 +2677,7 @@ export async function createConversationForWorkspaceMember(params: {
       for (const actor of actorRows) {
         await ensureConversationParticipant({
           conversationId: conversation.id as string,
-          participantKind: "actor",
+          participantType: "actor",
           actorId: actor.id,
           displayName: actor.name,
           queryable,
@@ -2657,7 +2700,7 @@ export async function createConversationForWorkspaceMember(params: {
       for (const remoteAgent of remoteAgentRows) {
         await ensureConversationParticipant({
           conversationId: conversation.id as string,
-          participantKind: "remote_agent",
+          participantType: "remote_agent",
           remoteAgentId: remoteAgent.id,
           displayName: remoteAgent.name,
           queryable,
@@ -2668,7 +2711,7 @@ export async function createConversationForWorkspaceMember(params: {
     for (const externalParticipant of externalParticipants) {
       await ensureConversationParticipant({
         conversationId: conversation.id as string,
-        participantKind: "external",
+        participantType: "external",
         displayName: externalParticipant.displayName,
         metadata: externalParticipant.metadata,
         transportAddressIds: externalParticipant.transportAddressIds,
@@ -2754,7 +2797,7 @@ export async function getConversationParticipant(params: {
 
 export async function ensureConversationParticipant(params: {
   conversationId: string
-  participantKind: ParticipantKind
+  participantType: ParticipantKind
   workspaceMemberId?: string
   actorId?: string
   remoteAgentId?: string
@@ -2772,15 +2815,21 @@ export async function ensureConversationParticipant(params: {
   }
 
   if (
-    params.participantKind === "workspace_member" &&
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
     !params.workspaceMemberId
   ) {
     throw new Error("workspaceMemberId is required for workspace participants")
   }
-  if (params.participantKind === "actor" && !params.actorId) {
+  if (
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+    !params.actorId
+  ) {
     throw new Error("actorId is required for actor participants")
   }
-  if (params.participantKind === "remote_agent" && !params.remoteAgentId) {
+  if (
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
+    !params.remoteAgentId
+  ) {
     throw new Error("remoteAgentId is required for remote agent participants")
   }
 
@@ -2790,7 +2839,7 @@ export async function ensureConversationParticipant(params: {
       SELECT id, state
       FROM conversation_participants
       WHERE conversation_id = $1
-        AND participant_kind = $2
+        AND participant_type = $2
         AND (
           ($2 = 'workspace_member' AND workspace_member_id = $3)
           OR ($2 = 'actor' AND actor_id = $4)
@@ -2804,7 +2853,7 @@ export async function ensureConversationParticipant(params: {
     `,
     [
       params.conversationId,
-      params.participantKind,
+      params.participantType,
       params.workspaceMemberId ?? null,
       params.actorId ?? null,
       params.remoteAgentId ?? null,
@@ -2879,7 +2928,7 @@ export async function ensureConversationParticipant(params: {
 
   const inserted = await insertParticipant(queryable, {
     conversationId: params.conversationId,
-    participantKind: params.participantKind,
+    participantType: params.participantType,
     workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
     remoteAgentId: params.remoteAgentId,
@@ -2928,7 +2977,7 @@ export async function addConversationParticipants(params: {
       for (const member of memberRows) {
         await ensureConversationParticipant({
           conversationId: params.conversationId,
-          participantKind: "workspace_member",
+          participantType: "workspace_member",
           workspaceMemberId: member.id,
           displayName: member.user_name,
           queryable,
@@ -2957,7 +3006,7 @@ export async function addConversationParticipants(params: {
       for (const actor of actorRows) {
         await ensureConversationParticipant({
           conversationId: params.conversationId,
-          participantKind: "actor",
+          participantType: "actor",
           actorId: actor.id,
           displayName: actor.name,
           queryable,
@@ -2980,7 +3029,7 @@ export async function addConversationParticipants(params: {
       for (const remoteAgent of remoteAgentRows) {
         await ensureConversationParticipant({
           conversationId: params.conversationId,
-          participantKind: "remote_agent",
+          participantType: "remote_agent",
           remoteAgentId: remoteAgent.id,
           displayName: remoteAgent.name,
           queryable,
@@ -2991,7 +3040,7 @@ export async function addConversationParticipants(params: {
     for (const externalParticipant of externalParticipants) {
       await ensureConversationParticipant({
         conversationId: params.conversationId,
-        participantKind: "external",
+        participantType: "external",
         displayName: externalParticipant.displayName,
         metadata: externalParticipant.metadata,
         transportAddressIds: externalParticipant.transportAddressIds,
@@ -3179,6 +3228,10 @@ export async function createConversationItem(params: {
       !!params.clientMessageId &&
       !!params.authorParticipantId
     if (isDuplicate) {
+      // S6 dedup observability: a duplicate clientMessageId reaching the
+      // server means main thread + SW both flushed the same outbox
+      // entry. Counter is exposed via getChatDedupCountersSnapshot().
+      recordDuplicateClientMessageIdSend()
       const duplicateItems = await buildChatConversationItems(queryable, [
         insertedItem,
       ])
@@ -3677,7 +3730,7 @@ function participantRowToEntityRef(
   const transportKind = asParticipantTransportKind(participant.transport_kind)
   return {
     participantId: participant.id,
-    participantType: participant.participant_kind,
+    participantType: participant.participant_type,
     workspaceMemberId: participant.workspace_member_id ?? undefined,
     actorId: participant.actor_id ?? undefined,
     remoteAgentId: participant.remote_agent_id ?? undefined,
@@ -3705,9 +3758,10 @@ function participantRowToChatParticipantSummary(
   return {
     participantId: participant.id,
     conversationId: participant.conversation_id,
-    participantType: participant.participant_kind,
+    participantType: participant.participant_type,
     workspaceMemberId: entity.workspaceMemberId,
     actorId: entity.actorId,
+    remoteAgentId: entity.remoteAgentId,
     externalUserKey: entity.externalUserKey,
     transportAddressId: entity.transportAddressId,
     transportKind: entity.transportKind,
@@ -4405,7 +4459,7 @@ export async function createChatConversation(params: {
     for (const member of memberRows) {
       await insertParticipant(client, {
         conversationId: newConversationId,
-        participantKind: "workspace_member",
+        participantType: "workspace_member",
         workspaceMemberId: member.id,
         displayName: member.user_name,
         roleKey: member.id === creator.workspaceMemberId ? "owner" : "member",
@@ -4421,7 +4475,7 @@ export async function createChatConversation(params: {
     for (const actor of actorRows) {
       await insertParticipant(client, {
         conversationId: newConversationId,
-        participantKind: "actor",
+        participantType: "actor",
         actorId: actor.id,
         displayName: actor.name,
         roleKey: "member",
@@ -4432,7 +4486,7 @@ export async function createChatConversation(params: {
     for (const remoteAgent of remoteAgentRows) {
       await insertParticipant(client, {
         conversationId: newConversationId,
-        participantKind: "remote_agent",
+        participantType: "remote_agent",
         remoteAgentId: remoteAgent.id,
         displayName: remoteAgent.name,
         roleKey: "member",
@@ -4443,7 +4497,7 @@ export async function createChatConversation(params: {
     for (const external of externalParticipants) {
       await insertParticipant(client, {
         conversationId: newConversationId,
-        participantKind: "external",
+        participantType: "external",
         displayName: external.displayName,
         roleKey: "member",
         metadata: external.metadata ?? {},
@@ -5219,10 +5273,11 @@ export async function updateChatConversationReadWatermark(
 
     const existingState = await executeSqlOn<{
       read_watermark_sequence: string | number
+      last_read_at: Date | string | null
     }>(
       client,
       `
-        SELECT read_watermark_sequence
+        SELECT read_watermark_sequence, last_read_at
         FROM conversation_participant_states
         WHERE conversation_id = $1
           AND participant_id = $2
@@ -5230,10 +5285,26 @@ export async function updateChatConversationReadWatermark(
       `,
       [params.conversationId, access.participant.id]
     )
-    const nextSequence = Math.max(
-      toNumber(existingState.rows[0]?.read_watermark_sequence),
-      requestedSequence
-    )
+    const existingRow = existingState.rows[0]
+    const existingSequence = toNumber(existingRow?.read_watermark_sequence)
+    const nextSequence = Math.max(existingSequence, requestedSequence)
+    // S6 dedup observability: if the request didn't actually advance the
+    // watermark, it's a duplicate POST — the main thread and the SW
+    // both flushed the same pending-read. Count it so we can monitor
+    // whether the mutex (isChatServiceWorkerActive guard, S23) is
+    // holding.
+    //
+    // S37: require an EXISTING USER-INITIATED watermark before counting.
+    // Adding a participant pre-inserts a row with sequence=0 and
+    // last_read_at=NULL (see ensureConversationParticipant). The user's
+    // first POST with readUpTo=0 collides with that pre-initialized row
+    // but isn't actually a duplicate — it's the inaugural mark. Use
+    // last_read_at as the "user has marked something before" signal.
+    const userHasMarkedBefore =
+      Boolean(existingRow) && existingRow!.last_read_at !== null
+    if (userHasMarkedBefore && nextSequence === existingSequence) {
+      recordDuplicateWatermarkPost()
+    }
     const lastReadItemId = await getLastItemAtOrBeforeSequence(
       client,
       params.conversationId,
@@ -5337,4 +5408,593 @@ export async function updateChatConversationReadWatermark(
       lastReadAt,
     }
   })
+}
+
+// ============ Stage 3: conversation CRUD ============
+
+export async function listChatConversations(params: {
+  workspaceId: string
+  userId: string
+}) {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const conversations = await loadConversationViews(
+    rootQueryable(),
+    params.workspaceId,
+    identity.workspaceMemberId
+  )
+  return {
+    workspaceMemberId: identity.workspaceMemberId,
+    conversations,
+  }
+}
+
+export async function getChatConversationDetail(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+}) {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const queryable = rootQueryable()
+  await requireConversationAccess(
+    queryable,
+    params.conversationId,
+    identity.workspaceMemberId
+  )
+  const view = await loadConversationView(
+    queryable,
+    params.workspaceId,
+    identity.workspaceMemberId,
+    params.conversationId
+  )
+  if (!view) {
+    throw createChatError(
+      404,
+      "conversation_not_found",
+      "Conversation not found"
+    )
+  }
+  return { conversation: view }
+}
+
+export async function patchChatConversation(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  title?: string | null
+  metadata?: Record<string, unknown>
+}) {
+  if (params.title === undefined && params.metadata === undefined) {
+    throw createChatError(
+      400,
+      "invalid_patch",
+      "At least one of title or metadata must be provided"
+    )
+  }
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  return transaction(async (client) => {
+    await requireConversationManagement(
+      client,
+      params.conversationId,
+      identity.workspaceMemberId
+    )
+
+    const setFragments: string[] = []
+    const values: unknown[] = []
+    let position = 1
+    if (params.title !== undefined) {
+      setFragments.push(`title = $${position++}`)
+      values.push(params.title?.trim() || null)
+    }
+    if (params.metadata !== undefined) {
+      setFragments.push(`metadata = $${position++}::jsonb`)
+      values.push(JSON.stringify(params.metadata))
+    }
+    setFragments.push("updated_at = NOW()")
+    values.push(params.conversationId)
+
+    await executeSqlOn(
+      client,
+      `UPDATE conversations SET ${setFragments.join(", ")} WHERE id = $${position}`,
+      values
+    )
+
+    const recipients = await listConversationRealtimeRecipients(
+      params.conversationId,
+      client
+    )
+    await syncConversationUpsertForWorkspaceMembers(
+      client,
+      params.workspaceId,
+      recipients.map((r) => r.workspaceMemberId),
+      params.conversationId
+    )
+
+    const view = await loadConversationView(
+      client,
+      params.workspaceId,
+      identity.workspaceMemberId,
+      params.conversationId
+    )
+    if (!view) {
+      throw createChatError(
+        404,
+        "conversation_not_found",
+        "Conversation not found"
+      )
+    }
+    return { conversation: view }
+  })
+}
+
+export async function addChatConversationParticipants(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  workspaceMemberIds?: string[]
+  actorIds?: string[]
+  remoteAgentIds?: string[]
+  externalParticipants?: ConversationCreateExternalParticipantInput[]
+}) {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  return transaction(async (client) => {
+    await requireConversationManagement(
+      client,
+      params.conversationId,
+      identity.workspaceMemberId
+    )
+
+    await addConversationParticipants({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      workspaceMemberIds: params.workspaceMemberIds,
+      actorIds: params.actorIds,
+      remoteAgentIds: params.remoteAgentIds,
+      externalParticipants: params.externalParticipants,
+      queryable: client,
+    })
+
+    const recipients = await listConversationRealtimeRecipients(
+      params.conversationId,
+      client
+    )
+    await syncConversationUpsertForWorkspaceMembers(
+      client,
+      params.workspaceId,
+      recipients.map((r) => r.workspaceMemberId),
+      params.conversationId
+    )
+
+    const view = await loadConversationView(
+      client,
+      params.workspaceId,
+      identity.workspaceMemberId,
+      params.conversationId
+    )
+    if (!view) {
+      throw createChatError(
+        404,
+        "conversation_not_found",
+        "Conversation not found"
+      )
+    }
+    return { conversation: view }
+  })
+}
+
+async function setParticipantState(
+  queryable: Queryable,
+  participantId: string,
+  state: "removed" | "left"
+) {
+  await executeSqlOn(
+    queryable,
+    `
+      UPDATE conversation_participants
+      SET state = $2, left_at = COALESCE(left_at, NOW())
+      WHERE id = $1
+    `,
+    [participantId, state]
+  )
+}
+
+async function loadParticipantById(
+  queryable: Queryable,
+  conversationId: string,
+  participantId: string
+) {
+  const result = await executeSqlOn<{
+    id: string
+    conversation_id: string
+    participant_type: ParticipantKind
+    workspace_member_id: string | null
+    actor_id: string | null
+    remote_agent_id: string | null
+    display_name: string | null
+    state: string
+  }>(
+    queryable,
+    `
+      SELECT id, conversation_id, participant_type,
+             workspace_member_id, actor_id, remote_agent_id,
+             display_name, state
+      FROM conversation_participants
+      WHERE conversation_id = $1 AND id = $2
+      LIMIT 1
+    `,
+    [conversationId, participantId]
+  )
+  return result.rows[0] ?? null
+}
+
+export async function removeChatConversationParticipant(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  participantId: string
+}) {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  return transaction(async (client) => {
+    const access = await requireConversationAccess(
+      client,
+      params.conversationId,
+      identity.workspaceMemberId
+    )
+
+    const target = await loadParticipantById(
+      client,
+      params.conversationId,
+      params.participantId
+    )
+    if (!target) {
+      throw createChatError(
+        404,
+        "participant_not_found",
+        "Participant not found in this conversation"
+      )
+    }
+    if (target.state !== "active") {
+      throw createChatError(
+        409,
+        "participant_not_active",
+        "Participant is already left or removed"
+      )
+    }
+
+    const isSelfRemoval = target.id === access.participant.id
+    // Kicking someone else requires conversation management rights;
+    // removing yourself ("leave") only requires being a participant.
+    if (!isSelfRemoval) {
+      await requireConversationManagement(
+        client,
+        params.conversationId,
+        identity.workspaceMemberId
+      )
+    }
+    const eventType = isSelfRemoval ? "participant_left" : "participant_kicked"
+
+    await setParticipantState(
+      client,
+      target.id,
+      isSelfRemoval ? "left" : "removed"
+    )
+
+    await createConversationEvent({
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+      eventType,
+      authorParticipantId: access.participant.id,
+      eventPayload: {
+        batchId: crypto.randomUUID(),
+        initiator: isSelfRemoval
+          ? undefined
+          : {
+              participantId: access.participant.id,
+              participantType: access.participant
+                .participant_type as ParticipantKind,
+              workspaceMemberId: identity.workspaceMemberId,
+            },
+        participants: [
+          {
+            participantId: target.id,
+            participantType: target.participant_type as Exclude<
+              ParticipantKind,
+              "system"
+            >,
+            workspaceMemberId: target.workspace_member_id ?? undefined,
+            actorId: target.actor_id ?? undefined,
+            remoteAgentId: target.remote_agent_id ?? undefined,
+            name: target.display_name ?? undefined,
+          },
+        ],
+      } as never,
+      queryable: client,
+    })
+
+    const recipients = await listConversationRealtimeRecipients(
+      params.conversationId,
+      client
+    )
+    await syncConversationUpsertForWorkspaceMembers(
+      client,
+      params.workspaceId,
+      [
+        ...recipients.map((r) => r.workspaceMemberId),
+        // Include the removed member so their own view drops the conversation.
+        ...(target.workspace_member_id ? [target.workspace_member_id] : []),
+      ],
+      params.conversationId
+    )
+
+    return {
+      conversationId: params.conversationId,
+      participantId: target.id,
+      state: isSelfRemoval ? "left" : "removed",
+    }
+  })
+}
+
+export async function leaveChatConversation(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+}) {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const access = await requireConversationAccess(
+    rootQueryable(),
+    params.conversationId,
+    identity.workspaceMemberId
+  )
+  return removeChatConversationParticipant({
+    workspaceId: params.workspaceId,
+    userId: params.userId,
+    conversationId: params.conversationId,
+    participantId: access.participant.id,
+  })
+}
+
+// ============ Stage 7: push tokens + typing ============
+
+export interface ChatPushTokenRow {
+  id: string
+  workspaceMemberId: string
+  platform: "ios" | "android" | "web"
+  token: string
+  deviceLabel: string | null
+  createdAt: string
+  lastSeenAt: string
+}
+
+function mapPushTokenRow(row: Record<string, unknown>): ChatPushTokenRow {
+  return {
+    id: String(row.id),
+    workspaceMemberId: String(row.workspace_member_id),
+    platform: row.platform as "ios" | "android" | "web",
+    token: String(row.token),
+    deviceLabel: (row.device_label as string | null) ?? null,
+    createdAt: toIso(row.created_at as string),
+    lastSeenAt: toIso(row.last_seen_at as string),
+  }
+}
+
+export async function registerChatPushToken(params: {
+  workspaceId: string
+  userId: string
+  platform: "ios" | "android" | "web"
+  token: string
+  deviceLabel?: string
+  metadata?: Record<string, unknown>
+}): Promise<{ token: ChatPushTokenRow }> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const result = await executeSql<Record<string, unknown>>(
+    `
+      INSERT INTO chat_push_tokens (workspace_member_id, platform, token, device_label, metadata)
+      VALUES ($1, $2, $3, $4, $5::jsonb)
+      ON CONFLICT (workspace_member_id, token)
+      DO UPDATE SET platform = EXCLUDED.platform,
+                    device_label = EXCLUDED.device_label,
+                    metadata = EXCLUDED.metadata,
+                    last_seen_at = NOW()
+      RETURNING id, workspace_member_id, platform, token, device_label,
+                created_at, last_seen_at
+    `,
+    [
+      identity.workspaceMemberId,
+      params.platform,
+      params.token,
+      params.deviceLabel ?? null,
+      JSON.stringify(params.metadata ?? {}),
+    ]
+  )
+  const row = result.rows[0]
+  if (!row) throw new Error("Failed to register push token")
+  return { token: mapPushTokenRow(row) }
+}
+
+export async function listChatPushTokens(params: {
+  workspaceId: string
+  userId: string
+}): Promise<{ tokens: ChatPushTokenRow[] }> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const result = await executeSql<Record<string, unknown>>(
+    `
+      SELECT id, workspace_member_id, platform, token, device_label,
+             created_at, last_seen_at
+      FROM chat_push_tokens
+      WHERE workspace_member_id = $1
+      ORDER BY last_seen_at DESC
+    `,
+    [identity.workspaceMemberId]
+  )
+  return { tokens: result.rows.map(mapPushTokenRow) }
+}
+
+export async function deleteChatPushToken(params: {
+  workspaceId: string
+  userId: string
+  tokenId: string
+}): Promise<{ deleted: boolean }> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const result = await executeSql<{ id: string }>(
+    `
+      DELETE FROM chat_push_tokens
+      WHERE id = $1 AND workspace_member_id = $2
+      RETURNING id
+    `,
+    [params.tokenId, identity.workspaceMemberId]
+  )
+  return { deleted: result.rows.length > 0 }
+}
+
+export async function broadcastTypingState(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  state: "started" | "stopped"
+}): Promise<{ broadcast: boolean }> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  await requireConversationAccess(
+    rootQueryable(),
+    params.conversationId,
+    identity.workspaceMemberId
+  )
+  // Fan out via the event bus. Subscribers (WS bridge) will publish to other
+  // participants. Typing is intentionally ephemeral — no DB persistence.
+  const { emitEvent } = await import("../../infrastructure/events/index.js")
+  await emitEvent({
+    type: "chat.typing",
+    workspaceId: params.workspaceId,
+    payload: {
+      conversationId: params.conversationId,
+      fromWorkspaceMemberId: identity.workspaceMemberId,
+      state: params.state,
+      occurredAt: new Date().toISOString(),
+    },
+    timestamp: new Date().toISOString(),
+  })
+  return { broadcast: true }
+}
+
+// ============ Stage 16: assistant message retry ============
+
+/**
+ * Re-trigger an actor turn after a model_error_notice item. Looks up the
+ * conversation item by id, verifies it's a retry-able error notice owned
+ * by an accessible conversation, then enqueues a session wakeup that will
+ * run another turn. UI calls this when the user taps "retry" on a failed
+ * assistant message.
+ */
+export async function retryAssistantMessage(params: {
+  workspaceId: string
+  userId: string
+  conversationId: string
+  itemId: string
+}): Promise<{
+  retryEnqueued: boolean
+  sessionId: string
+  actorId: string
+}> {
+  const identity = await getWorkspaceMemberIdentityOrThrow(
+    params.workspaceId,
+    params.userId
+  )
+  const access = await requireConversationAccess(
+    rootQueryable(),
+    params.conversationId,
+    identity.workspaceMemberId
+  )
+
+  const item = await getConversationFeedItemById(params.itemId)
+  if (!item || item.conversationId !== params.conversationId) {
+    throw createChatError(404, "item_not_found", "Conversation item not found")
+  }
+  if (item.kind !== "message" || item.messageType !== "model_error_notice") {
+    throw createChatError(
+      400,
+      "item_not_retryable",
+      "Only model error notices can be retried"
+    )
+  }
+
+  const metadata = (item.metadata ?? {}) as Record<string, unknown>
+  const retrySessionId =
+    typeof metadata.retrySessionId === "string" ? metadata.retrySessionId : null
+  if (!retrySessionId) {
+    throw createChatError(
+      400,
+      "retry_metadata_missing",
+      "model_error_notice is missing retrySessionId in metadata"
+    )
+  }
+
+  const actorId =
+    typeof item.author?.actorId === "string" ? item.author.actorId : null
+  if (!actorId) {
+    throw createChatError(
+      400,
+      "retry_actor_missing",
+      "model_error_notice has no actor author"
+    )
+  }
+
+  // S19: the wakeup "source" is the caller (the user clicking retry),
+  // NOT the original assistant author. The downstream model-error notice
+  // path in session-thinking.ts:922 expects sourceParticipantType="workspace_member"
+  // to come with sourceParticipantId = workspace_members.id (NOT a
+  // conversation_participants.id) so it can re-query the participant
+  // via getConversationParticipant({workspaceMemberId}).
+  const { enqueueSessionWakeup } = await import("../session/runtime.js")
+  await enqueueSessionWakeup({
+    sessionId: retrySessionId,
+    actorId,
+    workspaceId: params.workspaceId,
+    sourceType: "user_message",
+    sourceItemId: params.itemId,
+    sourceParticipantType: CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER,
+    sourceParticipantId: identity.workspaceMemberId,
+    sourceName: access.participant.user_name ?? "user",
+    summary: "user requested retry of failed assistant turn",
+    metadata: {
+      source: "chat.message_retry",
+      retryItemId: params.itemId,
+      conversationId: params.conversationId,
+      retryByParticipantId: access.participant.id,
+    },
+    trigger: "user_message",
+  })
+
+  return {
+    retryEnqueued: true,
+    sessionId: retrySessionId,
+    actorId,
+  }
 }

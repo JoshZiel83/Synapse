@@ -33,7 +33,7 @@ CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 
 CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace', 'conversation', 'actor', 'workspace_member');
 CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
 CREATE TYPE actors_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
-CREATE TYPE relationship_target_type AS ENUM ('member', 'actor', 'remote_agent');
+CREATE TYPE relationship_target_type AS ENUM ('workspace_member', 'actor', 'remote_agent');
 CREATE TYPE actor_access_policy AS ENUM ('workspace_open', 'approval_required');
 CREATE TYPE remote_agents_runtime_kind AS ENUM ('claude_code', 'codex');
 CREATE TYPE remote_agent_machines_trust_status AS ENUM ('pending', 'active', 'revoked', 'blocked');
@@ -57,7 +57,7 @@ CREATE TYPE model_group_grants_status AS ENUM ('active', 'revoked');
 CREATE TYPE sessions_channel_type AS ENUM ('web', 'api', 'bridge');
 CREATE TYPE sessions_status AS ENUM ('idle', 'queued', 'running', 'blocked', 'closed');
 CREATE TYPE sessions_collaboration_mode AS ENUM ('default', 'plan_drafting', 'plan_awaiting_approval');
-CREATE TYPE conversation_participants_kind AS ENUM ('workspace_member', 'actor', 'remote_agent', 'external', 'system');
+CREATE TYPE conversation_participants_type AS ENUM ('workspace_member', 'actor', 'remote_agent', 'external', 'system');
 CREATE TYPE conversation_participants_state AS ENUM ('active', 'left', 'removed');
 CREATE TYPE chat_client_instances_status AS ENUM ('active', 'revoked');
 CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
@@ -1028,7 +1028,7 @@ CREATE TABLE workspace_relationship_profiles (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
-    (subject_type = 'member' AND subject_workspace_member_id IS NOT NULL AND subject_actor_id IS NULL AND subject_remote_agent_id IS NULL) OR
+    (subject_type = 'workspace_member' AND subject_workspace_member_id IS NOT NULL AND subject_actor_id IS NULL AND subject_remote_agent_id IS NULL) OR
     (subject_type = 'actor' AND subject_actor_id IS NOT NULL AND subject_workspace_member_id IS NULL AND subject_remote_agent_id IS NULL) OR
     (subject_type = 'remote_agent' AND subject_remote_agent_id IS NOT NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL)
   )
@@ -1036,7 +1036,7 @@ CREATE TABLE workspace_relationship_profiles (
 
 CREATE UNIQUE INDEX uq_workspace_relationship_profiles_member
   ON workspace_relationship_profiles(workspace_id, subject_workspace_member_id)
-  WHERE subject_type = 'member' AND subject_workspace_member_id IS NOT NULL;
+  WHERE subject_type = 'workspace_member' AND subject_workspace_member_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_workspace_relationship_profiles_actor
   ON workspace_relationship_profiles(workspace_id, subject_actor_id)
   WHERE subject_type = 'actor' AND subject_actor_id IS NOT NULL;
@@ -1061,7 +1061,7 @@ CREATE TABLE workspace_friend_requests (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
-    (target_subject_type = 'member' AND target_workspace_member_id IS NOT NULL AND target_actor_id IS NULL AND target_remote_agent_id IS NULL) OR
+    (target_subject_type = 'workspace_member' AND target_workspace_member_id IS NOT NULL AND target_actor_id IS NULL AND target_remote_agent_id IS NULL) OR
     (target_subject_type = 'actor' AND target_actor_id IS NOT NULL AND target_workspace_member_id IS NULL AND target_remote_agent_id IS NULL) OR
     (target_subject_type = 'remote_agent' AND target_remote_agent_id IS NOT NULL AND target_workspace_member_id IS NULL AND target_actor_id IS NULL)
   )
@@ -1072,7 +1072,7 @@ CREATE UNIQUE INDEX uq_workspace_friend_requests_pending_member
     requester_workspace_member_id,
     target_workspace_member_id
   )
-  WHERE status = 'pending' AND target_subject_type = 'member' AND target_workspace_member_id IS NOT NULL;
+  WHERE status = 'pending' AND target_subject_type = 'workspace_member' AND target_workspace_member_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_workspace_friend_requests_pending_actor
   ON workspace_friend_requests(
     requester_workspace_member_id,
@@ -1109,7 +1109,7 @@ CREATE TABLE workspace_friend_entries (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
-    (peer_type = 'member' AND peer_workspace_member_id IS NOT NULL AND peer_actor_id IS NULL AND peer_remote_agent_id IS NULL) OR
+    (peer_type = 'workspace_member' AND peer_workspace_member_id IS NOT NULL AND peer_actor_id IS NULL AND peer_remote_agent_id IS NULL) OR
     (peer_type = 'actor' AND peer_actor_id IS NOT NULL AND peer_workspace_member_id IS NULL AND peer_remote_agent_id IS NULL) OR
     (peer_type = 'remote_agent' AND peer_remote_agent_id IS NOT NULL AND peer_workspace_member_id IS NULL AND peer_actor_id IS NULL)
   )
@@ -1117,7 +1117,7 @@ CREATE TABLE workspace_friend_entries (
 
 CREATE UNIQUE INDEX uq_workspace_friend_entries_member
   ON workspace_friend_entries(workspace_id, owner_workspace_member_id, peer_workspace_member_id)
-  WHERE peer_type = 'member' AND peer_workspace_member_id IS NOT NULL;
+  WHERE peer_type = 'workspace_member' AND peer_workspace_member_id IS NOT NULL;
 CREATE UNIQUE INDEX uq_workspace_friend_entries_actor
   ON workspace_friend_entries(workspace_id, owner_workspace_member_id, peer_actor_id)
   WHERE peer_type = 'actor' AND peer_actor_id IS NOT NULL;
@@ -1180,12 +1180,12 @@ CREATE TABLE direct_conversation_bindings (
   participant_two_remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
-    (participant_one_kind = 'member' AND participant_one_workspace_member_id IS NOT NULL AND participant_one_actor_id IS NULL AND participant_one_remote_agent_id IS NULL) OR
+    (participant_one_kind = 'workspace_member' AND participant_one_workspace_member_id IS NOT NULL AND participant_one_actor_id IS NULL AND participant_one_remote_agent_id IS NULL) OR
     (participant_one_kind = 'actor' AND participant_one_workspace_member_id IS NULL AND participant_one_actor_id IS NOT NULL AND participant_one_remote_agent_id IS NULL) OR
     (participant_one_kind = 'remote_agent' AND participant_one_workspace_member_id IS NULL AND participant_one_actor_id IS NULL AND participant_one_remote_agent_id IS NOT NULL)
   ),
   CHECK (
-    (participant_two_kind = 'member' AND participant_two_workspace_member_id IS NOT NULL AND participant_two_actor_id IS NULL AND participant_two_remote_agent_id IS NULL) OR
+    (participant_two_kind = 'workspace_member' AND participant_two_workspace_member_id IS NOT NULL AND participant_two_actor_id IS NULL AND participant_two_remote_agent_id IS NULL) OR
     (participant_two_kind = 'actor' AND participant_two_workspace_member_id IS NULL AND participant_two_actor_id IS NOT NULL AND participant_two_remote_agent_id IS NULL) OR
     (participant_two_kind = 'remote_agent' AND participant_two_workspace_member_id IS NULL AND participant_two_actor_id IS NULL AND participant_two_remote_agent_id IS NOT NULL)
   )
@@ -1608,7 +1608,7 @@ CREATE INDEX idx_conversation_item_parts_item ON conversation_item_parts(item_id
 CREATE TABLE conversation_participants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  participant_kind conversation_participants_kind NOT NULL,
+  participant_type conversation_participants_type NOT NULL,
   workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
   actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
@@ -1620,10 +1620,10 @@ CREATE TABLE conversation_participants (
   joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   left_at TIMESTAMPTZ,
   CHECK (
-    (participant_kind = 'workspace_member' AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (participant_kind = 'actor' AND actor_id IS NOT NULL AND workspace_member_id IS NULL AND remote_agent_id IS NULL) OR
-    (participant_kind = 'remote_agent' AND remote_agent_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL) OR
-    (participant_kind IN ('external', 'system') AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL)
+    (participant_type = 'workspace_member' AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
+    (participant_type = 'actor' AND actor_id IS NOT NULL AND workspace_member_id IS NULL AND remote_agent_id IS NULL) OR
+    (participant_type = 'remote_agent' AND remote_agent_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL) OR
+    (participant_type IN ('external', 'system') AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL)
   )
 );
 
@@ -3601,3 +3601,19 @@ CREATE INDEX idx_relay_authorization_grants_actor
   ON relay_authorization_grants(actor_id, relay_capability_id, status, created_at DESC);
 CREATE INDEX idx_relay_authorization_grants_conversation
   ON relay_authorization_grants(conversation_id, relay_capability_id, status, created_at DESC);
+
+-- ============ Chat push notification tokens (S7) ============
+CREATE TABLE IF NOT EXISTS chat_push_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL CHECK (platform IN ('ios','android','web')),
+  token TEXT NOT NULL,
+  device_label TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (workspace_member_id, token)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_push_tokens_workspace_member
+  ON chat_push_tokens(workspace_member_id);

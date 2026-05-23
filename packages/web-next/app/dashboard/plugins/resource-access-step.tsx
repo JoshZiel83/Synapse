@@ -60,10 +60,7 @@ import {
 } from "@/components/ui/table"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
-import {
-  loadConversationCatalog,
-  type ConversationCatalogEntry,
-} from "@/lib/conversation-catalog"
+import type { ConversationCatalogEntry } from "@synapse/shared"
 
 type PluginGrantScope = CapabilityAccessTargetType
 
@@ -1139,7 +1136,7 @@ export default function ResourceAccessStep({
     setLoadingConversations(true)
     setConversationsError(null)
     try {
-      const nextConversations = await loadConversationCatalog(workspaceId)
+      const nextConversations = await api.loadConversationCatalog(workspaceId)
       setConversations(nextConversations)
       setConversationsLoaded(true)
       return nextConversations

@@ -3432,7 +3432,7 @@ async function validateAutomationDeliveryTargets(params: {
     }
   }
 
-  if (params.creatorParticipant.participant_kind === "actor") {
+  if (params.creatorParticipant.participant_type === "actor") {
     if (params.delivery.target_policy !== "specified_members") {
       throw new Error(
         "Actor-created automations must target the creator actor only"

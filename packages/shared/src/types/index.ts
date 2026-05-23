@@ -107,6 +107,7 @@ import {
   TRANSPORT_ENDPOINT_TYPES,
   TRANSPORT_KINDS,
 } from "../constants/enums.js"
+import type { ChatTypingState } from "../constants/enums.js"
 
 export * from "./relay.js"
 
@@ -477,37 +478,6 @@ export const WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, WorkItemStatus[]> = {
   failed: [],
 }
 
-// ============ Communication Protocol ============
-export type MessageType =
-  | "assign"
-  | "accept"
-  | "reject"
-  | "info_request"
-  | "info_response"
-  | "progress"
-  | "escalate"
-  | "assist_request"
-  | "assist_response"
-  | "transfer"
-  | "complete"
-  | "feedback"
-  | "rework"
-  | "user_message"
-
-export interface Message {
-  id: UUID
-  workspaceId: UUID
-  workItemId?: UUID
-  type: MessageType
-  fromActorId?: UUID
-  toActorId?: UUID
-  fromWorkspaceMemberId?: UUID
-  toWorkspaceMemberId?: UUID
-  content: string
-  metadata: Record<string, unknown>
-  createdAt: Timestamp
-}
-
 // ============ Memory ============
 export type MemorySpaceType = (typeof MEMORY_SPACE_TYPES)[number]
 export type MemoryScope = (typeof MEMORY_SCOPES)[number]
@@ -856,17 +826,13 @@ export type EventType =
   | "memory.created"
   | "actor.thinking"
   | "actor.action"
-  | "session.message.new"
-  | "session.status.changed"
-  | "session.thinking"
-  | "feed.item.created"
   | "chat.sync.event"
   | "runtime.updated"
-  | "actor.version_changed"
   | "mcp.config.changed"
   | "relay.connected"
   | "relay.disconnected"
   | "relay.servers_updated"
+  | "chat.typing"
 
 export interface SystemEvent {
   type: EventType
@@ -2281,7 +2247,7 @@ export interface NormalizedMcpToolResult {
 // ============ Tool Plugin System ============
 
 export interface ConversationParticipantEntry {
-  type: "actor" | "workspace_member" | "external"
+  participantType: "actor" | "workspace_member" | "external"
   id: string
   name: string
   title?: string
@@ -3433,28 +3399,6 @@ export interface ConversationMessageTransportDelivery {
   metadata: Record<string, unknown>
 }
 
-export interface ActorVersionDocChangeWire {
-  docId: UUID
-  key: ActorDocKey
-  title: string
-  changeType: "added" | "updated" | "removed"
-  visibility: ActorDocVisibility
-  priority: number
-  fieldChanges?: ActorDocFieldChange[]
-  summaryText?: string
-}
-
-export interface ActorVersionFieldChangeWire {
-  field: ActorVersionChangedField
-  before?: unknown
-  after?: unknown
-  summaryText?: string
-}
-
-export type ActorVersionChangeWire =
-  | ({ kind: "field" } & ActorVersionFieldChangeWire)
-  | ({ kind: "doc" } & ActorVersionDocChangeWire)
-
 export type InteractionRequestKind = (typeof INTERACTION_REQUEST_KINDS)[number]
 export type TargetedInteractionRequestKind =
   (typeof TARGETED_INTERACTION_REQUEST_KINDS)[number]
@@ -3736,7 +3680,6 @@ export type ConversationFeedEventType =
   | "memory_updated"
   | "actor_renamed"
   | "actor_avatar_changed"
-  | "actor_version_changed"
   | "automation_notice"
   | "interaction_requested"
   | "task_notice"
@@ -3795,13 +3738,6 @@ export interface ConversationFeedEventPayloadMap {
     oldAvatarUrl?: string
     newAvatarUrl?: string
     sourceTurnId?: UUID
-  }
-  actor_version_changed: {
-    actor: ConversationEntityRef
-    fromVersion: number
-    toVersion: number
-    changes: ActorVersionChangeWire[]
-    source?: ActorVersionSource
   }
   automation_notice: {
     automationId: UUID
@@ -4028,80 +3964,6 @@ export function summarizeConversationEvent(
     return "Actor avatar updated."
   }
 
-  if (eventType === "actor_version_changed") {
-    const actor =
-      eventPayload.actor && typeof eventPayload.actor === "object"
-        ? (eventPayload.actor as { name?: string })
-        : undefined
-    const actorName =
-      typeof actor?.name === "string" ? actor.name.trim() : "An actor"
-    const fromVersion =
-      typeof eventPayload.fromVersion === "number"
-        ? eventPayload.fromVersion
-        : null
-    const toVersion =
-      typeof eventPayload.toVersion === "number" ? eventPayload.toVersion : null
-    const changes = Array.isArray(eventPayload.changes)
-      ? eventPayload.changes
-          .filter(
-            (
-              change: unknown
-            ): change is {
-              kind?: string
-              summaryText?: string
-              title?: string
-              changeType?: string
-              field?: string
-            } => !!change && typeof change === "object"
-          )
-          .map((change) => {
-            const summaryText =
-              typeof change.summaryText === "string"
-                ? change.summaryText.trim()
-                : ""
-            if (summaryText) return summaryText
-            if (change.kind === "field" && typeof change.field === "string") {
-              return `${change.field} changed.`
-            }
-            if (change.kind === "doc") {
-              const title =
-                typeof change.title === "string" ? change.title.trim() : "a doc"
-              const changeType =
-                typeof change.changeType === "string"
-                  ? change.changeType.trim()
-                  : "updated"
-              return `Doc ${changeType}: ${title}.`
-            }
-            return ""
-          })
-          .filter((value: string): value is string => Boolean(value))
-      : []
-    const source =
-      eventPayload.source && typeof eventPayload.source === "object"
-        ? (eventPayload.source as { type?: string })
-        : undefined
-
-    const fragments: string[] = []
-    if (fromVersion !== null && toVersion !== null) {
-      fragments.push(
-        `${actorName} updated from v${fromVersion} to v${toVersion}.`
-      )
-    } else {
-      fragments.push(`${actorName} updated their profile.`)
-    }
-    if (changes.length > 0) {
-      fragments.push(...changes)
-    } else {
-      fragments.push("Profile details changed.")
-    }
-    if (source?.type === "workspace_member") {
-      fragments.push("Updated by a workspace member.")
-    } else if (source?.type === "actor") {
-      fragments.push("Updated by the actor.")
-    }
-    return fragments.join(" ")
-  }
-
   if (eventType === "automation_notice") {
     const messageBlocks = Array.isArray(eventPayload.messageBlocks)
       ? (eventPayload.messageBlocks as CanonicalContentBlock[])
@@ -4218,25 +4080,6 @@ export function summarizeConversationEvent(
 export type ConversationFeedItem =
   | ConversationFeedMessageItem
   | ConversationFeedEventItem
-
-export interface ConversationSummary {
-  id: UUID
-  workspaceId: UUID
-  title: string
-  avatarUrl?: string
-  createdAt: Timestamp
-  updatedAt: Timestamp
-  unreadCount: number
-  lastItem?: {
-    itemId: UUID
-    sequence: number
-    kind: ConversationFeedItem["kind"]
-    role?: "user" | "assistant" | "system"
-    previewText: string
-    authorName?: string
-    createdAt: Timestamp
-  }
-}
 
 export interface ConversationFeedPage {
   items: ConversationFeedItem[]
@@ -4712,6 +4555,7 @@ export type ChatSocketEventType =
   | "server.shutdown"
   | "chat.sync.event"
   | "runtime.updated"
+  | "chat.typing"
 
 export interface ChatSocketEventPayloadMap {
   "auth.ok": {
@@ -4733,6 +4577,12 @@ export interface ChatSocketEventPayloadMap {
     conversationId: UUID
     runtimeSeq: number
     snapshot: ActorRuntimeState
+  }
+  "chat.typing": {
+    conversationId: UUID
+    fromWorkspaceMemberId: UUID
+    state: ChatTypingState
+    occurredAt: Timestamp
   }
 }
 

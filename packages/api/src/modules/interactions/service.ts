@@ -115,7 +115,7 @@ type RawInteractionRow = {
   device_display_name: string | null
   exposure_display_name: string | null
   exposure_stable_key: string | null
-  requester_participant_kind: string | null
+  requester_participant_type: string | null
   requester_name: string | null
   requester_title: string | null
   requester_role: string | null
@@ -123,7 +123,7 @@ type RawInteractionRow = {
   requester_user_avatar_file_id: string | null
   requester_remote_agent_avatar_file_id: string | null
   requester_avatar_emoji: string | null
-  target_participant_kind: string | null
+  target_participant_type: string | null
   target_name: string | null
   target_title: string | null
   target_role: string | null
@@ -131,7 +131,7 @@ type RawInteractionRow = {
   target_user_avatar_file_id: string | null
   target_remote_agent_avatar_file_id: string | null
   target_avatar_emoji: string | null
-  resolved_by_participant_kind: string | null
+  resolved_by_participant_type: string | null
   resolved_by_name: string | null
   resolved_by_title: string | null
   resolved_by_role: string | null
@@ -827,9 +827,9 @@ function mapEntityRefFromRow(
   prefix: "requester" | "target" | "resolved_by",
   row: RawInteractionRow
 ): ConversationEntityRef | undefined {
-  const participantKind =
-    row[`${prefix}_participant_kind` as keyof RawInteractionRow]
-  if (typeof participantKind !== "string" || !participantKind.trim()) {
+  const participantType =
+    row[`${prefix}_participant_type` as keyof RawInteractionRow]
+  if (typeof participantType !== "string" || !participantType.trim()) {
     return undefined
   }
   const participantId =
@@ -867,7 +867,7 @@ function mapEntityRefFromRow(
     participantId:
       typeof participantId === "string" ? participantId : undefined,
     participantType:
-      participantKind as ConversationEntityRef["participantType"],
+      participantType as ConversationEntityRef["participantType"],
     actorId: typeof actorId === "string" ? actorId : undefined,
     remoteAgentId:
       typeof remoteAgentId === "string" ? remoteAgentId : undefined,
@@ -1104,7 +1104,7 @@ async function getInteractionRowById(
             requester.workspace_member_id AS requester_workspace_member_id,
             requester.actor_id AS requester_actor_id,
             requester.remote_agent_id AS requester_remote_agent_id,
-            requester.participant_kind AS requester_participant_kind,
+            requester.participant_type AS requester_participant_type,
             COALESCE(requester_remote_agent.name, requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
             COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
             COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS requester_role,
@@ -1115,7 +1115,7 @@ async function getInteractionRowById(
             target.workspace_member_id AS target_workspace_member_id,
             target.actor_id AS target_actor_id,
             target.remote_agent_id AS target_remote_agent_id,
-            target.participant_kind AS target_participant_kind,
+            target.participant_type AS target_participant_type,
             COALESCE(target_remote_agent.name, target_actor.name, target_user.name, target.display_name) AS target_name,
             COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
             COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS target_role,
@@ -1126,7 +1126,7 @@ async function getInteractionRowById(
             resolver.workspace_member_id AS resolved_by_workspace_member_id,
             resolver.actor_id AS resolved_by_actor_id,
             resolver.remote_agent_id AS resolved_by_remote_agent_id,
-            resolver.participant_kind AS resolved_by_participant_kind,
+            resolver.participant_type AS resolved_by_participant_type,
             COALESCE(resolver_remote_agent.name, resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
             COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
             COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS resolved_by_role,
@@ -1268,7 +1268,7 @@ async function getInteractionRowByIdForUpdate(
             requester.workspace_member_id AS requester_workspace_member_id,
             requester.actor_id AS requester_actor_id,
             requester.remote_agent_id AS requester_remote_agent_id,
-            requester.participant_kind AS requester_participant_kind,
+            requester.participant_type AS requester_participant_type,
             COALESCE(requester_remote_agent.name, requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
             COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
             COALESCE(CASE WHEN requester_remote_agent.id IS NOT NULL THEN 'remote_agent' END, requester_actor.role::text) AS requester_role,
@@ -1279,7 +1279,7 @@ async function getInteractionRowByIdForUpdate(
             target.workspace_member_id AS target_workspace_member_id,
             target.actor_id AS target_actor_id,
             target.remote_agent_id AS target_remote_agent_id,
-            target.participant_kind AS target_participant_kind,
+            target.participant_type AS target_participant_type,
             COALESCE(target_remote_agent.name, target_actor.name, target_user.name, target.display_name) AS target_name,
             COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
             COALESCE(CASE WHEN target_remote_agent.id IS NOT NULL THEN 'remote_agent' END, target_actor.role::text) AS target_role,
@@ -1290,7 +1290,7 @@ async function getInteractionRowByIdForUpdate(
             resolver.workspace_member_id AS resolved_by_workspace_member_id,
             resolver.actor_id AS resolved_by_actor_id,
             resolver.remote_agent_id AS resolved_by_remote_agent_id,
-            resolver.participant_kind AS resolved_by_participant_kind,
+            resolver.participant_type AS resolved_by_participant_type,
             COALESCE(resolver_remote_agent.name, resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
             COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
             COALESCE(CASE WHEN resolver_remote_agent.id IS NOT NULL THEN 'remote_agent' END, resolver_actor.role::text) AS resolved_by_role,

@@ -7,9 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION = "2026-05-22-01"
+const CURRENT_SCHEMA_VERSION = "2026-05-23-3way-merge"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "per-conversation remote agent runtime sessions + fenced machine connections + delivery retry semantics"
+  "remote-agent per-conversation runtime sessions + fenced machine connections + delivery retry; IM transport-layer rewrite (connector abstraction, wecom enum, reaction tracking columns); chat refactor (participant_kind -> participant_type, relationship_target_type 'member' -> 'workspace_member', chat_push_tokens)"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

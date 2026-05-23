@@ -163,7 +163,7 @@ async function archiveConversationParticipantIfOrphaned(
   const row = await db
     .selectFrom("conversation_participants as cm")
     .select([
-      "cm.participant_kind",
+      "cm.participant_type",
       "cm.state",
       sql<boolean>`EXISTS (
         SELECT 1
@@ -176,7 +176,7 @@ async function archiveConversationParticipantIfOrphaned(
     .executeTakeFirst()
   if (!row) return
   if (
-    row.participant_kind !== "external" ||
+    row.participant_type !== "external" ||
     row.state !== "active" ||
     row.has_addresses
   ) {
@@ -211,7 +211,7 @@ export async function syncTransportAddressConversationParticipant(params: {
         await activateConversationParticipant({
           workspaceId: address.workspace_id,
           conversationId: params.conversationId,
-          participantKind: "workspace_member",
+          participantType: "workspace_member",
           workspaceMemberId: params.workspaceMemberId,
           recordJoinEvent: params.recordJoinEvent,
         })
@@ -220,7 +220,7 @@ export async function syncTransportAddressConversationParticipant(params: {
         await activateConversationParticipant({
           workspaceId: address.workspace_id,
           conversationId: params.conversationId,
-          participantKind: "external",
+          participantType: "external",
           displayName:
             params.displayName ||
             address.display_name ||
@@ -246,7 +246,7 @@ export async function syncTransportAddressConversationParticipant(params: {
       "cm.id",
       "cpa.conversation_participant_id"
     )
-    .select(["cm.id", "cm.participant_kind"])
+    .select(["cm.id", "cm.participant_type"])
     .where("cpa.transport_address_id", "=", address.id)
     .where("cm.conversation_id", "=", params.conversationId)
     .where("cm.id", "<>", desiredMember.id)
@@ -316,7 +316,7 @@ async function loadConversationExternalParticipantPrimaryAddress(params: {
     ])
     .where("cm.conversation_id", "=", params.conversationId)
     .where("cm.id", "=", params.conversationParticipantId)
-    .where("cm.participant_kind", "=", "external")
+    .where("cm.participant_type", "=", "external")
     .where("ta.workspace_id", "=", params.workspaceId)
     .orderBy("cpa.is_primary", "desc")
     .orderBy("cpa.created_at", "asc")

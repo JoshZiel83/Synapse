@@ -2,47 +2,32 @@
 
 import { openDB, type DBSchema, type IDBPDatabase } from "idb"
 
-import { isUuid } from "@/lib/uuid"
-import type {
-  ConversationReplyRef,
-  CanonicalContentBlock,
+import {
+  CHAT_QUEUE_DB_NAME,
+  CHAT_QUEUE_DB_VERSION,
+  CHAT_QUEUE_STATE_STORE,
+  createEmptyStoredChatQueueState,
+  mergeStoredQueueTransition,
+  normalizeStoredChatQueueState,
+  sameStoredChatQueueState,
+  type PendingConversationRead,
+  type PendingOutboxMessage,
+  type StoredChatQueueState,
 } from "@synapse/shared"
 
-export const CHAT_QUEUE_DB_NAME = "synapse-web-chat-queue"
-export const CHAT_QUEUE_DB_VERSION = 1
-export const CHAT_QUEUE_STATE_STORE = "workspace_queue_states"
-
-export interface PendingConversationRead {
-  conversationId: string
-  readUpToSequence: number
-  lastVisibleSequence: number
-  updatedAt: string
+export {
+  CHAT_QUEUE_DB_NAME,
+  CHAT_QUEUE_DB_VERSION,
+  CHAT_QUEUE_STATE_STORE,
+  createEmptyStoredChatQueueState,
+  mergeStoredQueueTransition,
+  normalizeStoredChatQueueState,
+  sameStoredChatQueueState,
 }
-
-export interface PendingOutboxMessage {
-  clientMessageId: string
-  conversationId: string
-  contentBlocks: CanonicalContentBlock[]
-  replyToItemId?: string
-  replyTo?: ConversationReplyRef
-  createdAt: string
-  optimisticSequence: number
-  status: "sending" | "retrying"
-  attemptCount: number
-  lastAttemptAt?: string
-  firstFailedAt?: string
-  lastErrorMessage?: string
-}
-
-export interface StoredChatQueueState {
-  version: 3
-  workspaceId: string
-  workspaceMemberId?: string
-  clientInstanceId?: string
-  inboxCursor: number
-  lastBootstrappedAt?: string
-  pendingReads: Record<string, PendingConversationRead>
-  outbox: Record<string, PendingOutboxMessage>
+export type {
+  PendingConversationRead,
+  PendingOutboxMessage,
+  StoredChatQueueState,
 }
 
 interface ChatQueueStateRow {
@@ -78,86 +63,6 @@ function getQueueDatabase() {
   }
 
   return queueDbPromise
-}
-
-export function createEmptyStoredChatQueueState(
-  workspaceId: string
-): StoredChatQueueState {
-  return {
-    version: 3,
-    workspaceId,
-    inboxCursor: 0,
-    pendingReads: {},
-    outbox: {},
-  }
-}
-
-export function normalizeStoredChatQueueState(
-  workspaceId: string,
-  value: unknown
-): StoredChatQueueState {
-  if (!value || typeof value !== "object") {
-    return createEmptyStoredChatQueueState(workspaceId)
-  }
-
-  const snapshot = value as Partial<StoredChatQueueState>
-  if (snapshot.version !== 3 || snapshot.workspaceId !== workspaceId) {
-    return createEmptyStoredChatQueueState(workspaceId)
-  }
-
-  const pendingReads =
-    snapshot.pendingReads && typeof snapshot.pendingReads === "object"
-      ? Object.fromEntries(
-          Object.entries(snapshot.pendingReads).filter(
-            ([conversationId, entry]) =>
-              Boolean(
-                conversationId &&
-                entry &&
-                typeof entry === "object" &&
-                typeof entry.conversationId === "string"
-              )
-          )
-        )
-      : {}
-
-  const outbox =
-    snapshot.outbox && typeof snapshot.outbox === "object"
-      ? Object.fromEntries(
-          Object.entries(snapshot.outbox).filter(([, entry]) =>
-            Boolean(
-              entry &&
-              typeof entry === "object" &&
-              typeof entry.clientMessageId === "string" &&
-              typeof entry.conversationId === "string"
-            )
-          )
-        )
-      : {}
-
-  return {
-    version: 3,
-    workspaceId,
-    workspaceMemberId:
-      typeof snapshot.workspaceMemberId === "string"
-        ? snapshot.workspaceMemberId
-        : undefined,
-    clientInstanceId:
-      typeof snapshot.clientInstanceId === "string" &&
-      isUuid(snapshot.clientInstanceId)
-        ? snapshot.clientInstanceId
-        : undefined,
-    inboxCursor:
-      typeof snapshot.inboxCursor === "number" &&
-      Number.isFinite(snapshot.inboxCursor)
-        ? snapshot.inboxCursor
-        : 0,
-    lastBootstrappedAt:
-      typeof snapshot.lastBootstrappedAt === "string"
-        ? snapshot.lastBootstrappedAt
-        : undefined,
-    pendingReads,
-    outbox,
-  }
 }
 
 export async function loadStoredChatQueueState(workspaceId: string) {
@@ -206,11 +111,4 @@ export async function updateStoredChatQueueState(
 export async function deleteStoredChatQueueState(workspaceId: string) {
   const database = await getQueueDatabase()
   await database.delete(CHAT_QUEUE_STATE_STORE, workspaceId)
-}
-
-export function sameStoredChatQueueState(
-  left: StoredChatQueueState,
-  right: StoredChatQueueState
-) {
-  return JSON.stringify(left) === JSON.stringify(right)
 }

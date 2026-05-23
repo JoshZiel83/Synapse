@@ -72,7 +72,6 @@ export {
 } from "./service/addresses.js"
 
 export {
-  deleteConversationTransportBinding,
   findConversationTransportBindingByEndpoint,
   getConversationTransportBinding,
   updateConversationTransportSettings,

@@ -27,9 +27,6 @@ packages/*/scripts/*.local.js
 # Build caches
 *.tsbuildinfo
 
-# Playwright MCP
-.playwright-mcp/
-
 # Relay agent
 relay/synapse-relay
 relay/synapse-relay-*

@@ -472,21 +472,6 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       throw new Error("Failed to install official actors for workspace.")
     }
 
-    await executeCompiledQuery(
-      runner,
-      db
-        .updateTable("catalog_items")
-        .set({
-          download_count: sql`download_count + 1`,
-          updated_at: sql`NOW()`,
-        })
-        .where(
-          "id",
-          "in",
-          officialActorTemplates.map((template) => template.packageId)
-        )
-    )
-
     const chiefActor =
       installedActors.find(({ template }) => template.isChiefActor) ||
       installedActors[0]!
@@ -504,8 +489,42 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
         chiefActor.actorRow,
         chiefActor.template.actorDocs
       ),
+      installedTemplatePackageIds: officialActorTemplates.map(
+        (template) => template.packageId
+      ),
     }
   })
+
+  // Bump catalog_items.download_count outside the workspace-creation
+  // transaction. This used to live inline before the return and
+  // deadlocked under concurrent workspace creates: two transactions
+  // both ran `UPDATE catalog_items WHERE id IN (a, b, ...)` and
+  // Postgres acquired the row locks in whatever order the planner
+  // chose, so two simultaneous calls could lock {a then b} vs {b then
+  // a} and one would always be killed by the deadlock detector.
+  //
+  // The count is best-effort observability — it must not roll back a
+  // workspace create. Running it post-commit, one row at a time in
+  // id-sorted order, removes the cycle (each tx grabs locks in the
+  // same order) and a transient failure now just leaves the counter a
+  // step behind instead of failing the user-visible request.
+  const sortedTemplateIds = [...result.installedTemplatePackageIds].sort()
+  for (const templateId of sortedTemplateIds) {
+    try {
+      await query(
+        `UPDATE catalog_items
+            SET download_count = download_count + 1,
+                updated_at = NOW()
+          WHERE id = $1`,
+        [templateId]
+      )
+    } catch (err) {
+      console.warn(
+        `[workspace.createWorkspace] best-effort download_count bump failed for catalog_item ${templateId}:`,
+        err
+      )
+    }
+  }
 
   return {
     ...result.workspace,

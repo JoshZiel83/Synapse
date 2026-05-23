@@ -37,6 +37,7 @@ import { useSession } from "@/providers/session-provider"
 import { useWorkspace } from "@/providers/workspace-provider"
 import {
   type ActorRuntimeState,
+  type ChatConversationCreateInput,
   type ChatConversationCreateResponse,
   type ChatConversationMessagesPage,
   type ChatConversationView,
@@ -58,6 +59,11 @@ interface ChatContextValue {
   getConversationRuntimes: (
     conversationId: string
   ) => Record<string, ActorRuntimeState>
+  getTypingMembers: (conversationId: string) => string[]
+  sendTypingState: (
+    conversationId: string,
+    state: "started" | "stopped"
+  ) => Promise<void>
   refreshInbox: () => Promise<void>
   refreshConversation: (
     conversationId: string
@@ -72,18 +78,17 @@ interface ChatContextValue {
     conversationId: string,
     input: ChatComposerSendPayload
   ) => Promise<void>
+  retryMessage: (clientMessageId: string) => Promise<void>
   respondInteraction: (
     conversationId: string,
     interactionId: string,
     input: ChatInteractionResolveInput
   ) => Promise<InteractionRequestSummary>
-  createConversation: (input: {
-    kind: "group" | "private" | "virtual"
-    title?: string
-    actorIds?: string[]
-    workspaceMemberIds?: string[]
-    boundary?: "internal" | "external"
-  }) => Promise<ChatConversationCreateResponse>
+  createConversation: (
+    input: Omit<ChatConversationCreateInput, "clientRequestId"> & {
+      workspaceId?: string
+    }
+  ) => Promise<ChatConversationCreateResponse>
   clearLocalState: () => Promise<void>
 }
 
@@ -334,6 +339,24 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     [runtimeState.runtimeByConversationId]
   )
 
+  const getTypingMembers = useCallback(
+    (conversationId: string): string[] => {
+      const map = runtimeState.typingByConversation[conversationId]
+      if (!map) return []
+      const now = Date.now()
+      return Object.entries(map)
+        .filter(([, expireAt]) => expireAt > now)
+        .map(([memberId]) => memberId)
+    },
+    [runtimeState.typingByConversation]
+  )
+
+  const sendTypingState = useCallback(
+    (conversationId: string, state: "started" | "stopped") =>
+      chatRuntime.sendTypingState(conversationId, state),
+    []
+  )
+
   const refreshInbox = useCallback(() => chatRuntime.refreshInbox(), [])
 
   const refreshConversation = useCallback(
@@ -366,6 +389,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
     []
   )
 
+  const retryMessage = useCallback(
+    (clientMessageId: string) => chatRuntime.retryMessage(clientMessageId),
+    []
+  )
+
   const respondInteraction = useCallback(
     async (
       conversationId: string,
@@ -389,13 +417,11 @@ export function ChatProvider({ children }: { children: ReactNode }) {
   )
 
   const createConversation = useCallback(
-    (input: {
-      kind: "group" | "private" | "virtual"
-      title?: string
-      actorIds?: string[]
-      workspaceMemberIds?: string[]
-      boundary?: "internal" | "external"
-    }) => chatRuntime.createConversation(input),
+    (
+      input: Omit<ChatConversationCreateInput, "clientRequestId"> & {
+        workspaceId?: string
+      }
+    ) => chatRuntime.createConversation(input),
     []
   )
 
@@ -414,11 +440,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       getConversationItems,
       getConversationMeta,
       getConversationRuntimes,
+      getTypingMembers,
+      sendTypingState,
       refreshInbox,
       refreshConversation,
       loadOlderMessages,
       markConversationRead,
       sendMessage,
+      retryMessage,
       respondInteraction,
       createConversation,
       clearLocalState,
@@ -431,11 +460,14 @@ export function ChatProvider({ children }: { children: ReactNode }) {
       getConversationItems,
       getConversationMeta,
       getConversationRuntimes,
+      getTypingMembers,
+      sendTypingState,
       loadOlderMessages,
       markConversationRead,
       refreshConversation,
       refreshInbox,
       respondInteraction,
+      retryMessage,
       runtimeState.error,
       runtimeState.snapshot?.clientInstanceId,
       runtimeState.snapshot?.workspaceMemberId,

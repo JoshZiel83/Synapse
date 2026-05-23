@@ -24,6 +24,7 @@ import type {
   ChatClientInstanceCreateInput,
   ChatClientInstanceRegistrationResponse,
   ChatClientInstanceTouchInput,
+  ChatConversationCreateInput,
   ChatConversationCreateResponse,
   ChatConversationMessagesPage,
   ChatConversationMessagesQuery,
@@ -76,6 +77,10 @@ import type {
   RelayPairingSessionView,
   SkillMarketplaceEntry,
   WorkspaceCapabilityConversationTypePoliciesView,
+} from "@synapse/shared"
+import {
+  normalizeConversationCatalogEntry,
+  type ConversationCatalogEntry,
 } from "@synapse/shared"
 import {
   isChatInteractionResolveConflictResponse,
@@ -1162,7 +1167,7 @@ class ApiClient {
       contactId: string
     }
   ): Promise<DirectConversationOpenResponse> {
-    return this.fetch(`/workspaces/${wsId}/direct-conversations/open`, {
+    return this.fetch(`/workspaces/${wsId}/chat/direct-conversations/open`, {
       method: "POST",
       body: JSON.stringify(input),
     })
@@ -1293,46 +1298,28 @@ class ApiClient {
   }
 
   // Actor lanes
-  // NOTE: createSession + sendSessionMessage were removed in the
-  // canonical-content-blocks refactor. They sent {content: string} but the
-  // session controller requires {contentBlocks: CanonicalContentBlock[]},
-  // so they would have failed Zod validation at runtime. There were no
-  // callers anywhere in web-next. If you need to programmatically create
-  // sessions from the FE, build a proper helper that constructs
-  // CanonicalContentBlock[] via composer/textBlocks and posts it.
-  getSession(wsId: string, sessionId: string) {
-    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}`)
-  }
-  getSessionMessages(wsId: string, sessionId: string) {
-    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/messages`)
-  }
-  getActorSessions(wsId: string, actorId: string, status?: string) {
-    const params = status ? `?status=${status}` : ""
-    return this.fetch(`/workspaces/${wsId}/actors/${actorId}/sessions${params}`)
-  }
-  getSessionTree(wsId: string, sessionId: string) {
-    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}/tree`)
-  }
   retryConversationMessage(
     workspaceId: string,
     threadId: string,
     itemId: string
   ) {
     return this.fetch(
-      `/workspaces/${workspaceId}/conversations/${threadId}/messages/${itemId}/retry`,
+      `/workspaces/${workspaceId}/chat/conversations/${threadId}/messages/${itemId}/retry`,
       {
         method: "POST",
       }
     )
   }
-  cancelSession(wsId: string, sessionId: string) {
-    return this.fetch(`/workspaces/${wsId}/sessions/${sessionId}`, {
-      method: "DELETE",
-    })
-  }
 
   getChatBootstrap(workspaceId: string): Promise<ChatBootstrapResponse> {
     return this.fetch(`/workspaces/${workspaceId}/chat/bootstrap`)
+  }
+
+  async loadConversationCatalog(
+    workspaceId: string
+  ): Promise<ConversationCatalogEntry[]> {
+    const bootstrap = await this.getChatBootstrap(workspaceId)
+    return bootstrap.conversations.map(normalizeConversationCatalogEntry)
   }
 
   getChatSync(
@@ -1387,15 +1374,7 @@ class ApiClient {
 
   createChatConversation(
     workspaceId: string,
-    input: {
-      clientRequestId: string
-      kind: "group" | "private" | "virtual"
-      boundary?: "internal" | "external"
-      title?: string
-      workspaceMemberIds?: string[]
-      actorIds?: string[]
-      metadata?: Record<string, unknown>
-    }
+    input: ChatConversationCreateInput
   ): Promise<ChatConversationCreateResponse> {
     return this.fetch(`/workspaces/${workspaceId}/chat/conversations`, {
       method: "POST",
@@ -1406,6 +1385,8 @@ class ApiClient {
         title: input.title,
         workspaceMemberIds: input.workspaceMemberIds ?? [],
         actorIds: input.actorIds ?? [],
+        remoteAgentIds: input.remoteAgentIds ?? [],
+        externalParticipants: input.externalParticipants ?? [],
         metadata: input.metadata,
       }),
     })
@@ -1483,6 +1464,43 @@ class ApiClient {
     )
   }
 
+  sendChatTypingState(
+    workspaceId: string,
+    conversationId: string,
+    state: "started" | "stopped"
+  ) {
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/conversations/${conversationId}/typing`,
+      { method: "POST", body: JSON.stringify({ state }) }
+    )
+  }
+
+  registerChatPushToken(
+    workspaceId: string,
+    input: {
+      platform: "ios" | "android" | "web"
+      token: string
+      deviceLabel?: string
+      metadata?: Record<string, unknown>
+    }
+  ) {
+    return this.fetch(`/workspaces/${workspaceId}/chat/push-tokens`, {
+      method: "POST",
+      body: JSON.stringify(input),
+    })
+  }
+
+  listChatPushTokens(workspaceId: string) {
+    return this.fetch(`/workspaces/${workspaceId}/chat/push-tokens`)
+  }
+
+  deleteChatPushToken(workspaceId: string, tokenId: string) {
+    return this.fetch(
+      `/workspaces/${workspaceId}/chat/push-tokens/${tokenId}`,
+      { method: "DELETE" }
+    )
+  }
+
   resolveChatInteraction(
     workspaceId: string,
     threadId: string,
@@ -1490,7 +1508,7 @@ class ApiClient {
     data: ChatInteractionResolveInput
   ): Promise<ChatInteractionResolveResponse> {
     return this.fetch(
-      `/workspaces/${workspaceId}/conversations/${threadId}/interactions/${interactionId}/respond`,
+      `/workspaces/${workspaceId}/chat/conversations/${threadId}/interactions/${interactionId}/respond`,
       {
         method: "POST",
         body: JSON.stringify(data),

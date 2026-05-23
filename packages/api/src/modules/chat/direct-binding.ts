@@ -1,27 +1,38 @@
+import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
+
+const PT = CONVERSATION_PARTICIPANT_TYPE
+
+export const DIRECT_PARTICIPANT_KINDS = [
+  PT.WORKSPACE_MEMBER,
+  PT.ACTOR,
+  PT.REMOTE_AGENT,
+] as const
+export type DirectParticipantKind = (typeof DIRECT_PARTICIPANT_KINDS)[number]
+
 export type DirectConversationIdentity =
   | {
-      kind: "member"
+      kind: typeof PT.WORKSPACE_MEMBER
       workspaceMemberId: string
     }
   | {
-      kind: "actor"
+      kind: typeof PT.ACTOR
       actorId: string
     }
   | {
-      kind: "remote_agent"
+      kind: typeof PT.REMOTE_AGENT
       remoteAgentId: string
     }
 
 export function directConversationIdentityKey(
   identity: DirectConversationIdentity
 ) {
-  if (identity.kind === "member") {
-    return `workspace_member:${identity.workspaceMemberId}`
+  if (identity.kind === PT.WORKSPACE_MEMBER) {
+    return `${PT.WORKSPACE_MEMBER}:${identity.workspaceMemberId}`
   }
-  if (identity.kind === "remote_agent") {
-    return `remote_agent:${identity.remoteAgentId}`
+  if (identity.kind === PT.REMOTE_AGENT) {
+    return `${PT.REMOTE_AGENT}:${identity.remoteAgentId}`
   }
-  return `actor:${identity.actorId}`
+  return `${PT.ACTOR}:${identity.actorId}`
 }
 
 export function canonicalizeDirectConversationPair(
@@ -39,45 +50,45 @@ export function directConversationBindingValues(
   pair: ReturnType<typeof canonicalizeDirectConversationPair>
 ) {
   const participantOne =
-    pair.participantOne.kind === "member"
+    pair.participantOne.kind === PT.WORKSPACE_MEMBER
       ? {
-          participant_one_kind: "member" as const,
+          participant_one_kind: PT.WORKSPACE_MEMBER,
           participant_one_workspace_member_id:
             pair.participantOne.workspaceMemberId,
           participant_one_actor_id: null,
           participant_one_remote_agent_id: null,
         }
-      : pair.participantOne.kind === "actor"
+      : pair.participantOne.kind === PT.ACTOR
         ? {
-            participant_one_kind: "actor" as const,
+            participant_one_kind: PT.ACTOR,
             participant_one_workspace_member_id: null,
             participant_one_actor_id: pair.participantOne.actorId,
             participant_one_remote_agent_id: null,
           }
         : {
-            participant_one_kind: "remote_agent" as const,
+            participant_one_kind: PT.REMOTE_AGENT,
             participant_one_workspace_member_id: null,
             participant_one_actor_id: null,
             participant_one_remote_agent_id: pair.participantOne.remoteAgentId,
           }
   const participantTwo =
-    pair.participantTwo.kind === "member"
+    pair.participantTwo.kind === PT.WORKSPACE_MEMBER
       ? {
-          participant_two_kind: "member" as const,
+          participant_two_kind: PT.WORKSPACE_MEMBER,
           participant_two_workspace_member_id:
             pair.participantTwo.workspaceMemberId,
           participant_two_actor_id: null,
           participant_two_remote_agent_id: null,
         }
-      : pair.participantTwo.kind === "actor"
+      : pair.participantTwo.kind === PT.ACTOR
         ? {
-            participant_two_kind: "actor" as const,
+            participant_two_kind: PT.ACTOR,
             participant_two_workspace_member_id: null,
             participant_two_actor_id: pair.participantTwo.actorId,
             participant_two_remote_agent_id: null,
           }
         : {
-            participant_two_kind: "remote_agent" as const,
+            participant_two_kind: PT.REMOTE_AGENT,
             participant_two_workspace_member_id: null,
             participant_two_actor_id: null,
             participant_two_remote_agent_id: pair.participantTwo.remoteAgentId,
@@ -91,11 +102,11 @@ export function directConversationBindingValues(
 
 export function directConversationBindingPeer(
   row: {
-    participant_one_kind: "member" | "actor" | "remote_agent"
+    participant_one_kind: DirectParticipantKind
     participant_one_workspace_member_id: string | null
     participant_one_actor_id: string | null
     participant_one_remote_agent_id: string | null
-    participant_two_kind: "member" | "actor" | "remote_agent"
+    participant_two_kind: DirectParticipantKind
     participant_two_workspace_member_id: string | null
     participant_two_actor_id: string | null
     participant_two_remote_agent_id: string | null
@@ -103,38 +114,38 @@ export function directConversationBindingPeer(
   viewer: DirectConversationIdentity
 ): DirectConversationIdentity | null {
   const left =
-    row.participant_one_kind === "member" &&
+    row.participant_one_kind === PT.WORKSPACE_MEMBER &&
     row.participant_one_workspace_member_id
       ? {
-          kind: "member" as const,
+          kind: PT.WORKSPACE_MEMBER,
           workspaceMemberId: row.participant_one_workspace_member_id,
         }
       : row.participant_one_actor_id
         ? {
-            kind: "actor" as const,
+            kind: PT.ACTOR,
             actorId: row.participant_one_actor_id,
           }
         : row.participant_one_remote_agent_id
           ? {
-              kind: "remote_agent" as const,
+              kind: PT.REMOTE_AGENT,
               remoteAgentId: row.participant_one_remote_agent_id,
             }
           : null
   const right =
-    row.participant_two_kind === "member" &&
+    row.participant_two_kind === PT.WORKSPACE_MEMBER &&
     row.participant_two_workspace_member_id
       ? {
-          kind: "member" as const,
+          kind: PT.WORKSPACE_MEMBER,
           workspaceMemberId: row.participant_two_workspace_member_id,
         }
       : row.participant_two_actor_id
         ? {
-            kind: "actor" as const,
+            kind: PT.ACTOR,
             actorId: row.participant_two_actor_id,
           }
         : row.participant_two_remote_agent_id
           ? {
-              kind: "remote_agent" as const,
+              kind: PT.REMOTE_AGENT,
               remoteAgentId: row.participant_two_remote_agent_id,
             }
           : null

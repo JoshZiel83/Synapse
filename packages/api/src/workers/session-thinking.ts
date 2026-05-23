@@ -141,18 +141,7 @@ async function putSessionToIdle(sessionId: string) {
     phase: "idle",
   })
 
-  await emitEvent({
-    type: "session.status.changed",
-    workspaceId: session.workspace_id,
-    payload: {
-      conversationId: session.conversation_id,
-      sessionId,
-      actorId: session.actor_id,
-      status: "idle",
-      previousStatus: "running",
-    },
-    timestamp: nowISO(),
-  })
+  // session.status.changed event emit removed (S13): no subscribers.
 }
 
 function isTurnInterruptedError(error: unknown) {
@@ -247,18 +236,8 @@ export function startSessionThinkingWorker() {
           await updateSessionStatus(sessionId, "running", {
             errorMessage: null,
           })
-          await emitEvent({
-            type: "session.status.changed",
-            workspaceId,
-            payload: {
-              conversationId,
-              sessionId,
-              actorId,
-              status: "running",
-              previousStatus,
-            },
-            timestamp: nowISO(),
-          })
+          // session.status.changed event emit removed (S13).
+          void previousStatus
           session = await getSession(sessionId)
           if (!session) {
             return {
@@ -299,12 +278,8 @@ export function startSessionThinkingWorker() {
             statusText: status,
             activeTurnId: turn?.id,
           })
-          await emitEvent({
-            type: "session.thinking",
-            workspaceId,
-            payload: thinkingPayload,
-            timestamp: nowISO(),
-          })
+          // session.thinking event emit removed (S13).
+          void thinkingPayload
         }
 
         thinkingActorName = session.actor_name || "Unknown"
@@ -353,7 +328,7 @@ export function startSessionThinkingWorker() {
           )
           if (selfParticipant) {
             participantEntries.push({
-              type: "actor",
+              participantType: "actor",
               id: actorId,
               participantId: selfParticipant.id,
               name:
@@ -375,7 +350,7 @@ export function startSessionThinkingWorker() {
               member.state === "active"
             ) {
               participantEntries.push({
-                type: "actor",
+                participantType: "actor",
                 id: member.actor_id,
                 participantId: member.id,
                 name: member.actor_name,
@@ -394,20 +369,20 @@ export function startSessionThinkingWorker() {
                 )
               }
               participantEntries.push({
-                type: "workspace_member",
+                participantType: "workspace_member",
                 id: workspaceMemberId,
                 participantId: member.id,
                 name: member.user_name || "User",
                 role: "Workspace member",
               })
             } else if (
-              member.participant_kind === "external" &&
+              member.participant_type === "external" &&
               member.state === "active"
             ) {
               const linkedUserName =
                 (member.linked_user_name as string | null) || undefined
               participantEntries.push({
-                type: "external",
+                participantType: "external",
                 id:
                   (member.linked_user_id as string | null) ||
                   (member.transport_external_id as string | null) ||
@@ -840,18 +815,7 @@ export function startSessionThinkingWorker() {
             phase: "idle",
             statusText: "Queued follow-up messages",
           })
-          await emitEvent({
-            type: "session.status.changed",
-            workspaceId,
-            payload: {
-              conversationId,
-              sessionId,
-              actorId,
-              status: "queued",
-              previousStatus: "running",
-            },
-            timestamp: nowISO(),
-          })
+          // session.status.changed event emit removed (S13).
         } else {
           await putSessionToIdle(sessionId)
         }
@@ -908,29 +872,7 @@ export function startSessionThinkingWorker() {
                   statusText: "Queued follow-up messages",
                 })
             )
-            await runCleanupStep(
-              `emit queued event for session ${sessionId}`,
-              () =>
-                emitEvent({
-                  type: "session.status.changed",
-                  workspaceId,
-                  payload: {
-                    conversationId:
-                      threadConversationId ||
-                      (isThreadConversationKind(
-                        failedSession?.conversation_kind
-                      )
-                        ? failedSession.conversation_id
-                        : undefined),
-                    sessionId,
-                    actorId,
-                    actorName: thinkingActorName,
-                    status: "queued",
-                    previousStatus: "running",
-                  },
-                  timestamp: nowISO(),
-                })
-            )
+            // session.status.changed event emit removed (S13).
           } else {
             await runCleanupStep(`put session ${sessionId} idle`, () =>
               putSessionToIdle(sessionId)
@@ -966,28 +908,7 @@ export function startSessionThinkingWorker() {
               },
             })
         )
-        await runCleanupStep(
-          `emit blocked event for session ${sessionId}`,
-          () =>
-            emitEvent({
-              type: "session.status.changed",
-              workspaceId,
-              payload: {
-                conversationId:
-                  threadConversationId ||
-                  (isThreadConversationKind(failedSession?.conversation_kind)
-                    ? failedSession.conversation_id
-                    : undefined),
-                sessionId,
-                actorId,
-                actorName: thinkingActorName,
-                status: "blocked",
-                phase: "error",
-                errorMessage,
-              },
-              timestamp: nowISO(),
-            })
-        )
+        // session.status.changed event emit removed (S13).
         await runCleanupStep(
           `shutdown MCP tools for session ${sessionId}`,
           () => mcpTools.shutdown()

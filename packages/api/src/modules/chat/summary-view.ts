@@ -41,7 +41,7 @@ export function mapConversationParticipant(row: any) {
     }
   }
 
-  if (row.participant_kind === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
+  if (row.participant_type === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
     return {
       participantId: row.id,
       participantType: CONVERSATION_PARTICIPANT_TYPE.EXTERNAL,
@@ -176,7 +176,7 @@ export async function mapConversationSummaryView(
   const viewerMembership = conversationParticipants.find(
     (participant: any) =>
       participant.state === "active" &&
-      participant.participant_kind === "workspace_member" &&
+      participant.participant_type === "workspace_member" &&
       participant.workspace_member_id === viewerWorkspaceMemberId
   )
   const viewerConversationRole =

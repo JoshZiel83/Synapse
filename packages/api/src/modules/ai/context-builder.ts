@@ -263,7 +263,7 @@ function buildAuthor(
   }
 
   if (
-    authorParticipant?.participant_kind === "system" ||
+    authorParticipant?.participant_type === "system" ||
     row.role === "system"
   ) {
     return {
@@ -286,7 +286,7 @@ function buildTargets(targets: any[]): CanonicalContextTarget[] | undefined {
   const built = targets.map((target) => ({
     participantId:
       target.participantId || target.participant_id || target.id || undefined,
-    participantType: (target.participant_kind ||
+    participantType: (target.participant_type ||
       "system") as CanonicalContextTarget["participantType"],
     actorId: target.actor_id || target.actorId || undefined,
     userId: target.user_id || target.userId || undefined,

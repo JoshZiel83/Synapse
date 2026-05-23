@@ -38,7 +38,6 @@ import { toast } from "sonner"
 import { usePluginStore } from "@/stores/plugin-store"
 import { useWorkspace } from "@/app/dashboard/workspace-provider"
 import { api } from "@/lib/api"
-import { loadConversationCatalog } from "@/lib/conversation-catalog"
 import {
   createIntegrationEventSources,
   listIntegrationEventDefinitionOptions,
@@ -795,7 +794,8 @@ export default function InstallDialog({
         .catch(() => {})
     }
     if (selectedAttachmentType === "conversation" && workspaceId) {
-      loadConversationCatalog(workspaceId)
+      api
+        .loadConversationCatalog(workspaceId)
         .then((res) =>
           setConversations(
             (res as AccessVisualConversation[]).map((conversation) => ({

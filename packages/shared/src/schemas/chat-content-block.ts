@@ -1,0 +1,54 @@
+import { z } from "zod"
+import { CANONICAL_FILE_CATEGORIES } from "../constants/enums.js"
+
+/**
+ * Canonical chat content-block zod schemas.
+ *
+ * Lives in shared so server controllers, future client-side guards, and
+ * tooling all validate against the same shape. Before this module the
+ * schema was inlined inside packages/api/src/modules/chat/controller.ts;
+ * any second consumer (a CLI ingest path, a relay-imported message
+ * pipeline, anything) had to either redeclare it or skip validation.
+ *
+ * Notes:
+ * - `id` is optional on input: clients may omit it and let the server
+ *   mint one; persisted form (CanonicalContentBlock) always has it.
+ * - `mention.mention` is intentionally a loose `record(z.any())` here
+ *   because ConversationEntityRef carries free-form transport metadata
+ *   the server resolves later — tightening it would force callers to
+ *   ship internal IDs they shouldn't have to.
+ */
+const blockIdSchema = z.string().uuid().optional()
+
+export const canonicalTextBlockSchema = z.object({
+  id: blockIdSchema,
+  type: z.literal("text"),
+  text: z.string(),
+})
+
+export const canonicalFileRefBlockSchema = z.object({
+  id: blockIdSchema,
+  type: z.literal("file_ref"),
+  fileId: z.string().uuid(),
+  url: z.string().min(1),
+  mimeType: z.string().min(1),
+  originalName: z.string().min(1),
+  sizeBytes: z.number().int().nonnegative(),
+  category: z.enum(CANONICAL_FILE_CATEGORIES),
+})
+
+export const canonicalMentionBlockSchema = z.object({
+  id: blockIdSchema,
+  type: z.literal("mention"),
+  mention: z.record(z.any()),
+})
+
+export const CanonicalContentBlockSchema = z.discriminatedUnion("type", [
+  canonicalTextBlockSchema,
+  canonicalFileRefBlockSchema,
+  canonicalMentionBlockSchema,
+])
+
+export type CanonicalContentBlockParsed = z.infer<
+  typeof CanonicalContentBlockSchema
+>

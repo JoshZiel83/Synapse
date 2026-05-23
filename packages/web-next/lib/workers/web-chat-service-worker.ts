@@ -8,6 +8,7 @@ import {
 import {
   createEmptyStoredChatQueueState,
   loadStoredChatQueueState,
+  mergeStoredQueueTransition,
   sameStoredChatQueueState,
   saveStoredChatQueueState,
 } from "../chat-persistence"
@@ -156,78 +157,8 @@ function latestIsoTimestamp(currentValue?: string, nextValue?: string) {
     ? currentValue
     : nextValue
 }
-
-function mergeStoredQueueTransition(
-  currentState: ReturnType<typeof createEmptyStoredChatQueueState>,
-  previousState: ReturnType<typeof createEmptyStoredChatQueueState> | null,
-  nextState: ReturnType<typeof createEmptyStoredChatQueueState>
-) {
-  const nextWorkspaceState =
-    currentState.workspaceMemberId &&
-    nextState.workspaceMemberId &&
-    currentState.workspaceMemberId !== nextState.workspaceMemberId
-      ? createEmptyStoredChatQueueState(nextState.workspaceId)
-      : currentState.workspaceId === nextState.workspaceId
-        ? currentState
-        : createEmptyStoredChatQueueState(nextState.workspaceId)
-
-  const previousOutbox = previousState?.outbox ?? {}
-  const previousPendingReads = previousState?.pendingReads ?? {}
-  const nextOutbox = { ...nextWorkspaceState.outbox }
-  const nextPendingReads = { ...nextWorkspaceState.pendingReads }
-
-  for (const clientMessageId of Object.keys(previousOutbox)) {
-    if (!(clientMessageId in nextState.outbox)) {
-      delete nextOutbox[clientMessageId]
-    }
-  }
-  for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
-    if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
-      nextOutbox[clientMessageId] = entry
-    }
-  }
-
-  for (const conversationId of Object.keys(previousPendingReads)) {
-    if (!(conversationId in nextState.pendingReads)) {
-      const currentEntry = nextPendingReads[conversationId]
-      const previousEntry = previousPendingReads[conversationId]
-      if (
-        currentEntry &&
-        previousEntry &&
-        currentEntry.readUpToSequence > previousEntry.readUpToSequence
-      ) {
-        continue
-      }
-      delete nextPendingReads[conversationId]
-    }
-  }
-  for (const [conversationId, entry] of Object.entries(
-    nextState.pendingReads
-  )) {
-    if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
-      nextPendingReads[conversationId] = entry
-    }
-  }
-
-  return {
-    ...nextWorkspaceState,
-    workspaceId: nextState.workspaceId,
-    workspaceMemberId:
-      nextState.workspaceMemberId || nextWorkspaceState.workspaceMemberId,
-    clientInstanceId:
-      nextState.clientInstanceId || nextWorkspaceState.clientInstanceId,
-    inboxCursor: Math.max(
-      nextWorkspaceState.inboxCursor || 0,
-      nextState.inboxCursor || 0
-    ),
-    lastBootstrappedAt: latestIsoTimestamp(
-      nextWorkspaceState.lastBootstrappedAt,
-      nextState.lastBootstrappedAt
-    ),
-    pendingReads: nextPendingReads,
-    outbox: nextOutbox,
-  }
-}
+void sameStoredEntry
+void latestIsoTimestamp
 
 function resolveApiUrl(apiBase: string, path: string) {
   const base =

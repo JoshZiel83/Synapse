@@ -56,6 +56,20 @@ function isSupported() {
   return typeof window !== "undefined" && "serviceWorker" in navigator
 }
 
+/**
+ * True when a chat service worker has activated and taken control of the
+ * page. When this is true, the SW is the sole owner of read-watermark
+ * and outbox flushing; the main thread should only persist optimistic
+ * state and trigger requestChatServiceWorkerSync(). When false (SW
+ * unsupported on this platform, or not yet activated on a fresh load),
+ * the main thread falls back to direct POSTs so the user's writes still
+ * land before the SW catches up.
+ */
+export function isChatServiceWorkerActive(): boolean {
+  if (!isSupported()) return false
+  return Boolean(navigator.serviceWorker.controller)
+}
+
 async function refreshRegistration(
   registration: ServiceWorkerRegistration | null
 ) {

@@ -148,7 +148,7 @@ async function attachDefaultWakeTarget(
   // by the caller.
   await ensureConversationParticipant({
     conversationId: binding.conversationId,
-    participantKind: "actor",
+    participantType: "actor",
     actorId,
   })
 }

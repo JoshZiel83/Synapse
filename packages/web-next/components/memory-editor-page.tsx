@@ -52,7 +52,6 @@ import {
 } from "@/components/ui/select"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { api } from "@/lib/api"
-import { loadConversationCatalog } from "@/lib/conversation-catalog"
 import { useAuthStore } from "@/stores/auth-store"
 
 function isMemorySpaceType(value: string | null): value is MemorySpaceType {
@@ -99,7 +98,7 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
     try {
       const [actorData, conversationData, memoryData] = await Promise.all([
         api.getActors(workspaceId),
-        loadConversationCatalog(workspaceId),
+        api.loadConversationCatalog(workspaceId),
         memoryId ? api.getMemory(workspaceId, memoryId) : Promise.resolve(null),
       ])
 

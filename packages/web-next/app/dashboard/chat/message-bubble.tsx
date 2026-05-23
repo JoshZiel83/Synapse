@@ -68,7 +68,7 @@ import {
   remoteAgentRuntimeToAvatarStatus,
   runtimeToAvatarStatus,
 } from "@/stores/chat-store"
-import type { ServerToolCall } from "@/stores/chat-store"
+import type { ServerToolCall } from "@synapse/shared"
 import type { ConversationMember } from "@/stores/chat-store"
 import type {
   ChatInteractionResolveInput,

@@ -4,7 +4,7 @@
   "version": "1.0.0",
   "scripts": {
     "build:chat-worker": "node ./scripts/build-chat-worker.mjs",
-    "sync:shared": "./node_modules/.bin/tsc -p ../shared/tsconfig.json",
+    "sync:shared": "npx tsc -p ../shared/tsconfig.json",
     "prestart": "npm run sync:shared",
     "prestart:clear": "npm run sync:shared",
     "preandroid": "npm run sync:shared",
