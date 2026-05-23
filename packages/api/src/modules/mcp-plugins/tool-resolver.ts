@@ -65,8 +65,15 @@ export interface ResolvedMcpTools {
   shutdown: () => Promise<void>
 }
 
-interface ResolveParams extends RuntimeActorContext {
+interface ResolveParams extends Omit<RuntimeActorContext, "actorId"> {
   conversationId: string
+  // Exactly one of actorId / remoteAgentId is set for a given resolver call.
+  // Actors flow through the original conversation_actor_context grant path;
+  // remote_agents pick up workspace-shared resources plus an extra
+  // conversation-target grant pass (since they have no actor identity and
+  // therefore can't be evaluated against actor / actor_in_conversation grants).
+  actorId?: string
+  remoteAgentId?: string
 }
 
 export interface ResolvedRelayToolTarget {
@@ -313,6 +320,7 @@ async function buildVisibilitySubjects(params: ResolveParams) {
   return buildConversationCapabilitySubjects({
     workspaceId: params.workspaceId,
     actorId: params.actorId,
+    remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
     sessionId: params.sessionId,
     conversationActorContextId: params.conversationActorContextId,
@@ -344,9 +352,13 @@ function accessBindingMatchesContext(
     case "conversation":
       return row.conversation_id === params.conversationId
     case "actor":
-      return row.actor_id === params.actorId
+      // Remote-agent flow has no actorId; actor / actor_in_conversation grants
+      // are inapplicable to a non-actor subject and must never match (even
+      // accidentally, e.g. if both sides were undefined).
+      return params.actorId !== undefined && row.actor_id === params.actorId
     case "actor_in_conversation":
       return (
+        params.actorId !== undefined &&
         row.actor_id === params.actorId &&
         row.conversation_id === params.conversationId
       )
@@ -435,7 +447,14 @@ function resolveReuseOwnerKey(
     case "conversation":
       return `conversation:${params.conversationId}`
     case "actor":
-      return `actor:${params.actorId}`
+      // Reuse key follows the principal: real actor for an actor-driven turn,
+      // remote_agent for a remote-agent-driven one. Both partition cleanly
+      // and never collide because actor IDs and remote_agent IDs come from
+      // disjoint tables / UUID space anyway, but the prefix makes audit
+      // traces unambiguous.
+      return params.actorId
+        ? `actor:${params.actorId}`
+        : `remote_agent:${params.remoteAgentId ?? "unknown"}`
     case "session":
       return `session:${params.sessionId}`
     case "turn":
@@ -841,6 +860,35 @@ function buildRelayScopedInstance(params: {
   }
 }
 
+async function loadConversationTargetedResourceIds(params: {
+  resourceType: "plugin_installation" | "relay_capability"
+  conversationId: string
+}): Promise<string[]> {
+  // Discover grants that target a whole conversation ("any participant in
+  // conversation X can use resource Y"). The standard subject machinery only
+  // surfaces these when the caller has a conversation_actor_context subject,
+  // which actors get for free. Remote agents do not have a
+  // conversation_actor_context row, so we have to ask the bindings table
+  // directly. Workspace-scoped grants are still discovered via the normal
+  // lookupResources({type:'workspace'}) path; this helper only fills the
+  // conversation-target gap.
+  const column =
+    params.resourceType === "plugin_installation"
+      ? "plugin_installation_id"
+      : "relay_capability_id"
+  const result = await db
+    .selectFrom("resource_access_bindings as binding")
+    .select(sql<string>`binding.${sql.raw(column)}::text`.as("resource_id"))
+    .where("binding.resource_type", "=", params.resourceType)
+    .where("binding.status", "=", "active")
+    .where("binding.target_type", "=", "conversation")
+    .where("binding.subject_conversation_id", "=", params.conversationId)
+    .where(sql<boolean>`binding.${sql.raw(column)} IS NOT NULL`)
+    .distinct()
+    .execute()
+  return result.map((row) => row.resource_id)
+}
+
 async function loadVisiblePlugins(params: ResolveParams) {
   const subjects = await buildVisibilitySubjects(params)
   const visibleInstallationIds = new Set<string>()
@@ -859,6 +907,16 @@ async function loadVisiblePlugins(params: ResolveParams) {
     for (const id of ids) {
       visibleInstallationIds.add(id)
     }
+  }
+
+  // Remote-agent flow has no actor identity, so the subject machinery cannot
+  // surface conversation-target plugin grants. Backfill from a direct query.
+  if (params.remoteAgentId && !params.actorId && params.conversationId) {
+    const extra = await loadConversationTargetedResourceIds({
+      resourceType: "plugin_installation",
+      conversationId: params.conversationId,
+    })
+    for (const id of extra) visibleInstallationIds.add(id)
   }
 
   if (visibleInstallationIds.size === 0) {
@@ -951,6 +1009,15 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
     for (const id of ids) {
       visibleCapabilityIds.add(id)
     }
+  }
+
+  // Same conversation-target backfill as plugins (see loadVisiblePlugins).
+  if (params.remoteAgentId && !params.actorId && params.conversationId) {
+    const extra = await loadConversationTargetedResourceIds({
+      resourceType: "relay_capability",
+      conversationId: params.conversationId,
+    })
+    for (const id of extra) visibleCapabilityIds.add(id)
   }
 
   if (visibleCapabilityIds.size === 0) {
@@ -1302,6 +1369,29 @@ async function resolveTools(
 }
 
 export async function resolveMcpToolsForActor(
+  params: ResolveParams
+): Promise<ResolvedMcpTools> {
+  if (!params.actorId) {
+    throw new Error(
+      "resolveMcpToolsForActor requires actorId; call resolveMcpToolsForRemoteAgent for the remote-agent flow"
+    )
+  }
+  return resolveMcpToolsCommon(params)
+}
+
+export async function resolveMcpToolsForRemoteAgent(
+  params: Omit<ResolveParams, "actorId"> & {
+    remoteAgentId: string
+    conversationId: string
+  }
+): Promise<ResolvedMcpTools> {
+  // actorId stays undefined; subject builder + accessBindingMatchesContext
+  // already understand this discriminator and route through the workspace +
+  // conversation-target grant paths only.
+  return resolveMcpToolsCommon({ ...params, actorId: undefined })
+}
+
+async function resolveMcpToolsCommon(
   params: ResolveParams
 ): Promise<ResolvedMcpTools> {
   const mcpVersion = await getMcpVersion(params.workspaceId)

@@ -11,12 +11,17 @@ RUN npm config set registry https://registry.npmmirror.com \
 COPY package.json package-lock.json ./
 COPY packages/shared/package.json packages/shared/
 COPY packages/api/package.json packages/api/
-RUN npm ci --workspace=packages/shared --workspace=packages/api
+COPY packages/remote-agent-daemon/package.json packages/remote-agent-daemon/
+COPY packages/web-next/package.json packages/web-next/
+RUN npm ci --legacy-peer-deps --ignore-scripts \
+      --workspace=packages/shared \
+      --workspace=packages/api \
+      --include-workspace-root
 COPY tsconfig.base.json ./
 COPY .setup/ .setup/
 COPY packages/shared/ packages/shared/
 COPY packages/api/ packages/api/
-RUN npx tsc -b packages/shared
+RUN npx tsc -b packages/shared --force
 RUN npm run build -w packages/api
 RUN cp packages/api/src/infrastructure/database/schema.sql packages/api/dist/infrastructure/database/schema.sql
 

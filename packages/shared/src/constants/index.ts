@@ -39,6 +39,7 @@ export const QUEUE_NAMES = {
   IM_TRANSPORT_DELIVERY: "im-transport-delivery",
   MEMORY_INDEXING: "memory-indexing",
   FILE_PARSING: "file-parsing",
+  REMOTE_AGENT_DELIVERY_RETRY: "remote-agent-delivery-retry",
 } as const
 
 export const WS_AUTH_TIMEOUT = 5000

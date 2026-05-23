@@ -46,9 +46,26 @@ export async function isActorActiveConversationParticipant(
   return Boolean(row)
 }
 
+export async function isRemoteAgentActiveConversationParticipant(
+  conversationId: string,
+  remoteAgentId: string
+) {
+  const row = await db
+    .selectFrom("conversation_participants")
+    .select("id")
+    .where("conversation_id", "=", conversationId)
+    .where("participant_kind", "=", "remote_agent")
+    .where("remote_agent_id", "=", remoteAgentId)
+    .where("state", "=", "active")
+    .limit(1)
+    .executeTakeFirst()
+  return Boolean(row)
+}
+
 export async function buildConversationCapabilitySubjects(params: {
   workspaceId: string
   actorId?: string | null
+  remoteAgentId?: string | null
   conversationId?: string | null
   sessionId?: string | null
   conversationActorContextId?: string | null
@@ -58,6 +75,22 @@ export async function buildConversationCapabilitySubjects(params: {
       params.conversationId,
       params.actorId
     )
+    if (!isActiveParticipant) {
+      return [] as PermissionSubject[]
+    }
+  }
+
+  // Remote agents have no actor identity; the only "actor-like" check we can
+  // do is conversation participation as a remote_agent. If the caller passed
+  // a remote_agent + conversation pair, refuse to grant access unless that
+  // remote_agent is actively participating — same fail-closed behavior as the
+  // actor path above.
+  if (params.remoteAgentId && params.conversationId && !params.actorId) {
+    const isActiveParticipant =
+      await isRemoteAgentActiveConversationParticipant(
+        params.conversationId,
+        params.remoteAgentId
+      )
     if (!isActiveParticipant) {
       return [] as PermissionSubject[]
     }
@@ -99,7 +132,15 @@ export async function buildConversationCapabilitySubjects(params: {
       )) || undefined
   }
 
-  if (!context && params.sessionId) {
+  // The session→context fallback only makes sense for the actor path:
+  // conversation_actor_context.session_id is a UUID column and the row only
+  // exists for human actors. Remote agents have no actor identity and no
+  // matching context row, so calling this lookup with the synthetic cache key
+  // we use for reverse-MCP sessions ("remote_agent_mcp:…") would crash the
+  // SQL driver and silently mask plugin/relay tool resolution. Gating on
+  // actorId keeps the actor flow unchanged while making the remote-agent
+  // flow correct-by-construction.
+  if (!context && params.actorId && params.sessionId) {
     context =
       (await getConversationActorContextBySessionId(params.sessionId)) ||
       undefined

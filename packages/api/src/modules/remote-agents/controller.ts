@@ -16,6 +16,7 @@ import {
   createRemoteAgentMachinePairingSession,
   createRemoteAgentUserInputInteraction,
   deleteRemoteAgent,
+  failRemoteAgentDeliveries,
   getMachineKeyFromHeaders,
   getRemoteAgent,
   getRemoteAgentConversationHistory,
@@ -29,6 +30,7 @@ import {
   updateRemoteAgentGroupInteractionGrants,
   updateRemoteAgent,
 } from "./service.js"
+import { handleRemoteAgentMcpRequest } from "./mcp-endpoint.js"
 
 const runtimeKindSchema = z.enum(REMOTE_AGENT_RUNTIME_KINDS)
 const accessPolicySchema = z.enum(RELATIONSHIP_ACCESS_POLICIES)
@@ -94,6 +96,11 @@ const sendMessageSchema = z.object({
 
 const completeDeliveriesSchema = z.object({
   deliveryIds: z.array(z.string().uuid()).min(1),
+})
+
+const failDeliveriesSchema = z.object({
+  deliveryIds: z.array(z.string().uuid()).min(1),
+  reason: z.string().trim().max(2000).optional(),
 })
 
 const internalUserInputInteractionSchema = z.object({
@@ -415,6 +422,17 @@ export default async function remoteAgentsController(app: FastifyInstance) {
   )
 
   for (const prefix of internalPrefixes) {
+    const mcpRoute = `${prefix}/remote-agents/:remoteAgentId/mcp/:conversationId`
+    app.post<{
+      Params: { remoteAgentId: string; conversationId: string }
+    }>(mcpRoute, handleRemoteAgentMcpRequest)
+    app.get<{
+      Params: { remoteAgentId: string; conversationId: string }
+    }>(mcpRoute, handleRemoteAgentMcpRequest)
+    app.delete<{
+      Params: { remoteAgentId: string; conversationId: string }
+    }>(mcpRoute, handleRemoteAgentMcpRequest)
+
     app.post<{
       Params: { remoteAgentId: string }
       Body: unknown
@@ -522,6 +540,28 @@ export default async function remoteAgentsController(app: FastifyInstance) {
               remoteAgentId: request.params.remoteAgentId,
               machineKey: getMachineKeyFromHeaders(request),
               deliveryIds: body.deliveryIds,
+            })
+          )
+        } catch (error) {
+          return sendServiceError(reply, error)
+        }
+      }
+    )
+
+    app.post<{
+      Params: { remoteAgentId: string }
+      Body: unknown
+    }>(
+      `${prefix}/remote-agents/:remoteAgentId/fail-deliveries`,
+      async (request, reply) => {
+        try {
+          const body = failDeliveriesSchema.parse(request.body)
+          return reply.send(
+            await failRemoteAgentDeliveries({
+              remoteAgentId: request.params.remoteAgentId,
+              machineKey: getMachineKeyFromHeaders(request),
+              deliveryIds: body.deliveryIds,
+              reason: body.reason,
             })
           )
         } catch (error) {

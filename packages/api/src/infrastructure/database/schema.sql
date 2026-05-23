@@ -892,6 +892,7 @@ CREATE INDEX idx_remote_agent_machines_workspace
 CREATE TABLE remote_agent_machine_sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   machine_id UUID NOT NULL REFERENCES remote_agent_machines(id) ON DELETE CASCADE,
+  fencing_token UUID NOT NULL UNIQUE DEFAULT uuid_generate_v4(),
   status remote_agent_machine_sessions_status NOT NULL DEFAULT 'connecting',
   transport remote_agent_machine_sessions_transport NOT NULL DEFAULT 'websocket',
   remote_addr TEXT,
@@ -905,6 +906,10 @@ CREATE TABLE remote_agent_machine_sessions (
 
 CREATE INDEX idx_remote_agent_machine_sessions_machine
   ON remote_agent_machine_sessions(machine_id, created_at DESC);
+
+CREATE UNIQUE INDEX uq_remote_agent_machine_sessions_machine_active
+  ON remote_agent_machine_sessions(machine_id)
+  WHERE status IN ('connecting', 'active');
 
 CREATE TABLE remote_agent_runtime_catalog (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -931,13 +936,8 @@ CREATE TABLE remote_agent_bindings (
   status remote_agent_bindings_status NOT NULL DEFAULT 'active',
   runtime_state remote_agent_bindings_runtime_state NOT NULL DEFAULT 'offline',
   status_text TEXT,
-  last_session_id VARCHAR(255),
   capabilities JSONB NOT NULL DEFAULT '{}',
-  active_conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
-  active_interaction_id UUID,
   last_activity_at TIMESTAMPTZ,
-  last_run_started_at TIMESTAMPTZ,
-  last_run_finished_at TIMESTAMPTZ,
   last_error TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -967,9 +967,18 @@ CREATE INDEX idx_remote_agent_runs_remote_agent
 CREATE TABLE remote_agent_conversation_contexts (
   remote_agent_id UUID NOT NULL REFERENCES remote_agents(id) ON DELETE CASCADE,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  runtime_kind remote_agents_runtime_kind,
+  runtime_session_id VARCHAR(255),
+  runtime_state remote_agent_bindings_runtime_state NOT NULL DEFAULT 'offline',
+  status_text TEXT,
+  active_interaction_id UUID,
   collaboration_mode TEXT NOT NULL DEFAULT 'default',
   collaboration_state JSONB NOT NULL DEFAULT '{}',
   active_plan_approval_interaction_id UUID,
+  last_run_started_at TIMESTAMPTZ,
+  last_run_finished_at TIMESTAMPTZ,
+  last_activity_at TIMESTAMPTZ,
+  last_error TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   PRIMARY KEY (remote_agent_id, conversation_id)
@@ -980,6 +989,16 @@ CREATE INDEX idx_remote_agent_conversation_contexts_remote_agent
 
 CREATE INDEX idx_remote_agent_conversation_contexts_conversation
   ON remote_agent_conversation_contexts(conversation_id, updated_at DESC);
+
+CREATE INDEX idx_remote_agent_conversation_contexts_runtime_session
+  ON remote_agent_conversation_contexts(remote_agent_id, runtime_session_id)
+  WHERE runtime_session_id IS NOT NULL;
+
+CREATE INDEX idx_remote_agent_conversation_contexts_active_state
+  ON remote_agent_conversation_contexts(remote_agent_id, runtime_state)
+  WHERE runtime_state IN (
+    'running', 'waiting_user_input', 'plan_drafting', 'waiting_plan_approval'
+  );
 
 CREATE TABLE remote_agent_group_interaction_grants (
   remote_agent_id UUID NOT NULL REFERENCES remote_agents(id) ON DELETE CASCADE,
@@ -1770,6 +1789,8 @@ CREATE TABLE remote_agent_message_deliveries (
   item_id UUID NOT NULL REFERENCES conversation_items(id) ON DELETE CASCADE,
   status remote_agent_message_deliveries_status NOT NULL DEFAULT 'pending',
   attempts INT NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ,
+  last_failure_reason TEXT,
   last_acked_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1778,6 +1799,10 @@ CREATE TABLE remote_agent_message_deliveries (
 
 CREATE INDEX idx_remote_agent_message_deliveries_remote_agent
   ON remote_agent_message_deliveries(remote_agent_id, status, updated_at DESC);
+
+CREATE INDEX idx_remote_agent_message_deliveries_due
+  ON remote_agent_message_deliveries(next_attempt_at)
+  WHERE status = 'pending';
 
 CREATE TABLE workspace_member_sync_events (
   sync_seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -3505,7 +3530,7 @@ ALTER TABLE sessions ADD CONSTRAINT fk_sessions_active_plan_approval_interaction
   REFERENCES interaction_requests(id)
   ON DELETE SET NULL;
 
-ALTER TABLE remote_agent_bindings ADD CONSTRAINT fk_remote_agent_bindings_active_interaction
+ALTER TABLE remote_agent_conversation_contexts ADD CONSTRAINT fk_remote_agent_conversation_contexts_active_interaction
   FOREIGN KEY (active_interaction_id)
   REFERENCES interaction_requests(id)
   ON DELETE SET NULL;

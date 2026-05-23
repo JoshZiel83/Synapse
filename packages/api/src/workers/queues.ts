@@ -25,6 +25,10 @@ export const memoryIndexingQueue = new Queue(QUEUE_NAMES.MEMORY_INDEXING, {
 export const fileParsingQueue = new Queue(QUEUE_NAMES.FILE_PARSING, {
   connection,
 })
+export const remoteAgentDeliveryRetryQueue = new Queue(
+  QUEUE_NAMES.REMOTE_AGENT_DELIVERY_RETRY,
+  { connection }
+)
 
 export async function enqueueAutomationExecutionJobs(executionIds: string[]) {
   const uniqueExecutionIds = Array.from(
@@ -65,6 +69,7 @@ const queues = [
   imTransportDeliveryQueue,
   memoryIndexingQueue,
   fileParsingQueue,
+  remoteAgentDeliveryRetryQueue,
 ]
 
 export async function shutdownQueues() {

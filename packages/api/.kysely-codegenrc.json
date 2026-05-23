@@ -1,7 +1,6 @@
 {
   "defaultSchemas": ["public"],
   "dialect": "postgres",
-  "envFile": "../../.env",
   "includePattern": "public.*",
   "logLevel": "warn",
   "outFile": "./src/infrastructure/database/generated/db.ts",

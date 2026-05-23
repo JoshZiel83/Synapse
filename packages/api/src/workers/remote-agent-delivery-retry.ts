@@ -1,0 +1,42 @@
+import { Worker } from "bullmq"
+import { QUEUE_NAMES } from "@synapse/shared"
+import { redis } from "../infrastructure/redis/index.js"
+import { runDueRemoteAgentDeliveryRetries } from "../modules/remote-agents/service.js"
+import { remoteAgentDeliveryRetryQueue } from "./queues.js"
+import { registerWorker } from "./registry.js"
+
+const REMOTE_AGENT_DELIVERY_RETRY_TICK_MS = 10_000
+
+export async function ensureRemoteAgentDeliveryRetryJob() {
+  await remoteAgentDeliveryRetryQueue.add(
+    "tick",
+    {},
+    {
+      repeat: { every: REMOTE_AGENT_DELIVERY_RETRY_TICK_MS },
+      jobId: "remote-agent-delivery-retry-tick",
+    }
+  )
+}
+
+export function startRemoteAgentDeliveryRetryWorker() {
+  const worker = new Worker(
+    QUEUE_NAMES.REMOTE_AGENT_DELIVERY_RETRY,
+    async () => {
+      return runDueRemoteAgentDeliveryRetries()
+    },
+    {
+      connection: redis,
+      concurrency: 1,
+    }
+  )
+
+  worker.on("failed", (job, err) => {
+    console.error(
+      `Remote agent delivery retry job ${job?.id} failed:`,
+      err.message
+    )
+  })
+
+  registerWorker(worker)
+  return worker
+}
