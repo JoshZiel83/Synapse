@@ -239,6 +239,18 @@ export class ConversationRuntime {
         this.spec.callbacks.onError(this.spec.conversationId, message)
       }
     }
+    // SDK closed the event stream — claude / codex subprocess is gone and the
+    // session can no longer accept prompts. If we leave this.session pointing
+    // at the dead handle, the next sendPrompt() finds it non-null and writes
+    // into a closed stdin, which surfaces as the EPIPE storm in daemon logs
+    // and keeps deliveries pending forever (server's retry worker re-fires
+    // agent:start every 10s, daemon routes it to the dead session, EPIPE,
+    // repeat). Clearing the handle lets the very next sendPrompt take the
+    // !session branch in sendPrompt() and call ensureStarted(), which spins
+    // up a fresh SDK query with the new prompt as seed.
+    if (this.session === session) {
+      this.session = null
+    }
   }
 
   async sendPrompt(prompt: string) {
