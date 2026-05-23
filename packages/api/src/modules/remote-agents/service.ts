@@ -289,7 +289,14 @@ async function updateConversationRuntimeStatus(
           ELSE NULL
         END,
         NOW(),
-        $8,
+        -- Honor the same NULL/empty/non-empty sentinel as the UPDATE arm
+        -- below: an empty-string lastError on the very first status update
+        -- for a conversation means "no prior error" and must land as NULL,
+        -- not as an empty string. Without NULLIF the e2e final state would
+        -- look clean today (no errors had been pushed) but the column type
+        -- would silently shift to "string-or-empty-string-not-null" once a
+        -- session_started arrived before any error event.
+        NULLIF($8, ''),
         NOW(),
         NOW()
       )
@@ -1223,7 +1230,10 @@ async function ensureRemoteAgentRun(params: {
         $3,
         $4::remote_agent_runs_status,
         $5,
-        $6,
+        -- Same NULLIF sentinel as the contexts INSERT above (and the
+        -- CASE in this table's UPDATE arm) so a fresh run started with
+        -- lastError="" does not persist an empty string.
+        NULLIF($6, ''),
         CASE WHEN $4::text = 'running' THEN NOW() ELSE NULL END,
         CASE
           WHEN $4::text IN ('completed', 'failed', 'cancelled') THEN NOW()
@@ -1248,10 +1258,62 @@ async function ensureRemoteAgentRun(params: {
 
 export async function loadRemoteAgentRuntimeSnapshot(
   remoteAgentId: string,
-  queryable: Queryable = {
+  options: {
+    /**
+     * When provided, the returned snapshot is scoped to this conversation:
+     * runtime_state / status_text / last_error / session_id / interaction
+     * come from the (remote_agent_id, conversation_id) context row, not
+     * the binding row or the "most representative context" LATERAL pick.
+     *
+     * Without this scoping the chat page would render conversation A's
+     * runtime view using whichever context happened to win the LATERAL's
+     * priority ordering (running > idle > error > offline, then most
+     * recent activity), so a parallel conversation B that was running
+     * would shadow A's true state and vice versa. Core execution is
+     * already isolated per-conversation (one CC/Codex session each), but
+     * the user-visible state read path was still binding/global.
+     */
+    conversationId?: string | null
+    queryable?: Queryable
+  } = {}
+) {
+  const queryable: Queryable = options.queryable ?? {
     query: (text, params) => executeSql(text, params),
   }
-) {
+  const conversationId = options.conversationId ?? null
+  // The LATERAL also pulls runtime_state / status_text / last_error from
+  // the context row so we can prefer them over the binding-level values
+  // when a conversationId scope was requested.
+  const lateral = `
+    LEFT JOIN LATERAL (
+      SELECT
+        ctx.conversation_id AS latest_active_conversation_id,
+        ctx.runtime_session_id AS latest_runtime_session_id,
+        ctx.runtime_state AS ctx_runtime_state,
+        ctx.status_text AS ctx_status_text,
+        ctx.last_error AS ctx_last_error,
+        ctx.active_interaction_id AS latest_active_interaction_id,
+        ctx.last_run_started_at AS latest_last_run_started_at,
+        ctx.last_run_finished_at AS latest_last_run_finished_at,
+        ctx.last_activity_at AS ctx_last_activity_at
+      FROM remote_agent_conversation_contexts ctx
+      WHERE ctx.remote_agent_id = binding.remote_agent_id
+        ${conversationId ? "AND ctx.conversation_id = $2" : ""}
+      ORDER BY
+        CASE ctx.runtime_state
+          WHEN 'running' THEN 0
+          WHEN 'waiting_user_input' THEN 0
+          WHEN 'plan_drafting' THEN 0
+          WHEN 'waiting_plan_approval' THEN 0
+          WHEN 'idle' THEN 1
+          WHEN 'error' THEN 2
+          ELSE 3
+        END,
+        ctx.last_activity_at DESC NULLS LAST,
+        ctx.updated_at DESC
+      LIMIT 1
+    ) latest_ctx ON TRUE
+  `
   const result = await executeSqlOn<{
     remote_agent_id: string
     runtime_kind: RemoteAgentRuntimeKind
@@ -1268,6 +1330,10 @@ export async function loadRemoteAgentRuntimeSnapshot(
     pending_conversation_count: string | number
     unread_delivery_count: string | number
     capabilities: unknown
+    ctx_runtime_state: RemoteAgentRuntimeStateType | null
+    ctx_status_text: string | null
+    ctx_last_error: string | null
+    ctx_last_activity_at: string | Date | null
   }>(
     queryable,
     `
@@ -1284,12 +1350,17 @@ export async function loadRemoteAgentRuntimeSnapshot(
         latest_ctx.latest_last_run_finished_at,
         binding.last_error,
         binding.updated_at,
+        latest_ctx.ctx_runtime_state,
+        latest_ctx.ctx_status_text,
+        latest_ctx.ctx_last_error,
+        latest_ctx.ctx_last_activity_at,
         COALESCE(
           (
             SELECT COUNT(DISTINCT delivery.conversation_id)
             FROM remote_agent_message_deliveries delivery
             WHERE delivery.remote_agent_id = binding.remote_agent_id
               AND delivery.status = 'pending'
+              ${conversationId ? "AND delivery.conversation_id = $2" : ""}
           ),
           0
         ) AS pending_conversation_count,
@@ -1299,28 +1370,47 @@ export async function loadRemoteAgentRuntimeSnapshot(
             FROM remote_agent_message_deliveries delivery
             WHERE delivery.remote_agent_id = binding.remote_agent_id
               AND delivery.status = 'pending'
+              ${conversationId ? "AND delivery.conversation_id = $2" : ""}
           ),
           0
         ) AS unread_delivery_count,
         binding.capabilities
       FROM remote_agent_bindings binding
-      ${LATEST_CONVERSATION_CONTEXT_LATERAL}
+      ${lateral}
       WHERE binding.remote_agent_id = $1
       LIMIT 1
     `,
-    [remoteAgentId]
+    conversationId ? [remoteAgentId, conversationId] : [remoteAgentId]
   )
   const row = result.rows[0]
   if (!row) {
     return null
   }
+  // When scoped to a specific conversation, the per-context fields are the
+  // authoritative source for what the UI should show for THAT conversation.
+  // Fall back to the binding-level fields when no context row exists for
+  // that conversation (the agent hasn't been activated there yet) or when
+  // the caller wants the global agent view (no conversationId passed).
+  const scopedToConversation = conversationId !== null
+  const runtimeState = scopedToConversation
+    ? (row.ctx_runtime_state ?? row.runtime_state)
+    : row.runtime_state
+  const statusText = scopedToConversation
+    ? (row.ctx_status_text ?? row.status_text)
+    : row.status_text
+  const lastErrorMessage = scopedToConversation
+    ? row.ctx_last_error
+    : row.last_error
+  const lastErrorActivityAt = scopedToConversation
+    ? (row.ctx_last_activity_at ?? row.last_activity_at)
+    : row.last_activity_at
   const updatedAt = toIso(row.updated_at) ?? new Date().toISOString()
-  const lastErrorAt = toIso(row.last_activity_at) || toIso(row.updated_at)
+  const lastErrorAt = toIso(lastErrorActivityAt) || toIso(row.updated_at)
   return {
     remoteAgentId: row.remote_agent_id,
     runtimeKind: row.runtime_kind,
-    state: row.runtime_state,
-    statusText: row.status_text ?? undefined,
+    state: runtimeState,
+    statusText: statusText ?? undefined,
     activeConversationId: row.latest_active_conversation_id ?? undefined,
     activeInteractionId: row.latest_active_interaction_id ?? undefined,
     sessionId: row.latest_runtime_session_id ?? undefined,
@@ -1330,9 +1420,9 @@ export async function loadRemoteAgentRuntimeSnapshot(
     lastRunStartedAt: toIso(row.latest_last_run_started_at),
     lastRunFinishedAt: toIso(row.latest_last_run_finished_at),
     lastError:
-      row.last_error && lastErrorAt
+      lastErrorMessage && lastErrorAt
         ? {
-            message: row.last_error,
+            message: lastErrorMessage,
             at: lastErrorAt,
           }
         : undefined,
@@ -1350,10 +1440,9 @@ async function emitRemoteAgentRuntimeUpdated(
     query: (text, params) => executeSql(text, params),
   }
 ) {
-  const snapshot = await loadRemoteAgentRuntimeSnapshot(
-    remoteAgentId,
-    queryable
-  )
+  const snapshot = await loadRemoteAgentRuntimeSnapshot(remoteAgentId, {
+    queryable,
+  })
   if (!snapshot) {
     return null
   }

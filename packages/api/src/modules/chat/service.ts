@@ -4889,7 +4889,14 @@ export async function getChatConversationMessages(params: {
     const { loadRemoteAgentRuntimeSnapshot } =
       await import("../remote-agents/service.js")
     for (const remoteAgentId of remoteAgentIds) {
-      const snapshot = await loadRemoteAgentRuntimeSnapshot(remoteAgentId)
+      // Pass the chat's conversationId so the snapshot reflects this
+      // conversation's runtime state, not whichever sibling conversation
+      // happened to win the global LATERAL pick in the snapshot SQL.
+      // Core execution is already per-conversation; this completes the
+      // user-visible isolation.
+      const snapshot = await loadRemoteAgentRuntimeSnapshot(remoteAgentId, {
+        conversationId: params.conversationId,
+      })
       if (snapshot) {
         runtimeByRemoteAgent[remoteAgentId] = snapshot
       }
