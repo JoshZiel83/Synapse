@@ -2,12 +2,19 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { buildAgentChildEnv } from "./proxy-env.js"
 
-test("buildAgentChildEnv returns empty when explicitly disabled", () => {
-  assert.deepEqual(buildAgentChildEnv({ enabled: false }), {})
+test("buildAgentChildEnv returns empty when no proxyUrl is configured", () => {
+  // No silent default to localhost SOCKS5 — daemons not on a tunnel host
+  // would dead-route every claude / codex API call if we shipped one.
+  assert.deepEqual(buildAgentChildEnv(), {})
+  assert.deepEqual(buildAgentChildEnv({}), {})
+  assert.deepEqual(buildAgentChildEnv({ proxyUrl: "" }), {})
+  assert.deepEqual(buildAgentChildEnv({ proxyUrl: "   " }), {})
 })
 
-test("buildAgentChildEnv defaults to <redacted-outbound-proxy> with sane no_proxy", () => {
-  const env = buildAgentChildEnv()
+test("buildAgentChildEnv injects every env-var case when proxyUrl is set", () => {
+  const env = buildAgentChildEnv({
+    proxyUrl: "<redacted-outbound-proxy>",
+  })
   assert.equal(env.HTTPS_PROXY, "<redacted-outbound-proxy>")
   assert.equal(env.HTTP_PROXY, "<redacted-outbound-proxy>")
   assert.equal(env.https_proxy, env.HTTPS_PROXY)
@@ -19,6 +26,7 @@ test("buildAgentChildEnv defaults to <redacted-outbound-proxy> with sane no_prox
 
 test("buildAgentChildEnv merges extraNoProxyHosts and dedupes", () => {
   const env = buildAgentChildEnv({
+    proxyUrl: "<redacted-outbound-proxy>",
     extraNoProxyHosts: ["host.docker.internal", "127.0.0.1", "rae-api"],
   })
   const list = (env.NO_PROXY ?? "").split(",")
@@ -29,12 +37,4 @@ test("buildAgentChildEnv merges extraNoProxyHosts and dedupes", () => {
     1,
     "no duplicate entries"
   )
-})
-
-test("buildAgentChildEnv accepts a custom proxyUrl override", () => {
-  const env = buildAgentChildEnv({
-    proxyUrl: "socks5h://proxy.example:9050",
-  })
-  assert.equal(env.HTTPS_PROXY, "socks5h://proxy.example:9050")
-  assert.equal(env.http_proxy, "socks5h://proxy.example:9050")
 })

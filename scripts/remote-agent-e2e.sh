@@ -384,14 +384,14 @@ cmd_verify() {
     || { echo "  initialize failed: $mcp_resp"; exit 1; }
   echo "  ok"
 
-  echo "[7/15] reverse-MCP endpoint denies a different remote_agent's conversation (401)"
+  echo "[7/15] reverse-MCP endpoint denies a conversation the agent isn't a participant of (403)"
   local fake_conv=00000000-0000-0000-0000-000000000099
   test "$(curl -s -o /dev/null -w '%{http_code}' \
     -X POST "http://127.0.0.1:$RAE_API_PORT/api/v1/internal/remote-agents/$RAE_REMOTE_AGENT_ID/mcp/$fake_conv" \
     -H "authorization: Bearer $SYNAPSE_MACHINE_KEY" \
     -H "content-type: application/json" \
     -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"x","version":"0"}}}')" \
-    = 401
+    = 403
   echo "  ok"
 
   echo "[8/15] machine connection is fenced (second WS with same key forces first close)"

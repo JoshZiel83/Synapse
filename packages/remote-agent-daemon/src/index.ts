@@ -29,7 +29,6 @@ type DaemonConfig = {
   apiKey: string
   heartbeatMs: number
   logLevel: LogLevel
-  proxyEnabled: boolean
   proxyUrl?: string
 }
 
@@ -133,16 +132,11 @@ function maskSecret(value: string) {
 function parseArgs(argv: string[]): DaemonConfig {
   const args = new Map<string, string>()
   let debug = false
-  let proxyDisabled = false
   for (let index = 0; index < argv.length; index += 1) {
     const current = argv[index]
     if (!current?.startsWith("--")) continue
     if (current === "--debug") {
       debug = true
-      continue
-    }
-    if (current === "--no-proxy") {
-      proxyDisabled = true
       continue
     }
     const next = argv[index + 1]
@@ -162,6 +156,12 @@ function parseArgs(argv: string[]): DaemonConfig {
     : resolveLogLevel(
         args.get("log-level") || process.env.SYNAPSE_REMOTE_AGENT_LOG_LEVEL
       )
+  // Proxy is opt-in: pass --proxy-url socks5h://host:port (or set
+  // SYNAPSE_AGENT_PROXY_URL) to inject HTTPS_PROXY into the claude / codex
+  // child processes. Without it the child runs with the daemon's own
+  // outbound network. Originally we defaulted to <redacted-local-proxy> to support
+  // the provider-specific AI endpoint gateway on our test box; that silently broke any other
+  // deployment, so the default is now no proxy.
   const proxyUrl = args.get("proxy-url") || process.env.SYNAPSE_AGENT_PROXY_URL
 
   if (!serverUrl) throw new Error("--server-url is required")
@@ -172,7 +172,6 @@ function parseArgs(argv: string[]): DaemonConfig {
     apiKey,
     heartbeatMs,
     logLevel,
-    proxyEnabled: !proxyDisabled,
     proxyUrl: proxyUrl?.trim() || undefined,
   }
 }
@@ -712,7 +711,6 @@ class ManagedRemoteAgent {
         localRootPath: this.localRootPath,
         serverUrl: this.params.config.serverUrl,
         machineKey: this.params.config.apiKey,
-        proxyEnabled: this.params.config.proxyEnabled,
         proxyUrl: this.params.config.proxyUrl,
         resumeSessionId: params.resumeSessionId,
         initialPrompt,

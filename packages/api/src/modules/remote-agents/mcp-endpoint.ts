@@ -4,6 +4,7 @@ import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js"
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js"
 import { textBlock, type ToolDefinition } from "@synapse/shared"
+import type { ConversationBoundary } from "@synapse/shared/types"
 import { z, type ZodTypeAny } from "zod"
 import {
   authenticateMachineForRemoteAgent,
@@ -109,14 +110,20 @@ function registerImTools(params: {
   server.registerTool(
     "check_messages",
     {
-      description: "Return pending message deliveries for this remote agent.",
+      description:
+        "Return pending message deliveries for the conversation this MCP session is bound to.",
       inputSchema: { limit: z.number().int().min(1).max(500).optional() },
       outputSchema: { deliveries: z.array(z.any()) },
     },
     async ({ limit }) => {
+      // Scoping to params.conversationId is load-bearing for session
+      // isolation: a per-conversation runtime asking the IM surface for
+      // "what's queued?" must never see another conversation's deliveries,
+      // even though the underlying remote_agent participates in many.
       const result = await checkRemoteAgentMessages({
         remoteAgentId: params.remoteAgentId,
         machineKey: params.machineKey,
+        conversationId: params.conversationId,
         limit,
       })
       return jsonToolResult(result)
@@ -231,16 +238,27 @@ async function registerResolvedTools(params: {
   workspaceId: string
   remoteAgentId: string
   conversationId: string
+  conversationKind: "private" | "group" | "virtual"
+  conversationBoundary: ConversationBoundary
   sessionKey: string
 }): Promise<() => Promise<void>> {
   // The resolver evaluates resource_access_bindings exactly like an actor
   // would (workspace + conversation grants for the remote-agent path) and
   // returns ready-to-execute plugin + relay tool definitions. We mount each
   // one as a passthrough that calls back into the same executor.
+  //
+  // conversationKind + conversationBoundary are LOAD-BEARING here: the
+  // resolver's conversation_type mask filter (loadVisiblePlugins +
+  // loadVisibleRelayExposures) rejects rows that don't match the conversation
+  // type, and shared/utils:maskAllowsConversationType returns false when
+  // either field is missing. Without these two values plugin / relay tools
+  // would be silently filtered out even when authorization passes.
   const resolved = await resolveMcpToolsForRemoteAgent({
     workspaceId: params.workspaceId,
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
+    conversationKind: params.conversationKind,
+    conversationBoundary: params.conversationBoundary,
     sessionId: params.sessionKey,
   })
   for (const def of resolved.tools as ToolDefinition[]) {
@@ -303,6 +321,8 @@ async function createSessionTransport(params: {
   conversationId: string
   machineKey: string
   workspaceId: string
+  conversationKind: "private" | "group" | "virtual"
+  conversationBoundary: ConversationBoundary
 }): Promise<ActiveTransport> {
   const sessionKey = `remote_agent_mcp:${params.remoteAgentId}:${params.conversationId}:${randomUUID()}`
   const server = new McpServer(
@@ -322,6 +342,8 @@ async function createSessionTransport(params: {
       workspaceId: params.workspaceId,
       remoteAgentId: params.remoteAgentId,
       conversationId: params.conversationId,
+      conversationKind: params.conversationKind,
+      conversationBoundary: params.conversationBoundary,
       sessionKey,
     })
   } catch (error) {
@@ -355,6 +377,19 @@ async function createSessionTransport(params: {
   return active
 }
 
+async function loadConversationTypeFacts(conversationId: string): Promise<{
+  kind: "private" | "group" | "virtual"
+  boundary: ConversationBoundary
+} | null> {
+  const result = await executeSql<{
+    kind: "private" | "group" | "virtual"
+    boundary: ConversationBoundary
+  }>(`SELECT kind, boundary FROM conversations WHERE id = $1 LIMIT 1`, [
+    conversationId,
+  ])
+  return result.rows[0] ?? null
+}
+
 export async function handleRemoteAgentMcpRequest(
   request: FastifyRequest<{
     Params: { remoteAgentId: string; conversationId: string }
@@ -362,6 +397,14 @@ export async function handleRemoteAgentMcpRequest(
   reply: FastifyReply
 ) {
   const machineKey = getMachineKeyFromHeaders(request)
+  // Authentication (machineKey) and authorization (conversation belongs to
+  // this remote_agent) are split deliberately:
+  //   - 401 means "we couldn't identify the caller" → bad/missing machineKey,
+  //     or the machine isn't bound to this remote_agent at all.
+  //   - 403 means "you authenticated fine, but the conversation isn't yours"
+  //     → the remote_agent isn't an active participant of that conversation.
+  // Treating both as 401 would let a leaked machineKey probe the
+  // conversation-id space and learn which ones exist by status code alone.
   let workspaceId: string
   try {
     const auth = await authenticateMachineForRemoteAgent({
@@ -369,6 +412,11 @@ export async function handleRemoteAgentMcpRequest(
       machineKey,
     })
     workspaceId = auth.workspaceId
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error)
+    return reply.code(401).send({ error: message })
+  }
+  try {
     await requireRemoteAgentConversationAccess(
       { query: (text: string, values?: any[]) => executeSql(text, values) },
       request.params.conversationId,
@@ -376,7 +424,13 @@ export async function handleRemoteAgentMcpRequest(
     )
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error)
-    return reply.code(401).send({ error: message })
+    return reply.code(403).send({ error: message })
+  }
+  const conversationFacts = await loadConversationTypeFacts(
+    request.params.conversationId
+  )
+  if (!conversationFacts) {
+    return reply.code(404).send({ error: "Conversation not found" })
   }
 
   const sessionId = extractMcpSessionId(request)
@@ -408,6 +462,8 @@ export async function handleRemoteAgentMcpRequest(
       conversationId: request.params.conversationId,
       machineKey,
       workspaceId,
+      conversationKind: conversationFacts.kind,
+      conversationBoundary: conversationFacts.boundary,
     })
   }
   active.lastActivityAt = Date.now()

@@ -2246,9 +2246,19 @@ export async function listRemoteAgentConversations(params: {
 export async function checkRemoteAgentMessages(params: {
   remoteAgentId: string
   machineKey: string
+  conversationId?: string
   limit?: number
 }) {
   await authenticateMachineForRemoteAgent(params)
+  const values: any[] = [
+    params.remoteAgentId,
+    Math.min(Math.max(params.limit ?? 100, 1), 500),
+  ]
+  let conversationFilter = ""
+  if (params.conversationId) {
+    values.push(params.conversationId)
+    conversationFilter = ` AND delivery.conversation_id = $${values.length}::uuid`
+  }
   const result = await executeSql<DeliveryRow>(
     `
       SELECT
@@ -2263,10 +2273,11 @@ export async function checkRemoteAgentMessages(params: {
       INNER JOIN conversation_items item ON item.id = delivery.item_id
       WHERE delivery.remote_agent_id = $1
         AND delivery.status = 'pending'
+        ${conversationFilter}
       ORDER BY item.sequence ASC, delivery.created_at ASC
       LIMIT $2
     `,
-    [params.remoteAgentId, Math.min(Math.max(params.limit ?? 100, 1), 500)]
+    values
   )
 
   return {

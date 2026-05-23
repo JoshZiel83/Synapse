@@ -500,10 +500,75 @@ class CodexAgentSession implements AgentSession {
       return
     }
     if (method === "mcpServer/elicitation/request") {
-      writeJsonLine(this.child, {
-        jsonrpc: "2.0",
-        id,
-        result: { action: "cancel", content: null },
+      // Codex elicitation = "MCP server wants the user to fill in a form
+      // mid-tool-call". Route it through the same user_input mechanism we
+      // already use for tool-driven questions so the human can answer in
+      // Synapse. The respondPermission roundtrip translates the daemon's
+      // PermissionDecision back into the elicitation accept/decline shape.
+      const typed = params as {
+        message?: string
+        mode?: "form" | "url"
+        requestedSchema?: { properties?: Record<string, unknown> }
+        serverName?: string
+      }
+      const requestId = `codex-elicit-${String(id)}`
+      this.pendingPermissions.set(requestId, (decision) => {
+        if (decision.behavior === "allow") {
+          writeJsonLine(this.child, {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              action: "accept",
+              content: (decision.updatedInput?.answers as unknown) ?? null,
+              _meta: null,
+            },
+          })
+        } else {
+          writeJsonLine(this.child, {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              action: "decline",
+              content: null,
+              _meta: { reason: decision.message },
+            },
+          })
+        }
+      })
+      const schemaProps = typed?.requestedSchema?.properties ?? {}
+      const questions = Object.entries(schemaProps).map(([key, raw], index) => {
+        const prop = (raw ?? {}) as {
+          title?: string
+          description?: string
+          type?: string
+          enum?: unknown[]
+        }
+        return {
+          id: key,
+          header: prop.title ?? `Field ${index + 1}`,
+          type:
+            Array.isArray(prop.enum) && prop.enum.length > 0
+              ? "single_select"
+              : "free_text",
+          prompt: prop.description ?? prop.title ?? key,
+          required: true,
+          ...(Array.isArray(prop.enum)
+            ? {
+                options: prop.enum.map((value, optionIndex) => ({
+                  id: `option-${index + 1}-${optionIndex + 1}`,
+                  label: String(value),
+                })),
+              }
+            : {}),
+        }
+      })
+      this.eventQueue.push({
+        kind: "user_input_requested",
+        requestId,
+        title:
+          typed?.message?.trim() ||
+          `Codex ${typed?.serverName ?? "MCP server"} needs input`,
+        questions,
       })
       return
     }
