@@ -210,13 +210,34 @@ class ClaudeAgentSession implements AgentSession {
   }
 
   private async drainQuery(query: ClaudeQuery) {
+    let yieldedAny = false
     try {
       for await (const message of query as AsyncIterable<SDKMessage>) {
+        yieldedAny = true
         this.handleMessage(message)
+      }
+      // The SDK closed the iterator without throwing. When it does that with
+      // zero messages, the daemon is left in "running" forever and operators
+      // see no signal beyond a generic EPIPE on the process-scope handler.
+      // Push a structured error so the conversation surfaces the failure in
+      // remote_agent_conversation_contexts.last_error and operators can find
+      // the right needle in the logs (e.g. proxy unreachable / model 404 /
+      // SDK config mismatch).
+      if (!yieldedAny) {
+        this.eventQueue.push({
+          kind: "error",
+          message:
+            "Claude SDK closed the message iterator before emitting any event " +
+            "(likely subprocess crashed during startup — check daemon/api logs, " +
+            "ANTHROPIC_BASE_URL reachability via HTTPS_PROXY, and mcpServers config)",
+        })
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error)
-      this.eventQueue.push({ kind: "error", message })
+      this.eventQueue.push({
+        kind: "error",
+        message: `Claude SDK iterator threw: ${message}`,
+      })
     } finally {
       this.eventQueue.push({ kind: "turn_completed" })
       this.eventQueue.close()
