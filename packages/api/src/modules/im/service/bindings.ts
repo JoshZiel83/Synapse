@@ -5,12 +5,6 @@
  * writes a transport_endpoints row.
  *
  * Extracted from service.ts. service.ts re-exports for back-compat.
- *
- * Note: this file imports `loadTransportAccountRow`,
- * `assertConversationInboundActor`, and `listTransportSessions` from
- * service.ts. They'll move out as accounts.ts is extracted next; the
- * temporary circular import is safe because each side only reads the
- * other's exports inside function bodies (no top-level evaluation race).
  */
 
 import { sql } from "kysely"
@@ -33,7 +27,7 @@ import {
   assertConversationInboundActor,
   loadTransportAccountRow,
   listTransportSessions,
-} from "../service.js"
+} from "./accounts.js"
 
 export async function getConversationTransportBinding(params: {
   workspaceId: string

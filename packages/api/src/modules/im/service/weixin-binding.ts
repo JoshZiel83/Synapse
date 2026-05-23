@@ -28,7 +28,7 @@ import {
   parseJsonObject,
   readTrimmedString,
 } from "./_helpers.js"
-import { updateTransportAccount } from "../service.js"
+import { updateTransportAccount } from "./accounts.js"
 
 function pickCurrentWeixinExternalUser(params: {
   externalUsers: TransportExternalUserSummary[]
