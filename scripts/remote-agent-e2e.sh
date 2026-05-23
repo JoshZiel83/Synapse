@@ -354,9 +354,27 @@ cmd_verify() {
   echo "  ok"
 
   echo "[3/16] daemon WebSocket connected"
-  compose logs --tail=100 rae-daemon 2>/dev/null \
-    | grep -q "WebSocket connected"
-  echo "  ok"
+  # Query authoritative DB state instead of grepping daemon logs. The old
+  # `compose logs --tail=100 | grep "WebSocket connected"` was fragile on
+  # long-running stacks where the line scrolled out of the tail window even
+  # though the daemon was still actively connected. The machine_sessions row
+  # is the server's own record of an accepted WS handshake; status in
+  # ('connecting','active') with ended_at IS NULL means the daemon is alive
+  # and the server has acked it. Poll briefly to ride out the seed-time
+  # restart that recreates the daemon container with the bound machine key.
+  local ws_elapsed=0
+  local ws_count="0"
+  while [ "$ws_elapsed" -lt 30 ]; do
+    ws_count=$(run_psql "SELECT COUNT(*)::text FROM remote_agent_machine_sessions WHERE machine_id='$RAE_MACHINE_ID' AND status IN ('connecting','active') AND ended_at IS NULL")
+    if [ "${ws_count:-0}" -ge 1 ]; then
+      break
+    fi
+    sleep 1
+    ws_elapsed=$((ws_elapsed + 1))
+  done
+  test "${ws_count:-0}" -ge 1 \
+    || { echo "  FAIL: no active remote_agent_machine_sessions row after ${ws_elapsed}s (daemon not connected to server)"; exit 1; }
+  echo "  ok ($ws_count active machine session row)"
 
   echo "[4/16] reverse-MCP endpoint rejects empty Bearer (401)"
   test "$(curl -s -o /dev/null -w '%{http_code}' \
