@@ -4,6 +4,7 @@ import type { ConversationFeedMessageItem } from "@synapse/shared/types"
 import { redis } from "../infrastructure/redis/index.js"
 import { getConversationFeedItemById } from "../modules/chat/service.js"
 import {
+  findExternalMessageIdForItem,
   getConversationTransportBinding,
   getPrimaryTransportAddressForParticipant,
   getReachableTransportAddressForParticipant,
@@ -186,6 +187,29 @@ export function startImTransportDeliveryWorker() {
             displayName: m.displayName || m.externalId,
           })
         }
+
+        // If this outbound is a reply to a previous IM message, look up the
+        // platform's message_id for that conversation_item and pass it to
+        // the connector. The connector decides how to use it (Feishu uses
+        // im.message.reply; weixin has no reply concept and may ignore).
+        let replyTo:
+          | { externalMessageId: string; endpointExternalId: string }
+          | undefined
+        const replyToItemId = (item as unknown as { replyToItemId?: string })
+          .replyToItemId
+        if (replyToItemId) {
+          const externalReplyMsgId = await findExternalMessageIdForItem({
+            itemId: replyToItemId,
+            transportEndpointId: link.endpoint.id,
+          })
+          if (externalReplyMsgId) {
+            replyTo = {
+              externalMessageId: externalReplyMsgId,
+              endpointExternalId: link.endpoint.externalId,
+            }
+          }
+        }
+
         const deliveryResult = await connector.sendMessage({
           account: link.account,
           endpoint: {
@@ -194,6 +218,7 @@ export function startImTransportDeliveryWorker() {
             metadata: link.endpoint.metadata,
           },
           message,
+          replyTo,
         })
 
         await updateTransportMessageLinkStatus({

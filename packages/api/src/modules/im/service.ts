@@ -2174,4 +2174,5 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
 export {
   loadTransportEmojiReactions,
   saveTransportEmojiReactions,
+  findExternalMessageIdForItem,
 } from "./service/reactions-storage.js"

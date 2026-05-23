@@ -157,10 +157,16 @@ export interface TransportConnector {
   /**
    * Build a per-message StatusReactionAdapter. Returns null on platforms with
    * no reaction capability (the controller becomes a no-op).
+   *
+   * `onPersist` is invoked whenever the platform's reaction state changes,
+   * so the caller can persist {glyph → reaction_id} into durable storage
+   * for cross-restart cleanup. Connectors that can't track reaction ids
+   * may pass an empty map.
    */
   createStatusReactionAdapter(input: {
     account: TransportAccountSummary
     messageRef: MessageRef
+    onPersist?: (state: { reactionIdsByEmoji: Record<string, string> }) => void
   }): StatusReactionAdapter | null
 
   /**

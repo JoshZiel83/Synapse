@@ -4,6 +4,9 @@
  * every add/delete so a process restart can recover the glyph→reaction_id
  * map and clean up orphan reactions instead of leaking them.
  *
+ * Also re-exports a lookup for the inbound link of a given item, used by
+ * the delivery worker to resolve replyTo.
+ *
  * Extracted from service.ts as the first piece of a per-domain split.
  * service.ts re-exports these to preserve the existing import paths.
  */
@@ -56,4 +59,25 @@ export async function saveTransportEmojiReactions(input: {
     .where("external_message_id", "=", input.externalMessageId)
     .where("direction", "=", "inbound")
     .execute()
+}
+
+/**
+ * Resolve the external_message_id of the inbound link that recorded the
+ * given conversation_item. Used by the delivery worker to translate
+ * `conversation_items.reply_to_item_id` (internal id) into the platform
+ * message_id that connector.sendMessage(replyTo) expects.
+ */
+export async function findExternalMessageIdForItem(input: {
+  itemId: string
+  transportEndpointId: string
+}): Promise<string | null> {
+  const row = await db
+    .selectFrom("transport_message_links")
+    .select(["external_message_id"])
+    .where("item_id", "=", input.itemId)
+    .where("transport_endpoint_id", "=", input.transportEndpointId)
+    .where("direction", "=", "inbound")
+    .limit(1)
+    .executeTakeFirst()
+  return row?.external_message_id || null
 }

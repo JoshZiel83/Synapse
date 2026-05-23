@@ -1,20 +1,24 @@
 /**
- * Wire actor turn lifecycle events to per-session StatusReactionController.
+ * Wire actor turn lifecycle events to per-session StatusReactionController
+ * AND TypingController.
  *
  * Subscribes to the existing event bus (packages/api/src/infrastructure/events)
- * for actor.thinking / session.thinking / actor.action and translates them
- * into set()/done()/error() calls on a StatusReactionController scoped per
- * (sessionId × originating inbound transport message).
+ * for actor.thinking / session.thinking / actor.action / session.status.changed
+ * and dispatches to whichever connector matches the originating inbound IM
+ * message. No transport-specific imports here; the connector layer owns the
+ * specifics.
  *
- * Per-conversation lookup: when a session starts thinking, find the most
- * recent inbound transport_message_link in that conversation (within a few
- * minutes). If present, build a StatusReactionAdapter via the registered
- * connector and create a controller. All subsequent events for the session
- * drive that controller. On terminal events, the controller schedules its
- * own destroy.
+ * Per-(sessionId × externalMessageId) the hook creates two controllers:
+ *   - StatusReactionController (for platforms with canReact, e.g. Feishu)
+ *   - TypingController         (for platforms with canTyping, e.g. WeChat)
+ * Either may be a null-controller if the connector returns null for that
+ * platform.
+ *
+ * Reaction persistence (orphan cleanup on restart) is handled generically:
+ * the hook passes an onPersist callback into createStatusReactionAdapter and
+ * the connector wires it.
  */
 
-import { sql } from "kysely"
 import { db } from "../../../infrastructure/database/kysely.js"
 import { onEvent } from "../../../infrastructure/events/index.js"
 import {
@@ -23,20 +27,22 @@ import {
   saveTransportEmojiReactions,
 } from "../service.js"
 import { tryGetConnector } from "../connectors/registry.js"
-import { feishuConnector } from "../connectors/feishu/index.js"
-import { createFeishuClient } from "../connectors/feishu/client.js"
-import { createFeishuReactionAdapter } from "../connectors/feishu/reactions.js"
 import {
   createStatusReactionController,
   type StatusReactionController,
 } from "../status-reaction/controller.js"
+import {
+  createTypingController,
+  type TypingController,
+} from "../typing/controller.js"
 import {
   resolveActorActionStatus,
   resolveSessionThinkingStatus,
 } from "./status-resolver.js"
 
 interface ActiveStatusSession {
-  controller: StatusReactionController
+  reaction: StatusReactionController
+  typing: TypingController
   externalMessageId: string
   startedAt: number
 }
@@ -48,6 +54,7 @@ const RECENT_INBOUND_WINDOW_MS = 5 * 60 * 1000 // 5 min fallback window
 interface InboundLinkLookup {
   externalMessageId: string
   endpointExternalId: string
+  endpointType: "direct" | "group"
   transportKind: string
   transportAccountId: string
 }
@@ -64,12 +71,6 @@ async function resolveConversationIdForSession(
   return row?.conversation_id || null
 }
 
-/**
- * Precise binding: look up the inbound transport_message_link via the
- * currently-running turn's trigger_item_id, so we react on the exact
- * message that woke this turn instead of "most recent in conversation
- * within an hour".
- */
 async function findInboundLinkForSessionTurn(
   sessionId: string
 ): Promise<InboundLinkLookup | null> {
@@ -83,8 +84,6 @@ async function findInboundLinkForSessionTurn(
     .executeTakeFirst()
   const itemId = turnRow?.trigger_item_id
   if (!itemId) {
-    // Turn might not yet have transitioned to running (race) or already
-    // completed. Try the most-recent-by-started-at as fallback.
     const fallback = await db
       .selectFrom("turns")
       .select(["trigger_item_id"])
@@ -116,6 +115,7 @@ async function findInboundLinkByItemId(
     .select([
       "transport_message_links.external_message_id as externalMessageId",
       "transport_endpoints.external_id as endpointExternalId",
+      "transport_endpoints.endpoint_type as endpointType",
       "transport_accounts.transport_kind as transportKind",
       "transport_accounts.id as transportAccountId",
     ])
@@ -127,20 +127,18 @@ async function findInboundLinkByItemId(
   return {
     externalMessageId: row.externalMessageId,
     endpointExternalId: row.endpointExternalId,
+    endpointType: row.endpointType as "direct" | "group",
     transportKind: String(row.transportKind),
     transportAccountId: String(row.transportAccountId),
   }
 }
 
-/**
- * Fallback used when no turn is found yet (event arrived before turn row
- * persisted). Wider lookup by conversation + last hour. NEVER blindly
- * react on this lookup — it's a best-effort grace path.
- */
 async function findRecentInboundLinkForConversation(
   conversationId: string
 ): Promise<InboundLinkLookup | null> {
-  const cutoff = new Date(Date.now() - RECENT_INBOUND_WINDOW_MS).toISOString()
+  const cutoffIso = new Date(
+    Date.now() - RECENT_INBOUND_WINDOW_MS
+  ).toISOString()
   const row = await db
     .selectFrom("transport_message_links")
     .innerJoin(
@@ -156,14 +154,13 @@ async function findRecentInboundLinkForConversation(
     .select([
       "transport_message_links.external_message_id as externalMessageId",
       "transport_endpoints.external_id as endpointExternalId",
+      "transport_endpoints.endpoint_type as endpointType",
       "transport_accounts.transport_kind as transportKind",
       "transport_accounts.id as transportAccountId",
     ])
     .where("transport_message_links.conversation_id", "=", conversationId)
     .where("transport_message_links.direction", "=", "inbound")
-    .where(
-      sql<boolean>`transport_message_links.created_at >= ${cutoff}::timestamptz`
-    )
+    .where("transport_message_links.created_at", ">=", cutoffIso as any)
     .orderBy("transport_message_links.created_at", "desc")
     .limit(1)
     .executeTakeFirst()
@@ -171,188 +168,145 @@ async function findRecentInboundLinkForConversation(
   return {
     externalMessageId: row.externalMessageId,
     endpointExternalId: row.endpointExternalId,
+    endpointType: row.endpointType as "direct" | "group",
     transportKind: String(row.transportKind),
     transportAccountId: String(row.transportAccountId),
   }
 }
 
-async function ensureControllerForSession(input: {
+async function ensureControllersForSession(input: {
   sessionId: string
   workspaceId: string
   conversationId: string
-}): Promise<StatusReactionController | null> {
-  // Prefer precise binding via the current turn's trigger_item_id.
-  // Fall back to the conversation+time window heuristic only if no
-  // turn row exists yet (race) — never as the steady-state path.
+}): Promise<ActiveStatusSession | null> {
   let link = await findInboundLinkForSessionTurn(input.sessionId)
   if (!link) {
     link = await findRecentInboundLinkForConversation(input.conversationId)
-    if (link) {
-      console.log(
-        `[im:status] precise turn lookup failed for sid=${input.sessionId.slice(0, 8)}; using fallback window`
-      )
-    }
   }
   if (!link) {
-    console.log(
-      `[im:status] no inbound link found for sid=${input.sessionId.slice(0, 8)}`
-    )
     return null
   }
 
-  // If we have a cached controller for this session but it's for a different
-  // (older) inbound message, destroy it first so the new message gets its own.
   const existing = activeSessions.get(input.sessionId)
+  if (existing && existing.externalMessageId === link.externalMessageId) {
+    return existing
+  }
   if (existing) {
-    if (existing.externalMessageId === link.externalMessageId) {
-      return existing.controller
-    }
     activeSessions.delete(input.sessionId)
-    void existing.controller.destroy()
+    void existing.reaction.destroy()
+    void existing.typing.destroy()
   }
-  console.log(
-    `[im:status] link found: kind=${link.transportKind} externalMsgId=${link.externalMessageId.slice(0, 12)} acct=${link.transportAccountId.slice(0, 8)}`
-  )
+
   const connector = tryGetConnector(link.transportKind as any)
-  if (!connector) {
-    console.log(`[im:status] no connector registered for ${link.transportKind}`)
-    return null
-  }
+  if (!connector) return null
 
   const account = await getTransportAccountById(link.transportAccountId)
-  if (!account || account.workspaceId !== input.workspaceId) {
-    console.log(
-      `[im:status] account mismatch: acct=${account?.id?.slice(0, 8)} acct.ws=${account?.workspaceId?.slice(0, 8)} ev.ws=${input.workspaceId.slice(0, 8)}`
-    )
-    return null
-  }
+  if (!account || account.workspaceId !== input.workspaceId) return null
 
-  const adapter =
-    link.transportKind === "feishu"
-      ? await buildFeishuAdapterWithPersistence({
-          account,
-          externalMessageId: link.externalMessageId,
-          endpointExternalId: link.endpointExternalId,
-        })
-      : connector.createStatusReactionAdapter({
-          account,
-          messageRef: {
-            externalMessageId: link.externalMessageId,
-            endpointExternalId: link.endpointExternalId,
-          },
-        })
-  if (!adapter) {
-    console.log(`[im:status] connector returned null adapter`)
-    return null
-  }
-  console.log(`[im:status] adapter created, registering controller`)
-
-  const controller = createStatusReactionController({
-    adapter,
-    onError: (err) => {
-      console.error(
-        `[im:status] adapter error for session=${input.sessionId}:`,
-        err
-      )
-    },
-  })
-  activeSessions.set(input.sessionId, {
-    controller,
-    externalMessageId: link.externalMessageId,
-    startedAt: Date.now(),
-  })
-  return controller
-}
-
-async function destroyControllerForSession(sessionId: string): Promise<void> {
-  const entry = activeSessions.get(sessionId)
-  if (!entry) return
-  activeSessions.delete(sessionId)
-  await entry.controller.destroy()
-}
-
-/**
- * Build a Feishu StatusReactionAdapter pre-loaded with persisted reaction_id
- * state. Whenever the in-memory state changes, persist it back so a process
- * restart can read it and DELETE orphan reactions instead of leaking them.
- */
-async function buildFeishuAdapterWithPersistence(input: {
-  account: Awaited<ReturnType<typeof getTransportAccountById>>
-  externalMessageId: string
-  endpointExternalId: string
-}) {
-  if (!input.account) return null
-  const account = input.account
-  // Best-effort: load previously persisted reaction ids (silent on failure)
-  let initial: Record<string, string> = {}
-  try {
-    initial = await loadTransportEmojiReactions({
-      transportAccountId: account.id,
-      externalMessageId: input.externalMessageId,
-    })
-  } catch (err) {
-    console.warn("[im:status] failed to load persisted reactions:", err)
-  }
-  const client = createFeishuClient(account)
-  const adapter = createFeishuReactionAdapter({
-    client,
+  // Reaction adapter — connector wires the onPersist callback into its own
+  // tracking. No platform-specific code here.
+  const accountId = account.id
+  const externalMessageId = link.externalMessageId
+  const reactionAdapter = connector.createStatusReactionAdapter({
+    account,
     messageRef: {
-      externalMessageId: input.externalMessageId,
-      endpointExternalId: input.endpointExternalId,
+      externalMessageId,
+      endpointExternalId: link.endpointExternalId,
     },
-    onReactionTracked: ({ reactionIdsByEmoji }) => {
-      // Fire-and-forget persistence; no need to await in the hot path
+    onPersist: ({ reactionIdsByEmoji }) => {
       void saveTransportEmojiReactions({
-        transportAccountId: account.id,
-        externalMessageId: input.externalMessageId,
+        transportAccountId: accountId,
+        externalMessageId,
         reactionIdsByEmoji,
       }).catch((err) => {
         console.warn("[im:status] failed to save reactions:", err)
       })
     },
   })
-  // If we restored prior state, replay it onto the adapter's bookkeeping so
-  // setReaction("same emoji") becomes a no-op and clearReaction can delete.
-  if (Object.keys(initial).length > 0) {
-    for (const [emoji, reactionId] of Object.entries(initial)) {
-      // Adapter exposes no setter for prior state; the reactionIdsByEmoji map
-      // lives in the adapter closure. The pragmatic recovery here is to
-      // immediately delete any orphan reactions left by a prior process.
-      try {
-        await client.im.messageReaction.delete({
-          path: {
-            message_id: input.externalMessageId,
-            reaction_id: reactionId,
-          },
-        })
-      } catch {
-        // ignored: maybe already deleted or stale id
-      }
-      void emoji // emoji is consulted by the deletion call's logging path only
-    }
-    // Persist the now-cleared state so we don't try this again next restart
+
+  // Reaction state recovery: ask the connector to delete any orphan
+  // reactions left by a previous process. We do this by calling
+  // removeReaction on each persisted glyph. Adapters that don't track
+  // ids just ignore — orphans stay only on platforms with stable ids
+  // (currently Feishu).
+  if (reactionAdapter) {
     try {
-      await saveTransportEmojiReactions({
-        transportAccountId: account.id,
-        externalMessageId: input.externalMessageId,
-        reactionIdsByEmoji: {},
+      const persisted = await loadTransportEmojiReactions({
+        transportAccountId: accountId,
+        externalMessageId,
       })
-    } catch {}
+      for (const glyph of Object.keys(persisted)) {
+        try {
+          await reactionAdapter.removeReaction?.(glyph)
+        } catch {
+          // ignored: orphan delete is best-effort
+        }
+      }
+      if (Object.keys(persisted).length > 0) {
+        await saveTransportEmojiReactions({
+          transportAccountId: accountId,
+          externalMessageId,
+          reactionIdsByEmoji: {},
+        }).catch(() => undefined)
+      }
+    } catch (err) {
+      console.warn("[im:status] orphan reaction recovery failed:", err)
+    }
   }
-  return adapter
+
+  const reactionController = createStatusReactionController({
+    adapter: reactionAdapter,
+    onError: (err) => {
+      console.error(
+        `[im:status] reaction adapter error for session=${input.sessionId}:`,
+        err
+      )
+    },
+  })
+
+  // Typing adapter — separate controller, separate lifecycle. Adapter is
+  // null on platforms without typing capability (e.g. Feishu).
+  const typingAdapter = connector.createTypingAdapter({
+    account,
+    endpointRef: {
+      endpointType: link.endpointType,
+      externalId: link.endpointExternalId,
+      metadata: {},
+    },
+  })
+  const typingController = createTypingController({
+    adapter: typingAdapter,
+    onError: (err) => {
+      console.error(
+        `[im:status] typing adapter error for session=${input.sessionId}:`,
+        err
+      )
+    },
+  })
+
+  const entry: ActiveStatusSession = {
+    reaction: reactionController,
+    typing: typingController,
+    externalMessageId,
+    startedAt: Date.now(),
+  }
+  activeSessions.set(input.sessionId, entry)
+  return entry
 }
 
-/**
- * Idempotent install. Call once during API startup. Returns a function that
- * unsubscribes (for graceful shutdown / tests).
- */
+async function destroyControllersForSession(sessionId: string): Promise<void> {
+  const entry = activeSessions.get(sessionId)
+  if (!entry) return
+  activeSessions.delete(sessionId)
+  await entry.reaction.destroy()
+  await entry.typing.destroy()
+}
+
 let installed = false
 const unsubscribers: Array<() => void> = []
 
 export function installActorStatusHooks(): () => void {
-  if (installed) {
-    return () => {}
-  }
+  if (installed) return () => {}
   installed = true
 
   unsubscribers.push(
@@ -363,61 +317,51 @@ export function installActorStatusHooks(): () => void {
       if (!sessionId) return
       if (!conversationId) {
         const looked = await resolveConversationIdForSession(sessionId)
-        if (!looked) {
-          console.log(
-            `[im:status] no conversationId for sid=${sessionId.slice(0, 8)}`
-          )
-          return
-        }
+        if (!looked) return
         conversationId = looked
       }
-      console.log(
-        `[im:status] actor.thinking sid=${sessionId.slice(0, 8)} cid=${conversationId.slice(0, 8)} ws=${event.workspaceId.slice(0, 8)}`
-      )
-      const controller = await ensureControllerForSession({
+      const entry = await ensureControllersForSession({
         sessionId,
         workspaceId: event.workspaceId,
         conversationId,
       })
-      if (!controller) {
-        console.log(
-          `[im:status] no controller for sid=${sessionId.slice(0, 8)}`
-        )
-        return
-      }
-      console.log(
-        `[im:status] dispatching queued → thinking for sid=${sessionId.slice(0, 8)}`
-      )
-      controller.set("queued")
-      controller.set("thinking")
+      if (!entry) return
+      entry.reaction.set("queued")
+      entry.reaction.set("thinking")
+      // Typing starts when the actor begins thinking; the controller
+      // self-stops after first model output via session.thinking handler
+      // below, or at terminal events.
+      entry.typing.start()
     })
   )
 
   unsubscribers.push(
     onEvent("session.thinking", async (event) => {
       const sessionId = String(event.payload.sessionId || "")
-      const existing = activeSessions.get(sessionId)
-      if (!existing) return
+      const entry = activeSessions.get(sessionId)
+      if (!entry) return
       const level = resolveSessionThinkingStatus(event.payload)
-      existing.controller.set(level)
+      entry.reaction.set(level)
+      // First sign of real model activity → stop the typing indicator so
+      // the user sees text arriving instead of an ever-present "typing…".
+      entry.typing.stop()
     })
   )
 
   unsubscribers.push(
     onEvent("actor.action", async (event) => {
       const sessionId = String(event.payload.sessionId || "")
-      const existing = activeSessions.get(sessionId)
-      if (!existing) return
+      const entry = activeSessions.get(sessionId)
+      if (!entry) return
       const level = resolveActorActionStatus(event.payload)
       if (level === null) {
-        // No actions → treat as turn completion
-        existing.controller.done()
-        // Schedule destroy after a beat to let terminal hold work
+        entry.reaction.done()
+        entry.typing.stop()
         setTimeout(() => {
-          void destroyControllerForSession(sessionId)
+          void destroyControllersForSession(sessionId)
         }, 5_000)
       } else {
-        existing.controller.set(level)
+        entry.reaction.set(level)
       }
     })
   )
@@ -426,17 +370,19 @@ export function installActorStatusHooks(): () => void {
     onEvent("session.status.changed", async (event) => {
       const sessionId = String(event.payload.sessionId || "")
       const status = String(event.payload.status || "")
-      const existing = activeSessions.get(sessionId)
-      if (!existing) return
+      const entry = activeSessions.get(sessionId)
+      if (!entry) return
       if (status === "error" || status === "failed") {
-        existing.controller.error()
+        entry.reaction.error()
+        entry.typing.stop()
         setTimeout(() => {
-          void destroyControllerForSession(sessionId)
+          void destroyControllersForSession(sessionId)
         }, 5_000)
       } else if (status === "idle" || status === "completed") {
-        existing.controller.done()
+        entry.reaction.done()
+        entry.typing.stop()
         setTimeout(() => {
-          void destroyControllerForSession(sessionId)
+          void destroyControllersForSession(sessionId)
         }, 5_000)
       }
     })
@@ -456,6 +402,6 @@ export function installActorStatusHooks(): () => void {
 export async function shutdownActorStatusHooks(): Promise<void> {
   const ids = Array.from(activeSessions.keys())
   for (const id of ids) {
-    await destroyControllerForSession(id)
+    await destroyControllersForSession(id)
   }
 }

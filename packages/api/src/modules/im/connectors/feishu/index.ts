@@ -68,6 +68,7 @@ export const feishuConnector: TransportConnector = {
       account: input.account,
       endpoint: input.endpoint,
       message: input.message,
+      replyTo: input.replyTo,
     })
   },
 
@@ -77,6 +78,9 @@ export const feishuConnector: TransportConnector = {
       return createFeishuReactionAdapter({
         client,
         messageRef: input.messageRef,
+        onReactionTracked: input.onPersist
+          ? ({ reactionIdsByEmoji }) => input.onPersist!({ reactionIdsByEmoji })
+          : undefined,
       })
     } catch {
       return null
