@@ -88,3 +88,23 @@ test("mobile sendMessage defers the flushOutbox when SW is active", async () => 
     "the SW guard must sit between the optimistic write and the flushOutbox call"
   )
 })
+
+test("mobile retryMessage defers the flushOutbox when SW is active", async () => {
+  const body = await readFile(chatRuntimePath, "utf8")
+  const retryFnMatch = body.match(
+    /async retryMessage\(clientMessageId: string\) \{[\s\S]*?\n  \}\n/
+  )
+  assert.ok(
+    retryFnMatch,
+    "could not find retryMessage function body in chat-runtime.ts"
+  )
+  const retryFnBody = retryFnMatch[0]
+  const guardIdx = retryFnBody.indexOf("isChatServiceWorkerActive()")
+  const flushIdx = retryFnBody.indexOf("await this.flushOutbox()")
+  assert.ok(guardIdx >= 0, "SW guard missing in retryMessage")
+  assert.ok(flushIdx >= 0, "main-thread flushOutbox call missing")
+  assert.ok(
+    guardIdx < flushIdx,
+    "the SW guard must come before the flushOutbox call in retryMessage so an SW-owned retry isn't double-POSTed"
+  )
+})

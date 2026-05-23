@@ -221,3 +221,83 @@ export function mergeStoredQueueTransition(
     outbox: nextOutbox,
   }
 }
+
+/**
+ * Worker-side merge: reconcile a flush attempt back into the queue.
+ *
+ * Mental model: the worker took a snapshot `base`, processed it, and
+ * produced `processed`. Meanwhile the UI thread may have written new
+ * state into `latest`. For each entry the worker touched, if `latest`
+ * still matches `base` (UI hasn't changed it during the flush) we
+ * apply `processed`; otherwise we keep the newer `latest` to avoid
+ * clobbering a concurrent write.
+ *
+ * Generic over the queue-state shape so it can serve both the v3 web
+ * StoredChatQueueState and the v1 mobile ChatWorkspaceQueueState
+ * without converging their version numbers (mobile would need a
+ * destructive IDB migration to bump to v3).
+ */
+export interface ChatQueueStateLike {
+  workspaceId: string
+  workspaceMemberId?: string
+  clientInstanceId?: string
+  inboxCursor: number
+  lastBootstrappedAt?: string
+  pendingReads: Record<string, unknown>
+  outbox: Record<string, unknown>
+}
+
+function sameEntry(left: unknown, right: unknown) {
+  return JSON.stringify(left ?? null) === JSON.stringify(right ?? null)
+}
+
+export function mergeQueueStateForSave<T extends ChatQueueStateLike>(
+  baseQueueState: T,
+  latestQueueState: T,
+  processedQueueState: T
+): T {
+  const next = {
+    ...latestQueueState,
+    workspaceId: latestQueueState.workspaceId,
+    workspaceMemberId:
+      latestQueueState.workspaceMemberId ||
+      processedQueueState.workspaceMemberId,
+    clientInstanceId:
+      latestQueueState.clientInstanceId || processedQueueState.clientInstanceId,
+    inboxCursor: Math.max(
+      latestQueueState.inboxCursor || 0,
+      processedQueueState.inboxCursor || 0
+    ),
+    lastBootstrappedAt:
+      latestQueueState.lastBootstrappedAt ||
+      processedQueueState.lastBootstrappedAt,
+    pendingReads: { ...latestQueueState.pendingReads },
+    outbox: { ...latestQueueState.outbox },
+  } as T
+
+  for (const conversationId of Object.keys(baseQueueState.pendingReads)) {
+    const baseEntry = baseQueueState.pendingReads[conversationId]
+    const latestEntry = next.pendingReads[conversationId]
+    const processedEntry = processedQueueState.pendingReads[conversationId]
+    if (!sameEntry(latestEntry, baseEntry)) continue
+    if (processedEntry) {
+      next.pendingReads[conversationId] = processedEntry
+    } else {
+      delete next.pendingReads[conversationId]
+    }
+  }
+
+  for (const clientMessageId of Object.keys(baseQueueState.outbox)) {
+    const baseEntry = baseQueueState.outbox[clientMessageId]
+    const latestEntry = next.outbox[clientMessageId]
+    const processedEntry = processedQueueState.outbox[clientMessageId]
+    if (!sameEntry(latestEntry, baseEntry)) continue
+    if (processedEntry) {
+      next.outbox[clientMessageId] = processedEntry
+    } else {
+      delete next.outbox[clientMessageId]
+    }
+  }
+
+  return next
+}

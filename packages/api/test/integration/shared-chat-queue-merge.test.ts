@@ -27,7 +27,9 @@ import { test } from "node:test"
 import assert from "node:assert/strict"
 import {
   createEmptyStoredChatQueueState,
+  mergeQueueStateForSave,
   mergeStoredQueueTransition,
+  type ChatQueueStateLike,
   type StoredChatQueueState,
 } from "@synapse/shared"
 
@@ -149,4 +151,75 @@ test("merge: inboxCursor is monotonic across snapshots", () => {
   const next = baseState("ws-a", { inboxCursor: 50 })
   const merged = mergeStoredQueueTransition(current, null, next)
   assert.equal(merged.inboxCursor, 100)
+})
+
+// ----- S28: mergeQueueStateForSave (worker reconcile) -----
+
+function mobileLike(
+  workspaceId: string,
+  overrides: Partial<ChatQueueStateLike> = {}
+): ChatQueueStateLike {
+  return {
+    workspaceId,
+    inboxCursor: 0,
+    pendingReads: {},
+    outbox: {},
+    ...overrides,
+  }
+}
+
+test("save-merge: worker-processed entries apply when UI hasn't touched them", () => {
+  const base = mobileLike("ws-a", {
+    pendingReads: {
+      "conv-1": { conversationId: "conv-1", readUpToSequence: 5 },
+    },
+    outbox: {
+      "cm-1": {
+        clientMessageId: "cm-1",
+        conversationId: "conv-1",
+        status: "sending",
+      },
+    },
+  })
+  // Latest is identical to base — UI did not change anything during the
+  // flush, so the processed result wins.
+  const latest = mobileLike("ws-a", {
+    pendingReads: base.pendingReads,
+    outbox: base.outbox,
+  })
+  const processed = mobileLike("ws-a", {})
+
+  const merged = mergeQueueStateForSave(base, latest, processed)
+  assert.deepEqual(merged.pendingReads, {}, "worker cleared pending read")
+  assert.deepEqual(merged.outbox, {}, "worker cleared outbox")
+})
+
+test("save-merge: locally-changed entry survives worker processing", () => {
+  const base = mobileLike("ws-a", {
+    pendingReads: {
+      "conv-1": { conversationId: "conv-1", readUpToSequence: 5 },
+    },
+  })
+  // UI advanced the read while the worker was flushing.
+  const latest = mobileLike("ws-a", {
+    pendingReads: {
+      "conv-1": { conversationId: "conv-1", readUpToSequence: 12 },
+    },
+  })
+  const processed = mobileLike("ws-a", {}) // worker cleared the old version
+
+  const merged = mergeQueueStateForSave(base, latest, processed)
+  assert.deepEqual(
+    merged.pendingReads,
+    { "conv-1": { conversationId: "conv-1", readUpToSequence: 12 } },
+    "newer local read must survive the worker's drop"
+  )
+})
+
+test("save-merge: inboxCursor is the max of latest and processed", () => {
+  const base = mobileLike("ws-a")
+  const latest = mobileLike("ws-a", { inboxCursor: 50 })
+  const processed = mobileLike("ws-a", { inboxCursor: 120 })
+  const merged = mergeQueueStateForSave(base, latest, processed)
+  assert.equal(merged.inboxCursor, 120)
 })
