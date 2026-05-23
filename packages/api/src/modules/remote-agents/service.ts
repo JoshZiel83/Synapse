@@ -310,7 +310,23 @@ async function updateConversationRuntimeStatus(
             ELSE remote_agent_conversation_contexts.last_run_finished_at
           END,
           last_activity_at = NOW(),
-          last_error = EXCLUDED.last_error,
+          -- last_error semantics: the daemon publishes status on every
+          -- lifecycle transition (session_started -> running, error -> error,
+          -- turn_completed -> idle, etc.) but only the error path attaches a
+          -- message. Before this change we ran
+          --     last_error = EXCLUDED.last_error
+          -- which meant the immediately-following turn_completed -> idle
+          -- (with lastError unset/null on the wire) overwrote the real error
+          -- with NULL. Net effect: operators saw runtime_state=idle and
+          -- last_error=NULL even though the SDK had just blown up, and the
+          -- only surviving signal was the EPIPE log line. That diagnostic
+          -- gap is what hid the claude-refuses-root bug.
+          --
+          -- COALESCE preserves the prior message when the daemon doesn't
+          -- attach one, and a new explicit non-null value replaces it.
+          -- There is no explicit clear path; the next error replaces it,
+          -- and a successful run leaves the historical reason visible.
+          last_error = COALESCE(EXCLUDED.last_error, remote_agent_conversation_contexts.last_error),
           updated_at = NOW()
     `,
     [
