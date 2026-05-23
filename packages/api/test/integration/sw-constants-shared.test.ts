@@ -137,3 +137,50 @@ test("mobile chat-web-queue-storage aliases CHAT_QUEUE_DB_NAME from @shared", as
     "mobile chat-web-queue-storage.ts must not redeclare the IDB name"
   )
 })
+
+test("bundled service workers carry the shared chat-queue strings", async () => {
+  // Both clients have a pre-built SW bundle that the browser loads
+  // (web: public/web-chat-service-worker.js, mobile: public/chat-service-worker.js).
+  // The S31 source-level guards above don't catch a stale bundle —
+  // grep the artifact directly for the canonical CHAT_QUEUE_BROADCAST_CHANNEL
+  // string so a forgotten `npm run build:chat-worker` is caught in CI.
+  const webBundle = await readFile(
+    path.join(
+      repoRoot,
+      "packages",
+      "web-next",
+      "public",
+      "web-chat-service-worker.js"
+    ),
+    "utf8"
+  )
+  const mobileBundle = await readFile(
+    path.join(
+      repoRoot,
+      "packages",
+      "mobile-app",
+      "public",
+      "chat-service-worker.js"
+    ),
+    "utf8"
+  )
+  assert.ok(
+    webBundle.includes(CHAT_QUEUE_BROADCAST_CHANNEL),
+    `web SW bundle must contain "${CHAT_QUEUE_BROADCAST_CHANNEL}" — run \`npm run build:chat-worker -w packages/web-next\` and commit`
+  )
+  assert.ok(
+    mobileBundle.includes(CHAT_QUEUE_BROADCAST_CHANNEL),
+    `mobile SW bundle must contain "${CHAT_QUEUE_BROADCAST_CHANNEL}" — run \`npm run build:chat-worker\` in packages/mobile-app and commit`
+  )
+  // Sanity: the old per-client strings must not survive in either bundle.
+  assert.equal(
+    webBundle.includes("synapse.web.chat.worker"),
+    false,
+    "web SW bundle still contains stale 'synapse.web.chat.worker' string"
+  )
+  assert.equal(
+    mobileBundle.includes("synapse.chat.worker"),
+    false,
+    "mobile SW bundle still contains stale 'synapse.chat.worker' string"
+  )
+})
