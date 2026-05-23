@@ -160,15 +160,6 @@ function latestIsoTimestamp(currentValue?: string, nextValue?: string) {
 void sameStoredEntry
 void latestIsoTimestamp
 
-function mergeStoredQueueTransitionLocal(
-  currentState: ReturnType<typeof createEmptyStoredChatQueueState>,
-  previousState: ReturnType<typeof createEmptyStoredChatQueueState> | null,
-  nextState: ReturnType<typeof createEmptyStoredChatQueueState>
-) {
-  return mergeStoredQueueTransition(currentState, previousState, nextState)
-}
-void mergeStoredQueueTransitionLocal
-
 function resolveApiUrl(apiBase: string, path: string) {
   const base =
     typeof apiBase === "string" && apiBase.trim() ? apiBase.trim() : "/api/v1"

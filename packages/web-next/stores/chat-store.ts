@@ -323,15 +323,6 @@ function latestIsoTimestamp(
 }
 void latestIsoTimestamp
 
-function mergeStoredQueueTransitionLocal(
-  currentState: StoredChatQueueState,
-  previousState: StoredChatQueueState | null,
-  nextState: StoredChatQueueState
-) {
-  return mergeStoredQueueTransition(currentState, previousState, nextState)
-}
-void mergeStoredQueueTransitionLocal
-
 function queuePersistSnapshot(
   previousSnapshot: ChatWorkspaceSnapshot | null,
   nextSnapshot: ChatWorkspaceSnapshot | null

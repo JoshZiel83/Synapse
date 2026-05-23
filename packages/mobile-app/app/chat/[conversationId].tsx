@@ -43,6 +43,8 @@ export default function ChatDetailScreen() {
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>()
   const scrollRef = useRef<ScrollView | null>(null)
   const lastReportedReadRef = useRef<string>("")
+  const isAtBottomRef = useRef<boolean>(true)
+  const [isAtBottom, setIsAtBottom] = useState<boolean>(true)
   const previousMessageMetricsRef = useRef<{
     conversationId: string
     firstSequence: number
@@ -154,6 +156,12 @@ export default function ChatDetailScreen() {
   useEffect(() => {
     setReplyTo(null)
     setActionMenu(null)
+    // New conversation auto-scrolls to the bottom (see the appendedAtTail
+    // effect below); reset the at-bottom flag so we don't carry over a
+    // false "scrolled up" state from the previous conversation.
+    isAtBottomRef.current = true
+    setIsAtBottom(true)
+    lastReportedReadRef.current = ""
   }, [conversationId])
 
   useEffect(() => {
@@ -205,23 +213,38 @@ export default function ChatDetailScreen() {
       return
     }
 
+    // The wire protocol distinguishes readUpToSequence (user has
+    // acknowledged messages up to this sequence) from lastVisibleSequence
+    // (this sequence is currently in the viewport). When the user is
+    // scrolled to the bottom we report both as confirmedMaxSequence —
+    // they've seen and acknowledged everything. When the user has scrolled
+    // up we skip the update entirely: bumping readUpTo to a new message
+    // they haven't actually read would be a lie, and ScrollView lacks the
+    // per-item layout info needed to compute a true viewport-top
+    // sequence. The mark resumes the next time they scroll back to the
+    // bottom.
+    if (!isAtBottom) {
+      return
+    }
+
     const nextKey = `${conversationId}:${confirmedMaxSequence}`
     if (lastReportedReadRef.current === nextKey) {
       return
     }
 
     lastReportedReadRef.current = nextKey
-    // NOTE: we send confirmedMaxSequence for both readUpTo and lastVisible
-    // because the mobile list virtualization doesn't currently expose a
-    // distinct viewport-top sequence. The wire protocol differentiates them
-    // (so a scrolled-up user could send readUpTo < lastVisible) but the
-    // mobile UI treats "loaded" as equivalent to "seen".
     void markConversationRead(
       conversationId,
       confirmedMaxSequence,
       confirmedMaxSequence
     )
-  }, [confirmedMaxSequence, conversation, conversationId, markConversationRead])
+  }, [
+    confirmedMaxSequence,
+    conversation,
+    conversationId,
+    isAtBottom,
+    markConversationRead,
+  ])
 
   // Debounced typing emit + auto-stop.
   const lastTypingSentRef = useRef<"started" | "stopped" | null>(null)
@@ -417,6 +440,21 @@ export default function ChatDetailScreen() {
                 />
               }
               keyboardShouldPersistTaps="handled"
+              scrollEventThrottle={200}
+              onScroll={(event) => {
+                const { contentOffset, contentSize, layoutMeasurement } =
+                  event.nativeEvent
+                // 64px is generous: covers a one-line message + padding,
+                // so "near the bottom" still counts as at-bottom for the
+                // purpose of marking-as-read.
+                const atBottom =
+                  contentOffset.y + layoutMeasurement.height >=
+                  contentSize.height - 64
+                if (atBottom !== isAtBottomRef.current) {
+                  isAtBottomRef.current = atBottom
+                  setIsAtBottom(atBottom)
+                }
+              }}
             >
               {meta?.hasMoreBefore ? (
                 <View style={styles.topAction}>
