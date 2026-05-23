@@ -42,4 +42,17 @@ RUN printf '%s\n' \
   'socks5 127.0.0.1 1080' \
   > /etc/proxychains4.conf
 COPY --from=builder /app/ ./
+# Claude Code refuses to run with --dangerously-skip-permissions under root
+# (it prints "cannot be used with root/sudo privileges for security reasons"
+# and exits immediately, which we observed as a downstream EPIPE storm
+# because the SDK kept writing to the dead subprocess). The daemon's whole
+# operating model requires bypassPermissions — Synapse evaluates tool grants
+# itself via the reverse-MCP server — so the right move is to run the
+# daemon (and the claude/codex children it spawns) as an unprivileged user.
+RUN groupadd --system --gid 1100 synapse \
+  && useradd --system --uid 1100 --gid 1100 --home /home/synapse --create-home --shell /bin/sh synapse \
+  && mkdir -p /home/synapse/.claude /home/synapse/.codex /home/synapse/.synapse/remote-agents \
+  && chown -R synapse:synapse /app /home/synapse
+USER synapse
+ENV HOME=/home/synapse
 ENTRYPOINT ["node", "packages/remote-agent-daemon/dist/index.js"]

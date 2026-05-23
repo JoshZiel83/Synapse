@@ -77,15 +77,23 @@ services:
     network_mode: host
     environment:
       SYNAPSE_MACHINE_KEY: ${SYNAPSE_MACHINE_KEY:-}
-      SYNAPSE_REMOTE_AGENT_STATE_DIR: /root/.synapse/remote-agents
+      SYNAPSE_REMOTE_AGENT_STATE_DIR: /home/synapse/.synapse/remote-agents
       SYNAPSE_REMOTE_AGENT_LOG_LEVEL: ${SYNAPSE_REMOTE_AGENT_LOG_LEVEL:-info}
       # Opt the e2e stack into the host's SOCKS5 tunnel so claude / codex
       # can reach example.invalid/ai-gateway. Real deployments leave this unset.
       SYNAPSE_AGENT_PROXY_URL: ${SYNAPSE_AGENT_PROXY_URL:-<redacted-outbound-proxy>}
     volumes:
-      - /projects/claude-settings.json:/root/.claude/settings.json:ro
-      - /projects/codex-config.toml:/root/.codex/config.toml:ro
-      - rae-daemon-state:/root/.synapse/remote-agents
+      # Mount under the synapse user's HOME, not /root — the daemon now runs
+      # as uid 1100 (see Dockerfile) so claude refuses --dangerously-skip-permissions
+      # if it's started as root and refuses to find its config if HOME doesn't
+      # match. The volume's owner needs to be the synapse uid so the daemon can
+      # write to it; docker bind-mounts inherit the host file's ownership for
+      # the read-only config files (read-only is fine, no write needed), and the
+      # named state volume gets chowned on first start of the container by the
+      # Dockerfile's USER directive.
+      - /projects/claude-settings.json:/home/synapse/.claude/settings.json:ro
+      - /projects/codex-config.toml:/home/synapse/.codex/config.toml:ro
+      - rae-daemon-state:/home/synapse/.synapse/remote-agents
     command:
       - "--server-url"
       - "http://127.0.0.1:${RAE_API_PORT:?RAE_API_PORT is required}"
