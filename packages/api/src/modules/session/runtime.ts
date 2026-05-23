@@ -782,7 +782,11 @@ interface SessionRuntimeSnapshotOverrides {
   laneState?: ActorRuntimeState["laneState"]
   health?: ActorRuntimeState["health"]
   phase?: ActorRuntimeState["phase"]
-  statusText?: ActorRuntimeState["statusText"]
+  /**
+   * Pass `null` to explicitly clear any inherited statusText from the
+   * cached runtime snapshot. See lastError doc for the same pattern.
+   */
+  statusText?: ActorRuntimeState["statusText"] | null
   activeTurnId?: string
   /**
    * Pass `null` to explicitly clear any inherited lastError from the cached
@@ -870,12 +874,14 @@ export async function buildSessionRuntimeSnapshot(
     health,
     phase,
     statusText:
-      overrides.statusText ??
-      (laneState === "running" ||
-      laneState === "queued" ||
-      laneState === "blocked"
-        ? cachedRuntime?.statusText
-        : undefined),
+      overrides.statusText === null
+        ? undefined
+        : (overrides.statusText ??
+          (laneState === "running" ||
+          laneState === "queued" ||
+          laneState === "blocked"
+            ? cachedRuntime?.statusText
+            : undefined)),
     pendingWakeupCount,
     currentTurnPreview,
     latestWakeupAt,
@@ -1101,15 +1107,20 @@ export async function enqueueSessionWakeup(params: {
   }
 
   // When transitioning out of "blocked", the cached runtime snapshot still
-  // carries phase="error" and a stale lastError from the previous failure.
-  // Override them explicitly so consumers (IM hooks, dashboard) see a clean
-  // queued/running state instead of inheriting the prior error through
-  // buildSessionRuntimeSnapshot's inherit-from-cache fallback (see runtime
-  // snapshot builder for the inheritance rules).
+  // carries phase="error", a stale lastError, and a statusText that holds
+  // the previous failure's message. Override them explicitly so consumers
+  // (IM hooks, dashboard) see a clean queued/running state instead of
+  // inheriting the prior error through buildSessionRuntimeSnapshot's
+  // inherit-from-cache fallback. statusText specifically is what the
+  // dashboard chat runtime UI prints to the user (web-next runtime-ui.ts
+  // surfaces runtime.statusText first), so leaving the failure message
+  // there would visibly lie about the session's current state.
   const requeueOverrides:
-    | { phase: ActorRuntimePhase; lastError: null }
+    | { phase: ActorRuntimePhase; lastError: null; statusText: null }
     | Record<string, never> =
-    session.status === "blocked" ? { phase: "idle", lastError: null } : {}
+    session.status === "blocked"
+      ? { phase: "idle", lastError: null, statusText: null }
+      : {}
 
   await publishSessionRuntime(params.workspaceId, params.sessionId, {
     laneState: session.status === "running" ? "running" : "queued",
