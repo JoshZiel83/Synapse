@@ -55,10 +55,24 @@ async function grantPlatformAdmin(pg: Client, userId: string) {
   )
 }
 
+async function grantPlatformAccessKey(
+  pg: Client,
+  userId: string,
+  accessKey: "super_admin" | "workspace_admin" | "model_admin"
+) {
+  await pg.query(
+    `INSERT INTO platform_access_bindings
+       (user_id, access_key, source, assigned_by_user_id)
+     VALUES ($1, $2, 'manual', NULL)
+     ON CONFLICT (user_id, access_key) DO NOTHING`,
+    [userId, accessKey]
+  )
+}
+
 test("debug GC endpoint rejects non-platform-admin callers with 403", async () => {
   const base = createApiClient()
   const ctx = await registerTestUser(base)
-  // Plain workspace owner — not a platform admin.
+  // Plain workspace owner — no platform access keys at all.
   const res = await ctx.client.fetch(
     "/_debug/chat/realtime-outbox-gc?hours=24",
     { method: "POST", json: {} }
@@ -69,7 +83,59 @@ test("debug GC endpoint rejects non-platform-admin callers with 403", async () =
     "non-platform-admin must be rejected from the global GC endpoint"
   )
   const body = (await res.json().catch(() => ({}))) as { code?: string }
-  assert.equal(body.code, "platform_admin_required")
+  assert.equal(body.code, "platform_super_admin_required")
+})
+
+test("debug GC endpoint rejects platform workspace_admin with 403 (super_admin only)", async () => {
+  // S41: isPlatformAdmin admits super_admin / workspace_admin /
+  // model_admin, but only super_admin should be able to run a
+  // process-wide GC. workspace_admin is scoped to workspace
+  // administration — it has no business sweeping the global outbox.
+  const base = createApiClient()
+  const ctx = await registerTestUser(base)
+  const pg = new Client(pgConfig())
+  await pg.connect()
+  try {
+    await grantPlatformAccessKey(pg, ctx.user.id, "workspace_admin")
+    const res = await ctx.client.fetch(
+      "/_debug/chat/realtime-outbox-gc?hours=24",
+      { method: "POST", json: {} }
+    )
+    assert.equal(
+      res.status,
+      403,
+      "workspace_admin must NOT be allowed to run the global outbox GC"
+    )
+    const body = (await res.json().catch(() => ({}))) as { code?: string }
+    assert.equal(body.code, "platform_super_admin_required")
+  } finally {
+    await pg.end().catch(() => undefined)
+  }
+})
+
+test("debug GC endpoint rejects platform model_admin with 403 (super_admin only)", async () => {
+  // Same rationale as workspace_admin: model_admin is scoped to model
+  // governance, not infra-level table sweeps.
+  const base = createApiClient()
+  const ctx = await registerTestUser(base)
+  const pg = new Client(pgConfig())
+  await pg.connect()
+  try {
+    await grantPlatformAccessKey(pg, ctx.user.id, "model_admin")
+    const res = await ctx.client.fetch(
+      "/_debug/chat/realtime-outbox-gc?hours=24",
+      { method: "POST", json: {} }
+    )
+    assert.equal(
+      res.status,
+      403,
+      "model_admin must NOT be allowed to run the global outbox GC"
+    )
+    const body = (await res.json().catch(() => ({}))) as { code?: string }
+    assert.equal(body.code, "platform_super_admin_required")
+  } finally {
+    await pg.end().catch(() => undefined)
+  }
 })
 
 test("GC deletes dispatched rows older than retention but spares fresh dispatched rows", async () => {

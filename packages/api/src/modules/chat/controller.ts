@@ -52,7 +52,7 @@ import {
 } from "../interactions/service.js"
 import { getChatDedupCountersSnapshot } from "./observability.js"
 import { gcRealtimeEventOutbox } from "../../infrastructure/events/index.js"
-import { isPlatformAdmin } from "../platform/admin-service.js"
+import { isPlatformSuperAdmin } from "../platform/admin-service.js"
 
 const CHAT_BASE_PATH = "/api/v1/workspaces/:workspaceId/chat"
 
@@ -285,25 +285,28 @@ export default async function chatController(app: FastifyInstance) {
     return reply.send(getChatDedupCountersSnapshot())
   })
 
-  // Platform-admin-only debug endpoint that forces a
+  // Platform-super-admin-only debug endpoint that forces a
   // realtime_event_outbox GC pass and returns the number of pruned
   // rows. The dispatcher loop runs the same GC periodically (see
   // infrastructure/events/index.ts); this endpoint lets ops + the S39
   // integration test trigger it on demand without waiting for the
   // loop's interval. Globally destructive (cross-workspace), so it
-  // requires platform admin — see S40. Optional `?hours=N` overrides
-  // the retention window for the call. Note: the GC only ever
-  // deletes status='dispatched' rows, never 'failed' (which is a
-  // retryable state in claimPendingRealtimeOutboxEntries), so even
-  // hours=0 won't cause realtime event loss.
+  // requires the super_admin platform access key specifically — NOT
+  // the broader isPlatformAdmin set, which also admits workspace_admin
+  // and model_admin (S41). Those scopes are workspace- or model-
+  // bound and have no business running a process-wide table sweep.
+  // Optional `?hours=N` overrides the retention window for the call.
+  // The GC only ever deletes status='dispatched' rows, never 'failed'
+  // (which is a retryable state in claimPendingRealtimeOutboxEntries),
+  // so even hours=0 won't cause realtime event loss.
   app.post<{
     Querystring: { hours?: string }
   }>("/api/v1/_debug/chat/realtime-outbox-gc", async (request, reply) => {
     const userId = getRequestUserId(request)
-    if (!(await isPlatformAdmin(userId))) {
+    if (!(await isPlatformSuperAdmin(userId))) {
       return reply.status(403).send({
-        error: "Platform admin required to run realtime outbox GC.",
-        code: "platform_admin_required",
+        error: "Platform super_admin required to run realtime outbox GC.",
+        code: "platform_super_admin_required",
       })
     }
     const hours = request.query?.hours

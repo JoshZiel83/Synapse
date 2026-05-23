@@ -320,7 +320,8 @@ async function runRealtimeOutboxDispatcherLoop() {
     try {
       const processed = await drainRealtimeEventOutbox()
 
-      // Periodic GC of dispatched/failed rows. Bounded by
+      // Periodic GC of dispatched rows (NOT failed — those are
+      // retryable; see gcRealtimeEventOutbox). Bounded by
       // outboxGcIntervalMs so it doesn't run on every drain iteration.
       const now = Date.now()
       if (now - lastGcAt >= config.realtime.outboxGcIntervalMs) {
@@ -329,7 +330,7 @@ async function runRealtimeOutboxDispatcherLoop() {
           const gced = await gcRealtimeEventOutbox()
           if (gced > 0) {
             console.info(
-              `[events] realtime_event_outbox GC: pruned ${gced} dispatched/failed rows`
+              `[events] realtime_event_outbox GC: pruned ${gced} dispatched rows`
             )
           }
         } catch (gcError) {
