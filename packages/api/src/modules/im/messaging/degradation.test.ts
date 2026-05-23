@@ -18,13 +18,15 @@ const FEISHU_CAPABILITIES = FEISHU_MESSAGE_CAPABILITIES
 const WEIXIN_CAPABILITIES = WEIXIN_MESSAGE_CAPABILITIES
 
 test("Feishu capabilities pass through chat-like part types unchanged", () => {
-  // Note: Feishu's V1 capability has supportsImage/supportsFile = false
-  // because native upload (im.image.create / im.file.create) is not yet
-  // wired in render.ts. Image therefore degrades to a system_marker — see
-  // the dedicated test below.
+  // Feishu now natively supports image (im.image.create) and file
+  // (im.file.create), so degradation leaves both parts intact and the
+  // outbound dispatcher uploads + sends them as proper attachment
+  // messages. See connectors/feishu/attachments.ts.
   const msg = buildCanonicalMessage([
     { type: "text", text: "hi" },
     { type: "mention", displayName: "alice", externalId: "ou_a" },
+    { type: "image", fileRef: { url: "https://x/img.png" } },
+    { type: "file", fileRef: { name: "spec.pdf", url: "https://x/spec.pdf" } },
     {
       type: "card",
       schema: "feishu_interactive_v1",
@@ -42,31 +44,11 @@ test("Feishu capabilities pass through chat-like part types unchanged", () => {
   assert.equal(out.parts.length, msg.parts.length)
   assert.equal(out.parts[0].type, "text")
   assert.equal(out.parts[1].type, "mention")
-  assert.equal(out.parts[2].type, "card")
-  assert.equal(out.parts[3].type, "quote")
-  assert.equal(out.parts[4].type, "reaction")
-})
-
-test("Feishu V1 capability degrades image to system_marker (native upload not wired)", () => {
-  const msg = buildCanonicalMessage([
-    { type: "image", fileRef: { url: "https://x/img.png" } },
-  ])
-  const out = degradeForCapabilities(msg, FEISHU_CAPABILITIES)
-  assert.equal(out.parts[0].type, "system_marker")
-  if (out.parts[0].type === "system_marker") {
-    assert.equal(out.parts[0].marker, "image_placeholder")
-  }
-})
-
-test("Feishu V1 capability degrades file to [文件 name] text (native upload not wired)", () => {
-  const msg = buildCanonicalMessage([
-    { type: "file", fileRef: { name: "spec.pdf" } },
-  ])
-  const out = degradeForCapabilities(msg, FEISHU_CAPABILITIES)
-  assert.equal(out.parts[0].type, "text")
-  if (out.parts[0].type === "text") {
-    assert.equal(out.parts[0].text, "[文件 spec.pdf]")
-  }
+  assert.equal(out.parts[2].type, "image")
+  assert.equal(out.parts[3].type, "file")
+  assert.equal(out.parts[4].type, "card")
+  assert.equal(out.parts[5].type, "quote")
+  assert.equal(out.parts[6].type, "reaction")
 })
 
 test("WeChat capabilities flatten mention to text and drop reactions", () => {

@@ -1,7 +1,17 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { buildCanonicalMessage } from "../../messaging/canonical-message.js"
-import { renderFeishuMessage, renderTextWithMentions } from "./render.js"
+import {
+  planFeishuSends,
+  renderFeishuMessage,
+  renderTextWithMentions,
+} from "./render.js"
+
+// ───────────────────────── renderTextWithMentions ─────────────────────────
+// The text path now ONLY serializes text-equivalent parts (text, mention,
+// quote, system_marker). Image, file, card and reaction parts are routed
+// through planFeishuSends → their own sends, NOT inlined as placeholder
+// text in the text message.
 
 test("text-only message renders as msg_type=text with JSON content", () => {
   const out = renderFeishuMessage(
@@ -29,7 +39,7 @@ test("mention without externalId falls back to @name", () => {
   assert.equal(out, "@Anon")
 })
 
-test("card part takes priority and renders as interactive", () => {
+test("card part takes priority and renders as interactive (single-send path)", () => {
   const out = renderFeishuMessage(
     buildCanonicalMessage([
       { type: "text", text: "ignored" },
@@ -55,7 +65,7 @@ test("quote part becomes blockquote prefix", () => {
   assert.equal(out, "> earlier now")
 })
 
-test("empty message renders as [消息]", () => {
+test("empty message renders as [消息] via single-send path", () => {
   const out = renderFeishuMessage(buildCanonicalMessage([]))
   assert.equal(out.content, JSON.stringify({ text: "[消息]" }))
 })
@@ -69,32 +79,159 @@ test("system_marker label flows into text", () => {
   assert.equal(out, "[音频]")
 })
 
-test("image part falls back to [图片] when render is reached without degrade", () => {
-  // Direct call to render WITHOUT degradation — this is the codepath that
-  // would silently drop image parts if rendered before. Now it emits a
-  // visible placeholder.
+test("image part is NOT inlined as text — it's a separate send (see planFeishuSends)", () => {
+  // Previously the text path emitted "[图片]" as a placeholder. Now image
+  // parts flow through planFeishuSends → uploadFeishuImage → image msg,
+  // so they don't pollute the text content.
   const out = renderTextWithMentions(
     buildCanonicalMessage([
       { type: "text", text: "see:" },
-      {
-        type: "image",
-        fileRef: { url: "https://x", mime: "image/png" },
-      },
+      { type: "image", fileRef: { url: "https://x", mime: "image/png" } },
     ])
   )
-  assert.equal(out, "see: [图片]")
+  assert.equal(out, "see:")
 })
 
-test("file part falls back to [文件 name] when render is reached without degrade", () => {
+test("file part is NOT inlined as text either", () => {
   const out = renderTextWithMentions(
     buildCanonicalMessage([{ type: "file", fileRef: { name: "report.pdf" } }])
   )
-  assert.equal(out, "[文件 report.pdf]")
+  assert.equal(out, "")
 })
 
-test("file part without name falls back to [文件]", () => {
-  const out = renderTextWithMentions(
-    buildCanonicalMessage([{ type: "file", fileRef: { name: "" } }])
+// ───────────────────────── planFeishuSends ─────────────────────────
+
+test("plan: text-only message produces a single text send", () => {
+  const plan = planFeishuSends(
+    buildCanonicalMessage([{ type: "text", text: "hi" }])
   )
-  assert.equal(out, "[文件]")
+  assert.equal(plan.length, 1)
+  assert.equal(plan[0].kind, "text")
+  if (plan[0].kind === "text") {
+    assert.equal(plan[0].content, "hi")
+  }
+})
+
+test("plan: card takes the whole message and suppresses other parts", () => {
+  // Feishu cards can't be combined with text or attachments in one
+  // message. The card wins; the rest is dropped.
+  const plan = planFeishuSends(
+    buildCanonicalMessage([
+      { type: "text", text: "ignored" },
+      {
+        type: "card",
+        schema: "feishu_interactive_v1",
+        payload: { hello: 1 },
+        fallbackText: "fallback",
+      },
+      { type: "image", fileRef: { url: "https://x/img.png" } },
+    ])
+  )
+  assert.equal(plan.length, 1)
+  assert.equal(plan[0].kind, "interactive")
+  if (plan[0].kind === "interactive") {
+    assert.deepEqual(plan[0].payload, { hello: 1 })
+  }
+})
+
+test("plan: text + single image produces text-first then image", () => {
+  const plan = planFeishuSends(
+    buildCanonicalMessage([
+      { type: "text", text: "see this:" },
+      { type: "image", fileRef: { url: "https://x/img.png" } },
+    ])
+  )
+  assert.equal(plan.length, 2)
+  assert.equal(plan[0].kind, "text")
+  assert.equal(plan[1].kind, "image")
+})
+
+test("plan: text + file produces text-first then file", () => {
+  const plan = planFeishuSends(
+    buildCanonicalMessage([
+      { type: "text", text: "report attached" },
+      { type: "file", fileRef: { name: "q4.pdf", url: "https://x/q4.pdf" } },
+    ])
+  )
+  assert.equal(plan.length, 2)
+  assert.equal(plan[0].kind, "text")
+  assert.equal(plan[1].kind, "file")
+  if (plan[1].kind === "file") {
+    assert.equal(plan[1].fileRef.name, "q4.pdf")
+  }
+})
+
+test("plan: multiple images emitted in order, each as its own send", () => {
+  const plan = planFeishuSends(
+    buildCanonicalMessage([
+      { type: "image", fileRef: { url: "https://x/1.png" } },
+      { type: "image", fileRef: { url: "https://x/2.png" } },
+      { type: "image", fileRef: { url: "https://x/3.png" } },
+    ])
+  )
+  assert.equal(plan.length, 3)
+  const urls = plan.flatMap((p) => (p.kind === "image" ? [p.fileRef.url] : []))
+  assert.deepEqual(urls, [
+    "https://x/1.png",
+    "https://x/2.png",
+    "https://x/3.png",
+  ])
+})
+
+test("plan: text + image + file emits (text, image, file) in attachment order", () => {
+  const plan = planFeishuSends(
+    buildCanonicalMessage([
+      { type: "file", fileRef: { name: "doc.pdf", url: "https://x/doc.pdf" } },
+      { type: "image", fileRef: { url: "https://x/img.png" } },
+      { type: "text", text: "before file in source, after in plan" },
+    ])
+  )
+  // text always wins position 0; attachments follow in source order.
+  assert.equal(plan.length, 3)
+  assert.equal(plan[0].kind, "text")
+  assert.equal(plan[1].kind, "file")
+  assert.equal(plan[2].kind, "image")
+})
+
+test("plan: mentions inline into the text send (not a separate part)", () => {
+  const plan = planFeishuSends(
+    buildCanonicalMessage([
+      { type: "text", text: "hello" },
+      { type: "mention", displayName: "Alice", externalId: "ou_alice" },
+      { type: "image", fileRef: { url: "https://x/i.png" } },
+    ])
+  )
+  assert.equal(plan.length, 2)
+  if (plan[0].kind === "text") {
+    assert.match(plan[0].content, /<at user_id="ou_alice">Alice<\/at>/)
+  } else {
+    assert.fail("expected first send to be text")
+  }
+  assert.equal(plan[1].kind, "image")
+})
+
+test("plan: reaction-only message yields an empty plan", () => {
+  const plan = planFeishuSends(
+    buildCanonicalMessage([
+      { type: "reaction", emoji: "👀", target: { externalMessageId: "om" } },
+    ])
+  )
+  assert.equal(plan.length, 0)
+})
+
+test("plan: quote-only without text becomes a single quote-text send", () => {
+  const plan = planFeishuSends(
+    buildCanonicalMessage([
+      {
+        type: "quote",
+        quoted: { externalMessageId: "om_q", preview: "earlier" },
+      },
+    ])
+  )
+  assert.equal(plan.length, 1)
+  if (plan[0].kind === "text") {
+    assert.match(plan[0].content, /> earlier/)
+  } else {
+    assert.fail("expected quote to render into text send")
+  }
 })
