@@ -23,6 +23,7 @@ import { buildActorPrompt } from "../modules/ai/prompt-builder.js"
 import {
   buildConversationContextItems,
   buildSessionContextItems,
+  loadExecutionToolResultsForSession,
   conversationItemToContextItem,
 } from "../modules/ai/context-builder.js"
 import { buildProviderContextWindow } from "../modules/context/service.js"
@@ -444,20 +445,29 @@ export function startSessionThinkingWorker() {
             participantId: actorParticipantId,
             limit: 200,
           })
+          // Phase 10: pre-load the canonical tool result map from the
+          // execution tables so context-builder uses them as source of
+          // truth rather than reconstructing from session_message.metadata.
+          const executionToolResults =
+            await loadExecutionToolResultsForSession(sessionId)
           const built = buildConversationContextItems({
             visibleItems,
             actorId,
             sessionMessages,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
             wakeups: pendingWakeups,
+            executionToolResults,
           })
           contextItems = built.items
           lastKnownConversationSequence = built.lastSequence
         } else {
+          const executionToolResults =
+            await loadExecutionToolResultsForSession(sessionId)
           contextItems = buildSessionContextItems(sessionMessages, {
             crossTurnToolHistory: false,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
             wakeups: pendingWakeups,
+            executionToolResults,
           })
         }
 
@@ -513,10 +523,13 @@ export function startSessionThinkingWorker() {
         const primaryModel = resolvedModelPlan?.candidates[0] || null
         let finalContextItems = contextItems
         if (primaryModel?.crossTurnToolHistory && !conversationId) {
+          const executionToolResults =
+            await loadExecutionToolResultsForSession(sessionId)
           finalContextItems = buildSessionContextItems(sessionMessages, {
             crossTurnToolHistory: true,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
             wakeups: pendingWakeups,
+            executionToolResults,
           })
           if (recalledMemories.length > 0) {
             finalContextItems = [

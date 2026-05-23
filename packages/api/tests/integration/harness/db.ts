@@ -32,6 +32,29 @@ export interface MinimalSeed {
   sessionToken: string
 }
 
+/**
+ * Shut down the API-side connection pools that get opened transitively by
+ * importing modules like execution/service.js. Call from an `after` hook
+ * so the test process can actually exit instead of hanging on open
+ * pg/redis sockets.
+ *
+ * Phase 10: previously tests had to be killed via SIGKILL after a long
+ * timeout because the kysely pg pool and BullMQ redis connections kept
+ * the event loop alive forever.
+ */
+export async function teardownApiConnections(): Promise<void> {
+  try {
+    const { closeDatabasePool } =
+      await import("../../../src/infrastructure/database/index.js")
+    await closeDatabasePool().catch(() => undefined)
+  } catch {}
+  try {
+    const { shutdownRedisConnections } =
+      await import("../../../src/infrastructure/redis/index.js")
+    await shutdownRedisConnections().catch(() => undefined)
+  } catch {}
+}
+
 async function withAdminClient<T>(
   fn: (client: pg.Client) => Promise<T>
 ): Promise<T> {

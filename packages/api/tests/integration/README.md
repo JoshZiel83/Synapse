@@ -49,13 +49,28 @@ bash packages/api/tests/integration/scripts/build-relay.sh
 # bring up isolated postgres + redis
 bash packages/api/tests/integration/scripts/up.sh
 
-# run the integration tests (single suite or all)
-node --test --import tsx 'packages/api/tests/integration/sanity.test.ts'
-node --test --import tsx 'packages/api/tests/integration/**/*.test.ts'
+# run integration tests via the wrapper. The wrapper sets DATABASE_URL +
+# REDIS_URL in the PARENT process before invoking node, because ESM static
+# imports hoist before any top-of-file `process.env = ...` runs — without
+# that, importing API modules at module-load time grabs the production
+# defaults (5432 / 6379 with prod password) and the test fails with auth
+# errors. The relevant test files also `throw` if you forget the wrapper.
+bash packages/api/tests/integration/scripts/run-test.sh \
+  packages/api/tests/integration/sanity.test.ts
+bash packages/api/tests/integration/scripts/run-test.sh \
+  packages/api/tests/integration/origin-propagation.test.ts
+bash packages/api/tests/integration/scripts/run-test.sh \
+  packages/api/tests/integration/execution-tool-results.test.ts
+bash packages/api/tests/integration/scripts/run-test.sh \
+  packages/api/tests/integration/ingest-via-relay.test.ts
 
 # tear down (default: deletes volumes for next clean run; set KEEP_VOLUMES=1 to keep)
 bash packages/api/tests/integration/scripts/down.sh
 ```
+
+Tests that don't import API modules at load time (sanity, ingest-via-relay)
+also work with a bare `node --test --import tsx <file>`, but the wrapper
+is safer and faster for everything.
 
 ## Production-style API build verification
 

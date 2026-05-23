@@ -30,6 +30,7 @@ import { extractText, textBlocks } from "@synapse/shared"
 import {
   resetDb,
   seedMinimal,
+  teardownApiConnections,
   TEST_PG_HOST,
   TEST_PG_PORT,
   TEST_PG_USER,
@@ -56,6 +57,7 @@ before(async () => {
 
 after(async () => {
   if (client) await client.end()
+  await teardownApiConnections()
 })
 
 async function buildFixture(opts: {

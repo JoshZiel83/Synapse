@@ -894,11 +894,19 @@ export function buildConversationContextItems(params: {
   visibleItems: any[]
   actorId: string
   sessionMessages: SessionMessageRow[]
-  interrupts?: { type: string; content: string }[]
+  interrupts?: {
+    type: string
+    content: string
+    contentBlocks?: CanonicalContentBlock[]
+  }[]
   wakeups?: Pick<
     ActorRuntimeWakeup,
     "wakeupId" | "sourceType" | "sourceName" | "summary" | "reasonText"
   >[]
+  // Phase 10 symmetry with buildSessionContextItems — caller pre-loads
+  // tool_calls/tool_results/tool_result_parts and passes them so the
+  // execution tables are the source of truth for tool result rebuild.
+  executionToolResults?: Map<string, CanonicalToolResult>
 }) {
   const items: CanonicalContextItem[] = []
 
@@ -916,14 +924,37 @@ export function buildConversationContextItems(params: {
   }
 
   for (const sessionMessage of params.sessionMessages) {
-    if (sessionMessage.role !== "tool_result") continue
-    items.push(
-      buildToolResultBatchFromSessionMessage(
-        sessionMessage,
-        parseMetadata(sessionMessage.metadata),
-        { scope: "private", surface: "internal" }
+    // Phase 10 symmetry: both tool_result AND child_result session_messages
+    // route through buildToolResultBatchFromSessionMessage, matching the
+    // buildSessionContextItems branches. Previously child_result was
+    // silently skipped in the group/thread path.
+    if (sessionMessage.role === "tool_result") {
+      items.push(
+        buildToolResultBatchFromSessionMessage(
+          sessionMessage,
+          parseMetadata(sessionMessage.metadata),
+          {
+            scope: "private",
+            surface: "internal",
+            executionToolResults: params.executionToolResults,
+          }
+        )
       )
-    )
+    } else if (sessionMessage.role === "child_result") {
+      items.push(
+        buildToolResultBatchFromSessionMessage(
+          sessionMessage,
+          parseMetadata(sessionMessage.metadata),
+          {
+            scope: "private",
+            surface: "internal",
+            defaultToolName: "child_actor",
+            defaultOrigin: { kind: "builtin", toolKind: "child_actor" },
+            executionToolResults: params.executionToolResults,
+          }
+        )
+      )
+    }
   }
 
   const lastSequence =

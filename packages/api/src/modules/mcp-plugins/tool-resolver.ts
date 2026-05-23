@@ -203,14 +203,42 @@ function buildRelayToolOrigin(
 }
 
 function buildMcpInstanceOrigin(
-  instance: { transport?: string },
+  instance: {
+    transport?: string
+    relayMetadata?: McpInstance["relayMetadata"]
+  },
   pluginSlug: string | undefined,
   pluginDisplayName: string | undefined,
   relayContext: RelayToolRuntimeContext | undefined,
   namespacedToolName: string
 ): ToolResultOrigin {
-  if (instance.transport === "relay" && relayContext) {
-    return buildRelayToolOrigin(relayContext, namespacedToolName)
+  if (instance.transport === "relay") {
+    // Prefer the runtime context (carries visibleToolName / runtimeSessionId
+    // captured at dispatch time). Fall back to the instance-level
+    // relayMetadata so the FIRST relay call (where runtime context hasn't
+    // been populated yet) and the failure-path origin still get the
+    // correct mcp_relay discriminator with deviceId/exposureStableKey.
+    if (relayContext) {
+      return buildRelayToolOrigin(relayContext, namespacedToolName)
+    }
+    if (instance.relayMetadata) {
+      return {
+        kind: "mcp_relay",
+        deviceId: instance.relayMetadata.deviceId,
+        exposureId: instance.relayMetadata.exposureId,
+        exposureStableKey: instance.relayMetadata.exposureStableKey,
+        exposureName: instance.relayMetadata.exposureDisplayName,
+        namespacedToolName,
+      }
+    }
+    // Last-resort placeholder — should not happen in practice; keeps the
+    // discriminator correct even if relayMetadata isn't populated.
+    return {
+      kind: "mcp_relay",
+      deviceId: "unknown",
+      exposureStableKey: pluginSlug || namespacedToolName,
+      namespacedToolName,
+    }
   }
   if (instance.transport === "builtin") {
     return {
@@ -1314,35 +1342,52 @@ export async function resolveMcpToolsForActor(
     let isError = false
     let errorMessage: string | undefined
 
-    // Compute origin up-front so it's available in the catch path. Without
-    // this, a failing instance.execute() would lose attribution and the
-    // ai/index.ts roundToolResults fallback would mis-tag the failure as
-    // {kind:"builtin"} (Phase 8 review gap).
-    const relayContext =
-      instance.transport === "relay"
-        ? getRelayToolRuntimeContext(params.sessionId, namespacedToolName)
-        : undefined
-    const origin = buildMcpInstanceOrigin(
+    // Compute a SKELETON origin up-front so it's available in the catch
+    // path even if instance.execute throws before runtime context can be
+    // populated. For relay instances this still has kind:"mcp_relay" plus
+    // deviceId/exposureStableKey thanks to instance.relayMetadata (Phase 10
+    // race fix). The success path re-resolves below to pick up the richer
+    // runtimeSessionId/visibleToolName fields once execute has set them.
+    const skeletonOrigin = buildMcpInstanceOrigin(
       instance,
       `${orgSlug}/${pluginSlug}`,
       instance.pluginSlug || pluginSlug,
-      relayContext,
+      undefined,
       namespacedToolName
     )
 
     try {
       rawOutput = await instance.execute(toolName, input, executionContext)
+      // Post-execute: for relay tools, ensureRuntimeSession has now run and
+      // populated activeRelayToolContexts. Re-resolve to upgrade from the
+      // skeleton mcp_relay (deviceId + exposureStableKey only) to the full
+      // mcp_relay (with runtimeSessionId, visibleToolName, deviceName, etc).
+      const relayContext =
+        instance.transport === "relay"
+          ? getRelayToolRuntimeContext(params.sessionId, namespacedToolName)
+          : undefined
+      const fullOrigin = relayContext
+        ? buildMcpInstanceOrigin(
+            instance,
+            `${orgSlug}/${pluginSlug}`,
+            instance.pluginSlug || pluginSlug,
+            relayContext,
+            namespacedToolName
+          )
+        : skeletonOrigin
       return await normalizeMcpToolResult(rawOutput, params.workspaceId, {
-        origin,
+        origin: fullOrigin,
       })
     } catch (error: any) {
       isError = true
       errorMessage = error.message
-      // Attach origin so ai/index.ts:appendMcpFailureResult can persist it
-      // alongside the failure metadata.
+      // Attach the SKELETON origin to the error so ai/index.ts can persist
+      // it with the failure. Skeleton still has the correct discriminator
+      // (mcp_relay vs mcp_remote vs callable_plugin), just potentially
+      // missing per-call enrichment.
       if (error && typeof error === "object" && !error.origin) {
         try {
-          error.origin = origin
+          error.origin = skeletonOrigin
         } catch {}
       }
       throw error

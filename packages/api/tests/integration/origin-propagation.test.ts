@@ -39,6 +39,7 @@ import { createToolResult } from "../../src/modules/execution/service.js"
 import {
   resetDb,
   seedMinimal,
+  teardownApiConnections,
   TEST_PG_HOST,
   TEST_PG_PORT,
   TEST_PG_USER,
@@ -65,6 +66,10 @@ before(async () => {
 
 after(async () => {
   if (client) await client.end()
+  // Phase 10: close the pg pool and redis sockets that
+  // execution/service.js opened transitively on import. Without this,
+  // the test process hangs after the last test finishes.
+  await teardownApiConnections()
 })
 
 // Set up minimal session+turn+conversation+tool_call rows so we can write
