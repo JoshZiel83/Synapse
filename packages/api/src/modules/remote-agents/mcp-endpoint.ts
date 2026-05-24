@@ -18,7 +18,7 @@ import {
 } from "./service.js"
 import { requireRemoteAgentConversationAccess } from "../chat/service.js"
 import { executeSql } from "../../infrastructure/database/kysely.js"
-import { resolveMcpToolsForRemoteAgent } from "../mcp-plugins/tool-resolver.js"
+import { projectToolsForPrincipal } from "../capability-projection/index.js"
 
 type ActiveTransport = {
   transport: StreamableHTTPServerTransport
@@ -253,12 +253,17 @@ async function registerResolvedTools(params: {
   // type, and shared/utils:maskAllowsConversationType returns false when
   // either field is missing. Without these two values plugin / relay tools
   // would be silently filtered out even when authorization passes.
-  const resolved = await resolveMcpToolsForRemoteAgent({
+  const resolved = await projectToolsForPrincipal({
     workspaceId: params.workspaceId,
-    remoteAgentId: params.remoteAgentId,
+    principal: {
+      kind: "remote_agent",
+      remoteAgentId: params.remoteAgentId,
+      conversationId: params.conversationId,
+    },
     conversationId: params.conversationId,
     conversationKind: params.conversationKind,
     conversationBoundary: params.conversationBoundary,
+    consumer: "reverse_mcp",
     sessionId: params.sessionKey,
   })
   for (const def of resolved.tools as ToolDefinition[]) {
