@@ -874,11 +874,12 @@ async function loadConversationTargetedResourceIds(params: {
       : "relay_capability_id"
   const result = await db
     .selectFrom("resource_access_bindings as binding")
+    .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
     .select(sql<string>`binding.${sql.raw(column)}::text`.as("resource_id"))
     .where("binding.resource_type", "=", params.resourceType)
     .where("binding.status", "=", "active")
-    .where("binding.target_type", "=", "conversation")
-    .where("binding.subject_conversation_id", "=", params.conversationId)
+    .where("subj.kind", "=", "conversation")
+    .where("subj.conversation_id", "=", params.conversationId)
     .where(sql<boolean>`binding.${sql.raw(column)} IS NOT NULL`)
     .distinct()
     .execute()

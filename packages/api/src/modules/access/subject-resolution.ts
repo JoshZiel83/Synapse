@@ -87,12 +87,16 @@ export async function isRemoteAgentActiveConversationParticipant(
   conversationId: string,
   remoteAgentId: string
 ) {
+  const remoteAgentSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.REMOTE_AGENT,
+    remoteAgentId,
+  })
   const row = await db
     .selectFrom("conversation_participants")
     .select("id")
     .where("conversation_id", "=", conversationId)
     .where("participant_type", "=", "remote_agent")
-    .where("remote_agent_id", "=", remoteAgentId)
+    .where("subject_id", "=", remoteAgentSubjectId)
     .where("state", "=", "active")
     .limit(1)
     .executeTakeFirst()

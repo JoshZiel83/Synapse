@@ -110,7 +110,6 @@ import type {
   RelayCatalogRevisionsStatus,
   RelationshipApprovalMode,
   RelationshipRequestStatus,
-  RelationshipTargetType,
   RelayDeviceSessionsStatus,
   RelayDevicesTrustStatus,
   RelayExposuresRuntimeStatus,
@@ -187,9 +186,10 @@ type _ActorDocVisibilityMatchesDb = Assert<
 type _MemorySpaceTypeListMatchesDb = Assert<
   IsEqual<(typeof MEMORY_SPACE_TYPES)[number], MemorySpacesSpaceType>
 >
-type _ContactTargetTypeMatchesDb = Assert<
-  IsEqual<(typeof CONTACT_TARGET_TYPES)[number], RelationshipTargetType>
->
+// Note: the Postgres `relationship_target_type` enum is declared but no column
+// references it after the P1b polymorphic-FK collapse (all subject FKs now go
+// through `access_subjects.subject_id`). `CONTACT_TARGET_TYPES` is a pure
+// application-layer constant with no DB-side counterpart to assert against.
 type _AutomationTriggerKindMatchesDb = Assert<
   IsEqual<
     (typeof AUTOMATION_TRIGGER_KINDS)[number],

@@ -5,8 +5,6 @@
 
 import type { ColumnType } from "kysely";
 
-export type ActorAccessPolicy = "approval_required" | "workspace_open";
-
 export type ActorSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
 
 export type ActorsRole = "archivist" | "assistant" | "manager" | "receptionist" | "reviewer" | "secretary" | "specialist";
@@ -163,8 +161,6 @@ export type MemoryRecallRunsRecallType = "bootstrap" | "manual_search" | "turn_r
 
 export type MemorySpacesSpaceType = "actor_private" | "conversation_shared" | "participant_private" | "user_private" | "workspace_shared";
 
-export type ModelGroupGrantsGrantScope = "actor" | "platform" | "workspace" | "workspace_member";
-
 export type ModelGroupGrantsStatus = "active" | "revoked";
 
 export type ModelGroupsOwnerType = "platform" | "workspace" | "workspace_member";
@@ -184,8 +180,6 @@ export type PluginAuthSessionsStatus = "completed" | "consumed" | "expired" | "f
 export type PluginConnectionsOwnerScope = "installation" | "workspace" | "workspace_member";
 
 export type PluginConnectionsStatus = "active" | "expired" | "revoked";
-
-export type PluginInstallationsAttachmentTargetType = "actor" | "conversation" | "workspace" | "workspace_member";
 
 export type PluginInstallationsReuseScope = "actor" | "conversation" | "session" | "turn" | "workspace";
 
@@ -208,8 +202,6 @@ export type RealtimeEventOutboxStatus = "dispatched" | "failed" | "pending" | "p
 export type RelationshipApprovalMode = "auto" | "manual";
 
 export type RelationshipRequestStatus = "approved" | "pending" | "rejected";
-
-export type RelationshipTargetType = "actor" | "remote_agent" | "workspace_member";
 
 export type RelayAuthorizationGrantsRetention = "consume_once" | "until_revoked";
 
@@ -273,11 +265,11 @@ export type RemoteAgentRuntimeCatalogStatus = "available" | "broken_path" | "mis
 
 export type RemoteAgentsRuntimeKind = "claude_code" | "codex";
 
-export type ResourceAccessBindingResourceType = "automation_event_source" | "installed_skill" | "plugin_installation" | "relay_capability";
+export type ResourceAccessBindingResourceType = "actor" | "automation_event_source" | "installed_skill" | "plugin_installation" | "relay_capability" | "remote_agent";
+
+export type ResourceAccessBindingsSource = "approval" | "default_open" | "manual" | "relay_auto" | "system";
 
 export type ResourceAccessBindingsStatus = "active" | "revoked";
-
-export type ResourceAccessBindingsTargetType = "actor" | "actor_in_conversation" | "conversation" | "workspace";
 
 export type RuntimeEventsLevel = "debug" | "error" | "info" | "warn";
 
@@ -306,6 +298,8 @@ export type SkillMirrorSourcesSourceType = "clawhub" | "github";
 export type SkillMirrorSourcesSyncStatus = "error" | "pending" | "synced";
 
 export type SkillSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
+
+export type SubjectKind = "actor" | "conversation" | "conversation_actor_context" | "external" | "remote_agent" | "system" | "user" | "workspace" | "workspace_member";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
@@ -359,16 +353,18 @@ export type WorkspaceInvitesTrustLevel = "admin" | "guest" | "member";
 
 export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
 
-export interface ActorAccessRequests {
-  actor_id: string;
-  created_at: Generated<Timestamp | null>;
+export interface AccessSubjects {
+  actor_id: string | null;
+  conversation_actor_context_id: string | null;
+  conversation_id: string | null;
+  created_at: Generated<Timestamp>;
+  external_identity_key: string | null;
   id: Generated<string>;
-  requester_workspace_member_id: string;
-  resolved_at: Timestamp | null;
-  resolved_by_workspace_member_id: string | null;
-  status: Generated<RelationshipRequestStatus>;
-  updated_at: Generated<Timestamp | null>;
-  workspace_id: string;
+  kind: SubjectKind;
+  remote_agent_id: string | null;
+  user_id: string | null;
+  workspace_id: string | null;
+  workspace_member_id: string | null;
 }
 
 export interface ActorModelGroupAssignments {
@@ -379,7 +375,6 @@ export interface ActorModelGroupAssignments {
 }
 
 export interface Actors {
-  access_policy: Generated<ActorAccessPolicy>;
   avatar_emoji: string | null;
   avatar_file_id: string | null;
   can_represent_user: Generated<boolean>;
@@ -928,7 +923,6 @@ export interface ConversationParticipantAddresses {
 }
 
 export interface ConversationParticipants {
-  actor_id: string | null;
   actor_join_version_id: string | null;
   conversation_id: string;
   display_name: string | null;
@@ -937,10 +931,9 @@ export interface ConversationParticipants {
   left_at: Timestamp | null;
   metadata: Generated<Json>;
   participant_type: ConversationParticipantsType;
-  remote_agent_id: string | null;
   role_key: Generated<string>;
   state: Generated<ConversationParticipantsState>;
-  workspace_member_id: string | null;
+  subject_id: string;
 }
 
 export interface ConversationParticipantStates {
@@ -983,14 +976,8 @@ export interface DirectConversationBindings {
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
-  participant_one_actor_id: string | null;
-  participant_one_kind: RelationshipTargetType;
-  participant_one_remote_agent_id: string | null;
-  participant_one_workspace_member_id: string | null;
-  participant_two_actor_id: string | null;
-  participant_two_kind: RelationshipTargetType;
-  participant_two_remote_agent_id: string | null;
-  participant_two_workspace_member_id: string | null;
+  participant_one_subject_id: string;
+  participant_two_subject_id: string;
 }
 
 export interface EngineBranchCheckpoints {
@@ -1008,6 +995,18 @@ export interface EngineBranchCheckpoints {
   provider_type: string;
   session_id: string;
   shared_sequence: Generated<Int8>;
+}
+
+export interface EntityAccessRequests {
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  requester_workspace_member_id: string;
+  resolved_at: Timestamp | null;
+  resolved_by_workspace_member_id: string | null;
+  status: Generated<RelationshipRequestStatus>;
+  target_subject_id: string;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
 }
 
 export interface FileBlobs {
@@ -1262,17 +1261,14 @@ export interface MemorySpaces {
 }
 
 export interface ModelGroupGrants {
-  actor_id: string | null;
   created_at: Generated<Timestamp | null>;
-  grant_scope: ModelGroupGrantsGrantScope;
   granted_by_workspace_member_id: string | null;
   group_id: string;
   id: Generated<string>;
   reason: string | null;
   revoked_at: Timestamp | null;
   status: Generated<ModelGroupGrantsStatus>;
-  workspace_id: string | null;
-  workspace_member_id: string | null;
+  subject_id: string;
 }
 
 export interface ModelGroupProfiles {
@@ -1394,10 +1390,7 @@ export interface PluginConnections {
 
 export interface PluginInstallations {
   approved_runtime_permissions: Generated<string[] | null>;
-  attachment_actor_id: string | null;
-  attachment_conversation_id: string | null;
-  attachment_target_type: PluginInstallationsAttachmentTargetType;
-  attachment_workspace_member_id: string | null;
+  attachment_subject_id: string;
   catalog_item_id: string;
   catalog_version_id: string;
   config_data: Generated<Json>;
@@ -1503,9 +1496,7 @@ export interface RealtimeEventOutbox {
 }
 
 export interface RelayAuthorizationGrants {
-  actor_id: string | null;
   consumed_at: Timestamp | null;
-  conversation_id: string | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
   id: Generated<string>;
@@ -1522,6 +1513,7 @@ export interface RelayAuthorizationGrants {
   source_runtime_session_id: string | null;
   source_task_id: string | null;
   status: Generated<RelayAuthorizationGrantsStatus>;
+  subject_id: string | null;
   superseded_at: Timestamp | null;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -1719,18 +1711,6 @@ export interface RelayTools {
   updated_at: Generated<Timestamp | null>;
 }
 
-export interface RemoteAgentAccessRequests {
-  created_at: Generated<Timestamp | null>;
-  id: Generated<string>;
-  remote_agent_id: string;
-  requester_workspace_member_id: string;
-  resolved_at: Timestamp | null;
-  resolved_by_workspace_member_id: string | null;
-  status: Generated<RelationshipRequestStatus>;
-  updated_at: Generated<Timestamp | null>;
-  workspace_id: string;
-}
-
 export interface RemoteAgentBindings {
   capabilities: Generated<Json>;
   created_at: Generated<Timestamp | null>;
@@ -1861,7 +1841,6 @@ export interface RemoteAgentRuntimeCatalog {
 }
 
 export interface RemoteAgents {
-  access_policy: Generated<ActorAccessPolicy>;
   avatar_emoji: string | null;
   avatar_file_id: string | null;
   created_at: Generated<Timestamp | null>;
@@ -1879,6 +1858,7 @@ export interface RemoteAgents {
 }
 
 export interface ResourceAccessBindings {
+  actor_id: string | null;
   automation_event_source_id: string | null;
   conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
@@ -1888,14 +1868,12 @@ export interface ResourceAccessBindings {
   plugin_installation_id: string | null;
   reason: string | null;
   relay_capability_id: string | null;
+  remote_agent_id: string | null;
   resource_type: ResourceAccessBindingResourceType;
   revoked_at: Timestamp | null;
+  source: Generated<ResourceAccessBindingsSource>;
   status: Generated<ResourceAccessBindingsStatus>;
-  subject_actor_id: string | null;
-  subject_conversation_actor_context_id: string | null;
-  subject_conversation_id: string | null;
-  subject_workspace_id: string | null;
-  target_type: ResourceAccessBindingsTargetType;
+  subject_id: string;
   workspace_id: string;
 }
 
@@ -2279,18 +2257,15 @@ export interface WorkspaceCapabilityConversationTypePolicies {
   created_at: Generated<Timestamp | null>;
   default_conversation_type_mask: number;
   resource_family: string;
+  subject_id: string;
   updated_at: Generated<Timestamp | null>;
-  workspace_id: string;
 }
 
 export interface WorkspaceFriendEntries {
   created_at: Generated<Timestamp | null>;
   id: Generated<string>;
   owner_workspace_member_id: string;
-  peer_actor_id: string | null;
-  peer_remote_agent_id: string | null;
-  peer_type: RelationshipTargetType;
-  peer_workspace_member_id: string | null;
+  peer_subject_id: string;
   source_request_id: string | null;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
@@ -2304,10 +2279,7 @@ export interface WorkspaceFriendRequests {
   resolved_at: Timestamp | null;
   resolved_by_workspace_member_id: string | null;
   status: Generated<RelationshipRequestStatus>;
-  target_actor_id: string | null;
-  target_remote_agent_id: string | null;
-  target_subject_type: RelationshipTargetType;
-  target_workspace_member_id: string | null;
+  target_subject_id: string;
   updated_at: Generated<Timestamp | null>;
 }
 
@@ -2375,10 +2347,7 @@ export interface WorkspaceRelationshipProfiles {
   identity_id: Generated<string>;
   identity_search_enabled: Generated<boolean>;
   qr_token: string;
-  subject_actor_id: string | null;
-  subject_remote_agent_id: string | null;
-  subject_type: RelationshipTargetType;
-  subject_workspace_member_id: string | null;
+  subject_id: string;
   updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
@@ -2395,7 +2364,7 @@ export interface Workspaces {
 }
 
 export interface DB {
-  actor_access_requests: ActorAccessRequests;
+  access_subjects: AccessSubjects;
   actor_model_group_assignments: ActorModelGroupAssignments;
   actor_source_refs: ActorSourceRefs;
   actor_template_version_specs: ActorTemplateVersionSpecs;
@@ -2444,6 +2413,7 @@ export interface DB {
   conversations: Conversations;
   direct_conversation_bindings: DirectConversationBindings;
   engine_branch_checkpoints: EngineBranchCheckpoints;
+  entity_access_requests: EntityAccessRequests;
   file_blobs: FileBlobs;
   file_origins: FileOrigins;
   file_parse_outputs: FileParseOutputs;
@@ -2491,7 +2461,6 @@ export interface DB {
   relay_sync_sources: RelaySyncSources;
   relay_tool_revisions: RelayToolRevisions;
   relay_tools: RelayTools;
-  remote_agent_access_requests: RemoteAgentAccessRequests;
   remote_agent_bindings: RemoteAgentBindings;
   remote_agent_conversation_contexts: RemoteAgentConversationContexts;
   remote_agent_conversation_views: RemoteAgentConversationViews;

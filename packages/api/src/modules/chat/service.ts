@@ -2373,20 +2373,20 @@ async function insertParticipant(
   // discriminator (external vs system) since both share kind='external' here.
   let participantSubjectId: string
   if (
-    params.participantKind === "workspace_member" &&
+    params.participantType === "workspace_member" &&
     params.workspaceMemberId
   ) {
     participantSubjectId = await upsertAccessSubjectOn(queryable, {
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
       memberId: params.workspaceMemberId,
     })
-  } else if (params.participantKind === "actor" && params.actorId) {
+  } else if (params.participantType === "actor" && params.actorId) {
     participantSubjectId = await upsertAccessSubjectOn(queryable, {
       kind: SUBJECT_KIND.ACTOR,
       actorId: params.actorId,
     })
   } else if (
-    params.participantKind === "remote_agent" &&
+    params.participantType === "remote_agent" &&
     params.remoteAgentId
   ) {
     participantSubjectId = await upsertAccessSubjectOn(queryable, {
@@ -2419,7 +2419,7 @@ async function insertParticipant(
     [
       participantId,
       params.conversationId,
-      params.participantKind,
+      params.participantType,
       participantSubjectId,
       params.actorJoinVersionId ?? null,
       params.displayName ?? null,
