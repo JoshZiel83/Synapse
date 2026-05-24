@@ -5649,7 +5649,13 @@ async function setParticipantState(
   )
 }
 
-async function loadParticipantById(
+// Exported for unit-test coverage; see remove-participant.test.ts. After the
+// P1b polymorphic-FK collapse, conversation_participants no longer carries
+// workspace_member_id / actor_id / remote_agent_id directly — those projections
+// come from access_subjects via cp.subject_id. A regression here would only
+// surface at runtime when DELETE /chat/conversations/:cid/participants/:pid
+// is hit; a focused test on the SQL keeps it honest.
+export async function loadParticipantById(
   queryable: Queryable,
   conversationId: string,
   participantId: string
@@ -5666,11 +5672,14 @@ async function loadParticipantById(
   }>(
     queryable,
     `
-      SELECT id, conversation_id, participant_type,
-             workspace_member_id, actor_id, remote_agent_id,
-             display_name, state
-      FROM conversation_participants
-      WHERE conversation_id = $1 AND id = $2
+      SELECT cp.id, cp.conversation_id, cp.participant_type,
+             cpsubj.workspace_member_id AS workspace_member_id,
+             cpsubj.actor_id AS actor_id,
+             cpsubj.remote_agent_id AS remote_agent_id,
+             cp.display_name, cp.state
+      FROM conversation_participants cp
+      JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
+      WHERE cp.conversation_id = $1 AND cp.id = $2
       LIMIT 1
     `,
     [conversationId, participantId]
