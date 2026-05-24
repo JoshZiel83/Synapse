@@ -39,6 +39,7 @@ import automationModule from "./modules/automation/index.js"
 import filesModule from "./modules/files/index.js"
 import memoryModule from "./modules/memory/index.js"
 import mcpPluginsModule from "./modules/mcp-plugins/index.js"
+import devicesModule from "./modules/devices/index.js"
 import modelGroupsModule from "./modules/model-groups/index.js"
 import platformModule from "./modules/platform/index.js"
 import auditModule from "./modules/audit/index.js"
@@ -207,6 +208,7 @@ async function main() {
   await app.register(filesModule)
   await app.register(memoryModule)
   await app.register(mcpPluginsModule)
+  await app.register(devicesModule)
   await app.register(modelGroupsModule)
   await app.register(platformModule)
   await app.register(auditModule)
