@@ -24,3 +24,14 @@ export {
   canonicalize,
   hashArguments,
 } from "./envelope.js"
+export {
+  createLocalFsBackend,
+  createVfsService,
+  VfsService,
+  type VfsBackend,
+  type VfsEntry,
+  type VfsExposure,
+  type VfsReadResult,
+  type VfsSessionState,
+  type VfsWriteResult,
+} from "./vfs.js"
