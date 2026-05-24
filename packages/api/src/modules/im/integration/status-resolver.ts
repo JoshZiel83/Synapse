@@ -123,15 +123,22 @@ export function resolveRuntimePhaseStatus(phase: string): StatusLevel | null {
  *     "queued + ok + stale error phase" case)       → noop
  *
  * Why phase="error" alone is NOT terminal: the runtime snapshot builder in
- * packages/api/src/modules/session/runtime.ts inherits cached fields when
- * the publisher does not override them. After a session goes "blocked" with
- * phase="error" and is later re-enqueued via enqueueSessionWakeup(),
- * publishSessionRuntime currently emits {laneState:"queued", health:"ok"}
- * with no phase override — the snapshot inherits phase="error" from the
- * stale cache even though the session is actually about to run again.
- * Treating that as terminal would tear down the IM controllers right when
- * the user is expecting the next turn to start. We require a corroborating
- * health/laneState signal so the stale phase alone doesn't fool us.
+ * packages/api/src/modules/session/runtime.ts inherits cached fields
+ * (phase, statusText, lastError) from the previous snapshot when laneState
+ * stays in {running, queued, blocked} and the publisher doesn't supply an
+ * override. enqueueSessionWakeup() now defends against this by explicitly
+ * passing {phase: "idle", lastError: null, statusText: null} on the
+ * requeue-from-blocked path, but the runtime contract on the receiving end
+ * cannot rely on every future publisher being equally disciplined —
+ * any caller that forgets to override phase while transitioning out of an
+ * "error" cache would leak phase="error" into a perfectly healthy
+ * queued/running snapshot. Treating that bare phase as terminal would
+ * tear down the IM controllers right when the next turn is about to start,
+ * so we require a corroborating health/laneState signal before believing
+ * it. The accompanying snapshot-level regression test
+ * (tests/integration/session-runtime-snapshot.test.ts) locks the
+ * inheritance behavior, and the decision-table tests here lock this
+ * receiver-side defense.
  */
 export type RuntimeUpdateDecision =
   | { kind: "terminal-error" }

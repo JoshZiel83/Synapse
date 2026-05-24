@@ -106,12 +106,14 @@ test("decision: hard error (health=error) → terminal-error", () => {
 
 test("decision: phase=error alone is NOT terminal (may be inherited stale phase from cache)", () => {
   // The runtime snapshot builder inherits cached phase when overrides
-  // don't supply one. A previously-blocked session re-enqueued via
-  // enqueueSessionWakeup() emits {laneState:"queued", health:"ok"} with
-  // no phase override, so phase="error" leaks through from the previous
-  // failure. Without corroborating health/laneState, the IM hook must
-  // treat this as a non-actionable churn event, not a terminal cleanup —
-  // otherwise it tears down the controllers right as the next turn starts.
+  // don't supply one. enqueueSessionWakeup() now explicitly clears phase
+  // on the requeue-from-blocked path, but the receiver-side decision rule
+  // stays defensive: any future caller that flips laneState out of an
+  // "error" cache without an explicit phase override would otherwise leak
+  // phase="error" into a perfectly healthy queued/running snapshot.
+  // Without corroborating health/laneState, the IM hook treats this as a
+  // non-actionable churn event, not a terminal cleanup — otherwise it
+  // tears down the controllers right as the next turn starts.
   assert.deepEqual(
     decideRuntimeUpdateAction({
       laneState: "queued",
