@@ -1,5 +1,5 @@
 /**
- * S35: end-to-end verification that the chat dedup counters fire.
+ * S35/S37: end-to-end verification that the chat dedup counters fire.
  *
  * The S6 plan called for duplicate_watermark_post_total and
  * duplicate_clientmessageid_send_total observability counters so we can
@@ -7,37 +7,62 @@
  * holding. These tests:
  *
  * 1. Issue a real duplicate read-watermark POST (same conversation,
- *    same sequence twice) against the staging API and assert
- *    duplicate_watermark_post_total advances.
- * 2. Issue a real duplicate send-message POST (same clientMessageId
+ *    same sequence twice) and assert duplicate_watermark_post_total
+ *    advances.
+ * 2. The first read-watermark POST on a fresh conversation must NOT
+ *    bump the counter (S37 regression: heuristic compared nextSequence
+ *    to 0 which falsely flagged inaugural writes).
+ * 3. Issue a real duplicate send-message POST (same clientMessageId
  *    twice) and assert duplicate_clientmessageid_send_total advances.
  *
  * Counters are read from the authenticated debug endpoint
- * GET /_debug/chat/dedup-counters which returns the in-process
- * snapshot.
+ * GET /_debug/chat/dedup-counters which returns the in-process snapshot.
+ *
+ * Must be run via tests/integration/scripts/run-test.sh.
  */
 
-import { test } from "node:test"
+if (
+  !process.env.DATABASE_URL ||
+  !process.env.DATABASE_URL.includes(":55433/")
+) {
+  throw new Error(
+    "chat-dedup-counters.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
+  )
+}
+
+import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes, randomUUID } from "node:crypto"
 import {
-  createApiClient,
+  setupChatStack,
+  teardownChatStack,
   registerTestUser,
   createTestWorkspace,
-} from "./setup.ts"
+  type ApiClient,
+  type ChatStack,
+} from "./harness/index.js"
 
 const uuid = () =>
   ([8, 4, 4, 4, 12] as const)
     .map((len) => randomBytes(len / 2).toString("hex"))
     .join("-")
 
-async function readDedupCounters(client: ReturnType<typeof createApiClient>) {
+let stack: ChatStack | undefined
+
+before(async () => {
+  stack = await setupChatStack()
+})
+
+after(async () => {
+  if (stack) await teardownChatStack(stack)
+})
+
+async function readDedupCounters(client: ApiClient) {
   return client.json<Record<string, number>>("/_debug/chat/dedup-counters")
 }
 
 test("duplicate read-watermark POST bumps duplicate_watermark_post_total", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const created = await ctx.client.json<{
     conversation: { conversationId: string }
@@ -78,8 +103,8 @@ test("duplicate read-watermark POST bumps duplicate_watermark_post_total", async
     { method: "POST", json: watermarkBody }
   )
 
-  const after = await readDedupCounters(ctx.client)
-  const afterWatermark = after.duplicate_watermark_post_total ?? 0
+  const afterCounters = await readDedupCounters(ctx.client)
+  const afterWatermark = afterCounters.duplicate_watermark_post_total ?? 0
   assert.ok(
     afterWatermark > beforeWatermark,
     `duplicate_watermark_post_total must advance after a no-op POST; before=${beforeWatermark} after=${afterWatermark}`
@@ -94,8 +119,7 @@ test("first read-watermark POST on a fresh conversation does NOT bump duplicate_
   // conversation), it was wrongly counted as a duplicate even though
   // it was the inaugural write. Now the counter requires an existing
   // row before firing.
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const created = await ctx.client.json<{
     conversation: { conversationId: string }
@@ -129,8 +153,8 @@ test("first read-watermark POST on a fresh conversation does NOT bump duplicate_
     }
   )
 
-  const after = await readDedupCounters(ctx.client)
-  const afterWatermark = after.duplicate_watermark_post_total ?? 0
+  const afterCounters = await readDedupCounters(ctx.client)
+  const afterWatermark = afterCounters.duplicate_watermark_post_total ?? 0
   assert.equal(
     afterWatermark,
     beforeWatermark,
@@ -139,8 +163,7 @@ test("first read-watermark POST on a fresh conversation does NOT bump duplicate_
 })
 
 test("duplicate clientMessageId send-message bumps duplicate_clientmessageid_send_total", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const created = await ctx.client.json<{
     conversation: { conversationId: string }
@@ -181,8 +204,8 @@ test("duplicate clientMessageId send-message bumps duplicate_clientmessageid_sen
     { method: "POST", json: sendBody }
   )
 
-  const after = await readDedupCounters(ctx.client)
-  const afterSend = after.duplicate_clientmessageid_send_total ?? 0
+  const afterCounters = await readDedupCounters(ctx.client)
+  const afterSend = afterCounters.duplicate_clientmessageid_send_total ?? 0
   assert.ok(
     afterSend > beforeSend,
     `duplicate_clientmessageid_send_total must advance after a same-id resend; before=${beforeSend} after=${afterSend}`

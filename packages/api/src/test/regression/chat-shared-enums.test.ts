@@ -17,7 +17,6 @@ const chatControllerPath = path.resolve(
   here,
   "..",
   "..",
-  "src",
   "modules",
   "chat",
   "controller.ts"

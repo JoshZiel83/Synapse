@@ -15,7 +15,7 @@ import path from "node:path"
 import { fileURLToPath } from "node:url"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const chatModuleDir = path.resolve(here, "..", "..", "src", "modules", "chat")
+const chatModuleDir = path.resolve(here, "..", "..", "modules", "chat")
 
 const filesToCheck = ["direct-binding.ts", "participant-activation.ts"] as const
 

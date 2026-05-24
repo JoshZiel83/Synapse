@@ -19,6 +19,7 @@ const mobileWorkerPath = path.resolve(
   "..",
   "..",
   "..",
+  "..",
   "mobile-app",
   "src",
   "workers",

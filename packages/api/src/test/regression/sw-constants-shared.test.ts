@@ -1,6 +1,6 @@
 /**
- * S31: web + mobile SW broadcast / IDB / sync-tag constants must come
- * from @synapse/shared. Until this stage each client redeclared its
+ * S31 + S34 + S36: web + mobile SW broadcast / IDB / sync-tag constants
+ * must come from @synapse/shared. Until S31 each client redeclared its
  * own value (web "synapse.web.chat.worker" / "synapse-web-chat-queue",
  * mobile "synapse.chat.worker" / "synapse-chat-web-queue"), so the two
  * clients literally lived in different IDB databases and broadcast on
@@ -27,7 +27,7 @@ import {
 } from "@synapse/shared"
 
 const here = path.dirname(fileURLToPath(import.meta.url))
-const repoRoot = path.resolve(here, "..", "..", "..", "..")
+const repoRoot = path.resolve(here, "..", "..", "..", "..", "..")
 
 const webSwConstantsPath = path.join(
   repoRoot,

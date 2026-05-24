@@ -5,19 +5,43 @@
  * - POST /workspaces/:wsId/chat/conversations/:cid/interactions/:iid/respond
  *      (new, was /conversations/:cid/...)
  * The legacy URLs must 404 after this stage.
+ *
+ * Must be run via tests/integration/scripts/run-test.sh (or run-all.sh) so
+ * DATABASE_URL/REDIS_URL point at the worktree-isolated stack before any
+ * API module is loaded.
  */
 
-import { test } from "node:test"
+if (
+  !process.env.DATABASE_URL ||
+  !process.env.DATABASE_URL.includes(":55433/")
+) {
+  throw new Error(
+    "chat-urls.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
+  )
+}
+
+import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import {
-  createApiClient,
+  setupChatStack,
+  teardownChatStack,
   registerTestUser,
   createTestWorkspace,
-} from "./setup.ts"
+  type ChatStack,
+} from "./harness/index.js"
+
+let stack: ChatStack | undefined
+
+before(async () => {
+  stack = await setupChatStack()
+})
+
+after(async () => {
+  if (stack) await teardownChatStack(stack)
+})
 
 test("legacy /workspaces/:wsId/direct-conversations/open returns 404", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const res = await ctx.client.fetch(
     `/workspaces/${ws.id}/direct-conversations/open`,
@@ -33,8 +57,7 @@ test("legacy /workspaces/:wsId/direct-conversations/open returns 404", async () 
 })
 
 test("new /workspaces/:wsId/chat/direct-conversations/open route is mounted", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   // Hitting with garbage body still proves the route exists: should be 400/404,
   // never 404-from-no-route. We expect 400 (bad request) or 404 (target member
@@ -60,8 +83,7 @@ test("new /workspaces/:wsId/chat/direct-conversations/open route is mounted", as
 })
 
 test("legacy /workspaces/:wsId/conversations/:cid/interactions/:iid/respond returns 404", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const fakeCid = "00000000-0000-0000-0000-000000000000"
   const fakeIid = "00000000-0000-0000-0000-000000000001"

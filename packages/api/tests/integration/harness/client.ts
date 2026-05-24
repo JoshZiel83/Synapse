@@ -1,15 +1,10 @@
-/**
- * Integration test harness for the Synapse API.
- *
- * Strategy: BLACK-BOX. Tests issue HTTP requests against a running API
- * (host+port configured via STAGING_API_URL env var).
- *
- * Tests must not assume state of the database; use random IDs and emails to
- * avoid collisions with other test runs sharing the same DB.
- *
- * Later stages may add white-box helpers (per-process Fastify boot + temp
- * schema isolation) on top of this file.
- */
+// HTTP client + auth helpers for integration tests that drive the API
+// over real HTTP (chat routes, conversation CRUD, push tokens, etc).
+//
+// These were previously part of packages/api/test/integration/setup.ts and
+// resolved the API base URL from $STAGING_API_URL. The new isolated
+// harness drops staging entirely: callers pass the URL from
+// spawnApi(...).baseUrl ("http://127.0.0.1:38091") + "/api/v1".
 
 import { randomBytes } from "node:crypto"
 
@@ -27,24 +22,12 @@ export interface ApiClient {
   withToken: (token: string) => ApiClient
 }
 
-function resolveBaseUrl(): string {
-  const explicit = process.env.STAGING_API_URL
-  if (explicit && explicit.trim().length > 0) {
-    return explicit.replace(/\/$/, "")
-  }
-  throw new Error(
-    "STAGING_API_URL is required for integration tests. " +
-      "Point it at a running API, e.g. http://127.0.0.1:38001/api/v1 " +
-      "from the integration test stack at packages/api/tests/integration/."
-  )
-}
-
-export function createApiClient(options?: {
-  baseUrl?: string
+export function createApiClient(options: {
+  baseUrl: string
   token?: string
 }): ApiClient {
-  const baseUrl = (options?.baseUrl ?? resolveBaseUrl()).replace(/\/$/, "")
-  const token = options?.token
+  const baseUrl = options.baseUrl.replace(/\/$/, "")
+  const token = options.token
 
   const client: ApiClient = {
     baseUrl,
@@ -105,7 +88,6 @@ export function randomSlug(prefix = "test"): string {
   return `${prefix}-${randomBytes(6).toString("hex")}`
 }
 
-/** Convenience: register a fresh user, return { client, user, sessionToken }. */
 export interface CreatedUserContext {
   client: ApiClient
   email: string
@@ -150,7 +132,6 @@ export async function registerTestUser(
   }
 }
 
-/** Create a fresh workspace owned by the authenticated user. */
 export async function createTestWorkspace(
   authedClient: ApiClient,
   options?: { name?: string }

@@ -6,17 +6,33 @@
  * (or inbound WS typing frame). Alice receives {type:"chat.typing"}
  * within 2s. Tests both transport paths so the fanout branch in
  * websocket/index.ts is exercised.
+ *
+ * Must be run via tests/integration/scripts/run-test.sh.
  */
 
-import { test } from "node:test"
+if (
+  !process.env.DATABASE_URL ||
+  !process.env.DATABASE_URL.includes(":55433/")
+) {
+  throw new Error(
+    "typing-ws.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
+  )
+}
+
+import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
 import { WebSocket } from "ws"
 import {
-  createApiClient,
+  setupChatStack,
+  teardownChatStack,
   registerTestUser,
   createTestWorkspace,
-} from "./setup.ts"
+  TEST_API_HOST,
+  TEST_API_PORT,
+  type ApiClient,
+  type ChatStack,
+} from "./harness/index.js"
 
 const uuid = () =>
   ([8, 4, 4, 4, 12] as const)
@@ -24,19 +40,8 @@ const uuid = () =>
     .join("-")
 
 function wsUrl(): string {
-  const explicit = process.env.STAGING_API_URL
-  if (explicit && explicit.trim().length > 0) {
-    return (
-      explicit
-        .replace(/^http/, "ws")
-        .replace(/\/api\/v1\/?$/, "")
-        .replace(/\/$/, "") + "/ws"
-    )
-  }
-  const host = process.env.SYNAPSE_STAGING_HOST || "127.0.0.1"
-  const port = process.env.NGINX_PORT
-  if (!port) throw new Error("NGINX_PORT not set")
-  return `ws://${host}:${port}/ws`
+  // The isolated API exposes its WS endpoint directly at /ws (no nginx in front).
+  return `ws://${TEST_API_HOST}:${TEST_API_PORT}/ws`
 }
 
 interface ConnectedSocket {
@@ -101,9 +106,9 @@ async function waitForFrame(
 }
 
 async function inviteAndJoin(
-  ownerClient: ReturnType<typeof createApiClient>,
+  ownerClient: ApiClient,
   workspaceId: string,
-  inviteeClient: ReturnType<typeof createApiClient>
+  inviteeClient: ApiClient
 ) {
   const invite = await ownerClient.json<{ token: string }>(
     `/workspaces/${workspaceId}/invites`,
@@ -118,11 +123,20 @@ async function inviteAndJoin(
   })
 }
 
+let stack: ChatStack | undefined
+
+before(async () => {
+  stack = await setupChatStack()
+})
+
+after(async () => {
+  if (stack) await teardownChatStack(stack)
+})
+
 test("HTTP typing broadcast reaches other-member WS subscribers", async () => {
-  const base = createApiClient()
-  const alice = await registerTestUser(base)
+  const alice = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(alice.client)
-  const bob = await registerTestUser(base)
+  const bob = await registerTestUser(stack!.baseClient)
   await inviteAndJoin(alice.client, ws.id, bob.client)
 
   // Build a group conversation that includes both alice + bob.
@@ -187,10 +201,9 @@ test("HTTP typing broadcast reaches other-member WS subscribers", async () => {
 })
 
 test("WS inbound {type:'typing'} broadcasts to other-member subscribers", async () => {
-  const base = createApiClient()
-  const alice = await registerTestUser(base)
+  const alice = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(alice.client)
-  const bob = await registerTestUser(base)
+  const bob = await registerTestUser(stack!.baseClient)
   await inviteAndJoin(alice.client, ws.id, bob.client)
 
   const bobBootstrap = await bob.client.json<{ workspaceMemberId: string }>(

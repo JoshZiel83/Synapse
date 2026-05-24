@@ -121,9 +121,17 @@ export async function resetDb(): Promise<void> {
     encoding: "utf8",
     timeout: 120_000,
   })
+  if (result.error) {
+    const cause = result.error as NodeJS.ErrnoException
+    throw new Error(
+      `bootstrap.ts could not be launched (${cause.code ?? "unknown"}): ${cause.message}. ` +
+        `Make sure dependencies are installed (run 'npm install' in ${WORKTREE_ROOT}).`
+    )
+  }
   if (result.status !== 0) {
     throw new Error(
-      `bootstrap.ts failed (exit ${result.status}):\n${result.stdout}\n${result.stderr}`
+      `bootstrap.ts failed (exit ${result.status}, signal ${result.signal ?? "none"}):\n` +
+        `stdout:\n${result.stdout ?? ""}\nstderr:\n${result.stderr ?? ""}`
     )
   }
 }

@@ -2,26 +2,48 @@
  * S3: conversation CRUD endpoints integration test.
  *
  * Verifies list/detail/PATCH/add-participant/remove/leave round-trip end
- * to end against the staging API.
+ * to end against the isolated API process spawned by setupChatStack.
+ *
+ * Must be run via tests/integration/scripts/run-test.sh.
  */
 
-import { test } from "node:test"
+if (
+  !process.env.DATABASE_URL ||
+  !process.env.DATABASE_URL.includes(":55433/")
+) {
+  throw new Error(
+    "conversations-crud.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
+  )
+}
+
+import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
 import {
-  createApiClient,
+  setupChatStack,
+  teardownChatStack,
   registerTestUser,
   createTestWorkspace,
-} from "./setup.ts"
+  type ChatStack,
+} from "./harness/index.js"
 
 const clientRequestId = () =>
   ([8, 4, 4, 4, 12] as const)
     .map((len) => randomBytes(len / 2).toString("hex"))
     .join("-")
 
+let stack: ChatStack | undefined
+
+before(async () => {
+  stack = await setupChatStack()
+})
+
+after(async () => {
+  if (stack) await teardownChatStack(stack)
+})
+
 test("GET /chat/conversations lists the conversations the user belongs to", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
 
   // No conversations yet.
@@ -33,22 +55,21 @@ test("GET /chat/conversations lists the conversations the user belongs to", asyn
   assert.equal(empty.conversations.length, 0)
 
   // Create one private conversation between just the owner.
-  const created = await ctx.client.json<{ conversation: { id: string } }>(
-    `/workspaces/${ws.id}/chat/conversations`,
-    {
-      method: "POST",
-      json: {
-        clientRequestId: clientRequestId(),
-        kind: "private",
-        boundary: "internal",
-        title: "S3 test convo",
-      },
-    }
-  )
+  const created = await ctx.client.json<{
+    conversation: { conversationId: string }
+  }>(`/workspaces/${ws.id}/chat/conversations`, {
+    method: "POST",
+    json: {
+      clientRequestId: clientRequestId(),
+      kind: "private",
+      boundary: "internal",
+      title: "S3 test convo",
+    },
+  })
   assert.ok(created.conversation.conversationId)
 
   const listed = await ctx.client.json<{
-    conversations: Array<{ id: string; title: string | null }>
+    conversations: Array<{ conversationId: string; title: string | null }>
   }>(`/workspaces/${ws.id}/chat/conversations`)
   assert.equal(listed.conversations.length, 1)
   assert.equal(
@@ -59,24 +80,22 @@ test("GET /chat/conversations lists the conversations the user belongs to", asyn
 })
 
 test("GET /chat/conversations/:cid returns the single conversation", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
-  const created = await ctx.client.json<{ conversation: { id: string } }>(
-    `/workspaces/${ws.id}/chat/conversations`,
-    {
-      method: "POST",
-      json: {
-        clientRequestId: clientRequestId(),
-        kind: "private",
-        boundary: "internal",
-        title: "detail test",
-      },
-    }
-  )
+  const created = await ctx.client.json<{
+    conversation: { conversationId: string }
+  }>(`/workspaces/${ws.id}/chat/conversations`, {
+    method: "POST",
+    json: {
+      clientRequestId: clientRequestId(),
+      kind: "private",
+      boundary: "internal",
+      title: "detail test",
+    },
+  })
 
   const detail = await ctx.client.json<{
-    conversation: { id: string; title: string | null }
+    conversation: { conversationId: string; title: string | null }
   }>(
     `/workspaces/${ws.id}/chat/conversations/${created.conversation.conversationId}`
   )
@@ -88,21 +107,19 @@ test("GET /chat/conversations/:cid returns the single conversation", async () =>
 })
 
 test("PATCH /chat/conversations/:cid renames the conversation", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
-  const created = await ctx.client.json<{ conversation: { id: string } }>(
-    `/workspaces/${ws.id}/chat/conversations`,
-    {
-      method: "POST",
-      json: {
-        clientRequestId: clientRequestId(),
-        kind: "group",
-        boundary: "internal",
-        title: "before",
-      },
-    }
-  )
+  const created = await ctx.client.json<{
+    conversation: { conversationId: string }
+  }>(`/workspaces/${ws.id}/chat/conversations`, {
+    method: "POST",
+    json: {
+      clientRequestId: clientRequestId(),
+      kind: "group",
+      boundary: "internal",
+      title: "before",
+    },
+  })
 
   const patched = await ctx.client.json<{
     conversation: { title: string | null }
@@ -117,11 +134,13 @@ test("PATCH /chat/conversations/:cid renames the conversation", async () => {
 })
 
 test("POST /participants then DELETE /participants/:id round-trips", async () => {
-  const base = createApiClient()
-  const owner = await registerTestUser(base)
+  const owner = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(owner.client)
   const created = await owner.client.json<{
-    conversation: { id: string; members: Array<{ id: string }> }
+    conversation: {
+      conversationId: string
+      members: Array<{ id: string }>
+    }
   }>(`/workspaces/${ws.id}/chat/conversations`, {
     method: "POST",
     json: {
@@ -164,21 +183,19 @@ test("POST /participants then DELETE /participants/:id round-trips", async () =>
 })
 
 test("POST /chat/conversations/:cid/leave removes self", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
-  const created = await ctx.client.json<{ conversation: { id: string } }>(
-    `/workspaces/${ws.id}/chat/conversations`,
-    {
-      method: "POST",
-      json: {
-        clientRequestId: clientRequestId(),
-        kind: "group",
-        boundary: "internal",
-        title: "leave test",
-      },
-    }
-  )
+  const created = await ctx.client.json<{
+    conversation: { conversationId: string }
+  }>(`/workspaces/${ws.id}/chat/conversations`, {
+    method: "POST",
+    json: {
+      clientRequestId: clientRequestId(),
+      kind: "group",
+      boundary: "internal",
+      title: "leave test",
+    },
+  })
 
   const left = await ctx.client.json<{
     state: string

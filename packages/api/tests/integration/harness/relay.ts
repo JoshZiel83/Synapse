@@ -7,6 +7,8 @@ import {
   type ChildProcessWithoutNullStreams,
 } from "node:child_process"
 import {
+  accessSync,
+  constants as fsConstants,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -70,12 +72,25 @@ async function createPairingSession(opts: {
   return code
 }
 
+function ensureRelayBinary(): void {
+  try {
+    accessSync(RELAY_BIN_PATH, fsConstants.X_OK)
+  } catch (err) {
+    const reason = (err as NodeJS.ErrnoException).code ?? "unknown error"
+    throw new Error(
+      `Relay binary not available at ${RELAY_BIN_PATH} (${reason}). ` +
+        "Run `bash packages/api/tests/integration/scripts/build-relay.sh` first."
+    )
+  }
+}
+
 function runPair(opts: {
   apiBaseUrl: string
   pairingCode: string
   homeDir: string
   displayName?: string
 }): void {
+  ensureRelayBinary()
   const result = spawnSync(
     RELAY_BIN_PATH,
     [
@@ -92,9 +107,17 @@ function runPair(opts: {
       stdio: ["ignore", "pipe", "pipe"],
     }
   )
+  if (result.error) {
+    const cause = result.error as NodeJS.ErrnoException
+    throw new Error(
+      `synapse-relay --pair could not be launched (${cause.code ?? "unknown"}): ${cause.message}. ` +
+        `Binary at ${RELAY_BIN_PATH} — rebuild via packages/api/tests/integration/scripts/build-relay.sh`
+    )
+  }
   if (result.status !== 0) {
     throw new Error(
-      `synapse-relay --pair failed (exit ${result.status}):\n${result.stdout}\n${result.stderr}`
+      `synapse-relay --pair failed (exit ${result.status}, signal ${result.signal ?? "none"}):\n` +
+        `stdout:\n${result.stdout ?? ""}\nstderr:\n${result.stderr ?? ""}`
     )
   }
 }
@@ -186,6 +209,7 @@ export async function pairAndStartRelay(opts: {
   const { deviceId } = loadConfigYaml(configPath)
   injectMcpServers(configPath, opts.mcpServers)
 
+  ensureRelayBinary()
   const proc = spawn(RELAY_BIN_PATH, ["-c", configPath], {
     env: { ...process.env, HOME: homeDir },
     cwd: homeDir,
@@ -193,7 +217,12 @@ export async function pairAndStartRelay(opts: {
   })
 
   let exited = false
+  let earlyError: Error | undefined
   proc.on("exit", () => {
+    exited = true
+  })
+  proc.on("error", (err) => {
+    earlyError = err as Error
     exited = true
   })
 
@@ -205,6 +234,12 @@ export async function pairAndStartRelay(opts: {
   // Wait a bit for the relay to connect + advertise catalog.
   await new Promise((r) => setTimeout(r, 2500))
   if (exited) {
+    if (earlyError) {
+      const cause = earlyError as NodeJS.ErrnoException
+      throw new Error(
+        `synapse-relay could not be launched (${cause.code ?? "unknown"}): ${cause.message}`
+      )
+    }
     throw new Error(
       "synapse-relay exited before reaching steady state. Check logs above."
     )

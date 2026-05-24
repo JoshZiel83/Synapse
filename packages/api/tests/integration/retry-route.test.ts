@@ -6,25 +6,47 @@
  *  - route exists (no 404 from missing handler)
  *  - non-existent itemId returns 404 from the service guard
  *  - non-retryable items (e.g. a plain message) return 400
+ *
+ * Must be run via tests/integration/scripts/run-test.sh.
  */
 
-import { test } from "node:test"
+if (
+  !process.env.DATABASE_URL ||
+  !process.env.DATABASE_URL.includes(":55433/")
+) {
+  throw new Error(
+    "retry-route.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
+  )
+}
+
+import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
 import {
-  createApiClient,
+  setupChatStack,
+  teardownChatStack,
   registerTestUser,
   createTestWorkspace,
-} from "./setup.ts"
+  type ChatStack,
+} from "./harness/index.js"
 
 const uuid = () =>
   ([8, 4, 4, 4, 12] as const)
     .map((len) => randomBytes(len / 2).toString("hex"))
     .join("-")
 
+let stack: ChatStack | undefined
+
+before(async () => {
+  stack = await setupChatStack()
+})
+
+after(async () => {
+  if (stack) await teardownChatStack(stack)
+})
+
 test("retry endpoint is mounted under /chat/conversations/.../messages/:itemId/retry", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const created = await ctx.client.json<{
     conversation: { conversationId: string }
@@ -58,8 +80,7 @@ test("retry endpoint is mounted under /chat/conversations/.../messages/:itemId/r
 })
 
 test("retry returns 400 for a non-retryable item (e.g. user message)", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const created = await ctx.client.json<{
     conversation: { conversationId: string }

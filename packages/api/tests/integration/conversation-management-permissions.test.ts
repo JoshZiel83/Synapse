@@ -7,26 +7,50 @@
  *   else) → only owners/admins; self-removal (leave) always allowed
  *
  * Non-manager members must get 403 conversation_manage_denied.
+ *
+ * Must be run via tests/integration/scripts/run-test.sh.
  */
 
-import { test } from "node:test"
+if (
+  !process.env.DATABASE_URL ||
+  !process.env.DATABASE_URL.includes(":55433/")
+) {
+  throw new Error(
+    "conversation-management-permissions.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
+  )
+}
+
+import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
 import {
-  createApiClient,
+  setupChatStack,
+  teardownChatStack,
   registerTestUser,
   createTestWorkspace,
-} from "./setup.ts"
+  type ApiClient,
+  type ChatStack,
+} from "./harness/index.js"
 
 const uuid = () =>
   ([8, 4, 4, 4, 12] as const)
     .map((len) => randomBytes(len / 2).toString("hex"))
     .join("-")
 
+let stack: ChatStack | undefined
+
+before(async () => {
+  stack = await setupChatStack()
+})
+
+after(async () => {
+  if (stack) await teardownChatStack(stack)
+})
+
 async function inviteAndJoin(
-  ownerClient: ReturnType<typeof createApiClient>,
+  ownerClient: ApiClient,
   workspaceId: string,
-  inviteeClient: ReturnType<typeof createApiClient>
+  inviteeClient: ApiClient
 ) {
   const invite = await ownerClient.json<{ token: string }>(
     `/workspaces/${workspaceId}/invites`,
@@ -39,10 +63,9 @@ async function inviteAndJoin(
 }
 
 async function setupAliceBobGroup() {
-  const base = createApiClient()
-  const alice = await registerTestUser(base)
+  const alice = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(alice.client)
-  const bob = await registerTestUser(base)
+  const bob = await registerTestUser(stack!.baseClient)
   await inviteAndJoin(alice.client, ws.id, bob.client)
   const bobBootstrap = await bob.client.json<{ workspaceMemberId: string }>(
     `/workspaces/${ws.id}/chat/bootstrap`

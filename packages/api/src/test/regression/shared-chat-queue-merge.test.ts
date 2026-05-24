@@ -1,5 +1,5 @@
 /**
- * S22: lock in the shared chat-queue merge behavior.
+ * S22 + S28: lock in the shared chat-queue merge behavior.
  *
  * Web's chat-store and the chat service worker both call
  * mergeStoredQueueTransition() to fold a queue-state snapshot from the

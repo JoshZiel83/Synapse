@@ -108,7 +108,12 @@ export async function spawnApi(
   })
 
   let exited = false
+  let spawnError: NodeJS.ErrnoException | undefined
   proc.on("exit", () => {
+    exited = true
+  })
+  proc.on("error", (err) => {
+    spawnError = err as NodeJS.ErrnoException
     exited = true
   })
 
@@ -120,6 +125,12 @@ export async function spawnApi(
   try {
     await waitForHealth(TEST_API_BASE_URL)
   } catch (err) {
+    if (spawnError) {
+      throw new Error(
+        `API process could not be launched (${spawnError.code ?? "unknown"}): ${spawnError.message}. ` +
+          `Make sure dependencies are installed (run 'npm install' in ${WORKTREE_ROOT}).`
+      )
+    }
     if (exited) {
       throw new Error(
         "API process exited before becoming healthy. Check logs above."

@@ -1,24 +1,46 @@
 /**
  * S7: push tokens + typing endpoints integration test.
+ *
+ * Must be run via tests/integration/scripts/run-test.sh.
  */
 
-import { test } from "node:test"
+if (
+  !process.env.DATABASE_URL ||
+  !process.env.DATABASE_URL.includes(":55433/")
+) {
+  throw new Error(
+    "push-and-typing.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
+  )
+}
+
+import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
 import {
-  createApiClient,
+  setupChatStack,
+  teardownChatStack,
   registerTestUser,
   createTestWorkspace,
-} from "./setup.ts"
+  type ChatStack,
+} from "./harness/index.js"
 
 const uuid = () =>
   ([8, 4, 4, 4, 12] as const)
     .map((len) => randomBytes(len / 2).toString("hex"))
     .join("-")
 
+let stack: ChatStack | undefined
+
+before(async () => {
+  stack = await setupChatStack()
+})
+
+after(async () => {
+  if (stack) await teardownChatStack(stack)
+})
+
 test("register + list + delete chat push token round-trips", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
 
   const registered = await ctx.client.json<{
@@ -57,8 +79,7 @@ test("register + list + delete chat push token round-trips", async () => {
 })
 
 test("push tokens are isolated per workspace member", async () => {
-  const base = createApiClient()
-  const a = await registerTestUser(base)
+  const a = await registerTestUser(stack!.baseClient)
   const wsA = await createTestWorkspace(a.client)
   await a.client.json(`/workspaces/${wsA.id}/chat/push-tokens`, {
     method: "POST",
@@ -68,7 +89,7 @@ test("push tokens are isolated per workspace member", async () => {
     },
   })
 
-  const b = await registerTestUser(base)
+  const b = await registerTestUser(stack!.baseClient)
   const wsB = await createTestWorkspace(b.client)
   const bList = await b.client.json<{ tokens: unknown[] }>(
     `/workspaces/${wsB.id}/chat/push-tokens`
@@ -77,8 +98,7 @@ test("push tokens are isolated per workspace member", async () => {
 })
 
 test("typing endpoint returns broadcast: true for authorized participants", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const created = await ctx.client.json<{
     conversation: { conversationId: string }
@@ -100,9 +120,8 @@ test("typing endpoint returns broadcast: true for authorized participants", asyn
 })
 
 test("typing endpoint rejects unauthorized callers with 403", async () => {
-  const base = createApiClient()
   // owner creates a conversation
-  const owner = await registerTestUser(base)
+  const owner = await registerTestUser(stack!.baseClient)
   const wsA = await createTestWorkspace(owner.client)
   const created = await owner.client.json<{
     conversation: { conversationId: string }
@@ -117,7 +136,7 @@ test("typing endpoint rejects unauthorized callers with 403", async () => {
   })
 
   // outsider in a different workspace tries to send typing
-  const outsider = await registerTestUser(base)
+  const outsider = await registerTestUser(stack!.baseClient)
   const wsB = await createTestWorkspace(outsider.client)
   const res = await outsider.client.fetch(
     `/workspaces/${wsB.id}/chat/conversations/${created.conversation.conversationId}/typing`,

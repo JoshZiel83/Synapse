@@ -1,4 +1,9 @@
-// Phase 7e: Optional LLM smoke test.
+// Phase 7e: Optional LLM smoke test (MANUAL — opt-in only).
+//
+// This file lives under tests/integration/manual/ on purpose: the default
+// `test:integration` glob does NOT pick it up. It calls an externally
+// configured Anthropic-compatible endpoint, so it must never run as part
+// of the default isolated integration suite.
 //
 // Drives a one-shot Anthropic Messages request against an externally
 // configured base URL to verify the provider transport path (AI_BASE_URL →
@@ -21,10 +26,10 @@
 // configure it at the environment level (HTTPS_PROXY, HTTP_PROXY, etc.) —
 // this test does not know about any specific proxy topology.
 //
-// Run manually with:
+// Run manually via the dedicated package script:
 //   LLM_SMOKE_BASE_URL=https://example.invalid/ai-gateway \
 //   LLM_SMOKE_API_KEY=$KEY \
-//   node --test --import tsx packages/api/tests/integration/llm-smoke.test.ts
+//     npm run test:integration:llm-smoke -w packages/api
 
 import { test } from "node:test"
 import assert from "node:assert/strict"
@@ -89,7 +94,9 @@ test("LLM smoke: configured base URL responds with a non-empty assistant message
     return
   }
   if (response.status !== 200) {
-    t.skip(`Unexpected gateway status ${response.status}: ${body.slice(0, 200)}`)
+    t.skip(
+      `Unexpected gateway status ${response.status}: ${body.slice(0, 200)}`
+    )
     return
   }
 

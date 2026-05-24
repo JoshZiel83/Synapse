@@ -11,42 +11,53 @@
  *      (S19 regression: previously this was incorrectly set to the
  *      assistant participant.id with type="workspace_member" — a mismatch
  *      that broke the model-error fallout in session-thinking.ts)
+ *
+ * Must be run via tests/integration/scripts/run-test.sh.
  */
 
-import { test } from "node:test"
+if (
+  !process.env.DATABASE_URL ||
+  !process.env.DATABASE_URL.includes(":55433/")
+) {
+  throw new Error(
+    "retry-deep.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
+  )
+}
+
+import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes, randomUUID } from "node:crypto"
 import { Client } from "pg"
 import {
-  createApiClient,
+  setupChatStack,
+  teardownChatStack,
   registerTestUser,
   createTestWorkspace,
-} from "./setup.ts"
+  TEST_PG_DB,
+  TEST_PG_HOST,
+  TEST_PG_PASSWORD,
+  TEST_PG_PORT,
+  TEST_PG_USER,
+  type ChatStack,
+} from "./harness/index.js"
 
 const uuid = () =>
   ([8, 4, 4, 4, 12] as const)
     .map((len) => randomBytes(len / 2).toString("hex"))
     .join("-")
 
-function pgConfig() {
-  // Connect to the integration test postgres on its host-bound port.
-  const port = Number.parseInt(process.env.PG_PORT || "0", 10)
-  if (!port)
-    throw new Error(
-      "PG_PORT not set; export it to point at the integration test postgres"
-    )
-  return {
-    host: process.env.SYNAPSE_STAGING_HOST || "127.0.0.1",
-    port,
-    user: process.env.POSTGRES_USER || "synapse",
-    password: process.env.POSTGRES_PASSWORD || "",
-    database: process.env.POSTGRES_DB || "synapse_staging",
-  }
-}
+let stack: ChatStack | undefined
+
+before(async () => {
+  stack = await setupChatStack()
+})
+
+after(async () => {
+  if (stack) await teardownChatStack(stack)
+})
 
 test("retry succeeds end-to-end and enqueues a session_wakeup with the correct workspace_member source", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const bootstrap = await ctx.client.json<{
     workspaceMemberId: string
@@ -68,7 +79,13 @@ test("retry succeeds end-to-end and enqueues a session_wakeup with the correct w
   })
   const conversationId = created.conversation.conversationId
 
-  const pg = new Client(pgConfig())
+  const pg = new Client({
+    host: TEST_PG_HOST,
+    port: TEST_PG_PORT,
+    user: TEST_PG_USER,
+    password: TEST_PG_PASSWORD,
+    database: TEST_PG_DB,
+  })
   await pg.connect()
   try {
     // Inject an actor in this workspace and add it as a participant in the
@@ -84,11 +101,22 @@ test("retry succeeds end-to-end and enqueues a session_wakeup with the correct w
        VALUES ($1, $2, 'retry-test-actor', 'assistant', 'tester')`,
       [actorId, ws.id]
     )
+    // P1b: conversation_participants.subject_id is a polymorphic FK into
+    // access_subjects (one row per logical subject — actor/member/etc.).
+    // The conversation-participants insert below needs a matching
+    // kind='actor' subject row, so create it first.
+    const subjectRow = await pg.query<{ id: string }>(
+      `INSERT INTO access_subjects (kind, workspace_id, actor_id)
+       VALUES ('actor', $1, $2)
+       RETURNING id`,
+      [ws.id, actorId]
+    )
+    const actorSubjectId = subjectRow.rows[0].id
     await pg.query(
       `INSERT INTO conversation_participants
-        (id, conversation_id, participant_type, actor_id, role_key, state)
+        (id, conversation_id, participant_type, subject_id, role_key, state)
        VALUES ($1, $2, 'actor', $3, 'member', 'active')`,
-      [actorParticipantId, conversationId, actorId]
+      [actorParticipantId, conversationId, actorSubjectId]
     )
     await pg.query(
       `INSERT INTO conversation_participant_states

@@ -5,16 +5,29 @@
  * - send-message rejects unknown block types
  * - send-message rejects malformed file_ref blocks
  * - messages endpoint paginates via beforeSequence
+ *
+ * Must be run via tests/integration/scripts/run-test.sh.
  */
 
-import { test } from "node:test"
+if (
+  !process.env.DATABASE_URL ||
+  !process.env.DATABASE_URL.includes(":55433/")
+) {
+  throw new Error(
+    "chat-content-blocks.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
+  )
+}
+
+import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { randomBytes } from "node:crypto"
 import {
-  createApiClient,
+  setupChatStack,
+  teardownChatStack,
   registerTestUser,
   createTestWorkspace,
-} from "./setup.ts"
+  type ChatStack,
+} from "./harness/index.js"
 
 const uuid = () =>
   ([8, 4, 4, 4, 12] as const)
@@ -31,9 +44,18 @@ type ParticipantSummary = {
   name?: string
 }
 
+let stack: ChatStack | undefined
+
+before(async () => {
+  stack = await setupChatStack()
+})
+
+after(async () => {
+  if (stack) await teardownChatStack(stack)
+})
+
 test("create conversation forwards remoteAgentIds: response participants include a remote_agent entry", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
 
   // Provision a remote agent in this workspace so we have a valid id.
@@ -83,8 +105,7 @@ test("create conversation forwards remoteAgentIds: response participants include
 })
 
 test("create conversation forwards externalParticipants: response includes an external entry with the displayName", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
 
   const externalName = `S27 External ${randomBytes(2).toString("hex")}`
@@ -121,8 +142,7 @@ test("create conversation forwards externalParticipants: response includes an ex
 })
 
 test("create conversation accepts mixed actorIds + remoteAgentIds + externalParticipants in one call", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
 
   const agentResponse = await ctx.client.json<{
@@ -166,8 +186,7 @@ test("create conversation accepts mixed actorIds + remoteAgentIds + externalPart
 })
 
 test("send-message rejects unknown block types with 400", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const created = await ctx.client.json<{
     conversation: { conversationId: string }
@@ -205,8 +224,7 @@ test("send-message rejects unknown block types with 400", async () => {
 })
 
 test("send-message rejects file_ref blocks missing required fields", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const created = await ctx.client.json<{
     conversation: { conversationId: string }
@@ -242,8 +260,7 @@ test("send-message rejects file_ref blocks missing required fields", async () =>
 })
 
 test("messages endpoint accepts beforeSequence pagination param", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const created = await ctx.client.json<{
     conversation: { conversationId: string }

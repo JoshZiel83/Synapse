@@ -27,6 +27,7 @@ const chatRuntimePath = path.resolve(
   "..",
   "..",
   "..",
+  "..",
   "mobile-app",
   "src",
   "lib",

@@ -1,57 +1,59 @@
 /**
  * S39/S40/S41: realtime_event_outbox GC.
  *
- * The S8 plan called for dropping the realtime_event_outbox table after
- * a 24h empty-table verification. That plan assumed all consumers would
- * be removed by Stage 8 (feed.item.created, the 5 dead session events,
- * etc.). One real consumer remains: chat.sync.event uses the outbox as
- * a transactional outbox so the WS fanout is guaranteed to fire iff the
- * underlying DB write commits. Dropping the table would break the chat
- * sync spine.
+ * - GC deletes dispatched rows older than retention window
+ * - GC must NEVER delete 'pending' or 'failed' rows (failed is retryable)
+ * - The /_debug/chat/realtime-outbox-gc endpoint requires platform
+ *   super_admin specifically — NOT the broader isPlatformAdmin set
+ *   (which also admits workspace_admin and model_admin).
  *
- * Instead we add a GC pass: dispatched rows older than the configured
- * retention window get deleted, so the table doesn't grow forever.
- *
- * S40 hardening:
- *  - GC only deletes status='dispatched'. 'failed' is a retryable
- *    status (claimPendingRealtimeOutboxEntries treats it the same as
- *    'pending'), so deleting failed rows would silently drop events
- *    the dispatcher still intends to retry. Test asserts a 48h-old
- *    failed row survives the GC.
- *
- * S41 hardening:
- *  - The /_debug/chat/realtime-outbox-gc endpoint requires platform
- *    `super_admin` specifically — NOT the broader isPlatformAdmin set
- *    (which also admits workspace_admin and model_admin). The GC is a
- *    process-wide, cross-workspace destructive op; only super_admin
- *    is an appropriate floor. Tests cover: plain workspace owner →
- *    403, workspace_admin → 403, model_admin → 403, super_admin →
- *    200.
+ * Must be run via tests/integration/scripts/run-test.sh.
  */
 
-import { test } from "node:test"
+if (
+  !process.env.DATABASE_URL ||
+  !process.env.DATABASE_URL.includes(":55433/")
+) {
+  throw new Error(
+    "realtime-outbox-gc.test.ts must be run via packages/api/tests/integration/scripts/run-test.sh"
+  )
+}
+
+import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import { Client } from "pg"
 import {
-  createApiClient,
+  setupChatStack,
+  teardownChatStack,
   registerTestUser,
   createTestWorkspace,
-} from "./setup.ts"
+  TEST_PG_DB,
+  TEST_PG_HOST,
+  TEST_PG_PASSWORD,
+  TEST_PG_PORT,
+  TEST_PG_USER,
+  type ChatStack,
+} from "./harness/index.js"
 
-function pgConfig() {
-  const port = Number.parseInt(process.env.PG_PORT || "0", 10)
-  if (!port)
-    throw new Error(
-      "PG_PORT not set; export it to point at the integration test postgres"
-    )
-  return {
-    host: process.env.SYNAPSE_STAGING_HOST || "127.0.0.1",
-    port,
-    user: process.env.POSTGRES_USER || "synapse",
-    password: process.env.POSTGRES_PASSWORD || "",
-    database: process.env.POSTGRES_DB || "synapse_staging",
-  }
+let stack: ChatStack | undefined
+
+before(async () => {
+  stack = await setupChatStack()
+})
+
+after(async () => {
+  if (stack) await teardownChatStack(stack)
+})
+
+function pgClient(): Client {
+  return new Client({
+    host: TEST_PG_HOST,
+    port: TEST_PG_PORT,
+    user: TEST_PG_USER,
+    password: TEST_PG_PASSWORD,
+    database: TEST_PG_DB,
+  })
 }
 
 async function grantPlatformAdmin(pg: Client, userId: string) {
@@ -79,8 +81,7 @@ async function grantPlatformAccessKey(
 }
 
 test("debug GC endpoint rejects non-platform-admin callers with 403", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   // Plain workspace owner — no platform access keys at all.
   const res = await ctx.client.fetch(
     "/_debug/chat/realtime-outbox-gc?hours=24",
@@ -100,9 +101,8 @@ test("debug GC endpoint rejects platform workspace_admin with 403 (super_admin o
   // model_admin, but only super_admin should be able to run a
   // process-wide GC. workspace_admin is scoped to workspace
   // administration — it has no business sweeping the global outbox.
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
-  const pg = new Client(pgConfig())
+  const ctx = await registerTestUser(stack!.baseClient)
+  const pg = pgClient()
   await pg.connect()
   try {
     await grantPlatformAccessKey(pg, ctx.user.id, "workspace_admin")
@@ -125,9 +125,8 @@ test("debug GC endpoint rejects platform workspace_admin with 403 (super_admin o
 test("debug GC endpoint rejects platform model_admin with 403 (super_admin only)", async () => {
   // Same rationale as workspace_admin: model_admin is scoped to model
   // governance, not infra-level table sweeps.
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
-  const pg = new Client(pgConfig())
+  const ctx = await registerTestUser(stack!.baseClient)
+  const pg = pgClient()
   await pg.connect()
   try {
     await grantPlatformAccessKey(pg, ctx.user.id, "model_admin")
@@ -148,14 +147,13 @@ test("debug GC endpoint rejects platform model_admin with 403 (super_admin only)
 })
 
 test("GC deletes dispatched rows older than retention but spares fresh dispatched rows", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const bootstrap = await ctx.client.json<{ workspaceMemberId: string }>(
     `/workspaces/${ws.id}/chat/bootstrap`
   )
 
-  const pg = new Client(pgConfig())
+  const pg = pgClient()
   await pg.connect()
   try {
     await grantPlatformAdmin(pg, ctx.user.id)
@@ -212,14 +210,13 @@ test("GC deletes dispatched rows older than retention but spares fresh dispatche
 })
 
 test("GC never deletes 'pending' rows, regardless of age", async () => {
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const bootstrap = await ctx.client.json<{ workspaceMemberId: string }>(
     `/workspaces/${ws.id}/chat/bootstrap`
   )
 
-  const pg = new Client(pgConfig())
+  const pg = pgClient()
   await pg.connect()
   try {
     await grantPlatformAdmin(pg, ctx.user.id)
@@ -270,14 +267,13 @@ test("GC never deletes 'failed' rows — they're retryable, not terminal", async
   // attention — it's NEVER safe to silently drop. With hours=0 (or
   // any misuse of the debug endpoint) the pre-S40 GC would have
   // dropped live realtime events.
-  const base = createApiClient()
-  const ctx = await registerTestUser(base)
+  const ctx = await registerTestUser(stack!.baseClient)
   const ws = await createTestWorkspace(ctx.client)
   const bootstrap = await ctx.client.json<{ workspaceMemberId: string }>(
     `/workspaces/${ws.id}/chat/bootstrap`
   )
 
-  const pg = new Client(pgConfig())
+  const pg = pgClient()
   await pg.connect()
   try {
     await grantPlatformAdmin(pg, ctx.user.id)
