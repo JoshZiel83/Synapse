@@ -139,6 +139,12 @@ async function putSessionToIdle(sessionId: string) {
   await publishSessionRuntime(session.workspace_id, sessionId, {
     laneState: "idle",
     phase: "idle",
+    // A clean idle transition. Clear any cached statusText/lastError
+    // explicitly so a runtime snapshot from an earlier failure cannot
+    // leak through buildSessionRuntimeSnapshot's inherit-from-cache
+    // fallback into this terminal snapshot.
+    statusText: null,
+    lastError: null,
   })
 
   // session.status.changed event emit removed (S13): no subscribers.
@@ -277,6 +283,15 @@ export function startSessionThinkingWorker() {
             phase: currentPhase,
             statusText: status,
             activeTurnId: turn?.id,
+            // Defense in depth: if the previous run ended in "blocked" and
+            // the requeue path that brought us here didn't clear the
+            // cached lastError (e.g. a future bypass that doesn't go
+            // through enqueueSessionWakeup), the snapshot builder would
+            // otherwise inherit it and the dashboard would keep showing
+            // the previous failure's message even though the session is
+            // now healthily running. This `null` is cheap and stays
+            // correct even when there was nothing to clear.
+            lastError: null,
           })
           // session.thinking event emit removed (S13).
           void thinkingPayload

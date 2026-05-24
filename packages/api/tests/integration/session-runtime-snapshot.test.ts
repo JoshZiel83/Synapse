@@ -276,3 +276,103 @@ test("lastError: null clearing is honored even when health stays 'ok'", async ()
   assert.ok(after)
   assert.equal(after!.lastError, undefined)
 })
+
+test("worker-startup publish WITHOUT lastError:null leaks stale cached lastError (regression anchor for the bypass-path bug)", async () => {
+  // Simulates the bypass shape: something requeued a previously-blocked
+  // session WITHOUT going through enqueueSessionWakeup()'s clearing
+  // overrides (the historical relay-manager CUA termination did this via
+  // raw SQL + direct sessionThinkingQueue.add). Result: cache still
+  // carries lastError. The worker then starts and publishes
+  // {laneState:"running", health:"ok", phase:"thinking", statusText:"Analyzing message..."}
+  // — exactly the original session-thinking emit shape, with no
+  // lastError override. snapshot builder inherits from cache.
+  const fixture = await buildSessionFixture()
+  await stageBlockedCache({
+    workspaceId: fixture.workspaceId,
+    sessionId: fixture.sessionId,
+    errorMessage: "old provider 500",
+  })
+  await updateSessionStatus(fixture.sessionId, "running", {
+    errorMessage: null,
+  })
+
+  const leaky = await publishSessionRuntime(
+    fixture.workspaceId,
+    fixture.sessionId,
+    {
+      laneState: "running",
+      health: "ok",
+      phase: "thinking",
+      statusText: "Analyzing message...",
+    }
+  )
+  assert.ok(leaky)
+  // The leak: cached lastError survives because the worker's first
+  // emit didn't override it. Dashboard runtime-ui.ts:90 would print
+  // "old provider 500" even though the session is healthily running.
+  assert.equal(leaky!.lastError?.message, "old provider 500")
+  // statusText is fine here because the worker explicitly overrides it.
+  assert.equal(leaky!.statusText, "Analyzing message...")
+})
+
+test("worker-startup publish WITH lastError:null produces a clean snapshot from blocked cache (defense in depth)", async () => {
+  // This is the post-fix shape session-thinking.ts:emitThinkingStatus now
+  // emits. Even if some future bypass leaves stale fields in the cache,
+  // the worker's first publish self-heals lastError on the way to
+  // "running".
+  const fixture = await buildSessionFixture()
+  await stageBlockedCache({
+    workspaceId: fixture.workspaceId,
+    sessionId: fixture.sessionId,
+    errorMessage: "old provider 500 (defense case)",
+  })
+  await updateSessionStatus(fixture.sessionId, "running", {
+    errorMessage: null,
+  })
+
+  const clean = await publishSessionRuntime(
+    fixture.workspaceId,
+    fixture.sessionId,
+    {
+      laneState: "running",
+      health: "ok",
+      phase: "thinking",
+      statusText: "Analyzing message...",
+      lastError: null,
+    }
+  )
+  assert.ok(clean)
+  assert.equal(clean!.lastError, undefined)
+  assert.equal(clean!.statusText, "Analyzing message...")
+  assert.equal(clean!.health, "ok")
+  assert.equal(clean!.phase, "thinking")
+})
+
+test("putSessionToIdle terminal publish WITH lastError/statusText:null fully clears even if cache had stale failure (defense in depth)", async () => {
+  // Mirrors the new putSessionToIdle shape: terminal idle transition
+  // explicitly clears any cached failure so the final snapshot stays
+  // honest.
+  const fixture = await buildSessionFixture()
+  await stageBlockedCache({
+    workspaceId: fixture.workspaceId,
+    sessionId: fixture.sessionId,
+    errorMessage: "tool timeout",
+  })
+  await updateSessionStatus(fixture.sessionId, "idle", { errorMessage: null })
+
+  const clean = await publishSessionRuntime(
+    fixture.workspaceId,
+    fixture.sessionId,
+    {
+      laneState: "idle",
+      phase: "idle",
+      statusText: null,
+      lastError: null,
+    }
+  )
+  assert.ok(clean)
+  assert.equal(clean!.laneState, "idle")
+  assert.equal(clean!.phase, "idle")
+  assert.equal(clean!.statusText, undefined)
+  assert.equal(clean!.lastError, undefined)
+})
