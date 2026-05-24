@@ -5,6 +5,8 @@
   "workspaces": [
     "packages/shared",
     "packages/device-protocol",
+    "packages/device-runtime",
+    "packages/device-sdk",
     "packages/api",
     "packages/remote-agent-daemon",
     "packages/web-next"
@@ -20,9 +22,11 @@
     "format:staged": "lint-staged",
     "codegen:relay-policies": "tsx scripts/codegen/relay-policies.ts",
     "codegen:verify": "tsx scripts/codegen/relay-policies.ts && git diff --exit-code -- relay/internal/runtimeauth/policies_gen.go && git ls-files --error-unmatch relay/internal/runtimeauth/policies_gen.go",
-    "build": "npm run codegen:relay-policies && npm run build -w packages/shared && npm run build -w packages/device-protocol && npm run build -w packages/api && npm run build -w packages/remote-agent-daemon && npm run build -w packages/web-next",
+    "build": "npm run codegen:relay-policies && npm run build -w packages/shared && npm run build -w packages/device-protocol && npm run build -w packages/device-runtime && npm run build -w packages/device-sdk && npm run build -w packages/api && npm run build -w packages/remote-agent-daemon && npm run build -w packages/web-next",
     "build:shared": "npm run build -w packages/shared",
     "build:device-protocol": "npm run build -w packages/device-protocol",
+    "build:device-runtime": "npm run build -w packages/device-runtime",
+    "build:device-sdk": "npm run build -w packages/device-sdk",
     "build:api": "npm run build -w packages/api",
     "build:daemon": "npm run build -w packages/remote-agent-daemon",
     "build:web": "npm run build -w packages/shared && npm run build -w packages/device-protocol && npm run build -w packages/web-next",
