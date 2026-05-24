@@ -8,6 +8,7 @@ import { sql } from "kysely"
 import { SUBJECT_KIND } from "@synapse/shared"
 import { db } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
+import { ensureConversationActorContext } from "../session/service.js"
 
 export interface DeviceCapabilityToolRow {
   device_id: string
@@ -118,13 +119,18 @@ export async function resolveAccessTargetSubjectId(
       })
     }
     case "actor_in_conversation": {
-      // The full ensureConversationActorContext flow lives in
-      // access-target-resolver.ts. PR #8 wires that via the group-chat picker;
-      // this v3.0 helper raises a typed error so the caller knows to take the
-      // group-chat code path.
-      throw new Error(
-        "use setActiveDeviceCapabilitiesForActorInConversation for actor_in_conversation"
-      )
+      if (!input.actorId || !input.conversationId)
+        throw new Error(
+          "actorId and conversationId required for actor_in_conversation target"
+        )
+      const context = await ensureConversationActorContext({
+        actorId: input.actorId,
+        conversationId: input.conversationId,
+      })
+      return upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
+        contextId: context.conversationActorContextId,
+      })
     }
   }
 }
