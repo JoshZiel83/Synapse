@@ -9,6 +9,11 @@ export {
   executeBash,
 } from "./builtins/commandline.js"
 export { createBrowserBuiltin, listCdpTargets } from "./builtins/browser.js"
+export {
+  startSidecar,
+  type SidecarHandle,
+  type SidecarOptions,
+} from "./sidecar.js"
 export { runDeviceRuntime, embedDeviceRuntime } from "./runtime.js"
 export { pair, rekeyDeviceRuntime, startPairingSession } from "./pairing.js"
 export { TransportClient } from "./transport.js"
