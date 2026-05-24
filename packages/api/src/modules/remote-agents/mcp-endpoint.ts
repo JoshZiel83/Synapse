@@ -83,6 +83,37 @@ function toolDefinitionToZodShape(
   return shape
 }
 
+// PR #14: surface a [device:<name>] / [plugin:<name>] / [skill:<name>]
+// origin badge in the tool description so reverse-MCP callers can attribute
+// results back to the source. Tool definitions carry source kind in the
+// ToolDefinition.source field today; v3 will additionally carry
+// device-attributed bindings via capability-projection (PR #7).
+function describeToolOrigin(def: ToolDefinition): string {
+  const meta = def as unknown as {
+    source?: { kind?: string; displayName?: string; deviceName?: string }
+    sourceType?: string
+  }
+  const source = meta.source
+  const kind = source?.kind ?? meta.sourceType
+  const name = source?.deviceName ?? source?.displayName ?? source?.kind ?? null
+  if (!kind) return ""
+  switch (kind) {
+    case "device_capability":
+    case "device":
+      return name ? `[device:${name}]` : "[device]"
+    case "plugin_installation":
+    case "plugin":
+      return name ? `[plugin:${name}]` : "[plugin]"
+    case "installed_skill":
+    case "skill":
+      return name ? `[skill:${name}]` : "[skill]"
+    case "relay_capability":
+      return name ? `[device:${name}]` : "[device]"
+    default:
+      return ""
+  }
+}
+
 function registerImTools(params: {
   server: McpServer
   remoteAgentId: string
@@ -268,10 +299,19 @@ async function registerResolvedTools(params: {
   })
   for (const def of resolved.tools as ToolDefinition[]) {
     try {
+      // Augment description with a [device:Name] / [plugin:Name] /
+      // [skill:Name] origin badge so the remote agent (and the conversation
+      // transcript surface) can attribute tool results back to their device.
+      // The ToolDefinition.namespacedToolName carries the source kind prefix
+      // for plugin/device tools; we surface that as a leading bracketed tag.
+      const originBadge = describeToolOrigin(def)
+      const decoratedDescription = originBadge
+        ? `${originBadge} ${def.description ?? ""}`.trim()
+        : def.description
       params.server.registerTool(
         def.name,
         {
-          description: def.description,
+          description: decoratedDescription,
           inputSchema: toolDefinitionToZodShape(def),
         },
         async (input: Record<string, unknown>) => {
