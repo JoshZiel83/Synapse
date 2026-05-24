@@ -399,7 +399,7 @@ export type TransportMessageLinksTransportKind = "feishu" | "wecom" | "weixin";
 
 export type TurnsStatus = "cancelled" | "completed" | "failed" | "running";
 
-export type WorkspaceAccessBindingsAccessKey = "actor_admin" | "conversation_admin" | "memory_admin" | "model_admin" | "plugin_admin" | "relay_admin" | "remote_agent_admin" | "skill_admin";
+export type WorkspaceAccessBindingsAccessKey = "actor_admin" | "conversation_admin" | "device_admin" | "memory_admin" | "model_admin" | "plugin_admin" | "relay_admin" | "remote_agent_admin" | "skill_admin";
 
 export type WorkspaceInvitesTrustLevel = "admin" | "guest" | "member";
 

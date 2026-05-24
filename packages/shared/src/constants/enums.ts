@@ -34,6 +34,7 @@ export const WORKSPACE_ACCESS_KEYS = [
   "plugin_admin",
   "memory_admin",
   "relay_admin",
+  "device_admin",
   "conversation_admin",
 ] as const
 
@@ -956,3 +957,57 @@ export const AUTOMATION_EVENT_SOURCE_STATUSES = [
 ] as const
 
 export const ACTOR_PACKAGE_SYNC_MODES = ["notify", "manual_merge"] as const
+
+// ============ v3 device-runtime aliases (PR #16) ============
+// PR #16 of the device-runtime refactor introduces device-shaped names that
+// shadow the legacy RELAY_* exports. Consumers are migrated to the new names
+// over time; PR #18 drops the legacy aliases. Authorization grants are
+// renamed to RUNTIME_AUTHORIZATION_* because the namespace is no longer
+// relay-specific.
+
+export const DEVICE_KINDS = RELAY_DEVICE_TYPES
+export const DEVICE_TRUST_STATUSES_V3 = [
+  "pending",
+  "trusted",
+  "revoked",
+] as const
+export const DEVICE_EXPOSURE_RUNTIME_STATUSES = [
+  "discovered",
+  "healthy",
+  "degraded",
+  "failed",
+  "quarantined",
+  "offline",
+] as const
+export const DEVICE_EXPOSURE_TRANSPORTS = [
+  "builtin",
+  "stdio",
+  "http",
+  "sse",
+  "custom",
+] as const
+export const DEVICE_ACCESS_DENIAL_KINDS = RELAY_ACCESS_DENIAL_KINDS
+export const DEVICE_ACCESS_DENIAL_RESOLUTIONS = RELAY_ACCESS_DENIAL_RESOLUTIONS
+
+export const RUNTIME_AUTHORIZATION_PRESETS = RELAY_AUTHORIZATION_PRESETS
+export const RUNTIME_AUTHORIZATION_GRANT_SCOPES =
+  RELAY_AUTHORIZATION_GRANT_SCOPES
+export const RUNTIME_AUTHORIZATION_GRANT_RETENTIONS =
+  RELAY_AUTHORIZATION_GRANT_RETENTIONS
+export const RUNTIME_AUTHORIZATION_GRANT_STATUSES =
+  RELAY_AUTHORIZATION_GRANT_STATUSES
+export const RUNTIME_AUTHORIZATION_REQUEST_MODES = [
+  "none",
+  "background",
+  "blocking",
+] as const
+export const RUNTIME_AUTHORIZATION_CAPABILITIES =
+  RELAY_AUTHORIZATION_CAPABILITIES
+export const RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES =
+  RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES
+export const RUNTIME_AUTHORIZATION_CUA_ACCESSES =
+  RELAY_AUTHORIZATION_CUA_ACCESSES
+export const RUNTIME_AUTHORIZATION_BROWSER_ACTIONS =
+  RELAY_AUTHORIZATION_BROWSER_ACTIONS
+export const RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES =
+  RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES
