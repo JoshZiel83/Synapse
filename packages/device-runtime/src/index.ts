@@ -7,3 +7,9 @@ export { createFilesystemBuiltin } from "./builtins/filesystem.js"
 export { runDeviceRuntime, embedDeviceRuntime } from "./runtime.js"
 export { pair, rekeyDeviceRuntime, startPairingSession } from "./pairing.js"
 export { TransportClient } from "./transport.js"
+export { createFrpTunnelAdapter } from "./tunnel/frp.js"
+export {
+  createInMemoryEnvelopeVerifier,
+  canonicalize,
+  hashArguments,
+} from "./envelope.js"

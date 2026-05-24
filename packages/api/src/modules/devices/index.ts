@@ -13,3 +13,4 @@ export default fp(
 
 export * from "./service.js"
 export * from "./tunnel-registry.js"
+export * from "./dispatch.js"
