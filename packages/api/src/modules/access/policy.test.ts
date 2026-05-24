@@ -220,7 +220,7 @@ test(
         .insertInto("conversation_participants")
         .values({
           conversation_id: conversationId,
-          participant_kind: "actor",
+          participant_type: "actor",
           subject_id: actorSubjectId,
           state: "active",
         })

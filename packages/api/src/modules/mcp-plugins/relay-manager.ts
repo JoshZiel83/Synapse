@@ -13,7 +13,6 @@ import type {
 } from "@synapse/shared/types"
 import {
   extractText,
-  GrantPolicySchema,
   RELAY_AUTH_TIMEOUT,
   RELAY_DELIVERY_ACK_TIMEOUT_MS,
   RELAY_HEARTBEAT_INTERVAL,
@@ -24,6 +23,7 @@ import {
   relayDeviceOnlineEventDefinition,
   textBlocks,
 } from "@synapse/shared"
+import { GrantPolicySchema } from "@synapse/shared/access/policies"
 import { redis } from "../../infrastructure/redis/index.js"
 import { transaction } from "../../infrastructure/database/index.js"
 import {

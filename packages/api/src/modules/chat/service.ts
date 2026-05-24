@@ -2369,24 +2369,27 @@ async function insertParticipant(
   // access_subjects rows. External + system participants are anonymous and
   // would have nothing to point to under the strict {kind, payload} schema, so
   // we mint a per-participant kind='external' subject keyed by the participant
-  // id itself ('participant:<uuid>'). participant_kind stays as the display
+  // id itself ('participant:<uuid>'). participant_type stays as the display
   // discriminator (external vs system) since both share kind='external' here.
   let participantSubjectId: string
   if (
-    params.participantType === "workspace_member" &&
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
     params.workspaceMemberId
   ) {
     participantSubjectId = await upsertAccessSubjectOn(queryable, {
       kind: SUBJECT_KIND.WORKSPACE_MEMBER,
       memberId: params.workspaceMemberId,
     })
-  } else if (params.participantType === "actor" && params.actorId) {
+  } else if (
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+    params.actorId
+  ) {
     participantSubjectId = await upsertAccessSubjectOn(queryable, {
       kind: SUBJECT_KIND.ACTOR,
       actorId: params.actorId,
     })
   } else if (
-    params.participantType === "remote_agent" &&
+    params.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
     params.remoteAgentId
   ) {
     participantSubjectId = await upsertAccessSubjectOn(queryable, {

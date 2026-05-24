@@ -15,11 +15,8 @@ import {
   type QueryExecutor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
-import {
-  GrantPolicySchema,
-  SUBJECT_KIND,
-  type SubjectRef,
-} from "@synapse/shared"
+import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
+import { GrantPolicySchema } from "@synapse/shared/access/policies"
 import {
   upsertAccessSubject,
   upsertAccessSubjectOn,

@@ -29,15 +29,16 @@
     "./schemas": {
       "types": "./dist/schemas/index.d.ts",
       "default": "./dist/schemas/index.js"
+    },
+    "./access/policies": {
+      "types": "./dist/access/policies/index.d.ts",
+      "default": "./dist/access/policies/index.js"
     }
   },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
     "test": "tsx --test \"src/**/*.test.ts\""
-  },
-  "dependencies": {
-    "zod": "^3.23.0"
   },
   "dependencies": {
     "zod": "^3.23.0"

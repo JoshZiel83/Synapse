@@ -1,6 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks"
 import { z } from "zod"
 import {
+  CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_TYPE_MASK_BITS,
   describeAutomationDelivery,
   describeAutomationPolicy,
@@ -261,9 +262,9 @@ function buildSendToDefinition(params: {
 }): ToolDefinition {
   const rosterDesc = params.otherParticipants
     .map((member) =>
-      member.participantType === "workspace_member"
+      member.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
         ? `"${member.name}" (workspace member)`
-        : member.participantType === "external"
+        : member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
           ? `"${member.name}" (external${member.linkedWorkspaceMemberName ? `, linked to workspace user ${member.linkedWorkspaceMemberName}` : ""})`
           : `"${member.name}" (actor${member.title ? ", " + member.title : ""})`
     )
@@ -1339,7 +1340,10 @@ export function registerCallableToolPlugins(): void {
         return { active: false, definition: null as any }
       }
       const otherParticipants = conversationParticipants.filter(
-        (m) => m.participantType === "workspace_member" || m.id !== ctx.actorId
+        (m) =>
+          m.participantType ===
+            CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER ||
+          m.id !== ctx.actorId
       )
       if (otherParticipants.length === 0) {
         return { active: false, definition: null as any }

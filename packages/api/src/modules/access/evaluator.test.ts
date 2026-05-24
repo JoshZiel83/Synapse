@@ -1163,7 +1163,7 @@ async function addMemberParticipant(
     .insertInto("conversation_participants")
     .values({
       conversation_id: conversationId,
-      participant_kind: "workspace_member",
+      participant_type: "workspace_member",
       subject_id: subjectId,
       role_key: roleKey,
       state: "active",
@@ -1184,7 +1184,7 @@ async function addActorParticipant(
     .insertInto("conversation_participants")
     .values({
       conversation_id: conversationId,
-      participant_kind: "actor",
+      participant_type: "actor",
       subject_id: subjectId,
       role_key: "member",
       state: "active",

@@ -1,4 +1,5 @@
 import crypto from "node:crypto"
+import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import {
   createConversationEvent,
   ensureConversationParticipant,
@@ -58,13 +59,14 @@ async function loadParticipantDisplay(params: {
   }
   return {
     name:
-      params.participantType === "actor"
+      params.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
         ? "Actor"
-        : params.participantType === "remote_agent"
+        : params.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
           ? "Remote Agent"
-          : params.participantType === "workspace_member"
+          : params.participantType ===
+              CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
             ? "User"
-            : params.participantType === "system"
+            : params.participantType === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
               ? "System"
               : "External participant",
     title: undefined as string | undefined,
@@ -137,8 +139,8 @@ export async function activateConversationParticipant(params: {
           {
             participantId: member.id,
             participantType:
-              params.participantType === "system"
-                ? "external"
+              params.participantType === CONVERSATION_PARTICIPANT_TYPE.SYSTEM
+                ? CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
                 : params.participantType,
             actorId: params.actorId,
             remoteAgentId: params.remoteAgentId,
