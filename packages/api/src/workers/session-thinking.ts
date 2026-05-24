@@ -228,6 +228,13 @@ export function startSessionThinkingWorker() {
             laneState: "idle",
             health: "ok",
             phase: "idle",
+            // Idle early-return: another worker already handled the wakeup,
+            // or there's nothing to do. Clear any cached statusText/lastError
+            // from a prior blocked snapshot — same defense as putSessionToIdle.
+            // Without this the dashboard would keep showing the previous
+            // failure even though the session is now demonstrably idle.
+            statusText: null,
+            lastError: null,
           })
           return { success: true, reason: "no pending wakeups" }
         }

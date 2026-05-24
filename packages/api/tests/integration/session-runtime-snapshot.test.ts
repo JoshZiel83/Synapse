@@ -376,3 +376,50 @@ test("putSessionToIdle terminal publish WITH lastError/statusText:null fully cle
   assert.equal(clean!.statusText, undefined)
   assert.equal(clean!.lastError, undefined)
 })
+
+test("worker early-return-no-pending-wakeups publish clears cached blocked-failure fields (regression for session-thinking.ts:227)", async () => {
+  // session-thinking.ts has a pre-turn early-return: if the worker boots
+  // and finds pendingWakeupsAtStart === 0 and session.status !== "running"
+  // (e.g. a peer worker already drained the wakeup, or a stale job is
+  // being retried), it flips the DB to idle and publishes a clean
+  // runtime snapshot. Before this fix that publish was
+  //   { laneState:"idle", health:"ok", phase:"idle" }
+  // with no lastError/statusText override, so a previous blocked
+  // snapshot's failure fields would leak through into the "idle/ok"
+  // shape — DB says clean but the dashboard kept showing the old
+  // error.
+  const fixture = await buildSessionFixture()
+  await stageBlockedCache({
+    workspaceId: fixture.workspaceId,
+    sessionId: fixture.sessionId,
+    errorMessage: "previous worker crashed",
+  })
+  await updateSessionStatus(fixture.sessionId, "idle", { errorMessage: null })
+
+  // The exact shape worker now emits on the early-return path.
+  const clean = await publishSessionRuntime(
+    fixture.workspaceId,
+    fixture.sessionId,
+    {
+      laneState: "idle",
+      health: "ok",
+      phase: "idle",
+      statusText: null,
+      lastError: null,
+    }
+  )
+  assert.ok(clean)
+  assert.equal(clean!.laneState, "idle")
+  assert.equal(clean!.health, "ok")
+  assert.equal(clean!.phase, "idle")
+  assert.equal(
+    clean!.statusText,
+    undefined,
+    "early-return idle snapshot must not carry the previous failure's statusText"
+  )
+  assert.equal(
+    clean!.lastError,
+    undefined,
+    "early-return idle snapshot must not carry the previous failure's lastError"
+  )
+})
