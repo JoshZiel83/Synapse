@@ -1,5 +1,12 @@
 import { FILE_ORIGIN_SYSTEMS } from "@synapse/shared/constants"
 import type {
+  DeviceCapabilitySummaryView,
+  DeviceDetailView,
+  DevicePairingTicketView,
+  DeviceServiceSummaryView,
+  DeviceSummaryView,
+} from "./device-views"
+import type {
   ActorPackageInstallResult,
   ActorRuntimeTurnActivityDetail,
   CapabilityAccessTarget,
@@ -1819,6 +1826,57 @@ class ApiClient {
   // MCP Relays
   getRelayDashboard(wsId: string): Promise<RelayDashboardView> {
     return this.fetch(`/workspaces/${wsId}/mcp/relays`)
+  }
+
+  // Devices (v3) — parallel to Relays during the migration window.
+  listDevices(wsId: string): Promise<{ devices: DeviceSummaryView[] }> {
+    return this.fetch(`/workspaces/${wsId}/devices`)
+  }
+  getDevice(wsId: string, deviceId: string): Promise<DeviceDetailView> {
+    return this.fetch(`/workspaces/${wsId}/devices/${deviceId}`)
+  }
+  deleteDevice(wsId: string, deviceId: string): Promise<void> {
+    return this.fetch(`/workspaces/${wsId}/devices/${deviceId}`, {
+      method: "DELETE",
+    })
+  }
+  startDevicePairingSession(
+    wsId: string,
+    body: {
+      mode: "local_qr" | "cloud_bootstrap" | "service_join"
+      title?: string
+      device_type?: string
+      device_id?: string
+      context?: Record<string, unknown>
+    }
+  ): Promise<DevicePairingTicketView> {
+    return this.fetch(`/workspaces/${wsId}/devices/pairing-sessions`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    })
+  }
+  claimRemoteAgentDaemon(
+    wsId: string,
+    deviceId: string,
+    remoteAgentMachineId: string
+  ): Promise<DeviceServiceSummaryView> {
+    return this.fetch(`/workspaces/${wsId}/devices/${deviceId}/services`, {
+      method: "POST",
+      body: JSON.stringify({
+        service_kind: "remote_agent_daemon",
+        remote_agent_machine_id: remoteAgentMachineId,
+      }),
+    })
+  }
+  detachDeviceService(
+    wsId: string,
+    deviceId: string,
+    serviceId: string
+  ): Promise<void> {
+    return this.fetch(
+      `/workspaces/${wsId}/devices/${deviceId}/services/${serviceId}`,
+      { method: "DELETE" }
+    )
   }
   createRelayPairingSession(
     wsId: string,
