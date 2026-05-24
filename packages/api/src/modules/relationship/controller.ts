@@ -525,7 +525,7 @@ export default async function relationshipController(app: FastifyInstance) {
     Params: { workspaceId: string }
     Body: unknown
   }>(
-    "/api/v1/workspaces/:workspaceId/direct-conversations/open",
+    "/api/v1/workspaces/:workspaceId/chat/direct-conversations/open",
     async (request, reply) => {
       const userId = (request as any).user!.userId
       const body = openDirectSchema.parse(request.body)

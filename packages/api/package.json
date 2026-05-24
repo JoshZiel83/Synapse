@@ -9,6 +9,7 @@
     "build": "tsc",
     "start": "node dist/index.js",
     "test": "tsx --test --test-force-exit \"src/**/*.test.ts\"",
+    "test:integration": "tsx --test \"test/integration/**/*.test.ts\"",
     "test:conformance": "tsx --test \"src/modules/relay-authorizations/conformance.test.ts\"",
     "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-include=\"src/modules/access/*.ts\" --test-coverage-exclude=\"src/**/*.test.ts\" \"src/modules/access/*.test.ts\" \"src/test/helpers/db.test.ts\"",
     "db:bootstrap": "tsx src/infrastructure/database/bootstrap.ts && npm run db:codegen",
@@ -17,7 +18,7 @@
     "db:seed:builtin-mcp": "tsx src/infrastructure/database/seed-builtin-mcp-plugins.ts",
     "db:rebuild": "tsx src/infrastructure/database/rebuild.ts && npm run db:codegen",
     "db:rebuild:runtime": "tsx src/infrastructure/database/rebuild.ts",
-    "db:codegen": "kysely-codegen --config-file .kysely-codegenrc.json",
+    "db:codegen": "node scripts/db-codegen.mjs",
     "db:codegen:verify": "npm run db:codegen -- --verify",
     "memory:bootstrap-model": "tsx src/modules/memory/bootstrap-model.ts"
   },

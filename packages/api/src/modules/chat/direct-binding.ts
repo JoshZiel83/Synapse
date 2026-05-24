@@ -1,34 +1,40 @@
-import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
+import {
+  CONVERSATION_PARTICIPANT_TYPE,
+  SUBJECT_KIND,
+  type SubjectRef,
+} from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import {
   loadAccessSubject,
   upsertAccessSubject,
 } from "../access/subject-registry.js"
 
+const PT = CONVERSATION_PARTICIPANT_TYPE
+
 export type DirectConversationIdentity =
   | {
-      kind: "member"
+      kind: typeof PT.WORKSPACE_MEMBER
       workspaceMemberId: string
     }
   | {
-      kind: "actor"
+      kind: typeof PT.ACTOR
       actorId: string
     }
   | {
-      kind: "remote_agent"
+      kind: typeof PT.REMOTE_AGENT
       remoteAgentId: string
     }
 
 export function directConversationIdentityKey(
   identity: DirectConversationIdentity
 ) {
-  if (identity.kind === "member") {
-    return `workspace_member:${identity.workspaceMemberId}`
+  if (identity.kind === PT.WORKSPACE_MEMBER) {
+    return `${PT.WORKSPACE_MEMBER}:${identity.workspaceMemberId}`
   }
-  if (identity.kind === "remote_agent") {
-    return `remote_agent:${identity.remoteAgentId}`
+  if (identity.kind === PT.REMOTE_AGENT) {
+    return `${PT.REMOTE_AGENT}:${identity.remoteAgentId}`
   }
-  return `actor:${identity.actorId}`
+  return `${PT.ACTOR}:${identity.actorId}`
 }
 
 export function canonicalizeDirectConversationPair(
@@ -46,14 +52,14 @@ function directIdentityToSubjectRef(
   identity: DirectConversationIdentity
 ): SubjectRef {
   switch (identity.kind) {
-    case "member":
+    case PT.WORKSPACE_MEMBER:
       return {
         kind: SUBJECT_KIND.WORKSPACE_MEMBER,
         memberId: identity.workspaceMemberId,
       }
-    case "actor":
+    case PT.ACTOR:
       return { kind: SUBJECT_KIND.ACTOR, actorId: identity.actorId }
-    case "remote_agent":
+    case PT.REMOTE_AGENT:
       return {
         kind: SUBJECT_KIND.REMOTE_AGENT,
         remoteAgentId: identity.remoteAgentId,
@@ -66,11 +72,11 @@ function subjectRefToDirectIdentity(
 ): DirectConversationIdentity | null {
   switch (ref.kind) {
     case SUBJECT_KIND.WORKSPACE_MEMBER:
-      return { kind: "member", workspaceMemberId: ref.memberId }
+      return { kind: PT.WORKSPACE_MEMBER, workspaceMemberId: ref.memberId }
     case SUBJECT_KIND.ACTOR:
-      return { kind: "actor", actorId: ref.actorId }
+      return { kind: PT.ACTOR, actorId: ref.actorId }
     case SUBJECT_KIND.REMOTE_AGENT:
-      return { kind: "remote_agent", remoteAgentId: ref.remoteAgentId }
+      return { kind: PT.REMOTE_AGENT, remoteAgentId: ref.remoteAgentId }
     default:
       return null
   }
@@ -78,7 +84,7 @@ function subjectRefToDirectIdentity(
 
 /**
  * P1b: returns the column shape for inserting a row into
- * `direct_conversation_bindings`. The two polymorphic participant_*_kind +
+ * `direct_conversation_bindings`. The two polymorphic participant_*_type +
  * three nullable FKs are collapsed into a single `*_subject_id` per side.
  * Caller is responsible for ensuring the subject upserts happen inside the
  * same transaction as the binding insert.

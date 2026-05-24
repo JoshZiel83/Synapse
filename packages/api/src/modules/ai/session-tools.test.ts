@@ -9,14 +9,14 @@ test("buildUserInteractionCandidatesFromRows uses workspace_member_id for partic
   const candidates = buildUserInteractionCandidatesFromRows([
     {
       id: "participant-1",
-      participant_kind: "workspace_member",
+      participant_type: "workspace_member",
       state: "active",
       user_name: "Demo User",
       workspace_member_id: "workspace-member-1",
     },
     {
       id: "participant-ignored",
-      participant_kind: "actor",
+      participant_type: "actor",
       state: "active",
       user_name: null,
       workspace_member_id: null,
@@ -36,13 +36,13 @@ test("buildUserInteractionCandidatesFromRows uses workspace_member_id for partic
 test("buildUserInteractionCandidatesFromEntries supports tool context workspace_member entries", () => {
   const candidates = buildUserInteractionCandidatesFromEntries([
     {
-      type: "workspace_member",
+      participantType: "workspace_member",
       id: "workspace-member-2",
       participantId: "participant-2",
       name: "Resolve Context User",
     },
     {
-      type: "external",
+      participantType: "external",
       id: "external-1",
       name: "External User",
     },

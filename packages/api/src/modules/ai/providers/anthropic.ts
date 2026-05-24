@@ -8,7 +8,12 @@ import type {
   CanonicalContentBlock,
   ProviderContextWindow,
 } from "@synapse/shared"
-import { extractText, formatMentionText, textBlock } from "@synapse/shared"
+import {
+  extractText,
+  formatMentionText,
+  formatStructuredContentForProvider,
+  textBlock,
+} from "@synapse/shared"
 import { createHash, randomUUID } from "crypto"
 import type { AIProvider, AIProviderConfig, FileRefSegment } from "./types.js"
 import {
@@ -514,10 +519,25 @@ export class AnthropicProvider implements AIProvider {
               tr.content,
               multimodal
             )
+            // structuredContent (MCP protocol sidecar JSON) gets appended as
+            // an additional text block so the LLM sees it inline with the
+            // primary tool content. Anthropic has no native structuredContent
+            // field on tool_result.
+            const structuredSuffix = formatStructuredContentForProvider(
+              tr.structuredContent
+            )
+            const contentArr: unknown[] =
+              nativeBlocks.length > 0 ? [...nativeBlocks] : []
+            if (structuredSuffix) {
+              contentArr.push({
+                type: "text",
+                text: structuredSuffix.trimStart(),
+              })
+            }
             toolResultBlocks.push({
               type: "tool_result",
               tool_use_id: tr.providerCallId || tr.toolCallId,
-              content: nativeBlocks.length > 0 ? nativeBlocks : "",
+              content: contentArr.length > 0 ? contentArr : "",
               is_error: tr.isError || false,
             })
           }

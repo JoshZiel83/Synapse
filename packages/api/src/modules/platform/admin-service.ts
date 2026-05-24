@@ -59,6 +59,16 @@ export async function isPlatformAdmin(userId: string) {
   ])
 }
 
+/**
+ * Stricter check than isPlatformAdmin: only `super_admin` passes.
+ * Reserve this for process-wide / globally-destructive ops (cross-
+ * workspace deletes, infra-level toggles, etc.) where the
+ * workspace_admin / model_admin scopes would be the wrong floor.
+ */
+export async function isPlatformSuperAdmin(userId: string) {
+  return hasPlatformAccess(userId, ["super_admin"])
+}
+
 export async function listPlatformAccessBindings() {
   const rows = await db
     .selectFrom("platform_access_bindings as pab")

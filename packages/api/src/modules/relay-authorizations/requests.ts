@@ -235,7 +235,7 @@ async function hasNewUserFacingConversationMessage(
     .where((eb) =>
       eb.or([
         eb("ci.role", "=", "user"),
-        eb("cp.participant_kind", "in", ["workspace_member", "external"]),
+        eb("cp.participant_type", "in", ["workspace_member", "external"]),
       ])
     )
     .limit(1)

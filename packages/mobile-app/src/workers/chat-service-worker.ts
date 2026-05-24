@@ -3,12 +3,12 @@ import {
   createEmptyStoredChatWorkspaceQueueState,
   loadStoredChatWorkerAuthContext,
   loadStoredChatWorkspaceQueueState,
-  sameStoredChatQueueEntry,
   sameStoredChatQueueState,
   saveStoredChatWorkerAuthContext,
   saveStoredChatWorkspaceQueueState,
   type MobileChatWorkerAuthContext,
 } from "../lib/chat-web-queue-storage"
+import { mergeQueueStateForSave } from "@shared"
 import {
   CHAT_WEB_SERVICE_WORKER_BROADCAST_CHANNEL,
   CHAT_WEB_SERVICE_WORKER_PERIODIC_SYNC_TAG,
@@ -266,71 +266,6 @@ async function flushOutbox(
         },
       }
       break
-    }
-  }
-
-  return next
-}
-
-function mergeQueueStateForSave(
-  baseQueueState: ReturnType<typeof createEmptyStoredChatWorkspaceQueueState>,
-  latestQueueState: ReturnType<typeof createEmptyStoredChatWorkspaceQueueState>,
-  processedQueueState: ReturnType<
-    typeof createEmptyStoredChatWorkspaceQueueState
-  >
-) {
-  const next = {
-    version: 1 as const,
-    workspaceId: latestQueueState.workspaceId,
-    workspaceMemberId:
-      latestQueueState.workspaceMemberId ||
-      processedQueueState.workspaceMemberId,
-    clientInstanceId:
-      latestQueueState.clientInstanceId || processedQueueState.clientInstanceId,
-    inboxCursor: Math.max(
-      latestQueueState.inboxCursor || 0,
-      processedQueueState.inboxCursor || 0
-    ),
-    lastBootstrappedAt:
-      latestQueueState.lastBootstrappedAt ||
-      processedQueueState.lastBootstrappedAt,
-    pendingReads: {
-      ...latestQueueState.pendingReads,
-    },
-    outbox: {
-      ...latestQueueState.outbox,
-    },
-  }
-
-  for (const conversationId of Object.keys(baseQueueState.pendingReads)) {
-    const baseEntry = baseQueueState.pendingReads[conversationId]
-    const latestEntry = next.pendingReads[conversationId]
-    const processedEntry = processedQueueState.pendingReads[conversationId]
-
-    if (!sameStoredChatQueueEntry(latestEntry, baseEntry)) {
-      continue
-    }
-
-    if (processedEntry) {
-      next.pendingReads[conversationId] = processedEntry
-    } else {
-      delete next.pendingReads[conversationId]
-    }
-  }
-
-  for (const clientMessageId of Object.keys(baseQueueState.outbox)) {
-    const baseEntry = baseQueueState.outbox[clientMessageId]
-    const latestEntry = next.outbox[clientMessageId]
-    const processedEntry = processedQueueState.outbox[clientMessageId]
-
-    if (!sameStoredChatQueueEntry(latestEntry, baseEntry)) {
-      continue
-    }
-
-    if (processedEntry) {
-      next.outbox[clientMessageId] = processedEntry
-    } else {
-      delete next.outbox[clientMessageId]
     }
   }
 

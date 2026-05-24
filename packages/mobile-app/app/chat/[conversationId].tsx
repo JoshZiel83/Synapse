@@ -1,7 +1,7 @@
 import Feather from "@expo/vector-icons/Feather"
 import * as Clipboard from "expo-clipboard"
 import { useLocalSearchParams, useRouter } from "expo-router"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import {
   KeyboardAvoidingView,
   Platform,
@@ -43,6 +43,8 @@ export default function ChatDetailScreen() {
   const { conversationId } = useLocalSearchParams<{ conversationId: string }>()
   const scrollRef = useRef<ScrollView | null>(null)
   const lastReportedReadRef = useRef<string>("")
+  const isAtBottomRef = useRef<boolean>(true)
+  const [isAtBottom, setIsAtBottom] = useState<boolean>(true)
   const previousMessageMetricsRef = useRef<{
     conversationId: string
     firstSequence: number
@@ -53,10 +55,13 @@ export default function ChatDetailScreen() {
     getConversationItems,
     getConversationMeta,
     getConversationRuntimes,
+    getTypingMembers,
+    sendTypingState,
     loadOlderMessages,
     markConversationRead,
     refreshConversation,
     respondInteraction,
+    retryMessage,
     sendMessage,
     status,
     clientInstanceId,
@@ -151,6 +156,12 @@ export default function ChatDetailScreen() {
   useEffect(() => {
     setReplyTo(null)
     setActionMenu(null)
+    // New conversation auto-scrolls to the bottom (see the appendedAtTail
+    // effect below); reset the at-bottom flag so we don't carry over a
+    // false "scrolled up" state from the previous conversation.
+    isAtBottomRef.current = true
+    setIsAtBottom(true)
+    lastReportedReadRef.current = ""
   }, [conversationId])
 
   useEffect(() => {
@@ -202,6 +213,20 @@ export default function ChatDetailScreen() {
       return
     }
 
+    // The wire protocol distinguishes readUpToSequence (user has
+    // acknowledged messages up to this sequence) from lastVisibleSequence
+    // (this sequence is currently in the viewport). When the user is
+    // scrolled to the bottom we report both as confirmedMaxSequence —
+    // they've seen and acknowledged everything. When the user has scrolled
+    // up we skip the update entirely: bumping readUpTo to a new message
+    // they haven't actually read would be a lie, and ScrollView lacks the
+    // per-item layout info needed to compute a true viewport-top
+    // sequence. The mark resumes the next time they scroll back to the
+    // bottom.
+    if (!isAtBottom) {
+      return
+    }
+
     const nextKey = `${conversationId}:${confirmedMaxSequence}`
     if (lastReportedReadRef.current === nextKey) {
       return
@@ -213,7 +238,51 @@ export default function ChatDetailScreen() {
       confirmedMaxSequence,
       confirmedMaxSequence
     )
-  }, [confirmedMaxSequence, conversation, conversationId, markConversationRead])
+  }, [
+    confirmedMaxSequence,
+    conversation,
+    conversationId,
+    isAtBottom,
+    markConversationRead,
+  ])
+
+  // Debounced typing emit + auto-stop.
+  const lastTypingSentRef = useRef<"started" | "stopped" | null>(null)
+  const typingStartedAtRef = useRef<number>(0)
+  const typingStoppedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+  const handleTypingHeartbeat = useCallback(() => {
+    if (!conversationId) return
+    const now = Date.now()
+    if (
+      lastTypingSentRef.current !== "started" ||
+      now - typingStartedAtRef.current > 3_000
+    ) {
+      void sendTypingState(conversationId, "started")
+      lastTypingSentRef.current = "started"
+      typingStartedAtRef.current = now
+    }
+    if (typingStoppedTimerRef.current) {
+      clearTimeout(typingStoppedTimerRef.current)
+    }
+    typingStoppedTimerRef.current = setTimeout(() => {
+      void sendTypingState(conversationId, "stopped")
+      lastTypingSentRef.current = "stopped"
+    }, 4_000)
+  }, [conversationId, sendTypingState])
+  useEffect(() => {
+    return () => {
+      if (typingStoppedTimerRef.current) {
+        clearTimeout(typingStoppedTimerRef.current)
+      }
+    }
+  }, [])
+
+  const typingMembers = useMemo(
+    () => (conversationId ? getTypingMembers(conversationId) : []),
+    [conversationId, getTypingMembers]
+  )
 
   const messageNodes = useMemo(
     () =>
@@ -243,9 +312,10 @@ export default function ChatDetailScreen() {
                   })
               : undefined
           }
+          onRetry={retryMessage}
         />
       )),
-    [conversation, items, respondInteraction, viewerParticipantId]
+    [conversation, items, respondInteraction, retryMessage, viewerParticipantId]
   )
 
   async function handleRefresh() {
@@ -370,6 +440,21 @@ export default function ChatDetailScreen() {
                 />
               }
               keyboardShouldPersistTaps="handled"
+              scrollEventThrottle={200}
+              onScroll={(event) => {
+                const { contentOffset, contentSize, layoutMeasurement } =
+                  event.nativeEvent
+                // 64px is generous: covers a one-line message + padding,
+                // so "near the bottom" still counts as at-bottom for the
+                // purpose of marking-as-read.
+                const atBottom =
+                  contentOffset.y + layoutMeasurement.height >=
+                  contentSize.height - 64
+                if (atBottom !== isAtBottomRef.current) {
+                  isAtBottomRef.current = atBottom
+                  setIsAtBottom(atBottom)
+                }
+              }}
             >
               {meta?.hasMoreBefore ? (
                 <View style={styles.topAction}>
@@ -441,6 +526,16 @@ export default function ChatDetailScreen() {
               )}
             </ScrollView>
 
+            {typingMembers.length > 0 ? (
+              <View style={styles.typingRow}>
+                <Text style={styles.typingText}>
+                  {typingMembers.length === 1
+                    ? "Someone is typing…"
+                    : `${typingMembers.length} people are typing…`}
+                </Text>
+              </View>
+            ) : null}
+
             <ChatComposer
               workspaceId={conversation.workspaceId}
               conversationId={conversationId}
@@ -449,7 +544,11 @@ export default function ChatDetailScreen() {
               disabled={status !== "ready" || !clientInstanceId}
               replyTo={replyTo}
               onCancelReply={() => setReplyTo(null)}
-              onSend={(payload) => sendMessage(conversationId, payload)}
+              onSend={async (payload) => {
+                await sendMessage(conversationId, payload)
+                void sendTypingState(conversationId, "stopped")
+              }}
+              onTyping={handleTypingHeartbeat}
             />
           </>
         )}
@@ -500,6 +599,15 @@ export default function ChatDetailScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
+  },
+  typingRow: {
+    paddingHorizontal: 16,
+    paddingVertical: 4,
+  },
+  typingText: {
+    fontSize: 12,
+    color: theme.colors.textMuted,
+    fontStyle: "italic",
   },
   header: {
     minHeight: 48,

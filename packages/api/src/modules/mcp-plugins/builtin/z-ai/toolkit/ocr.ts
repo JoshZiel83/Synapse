@@ -1,5 +1,6 @@
-import { ToolDefinition } from "@synapse/shared"
+import { textBlocks, ToolDefinition } from "@synapse/shared"
 import type { SubFeature } from "./types.js"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 import { fileToBuffer } from "../../../../../infrastructure/storage/file-io.js"
 import { resolveFileRefRecord, fileRefProperty } from "../../../file-ref.js"
 import {
@@ -102,7 +103,7 @@ export const ocrFeature: SubFeature = {
     _toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<string> {
+  ): Promise<BuiltinPluginExecuteResult> {
     const apiKey = config.apiKey as string
     if (!apiKey) throw new Error("ZhipuAI API key not configured.")
 
@@ -168,14 +169,18 @@ export const ocrFeature: SubFeature = {
         .filter(Boolean)
 
       if (lines.length === 0) {
-        return `OCR completed with status ${result.status || "unknown"}, but no text was returned. Message: ${result.message || "none"}`
+        return textBlocks(
+          `OCR completed with status ${result.status || "unknown"}, but no text was returned. Message: ${result.message || "none"}`
+        )
       }
 
-      return [
-        `OCR task ${result.task_id || ""} status: ${result.status || "unknown"}`,
-        `Recognized blocks: ${result.words_result_num ?? lines.length}`,
-        lines.join("\n"),
-      ].join("\n\n")
+      return textBlocks(
+        [
+          `OCR task ${result.task_id || ""} status: ${result.status || "unknown"}`,
+          `Recognized blocks: ${result.words_result_num ?? lines.length}`,
+          lines.join("\n"),
+        ].join("\n\n")
+      )
     } catch (error) {
       throw normalizeZhipuTransportError("OCR 服务 API", error)
     } finally {

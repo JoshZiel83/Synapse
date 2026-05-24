@@ -6,10 +6,17 @@ import type {
   PendingChatOutboxMessage,
   PendingChatRead,
 } from "@/lib/chat-data"
+import {
+  CHAT_QUEUE_DB_NAME,
+  CHAT_QUEUE_DB_VERSION,
+  CHAT_QUEUE_STATE_STORE,
+} from "@shared"
 
-export const CHAT_WEB_QUEUE_DB_NAME = "synapse-chat-web-queue"
-export const CHAT_WEB_QUEUE_DB_VERSION = 1
-export const CHAT_WEB_QUEUE_STATE_STORE = "workspace_queue_states"
+// Mobile keeps its historical constant names but derives the actual
+// string values from @synapse/shared so web + mobile cannot diverge.
+export const CHAT_WEB_QUEUE_DB_NAME = CHAT_QUEUE_DB_NAME
+export const CHAT_WEB_QUEUE_DB_VERSION = CHAT_QUEUE_DB_VERSION
+export const CHAT_WEB_QUEUE_STATE_STORE = CHAT_QUEUE_STATE_STORE
 
 const CHAT_WEB_WORKER_DB_NAME = "synapse-chat-worker"
 const CHAT_WEB_WORKER_DB_VERSION = 1

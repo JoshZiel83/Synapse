@@ -107,6 +107,7 @@ import {
   TRANSPORT_ENDPOINT_TYPES,
   TRANSPORT_KINDS,
 } from "../constants/enums.js"
+import type { ChatTypingState } from "../constants/enums.js"
 import type {
   FilesystemPolicy as FilesystemPolicyBase,
   CUAPolicy as CUAPolicyBase,
@@ -484,37 +485,6 @@ export const WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, WorkItemStatus[]> = {
   failed: [],
 }
 
-// ============ Communication Protocol ============
-export type MessageType =
-  | "assign"
-  | "accept"
-  | "reject"
-  | "info_request"
-  | "info_response"
-  | "progress"
-  | "escalate"
-  | "assist_request"
-  | "assist_response"
-  | "transfer"
-  | "complete"
-  | "feedback"
-  | "rework"
-  | "user_message"
-
-export interface Message {
-  id: UUID
-  workspaceId: UUID
-  workItemId?: UUID
-  type: MessageType
-  fromActorId?: UUID
-  toActorId?: UUID
-  fromWorkspaceMemberId?: UUID
-  toWorkspaceMemberId?: UUID
-  content: string
-  metadata: Record<string, unknown>
-  createdAt: Timestamp
-}
-
 // ============ Memory ============
 export type MemorySpaceType = (typeof MEMORY_SPACE_TYPES)[number]
 export type MemoryScope = (typeof MEMORY_SCOPES)[number]
@@ -863,17 +833,13 @@ export type EventType =
   | "memory.created"
   | "actor.thinking"
   | "actor.action"
-  | "session.message.new"
-  | "session.status.changed"
-  | "session.thinking"
-  | "feed.item.created"
   | "chat.sync.event"
   | "runtime.updated"
-  | "actor.version_changed"
   | "mcp.config.changed"
   | "relay.connected"
   | "relay.disconnected"
   | "relay.servers_updated"
+  | "chat.typing"
 
 export interface SystemEvent {
   type: EventType
@@ -1497,7 +1463,11 @@ export interface SessionInterrupt {
   id: UUID
   targetSessionId: UUID
   type: SessionInterruptType
+  // Plain-text snapshot of the interrupt content (legacy / FE display).
   content: string
+  // Optional canonical content blocks; preferred over `content` when present
+  // for context-builder consumption. New code should populate this.
+  contentBlocks?: CanonicalContentBlock[]
   fromSessionId?: UUID
   isConsumed: boolean
   createdAt: Timestamp
@@ -1505,6 +1475,14 @@ export interface SessionInterrupt {
 
 export interface ActorAction {
   type: "respond" | "create_memory" | "rename_self" | "change_avatar"
+  /**
+   * Derived plaintext snapshot of the action body — computed from
+   * `contentBlocks` via `extractText(...)`. Treat as read-only; new
+   * code should write to `contentBlocks` and let the API recompute
+   * `content` at the boundary. Persisted on the wire for legacy
+   * consumers (e.g. analytics that don't understand blocks) but
+   * MUST NOT be the source of truth.
+   */
   content: string
   contentBlocks?: CanonicalContentBlock[]
   targetActorId?: UUID
@@ -1960,12 +1938,62 @@ export interface CanonicalToolCall {
   metadata?: Record<string, unknown>
 }
 
+// Provenance of a CanonicalToolResult — what produced it and where it came from.
+// Set at the ingest boundary (mcp-plugins/result-normalizer, callable executor,
+// model response media ingest, builtin tool dispatch). Downstream consumers
+// (FE display, audit logs, debugging tools) read this to attribute results.
+export type ToolResultOrigin =
+  | {
+      kind: "mcp_remote"
+      serverKey: string
+      serverName?: string
+    }
+  | {
+      kind: "mcp_relay"
+      deviceId: string
+      deviceName?: string
+      exposureId?: string
+      exposureStableKey: string
+      exposureName?: string
+      runtimeSessionId?: string
+      visibleToolName?: string
+      namespacedToolName?: string
+    }
+  | {
+      kind: "callable_plugin"
+      pluginKey: string
+      pluginName?: string
+    }
+  | {
+      kind: "builtin"
+      toolKind: string
+    }
+  | {
+      kind: "model_response"
+      providerType: ProviderType
+    }
+
+export const TOOL_RESULT_ORIGIN_KINDS = [
+  "mcp_remote",
+  "mcp_relay",
+  "callable_plugin",
+  "builtin",
+  "model_response",
+] as const
+export type ToolResultOriginKind = (typeof TOOL_RESULT_ORIGIN_KINDS)[number]
+
 export interface CanonicalToolResult {
   toolCallId: string
   providerCallId?: string
   toolName: string
   content: CanonicalContentBlock[]
+  // MCP protocol structured output (JSON sidecar to content blocks). Surface
+  // as first-class so FE/audit and the LLM context compiler can use it without
+  // grovelling through metadata.
+  structuredContent?: Record<string, unknown>
   isError?: boolean
+  // Where this result came from. Filled at the ingest boundary.
+  origin?: ToolResultOrigin
   metadata?: Record<string, unknown>
 }
 
@@ -2034,11 +2062,7 @@ interface CanonicalContextItemBase {
 
 export interface CanonicalSystemNoticeItem extends CanonicalContextItemBase {
   kind: "system_notice"
-  noticeType:
-    | "interrupt"
-    | "task_instruction"
-    | "legacy_tool_result"
-    | "generic"
+  noticeType: "interrupt" | "task_instruction" | "wakeup" | "generic"
   parts: CanonicalContentBlock[]
 }
 
@@ -2209,7 +2233,8 @@ export interface ToolResult {
   toolCallId: string
   providerCallId?: string
   toolName: string
-  content: string | unknown[] // string for text-only, array for multimodal (MCP content blocks)
+  content: CanonicalContentBlock[]
+  structuredContent?: Record<string, unknown>
   isError?: boolean
   metadata?: Record<string, unknown>
 }
@@ -2218,6 +2243,10 @@ export interface NormalizedMcpToolResult {
   content: CanonicalContentBlock[]
   isError?: boolean
   structuredContent?: Record<string, unknown>
+  // Provenance of the result (transport / device / plugin). Filled by the
+  // ingest pipeline so downstream code can attribute the result without
+  // tracking it out-of-band.
+  origin?: ToolResultOrigin
   metadata?: Record<string, unknown>
   rawResult?: unknown
 }
@@ -2225,7 +2254,7 @@ export interface NormalizedMcpToolResult {
 // ============ Tool Plugin System ============
 
 export interface ConversationParticipantEntry {
-  type: "actor" | "workspace_member" | "external"
+  participantType: "actor" | "workspace_member" | "external"
   id: string
   name: string
   title?: string
@@ -2325,7 +2354,25 @@ export interface ToolPlugin {
         active: boolean
         definition: ToolDefinition
       }>
-  execute?: (input: Record<string, unknown>) => Promise<string>
+  // Callable tools return content as CanonicalContentBlock[]. Authors can
+  // either return just the blocks (most common) or the richer result object
+  // when they need structuredContent / isError / metadata. The executor
+  // (executeCallableTools) handles the union and lifts everything into the
+  // canonical ToolResult shape so downstream code never sees plain strings.
+  execute?: (
+    input: Record<string, unknown>
+  ) => Promise<CallableToolResult | CanonicalContentBlock[]>
+}
+
+// Return shape for ToolPlugin.execute when the plugin needs to attach
+// structuredContent, isError, or metadata alongside its blocks. For the
+// simple text-only case, prefer `textResult("hello")` which produces this
+// shape; or just return `textBlocks("hello")` if no extra fields are needed.
+export interface CallableToolResult {
+  content: CanonicalContentBlock[]
+  structuredContent?: Record<string, unknown>
+  isError?: boolean
+  metadata?: Record<string, unknown>
 }
 
 export interface AIResponse {
@@ -3328,6 +3375,14 @@ export interface TransportMessageLink {
   direction: "inbound" | "outbound"
   deliveryStatus: TransportDeliveryStatus
   externalMessageId?: string
+  /** Platform reply-to id (Feishu parent_id). Populated on inbound when
+   *  the user replied to a previous message. */
+  externalReplyToId?: string
+  /** Platform thread id (Feishu thread_id). */
+  externalThreadId?: string
+  /** Emoji glyph → platform reaction_id map maintained by
+   *  StatusReactionAdapter so a restart can clean orphan reactions. */
+  externalEmojiReactions?: Record<string, string>
   metadata: Record<string, unknown>
   deliveredAt?: Timestamp
   createdAt: Timestamp
@@ -3357,28 +3412,6 @@ export interface ConversationMessageTransportDelivery {
   deliveredAt?: Timestamp
   metadata: Record<string, unknown>
 }
-
-export interface ActorVersionDocChangeWire {
-  docId: UUID
-  key: ActorDocKey
-  title: string
-  changeType: "added" | "updated" | "removed"
-  visibility: ActorDocVisibility
-  priority: number
-  fieldChanges?: ActorDocFieldChange[]
-  summaryText?: string
-}
-
-export interface ActorVersionFieldChangeWire {
-  field: ActorVersionChangedField
-  before?: unknown
-  after?: unknown
-  summaryText?: string
-}
-
-export type ActorVersionChangeWire =
-  | ({ kind: "field" } & ActorVersionFieldChangeWire)
-  | ({ kind: "doc" } & ActorVersionDocChangeWire)
 
 export type InteractionRequestKind = (typeof INTERACTION_REQUEST_KINDS)[number]
 export type TargetedInteractionRequestKind =
@@ -3642,7 +3675,6 @@ export type ConversationFeedEventType =
   | "memory_updated"
   | "actor_renamed"
   | "actor_avatar_changed"
-  | "actor_version_changed"
   | "automation_notice"
   | "interaction_requested"
   | "task_notice"
@@ -3702,13 +3734,6 @@ export interface ConversationFeedEventPayloadMap {
     newAvatarUrl?: string
     sourceTurnId?: UUID
   }
-  actor_version_changed: {
-    actor: ConversationEntityRef
-    fromVersion: number
-    toVersion: number
-    changes: ActorVersionChangeWire[]
-    source?: ActorVersionSource
-  }
   automation_notice: {
     automationId: UUID
     executionId: UUID
@@ -3748,6 +3773,13 @@ export interface ConversationFeedMessageItem {
   replyToItemId?: UUID
   replyTo?: ConversationReplyRef
   restrictedAudience?: ConversationEntityRef[]
+  /**
+   * Derived plaintext snapshot of the message — produced by the API via
+   * `extractText(contentBlocks)`. Treat as read-only on the consumer side;
+   * `contentBlocks` is the source of truth (carries file_ref / mention
+   * structure that `content` cannot represent). Do not mutate `content`
+   * independently of `contentBlocks`.
+   */
   content: string
   contentBlocks: CanonicalContentBlock[]
   metadata: Record<string, unknown>
@@ -3927,80 +3959,6 @@ export function summarizeConversationEvent(
     return "Actor avatar updated."
   }
 
-  if (eventType === "actor_version_changed") {
-    const actor =
-      eventPayload.actor && typeof eventPayload.actor === "object"
-        ? (eventPayload.actor as { name?: string })
-        : undefined
-    const actorName =
-      typeof actor?.name === "string" ? actor.name.trim() : "An actor"
-    const fromVersion =
-      typeof eventPayload.fromVersion === "number"
-        ? eventPayload.fromVersion
-        : null
-    const toVersion =
-      typeof eventPayload.toVersion === "number" ? eventPayload.toVersion : null
-    const changes = Array.isArray(eventPayload.changes)
-      ? eventPayload.changes
-          .filter(
-            (
-              change: unknown
-            ): change is {
-              kind?: string
-              summaryText?: string
-              title?: string
-              changeType?: string
-              field?: string
-            } => !!change && typeof change === "object"
-          )
-          .map((change) => {
-            const summaryText =
-              typeof change.summaryText === "string"
-                ? change.summaryText.trim()
-                : ""
-            if (summaryText) return summaryText
-            if (change.kind === "field" && typeof change.field === "string") {
-              return `${change.field} changed.`
-            }
-            if (change.kind === "doc") {
-              const title =
-                typeof change.title === "string" ? change.title.trim() : "a doc"
-              const changeType =
-                typeof change.changeType === "string"
-                  ? change.changeType.trim()
-                  : "updated"
-              return `Doc ${changeType}: ${title}.`
-            }
-            return ""
-          })
-          .filter((value: string): value is string => Boolean(value))
-      : []
-    const source =
-      eventPayload.source && typeof eventPayload.source === "object"
-        ? (eventPayload.source as { type?: string })
-        : undefined
-
-    const fragments: string[] = []
-    if (fromVersion !== null && toVersion !== null) {
-      fragments.push(
-        `${actorName} updated from v${fromVersion} to v${toVersion}.`
-      )
-    } else {
-      fragments.push(`${actorName} updated their profile.`)
-    }
-    if (changes.length > 0) {
-      fragments.push(...changes)
-    } else {
-      fragments.push("Profile details changed.")
-    }
-    if (source?.type === "workspace_member") {
-      fragments.push("Updated by a workspace member.")
-    } else if (source?.type === "actor") {
-      fragments.push("Updated by the actor.")
-    }
-    return fragments.join(" ")
-  }
-
   if (eventType === "automation_notice") {
     const messageBlocks = Array.isArray(eventPayload.messageBlocks)
       ? (eventPayload.messageBlocks as CanonicalContentBlock[])
@@ -4118,25 +4076,6 @@ export type ConversationFeedItem =
   | ConversationFeedMessageItem
   | ConversationFeedEventItem
 
-export interface ConversationSummary {
-  id: UUID
-  workspaceId: UUID
-  title: string
-  avatarUrl?: string
-  createdAt: Timestamp
-  updatedAt: Timestamp
-  unreadCount: number
-  lastItem?: {
-    itemId: UUID
-    sequence: number
-    kind: ConversationFeedItem["kind"]
-    role?: "user" | "assistant" | "system"
-    previewText: string
-    authorName?: string
-    createdAt: Timestamp
-  }
-}
-
 export interface ConversationFeedPage {
   items: ConversationFeedItem[]
   hasMore: boolean
@@ -4177,6 +4116,11 @@ interface ChatConversationItemBase {
   replyToItemId?: UUID
   replyTo?: ConversationReplyRef
   causedByItemId?: UUID
+  /**
+   * Derived plaintext snapshot of the item — produced by the API via
+   * `extractText(contentBlocks)`. Treat as read-only; `contentBlocks` is
+   * authoritative. Do not mutate `content` without rebuilding the blocks.
+   */
   content: string
   contentBlocks: CanonicalContentBlock[]
   metadata: Record<string, unknown>
@@ -4606,6 +4550,7 @@ export type ChatSocketEventType =
   | "server.shutdown"
   | "chat.sync.event"
   | "runtime.updated"
+  | "chat.typing"
 
 export interface ChatSocketEventPayloadMap {
   "auth.ok": {
@@ -4627,6 +4572,12 @@ export interface ChatSocketEventPayloadMap {
     conversationId: UUID
     runtimeSeq: number
     snapshot: ActorRuntimeState
+  }
+  "chat.typing": {
+    conversationId: UUID
+    fromWorkspaceMemberId: UUID
+    state: ChatTypingState
+    occurredAt: Timestamp
   }
 }
 
@@ -4925,6 +4876,112 @@ export function normalizeCanonicalContentBlocks(
 /** Wrap a plain string into CanonicalContentBlock[] */
 export function textBlocks(s: string): CanonicalContentBlock[] {
   return [textBlock(s)]
+}
+
+/**
+ * Convenience constructor for the common text-only CallableToolResult.
+ * Equivalent to `{ content: textBlocks(text), ...opts }` but easier to read
+ * in plugin handlers that return plain text plus an isError flag.
+ */
+export function textResult(
+  text: string,
+  opts?: {
+    isError?: boolean
+    structuredContent?: Record<string, unknown>
+    metadata?: Record<string, unknown>
+  }
+): CallableToolResult {
+  const result: CallableToolResult = { content: textBlocks(text) }
+  if (opts?.isError !== undefined) result.isError = opts.isError
+  if (opts?.structuredContent !== undefined)
+    result.structuredContent = opts.structuredContent
+  if (opts?.metadata !== undefined) result.metadata = opts.metadata
+  return result
+}
+
+/**
+ * Format a CanonicalToolResult.structuredContent payload as an XML-tagged
+ * JSON suffix suitable for inclusion in provider tool_result content.
+ *
+ * Returns empty string when there is nothing to emit. Otherwise wraps the
+ * JSON in `<structured_content>...</structured_content>` so the LLM has a
+ * clear, parseable marker around the sidecar payload (distinct from the
+ * primary text output). The XML tag matches the wrapping convention
+ * context-compiler.ts uses for system_notice / event items.
+ *
+ * Callers append this to whatever string they're about to send to the
+ * provider — Anthropic appends as a tool_result content text block,
+ * OpenAI / OpenAI-Responses / BigModel append as a string suffix.
+ */
+export function formatStructuredContentForProvider(
+  structuredContent: unknown
+): string {
+  if (!structuredContent || typeof structuredContent !== "object") return ""
+  try {
+    const json = JSON.stringify(structuredContent, null, 2)
+    if (!json || json === "{}" || json === "null") return ""
+    return `\n\n<structured_content>\n${json}\n</structured_content>`
+  } catch {
+    return ""
+  }
+}
+
+/**
+ * Type guard for ToolResultOrigin. Validates the discriminator and the
+ * required fields per kind. Use at trust boundaries (e.g., when reading
+ * a metadata column from the DB) before passing to downstream code that
+ * relies on origin being correctly shaped.
+ */
+export function isToolResultOrigin(value: unknown): value is ToolResultOrigin {
+  if (!value || typeof value !== "object") return false
+  const v = value as Record<string, unknown>
+  switch (v.kind) {
+    case "mcp_remote":
+      return typeof v.serverKey === "string"
+    case "mcp_relay":
+      return (
+        typeof v.deviceId === "string" &&
+        typeof v.exposureStableKey === "string"
+      )
+    case "callable_plugin":
+      return typeof v.pluginKey === "string"
+    case "builtin":
+      return typeof v.toolKind === "string"
+    case "model_response":
+      return typeof v.providerType === "string"
+    default:
+      return false
+  }
+}
+
+/**
+ * Convenience constructor for CanonicalToolResult. Defaults isError=false
+ * when not provided; leaves optional fields undefined when not provided
+ * (do not store empty objects/arrays — keeps DB JSONB small).
+ */
+export function canonicalToolResult(input: {
+  toolCallId: string
+  providerCallId?: string
+  toolName: string
+  content: CanonicalContentBlock[]
+  structuredContent?: Record<string, unknown>
+  isError?: boolean
+  origin?: ToolResultOrigin
+  metadata?: Record<string, unknown>
+}): CanonicalToolResult {
+  const result: CanonicalToolResult = {
+    toolCallId: input.toolCallId,
+    toolName: input.toolName,
+    content: input.content,
+  }
+  if (input.providerCallId !== undefined)
+    result.providerCallId = input.providerCallId
+  if (input.structuredContent !== undefined)
+    result.structuredContent = input.structuredContent
+  if (input.isError !== undefined) result.isError = input.isError
+  if (input.origin !== undefined) result.origin = input.origin
+  if (input.metadata !== undefined) result.metadata = input.metadata
+  return result
 }
 
 function createActorDocId(): UUID {

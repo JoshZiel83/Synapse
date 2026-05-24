@@ -5,7 +5,11 @@ import type {
   ConversationEventContextPolicy,
   ConversationEventTimelinePolicy,
 } from "@synapse/shared/types"
-import { summarizeConversationEvent, textBlocks } from "@synapse/shared"
+import {
+  isCanonicalContentBlock,
+  summarizeConversationEvent,
+  textBlocks,
+} from "@synapse/shared"
 
 export interface ConversationEventRenderContext {
   eventType: ConversationFeedEventType
@@ -40,11 +44,14 @@ function noticeBlocks(
   },
   fallback: string
 ): CanonicalContentBlock[] {
+  // Strict validation: only accept input items that pass isCanonicalContentBlock.
+  // Previously we accepted any object, which let garbage payloads (mismatched
+  // schemas, half-built shapes) flow downstream as "blocks" and surface as
+  // typed bugs at the LLM compile boundary.
   const messageBlocks = Array.isArray(payload.messageBlocks)
-    ? payload.messageBlocks.filter(
-        (block): block is CanonicalContentBlock =>
-          Boolean(block) && typeof block === "object"
-      )
+    ? (payload.messageBlocks.filter(
+        isCanonicalContentBlock
+      ) as CanonicalContentBlock[])
     : []
   if (messageBlocks.length > 0) {
     return messageBlocks
@@ -124,14 +131,6 @@ const EVENT_SPECS: Record<ConversationFeedEventType, ConversationEventSpec> = {
     renderTimeline: ({ eventType, payload }) =>
       textBlocks(summarizeConversationEvent(eventType, payload)),
     renderContext: noContext,
-  },
-  actor_version_changed: {
-    timelinePolicy: "all_members",
-    contextPolicy: "shared",
-    renderTimeline: ({ eventType, payload }) =>
-      textBlocks(summarizeConversationEvent(eventType, payload)),
-    renderContext: ({ eventType, payload }) =>
-      textBlocks(summarizeConversationEvent(eventType, payload)),
   },
   automation_notice: {
     timelinePolicy: "all_members",

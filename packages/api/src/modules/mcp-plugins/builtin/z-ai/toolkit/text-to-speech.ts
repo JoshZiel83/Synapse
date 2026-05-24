@@ -1,5 +1,6 @@
-import { FILE_ORIGIN_SYSTEMS, ToolDefinition } from "@synapse/shared"
+import { FILE_ORIGIN_SYSTEMS, textBlock, ToolDefinition } from "@synapse/shared"
 import type { SubFeature } from "./types.js"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 import { saveFromBuffer } from "../../../../../infrastructure/storage/file-io.js"
 import { pluginOutputFileRef } from "../../../file-ref.js"
 import {
@@ -79,7 +80,7 @@ export const ttsFeature: SubFeature = {
     toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<string | unknown[]> {
+  ): Promise<BuiltinPluginExecuteResult> {
     const apiKey = config.apiKey as string
     if (!apiKey) throw new Error("ZhipuAI API key not configured.")
 
@@ -152,7 +153,7 @@ export const ttsFeature: SubFeature = {
       )
 
       return [
-        { type: "text", text: `Generated audio: ${fileRecord.originalName}` },
+        textBlock(`Generated audio: ${fileRecord.originalName}`),
         pluginOutputFileRef(fileRecord),
       ]
     } catch (error) {

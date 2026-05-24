@@ -1,5 +1,11 @@
-import { FILE_ORIGIN_SYSTEMS, ToolDefinition } from "@synapse/shared"
+import {
+  CanonicalContentBlock,
+  FILE_ORIGIN_SYSTEMS,
+  textBlock,
+  ToolDefinition,
+} from "@synapse/shared"
 import type { SubFeature } from "./types.js"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 import {
   saveFromUrl,
   fileToBuffer,
@@ -123,7 +129,7 @@ export const fileParserSyncFeature: SubFeature = {
     _toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<string | unknown[]> {
+  ): Promise<BuiltinPluginExecuteResult> {
     const apiKey = config.apiKey as string
     if (!apiKey) throw new Error("ZhipuAI API key not configured.")
 
@@ -169,19 +175,15 @@ export const fileParserSyncFeature: SubFeature = {
         parsing_result_url?: string | null
       }
 
-      const output: Array<
-        { type: "text"; text: string } | ReturnType<typeof pluginOutputFileRef>
-      > = []
-      output.push({
-        type: "text",
-        text: `File parser task ${result.task_id || ""} status: ${result.status || "unknown"}${result.message ? ` (${result.message})` : ""}`,
-      })
+      const output: CanonicalContentBlock[] = []
+      output.push(
+        textBlock(
+          `File parser task ${result.task_id || ""} status: ${result.status || "unknown"}${result.message ? ` (${result.message})` : ""}`
+        )
+      )
 
       if (result.content) {
-        output.push({
-          type: "text",
-          text: result.content,
-        })
+        output.push(textBlock(result.content))
       }
 
       if (result.parsing_result_url) {
@@ -199,10 +201,7 @@ export const fileParserSyncFeature: SubFeature = {
             },
           })
         )
-        output.push({
-          type: "text",
-          text: "Structured parsing result archive:",
-        })
+        output.push(textBlock("Structured parsing result archive:"))
         output.push(pluginOutputFileRef(parsedArchive))
       }
 

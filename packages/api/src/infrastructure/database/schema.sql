@@ -33,7 +33,8 @@ CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 
 CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace', 'conversation', 'actor', 'workspace_member');
 CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
 CREATE TYPE actors_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
-CREATE TYPE relationship_target_type AS ENUM ('member', 'actor', 'remote_agent');
+CREATE TYPE relationship_target_type AS ENUM ('workspace_member', 'actor', 'remote_agent');
+CREATE TYPE actor_access_policy AS ENUM ('workspace_open', 'approval_required');
 CREATE TYPE remote_agents_runtime_kind AS ENUM ('claude_code', 'codex');
 CREATE TYPE remote_agent_machines_trust_status AS ENUM ('pending', 'active', 'revoked', 'blocked');
 CREATE TYPE remote_agent_machines_lifecycle_state AS ENUM ('online', 'offline');
@@ -55,7 +56,7 @@ CREATE TYPE model_group_grants_status AS ENUM ('active', 'revoked');
 CREATE TYPE sessions_channel_type AS ENUM ('web', 'api', 'bridge');
 CREATE TYPE sessions_status AS ENUM ('idle', 'queued', 'running', 'blocked', 'closed');
 CREATE TYPE sessions_collaboration_mode AS ENUM ('default', 'plan_drafting', 'plan_awaiting_approval');
-CREATE TYPE conversation_participants_kind AS ENUM ('workspace_member', 'actor', 'remote_agent', 'external', 'system');
+CREATE TYPE conversation_participants_type AS ENUM ('workspace_member', 'actor', 'remote_agent', 'external', 'system');
 CREATE TYPE conversation_participants_state AS ENUM ('active', 'left', 'removed');
 CREATE TYPE subject_kind AS ENUM (
   'workspace',
@@ -69,14 +70,14 @@ CREATE TYPE subject_kind AS ENUM (
   'system'
 );
 CREATE TYPE chat_client_instances_status AS ENUM ('active', 'revoked');
-CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin');
+CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
 CREATE TYPE transport_accounts_owner_scope AS ENUM ('workspace', 'workspace_member');
 CREATE TYPE transport_accounts_inbound_actor_mode AS ENUM ('none', 'specified_actor', 'follow_owner_chief_actor');
 CREATE TYPE transport_accounts_connection_mode AS ENUM ('webhook', 'long_connection');
 CREATE TYPE transport_accounts_status AS ENUM ('active', 'disabled', 'error');
 CREATE TYPE transport_endpoints_endpoint_type AS ENUM ('direct', 'group');
 CREATE TYPE conversation_transport_bindings_inbound_actor_mode AS ENUM ('inherit_account', 'none', 'specified_actor');
-CREATE TYPE transport_addresses_transport_kind AS ENUM ('feishu', 'weixin');
+CREATE TYPE transport_addresses_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
 CREATE TYPE transport_addresses_address_type AS ENUM ('user', 'bot', 'system');
 CREATE TYPE conversation_items_scope AS ENUM ('shared', 'private');
 CREATE TYPE conversation_items_surface AS ENUM ('visible', 'internal');
@@ -86,7 +87,7 @@ CREATE TYPE conversation_items_event_timeline_policy AS ENUM ('none', 'all_membe
 CREATE TYPE conversation_items_event_context_policy AS ENUM ('none', 'shared', 'actor_private', 'targeted_members');
 CREATE TYPE conversation_item_parts_part_type AS ENUM ('text', 'file_ref', 'json');
 CREATE TYPE conversation_item_targets_target_kind AS ENUM ('to', 'cc', 'visible');
-CREATE TYPE transport_message_links_transport_kind AS ENUM ('feishu', 'weixin');
+CREATE TYPE transport_message_links_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
 CREATE TYPE transport_message_links_direction AS ENUM ('inbound', 'outbound');
 CREATE TYPE transport_message_links_delivery_status AS ENUM ('pending', 'sent', 'failed', 'skipped');
 CREATE TYPE turns_status AS ENUM ('running', 'completed', 'failed', 'cancelled');
@@ -907,6 +908,7 @@ CREATE INDEX idx_remote_agent_machines_workspace
 CREATE TABLE remote_agent_machine_sessions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   machine_id UUID NOT NULL REFERENCES remote_agent_machines(id) ON DELETE CASCADE,
+  fencing_token UUID NOT NULL UNIQUE DEFAULT uuid_generate_v4(),
   status remote_agent_machine_sessions_status NOT NULL DEFAULT 'connecting',
   transport remote_agent_machine_sessions_transport NOT NULL DEFAULT 'websocket',
   remote_addr TEXT,
@@ -920,6 +922,10 @@ CREATE TABLE remote_agent_machine_sessions (
 
 CREATE INDEX idx_remote_agent_machine_sessions_machine
   ON remote_agent_machine_sessions(machine_id, created_at DESC);
+
+CREATE UNIQUE INDEX uq_remote_agent_machine_sessions_machine_active
+  ON remote_agent_machine_sessions(machine_id)
+  WHERE status IN ('connecting', 'active');
 
 CREATE TABLE remote_agent_runtime_catalog (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -946,13 +952,8 @@ CREATE TABLE remote_agent_bindings (
   status remote_agent_bindings_status NOT NULL DEFAULT 'active',
   runtime_state remote_agent_bindings_runtime_state NOT NULL DEFAULT 'offline',
   status_text TEXT,
-  last_session_id VARCHAR(255),
   capabilities JSONB NOT NULL DEFAULT '{}',
-  active_conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
-  active_interaction_id UUID,
   last_activity_at TIMESTAMPTZ,
-  last_run_started_at TIMESTAMPTZ,
-  last_run_finished_at TIMESTAMPTZ,
   last_error TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -982,9 +983,18 @@ CREATE INDEX idx_remote_agent_runs_remote_agent
 CREATE TABLE remote_agent_conversation_contexts (
   remote_agent_id UUID NOT NULL REFERENCES remote_agents(id) ON DELETE CASCADE,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  runtime_kind remote_agents_runtime_kind,
+  runtime_session_id VARCHAR(255),
+  runtime_state remote_agent_bindings_runtime_state NOT NULL DEFAULT 'offline',
+  status_text TEXT,
+  active_interaction_id UUID,
   collaboration_mode TEXT NOT NULL DEFAULT 'default',
   collaboration_state JSONB NOT NULL DEFAULT '{}',
   active_plan_approval_interaction_id UUID,
+  last_run_started_at TIMESTAMPTZ,
+  last_run_finished_at TIMESTAMPTZ,
+  last_activity_at TIMESTAMPTZ,
+  last_error TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   PRIMARY KEY (remote_agent_id, conversation_id)
@@ -995,6 +1005,16 @@ CREATE INDEX idx_remote_agent_conversation_contexts_remote_agent
 
 CREATE INDEX idx_remote_agent_conversation_contexts_conversation
   ON remote_agent_conversation_contexts(conversation_id, updated_at DESC);
+
+CREATE INDEX idx_remote_agent_conversation_contexts_runtime_session
+  ON remote_agent_conversation_contexts(remote_agent_id, runtime_session_id)
+  WHERE runtime_session_id IS NOT NULL;
+
+CREATE INDEX idx_remote_agent_conversation_contexts_active_state
+  ON remote_agent_conversation_contexts(remote_agent_id, runtime_state)
+  WHERE runtime_state IN (
+    'running', 'waiting_user_input', 'plan_drafting', 'waiting_plan_approval'
+  );
 
 CREATE TABLE remote_agent_group_interaction_grants (
   remote_agent_id UUID NOT NULL REFERENCES remote_agents(id) ON DELETE CASCADE,
@@ -1614,13 +1634,13 @@ CREATE INDEX idx_conversation_item_parts_item ON conversation_item_parts(item_id
 CREATE TABLE conversation_participants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  -- P1b: participant_kind is a denormalized discriminator that mirrors the
+  -- P1b: participant_type is a denormalized discriminator that mirrors the
   -- subject's kind. Workspace_member / actor / remote_agent participants
   -- carry the corresponding access_subjects row (kind matches); external /
   -- system participants carry an access_subjects row of kind='external' with
   -- a per-participant external_identity_key of the form 'participant:<uuid>'
   -- so every participant has a real subject_id (no NULL escape hatch).
-  participant_kind conversation_participants_kind NOT NULL,
+  participant_type conversation_participants_type NOT NULL,
   subject_id UUID NOT NULL,
   actor_join_version_id UUID REFERENCES actor_versions(id) ON DELETE SET NULL,
   display_name VARCHAR(255),
@@ -1787,6 +1807,8 @@ CREATE TABLE remote_agent_message_deliveries (
   item_id UUID NOT NULL REFERENCES conversation_items(id) ON DELETE CASCADE,
   status remote_agent_message_deliveries_status NOT NULL DEFAULT 'pending',
   attempts INT NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ,
+  last_failure_reason TEXT,
   last_acked_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1795,6 +1817,10 @@ CREATE TABLE remote_agent_message_deliveries (
 
 CREATE INDEX idx_remote_agent_message_deliveries_remote_agent
   ON remote_agent_message_deliveries(remote_agent_id, status, updated_at DESC);
+
+CREATE INDEX idx_remote_agent_message_deliveries_due
+  ON remote_agent_message_deliveries(next_attempt_at)
+  WHERE status = 'pending';
 
 CREATE TABLE workspace_member_sync_events (
   sync_seq BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -1836,6 +1862,9 @@ CREATE TABLE transport_message_links (
   direction transport_message_links_direction NOT NULL,
   delivery_status transport_message_links_delivery_status NOT NULL DEFAULT 'pending',
   external_message_id VARCHAR(255),
+  external_reply_to_id VARCHAR(255),
+  external_thread_id VARCHAR(255),
+  external_emoji_reactions JSONB NOT NULL DEFAULT '{}',
   metadata JSONB NOT NULL DEFAULT '{}',
   delivered_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1849,6 +1878,9 @@ CREATE INDEX idx_transport_message_links_endpoint
   ON transport_message_links(transport_endpoint_id, created_at DESC);
 CREATE INDEX idx_transport_message_links_status
   ON transport_message_links(delivery_status, created_at DESC);
+CREATE INDEX idx_transport_message_links_reply_to
+  ON transport_message_links(transport_endpoint_id, external_reply_to_id)
+  WHERE external_reply_to_id IS NOT NULL;
 
 -- ============ Turns ============
 CREATE TABLE turns (
@@ -3514,7 +3546,7 @@ ALTER TABLE sessions ADD CONSTRAINT fk_sessions_active_plan_approval_interaction
   REFERENCES interaction_requests(id)
   ON DELETE SET NULL;
 
-ALTER TABLE remote_agent_bindings ADD CONSTRAINT fk_remote_agent_bindings_active_interaction
+ALTER TABLE remote_agent_conversation_contexts ADD CONSTRAINT fk_remote_agent_conversation_contexts_active_interaction
   FOREIGN KEY (active_interaction_id)
   REFERENCES interaction_requests(id)
   ON DELETE SET NULL;
@@ -3586,3 +3618,19 @@ CREATE INDEX idx_relay_authorization_grants_subject
 ALTER TABLE relay_authorization_grants
   ADD CONSTRAINT fk_relay_authorization_grants_subject
   FOREIGN KEY (subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
+
+-- ============ Chat push notification tokens (S7) ============
+CREATE TABLE IF NOT EXISTS chat_push_tokens (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
+  platform TEXT NOT NULL CHECK (platform IN ('ios','android','web')),
+  token TEXT NOT NULL,
+  device_label TEXT,
+  metadata JSONB NOT NULL DEFAULT '{}',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  UNIQUE (workspace_member_id, token)
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_push_tokens_workspace_member
+  ON chat_push_tokens(workspace_member_id);

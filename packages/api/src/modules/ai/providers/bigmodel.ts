@@ -10,6 +10,7 @@ import type {
 import {
   extractText,
   formatMentionText,
+  formatStructuredContentForProvider,
   getModelMaxTokensLimit,
   textBlock,
 } from "@synapse/shared"
@@ -373,10 +374,13 @@ export class BigModelChatCompletionsProvider implements AIProvider {
               resultItem.content,
               multimodal
             )
+            const structuredSuffix = formatStructuredContentForProvider(
+              resultItem.structuredContent
+            )
             result.push({
               role: "tool",
               tool_call_id: resultItem.providerCallId || resultItem.toolCallId,
-              content: textFallback,
+              content: textFallback + structuredSuffix,
             })
           }
           break

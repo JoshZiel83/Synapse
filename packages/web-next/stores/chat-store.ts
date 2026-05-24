@@ -5,20 +5,28 @@ import { api } from "@/lib/api"
 import {
   createEmptyStoredChatQueueState,
   loadStoredChatQueueState,
+  mergeStoredQueueTransition,
   updateStoredChatQueueState,
   type PendingOutboxMessage as PersistedOutboxEntry,
   type PendingConversationRead,
   type StoredChatQueueState,
 } from "@/lib/chat-persistence"
+import {
+  isChatServiceWorkerActive,
+  requestChatServiceWorkerSync,
+} from "@/lib/chat-service-worker"
 import { createUuid } from "@/lib/uuid"
 import type {
   ActorRuntimeState,
   CanonicalContentBlock,
+  ChatConversationCreateInput,
   ChatConversationItem,
   ChatConversationReadWatermarkResponse,
   ChatConversationView,
   ChatSyncEvent,
   ConversationEntityRef,
+  ConversationParticipantType,
+  ServerToolCall,
   ConversationFeedEventPayloadMap,
   ConversationFeedEventType,
   ConversationMessageTransportContext,
@@ -46,7 +54,7 @@ export interface ConversationParticipant {
 
 export interface ConversationMember {
   participantId: string
-  participantType: "actor" | "remote_agent" | "workspace_member" | "external"
+  participantType: Exclude<ConversationParticipantType, "system">
   id: string
   workspaceMemberId?: string
   remoteAgentId?: string
@@ -85,13 +93,6 @@ export interface ConversationSummary {
     canManage?: boolean
     canManageMembers?: boolean
   }
-}
-
-export interface ServerToolCall {
-  type: "web_search" | "web_fetch"
-  query?: string
-  url?: string
-  results?: { url: string; title: string; pageAge?: string }[]
 }
 
 export interface FeedMessage {
@@ -158,6 +159,13 @@ interface ChatState {
   remoteAgentRuntimeMap: Record<string, RemoteAgentRuntimeState>
   runtimeSeqMap: Record<string, number>
   totalUnread: number
+  /**
+   * Active typing participants per conversation.
+   * key = conversationId; value = { workspaceMemberId: expireAtMs }
+   * Entries auto-expire 5s after the last `started` event with no follow-up
+   * `stopped` — checked at read time, no separate timer.
+   */
+  typingByConversation: Record<string, Record<string, number>>
 
   snapshot: ChatWorkspaceSnapshot | null
   loadedMessageItems: ChatConversationItem[]
@@ -171,6 +179,12 @@ interface ChatState {
   selectConversation: (conversationId: string | null) => void
   setVisibleConversation: (conversationId: string | null) => void
   loadMessages: (workspaceId: string, conversationId: string) => Promise<void>
+  loadOlderMessages: (
+    workspaceId: string,
+    conversationId: string,
+    beforeSequence: number,
+    limit?: number
+  ) => Promise<{ items: FeedMessage[]; hasMoreBefore: boolean } | null>
   sendMessage: (
     workspaceId: string,
     conversationId: string,
@@ -187,9 +201,13 @@ interface ChatState {
     workspaceId: string,
     kind: "private" | "group",
     actorIds: string[],
-    content?: string,
-    contentBlocks?: CanonicalContentBlock[],
-    title?: string
+    options?: {
+      title?: string
+      workspaceMemberIds?: string[]
+      remoteAgentIds?: string[]
+      externalParticipants?: ChatConversationCreateInput["externalParticipants"]
+      metadata?: Record<string, unknown>
+    }
   ) => Promise<string>
   markConversationRead: (
     conversationId: string,
@@ -203,6 +221,16 @@ interface ChatState {
     runtimeSeq: number
     snapshot: ActorRuntimeState
   }) => void
+  handleTypingEvent: (payload: {
+    conversationId: string
+    fromWorkspaceMemberId: string
+    state: "started" | "stopped"
+    occurredAt: string
+  }) => void
+  sendTypingState: (
+    conversationId: string,
+    state: "started" | "stopped"
+  ) => Promise<void>
   handleInteractionUpdated: (payload: {
     conversationId: string
     interactionId: string
@@ -298,82 +326,7 @@ function latestIsoTimestamp(
     ? currentValue
     : nextValue
 }
-
-function sameStoredEntry(left: unknown, right: unknown) {
-  return JSON.stringify(left) === JSON.stringify(right)
-}
-
-function mergeStoredQueueTransition(
-  currentState: StoredChatQueueState,
-  previousState: StoredChatQueueState | null,
-  nextState: StoredChatQueueState
-) {
-  const nextWorkspaceState =
-    currentState.workspaceMemberId &&
-    nextState.workspaceMemberId &&
-    currentState.workspaceMemberId !== nextState.workspaceMemberId
-      ? createEmptyStoredChatQueueState(nextState.workspaceId)
-      : currentState.workspaceId === nextState.workspaceId
-        ? currentState
-        : createEmptyStoredChatQueueState(nextState.workspaceId)
-
-  const previousOutbox = previousState?.outbox ?? {}
-  const previousPendingReads = previousState?.pendingReads ?? {}
-  const nextOutbox = { ...nextWorkspaceState.outbox }
-  const nextPendingReads = { ...nextWorkspaceState.pendingReads }
-
-  for (const clientMessageId of Object.keys(previousOutbox)) {
-    if (!(clientMessageId in nextState.outbox)) {
-      delete nextOutbox[clientMessageId]
-    }
-  }
-  for (const [clientMessageId, entry] of Object.entries(nextState.outbox)) {
-    if (!sameStoredEntry(previousOutbox[clientMessageId], entry)) {
-      nextOutbox[clientMessageId] = entry
-    }
-  }
-
-  for (const conversationId of Object.keys(previousPendingReads)) {
-    if (!(conversationId in nextState.pendingReads)) {
-      const currentEntry = nextPendingReads[conversationId]
-      const previousEntry = previousPendingReads[conversationId]
-      if (
-        currentEntry &&
-        previousEntry &&
-        currentEntry.readUpToSequence > previousEntry.readUpToSequence
-      ) {
-        continue
-      }
-      delete nextPendingReads[conversationId]
-    }
-  }
-  for (const [conversationId, entry] of Object.entries(
-    nextState.pendingReads
-  )) {
-    if (!sameStoredEntry(previousPendingReads[conversationId], entry)) {
-      nextPendingReads[conversationId] = entry
-    }
-  }
-
-  return {
-    ...nextWorkspaceState,
-    workspaceId: nextState.workspaceId,
-    workspaceMemberId:
-      nextState.workspaceMemberId ?? nextWorkspaceState.workspaceMemberId,
-    clientInstanceId:
-      nextState.clientInstanceId ?? nextWorkspaceState.clientInstanceId,
-    inboxCursor: Math.max(
-      nextWorkspaceState.inboxCursor,
-      nextState.inboxCursor
-    ),
-    lastBootstrappedAt: latestIsoTimestamp(
-      nextWorkspaceState.lastBootstrappedAt,
-      nextState.lastBootstrappedAt
-    ),
-    pendingReads: nextPendingReads,
-    outbox: nextOutbox,
-  }
-}
+void latestIsoTimestamp
 
 function queuePersistSnapshot(
   previousSnapshot: ChatWorkspaceSnapshot | null,
@@ -851,7 +804,21 @@ function outboxEntryToMessage(
 
 function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
   if (item.itemType === "event") {
-    const content = summarizeConversationEvent(item.subtype, item.eventPayload)
+    // The API has already rendered authoritative contentBlocks for the
+    // event (see event-registry.ts renderTimeline). Pass them through
+    // verbatim — re-deriving via summarizeConversationEvent loses any
+    // file_ref / mention structure the API attached. The plain `content`
+    // string is kept as a display-only derivation for legacy consumers.
+    const blocks =
+      Array.isArray(item.contentBlocks) && item.contentBlocks.length > 0
+        ? item.contentBlocks
+        : textBlocks(
+            summarizeConversationEvent(item.subtype, item.eventPayload)
+          )
+    const content =
+      typeof item.content === "string" && item.content.length > 0
+        ? item.content
+        : summarizeConversationEvent(item.subtype, item.eventPayload)
     const interaction =
       item.subtype === "interaction_requested" &&
       item.eventPayload &&
@@ -869,7 +836,7 @@ function chatItemToFeedMessage(item: ChatConversationItem): FeedMessage {
       role: "system",
       messageType: item.subtype,
       content,
-      contentBlocks: textBlocks(content),
+      contentBlocks: blocks,
       author: item.author,
       fromActorId: item.author?.actorId,
       fromWorkspaceMemberId: item.author?.workspaceMemberId,
@@ -1399,6 +1366,15 @@ async function flushPendingReadsInternal(snapshot: ChatWorkspaceSnapshot) {
     return snapshot
   }
 
+  // S10: when the service worker is actively controlling the page, it owns
+  // read-watermark flushing exclusively. The main-thread store still tracks
+  // pendingReads optimistically (so the unread badge clears immediately) but
+  // skips the POST — the SW will pick the entries up via the shared IDB
+  // queue and broadcast `chat:queue-updated` when done.
+  if (isChatServiceWorkerActive()) {
+    return snapshot
+  }
+
   let nextSnapshot = snapshot
   const pendingReads = Object.values(snapshot.pendingReads).sort(
     (left, right) => left.readUpToSequence - right.readUpToSequence
@@ -1430,6 +1406,17 @@ async function flushOutboxInternal(
   loadedMessageItems: ChatConversationItem[]
 ) {
   if (!snapshot.clientInstanceId) {
+    return {
+      snapshot,
+      loadedMessageItems,
+      retryAttemptCount: null as number | null,
+    }
+  }
+
+  // S10: when the service worker is the active flush owner, the main thread
+  // skips POSTing outbox entries. The SW reads the same IDB queue and
+  // POSTs once per clientMessageId, then broadcasts `chat:queue-updated`.
+  if (isChatServiceWorkerActive()) {
     return {
       snapshot,
       loadedMessageItems,
@@ -1558,6 +1545,7 @@ export const useChatStore = create<ChatState>((set, get) => ({
   remoteAgentRuntimeMap: {},
   runtimeSeqMap: {},
   totalUnread: 0,
+  typingByConversation: {},
   snapshot: null,
   loadedMessageItems: [],
 
@@ -1788,6 +1776,47 @@ export const useChatStore = create<ChatState>((set, get) => ({
     }
   },
 
+  loadOlderMessages: async (
+    workspaceId,
+    conversationId,
+    beforeSequence,
+    limit = 100
+  ) => {
+    const currentSnapshot = get().snapshot
+    if (!currentSnapshot?.clientInstanceId) {
+      return null
+    }
+    try {
+      const response = await api.getChatConversationMessages(
+        workspaceId,
+        conversationId,
+        {
+          clientInstanceId: currentSnapshot.clientInstanceId,
+          beforeSequence,
+          limit,
+        }
+      )
+      set((state) => {
+        if (state.selectedConversationId !== conversationId) {
+          return state
+        }
+        return {
+          loadedMessageItems: mergeRawItems(
+            response.items,
+            state.loadedMessageItems
+          ),
+        }
+      })
+      return {
+        items: response.items as never,
+        hasMoreBefore: response.hasMoreBefore,
+      }
+    } catch (error) {
+      console.error("Failed to load older messages:", error)
+      return null
+    }
+  },
+
   sendMessage: async (workspaceId, conversationId, input) => {
     const snapshot = get().snapshot
     if (!snapshot || snapshot.workspaceId !== workspaceId) {
@@ -1982,26 +2011,16 @@ export const useChatStore = create<ChatState>((set, get) => ({
     return syncPromise
   },
 
-  createWorkspaceThread: async (
-    workspaceId,
-    kind,
-    actorIds,
-    content,
-    contentBlocks,
-    title
-  ) => {
+  createWorkspaceThread: async (workspaceId, kind, actorIds, options) => {
     const response = await api.createChatConversation(workspaceId, {
       clientRequestId: createUuid("conversation"),
       kind,
-      title,
+      title: options?.title,
       actorIds,
-      metadata:
-        content || (contentBlocks && contentBlocks.length > 0)
-          ? {
-              initialContent: content,
-              initialContentBlocks: contentBlocks,
-            }
-          : undefined,
+      workspaceMemberIds: options?.workspaceMemberIds ?? [],
+      remoteAgentIds: options?.remoteAgentIds ?? [],
+      externalParticipants: options?.externalParticipants ?? [],
+      metadata: options?.metadata,
     })
 
     if (get().activeWorkspaceId === workspaceId && get().snapshot) {
@@ -2069,6 +2088,14 @@ export const useChatStore = create<ChatState>((set, get) => ({
     void queuePersistSnapshot(snapshot, nextSnapshot)
 
     if (!nextSnapshot.clientInstanceId) {
+      return
+    }
+
+    // S10: when SW is active, it owns the POST. We've already optimistically
+    // updated local state + persisted; the SW will pick the pendingRead up
+    // from the shared IDB queue.
+    if (isChatServiceWorkerActive()) {
+      void requestChatServiceWorkerSync("mark-conversation-read")
       return
     }
 
@@ -2186,6 +2213,42 @@ export const useChatStore = create<ChatState>((set, get) => ({
         totalUnread: sumConversationUnread(conversations),
       }
     })
+  },
+
+  handleTypingEvent: (payload) => {
+    const ownMember = get().snapshot?.workspaceMemberId
+    if (payload.fromWorkspaceMemberId === ownMember) {
+      // Don't show our own typing back to ourselves.
+      return
+    }
+    set((state) => {
+      const current = state.typingByConversation[payload.conversationId] || {}
+      const next = { ...current }
+      if (payload.state === "stopped") {
+        delete next[payload.fromWorkspaceMemberId]
+      } else {
+        // expire 5 seconds after the started event
+        next[payload.fromWorkspaceMemberId] = Date.now() + 5_000
+      }
+      return {
+        typingByConversation: {
+          ...state.typingByConversation,
+          [payload.conversationId]:
+            Object.keys(next).length > 0 ? next : (undefined as never),
+        },
+      }
+    })
+  },
+
+  sendTypingState: async (conversationId, state) => {
+    const snapshot = get().snapshot
+    if (!snapshot) return
+    try {
+      await api.sendChatTypingState(snapshot.workspaceId, conversationId, state)
+    } catch (error) {
+      // Typing is best-effort, never throw.
+      console.debug("Failed to send typing state:", error)
+    }
   },
 
   handleInteractionUpdated: (payload) => {

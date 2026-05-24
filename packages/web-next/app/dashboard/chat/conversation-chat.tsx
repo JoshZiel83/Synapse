@@ -8,7 +8,7 @@ import type {
   RemoteAgentRuntimeState,
 } from "@synapse/shared"
 import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
-import { useEffect, useMemo, useRef, useState } from "react"
+import { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { toast } from "sonner"
 import ChatComposer, {
   CHAT_COMPOSER_MENTION_TARGET_TYPE,
@@ -250,12 +250,18 @@ export default function ConversationChat({
   const handleInteractionUpdated = useChatStore(
     (state) => state.handleInteractionUpdated
   )
+  const loadOlderMessages = useChatStore((state) => state.loadOlderMessages)
   const currentViewerWorkspaceMemberId = currentWorkspaceMemberId || ""
   const scrollRef = useRef<HTMLDivElement>(null)
   const bottomRef = useRef<HTMLDivElement>(null)
   const initialScrollPendingRef = useRef(true)
   const hasObservedLoadingForConversationRef = useRef(false)
   const [showJumpButton, setShowJumpButton] = useState(false)
+  const [loadingOlder, setLoadingOlder] = useState(false)
+  // `null` = unknown (default), `true` = more older messages exist, `false`
+  // = the API said it's reached the start. Reset whenever the conversation
+  // changes since the new conversation has a fresh history.
+  const [hasMoreOlder, setHasMoreOlder] = useState<boolean | null>(null)
   const [conversationDetailsOpen, setConversationDetailsOpen] = useState(false)
   const [participantDetailOpen, setParticipantDetailOpen] = useState(false)
   const [selectedParticipantMember, setSelectedParticipantMember] =
@@ -442,7 +448,48 @@ export default function ConversationChat({
     initialScrollPendingRef.current = true
     hasObservedLoadingForConversationRef.current = false
     setShowJumpButton(false)
+    setHasMoreOlder(null)
+    setLoadingOlder(false)
   }, [conversation.id])
+
+  const handleLoadOlder = async () => {
+    if (!workspaceId || loadingOlder || hasMoreOlder === false) return
+    const earliestSequence = messages.length > 0 ? messages[0].sequence : null
+    if (earliestSequence === null) return
+    setLoadingOlder(true)
+    try {
+      // Capture viewport height so we can preserve scroll position when the
+      // older messages get prepended — without this the list would jump
+      // upward and dump the user back to the new content's top edge.
+      const el = scrollRef.current
+      const previousScrollHeight = el?.scrollHeight ?? 0
+      const previousScrollTop = el?.scrollTop ?? 0
+
+      const result = await loadOlderMessages(
+        workspaceId,
+        conversation.id,
+        earliestSequence
+      )
+
+      if (result) {
+        setHasMoreOlder(result.hasMoreBefore)
+      }
+
+      // After React paints the new items the scroll height grew; bump
+      // scrollTop by the delta so the user stays anchored on the message
+      // they were reading.
+      requestAnimationFrame(() => {
+        const next = scrollRef.current
+        if (!next) return
+        const delta = next.scrollHeight - previousScrollHeight
+        if (delta > 0) {
+          next.scrollTop = previousScrollTop + delta
+        }
+      })
+    } finally {
+      setLoadingOlder(false)
+    }
+  }
 
   useEffect(() => {
     if (!initialScrollPendingRef.current) return
@@ -590,7 +637,58 @@ export default function ConversationChat({
     setTimeout(() => {
       bottomRef.current?.scrollIntoView({ behavior: "smooth" })
     }, 50)
+    // Make sure we send a final `stopped` typing state on submit so the
+    // indicator on the recipient side disappears promptly.
+    void sendTypingState(conversation.id, "stopped")
+    lastTypingSentRef.current = "stopped"
   }
+
+  const sendTypingState = useChatStore((state) => state.sendTypingState)
+  const typersForConversation = useChatStore(
+    (state) => state.typingByConversation[conversation.id]
+  )
+  const activeTypers = useMemo(() => {
+    if (!typersForConversation) return [] as string[]
+    const now = Date.now()
+    return Object.entries(typersForConversation)
+      .filter(([, expireAt]) => expireAt > now)
+      .map(([memberId]) => memberId)
+  }, [typersForConversation])
+
+  // Debounced typing emit: send "started" on first keystroke, then re-send
+  // "started" at most every 3s while typing; send "stopped" after 4s of
+  // silence.
+  const lastTypingSentRef = useRef<"started" | "stopped" | null>(null)
+  const typingStartedAtRef = useRef<number>(0)
+  const typingStoppedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null
+  )
+  const handleTypingHeartbeat = useCallback(() => {
+    const now = Date.now()
+    if (
+      lastTypingSentRef.current !== "started" ||
+      now - typingStartedAtRef.current > 3_000
+    ) {
+      void sendTypingState(conversation.id, "started")
+      lastTypingSentRef.current = "started"
+      typingStartedAtRef.current = now
+    }
+    if (typingStoppedTimerRef.current) {
+      clearTimeout(typingStoppedTimerRef.current)
+    }
+    typingStoppedTimerRef.current = setTimeout(() => {
+      void sendTypingState(conversation.id, "stopped")
+      lastTypingSentRef.current = "stopped"
+    }, 4_000)
+  }, [conversation.id, sendTypingState])
+
+  useEffect(() => {
+    return () => {
+      if (typingStoppedTimerRef.current) {
+        clearTimeout(typingStoppedTimerRef.current)
+      }
+    }
+  }, [])
 
   return (
     <div
@@ -706,70 +804,86 @@ export default function ConversationChat({
                 </div>
               </div>
             ) : (
-              messages.map((msg) => (
-                <MessageBubble
-                  key={msg.id}
-                  kind={msg.kind}
-                  messageId={msg.id}
-                  role={msg.role}
-                  messageType={msg.messageType}
-                  author={msg.author}
-                  contentBlocks={msg.contentBlocks}
-                  actorName={msg.actorName}
-                  actorAvatarUrl={
-                    msg.fromActorId
-                      ? actorMemberMap[msg.fromActorId]?.avatarUrl
-                      : undefined
-                  }
-                  actorEmoji={msg.actorEmoji}
-                  actorRole={msg.actorRole}
-                  actorRuntime={
-                    msg.fromActorId
-                      ? actorRuntimes?.[msg.fromActorId]
-                      : undefined
-                  }
-                  remoteAgentRuntime={
-                    msg.author?.participantType ===
-                      CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
-                    msg.author.remoteAgentId
-                      ? remoteAgentRuntimes?.[msg.author.remoteAgentId]
-                      : undefined
-                  }
-                  timestamp={msg.createdAt}
-                  isUser={
-                    msg.author
-                      ? msg.author.participantType ===
-                          CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
-                        msg.author.workspaceMemberId ===
-                          currentViewerWorkspaceMemberId
-                      : msg.role === "user"
-                  }
-                  status={msg.deliveryStatus}
-                  toolsUsed={msg.toolsUsed}
-                  serverToolCalls={msg.serverToolCalls}
-                  citationSources={msg.citationSources}
-                  coordination={msg.coordination}
-                  conversationMembers={conversation.members}
-                  restrictedAudienceParticipantIds={
-                    msg.restrictedAudienceParticipantIds
-                  }
-                  replyTo={msg.replyTo}
-                  workspaceActors={workspaceActorDirectory}
-                  transport={msg.transport}
-                  transportDeliveries={msg.transportDeliveries}
-                  interaction={msg.interaction}
-                  enableTablePreview={viewportLocked}
-                  viewerWorkspaceMemberId={
-                    currentViewerWorkspaceMemberId || undefined
-                  }
-                  contactBasePath={contactBasePath}
-                  onParticipantClick={participantInteractionHandler}
-                  onResolveInteraction={handleResolveInteraction}
-                  retryPending={retryingMessageIds.includes(msg.id)}
-                  onRetryModelError={handleRetryModelError}
-                  onQuoteMessage={setReplyTo}
-                />
-              ))
+              <>
+                {hasMoreOlder !== false ? (
+                  <div className="flex justify-center pt-1">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      disabled={loadingOlder}
+                      onClick={() => void handleLoadOlder()}
+                    >
+                      {loadingOlder
+                        ? "Loading earlier messages..."
+                        : "Load earlier messages"}
+                    </Button>
+                  </div>
+                ) : null}
+                {messages.map((msg) => (
+                  <MessageBubble
+                    key={msg.id}
+                    kind={msg.kind}
+                    messageId={msg.id}
+                    role={msg.role}
+                    messageType={msg.messageType}
+                    author={msg.author}
+                    contentBlocks={msg.contentBlocks}
+                    actorName={msg.actorName}
+                    actorAvatarUrl={
+                      msg.fromActorId
+                        ? actorMemberMap[msg.fromActorId]?.avatarUrl
+                        : undefined
+                    }
+                    actorEmoji={msg.actorEmoji}
+                    actorRole={msg.actorRole}
+                    actorRuntime={
+                      msg.fromActorId
+                        ? actorRuntimes?.[msg.fromActorId]
+                        : undefined
+                    }
+                    remoteAgentRuntime={
+                      msg.author?.participantType ===
+                        CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
+                      msg.author.remoteAgentId
+                        ? remoteAgentRuntimes?.[msg.author.remoteAgentId]
+                        : undefined
+                    }
+                    timestamp={msg.createdAt}
+                    isUser={
+                      msg.author
+                        ? msg.author.participantType ===
+                            CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
+                          msg.author.workspaceMemberId ===
+                            currentViewerWorkspaceMemberId
+                        : msg.role === "user"
+                    }
+                    status={msg.deliveryStatus}
+                    toolsUsed={msg.toolsUsed}
+                    serverToolCalls={msg.serverToolCalls}
+                    citationSources={msg.citationSources}
+                    coordination={msg.coordination}
+                    conversationMembers={conversation.members}
+                    restrictedAudienceParticipantIds={
+                      msg.restrictedAudienceParticipantIds
+                    }
+                    replyTo={msg.replyTo}
+                    workspaceActors={workspaceActorDirectory}
+                    transport={msg.transport}
+                    transportDeliveries={msg.transportDeliveries}
+                    interaction={msg.interaction}
+                    enableTablePreview={viewportLocked}
+                    viewerWorkspaceMemberId={
+                      currentViewerWorkspaceMemberId || undefined
+                    }
+                    contactBasePath={contactBasePath}
+                    onParticipantClick={participantInteractionHandler}
+                    onResolveInteraction={handleResolveInteraction}
+                    retryPending={retryingMessageIds.includes(msg.id)}
+                    onRetryModelError={handleRetryModelError}
+                    onQuoteMessage={setReplyTo}
+                  />
+                ))}
+              </>
             )}
 
             {!loading
@@ -809,6 +923,21 @@ export default function ConversationChat({
             <span className="text-xs text-muted-foreground">{workingHint}</span>
           </div>
         )}
+        {/* Typing indicator (other participants currently typing) */}
+        {activeTypers.length > 0 && (
+          <div className="mb-2 flex items-center gap-2 px-1">
+            <div className="flex gap-0.5">
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:120ms]" />
+              <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-muted-foreground [animation-delay:240ms]" />
+            </div>
+            <span className="text-xs text-muted-foreground">
+              {activeTypers.length === 1
+                ? "Someone is typing…"
+                : `${activeTypers.length} people are typing…`}
+            </span>
+          </div>
+        )}
         <ChatComposer
           workspaceId={workspaceId || null}
           participants={mentionableParticipants}
@@ -817,6 +946,7 @@ export default function ConversationChat({
           replyTo={replyTo}
           onCancelReply={() => setReplyTo(null)}
           onSubmit={handleComposerSubmit}
+          onTyping={handleTypingHeartbeat}
         />
       </div>
       {usesExternalMentionPicker ? (

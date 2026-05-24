@@ -5,6 +5,7 @@ import type {
   RelayHiddenToolBinding,
   RelayOperationError,
   RelayVisibleToolDefinition,
+  ToolResultOrigin,
 } from "@synapse/shared"
 import type {
   RelayAuthorizationGrantSpec,
@@ -39,10 +40,8 @@ import { logEvent } from "./audit.js"
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { touchRelayExposureAccessState } from "./relay-access.js"
 import { ingestAutomationProviderEvent } from "../automation/service.js"
-import {
-  enqueueAutomationExecutionJobs,
-  sessionThinkingQueue,
-} from "../../workers/queues.js"
+import { enqueueAutomationExecutionJobs } from "../../workers/queues.js"
+import { enqueueSessionWakeup } from "../session/runtime.js"
 import {
   appendToolCallTaskOutput,
   completeToolCallTask,
@@ -766,7 +765,7 @@ function resolveRelayOperationTimeoutMs(
   return Math.max(1_000, timeoutSec * 1_000 + 30_000)
 }
 
-function buildAsyncRelayBinaryMetadata(params: {
+function buildAsyncRelayOrigin(params: {
   deviceId: string
   deviceDisplayName: string
   exposureId: string
@@ -775,19 +774,17 @@ function buildAsyncRelayBinaryMetadata(params: {
   runtimeSessionId: string
   visibleToolName: string
   namespacedToolName: string
-}) {
+}): ToolResultOrigin {
   return {
-    source: {
-      kind: "relay_mcp",
-      deviceId: params.deviceId,
-      deviceDisplayName: params.deviceDisplayName,
-      exposureId: params.exposureId,
-      exposureStableKey: params.exposureStableKey,
-      exposureDisplayName: params.exposureDisplayName,
-      runtimeSessionId: params.runtimeSessionId,
-      visibleToolName: params.visibleToolName,
-      namespacedToolName: params.namespacedToolName,
-    },
+    kind: "mcp_relay",
+    deviceId: params.deviceId,
+    deviceName: params.deviceDisplayName,
+    exposureId: params.exposureId,
+    exposureStableKey: params.exposureStableKey,
+    exposureName: params.exposureDisplayName,
+    runtimeSessionId: params.runtimeSessionId,
+    visibleToolName: params.visibleToolName,
+    namespacedToolName: params.namespacedToolName,
   }
 }
 
@@ -1891,8 +1888,9 @@ async function enqueueRemoteControlTerminationWakeup(params: {
 }) {
   const sessionRows = await executeSql<{
     status: string
+    actor_id: string
   }>(
-    `SELECT status
+    `SELECT status, actor_id
      FROM sessions
      WHERE id = $1
      LIMIT 1`,
@@ -1907,68 +1905,40 @@ async function enqueueRemoteControlTerminationWakeup(params: {
   // and aborts its current turn. Re-enqueueing an extra wakeup here makes the
   // same session immediately continue and can reopen a new CUA overlay after the
   // user explicitly terminated remote control.
-  if (session.status === "idle" || session.status === "blocked") {
-    await executeSql(
-      `INSERT INTO session_wakeups (
-         id,
-         session_id,
-         source_type,
-         source_item_id,
-         source_session_id,
-         source_participant_type,
-         source_participant_id,
-         source_name,
-         summary,
-         reason_text,
-         status,
-         metadata
-       )
-       VALUES (
-         $1,
-         $2,
-         'system_interrupt',
-         NULL,
-         NULL,
-         'system',
-         NULL,
-         $3,
-         $4,
-         $5,
-         'pending',
-         $6::jsonb
-       )`,
-      [
-        crypto.randomUUID(),
-        params.sessionId,
-        "Remote desktop control",
-        params.summary,
-        params.reasonText,
-        JSON.stringify({
-          runtimeSessionId: params.runtimeSessionId,
-          reason: params.reason,
-          source: "relay_cua_termination",
-        }),
-      ]
-    ).catch(() => {})
-
-    await executeSql(
-      `UPDATE sessions
-       SET status = 'queued',
-           updated_at = NOW(),
-           error_message = NULL
-       WHERE id = $1`,
-      [params.sessionId]
-    ).catch(() => {})
-
-    await sessionThinkingQueue
-      .add("think", {
-        sessionId: params.sessionId,
-        actorId: params.actorId,
-        workspaceId: params.workspaceId,
-        trigger: "system_interrupt",
-      })
-      .catch(() => {})
+  if (session.status !== "idle" && session.status !== "blocked") {
+    return
   }
+
+  // Route through enqueueSessionWakeup() (instead of raw SQL + queue.add)
+  // so the requeue inherits the canonical clearing semantics for snapshot
+  // overrides (phase / lastError / statusText cleared on blocked→queued
+  // — see packages/api/src/modules/session/runtime.ts). The earlier
+  // hand-rolled path bypassed those overrides, which caused the dashboard
+  // to display the previous failure's error message even after a clean
+  // re-queue. requested_by_actor_id may legitimately be null on older
+  // rows; fall back to the session's primary actor_id (sessions.actor_id
+  // is NOT NULL) so the worker has a valid actor for the resumed turn.
+  await enqueueSessionWakeup({
+    sessionId: params.sessionId,
+    actorId: params.actorId || session.actor_id,
+    workspaceId: params.workspaceId,
+    sourceType: "system_interrupt",
+    sourceParticipantType: "system",
+    sourceName: "Remote desktop control",
+    summary: params.summary,
+    reasonText: params.reasonText,
+    metadata: {
+      runtimeSessionId: params.runtimeSessionId,
+      reason: params.reason,
+      source: "relay_cua_termination",
+    },
+    trigger: "system_interrupt",
+  }).catch((err) => {
+    console.error(
+      `[relay-manager] enqueueSessionWakeup failed for session ${params.sessionId}:`,
+      err
+    )
+  })
 }
 
 async function handleRelayCUATermination(
@@ -3702,9 +3672,9 @@ async function finalizeAsyncRelayOperation(
     msg.result,
     operation.workspace_id,
     {
-      binaryMetadata:
+      origin:
         operation.runtime_session_id && operation.exposure_stable_key
-          ? buildAsyncRelayBinaryMetadata({
+          ? buildAsyncRelayOrigin({
               deviceId: operation.device_id,
               deviceDisplayName:
                 operation.device_display_name || "Relay device",
@@ -3805,6 +3775,11 @@ async function finalizeAsyncRelayOperation(
           typeof normalizedResult.structuredContent === "object"
             ? normalizedResult.structuredContent
             : undefined,
+        // Phase 8 review: error path was dropping origin (only the success
+        // path at the bottom of finalizeAsyncRelayOperation had it). Keep
+        // attribution intact for failures too — audit needs to know which
+        // relay/exposure errored, not just that *something* errored.
+        origin: normalizedResult.origin,
         metadata:
           normalizedResult.metadata &&
           typeof normalizedResult.metadata === "object"
@@ -3833,6 +3808,10 @@ async function finalizeAsyncRelayOperation(
         typeof normalizedResult.structuredContent === "object"
           ? normalizedResult.structuredContent
           : undefined,
+      // Phase 7d: origin must survive the async round-trip — without this,
+      // any consumer rehydrating the task result loses the relay device /
+      // exposure attribution that buildAsyncRelayOrigin filled in upstream.
+      origin: normalizedResult.origin,
       metadata:
         normalizedResult.metadata &&
         typeof normalizedResult.metadata === "object"

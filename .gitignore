@@ -4,9 +4,11 @@ dist/
 .next/
 .env
 .env.local
+.env.*.local
 *.log
 .DS_Store
 coverage/
+artifacts/
 
 .claude/*
 CLAUDE.md
@@ -16,11 +18,14 @@ TARGET.md
 storage/
 infrastructure/nginx.conf
 
+# Local dev / test scripts that may contain secrets
+scripts/*.local.mjs
+scripts/*.local.js
+packages/*/scripts/*.local.mjs
+packages/*/scripts/*.local.js
+
 # Build caches
 *.tsbuildinfo
-
-# Playwright MCP
-.playwright-mcp/
 
 # Relay agent
 relay/synapse-relay
@@ -49,3 +54,4 @@ relay/internal/commandlinebundle/assets/sp/
 # Local reference checkouts
 .refer/
 .workbuddy/
+.synapse-relay-vms/

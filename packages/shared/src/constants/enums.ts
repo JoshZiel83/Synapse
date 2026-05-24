@@ -38,7 +38,7 @@ export const WORKSPACE_ACCESS_KEYS = [
 ] as const
 
 export const RELATIONSHIP_PROFILE_SUBJECT_TYPE = {
-  MEMBER: "member",
+  MEMBER: "workspace_member",
   ACTOR: "actor",
   REMOTE_AGENT: "remote_agent",
 } as const
@@ -81,7 +81,7 @@ export const RELATIONSHIP_REQUEST_STATUSES = [
   RELATIONSHIP_REQUEST_STATUS.REJECTED,
 ] as const
 export const CONTACT_TARGET_TYPE = {
-  MEMBER: "member",
+  MEMBER: "workspace_member",
   ACTOR: "actor",
   REMOTE_AGENT: "remote_agent",
 } as const
@@ -315,6 +315,28 @@ export const CONVERSATION_PARTICIPANT_STATES = [
   CONVERSATION_PARTICIPANT_STATE.LEFT,
   CONVERSATION_PARTICIPANT_STATE.REMOVED,
 ] as const
+
+export const CHAT_TYPING_STATE = {
+  STARTED: "started",
+  STOPPED: "stopped",
+} as const
+export const CHAT_TYPING_STATES = [
+  CHAT_TYPING_STATE.STARTED,
+  CHAT_TYPING_STATE.STOPPED,
+] as const
+export type ChatTypingState = (typeof CHAT_TYPING_STATES)[number]
+
+export const PUSH_TOKEN_PLATFORM = {
+  IOS: "ios",
+  ANDROID: "android",
+  WEB: "web",
+} as const
+export const PUSH_TOKEN_PLATFORMS = [
+  PUSH_TOKEN_PLATFORM.IOS,
+  PUSH_TOKEN_PLATFORM.ANDROID,
+  PUSH_TOKEN_PLATFORM.WEB,
+] as const
+export type PushTokenPlatform = (typeof PUSH_TOKEN_PLATFORMS)[number]
 export const CONVERSATION_ITEM_SCOPE = {
   SHARED: "shared",
   PRIVATE: "private",
@@ -685,7 +707,7 @@ export const TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES = [
   "specified_actor",
 ] as const
 
-export const TRANSPORT_KINDS = ["feishu", "weixin"] as const
+export const TRANSPORT_KINDS = ["feishu", "weixin", "wecom"] as const
 export const TRANSPORT_CONNECTION_MODES = [
   "webhook",
   "long_connection",

@@ -23,6 +23,7 @@ import { buildActorPrompt } from "../modules/ai/prompt-builder.js"
 import {
   buildConversationContextItems,
   buildSessionContextItems,
+  loadExecutionToolResultsForSession,
   conversationItemToContextItem,
 } from "../modules/ai/context-builder.js"
 import { buildProviderContextWindow } from "../modules/context/service.js"
@@ -138,20 +139,15 @@ async function putSessionToIdle(sessionId: string) {
   await publishSessionRuntime(session.workspace_id, sessionId, {
     laneState: "idle",
     phase: "idle",
+    // A clean idle transition. Clear any cached statusText/lastError
+    // explicitly so a runtime snapshot from an earlier failure cannot
+    // leak through buildSessionRuntimeSnapshot's inherit-from-cache
+    // fallback into this terminal snapshot.
+    statusText: null,
+    lastError: null,
   })
 
-  await emitEvent({
-    type: "session.status.changed",
-    workspaceId: session.workspace_id,
-    payload: {
-      conversationId: session.conversation_id,
-      sessionId,
-      actorId: session.actor_id,
-      status: "idle",
-      previousStatus: "running",
-    },
-    timestamp: nowISO(),
-  })
+  // session.status.changed event emit removed (S13): no subscribers.
 }
 
 function isTurnInterruptedError(error: unknown) {
@@ -232,6 +228,13 @@ export function startSessionThinkingWorker() {
             laneState: "idle",
             health: "ok",
             phase: "idle",
+            // Idle early-return: another worker already handled the wakeup,
+            // or there's nothing to do. Clear any cached statusText/lastError
+            // from a prior blocked snapshot — same defense as putSessionToIdle.
+            // Without this the dashboard would keep showing the previous
+            // failure even though the session is now demonstrably idle.
+            statusText: null,
+            lastError: null,
           })
           return { success: true, reason: "no pending wakeups" }
         }
@@ -246,18 +249,8 @@ export function startSessionThinkingWorker() {
           await updateSessionStatus(sessionId, "running", {
             errorMessage: null,
           })
-          await emitEvent({
-            type: "session.status.changed",
-            workspaceId,
-            payload: {
-              conversationId,
-              sessionId,
-              actorId,
-              status: "running",
-              previousStatus,
-            },
-            timestamp: nowISO(),
-          })
+          // session.status.changed event emit removed (S13).
+          void previousStatus
           session = await getSession(sessionId)
           if (!session) {
             return {
@@ -297,13 +290,18 @@ export function startSessionThinkingWorker() {
             phase: currentPhase,
             statusText: status,
             activeTurnId: turn?.id,
+            // Defense in depth: if the previous run ended in "blocked" and
+            // the requeue path that brought us here didn't clear the
+            // cached lastError (e.g. a future bypass that doesn't go
+            // through enqueueSessionWakeup), the snapshot builder would
+            // otherwise inherit it and the dashboard would keep showing
+            // the previous failure's message even though the session is
+            // now healthily running. This `null` is cheap and stays
+            // correct even when there was nothing to clear.
+            lastError: null,
           })
-          await emitEvent({
-            type: "session.thinking",
-            workspaceId,
-            payload: thinkingPayload,
-            timestamp: nowISO(),
-          })
+          // session.thinking event emit removed (S13).
+          void thinkingPayload
         }
 
         thinkingActorName = session.actor_name || "Unknown"
@@ -352,7 +350,7 @@ export function startSessionThinkingWorker() {
           )
           if (selfParticipant) {
             participantEntries.push({
-              type: "actor",
+              participantType: "actor",
               id: actorId,
               participantId: selfParticipant.id,
               name:
@@ -374,7 +372,7 @@ export function startSessionThinkingWorker() {
               member.state === "active"
             ) {
               participantEntries.push({
-                type: "actor",
+                participantType: "actor",
                 id: member.actor_id,
                 participantId: member.id,
                 name: member.actor_name,
@@ -393,20 +391,20 @@ export function startSessionThinkingWorker() {
                 )
               }
               participantEntries.push({
-                type: "workspace_member",
+                participantType: "workspace_member",
                 id: workspaceMemberId,
                 participantId: member.id,
                 name: member.user_name || "User",
                 role: "Workspace member",
               })
             } else if (
-              member.participant_kind === "external" &&
+              member.participant_type === "external" &&
               member.state === "active"
             ) {
               const linkedUserName =
                 (member.linked_user_name as string | null) || undefined
               participantEntries.push({
-                type: "external",
+                participantType: "external",
                 id:
                   (member.linked_user_id as string | null) ||
                   (member.transport_external_id as string | null) ||
@@ -444,20 +442,29 @@ export function startSessionThinkingWorker() {
             participantId: actorParticipantId,
             limit: 200,
           })
+          // Phase 10: pre-load the canonical tool result map from the
+          // execution tables so context-builder uses them as source of
+          // truth rather than reconstructing from session_message.metadata.
+          const executionToolResults =
+            await loadExecutionToolResultsForSession(sessionId)
           const built = buildConversationContextItems({
             visibleItems,
             actorId,
             sessionMessages,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
             wakeups: pendingWakeups,
+            executionToolResults,
           })
           contextItems = built.items
           lastKnownConversationSequence = built.lastSequence
         } else {
+          const executionToolResults =
+            await loadExecutionToolResultsForSession(sessionId)
           contextItems = buildSessionContextItems(sessionMessages, {
             crossTurnToolHistory: false,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
             wakeups: pendingWakeups,
+            executionToolResults,
           })
         }
 
@@ -513,10 +520,13 @@ export function startSessionThinkingWorker() {
         const primaryModel = resolvedModelPlan?.candidates[0] || null
         let finalContextItems = contextItems
         if (primaryModel?.crossTurnToolHistory && !conversationId) {
+          const executionToolResults =
+            await loadExecutionToolResultsForSession(sessionId)
           finalContextItems = buildSessionContextItems(sessionMessages, {
             crossTurnToolHistory: true,
             interrupts: interrupts.length > 0 ? interrupts : undefined,
             wakeups: pendingWakeups,
+            executionToolResults,
           })
           if (recalledMemories.length > 0) {
             finalContextItems = [
@@ -827,18 +837,7 @@ export function startSessionThinkingWorker() {
             phase: "idle",
             statusText: "Queued follow-up messages",
           })
-          await emitEvent({
-            type: "session.status.changed",
-            workspaceId,
-            payload: {
-              conversationId,
-              sessionId,
-              actorId,
-              status: "queued",
-              previousStatus: "running",
-            },
-            timestamp: nowISO(),
-          })
+          // session.status.changed event emit removed (S13).
         } else {
           await putSessionToIdle(sessionId)
         }
@@ -895,29 +894,7 @@ export function startSessionThinkingWorker() {
                   statusText: "Queued follow-up messages",
                 })
             )
-            await runCleanupStep(
-              `emit queued event for session ${sessionId}`,
-              () =>
-                emitEvent({
-                  type: "session.status.changed",
-                  workspaceId,
-                  payload: {
-                    conversationId:
-                      threadConversationId ||
-                      (isThreadConversationKind(
-                        failedSession?.conversation_kind
-                      )
-                        ? failedSession.conversation_id
-                        : undefined),
-                    sessionId,
-                    actorId,
-                    actorName: thinkingActorName,
-                    status: "queued",
-                    previousStatus: "running",
-                  },
-                  timestamp: nowISO(),
-                })
-            )
+            // session.status.changed event emit removed (S13).
           } else {
             await runCleanupStep(`put session ${sessionId} idle`, () =>
               putSessionToIdle(sessionId)
@@ -953,28 +930,7 @@ export function startSessionThinkingWorker() {
               },
             })
         )
-        await runCleanupStep(
-          `emit blocked event for session ${sessionId}`,
-          () =>
-            emitEvent({
-              type: "session.status.changed",
-              workspaceId,
-              payload: {
-                conversationId:
-                  threadConversationId ||
-                  (isThreadConversationKind(failedSession?.conversation_kind)
-                    ? failedSession.conversation_id
-                    : undefined),
-                sessionId,
-                actorId,
-                actorName: thinkingActorName,
-                status: "blocked",
-                phase: "error",
-                errorMessage,
-              },
-              timestamp: nowISO(),
-            })
-        )
+        // session.status.changed event emit removed (S13).
         await runCleanupStep(
           `shutdown MCP tools for session ${sessionId}`,
           () => mcpTools.shutdown()

@@ -41,6 +41,7 @@ export function useChatRealtimeSync({
   const handleRuntimeUpdated = useChatStore(
     (state) => state.handleRuntimeUpdated
   )
+  const handleTypingEvent = useChatStore((state) => state.handleTypingEvent)
 
   const onEvent = useCallback(
     (event: ChatSocketEvent | Record<string, unknown>) => {
@@ -78,11 +79,14 @@ export function useChatRealtimeSync({
             (event as ChatSocketEvent<"runtime.updated">).payload
           )
           break
+        case "chat.typing":
+          handleTypingEvent((event as ChatSocketEvent<"chat.typing">).payload)
+          break
         default:
           break
       }
     },
-    [handleRuntimeUpdated, handleSyncEvent, notify]
+    [handleRuntimeUpdated, handleSyncEvent, handleTypingEvent, notify]
   )
 
   const subscriptions = useMemo<WebSocketSubscription[]>(() => {

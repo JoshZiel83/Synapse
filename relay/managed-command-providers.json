@@ -605,7 +605,8 @@
         "packageName": "kabi-tg-cli",
         "packageVersion": "0.6.0",
         "entryPointTarget": "tg_cli.cli.main:cli",
-        "source": "subproject"
+        "source": "subproject",
+        "supportedTargets": ["linux-amd64", "linux-arm64"]
       },
       "skillSource": {
         "type": "single",

@@ -20,7 +20,6 @@ import {
 } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { api } from "@/lib/api"
-import { loadConversationCatalog } from "@/lib/conversation-catalog"
 import { toast } from "sonner"
 
 type PluginAttachmentType = AttachmentTargetType
@@ -89,7 +88,7 @@ export default function PluginAdvancedStep({
       try {
         const [actorData, conversationData] = await Promise.all([
           api.getActors(workspaceId),
-          loadConversationCatalog(workspaceId),
+          api.loadConversationCatalog(workspaceId),
         ])
 
         if (cancelled) return

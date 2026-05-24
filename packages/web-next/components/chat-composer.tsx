@@ -190,6 +190,8 @@ type ChatComposerProps = {
   onSubmit: (
     payload: ChatComposerSubmitPayload
   ) => Promise<boolean | void> | boolean | void
+  /** Called on every keystroke; consumer is responsible for debouncing. */
+  onTyping?: () => void
 }
 
 function createAttachmentId() {
@@ -826,9 +828,14 @@ export default function ChatComposer({
   onCancelReply,
   renderSubmitButton,
   onSubmit,
+  onTyping,
 }: ChatComposerProps) {
   const fileInputRef = useRef<HTMLInputElement>(null)
   const participantsRef = useRef(participants)
+  const onTypingRef = useRef(onTyping)
+  useEffect(() => {
+    onTypingRef.current = onTyping
+  }, [onTyping])
   const attachmentsRef = useRef<PendingAttachment[]>([])
   const uploadControllersRef = useRef(new Map<string, AbortController>())
   const submitActionRef = useRef<() => void>(() => {})
@@ -988,6 +995,11 @@ export default function ChatComposer({
           setMentionCount(nextDraftState.mentionCount)
           setCitedAttachmentIds(nextDraftState.citedAttachmentIds)
         })
+
+        // Best-effort: notify the consumer that the user is typing. The
+        // consumer is responsible for debouncing + scheduling a "stopped"
+        // event after idle.
+        onTypingRef.current?.()
       },
     },
     [placeholder, suggestionRenderer]

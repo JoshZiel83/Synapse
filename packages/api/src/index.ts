@@ -68,10 +68,19 @@ import {
 } from "./workers/automation-scheduler.js"
 import { startAutomationExecutionWorker } from "./workers/automation-execution.js"
 import { startImTransportDeliveryWorker } from "./workers/im-transport-delivery.js"
+import { installActorStatusHooks } from "./modules/im/integration/actor-status-hooks.js"
 import { startMemoryIndexingWorker } from "./workers/memory-indexing.js"
 import { startFileParsingWorker } from "./workers/file-parsing.js"
+import {
+  ensureRemoteAgentDeliveryRetryJob,
+  startRemoteAgentDeliveryRetryWorker,
+} from "./workers/remote-agent-delivery-retry.js"
 import { shutdownAllWorkers } from "./workers/registry.js"
 import { shutdownQueues } from "./workers/queues.js"
+import {
+  startChatDedupCounterLogger,
+  stopChatDedupCounterLogger,
+} from "./modules/chat/observability.js"
 import {
   getMemoryEmbeddingRuntimeHealth,
   shutdownMemoryEmbeddingRuntime,
@@ -172,6 +181,9 @@ async function main() {
   }
 
   await startRealtimeEventOutboxDispatcher()
+  if (process.env.CHAT_DEDUP_LOGGER === "1") {
+    startChatDedupCounterLogger()
+  }
 
   try {
     const platformAdmins = await syncConfiguredPlatformAdmins()
@@ -267,8 +279,11 @@ async function main() {
   startAutomationExecutionWorker()
   startSessionThinkingWorker()
   startImTransportDeliveryWorker()
+  installActorStatusHooks()
   startMemoryIndexingWorker()
   startFileParsingWorker()
+  await ensureRemoteAgentDeliveryRetryJob()
+  startRemoteAgentDeliveryRetryWorker()
   void warmMemoryEmbeddingRuntime().catch((err) => {
     console.error("Failed to warm memory embedding runtime:", err)
   })
@@ -356,6 +371,7 @@ async function main() {
       ).catch((err) => {
         app.log.error({ err }, "Event bus shutdown timed out")
       })
+      stopChatDedupCounterLogger()
       await waitWithTimeout(
         "plugin instance shutdown",
         shutdownAllInstances(),

@@ -1,7 +1,7 @@
 VERSION ?= dev
 LDFLAGS = -s -w -X main.Version=$(VERSION)
 
-.PHONY: cli cli-desktop mount-fuse gui gui-dev gui-windows-installer clean test cli-all test-vfs-unit validate-vfs-browser-headless validate-vfs-fuse-linux-headless validate-vfs-linux-headless
+.PHONY: cli cli-desktop mount-fuse gui gui-dev gui-windows-installer clean test cli-all test-vfs-unit validate-vfs-browser-headless validate-vfs-fuse-linux-headless validate-vfs-linux-headless non-github-preflight non-github-build
 
 # CLI binary (no CGO, pure Go)
 cli:
@@ -46,6 +46,12 @@ validate-vfs-fuse-linux-headless:
 
 validate-vfs-linux-headless:
 	bash scripts/validate-vfs-linux-headless.sh
+
+non-github-preflight:
+	bash scripts/non-github-ci/preflight.sh --include-vms
+
+non-github-build:
+	bash scripts/non-github-ci/build-all.sh --version="$(VERSION)"
 
 # Cross-compilation targets (CLI only, CGO_ENABLED=0)
 cli-linux-amd64:

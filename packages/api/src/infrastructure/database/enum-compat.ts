@@ -91,7 +91,7 @@ import type {
   AuthQrLoginRequestsApprovedSessionPersistence,
   AuthSessionsClientType,
   AuthSessionsTransport,
-  ConversationParticipantsKind,
+  ConversationParticipantsType,
   InteractionRequestsStatus,
   MemoryItemsCategory,
   MemoryItemsIndexStatus,
@@ -420,7 +420,7 @@ type _AccessBindingSourceMatchesDb = Assert<
 type _ConversationParticipantTypeMatchesDb = Assert<
   IsEqual<
     (typeof CONVERSATION_PARTICIPANT_TYPES)[number],
-    ConversationParticipantsKind
+    ConversationParticipantsType
   >
 >
 // Note: the historical `actor_access_policy` Postgres enum + the

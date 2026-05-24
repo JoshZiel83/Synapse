@@ -42,7 +42,7 @@ test("buildActorPrompt injects request-user-input guidance for human conversatio
     [
       {
         id: "participant-user",
-        participant_kind: "workspace_member",
+        participant_type: "workspace_member",
         user_id: "user-1",
         user_name: "Ada",
       },
@@ -65,7 +65,7 @@ test("buildActorPrompt injects stronger plan mode guidance", () => {
     [
       {
         id: "participant-user",
-        participant_kind: "workspace_member",
+        participant_type: "workspace_member",
         user_id: "user-1",
         user_name: "Ada",
       },
@@ -95,7 +95,7 @@ test("buildActorPrompt teaches private threads not to overuse replyToRef", () =>
     [
       {
         id: "participant-user",
-        participant_kind: "workspace_member",
+        participant_type: "workspace_member",
         user_id: "user-1",
         user_name: "Ada",
       },
@@ -123,7 +123,7 @@ test("buildActorPrompt rejects plan mode in group conversations", () => {
         [
           {
             id: "participant-user",
-            participant_kind: "workspace_member",
+            participant_type: "workspace_member",
             user_id: "user-1",
             user_name: "Ada",
           },
@@ -167,7 +167,7 @@ test("buildActorPrompt mentions relay request_authorization guidance for builtin
     [
       {
         id: "participant-user",
-        participant_kind: "workspace_member",
+        participant_type: "workspace_member",
         user_id: "user-1",
         user_name: "Ada",
       },

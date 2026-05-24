@@ -12,6 +12,7 @@ import type {
   AssistantToolHistory,
   ConversationParticipantEntry,
   ToolResolveContext,
+  ToolResultOrigin,
   CanonicalContentBlock,
   ProviderContextWindow,
   AvailableSkillSummary,
@@ -27,6 +28,8 @@ import {
   extractText,
   formatMentionText,
   getDefaultModelEngineKind,
+  isToolResultOrigin,
+  MCP_TOOL_NAMESPACE_SEPARATOR,
   normalizeCanonicalContentBlocks,
   resolveThreadSemantics,
   textBlock,
@@ -342,7 +345,7 @@ async function loadToolResolveConversationParticipants(params: {
     if (member.state !== "active") continue
     if (member.actor_id) {
       entries.push({
-        type: "actor",
+        participantType: "actor",
         id: member.actor_id,
         participantId: member.id,
         name: member.participant_name || "Unknown actor",
@@ -367,7 +370,7 @@ async function loadToolResolveConversationParticipants(params: {
           ? member.transport_kind
           : undefined
       entries.push({
-        type: "workspace_member",
+        participantType: "workspace_member",
         id: workspaceMemberId,
         participantId: member.id,
         name: member.user_name || "User",
@@ -378,11 +381,11 @@ async function loadToolResolveConversationParticipants(params: {
       })
       continue
     }
-    if (member.participant_kind === "external") {
+    if (member.participant_type === "external") {
       const linkedWorkspaceMemberName =
         (member.linked_user_name as string | null) || undefined
       entries.push({
-        type: "external",
+        participantType: "external",
         id:
           (member.linked_user_id as string | null) ||
           (member.transport_external_id as string | null) ||
@@ -407,6 +410,24 @@ async function loadToolResolveConversationParticipants(params: {
   }
 
   return entries
+}
+
+// Best-effort origin synthesizer for situations where we know a tool is in
+// the MCP family (because it has a namespaced `org__plugin__tool` shape)
+// but we couldn't get to the real instance.transport to distinguish
+// remote/relay/callable. Used in the replan-skip path of appendMcpFailureResult
+// where the tool didn't actually run.
+function deriveOriginFromNamespacedToolName(
+  namespacedToolName: string
+): ToolResultOrigin {
+  const parts = namespacedToolName.split(MCP_TOOL_NAMESPACE_SEPARATOR)
+  if (parts.length >= 2) {
+    return {
+      kind: "mcp_remote",
+      serverKey: `${parts[0]}/${parts[1]}`,
+    }
+  }
+  return { kind: "mcp_remote", serverKey: namespacedToolName }
 }
 
 function blocksToToolResultParts(blocks: CanonicalContentBlock[]) {
@@ -680,7 +701,8 @@ export async function actorThink(
         currentToolConversationParticipants?.filter(
           (participant) =>
             !(
-              participant.type === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
+              participant.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
               participant.id === actor.id
             )
         ).length || 0,
@@ -1239,18 +1261,36 @@ export async function actorThink(
           callableResults.push(res)
 
           if (executionEnabled && callRow && attempt) {
-            const blocks =
-              typeof res.content === "string"
-                ? textBlocks(res.content)
-                : textBlocks(JSON.stringify(res.content))
+            const blocks = res.content
+            // Phase 7b: synthesize a {kind:"builtin"} origin for the
+            // ToolPlugin (registerToolPlugin) path so tool_results.metadata
+            // always carries origin alongside structuredContent. Reading
+            // this back via context-builder's tool_result_batch path
+            // restores the discriminator without any out-of-band lookup.
+            const persistedMetadata: Record<string, unknown> = {
+              ...(res.metadata || {}),
+              origin: { kind: "builtin", toolKind: tc.toolName },
+              ...((res as any).structuredContent !== undefined
+                ? { structuredContent: (res as any).structuredContent }
+                : {}),
+              toolCallId: tc.callId,
+              toolName: tc.toolName,
+              ...(tc.providerCallId
+                ? { providerCallId: tc.providerCallId }
+                : {}),
+              ...(res.isError !== undefined ? { isError: res.isError } : {}),
+            }
+            // Phase 7b: res.content is strictly CanonicalContentBlock[] post
+            // Phase 3, so the old `typeof res.content === "string"` check is
+            // dead. Use extractText to get a meaningful error message body.
+            const errorMessage = res.isError
+              ? extractText(blocks) || `Tool ${tc.toolName} failed`
+              : undefined
             await finalizeToolExecutionAttempt({
               attemptId: attempt.id,
               status: res.isError ? "error" : "success",
               isError: res.isError,
-              errorMessage:
-                res.isError && typeof res.content === "string"
-                  ? res.content
-                  : undefined,
+              errorMessage,
               durationMs: Date.now() - attemptStart,
               responsePayload: res,
             })
@@ -1258,11 +1298,8 @@ export async function actorThink(
               toolCallId: callRow.id,
               attemptId: attempt.id,
               isError: res.isError,
-              errorMessage:
-                res.isError && typeof res.content === "string"
-                  ? res.content
-                  : undefined,
-              metadata: res.metadata,
+              errorMessage,
+              metadata: persistedMetadata,
               parts: blocksToToolResultParts(blocks),
             })
             await updateToolCallStatus(
@@ -1287,6 +1324,8 @@ export async function actorThink(
           toolName: string
           content: CanonicalContentBlock[]
           isError?: boolean
+          structuredContent?: Record<string, unknown>
+          origin?: ToolResultOrigin
           metadata?: Record<string, unknown>
         }[] = []
         let mcpReplanRequired = false
@@ -1299,15 +1338,31 @@ export async function actorThink(
             message: string
             metadata?: Record<string, unknown>
             responsePayload?: unknown
+            // Phase 8 review: origin must be carried into failures so audit
+            // trails attribute the failure to the right transport (mcp_relay /
+            // mcp_remote / callable_plugin) instead of falling back to the
+            // synthesized {kind:"builtin"} default.
+            origin?: ToolResultOrigin
           }) => {
             const content = textBlocks(params.message)
+            const failureMetadata: Record<string, unknown> = {
+              ...(params.metadata || {}),
+              toolCallId: params.tc.callId,
+              toolName: params.tc.toolName,
+              ...(params.tc.providerCallId
+                ? { providerCallId: params.tc.providerCallId }
+                : {}),
+              isError: true,
+              ...(params.origin ? { origin: params.origin } : {}),
+            }
             mcpResults.push({
               toolCallId: params.tc.callId,
               providerCallId: params.tc.providerCallId,
               toolName: params.tc.toolName,
               content,
               isError: true,
-              metadata: params.metadata,
+              ...(params.origin ? { origin: params.origin } : {}),
+              metadata: failureMetadata,
             })
 
             if (executionEnabled && params.callRow) {
@@ -1336,7 +1391,7 @@ export async function actorThink(
                   attemptId: attemptRow.id,
                   isError: true,
                   errorMessage: params.message,
-                  metadata: params.metadata,
+                  metadata: failureMetadata,
                   parts: blocksToToolResultParts(content),
                 })
                 await updateToolCallStatus(params.callRow.id, "failed")
@@ -1376,8 +1431,23 @@ export async function actorThink(
                 }
               )
               let normalizedContent = normalizedResult.content
+              // metadata persisted to tool_results.metadata JSONB carries
+              // origin + structuredContent so we can rehydrate them when the
+              // session is later replayed. The CanonicalToolResult also gets
+              // origin/structuredContent as first-class fields below.
               let metadata: Record<string, unknown> = {
                 ...(normalizedResult.metadata || {}),
+                toolCallId: tc.callId,
+                toolName: tc.toolName,
+                ...(tc.providerCallId
+                  ? { providerCallId: tc.providerCallId }
+                  : {}),
+                ...(normalizedResult.isError !== undefined
+                  ? { isError: normalizedResult.isError }
+                  : {}),
+                ...(normalizedResult.origin
+                  ? { origin: normalizedResult.origin }
+                  : {}),
                 ...(normalizedResult.structuredContent
                   ? { structuredContent: normalizedResult.structuredContent }
                   : {}),
@@ -1389,6 +1459,12 @@ export async function actorThink(
                 toolName: tc.toolName,
                 content: normalizedContent,
                 isError: normalizedResult.isError,
+                ...(normalizedResult.structuredContent
+                  ? { structuredContent: normalizedResult.structuredContent }
+                  : {}),
+                ...(normalizedResult.origin
+                  ? { origin: normalizedResult.origin }
+                  : {}),
                 metadata,
               })
               allSupplementalBlocks.push(
@@ -1428,6 +1504,14 @@ export async function actorThink(
                 classifiedError.message,
                 classifiedError.requiresReplan
               )
+              // tool-resolver attaches origin to the thrown error (when it
+              // can derive transport from the instance lookup). If for some
+              // reason it's missing, leave origin undefined and let the
+              // downstream roundToolResults map handle it.
+              const failureOrigin: ToolResultOrigin | undefined =
+                isToolResultOrigin((err as any)?.origin)
+                  ? (err as any).origin
+                  : undefined
               await appendMcpFailureResult({
                 tc,
                 callRow,
@@ -1451,6 +1535,7 @@ export async function actorThink(
                     ? { requiresReplan: true }
                     : {}),
                 },
+                origin: failureOrigin,
               })
 
               if (classifiedError.requiresReplan) {
@@ -1478,6 +1563,15 @@ export async function actorThink(
                       requiresReplan: true,
                       skippedDueToReplan: true,
                     },
+                    // Skipped MCP calls didn't actually run, so we can't
+                    // inherit a real origin from a thrown error. Derive a
+                    // best-guess mcp_remote origin from the namespaced tool
+                    // name so the audit trail still attributes correctly
+                    // and the roundToolResults fallback doesn't mis-tag as
+                    // {kind:"builtin"}.
+                    origin: deriveOriginFromNamespacedToolName(
+                      skippedTc.toolName
+                    ),
                     responsePayload: {
                       error: skippedMessage,
                       code: "tool_replan_required",
@@ -1503,20 +1597,42 @@ export async function actorThink(
             input: tc.input,
           })
         )
+        const callableResultIds = new Set(
+          callableResults.map((r) => r.toolCallId)
+        )
         const roundToolResults: CanonicalToolResult[] = toolResults.map(
-          (tr) => ({
-            toolCallId: tr.toolCallId,
-            providerCallId: tr.providerCallId,
-            toolName: tr.toolName,
-            content:
-              typeof tr.content === "string"
-                ? textBlocks(tr.content)
-                : Array.isArray(tr.content)
-                  ? normalizeCanonicalContentBlocks(tr.content as any[])
-                  : textBlocks(JSON.stringify(tr.content)),
-            isError: tr.isError,
-            metadata: tr.metadata,
-          })
+          (tr) => {
+            // Both callableResults and mcpResults now carry origin (Phase
+            // 7b/7d/8). Distinguish their fallback semantics:
+            //   - callable path: synth {kind:"builtin", toolKind: toolName}
+            //     (these are ToolPlugin-style runtime tools like
+            //     create_memory; "builtin" is the right discriminator)
+            //   - mcp path: synth a derived mcp_remote origin from the
+            //     namespaced tool name (Phase 8 bug: was falling back to
+            //     "builtin" for MCP failures, mis-tagging audit + context)
+            const trAny = tr as any
+            const isCallableEntry = callableResultIds.has(tr.toolCallId)
+            const fallbackOrigin: ToolResultOrigin = isCallableEntry
+              ? { kind: "builtin", toolKind: tr.toolName }
+              : deriveOriginFromNamespacedToolName(tr.toolName)
+            const origin = isToolResultOrigin(trAny.origin)
+              ? trAny.origin
+              : fallbackOrigin
+            const structuredContent = trAny.structuredContent
+            const base: CanonicalToolResult = {
+              toolCallId: tr.toolCallId,
+              providerCallId: tr.providerCallId,
+              toolName: tr.toolName,
+              content: tr.content,
+              isError: tr.isError,
+              metadata: tr.metadata,
+              origin,
+            }
+            if (structuredContent !== undefined) {
+              base.structuredContent = structuredContent
+            }
+            return base
+          }
         )
         const roundContentBlocks: CanonicalContentBlock[] = []
         if (finalTextContent)

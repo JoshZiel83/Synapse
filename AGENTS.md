@@ -1,5 +1,18 @@
 当前系统处于初期设计实现阶段，不要考虑兼容旧数据。
 
+## Relay 非 GitHub CI x86 构建
+
+- Relay 的非 GitHub CI 构建入口在 `relay/scripts/non-github-ci/`，详细操作说明在 `relay/NON_GITHUB_CI.md`。
+- 这个构建路径面向 x86_64/amd64 构建机；如果要在本机启动 Windows/macOS VM worker，需要构建机支持嵌套虚拟化，并可用 `/dev/kvm`、`/dev/net/tun`、Docker Compose。
+- 构建前优先运行：
+  - `cd relay`
+  - `make non-github-preflight`
+- Linux、本机可交叉编译的 CLI、runtime bundle 和 VM worker 脚本统一通过：
+  - `bash scripts/non-github-ci/build-all.sh --version=<version> --platforms=all`
+- Windows GUI 必须在 Windows worker 内完成；先用 `--platforms=windows-amd64 --start-windows-vm` staging，再在 Windows 共享目录中运行生成的 `artifacts/relay/<version>/vm/run-windows-gui-build.ps1`。
+- macOS GUI 必须在已授权的 macOS x86_64 builder 内完成；dockur macOS 路径必须显式传入 `--enable-dockur-macos --start-macos-vm`，VM 内挂载 shared 后运行生成的 `artifacts/relay/<version>/vm/run-macos-gui-build.sh`。
+- 产物默认输出到 `artifacts/relay/<version>/`，该目录不应提交。构建脚本和文档中不要硬编码构建机厂商、资产名称、公网或内网地址；需要跨 VM 访问宿主时使用脚本生成的 shared/host alias 约定。
+
 ## 业务枚举与分支判断规范
 
 - 跨 `packages/api`、`packages/web-next`、`packages/mobile-app` 共享的业务枚举与协议值，统一定义在 `packages/shared`，禁止在消费端重复声明同义字符串联合或手抄枚举数组。

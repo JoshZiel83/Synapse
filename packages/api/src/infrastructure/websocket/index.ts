@@ -95,12 +95,30 @@ function mapInternalEventToSocketEvent(
         type: "runtime.updated",
         payload: event.payload as ChatSocketEventPayloadMap["runtime.updated"],
       }
-    case "session.message.new":
-    case "session.status.changed":
-    case "session.thinking":
-    case "actor.version_changed":
-    case "feed.item.created":
-      return null
+    case "chat.typing": {
+      const typingPayload = event.payload as {
+        conversationId?: string
+        fromWorkspaceMemberId?: string
+        state?: "started" | "stopped"
+        occurredAt?: string
+      }
+      if (
+        !typingPayload.conversationId ||
+        !typingPayload.fromWorkspaceMemberId ||
+        !typingPayload.state
+      ) {
+        return null
+      }
+      return {
+        type: "chat.typing",
+        payload: {
+          conversationId: typingPayload.conversationId,
+          fromWorkspaceMemberId: typingPayload.fromWorkspaceMemberId,
+          state: typingPayload.state,
+          occurredAt: typingPayload.occurredAt ?? new Date().toISOString(),
+        },
+      }
+    }
     default:
       return event
   }
@@ -181,6 +199,8 @@ function getConversationIdFromSocketEvent(
         .conversationId
     case "runtime.updated":
       return (event.payload as { conversationId: string }).conversationId
+    case "chat.typing":
+      return (event.payload as { conversationId: string }).conversationId
     default:
       return undefined
   }
@@ -192,7 +212,7 @@ function closeClient(clientId: string, message: string, closeCode = 1008) {
 
   if (client.ws.readyState === 1) {
     try {
-      client.ws.send(JSON.stringify({ type: "auth_error", message }))
+      client.ws.send(JSON.stringify({ type: "auth.error", message }))
     } catch {}
   }
 
@@ -298,6 +318,32 @@ function handleUnsubscribe(clientId: string, msg: Record<string, unknown>) {
   client.subscriptions.delete(key)
 }
 
+async function handleInboundTyping(
+  client: { workspaceId: string; workspaceMemberId: string; userId: string },
+  msg: Record<string, unknown>
+) {
+  const conversationId =
+    typeof msg.conversationId === "string" && msg.conversationId.trim()
+      ? msg.conversationId.trim()
+      : ""
+  const state =
+    msg.state === "started" || msg.state === "stopped" ? msg.state : null
+  if (!conversationId || !state) return
+
+  try {
+    const { broadcastTypingState } =
+      await import("../../modules/chat/service.js")
+    await broadcastTypingState({
+      workspaceId: client.workspaceId,
+      userId: client.userId,
+      conversationId,
+      state,
+    })
+  } catch {
+    // Inbound typing is best-effort.
+  }
+}
+
 export function setupWebSocket(app: FastifyInstance) {
   appRef = app
   void initAuthSessionRegistry().catch((error) => {
@@ -321,7 +367,7 @@ export function setupWebSocket(app: FastifyInstance) {
       try {
         socket.send(
           JSON.stringify({
-            type: "server_shutdown",
+            type: "server.shutdown",
             message: "Synapse API server is shutting down",
             retryable: true,
           })
@@ -340,7 +386,7 @@ export function setupWebSocket(app: FastifyInstance) {
       try {
         socket.send(
           JSON.stringify({
-            type: "server_shutdown",
+            type: "server.shutdown",
             message: "Synapse API server is shutting down",
             retryable: true,
           })
@@ -360,7 +406,7 @@ export function setupWebSocket(app: FastifyInstance) {
       try {
         socket.send(
           JSON.stringify({
-            type: "server_shutdown",
+            type: "server.shutdown",
             message: "Synapse API server is shutting down",
             retryable: true,
           })
@@ -490,6 +536,11 @@ export function setupWebSocket(app: FastifyInstance) {
             client.pongTimer = undefined
           }
         }
+
+        if (msg.type === "typing") {
+          await handleInboundTyping(client, msg)
+          return
+        }
       } catch {
         // Ignore malformed websocket frames.
       }
@@ -572,6 +623,19 @@ export function setupWebSocket(app: FastifyInstance) {
         }
         continue
       }
+
+      if (outbound.type === "chat.typing") {
+        const typingPayload =
+          outbound.payload as ChatSocketEventPayloadMap["chat.typing"]
+        // Don't echo the typer's own event back to themselves.
+        if (client.workspaceMemberId === typingPayload.fromWorkspaceMemberId) {
+          continue
+        }
+        if (conversationId && hasConversationTopic && isConversationAllowed) {
+          safeSendSocketEvent(clientId, outbound)
+        }
+        continue
+      }
     }
   })
 }
@@ -616,7 +680,7 @@ export async function shutdownWebSockets(
       try {
         client.ws.send(
           JSON.stringify({
-            type: "server_shutdown",
+            type: "server.shutdown",
             message: reason,
             retryable: true,
           })

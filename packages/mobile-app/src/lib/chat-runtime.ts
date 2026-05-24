@@ -17,6 +17,7 @@ import {
   type PendingChatOutboxMessage,
 } from "@/lib/chat-data"
 import { createChatPersistence } from "@/lib/chat-persistence"
+import { isChatServiceWorkerActive } from "@/lib/chat-web-service-worker"
 import type { ChatComposerSendPayload } from "@/lib/chat-compose"
 import { getDeviceLabel } from "@/lib/config"
 import { createId } from "@/lib/ids"
@@ -24,6 +25,7 @@ import {
   type ActorRuntimeState,
   extractText,
   summarizeConversationEvent,
+  type ChatConversationCreateInput,
   type ChatConversationCreateResponse,
   type ChatConversationItem,
   type ChatConversationMessagesPage,
@@ -41,6 +43,8 @@ export interface ChatRuntimeState {
   activeWorkspaceId: string | null
   snapshot: ChatWorkspaceSnapshot | null
   runtimeByConversationId: Record<string, Record<string, ActorRuntimeState>>
+  /** conversationId -> workspaceMemberId -> expireAtMs */
+  typingByConversation: Record<string, Record<string, number>>
 }
 
 type ChatRuntimeListener = (state: ChatRuntimeState) => void
@@ -128,6 +132,7 @@ export class ChatRuntime {
     activeWorkspaceId: null,
     snapshot: null,
     runtimeByConversationId: {},
+    typingByConversation: {},
   }
 
   subscribe(listener: ChatRuntimeListener) {
@@ -187,6 +192,7 @@ export class ChatRuntime {
       activeWorkspaceId: null,
       snapshot: null,
       runtimeByConversationId: {},
+      typingByConversation: {},
     })
   }
 
@@ -302,6 +308,14 @@ export class ChatRuntime {
           return
         }
 
+        // When the SW is owning the flush (see markConversationRead +
+        // sendMessage above), the provider triggers it on every queue
+        // change. Calling flushPendingReads/flushOutbox here would race
+        // the SW and double-POST.
+        if (isChatServiceWorkerActive()) {
+          return
+        }
+
         await this.flushPendingReads()
         await this.flushOutbox()
       } finally {
@@ -339,6 +353,43 @@ export class ChatRuntime {
           },
         },
       })
+    }
+
+    if (event.type === "chat.typing") {
+      const payload = (event as ChatSocketEvent<"chat.typing">).payload
+      const ownMember = this.state.snapshot?.workspaceMemberId
+      if (payload.fromWorkspaceMemberId === ownMember) {
+        return
+      }
+      const current =
+        this.state.typingByConversation[payload.conversationId] ?? {}
+      const next = { ...current }
+      if (payload.state === "stopped") {
+        delete next[payload.fromWorkspaceMemberId]
+      } else {
+        next[payload.fromWorkspaceMemberId] = Date.now() + 5_000
+      }
+      const nextByConv = { ...this.state.typingByConversation }
+      if (Object.keys(next).length > 0) {
+        nextByConv[payload.conversationId] = next
+      } else {
+        delete nextByConv[payload.conversationId]
+      }
+      this.replaceState({
+        ...this.state,
+        typingByConversation: nextByConv,
+      })
+    }
+  }
+
+  async sendTypingState(conversationId: string, state: "started" | "stopped") {
+    const snapshot = this.state.snapshot
+    if (!snapshot) return
+    try {
+      await api.sendChatTypingState(snapshot.workspaceId, conversationId, state)
+    } catch (error) {
+      // Typing is best-effort.
+      console.debug("Failed to send typing state:", error)
     }
   }
 
@@ -580,6 +631,17 @@ export class ChatRuntime {
       return
     }
 
+    // When the chat service worker has taken control on web, it is the
+    // single owner of read-watermark POSTs (the provider re-broadcasts
+    // queue changes to the SW via requestChatServiceWorkerSync). The
+    // main thread doing a direct POST here would mean two writes per
+    // mark — see S6 ("主线程与 SW 互斥、一次只 POST 一次"). On native
+    // and on web before the SW activates, the main thread still POSTs
+    // so the user's read state isn't lost.
+    if (isChatServiceWorkerActive()) {
+      return
+    }
+
     const clientInstanceId = current.clientInstanceId
     try {
       const response = await api.updateChatConversationReadWatermark(
@@ -642,17 +704,59 @@ export class ChatRuntime {
       },
     }))
 
+    // The SW polls the outbox via requestChatServiceWorkerSync() that
+    // the provider fires when the queue changes; it owns the outbox
+    // flush whenever it has activated. Skip the main-thread flush in
+    // that case to avoid double-POSTing the same clientMessageId. On
+    // native (no SW) or web before SW activation, fall through.
+    if (isChatServiceWorkerActive()) {
+      return
+    }
+
     await this.flushOutbox()
   }
 
-  async createConversation(input: {
-    workspaceId?: string
-    kind: "group" | "private" | "virtual"
-    title?: string
-    actorIds?: string[]
-    workspaceMemberIds?: string[]
-    boundary?: "internal" | "external"
-  }): Promise<ChatConversationCreateResponse> {
+  /**
+   * Reset a retrying/failed outbox entry's attempt count and immediately
+   * re-attempt the flush. Used by the manual "retry" button.
+   */
+  async retryMessage(clientMessageId: string) {
+    const current = this.state.snapshot
+    if (!current) return
+    const entry = current.outbox[clientMessageId]
+    if (!entry) return
+
+    this.updateSnapshot((snapshotValue) => ({
+      ...snapshotValue,
+      outbox: {
+        ...snapshotValue.outbox,
+        [clientMessageId]: {
+          ...entry,
+          status: "sending",
+          attemptCount: 0,
+          firstFailedAt: undefined,
+          lastErrorMessage: undefined,
+        },
+      },
+    }))
+
+    // Same SW-mutex rule as sendMessage/markConversationRead — when the
+    // SW is alive on web it owns the actual POST and the provider's
+    // queue-change effect will trigger the sync once the optimistic
+    // update lands. Falling through to flushOutbox would mean both the
+    // SW and the main thread re-POST the same clientMessageId.
+    if (isChatServiceWorkerActive()) {
+      return
+    }
+
+    await this.flushOutbox()
+  }
+
+  async createConversation(
+    input: Omit<ChatConversationCreateInput, "clientRequestId"> & {
+      workspaceId?: string
+    }
+  ): Promise<ChatConversationCreateResponse> {
     const workspaceId = input.workspaceId ?? this.state.activeWorkspaceId
     if (!workspaceId) {
       throw new Error("No active workspace")
@@ -664,7 +768,10 @@ export class ChatRuntime {
       title: input.title,
       actorIds: input.actorIds ?? [],
       workspaceMemberIds: input.workspaceMemberIds ?? [],
+      remoteAgentIds: input.remoteAgentIds ?? [],
+      externalParticipants: input.externalParticipants ?? [],
       boundary: input.boundary,
+      metadata: input.metadata,
     })
 
     if (this.state.activeWorkspaceId === workspaceId) {

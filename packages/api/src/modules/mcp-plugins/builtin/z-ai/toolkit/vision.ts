@@ -1,5 +1,6 @@
-import { ToolDefinition } from "@synapse/shared"
+import { textBlocks, ToolDefinition } from "@synapse/shared"
 import type { SubFeature } from "./types.js"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 import {
   fileRefProperty,
   resolveImageFileRefToDataUrl,
@@ -325,7 +326,7 @@ export const visionFeature: SubFeature = {
     toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<string> {
+  ): Promise<BuiltinPluginExecuteResult> {
     const apiKey = config.apiKey as string
     if (!apiKey) {
       throw new Error("ZhipuAI API key not configured.")
@@ -346,6 +347,6 @@ export const visionFeature: SubFeature = {
     )
     const model = (config.visionModel as string) || DEFAULT_MODEL
 
-    return await callGLM4V(apiKey, prompt, images, model)
+    return textBlocks(await callGLM4V(apiKey, prompt, images, model))
   },
 }

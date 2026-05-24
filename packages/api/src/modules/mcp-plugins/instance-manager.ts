@@ -107,6 +107,18 @@ export interface McpInstance {
   workspaceId?: string
   configHash: string
   tools: ToolDefinition[]
+  // Relay-only metadata exposed at instance level so tool-resolver can
+  // build a correct mcp_relay origin BEFORE invoking execute (the
+  // per-tool runtime context with deviceId/exposureStableKey isn't
+  // populated until ensureRuntimeSession runs inside execute). Without
+  // this, the failure path or the first tool call gets mis-tagged as
+  // mcp_remote — Phase 10 review fix.
+  relayMetadata?: {
+    deviceId: string
+    exposureId: string
+    exposureStableKey: string
+    exposureDisplayName?: string
+  }
   execute: (
     toolName: string,
     input: Record<string, unknown>,
@@ -648,6 +660,14 @@ async function createRelayInstance(
     workspaceId: params.workspaceId,
     configHash,
     tools: [],
+    // Phase 10: expose relay binding info so tool-resolver can synthesize
+    // a correct mcp_relay origin even before ensureRuntimeSession runs
+    // (which is what populates activeRelayToolContexts).
+    relayMetadata: {
+      deviceId,
+      exposureId,
+      exposureStableKey,
+    },
     execute: async (toolName, input, executionContext) =>
       executeRelayCall(
         toolName,

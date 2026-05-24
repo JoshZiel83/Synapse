@@ -6,8 +6,12 @@ import type {
   CanonicalFileCategory,
   CanonicalToolCall,
   CanonicalToolResult,
+  ToolResultOrigin,
 } from "@synapse/shared"
-import { buildConversationMessageRef } from "@synapse/shared"
+import {
+  buildConversationMessageRef,
+  isToolResultOrigin,
+} from "@synapse/shared"
 import type {
   CanonicalContextAuthor,
   CanonicalContextItem,
@@ -22,6 +26,113 @@ import {
 } from "@synapse/shared"
 import { renderConversationEventContextBlocks } from "../chat/event-registry.js"
 import { getFileUrlById } from "../files/service.js"
+import { db } from "../../infrastructure/database/kysely.js"
+import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
+
+/**
+ * Read the authoritative tool result data for a session from the
+ * tool_calls / tool_results / tool_result_parts tables and return a map
+ * keyed by provider_call_id (and also by tool_calls.id as fallback) →
+ * CanonicalToolResult.
+ *
+ * Pre-load this once per session before calling buildSessionContextItems
+ * with `executionToolResults: map` so tool_result/child_result rows use
+ * the execution tables as source of truth instead of falling back to the
+ * session_message.metadata projection (the Phase 5 plan requirement).
+ *
+ * For each tool_call we take the LATEST tool_results row (highest
+ * result_index) and assemble the canonical content from
+ * tool_result_parts via itemPartsToCanonicalContentBlocks.
+ */
+export async function loadExecutionToolResultsForSession(
+  sessionId: string
+): Promise<Map<string, CanonicalToolResult>> {
+  const out = new Map<string, CanonicalToolResult>()
+  if (!sessionId) return out
+
+  const toolCalls = await db
+    .selectFrom("tool_calls")
+    .select(["id", "provider_call_id", "tool_name"])
+    .where("session_id", "=", sessionId)
+    .execute()
+  if (toolCalls.length === 0) return out
+
+  const callsById = new Map<
+    string,
+    { id: string; provider_call_id: string | null; tool_name: string }
+  >()
+  for (const row of toolCalls) {
+    callsById.set(row.id, row)
+  }
+  const toolCallIds = [...callsById.keys()]
+
+  // Take the latest tool_results row per tool_call (highest result_index).
+  const results = await db
+    .selectFrom("tool_results")
+    .selectAll()
+    .where("tool_call_id", "in", toolCallIds)
+    .orderBy("tool_call_id", "asc")
+    .orderBy("result_index", "desc")
+    .execute()
+  const latestByCall = new Map<string, (typeof results)[number]>()
+  for (const row of results) {
+    if (!latestByCall.has(row.tool_call_id))
+      latestByCall.set(row.tool_call_id, row)
+  }
+  if (latestByCall.size === 0) return out
+
+  const resultIds = [...latestByCall.values()].map((r) => r.id)
+  const parts = await db
+    .selectFrom("tool_result_parts")
+    .selectAll()
+    .where("tool_result_id", "in", resultIds)
+    .orderBy("tool_result_id", "asc")
+    .orderBy("ordinal", "asc")
+    .execute()
+  const partsByResult = new Map<string, any[]>()
+  for (const row of parts) {
+    const arr = partsByResult.get(row.tool_result_id) || []
+    arr.push(row)
+    partsByResult.set(row.tool_result_id, arr)
+  }
+
+  for (const [toolCallId, resultRow] of latestByCall.entries()) {
+    const call = callsById.get(toolCallId)
+    if (!call) continue
+    const meta = parseMetadata(resultRow.metadata)
+    const contentBlocks = itemPartsToCanonicalContentBlocks(
+      partsByResult.get(resultRow.id) || []
+    )
+    const origin = isToolResultOrigin(meta.origin) ? meta.origin : undefined
+    const structuredContent =
+      meta.structuredContent && typeof meta.structuredContent === "object"
+        ? (meta.structuredContent as Record<string, unknown>)
+        : undefined
+    const innerMetadata = extractInnerMetadata(meta)
+
+    const canonical: CanonicalToolResult = {
+      toolCallId: call.provider_call_id || call.id,
+      toolName: call.tool_name,
+      content: contentBlocks,
+      ...(call.provider_call_id
+        ? { providerCallId: call.provider_call_id }
+        : {}),
+      ...(resultRow.is_error !== null && resultRow.is_error !== undefined
+        ? { isError: resultRow.is_error }
+        : {}),
+      ...(structuredContent !== undefined ? { structuredContent } : {}),
+      ...(origin ? { origin } : {}),
+      ...(innerMetadata ? { metadata: innerMetadata } : {}),
+    }
+
+    // Index by BOTH provider_call_id and the DB row id so callers that
+    // wrote either to session_message.metadata.toolCallId can hit.
+    if (call.provider_call_id) out.set(call.provider_call_id, canonical)
+    out.set(call.id, canonical)
+  }
+
+  return out
+}
 
 function mimeToCategory(mimeType: string): CanonicalFileCategory {
   if (mimeType.startsWith("image/")) return "image"
@@ -152,7 +263,7 @@ function buildAuthor(
   }
 
   if (
-    authorParticipant?.participant_kind === "system" ||
+    authorParticipant?.participant_type === "system" ||
     row.role === "system"
   ) {
     return {
@@ -175,7 +286,7 @@ function buildTargets(targets: any[]): CanonicalContextTarget[] | undefined {
   const built = targets.map((target) => ({
     participantId:
       target.participantId || target.participant_id || target.id || undefined,
-    participantType: (target.participant_kind ||
+    participantType: (target.participant_type ||
       "system") as CanonicalContextTarget["participantType"],
     actorId: target.actor_id || target.actorId || undefined,
     userId: target.user_id || target.userId || undefined,
@@ -314,15 +425,18 @@ export function conversationItemToContextItem(
 function buildInterruptNotice(interrupt: {
   type: string
   content: string
+  contentBlocks?: CanonicalContentBlock[]
 }): CanonicalContextItem {
+  const parts =
+    interrupt.contentBlocks && interrupt.contentBlocks.length > 0
+      ? interrupt.contentBlocks
+      : textBlocks(interrupt.content)
   return {
     kind: "system_notice",
     noticeType: "interrupt",
     scope: "private",
     surface: "internal",
-    parts: textBlocks(
-      `[System Interrupt - ${interrupt.type}]: ${interrupt.content}`
-    ),
+    parts,
     metadata: {
       interruptType: interrupt.type,
     },
@@ -344,13 +458,19 @@ function buildWakeupNotice(
     itemId: `wakeup:${wakeup.wakeupId}`,
     scope: "private",
     surface: "internal",
-    noticeType: "task_instruction",
-    parts: textBlocks(`[Wakeup - ${title}]: ${reason}`),
+    // noticeType identifies this as a wakeup notice; the body holds the
+    // raw reason without a bracket-prefix. compileSystemNoticeItem wraps
+    // these in <system_notice noticeType="wakeup"> so the LLM has the
+    // semantic tag without us injecting it into the text payload.
+    noticeType: "wakeup",
+    parts: textBlocks(reason),
     metadata: {
       wakeupId: wakeup.wakeupId,
       sourceType: wakeup.sourceType,
+      sourceName: wakeup.sourceName,
       summary: wakeup.summary,
       reasonText: wakeup.reasonText,
+      title,
     },
   }
 }
@@ -401,14 +521,26 @@ function expandToolHistoryContextItems(
       metadata: toolCall.metadata,
     }))
     const toolResults: CanonicalToolResult[] = round.toolResults.map(
-      (toolResult) => ({
-        toolCallId: toolResult.toolCallId,
-        providerCallId: toolResult.providerCallId,
-        toolName: toolResult.toolName,
-        content: toolResult.content,
-        isError: toolResult.isError,
-        metadata: toolResult.metadata,
-      })
+      (toolResult) => {
+        const item: CanonicalToolResult = {
+          toolCallId: toolResult.toolCallId,
+          providerCallId: toolResult.providerCallId,
+          toolName: toolResult.toolName,
+          content: toolResult.content,
+          isError: toolResult.isError,
+          metadata: toolResult.metadata,
+        }
+        // Phase 1+ first-class fields — carry them through, otherwise the
+        // context window forgets where the result came from and what its
+        // structured sidecar said. Was missed in the original Phase 5.
+        if (toolResult.structuredContent !== undefined) {
+          item.structuredContent = toolResult.structuredContent
+        }
+        if (toolResult.origin !== undefined) {
+          item.origin = toolResult.origin
+        }
+        return item
+      }
     )
 
     items.push({
@@ -479,15 +611,159 @@ function sessionMessageText(message: SessionMessageRow) {
   return extractText(message.contentBlocks || [])
 }
 
+// Keys that ai/index.ts writes flat into tool_results.metadata alongside
+// the original CanonicalToolResult.metadata fields. When rehydrating, we
+// pull them out individually and the residual is the original tool metadata.
+const TOOL_RESULT_METADATA_RESERVED_KEYS = new Set([
+  "toolCallId",
+  "toolName",
+  "providerCallId",
+  "isError",
+  "origin",
+  "structuredContent",
+])
+
+function extractInnerMetadata(
+  meta: Record<string, unknown>
+): Record<string, unknown> | undefined {
+  const residual: Record<string, unknown> = {}
+  let hasAny = false
+  for (const [key, value] of Object.entries(meta)) {
+    if (TOOL_RESULT_METADATA_RESERVED_KEYS.has(key)) continue
+    residual[key] = value
+    hasAny = true
+  }
+  return hasAny ? residual : undefined
+}
+
+// Convert a session_message row with role="tool_result" into a structured
+// CanonicalToolResultBatchContextItem. Phase 4+ writers persist
+// toolCallId/toolName/origin/structuredContent/isError under msg.metadata so
+// the batch can be reconstructed without extra DB lookups. For legacy rows
+// (no metadata structure), synthetic identifiers derived from msg.id keep
+// the batch well-formed; origin defaults to a placeholder mcp_remote kind.
+function buildToolResultBatchFromSessionMessage(
+  msg: SessionMessageRow,
+  meta: Record<string, unknown>,
+  options: {
+    scope: "shared" | "private"
+    surface: "visible" | "internal"
+    // Override the synthetic toolName/origin used when the writer didn't
+    // preserve structured identifiers in metadata. tool_result rows use
+    // "unknown_tool" + an mcp_remote placeholder; child_result rows use
+    // "child_actor" + a builtin origin so the discriminator reflects
+    // semantics (a child actor finishing is not an MCP server response).
+    defaultToolName?: string
+    defaultOrigin?: ToolResultOrigin
+    // Authoritative tool result data pre-loaded from
+    // tool_calls / tool_results / tool_result_parts. Keyed by the
+    // provider_call_id (or LLM-side callId), which matches
+    // session_message.metadata.toolCallId. When the key resolves, we use
+    // the execution-table data as source of truth instead of the
+    // metadata-based reconstruction.
+    executionToolResults?: Map<string, CanonicalToolResult>
+  }
+): CanonicalContextItem {
+  const metaToolCallId =
+    typeof meta.toolCallId === "string" && meta.toolCallId.length > 0
+      ? (meta.toolCallId as string)
+      : undefined
+  const metaProviderCallId =
+    typeof meta.providerCallId === "string" && meta.providerCallId.length > 0
+      ? (meta.providerCallId as string)
+      : undefined
+
+  // Prefer the execution-tables row when available (Phase 5 plan):
+  // tool_calls/tool_results/tool_result_parts are the canonical source of
+  // truth for tool results; session_message.metadata is a cached projection
+  // used when the caller doesn't pre-load the execution data.
+  const executionMatch =
+    options.executionToolResults &&
+    ((metaToolCallId && options.executionToolResults.get(metaToolCallId)) ||
+      (metaProviderCallId &&
+        options.executionToolResults.get(metaProviderCallId)) ||
+      undefined)
+
+  if (executionMatch) {
+    return {
+      kind: "tool_result_batch",
+      itemId: msg.id,
+      conversationId: msg.conversationId,
+      sessionId: msg.sessionId,
+      sequence: msg.sequence,
+      createdAt: msg.createdAt,
+      scope: options.scope,
+      surface: options.surface,
+      toolResults: [executionMatch],
+    }
+  }
+
+  const toolCallId = metaToolCallId || `legacy-tool-call:${msg.id}`
+  const toolName =
+    typeof meta.toolName === "string" && meta.toolName.length > 0
+      ? (meta.toolName as string)
+      : options.defaultToolName || "unknown_tool"
+  const providerCallId = metaProviderCallId
+  const isError =
+    typeof meta.isError === "boolean" ? (meta.isError as boolean) : undefined
+  const structuredContent =
+    meta.structuredContent && typeof meta.structuredContent === "object"
+      ? (meta.structuredContent as Record<string, unknown>)
+      : undefined
+  const origin = isToolResultOrigin(meta.origin)
+    ? meta.origin
+    : options.defaultOrigin ||
+      ({ kind: "mcp_remote", serverKey: "unknown_legacy" } as const)
+  // The writer (ai/index.ts) flattens the original tool metadata into
+  // tool_results.metadata next to the reserved keys above (no
+  // `innerMetadata` wrapper). Recover by stripping the reserved keys.
+  const innerMetadata = extractInnerMetadata(meta)
+
+  const toolResult: CanonicalToolResult = {
+    toolCallId,
+    providerCallId,
+    toolName,
+    content: msg.contentBlocks,
+    isError,
+    structuredContent,
+    origin,
+    metadata: innerMetadata,
+  }
+
+  return {
+    kind: "tool_result_batch",
+    itemId: msg.id,
+    conversationId: msg.conversationId,
+    sessionId: msg.sessionId,
+    sequence: msg.sequence,
+    createdAt: msg.createdAt,
+    scope: options.scope,
+    surface: options.surface,
+    toolResults: [toolResult],
+  }
+}
+
 export function buildSessionContextItems(
   sessionMessages: SessionMessageRow[],
   options: {
     crossTurnToolHistory?: boolean
-    interrupts?: { type: string; content: string }[]
+    interrupts?: {
+      type: string
+      content: string
+      contentBlocks?: CanonicalContentBlock[]
+    }[]
     wakeups?: Pick<
       ActorRuntimeWakeup,
       "wakeupId" | "sourceType" | "sourceName" | "summary" | "reasonText"
     >[]
+    // Phase 8+ review: when present, this map (keyed by provider_call_id or
+    // the LLM-side callId) is the AUTHORITATIVE source of truth for tool
+    // results — pre-loaded from the tool_calls / tool_results /
+    // tool_result_parts tables by the caller via
+    // loadExecutionToolResultsForSession(). Tool_result session_messages
+    // first look here; the metadata-based reconstruction is a fallback for
+    // rows whose execution table data was lost or never written.
+    executionToolResults?: Map<string, CanonicalToolResult>
   } = {}
 ): CanonicalContextItem[] {
   const items: CanonicalContextItem[] = []
@@ -571,43 +847,37 @@ export function buildSessionContextItems(
           scope: "shared",
           surface: "visible",
           noticeType: "task_instruction",
-          parts: textBlocks(`[Task Instruction]: ${sessionMessageText(msg)}`),
+          // Body holds the raw instruction; compileSystemNoticeItem wraps
+          // it in <system_notice noticeType="task_instruction"> so the
+          // model can read the semantic tag from the XML, not from a
+          // baked-in text prefix.
+          parts: msg.contentBlocks,
           metadata: meta,
         })
         break
       }
 
       case "child_result": {
-        items.push({
-          kind: "system_notice",
-          itemId: msg.id,
-          conversationId: msg.conversationId,
-          sessionId: msg.sessionId,
-          sequence: msg.sequence,
-          createdAt: msg.createdAt,
-          scope: "private",
-          surface: "internal",
-          noticeType: "generic",
-          parts: textBlocks(sessionMessageText(msg)),
-          metadata: meta,
-        })
+        items.push(
+          buildToolResultBatchFromSessionMessage(msg, meta, {
+            scope: "private",
+            surface: "internal",
+            defaultToolName: "child_actor",
+            defaultOrigin: { kind: "builtin", toolKind: "child_actor" },
+            executionToolResults: options.executionToolResults,
+          })
+        )
         break
       }
 
       case "tool_result": {
-        items.push({
-          kind: "system_notice",
-          itemId: msg.id,
-          conversationId: msg.conversationId,
-          sessionId: msg.sessionId,
-          sequence: msg.sequence,
-          createdAt: msg.createdAt,
-          scope: "private",
-          surface: "internal",
-          noticeType: "legacy_tool_result",
-          parts: textBlocks(`[Tool Result]: ${sessionMessageText(msg)}`),
-          metadata: meta,
-        })
+        items.push(
+          buildToolResultBatchFromSessionMessage(msg, meta, {
+            scope: "private",
+            surface: "internal",
+            executionToolResults: options.executionToolResults,
+          })
+        )
         break
       }
     }
@@ -624,11 +894,19 @@ export function buildConversationContextItems(params: {
   visibleItems: any[]
   actorId: string
   sessionMessages: SessionMessageRow[]
-  interrupts?: { type: string; content: string }[]
+  interrupts?: {
+    type: string
+    content: string
+    contentBlocks?: CanonicalContentBlock[]
+  }[]
   wakeups?: Pick<
     ActorRuntimeWakeup,
     "wakeupId" | "sourceType" | "sourceName" | "summary" | "reasonText"
   >[]
+  // Phase 10 symmetry with buildSessionContextItems — caller pre-loads
+  // tool_calls/tool_results/tool_result_parts and passes them so the
+  // execution tables are the source of truth for tool result rebuild.
+  executionToolResults?: Map<string, CanonicalToolResult>
 }) {
   const items: CanonicalContextItem[] = []
 
@@ -646,22 +924,37 @@ export function buildConversationContextItems(params: {
   }
 
   for (const sessionMessage of params.sessionMessages) {
-    if (sessionMessage.role !== "tool_result") continue
-    items.push({
-      kind: "system_notice",
-      itemId: sessionMessage.id,
-      conversationId: sessionMessage.conversationId,
-      sessionId: sessionMessage.sessionId,
-      sequence: sessionMessage.sequence,
-      createdAt: sessionMessage.createdAt,
-      scope: "private",
-      surface: "internal",
-      noticeType: "legacy_tool_result",
-      parts: textBlocks(
-        `[Tool Result]: ${extractText(sessionMessage.contentBlocks)}`
-      ),
-      metadata: parseMetadata(sessionMessage.metadata),
-    })
+    // Phase 10 symmetry: both tool_result AND child_result session_messages
+    // route through buildToolResultBatchFromSessionMessage, matching the
+    // buildSessionContextItems branches. Previously child_result was
+    // silently skipped in the group/thread path.
+    if (sessionMessage.role === "tool_result") {
+      items.push(
+        buildToolResultBatchFromSessionMessage(
+          sessionMessage,
+          parseMetadata(sessionMessage.metadata),
+          {
+            scope: "private",
+            surface: "internal",
+            executionToolResults: params.executionToolResults,
+          }
+        )
+      )
+    } else if (sessionMessage.role === "child_result") {
+      items.push(
+        buildToolResultBatchFromSessionMessage(
+          sessionMessage,
+          parseMetadata(sessionMessage.metadata),
+          {
+            scope: "private",
+            surface: "internal",
+            defaultToolName: "child_actor",
+            defaultOrigin: { kind: "builtin", toolKind: "child_actor" },
+            executionToolResults: params.executionToolResults,
+          }
+        )
+      )
+    }
   }
 
   const lastSequence =

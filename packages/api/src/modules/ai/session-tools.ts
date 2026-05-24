@@ -15,6 +15,7 @@ import {
   mentionBlock,
   textBlock,
   textBlocks,
+  textResult,
   type ActorDoc,
   type ToolDefinition,
   type ToolResolveContext,
@@ -113,7 +114,7 @@ type InviteableActor = {
 }
 
 type SendToCandidate = {
-  type: "actor" | "workspace_member" | "external"
+  participantType: "actor" | "workspace_member" | "external"
   participantId: string
   actorId?: string
   workspaceMemberId?: string
@@ -260,9 +261,9 @@ function buildSendToDefinition(params: {
 }): ToolDefinition {
   const rosterDesc = params.otherParticipants
     .map((member) =>
-      member.type === "workspace_member"
+      member.participantType === "workspace_member"
         ? `"${member.name}" (workspace member)`
-        : member.type === "external"
+        : member.participantType === "external"
           ? `"${member.name}" (external${member.linkedWorkspaceMemberName ? `, linked to workspace user ${member.linkedWorkspaceMemberName}` : ""})`
           : `"${member.name}" (actor${member.title ? ", " + member.title : ""})`
     )
@@ -368,7 +369,7 @@ function formatWeekdayInZone(date: Date, timeZone: string) {
 function buildSendToMention(candidate: SendToCandidate): ConversationEntityRef {
   return {
     participantId: candidate.participantId,
-    participantType: candidate.type,
+    participantType: candidate.participantType,
     actorId: candidate.actorId,
     workspaceMemberId: candidate.workspaceMemberId,
     externalUserKey: candidate.externalUserKey,
@@ -433,7 +434,7 @@ function buildSendToCandidates(
       const name = participant.actor_name || "Unknown actor"
       const title = participant.actor_title || participant.actor_role || "Actor"
       candidates.push({
-        type: "actor",
+        participantType: "actor",
         participantId: participant.id,
         actorId: participant.actor_id,
         title: participant.actor_title || undefined,
@@ -456,7 +457,7 @@ function buildSendToCandidates(
         ? `, reachable via ${transportKind === "feishu" ? "Feishu" : "WeChat"}`
         : ""
       candidates.push({
-        type: "workspace_member",
+        participantType: "workspace_member",
         participantId: participant.id,
         workspaceMemberId: participant.workspace_member_id,
         name,
@@ -467,7 +468,7 @@ function buildSendToCandidates(
       continue
     }
 
-    if (participant.participant_kind === "external") {
+    if (participant.participant_type === "external") {
       const linkedWorkspaceMemberName =
         (participant.linked_user_name as string | null) || undefined
       const name =
@@ -484,7 +485,7 @@ function buildSendToCandidates(
         )
       )
       candidates.push({
-        type: "external",
+        participantType: "external",
         participantId: participant.id,
         externalUserKey:
           (participant.transport_external_id as string | null) || undefined,
@@ -1223,14 +1224,16 @@ export function registerCallableToolPlugins(): void {
           assetPath: path || undefined,
         })
 
-        return [
-          `Skill: ${result.skill.name}`,
-          `Slug: ${result.skill.slug}`,
-          `Version: ${result.skill.version}`,
-          `Path: ${result.asset.path}`,
-          "",
-          result.asset.textContent || "",
-        ].join("\n")
+        return textResult(
+          [
+            `Skill: ${result.skill.name}`,
+            `Slug: ${result.skill.slug}`,
+            `Version: ${result.skill.version}`,
+            `Path: ${result.asset.path}`,
+            "",
+            result.asset.textContent || "",
+          ].join("\n")
+        )
       } catch (err: any) {
         rethrowToolExecutionError(err, "Failed to read skill")
       }
@@ -1273,14 +1276,16 @@ export function registerCallableToolPlugins(): void {
       try {
         const localTime = formatDateTimeInZone(now, resolvedTimeZone)
         const weekday = formatWeekdayInZone(now, resolvedTimeZone)
-        return JSON.stringify({
-          nowIso: now.toISOString(),
-          utc: formatUtcTimestamp(now),
-          unixMs: now.getTime(),
-          timeZone: resolvedTimeZone,
-          localTime,
-          weekday,
-        })
+        return textResult(
+          JSON.stringify({
+            nowIso: now.toISOString(),
+            utc: formatUtcTimestamp(now),
+            unixMs: now.getTime(),
+            timeZone: resolvedTimeZone,
+            localTime,
+            weekday,
+          })
+        )
       } catch (error: any) {
         throwToolError(
           `Invalid timeZone "${resolvedTimeZone}". Use an IANA timezone such as Asia/Shanghai or America/Los_Angeles.`,
@@ -1334,7 +1339,7 @@ export function registerCallableToolPlugins(): void {
         return { active: false, definition: null as any }
       }
       const otherParticipants = conversationParticipants.filter(
-        (m) => m.type === "workspace_member" || m.id !== ctx.actorId
+        (m) => m.participantType === "workspace_member" || m.id !== ctx.actorId
       )
       if (otherParticipants.length === 0) {
         return { active: false, definition: null as any }
@@ -1424,7 +1429,7 @@ export function registerCallableToolPlugins(): void {
         replyToRef: replyTarget?.ref,
         message: "Message sent.",
       }
-      return JSON.stringify(result)
+      return textResult(JSON.stringify(result))
     },
   })
 
@@ -1697,13 +1702,15 @@ export function registerCallableToolPlugins(): void {
         throw error
       }
 
-      return JSON.stringify({
-        success: true,
-        taskId: task.id,
-        interactionId: interaction.id,
-        targetMember: resolution.candidate.name,
-        message: `Input request sent to ${resolution.candidate.name}. Only that participant can answer it.`,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          taskId: task.id,
+          interactionId: interaction.id,
+          targetMember: resolution.candidate.name,
+          message: `Input request sent to ${resolution.candidate.name}. Only that participant can answer it.`,
+        })
+      )
     },
   })
 
@@ -1784,11 +1791,13 @@ export function registerCallableToolPlugins(): void {
         activePlanApprovalInteractionId: null,
       })
 
-      return JSON.stringify({
-        success: true,
-        collaborationMode: "plan_drafting",
-        message: "Plan mode enabled.",
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          collaborationMode: "plan_drafting",
+          message: "Plan mode enabled.",
+        })
+      )
     },
   })
 
@@ -1898,11 +1907,13 @@ export function registerCallableToolPlugins(): void {
         },
       })
 
-      return JSON.stringify({
-        success: true,
-        collaborationMode: "plan_drafting",
-        checklist,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          collaborationMode: "plan_drafting",
+          checklist,
+        })
+      )
     },
   })
 
@@ -2160,14 +2171,16 @@ export function registerCallableToolPlugins(): void {
         throw error
       }
 
-      return JSON.stringify({
-        success: true,
-        taskId: task.id,
-        interactionId: interaction.id,
-        collaborationMode: "plan_awaiting_approval",
-        targetMember: resolution.candidate.name,
-        message: `Plan submitted to ${resolution.candidate.name} for approval.`,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          taskId: task.id,
+          interactionId: interaction.id,
+          collaborationMode: "plan_awaiting_approval",
+          targetMember: resolution.candidate.name,
+          message: `Plan submitted to ${resolution.candidate.name} for approval.`,
+        })
+      )
     },
   })
 
@@ -2343,18 +2356,20 @@ export function registerCallableToolPlugins(): void {
           onApproved: async (interaction) => interaction,
         })
         if (waited.status === "approved") {
-          return JSON.stringify({
-            success: true,
-            taskId: created.task?.id,
-            interactionId: created.interaction.id,
-            approverCount: created.availableAuthorizerCount,
-            relayDevice: relayTarget.deviceDisplayName,
-            relayExposure: relayTarget.exposureDisplayName,
-            authorized: true,
-            retried: false,
-            relayToolName,
-            authorization: waited.approvedValue.relayAuthorization,
-          })
+          return textResult(
+            JSON.stringify({
+              success: true,
+              taskId: created.task?.id,
+              interactionId: created.interaction.id,
+              approverCount: created.availableAuthorizerCount,
+              relayDevice: relayTarget.deviceDisplayName,
+              relayExposure: relayTarget.exposureDisplayName,
+              authorized: true,
+              retried: false,
+              relayToolName,
+              authorization: waited.approvedValue.relayAuthorization,
+            })
+          )
         }
         throwToolError(
           waited.status === "superseded"
@@ -2368,28 +2383,32 @@ export function registerCallableToolPlugins(): void {
       }
 
       if (created.reused) {
-        return JSON.stringify({
+        return textResult(
+          JSON.stringify({
+            success: true,
+            interactionId: created.interaction.id,
+            relayDevice: relayTarget.deviceDisplayName,
+            relayExposure: relayTarget.exposureDisplayName,
+            message:
+              "A matching relay authorization request is already pending in this conversation.",
+          })
+        )
+      }
+
+      return textResult(
+        JSON.stringify({
           success: true,
+          taskId: created.task?.id,
           interactionId: created.interaction.id,
+          approverCount: created.availableAuthorizerCount,
           relayDevice: relayTarget.deviceDisplayName,
           relayExposure: relayTarget.exposureDisplayName,
           message:
-            "A matching relay authorization request is already pending in this conversation.",
+            created.availableAuthorizerCount === 1
+              ? `Relay authorization request created. ${created.availableAuthorizers[0]!.name} can approve or reject it.`
+              : `Relay authorization request created. ${created.availableAuthorizerCount} current conversation users can approve or reject it.`,
         })
-      }
-
-      return JSON.stringify({
-        success: true,
-        taskId: created.task?.id,
-        interactionId: created.interaction.id,
-        approverCount: created.availableAuthorizerCount,
-        relayDevice: relayTarget.deviceDisplayName,
-        relayExposure: relayTarget.exposureDisplayName,
-        message:
-          created.availableAuthorizerCount === 1
-            ? `Relay authorization request created. ${created.availableAuthorizers[0]!.name} can approve or reject it.`
-            : `Relay authorization request created. ${created.availableAuthorizerCount} current conversation users can approve or reject it.`,
-      })
+      )
     },
   })
 
@@ -2448,10 +2467,12 @@ export function registerCallableToolPlugins(): void {
         limit,
       })
 
-      return JSON.stringify({
-        success: true,
-        tasks: tasks.map((task) => serializeTaskSummary(task)),
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          tasks: tasks.map((task) => serializeTaskSummary(task)),
+        })
+      )
     },
   })
 
@@ -2493,11 +2514,13 @@ export function registerCallableToolPlugins(): void {
           ? await getInteractionRequestSummaryByTaskId(task.id)
           : null
 
-      return JSON.stringify({
-        success: true,
-        task: serializeTaskDetails(task),
-        interaction,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          task: serializeTaskDetails(task),
+          interaction,
+        })
+      )
     },
   })
 
@@ -2547,11 +2570,13 @@ export function registerCallableToolPlugins(): void {
         task.status === "failed" ||
         task.status === "cancelled"
       ) {
-        return JSON.stringify({
-          success: true,
-          alreadyTerminal: true,
-          task: serializeTaskDetails(task),
-        })
+        return textResult(
+          JSON.stringify({
+            success: true,
+            alreadyTerminal: true,
+            task: serializeTaskDetails(task),
+          })
+        )
       }
 
       if (!task.supportsCancel) {
@@ -2570,15 +2595,17 @@ export function registerCallableToolPlugins(): void {
           ? await getInteractionRequestSummaryByTaskId(current.id)
           : null
 
-      return JSON.stringify({
-        success: true,
-        message:
-          updated?.status === "cancelled"
-            ? `Task ${task.id} was cancelled.`
-            : `Cancellation requested for task ${task.id}.`,
-        task: serializeTaskDetails(current),
-        interaction,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          message:
+            updated?.status === "cancelled"
+              ? `Task ${task.id} was cancelled.`
+              : `Cancellation requested for task ${task.id}.`,
+          task: serializeTaskDetails(current),
+          interaction,
+        })
+      )
     },
   })
 
@@ -2660,14 +2687,16 @@ export function registerCallableToolPlugins(): void {
         stream,
       })
 
-      return JSON.stringify({
-        success: true,
-        task: serializeTaskSummary(task),
-        chunks,
-        combinedText: chunks.map((chunk) => chunk.text).join("\n"),
-        nextAfterSeq:
-          chunks.length > 0 ? chunks[chunks.length - 1]!.seq : afterSeq,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          task: serializeTaskSummary(task),
+          chunks,
+          combinedText: chunks.map((chunk) => chunk.text).join("\n"),
+          nextAfterSeq:
+            chunks.length > 0 ? chunks[chunks.length - 1]!.seq : afterSeq,
+        })
+      )
     },
   })
 
@@ -2935,20 +2964,22 @@ export function registerCallableToolPlugins(): void {
           ],
         })
 
-        return JSON.stringify({
-          success: true,
-          invitedActors: invitedActors.map((candidate) => ({
-            id: candidate.id,
-            name: candidate.name,
-            title: candidate.title || candidate.role || "Actor",
-            summary: candidate.summary,
-          })),
-          skippedActors,
-          message:
-            invitedActors.length === 1
-              ? `${invitedActors[0]!.name} has been invited to the conversation and notified.`
-              : `${invitedActors.map((candidate) => candidate.name).join(", ")} have been invited to the conversation and notified.`,
-        })
+        return textResult(
+          JSON.stringify({
+            success: true,
+            invitedActors: invitedActors.map((candidate) => ({
+              id: candidate.id,
+              name: candidate.name,
+              title: candidate.title || candidate.role || "Actor",
+              summary: candidate.summary,
+            })),
+            skippedActors,
+            message:
+              invitedActors.length === 1
+                ? `${invitedActors[0]!.name} has been invited to the conversation and notified.`
+                : `${invitedActors.map((candidate) => candidate.name).join(", ")} have been invited to the conversation and notified.`,
+          })
+        )
       } catch (err: any) {
         rethrowToolExecutionError(err, "Failed to invite actor(s)")
       }
@@ -3009,19 +3040,21 @@ export function registerCallableToolPlugins(): void {
         },
       })
 
-      return JSON.stringify({
-        success: true,
-        runId: result.run.id,
-        results: result.memories.map((memory) => ({
-          id: memory.id,
-          spaceType: memory.spaceType,
-          category: memory.category,
-          textDigest: memory.textDigest,
-          tags: memory.tags,
-          finalScore: Number(memory.finalScore.toFixed(4)),
-          matchedTerms: memory.matchedTerms || [],
-        })),
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          runId: result.run.id,
+          results: result.memories.map((memory) => ({
+            id: memory.id,
+            spaceType: memory.spaceType,
+            category: memory.category,
+            textDigest: memory.textDigest,
+            tags: memory.tags,
+            finalScore: Number(memory.finalScore.toFixed(4)),
+            matchedTerms: memory.matchedTerms || [],
+          })),
+        })
+      )
     },
   })
 
@@ -3219,12 +3252,14 @@ export function registerCallableToolPlugins(): void {
           }
         )
 
-        return JSON.stringify({
-          success: true,
-          automationId: rule.id,
-          nextFireAt: rule.trigger.nextFireAt,
-          message: `Scheduled self wakeup created: ${rule.name}.`,
-        })
+        return textResult(
+          JSON.stringify({
+            success: true,
+            automationId: rule.id,
+            nextFireAt: rule.trigger.nextFireAt,
+            message: `Scheduled self wakeup created: ${rule.name}.`,
+          })
+        )
       } catch (err: any) {
         rethrowToolExecutionError(err, "Failed to create schedule")
       }
@@ -3294,18 +3329,20 @@ export function registerCallableToolPlugins(): void {
           actorId: context.actorId,
         }
       )
-      return JSON.stringify({
-        success: true,
-        eventSources: sources.map((source) => ({
-          id: source.id,
-          sourceKey: source.sourceKey,
-          name: source.name,
-          description: source.description,
-          recommendedUsage: source.recommendedUsage,
-          providerKind: source.providerKind,
-          providerRef: source.providerRef,
-        })),
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          eventSources: sources.map((source) => ({
+            id: source.id,
+            sourceKey: source.sourceKey,
+            name: source.name,
+            description: source.description,
+            recommendedUsage: source.recommendedUsage,
+            providerKind: source.providerKind,
+            providerRef: source.providerRef,
+          })),
+        })
+      )
     },
   })
 
@@ -3523,12 +3560,14 @@ export function registerCallableToolPlugins(): void {
           }
         )
 
-        return JSON.stringify({
-          success: true,
-          automationId: rule.id,
-          eventSourceId: rule.trigger.eventSourceId,
-          message: `Event subscription created: ${rule.name}.`,
-        })
+        return textResult(
+          JSON.stringify({
+            success: true,
+            automationId: rule.id,
+            eventSourceId: rule.trigger.eventSourceId,
+            message: `Event subscription created: ${rule.name}.`,
+          })
+        )
       } catch (err: any) {
         rethrowToolExecutionError(err, "Failed to create event subscription")
       }
@@ -3603,21 +3642,23 @@ export function registerCallableToolPlugins(): void {
         eventSourceId,
         limit: 20,
       })
-      return JSON.stringify({
-        success: true,
-        eventSourceId,
-        occurrences: occurrences.map((occurrence) => ({
-          id: occurrence.id,
-          occurredAt: occurrence.occurredAt,
-          sourceKind: occurrence.sourceKind,
-          eventSourceName: occurrence.eventSourceName,
-          title: occurrence.displayTitle,
-          summary: occurrence.displaySummary,
-          description: occurrence.displayDescription,
-          payload: occurrence.payload,
-          sourceSnapshot: occurrence.sourceSnapshot,
-        })),
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          eventSourceId,
+          occurrences: occurrences.map((occurrence) => ({
+            id: occurrence.id,
+            occurredAt: occurrence.occurredAt,
+            sourceKind: occurrence.sourceKind,
+            eventSourceName: occurrence.eventSourceName,
+            title: occurrence.displayTitle,
+            summary: occurrence.displaySummary,
+            description: occurrence.displayDescription,
+            payload: occurrence.payload,
+            sourceSnapshot: occurrence.sourceSnapshot,
+          })),
+        })
+      )
     },
   })
 
@@ -3656,39 +3697,41 @@ export function registerCallableToolPlugins(): void {
         sessionId: context.sessionId,
         actorId: context.actorId,
       })
-      return JSON.stringify({
-        success: true,
-        automations: rules.map((rule) => {
-          const triggerDisplay = describeAutomationTrigger(rule.trigger)
-          const policyDisplay = describeAutomationPolicy(rule.policy)
-          const deliveryDisplay = describeAutomationDelivery(rule.delivery)
-          return {
-            id: rule.id,
-            name: rule.name,
-            category: rule.category,
-            status: rule.status,
-            triggerKind: rule.trigger.triggerKind,
-            triggerTitle: triggerDisplay.title,
-            triggerSummary: triggerDisplay.summary,
-            triggerDescription: triggerDisplay.description,
-            triggerDetails: triggerDisplay.details,
-            policySummary: policyDisplay.summary,
-            policyDescription: policyDisplay.description,
-            policyDetails: policyDisplay.details,
-            deliveryTitle: deliveryDisplay.title,
-            deliverySummary: deliveryDisplay.summary,
-            deliveryDescription: deliveryDisplay.description,
-            deliveryDetails: deliveryDisplay.details,
-            eventSourceId: rule.trigger.eventSourceId,
-            eventSourceName: rule.trigger.eventSourceName,
-            sourceKind: rule.trigger.sourceKind,
-            matchKey: rule.trigger.matchKey,
-            nextFireAt: rule.trigger.nextFireAt,
-            conversationId: rule.conversationId,
-            targetParticipantIds: rule.delivery.targetParticipantIds,
-          }
-        }),
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          automations: rules.map((rule) => {
+            const triggerDisplay = describeAutomationTrigger(rule.trigger)
+            const policyDisplay = describeAutomationPolicy(rule.policy)
+            const deliveryDisplay = describeAutomationDelivery(rule.delivery)
+            return {
+              id: rule.id,
+              name: rule.name,
+              category: rule.category,
+              status: rule.status,
+              triggerKind: rule.trigger.triggerKind,
+              triggerTitle: triggerDisplay.title,
+              triggerSummary: triggerDisplay.summary,
+              triggerDescription: triggerDisplay.description,
+              triggerDetails: triggerDisplay.details,
+              policySummary: policyDisplay.summary,
+              policyDescription: policyDisplay.description,
+              policyDetails: policyDisplay.details,
+              deliveryTitle: deliveryDisplay.title,
+              deliverySummary: deliveryDisplay.summary,
+              deliveryDescription: deliveryDisplay.description,
+              deliveryDetails: deliveryDisplay.details,
+              eventSourceId: rule.trigger.eventSourceId,
+              eventSourceName: rule.trigger.eventSourceName,
+              sourceKind: rule.trigger.sourceKind,
+              matchKey: rule.trigger.matchKey,
+              nextFireAt: rule.trigger.nextFireAt,
+              conversationId: rule.conversationId,
+              targetParticipantIds: rule.delivery.targetParticipantIds,
+            }
+          }),
+        })
+      )
     },
   })
 
@@ -3766,11 +3809,13 @@ export function registerCallableToolPlugins(): void {
         workspaceMemberId: context.workspaceMemberId,
         actorId: context.actorId,
       })
-      return JSON.stringify({
-        success: true,
-        automationId,
-        message: `Automation deleted: ${rule.name}.`,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          automationId,
+          message: `Automation deleted: ${rule.name}.`,
+        })
+      )
     },
   })
 
@@ -3829,12 +3874,14 @@ export function registerCallableToolPlugins(): void {
           ? String((input as any).summary).trim()
           : ""
 
-      return JSON.stringify({
-        success: true,
-        summary,
-        message:
-          "Sleep requested. The session will return to idle after this turn completes.",
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          summary,
+          message:
+            "Sleep requested. The session will return to idle after this turn completes.",
+        })
+      )
     },
   })
 }

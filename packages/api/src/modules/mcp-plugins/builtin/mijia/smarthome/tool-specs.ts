@@ -1,4 +1,5 @@
-import { ToolDefinition } from "@synapse/shared"
+import { textBlocks, ToolDefinition } from "@synapse/shared"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 import {
   DEFAULT_STATUS_PROPERTY_NAMES,
   getMijiaDeviceSpec,
@@ -21,7 +22,7 @@ type ToolSpec = {
     client: MijiaCloudClient,
     input: JsonObject,
     config: Record<string, unknown>
-  ) => Promise<unknown>
+  ) => Promise<BuiltinPluginExecuteResult>
 }
 
 function buildTool(
@@ -340,6 +341,22 @@ function formatRawResult(result: unknown) {
   }
 }
 
+/**
+ * Wrap a Mijia tool JSON payload as a CallableToolResult so that the
+ * structured object is preserved via structuredContent while still flowing
+ * canonical content blocks through to the ingest pipeline.
+ */
+function jsonResult(value: unknown): BuiltinPluginExecuteResult {
+  const structured =
+    value && typeof value === "object" && !Array.isArray(value)
+      ? (value as Record<string, unknown>)
+      : { value }
+  return {
+    content: textBlocks(JSON.stringify(value)),
+    structuredContent: structured,
+  }
+}
+
 const toolSpecs: ToolSpec[] = [
   buildTool(
     "list_homes",
@@ -361,7 +378,7 @@ const toolSpecs: ToolSpec[] = [
             .toLowerCase()
             .includes(query)
       )
-      return {
+      return jsonResult({
         homes: filtered.map((home: any) => ({
           id: String(home.id),
           name: String(home.name || home.id),
@@ -369,7 +386,7 @@ const toolSpecs: ToolSpec[] = [
           roomCount: Array.isArray(home.roomlist) ? home.roomlist.length : 0,
           address: readString(home.address),
         })),
-      }
+      })
     }
   ),
   buildTool(
@@ -403,7 +420,7 @@ const toolSpecs: ToolSpec[] = [
         homeId ? devices.filter((device) => device.homeId === homeId) : devices,
         readString(input.query)
       )
-      return {
+      return jsonResult({
         devices: filtered.map((device) => ({
           did: device.did,
           name: device.name,
@@ -415,7 +432,7 @@ const toolSpecs: ToolSpec[] = [
           isOnline: device.isOnline,
           isShared: device.isShared,
         })),
-      }
+      })
     }
   ),
   buildTool(
@@ -436,7 +453,7 @@ const toolSpecs: ToolSpec[] = [
     async (client, input, config) => {
       const device = await resolveDevice(client, input, config)
       const spec = await getMijiaDeviceSpec(device.model)
-      return summarizeCapabilities(device, spec)
+      return jsonResult(summarizeCapabilities(device, spec))
     }
   ),
   buildTool(
@@ -489,7 +506,7 @@ const toolSpecs: ToolSpec[] = [
       )
 
       const resultList = Array.isArray(results) ? results : [results]
-      return {
+      return jsonResult({
         device: {
           did: device.did,
           name: device.name,
@@ -522,7 +539,7 @@ const toolSpecs: ToolSpec[] = [
               typeof raw.updateTime === "number" ? raw.updateTime : undefined,
           }
         }),
-      }
+      })
     }
   ),
   buildTool(
@@ -577,7 +594,7 @@ const toolSpecs: ToolSpec[] = [
         value: parsedValue,
       })
 
-      return {
+      return jsonResult({
         device: {
           did: device.did,
           name: device.name,
@@ -591,7 +608,7 @@ const toolSpecs: ToolSpec[] = [
           piid: property.method.piid,
         },
         result: formatRawResult(result),
-      }
+      })
     }
   ),
   buildTool(
@@ -638,7 +655,7 @@ const toolSpecs: ToolSpec[] = [
         ...(args ? { value: args } : {}),
       })
 
-      return {
+      return jsonResult({
         device: {
           did: device.did,
           name: device.name,
@@ -652,7 +669,7 @@ const toolSpecs: ToolSpec[] = [
           args,
         },
         result: formatRawResult(result),
-      }
+      })
     }
   ),
   buildTool(
@@ -672,7 +689,7 @@ const toolSpecs: ToolSpec[] = [
     async (client, input) => {
       const scenes = await client.getScenesList(readString(input.homeId))
       const query = readString(input.query)?.toLowerCase()
-      return {
+      return jsonResult({
         scenes: scenes
           .filter(
             (scene: any) =>
@@ -687,7 +704,7 @@ const toolSpecs: ToolSpec[] = [
             homeId: String(scene.home_id),
             homeName: readString(scene.home_name),
           })),
-      }
+      })
     }
   ),
   buildTool(
@@ -738,14 +755,14 @@ const toolSpecs: ToolSpec[] = [
       }
 
       const result = await client.runScene(sceneId || "", homeId || "")
-      return {
+      return jsonResult({
         scene: {
           sceneId: sceneId || undefined,
           sceneName,
           homeId,
         },
         result: formatRawResult(result),
-      }
+      })
     }
   ),
   buildTool(
@@ -808,14 +825,14 @@ const toolSpecs: ToolSpec[] = [
         time_end: timeEnd,
       })
 
-      return {
+      return jsonResult({
         device: {
           did: device.did,
           name: device.name,
           model: device.model,
         },
         statistics: formatRawResult(result),
-      }
+      })
     }
   ),
   buildTool(
@@ -830,9 +847,11 @@ const toolSpecs: ToolSpec[] = [
     },
     ["paramsJson"],
     async (client, input) => {
-      return formatRawResult(
-        await client.getDevicesProp(
-          parseJsonInput(input.paramsJson, "paramsJson")
+      return jsonResult(
+        formatRawResult(
+          await client.getDevicesProp(
+            parseJsonInput(input.paramsJson, "paramsJson")
+          )
         )
       )
     },
@@ -850,9 +869,11 @@ const toolSpecs: ToolSpec[] = [
     },
     ["paramsJson"],
     async (client, input) => {
-      return formatRawResult(
-        await client.setDevicesProp(
-          parseJsonInput(input.paramsJson, "paramsJson")
+      return jsonResult(
+        formatRawResult(
+          await client.setDevicesProp(
+            parseJsonInput(input.paramsJson, "paramsJson")
+          )
         )
       )
     },
@@ -870,8 +891,10 @@ const toolSpecs: ToolSpec[] = [
     },
     ["paramsJson"],
     async (client, input) => {
-      return formatRawResult(
-        await client.runAction(parseJsonInput(input.paramsJson, "paramsJson"))
+      return jsonResult(
+        formatRawResult(
+          await client.runAction(parseJsonInput(input.paramsJson, "paramsJson"))
+        )
       )
     },
     { raw: true }
@@ -894,7 +917,7 @@ export async function executeMijiaTool(
   input: JsonObject,
   config: Record<string, unknown>,
   client: MijiaCloudClient
-) {
+): Promise<BuiltinPluginExecuteResult> {
   const tool = toolSpecs.find((item) => item.name === toolName)
   if (!tool) {
     throw new Error(`Unknown Mijia tool '${toolName}'.`)

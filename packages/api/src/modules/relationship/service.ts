@@ -86,7 +86,7 @@ function buildRelationshipPeerSubjectRef(input: {
   peerRemoteAgentId?: string | null
 }): SubjectRef {
   switch (input.peerType) {
-    case "member":
+    case "workspace_member":
       if (!input.peerWorkspaceMemberId) {
         throw new Error("peerWorkspaceMemberId required for member peer type")
       }
@@ -115,7 +115,7 @@ function subjectKindToRelationshipPeerType(
 ): ContactTargetType {
   switch (kind) {
     case SUBJECT_KIND.WORKSPACE_MEMBER:
-      return "member"
+      return "workspace_member"
     case SUBJECT_KIND.ACTOR:
       return "actor"
     case SUBJECT_KIND.REMOTE_AGENT:
@@ -1024,7 +1024,7 @@ async function loadViewerDirectConversationMap(workspaceMemberId: string) {
     .execute()
 
   const viewerIdentity: DirectConversationIdentity = {
-    kind: "member",
+    kind: "workspace_member",
     workspaceMemberId,
   }
   const map = new Map<string, string>()
@@ -1135,7 +1135,7 @@ async function resolveContactReference(params: {
       kind: params.contactKind,
       member,
       peerIdentity: {
-        kind: "member" as const,
+        kind: "workspace_member" as const,
         workspaceMemberId: member.workspaceMemberId,
       },
     }
@@ -1210,7 +1210,7 @@ async function resolveContactReference(params: {
       friendEntry,
       member,
       peerIdentity: {
-        kind: "member" as const,
+        kind: "workspace_member" as const,
         workspaceMemberId: member.workspaceMemberId,
       },
     }
@@ -1435,7 +1435,7 @@ async function buildContactHubEntryMap(params: {
       },
       conversationId: directConversationMap.get(
         directConversationIdentityKey({
-          kind: "member",
+          kind: "workspace_member",
           workspaceMemberId: row.workspace_member_id,
         })
       ),
@@ -1544,7 +1544,7 @@ async function buildContactHubEntryMap(params: {
           peer,
           conversationId: directConversationMap.get(
             directConversationIdentityKey({
-              kind: "member",
+              kind: "workspace_member",
               workspaceMemberId: peer.workspaceMemberId,
             })
           ),
@@ -1635,7 +1635,7 @@ async function createOrApproveFriendship(params: {
     await ensureFriendEntry({
       workspaceId: target.workspace.id,
       ownerWorkspaceMemberId: target.workspaceMemberId,
-      peerType: "member",
+      peerType: "workspace_member",
       peerWorkspaceMemberId: requester.workspaceMemberId,
       sourceRequestId: params.sourceRequestId,
     })
@@ -1682,7 +1682,7 @@ async function resolveMemberRelationshipProfile(params: {
   const existingFriend = await findExistingFriendEntry({
     workspaceId: params.workspaceId,
     ownerWorkspaceMemberId: params.viewerWorkspaceMemberId,
-    peerType: "member",
+    peerType: "workspace_member",
     peerWorkspaceMemberId: params.profile.subject_workspace_member_id,
   })
   if (existingFriend) {
@@ -1698,13 +1698,13 @@ async function resolveMemberRelationshipProfile(params: {
   if (params.profile.approval_mode === "auto") {
     await createOrApproveFriendship({
       requesterWorkspaceMemberId: params.viewerWorkspaceMemberId,
-      targetType: "member",
+      targetType: "workspace_member",
       targetWorkspaceMemberId: params.profile.subject_workspace_member_id,
     })
     const entry = await findExistingFriendEntry({
       workspaceId: params.workspaceId,
       ownerWorkspaceMemberId: params.viewerWorkspaceMemberId,
-      peerType: "member",
+      peerType: "workspace_member",
       peerWorkspaceMemberId: params.profile.subject_workspace_member_id,
     })
     return {
@@ -1720,7 +1720,7 @@ async function resolveMemberRelationshipProfile(params: {
 
   const requestResult = await createFriendRequest({
     requesterWorkspaceMemberId: params.viewerWorkspaceMemberId,
-    targetType: "member",
+    targetType: "workspace_member",
     targetWorkspaceMemberId: params.profile.subject_workspace_member_id,
     profileId: params.profile.id,
   })
@@ -1820,7 +1820,7 @@ export async function searchRelationshipsByIdentity(params: {
 
     const conversationId = directConversationMap.get(
       directConversationIdentityKey({
-        kind: "member",
+        kind: "workspace_member",
         workspaceMemberId: member.workspaceMemberId,
       })
     )
@@ -1832,7 +1832,7 @@ export async function searchRelationshipsByIdentity(params: {
         matches: [
           {
             profileId: profile.id,
-            targetType: "member" as const,
+            targetType: "workspace_member" as const,
             title: member.name || member.email || "Unknown member",
             subtitle: `${member.workspace.name} · ${member.email}`,
             avatarUrl: member.avatarFileId
@@ -1855,7 +1855,7 @@ export async function searchRelationshipsByIdentity(params: {
     const existingFriend = await findExistingFriendEntry({
       workspaceId: params.workspaceId,
       ownerWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-      peerType: "member",
+      peerType: "workspace_member",
       peerWorkspaceMemberId: member.workspaceMemberId,
     })
     if (existingFriend) {
@@ -1865,7 +1865,7 @@ export async function searchRelationshipsByIdentity(params: {
         matches: [
           {
             profileId: profile.id,
-            targetType: "member" as const,
+            targetType: "workspace_member" as const,
             title: member.name || member.email || "Unknown member",
             subtitle: `${member.workspace.name} · ${member.email}`,
             avatarUrl: member.avatarFileId
@@ -1887,7 +1887,7 @@ export async function searchRelationshipsByIdentity(params: {
 
     const pendingRequest = await findPendingFriendRequest({
       requesterWorkspaceMemberId: viewerWorkspaceMember.workspaceMemberId,
-      targetType: "member",
+      targetType: "workspace_member",
       targetWorkspaceMemberId: member.workspaceMemberId,
     })
     return {
@@ -1896,7 +1896,7 @@ export async function searchRelationshipsByIdentity(params: {
       matches: [
         {
           profileId: profile.id,
-          targetType: "member" as const,
+          targetType: "workspace_member" as const,
           title: member.name || member.email || "Unknown member",
           subtitle: `${member.workspace.name} · ${member.email}`,
           avatarUrl: member.avatarFileId

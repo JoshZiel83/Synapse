@@ -103,8 +103,12 @@ function ProtectedNavigation() {
   useEffect(() => {
     if (status === "loading") return
 
-    const first = segments[0]
-    const second = segments[1]
+    // useSegments() narrows to a tuple sized by the current route depth.
+    // Widen to a sparse string[] so checking depth-2 segments on a depth-1
+    // route doesn't error at compile time.
+    const segmentPath = segments as readonly string[]
+    const first = segmentPath[0]
+    const second = segmentPath[1]
     const isAuthRoute = first === "login" || first === "register"
     const isWorkspaceCreateRoute = first === "workspace" && second === "create"
 

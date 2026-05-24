@@ -15,30 +15,19 @@ import {
   type ConversationEntityRef,
   type ConversationReplyRef,
   type ChatParticipantSummary,
+  type PendingConversationRead,
+  type PendingOutboxMessage,
 } from "@shared"
 
 export type LocalChatDeliveryStatus = "sending" | "retrying"
 
-export interface PendingChatRead {
-  conversationId: string
-  readUpToSequence: number
-  lastVisibleSequence: number
-  updatedAt: string
-}
-
-export interface PendingChatOutboxMessage {
-  clientMessageId: string
-  conversationId: string
-  contentBlocks: CanonicalContentBlock[]
-  replyToItemId?: string
-  replyTo?: ConversationReplyRef
-  createdAt: string
-  optimisticSequence: number
+// Mobile's persisted queue piggy-backs on the shared chat-queue shapes
+// so any change to PendingConversationRead / PendingOutboxMessage in
+// shared lands on both clients without manual sync. The local aliases
+// keep the historical naming used throughout the mobile codebase.
+export type PendingChatRead = PendingConversationRead
+export type PendingChatOutboxMessage = Omit<PendingOutboxMessage, "status"> & {
   status: LocalChatDeliveryStatus
-  attemptCount: number
-  lastAttemptAt?: string
-  firstFailedAt?: string
-  lastErrorMessage?: string
 }
 
 export interface ChatConversationMeta {

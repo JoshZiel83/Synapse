@@ -822,88 +822,6 @@ function buildActorVersionDelta(
   }
 }
 
-function toActorVersionChangeWire(change: ActorVersionChange) {
-  if (change.kind === "field") {
-    return {
-      kind: "field" as const,
-      field: change.field,
-      before: change.before,
-      after: change.after,
-      summaryText:
-        extractText(change.summary).replace(/\s+/g, " ").trim() || undefined,
-    }
-  }
-
-  return {
-    kind: "doc" as const,
-    docId: change.docId,
-    key: change.key,
-    title: change.title,
-    changeType: change.changeType,
-    visibility: change.visibility,
-    priority: change.priority,
-    fieldChanges: change.fieldChanges,
-    summaryText:
-      extractText(change.summary).replace(/\s+/g, " ").trim() || undefined,
-  }
-}
-
-async function emitActorVersionChangedEvents(params: {
-  workspaceId: UUID
-  actorId: UUID
-  actorName: string
-  actorTitle: string
-  actorAvatarUrl?: string
-  actorAvatarEmoji?: string
-  delta: ActorVersionDelta
-}) {
-  const memberships = await runQuery<{ conversation_id: string }>(
-    `SELECT DISTINCT cp.conversation_id
-     FROM conversation_participants cp
-     JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
-     JOIN conversations c ON c.id = cp.conversation_id
-     WHERE cpsubj.actor_id = $1
-       AND cp.state = 'active'
-       AND c.kind = $2`,
-    [params.actorId, GROUP_CONVERSATION_KIND]
-  )
-
-  if (memberships.rows.length === 0) return
-
-  const changes = params.delta.changes.map(toActorVersionChangeWire)
-
-  await Promise.all(
-    memberships.rows.map((membership) =>
-      createConversationEvent({
-        workspaceId: params.workspaceId,
-        conversationId: membership.conversation_id,
-        eventType: "actor_version_changed",
-        timelinePolicy: "all_members",
-        contextPolicy: "shared",
-        metadata: {
-          actorId: params.actorId,
-          fromVersion: params.delta.fromVersion,
-          toVersion: params.delta.toVersion,
-        },
-        eventPayload: {
-          actor: {
-            participantType: "actor",
-            actorId: params.actorId,
-            name: params.actorName,
-            title: params.actorTitle,
-            avatarUrl: params.actorAvatarUrl,
-            avatarEmoji: params.actorAvatarEmoji,
-          },
-          fromVersion: params.delta.fromVersion,
-          toVersion: params.delta.toVersion,
-          changes,
-          source: params.delta.source,
-        },
-      })
-    )
-  )
-}
-
 async function runQuery<T extends QueryRow>(text: string, params?: unknown[]) {
   return executeSql<T>(text, params)
 }
@@ -1482,23 +1400,6 @@ export async function updateActor(
 
   const actor = await getActor(actorId, workspaceId)
   if (!actor) return null
-
-  try {
-    await emitActorVersionChangedEvents({
-      workspaceId,
-      actorId,
-      actorName: actor.definition.name,
-      actorTitle: actor.definition.title,
-      actorAvatarUrl: actor.avatarUrl,
-      actorAvatarEmoji: actor.definition.avatarEmoji,
-      delta,
-    })
-  } catch (error) {
-    console.error(
-      "[actor.update] Failed to emit actor_version_changed events:",
-      error
-    )
-  }
 
   return actor
 }

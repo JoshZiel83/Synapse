@@ -1,4 +1,5 @@
 import type { ToolCall, ActorAction } from "@synapse/shared"
+import { textResult } from "@synapse/shared"
 import { z } from "zod"
 import { registerToolPlugin } from "./tool-plugins.js"
 import { throwToolError } from "./tool-errors.js"
@@ -310,12 +311,14 @@ export function registerActionToolPlugins(): void {
         }
       )
 
-      return JSON.stringify({
-        success: true,
-        message: "Memory saved.",
-        spaceType: action.metadata?.spaceType,
-        category: action.metadata?.category,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          message: "Memory saved.",
+          spaceType: action.metadata?.spaceType,
+          category: action.metadata?.category,
+        })
+      )
     },
   })
 
@@ -353,11 +356,13 @@ export function registerActionToolPlugins(): void {
         }
       )
 
-      return JSON.stringify({
-        success: true,
-        newName: action.content,
-        message: `Your display name is now ${action.content}.`,
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          newName: action.content,
+          message: `Your display name is now ${action.content}.`,
+        })
+      )
     },
   })
 
@@ -519,22 +524,26 @@ export function registerActionToolPlugins(): void {
       const actor = await getActor(context.actorId, context.workspaceId)
 
       if (parsed.data.mode === EMOJI_MODE) {
-        return JSON.stringify({
-          success: true,
-          avatarMode: EMOJI_MODE,
-          emoji: parsed.data.emoji,
-          avatarFileId: actor?.definition.avatarFileId || null,
-          message: `Your avatar now uses the emoji ${parsed.data.emoji}.`,
-        })
+        return textResult(
+          JSON.stringify({
+            success: true,
+            avatarMode: EMOJI_MODE,
+            emoji: parsed.data.emoji,
+            avatarFileId: actor?.definition.avatarFileId || null,
+            message: `Your avatar now uses the emoji ${parsed.data.emoji}.`,
+          })
+        )
       }
 
-      return JSON.stringify({
-        success: true,
-        avatarMode: PIXEL_ART_MODE,
-        avatarFileId: actor?.definition.avatarFileId || null,
-        avatarUrl: actor?.avatarUrl || null,
-        message: "Your avatar now uses a generated pixel-art portrait.",
-      })
+      return textResult(
+        JSON.stringify({
+          success: true,
+          avatarMode: PIXEL_ART_MODE,
+          avatarFileId: actor?.definition.avatarFileId || null,
+          avatarUrl: actor?.avatarUrl || null,
+          message: "Your avatar now uses a generated pixel-art portrait.",
+        })
+      )
     },
   })
 }

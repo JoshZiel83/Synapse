@@ -1,9 +1,16 @@
 import path from 'node:path';
+import os from 'node:os';
 import fs from 'node:fs/promises';
 import crypto from 'node:crypto';
 import type { FileStorageBackend } from '@synapse/shared/types';
 
-export const STORAGE_DIR = process.env.STORAGE_DIR || '/home/ubuntu/project/synapse/storage/files';
+// Production deployments inject STORAGE_DIR via the API container env
+// (docker-compose.yml sets /app/storage/files mounted to api_storage:).
+// The default below is only used by local dev / tests where the env var
+// is unset — it lives under os.tmpdir() to avoid writing into the source
+// tree or stale hardcoded paths.
+export const STORAGE_DIR =
+  process.env.STORAGE_DIR || path.join(os.tmpdir(), 'synapse-storage');
 export const FILE_URL_PREFIX = '/files/';
 const BASE_URL = (process.env.BASE_URL || 'http://localhost:3001').replace(/\/+$/, '');
 const MIME_ALIASES: Record<string, string> = {

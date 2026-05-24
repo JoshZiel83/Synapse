@@ -6,7 +6,7 @@ import {
 } from "./service.js"
 
 type ParticipantInitiator = {
-  participantKind: "actor" | "remote_agent" | "workspace_member"
+  participantType: "actor" | "remote_agent" | "workspace_member"
   participantId?: string
   workspaceMemberId?: string
   actorId?: string
@@ -40,7 +40,7 @@ async function resolveInitiator(params: {
 }
 
 async function loadParticipantDisplay(params: {
-  participantKind:
+  participantType:
     | "actor"
     | "remote_agent"
     | "workspace_member"
@@ -58,13 +58,13 @@ async function loadParticipantDisplay(params: {
   }
   return {
     name:
-      params.participantKind === "actor"
+      params.participantType === "actor"
         ? "Actor"
-        : params.participantKind === "remote_agent"
+        : params.participantType === "remote_agent"
           ? "Remote Agent"
-          : params.participantKind === "workspace_member"
+          : params.participantType === "workspace_member"
             ? "User"
-            : params.participantKind === "system"
+            : params.participantType === "system"
               ? "System"
               : "External participant",
     title: undefined as string | undefined,
@@ -74,7 +74,7 @@ async function loadParticipantDisplay(params: {
 export async function activateConversationParticipant(params: {
   workspaceId?: string
   conversationId: string
-  participantKind: "actor" | "workspace_member" | "external" | "system"
+  participantType: "actor" | "workspace_member" | "external" | "system"
   workspaceMemberId?: string
   actorId?: string
   remoteAgentId?: string
@@ -96,7 +96,7 @@ export async function activateConversationParticipant(params: {
 
   const member = await ensureConversationParticipant({
     conversationId: params.conversationId,
-    participantKind: params.participantKind,
+    participantType: params.participantType,
     workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
     remoteAgentId: params.remoteAgentId,
@@ -115,7 +115,7 @@ export async function activateConversationParticipant(params: {
       initiator: params.initiator,
     })
     const { name, title } = await loadParticipantDisplay({
-      participantKind: params.participantKind,
+      participantType: params.participantType,
       actorId: params.actorId,
       workspaceMemberId: params.workspaceMemberId,
       displayName: params.displayName,
@@ -128,7 +128,7 @@ export async function activateConversationParticipant(params: {
       timelinePolicy: "all_members",
       contextPolicy: "shared",
       authorParticipantId:
-        initiator?.participantKind === params.participantKind
+        initiator?.participantType === params.participantType
           ? member.id
           : initiator?.participantId,
       eventPayload: {
@@ -137,9 +137,9 @@ export async function activateConversationParticipant(params: {
           {
             participantId: member.id,
             participantType:
-              params.participantKind === "system"
+              params.participantType === "system"
                 ? "external"
-                : params.participantKind,
+                : params.participantType,
             actorId: params.actorId,
             remoteAgentId: params.remoteAgentId,
             workspaceMemberId: params.workspaceMemberId,
@@ -150,7 +150,7 @@ export async function activateConversationParticipant(params: {
         initiator: initiator
           ? {
               participantId: initiator.participantId,
-              participantType: initiator.participantKind,
+              participantType: initiator.participantType,
               actorId: initiator.actorId,
               remoteAgentId: initiator.remoteAgentId,
               workspaceMemberId: initiator.workspaceMemberId,

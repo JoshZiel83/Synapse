@@ -48,9 +48,13 @@ fi
 app_path="$(cd "$(dirname "$app_path")" && pwd)/$(basename "$app_path")"
 app_name="$(basename "$app_path")"
 product_name="${app_name%.app}"
-portable_zip="synapse-relay-gui-${suffix}-portable.zip"
-dmg_output="synapse-relay-gui-${suffix}.dmg"
-pkg_output="synapse-relay-gui-${suffix}.pkg"
+output_dir="$(pwd)"
+portable_zip_name="synapse-relay-gui-${suffix}-portable.zip"
+dmg_output_name="synapse-relay-gui-${suffix}.dmg"
+pkg_output_name="synapse-relay-gui-${suffix}.pkg"
+portable_zip="${output_dir}/${portable_zip_name}"
+dmg_output="${output_dir}/${dmg_output_name}"
+pkg_output="${output_dir}/${pkg_output_name}"
 
 if [[ -f "${app_path}/Contents/Info.plist" ]]; then
   detected_bundle_identifier="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "${app_path}/Contents/Info.plist" 2>/dev/null || true)"
@@ -74,15 +78,14 @@ if [[ -z "$app_exec_name" ]]; then
   app_exec_name="${app_name%.app}"
 fi
 
-node "${repo_root}/relay/scripts/prepare-gui-build-assets.mjs" --runtime-output="${app_path}/Contents/Resources/runtime"
-ditto -c -k --sequesterRsrc --keepParent "$app_path" "$portable_zip"
-
 work_dir="$(mktemp -d)"
 stage_dir="${work_dir}/dmg-root"
 temp_dmg="${work_dir}/Synapse Relay-temp.dmg"
 dmg_base="${work_dir}/Synapse Relay"
 pkg_root="${work_dir}/pkg-root"
 pkg_scripts="${work_dir}/pkg-scripts"
+portable_zip_local="${work_dir}/${portable_zip_name}"
+pkg_output_local="${work_dir}/${pkg_output_name}"
 device=""
 
 cleanup() {
@@ -92,6 +95,11 @@ cleanup() {
   rm -rf "$work_dir"
 }
 trap cleanup EXIT
+
+node "${repo_root}/relay/scripts/prepare-gui-build-assets.mjs" --runtime-output="${app_path}/Contents/Resources/runtime"
+ditto -c -k --sequesterRsrc --keepParent "$app_path" "$portable_zip_local"
+rm -f "$portable_zip"
+cp "$portable_zip_local" "$portable_zip"
 
 mkdir -p "$stage_dir"
 mkdir -p "$pkg_root" "$pkg_scripts"
@@ -119,10 +127,12 @@ pkgbuild \
   --identifier "$bundle_identifier" \
   --version "$app_version" \
   --scripts "$pkg_scripts" \
-  "$pkg_output" >/dev/null
+  "$pkg_output_local" >/dev/null
 
-pkg_name="$(basename "$pkg_output")"
-cp "$pkg_output" "$stage_dir/"
+pkg_name="$(basename "$pkg_output_local")"
+cp "$pkg_output_local" "$stage_dir/"
+rm -f "$pkg_output"
+cp "$pkg_output_local" "$pkg_output"
 
 hdiutil create -srcfolder "$stage_dir" -volname "$volume_name" -fs HFS+ -format UDRW -ov "$temp_dmg" >/dev/null
 
@@ -133,7 +143,8 @@ if [[ -z "$device" ]]; then
   exit 1
 fi
 
-/usr/bin/osascript <<EOF
+if [[ "${SYNAPSE_RELAY_DMG_FINDER_LAYOUT:-0}" == "1" ]]; then
+  /usr/bin/osascript <<EOF || echo "warning: Finder DMG layout customization failed; continuing with default layout" >&2
 tell application "Finder"
   tell disk "${volume_name}"
     open
@@ -152,10 +163,12 @@ tell application "Finder"
   end tell
 end tell
 EOF
+fi
 
 sync
 hdiutil detach "$device" -quiet >/dev/null
 device=""
 
 hdiutil convert "$temp_dmg" -format UDZO -imagekey zlib-level=9 -ov -o "$dmg_base" >/dev/null
-mv "${dmg_base}.dmg" "$dmg_output"
+rm -f "$dmg_output"
+cp "${dmg_base}.dmg" "$dmg_output"

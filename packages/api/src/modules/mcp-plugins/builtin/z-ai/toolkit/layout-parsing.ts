@@ -1,5 +1,11 @@
-import { FILE_ORIGIN_SYSTEMS, ToolDefinition } from "@synapse/shared"
+import {
+  CanonicalContentBlock,
+  FILE_ORIGIN_SYSTEMS,
+  textBlock,
+  ToolDefinition,
+} from "@synapse/shared"
 import type { SubFeature } from "./types.js"
+import type { BuiltinPluginExecuteResult } from "../../index.js"
 import { saveFromUrl } from "../../../../../infrastructure/storage/file-io.js"
 import {
   fileRefProperty,
@@ -72,7 +78,7 @@ export const layoutParsingFeature: SubFeature = {
     _toolName: string,
     input: Record<string, unknown>,
     config: Record<string, unknown>
-  ): Promise<unknown> {
+  ): Promise<BuiltinPluginExecuteResult> {
     const apiKey = config.apiKey as string
     if (!apiKey) throw new Error("ZhipuAI API key not configured.")
 
@@ -129,36 +135,33 @@ export const layoutParsingFeature: SubFeature = {
         request_id?: string
       }
 
-      const output: Array<
-        { type: "text"; text: string } | ReturnType<typeof pluginOutputFileRef>
-      > = []
-      output.push({
-        type: "text",
-        text: [
-          result.id ? `Task ID: ${result.id}` : null,
-          result.request_id ? `Request ID: ${result.request_id}` : null,
-          result.model ? `Model: ${result.model}` : null,
-          result.created ? `Created: ${result.created}` : null,
-          result.data_info?.num_pages
-            ? `Pages: ${result.data_info.num_pages}`
-            : null,
-        ]
-          .filter(Boolean)
-          .join("\n"),
-      })
+      const output: CanonicalContentBlock[] = []
+      output.push(
+        textBlock(
+          [
+            result.id ? `Task ID: ${result.id}` : null,
+            result.request_id ? `Request ID: ${result.request_id}` : null,
+            result.model ? `Model: ${result.model}` : null,
+            result.created ? `Created: ${result.created}` : null,
+            result.data_info?.num_pages
+              ? `Pages: ${result.data_info.num_pages}`
+              : null,
+          ]
+            .filter(Boolean)
+            .join("\n")
+        )
+      )
 
       if (result.md_results) {
-        output.push({
-          type: "text",
-          text: `Markdown result:\n${result.md_results}`,
-        })
+        output.push(textBlock(`Markdown result:\n${result.md_results}`))
       }
 
       if (result.layout_details) {
-        output.push({
-          type: "text",
-          text: `Layout details JSON:\n${JSON.stringify(result.layout_details, null, 2)}`,
-        })
+        output.push(
+          textBlock(
+            `Layout details JSON:\n${JSON.stringify(result.layout_details, null, 2)}`
+          )
+        )
       }
 
       if (Array.isArray(result.layout_visualization)) {
@@ -179,10 +182,7 @@ export const layoutParsingFeature: SubFeature = {
               },
             })
           )
-          output.push({
-            type: "text",
-            text: `Layout visualization ${index + 1}:`,
-          })
+          output.push(textBlock(`Layout visualization ${index + 1}:`))
           output.push(pluginOutputFileRef(saved))
         }
       }

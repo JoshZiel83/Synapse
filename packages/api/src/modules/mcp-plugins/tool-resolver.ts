@@ -6,6 +6,7 @@ import {
   textBlocks,
   type RelayHiddenToolBinding,
   type ToolDefinition,
+  type ToolResultOrigin,
 } from "@synapse/shared"
 import type {
   NormalizedMcpToolResult,
@@ -66,8 +67,15 @@ export interface ResolvedMcpTools {
   shutdown: () => Promise<void>
 }
 
-interface ResolveParams extends RuntimeActorContext {
+interface ResolveParams extends Omit<RuntimeActorContext, "actorId"> {
   conversationId: string
+  // Exactly one of actorId / remoteAgentId is set for a given resolver call.
+  // Actors flow through the original conversation_actor_context grant path;
+  // remote_agents pick up workspace-shared resources plus an extra
+  // conversation-target grant pass (since they have no actor identity and
+  // therefore can't be evaluated against actor / actor_in_conversation grants).
+  actorId?: string
+  remoteAgentId?: string
 }
 
 export interface ResolvedRelayToolTarget {
@@ -192,24 +200,73 @@ function clearRelayToolRuntimeContexts(sessionId: string) {
   }
 }
 
-function buildRelayBinaryMetadata(
+function buildRelayToolOrigin(
   context: RelayToolRuntimeContext,
   namespacedToolName: string
-): Record<string, unknown> {
+): ToolResultOrigin {
   return {
-    source: {
-      kind: "relay_mcp",
-      relayCapabilityId: context.capabilityId,
-      deviceId: context.deviceId,
-      deviceDisplayName: context.deviceDisplayName,
-      exposureId: context.exposureId,
-      exposureStableKey: context.exposureStableKey,
-      exposureDisplayName: context.exposureDisplayName,
-      runtimeSessionId: context.runtimeSessionId,
-      visibleToolName: context.visibleToolName,
-      relayToolStableKey: context.relayToolStableKey,
+    kind: "mcp_relay",
+    deviceId: context.deviceId,
+    deviceName: context.deviceDisplayName,
+    exposureId: context.exposureId,
+    exposureStableKey: context.exposureStableKey,
+    exposureName: context.exposureDisplayName,
+    runtimeSessionId: context.runtimeSessionId,
+    visibleToolName: context.visibleToolName,
+    namespacedToolName,
+  }
+}
+
+function buildMcpInstanceOrigin(
+  instance: {
+    transport?: string
+    relayMetadata?: McpInstance["relayMetadata"]
+  },
+  pluginSlug: string | undefined,
+  pluginDisplayName: string | undefined,
+  relayContext: RelayToolRuntimeContext | undefined,
+  namespacedToolName: string
+): ToolResultOrigin {
+  if (instance.transport === "relay") {
+    // Prefer the runtime context (carries visibleToolName / runtimeSessionId
+    // captured at dispatch time). Fall back to the instance-level
+    // relayMetadata so the FIRST relay call (where runtime context hasn't
+    // been populated yet) and the failure-path origin still get the
+    // correct mcp_relay discriminator with deviceId/exposureStableKey.
+    if (relayContext) {
+      return buildRelayToolOrigin(relayContext, namespacedToolName)
+    }
+    if (instance.relayMetadata) {
+      return {
+        kind: "mcp_relay",
+        deviceId: instance.relayMetadata.deviceId,
+        exposureId: instance.relayMetadata.exposureId,
+        exposureStableKey: instance.relayMetadata.exposureStableKey,
+        exposureName: instance.relayMetadata.exposureDisplayName,
+        namespacedToolName,
+      }
+    }
+    // Last-resort placeholder — should not happen in practice; keeps the
+    // discriminator correct even if relayMetadata isn't populated.
+    return {
+      kind: "mcp_relay",
+      deviceId: "unknown",
+      exposureStableKey: pluginSlug || namespacedToolName,
       namespacedToolName,
-    },
+    }
+  }
+  if (instance.transport === "builtin") {
+    return {
+      kind: "callable_plugin",
+      pluginKey: pluginSlug || namespacedToolName,
+      pluginName: pluginDisplayName,
+    }
+  }
+  // stdio / http remote MCP servers
+  return {
+    kind: "mcp_remote",
+    serverKey: pluginSlug || namespacedToolName,
+    serverName: pluginDisplayName,
   }
 }
 
@@ -272,6 +329,7 @@ async function buildVisibilitySubjects(params: ResolveParams) {
     workspaceId: params.workspaceId,
     workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
+    remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
     sessionId: params.sessionId,
     conversationActorContextId: params.conversationActorContextId,
@@ -311,9 +369,13 @@ function accessBindingMatchesContext(
     case "conversation":
       return row.conversation_id === params.conversationId
     case "actor":
-      return row.actor_id === params.actorId
+      // Remote-agent flow has no actorId; actor / actor_in_conversation grants
+      // are inapplicable to a non-actor subject and must never match (even
+      // accidentally, e.g. if both sides were undefined).
+      return params.actorId !== undefined && row.actor_id === params.actorId
     case "actor_in_conversation":
       return (
+        params.actorId !== undefined &&
         row.actor_id === params.actorId &&
         row.conversation_id === params.conversationId
       )
@@ -381,7 +443,14 @@ function resolveReuseOwnerKey(
     case "conversation":
       return `conversation:${params.conversationId}`
     case "actor":
-      return `actor:${params.actorId}`
+      // Reuse key follows the principal: real actor for an actor-driven turn,
+      // remote_agent for a remote-agent-driven one. Both partition cleanly
+      // and never collide because actor IDs and remote_agent IDs come from
+      // disjoint tables / UUID space anyway, but the prefix makes audit
+      // traces unambiguous.
+      return params.actorId
+        ? `actor:${params.actorId}`
+        : `remote_agent:${params.remoteAgentId ?? "unknown"}`
     case "session":
       return `session:${params.sessionId}`
     case "turn":
@@ -787,6 +856,35 @@ function buildRelayScopedInstance(params: {
   }
 }
 
+async function loadConversationTargetedResourceIds(params: {
+  resourceType: "plugin_installation" | "relay_capability"
+  conversationId: string
+}): Promise<string[]> {
+  // Discover grants that target a whole conversation ("any participant in
+  // conversation X can use resource Y"). The standard subject machinery only
+  // surfaces these when the caller has a conversation_actor_context subject,
+  // which actors get for free. Remote agents do not have a
+  // conversation_actor_context row, so we have to ask the bindings table
+  // directly. Workspace-scoped grants are still discovered via the normal
+  // lookupResources({type:'workspace'}) path; this helper only fills the
+  // conversation-target gap.
+  const column =
+    params.resourceType === "plugin_installation"
+      ? "plugin_installation_id"
+      : "relay_capability_id"
+  const result = await db
+    .selectFrom("resource_access_bindings as binding")
+    .select(sql<string>`binding.${sql.raw(column)}::text`.as("resource_id"))
+    .where("binding.resource_type", "=", params.resourceType)
+    .where("binding.status", "=", "active")
+    .where("binding.target_type", "=", "conversation")
+    .where("binding.subject_conversation_id", "=", params.conversationId)
+    .where(sql<boolean>`binding.${sql.raw(column)} IS NOT NULL`)
+    .distinct()
+    .execute()
+  return result.map((row) => row.resource_id)
+}
+
 async function loadVisiblePlugins(params: ResolveParams) {
   const subjects = await buildVisibilitySubjects(params)
   const visibleInstallationIds = new Set<string>()
@@ -805,6 +903,16 @@ async function loadVisiblePlugins(params: ResolveParams) {
     for (const id of ids) {
       visibleInstallationIds.add(id)
     }
+  }
+
+  // Remote-agent flow has no actor identity, so the subject machinery cannot
+  // surface conversation-target plugin grants. Backfill from a direct query.
+  if (params.remoteAgentId && !params.actorId && params.conversationId) {
+    const extra = await loadConversationTargetedResourceIds({
+      resourceType: "plugin_installation",
+      conversationId: params.conversationId,
+    })
+    for (const id of extra) visibleInstallationIds.add(id)
   }
 
   if (visibleInstallationIds.size === 0) {
@@ -897,6 +1005,15 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
     for (const id of ids) {
       visibleCapabilityIds.add(id)
     }
+  }
+
+  // Same conversation-target backfill as plugins (see loadVisiblePlugins).
+  if (params.remoteAgentId && !params.actorId && params.conversationId) {
+    const extra = await loadConversationTargetedResourceIds({
+      resourceType: "relay_capability",
+      conversationId: params.conversationId,
+    })
+    for (const id of extra) visibleCapabilityIds.add(id)
   }
 
   if (visibleCapabilityIds.size === 0) {
@@ -1250,6 +1367,29 @@ async function resolveTools(
 export async function resolveMcpToolsForActor(
   params: ResolveParams
 ): Promise<ResolvedMcpTools> {
+  if (!params.actorId) {
+    throw new Error(
+      "resolveMcpToolsForActor requires actorId; call resolveMcpToolsForRemoteAgent for the remote-agent flow"
+    )
+  }
+  return resolveMcpToolsCommon(params)
+}
+
+export async function resolveMcpToolsForRemoteAgent(
+  params: Omit<ResolveParams, "actorId"> & {
+    remoteAgentId: string
+    conversationId: string
+  }
+): Promise<ResolvedMcpTools> {
+  // actorId stays undefined; subject builder + accessBindingMatchesContext
+  // already understand this discriminator and route through the workspace +
+  // conversation-target grant paths only.
+  return resolveMcpToolsCommon({ ...params, actorId: undefined })
+}
+
+async function resolveMcpToolsCommon(
+  params: ResolveParams
+): Promise<ResolvedMcpTools> {
   const mcpVersion = await getMcpVersion(params.workspaceId)
   const turnOwnerKey = `session:${params.sessionId}:turn:${randomUUID()}`
   const instances = new Map<string, McpInstance>()
@@ -1288,27 +1428,54 @@ export async function resolveMcpToolsForActor(
     let isError = false
     let errorMessage: string | undefined
 
+    // Compute a SKELETON origin up-front so it's available in the catch
+    // path even if instance.execute throws before runtime context can be
+    // populated. For relay instances this still has kind:"mcp_relay" plus
+    // deviceId/exposureStableKey thanks to instance.relayMetadata (Phase 10
+    // race fix). The success path re-resolves below to pick up the richer
+    // runtimeSessionId/visibleToolName fields once execute has set them.
+    const skeletonOrigin = buildMcpInstanceOrigin(
+      instance,
+      `${orgSlug}/${pluginSlug}`,
+      instance.pluginSlug || pluginSlug,
+      undefined,
+      namespacedToolName
+    )
+
     try {
       rawOutput = await instance.execute(toolName, input, executionContext)
+      // Post-execute: for relay tools, ensureRuntimeSession has now run and
+      // populated activeRelayToolContexts. Re-resolve to upgrade from the
+      // skeleton mcp_relay (deviceId + exposureStableKey only) to the full
+      // mcp_relay (with runtimeSessionId, visibleToolName, deviceName, etc).
       const relayContext =
         instance.transport === "relay"
           ? getRelayToolRuntimeContext(params.sessionId, namespacedToolName)
           : undefined
-      return await normalizeMcpToolResult(
-        rawOutput,
-        params.workspaceId,
-        relayContext
-          ? {
-              binaryMetadata: buildRelayBinaryMetadata(
-                relayContext,
-                namespacedToolName
-              ),
-            }
-          : undefined
-      )
+      const fullOrigin = relayContext
+        ? buildMcpInstanceOrigin(
+            instance,
+            `${orgSlug}/${pluginSlug}`,
+            instance.pluginSlug || pluginSlug,
+            relayContext,
+            namespacedToolName
+          )
+        : skeletonOrigin
+      return await normalizeMcpToolResult(rawOutput, params.workspaceId, {
+        origin: fullOrigin,
+      })
     } catch (error: any) {
       isError = true
       errorMessage = error.message
+      // Attach the SKELETON origin to the error so ai/index.ts can persist
+      // it with the failure. Skeleton still has the correct discriminator
+      // (mcp_relay vs mcp_remote vs callable_plugin), just potentially
+      // missing per-call enrichment.
+      if (error && typeof error === "object" && !error.origin) {
+        try {
+          error.origin = skeletonOrigin
+        } catch {}
+      }
       throw error
     } finally {
       const durationMs = Date.now() - startTime
