@@ -231,6 +231,33 @@ export const ACCESS_ACTIONS = {
     permission: "delete",
   },
 
+  // v3 device-runtime parallel actions; the relay_capability.* entries above
+  // continue to exist until PR #17 deletes the legacy relay code paths.
+  "device_capability.view": {
+    resourceType: "device_capability",
+    permission: "view",
+  },
+  "device_capability.use": {
+    resourceType: "device_capability",
+    permission: "use",
+  },
+  "device_capability.request_runtime_authorization": {
+    resourceType: "device_capability",
+    permission: "request_runtime_authorization",
+  },
+  "device_capability.edit": {
+    resourceType: "device_capability",
+    permission: "edit",
+  },
+  "device_capability.grant": {
+    resourceType: "device_capability",
+    permission: "grant",
+  },
+  "device_capability.delete": {
+    resourceType: "device_capability",
+    permission: "delete",
+  },
+
   "model_group.use": { resourceType: "model_group", permission: "use" },
   "model_group.view": { resourceType: "model_group", permission: "view" },
   "model_group.edit": { resourceType: "model_group", permission: "edit" },

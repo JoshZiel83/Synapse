@@ -115,6 +115,58 @@ export type ConversationsKind = "group" | "private" | "virtual";
 
 export type ConversationTransportBindingsInboundActorMode = "inherit_account" | "none" | "specified_actor";
 
+export type DeviceCapabilitiesStatus = "active" | "archived" | "deprecated";
+
+export type DeviceCatalogRevisionsStatus = "active" | "invalid" | "superseded";
+
+export type DeviceControlPlaneSessionsStatus = "active" | "closed" | "closing" | "connecting" | "rejected";
+
+export type DeviceControlPlaneSessionsTransport = "websocket";
+
+export type DeviceExposuresBuiltinKind = "browser" | "commandline" | "cua" | "filesystem";
+
+export type DeviceExposuresRuntimeStatus = "degraded" | "discovered" | "failed" | "healthy" | "offline" | "quarantined";
+
+export type DeviceExposuresTransport = "builtin" | "custom" | "http" | "sse" | "stdio";
+
+export type DeviceOperationAttemptsStatus = "abandoned" | "acknowledged" | "failed" | "issued" | "response_received" | "sent";
+
+export type DeviceOperationAttemptsTransport = "control_plane_task" | "mcp_http";
+
+export type DeviceOperationsPrincipalKind = "actor" | "actor_in_conversation" | "conversation" | "remote_agent" | "workspace_member";
+
+export type DeviceOperationsStatus = "awaiting_authorization" | "cancelled" | "created" | "dispatched" | "expired" | "failed" | "output_streaming" | "received" | "started" | "succeeded";
+
+export type DeviceOperationsTaskMode = "async" | "sync";
+
+export type DevicePairingSessionsMode = "cloud_bootstrap" | "local_qr" | "service_join";
+
+export type DevicePairingSessionsStatus = "cancelled" | "confirmed" | "consumed" | "expired" | "pending" | "rejected";
+
+export type DeviceRuntimeSessionServicesStatus = "closed" | "open";
+
+export type DeviceRuntimeSessionsStatus = "aborted" | "closed" | "closing" | "open";
+
+export type DevicesAutomationLifecycleState = "offline" | "online";
+
+export type DevicesDeviceType = "cloud_sandbox" | "custom" | "desktop_computer" | "laptop_computer" | "mobile_phone" | "server" | "tablet" | "virtual_machine";
+
+export type DeviceServicesServiceKind = "device_runtime" | "remote_agent_daemon";
+
+export type DeviceServicesStatus = "degraded" | "offline" | "online" | "starting";
+
+export type DevicesHostKind = "cloud" | "local";
+
+export type DevicesTrustStatus = "pending" | "revoked" | "trusted";
+
+export type DeviceSyncSourcesSourceKind = "claude_code" | "claude_desktop" | "codex" | "custom" | "gemini" | "manual" | "opencode";
+
+export type DeviceSyncSourcesStatus = "disabled" | "error" | "idle" | "syncing" | "unknown";
+
+export type DeviceSyncSourcesSyncMode = "follow" | "snapshot";
+
+export type DeviceToolsStatus = "active" | "hidden" | "removed";
+
 export type EngineBranchCheckpointsCheckpointKind = "compaction" | "snapshot";
 
 export type FileContentKind = "audio" | "document" | "image" | "video";
@@ -205,7 +257,7 @@ export type RelationshipRequestStatus = "approved" | "pending" | "rejected";
 
 export type RelayAuthorizationGrantsRetention = "consume_once" | "until_revoked";
 
-export type RelayAuthorizationGrantsScope = "actor" | "conversation" | "once" | "workspace";
+export type RelayAuthorizationGrantsScope = "actor" | "actor_in_conversation" | "conversation" | "once" | "workspace";
 
 export type RelayAuthorizationGrantsStatus = "active" | "consumed" | "revoked" | "superseded";
 
@@ -265,7 +317,7 @@ export type RemoteAgentRuntimeCatalogStatus = "available" | "broken_path" | "mis
 
 export type RemoteAgentsRuntimeKind = "claude_code" | "codex";
 
-export type ResourceAccessBindingResourceType = "actor" | "automation_event_source" | "installed_skill" | "plugin_installation" | "relay_capability" | "remote_agent";
+export type ResourceAccessBindingResourceType = "actor" | "automation_event_source" | "device_capability" | "installed_skill" | "plugin_installation" | "relay_capability" | "remote_agent";
 
 export type ResourceAccessBindingsSource = "approval" | "default_open" | "manual" | "relay_auto" | "system";
 
@@ -972,6 +1024,258 @@ export interface ConversationTransportBindings {
   workspace_id: string;
 }
 
+export interface DeviceCapabilities {
+  conversation_type_mask_override: number | null;
+  created_at: Generated<Timestamp | null>;
+  exposure_id: string;
+  id: Generated<string>;
+  status: Generated<DeviceCapabilitiesStatus>;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
+}
+
+export interface DeviceCatalogRevisions {
+  activated_at: Generated<Timestamp | null>;
+  created_at: Generated<Timestamp | null>;
+  exposure_id: string;
+  id: Generated<string>;
+  invalidated_at: Timestamp | null;
+  revision_seq: Int8;
+  schema_hash: string;
+  status: Generated<DeviceCatalogRevisionsStatus>;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface DeviceControlPlaneSessions {
+  client_version: string | null;
+  close_reason: string | null;
+  created_at: Generated<Timestamp | null>;
+  device_id: string;
+  ended_at: Timestamp | null;
+  id: Generated<string>;
+  last_heartbeat_at: Timestamp | null;
+  last_sequence: Generated<Int8>;
+  protocol_version: Generated<number>;
+  remote_addr: string | null;
+  service_id: string;
+  started_at: Generated<Timestamp | null>;
+  status: Generated<DeviceControlPlaneSessionsStatus>;
+  transport: Generated<DeviceControlPlaneSessionsTransport>;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface DeviceExposures {
+  builtin_kind: DeviceExposuresBuiltinKind | null;
+  created_at: Generated<Timestamp | null>;
+  description: string | null;
+  device_id: string;
+  display_name: string;
+  id: Generated<string>;
+  last_error: string | null;
+  last_healthy_at: Timestamp | null;
+  last_seen_at: Timestamp | null;
+  metadata: Generated<Json>;
+  runtime_status: Generated<DeviceExposuresRuntimeStatus>;
+  service_id: string;
+  stable_key: string;
+  sync_source_id: string | null;
+  transport: DeviceExposuresTransport;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface DeviceOperationAttempts {
+  acknowledged_at: Timestamp | null;
+  attempt_seq: Int8;
+  created_at: Generated<Timestamp | null>;
+  device_control_plane_session_id: string | null;
+  device_service_id: string;
+  envelope_signature_kid: string | null;
+  id: Generated<string>;
+  mcp_request_id: string | null;
+  metadata: Generated<Json>;
+  operation_id: string;
+  response_at: Timestamp | null;
+  started_at: Timestamp | null;
+  status: Generated<DeviceOperationAttemptsStatus>;
+  transport: DeviceOperationAttemptsTransport;
+  tunnel_internal_url: string | null;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface DeviceOperationResults {
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  operation_id: string;
+  output_payload: Generated<Json>;
+  output_preview: string | null;
+  result_hash: string | null;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface DeviceOperations {
+  authorization_payload: Generated<Json>;
+  catalog_revision_id: string;
+  completed_at: Timestamp | null;
+  conversation_id: string | null;
+  created_at: Generated<Timestamp | null>;
+  device_capability_id: string;
+  device_exposure_id: string;
+  device_id: string;
+  error_code: string | null;
+  error_message: string | null;
+  expires_at: Timestamp | null;
+  id: Generated<string>;
+  initiated_by_session_id: string | null;
+  initiated_by_workspace_member_id: string | null;
+  input_hash: string;
+  input_payload: Generated<Json>;
+  operation_timeout_ms: number | null;
+  principal_kind: DeviceOperationsPrincipalKind;
+  principal_subject_id: string | null;
+  requires_replan: Generated<boolean>;
+  result_hash: string | null;
+  runtime_session_id: string | null;
+  status: Generated<DeviceOperationsStatus>;
+  task_id: string | null;
+  task_mode: Generated<DeviceOperationsTaskMode>;
+  tool_id: string;
+  tool_revision_id: string;
+  updated_at: Generated<Timestamp | null>;
+  visible_tool_name: string;
+  workspace_id: string;
+}
+
+export interface DevicePairingSessions {
+  bootstrap_token_hash: Buffer | null;
+  confirmed_at: Timestamp | null;
+  consumed_at: Timestamp | null;
+  context: Generated<Json>;
+  created_at: Generated<Timestamp | null>;
+  device_id: string | null;
+  expires_at: Timestamp;
+  id: Generated<string>;
+  mode: DevicePairingSessionsMode;
+  pairing_code: string | null;
+  requested_by_workspace_member_id: string | null;
+  requested_description: string | null;
+  requested_device_type: DevicesDeviceType | null;
+  requested_title: string | null;
+  server_base_url: string;
+  status: Generated<DevicePairingSessionsStatus>;
+  updated_at: Generated<Timestamp | null>;
+  verification_uri: string | null;
+  verification_uri_complete: string | null;
+  workspace_id: string;
+}
+
+export interface DeviceRuntimeSessions {
+  actor_id: string | null;
+  closed_at: Timestamp | null;
+  conversation_actor_context_id: string | null;
+  conversation_id: string | null;
+  created_at: Generated<Timestamp | null>;
+  device_id: string;
+  id: Generated<string>;
+  opened_at: Generated<Timestamp | null>;
+  status: Generated<DeviceRuntimeSessionsStatus>;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface DeviceRuntimeSessionServices {
+  closed_at: Timestamp | null;
+  opened_at: Generated<Timestamp | null>;
+  service_id: string;
+  session_id: string;
+  status: Generated<DeviceRuntimeSessionServicesStatus>;
+}
+
+export interface Devices {
+  automation_lifecycle_event_at: Timestamp | null;
+  automation_lifecycle_grace_until: Timestamp | null;
+  automation_lifecycle_state: DevicesAutomationLifecycleState | null;
+  conversation_type_mask_override: number | null;
+  created_at: Generated<Timestamp | null>;
+  description: string | null;
+  device_type: Generated<DevicesDeviceType>;
+  host_kind: Generated<DevicesHostKind>;
+  host_provider: string | null;
+  id: Generated<string>;
+  last_catalog_changed_at: Timestamp | null;
+  last_connected_at: Timestamp | null;
+  last_seen_at: Timestamp | null;
+  owner_workspace_member_id: string | null;
+  platform: string | null;
+  public_key: string;
+  public_key_fingerprint: string;
+  title: string;
+  trust_status: Generated<DevicesTrustStatus>;
+  updated_at: Generated<Timestamp | null>;
+  workspace_id: string;
+}
+
+export interface DeviceServiceKeys {
+  created_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  pubkey: string;
+  pubkey_fingerprint: string;
+  revoked_at: Timestamp | null;
+  service_id: string;
+}
+
+export interface DeviceServices {
+  created_at: Generated<Timestamp | null>;
+  current_session_id: string | null;
+  device_id: string;
+  id: Generated<string>;
+  last_seen_at: Timestamp | null;
+  metadata: Generated<Json>;
+  remote_agent_machine_id: string | null;
+  service_kind: DeviceServicesServiceKind;
+  status: Generated<DeviceServicesStatus>;
+  updated_at: Generated<Timestamp | null>;
+  version: string | null;
+}
+
+export interface DeviceSyncSources {
+  config_path: string | null;
+  created_at: Generated<Timestamp | null>;
+  device_id: string;
+  id: Generated<string>;
+  last_error: string | null;
+  last_synced_at: Timestamp | null;
+  source_key: string;
+  source_kind: DeviceSyncSourcesSourceKind;
+  status: Generated<DeviceSyncSourcesStatus>;
+  sync_mode: Generated<DeviceSyncSourcesSyncMode>;
+  updated_at: Generated<Timestamp | null>;
+}
+
+export interface DeviceToolRevisions {
+  annotations: Generated<Json>;
+  catalog_revision_id: string;
+  created_at: Generated<Timestamp | null>;
+  definition_hash: string;
+  description: Generated<string>;
+  id: Generated<string>;
+  input_schema: Generated<Json>;
+  tool_id: string;
+  tool_name: string;
+}
+
+export interface DeviceTools {
+  created_at: Generated<Timestamp | null>;
+  current_name: string;
+  exposure_id: string;
+  first_seen_at: Generated<Timestamp | null>;
+  id: Generated<string>;
+  last_seen_at: Generated<Timestamp | null>;
+  latest_revision_id: string | null;
+  metadata: Generated<Json>;
+  stable_key: string;
+  status: Generated<DeviceToolsStatus>;
+  updated_at: Generated<Timestamp | null>;
+}
+
 export interface DirectConversationBindings {
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
@@ -1098,12 +1402,15 @@ export interface InteractionPlanApprovalRequests {
 export interface InteractionRelayAuthorizationRequests {
   available_presets: Generated<Json>;
   dedupe_key: string;
+  device_capability_id: string | null;
+  device_exposure_id: string | null;
+  device_id: string | null;
   grant_options: Generated<Json>;
   interaction_id: string;
   reason: Generated<string>;
-  relay_capability_id: string;
-  relay_device_id: string;
-  relay_exposure_id: string;
+  relay_capability_id: string | null;
+  relay_device_id: string | null;
+  relay_exposure_id: string | null;
   relay_tool_stable_key: string;
   request_mode: RelayAuthorizationRequestMode;
   requested_action: Generated<Json>;
@@ -1497,13 +1804,17 @@ export interface RealtimeEventOutbox {
 
 export interface RelayAuthorizationGrants {
   consumed_at: Timestamp | null;
+  conversation_actor_context_id: string | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
+  device_capability_id: string | null;
+  device_exposure_id: string | null;
+  device_id: string | null;
   id: Generated<string>;
   policy: Generated<Json>;
-  relay_capability_id: string;
-  relay_device_id: string;
-  relay_exposure_id: string;
+  relay_capability_id: string | null;
+  relay_device_id: string | null;
+  relay_exposure_id: string | null;
   retention: RelayAuthorizationGrantsRetention;
   revoked_at: Timestamp | null;
   scope: RelayAuthorizationGrantsScope;
@@ -1863,6 +2174,7 @@ export interface ResourceAccessBindings {
   conversation_type_mask_override: number | null;
   created_at: Generated<Timestamp | null>;
   created_by_workspace_member_id: string | null;
+  device_capability_id: string | null;
   id: Generated<string>;
   installed_skill_id: string | null;
   plugin_installation_id: string | null;
@@ -2411,6 +2723,22 @@ export interface DB {
   conversation_participants: ConversationParticipants;
   conversation_transport_bindings: ConversationTransportBindings;
   conversations: Conversations;
+  device_capabilities: DeviceCapabilities;
+  device_catalog_revisions: DeviceCatalogRevisions;
+  device_control_plane_sessions: DeviceControlPlaneSessions;
+  device_exposures: DeviceExposures;
+  device_operation_attempts: DeviceOperationAttempts;
+  device_operation_results: DeviceOperationResults;
+  device_operations: DeviceOperations;
+  device_pairing_sessions: DevicePairingSessions;
+  device_runtime_session_services: DeviceRuntimeSessionServices;
+  device_runtime_sessions: DeviceRuntimeSessions;
+  device_service_keys: DeviceServiceKeys;
+  device_services: DeviceServices;
+  device_sync_sources: DeviceSyncSources;
+  device_tool_revisions: DeviceToolRevisions;
+  device_tools: DeviceTools;
+  devices: Devices;
   direct_conversation_bindings: DirectConversationBindings;
   engine_branch_checkpoints: EngineBranchCheckpoints;
   entity_access_requests: EntityAccessRequests;

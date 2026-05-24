@@ -29,7 +29,7 @@ import {
  * no actor/conversation context.
  */
 function buildRelayGrantSubjectRef(input: {
-  scope: "once" | "actor" | "conversation" | "workspace"
+  scope: RelayAuthorizationGrantScope
   workspaceId: string
   actorId?: string | null
   conversationId?: string | null
@@ -54,6 +54,14 @@ function buildRelayGrantSubjectRef(input: {
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: input.conversationId,
       }
+    case "actor_in_conversation":
+      // v3 scope added in PR #1 of the device-runtime refactor; the legacy
+      // relay code path does not emit this scope. The device-side runtime-
+      // authorizations module (PR #15 rename) handles it via
+      // ensureConversationActorContext + SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT.
+      throw new Error(
+        "actor_in_conversation scope is not supported by the legacy relay-authorizations module; use the device path"
+      )
   }
 }
 
@@ -95,10 +103,16 @@ function relayAuthorizationScopeRank(scope: RelayAuthorizationGrantScope) {
       return 0
     case "actor":
       return 1
-    case "conversation":
+    case "actor_in_conversation":
+      // Narrower than `conversation` (one actor only) but more specific than
+      // `actor` (only inside this conversation). Rank between actor and
+      // conversation so policy resolution prefers it over `actor` when
+      // available.
       return 2
-    case "workspace":
+    case "conversation":
       return 3
+    case "workspace":
+      return 4
     default:
       return 99
   }

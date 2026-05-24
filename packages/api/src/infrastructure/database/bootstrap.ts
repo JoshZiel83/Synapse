@@ -7,9 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION = "2026-05-24-auth-refactor"
+const CURRENT_SCHEMA_VERSION = "2026-05-25-device-runtime-v3-foundation"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "auth refactor (access_subjects registry + subject_id FKs across access/relationship/conversation tables); remote-agent per-conversation runtime sessions + fenced machine connections + delivery retry; IM transport-layer rewrite (connector abstraction, wecom enum, reaction tracking columns); chat refactor (participant_kind -> participant_type, relationship_target_type 'member' -> 'workspace_member', chat_push_tokens)"
+  "device runtime v3 PR #1 foundation: add device_* tables + enum types alongside relay_*; add 'device_capability' resource_access_binding_resource_type variant + device_capability_id column; add 'actor_in_conversation' to relay_authorization_grants_scope + conversation_actor_context_id column; dual-FK (nullable device triple alongside relay triple) on relay_authorization_grants and interaction_relay_authorization_requests with XOR CHECK"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

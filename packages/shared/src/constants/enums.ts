@@ -815,6 +815,7 @@ export const RELAY_AUTHORIZATION_GRANT_SCOPES = [
   "once",
   "actor",
   "conversation",
+  "actor_in_conversation",
   "workspace",
 ] as const
 export const RELAY_AUTHORIZATION_GRANT_RETENTIONS = [
