@@ -8,6 +8,7 @@ export {
   createCommandlineBuiltin,
   executeBash,
 } from "./builtins/commandline.js"
+export { createBrowserBuiltin, listCdpTargets } from "./builtins/browser.js"
 export { runDeviceRuntime, embedDeviceRuntime } from "./runtime.js"
 export { pair, rekeyDeviceRuntime, startPairingSession } from "./pairing.js"
 export { TransportClient } from "./transport.js"
