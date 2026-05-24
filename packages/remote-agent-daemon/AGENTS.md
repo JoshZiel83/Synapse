@@ -26,4 +26,4 @@
 
 合入 dev 后,使用 dev 分支的独立部署测试容器(`packages/api/tests/integration/` 下的 `docker-compose.test.yaml` 等)进行验证。
 
-子进程访问 `provider-specific AI endpoint` 必须经宿主机 SOCKS5(<redacted-local-proxy>);CC/Codex 子进程的 env 由 `drivers/proxy-env.ts:buildAgentChildEnv()` 统一注入 `HTTPS_PROXY=<redacted-outbound-proxy>` 等。
+子进程的外发流量由部署环境的代理配置决定。如果需要让 CC/Codex 子进程走 HTTPS 代理,可以通过 `--proxy-url`(或环境变量 `SYNAPSE_AGENT_PROXY_URL`)注入,driver 内部由 `drivers/proxy-env.ts:buildAgentChildEnv()` 统一展开为 `HTTPS_PROXY` / `HTTP_PROXY` / `NO_PROXY` 系列变量。默认不开启代理。

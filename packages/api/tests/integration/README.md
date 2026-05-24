@@ -105,9 +105,14 @@ ensure this never collides with `synapse-*` production containers.
 
 ## Notes
 
-- `provider-specific AI endpoint` access on this machine requires SOCKS5 `<redacted-local-proxy>`. Only
-  `llm-smoke.test.ts` hits the gateway; everything else is fully
-  self-contained.
+- The optional LLM smoke test (`llm-smoke.test.ts`) requires
+  `LLM_SMOKE_BASE_URL` and `LLM_SMOKE_API_KEY` (or the shared
+  `AI_BASE_URL` / `AI_API_KEY` pair), plus optional `LLM_SMOKE_MODEL`.
+  It is skipped when not configured. If your environment needs an HTTPS
+  proxy to reach the configured endpoint, set `HTTPS_PROXY` /
+  `HTTP_PROXY` at the environment level — the test itself is unaware of
+  any specific proxy topology. Everything else in this directory is
+  fully self-contained.
 - `.cache/` and `tmp-profiles/` are gitignored.
 - Mock MCP servers are pure stdio Node scripts — they don't need any
   runtime bundle; the relay's plain `make cli` build is sufficient.

@@ -2,9 +2,11 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { buildAgentChildEnv } from "./proxy-env.js"
 
+const EXAMPLE_PROXY = "socks5h://proxy.example.invalid:1080"
+
 test("buildAgentChildEnv returns empty when no proxyUrl is configured", () => {
-  // No silent default to localhost SOCKS5 — daemons not on a tunnel host
-  // would dead-route every claude / codex API call if we shipped one.
+  // No silent default — daemons not on a tunnel host would dead-route
+  // every claude / codex API call if we shipped one.
   assert.deepEqual(buildAgentChildEnv(), {})
   assert.deepEqual(buildAgentChildEnv({}), {})
   assert.deepEqual(buildAgentChildEnv({ proxyUrl: "" }), {})
@@ -13,10 +15,10 @@ test("buildAgentChildEnv returns empty when no proxyUrl is configured", () => {
 
 test("buildAgentChildEnv injects every env-var case when proxyUrl is set", () => {
   const env = buildAgentChildEnv({
-    proxyUrl: "<redacted-outbound-proxy>",
+    proxyUrl: EXAMPLE_PROXY,
   })
-  assert.equal(env.HTTPS_PROXY, "<redacted-outbound-proxy>")
-  assert.equal(env.HTTP_PROXY, "<redacted-outbound-proxy>")
+  assert.equal(env.HTTPS_PROXY, EXAMPLE_PROXY)
+  assert.equal(env.HTTP_PROXY, EXAMPLE_PROXY)
   assert.equal(env.https_proxy, env.HTTPS_PROXY)
   assert.equal(env.http_proxy, env.HTTP_PROXY)
   assert.ok(env.NO_PROXY?.includes("127.0.0.1"))
@@ -26,7 +28,7 @@ test("buildAgentChildEnv injects every env-var case when proxyUrl is set", () =>
 
 test("buildAgentChildEnv merges extraNoProxyHosts and dedupes", () => {
   const env = buildAgentChildEnv({
-    proxyUrl: "<redacted-outbound-proxy>",
+    proxyUrl: EXAMPLE_PROXY,
     extraNoProxyHosts: ["host.docker.internal", "127.0.0.1", "rae-api"],
   })
   const list = (env.NO_PROXY ?? "").split(",")

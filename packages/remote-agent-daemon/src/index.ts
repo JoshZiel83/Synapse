@@ -159,9 +159,8 @@ function parseArgs(argv: string[]): DaemonConfig {
   // Proxy is opt-in: pass --proxy-url socks5h://host:port (or set
   // SYNAPSE_AGENT_PROXY_URL) to inject HTTPS_PROXY into the claude / codex
   // child processes. Without it the child runs with the daemon's own
-  // outbound network. Originally we defaulted to <redacted-local-proxy> to support
-  // the provider-specific AI endpoint gateway on our test box; that silently broke any other
-  // deployment, so the default is now no proxy.
+  // outbound network. No default — a daemon not on a tunnel host would
+  // dead-route every claude / codex API call if we shipped one.
   const proxyUrl = args.get("proxy-url") || process.env.SYNAPSE_AGENT_PROXY_URL
 
   if (!serverUrl) throw new Error("--server-url is required")
