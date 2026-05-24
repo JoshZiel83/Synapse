@@ -16,6 +16,7 @@ export {
 } from "./sidecar.js"
 export { runDeviceRuntime, embedDeviceRuntime } from "./runtime.js"
 export { pair, rekeyDeviceRuntime, startPairingSession } from "./pairing.js"
+export { bootstrapCloudDevice } from "./cloud-bootstrap.js"
 export { TransportClient } from "./transport.js"
 export { createFrpTunnelAdapter } from "./tunnel/frp.js"
 export {

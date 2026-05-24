@@ -14,6 +14,7 @@
 import { createFileBackedBroker } from "./broker.js"
 import { pair, rekeyDeviceRuntime } from "./pairing.js"
 import { runDeviceRuntime } from "./runtime.js"
+import { bootstrapCloudDevice } from "./cloud-bootstrap.js"
 
 interface CliArgs {
   cmd: string
@@ -112,10 +113,26 @@ async function main() {
       )
       return
     }
-    case "bootstrap":
+    case "bootstrap": {
+      const token = getFlag(args.flags, "bootstrap-token")
+      if (!token) {
+        console.error(
+          "synapse-device bootstrap: --bootstrap-token <token> is required"
+        )
+        process.exit(2)
+      }
+      const result = await bootstrapCloudDevice({
+        serverOrigin,
+        broker,
+        bootstrapToken: token,
+        clientVersion: "0.1.0-device-runtime-v3",
+      })
+      console.log(JSON.stringify(result, null, 2))
+      return
+    }
     case "claim-daemon": {
       console.error(
-        `synapse-device ${args.cmd}: implementation lands in PR #12 / PR #5; this is a v3.0 stub`
+        `synapse-device ${args.cmd}: not yet wired in v3.0 CLI; use the dashboard "Attach remote agent daemon" button (PR #5+)`
       )
       process.exit(2)
       return

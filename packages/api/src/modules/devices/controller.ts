@@ -31,6 +31,7 @@ import {
   listDevices,
   startPairing,
 } from "./service.js"
+import { consumeCloudBootstrap, createCloudDevicePairing } from "./cloud.js"
 
 const pairingModeSchema = z.enum(DEVICE_PAIRING_MODES)
 const serviceKindSchema = z.enum(DEVICE_SERVICE_KINDS)
@@ -251,4 +252,74 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
   // Silence unused authHook lint warning until cloud bootstrap (PR #12)
   // mounts /api/v1/devices/bootstrap on it.
   void authHook
+
+  // Cloud device creation — workspace-scoped POST that returns a one-time
+  // bootstrap_token for the API server to inject into the sandbox env.
+  // The actual sandbox provisioning is the operator's responsibility (or a
+  // host_provider plugin); the API just hands back the token.
+  app.post(
+    "/api/v1/workspaces/:workspaceId/devices/cloud",
+    workspaceHook,
+    async (request, reply) => {
+      const { workspaceId } = request.params as { workspaceId: string }
+      const body = request.body as {
+        title?: string
+        preset?: string
+        host_provider?: string
+      }
+      const session = (request as { session?: { workspaceMemberId?: string } })
+        .session
+      try {
+        const result = await createCloudDevicePairing({
+          workspaceId,
+          title: body.title ?? "Cloud Device",
+          preset: body.preset,
+          hostProvider: body.host_provider,
+          requestedByWorkspaceMemberId: session?.workspaceMemberId ?? null,
+        })
+        reply.send(result)
+      } catch (err) {
+        if (sendModuleError(reply, err)) return
+        throw err
+      }
+    }
+  )
+
+  // Sandbox boot handler — runs INSIDE the sandbox. Unauthenticated;
+  // bootstrap_token (sha256-hashed and matched against
+  // device_pairing_sessions.bootstrap_token_hash) is the credential.
+  app.post("/api/v1/devices/bootstrap", async (request, reply) => {
+    const body = request.body as {
+      bootstrap_token?: string
+      device_pubkey?: string
+      service_pubkey?: string
+      client_version?: string
+      host_provider?: string
+      platform?: string
+    }
+    if (!body?.bootstrap_token || !body.device_pubkey || !body.service_pubkey) {
+      reply.status(400).send({
+        code: "invalid_request",
+        message: "bootstrap_token, device_pubkey, service_pubkey required",
+      })
+      return
+    }
+    try {
+      const result = await consumeCloudBootstrap(
+        {
+          bootstrapToken: body.bootstrap_token,
+          devicePubkey: body.device_pubkey,
+          servicePubkey: body.service_pubkey,
+          clientVersion: body.client_version,
+          hostProvider: body.host_provider,
+          platform: body.platform,
+        },
+        { controlPlaneUrl: resolveControlPlaneUrl() }
+      )
+      reply.send(result)
+    } catch (err) {
+      if (sendModuleError(reply, err)) return
+      throw err
+    }
+  })
 }
