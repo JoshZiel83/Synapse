@@ -43,7 +43,7 @@ import { inferRelaySpecialAuthorizationPlan } from "./relay-special-mcp.js"
 import {
   createRelayAuthorizationRequest,
   waitForRelayAuthorizationResolution,
-} from "../relay-authorizations/requests.js"
+} from "../runtime-authorizations/requests.js"
 import {
   classifyRelayLocalPermissionDenial,
   injectRelayAuthorizationToolParameter,

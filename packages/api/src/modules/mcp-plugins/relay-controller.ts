@@ -50,7 +50,7 @@ import {
   listActiveRelayAuthorizationGrantsForExposure,
   revokeRelayAuthorizationGrant,
   type RelayAuthorizationGrantRecord,
-} from "../relay-authorizations/service.js"
+} from "../runtime-authorizations/service.js"
 
 const createPairingSchema = z.object({
   title: z.string().trim().min(1).max(255).optional(),

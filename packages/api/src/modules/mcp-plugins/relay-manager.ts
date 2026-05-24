@@ -57,10 +57,10 @@ import {
   type ToolCallTaskDeliveryPolicy,
   type ToolCallTaskRecord,
 } from "../tool-call-tasks/service.js"
-import { findMatchingRelayAuthorizationGrant } from "../relay-authorizations/service.js"
+import { findMatchingRelayAuthorizationGrant } from "../runtime-authorizations/service.js"
 import { normalizeMcpToolResult } from "./result-normalizer.js"
 import { inferRelaySpecialAuthorizationPlan } from "./relay-special-mcp.js"
-import { createRelayAuthorizationRequest } from "../relay-authorizations/requests.js"
+import { createRelayAuthorizationRequest } from "../runtime-authorizations/requests.js"
 import {
   classifyRelayLocalPermissionDenial,
   normalizeRelayRequestAuthorizationMode,

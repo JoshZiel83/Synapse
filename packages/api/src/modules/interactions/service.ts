@@ -65,7 +65,7 @@ import { sql } from "kysely"
 import {
   createRelayAuthorizationGrant,
   type RelayAuthorizationGrantRecord,
-} from "../relay-authorizations/service.js"
+} from "../runtime-authorizations/service.js"
 import {
   buildSessionPlanDraftState,
   parseSessionCollaborationState,

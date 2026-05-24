@@ -102,7 +102,7 @@ import {
 import {
   createRelayAuthorizationRequest,
   waitForRelayAuthorizationResolution,
-} from "../relay-authorizations/requests.js"
+} from "../runtime-authorizations/requests.js"
 import { inferRelaySpecialAuthorizationPlan } from "../mcp-plugins/relay-special-mcp.js"
 import { normalizeMcpToolResult } from "../mcp-plugins/result-normalizer.js"
 
