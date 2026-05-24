@@ -9,6 +9,7 @@ import type {
   ConversationMember,
   ConversationSummary,
 } from "@/stores/chat-store"
+import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import {
   getConversationMemberContactHref,
   getConversationMemberSubtitle,
@@ -16,13 +17,15 @@ import {
 
 function summarizeMemberCounts(conversation: ConversationSummary) {
   const workspaceMemberCount = conversation.members.filter(
-    (member) => member.participantType === "workspace_member"
+    (member) =>
+      member.participantType === CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER
   ).length
   const actorCount = conversation.members.filter(
-    (member) => member.participantType === "actor"
+    (member) => member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
   ).length
   const externalCount = conversation.members.filter(
-    (member) => member.participantType === "external"
+    (member) =>
+      member.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
   ).length
   const memberLabel = `${workspaceMemberCount} member${workspaceMemberCount === 1 ? "" : "s"}`
   const actorLabel = `${actorCount} actor${actorCount === 1 ? "" : "s"}`
@@ -33,7 +36,9 @@ function summarizeMemberCounts(conversation: ConversationSummary) {
 function orderMembers(members: ConversationMember[]) {
   return [...members].sort((left, right) => {
     if (left.participantType !== right.participantType) {
-      return left.participantType === "actor" ? -1 : 1
+      return left.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+        ? -1
+        : 1
     }
 
     return left.name.localeCompare(right.name)

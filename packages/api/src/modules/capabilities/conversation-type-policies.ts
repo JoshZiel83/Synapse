@@ -2,6 +2,7 @@ import type pg from "pg"
 import {
   CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES,
   DEFAULT_CONVERSATION_TYPE_MASK,
+  SUBJECT_KIND,
   normalizeConversationTypeMask,
 } from "@synapse/shared"
 import type {
@@ -10,9 +11,14 @@ import type {
   WorkspaceCapabilityConversationTypePolicy,
 } from "@synapse/shared/types"
 import {
+  db,
   executeSql,
   executeSqlOn,
 } from "../../infrastructure/database/kysely.js"
+import {
+  upsertAccessSubject,
+  upsertAccessSubjectOn,
+} from "../access/subject-registry.js"
 
 type Queryable = Pick<pg.PoolClient, "query">
 
@@ -61,17 +67,21 @@ export async function seedWorkspaceCapabilityConversationTypePolicies(
   run: Queryable,
   workspaceId: string
 ) {
+  const workspaceSubjectId = await upsertAccessSubjectOn(run, {
+    kind: SUBJECT_KIND.WORKSPACE,
+    workspaceId,
+  })
   for (const resourceFamily of CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES) {
     await executeSqlOn(
       run,
       `INSERT INTO workspace_capability_conversation_type_policies (
-         workspace_id,
+         subject_id,
          resource_family,
          default_conversation_type_mask
        )
        VALUES ($1, $2, $3)
-       ON CONFLICT (workspace_id, resource_family) DO NOTHING`,
-      [workspaceId, resourceFamily, DEFAULT_CONVERSATION_TYPE_MASK]
+       ON CONFLICT (subject_id, resource_family) DO NOTHING`,
+      [workspaceSubjectId, resourceFamily, DEFAULT_CONVERSATION_TYPE_MASK]
     )
   }
 }
@@ -81,12 +91,14 @@ export async function listWorkspaceCapabilityConversationTypePolicies(
 ) {
   const result = await executeSql<WorkspaceCapabilityConversationTypePolicyRow>(
     `SELECT
-       workspace_id,
-       resource_family,
-       default_conversation_type_mask
-     FROM workspace_capability_conversation_type_policies
-     WHERE workspace_id = $1
-     ORDER BY resource_family ASC`,
+       subj.workspace_id,
+       policy.resource_family,
+       policy.default_conversation_type_mask
+     FROM workspace_capability_conversation_type_policies policy
+     INNER JOIN access_subjects subj ON subj.id = policy.subject_id
+     WHERE subj.workspace_id = $1
+       AND subj.kind = 'workspace'
+     ORDER BY policy.resource_family ASC`,
     [workspaceId]
   )
   return buildWorkspacePoliciesView(workspaceId, result.rows)
@@ -102,19 +114,24 @@ export async function updateWorkspaceCapabilityConversationTypePolicies(input: {
     ([, mask]) => mask !== undefined
   ) as Array<[CapabilityConversationTypePolicyResourceFamily, number]>
 
+  const workspaceSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE,
+    workspaceId: input.workspaceId,
+  })
+
   for (const [resourceFamily, defaultMask] of entries) {
     await executeSql(
       `INSERT INTO workspace_capability_conversation_type_policies (
-         workspace_id,
+         subject_id,
          resource_family,
          default_conversation_type_mask
        )
        VALUES ($1, $2, $3)
-       ON CONFLICT (workspace_id, resource_family) DO UPDATE
+       ON CONFLICT (subject_id, resource_family) DO UPDATE
          SET default_conversation_type_mask = EXCLUDED.default_conversation_type_mask,
              updated_at = NOW()`,
       [
-        input.workspaceId,
+        workspaceSubjectId,
         resourceFamily,
         normalizeConversationTypeMask(
           defaultMask,
@@ -142,11 +159,13 @@ export async function getWorkspaceCapabilityConversationTypePolicyMap(
 
   const result = await executeSql<WorkspaceCapabilityConversationTypePolicyRow>(
     `SELECT
-       workspace_id,
-       resource_family,
-       default_conversation_type_mask
-     FROM workspace_capability_conversation_type_policies
-     WHERE workspace_id = ANY($1::uuid[])`,
+       subj.workspace_id,
+       policy.resource_family,
+       policy.default_conversation_type_mask
+     FROM workspace_capability_conversation_type_policies policy
+     INNER JOIN access_subjects subj ON subj.id = policy.subject_id
+     WHERE subj.workspace_id = ANY($1::uuid[])
+       AND subj.kind = 'workspace'`,
     [uniqueWorkspaceIds]
   )
 

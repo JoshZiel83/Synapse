@@ -38,7 +38,12 @@ import {
   nowISO,
 } from "@synapse/shared"
 import { sql } from "kysely"
+import { SUBJECT_KIND } from "@synapse/shared"
 import { parseSessionCollaborationState } from "./collaboration-state.js"
+import {
+  upsertAccessSubject,
+  upsertAccessSubjectOn,
+} from "../access/subject-registry.js"
 
 type SessionConversationMessageRole =
   | "user"
@@ -178,6 +183,12 @@ async function requireActiveActorConversationParticipant(
   actorId: UUID,
   queryable: QueryExecutor = pool
 ) {
+  // P1b: upsert the actor's subject_id (on the same queryable for trx safety),
+  // then filter conversation_participants by subject_id.
+  const actorSubjectId = await upsertAccessSubjectOn(queryable, {
+    kind: SUBJECT_KIND.ACTOR,
+    actorId,
+  })
   const participant = await executeTakeFirst(
     queryable,
     db
@@ -185,7 +196,7 @@ async function requireActiveActorConversationParticipant(
       .select("id")
       .where("conversation_id", "=", conversationId)
       .where("participant_kind", "=", "actor")
-      .where("actor_id", "=", actorId)
+      .where("subject_id", "=", actorSubjectId)
       .where("state", "=", "active")
       .limit(1)
   )
@@ -746,8 +757,9 @@ export async function getSessionMessages(
       "cp.id",
       "ci.author_participant_id"
     )
-    .leftJoin("actors as a", "a.id", "cp.actor_id")
-    .leftJoin("workspace_members as wm", "wm.id", "cp.workspace_member_id")
+    .leftJoin("access_subjects as cpsubj", "cpsubj.id", "cp.subject_id")
+    .leftJoin("actors as a", "a.id", "cpsubj.actor_id")
+    .leftJoin("workspace_members as wm", "wm.id", "cpsubj.workspace_member_id")
     .leftJoin("users as u", "u.id", "wm.user_id")
     .select([
       "ci.id",
@@ -761,8 +773,8 @@ export async function getSessionMessages(
       "ci.author_participant_id",
       "ci.created_at",
       "s.workspace_id",
-      "cp.actor_id as from_actor_id",
-      "cp.workspace_member_id as from_workspace_member_id",
+      "cpsubj.actor_id as from_actor_id",
+      "cpsubj.workspace_member_id as from_workspace_member_id",
       sql<string | null>`COALESCE(a.name, u.name, cp.display_name)`.as(
         "author_name"
       ),

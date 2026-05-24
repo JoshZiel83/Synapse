@@ -2,42 +2,17 @@ package runtimeauth
 
 import (
 	"context"
-	"encoding/json"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
-type FilesystemPolicy struct {
-	Access       string   `json:"access"`
-	PathPrefixes []string `json:"pathPrefixes"`
-}
-
-type CUAPolicy struct {
-	Access string `json:"access"`
-}
-
-type BrowserPolicy struct {
-	Action            string `json:"action"`
-	ScopeType         string `json:"scopeType,omitempty"`
-	Origin            string `json:"origin,omitempty"`
-	Host              string `json:"host,omitempty"`
-	RegistrableDomain string `json:"registrableDomain,omitempty"`
-}
-
-type CommandlinePolicy struct {
-	Executor         string `json:"executor"`
-	CommandMatchType string `json:"commandMatchType"`
-	CommandText      string `json:"commandText,omitempty"`
-	WorkingDirectory string `json:"workingDirectory,omitempty"`
-}
-
-type GrantPolicy struct {
-	Capability  string             `json:"capability"`
-	Filesystem  *FilesystemPolicy  `json:"filesystem,omitempty"`
-	CUA         *CUAPolicy         `json:"cua,omitempty"`
-	Browser     *BrowserPolicy     `json:"browser,omitempty"`
-	Commandline *CommandlinePolicy `json:"commandline,omitempty"`
-}
+// Struct definitions for FilesystemPolicy, CUAPolicy, BrowserPolicy,
+// CommandlinePolicy, and GrantPolicy now live in policies_gen.go, which is
+// generated from the Zod schemas in
+// packages/shared/src/access/policies/*.ts via
+// scripts/codegen/relay-policies.ts. To change a field, edit the Zod schema
+// and run `npm run codegen:relay-policies`.
 
 func normalizePathPrefix(value string) string {
 	trimmed := strings.TrimSpace(value)
@@ -64,6 +39,10 @@ func normalizePathPrefixes(values []string) []string {
 		seen[prefix] = struct{}{}
 		normalized = append(normalized, prefix)
 	}
+	// P4: sort for cross-language determinism — the TS side calls .sort() on
+	// the same normalized list, and any code path that compares or hashes the
+	// list across the boundary must see identical ordering.
+	sort.Strings(normalized)
 	return normalized
 }
 
@@ -92,33 +71,17 @@ func normalizeGrantPolicy(policy GrantPolicy) GrantPolicy {
 	return policy
 }
 
-func decodeGrantPolicy(raw map[string]interface{}) (GrantPolicy, bool) {
-	if len(raw) == 0 {
-		return GrantPolicy{}, false
-	}
-	encoded, err := json.Marshal(raw)
-	if err != nil {
-		return GrantPolicy{}, false
-	}
-	var policy GrantPolicy
-	if err := json.Unmarshal(encoded, &policy); err != nil {
-		return GrantPolicy{}, false
-	}
-	policy = normalizeGrantPolicy(policy)
-	if policy.Capability == "" {
-		return GrantPolicy{}, false
-	}
-	return policy, true
-}
-
+// P4 contract: `RuntimeAuthorization.GrantSpecs` is now `[]GrantPolicy`
+// (strongly typed at unmarshal). The historical `decodeGrantPolicy` step
+// that re-marshaled `map[string]interface{}` into a GrantPolicy is gone.
 func (authorization RuntimeAuthorization) Policies() []GrantPolicy {
 	if len(authorization.GrantSpecs) == 0 {
 		return nil
 	}
 	policies := make([]GrantPolicy, 0, len(authorization.GrantSpecs))
 	for _, raw := range authorization.GrantSpecs {
-		policy, ok := decodeGrantPolicy(raw)
-		if !ok {
+		policy := normalizeGrantPolicy(raw)
+		if policy.Capability == "" {
 			continue
 		}
 		policies = append(policies, policy)
@@ -259,7 +222,10 @@ func MatchesBrowserPolicy(
 				return true
 			}
 		default:
-			return true
+			// P4: previously `return true` — that was a dangerous default that
+			// silently granted access when a policy stored an unknown scopeType.
+			// Safer to deny and let callers explicitly add new scope types.
+			continue
 		}
 	}
 	return false

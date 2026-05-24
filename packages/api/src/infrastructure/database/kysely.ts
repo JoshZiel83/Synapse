@@ -1,16 +1,22 @@
 import { Kysely, PostgresDialect } from "kysely"
 import type { Insertable, Selectable, Transaction, Updateable } from "kysely"
+import type pg from "pg"
 import { pool } from "./index.js"
 import type { Database } from "./db-types.js"
 
-export const db = new Kysely<Database>({
-  dialect: new PostgresDialect({
-    pool,
-  }),
-})
-
-export type KyselyDb = typeof db
+export type KyselyDb = Kysely<Database>
 export type DatabaseTransaction = Transaction<Database>
+
+export function createDb(pgPool: pg.Pool): KyselyDb {
+  return new Kysely<Database>({
+    dialect: new PostgresDialect({
+      pool: pgPool,
+    }),
+  })
+}
+
+export const db: KyselyDb = createDb(pool)
+
 export type TableRow<T extends keyof Database> = Selectable<Database[T]>
 export type TableInsert<T extends keyof Database> = Insertable<Database[T]>
 export type TableUpdate<T extends keyof Database> = Updateable<Database[T]>

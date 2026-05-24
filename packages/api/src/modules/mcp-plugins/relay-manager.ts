@@ -12,6 +12,7 @@ import type {
 } from "@synapse/shared/types"
 import {
   extractText,
+  GrantPolicySchema,
   RELAY_AUTH_TIMEOUT,
   RELAY_DELIVERY_ACK_TIMEOUT_MS,
   RELAY_HEARTBEAT_INTERVAL,
@@ -60,7 +61,7 @@ import {
 import { findMatchingRelayAuthorizationGrant } from "../relay-authorizations/service.js"
 import { normalizeMcpToolResult } from "./result-normalizer.js"
 import { inferRelaySpecialAuthorizationPlan } from "./relay-special-mcp.js"
-import { createRelayAuthorizationRequest } from "./relay-authorization-requests.js"
+import { createRelayAuthorizationRequest } from "../relay-authorizations/requests.js"
 import {
   classifyRelayLocalPermissionDenial,
   normalizeRelayRequestAuthorizationMode,
@@ -854,7 +855,11 @@ async function validateRelayCallTargetLocal(params: RelayCallParams) {
 function relayAuthorizationGrantToSpec(
   grant: RelayAuthorizationGrantSpec
 ): RelayAuthorizationGrantSpec {
-  return JSON.parse(JSON.stringify(grant)) as RelayAuthorizationGrantSpec
+  // Validate wire shape against the Zod source-of-truth before pushing to the
+  // relay. Parse strips unknown fields and rejects malformed policies so the
+  // Go end never has to defend against drift. Reuse the parsed object — it's
+  // already a deep clone.
+  return GrantPolicySchema.parse(grant) as RelayAuthorizationGrantSpec
 }
 
 export async function resolveRelayToolAuthorization(params: {

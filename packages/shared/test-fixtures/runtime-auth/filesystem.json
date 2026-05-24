@@ -1,0 +1,106 @@
+[
+  {
+    "description": "exact prefix match",
+    "policies": [
+      {
+        "capability": "filesystem",
+        "filesystem": { "access": "read", "pathPrefixes": ["/tmp/a"] }
+      }
+    ],
+    "request": { "access": "read", "pathPrefixes": ["/tmp/a"] },
+    "expected": true
+  },
+  {
+    "description": "subpath under granted prefix",
+    "policies": [
+      {
+        "capability": "filesystem",
+        "filesystem": { "access": "read", "pathPrefixes": ["/tmp/a"] }
+      }
+    ],
+    "request": { "access": "read", "pathPrefixes": ["/tmp/a/sub/file.txt"] },
+    "expected": true
+  },
+  {
+    "description": "path outside granted prefix",
+    "policies": [
+      {
+        "capability": "filesystem",
+        "filesystem": { "access": "read", "pathPrefixes": ["/tmp/a"] }
+      }
+    ],
+    "request": { "access": "read", "pathPrefixes": ["/tmp/b/file.txt"] },
+    "expected": false
+  },
+  {
+    "description": "access type mismatch (read grant vs write request)",
+    "policies": [
+      {
+        "capability": "filesystem",
+        "filesystem": { "access": "read", "pathPrefixes": ["/tmp/a"] }
+      }
+    ],
+    "request": { "access": "write", "pathPrefixes": ["/tmp/a"] },
+    "expected": false
+  },
+  {
+    "description": "all requested prefixes must be covered",
+    "policies": [
+      {
+        "capability": "filesystem",
+        "filesystem": { "access": "read", "pathPrefixes": ["/tmp/a"] }
+      }
+    ],
+    "request": { "access": "read", "pathPrefixes": ["/tmp/a", "/tmp/b"] },
+    "expected": false
+  },
+  {
+    "description": "multiple grants cover requested prefixes",
+    "policies": [
+      {
+        "capability": "filesystem",
+        "filesystem": { "access": "read", "pathPrefixes": ["/tmp/a"] }
+      },
+      {
+        "capability": "filesystem",
+        "filesystem": { "access": "read", "pathPrefixes": ["/tmp/b"] }
+      }
+    ],
+    "request": { "access": "read", "pathPrefixes": ["/tmp/a", "/tmp/b"] },
+    "expected": false,
+    "note": "Each grant is checked independently — request prefixes must be covered by a single grant. Multi-grant coverage requires the request to come pre-split."
+  },
+  {
+    "description": "empty request prefixes denied",
+    "policies": [
+      {
+        "capability": "filesystem",
+        "filesystem": { "access": "read", "pathPrefixes": ["/tmp/a"] }
+      }
+    ],
+    "request": { "access": "read", "pathPrefixes": [] },
+    "expected": false
+  },
+  {
+    "description": "non-filesystem policies are ignored",
+    "policies": [
+      {
+        "capability": "cua",
+        "cua": { "access": "read" }
+      }
+    ],
+    "request": { "access": "read", "pathPrefixes": ["/tmp/a"] },
+    "expected": false
+  },
+  {
+    "description": "path prefixes are normalized (trailing slash, redundant ../)",
+    "policies": [
+      {
+        "capability": "filesystem",
+        "filesystem": { "access": "read", "pathPrefixes": ["/tmp/a/"] }
+      }
+    ],
+    "request": { "access": "read", "pathPrefixes": ["/tmp/a/sub/../file"] },
+    "expected": true
+  }
+]

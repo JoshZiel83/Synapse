@@ -1,6 +1,7 @@
 import {
   CONVERSATION_BOUNDARY,
   CONVERSATION_KIND,
+  CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_TYPE_KEYS,
   CONVERSATION_TYPE_MASK_BITS,
   CONVERSATION_TYPE_MASK_PRESETS,
@@ -303,7 +304,8 @@ export function isActorRuntimeProcessingWorkspaceMember(
   if (!workspaceMemberId) return false
   return getActorRuntimeProcessingTargets(runtime).some(
     (target) =>
-      target.participantType === "workspace_member" &&
+      target.participantType ===
+        CONVERSATION_PARTICIPANT_TYPE.WORKSPACE_MEMBER &&
       target.participantId === workspaceMemberId
   )
 }

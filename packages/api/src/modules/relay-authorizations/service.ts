@@ -15,6 +15,50 @@ import {
   type QueryExecutor,
   type TableInsert,
 } from "../../infrastructure/database/kysely.js"
+import {
+  GrantPolicySchema,
+  SUBJECT_KIND,
+  type SubjectRef,
+} from "@synapse/shared"
+import {
+  upsertAccessSubject,
+  upsertAccessSubjectOn,
+} from "../access/subject-registry.js"
+
+/**
+ * P1b: derive the SubjectRef for a relay authorization grant from the
+ * (scope, actorId, conversationId, workspaceId) tuple. Returns null for
+ * `once` scope (single-use grants don't bind a subject) and workspaces with
+ * no actor/conversation context.
+ */
+function buildRelayGrantSubjectRef(input: {
+  scope: "once" | "actor" | "conversation" | "workspace"
+  workspaceId: string
+  actorId?: string | null
+  conversationId?: string | null
+}): SubjectRef | null {
+  switch (input.scope) {
+    case "once":
+      return null
+    case "workspace":
+      return { kind: SUBJECT_KIND.WORKSPACE, workspaceId: input.workspaceId }
+    case "actor":
+      if (!input.actorId) {
+        throw new Error("actorId required for actor-scope relay grant")
+      }
+      return { kind: SUBJECT_KIND.ACTOR, actorId: input.actorId }
+    case "conversation":
+      if (!input.conversationId) {
+        throw new Error(
+          "conversationId required for conversation-scope relay grant"
+        )
+      }
+      return {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: input.conversationId,
+      }
+  }
+}
 
 type Queryable = QueryExecutor
 
@@ -224,9 +268,12 @@ function normalizeGrantSpecForInsert(
 }
 
 function parseGrantSpec(value: unknown): RelayAuthorizationGrantSpec {
-  const policy = parseJsonObject(
-    value
-  ) as unknown as RelayAuthorizationGrantSpec
+  // Validate the JSON we read out of the DB against the Zod schema before
+  // handing it back up. This guarantees the wire shape we emit matches what
+  // the Go relay expects, even if older rows pre-date the current schema.
+  const policy = GrantPolicySchema.parse(
+    parseJsonObject(value)
+  ) as RelayAuthorizationGrantSpec
   return normalizeGrantSpecForInsert(policy)
 }
 
@@ -239,8 +286,13 @@ function mapRelayAuthorizationGrantRow(
     relayDeviceId: row.relay_device_id,
     relayCapabilityId: row.relay_capability_id,
     relayExposureId: row.relay_exposure_id,
-    conversationId: row.conversation_id || undefined,
-    actorId: row.actor_id || undefined,
+    // P1b: actor_id and conversation_id are no longer stored on the grant
+    // row; they live on the joined access_subjects row. SELECT helpers below
+    // project subj.actor_id AS subject_actor_id and subj.conversation_id AS
+    // subject_conversation_id so this mapper can pick them up. (For `once` /
+    // `workspace` scopes subject_id is NULL, so these are also undefined.)
+    conversationId: row.subject_conversation_id || undefined,
+    actorId: row.subject_actor_id || undefined,
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
     sourceInteractionId: row.source_interaction_id || undefined,
     sourceTaskId: row.source_task_id || undefined,
@@ -257,6 +309,42 @@ function mapRelayAuthorizationGrantRow(
     revokedAt: toIsoString(row.revoked_at),
     supersededAt: toIsoString(row.superseded_at),
   }
+}
+
+/**
+ * P1b: the canonical SELECT projection for relay_authorization_grants rows
+ * that will be passed to mapRelayAuthorizationGrantRow. LEFT JOINs
+ * access_subjects (subject_id is nullable for `once` / `workspace` scopes)
+ * and surfaces subject_actor_id / subject_conversation_id derived from the
+ * subject row, so the mapper doesn't have to know about the join.
+ */
+function relayGrantSelectColumns() {
+  return [
+    "g.id",
+    "g.workspace_id",
+    "g.relay_device_id",
+    "g.relay_capability_id",
+    "g.relay_exposure_id",
+    "g.subject_id",
+    "g.created_by_workspace_member_id",
+    "g.source_interaction_id",
+    "g.source_task_id",
+    "g.scope",
+    "g.retention",
+    "g.status",
+    "g.policy",
+    "g.source_retry_nonce",
+    "g.source_runtime_session_id",
+    "g.source_request_args",
+    "g.consumed_at",
+    "g.revoked_at",
+    "g.superseded_at",
+    "g.created_at",
+    "g.updated_at",
+    "subj.actor_id as subject_actor_id",
+    "subj.conversation_id as subject_conversation_id",
+    "subj.kind as subject_kind",
+  ] as const
 }
 
 export function relayAuthorizationPresetToGrant(
@@ -284,16 +372,30 @@ export async function createRelayAuthorizationGrant(
   queryable?: Queryable
 ) {
   const { scope, retention } = relayAuthorizationPresetToGrant(params.preset)
-  const grantSpec = normalizeGrantSpecForInsert(params.grantSpec)
-  const statement = db
+  // Zod-parse on the write side as well — any caller that hand-builds a
+  // grantSpec gets the same shape validation as the read path.
+  const grantSpec = normalizeGrantSpecForInsert(
+    GrantPolicySchema.parse(params.grantSpec) as RelayAuthorizationGrantSpec
+  )
+  const subjectRef = buildRelayGrantSubjectRef({
+    scope,
+    workspaceId: params.workspaceId,
+    actorId: params.actorId,
+    conversationId: params.conversationId,
+  })
+  const subjectId = subjectRef
+    ? isQueryExecutor(queryable)
+      ? await upsertAccessSubjectOn(queryable, subjectRef)
+      : await upsertAccessSubject(db, subjectRef)
+    : null
+  const insertStatement = db
     .insertInto("relay_authorization_grants")
     .values({
       workspace_id: params.workspaceId,
       relay_device_id: params.relayDeviceId,
       relay_capability_id: params.relayCapabilityId,
       relay_exposure_id: params.relayExposureId,
-      conversation_id: params.conversationId || null,
-      actor_id: params.actorId || null,
+      subject_id: subjectId,
       created_by_workspace_member_id: params.createdByWorkspaceMemberId || null,
       source_interaction_id: params.sourceInteractionId || null,
       source_task_id: params.sourceTaskId || null,
@@ -307,13 +409,28 @@ export async function createRelayAuthorizationGrant(
       source_request_args: (params.sourceRequestArgs ||
         {}) as TableInsert<"relay_authorization_grants">["source_request_args"],
     })
-    .returningAll()
+    .returning("id")
 
-  const row = isQueryExecutor(queryable)
-    ? await executeTakeFirst<any>(queryable, statement)
-    : await statement.executeTakeFirst()
-  if (!row) {
+  const inserted = isQueryExecutor(queryable)
+    ? await executeTakeFirst<{ id: string }>(queryable, insertStatement)
+    : await insertStatement.executeTakeFirst()
+  if (!inserted) {
     throw new Error("Failed to create relay authorization grant")
+  }
+  // Re-fetch with the access_subjects join so the mapper can populate
+  // actorId / conversationId from the subject row (P1b: actor_id and
+  // conversation_id were dropped from the grant table).
+  const selectStatement = db
+    .selectFrom("relay_authorization_grants as g")
+    .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
+    .select(relayGrantSelectColumns())
+    .where("g.id", "=", inserted.id)
+    .limit(1)
+  const row = isQueryExecutor(queryable)
+    ? await executeTakeFirst<any>(queryable, selectStatement)
+    : await selectStatement.executeTakeFirst()
+  if (!row) {
+    throw new Error("Failed to re-fetch inserted relay authorization grant")
   }
   return mapRelayAuthorizationGrantRow(row)
 }
@@ -323,9 +440,10 @@ export async function getRelayAuthorizationGrant(
   queryable?: Queryable
 ) {
   const statement = db
-    .selectFrom("relay_authorization_grants")
-    .selectAll()
-    .where("id", "=", id)
+    .selectFrom("relay_authorization_grants as g")
+    .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
+    .select(relayGrantSelectColumns())
+    .where("g.id", "=", id)
     .limit(1)
   const row = isQueryExecutor(queryable)
     ? await executeTakeFirst<any>(queryable, statement)
@@ -393,7 +511,7 @@ export async function consumeRelayAuthorizationGrant(
   await statement.execute()
 }
 
-function filesystemPolicyMatches(
+export function filesystemPolicyMatches(
   grant: RelayAuthorizationGrantSpec,
   action: RelayAuthorizationRequestedAction
 ) {
@@ -415,7 +533,7 @@ function filesystemPolicyMatches(
   )
 }
 
-function browserPolicyMatches(
+export function browserPolicyMatches(
   grant: RelayAuthorizationGrantSpec,
   action: RelayAuthorizationRequestedAction
 ) {
@@ -442,11 +560,13 @@ function browserPolicyMatches(
         granted.registrableDomain === requested.registrableDomain
       )
     default:
-      return true
+      // P4: previously `return true` — that silently granted access for any
+      // unknown scopeType, which is unsafe. Match Go behavior: deny.
+      return false
   }
 }
 
-function commandlinePolicyMatches(
+export function commandlinePolicyMatches(
   grant: RelayAuthorizationGrantSpec,
   action: RelayAuthorizationRequestedAction
 ) {
@@ -491,7 +611,7 @@ function commandlinePolicyMatches(
   }
 }
 
-function relayAuthorizationGrantMatches(
+export function relayAuthorizationGrantMatches(
   grant: RelayAuthorizationGrantRecord,
   requestedAction: RelayAuthorizationRequestedAction
 ) {
@@ -520,38 +640,58 @@ export async function findMatchingRelayAuthorizationGrant(
   params: FindMatchingRelayAuthorizationGrantParams,
   queryable?: Queryable
 ) {
+  // P1b: subject upserts must run on the same connection as the surrounding
+  // transaction (when one was passed via `queryable`) — otherwise the upsert
+  // commits independently and the subsequent SELECT inside the trx sees a
+  // subject_id that hasn't been visible if the trx is later rolled back.
+  const upsertSubject = async (ref: SubjectRef) =>
+    isQueryExecutor(queryable)
+      ? upsertAccessSubjectOn(queryable, ref)
+      : upsertAccessSubject(db, ref)
+
+  const conversationSubjectId = params.conversationId
+    ? await upsertSubject({
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: params.conversationId,
+      })
+    : null
+  const actorSubjectId = params.actorId
+    ? await upsertSubject({ kind: SUBJECT_KIND.ACTOR, actorId: params.actorId })
+    : null
+
   const statement = db
-    .selectFrom("relay_authorization_grants")
-    .selectAll()
-    .where("workspace_id", "=", params.workspaceId)
-    .where("relay_device_id", "=", params.relayDeviceId)
-    .where("relay_capability_id", "=", params.relayCapabilityId)
-    .where("relay_exposure_id", "=", params.relayExposureId)
-    .where("status", "=", "active")
+    .selectFrom("relay_authorization_grants as g")
+    .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
+    .select(relayGrantSelectColumns())
+    .where("g.workspace_id", "=", params.workspaceId)
+    .where("g.relay_device_id", "=", params.relayDeviceId)
+    .where("g.relay_capability_id", "=", params.relayCapabilityId)
+    .where("g.relay_exposure_id", "=", params.relayExposureId)
+    .where("g.status", "=", "active")
     .where((eb) =>
       eb.or([
-        eb("scope", "=", "workspace"),
-        ...(params.conversationId
+        eb("g.scope", "=", "workspace"),
+        ...(conversationSubjectId
           ? [
               eb.and([
-                eb("scope", "=", "conversation"),
-                eb("conversation_id", "=", params.conversationId),
+                eb("g.scope", "=", "conversation"),
+                eb("g.subject_id", "=", conversationSubjectId),
               ]),
             ]
           : []),
-        ...(params.actorId
+        ...(actorSubjectId
           ? [
               eb.and([
-                eb("scope", "=", "actor"),
-                eb("actor_id", "=", params.actorId),
+                eb("g.scope", "=", "actor"),
+                eb("g.subject_id", "=", actorSubjectId),
               ]),
             ]
           : []),
         ...(params.retryNonce
           ? [
               eb.and([
-                eb("scope", "=", "once"),
-                eb("source_retry_nonce", "=", params.retryNonce),
+                eb("g.scope", "=", "once"),
+                eb("g.source_retry_nonce", "=", params.retryNonce),
               ]),
             ]
           : []),
@@ -594,11 +734,12 @@ export async function listActiveRelayAuthorizationGrantsForExposure(
   queryable?: Queryable
 ) {
   const statement = db
-    .selectFrom("relay_authorization_grants")
-    .selectAll()
-    .where("relay_capability_id", "=", relayCapabilityId)
-    .where("status", "=", "active")
-    .orderBy("created_at", "desc")
+    .selectFrom("relay_authorization_grants as g")
+    .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
+    .select(relayGrantSelectColumns())
+    .where("g.relay_capability_id", "=", relayCapabilityId)
+    .where("g.status", "=", "active")
+    .orderBy("g.created_at", "desc")
   const rows = isQueryExecutor(queryable)
     ? (await executeCompiledQuery<any>(queryable, statement)).rows
     : await statement.execute()

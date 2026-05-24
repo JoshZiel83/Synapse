@@ -14,6 +14,7 @@ import {
 import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
 import { authorizeAction } from "../access/service.js"
+import { capabilityTargetMatchesContext } from "../access/bindings.js"
 import { buildUserInteractionCandidatesFromRows } from "../ai/session-tool-user-interactions.js"
 import { listConversationParticipants } from "../chat/service.js"
 import {
@@ -27,7 +28,7 @@ import {
   createToolCallTask,
   type ToolCallTaskRecord,
 } from "../tool-call-tasks/service.js"
-import { listRelayExposureAccessState } from "./relay-access.js"
+import { listRelayExposureAccessState } from "../mcp-plugins/relay-access.js"
 
 export interface RelayAuthorizationRequestSource {
   workspaceId: string
@@ -160,49 +161,6 @@ async function loadRelayCapabilityRequestState(capabilityId: string) {
     .executeTakeFirst()
 }
 
-function relayGrantMatchesCurrentActorConversation(params: {
-  target: CreateRelayAuthorizationRequestParams["source"]
-  ownerWorkspaceId: string
-  grant: {
-    target: {
-      type: "workspace" | "conversation" | "actor" | "actor_in_conversation"
-      actorId?: string
-      conversationId?: string
-    }
-    effectiveConversationTypeMask?: number
-  }
-  conversationKind: "private" | "group" | "virtual"
-  conversationBoundary: ConversationBoundary
-}) {
-  const grantMask =
-    params.grant.effectiveConversationTypeMask ?? DEFAULT_CONVERSATION_TYPE_MASK
-  if (
-    !maskAllowsConversationType(
-      grantMask,
-      params.conversationKind,
-      params.conversationBoundary
-    )
-  ) {
-    return false
-  }
-
-  switch (params.grant.target.type) {
-    case "workspace":
-      return params.target.workspaceId === params.ownerWorkspaceId
-    case "conversation":
-      return params.grant.target.conversationId === params.target.conversationId
-    case "actor":
-      return params.grant.target.actorId === params.target.actorId
-    case "actor_in_conversation":
-      return (
-        params.grant.target.actorId === params.target.actorId &&
-        params.grant.target.conversationId === params.target.conversationId
-      )
-    default:
-      return false
-  }
-}
-
 async function canActorRequestRelayAuthorization(
   params: CreateRelayAuthorizationRequestParams
 ) {
@@ -230,15 +188,33 @@ async function canActorRequestRelayAuthorization(
     relayState.owner_workspace_id,
     relayState.exposure_id
   )
-  return accessState.grants.some((grant) =>
-    relayGrantMatchesCurrentActorConversation({
-      target: params.source,
-      ownerWorkspaceId: relayState.owner_workspace_id,
-      grant,
-      conversationKind: conversation.kind,
-      conversationBoundary: conversation.boundary,
+  return accessState.grants.some((grant) => {
+    // Relay-specific gate: the grant's effective conversation-type mask must
+    // permit the current conversation kind/boundary before we even consider
+    // target matching. workspace_member grants are individual approvals and
+    // don't match this actor-in-conversation code path.
+    const grantMask =
+      grant.effectiveConversationTypeMask ?? DEFAULT_CONVERSATION_TYPE_MASK
+    if (
+      !maskAllowsConversationType(
+        grantMask,
+        conversation.kind,
+        conversation.boundary
+      )
+    ) {
+      return false
+    }
+    if (grant.target.type === "workspace_member") {
+      return false
+    }
+    return capabilityTargetMatchesContext(grant.target, {
+      grantOwnerWorkspaceId: relayState.owner_workspace_id,
+      contextWorkspaceId: params.source.workspaceId,
+      actorId: params.source.actorId,
+      conversationId: params.source.conversationId,
+      workspaceMemberId: undefined,
     })
-  )
+  })
 }
 
 async function hasNewUserFacingConversationMessage(
@@ -304,7 +280,7 @@ export async function createRelayAuthorizationRequest(
   const authorizerCandidates = await Promise.all(
     candidates.map(async (candidate) => ({
       candidate,
-      allowed: await authorizeAction({
+      allowed: await authorizeAction(db, {
         subject: { type: "workspace_member", id: candidate.workspaceMemberId },
         action: "relay_device.authorize_relay_authorization",
         resourceId: params.relayTarget.relayDeviceId,

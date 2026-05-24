@@ -1,3 +1,4 @@
+import { db } from "../../infrastructure/database/kysely.js"
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import {
@@ -186,7 +187,7 @@ async function requireMemoryPermission(
   permission: "read" | "edit" | "retarget" | "delete",
   errorMessage: string
 ) {
-  const allowed = await authorizePermission({
+  const allowed = await authorizePermission(db, {
     subject: getRequestAccessSubject(request),
     resourceType: "memory_item",
     resourceId: memoryId,
@@ -218,7 +219,7 @@ async function requireMemorySpaceWritePermission(
 
   switch (body.spaceType) {
     case "workspace_shared":
-      allowed = await authorizeAction({
+      allowed = await authorizeAction(db, {
         subject: getRequestAccessSubject(request),
         action: "workspace.manage_memories",
         resourceId: workspaceId,
@@ -226,7 +227,7 @@ async function requireMemorySpaceWritePermission(
       break
     case "conversation_shared":
       if (body.conversationId) {
-        allowed = await authorizePermission({
+        allowed = await authorizePermission(db, {
           subject: getRequestAccessSubject(request),
           resourceType: "conversation",
           resourceId: body.conversationId,
@@ -236,7 +237,7 @@ async function requireMemorySpaceWritePermission(
       break
     case "actor_private":
       if (body.actorId) {
-        allowed = await authorizePermission({
+        allowed = await authorizePermission(db, {
           subject: getRequestAccessSubject(request),
           resourceType: "actor",
           resourceId: body.actorId,
@@ -251,7 +252,7 @@ async function requireMemorySpaceWritePermission(
           actorId: body.actorId,
           conversationId: body.conversationId,
         })
-        allowed = await authorizePermission({
+        allowed = await authorizePermission(db, {
           subject: getRequestAccessSubject(request),
           resourceType: "conversation_actor_context",
           resourceId: context.conversationActorContextId,
@@ -262,7 +263,7 @@ async function requireMemorySpaceWritePermission(
     case "user_private":
       allowed = body.workspaceMemberId === workspaceMemberId
       if (!allowed) {
-        allowed = await authorizeAction({
+        allowed = await authorizeAction(db, {
           subject: getRequestAccessSubject(request),
           action: "workspace.manage_memories",
           resourceId: workspaceId,
@@ -424,7 +425,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           memoryId: string
         }
         const memory = await getMemory(workspaceId, memoryId)
-        const readable = await authorizePermission({
+        const readable = await authorizePermission(db, {
           subject: getRequestAccessSubject(request),
           resourceType: "memory_item",
           resourceId: memoryId,

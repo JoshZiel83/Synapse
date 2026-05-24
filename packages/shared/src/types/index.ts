@@ -107,6 +107,13 @@ import {
   TRANSPORT_ENDPOINT_TYPES,
   TRANSPORT_KINDS,
 } from "../constants/enums.js"
+import type {
+  FilesystemPolicy as FilesystemPolicyBase,
+  CUAPolicy as CUAPolicyBase,
+  BrowserPolicy as BrowserPolicyBase,
+  CommandlinePolicy as CommandlinePolicyBase,
+  GrantPolicy as GrantPolicyBase,
+} from "../access/policies/index.js"
 
 export * from "./relay.js"
 
@@ -2260,6 +2267,11 @@ export interface RuntimeActorContext {
   conversationBoundary?: ConversationBoundary
   conversationActorContextId?: string
   userId?: string
+  // Carries the workspace_member acting on behalf of `userId` in this workspace.
+  // Needed so that member-scoped resource_access_bindings (written by
+  // grantApprovedAccess and by API controllers) become visible to the tool
+  // resolver — see mcp-plugins/tool-resolver.ts:buildVisibilitySubjects.
+  workspaceMemberId?: string
 }
 
 export interface CapabilityInvocationContext {
@@ -2444,12 +2456,14 @@ export interface AccessTarget {
   type: AccessTargetType
   actorId?: string
   conversationId?: string
+  workspaceMemberId?: string
 }
 
 export interface CapabilityAccessTarget {
   type: CapabilityAccessTargetType
   actorId?: string
   conversationId?: string
+  workspaceMemberId?: string
 }
 
 export interface PluginAuthValueSource {
@@ -3491,29 +3505,13 @@ export type RelayAuthorizationCUAAccess =
 export type RelayAuthorizationBrowserAction =
   (typeof RELAY_AUTHORIZATION_BROWSER_ACTIONS)[number]
 
-export interface RelayAuthorizationFilesystemPolicy {
-  access: RelayAuthorizationFilesystemAccess
-  pathPrefixes: string[]
-}
+export interface RelayAuthorizationFilesystemPolicy extends FilesystemPolicyBase {}
 
-export interface RelayAuthorizationCUAPolicy {
-  access: RelayAuthorizationCUAAccess
-}
+export interface RelayAuthorizationCUAPolicy extends CUAPolicyBase {}
 
-export interface RelayAuthorizationBrowserPolicy {
-  action: RelayAuthorizationBrowserAction
-  scopeType?: RelayAuthorizationBrowserScopeType
-  origin?: string
-  host?: string
-  registrableDomain?: string
-}
+export interface RelayAuthorizationBrowserPolicy extends BrowserPolicyBase {}
 
-export interface RelayAuthorizationCommandlinePolicy {
-  executor: RelayAuthorizationCommandExecutor
-  commandMatchType: RelayAuthorizationCommandMatchType
-  commandText?: string
-  workingDirectory?: string
-}
+export interface RelayAuthorizationCommandlinePolicy extends CommandlinePolicyBase {}
 
 export interface RelayAuthorizationRequestedAction {
   capability: RelayAuthorizationCapability
@@ -3528,13 +3526,10 @@ export interface RelayAuthorizationRequestedAction {
   }
 }
 
-export interface RelayAuthorizationGrantSpec {
-  capability: RelayAuthorizationCapability
-  filesystem?: RelayAuthorizationFilesystemPolicy
-  cua?: RelayAuthorizationCUAPolicy
-  browser?: RelayAuthorizationBrowserPolicy
-  commandline?: RelayAuthorizationCommandlinePolicy
-}
+// P4: now derived from the Zod GrantPolicySchema (see
+// packages/shared/src/access/policies). Hand-written extension types below
+// (Summary/View) compose on top so they keep their extra identity fields.
+export type RelayAuthorizationGrantSpec = GrantPolicyBase
 
 export interface RelayAuthorizationGrantOption {
   id: string
@@ -5330,7 +5325,8 @@ export type ResourceAccessBindingResourceType =
   | "plugin_installation"
   | "relay_capability"
   | "automation_event_source"
-export type AccessResourceType = ResourceAccessBindingResourceType
+  | "actor"
+  | "remote_agent"
 
 export interface CatalogPublisherRecord {
   id: string

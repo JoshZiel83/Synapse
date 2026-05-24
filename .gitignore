@@ -27,7 +27,11 @@ relay/synapse-relay
 relay/synapse-relay-*
 relay/config.yaml
 relay/cmd/synapse-relay-gui/frontend/node_modules/
-relay/cmd/synapse-relay-gui/frontend/dist/
+relay/cmd/synapse-relay-gui/frontend/dist/*
+# Stub kept so `//go:embed all:frontend/dist` resolves before `wails build`
+# has populated the real artifacts (lets `go test ./...` pass cleanly).
+!relay/cmd/synapse-relay-gui/frontend/dist/
+!relay/cmd/synapse-relay-gui/frontend/dist/index.html
 relay/cmd/synapse-relay-gui/frontend/src/lib/wailsjs/
 relay/cmd/synapse-relay-gui/frontend/wailsjs/
 relay/cmd/synapse-relay-gui/frontend/package.json.md5

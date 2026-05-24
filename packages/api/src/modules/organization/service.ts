@@ -4,6 +4,7 @@ import {
   GROUP_CONVERSATION_KIND,
   normalizeActorDocs,
   normalizeCanonicalContentBlocks,
+  RELATIONSHIP_ACCESS_POLICY,
   summarizeActorDoc,
   summarizeActorForPrompt,
   summarizeActorForRole,
@@ -34,6 +35,7 @@ import {
 } from "@synapse/shared"
 import { transaction } from "../../infrastructure/database/index.js"
 import {
+  db,
   executeSql,
   executeSqlOn,
 } from "../../infrastructure/database/kysely.js"
@@ -43,6 +45,7 @@ import {
   listAuthorizedResourceIds,
   type AccessSubject,
 } from "../access/service.js"
+import { setAccessPolicyOn } from "../access/default-access-policy.js"
 
 type QueryRow = pg.QueryResultRow
 type QueryResultLike<T extends QueryRow> = { rows: T[] }
@@ -857,8 +860,9 @@ async function emitActorVersionChangedEvents(params: {
   const memberships = await runQuery<{ conversation_id: string }>(
     `SELECT DISTINCT cp.conversation_id
      FROM conversation_participants cp
+     JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
      JOIN conversations c ON c.id = cp.conversation_id
-     WHERE cp.actor_id = $1
+     WHERE cpsubj.actor_id = $1
        AND cp.state = 'active'
        AND c.kind = $2`,
     [params.actorId, GROUP_CONVERSATION_KIND]
@@ -1020,7 +1024,7 @@ export async function listActors(
   workspaceId: UUID,
   subject: AccessSubject
 ): Promise<Actor[]> {
-  const actorIds = await listAuthorizedResourceIds({
+  const actorIds = await listAuthorizedResourceIds(db, {
     subject,
     action: "actor.view",
   })
@@ -1181,6 +1185,18 @@ export async function createActor(input: {
       ]
     )
     const actorId = actorResult.rows[0]!.id
+
+    // P2 contract: actors no longer have an `access_policy` column. New actors
+    // default to workspace-open by writing a `source='default_open'`
+    // workspace-scoped binding so the evaluator and the contact-hub UI both
+    // see them as accessible to all members.
+    await setAccessPolicyOn(client, {
+      resourceType: "actor",
+      resourceId: actorId,
+      workspaceId: input.workspaceId,
+      policy: RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
+      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
+    })
 
     const versionResult = await executeSqlOn<{ id: string }>(
       client,
@@ -1631,6 +1647,16 @@ export async function installActorPackage(input: {
       ]
     )
     const actorId = actorResult.rows[0]!.id
+
+    // P2 contract: write default workspace-open binding so the package's
+    // synthesized actors are reachable to all members by default.
+    await setAccessPolicyOn(client, {
+      resourceType: "actor",
+      resourceId: actorId,
+      workspaceId: input.workspaceId,
+      policy: RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
+      createdByWorkspaceMemberId: input.createdByWorkspaceMemberId || null,
+    })
 
     const versionResult = await executeSqlOn<{ id: string }>(
       client,

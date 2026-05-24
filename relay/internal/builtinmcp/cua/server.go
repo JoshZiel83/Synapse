@@ -308,20 +308,14 @@ func cuaAccessForTool(toolName string) string {
 }
 
 func (s *Server) denialResolution() string {
-	if s.cfg.AllowServerAuthorization {
-		return core.RelayAccessDenialResolutionServerGrant
-	}
-	return core.RelayAccessDenialResolutionLocalSetting
+	return core.RelayAccessDenialResolutionServerGrant
 }
 
 func (s *Server) hasMatchingServerAuthorization(ctx context.Context, access string) bool {
-	if !s.cfg.AllowServerAuthorization {
-		return false
-	}
-	return runtimeauth.MatchesCUAPolicy(
-		runtimeauth.PoliciesForCapability(ctx, "cua"),
-		access,
-	)
+	return runtimeauth.IsAuthorized(ctx, runtimeauth.AccessRequest{
+		Capability: "cua",
+		CUA:        &runtimeauth.CUARequest{Access: access},
+	})
 }
 
 func (s *Server) readOnlyBlock(serverAuthorized bool, runtimeSessionID, toolName string, args map[string]interface{}) (bool, string) {

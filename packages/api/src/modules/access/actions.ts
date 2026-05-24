@@ -1,4 +1,4 @@
-import type { AccessResourceType } from "./core.js"
+import type { AccessResourceType } from "./evaluator.js"
 
 export const ACCESS_ACTIONS = {
   "platform.manage": { resourceType: "platform", permission: "manage" },
@@ -248,6 +248,27 @@ export const ACCESS_ACTIONS = {
   "model_profile.grant": { resourceType: "model_profile", permission: "grant" },
   "model_profile.delete": {
     resourceType: "model_profile",
+    permission: "delete",
+  },
+
+  "automation_event_source.use": {
+    resourceType: "automation_event_source",
+    permission: "use",
+  },
+  "automation_event_source.view": {
+    resourceType: "automation_event_source",
+    permission: "view",
+  },
+  "automation_event_source.edit": {
+    resourceType: "automation_event_source",
+    permission: "edit",
+  },
+  "automation_event_source.grant": {
+    resourceType: "automation_event_source",
+    permission: "grant",
+  },
+  "automation_event_source.delete": {
+    resourceType: "automation_event_source",
     permission: "delete",
   },
 } as const satisfies Record<

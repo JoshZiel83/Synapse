@@ -31,13 +31,9 @@ func TestContextWithRuntimeAuthorizationRoundTripsValue(t *testing.T) {
 		GrantIDs:   []string{"grant-1", "grant-2"},
 		GrantScope: "persistent",
 		RetryNonce: "nonce-1",
-		GrantSpecs: []map[string]interface{}{
-			{
-				"kind": "cua.tool",
-			},
-			{
-				"kind": "cua.write",
-			},
+		GrantSpecs: []GrantPolicy{
+			{Capability: "cua", CUA: &CUAPolicy{Access: "read"}},
+			{Capability: "cua", CUA: &CUAPolicy{Access: "write"}},
 		},
 	}
 	ctx := ContextWithRuntimeAuthorization(context.Background(), authorization)
@@ -45,7 +41,7 @@ func TestContextWithRuntimeAuthorizationRoundTripsValue(t *testing.T) {
 	if len(got.GrantIDs) != len(authorization.GrantIDs) || got.GrantScope != authorization.GrantScope || got.RetryNonce != authorization.RetryNonce {
 		t.Fatalf("expected runtime authorization metadata to round-trip, got %+v", got)
 	}
-	if len(got.GrantSpecs) != 2 || got.GrantSpecs[1]["kind"] != "cua.write" {
+	if len(got.GrantSpecs) != 2 || got.GrantSpecs[1].CUA == nil || got.GrantSpecs[1].CUA.Access != "write" {
 		t.Fatalf("expected runtime authorization grant specs to round-trip, got %+v", got.GrantSpecs)
 	}
 	if !got.IsServerAuthorized() {

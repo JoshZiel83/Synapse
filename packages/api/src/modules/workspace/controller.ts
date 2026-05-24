@@ -1,3 +1,4 @@
+import { db } from "../../infrastructure/database/kysely.js"
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify"
 import { z } from "zod"
 import {
@@ -98,8 +99,8 @@ async function canWorkspacePermission(
   userId: string,
   action: AccessAction
 ): Promise<boolean> {
-  return authorizeAction({
-    subject: await resolveWorkspaceAccessSubject(workspaceId, userId),
+  return authorizeAction(db, {
+    subject: await resolveWorkspaceAccessSubject(db, workspaceId, userId),
     action,
     resourceId: workspaceId,
   })

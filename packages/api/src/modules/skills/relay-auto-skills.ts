@@ -531,6 +531,49 @@ async function loadVisibleHealthyRelayCommandlineExposureMetadata(input: {
   return listVisibleHealthyRelayCommandlineExposureMetadata(input)
 }
 
+// Relay-auto skills are virtual wrappers over relay commandline exposures.
+// They share visibility with the relay capability that backs them: visibility
+// flows through `listVisibleHealthyRelayCommandlineExposureMetadata`, which
+// resolves the relay-capability `resource_access_bindings` row via the unified
+// `lookupResources` channel — so an auto-skill appears exactly when the relay
+// capability is visible, with no separate per-skill binding required. The
+// `AvailableSkillSummary` shape returned here is a presentation adapter, not
+// a parallel authorization path.
+//
+// PLAN DEVIATION (documented): the original auth-refactor plan called for a
+// per-command `resource_access_bindings` row with `source='relay_auto'` for
+// each entry in `managed-command-providers.json`. We chose NOT to write those
+// because (a) auto-skills have no stable installed_skill_id (they're not
+// `installed_skills` rows), (b) duplicating bindings per-command would create
+// N redundant rows per workspace that simply mirror the single
+// relay-capability binding, and (c) any policy change on the relay capability
+// would have to be propagated to N skill bindings instead of one. The single
+// relay-capability binding remains the source of truth; this module is a
+// view, not a write path.
+//
+// Migration path when per-skill grant/audit/revoke is needed:
+// call `promoteRelayAutoSkillToInstalled` (defined below). It materializes the
+// relay-auto skill as a real `installed_skills` row (with skill_versions +
+// skill_snapshots + source_kind='relay_auto_promoted'); from that point the
+// existing `installed_skill` binding path takes over and per-skill grants
+// behave like any other installed skill. The function is intentionally a
+// stub right now — wiring it requires designing the lifecycle for
+// re-promotion (e.g., what happens if the underlying relay capability is
+// removed) and that work hasn't been scoped yet.
+
+export async function promoteRelayAutoSkillToInstalled(_input: {
+  workspaceId: string
+  workspaceMemberId: string
+  providerSlug: string
+  capabilitySlug: string
+}): Promise<{ installedSkillId: string }> {
+  // Deferred — see the PLAN DEVIATION block above. Throwing rather than
+  // half-implementing so callers fail loudly the moment per-skill granting
+  // becomes a real requirement.
+  throw new Error(
+    "promoteRelayAutoSkillToInstalled is not yet implemented — see the PLAN DEVIATION block in relay-auto-skills.ts for the design contract"
+  )
+}
 export async function listRelayAutoLoadedSkills(input: {
   workspaceId: string
   actorId?: string

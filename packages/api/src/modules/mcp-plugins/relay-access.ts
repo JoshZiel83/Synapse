@@ -5,21 +5,29 @@ import {
   db,
   executeSql,
   executeSqlOn,
-  executeTakeFirst,
 } from "../../infrastructure/database/kysely.js"
 import {
   accessBindingHasTarget,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
-  resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js"
-import { buildResourceAccessBindingInsertValues } from "../access/binding-storage.js"
+import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
+import {
+  hasAnyBindingForResourceOn,
+  insertAccessBindingReturningIdOn,
+  insertAccessBindingReturningRowOn,
+  loadAccessBindingRowsForResource,
+  loadAccessBindingRowsForResources,
+  revokeGrant,
+  revokeGrantsByIdsOn,
+  updateGrantConversationTypeMaskOverride,
+} from "../access/binding-storage.js"
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
   validateConversationScopedAccessTarget,
-} from "../access/conversation-type-validation.js"
+} from "../access/policy.js"
 import { getWorkspaceCapabilityConversationTypeMask } from "../capabilities/conversation-type-policies.js"
 import {
   resolveRelayCapabilityConversationTypeMask,
@@ -99,36 +107,12 @@ async function listRelayExposureAccessRows(
   capabilityId: string,
   includeRevoked = false
 ) {
-  const result = await executeSql<AccessBindingRow>(
-    `SELECT
-       binding.id,
-       binding.workspace_id,
-       binding.resource_type,
-       binding.installed_skill_id,
-       binding.plugin_installation_id,
-       binding.relay_capability_id,
-       binding.relay_capability_id::text AS resource_id,
-       binding.target_type,
-       binding.subject_workspace_id,
-       COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
-       COALESCE(binding.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
-       binding.subject_conversation_actor_context_id,
-       binding.conversation_type_mask_override,
-       binding.status,
-       binding.created_by_workspace_member_id,
-       binding.reason,
-       binding.created_at,
-       binding.revoked_at
-     FROM resource_access_bindings binding
-     LEFT JOIN conversation_actor_contexts cac
-       ON cac.id = binding.subject_conversation_actor_context_id
-     WHERE binding.workspace_id = $1
-       AND binding.relay_capability_id = $2::uuid
-       ${includeRevoked ? "" : "AND binding.status = 'active'"}
-     ORDER BY binding.created_at ASC`,
-    [workspaceId, capabilityId]
-  )
-  return result.rows.map((row) => normalizeAccessBindingRow(row))
+  return loadAccessBindingRowsForResource(db, {
+    resourceType: "relay_capability",
+    resourceId: capabilityId,
+    workspaceId,
+    includeRevoked,
+  })
 }
 
 export async function ensureRelayExposureDefaultAccess(params: {
@@ -136,43 +120,31 @@ export async function ensureRelayExposureDefaultAccess(params: {
   capabilityId: string
 }) {
   await transaction(async (client) => {
-    const existing = await executeSqlOn<{ id: string }>(
-      client,
-      `SELECT id
-       FROM resource_access_bindings
-       WHERE relay_capability_id = $1::uuid
-       LIMIT 1`,
-      [params.capabilityId]
-    )
-
-    if (existing.rows.length > 0) {
+    const alreadyHasBinding = await hasAnyBindingForResourceOn(client, {
+      resourceType: "relay_capability",
+      resourceId: params.capabilityId,
+    })
+    if (alreadyHasBinding) {
       return
     }
 
-    await executeSqlOn<AccessBindingRow>(
-      client,
-      `INSERT INTO resource_access_bindings (
-         workspace_id,
-         resource_type,
-         relay_capability_id,
-         target_type,
-         subject_workspace_id,
-         subject_actor_id,
-         subject_conversation_id,
-         status,
-         reason
-       )
-       VALUES (
-        $1, 'relay_capability', $2, 'workspace', $3, NULL, NULL, 'active', $4
-       )
-       RETURNING *, relay_capability_id::text AS resource_id`,
-      [
-        params.workspaceId,
-        params.capabilityId,
-        params.workspaceId,
-        RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
-      ]
-    )
+    // P1b contract: use binding-storage helper which upserts access_subjects
+    // and writes the new subject_id schema.
+    await insertAccessBindingReturningIdOn(client, {
+      workspaceId: params.workspaceId,
+      resourceType: "relay_capability",
+      resourceId: params.capabilityId,
+      target: {
+        targetType: "workspace",
+        subjectWorkspaceId: params.workspaceId,
+        subjectWorkspaceMemberId: null,
+        subjectActorId: null,
+        subjectConversationId: null,
+        subjectConversationActorContextId: null,
+      },
+      source: "relay_auto",
+      reason: RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
+    })
   })
 }
 
@@ -239,7 +211,7 @@ export async function listRelayExposureAccessState(
   const grants = (
     await listRelayExposureAccessRows(workspaceId, exposure.capability_id)
   ).map((row) =>
-    mapAccessBindingToGrant(row, ["use"], undefined, {
+    mapAccessBindingToGrant(row, undefined, {
       effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
         effectiveConversationTypeMask,
         row.conversation_type_mask_override
@@ -313,6 +285,7 @@ export async function grantRelayExposureAccess(input: {
       "Relay exposure grant conversation policy must allow at least one conversation type from the exposure policy.",
   })
   await validateConversationScopedAccessTarget({
+    db,
     targetType: target.targetType,
     conversationId: target.subjectConversationId,
     actorId: target.subjectActorId,
@@ -329,7 +302,7 @@ export async function grantRelayExposureAccess(input: {
   ).find((row) => accessBindingHasTarget(row, target))
 
   if (existing) {
-    return mapAccessBindingToGrant(existing, ["use"], undefined, {
+    return mapAccessBindingToGrant(existing, undefined, {
       effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
         effectiveConversationTypeMask,
         existing.conversation_type_mask_override
@@ -337,28 +310,15 @@ export async function grantRelayExposureAccess(input: {
     })
   }
   const inserted = await transaction(async (client) => {
-    const binding = await executeTakeFirst<AccessBindingRow>(
-      client,
-      db
-        .insertInto("resource_access_bindings")
-        .values(
-          buildResourceAccessBindingInsertValues({
-            workspaceId: input.workspaceId,
-            resourceType: "relay_capability",
-            resourceId: exposure.capability_id,
-            target,
-            conversationTypeMaskOverride:
-              input.conversationTypeMaskOverride ?? null,
-            createdByWorkspaceMemberId:
-              input.grantedByWorkspaceMemberId || null,
-            reason: input.reason || RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
-          })
-        )
-        .returningAll()
-    )
-    if (!binding) {
-      throw new Error("Failed to create relay capability access binding")
-    }
+    const binding = await insertAccessBindingReturningRowOn(client, {
+      workspaceId: input.workspaceId,
+      resourceType: "relay_capability",
+      resourceId: exposure.capability_id,
+      target,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
+      createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+      reason: input.reason || RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
+    })
 
     return {
       binding: {
@@ -370,14 +330,7 @@ export async function grantRelayExposureAccess(input: {
 
   await incrementMcpVersion(input.workspaceId)
   return mapAccessBindingToGrant(
-    {
-      ...normalizeAccessBindingRow(inserted.binding),
-      subject_actor_id: target.subjectActorId,
-      subject_conversation_id: target.subjectConversationId,
-      subject_conversation_actor_context_id:
-        target.subjectConversationActorContextId,
-    } as AccessBindingRow,
-    ["use"],
+    normalizeAccessBindingRow(inserted.binding),
     undefined,
     {
       effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
@@ -393,22 +346,26 @@ export async function revokeRelayExposureAccess(input: {
   exposureId: string
   bindingId: string
 }) {
-  const result = await executeSql<AccessBindingRow>(
-    `SELECT *, relay_capability_id::text AS resource_id
-     FROM resource_access_bindings
-     WHERE id = $1
-       AND workspace_id = $2
-       AND relay_capability_id = (
-         SELECT capability.id
-         FROM relay_capabilities capability
-         WHERE capability.exposure_id = $3
-         LIMIT 1
-       )
-     LIMIT 1`,
-    [input.bindingId, input.workspaceId, input.exposureId]
+  const exposure = await loadRelayExposurePolicyState(
+    input.workspaceId,
+    input.exposureId
   )
-
-  if (result.rows.length === 0) {
+  if (!exposure) {
+    const error = new Error(
+      "Relay exposure access binding not found"
+    ) as Error & {
+      code: string
+    }
+    error.code = "RELAY_EXPOSURE_ACCESS_NOT_FOUND"
+    throw error
+  }
+  const candidates = await listRelayExposureAccessRows(
+    input.workspaceId,
+    exposure.capability_id,
+    true
+  )
+  const existing = candidates.find((row) => row.id === input.bindingId)
+  if (!existing) {
     const error = new Error(
       "Relay exposure access binding not found"
     ) as Error & {
@@ -418,17 +375,7 @@ export async function revokeRelayExposureAccess(input: {
     throw error
   }
 
-  const binding = normalizeAccessBindingRow(result.rows[0]!)
-  await transaction(async (client) => {
-    await executeSqlOn(
-      client,
-      `UPDATE resource_access_bindings
-       SET status = 'revoked',
-           revoked_at = NOW()
-       WHERE id = $1`,
-      [binding.id]
-    )
-  })
+  await revokeGrant(db, { bindingId: existing.id })
 
   await incrementMcpVersion(input.workspaceId)
 }
@@ -481,6 +428,7 @@ export async function updateRelayExposurePolicy(input: {
   )
   for (const accessRow of accessRows) {
     await validateConversationScopedAccessTarget({
+      db,
       targetType: accessRow.target_type,
       conversationId: accessRow.subject_conversation_id,
       actorId: accessRow.subject_actor_id,
@@ -571,6 +519,7 @@ export async function updateRelayExposureAccessGrant(input: {
         "Relay exposure grant conversation policy must allow at least one conversation type from the exposure policy.",
     })
     await validateConversationScopedAccessTarget({
+      db,
       targetType: existing.target_type,
       conversationId: existing.subject_conversation_id,
       actorId: existing.subject_actor_id,
@@ -584,13 +533,11 @@ export async function updateRelayExposureAccessGrant(input: {
   }
 
   if (input.conversationTypeMaskOverride !== undefined) {
-    await executeSql(
-      `UPDATE resource_access_bindings
-       SET conversation_type_mask_override = $2
-       WHERE id = $1
-         AND workspace_id = $3`,
-      [input.bindingId, input.conversationTypeMaskOverride, input.workspaceId]
-    )
+    await updateGrantConversationTypeMaskOverride(db, {
+      bindingId: input.bindingId,
+      workspaceId: input.workspaceId,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride,
+    })
   }
 
   const updated = (
@@ -606,7 +553,7 @@ export async function updateRelayExposureAccessGrant(input: {
     throw error
   }
 
-  return mapAccessBindingToGrant(updated, ["use"], undefined, {
+  return mapAccessBindingToGrant(updated, undefined, {
     effectiveConversationTypeMask: resolveRelayGrantConversationTypeMask(
       effectiveConversationTypeMask,
       updated.conversation_type_mask_override
@@ -620,30 +567,29 @@ export async function revokeRelayDeviceAccessState(input: {
   ownerWorkspaceMemberId?: string | null
   exposureIds: string[]
 }) {
-  const activeBindings =
-    input.exposureIds.length > 0
-      ? await executeSql<AccessBindingRow>(
-          `SELECT *, relay_capability_id::text AS resource_id
-         FROM resource_access_bindings
-         WHERE workspace_id = $1
-           AND relay_capability_id IN (
-             SELECT id FROM relay_capabilities WHERE exposure_id = ANY($2::uuid[])
-           )
-           AND status = 'active'`,
-          [input.workspaceId, input.exposureIds]
-        )
-      : { rows: [] as AccessBindingRow[] }
+  if (input.exposureIds.length === 0) {
+    return
+  }
+  // Resolve the exposures' capability ids first (resource_access_bindings
+  // hangs off relay_capability_id, not exposure_id).
+  const capabilityRows = await db
+    .selectFrom("relay_capabilities")
+    .select("id")
+    .where("exposure_id", "in", input.exposureIds)
+    .execute()
+  const capabilityIds = capabilityRows.map((row) => row.id as string)
+  if (capabilityIds.length === 0) return
+
+  const activeBindings = await loadAccessBindingRowsForResources(db, {
+    resourceType: "relay_capability",
+    resourceIds: capabilityIds,
+    workspaceId: input.workspaceId,
+  })
 
   await transaction(async (client) => {
-    if (activeBindings.rows.length > 0) {
-      await executeSqlOn(
-        client,
-        `UPDATE resource_access_bindings
-         SET status = 'revoked',
-             revoked_at = NOW()
-         WHERE id = ANY($1::uuid[])`,
-        [activeBindings.rows.map((row) => row.id)]
-      )
-    }
+    await revokeGrantsByIdsOn(
+      client,
+      activeBindings.map((row) => row.id)
+    )
   })
 }

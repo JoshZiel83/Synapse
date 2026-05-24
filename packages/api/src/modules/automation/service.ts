@@ -47,7 +47,6 @@ import {
   db,
   executeSql,
   executeSqlOn,
-  executeTakeFirst,
 } from "../../infrastructure/database/kysely.js"
 import {
   createConversationEvent,
@@ -74,10 +73,15 @@ import {
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   readAccessBindingTarget,
-  resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js"
-import { buildResourceAccessBindingInsertValues } from "../access/binding-storage.js"
+import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
+import {
+  insertAccessBindingReturningRowOn,
+  loadAccessBindingRowsForResources,
+  revokeGrant,
+  updateGrantConversationTypeMaskOverride,
+} from "../access/binding-storage.js"
 
 type AutomationRuleRow = {
   id: string
@@ -1368,43 +1372,21 @@ async function loadAutomationEventSourceAccessRows(
     return new Map<string, AutomationEventSourceAccessRow[]>()
   }
 
-  const result = await executeSql<AccessBindingRow>(
-    `SELECT
-       binding.id,
-       binding.workspace_id,
-       binding.resource_type,
-       binding.installed_skill_id,
-       binding.plugin_installation_id,
-       binding.relay_capability_id,
-       binding.automation_event_source_id,
-       binding.automation_event_source_id::text AS resource_id,
-       binding.target_type,
-       binding.subject_workspace_id,
-       COALESCE(binding.subject_actor_id, cac.actor_id) AS subject_actor_id,
-       COALESCE(binding.subject_conversation_id, cac.conversation_id) AS subject_conversation_id,
-       binding.subject_conversation_actor_context_id,
-       binding.conversation_type_mask_override,
-       binding.status,
-       binding.created_by_workspace_member_id,
-       binding.reason,
-       binding.created_at,
-       binding.revoked_at
-     FROM resource_access_bindings binding
-     LEFT JOIN conversation_actor_contexts cac
-       ON cac.id = binding.subject_conversation_actor_context_id
-     WHERE binding.workspace_id = $1
-       AND binding.automation_event_source_id = ANY($2::uuid[])
-       ${includeRevoked ? "" : "AND binding.status = 'active'"}
-     ORDER BY binding.automation_event_source_id, binding.created_at ASC`,
-    [workspaceId, uniqueIds]
-  )
+  // P3: delegate the SELECT-with-access_subjects-JOIN to binding-storage. The
+  // helper returns normalized AccessBindingRow rows; this function only has to
+  // bucket them by event source.
+  const rows = await loadAccessBindingRowsForResources(db, {
+    resourceType: "automation_event_source",
+    resourceIds: uniqueIds,
+    workspaceId,
+    includeRevoked,
+  })
 
   const rowsBySource = new Map<string, AutomationEventSourceAccessRow[]>()
-  for (const row of result.rows) {
-    const normalized = normalizeAccessBindingRow(row)
-    const existing = rowsBySource.get(normalized.resource_id) || []
-    existing.push(normalized)
-    rowsBySource.set(normalized.resource_id, existing)
+  for (const row of rows) {
+    const existing = rowsBySource.get(row.resource_id) || []
+    existing.push(row)
+    rowsBySource.set(row.resource_id, existing)
   }
   return rowsBySource
 }
@@ -1507,7 +1489,6 @@ function mapAutomationEventSourceAccessGrant(
 ) {
   return mapAccessBindingToGrant(
     row,
-    ["use"],
     "Automation event sources require explicit use access.",
     {
       effectiveConversationTypeMask:
@@ -1614,28 +1595,15 @@ export async function grantAutomationEventSourceAccess(input: {
   }
 
   const inserted = await transaction(async (client) => {
-    const binding = await executeTakeFirst<AccessBindingRow>(
-      client,
-      db
-        .insertInto("resource_access_bindings")
-        .values(
-          buildResourceAccessBindingInsertValues({
-            workspaceId: input.workspaceId,
-            resourceType: "automation_event_source",
-            resourceId: input.eventSourceId,
-            target,
-            conversationTypeMaskOverride:
-              input.conversationTypeMaskOverride ?? null,
-            createdByWorkspaceMemberId:
-              input.grantedByWorkspaceMemberId || null,
-            reason: input.reason || "Automation event source access grant",
-          })
-        )
-        .returningAll()
-    )
-    if (!binding) {
-      throw new Error("Failed to create automation event source access binding")
-    }
+    const binding = await insertAccessBindingReturningRowOn(client, {
+      workspaceId: input.workspaceId,
+      resourceType: "automation_event_source",
+      resourceId: input.eventSourceId,
+      target,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
+      createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+      reason: input.reason || "Automation event source access grant",
+    })
 
     return {
       binding: {
@@ -1646,13 +1614,7 @@ export async function grantAutomationEventSourceAccess(input: {
   })
 
   return mapAutomationEventSourceAccessGrant(
-    normalizeAccessBindingRow({
-      ...inserted.binding,
-      subject_actor_id: target.subjectActorId,
-      subject_conversation_id: target.subjectConversationId,
-      subject_conversation_actor_context_id:
-        target.subjectConversationActorContextId,
-    })
+    normalizeAccessBindingRow(inserted.binding)
   )
 }
 
@@ -1685,19 +1647,11 @@ export async function updateAutomationEventSourceAccessGrant(input: {
       })
     }
 
-    await executeSql(
-      `UPDATE resource_access_bindings
-       SET conversation_type_mask_override = $2
-       WHERE id = $1
-         AND workspace_id = $3
-         AND automation_event_source_id = $4::uuid`,
-      [
-        input.bindingId,
-        input.conversationTypeMaskOverride ?? null,
-        input.workspaceId,
-        input.eventSourceId,
-      ]
-    )
+    await updateGrantConversationTypeMaskOverride(db, {
+      bindingId: input.bindingId,
+      workspaceId: input.workspaceId,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
+    })
   }
 
   const updatedRows = await listAutomationEventSourceAccessRows(
@@ -1807,18 +1761,7 @@ export async function revokeAutomationEventSourceAccess(input: {
     throw new Error("Automation event source access binding not found")
   }
 
-  await transaction(async (client) => {
-    await executeSqlOn(
-      client,
-      `UPDATE resource_access_bindings
-       SET status = 'revoked',
-           revoked_at = NOW()
-       WHERE id = $1
-         AND workspace_id = $2
-         AND automation_event_source_id = $3::uuid`,
-      [input.bindingId, input.workspaceId, input.eventSourceId]
-    )
-  })
+  await revokeGrant(db, { bindingId: input.bindingId })
   await pauseAutomationRulesMissingEventSourceAccess(
     input.eventSourceId,
     input.operator,

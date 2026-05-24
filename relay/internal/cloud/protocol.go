@@ -1,5 +1,7 @@
 package cloud
 
+import "github.com/PekingSpades/Synapse/relay/internal/runtimeauth"
+
 // Relay WebSocket protocol v2
 
 const RelayProtocolVersion = 2
@@ -83,10 +85,12 @@ type RelayDispatchPayload struct {
 }
 
 type RelayRuntimeAuthorizationPayload struct {
-	GrantIDs   []string                 `json:"grantIds,omitempty"`
-	GrantScope string                   `json:"grantScope,omitempty"`
-	GrantSpecs []map[string]interface{} `json:"grantSpecs,omitempty"`
-	RetryNonce string                   `json:"retryNonce,omitempty"`
+	GrantIDs   []string `json:"grantIds,omitempty"`
+	GrantScope string   `json:"grantScope,omitempty"`
+	// P4 contract: strongly-typed GrantPolicy values on the wire, replacing
+	// the historical `[]map[string]interface{}` indirection.
+	GrantSpecs []runtimeauth.GrantPolicy `json:"grantSpecs,omitempty"`
+	RetryNonce string                    `json:"retryNonce,omitempty"`
 }
 
 type RelayRuntimeSessionOpenMessage struct {

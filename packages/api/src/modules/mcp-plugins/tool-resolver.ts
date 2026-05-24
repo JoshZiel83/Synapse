@@ -12,8 +12,10 @@ import type {
   RuntimeActorContext,
 } from "@synapse/shared/types"
 import { sql } from "kysely"
-import { lookupResources } from "../access/core.js"
+import { lookupResources } from "../access/evaluator.js"
+import { ACCESS_ACTIONS } from "../access/actions.js"
 import { db } from "../../infrastructure/database/kysely.js"
+import { loadAccessBindingRowsForResources } from "../access/binding-storage.js"
 import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
 import { resolveInstallationConfig } from "./config-resolver.js"
@@ -40,7 +42,7 @@ import { inferRelaySpecialAuthorizationPlan } from "./relay-special-mcp.js"
 import {
   createRelayAuthorizationRequest,
   waitForRelayAuthorizationResolution,
-} from "./relay-authorization-requests.js"
+} from "../relay-authorizations/requests.js"
 import {
   classifyRelayLocalPermissionDenial,
   injectRelayAuthorizationToolParameter,
@@ -118,8 +120,14 @@ type VisibleAccessBindingRow = {
   workspace_id: string
   resource_type: "plugin_installation" | "relay_capability"
   resource_id: string
-  target_type: "workspace" | "conversation" | "actor" | "actor_in_conversation"
+  target_type:
+    | "workspace"
+    | "workspace_member"
+    | "conversation"
+    | "actor"
+    | "actor_in_conversation"
   subject_workspace_id: string | null
+  subject_workspace_member_id: string | null
   subject_actor_id: string | null
   subject_conversation_id: string | null
   subject_conversation_actor_context_id: string | null
@@ -260,8 +268,9 @@ function asArray<T>(value: unknown): T[] {
 }
 
 async function buildVisibilitySubjects(params: ResolveParams) {
-  return buildConversationCapabilitySubjects({
+  return buildConversationCapabilitySubjects(db, {
     workspaceId: params.workspaceId,
+    workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
     conversationId: params.conversationId,
     sessionId: params.sessionId,
@@ -286,11 +295,19 @@ function isConversationTypeAllowed(
 
 function accessBindingMatchesContext(
   row: VisibleAccessBindingRow,
-  params: Pick<ResolveParams, "actorId" | "conversationId">
+  params: Pick<
+    ResolveParams,
+    "actorId" | "conversationId" | "workspaceMemberId"
+  >
 ) {
   switch (row.target_type) {
     case "workspace":
       return true
+    case "workspace_member":
+      return (
+        !!params.workspaceMemberId &&
+        row.subject_workspace_member_id === params.workspaceMemberId
+      )
     case "conversation":
       return row.conversation_id === params.conversationId
     case "actor":
@@ -311,65 +328,44 @@ async function loadVisibleAccessBindings(params: {
     return new Map<string, VisibleAccessBindingRow[]>()
   }
 
-  const resourceColumn =
-    params.resourceType === "plugin_installation"
-      ? "binding.plugin_installation_id"
-      : "binding.relay_capability_id"
-  const resourceIdSelect =
-    params.resourceType === "plugin_installation"
-      ? sql<string>`binding.plugin_installation_id::text`.as("resource_id")
-      : sql<string>`binding.relay_capability_id::text`.as("resource_id")
-
-  const rows = (await db
-    .selectFrom("resource_access_bindings as binding")
-    .leftJoin(
-      "conversation_actor_contexts as cac",
-      "cac.id",
-      "binding.subject_conversation_actor_context_id"
-    )
-    .select([
-      "binding.id",
-      "binding.workspace_id",
-      "binding.resource_type",
-      resourceIdSelect,
-      "binding.target_type",
-      "binding.subject_workspace_id",
-      sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
-        "subject_actor_id"
-      ),
-      sql<
-        string | null
-      >`COALESCE(binding.subject_conversation_id, cac.conversation_id)`.as(
-        "subject_conversation_id"
-      ),
-      "binding.subject_conversation_actor_context_id",
-      "binding.conversation_type_mask_override",
-      "binding.status",
-      "binding.created_by_workspace_member_id",
-      "binding.reason",
-      "binding.created_at",
-      "binding.revoked_at",
-      sql<Record<string, unknown>>`'{}'::jsonb`.as("metadata"),
-      sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
-        "actor_id"
-      ),
-      sql<
-        string | null
-      >`COALESCE(binding.subject_conversation_id, cac.conversation_id)`.as(
-        "conversation_id"
-      ),
-    ])
-    .where("binding.resource_type", "=", params.resourceType)
-    .where(resourceColumn, "in", params.resourceIds)
-    .where("binding.status", "=", "active")
-    .orderBy("binding.created_at", "desc")
-    .execute()) as unknown as VisibleAccessBindingRow[]
+  // P3: route through binding-storage's central row loader. The returned
+  // AccessBindingRow already carries target_type + subject_*_id (reconstructed
+  // from the access_subjects JOIN). VisibleAccessBindingRow surfaces a few
+  // extra denormalized fields — `actor_id` / `conversation_id` mirror the
+  // subject side, `metadata` is intentionally an empty object — so we map
+  // them on after the load.
+  const rows = await loadAccessBindingRowsForResources(db, {
+    resourceType: params.resourceType,
+    resourceIds: params.resourceIds,
+  })
 
   const map = new Map<string, VisibleAccessBindingRow[]>()
   for (const row of rows) {
-    const entries = map.get(row.resource_id) || []
-    entries.push(row)
-    map.set(row.resource_id, entries)
+    const visible: VisibleAccessBindingRow = {
+      id: row.id,
+      workspace_id: row.workspace_id,
+      resource_type: params.resourceType,
+      resource_id: row.resource_id,
+      target_type: row.target_type,
+      subject_workspace_id: row.subject_workspace_id,
+      subject_workspace_member_id: row.subject_workspace_member_id,
+      subject_actor_id: row.subject_actor_id,
+      subject_conversation_id: row.subject_conversation_id,
+      subject_conversation_actor_context_id:
+        row.subject_conversation_actor_context_id,
+      conversation_type_mask_override: row.conversation_type_mask_override,
+      status: row.status,
+      created_by_workspace_member_id: row.created_by_workspace_member_id,
+      reason: row.reason,
+      metadata: {},
+      created_at: row.created_at,
+      revoked_at: row.revoked_at,
+      actor_id: row.subject_actor_id,
+      conversation_id: row.subject_conversation_id,
+    }
+    const entries = map.get(visible.resource_id) || []
+    entries.push(visible)
+    map.set(visible.resource_id, entries)
   }
   return map
 }
@@ -797,9 +793,9 @@ async function loadVisiblePlugins(params: ResolveParams) {
 
   const lookups = await Promise.all(
     subjects.map((subject) =>
-      lookupResources({
-        resourceType: "plugin_installation",
-        permission: "use",
+      lookupResources(db, {
+        resourceType: ACCESS_ACTIONS["plugin_installation.use"].resourceType,
+        permission: ACCESS_ACTIONS["plugin_installation.use"].permission,
         subject,
       })
     )
@@ -889,9 +885,9 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
 
   const lookups = await Promise.all(
     subjects.map((subject) =>
-      lookupResources({
-        resourceType: "relay_capability",
-        permission: "use",
+      lookupResources(db, {
+        resourceType: ACCESS_ACTIONS["relay_capability.use"].resourceType,
+        permission: ACCESS_ACTIONS["relay_capability.use"].permission,
         subject,
       })
     )
@@ -947,7 +943,7 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
 
   const [bindingsByExposureId, workspacePolicyMap] = await Promise.all([
     loadVisibleAccessBindings({
-      resourceType: "relay_capability",
+      resourceType: ACCESS_ACTIONS["relay_capability.use"].resourceType,
       resourceIds: rows.map((row) => row.capability_id),
     }),
     getWorkspaceCapabilityConversationTypePolicyMap(

@@ -1,9 +1,7 @@
-import { db } from "../../infrastructure/database/kysely.js"
-import type { PermissionSubject } from "./core.js"
-import {
-  getConversationActorContextByPair,
-  getConversationActorContextBySessionId,
-} from "../session/service.js"
+import { SUBJECT_KIND } from "@synapse/shared"
+import type { KyselyDb } from "../../infrastructure/database/kysely.js"
+import type { PermissionSubject } from "./evaluator.js"
+import { upsertAccessSubject } from "./subject-registry.js"
 
 function dedupeSubjects(subjects: PermissionSubject[]) {
   const seen = new Set<string>()
@@ -21,7 +19,10 @@ function dedupeSubjects(subjects: PermissionSubject[]) {
   return deduped
 }
 
-async function loadConversationActorContextById(contextId: string) {
+async function loadConversationActorContextById(
+  db: KyselyDb,
+  contextId: string
+) {
   return db
     .selectFrom("conversation_actor_contexts")
     .select(["id", "actor_id", "conversation_id", "session_id"])
@@ -30,31 +31,71 @@ async function loadConversationActorContextById(contextId: string) {
     .executeTakeFirst()
 }
 
-export async function isActorActiveConversationParticipant(
+// P0/P6: previously delegated to session/service.ts helpers which fall back to
+// the global pool when no queryable is passed. Inline the queries so subject
+// resolution honors the injected `db` (test-container DB, transaction client).
+async function loadConversationActorContextByPair(
+  db: KyselyDb,
   conversationId: string,
   actorId: string
 ) {
+  return db
+    .selectFrom("conversation_actor_contexts")
+    .select(["id", "actor_id", "conversation_id", "session_id"])
+    .where("conversation_id", "=", conversationId)
+    .where("actor_id", "=", actorId)
+    .limit(1)
+    .executeTakeFirst()
+}
+
+async function loadConversationActorContextBySessionId(
+  db: KyselyDb,
+  sessionId: string
+) {
+  return db
+    .selectFrom("conversation_actor_contexts")
+    .select(["id", "actor_id", "conversation_id", "session_id"])
+    .where("session_id", "=", sessionId)
+    .limit(1)
+    .executeTakeFirst()
+}
+
+export async function isActorActiveConversationParticipant(
+  db: KyselyDb,
+  conversationId: string,
+  actorId: string
+) {
+  // P1b: filter by subject_id (the polymorphic actor_id column was dropped).
+  const actorSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.ACTOR,
+    actorId,
+  })
   const row = await db
     .selectFrom("conversation_participants")
     .select("id")
     .where("conversation_id", "=", conversationId)
     .where("participant_kind", "=", "actor")
-    .where("actor_id", "=", actorId)
+    .where("subject_id", "=", actorSubjectId)
     .where("state", "=", "active")
     .limit(1)
     .executeTakeFirst()
   return Boolean(row)
 }
 
-export async function buildConversationCapabilitySubjects(params: {
-  workspaceId: string
-  actorId?: string | null
-  conversationId?: string | null
-  sessionId?: string | null
-  conversationActorContextId?: string | null
-}) {
+export async function buildConversationCapabilitySubjects(
+  db: KyselyDb,
+  params: {
+    workspaceId: string
+    workspaceMemberId?: string | null
+    actorId?: string | null
+    conversationId?: string | null
+    sessionId?: string | null
+    conversationActorContextId?: string | null
+  }
+) {
   if (params.actorId && params.conversationId) {
     const isActiveParticipant = await isActorActiveConversationParticipant(
+      db,
       params.conversationId,
       params.actorId
     )
@@ -69,6 +110,17 @@ export async function buildConversationCapabilitySubjects(params: {
       id: params.workspaceId,
     },
   ]
+
+  // P2 fix: include the workspace_member subject so that workspace_member-scoped
+  // bindings written by `grantApprovedAccess` actually surface in lookups /
+  // visibility queries. Without this, an approved member would never see the
+  // actor/skill/plugin they were granted access to.
+  if (params.workspaceMemberId) {
+    subjects.push({
+      type: "workspace_member",
+      id: params.workspaceMemberId,
+    })
+  }
 
   if (params.actorId) {
     subjects.push({
@@ -88,12 +140,14 @@ export async function buildConversationCapabilitySubjects(params: {
     | undefined
 
   if (contextId) {
-    context = (await loadConversationActorContextById(contextId)) || undefined
+    context =
+      (await loadConversationActorContextById(db, contextId)) || undefined
   }
 
   if (!context && params.actorId && params.conversationId) {
     context =
-      (await getConversationActorContextByPair(
+      (await loadConversationActorContextByPair(
+        db,
         params.conversationId,
         params.actorId
       )) || undefined
@@ -101,7 +155,7 @@ export async function buildConversationCapabilitySubjects(params: {
 
   if (!context && params.sessionId) {
     context =
-      (await getConversationActorContextBySessionId(params.sessionId)) ||
+      (await loadConversationActorContextBySessionId(db, params.sessionId)) ||
       undefined
   }
 
@@ -111,6 +165,7 @@ export async function buildConversationCapabilitySubjects(params: {
     (!params.conversationId ||
       context.conversation_id === params.conversationId) &&
     (await isActorActiveConversationParticipant(
+      db,
       context.conversation_id,
       context.actor_id
     ))

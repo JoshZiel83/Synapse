@@ -1,4 +1,5 @@
 import {
+  CONVERSATION_PARTICIPANT_TYPE,
   INTERACTION_INPUT_QUESTION_TYPES,
   INTERACTION_REQUEST_KIND,
   textBlocks,
@@ -1101,9 +1102,9 @@ async function getInteractionRowById(
             auth.relay_capability_id,
             auth.relay_exposure_id,
             auth.relay_tool_stable_key,
-            requester.workspace_member_id AS requester_workspace_member_id,
-            requester.actor_id AS requester_actor_id,
-            requester.remote_agent_id AS requester_remote_agent_id,
+            requester_subj.workspace_member_id AS requester_workspace_member_id,
+            requester_subj.actor_id AS requester_actor_id,
+            requester_subj.remote_agent_id AS requester_remote_agent_id,
             requester.participant_kind AS requester_participant_kind,
             COALESCE(requester_remote_agent.name, requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
             COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
@@ -1112,9 +1113,9 @@ async function getInteractionRowById(
             requester_user.avatar_file_id AS requester_user_avatar_file_id,
             requester_remote_agent.avatar_file_id AS requester_remote_agent_avatar_file_id,
             COALESCE(requester_remote_agent.avatar_emoji, requester_actor.avatar_emoji) AS requester_avatar_emoji,
-            target.workspace_member_id AS target_workspace_member_id,
-            target.actor_id AS target_actor_id,
-            target.remote_agent_id AS target_remote_agent_id,
+            target_subj.workspace_member_id AS target_workspace_member_id,
+            target_subj.actor_id AS target_actor_id,
+            target_subj.remote_agent_id AS target_remote_agent_id,
             target.participant_kind AS target_participant_kind,
             COALESCE(target_remote_agent.name, target_actor.name, target_user.name, target.display_name) AS target_name,
             COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
@@ -1123,9 +1124,9 @@ async function getInteractionRowById(
             target_user.avatar_file_id AS target_user_avatar_file_id,
             target_remote_agent.avatar_file_id AS target_remote_agent_avatar_file_id,
             COALESCE(target_remote_agent.avatar_emoji, target_actor.avatar_emoji) AS target_avatar_emoji,
-            resolver.workspace_member_id AS resolved_by_workspace_member_id,
-            resolver.actor_id AS resolved_by_actor_id,
-            resolver.remote_agent_id AS resolved_by_remote_agent_id,
+            resolver_subj.workspace_member_id AS resolved_by_workspace_member_id,
+            resolver_subj.actor_id AS resolved_by_actor_id,
+            resolver_subj.remote_agent_id AS resolved_by_remote_agent_id,
             resolver.participant_kind AS resolved_by_participant_kind,
             COALESCE(resolver_remote_agent.name, resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
             COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
@@ -1146,32 +1147,38 @@ async function getInteractionRowById(
        ON auth.interaction_id = ir.id
      LEFT JOIN conversation_participants requester
        ON requester.id = ir.requester_participant_id
+     LEFT JOIN access_subjects requester_subj
+       ON requester_subj.id = requester.subject_id
      LEFT JOIN actors requester_actor
-       ON requester_actor.id = requester.actor_id
+       ON requester_actor.id = requester_subj.actor_id
      LEFT JOIN remote_agents requester_remote_agent
-       ON requester_remote_agent.id = requester.remote_agent_id
+       ON requester_remote_agent.id = requester_subj.remote_agent_id
      LEFT JOIN workspace_members requester_wm
-       ON requester_wm.id = requester.workspace_member_id
+       ON requester_wm.id = requester_subj.workspace_member_id
      LEFT JOIN users requester_user
        ON requester_user.id = requester_wm.user_id
      LEFT JOIN conversation_participants target
        ON target.id = ir.target_participant_id
+     LEFT JOIN access_subjects target_subj
+       ON target_subj.id = target.subject_id
      LEFT JOIN actors target_actor
-       ON target_actor.id = target.actor_id
+       ON target_actor.id = target_subj.actor_id
      LEFT JOIN remote_agents target_remote_agent
-       ON target_remote_agent.id = target.remote_agent_id
+       ON target_remote_agent.id = target_subj.remote_agent_id
      LEFT JOIN workspace_members target_wm
-       ON target_wm.id = target.workspace_member_id
+       ON target_wm.id = target_subj.workspace_member_id
      LEFT JOIN users target_user
        ON target_user.id = target_wm.user_id
      LEFT JOIN conversation_participants resolver
        ON resolver.id = ir.resolved_by_participant_id
+     LEFT JOIN access_subjects resolver_subj
+       ON resolver_subj.id = resolver.subject_id
      LEFT JOIN actors resolver_actor
-       ON resolver_actor.id = resolver.actor_id
+       ON resolver_actor.id = resolver_subj.actor_id
      LEFT JOIN remote_agents resolver_remote_agent
-       ON resolver_remote_agent.id = resolver.remote_agent_id
+       ON resolver_remote_agent.id = resolver_subj.remote_agent_id
      LEFT JOIN workspace_members resolver_wm
-       ON resolver_wm.id = resolver.workspace_member_id
+       ON resolver_wm.id = resolver_subj.workspace_member_id
      LEFT JOIN users resolver_user
        ON resolver_user.id = resolver_wm.user_id
      LEFT JOIN relay_devices device
@@ -1265,9 +1272,9 @@ async function getInteractionRowByIdForUpdate(
             auth.relay_capability_id,
             auth.relay_exposure_id,
             auth.relay_tool_stable_key,
-            requester.workspace_member_id AS requester_workspace_member_id,
-            requester.actor_id AS requester_actor_id,
-            requester.remote_agent_id AS requester_remote_agent_id,
+            requester_subj.workspace_member_id AS requester_workspace_member_id,
+            requester_subj.actor_id AS requester_actor_id,
+            requester_subj.remote_agent_id AS requester_remote_agent_id,
             requester.participant_kind AS requester_participant_kind,
             COALESCE(requester_remote_agent.name, requester_actor.name, requester_user.name, requester.display_name) AS requester_name,
             COALESCE(requester_remote_agent.title, requester_actor.title) AS requester_title,
@@ -1276,9 +1283,9 @@ async function getInteractionRowByIdForUpdate(
             requester_user.avatar_file_id AS requester_user_avatar_file_id,
             requester_remote_agent.avatar_file_id AS requester_remote_agent_avatar_file_id,
             COALESCE(requester_remote_agent.avatar_emoji, requester_actor.avatar_emoji) AS requester_avatar_emoji,
-            target.workspace_member_id AS target_workspace_member_id,
-            target.actor_id AS target_actor_id,
-            target.remote_agent_id AS target_remote_agent_id,
+            target_subj.workspace_member_id AS target_workspace_member_id,
+            target_subj.actor_id AS target_actor_id,
+            target_subj.remote_agent_id AS target_remote_agent_id,
             target.participant_kind AS target_participant_kind,
             COALESCE(target_remote_agent.name, target_actor.name, target_user.name, target.display_name) AS target_name,
             COALESCE(target_remote_agent.title, target_actor.title) AS target_title,
@@ -1287,9 +1294,9 @@ async function getInteractionRowByIdForUpdate(
             target_user.avatar_file_id AS target_user_avatar_file_id,
             target_remote_agent.avatar_file_id AS target_remote_agent_avatar_file_id,
             COALESCE(target_remote_agent.avatar_emoji, target_actor.avatar_emoji) AS target_avatar_emoji,
-            resolver.workspace_member_id AS resolved_by_workspace_member_id,
-            resolver.actor_id AS resolved_by_actor_id,
-            resolver.remote_agent_id AS resolved_by_remote_agent_id,
+            resolver_subj.workspace_member_id AS resolved_by_workspace_member_id,
+            resolver_subj.actor_id AS resolved_by_actor_id,
+            resolver_subj.remote_agent_id AS resolved_by_remote_agent_id,
             resolver.participant_kind AS resolved_by_participant_kind,
             COALESCE(resolver_remote_agent.name, resolver_actor.name, resolver_user.name, resolver.display_name) AS resolved_by_name,
             COALESCE(resolver_remote_agent.title, resolver_actor.title) AS resolved_by_title,
@@ -1310,32 +1317,38 @@ async function getInteractionRowByIdForUpdate(
        ON auth.interaction_id = ir.id
      LEFT JOIN conversation_participants requester
        ON requester.id = ir.requester_participant_id
+     LEFT JOIN access_subjects requester_subj
+       ON requester_subj.id = requester.subject_id
      LEFT JOIN actors requester_actor
-       ON requester_actor.id = requester.actor_id
+       ON requester_actor.id = requester_subj.actor_id
      LEFT JOIN remote_agents requester_remote_agent
-       ON requester_remote_agent.id = requester.remote_agent_id
+       ON requester_remote_agent.id = requester_subj.remote_agent_id
      LEFT JOIN workspace_members requester_wm
-       ON requester_wm.id = requester.workspace_member_id
+       ON requester_wm.id = requester_subj.workspace_member_id
      LEFT JOIN users requester_user
        ON requester_user.id = requester_wm.user_id
      LEFT JOIN conversation_participants target
        ON target.id = ir.target_participant_id
+     LEFT JOIN access_subjects target_subj
+       ON target_subj.id = target.subject_id
      LEFT JOIN actors target_actor
-       ON target_actor.id = target.actor_id
+       ON target_actor.id = target_subj.actor_id
      LEFT JOIN remote_agents target_remote_agent
-       ON target_remote_agent.id = target.remote_agent_id
+       ON target_remote_agent.id = target_subj.remote_agent_id
      LEFT JOIN workspace_members target_wm
-       ON target_wm.id = target.workspace_member_id
+       ON target_wm.id = target_subj.workspace_member_id
      LEFT JOIN users target_user
        ON target_user.id = target_wm.user_id
      LEFT JOIN conversation_participants resolver
        ON resolver.id = ir.resolved_by_participant_id
+     LEFT JOIN access_subjects resolver_subj
+       ON resolver_subj.id = resolver.subject_id
      LEFT JOIN actors resolver_actor
-       ON resolver_actor.id = resolver.actor_id
+       ON resolver_actor.id = resolver_subj.actor_id
      LEFT JOIN remote_agents resolver_remote_agent
-       ON resolver_remote_agent.id = resolver.remote_agent_id
+       ON resolver_remote_agent.id = resolver_subj.remote_agent_id
      LEFT JOIN workspace_members resolver_wm
-       ON resolver_wm.id = resolver.workspace_member_id
+       ON resolver_wm.id = resolver_subj.workspace_member_id
      LEFT JOIN users resolver_user
        ON resolver_user.id = resolver_wm.user_id
      LEFT JOIN relay_devices device
@@ -1394,7 +1407,8 @@ async function appendInteractionUpdatedSyncEvent(
   )
   const recipients =
     interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION ||
-    (interaction.requester?.participantType === "remote_agent" &&
+    (interaction.requester?.participantType ===
+      CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
       !interaction.target)
       ? allRecipients
       : allRecipients.filter(
@@ -2262,14 +2276,15 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
           active_plan_approval_interaction_id
         )
         SELECT
-          cp.remote_agent_id,
+          cpsubj.remote_agent_id,
           $1,
           'plan_awaiting_approval',
           $2::jsonb,
           $3
         FROM conversation_participants cp
+        INNER JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
         WHERE cp.id = $4
-          AND cp.remote_agent_id IS NOT NULL
+          AND cpsubj.remote_agent_id IS NOT NULL
         ON CONFLICT (remote_agent_id, conversation_id)
         DO UPDATE SET
           collaboration_mode = EXCLUDED.collaboration_mode,
@@ -2552,8 +2567,9 @@ export async function canUserViewInteraction(params: {
         sql<boolean>`EXISTS (
           SELECT 1
           FROM conversation_participants cp
+          JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
           JOIN workspace_members wm
-            ON wm.id = cp.workspace_member_id
+            ON wm.id = cpsubj.workspace_member_id
           WHERE cp.id = ir.requester_participant_id
             AND wm.user_id = ${params.userId}
         )`,
@@ -2566,21 +2582,24 @@ export async function canUserViewInteraction(params: {
             sql<boolean>`EXISTS (
               SELECT 1
               FROM conversation_participants cp
+              JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
               JOIN workspace_members wm
-                ON wm.id = cp.workspace_member_id
+                ON wm.id = cpsubj.workspace_member_id
               WHERE cp.id = ir.target_participant_id
                 AND wm.user_id = ${params.userId}
             )`,
             sql<boolean>`EXISTS (
               SELECT 1
               FROM conversation_participants requester_cp
+              JOIN access_subjects requester_subj ON requester_subj.id = requester_cp.subject_id
               JOIN conversation_participants viewer_cp
                 ON viewer_cp.conversation_id = requester_cp.conversation_id
                AND viewer_cp.state = 'active'
+              JOIN access_subjects viewer_subj ON viewer_subj.id = viewer_cp.subject_id
               JOIN workspace_members viewer_wm
-                ON viewer_wm.id = viewer_cp.workspace_member_id
+                ON viewer_wm.id = viewer_subj.workspace_member_id
               WHERE requester_cp.id = ir.requester_participant_id
-                AND requester_cp.remote_agent_id IS NOT NULL
+                AND requester_subj.remote_agent_id IS NOT NULL
                 AND ir.remote_agent_run_id IS NOT NULL
                 AND viewer_wm.user_id = ${params.userId}
             )`,
@@ -2591,8 +2610,9 @@ export async function canUserViewInteraction(params: {
           sql<boolean>`EXISTS (
             SELECT 1
             FROM conversation_participants cm
+            JOIN access_subjects cm_subj ON cm_subj.id = cm.subject_id
             JOIN workspace_members wm
-              ON wm.id = cm.workspace_member_id
+              ON wm.id = cm_subj.workspace_member_id
             WHERE cm.conversation_id = ir.conversation_id
               AND wm.user_id = ${params.userId}
               AND cm.state = 'active'
@@ -2621,7 +2641,8 @@ export async function canUserResolveInteraction(params: {
     const targetParticipantId = interaction.target?.participantId
     const viewerParticipant = await db
       .selectFrom("conversation_participants as cp")
-      .innerJoin("workspace_members as wm", "wm.id", "cp.workspace_member_id")
+      .innerJoin("access_subjects as subj", "subj.id", "cp.subject_id")
+      .innerJoin("workspace_members as wm", "wm.id", "subj.workspace_member_id")
       .select("cp.id")
       .where("cp.id", "=", targetParticipantId)
       .where("cp.state", "=", "active")
@@ -2634,15 +2655,17 @@ export async function canUserResolveInteraction(params: {
 
   if (
     interaction.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
-    interaction.requester?.participantType === "remote_agent" &&
+    interaction.requester?.participantType ===
+      CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
     interaction.requester.remoteAgentId
   ) {
     const viewerMembership = await db
       .selectFrom("conversation_participants as cp")
-      .innerJoin("workspace_members as wm", "wm.id", "cp.workspace_member_id")
+      .innerJoin("access_subjects as subj", "subj.id", "cp.subject_id")
+      .innerJoin("workspace_members as wm", "wm.id", "subj.workspace_member_id")
       .innerJoin("conversations as c", "c.id", "cp.conversation_id")
       .select([
-        "cp.workspace_member_id as workspace_member_id",
+        "subj.workspace_member_id as workspace_member_id",
         "c.kind as conversation_kind",
       ])
       .where("cp.conversation_id", "=", interaction.conversationId)
@@ -2681,7 +2704,7 @@ export async function canUserResolveInteraction(params: {
     return false
   }
 
-  return authorizeAction({
+  return authorizeAction(db, {
     subject: userSubject(userId),
     action: "relay_device.authorize_relay_authorization",
     resourceId: deviceId,
@@ -3022,7 +3045,7 @@ export async function resolveInteractionRequest(
       if (!relayDeviceId) {
         throw new Error(`Interaction ${locked.id} is missing relay_device_id`)
       }
-      const canResolveRelayAuthorization = await authorizeAction({
+      const canResolveRelayAuthorization = await authorizeAction(db, {
         subject: workspaceMemberSubject(params.resolverWorkspaceMemberId),
         action: "relay_device.authorize_relay_authorization",
         resourceId: relayDeviceId,

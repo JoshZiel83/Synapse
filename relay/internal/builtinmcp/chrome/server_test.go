@@ -59,8 +59,8 @@ func TestDisabledChromeListsStaticToolsAndReturnsRelayAccessDenial(t *testing.T)
 	if denial["kind"] != "permission_denied" {
 		t.Fatalf("expected permission_denied kind, got %#v", denial["kind"])
 	}
-	if denial["resolution"] != "local_setting" {
-		t.Fatalf("expected local_setting resolution, got %#v", denial["resolution"])
+	if denial["resolution"] != "server_grant" {
+		t.Fatalf("expected server_grant resolution, got %#v", denial["resolution"])
 	}
 }
 

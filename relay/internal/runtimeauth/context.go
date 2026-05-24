@@ -9,7 +9,11 @@ type RuntimeAuthorization struct {
 	GrantIDs   []string
 	GrantScope string
 	RetryNonce string
-	GrantSpecs []map[string]interface{}
+	// P4 contract: strongly typed instead of `[]map[string]interface{}`. The
+	// API serializes GrantPolicy values directly into the WS payload, and the
+	// relay unmarshals into this slice. The old map-of-any intermediate plus
+	// per-call `decodeGrantPolicy` re-marshal step is gone.
+	GrantSpecs []GrantPolicy
 }
 
 func (authorization RuntimeAuthorization) IsServerAuthorized() bool {

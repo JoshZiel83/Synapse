@@ -91,22 +91,18 @@ func (s *Server) isAuthorized(ctx context.Context, command, cwd string) bool {
 	if s.cfg.Enabled {
 		return true
 	}
-	if !s.cfg.AllowServerAuthorization {
-		return false
-	}
-	return runtimeauth.MatchesCommandlinePolicy(
-		runtimeauth.PoliciesForCapability(ctx, "commandline"),
-		"bash",
-		command,
-		cwd,
-	)
+	return runtimeauth.IsAuthorized(ctx, runtimeauth.AccessRequest{
+		Capability: "commandline",
+		Commandline: &runtimeauth.CommandlineRequest{
+			Executor:         "bash",
+			Command:          command,
+			WorkingDirectory: cwd,
+		},
+	})
 }
 
 func (s *Server) denialResolution() string {
-	if s.cfg.AllowServerAuthorization {
-		return core.RelayAccessDenialResolutionServerGrant
-	}
-	return core.RelayAccessDenialResolutionLocalSetting
+	return core.RelayAccessDenialResolutionServerGrant
 }
 
 func disabledResult(toolName string, resolution string) core.CallResult {

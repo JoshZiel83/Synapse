@@ -1,7 +1,7 @@
 import crypto from "node:crypto"
 import * as Lark from "@larksuiteoapi/node-sdk"
 import { Worker } from "bullmq"
-import { QUEUE_NAMES } from "@synapse/shared"
+import { CONVERSATION_PARTICIPANT_TYPE, QUEUE_NAMES } from "@synapse/shared"
 import type {
   ConversationFeedMessageItem,
   TransportAccountSummary,
@@ -336,7 +336,9 @@ export function startImTransportDeliveryWorker() {
         })
         return { success: true, reason: "item missing" }
       }
-      if (item.author?.participantType === "external") {
+      if (
+        item.author?.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
+      ) {
         await updateTransportMessageLinkStatus({
           linkId,
           status: "skipped",

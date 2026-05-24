@@ -1,3 +1,10 @@
+import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
+import type { KyselyDb } from "../../infrastructure/database/kysely.js"
+import {
+  loadAccessSubject,
+  upsertAccessSubject,
+} from "../access/subject-registry.js"
+
 export type DirectConversationIdentity =
   | {
       kind: "member"
@@ -35,110 +42,84 @@ export function canonicalizeDirectConversationPair(
     : { participantOne: right, participantTwo: left }
 }
 
-export function directConversationBindingValues(
-  pair: ReturnType<typeof canonicalizeDirectConversationPair>
-) {
-  const participantOne =
-    pair.participantOne.kind === "member"
-      ? {
-          participant_one_kind: "member" as const,
-          participant_one_workspace_member_id:
-            pair.participantOne.workspaceMemberId,
-          participant_one_actor_id: null,
-          participant_one_remote_agent_id: null,
-        }
-      : pair.participantOne.kind === "actor"
-        ? {
-            participant_one_kind: "actor" as const,
-            participant_one_workspace_member_id: null,
-            participant_one_actor_id: pair.participantOne.actorId,
-            participant_one_remote_agent_id: null,
-          }
-        : {
-            participant_one_kind: "remote_agent" as const,
-            participant_one_workspace_member_id: null,
-            participant_one_actor_id: null,
-            participant_one_remote_agent_id: pair.participantOne.remoteAgentId,
-          }
-  const participantTwo =
-    pair.participantTwo.kind === "member"
-      ? {
-          participant_two_kind: "member" as const,
-          participant_two_workspace_member_id:
-            pair.participantTwo.workspaceMemberId,
-          participant_two_actor_id: null,
-          participant_two_remote_agent_id: null,
-        }
-      : pair.participantTwo.kind === "actor"
-        ? {
-            participant_two_kind: "actor" as const,
-            participant_two_workspace_member_id: null,
-            participant_two_actor_id: pair.participantTwo.actorId,
-            participant_two_remote_agent_id: null,
-          }
-        : {
-            participant_two_kind: "remote_agent" as const,
-            participant_two_workspace_member_id: null,
-            participant_two_actor_id: null,
-            participant_two_remote_agent_id: pair.participantTwo.remoteAgentId,
-          }
-
-  return {
-    ...participantOne,
-    ...participantTwo,
+function directIdentityToSubjectRef(
+  identity: DirectConversationIdentity
+): SubjectRef {
+  switch (identity.kind) {
+    case "member":
+      return {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: identity.workspaceMemberId,
+      }
+    case "actor":
+      return { kind: SUBJECT_KIND.ACTOR, actorId: identity.actorId }
+    case "remote_agent":
+      return {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: identity.remoteAgentId,
+      }
   }
 }
 
-export function directConversationBindingPeer(
+function subjectRefToDirectIdentity(
+  ref: SubjectRef
+): DirectConversationIdentity | null {
+  switch (ref.kind) {
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      return { kind: "member", workspaceMemberId: ref.memberId }
+    case SUBJECT_KIND.ACTOR:
+      return { kind: "actor", actorId: ref.actorId }
+    case SUBJECT_KIND.REMOTE_AGENT:
+      return { kind: "remote_agent", remoteAgentId: ref.remoteAgentId }
+    default:
+      return null
+  }
+}
+
+/**
+ * P1b: returns the column shape for inserting a row into
+ * `direct_conversation_bindings`. The two polymorphic participant_*_kind +
+ * three nullable FKs are collapsed into a single `*_subject_id` per side.
+ * Caller is responsible for ensuring the subject upserts happen inside the
+ * same transaction as the binding insert.
+ */
+export async function directConversationBindingValues(
+  db: KyselyDb,
+  pair: ReturnType<typeof canonicalizeDirectConversationPair>
+) {
+  const participantOneSubjectId = await upsertAccessSubject(
+    db,
+    directIdentityToSubjectRef(pair.participantOne)
+  )
+  const participantTwoSubjectId = await upsertAccessSubject(
+    db,
+    directIdentityToSubjectRef(pair.participantTwo)
+  )
+  return {
+    participant_one_subject_id: participantOneSubjectId,
+    participant_two_subject_id: participantTwoSubjectId,
+  }
+}
+
+/**
+ * Given a stored binding row and the viewer's identity, returns the peer
+ * identity. Requires the row to JOIN access_subjects so the participant
+ * subject ids resolve to their kind+id.
+ */
+export async function directConversationBindingPeer(
+  db: KyselyDb,
   row: {
-    participant_one_kind: "member" | "actor" | "remote_agent"
-    participant_one_workspace_member_id: string | null
-    participant_one_actor_id: string | null
-    participant_one_remote_agent_id: string | null
-    participant_two_kind: "member" | "actor" | "remote_agent"
-    participant_two_workspace_member_id: string | null
-    participant_two_actor_id: string | null
-    participant_two_remote_agent_id: string | null
+    participant_one_subject_id: string
+    participant_two_subject_id: string
   },
   viewer: DirectConversationIdentity
-): DirectConversationIdentity | null {
-  const left =
-    row.participant_one_kind === "member" &&
-    row.participant_one_workspace_member_id
-      ? {
-          kind: "member" as const,
-          workspaceMemberId: row.participant_one_workspace_member_id,
-        }
-      : row.participant_one_actor_id
-        ? {
-            kind: "actor" as const,
-            actorId: row.participant_one_actor_id,
-          }
-        : row.participant_one_remote_agent_id
-          ? {
-              kind: "remote_agent" as const,
-              remoteAgentId: row.participant_one_remote_agent_id,
-            }
-          : null
-  const right =
-    row.participant_two_kind === "member" &&
-    row.participant_two_workspace_member_id
-      ? {
-          kind: "member" as const,
-          workspaceMemberId: row.participant_two_workspace_member_id,
-        }
-      : row.participant_two_actor_id
-        ? {
-            kind: "actor" as const,
-            actorId: row.participant_two_actor_id,
-          }
-        : row.participant_two_remote_agent_id
-          ? {
-              kind: "remote_agent" as const,
-              remoteAgentId: row.participant_two_remote_agent_id,
-            }
-          : null
-
+): Promise<DirectConversationIdentity | null> {
+  const [oneRef, twoRef] = await Promise.all([
+    loadAccessSubject(db, row.participant_one_subject_id),
+    loadAccessSubject(db, row.participant_two_subject_id),
+  ])
+  const left = oneRef ? subjectRefToDirectIdentity(oneRef) : null
+  const right = twoRef ? subjectRefToDirectIdentity(twoRef) : null
   if (!left || !right) return null
   const viewerKey = directConversationIdentityKey(viewer)
   if (directConversationIdentityKey(left) === viewerKey) return right

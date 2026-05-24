@@ -7,6 +7,7 @@ import { Card, CardContent } from "@/components/ui/card"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ArrowLeft, History, Clock } from "lucide-react"
+import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared"
 
 interface ConfigVersion {
   id: string
@@ -39,12 +40,12 @@ export default function ModelItemVersions({
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (!workspaceId && scope === "workspace") return
+    if (!workspaceId && scope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE) return
     setLoading(true)
     const request =
-      scope === "platform"
+      scope === MODEL_GROUP_GRANT_SCOPE.PLATFORM
         ? api.getPlatformItemVersions(groupId, itemId)
-        : scope === "workspace_member"
+        : scope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER
           ? api.getWorkspaceMemberItemVersions(workspaceId!, groupId, itemId)
           : api.getItemVersions(workspaceId!, groupId, itemId)
     request

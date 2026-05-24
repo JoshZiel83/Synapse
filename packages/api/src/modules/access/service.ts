@@ -1,11 +1,11 @@
 import type { FastifyRequest } from "fastify"
+import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import {
   checkPermission,
   lookupResources,
   type AccessResourceType,
   type PermissionSubject,
-} from "./core.js"
-import { db } from "../../infrastructure/database/kysely.js"
+} from "./evaluator.js"
 import { getAccessActionSpec, type AccessAction } from "./actions.js"
 
 export type AccessSubject = PermissionSubject & {
@@ -20,7 +20,6 @@ export function actorSubject(actorId: string): AccessSubject {
   return { type: "actor", id: actorId }
 }
 
-export function workspaceMemberSubject(workspaceMemberId: string): AccessSubject
 export function workspaceMemberSubject(
   workspaceMemberId: string
 ): AccessSubject {
@@ -31,6 +30,7 @@ export function workspaceMemberSubject(
 }
 
 export async function resolveWorkspaceAccessSubject(
+  db: KyselyDb,
   workspaceId: string,
   userId: string
 ): Promise<AccessSubject> {
@@ -69,13 +69,16 @@ export function getRequestAccessSubject(
   return userSubject(getRequestUserId(request))
 }
 
-export async function authorizeAction(params: {
-  subject: AccessSubject
-  action: AccessAction
-  resourceId: string
-}) {
+export async function authorizeAction(
+  db: KyselyDb,
+  params: {
+    subject: AccessSubject
+    action: AccessAction
+    resourceId: string
+  }
+) {
   const spec = getAccessActionSpec(params.action)
-  return checkPermission({
+  return checkPermission(db, {
     resourceType: spec.resourceType,
     resourceId: params.resourceId,
     permission: spec.permission,
@@ -83,13 +86,16 @@ export async function authorizeAction(params: {
   })
 }
 
-export async function authorizePermission(params: {
-  subject: PermissionSubject
-  resourceType: AccessResourceType
-  resourceId: string
-  permission: string
-}) {
-  return checkPermission({
+export async function authorizePermission(
+  db: KyselyDb,
+  params: {
+    subject: PermissionSubject
+    resourceType: AccessResourceType
+    resourceId: string
+    permission: string
+  }
+) {
+  return checkPermission(db, {
     resourceType: params.resourceType,
     resourceId: params.resourceId,
     permission: params.permission,
@@ -97,63 +103,16 @@ export async function authorizePermission(params: {
   })
 }
 
-export async function authorizeAnyAction(params: {
-  subjects: readonly PermissionSubject[]
-  action: AccessAction
-  resourceId: string
-}) {
-  const uniqueSubjects = params.subjects.filter(Boolean)
-  if (uniqueSubjects.length === 0) {
-    return false
+export async function listAuthorizedResourceIds(
+  db: KyselyDb,
+  params: {
+    subject: AccessSubject
+    action: AccessAction
+    limit?: number
   }
-
+) {
   const spec = getAccessActionSpec(params.action)
-  for (const subject of uniqueSubjects) {
-    // Keep checks sequential so we can short-circuit on the first allowed subject.
-    if (
-      await checkPermission({
-        resourceType: spec.resourceType,
-        resourceId: params.resourceId,
-        permission: spec.permission,
-        subject,
-      })
-    ) {
-      return true
-    }
-  }
-
-  return false
-}
-
-export async function authorizeAnyPermission(params: {
-  subjects: readonly PermissionSubject[]
-  resourceType: AccessResourceType
-  resourceId: string
-  permission: string
-}) {
-  for (const subject of params.subjects) {
-    if (
-      await checkPermission({
-        resourceType: params.resourceType,
-        resourceId: params.resourceId,
-        permission: params.permission,
-        subject,
-      })
-    ) {
-      return true
-    }
-  }
-
-  return false
-}
-
-export async function listAuthorizedResourceIds(params: {
-  subject: AccessSubject
-  action: AccessAction
-  limit?: number
-}) {
-  const spec = getAccessActionSpec(params.action)
-  return lookupResources({
+  return lookupResources(db, {
     resourceType: spec.resourceType,
     permission: spec.permission,
     subject: params.subject,
@@ -161,31 +120,20 @@ export async function listAuthorizedResourceIds(params: {
   })
 }
 
-export async function listAuthorizedPermissionResourceIds(params: {
-  subject: PermissionSubject
-  resourceType: AccessResourceType
-  permission: string
-  limit?: number
-}) {
-  return lookupResources({
-    resourceType: params.resourceType,
-    permission: params.permission,
-    subject: params.subject,
-    limit: params.limit,
-  })
-}
-
-export async function filterAuthorizedPermissionResourceIds(params: {
-  subject: PermissionSubject
-  resourceType: AccessResourceType
-  permission: string
-  resourceIds: string[]
-}) {
+export async function filterAuthorizedPermissionResourceIds(
+  db: KyselyDb,
+  params: {
+    subject: PermissionSubject
+    resourceType: AccessResourceType
+    permission: string
+    resourceIds: string[]
+  }
+) {
   const uniqueIds = Array.from(new Set(params.resourceIds.filter(Boolean)))
   const checks = await Promise.all(
     uniqueIds.map(async (resourceId) => ({
       resourceId,
-      allowed: await authorizePermission({
+      allowed: await authorizePermission(db, {
         subject: params.subject,
         resourceType: params.resourceType,
         resourceId,

@@ -33,7 +33,7 @@ import {
   inspectPluginAuthSession,
   PluginAuthError,
   startPluginAuthSession,
-} from "./auth-service.js"
+} from "./plugin-auth-connections.js"
 import { getEventLogs, getToolCallLogs } from "./audit.js"
 
 const attachmentTargetTypeSchema = z.enum(ATTACHMENT_TARGET_TYPES)
@@ -50,6 +50,7 @@ const accessTargetSchema = z.object({
   type: accessTargetTypeSchema,
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
+  workspaceMemberId: z.string().uuid().optional(),
 })
 
 const installSchema = z.object({

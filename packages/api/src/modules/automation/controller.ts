@@ -110,6 +110,7 @@ const accessTargetSchema = z
     type: z.enum(ACCESS_TARGET_TYPES),
     conversationId: z.string().uuid().optional(),
     actorId: z.string().uuid().optional(),
+    workspaceMemberId: z.string().uuid().optional(),
   })
   .superRefine((value, ctx) => {
     if (
@@ -131,6 +132,13 @@ const accessTargetSchema = z
         code: z.ZodIssueCode.custom,
         path: ["actorId"],
         message: "actorId is required for this access target",
+      })
+    }
+    if (value.type === "workspace_member" && !value.workspaceMemberId) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["workspaceMemberId"],
+        message: "workspaceMemberId is required for this access target",
       })
     }
   })

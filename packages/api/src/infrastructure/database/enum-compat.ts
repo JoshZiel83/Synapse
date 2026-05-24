@@ -33,6 +33,12 @@ import type {
   TaskNoticeStatus,
 } from "@synapse/shared"
 import {
+  ACCESS_BINDABLE_RESOURCE_TYPES,
+  ACCESS_BINDING_SOURCES,
+  ACCESS_BINDING_STATUSES,
+  SUBJECT_KINDS,
+} from "@synapse/shared"
+import {
   AUTOMATION_COMPLETION_STATUSES,
   AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS,
   AUTOMATION_EVENT_SOURCE_STATUSES,
@@ -44,11 +50,20 @@ import {
   AUTOMATION_TARGET_POLICIES,
   AUTOMATION_TRIGGER_KINDS,
   AUTOMATION_TRIGGER_SOURCE_KINDS,
+  ATTACHMENT_TARGET_TYPES,
   CONTACT_TARGET_TYPES,
+  CONVERSATION_PARTICIPANT_TYPES,
   MEMORY_SPACE_TYPES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
   PLATFORM_ACCESS_KEYS,
+  RELATIONSHIP_ACCESS_POLICIES,
+  RELATIONSHIP_APPROVAL_MODES,
+  RELATIONSHIP_REQUEST_STATUSES,
+  RELAY_AUTHORIZATION_GRANT_RETENTIONS,
+  RELAY_AUTHORIZATION_GRANT_SCOPES,
+  RELAY_AUTHORIZATION_GRANT_STATUSES,
+  RELAY_AUTHORIZATION_REQUEST_MODES,
   RELAY_MANAGEABLE_TRUST_STATUSES,
   TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
   TRANSPORT_ACCOUNT_OWNER_SCOPES,
@@ -76,19 +91,25 @@ import type {
   AuthQrLoginRequestsApprovedSessionPersistence,
   AuthSessionsClientType,
   AuthSessionsTransport,
+  ConversationParticipantsKind,
   InteractionRequestsStatus,
   MemoryItemsCategory,
   MemoryItemsIndexStatus,
   MemoryItemsState,
   MemoryRecallRunsRecallType,
   MemorySpacesSpaceType,
-  ModelGroupGrantsGrantScope,
   ModelGroupsRoutingStrategy,
   PlatformAccessBindingsAccessKey,
   PluginAuthSessionsStatus,
   PluginConnectionsOwnerScope,
   PluginConnectionsStatus,
+  RelayAuthorizationGrantsRetention,
+  RelayAuthorizationGrantsScope,
+  RelayAuthorizationGrantsStatus,
+  RelayAuthorizationRequestMode,
   RelayCatalogRevisionsStatus,
+  RelationshipApprovalMode,
+  RelationshipRequestStatus,
   RelationshipTargetType,
   RelayDeviceSessionsStatus,
   RelayDevicesTrustStatus,
@@ -101,6 +122,10 @@ import type {
   RelaySyncSourcesStatus,
   RelaySyncSourcesSyncMode,
   RelayToolsStatus,
+  ResourceAccessBindingResourceType,
+  ResourceAccessBindingsSource,
+  ResourceAccessBindingsStatus,
+  SubjectKind,
   SessionInterruptsType,
   SessionsChannelType,
   SessionsStatus,
@@ -140,9 +165,10 @@ type _PlatformAccessKeyMatchesDb = Assert<
   >
 >
 type _WorkspaceAccessKeyMatchesDb = Assert<
-  (typeof WORKSPACE_ACCESS_KEYS)[number] extends WorkspaceAccessBindingsAccessKey
-    ? true
-    : false
+  IsEqual<
+    (typeof WORKSPACE_ACCESS_KEYS)[number],
+    WorkspaceAccessBindingsAccessKey
+  >
 >
 type _ModelGroupRoutingStrategyMatchesDb = Assert<
   IsEqual<
@@ -150,9 +176,10 @@ type _ModelGroupRoutingStrategyMatchesDb = Assert<
     ModelGroupsRoutingStrategy
   >
 >
-type _ModelGroupGrantScopeMatchesDb = Assert<
-  IsEqual<(typeof MODEL_GROUP_GRANT_SCOPES)[number], ModelGroupGrantsGrantScope>
->
+// P1b: `model_group_grants_grant_scope` enum was dropped; grant scope is now
+// inferred from the access_subjects row's `kind`. MODEL_GROUP_GRANT_SCOPES
+// remains a pure application-layer enum (used by API request bodies + the
+// translation layer in model-groups/service.ts → SubjectRef).
 type _ActorRoleMatchesDb = Assert<IsEqual<ActorRole, ActorsRole>>
 type _ActorDocVisibilityMatchesDb = Assert<
   IsEqual<ActorDocVisibility, ActorVersionDocsVisibility>
@@ -161,9 +188,7 @@ type _MemorySpaceTypeListMatchesDb = Assert<
   IsEqual<(typeof MEMORY_SPACE_TYPES)[number], MemorySpacesSpaceType>
 >
 type _ContactTargetTypeMatchesDb = Assert<
-  (typeof CONTACT_TARGET_TYPES)[number] extends RelationshipTargetType
-    ? true
-    : false
+  IsEqual<(typeof CONTACT_TARGET_TYPES)[number], RelationshipTargetType>
 >
 type _AutomationTriggerKindMatchesDb = Assert<
   IsEqual<
@@ -365,6 +390,78 @@ type _InteractionRequestStatusHasAppTerminalStates = Assert<
       | "superseded"
     >,
     InteractionRequestsStatus
+  >
+>
+
+// ============ Access / authorization enum alignment (P5) ============
+
+type _SubjectKindMatchesDb = Assert<
+  IsEqual<(typeof SUBJECT_KINDS)[number], SubjectKind>
+>
+type _AccessBindableResourceTypeMatchesDb = Assert<
+  IsEqual<
+    (typeof ACCESS_BINDABLE_RESOURCE_TYPES)[number],
+    ResourceAccessBindingResourceType
+  >
+>
+type _AccessBindingStatusMatchesDb = Assert<
+  IsEqual<
+    (typeof ACCESS_BINDING_STATUSES)[number],
+    ResourceAccessBindingsStatus
+  >
+>
+type _AccessBindingSourceMatchesDb = Assert<
+  IsEqual<(typeof ACCESS_BINDING_SOURCES)[number], ResourceAccessBindingsSource>
+>
+// P1b: plugin_installations.attachment_target_type column + the DB enum
+// have been dropped. ATTACHMENT_TARGET_TYPES remains a pure application-layer
+// enum used at the API layer / translated to SubjectKind via
+// buildPluginAttachmentSubjectRef.
+type _ConversationParticipantTypeMatchesDb = Assert<
+  IsEqual<
+    (typeof CONVERSATION_PARTICIPANT_TYPES)[number],
+    ConversationParticipantsKind
+  >
+>
+// Note: the historical `actor_access_policy` Postgres enum + the
+// `actors.access_policy` / `remote_agents.access_policy` columns have been
+// dropped (P2). `RELATIONSHIP_ACCESS_POLICIES` is now a pure
+// application-layer constant (input to `setAccessPolicy` / API request bodies)
+// with no DB-side counterpart to assert equality against.
+type _RelationshipApprovalModeMatchesDb = Assert<
+  IsEqual<
+    (typeof RELATIONSHIP_APPROVAL_MODES)[number],
+    RelationshipApprovalMode
+  >
+>
+type _RelationshipRequestStatusMatchesDb = Assert<
+  IsEqual<
+    (typeof RELATIONSHIP_REQUEST_STATUSES)[number],
+    RelationshipRequestStatus
+  >
+>
+type _RelayAuthorizationGrantScopeMatchesDb = Assert<
+  IsEqual<
+    (typeof RELAY_AUTHORIZATION_GRANT_SCOPES)[number],
+    RelayAuthorizationGrantsScope
+  >
+>
+type _RelayAuthorizationGrantStatusMatchesDb = Assert<
+  IsEqual<
+    (typeof RELAY_AUTHORIZATION_GRANT_STATUSES)[number],
+    RelayAuthorizationGrantsStatus
+  >
+>
+type _RelayAuthorizationGrantRetentionMatchesDb = Assert<
+  IsEqual<
+    (typeof RELAY_AUTHORIZATION_GRANT_RETENTIONS)[number],
+    RelayAuthorizationGrantsRetention
+  >
+>
+type _RelayAuthorizationRequestModeMatchesDb = Assert<
+  IsEqual<
+    (typeof RELAY_AUTHORIZATION_REQUEST_MODES)[number],
+    RelayAuthorizationRequestMode
   >
 >
 

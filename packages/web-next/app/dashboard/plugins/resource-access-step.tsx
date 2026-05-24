@@ -7,6 +7,8 @@ import type {
   ConversationTypeKey,
 } from "@synapse/shared/types"
 import {
+  MODEL_GROUP_GRANT_SCOPE,
+  CONVERSATION_PARTICIPANT_TYPE,
   CONVERSATION_TYPE_MASK_PRESETS,
   maskAllowsConversationType,
   conversationTypeKeysToMask,
@@ -454,7 +456,10 @@ function formatConversationTypeLabel(key: ConversationTypeKey | null) {
 }
 
 function supportsGrantConversationTypeOverride(scope: PluginGrantScope) {
-  return scope === "workspace" || scope === "actor"
+  return (
+    scope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE ||
+    scope === MODEL_GROUP_GRANT_SCOPE.ACTOR
+  )
 }
 
 function IdentityPill({
@@ -677,7 +682,8 @@ export default function ResourceAccessStep({
           conversation.participants
             .filter(
               (participant) =>
-                participant.participantType === "actor" &&
+                participant.participantType ===
+                  CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
                 participant.actorId &&
                 participant.name
             )
@@ -870,7 +876,7 @@ export default function ResourceAccessStep({
     return selectedConversation.participants
       .filter(
         (participant) =>
-          participant.participantType === "actor" &&
+          participant.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR &&
           participant.actorId &&
           participant.state === "active"
       )
@@ -921,7 +927,7 @@ export default function ResourceAccessStep({
   )
 
   const previewTarget = useMemo(() => {
-    if (grantScope === "workspace") {
+    if (grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE) {
       return "The entire workspace"
     }
     if (grantScope === "conversation") {
@@ -929,7 +935,7 @@ export default function ResourceAccessStep({
         ? "The conversation you selected on the left"
         : "Choose a conversation on the left"
     }
-    if (grantScope === "actor") {
+    if (grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR) {
       return actorId
         ? "The actor you selected on the left"
         : "Choose an actor on the left"
@@ -1050,7 +1056,7 @@ export default function ResourceAccessStep({
         conversationId && selectedConversationAllowed && !loadingConversations
       )
     }
-    if (grantScope === "actor") {
+    if (grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR) {
       return Boolean(actorId && !loadingActors)
     }
     if (grantScope === "actor_in_conversation") {
@@ -1200,7 +1206,7 @@ export default function ResourceAccessStep({
       return
     }
     setSubmitError(null)
-    if (grantScope === "actor") {
+    if (grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR) {
       void ensureActorsLoaded().catch(() => {})
       return
     }
@@ -1317,7 +1323,7 @@ export default function ResourceAccessStep({
   }
 
   const buildCreateGrantError = () => {
-    if (grantScope === "actor" && !actorId) {
+    if (grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR && !actorId) {
       return "Select an actor before creating resource access."
     }
     if (grantScope === "conversation") {
@@ -1371,7 +1377,8 @@ export default function ResourceAccessStep({
         accessTarget: {
           type: grantScope,
           actorId:
-            grantScope === "actor" || grantScope === "actor_in_conversation"
+            grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR ||
+            grantScope === "actor_in_conversation"
               ? actorId
               : undefined,
           conversationId:
@@ -1578,7 +1585,7 @@ export default function ResourceAccessStep({
   }
 
   const renderTargetSelector = () => {
-    if (grantScope === "workspace") return null
+    if (grantScope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE) return null
 
     if (grantScope === "conversation") {
       return (
@@ -1615,7 +1622,7 @@ export default function ResourceAccessStep({
       )
     }
 
-    if (grantScope === "actor") {
+    if (grantScope === MODEL_GROUP_GRANT_SCOPE.ACTOR) {
       return (
         <Field>
           <FieldLabel>Actor</FieldLabel>

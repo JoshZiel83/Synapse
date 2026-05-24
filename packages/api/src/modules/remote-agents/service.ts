@@ -23,11 +23,17 @@ import {
 import { config } from "../../config/index.js"
 import { transaction } from "../../infrastructure/database/index.js"
 import {
+  db,
   executeSql,
   executeSqlOn,
 } from "../../infrastructure/database/kysely.js"
 import type { Queryable } from "../../infrastructure/events/index.js"
 import { authorizeAction } from "../access/service.js"
+import {
+  deriveAccessPolicy,
+  setAccessPolicy,
+  setAccessPolicyOn,
+} from "../access/default-access-policy.js"
 import {
   getConversationParticipant,
   listVisibleConversationItemsForParticipant,
@@ -883,15 +889,17 @@ async function emitRemoteAgentRuntimeUpdated(
   }>(
     queryable,
     `
-      SELECT DISTINCT member.workspace_id, viewer.workspace_member_id
+      SELECT DISTINCT member.workspace_id, viewer_subj.workspace_member_id
       FROM conversation_participants agent_cp
+      INNER JOIN access_subjects agent_subj ON agent_subj.id = agent_cp.subject_id
       INNER JOIN conversation_participants viewer
         ON viewer.conversation_id = agent_cp.conversation_id
        AND viewer.state = 'active'
-       AND viewer.workspace_member_id IS NOT NULL
+      INNER JOIN access_subjects viewer_subj ON viewer_subj.id = viewer.subject_id
+       AND viewer_subj.workspace_member_id IS NOT NULL
       INNER JOIN workspace_members member
-        ON member.id = viewer.workspace_member_id
-      WHERE agent_cp.remote_agent_id = $1
+        ON member.id = viewer_subj.workspace_member_id
+      WHERE agent_subj.remote_agent_id = $1
         AND agent_cp.state = 'active'
     `,
     [remoteAgentId]
@@ -920,7 +928,6 @@ async function mapRemoteAgentRow(row: {
   runtime_kind: RemoteAgentRuntimeKind
   avatar_file_id: string | null
   avatar_emoji: string | null
-  access_policy: RemoteAgentAccessPolicy
   is_active: boolean
   is_public_shared: boolean
   metadata: unknown
@@ -949,6 +956,12 @@ async function mapRemoteAgentRow(row: {
   const runtimeSummary = row.machine_id
     ? mapRuntimeSummaryFromRow(row)
     : undefined
+  const accessPolicy = await deriveAccessPolicy(
+    db,
+    "remote_agent",
+    row.id,
+    row.workspace_id
+  )
   return {
     id: row.id,
     workspaceId: row.workspace_id,
@@ -958,7 +971,7 @@ async function mapRemoteAgentRow(row: {
     runtimeKind: row.runtime_kind,
     avatarFileId: row.avatar_file_id ?? undefined,
     avatarEmoji: row.avatar_emoji ?? undefined,
-    accessPolicy: row.access_policy,
+    accessPolicy,
     isActive: row.is_active,
     isPublicShared: row.is_public_shared,
     metadata:
@@ -1110,42 +1123,57 @@ export async function createRemoteAgent(params: {
     params.workspaceId,
     params.userId
   )
-  const result = await executeSql<any>(
-    `
-      INSERT INTO remote_agents (
-        workspace_id,
-        name,
-        title,
-        description,
-        runtime_kind,
-        avatar_file_id,
-        avatar_emoji,
-        access_policy,
-        is_public_shared,
-        metadata,
-        created_by_workspace_member_id,
-        created_at,
-        updated_at
-      )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb, $11, NOW(), NOW())
-      RETURNING *
-    `,
-    [
-      params.workspaceId,
-      params.name.trim(),
-      params.title.trim(),
-      params.description?.trim() || null,
-      params.runtimeKind,
-      params.avatarFileId ?? null,
-      params.avatarEmoji ?? null,
-      params.accessPolicy ?? RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
-      params.isPublicShared === true,
-      JSON.stringify(params.metadata ?? {}),
-      identity.workspaceMemberId,
-    ]
-  )
+  // P2 atomicity: wrap the INSERT remote_agents + setAccessPolicy default-open
+  // binding in a single transaction so we never leave a remote_agent row
+  // without its expected default-open binding when the second write fails.
+  const insertedRow = await transaction(async (client) => {
+    const result = await executeSqlOn<any>(
+      client,
+      `
+        INSERT INTO remote_agents (
+          workspace_id,
+          name,
+          title,
+          description,
+          runtime_kind,
+          avatar_file_id,
+          avatar_emoji,
+          is_public_shared,
+          metadata,
+          created_by_workspace_member_id,
+          created_at,
+          updated_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9::jsonb, $10, NOW(), NOW())
+        RETURNING *
+      `,
+      [
+        params.workspaceId,
+        params.name.trim(),
+        params.title.trim(),
+        params.description?.trim() || null,
+        params.runtimeKind,
+        params.avatarFileId ?? null,
+        params.avatarEmoji ?? null,
+        params.isPublicShared === true,
+        JSON.stringify(params.metadata ?? {}),
+        identity.workspaceMemberId,
+      ]
+    )
+    const row = result.rows[0]!
+    // Persist access policy intent as a default_open binding row instead of
+    // a column on remote_agents. New agents default to workspace_open.
+    await setAccessPolicyOn(client, {
+      resourceType: "remote_agent",
+      resourceId: row.id,
+      workspaceId: row.workspace_id,
+      policy: params.accessPolicy ?? RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
+      createdByWorkspaceMemberId: identity.workspaceMemberId,
+    })
+    return row
+  })
   return {
-    remoteAgent: await mapRemoteAgentRow(result.rows[0]!),
+    remoteAgent: await mapRemoteAgentRow(insertedRow),
   }
 }
 
@@ -1183,10 +1211,9 @@ export async function updateRemoteAgent(params: {
           description = $5,
           avatar_file_id = $6,
           avatar_emoji = $7,
-          access_policy = $8,
-          is_public_shared = $9,
-          is_active = $10,
-          metadata = $11::jsonb,
+          is_public_shared = $8,
+          is_active = $9,
+          metadata = $10::jsonb,
           updated_at = NOW()
       WHERE workspace_id = $1
         AND id = $2
@@ -1206,12 +1233,22 @@ export async function updateRemoteAgent(params: {
       params.avatarEmoji === undefined
         ? (existing.remoteAgent.avatarEmoji ?? null)
         : params.avatarEmoji,
-      params.accessPolicy ?? existing.remoteAgent.accessPolicy,
       params.isPublicShared ?? existing.remoteAgent.isPublicShared,
       params.isActive ?? existing.remoteAgent.isActive,
       JSON.stringify(nextMetadata),
     ]
   )
+  if (
+    params.accessPolicy &&
+    params.accessPolicy !== existing.remoteAgent.accessPolicy
+  ) {
+    await setAccessPolicy(db, {
+      resourceType: "remote_agent",
+      resourceId: params.remoteAgentId,
+      workspaceId: params.workspaceId,
+      policy: params.accessPolicy,
+    })
+  }
   return {
     remoteAgent: await mapRemoteAgentRow(result.rows[0]!),
   }
@@ -1773,11 +1810,12 @@ export async function createRemoteAgentDeliveriesForItem(params: {
     `
       SELECT
         cp.id AS participant_id,
-        cp.remote_agent_id
+        cpsubj.remote_agent_id
       FROM conversation_participants cp
+      INNER JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
       WHERE cp.conversation_id = $1
         AND cp.state = 'active'
-        AND cp.remote_agent_id IS NOT NULL
+        AND cpsubj.remote_agent_id IS NOT NULL
         AND ($2::uuid IS NULL OR cp.id <> $2)
         AND (
           NOT EXISTS (
@@ -1864,11 +1902,12 @@ export async function listRemoteAgentConversations(params: {
         c.updated_at,
         view.unread_count
       FROM conversation_participants cp
+      INNER JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
       INNER JOIN conversations c ON c.id = cp.conversation_id
       LEFT JOIN remote_agent_conversation_views view
-        ON view.remote_agent_id = cp.remote_agent_id
+        ON view.remote_agent_id = cpsubj.remote_agent_id
        AND view.conversation_id = cp.conversation_id
-      WHERE cp.remote_agent_id = $1
+      WHERE cpsubj.remote_agent_id = $1
         AND cp.state = 'active'
       ORDER BY COALESCE(view.updated_at, c.updated_at, c.created_at) DESC, c.id ASC
     `,

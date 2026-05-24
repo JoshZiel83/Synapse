@@ -47,6 +47,7 @@ import {
 } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { API_BASE, api } from "@/lib/api"
+import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared"
 
 type TransportAccountOwnerFormState = {
   ownerScope: TransportAccountOwnerScope
@@ -126,7 +127,9 @@ function prettyTransportKind(kind: "feishu" | "weixin") {
 }
 
 function prettyTransportAccountOwnerScope(scope: TransportAccountOwnerScope) {
-  return scope === "workspace" ? "Workspace-owned" : "Member-owned"
+  return scope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE
+    ? "Workspace-owned"
+    : "Member-owned"
 }
 
 function prettyEndpointType(endpointType: "direct" | "group") {

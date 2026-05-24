@@ -44,7 +44,7 @@ import {
 import { emitEvent } from "../../infrastructure/events/index.js"
 import { saveFromBuffer } from "../../infrastructure/storage/file-io.js"
 import { buildPlatformAssetOrigin, getFileUrlById } from "../files/service.js"
-import { attachAuthConnectionsToConfig } from "./auth-service.js"
+import { attachAuthConnectionsToConfig } from "./plugin-auth-connections.js"
 import { incrementMcpVersion } from "./runtime-version.js"
 import { builtinCapabilityCategories } from "./builtin-plugins/categories.js"
 import { builtinSeeds } from "./builtin-plugins/index.js"
@@ -57,15 +57,70 @@ import {
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   readAccessBindingTarget,
-  resolveAccessGrantTarget,
   type AccessBindingRow,
 } from "../access/bindings.js"
-import { buildResourceAccessBindingInsertValues } from "../access/binding-storage.js"
+import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
+import {
+  hardDeleteBindingsForResourceOn,
+  insertAccessBindingReturningIdOn,
+  insertAccessBindingReturningRowOn,
+  loadAccessBindingRowsForResources,
+  revokeGrant,
+  updateGrantConversationTypeMaskOverride,
+} from "../access/binding-storage.js"
+import {
+  upsertAccessSubject,
+  upsertAccessSubjectOn,
+} from "../access/subject-registry.js"
+import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
+
+/**
+ * P1b: translate a plugin attachment target (workspace / conversation / actor
+ * / workspace_member) into a SubjectRef. Used by INSERT/UPDATE on
+ * plugin_installations to populate `attachment_subject_id`.
+ */
+function buildPluginAttachmentSubjectRef(input: {
+  workspaceId: string
+  scope: "workspace" | "conversation" | "actor" | "workspace_member"
+  conversationId?: string | null
+  actorId?: string | null
+  workspaceMemberId?: string | null
+}): SubjectRef {
+  switch (input.scope) {
+    case "workspace":
+      return { kind: SUBJECT_KIND.WORKSPACE, workspaceId: input.workspaceId }
+    case "conversation":
+      if (!input.conversationId) {
+        throw new Error(
+          "conversationId required for conversation attachment scope"
+        )
+      }
+      return {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: input.conversationId,
+      }
+    case "actor":
+      if (!input.actorId) {
+        throw new Error("actorId required for actor attachment scope")
+      }
+      return { kind: SUBJECT_KIND.ACTOR, actorId: input.actorId }
+    case "workspace_member":
+      if (!input.workspaceMemberId) {
+        throw new Error(
+          "workspaceMemberId required for workspace_member attachment scope"
+        )
+      }
+      return {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: input.workspaceMemberId,
+      }
+  }
+}
 import {
   assertConversationTypeMaskWithinParent,
   assertGrantConversationTypeOverrideAllowed,
   validateConversationScopedAccessTarget,
-} from "../access/conversation-type-validation.js"
+} from "../access/policy.js"
 
 type QueryRow = pg.QueryResultRow
 type QueryResultLike<T extends QueryRow> = { rows: T[] }
@@ -846,7 +901,13 @@ function buildInstallationAccessRow(
     access_target_type: target.targetType,
     actor_id: target.subjectActorId,
     conversation_id: target.subjectConversationId,
-    workspace_member_id: null,
+    // P2/P3 fix: surface the member subject so workspace_member grants don't
+    // appear as anonymous (which silently collapsed multiple member grants
+    // into a single key).
+    workspace_member_id:
+      target.targetType === "workspace_member"
+        ? target.subjectWorkspaceMemberId
+        : null,
   }
 }
 
@@ -912,10 +973,13 @@ async function loadInstallationRows(
         installation.catalog_item_id,
         installation.catalog_version_id,
         installation.display_name AS installation_display_name,
-        installation.attachment_target_type,
-        installation.attachment_conversation_id,
-        installation.attachment_actor_id,
-        installation.attachment_workspace_member_id,
+        -- P1b: derive the legacy attachment_target_type + subject_*_id fields
+        -- from the joined access_subjects row. attachment_target_type maps
+        -- subject_kind: workspace/conversation/actor/workspace_member 1:1.
+        attachment_subj.kind AS attachment_target_type,
+        attachment_subj.conversation_id AS attachment_conversation_id,
+        attachment_subj.actor_id AS attachment_actor_id,
+        attachment_subj.workspace_member_id AS attachment_workspace_member_id,
         installation.config_data,
         installation.approved_runtime_permissions,
         installation.reuse_scope,
@@ -928,6 +992,8 @@ async function loadInstallationRows(
         source_ref.source_catalog_version_id,
         source_ref.sync_mode AS source_sync_mode
       FROM plugin_installations installation
+      INNER JOIN access_subjects attachment_subj
+        ON attachment_subj.id = installation.attachment_subject_id
       LEFT JOIN plugin_source_refs source_ref
         ON source_ref.installation_id = installation.id
       WHERE ${sql.join(conditions, sql` AND `)}
@@ -964,52 +1030,15 @@ async function loadInstallationRows(
 }
 
 async function listAccessRows(installationId: string, includeRevoked = false) {
-  let builder = db
-    .selectFrom("resource_access_bindings as binding")
-    .leftJoin(
-      "conversation_actor_contexts as cac",
-      "cac.id",
-      "binding.subject_conversation_actor_context_id"
-    )
-    .select([
-      "binding.id",
-      "binding.workspace_id",
-      "binding.resource_type",
-      "binding.installed_skill_id",
-      "binding.plugin_installation_id",
-      "binding.relay_capability_id",
-      "binding.automation_event_source_id",
-      sql<string>`binding.plugin_installation_id::text`.as("resource_id"),
-      "binding.target_type",
-      "binding.subject_workspace_id",
-      sql<string | null>`COALESCE(binding.subject_actor_id, cac.actor_id)`.as(
-        "subject_actor_id"
-      ),
-      sql<
-        string | null
-      >`COALESCE(binding.subject_conversation_id, cac.conversation_id)`.as(
-        "subject_conversation_id"
-      ),
-      "binding.subject_conversation_actor_context_id",
-      "binding.conversation_type_mask_override",
-      "binding.status",
-      "binding.created_by_workspace_member_id",
-      "binding.reason",
-      "binding.created_at",
-      "binding.revoked_at",
-    ])
-    .where("binding.plugin_installation_id", "=", installationId)
-
-  if (!includeRevoked) {
-    builder = builder.where("binding.status", "=", "active")
-  }
-
-  const rows = await builder.orderBy("binding.created_at", "asc").execute()
-  return rows.map((row) =>
-    buildInstallationAccessRow(
-      normalizeAccessBindingRow(row as unknown as AccessBindingRow)
-    )
-  )
+  // P3 consolidation: delegate the SELECT-with-access_subjects-JOIN to
+  // binding-storage so every plugin/skill/automation/relay path goes through
+  // the same code.
+  const rows = await loadAccessBindingRowsForResources(db, {
+    resourceType: "plugin_installation",
+    resourceIds: [installationId],
+    includeRevoked,
+  })
+  return rows.map((row) => buildInstallationAccessRow(row))
 }
 
 function buildPluginGrantPlan(input: {
@@ -1063,10 +1092,16 @@ function capabilityAccessTargetFromStored(input: {
   targetType: RuntimeBindingScope | null | undefined
   actorId?: string | null
   conversationId?: string | null
+  workspaceMemberId?: string | null
 }): CapabilityAccessTarget {
   switch (input.targetType || "workspace") {
     case "workspace":
       return { type: "workspace" }
+    case "workspace_member":
+      return {
+        type: "workspace_member",
+        workspaceMemberId: input.workspaceMemberId || undefined,
+      }
     case "actor":
       return {
         type: "actor",
@@ -1083,6 +1118,8 @@ function capabilityAccessTargetFromStored(input: {
         actorId: input.actorId || undefined,
         conversationId: input.conversationId || undefined,
       }
+    default:
+      return { type: "workspace" }
   }
 }
 
@@ -1104,7 +1141,7 @@ function mapAccessRowToGrant(
         mount.conversation_type_mask_override
       )
     : undefined
-  return mapAccessBindingToGrant(mount, requiredPermissions, reason, {
+  return mapAccessBindingToGrant(mount, reason, {
     effectiveConversationTypeMask,
   })
 }
@@ -1854,6 +1891,16 @@ export async function installPluginUnified(data: {
       )
     }
 
+    const attachmentSubjectId = await upsertAccessSubjectOn(
+      client,
+      buildPluginAttachmentSubjectRef({
+        workspaceId: data.workspaceId,
+        scope: target.mountScope,
+        actorId: target.actorId,
+        conversationId: target.conversationId,
+        workspaceMemberId: target.workspaceMemberId,
+      })
+    )
     const insertedInstallation = await executeTakeFirst<{ id: string }>(
       client,
       db
@@ -1863,10 +1910,7 @@ export async function installPluginUnified(data: {
           catalog_item_id: plugin.id,
           catalog_version_id: catalogVersionId,
           display_name: plugin.display_name,
-          attachment_target_type: target.mountScope,
-          attachment_actor_id: target.actorId,
-          attachment_conversation_id: target.conversationId,
-          attachment_workspace_member_id: target.workspaceMemberId,
+          attachment_subject_id: attachmentSubjectId,
           config_data: {} as TableInsert<"plugin_installations">["config_data"],
           approved_runtime_permissions: approvedRuntimePermissions,
           reuse_scope: internalReuseScope(lifecycleScope),
@@ -1916,23 +1960,14 @@ export async function installPluginUnified(data: {
       workspaceId: data.workspaceId,
       target: defaultAccessTargetForAttachment(data.attachmentTarget),
     })
-    await executeTakeFirst<{ id: string }>(
-      client,
-      db
-        .insertInto("resource_access_bindings")
-        .values(
-          buildResourceAccessBindingInsertValues({
-            workspaceId: data.workspaceId,
-            resourceType: "plugin_installation",
-            resourceId: installationId,
-            target: initialAccessTarget,
-            createdByWorkspaceMemberId:
-              data.installedByWorkspaceMemberId || null,
-            reason: plugin.authorization?.reason || null,
-          })
-        )
-        .returning("id")
-    )
+    await insertAccessBindingReturningIdOn(client, {
+      workspaceId: data.workspaceId,
+      resourceType: "plugin_installation",
+      resourceId: installationId,
+      target: initialAccessTarget,
+      createdByWorkspaceMemberId: data.installedByWorkspaceMemberId || null,
+      reason: plugin.authorization?.reason || null,
+    })
     await executeCompiledQuery(
       client,
       db.insertInto("plugin_source_refs").values({
@@ -1983,12 +2018,10 @@ export async function uninstallPluginUnified(installId: string) {
     throw new McpPluginError(404, "Installation not found")
   }
   await transaction(async (client) => {
-    await executeCompiledQuery(
-      client,
-      db
-        .deleteFrom("resource_access_bindings")
-        .where("plugin_installation_id", "=", installId)
-    )
+    await hardDeleteBindingsForResourceOn(client, {
+      resourceType: "plugin_installation",
+      resourceId: installId,
+    })
 
     await executeCompiledQuery(
       client,
@@ -2109,6 +2142,7 @@ export async function updateInstallation(
     const accessRows = await listAccessRows(installId)
     for (const accessRow of accessRows) {
       await validateConversationScopedAccessTarget({
+        db,
         targetType: accessRow.access_target_type,
         conversationId: accessRow.conversation_id,
         actorId: accessRow.actor_id,
@@ -2233,21 +2267,22 @@ export async function updateInstallation(
     }
 
     if (data.attachmentTarget) {
+      const newSubjectId = await upsertAccessSubjectOn(
+        client,
+        buildPluginAttachmentSubjectRef({
+          workspaceId,
+          scope: target.mountScope,
+          actorId: target.actorId,
+          conversationId: target.conversationId,
+          workspaceMemberId: target.workspaceMemberId,
+        })
+      )
       await run(
         `UPDATE plugin_installations
-         SET attachment_target_type = $2,
-             attachment_actor_id = $3,
-             attachment_conversation_id = $4,
-             attachment_workspace_member_id = $5,
+         SET attachment_subject_id = $2,
              updated_at = NOW()
          WHERE id = $1`,
-        [
-          installId,
-          target.mountScope,
-          target.actorId,
-          target.conversationId,
-          target.workspaceMemberId,
-        ]
+        [installId, newSubjectId]
       )
     }
 
@@ -2354,6 +2389,7 @@ export async function grantPluginInstallationAccess(input: {
         "Plugin access grant conversation policy must allow at least one conversation type from the installation policy.",
     })
   await validateConversationScopedAccessTarget({
+    db,
     targetType: accessTarget.targetType,
     conversationId: accessTarget.subjectConversationId,
     actorId: accessTarget.subjectActorId,
@@ -2366,7 +2402,8 @@ export async function grantPluginInstallationAccess(input: {
       entry.status === "active" &&
       entry.access_target_type === accessTarget.targetType &&
       entry.actor_id === accessTarget.subjectActorId &&
-      entry.conversation_id === accessTarget.subjectConversationId
+      entry.conversation_id === accessTarget.subjectConversationId &&
+      entry.workspace_member_id === accessTarget.subjectWorkspaceMemberId
   )
   if (existing) {
     return mapAccessRowToGrant(
@@ -2382,33 +2419,19 @@ export async function grantPluginInstallationAccess(input: {
   }
 
   const result = await transaction(async (client) => {
-    const inserted = await executeTakeFirst(
-      client,
-      db
-        .insertInto("resource_access_bindings")
-        .values(
-          buildResourceAccessBindingInsertValues({
-            workspaceId: input.workspaceId,
-            resourceType: "plugin_installation",
-            resourceId: input.installationId,
-            target: accessTarget,
-            conversationTypeMaskOverride:
-              input.conversationTypeMaskOverride ?? null,
-            createdByWorkspaceMemberId:
-              input.grantedByWorkspaceMemberId || null,
-            reason: input.reason || plugin.authorization?.reason || null,
-          })
-        )
-        .returningAll()
-    )
-
-    const accessRow = buildInstallationAccessRow({
-      ...normalizeAccessBindingRow(inserted as unknown as AccessBindingRow),
-      subject_actor_id: accessTarget.subjectActorId,
-      subject_conversation_id: accessTarget.subjectConversationId,
-      subject_conversation_actor_context_id:
-        accessTarget.subjectConversationActorContextId,
+    const inserted = await insertAccessBindingReturningRowOn(client, {
+      workspaceId: input.workspaceId,
+      resourceType: "plugin_installation",
+      resourceId: input.installationId,
+      target: accessTarget,
+      conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
+      createdByWorkspaceMemberId: input.grantedByWorkspaceMemberId || null,
+      reason: input.reason || plugin.authorization?.reason || null,
     })
+
+    const accessRow = buildInstallationAccessRow(
+      normalizeAccessBindingRow(inserted)
+    )
     return {
       accessRow,
     }
@@ -2475,6 +2498,7 @@ export async function updatePluginInstallationAccessGrant(input: {
         "Plugin access grant conversation policy must allow at least one conversation type from the installation policy.",
     })
   await validateConversationScopedAccessTarget({
+    db,
     targetType: accessRow.access_target_type,
     conversationId: accessRow.conversation_id,
     actorId: accessRow.actor_id,
@@ -2482,15 +2506,11 @@ export async function updatePluginInstallationAccessGrant(input: {
     buildError: (message) => new McpPluginError(400, message),
   })
 
-  await db
-    .updateTable("resource_access_bindings")
-    .set({
-      conversation_type_mask_override:
-        input.conversationTypeMaskOverride ?? null,
-    })
-    .where("id", "=", input.grantId)
-    .where("workspace_id", "=", input.workspaceId)
-    .executeTakeFirst()
+  await updateGrantConversationTypeMaskOverride(db, {
+    bindingId: input.grantId,
+    workspaceId: input.workspaceId,
+    conversationTypeMaskOverride: input.conversationTypeMaskOverride ?? null,
+  })
 
   const updatedAccessRows = await listAccessRows(input.installationId)
   const updatedAccessRow = updatedAccessRows.find(
@@ -2526,18 +2546,7 @@ export async function revokePluginInstallationAccess(input: {
     return mapAccessRowToGrant(accessRow, [], undefined)
   }
 
-  await transaction(async (client) => {
-    await executeCompiledQuery(
-      client,
-      db
-        .updateTable("resource_access_bindings")
-        .set({
-          status: "revoked",
-          revoked_at: sql`NOW()`,
-        })
-        .where("id", "=", accessRow.id)
-    )
-  })
+  await revokeGrant(db, { bindingId: accessRow.id })
 
   await incrementMcpVersion(input.workspaceId)
 

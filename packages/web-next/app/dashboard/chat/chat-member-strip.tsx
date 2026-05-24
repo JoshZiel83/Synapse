@@ -22,6 +22,7 @@ import {
   getRuntimeLabel,
 } from "./runtime-ui"
 import ChatParticipantHoverCard from "./chat-participant-hover-card"
+import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 import {
   getConversationMemberContactHref,
   getConversationMemberSubtitle,
@@ -34,11 +35,11 @@ function orderMembers(
 ) {
   return [...members].sort((left, right) => {
     const leftIsAgent =
-      left.participantType === "actor" ||
-      left.participantType === "remote_agent"
+      left.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR ||
+      left.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
     const rightIsAgent =
-      right.participantType === "actor" ||
-      right.participantType === "remote_agent"
+      right.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR ||
+      right.participantType === CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
     if (!leftIsAgent || !rightIsAgent) {
       if (leftIsAgent !== rightIsAgent) {
         return leftIsAgent ? -1 : 1
@@ -48,11 +49,11 @@ function orderMembers(
     }
 
     const leftPriority =
-      left.participantType === "actor"
+      left.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
         ? getActorRuntimePriority(runtimeByActor?.[left.id])
         : getRemoteAgentRuntimePriority(runtimeByRemoteAgent?.[left.id])
     const rightPriority =
-      right.participantType === "actor"
+      right.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
         ? getActorRuntimePriority(runtimeByActor?.[right.id])
         : getRemoteAgentRuntimePriority(runtimeByRemoteAgent?.[right.id])
 
@@ -60,7 +61,9 @@ function orderMembers(
       return leftPriority - rightPriority
     }
     if (left.participantType !== right.participantType) {
-      return left.participantType === "actor" ? -1 : 1
+      return left.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
+        ? -1
+        : 1
     }
     return left.name.localeCompare(right.name)
   })
@@ -106,9 +109,10 @@ export default function ChatMemberStrip({
     <AvatarGroup className={cn("items-center", className)}>
       {visibleMembers.map((member) => {
         const runtime =
-          member.participantType === "actor"
+          member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR
             ? runtimeByActor?.[member.id]
-            : member.participantType === "remote_agent"
+            : member.participantType ===
+                CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
               ? runtimeByRemoteAgent?.[member.id]
               : undefined
         const href = getConversationMemberContactHref(member, contactBasePath)
@@ -122,7 +126,8 @@ export default function ChatMemberStrip({
             entityType={member.participantType}
             size={size}
             statusState={
-              member.participantType === "remote_agent"
+              member.participantType ===
+              CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
                 ? remoteAgentRuntimeToAvatarStatus(
                     runtime as RemoteAgentRuntimeState | undefined
                   )

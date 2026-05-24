@@ -1,6 +1,7 @@
 package filesystem
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"os"
@@ -93,12 +94,12 @@ type grepContentEntry struct {
 	ModTime        int64    `json:"-"`
 }
 
-func (s *Server) readViewFile(runtimeSessionID, filePath string, offset, limit int) (viewedFile, error) {
+func (s *Server) readViewFile(ctx context.Context, filePath string, offset, limit int) (viewedFile, error) {
 	if err := requireAbsolutePath("file_path", filePath); err != nil {
 		return viewedFile{}, err
 	}
 
-	resolved, err := s.resolvePath(runtimeSessionID, filePath, false, false)
+	resolved, err := s.resolvePath(ctx, filePath, false, false)
 	if err != nil {
 		return viewedFile{}, err
 	}
@@ -185,7 +186,7 @@ func loadEditableTextFile(path string) (string, error) {
 	return string(data), nil
 }
 
-func (s *Server) viewMany(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) viewMany(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		Files []viewManyFileInput `json:"files"`
 	}
@@ -199,7 +200,7 @@ func (s *Server) viewMany(runtimeSessionID string, args map[string]interface{}) 
 	sections := make([]string, 0, len(input.Files))
 	items := make([]map[string]interface{}, 0, len(input.Files))
 	for _, file := range input.Files {
-		viewed, err := s.readViewFile(runtimeSessionID, file.FilePath, file.Offset, file.Limit)
+		viewed, err := s.readViewFile(ctx, file.FilePath, file.Offset, file.Limit)
 		if err != nil {
 			if toolErr, ok := err.(*toolError); ok {
 				return toolErr.result("ViewMany", "read"), nil
@@ -222,7 +223,7 @@ func (s *Server) viewMany(runtimeSessionID string, args map[string]interface{}) 
 	}), nil
 }
 
-func (s *Server) patchTool(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) patchTool(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		Operations []patchOperationInput `json:"operations"`
 	}
@@ -246,7 +247,7 @@ func (s *Server) patchTool(runtimeSessionID string, args map[string]interface{})
 		if err := requireAbsolutePath("file_path", operation.FilePath); err != nil {
 			return toolResultError("Patch", "write", err), nil
 		}
-		resolved, err := s.resolvePath(runtimeSessionID, operation.FilePath, true, true)
+		resolved, err := s.resolvePath(ctx, operation.FilePath, true, true)
 		if err != nil {
 			return toolResultError("Patch", "write", err), nil
 		}
@@ -380,7 +381,7 @@ func rollbackPatchWrites(states map[string]*patchFileState, applied []string) {
 	}
 }
 
-func (s *Server) updateStructuredData(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) updateStructuredData(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input structuredDataUpdateInput
 	if err := decodeArgs(args, &input); err != nil {
 		return errorResult(fmt.Sprintf("Invalid UpdateStructuredData arguments: %v", err)), nil
@@ -392,7 +393,7 @@ func (s *Server) updateStructuredData(runtimeSessionID string, args map[string]i
 		return errorResult("updates must contain at least one item."), nil
 	}
 
-	resolved, err := s.resolvePath(runtimeSessionID, input.FilePath, true, true)
+	resolved, err := s.resolvePath(ctx, input.FilePath, true, true)
 	if err != nil {
 		return toolResultError("UpdateStructuredData", "write", err), nil
 	}
@@ -453,7 +454,7 @@ func (s *Server) updateStructuredData(runtimeSessionID string, args map[string]i
 	}, backups), nil
 }
 
-func (s *Server) copyPath(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) copyPath(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		SourcePath      string `json:"source_path"`
 		DestinationPath string `json:"destination_path"`
@@ -470,11 +471,11 @@ func (s *Server) copyPath(runtimeSessionID string, args map[string]interface{}) 
 		return toolResultError("Copy", "write", err), nil
 	}
 
-	source, err := s.resolvePath(runtimeSessionID, input.SourcePath, false, false)
+	source, err := s.resolvePath(ctx, input.SourcePath, false, false)
 	if err != nil {
 		return toolResultError("Copy", "read", err), nil
 	}
-	destination, err := s.resolvePath(runtimeSessionID, input.DestinationPath, true, true)
+	destination, err := s.resolvePath(ctx, input.DestinationPath, true, true)
 	if err != nil {
 		return toolResultError("Copy", "write", err), nil
 	}
@@ -586,7 +587,7 @@ func copyRegularFile(source, destination string, mode os.FileMode) error {
 	return nil
 }
 
-func (s *Server) deletePath(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) deletePath(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		Path      string `json:"path"`
 		Recursive bool   `json:"recursive"`
@@ -598,7 +599,7 @@ func (s *Server) deletePath(runtimeSessionID string, args map[string]interface{}
 		return toolResultError("Delete", "write", err), nil
 	}
 
-	resolved, err := s.resolvePath(runtimeSessionID, input.Path, true, false)
+	resolved, err := s.resolvePath(ctx, input.Path, true, false)
 	if err != nil {
 		return toolResultError("Delete", "write", err), nil
 	}
@@ -637,7 +638,7 @@ func (s *Server) deletePath(runtimeSessionID string, args map[string]interface{}
 	}, backups), nil
 }
 
-func (s *Server) listBackups(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) listBackups(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		Path      string `json:"path"`
 		Operation string `json:"operation"`
@@ -665,7 +666,7 @@ func (s *Server) listBackups(runtimeSessionID string, args map[string]interface{
 		if err := requireAbsolutePath("path", input.Path); err != nil {
 			return toolResultError("ListBackups", "read", err), nil
 		}
-		resolved, err := s.resolvePath(runtimeSessionID, input.Path, false, true)
+		resolved, err := s.resolvePath(ctx, input.Path, false, true)
 		if err != nil {
 			return toolResultError("ListBackups", "read", err), nil
 		}
@@ -680,7 +681,7 @@ func (s *Server) listBackups(runtimeSessionID string, args map[string]interface{
 	visible := make([]backupRecord, 0, len(listing.Records))
 	for _, record := range listing.Records {
 		if filterPath == "" {
-			if _, err := s.resolvePath(runtimeSessionID, record.OriginalPath, false, true); err != nil {
+			if _, err := s.resolvePath(ctx, record.OriginalPath, false, true); err != nil {
 				continue
 			}
 		}
@@ -730,7 +731,7 @@ func (s *Server) listBackups(runtimeSessionID string, args map[string]interface{
 	}), nil
 }
 
-func (s *Server) getBackup(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) getBackup(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		BackupID string `json:"backup_id"`
 		Path     string `json:"path"`
@@ -761,14 +762,14 @@ func (s *Server) getBackup(runtimeSessionID string, args map[string]interface{})
 			}
 			return errorResult(fmt.Sprintf("Failed to load backup %q: %v", strings.TrimSpace(input.BackupID), err)), nil
 		}
-		if _, resolveErr := s.resolvePath(runtimeSessionID, payload.Record.OriginalPath, false, true); resolveErr != nil {
+		if _, resolveErr := s.resolvePath(ctx, payload.Record.OriginalPath, false, true); resolveErr != nil {
 			return toolResultError("GetBackup", "read", resolveErr), nil
 		}
 	} else {
 		if err := requireAbsolutePath("path", input.Path); err != nil {
 			return toolResultError("GetBackup", "read", err), nil
 		}
-		resolved, resolveErr := s.resolvePath(runtimeSessionID, input.Path, false, true)
+		resolved, resolveErr := s.resolvePath(ctx, input.Path, false, true)
 		if resolveErr != nil {
 			return toolResultError("GetBackup", "read", resolveErr), nil
 		}
@@ -784,7 +785,7 @@ func (s *Server) getBackup(runtimeSessionID string, args map[string]interface{})
 	return backupPayloadResult(payload), nil
 }
 
-func (s *Server) restoreBackup(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) restoreBackup(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		BackupID   string `json:"backup_id"`
 		TargetPath string `json:"target_path"`
@@ -806,7 +807,7 @@ func (s *Server) restoreBackup(runtimeSessionID string, args map[string]interfac
 		}
 		return errorResult(fmt.Sprintf("Failed to load backup %q: %v", strings.TrimSpace(input.BackupID), err)), nil
 	}
-	if _, resolveErr := s.resolvePath(runtimeSessionID, payload.Record.OriginalPath, false, true); resolveErr != nil {
+	if _, resolveErr := s.resolvePath(ctx, payload.Record.OriginalPath, false, true); resolveErr != nil {
 		return toolResultError("RestoreBackup", "read", resolveErr), nil
 	}
 
@@ -817,7 +818,7 @@ func (s *Server) restoreBackup(runtimeSessionID string, args map[string]interfac
 			return toolResultError("RestoreBackup", "write", err), nil
 		}
 	}
-	target, err := s.resolvePath(runtimeSessionID, targetPath, true, true)
+	target, err := s.resolvePath(ctx, targetPath, true, true)
 	if err != nil {
 		return toolResultError("RestoreBackup", "write", err), nil
 	}

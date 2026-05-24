@@ -55,6 +55,13 @@ export const RELATIONSHIP_APPROVAL_MODES = [
   RELATIONSHIP_APPROVAL_MODE.AUTO,
   RELATIONSHIP_APPROVAL_MODE.MANUAL,
 ] as const
+// P2: this enum used to be the value of the dropped `actors.access_policy` /
+// `remote_agents.access_policy` columns. After P2 it is a pure
+// application-layer "intent" enum — input to `setAccessPolicy(policy)` and the
+// API request bodies. `workspace_open` translates to "ensure a
+// source=default_open binding exists targeting the workspace"; `approval_required`
+// translates to "revoke any default_open binding so access requires explicit
+// approval". The DB no longer stores this value directly.
 export const RELATIONSHIP_ACCESS_POLICY = {
   WORKSPACE_OPEN: "workspace_open",
   APPROVAL_REQUIRED: "approval_required",
@@ -397,12 +404,14 @@ export const ATTACHMENT_TARGET_TYPES = [
 ] as const
 export const ACCESS_TARGET_TYPES = [
   "workspace",
+  "workspace_member",
   "conversation",
   "actor",
   "actor_in_conversation",
 ] as const
 export const CAPABILITY_ACCESS_TARGET_TYPES = [
   "workspace",
+  "workspace_member",
   "conversation",
   "actor",
   "actor_in_conversation",

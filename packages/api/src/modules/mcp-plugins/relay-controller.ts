@@ -86,6 +86,7 @@ const accessTargetSchema = z.object({
   type: accessTargetTypeSchema,
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
+  workspaceMemberId: z.string().uuid().optional(),
 })
 
 const accessGrantSchema = z.object({

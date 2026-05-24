@@ -153,7 +153,6 @@ func (b *managerBackend) CloseRuntimeSession(ctx context.Context, runtimeSession
 
 func prepareVFSConfig(paths relaypaths.ResolvedPaths, cfg *config.Config) (*config.Config, error) {
 	clone := config.Clone(cfg)
-	clone.Security.ServerAuthorizationEnabled = false
 
 	servers := make([]config.ServerConfig, 0, len(clone.Servers))
 	for _, server := range clone.Servers {

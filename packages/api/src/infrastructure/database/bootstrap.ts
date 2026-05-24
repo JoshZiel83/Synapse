@@ -7,9 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION = "2026-04-06-01"
+const CURRENT_SCHEMA_VERSION = "2026-05-24-auth-refactor"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "canonicalize interaction revisions, commands, and replayable sync events"
+  "auth refactor: access_subjects registry + subject_id FKs across access/relationship/conversation tables"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`
@@ -57,34 +57,72 @@ async function applyBootstrapSchema() {
   await executeSql(schemaSql)
 }
 
+/**
+ * Pure function that decides what to do given the current DB state. Extracted
+ * so the auth-refactor fail-loud rule can be unit-tested without spinning up
+ * a real Postgres + writing tables.
+ */
+export type BootstrapDecision =
+  | { kind: "noop"; reason: string }
+  | { kind: "apply" }
+  | { kind: "fail"; message: string }
+
+export function decideBootstrapAction(input: {
+  hasCurrentVersion: boolean
+  tableCount: number
+  currentVersion: string
+}): BootstrapDecision {
+  if (input.hasCurrentVersion) {
+    return {
+      kind: "noop",
+      reason: `Database schema is already at version ${input.currentVersion} (${input.tableCount} public tables).`,
+    }
+  }
+  if (input.tableCount === 0) {
+    return { kind: "apply" }
+  }
+  return {
+    kind: "fail",
+    message:
+      `Database already contains ${input.tableCount} public tables but is not at schema version ${input.currentVersion}. ` +
+      `This release ships the auth-refactor schema (access_subjects + subject_id) which has no in-place migration. ` +
+      `Run \`npm run db:rebuild\` to drop and recreate the schema. ` +
+      `If you need to preserve data, snapshot the database first and reapply business data after rebuild.`,
+  }
+}
+
 export async function bootstrapDatabaseSchema() {
   console.log("Checking database schema bootstrap state...")
 
   await ensureSchemaMigrationsTable()
 
-  if (await hasCurrentSchemaVersion()) {
-    const tableCount = await countBusinessTables()
-    console.log(
-      `Database schema is already at version ${CURRENT_SCHEMA_VERSION} (${tableCount} public tables).`
-    )
-    return { bootstrapped: false, upgraded: false, tableCount }
-  }
-
+  const hasCurrentVersion = await hasCurrentSchemaVersion()
   const tableCount = await countBusinessTables()
+  const decision = decideBootstrapAction({
+    hasCurrentVersion,
+    tableCount,
+    currentVersion: CURRENT_SCHEMA_VERSION,
+  })
 
   try {
-    if (tableCount === 0) {
-      await applyBootstrapSchema()
-      console.log("Database schema bootstrap completed successfully")
-      await ensureSchemaMigrationsTable()
-      await recordCurrentSchemaVersion()
-      return { bootstrapped: true, upgraded: false, tableCount: 0 }
+    switch (decision.kind) {
+      case "noop":
+        console.log(decision.reason)
+        return { bootstrapped: false, upgraded: false, tableCount }
+      case "apply":
+        await applyBootstrapSchema()
+        console.log("Database schema bootstrap completed successfully")
+        await ensureSchemaMigrationsTable()
+        await recordCurrentSchemaVersion()
+        return { bootstrapped: true, upgraded: false, tableCount: 0 }
+      case "fail":
+        // AGENTS.md: "initial design implementation phase, do not consider
+        // backward-compat with existing data". The auth refactor introduces
+        // breaking schema changes with no incremental migration path —
+        // pre-existing databases must be rebuilt. Fail loudly instead of
+        // skipping silently so the operator notices.
+        throw new Error(decision.message)
     }
-
-    console.log(
-      `Database already contains ${tableCount} public tables. Skipping schema bootstrap; rebuild the database to apply the current schema.`
-    )
-    return { bootstrapped: false, upgraded: false, tableCount }
   } catch (error) {
     console.error("Database bootstrap/upgrade failed:", error)
     throw error

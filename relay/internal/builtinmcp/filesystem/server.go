@@ -61,60 +61,6 @@ type toolError struct {
 	DenialResolution string
 }
 
-const serverAuthorizedRuntimeSessionPrefix = "__server_authorized__:"
-
-type runtimeSessionAuthorizationEnvelope struct {
-	RuntimeSessionID   string                         `json:"runtimeSessionId,omitempty"`
-	FilesystemPolicies []runtimeauth.FilesystemPolicy `json:"filesystemPolicies,omitempty"`
-}
-
-func decorateRuntimeSessionID(
-	runtimeSessionID string,
-	authorization runtimeauth.RuntimeAuthorization,
-	allowServerAuthorization bool,
-) string {
-	if !allowServerAuthorization {
-		return runtimeSessionID
-	}
-	policies := runtimeauth.FilesystemRootsFromPolicies(authorization.Policies())
-	if len(policies) == 0 {
-		return runtimeSessionID
-	}
-	encoded, err := json.Marshal(runtimeSessionAuthorizationEnvelope{
-		RuntimeSessionID:   runtimeSessionID,
-		FilesystemPolicies: policies,
-	})
-	if err != nil {
-		return runtimeSessionID
-	}
-	return serverAuthorizedRuntimeSessionPrefix + base64.RawURLEncoding.EncodeToString(encoded)
-}
-
-func parseRuntimeSessionAuthorizationEnvelope(
-	runtimeSessionID string,
-) runtimeSessionAuthorizationEnvelope {
-	if !strings.HasPrefix(runtimeSessionID, serverAuthorizedRuntimeSessionPrefix) {
-		return runtimeSessionAuthorizationEnvelope{RuntimeSessionID: runtimeSessionID}
-	}
-	encoded := strings.TrimPrefix(runtimeSessionID, serverAuthorizedRuntimeSessionPrefix)
-	payload, err := base64.RawURLEncoding.DecodeString(encoded)
-	if err != nil {
-		return runtimeSessionAuthorizationEnvelope{RuntimeSessionID: runtimeSessionID}
-	}
-	var envelope runtimeSessionAuthorizationEnvelope
-	if err := json.Unmarshal(payload, &envelope); err != nil {
-		return runtimeSessionAuthorizationEnvelope{RuntimeSessionID: runtimeSessionID}
-	}
-	if envelope.RuntimeSessionID == "" {
-		envelope.RuntimeSessionID = runtimeSessionID
-	}
-	return envelope
-}
-
-func isServerAuthorizedRuntimeSession(runtimeSessionID string) bool {
-	return len(parseRuntimeSessionAuthorizationEnvelope(runtimeSessionID).FilesystemPolicies) > 0
-}
-
 func (e *toolError) Error() string {
 	return e.Message
 }
@@ -166,7 +112,7 @@ func (s *Server) Start(ctx context.Context) error {
 	childCtx, cancel := context.WithCancel(ctx)
 	s.startCtx = childCtx
 	s.cancel = cancel
-	if s.shouldStart("") {
+	if s.shouldStart(ctx) {
 		if err := s.ensureStarted(); err != nil {
 			return err
 		}
@@ -193,8 +139,8 @@ func (s *Server) Shutdown() {
 	s.started = false
 }
 
-func (s *Server) shouldStart(runtimeSessionID string) bool {
-	return s.cfg.Enabled || len(s.effectiveRootsForSession(runtimeSessionID)) > 0
+func (s *Server) shouldStart(ctx context.Context) bool {
+	return s.cfg.Enabled || len(s.effectiveRoots(ctx)) > 0
 }
 
 func (s *Server) ensureStarted() error {
@@ -221,55 +167,49 @@ func (s *Server) ensureStarted() error {
 }
 
 func (s *Server) CallTool(ctx context.Context, toolName string, args map[string]interface{}) (core.CallResult, error) {
-	authorization := runtimeauth.RuntimeAuthorizationFromContext(ctx)
-	runtimeSessionID := decorateRuntimeSessionID(
-		runtimeauth.RuntimeSessionIDFromContext(ctx),
-		authorization,
-		s.cfg.AllowServerAuthorization,
-	)
 	switch toolName {
 	case "ListAllowedDirectories":
-		return s.listAllowedDirectories(runtimeSessionID), nil
+		return s.listAllowedDirectories(ctx), nil
 	case "View":
-		return s.viewFile(runtimeSessionID, args)
+		return s.viewFile(ctx, args)
 	case "ViewMany":
-		return s.viewMany(runtimeSessionID, args)
+		return s.viewMany(ctx, args)
 	case "GetFile":
-		return s.getFile(runtimeSessionID, args)
+		return s.getFile(ctx, args)
 	case "Replace":
-		return s.replaceFile(runtimeSessionID, args)
+		return s.replaceFile(ctx, args)
 	case "Edit":
-		return s.editFileContent(runtimeSessionID, args)
+		return s.editFileContent(ctx, args)
 	case "Patch":
-		return s.patchTool(runtimeSessionID, args)
+		return s.patchTool(ctx, args)
 	case "UpdateStructuredData":
-		return s.updateStructuredData(runtimeSessionID, args)
+		return s.updateStructuredData(ctx, args)
 	case "CreateDirectory":
-		return s.createDirectory(runtimeSessionID, args)
+		return s.createDirectory(ctx, args)
 	case "LS":
-		return s.listFiles(runtimeSessionID, args)
+		return s.listFiles(ctx, args)
 	case "DirectoryTree":
-		return s.directoryTree(runtimeSessionID, args)
+		return s.directoryTree(ctx, args)
 	case "Move":
-		return s.moveFile(runtimeSessionID, args)
+		return s.moveFile(ctx, args)
 	case "Copy":
-		return s.copyPath(runtimeSessionID, args)
+		return s.copyPath(ctx, args)
 	case "Delete":
-		return s.deletePath(runtimeSessionID, args)
+		return s.deletePath(ctx, args)
 	case "Stat":
-		return s.getFileInfo(runtimeSessionID, args)
+		return s.getFileInfo(ctx, args)
 	case "GlobTool":
-		return s.globTool(ctx, runtimeSessionID, args)
+		return s.globTool(ctx, args)
 	case "GrepTool":
-		return s.grepTool(ctx, runtimeSessionID, args)
+		return s.grepTool(ctx, args)
 	case "SearchFiles":
-		return s.searchFiles(ctx, runtimeSessionID, args)
+		return s.searchFiles(ctx, args)
 	case "ListBackups":
-		return s.listBackups(runtimeSessionID, args)
+		return s.listBackups(ctx, args)
 	case "GetBackup":
-		return s.getBackup(runtimeSessionID, args)
+		return s.getBackup(ctx, args)
 	case "RestoreBackup":
-		return s.restoreBackup(runtimeSessionID, args)
+		return s.restoreBackup(ctx, args)
 	default:
 		return errorResult(fmt.Sprintf("unknown tool: %s", toolName)), nil
 	}
@@ -316,13 +256,9 @@ func (s *Server) resolveRoots() ([]Root, error) {
 	}
 }
 
-func (s *Server) effectiveRoots() []Root {
-	return s.effectiveRootsForSession("")
-}
-
-func (s *Server) effectiveRootsForSession(runtimeSessionID string) []Root {
-	envelope := parseRuntimeSessionAuthorizationEnvelope(runtimeSessionID)
-	roots := make([]Root, 0, len(s.roots)+len(envelope.FilesystemPolicies))
+func (s *Server) effectiveRoots(ctx context.Context) []Root {
+	policies := runtimeauth.FilesystemRootsFromPolicies(runtimeauth.PoliciesFromContext(ctx))
+	roots := make([]Root, 0, len(s.roots)+len(policies))
 	if s.cfg.Enabled {
 		for _, root := range s.roots {
 			access := root.Access
@@ -334,7 +270,7 @@ func (s *Server) effectiveRootsForSession(runtimeSessionID string) []Root {
 			})
 		}
 	}
-	for policyIndex, policy := range envelope.FilesystemPolicies {
+	for policyIndex, policy := range policies {
 		for pathIndex, pathPrefix := range policy.PathPrefixes {
 			normalizedPath := normalizePathForMatch(pathPrefix)
 			if normalizedPath == "" {
@@ -407,12 +343,12 @@ func (s *Server) blockedSystemPath(path string) (string, bool) {
 }
 
 func (s *Server) matchRoot(path string) (Root, bool) {
-	return s.matchRootForSession("", path)
+	return s.matchRootForContext(context.Background(), path)
 }
 
-func (s *Server) matchRootForSession(runtimeSessionID, path string) (Root, bool) {
+func (s *Server) matchRootForContext(ctx context.Context, path string) (Root, bool) {
 	normalized := normalizePathForMatch(path)
-	for _, root := range s.effectiveRootsForSession(runtimeSessionID) {
+	for _, root := range s.effectiveRoots(ctx) {
 		if pathWithinPrefix(normalized, root.Path) {
 			return root, true
 		}
@@ -420,7 +356,7 @@ func (s *Server) matchRootForSession(runtimeSessionID, path string) (Root, bool)
 	return Root{}, false
 }
 
-func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMissing bool) (resolvedPath, error) {
+func (s *Server) resolvePath(ctx context.Context, input string, write bool, allowMissing bool) (resolvedPath, error) {
 	input = strings.TrimSpace(input)
 	if input == "" {
 		return resolvedPath{}, &toolError{
@@ -432,7 +368,7 @@ func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMi
 	}
 
 	if !filepath.IsAbs(input) {
-		effectiveRoots := s.effectiveRootsForSession(runtimeSessionID)
+		effectiveRoots := s.effectiveRoots(ctx)
 		if s.cfg.Scope == "roots" && len(effectiveRoots) == 1 {
 			input = filepath.Join(effectiveRoots[0].Path, input)
 		} else {
@@ -521,53 +457,33 @@ func (s *Server) resolvePath(runtimeSessionID, input string, write bool, allowMi
 		}
 	}
 
-	root, ok := s.matchRootForSession(runtimeSessionID, resolved)
+	root, ok := s.matchRootForContext(ctx, resolved)
 	if !ok {
-		resolution := core.RelayAccessDenialResolutionLocalSetting
-		if s.cfg.AllowServerAuthorization {
-			resolution = core.RelayAccessDenialResolutionServerGrant
-		}
-		message := fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server.", absPath)
-		if resolution == core.RelayAccessDenialResolutionLocalSetting {
-			message = fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server, and this relay client is not configured to trust server-issued relay authorizations.", absPath)
-		}
 		return resolvedPath{}, &toolError{
 			Code:             "directory_permission_required",
-			Message:          message,
+			Message:          fmt.Sprintf("The path %q is outside the directories exposed by this filesystem server.", absPath),
 			Path:             absPath,
 			DenialKind:       core.RelayAccessDenialKindPermissionDenied,
-			DenialResolution: resolution,
+			DenialResolution: core.RelayAccessDenialResolutionServerGrant,
 		}
 	}
 	if write {
-		resolution := core.RelayAccessDenialResolutionLocalSetting
-		if s.cfg.AllowServerAuthorization {
-			resolution = core.RelayAccessDenialResolutionServerGrant
-		}
 		if s.cfg.ReadOnly && !root.ServerAuthorized {
-			message := "This built-in filesystem server is currently in read-only mode. Read and search tools remain available, but write actions require relay authorization before retrying."
-			if resolution == core.RelayAccessDenialResolutionLocalSetting {
-				message = "This built-in filesystem server is currently in read-only mode, and this relay client is not configured to trust server-issued relay authorizations for write actions."
-			}
 			return resolvedPath{}, &toolError{
 				Code:             "read_only_mode",
-				Message:          message,
+				Message:          "This built-in filesystem server is currently in read-only mode. Read and search tools remain available, but write actions require relay authorization before retrying.",
 				Path:             absPath,
 				DenialKind:       core.RelayAccessDenialKindPermissionDenied,
-				DenialResolution: resolution,
+				DenialResolution: core.RelayAccessDenialResolutionServerGrant,
 			}
 		}
 		if root.Access != "rw" {
-			message := fmt.Sprintf("The path %q is currently configured read-only by the relay client's local policy. Relay authorization is required before retrying the write action.", absPath)
-			if resolution == core.RelayAccessDenialResolutionLocalSetting {
-				message = fmt.Sprintf("The path %q is currently configured read-only by the relay client's local policy, and this relay client is not configured to trust server-issued relay authorizations for write actions.", absPath)
-			}
 			return resolvedPath{}, &toolError{
 				Code:             "write_permission_required",
-				Message:          message,
+				Message:          fmt.Sprintf("The path %q is currently configured read-only by the relay client's local policy. Relay authorization is required before retrying the write action.", absPath),
 				Path:             absPath,
 				DenialKind:       core.RelayAccessDenialKindPermissionDenied,
-				DenialResolution: resolution,
+				DenialResolution: core.RelayAccessDenialResolutionServerGrant,
 			}
 		}
 	}
@@ -602,9 +518,9 @@ func resolveMissingPath(absPath string) (string, error) {
 	}
 }
 
-func (s *Server) listAllowedDirectories(runtimeSessionID string) core.CallResult {
+func (s *Server) listAllowedDirectories(ctx context.Context) core.CallResult {
 	entries := make([]AllowedDirectory, 0, len(s.roots))
-	for _, root := range s.effectiveRootsForSession(runtimeSessionID) {
+	for _, root := range s.effectiveRoots(ctx) {
 		entries = append(entries, AllowedDirectory{
 			ID:     root.ID,
 			Path:   root.Path,
@@ -698,7 +614,7 @@ func sliceTextByLine(text string, offset, limit int) (string, int, int, bool) {
 	return strings.Join(selected, "\n"), len(lines), end - offset, truncatedAny
 }
 
-func (s *Server) resolveOptionalSearchPath(runtimeSessionID, input string) (resolvedPath, error) {
+func (s *Server) resolveOptionalSearchPath(ctx context.Context, input string) (resolvedPath, error) {
 	if strings.TrimSpace(input) == "" {
 		wd, err := currentWorkingDirectory()
 		if err != nil {
@@ -711,7 +627,7 @@ func (s *Server) resolveOptionalSearchPath(runtimeSessionID, input string) (reso
 		}
 		input = wd
 	}
-	return s.resolvePath(runtimeSessionID, input, false, false)
+	return s.resolvePath(ctx, input, false, false)
 }
 
 type listedEntry struct {
@@ -723,7 +639,7 @@ type listedEntry struct {
 	ModTime    time.Time
 }
 
-func (s *Server) viewFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) viewFile(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		FilePath string `json:"file_path"`
 		Offset   int    `json:"offset"`
@@ -732,7 +648,7 @@ func (s *Server) viewFile(runtimeSessionID string, args map[string]interface{}) 
 	if err := decodeArgs(args, &input); err != nil {
 		return errorResult(fmt.Sprintf("Invalid View arguments: %v", err)), nil
 	}
-	viewed, err := s.readViewFile(runtimeSessionID, input.FilePath, input.Offset, input.Limit)
+	viewed, err := s.readViewFile(ctx, input.FilePath, input.Offset, input.Limit)
 	if err != nil {
 		if toolErr, ok := err.(*toolError); ok {
 			return toolErr.result("View", "read"), nil
@@ -742,7 +658,7 @@ func (s *Server) viewFile(runtimeSessionID string, args map[string]interface{}) 
 	return textResult(viewed.Text, viewed.Structured), nil
 }
 
-func (s *Server) replaceFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) replaceFile(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		FilePath string `json:"file_path"`
 		Content  string `json:"content"`
@@ -754,7 +670,7 @@ func (s *Server) replaceFile(runtimeSessionID string, args map[string]interface{
 		return toolResultError("Replace", "replace", err), nil
 	}
 
-	resolved, err := s.resolvePath(runtimeSessionID, input.FilePath, true, true)
+	resolved, err := s.resolvePath(ctx, input.FilePath, true, true)
 	if err != nil {
 		return toolResultError("Replace", "replace", err), nil
 	}
@@ -775,7 +691,7 @@ func (s *Server) replaceFile(runtimeSessionID string, args map[string]interface{
 	}, backups), nil
 }
 
-func (s *Server) editFileContent(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) editFileContent(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		FilePath  string `json:"file_path"`
 		OldString string `json:"old_string"`
@@ -790,7 +706,7 @@ func (s *Server) editFileContent(runtimeSessionID string, args map[string]interf
 
 	trimmedOld := input.OldString
 	if trimmedOld == "" {
-		resolved, err := s.resolvePath(runtimeSessionID, input.FilePath, true, true)
+		resolved, err := s.resolvePath(ctx, input.FilePath, true, true)
 		if err != nil {
 			return toolResultError("Edit", "edit", err), nil
 		}
@@ -816,7 +732,7 @@ func (s *Server) editFileContent(runtimeSessionID string, args map[string]interf
 		}, backups), nil
 	}
 
-	resolved, err := s.resolvePath(runtimeSessionID, input.FilePath, true, false)
+	resolved, err := s.resolvePath(ctx, input.FilePath, true, false)
 	if err != nil {
 		return toolResultError("Edit", "edit", err), nil
 	}
@@ -849,7 +765,7 @@ func (s *Server) editFileContent(runtimeSessionID string, args map[string]interf
 	}, backups), nil
 }
 
-func (s *Server) listFiles(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) listFiles(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		DirectoryPath string `json:"directory_path"`
 		Offset        int    `json:"offset"`
@@ -866,7 +782,7 @@ func (s *Server) listFiles(runtimeSessionID string, args map[string]interface{})
 		return toolResultError("LS", "list", err), nil
 	}
 
-	resolved, err := s.resolvePath(runtimeSessionID, input.DirectoryPath, false, false)
+	resolved, err := s.resolvePath(ctx, input.DirectoryPath, false, false)
 	if err != nil {
 		return toolResultError("LS", "list", err), nil
 	}
@@ -1043,7 +959,7 @@ func (s *Server) listFiles(runtimeSessionID string, args map[string]interface{})
 	}), nil
 }
 
-func (s *Server) globTool(ctx context.Context, runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) globTool(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		Pattern          string   `json:"pattern"`
 		Path             string   `json:"path"`
@@ -1068,7 +984,7 @@ func (s *Server) globTool(ctx context.Context, runtimeSessionID string, args map
 		input.Limit = 1000
 	}
 
-	root, err := s.resolveOptionalSearchPath(runtimeSessionID, input.Path)
+	root, err := s.resolveOptionalSearchPath(ctx, input.Path)
 	if err != nil {
 		return toolResultError("GlobTool", "read", err), nil
 	}
@@ -1111,7 +1027,7 @@ func (s *Server) globTool(ctx context.Context, runtimeSessionID string, args map
 	return matchedPathResult(input.Pattern, root.Path, paged, total, appliedOffset, appliedLimit, hasMore, backend), nil
 }
 
-func (s *Server) grepTool(ctx context.Context, runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) grepTool(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		Pattern          string   `json:"pattern"`
 		Path             string   `json:"path"`
@@ -1162,7 +1078,7 @@ func (s *Server) grepTool(ctx context.Context, runtimeSessionID string, args map
 		return errorResult(fmt.Sprintf("Invalid regular expression %q: %v", input.Pattern, err)), nil
 	}
 
-	root, err := s.resolveOptionalSearchPath(runtimeSessionID, input.Path)
+	root, err := s.resolveOptionalSearchPath(ctx, input.Path)
 	if err != nil {
 		return toolResultError("GrepTool", "read", err), nil
 	}
@@ -1259,7 +1175,7 @@ func (s *Server) grepTool(ctx context.Context, runtimeSessionID string, args map
 	}
 }
 
-func (s *Server) getFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) getFile(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		FilePath string `json:"file_path"`
 	}
@@ -1270,7 +1186,7 @@ func (s *Server) getFile(runtimeSessionID string, args map[string]interface{}) (
 		return toolResultError("GetFile", "read", err), nil
 	}
 
-	resolved, err := s.resolvePath(runtimeSessionID, input.FilePath, false, false)
+	resolved, err := s.resolvePath(ctx, input.FilePath, false, false)
 	if err != nil {
 		return toolResultError("GetFile", "read", err), nil
 	}
@@ -1326,7 +1242,7 @@ func (s *Server) getFile(runtimeSessionID string, args map[string]interface{}) (
 	}, nil
 }
 
-func (s *Server) createDirectory(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) createDirectory(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		DirectoryPath string `json:"directory_path"`
 	}
@@ -1336,7 +1252,7 @@ func (s *Server) createDirectory(runtimeSessionID string, args map[string]interf
 	if err := requireAbsolutePath("directory_path", input.DirectoryPath); err != nil {
 		return toolResultError("CreateDirectory", "write", err), nil
 	}
-	resolved, err := s.resolvePath(runtimeSessionID, input.DirectoryPath, true, true)
+	resolved, err := s.resolvePath(ctx, input.DirectoryPath, true, true)
 	if err != nil {
 		return toolResultError("CreateDirectory", "write", err), nil
 	}
@@ -1358,7 +1274,7 @@ func (s *Server) createDirectory(runtimeSessionID string, args map[string]interf
 	return textResultWithBackups(fmt.Sprintf("Created %q.", resolved.Path), map[string]interface{}{"directory_path": resolved.Path}, backups), nil
 }
 
-func (s *Server) directoryTree(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) directoryTree(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		DirectoryPath string `json:"directory_path"`
 		MaxDepth      int    `json:"max_depth"`
@@ -1372,7 +1288,7 @@ func (s *Server) directoryTree(runtimeSessionID string, args map[string]interfac
 	if err := requireAbsolutePath("directory_path", input.DirectoryPath); err != nil {
 		return toolResultError("DirectoryTree", "list", err), nil
 	}
-	resolved, err := s.resolvePath(runtimeSessionID, input.DirectoryPath, false, false)
+	resolved, err := s.resolvePath(ctx, input.DirectoryPath, false, false)
 	if err != nil {
 		return toolResultError("DirectoryTree", "list", err), nil
 	}
@@ -1420,7 +1336,7 @@ func (s *Server) buildDirectoryTree(path string, maxDepth, depth int) (map[strin
 	return node, lines, nil
 }
 
-func (s *Server) moveFile(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) moveFile(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		SourcePath      string `json:"source_path"`
 		DestinationPath string `json:"destination_path"`
@@ -1434,11 +1350,11 @@ func (s *Server) moveFile(runtimeSessionID string, args map[string]interface{}) 
 	if err := requireAbsolutePath("destination_path", input.DestinationPath); err != nil {
 		return toolResultError("Move", "write", err), nil
 	}
-	source, err := s.resolvePath(runtimeSessionID, input.SourcePath, true, false)
+	source, err := s.resolvePath(ctx, input.SourcePath, true, false)
 	if err != nil {
 		return toolResultError("Move", "write", err), nil
 	}
-	destination, err := s.resolvePath(runtimeSessionID, input.DestinationPath, true, true)
+	destination, err := s.resolvePath(ctx, input.DestinationPath, true, true)
 	if err != nil {
 		return toolResultError("Move", "write", err), nil
 	}
@@ -1482,7 +1398,7 @@ func (s *Server) moveFile(runtimeSessionID string, args map[string]interface{}) 
 	}, backups), nil
 }
 
-func (s *Server) getFileInfo(runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) getFileInfo(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input struct {
 		Path string `json:"path"`
 	}
@@ -1492,7 +1408,7 @@ func (s *Server) getFileInfo(runtimeSessionID string, args map[string]interface{
 	if err := requireAbsolutePath("path", input.Path); err != nil {
 		return toolResultError("Stat", "read", err), nil
 	}
-	resolved, err := s.resolvePath(runtimeSessionID, input.Path, false, false)
+	resolved, err := s.resolvePath(ctx, input.Path, false, false)
 	if err != nil {
 		return toolResultError("Stat", "read", err), nil
 	}
@@ -1513,13 +1429,13 @@ func (s *Server) getFileInfo(runtimeSessionID string, args map[string]interface{
 	return textResult(fmt.Sprintf("Retrieved metadata for %q.", resolved.Path), result), nil
 }
 
-func (s *Server) searchFiles(_ context.Context, runtimeSessionID string, args map[string]interface{}) (core.CallResult, error) {
+func (s *Server) searchFiles(ctx context.Context, args map[string]interface{}) (core.CallResult, error) {
 	var input SearchQuery
 	if err := decodeArgs(args, &input); err != nil {
 		return errorResult(fmt.Sprintf("Invalid SearchFiles arguments: %v", err)), nil
 	}
 	if !s.started {
-		if !s.shouldStart(runtimeSessionID) {
+		if !s.shouldStart(ctx) {
 			requestPath := strings.TrimSpace(input.Path)
 			if requestPath == "" {
 				if cwd, err := currentWorkingDirectory(); err == nil {
@@ -1536,7 +1452,7 @@ func (s *Server) searchFiles(_ context.Context, runtimeSessionID string, args ma
 			return errorResult(fmt.Sprintf("Search failed: %v", err)), nil
 		}
 	}
-	results, err := s.searchIndex(input)
+	results, err := s.searchIndex(ctx, input)
 	if err != nil {
 		return errorResult(fmt.Sprintf("Search failed: %v", err)), nil
 	}

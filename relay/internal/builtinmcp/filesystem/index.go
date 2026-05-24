@@ -170,7 +170,7 @@ func (s *Server) startBackgroundSync(ctx context.Context) error {
 	go s.runSyncWorker(ctx)
 	go s.runWatchLoop(ctx)
 
-	initialRoots := s.effectiveRoots()
+	initialRoots := s.effectiveRoots(ctx)
 	for _, root := range initialRoots {
 		s.enqueueSync(root.Path, true)
 	}
@@ -762,8 +762,8 @@ type searchCandidate struct {
 	contentScore float64
 }
 
-func (s *Server) searchIndex(input SearchQuery) ([]SearchResult, error) {
-	options, err := s.compileSearchOptions(input)
+func (s *Server) searchIndex(ctx context.Context, input SearchQuery) ([]SearchResult, error) {
+	options, err := s.compileSearchOptions(ctx, input)
 	if err != nil {
 		return nil, err
 	}
@@ -818,7 +818,7 @@ func (s *Server) searchIndex(input SearchQuery) ([]SearchResult, error) {
 	return results, nil
 }
 
-func (s *Server) compileSearchOptions(input SearchQuery) (searchOptions, error) {
+func (s *Server) compileSearchOptions(ctx context.Context, input SearchQuery) (searchOptions, error) {
 	options := searchOptions{
 		query:            strings.TrimSpace(input.Query),
 		roots:            normalizeSearchFilters(input.Roots),
@@ -911,7 +911,7 @@ func (s *Server) compileSearchOptions(input SearchQuery) (searchOptions, error) 
 		if !filepath.IsAbs(input.Path) {
 			return options, fmt.Errorf("path must be an absolute path")
 		}
-		resolved, err := s.resolvePath("", input.Path, false, false)
+		resolved, err := s.resolvePath(ctx, input.Path, false, false)
 		if err != nil {
 			return options, err
 		}
@@ -935,7 +935,7 @@ func (s *Server) compileSearchOptions(input SearchQuery) (searchOptions, error) 
 	}
 
 	options.pathFilters = make(map[string]*pathSearchFilter)
-	for _, root := range s.effectiveRoots() {
+	for _, root := range s.effectiveRoots(ctx) {
 		filter, err := newPathSearchFilter(root.Path, options.exclude, options.respectGitignore)
 		if err != nil {
 			return options, fmt.Errorf("compile path filters for %q: %w", root.Path, err)

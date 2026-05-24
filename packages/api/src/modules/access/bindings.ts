@@ -1,10 +1,6 @@
-import type {
-  AccessGrant,
-  AccessTarget,
-  CapabilityAccessTarget,
-} from "@synapse/shared/types"
-import type { AccessResourceType } from "./core.js"
-import { ensureConversationActorContext } from "../session/service.js"
+import type { AccessGrant, CapabilityAccessTarget } from "@synapse/shared/types"
+import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
+import type { AccessResourceType } from "./evaluator.js"
 
 export type AccessBindableResourceType = Extract<
   AccessResourceType,
@@ -12,6 +8,8 @@ export type AccessBindableResourceType = Extract<
   | "plugin_installation"
   | "relay_capability"
   | "automation_event_source"
+  | "actor"
+  | "remote_agent"
 >
 
 export type ResourceAccessBindingStorageRow = {
@@ -20,16 +18,20 @@ export type ResourceAccessBindingStorageRow = {
   plugin_installation_id: string | null
   relay_capability_id: string | null
   automation_event_source_id: string | null
+  actor_id: string | null
+  remote_agent_id: string | null
 }
 
 export type AccessBindingTargetType =
   | "workspace"
+  | "workspace_member"
   | "conversation"
   | "actor"
   | "actor_in_conversation"
 
 export type AccessBindingRelation =
   | "use_workspace"
+  | "use_workspace_member"
   | "use_conversation"
   | "use_actor"
   | "use_actor_in_conversation"
@@ -40,12 +42,18 @@ export type AccessBindingRow = ResourceAccessBindingStorageRow & {
   resource_id: string
   target_type: AccessBindingTargetType
   relation: AccessBindingRelation
+  // P1b: new canonical reference. Nullable transitionally — non-null after the
+  // double-write rollout is fully deployed. The legacy subject_*_id columns
+  // are still authoritative for reads until P7 contracts them away.
+  subject_id: string | null
   subject_workspace_id: string | null
+  subject_workspace_member_id: string | null
   subject_actor_id: string | null
   subject_conversation_id: string | null
   subject_conversation_actor_context_id: string | null
   conversation_type_mask_override: number | null
   status: "active" | "revoked"
+  source: "manual" | "default_open" | "relay_auto" | "approval" | "system"
   created_by_workspace_member_id: string | null
   reason: string | null
   created_at: string
@@ -60,6 +68,8 @@ export function readAccessBindingResourceId(
     | "plugin_installation_id"
     | "relay_capability_id"
     | "automation_event_source_id"
+    | "actor_id"
+    | "remote_agent_id"
   >
 ) {
   switch (row.resource_type) {
@@ -91,6 +101,16 @@ export function readAccessBindingResourceId(
         )
       }
       return row.automation_event_source_id
+    case "actor":
+      if (!row.actor_id) {
+        throw new Error("actor_id is required for actor bindings")
+      }
+      return row.actor_id
+    case "remote_agent":
+      if (!row.remote_agent_id) {
+        throw new Error("remote_agent_id is required for remote_agent bindings")
+      }
+      return row.remote_agent_id
     default:
       throw new Error(
         `Unsupported access binding resource type: ${String(row.resource_type)}`
@@ -114,6 +134,9 @@ export function buildResourceAccessBindingRef(input: {
       input.resourceType === "automation_event_source"
         ? input.resourceId
         : null,
+    actor_id: input.resourceType === "actor" ? input.resourceId : null,
+    remote_agent_id:
+      input.resourceType === "remote_agent" ? input.resourceId : null,
   }
 }
 
@@ -123,6 +146,8 @@ export function relationForAccessTargetType(
   switch (targetType) {
     case "workspace":
       return "use_workspace"
+    case "workspace_member":
+      return "use_workspace_member"
     case "conversation":
       return "use_conversation"
     case "actor":
@@ -152,6 +177,15 @@ export type AccessGrantTarget =
   | {
       targetType: "workspace"
       subjectWorkspaceId: string
+      subjectWorkspaceMemberId: null
+      subjectActorId: null
+      subjectConversationId: null
+      subjectConversationActorContextId: null
+    }
+  | {
+      targetType: "workspace_member"
+      subjectWorkspaceId: null
+      subjectWorkspaceMemberId: string
       subjectActorId: null
       subjectConversationId: null
       subjectConversationActorContextId: null
@@ -159,6 +193,7 @@ export type AccessGrantTarget =
   | {
       targetType: "conversation"
       subjectWorkspaceId: null
+      subjectWorkspaceMemberId: null
       subjectActorId: null
       subjectConversationId: string
       subjectConversationActorContextId: null
@@ -166,6 +201,7 @@ export type AccessGrantTarget =
   | {
       targetType: "actor"
       subjectWorkspaceId: null
+      subjectWorkspaceMemberId: null
       subjectActorId: string
       subjectConversationId: null
       subjectConversationActorContextId: null
@@ -173,68 +209,43 @@ export type AccessGrantTarget =
   | {
       targetType: "actor_in_conversation"
       subjectWorkspaceId: null
+      subjectWorkspaceMemberId: null
       subjectActorId: string
       subjectConversationId: string
       subjectConversationActorContextId: string
     }
 
-export async function resolveAccessGrantTarget(input: {
-  workspaceId: string
-  target: AccessTarget
-}): Promise<AccessGrantTarget> {
-  switch (input.target.type) {
+/**
+ * P1b bridge: translate an application-layer AccessGrantTarget into the
+ * canonical SubjectRef used by access_subjects. Pass the resulting ref to
+ * `upsertAccessSubject` (from subject-registry.ts) to obtain a subject_id.
+ */
+export function accessGrantTargetToSubjectRef(
+  target: AccessGrantTarget
+): SubjectRef {
+  switch (target.targetType) {
     case "workspace":
       return {
-        targetType: "workspace",
-        subjectWorkspaceId: input.workspaceId,
-        subjectActorId: null,
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
+        kind: SUBJECT_KIND.WORKSPACE,
+        workspaceId: target.subjectWorkspaceId,
+      }
+    case "workspace_member":
+      return {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: target.subjectWorkspaceMemberId,
       }
     case "conversation":
-      if (!input.target.conversationId) {
-        throw new Error("conversationId is required for conversation target")
-      }
       return {
-        targetType: "conversation",
-        subjectWorkspaceId: null,
-        subjectActorId: null,
-        subjectConversationId: input.target.conversationId,
-        subjectConversationActorContextId: null,
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: target.subjectConversationId,
       }
     case "actor":
-      if (!input.target.actorId) {
-        throw new Error("actorId is required for actor target")
-      }
+      return { kind: SUBJECT_KIND.ACTOR, actorId: target.subjectActorId }
+    case "actor_in_conversation":
       return {
-        targetType: "actor",
-        subjectWorkspaceId: null,
-        subjectActorId: input.target.actorId,
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
+        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
+        contextId: target.subjectConversationActorContextId,
       }
-    case "actor_in_conversation": {
-      if (!input.target.actorId || !input.target.conversationId) {
-        throw new Error(
-          "actorId and conversationId are required for actor_in_conversation target"
-        )
-      }
-      const context = await ensureConversationActorContext({
-        actorId: input.target.actorId,
-        conversationId: input.target.conversationId,
-      })
-      return {
-        targetType: "actor_in_conversation",
-        subjectWorkspaceId: null,
-        subjectActorId: input.target.actorId,
-        subjectConversationId: input.target.conversationId,
-        subjectConversationActorContextId: context.conversationActorContextId,
-      }
-    }
-    default:
-      throw new Error(
-        `Unsupported access target type: ${String(input.target.type)}`
-      )
   }
 }
 
@@ -256,6 +267,7 @@ export function readAccessBindingTarget(
     AccessBindingRow,
     | "target_type"
     | "subject_workspace_id"
+    | "subject_workspace_member_id"
     | "subject_actor_id"
     | "subject_conversation_id"
     | "subject_conversation_actor_context_id"
@@ -271,6 +283,20 @@ export function readAccessBindingTarget(
           "subject_workspace_id",
           row.target_type
         ),
+        subjectWorkspaceMemberId: null,
+        subjectActorId: null,
+        subjectConversationId: null,
+        subjectConversationActorContextId: null,
+      }
+    case "workspace_member":
+      return {
+        targetType: "workspace_member",
+        subjectWorkspaceId: null,
+        subjectWorkspaceMemberId: requireResolvedSubjectId(
+          row.subject_workspace_member_id,
+          "subject_workspace_member_id",
+          row.target_type
+        ),
         subjectActorId: null,
         subjectConversationId: null,
         subjectConversationActorContextId: null,
@@ -279,6 +305,7 @@ export function readAccessBindingTarget(
       return {
         targetType: "conversation",
         subjectWorkspaceId: null,
+        subjectWorkspaceMemberId: null,
         subjectActorId: null,
         subjectConversationId: requireResolvedSubjectId(
           row.subject_conversation_id,
@@ -291,6 +318,7 @@ export function readAccessBindingTarget(
       return {
         targetType: "actor",
         subjectWorkspaceId: null,
+        subjectWorkspaceMemberId: null,
         subjectActorId: requireResolvedSubjectId(
           row.subject_actor_id,
           "subject_actor_id",
@@ -303,6 +331,7 @@ export function readAccessBindingTarget(
       return {
         targetType: "actor_in_conversation",
         subjectWorkspaceId: null,
+        subjectWorkspaceMemberId: null,
         subjectActorId: requireResolvedSubjectId(
           row.subject_actor_id,
           "subject_actor_id",
@@ -331,6 +360,7 @@ export function accessBindingHasTarget(
     AccessBindingRow,
     | "target_type"
     | "subject_workspace_id"
+    | "subject_workspace_member_id"
     | "subject_actor_id"
     | "subject_conversation_id"
     | "subject_conversation_actor_context_id"
@@ -342,6 +372,12 @@ export function accessBindingHasTarget(
       return (
         row.target_type === "workspace" &&
         (row.subject_workspace_id || null) === target.subjectWorkspaceId
+      )
+    case "workspace_member":
+      return (
+        row.target_type === "workspace_member" &&
+        (row.subject_workspace_member_id || null) ===
+          target.subjectWorkspaceMemberId
       )
     case "conversation":
       return (
@@ -364,36 +400,80 @@ export function accessBindingHasTarget(
   }
 }
 
+/**
+ * Shared matcher used by callers that have a decoded
+ * `CapabilityAccessTarget` (as returned by `mapAccessBindingToGrant`) and need
+ * to check whether it covers the current (workspace, conversation, actor,
+ * workspace_member) context.
+ *
+ * Workspace-scoped targets are implicit — the grant is bound to the workspace
+ * row holding it. Pass `grantOwnerWorkspaceId` (the workspace the grant lives
+ * in) plus `contextWorkspaceId` (the runtime context's workspace) to disambiguate.
+ *
+ * Returns true when the grant's target shape matches the runtime context for
+ * its target type:
+ *   - workspace                : context workspace == grant's owning workspace
+ *   - workspace_member         : workspace_member-id matches
+ *   - conversation             : conversation-id matches
+ *   - actor                    : actor-id matches
+ *   - actor_in_conversation    : actor-id AND conversation-id both match
+ */
+export function capabilityTargetMatchesContext(
+  target: CapabilityAccessTarget,
+  context: {
+    grantOwnerWorkspaceId: string
+    contextWorkspaceId: string
+    actorId?: string | null
+    conversationId?: string | null
+    workspaceMemberId?: string | null
+  }
+): boolean {
+  switch (target.type) {
+    case "workspace":
+      return context.contextWorkspaceId === context.grantOwnerWorkspaceId
+    case "workspace_member":
+      return (
+        !!context.workspaceMemberId &&
+        target.workspaceMemberId === context.workspaceMemberId
+      )
+    case "conversation":
+      return (
+        !!context.conversationId &&
+        target.conversationId === context.conversationId
+      )
+    case "actor":
+      return !!context.actorId && target.actorId === context.actorId
+    case "actor_in_conversation":
+      return (
+        !!context.actorId &&
+        !!context.conversationId &&
+        target.actorId === context.actorId &&
+        target.conversationId === context.conversationId
+      )
+    default:
+      return false
+  }
+}
+
 export function mapAccessBindingToGrant(
   row: AccessBindingRow,
-  permissionsOrFallbackReason?: string[] | string,
-  fallbackReasonOrOptions?:
-    | string
-    | {
-        effectiveConversationTypeMask?: number
-      },
+  fallbackReason?: string,
   options?: {
     effectiveConversationTypeMask?: number
   }
 ): AccessGrant {
-  const fallbackReason =
-    typeof permissionsOrFallbackReason === "string"
-      ? permissionsOrFallbackReason
-      : typeof fallbackReasonOrOptions === "string"
-        ? fallbackReasonOrOptions
-        : undefined
-  const resolvedOptions =
-    typeof fallbackReasonOrOptions === "object" &&
-    fallbackReasonOrOptions !== null &&
-    !Array.isArray(fallbackReasonOrOptions)
-      ? fallbackReasonOrOptions
-      : options
   const target = readAccessBindingTarget(row)
   let capabilityTarget: CapabilityAccessTarget
 
   switch (target.targetType) {
     case "workspace":
       capabilityTarget = { type: "workspace" }
+      break
+    case "workspace_member":
+      capabilityTarget = {
+        type: "workspace_member",
+        workspaceMemberId: target.subjectWorkspaceMemberId || undefined,
+      }
       break
     case "conversation":
       capabilityTarget = {
@@ -425,8 +505,7 @@ export function mapAccessBindingToGrant(
     grantedByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
     reason: row.reason || fallbackReason,
     conversationTypeMaskOverride: row.conversation_type_mask_override ?? null,
-    effectiveConversationTypeMask:
-      resolvedOptions?.effectiveConversationTypeMask,
+    effectiveConversationTypeMask: options?.effectiveConversationTypeMask,
     createdAt: row.created_at,
     revokedAt: row.revoked_at || undefined,
   }

@@ -1,9 +1,10 @@
+import { db } from "../../infrastructure/database/kysely.js"
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import { CAPABILITY_ACCESS_TARGET_TYPES } from "@synapse/shared/constants"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
-import { PLATFORM_RESOURCE_ID } from "../access/core.js"
+import { PLATFORM_RESOURCE_ID } from "../access/evaluator.js"
 import { requireRequestAction } from "../access/guards.js"
 import {
   authorizeAction,
@@ -36,6 +37,7 @@ const accessTargetSchema = z.object({
   type: accessTargetTypeSchema,
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
+  workspaceMemberId: z.string().uuid().optional(),
 })
 
 const skillAttachmentSchema = z.object({
@@ -157,8 +159,9 @@ async function requireWorkspaceQueryView(
   workspaceId: string,
   errorMessage: string
 ) {
-  const allowed = await authorizeAction({
+  const allowed = await authorizeAction(db, {
     subject: await resolveWorkspaceAccessSubject(
+      db,
       workspaceId,
       getRequestUserId(request)
     ),

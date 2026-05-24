@@ -1,7 +1,10 @@
 import test from "node:test"
 import assert from "node:assert/strict"
 import { textBlocks } from "@synapse/shared"
-import { buildMemoryRecallQuery } from "./service.js"
+// Import from the pure recall-query module rather than service.js so we
+// don't drag in the module-level Redis client (which would block process
+// exit on machines without Redis configured).
+import { buildMemoryRecallQuery } from "./recall-query.js"
 
 function hasIsolatedSurrogate(value: string) {
   for (let index = 0; index < value.length; index += 1) {

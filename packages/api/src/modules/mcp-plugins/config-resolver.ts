@@ -1,6 +1,6 @@
 import { decryptSensitiveFields } from "../../infrastructure/crypto/index.js"
 import { db } from "../../infrastructure/database/kysely.js"
-import { resolveAuthConnectionRefs } from "./auth-service.js"
+import { resolveAuthConnectionRefs } from "./plugin-auth-connections.js"
 
 export interface ResolvedPluginConfig {
   pluginId: string

@@ -44,28 +44,27 @@ func newBuiltinServer(
 
 		paths := relaypaths.Current()
 		server, err := chrome.New(chrome.Config{
-			StableKey:                cfg.StableKey,
-			Name:                     cfg.Name,
-			InstanceID:               cfg.Builtin.InstanceID,
-			Enabled:                  enabled,
-			AllowServerAuthorization: security.ServerAuthorizationEnabled,
-			ConnectionMode:           cfg.Builtin.Chrome.ConnectionMode,
-			Channel:                  cfg.Builtin.Chrome.Channel,
-			ExecutablePath:           cfg.Builtin.Chrome.ExecutablePath,
-			UserDataDir:              cfg.Builtin.Chrome.UserDataDir,
-			BrowserURL:               cfg.Builtin.Chrome.BrowserURL,
-			WSEndpoint:               cfg.Builtin.Chrome.WSEndpoint,
-			WSHeaders:                cfg.Builtin.Chrome.WSHeaders,
-			Headless:                 cfg.Builtin.Chrome.Headless != nil && *cfg.Builtin.Chrome.Headless,
-			Isolated:                 cfg.Builtin.Chrome.Isolated != nil && *cfg.Builtin.Chrome.Isolated,
-			AcceptInsecureCerts:      cfg.Builtin.Chrome.AcceptInsecureCerts != nil && *cfg.Builtin.Chrome.AcceptInsecureCerts,
-			LogFile:                  cfg.Builtin.Chrome.LogFile,
-			ChromeArgs:               cfg.Builtin.Chrome.ChromeArgs,
-			IgnoreDefaultChromeArgs:  cfg.Builtin.Chrome.IgnoreDefaultChromeArgs,
-			Slim:                     cfg.Builtin.Chrome.Slim == nil || *cfg.Builtin.Chrome.Slim,
-			UsageStatistics:          cfg.Builtin.Chrome.UsageStatistics != nil && *cfg.Builtin.Chrome.UsageStatistics,
-			PerformanceCrux:          cfg.Builtin.Chrome.PerformanceCrux != nil && *cfg.Builtin.Chrome.PerformanceCrux,
-			LogsDir:                  filepath.Join(paths.LogsDir, "chrome-devtools-mcp"),
+			StableKey:               cfg.StableKey,
+			Name:                    cfg.Name,
+			InstanceID:              cfg.Builtin.InstanceID,
+			Enabled:                 enabled,
+			ConnectionMode:          cfg.Builtin.Chrome.ConnectionMode,
+			Channel:                 cfg.Builtin.Chrome.Channel,
+			ExecutablePath:          cfg.Builtin.Chrome.ExecutablePath,
+			UserDataDir:             cfg.Builtin.Chrome.UserDataDir,
+			BrowserURL:              cfg.Builtin.Chrome.BrowserURL,
+			WSEndpoint:              cfg.Builtin.Chrome.WSEndpoint,
+			WSHeaders:               cfg.Builtin.Chrome.WSHeaders,
+			Headless:                cfg.Builtin.Chrome.Headless != nil && *cfg.Builtin.Chrome.Headless,
+			Isolated:                cfg.Builtin.Chrome.Isolated != nil && *cfg.Builtin.Chrome.Isolated,
+			AcceptInsecureCerts:     cfg.Builtin.Chrome.AcceptInsecureCerts != nil && *cfg.Builtin.Chrome.AcceptInsecureCerts,
+			LogFile:                 cfg.Builtin.Chrome.LogFile,
+			ChromeArgs:              cfg.Builtin.Chrome.ChromeArgs,
+			IgnoreDefaultChromeArgs: cfg.Builtin.Chrome.IgnoreDefaultChromeArgs,
+			Slim:                    cfg.Builtin.Chrome.Slim == nil || *cfg.Builtin.Chrome.Slim,
+			UsageStatistics:         cfg.Builtin.Chrome.UsageStatistics != nil && *cfg.Builtin.Chrome.UsageStatistics,
+			PerformanceCrux:         cfg.Builtin.Chrome.PerformanceCrux != nil && *cfg.Builtin.Chrome.PerformanceCrux,
+			LogsDir:                 filepath.Join(paths.LogsDir, "chrome-devtools-mcp"),
 		})
 		if err != nil {
 			return nil, err
@@ -76,18 +75,17 @@ func newBuiltinServer(
 			return nil, fmt.Errorf("builtin.cua config is required")
 		}
 		server, err := cua.New(cua.Config{
-			StableKey:                cfg.StableKey,
-			Enabled:                  enabled,
-			AllowServerAuthorization: security.ServerAuthorizationEnabled,
-			ReadOnly:                 cfg.Builtin.CUA.ReadOnly != nil && *cfg.Builtin.CUA.ReadOnly,
-			RelativeCoordinate:       cfg.Builtin.CUA.RelativeCoordinate,
-			ImageSize:                cfg.Builtin.CUA.ImageSize,
-			RelativeSize:             cfg.Builtin.CUA.RelativeSize,
-			ScrollMultiplier:         cfg.Builtin.CUA.ScrollMultiplier,
-			LogDir:                   cfg.Builtin.CUA.LogDir,
-			StateDir:                 relaypaths.Current().StateDir,
-			AllowDisplayOverride:     cfg.Builtin.CUA.AllowDisplayOverride == nil || *cfg.Builtin.CUA.AllowDisplayOverride,
-			IncludeOverviewTool:      cfg.Builtin.CUA.IncludeOverviewTool == nil || *cfg.Builtin.CUA.IncludeOverviewTool,
+			StableKey:            cfg.StableKey,
+			Enabled:              enabled,
+			ReadOnly:             cfg.Builtin.CUA.ReadOnly != nil && *cfg.Builtin.CUA.ReadOnly,
+			RelativeCoordinate:   cfg.Builtin.CUA.RelativeCoordinate,
+			ImageSize:            cfg.Builtin.CUA.ImageSize,
+			RelativeSize:         cfg.Builtin.CUA.RelativeSize,
+			ScrollMultiplier:     cfg.Builtin.CUA.ScrollMultiplier,
+			LogDir:               cfg.Builtin.CUA.LogDir,
+			StateDir:             relaypaths.Current().StateDir,
+			AllowDisplayOverride: cfg.Builtin.CUA.AllowDisplayOverride == nil || *cfg.Builtin.CUA.AllowDisplayOverride,
+			IncludeOverviewTool:  cfg.Builtin.CUA.IncludeOverviewTool == nil || *cfg.Builtin.CUA.IncludeOverviewTool,
 			DisplaySelector: cua.DisplaySelector{
 				Mode:       cfg.Builtin.CUA.DisplaySelector.Mode,
 				Index:      cfg.Builtin.CUA.DisplaySelector.Index,
@@ -114,15 +112,14 @@ func newBuiltinServer(
 		}
 
 		server, err := filesystem.New(filesystem.Config{
-			StableKey:                cfg.StableKey,
-			Name:                     cfg.Name,
-			Enabled:                  enabled,
-			AllowServerAuthorization: security.ServerAuthorizationEnabled,
-			ReadOnly:                 cfg.Builtin.Filesystem.ReadOnly != nil && *cfg.Builtin.Filesystem.ReadOnly,
-			Scope:                    cfg.Builtin.Filesystem.Scope,
-			GlobalAccess:             cfg.Builtin.Filesystem.GlobalAccess,
-			MaxGetFileSizeBytes:      cfg.Builtin.Filesystem.MaxGetFileSizeBytes,
-			Roots:                    roots,
+			StableKey:           cfg.StableKey,
+			Name:                cfg.Name,
+			Enabled:             enabled,
+			ReadOnly:            cfg.Builtin.Filesystem.ReadOnly != nil && *cfg.Builtin.Filesystem.ReadOnly,
+			Scope:               cfg.Builtin.Filesystem.Scope,
+			GlobalAccess:        cfg.Builtin.Filesystem.GlobalAccess,
+			MaxGetFileSizeBytes: cfg.Builtin.Filesystem.MaxGetFileSizeBytes,
+			Roots:               roots,
 			Index: filesystem.IndexConfig{
 				Dir:              filepath.Join(relaypaths.Current().FilesystemIndexesDir, "filesystem", cfg.StableKey),
 				ContentEnabled:   cfg.Builtin.Filesystem.Index.ContentEnabled != nil && *cfg.Builtin.Filesystem.Index.ContentEnabled,
@@ -149,12 +146,11 @@ func newBuiltinServer(
 		}
 
 		server, err := commandline.New(commandline.Config{
-			Name:                     cfg.Name,
-			InstanceID:               cfg.Builtin.InstanceID,
-			Enabled:                  enabled,
-			AllowServerAuthorization: security.ServerAuthorizationEnabled,
-			DefaultCWD:               cfg.Builtin.Commandline.DefaultCWD,
-			MaxTimeout:               time.Duration(cfg.Builtin.Commandline.MaxTimeoutSec) * time.Second,
+			Name:       cfg.Name,
+			InstanceID: cfg.Builtin.InstanceID,
+			Enabled:    enabled,
+			DefaultCWD: cfg.Builtin.Commandline.DefaultCWD,
+			MaxTimeout: time.Duration(cfg.Builtin.Commandline.MaxTimeoutSec) * time.Second,
 		})
 		if err != nil {
 			return nil, err

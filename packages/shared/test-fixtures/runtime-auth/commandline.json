@@ -1,0 +1,192 @@
+[
+  {
+    "description": "exact match",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "exact",
+          "commandText": "ls -la"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "ls -la",
+      "workingDirectory": ""
+    },
+    "expected": true
+  },
+  {
+    "description": "exact match rejects extra args",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "exact",
+          "commandText": "ls"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "ls -la",
+      "workingDirectory": ""
+    },
+    "expected": false
+  },
+  {
+    "description": "prefix match allows trailing args",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "prefix",
+          "commandText": "ls"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "ls -la /tmp",
+      "workingDirectory": ""
+    },
+    "expected": true
+  },
+  {
+    "description": "prefix match denies compound shell command",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "prefix",
+          "commandText": "ls"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "ls && rm -rf /",
+      "workingDirectory": ""
+    },
+    "expected": false
+  },
+  {
+    "description": "prefix match denies piped command",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "prefix",
+          "commandText": "ls"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "ls | grep foo",
+      "workingDirectory": ""
+    },
+    "expected": false
+  },
+  {
+    "description": "tool match allows any args",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "tool"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "anything goes",
+      "workingDirectory": ""
+    },
+    "expected": true
+  },
+  {
+    "description": "executor mismatch denies",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "exact",
+          "commandText": "ls"
+        }
+      }
+    ],
+    "request": {
+      "executor": "zsh",
+      "commandText": "ls",
+      "workingDirectory": ""
+    },
+    "expected": false
+  },
+  {
+    "description": "working directory required when policy scopes it",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "exact",
+          "commandText": "ls",
+          "workingDirectory": "/srv"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "ls",
+      "workingDirectory": ""
+    },
+    "expected": false
+  },
+  {
+    "description": "working directory under scoped root passes",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "exact",
+          "commandText": "ls",
+          "workingDirectory": "/srv"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "ls",
+      "workingDirectory": "/srv/app"
+    },
+    "expected": true
+  },
+  {
+    "description": "empty command denied",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "tool"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "",
+      "workingDirectory": ""
+    },
+    "expected": false
+  }
+]

@@ -100,7 +100,7 @@ import {
 import {
   createRelayAuthorizationRequest,
   waitForRelayAuthorizationResolution,
-} from "../mcp-plugins/relay-authorization-requests.js"
+} from "../relay-authorizations/requests.js"
 import { inferRelaySpecialAuthorizationPlan } from "../mcp-plugins/relay-special-mcp.js"
 import { normalizeMcpToolResult } from "../mcp-plugins/result-normalizer.js"
 
@@ -1034,8 +1034,9 @@ async function listInviteableActors(params: {
       sql<boolean>`NOT EXISTS (
       SELECT 1
       FROM conversation_participants cp
+      JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
       WHERE cp.conversation_id = ${params.conversationId}
-        AND cp.actor_id = a.id
+        AND cpsubj.actor_id = a.id
         AND cp.state = 'active'
     )`
     )
@@ -1067,6 +1068,7 @@ async function canActorUseInviteActorTool(params: {
   }
 
   return isActorActiveConversationParticipant(
+    db,
     params.conversationId,
     params.actorId
   )
@@ -3878,11 +3880,6 @@ export function runWithToolContext<T>(
   fn: () => T
 ): T {
   return contextStorage.run(ctx, fn)
-}
-
-/** @deprecated Use runWithToolContext instead. Kept only as no-op for call sites that still call it. */
-export function setToolExecutionContext(_ctx: ToolExecutionContext | null) {
-  // no-op — context is now set via runWithToolContext / AsyncLocalStorage
 }
 
 export function getToolExecutionContext(): ToolExecutionContext | null {

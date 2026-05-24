@@ -1,3 +1,4 @@
+import { db } from "../../infrastructure/database/kysely.js"
 import type { FastifyInstance } from "fastify"
 import { z } from "zod"
 import {
@@ -75,7 +76,7 @@ async function requireSessionConversationPermission(
     return null
   }
 
-  const allowed = await authorizeAction({
+  const allowed = await authorizeAction(db, {
     subject: workspaceMemberSubject(workspaceMemberId),
     action,
     resourceId: session.conversation_id,

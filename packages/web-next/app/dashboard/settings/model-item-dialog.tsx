@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from "react"
 import {
+  MODEL_GROUP_GRANT_SCOPE,
   getDefaultModelBaseUrl,
   getDefaultModelEngineKind,
   getDefaultModelName,
@@ -174,7 +175,11 @@ export default function ModelItemDialog({
   }
 
   const handleSave = async () => {
-    if ((!workspaceId && scope === "workspace") || !displayName.trim()) return
+    if (
+      (!workspaceId && scope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE) ||
+      !displayName.trim()
+    )
+      return
     setSaving(true)
     try {
       if (modelConfigError) {
@@ -210,9 +215,9 @@ export default function ModelItemDialog({
         updateData.engineKind = engineKind
         updateData.maxTokens = parseInt(maxTokens)
 
-        if (scope === "platform") {
+        if (scope === MODEL_GROUP_GRANT_SCOPE.PLATFORM) {
           await api.updatePlatformModelItem(groupId, item.id, updateData)
-        } else if (scope === "workspace_member") {
+        } else if (scope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER) {
           await api.updateWorkspaceMemberModelItem(
             workspaceId!,
             groupId,
@@ -236,9 +241,9 @@ export default function ModelItemDialog({
           maxTokens: parseInt(maxTokens),
           extraConfig,
         }
-        if (scope === "platform") {
+        if (scope === MODEL_GROUP_GRANT_SCOPE.PLATFORM) {
           await api.addPlatformModelItem(groupId, payload)
-        } else if (scope === "workspace_member") {
+        } else if (scope === MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER) {
           await api.addWorkspaceMemberModelItem(workspaceId!, groupId, payload)
         } else {
           await api.addModelItem(workspaceId!, groupId, payload)

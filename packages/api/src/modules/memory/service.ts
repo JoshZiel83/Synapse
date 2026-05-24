@@ -19,7 +19,9 @@ import {
 } from "@synapse/shared"
 import { sql, type RawBuilder } from "kysely"
 import { v4 as uuidv4 } from "uuid"
+import { SUBJECT_KIND } from "@synapse/shared"
 import { transaction } from "../../infrastructure/database/index.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
   db,
   executeCompiledQuery,
@@ -634,10 +636,13 @@ async function assertConversationInWorkspace(
   workspaceId: string,
   conversationId: string
 ) {
+  // P1b: traverse via access_subjects to recover workspace_member / actor refs
+  // from the joined subject row.
   const row = await db
     .selectFrom("conversation_participants as cp")
-    .leftJoin("workspace_members as wm", "wm.id", "cp.workspace_member_id")
-    .leftJoin("actors as a", "a.id", "cp.actor_id")
+    .innerJoin("access_subjects as subj", "subj.id", "cp.subject_id")
+    .leftJoin("workspace_members as wm", "wm.id", "subj.workspace_member_id")
+    .leftJoin("actors as a", "a.id", "subj.actor_id")
     .select("cp.id")
     .where("cp.conversation_id", "=", conversationId)
     .where((eb) =>
@@ -657,11 +662,17 @@ async function assertActorInConversation(
   conversationId: string,
   actorId: string
 ) {
+  // P1b: filter by access_subjects FK via subject_id rather than the dropped
+  // polymorphic actor_id column.
+  const actorSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.ACTOR,
+    actorId,
+  })
   const row = await db
     .selectFrom("conversation_participants")
     .select("id")
     .where("conversation_id", "=", conversationId)
-    .where("actor_id", "=", actorId)
+    .where("subject_id", "=", actorSubjectId)
     .where("state", "=", "active")
     .limit(1)
     .executeTakeFirst()
@@ -1060,6 +1071,10 @@ async function resolveDirectUserPrivateContext(
     return null
   }
 
+  // P1b: direct_conversation_bindings now exposes participant_*_subject_id
+  // referencing access_subjects; JOIN access_subjects twice (one per
+  // participant) to recover the actor_id / workspace_member_id values this
+  // memory bridge needs.
   const row = await db
     .selectFrom("conversations as c")
     .innerJoin(
@@ -1067,13 +1082,23 @@ async function resolveDirectUserPrivateContext(
       "dcb.conversation_id",
       "c.id"
     )
+    .innerJoin(
+      "access_subjects as p1",
+      "p1.id",
+      "dcb.participant_one_subject_id"
+    )
+    .innerJoin(
+      "access_subjects as p2",
+      "p2.id",
+      "dcb.participant_two_subject_id"
+    )
     .select([
-      "dcb.participant_one_kind",
-      "dcb.participant_one_workspace_member_id",
-      "dcb.participant_one_actor_id",
-      "dcb.participant_two_kind",
-      "dcb.participant_two_workspace_member_id",
-      "dcb.participant_two_actor_id",
+      "p1.kind as participant_one_kind",
+      "p1.workspace_member_id as participant_one_workspace_member_id",
+      "p1.actor_id as participant_one_actor_id",
+      "p2.kind as participant_two_kind",
+      "p2.workspace_member_id as participant_two_workspace_member_id",
+      "p2.actor_id as participant_two_actor_id",
     ])
     .where("c.id", "=", params.conversationId)
     .where("c.kind", "=", "private")
@@ -1089,11 +1114,11 @@ async function resolveDirectUserPrivateContext(
   const participantTwoActorId =
     row.participant_two_kind === "actor" ? row.participant_two_actor_id : null
   const participantOneWorkspaceMemberId =
-    row.participant_one_kind === "member"
+    row.participant_one_kind === "workspace_member"
       ? row.participant_one_workspace_member_id
       : null
   const participantTwoWorkspaceMemberId =
-    row.participant_two_kind === "member"
+    row.participant_two_kind === "workspace_member"
       ? row.participant_two_workspace_member_id
       : null
 
@@ -1405,7 +1430,7 @@ async function buildSearchHits(params: {
 
     if (subject) {
       const allowedIds = new Set(
-        await filterAuthorizedPermissionResourceIds({
+        await filterAuthorizedPermissionResourceIds(db, {
           subject,
           resourceType: "memory_item",
           permission: params.permission,
@@ -1809,7 +1834,7 @@ export async function listMemories(
   const subject = resolveAccessSubject(input)
   if (subject && rows.length > 0) {
     const allowedIds = new Set(
-      await filterAuthorizedPermissionResourceIds({
+      await filterAuthorizedPermissionResourceIds(db, {
         subject,
         resourceType: "memory_item",
         permission: "read",

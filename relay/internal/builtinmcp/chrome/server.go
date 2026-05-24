@@ -86,7 +86,7 @@ func (s *Server) Start(ctx context.Context) error {
 	s.mu.Lock()
 	s.startCtx = childCtx
 	s.cancel = cancel
-	shouldActivate := s.isAuthorized(false)
+	shouldActivate := s.cfg.Enabled
 	s.mu.Unlock()
 
 	if !shouldActivate {
@@ -97,7 +97,7 @@ func (s *Server) Start(ctx context.Context) error {
 }
 
 func (s *Server) Initialize() error {
-	if !s.isAuthorized(false) {
+	if !s.cfg.Enabled {
 		return nil
 	}
 	return s.ensureReady(nil)
@@ -143,15 +143,8 @@ func (s *Server) Shutdown() {
 	}
 }
 
-func (s *Server) isAuthorized(serverAuthorized bool) bool {
-	return s.cfg.Enabled || (s.cfg.AllowServerAuthorization && serverAuthorized)
-}
-
 func (s *Server) denialResolution() string {
-	if s.cfg.AllowServerAuthorization {
-		return core.RelayAccessDenialResolutionServerGrant
-	}
-	return core.RelayAccessDenialResolutionLocalSetting
+	return core.RelayAccessDenialResolutionServerGrant
 }
 
 func browserActionForTool(toolName string) string {
@@ -204,18 +197,17 @@ func (s *Server) isAuthorizedForTool(
 	if s.cfg.Enabled {
 		return true
 	}
-	if !s.cfg.AllowServerAuthorization {
-		return false
-	}
 	action := browserActionForTool(toolName)
 	origin, host, registrableDomain := browserSiteForArgs(args)
-	return runtimeauth.MatchesBrowserPolicy(
-		runtimeauth.PoliciesForCapability(ctx, "browser"),
-		action,
-		origin,
-		host,
-		registrableDomain,
-	)
+	return runtimeauth.IsAuthorized(ctx, runtimeauth.AccessRequest{
+		Capability: "browser",
+		Browser: &runtimeauth.BrowserRequest{
+			Action:            action,
+			Origin:            origin,
+			Host:              host,
+			RegistrableDomain: registrableDomain,
+		},
+	})
 }
 
 func (s *Server) ensureReady(ctx context.Context) error {

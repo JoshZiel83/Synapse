@@ -3,42 +3,53 @@ import path from "node:path"
 
 const repoRoot = process.cwd()
 
-const auditedPaths = [
-  "packages/api/src/modules/relationship/controller.ts",
-  "packages/api/src/modules/remote-agents/controller.ts",
-  "packages/api/src/modules/chat/service.ts",
-  "packages/api/src/modules/chat/summary-view.ts",
-  "packages/api/src/modules/ai/index.ts",
-  "packages/api/src/modules/ai/context-compiler.ts",
-  "packages/api/src/modules/ai/inline-ref-resolver.ts",
-  "packages/web-next/app/dashboard/chat/member-utils.ts",
-  "packages/web-next/app/dashboard/chat/conversation-chat.tsx",
-  "packages/web-next/app/dashboard/chat/chat-participant-detail-dialog.tsx",
-  "packages/web-next/app/dashboard/chat/chat-participant-hover-card.tsx",
-  "packages/web-next/app/dashboard/chat/mobile-participant-picker-screen.tsx",
-  "packages/web-next/app/dashboard/chat/message-bubble.tsx",
-  "packages/web-next/app/dashboard/contacts/contact-hub-client.tsx",
-  "packages/web-next/app/dashboard/remote-agents/agents/[remoteAgentId]/page.tsx",
-  "packages/web-next/components/chat-composer.tsx",
-  "packages/web-next/app/dashboard/settings/model-group-list.tsx",
-  "packages/web-next/app/dashboard/settings/model-group-dialog.tsx",
-  "packages/web-next/app/dashboard/settings/model-group-detail.tsx",
-  "packages/web-next/app/dashboard/settings/model-group-browser.tsx",
-  "packages/web-next/app/dashboard/settings/model-settings-workbench.tsx",
-  "packages/mobile-app/src/lib/chat-data.ts",
-  "packages/mobile-app/app/contacts/[contactType]/[contactId].tsx",
-  "packages/mobile-app/app/contacts/discover.tsx",
-  "packages/mobile-app/app/contacts/requests.tsx",
-  "packages/mobile-app/app/search.tsx",
-  "packages/mobile-app/app/scan.tsx",
-  "packages/mobile-app/app/chat/[conversationId].tsx",
-  "packages/mobile-app/app/conversations/[conversationId]/details.tsx",
-  "packages/mobile-app/app/actors/select.tsx",
-  "packages/mobile-app/app/contacts/group/new.tsx",
-  "packages/mobile-app/src/components/chat-mention-picker-screen.tsx",
-  "packages/mobile-app/src/components/workspace-entity-picker-screen.tsx",
-  "packages/mobile-app/src/screens/tabs/contacts-tab-screen.tsx",
+// Whole-repo scan. The audited surface was previously a 34-file allow-list;
+// it now walks all .ts / .tsx sources under packages/{api,web-next,mobile-app}
+// + packages/shared so a literal added in a new module gets caught too.
+const scanRoots = [
+  "packages/api/src",
+  "packages/shared/src",
+  "packages/web-next/app",
+  "packages/web-next/components",
+  "packages/web-next/lib",
+  "packages/mobile-app/app",
+  "packages/mobile-app/src",
+  "packages/remote-agent-daemon/src",
 ]
+const skipDirectories = new Set([
+  "node_modules",
+  "dist",
+  ".next",
+  "generated",
+  "build",
+])
+const fileExtensions = new Set([".ts", ".tsx"])
+
+function walk(dir) {
+  if (!fs.existsSync(dir)) return []
+  const out = []
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (skipDirectories.has(entry.name)) continue
+    const full = path.join(dir, entry.name)
+    if (entry.isDirectory()) {
+      out.push(...walk(full))
+      continue
+    }
+    if (entry.isFile() && fileExtensions.has(path.extname(entry.name))) {
+      // Skip *.test.ts / *.test.tsx files — tests legitimately compare to
+      // raw literals via assert.equal(value, "actor"), etc.
+      if (entry.name.endsWith(".test.ts") || entry.name.endsWith(".test.tsx")) {
+        continue
+      }
+      out.push(full)
+    }
+  }
+  return out
+}
+
+const auditedPaths = scanRoots.flatMap((root) =>
+  walk(path.join(repoRoot, root)).map((p) => path.relative(repoRoot, p))
+)
 
 const checks = [
   {
@@ -146,5 +157,5 @@ if (findings.length > 0) {
 }
 
 console.log(
-  `Business enum audit passed for ${auditedPaths.length} first-wave files.`
+  `Business enum audit passed for ${auditedPaths.length} source files.`
 )

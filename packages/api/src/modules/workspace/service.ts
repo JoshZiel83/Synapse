@@ -13,12 +13,14 @@ import { getFileUrlById } from "../files/service.js"
 import {
   INVITE_TRUST_LEVELS,
   normalizeActorDocs,
+  RELATIONSHIP_ACCESS_POLICY,
   type ActorDoc,
   type ActorDocInput,
   type ActorRole,
   type WorkspaceChiefActorPreference,
 } from "@synapse/shared"
 import { seedWorkspaceCapabilityConversationTypePolicies } from "../capabilities/conversation-type-policies.js"
+import { setAccessPolicyOn } from "../access/default-access-policy.js"
 import type {
   WorkspaceAccessBindingsAccessKey,
   WorkspaceMembersTrustLevel,
@@ -410,6 +412,16 @@ export async function createWorkspace(input: CreateWorkspaceInput) {
       if (!actorRow) {
         throw new Error(`Failed to install actor ${template.actorName}`)
       }
+
+      // P2 contract: bootstrap actors are workspace-open by default — write
+      // the binding instead of relying on the legacy access_policy column.
+      await setAccessPolicyOn(runner, {
+        resourceType: "actor",
+        resourceId: String(actorRow.id),
+        workspaceId: String(workspace.id),
+        policy: RELATIONSHIP_ACCESS_POLICY.WORKSPACE_OPEN,
+        createdByWorkspaceMemberId: String(creatorMember.id),
+      })
 
       const actorVersionResult = await executeTakeFirst<{ id: string }>(
         runner,

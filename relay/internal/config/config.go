@@ -49,7 +49,6 @@ type NotificationConfig struct {
 }
 
 type SecurityConfig struct {
-	ServerAuthorizationEnabled bool `yaml:"server_authorization_enabled" json:"serverAuthorizationEnabled"`
 }
 
 type UpdateConfig struct {
@@ -202,9 +201,7 @@ func Clone(cfg *Config) *Config {
 		Notifications: NotificationConfig{
 			BackgroundEnabled: cfg.Notifications.BackgroundEnabled,
 		},
-		Security: SecurityConfig{
-			ServerAuthorizationEnabled: cfg.Security.ServerAuthorizationEnabled,
-		},
+		Security: SecurityConfig{},
 		Update: UpdateConfig{
 			Channel:          cfg.Update.Channel,
 			LastCheckedAt:    cfg.Update.LastCheckedAt,

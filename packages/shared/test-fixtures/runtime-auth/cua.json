@@ -1,0 +1,25 @@
+[
+  {
+    "description": "read grant matches read request",
+    "policies": [{ "capability": "cua", "cua": { "access": "read" } }],
+    "request": { "access": "read" },
+    "expected": true
+  },
+  {
+    "description": "write grant does not satisfy read request",
+    "policies": [{ "capability": "cua", "cua": { "access": "write" } }],
+    "request": { "access": "read" },
+    "expected": false
+  },
+  {
+    "description": "no cua policy denies",
+    "policies": [
+      {
+        "capability": "filesystem",
+        "filesystem": { "access": "read", "pathPrefixes": ["/tmp"] }
+      }
+    ],
+    "request": { "access": "read" },
+    "expected": false
+  }
+]

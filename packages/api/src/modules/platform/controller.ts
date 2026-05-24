@@ -1,8 +1,9 @@
+import { db } from "../../infrastructure/database/kysely.js"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import { z } from "zod"
 import { PLATFORM_ACCESS_KEYS } from "@synapse/shared/constants"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
-import { PLATFORM_RESOURCE_ID } from "../access/core.js"
+import { PLATFORM_RESOURCE_ID } from "../access/evaluator.js"
 import {
   grantPlatformAccess,
   listPlatformAccessBindings,
@@ -32,7 +33,7 @@ async function requirePlatformManagePermission(
 }
 
 async function canPlatformPermission(userId: string) {
-  return authorizeAction({
+  return authorizeAction(db, {
     subject: userSubject(userId),
     action: "platform.manage",
     resourceId: PLATFORM_RESOURCE_ID,

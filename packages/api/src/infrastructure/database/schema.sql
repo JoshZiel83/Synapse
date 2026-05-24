@@ -20,8 +20,8 @@ CREATE TYPE file_origin_family AS ENUM ('user_upload', 'actor_output', 'tool_out
 CREATE TYPE file_parse_run_status AS ENUM ('pending', 'running', 'succeeded', 'failed', 'skipped');
 CREATE TYPE file_parse_output_kind AS ENUM ('text', 'structured_json', 'derived_file');
 CREATE TYPE resource_access_bindings_status AS ENUM ('active', 'revoked');
-CREATE TYPE resource_access_bindings_target_type AS ENUM ('workspace', 'conversation', 'actor', 'actor_in_conversation');
-CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'plugin_installation', 'relay_capability', 'automation_event_source');
+CREATE TYPE resource_access_bindings_source AS ENUM ('manual', 'default_open', 'relay_auto', 'approval', 'system');
+CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'plugin_installation', 'relay_capability', 'automation_event_source', 'actor', 'remote_agent');
 CREATE TYPE realtime_event_outbox_status AS ENUM ('pending', 'processing', 'dispatched', 'failed');
 CREATE TYPE catalog_categories_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
 CREATE TYPE catalog_items_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
@@ -34,7 +34,6 @@ CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace
 CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
 CREATE TYPE actors_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
 CREATE TYPE relationship_target_type AS ENUM ('member', 'actor', 'remote_agent');
-CREATE TYPE actor_access_policy AS ENUM ('workspace_open', 'approval_required');
 CREATE TYPE remote_agents_runtime_kind AS ENUM ('claude_code', 'codex');
 CREATE TYPE remote_agent_machines_trust_status AS ENUM ('pending', 'active', 'revoked', 'blocked');
 CREATE TYPE remote_agent_machines_lifecycle_state AS ENUM ('online', 'offline');
@@ -52,13 +51,23 @@ CREATE TYPE actor_version_docs_visibility AS ENUM ('always', 'direct_only', 'mul
 CREATE TYPE actor_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'follow_upstream', 'detached');
 CREATE TYPE model_groups_owner_type AS ENUM ('platform', 'workspace', 'workspace_member');
 CREATE TYPE model_groups_routing_strategy AS ENUM ('weighted_random', 'round_robin', 'priority_failover');
-CREATE TYPE model_group_grants_grant_scope AS ENUM ('platform', 'workspace', 'workspace_member', 'actor');
 CREATE TYPE model_group_grants_status AS ENUM ('active', 'revoked');
 CREATE TYPE sessions_channel_type AS ENUM ('web', 'api', 'bridge');
 CREATE TYPE sessions_status AS ENUM ('idle', 'queued', 'running', 'blocked', 'closed');
 CREATE TYPE sessions_collaboration_mode AS ENUM ('default', 'plan_drafting', 'plan_awaiting_approval');
 CREATE TYPE conversation_participants_kind AS ENUM ('workspace_member', 'actor', 'remote_agent', 'external', 'system');
 CREATE TYPE conversation_participants_state AS ENUM ('active', 'left', 'removed');
+CREATE TYPE subject_kind AS ENUM (
+  'workspace',
+  'workspace_member',
+  'actor',
+  'remote_agent',
+  'conversation',
+  'conversation_actor_context',
+  'user',
+  'external',
+  'system'
+);
 CREATE TYPE chat_client_instances_status AS ENUM ('active', 'revoked');
 CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin');
 CREATE TYPE transport_accounts_owner_scope AS ENUM ('workspace', 'workspace_member');
@@ -133,7 +142,6 @@ CREATE TYPE skill_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'foll
 CREATE TYPE skill_mirror_sources_source_type AS ENUM ('github', 'clawhub');
 CREATE TYPE skill_mirror_sources_refresh_mode AS ENUM ('manual');
 CREATE TYPE skill_mirror_sources_sync_status AS ENUM ('pending', 'synced', 'error');
-CREATE TYPE plugin_installations_attachment_target_type AS ENUM ('workspace', 'conversation', 'actor', 'workspace_member');
 CREATE TYPE plugin_installations_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
 CREATE TYPE plugin_installations_status AS ENUM ('active', 'disabled', 'error', 'archived');
 CREATE TYPE automation_integration_bindings_provider AS ENUM ('github', 'gitlab');
@@ -275,14 +283,18 @@ CREATE TABLE workspace_access_bindings (
 );
 
 CREATE TABLE workspace_capability_conversation_type_policies (
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  -- P1b: workspace_id collapsed into subject_id (always kind='workspace') so
+  -- this table participates in the same subject registry as other access-side
+  -- tables. Deferred FK to access_subjects is added after access_subjects is
+  -- defined.
+  subject_id UUID NOT NULL,
   resource_family VARCHAR(60) NOT NULL
     CHECK (resource_family IN ('plugin_installation', 'installed_skill', 'relay_capability')),
   default_conversation_type_mask INT NOT NULL
     CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 31),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  PRIMARY KEY (workspace_id, resource_family)
+  PRIMARY KEY (subject_id, resource_family)
 );
 
 CREATE TABLE workspace_invites (
@@ -836,7 +848,10 @@ CREATE TABLE actors (
   parent_id UUID REFERENCES actors(id) ON DELETE SET NULL,
   can_represent_user BOOLEAN NOT NULL DEFAULT FALSE,
   specialties TEXT[] DEFAULT '{}',
-  access_policy actor_access_policy NOT NULL DEFAULT 'workspace_open',
+  -- P2: `access_policy` column has been removed. Authorization intent is now
+  -- represented by the existence of a workspace-scoped binding in
+  -- `resource_access_bindings` with `resource_type='actor'`, `source='default_open'`.
+  -- See packages/api/src/modules/relationship/service.ts for the lifecycle.
   config JSONB DEFAULT '{}',
   current_version INT NOT NULL DEFAULT 1,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -859,7 +874,7 @@ CREATE TABLE remote_agents (
   runtime_kind remote_agents_runtime_kind NOT NULL,
   avatar_file_id UUID REFERENCES files(id) ON DELETE SET NULL,
   avatar_emoji VARCHAR(32),
-  access_policy actor_access_policy NOT NULL DEFAULT 'workspace_open',
+  -- P2: see actors.access_policy comment above.
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   is_public_shared BOOLEAN NOT NULL DEFAULT FALSE,
   metadata JSONB NOT NULL DEFAULT '{}',
@@ -996,10 +1011,9 @@ CREATE INDEX idx_remote_agent_group_interaction_grants_workspace_member
 CREATE TABLE workspace_relationship_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  subject_type relationship_target_type NOT NULL,
-  subject_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  subject_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  subject_remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
+  -- P1b: subject_type + 3 nullable FKs collapsed into a single subject_id FK
+  -- into access_subjects. Deferred FK applied below.
+  subject_id UUID NOT NULL,
   identity_id VARCHAR(32) NOT NULL UNIQUE
     DEFAULT lower('id_' || substr(replace(uuid_generate_v4()::text, '-', ''), 1, 12)),
   identity_search_enabled BOOLEAN NOT NULL DEFAULT FALSE,
@@ -1007,23 +1021,13 @@ CREATE TABLE workspace_relationship_profiles (
   qr_token VARCHAR(128) NOT NULL UNIQUE,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (
-    (subject_type = 'member' AND subject_workspace_member_id IS NOT NULL AND subject_actor_id IS NULL AND subject_remote_agent_id IS NULL) OR
-    (subject_type = 'actor' AND subject_actor_id IS NOT NULL AND subject_workspace_member_id IS NULL AND subject_remote_agent_id IS NULL) OR
-    (subject_type = 'remote_agent' AND subject_remote_agent_id IS NOT NULL AND subject_workspace_member_id IS NULL AND subject_actor_id IS NULL)
-  )
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX uq_workspace_relationship_profiles_member
-  ON workspace_relationship_profiles(workspace_id, subject_workspace_member_id)
-  WHERE subject_type = 'member' AND subject_workspace_member_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_workspace_relationship_profiles_actor
-  ON workspace_relationship_profiles(workspace_id, subject_actor_id)
-  WHERE subject_type = 'actor' AND subject_actor_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_workspace_relationship_profiles_remote_agent
-  ON workspace_relationship_profiles(workspace_id, subject_remote_agent_id)
-  WHERE subject_type = 'remote_agent' AND subject_remote_agent_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_workspace_relationship_profiles_subject
+  ON workspace_relationship_profiles(workspace_id, subject_id);
+CREATE INDEX idx_workspace_relationship_profiles_subject
+  ON workspace_relationship_profiles(subject_id);
 CREATE INDEX idx_workspace_relationship_profiles_identity_lookup
   ON workspace_relationship_profiles(identity_id)
   WHERE identity_search_enabled = TRUE;
@@ -1031,50 +1035,22 @@ CREATE INDEX idx_workspace_relationship_profiles_identity_lookup
 CREATE TABLE workspace_friend_requests (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   requester_workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
-  target_subject_type relationship_target_type NOT NULL,
-  target_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  target_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  target_remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
+  -- P1b: target_subject_type + 3 nullable FKs collapsed into a single
+  -- target_subject_id FK into access_subjects. Deferred FK below.
+  target_subject_id UUID NOT NULL,
   requested_via_profile_id UUID REFERENCES workspace_relationship_profiles(id) ON DELETE SET NULL,
   status relationship_request_status NOT NULL DEFAULT 'pending',
   resolved_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   resolved_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (
-    (target_subject_type = 'member' AND target_workspace_member_id IS NOT NULL AND target_actor_id IS NULL AND target_remote_agent_id IS NULL) OR
-    (target_subject_type = 'actor' AND target_actor_id IS NOT NULL AND target_workspace_member_id IS NULL AND target_remote_agent_id IS NULL) OR
-    (target_subject_type = 'remote_agent' AND target_remote_agent_id IS NOT NULL AND target_workspace_member_id IS NULL AND target_actor_id IS NULL)
-  )
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX uq_workspace_friend_requests_pending_member
-  ON workspace_friend_requests(
-    requester_workspace_member_id,
-    target_workspace_member_id
-  )
-  WHERE status = 'pending' AND target_subject_type = 'member' AND target_workspace_member_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_workspace_friend_requests_pending_actor
-  ON workspace_friend_requests(
-    requester_workspace_member_id,
-    target_actor_id
-  )
-  WHERE status = 'pending' AND target_subject_type = 'actor' AND target_actor_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_workspace_friend_requests_pending_remote_agent
-  ON workspace_friend_requests(
-    requester_workspace_member_id,
-    target_remote_agent_id
-  )
-  WHERE status = 'pending' AND target_subject_type = 'remote_agent' AND target_remote_agent_id IS NOT NULL;
-CREATE INDEX idx_workspace_friend_requests_target_member
-  ON workspace_friend_requests(target_workspace_member_id, created_at DESC)
-  WHERE target_workspace_member_id IS NOT NULL;
-CREATE INDEX idx_workspace_friend_requests_target_actor
-  ON workspace_friend_requests(target_actor_id, created_at DESC)
-  WHERE target_actor_id IS NOT NULL;
-CREATE INDEX idx_workspace_friend_requests_target_remote_agent
-  ON workspace_friend_requests(target_remote_agent_id, created_at DESC)
-  WHERE target_remote_agent_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_workspace_friend_requests_pending_target
+  ON workspace_friend_requests(requester_workspace_member_id, target_subject_id)
+  WHERE status = 'pending';
+CREATE INDEX idx_workspace_friend_requests_target_subject
+  ON workspace_friend_requests(target_subject_id, created_at DESC);
 CREATE INDEX idx_workspace_friend_requests_requester
   ON workspace_friend_requests(requester_workspace_member_id, created_at DESC);
 
@@ -1082,36 +1058,32 @@ CREATE TABLE workspace_friend_entries (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   owner_workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
-  peer_type relationship_target_type NOT NULL,
-  peer_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  peer_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  peer_remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
+  -- P1b: peer_type + 3 nullable polymorphic FKs collapsed into a single
+  -- peer_subject_id FK into access_subjects. Peer kind is recoverable from
+  -- the joined subject's `kind` (workspace_member / actor / remote_agent).
+  -- Deferred FK applied below in the post-access_subjects ALTER section.
+  peer_subject_id UUID NOT NULL,
   source_request_id UUID REFERENCES workspace_friend_requests(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (
-    (peer_type = 'member' AND peer_workspace_member_id IS NOT NULL AND peer_actor_id IS NULL AND peer_remote_agent_id IS NULL) OR
-    (peer_type = 'actor' AND peer_actor_id IS NOT NULL AND peer_workspace_member_id IS NULL AND peer_remote_agent_id IS NULL) OR
-    (peer_type = 'remote_agent' AND peer_remote_agent_id IS NOT NULL AND peer_workspace_member_id IS NULL AND peer_actor_id IS NULL)
-  )
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX uq_workspace_friend_entries_member
-  ON workspace_friend_entries(workspace_id, owner_workspace_member_id, peer_workspace_member_id)
-  WHERE peer_type = 'member' AND peer_workspace_member_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_workspace_friend_entries_actor
-  ON workspace_friend_entries(workspace_id, owner_workspace_member_id, peer_actor_id)
-  WHERE peer_type = 'actor' AND peer_actor_id IS NOT NULL;
-CREATE UNIQUE INDEX uq_workspace_friend_entries_remote_agent
-  ON workspace_friend_entries(workspace_id, owner_workspace_member_id, peer_remote_agent_id)
-  WHERE peer_type = 'remote_agent' AND peer_remote_agent_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_workspace_friend_entries_peer
+  ON workspace_friend_entries(workspace_id, owner_workspace_member_id, peer_subject_id);
 CREATE INDEX idx_workspace_friend_entries_owner
   ON workspace_friend_entries(workspace_id, owner_workspace_member_id, created_at DESC);
+CREATE INDEX idx_workspace_friend_entries_peer_subject
+  ON workspace_friend_entries(peer_subject_id);
 
-CREATE TABLE actor_access_requests (
+-- P2 / P1b: actor_access_requests and remote_agent_access_requests have been
+-- merged into a single entity_access_requests table. The target entity is
+-- expressed via subject_id into access_subjects (kind=actor or remote_agent),
+-- which removes the two-table duplication and lets a single endpoint handle
+-- both flows. Deferred FK applied later in the file.
+CREATE TABLE entity_access_requests (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
+  target_subject_id UUID NOT NULL,
   requester_workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
   status relationship_request_status NOT NULL DEFAULT 'pending',
   resolved_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
@@ -1120,83 +1092,30 @@ CREATE TABLE actor_access_requests (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX uq_actor_access_requests_pending
-  ON actor_access_requests(workspace_id, actor_id, requester_workspace_member_id)
+CREATE UNIQUE INDEX uq_entity_access_requests_pending
+  ON entity_access_requests(workspace_id, target_subject_id, requester_workspace_member_id)
   WHERE status = 'pending';
-CREATE INDEX idx_actor_access_requests_actor
-  ON actor_access_requests(workspace_id, actor_id, created_at DESC);
-CREATE INDEX idx_actor_access_requests_requester
-  ON actor_access_requests(workspace_id, requester_workspace_member_id, created_at DESC);
-
-CREATE TABLE remote_agent_access_requests (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  remote_agent_id UUID NOT NULL REFERENCES remote_agents(id) ON DELETE CASCADE,
-  requester_workspace_member_id UUID NOT NULL REFERENCES workspace_members(id) ON DELETE CASCADE,
-  status relationship_request_status NOT NULL DEFAULT 'pending',
-  resolved_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  resolved_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE UNIQUE INDEX uq_remote_agent_access_requests_pending
-  ON remote_agent_access_requests(workspace_id, remote_agent_id, requester_workspace_member_id)
-  WHERE status = 'pending';
-CREATE INDEX idx_remote_agent_access_requests_remote_agent
-  ON remote_agent_access_requests(workspace_id, remote_agent_id, created_at DESC);
-CREATE INDEX idx_remote_agent_access_requests_requester
-  ON remote_agent_access_requests(workspace_id, requester_workspace_member_id, created_at DESC);
+CREATE INDEX idx_entity_access_requests_target
+  ON entity_access_requests(workspace_id, target_subject_id, created_at DESC);
+CREATE INDEX idx_entity_access_requests_requester
+  ON entity_access_requests(workspace_id, requester_workspace_member_id, created_at DESC);
 
 CREATE TABLE direct_conversation_bindings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL UNIQUE REFERENCES conversations(id) ON DELETE CASCADE,
-  participant_one_kind relationship_target_type NOT NULL,
-  participant_one_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  participant_one_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  participant_one_remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
-  participant_two_kind relationship_target_type NOT NULL,
-  participant_two_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  participant_two_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  participant_two_remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (
-    (participant_one_kind = 'member' AND participant_one_workspace_member_id IS NOT NULL AND participant_one_actor_id IS NULL AND participant_one_remote_agent_id IS NULL) OR
-    (participant_one_kind = 'actor' AND participant_one_workspace_member_id IS NULL AND participant_one_actor_id IS NOT NULL AND participant_one_remote_agent_id IS NULL) OR
-    (participant_one_kind = 'remote_agent' AND participant_one_workspace_member_id IS NULL AND participant_one_actor_id IS NULL AND participant_one_remote_agent_id IS NOT NULL)
-  ),
-  CHECK (
-    (participant_two_kind = 'member' AND participant_two_workspace_member_id IS NOT NULL AND participant_two_actor_id IS NULL AND participant_two_remote_agent_id IS NULL) OR
-    (participant_two_kind = 'actor' AND participant_two_workspace_member_id IS NULL AND participant_two_actor_id IS NOT NULL AND participant_two_remote_agent_id IS NULL) OR
-    (participant_two_kind = 'remote_agent' AND participant_two_workspace_member_id IS NULL AND participant_two_actor_id IS NULL AND participant_two_remote_agent_id IS NOT NULL)
-  )
+  -- P1b: participant_*_kind + 3 nullable polymorphic FKs collapsed into a
+  -- single subject_id FK per participant (deferred ALTER below).
+  participant_one_subject_id UUID NOT NULL,
+  participant_two_subject_id UUID NOT NULL,
+  created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE UNIQUE INDEX uq_direct_conversation_bindings_pair
-  ON direct_conversation_bindings(
-    participant_one_kind,
-    COALESCE(participant_one_workspace_member_id, '00000000-0000-0000-0000-000000000000'::uuid),
-    COALESCE(participant_one_actor_id, '00000000-0000-0000-0000-000000000000'::uuid),
-    COALESCE(participant_one_remote_agent_id, '00000000-0000-0000-0000-000000000000'::uuid),
-    participant_two_kind,
-    COALESCE(participant_two_workspace_member_id, '00000000-0000-0000-0000-000000000000'::uuid),
-    COALESCE(participant_two_actor_id, '00000000-0000-0000-0000-000000000000'::uuid),
-    COALESCE(participant_two_remote_agent_id, '00000000-0000-0000-0000-000000000000'::uuid)
-  );
+  ON direct_conversation_bindings(participant_one_subject_id, participant_two_subject_id);
 CREATE INDEX idx_direct_conversation_bindings_participant_one
-  ON direct_conversation_bindings(
-    participant_one_kind,
-    participant_one_workspace_member_id,
-    participant_one_actor_id,
-    participant_one_remote_agent_id
-  );
+  ON direct_conversation_bindings(participant_one_subject_id);
 CREATE INDEX idx_direct_conversation_bindings_participant_two
-  ON direct_conversation_bindings(
-    participant_two_kind,
-    participant_two_workspace_member_id,
-    participant_two_actor_id,
-    participant_two_remote_agent_id
-  );
+  ON direct_conversation_bindings(participant_two_subject_id);
 
 CREATE TABLE workspace_member_preferences (
   workspace_member_id UUID PRIMARY KEY REFERENCES workspace_members(id) ON DELETE CASCADE,
@@ -1325,27 +1244,28 @@ ALTER TABLE model_profiles ADD CONSTRAINT fk_model_profiles_current_revision
 CREATE TABLE model_group_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   group_id UUID NOT NULL REFERENCES model_groups(id) ON DELETE CASCADE,
-  grant_scope model_group_grants_grant_scope NOT NULL,
-  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  -- P1b: polymorphic (grant_scope + 3 nullable FKs) collapsed into a single
+  -- subject_id FK into access_subjects. The legacy `grant_scope` enum
+  -- (platform/workspace/workspace_member/actor) is recoverable from the
+  -- subject's `kind` (system/workspace/workspace_member/actor respectively).
+  -- The FK constraint to access_subjects is added after the access_subjects
+  -- table is defined later in this file (search "ALTER TABLE model_group_grants").
+  subject_id UUID NOT NULL,
   status model_group_grants_status NOT NULL DEFAULT 'active',
   granted_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   reason TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  revoked_at TIMESTAMPTZ,
-  CONSTRAINT chk_model_group_grants_target CHECK (
-    (grant_scope = 'platform' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL) OR
-    (grant_scope = 'workspace' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL) OR
-    (grant_scope = 'workspace_member' AND workspace_id IS NULL AND workspace_member_id IS NOT NULL AND actor_id IS NULL) OR
-    (grant_scope = 'actor' AND workspace_id IS NOT NULL AND actor_id IS NOT NULL AND workspace_member_id IS NULL)
-  )
+  revoked_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_model_group_grants_group ON model_group_grants(group_id, created_at DESC);
-CREATE INDEX idx_model_group_grants_workspace ON model_group_grants(workspace_id, created_at DESC) WHERE workspace_id IS NOT NULL;
-CREATE INDEX idx_model_group_grants_actor ON model_group_grants(actor_id, created_at DESC) WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_model_group_grants_workspace_member ON model_group_grants(workspace_member_id, created_at DESC) WHERE workspace_member_id IS NOT NULL;
+CREATE INDEX idx_model_group_grants_subject ON model_group_grants(subject_id, created_at DESC);
+-- P1b: prevent concurrent inserts from both writing a duplicate active grant
+-- between the check in ensureNoDuplicateActiveGrant and the subsequent INSERT.
+-- Limited to status='active' so revoked rows don't block new grants.
+CREATE UNIQUE INDEX uq_model_group_grants_active_subject
+  ON model_group_grants(group_id, subject_id)
+  WHERE status = 'active';
 
 CREATE TABLE model_group_profiles (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1429,6 +1349,111 @@ CREATE INDEX idx_conversation_actor_contexts_actor
 CREATE UNIQUE INDEX uq_conversation_actor_contexts_session
   ON conversation_actor_contexts(session_id)
   WHERE session_id IS NOT NULL;
+
+-- ============ access_subjects: unified polymorphic subject registry ============
+-- Replaces the historical pattern of "kind + N nullable FK columns + CHECK" that
+-- was duplicated across 10+ tables. Authorization/relationship/binding tables
+-- now hold a single `subject_id` FK into this registry. See
+-- `packages/shared/src/access/subject.ts` for the application-layer `SubjectRef`.
+
+CREATE TABLE access_subjects (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  kind subject_kind NOT NULL,
+  workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
+  workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
+  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
+  conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
+  user_id UUID REFERENCES users(id) ON DELETE CASCADE,
+  external_identity_key VARCHAR(255),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  -- workspace_id is REQUIRED for kinds that are unambiguously workspace-bound
+  -- (workspace, workspace_member, actor, remote_agent). It is denormalized from
+  -- the underlying table by `upsertAccessSubject` via a SELECT lookup so that
+  -- workspace-scoped queries on access_subjects can filter without a JOIN.
+  -- For conversation / conversation_actor_context it is best-effort (external
+  -- conversations have no owning workspace). `user` / `external` / `system`
+  -- are platform-wide subjects and intentionally have no workspace.
+  CONSTRAINT chk_access_subjects_payload CHECK (
+    (kind = 'workspace' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'workspace_member' AND workspace_id IS NOT NULL AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'actor' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'remote_agent' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'conversation' AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NOT NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'conversation_actor_context' AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NOT NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'user' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NOT NULL AND external_identity_key IS NULL) OR
+    (kind = 'external' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NOT NULL) OR
+    (kind = 'system' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL)
+  )
+);
+
+-- Partial-unique indexes let upsertAccessSubject reuse the same row for the
+-- same logical subject (one row per actor, one per member, etc.).
+CREATE UNIQUE INDEX uq_access_subjects_workspace
+  ON access_subjects(workspace_id) WHERE kind = 'workspace';
+CREATE UNIQUE INDEX uq_access_subjects_workspace_member
+  ON access_subjects(workspace_member_id) WHERE kind = 'workspace_member';
+CREATE UNIQUE INDEX uq_access_subjects_actor
+  ON access_subjects(actor_id) WHERE kind = 'actor';
+CREATE UNIQUE INDEX uq_access_subjects_remote_agent
+  ON access_subjects(remote_agent_id) WHERE kind = 'remote_agent';
+CREATE UNIQUE INDEX uq_access_subjects_conversation
+  ON access_subjects(conversation_id) WHERE kind = 'conversation';
+CREATE UNIQUE INDEX uq_access_subjects_conversation_actor_context
+  ON access_subjects(conversation_actor_context_id) WHERE kind = 'conversation_actor_context';
+CREATE UNIQUE INDEX uq_access_subjects_user
+  ON access_subjects(user_id) WHERE kind = 'user';
+CREATE UNIQUE INDEX uq_access_subjects_external
+  ON access_subjects(external_identity_key) WHERE kind = 'external';
+CREATE UNIQUE INDEX uq_access_subjects_system
+  ON access_subjects((1)) WHERE kind = 'system';
+
+CREATE INDEX idx_access_subjects_kind
+  ON access_subjects(kind, created_at DESC);
+
+-- P1b: deferred FK from model_group_grants.subject_id (defined earlier in this
+-- file, before access_subjects exists). Adding the constraint here keeps the
+-- single-pass schema.sql apply-order working.
+ALTER TABLE model_group_grants
+  ADD CONSTRAINT fk_model_group_grants_subject
+  FOREIGN KEY (subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
+
+-- P1b: deferred FK from workspace_friend_entries.peer_subject_id.
+ALTER TABLE workspace_friend_entries
+  ADD CONSTRAINT fk_workspace_friend_entries_peer_subject
+  FOREIGN KEY (peer_subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
+
+-- P1b: deferred FK from workspace_friend_requests.target_subject_id.
+ALTER TABLE workspace_friend_requests
+  ADD CONSTRAINT fk_workspace_friend_requests_target_subject
+  FOREIGN KEY (target_subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
+
+-- P1b: deferred FK from workspace_relationship_profiles.subject_id.
+ALTER TABLE workspace_relationship_profiles
+  ADD CONSTRAINT fk_workspace_relationship_profiles_subject
+  FOREIGN KEY (subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
+
+-- P1b: deferred FK from direct_conversation_bindings's two subject columns.
+ALTER TABLE direct_conversation_bindings
+  ADD CONSTRAINT fk_direct_conversation_bindings_participant_one_subject
+  FOREIGN KEY (participant_one_subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
+ALTER TABLE direct_conversation_bindings
+  ADD CONSTRAINT fk_direct_conversation_bindings_participant_two_subject
+  FOREIGN KEY (participant_two_subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
+
+-- P2/P1b: deferred FK from entity_access_requests.target_subject_id (the
+-- merged actor/remote_agent target).
+ALTER TABLE entity_access_requests
+  ADD CONSTRAINT fk_entity_access_requests_target_subject
+  FOREIGN KEY (target_subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
+
+-- P1b: deferred FK from workspace_capability_conversation_type_policies.subject_id
+-- (always points to a kind='workspace' access_subjects row).
+ALTER TABLE workspace_capability_conversation_type_policies
+  ADD CONSTRAINT fk_workspace_capability_conversation_type_policies_subject
+  FOREIGN KEY (subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
+
 
 CREATE TABLE transport_accounts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -1589,45 +1614,37 @@ CREATE INDEX idx_conversation_item_parts_item ON conversation_item_parts(item_id
 CREATE TABLE conversation_participants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  -- P1b: participant_kind is a denormalized discriminator that mirrors the
+  -- subject's kind. Workspace_member / actor / remote_agent participants
+  -- carry the corresponding access_subjects row (kind matches); external /
+  -- system participants carry an access_subjects row of kind='external' with
+  -- a per-participant external_identity_key of the form 'participant:<uuid>'
+  -- so every participant has a real subject_id (no NULL escape hatch).
   participant_kind conversation_participants_kind NOT NULL,
-  workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
+  subject_id UUID NOT NULL,
   actor_join_version_id UUID REFERENCES actor_versions(id) ON DELETE SET NULL,
   display_name VARCHAR(255),
   role_key VARCHAR(64) NOT NULL DEFAULT 'member',
   state conversation_participants_state NOT NULL DEFAULT 'active',
   metadata JSONB NOT NULL DEFAULT '{}',
   joined_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  left_at TIMESTAMPTZ,
-  CHECK (
-    (participant_kind = 'workspace_member' AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (participant_kind = 'actor' AND actor_id IS NOT NULL AND workspace_member_id IS NULL AND remote_agent_id IS NULL) OR
-    (participant_kind = 'remote_agent' AND remote_agent_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL) OR
-    (participant_kind IN ('external', 'system') AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL)
-  )
+  left_at TIMESTAMPTZ
 );
 
 CREATE INDEX idx_conversation_participants_conversation
   ON conversation_participants(conversation_id, state, joined_at DESC);
-CREATE INDEX idx_conversation_participants_workspace_member
-  ON conversation_participants(workspace_member_id, joined_at DESC)
-  WHERE workspace_member_id IS NOT NULL;
-CREATE INDEX idx_conversation_participants_actor
-  ON conversation_participants(actor_id, joined_at DESC)
-  WHERE actor_id IS NOT NULL;
-CREATE INDEX idx_conversation_participants_remote_agent
-  ON conversation_participants(remote_agent_id, joined_at DESC)
-  WHERE remote_agent_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_conversation_participants_unique_workspace_member
-  ON conversation_participants(conversation_id, workspace_member_id)
-  WHERE workspace_member_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_conversation_participants_unique_actor
-  ON conversation_participants(conversation_id, actor_id)
-  WHERE actor_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_conversation_participants_unique_remote_agent
-  ON conversation_participants(conversation_id, remote_agent_id)
-  WHERE remote_agent_id IS NOT NULL;
+CREATE INDEX idx_conversation_participants_subject
+  ON conversation_participants(subject_id, joined_at DESC);
+CREATE UNIQUE INDEX idx_conversation_participants_unique_subject
+  ON conversation_participants(conversation_id, subject_id);
+
+-- P1b: deferred FK from conversation_participants.subject_id. Declared here
+-- rather than inline because access_subjects is defined before this table; this
+-- placement keeps the schema topologically valid without requiring the
+-- registry to live in the conversation cluster.
+ALTER TABLE conversation_participants
+  ADD CONSTRAINT fk_conversation_participants_subject
+  FOREIGN KEY (subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
 
 CREATE TABLE conversation_item_mentions (
   item_id UUID NOT NULL REFERENCES conversation_items(id) ON DELETE CASCADE,
@@ -2867,10 +2884,13 @@ CREATE TABLE plugin_installations (
   catalog_item_id UUID NOT NULL REFERENCES catalog_items(id) ON DELETE RESTRICT,
   catalog_version_id UUID NOT NULL REFERENCES catalog_versions(id) ON DELETE RESTRICT,
   display_name VARCHAR(255) NOT NULL,
-  attachment_target_type plugin_installations_attachment_target_type NOT NULL,
-  attachment_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  attachment_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  attachment_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
+  -- P1b: polymorphic attachment (attachment_target_type + 3 nullable FKs)
+  -- collapsed into a single attachment_subject_id FK into access_subjects.
+  -- Mapping: workspace → SUBJECT_KIND.WORKSPACE; conversation → CONVERSATION;
+  -- actor → ACTOR; workspace_member → WORKSPACE_MEMBER. The FK is added by
+  -- a deferred ALTER TABLE after access_subjects exists (search
+  -- "ALTER TABLE plugin_installations").
+  attachment_subject_id UUID NOT NULL,
   config_data JSONB NOT NULL DEFAULT '{}',
   approved_runtime_permissions TEXT[] DEFAULT '{}',
   reuse_scope plugin_installations_reuse_scope NOT NULL DEFAULT 'conversation',
@@ -2879,17 +2899,19 @@ CREATE TABLE plugin_installations (
   status plugin_installations_status NOT NULL DEFAULT 'active',
   installed_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (
-    (attachment_target_type = 'workspace' AND attachment_actor_id IS NULL AND attachment_conversation_id IS NULL AND attachment_workspace_member_id IS NULL) OR
-    (attachment_target_type = 'conversation' AND attachment_conversation_id IS NOT NULL AND attachment_actor_id IS NULL AND attachment_workspace_member_id IS NULL) OR
-    (attachment_target_type = 'actor' AND attachment_actor_id IS NOT NULL AND attachment_conversation_id IS NULL AND attachment_workspace_member_id IS NULL) OR
-    (attachment_target_type = 'workspace_member' AND attachment_workspace_member_id IS NOT NULL AND attachment_actor_id IS NULL AND attachment_conversation_id IS NULL)
-  )
+  updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 CREATE INDEX idx_plugin_installations_workspace ON plugin_installations(workspace_id, created_at DESC);
 CREATE INDEX idx_plugin_installations_item ON plugin_installations(catalog_item_id, created_at DESC);
+CREATE INDEX idx_plugin_installations_attachment_subject
+  ON plugin_installations(attachment_subject_id);
+-- P1b: deferred FK from plugin_installations.attachment_subject_id —
+-- access_subjects is created earlier in this file so a forward reference is
+-- safe; we add the FK here (after plugin_installations exists) for clarity.
+ALTER TABLE plugin_installations
+  ADD CONSTRAINT fk_plugin_installations_attachment_subject
+  FOREIGN KEY (attachment_subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
 
 CREATE TABLE automation_integration_bindings (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3112,29 +3134,28 @@ CREATE TABLE resource_access_bindings (
   plugin_installation_id UUID REFERENCES plugin_installations(id) ON DELETE CASCADE,
   relay_capability_id UUID REFERENCES relay_capabilities(id) ON DELETE CASCADE,
   automation_event_source_id UUID REFERENCES automation_event_sources(id) ON DELETE CASCADE,
-  target_type resource_access_bindings_target_type NOT NULL,
-  subject_workspace_id UUID REFERENCES workspaces(id) ON DELETE CASCADE,
-  subject_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  subject_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  subject_conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
+  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
+  -- P1b contract: `subject_id` is the sole subject reference. Legacy polymorphic
+  -- columns (target_type + subject_*_id) have been dropped. Readers JOIN
+  -- access_subjects via subject_id and project equivalent fields when needed
+  -- (see access/binding-storage.ts `accessSubjectRowToGrantTarget`).
+  subject_id UUID NOT NULL REFERENCES access_subjects(id) ON DELETE CASCADE,
   conversation_type_mask_override INT
     CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
   status resource_access_bindings_status NOT NULL DEFAULT 'active',
+  source resource_access_bindings_source NOT NULL DEFAULT 'manual',
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   reason TEXT,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
   CONSTRAINT chk_resource_access_bindings_resource CHECK (
-    (resource_type = 'installed_skill' AND installed_skill_id IS NOT NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NULL) OR
-    (resource_type = 'plugin_installation' AND installed_skill_id IS NULL AND plugin_installation_id IS NOT NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NULL) OR
-    (resource_type = 'relay_capability' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NOT NULL AND automation_event_source_id IS NULL) OR
-    (resource_type = 'automation_event_source' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NOT NULL)
-  ),
-  CONSTRAINT chk_resource_access_bindings_target CHECK (
-    (target_type = 'workspace' AND subject_workspace_id IS NOT NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL AND subject_conversation_actor_context_id IS NULL) OR
-    (target_type = 'conversation' AND subject_workspace_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NOT NULL AND subject_conversation_actor_context_id IS NULL) OR
-    (target_type = 'actor' AND subject_workspace_id IS NULL AND subject_actor_id IS NOT NULL AND subject_conversation_id IS NULL AND subject_conversation_actor_context_id IS NULL) OR
-    (target_type = 'actor_in_conversation' AND subject_workspace_id IS NULL AND subject_actor_id IS NULL AND subject_conversation_id IS NULL AND subject_conversation_actor_context_id IS NOT NULL)
+    (resource_type = 'installed_skill' AND installed_skill_id IS NOT NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
+    (resource_type = 'plugin_installation' AND installed_skill_id IS NULL AND plugin_installation_id IS NOT NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
+    (resource_type = 'relay_capability' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NOT NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
+    (resource_type = 'automation_event_source' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
+    (resource_type = 'actor' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL) OR
+    (resource_type = 'remote_agent' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL)
   )
 );
 
@@ -3145,11 +3166,9 @@ CREATE UNIQUE INDEX uq_resource_access_bindings_active
     COALESCE(plugin_installation_id::text, ''),
     COALESCE(relay_capability_id::text, ''),
     COALESCE(automation_event_source_id::text, ''),
-    target_type,
-    COALESCE(subject_workspace_id::text, ''),
-    COALESCE(subject_actor_id::text, ''),
-    COALESCE(subject_conversation_id::text, ''),
-    COALESCE(subject_conversation_actor_context_id::text, '')
+    COALESCE(actor_id::text, ''),
+    COALESCE(remote_agent_id::text, ''),
+    subject_id
   )
   WHERE status = 'active';
 CREATE INDEX idx_resource_access_bindings_workspace
@@ -3166,24 +3185,14 @@ CREATE INDEX idx_resource_access_bindings_relay_capability
 CREATE INDEX idx_resource_access_bindings_automation_event_source
   ON resource_access_bindings(automation_event_source_id, created_at DESC)
   WHERE automation_event_source_id IS NOT NULL;
-CREATE INDEX idx_resource_access_bindings_subject_lookup
-  ON resource_access_bindings(
-    target_type,
-    subject_workspace_id,
-    subject_actor_id,
-    subject_conversation_id,
-    subject_conversation_actor_context_id,
-    created_at DESC
-  );
-CREATE INDEX idx_resource_access_bindings_target_lookup
-  ON resource_access_bindings(
-    target_type,
-    subject_conversation_actor_context_id,
-    subject_conversation_id,
-    subject_actor_id,
-    subject_workspace_id,
-    created_at DESC
-  );
+CREATE INDEX idx_resource_access_bindings_actor
+  ON resource_access_bindings(actor_id, created_at DESC)
+  WHERE actor_id IS NOT NULL;
+CREATE INDEX idx_resource_access_bindings_remote_agent
+  ON resource_access_bindings(remote_agent_id, created_at DESC)
+  WHERE remote_agent_id IS NOT NULL;
+CREATE INDEX idx_resource_access_bindings_subject_id
+  ON resource_access_bindings(subject_id, status, created_at DESC);
 
 CREATE TABLE relay_catalog_revisions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3526,8 +3535,11 @@ CREATE TABLE relay_authorization_grants (
   relay_device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
   relay_capability_id UUID NOT NULL REFERENCES relay_capabilities(id) ON DELETE CASCADE,
   relay_exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
-  conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
+  -- P1b: actor_id + conversation_id polymorphic columns collapsed into a
+  -- single subject_id FK into access_subjects (nullable because `once` and
+  -- `workspace` scopes don't bind to a sub-workspace subject). Deferred FK
+  -- applied below in the post-access_subjects ALTER section.
+  subject_id UUID,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
   source_task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
@@ -3566,7 +3578,11 @@ CREATE INDEX idx_interaction_response_commands_interaction
   ON interaction_response_commands(interaction_id, created_at DESC);
 CREATE INDEX idx_relay_authorization_grants_exposure
   ON relay_authorization_grants(relay_capability_id, status, scope, created_at DESC);
-CREATE INDEX idx_relay_authorization_grants_actor
-  ON relay_authorization_grants(actor_id, relay_capability_id, status, created_at DESC);
-CREATE INDEX idx_relay_authorization_grants_conversation
-  ON relay_authorization_grants(conversation_id, relay_capability_id, status, created_at DESC);
+CREATE INDEX idx_relay_authorization_grants_subject
+  ON relay_authorization_grants(subject_id, relay_capability_id, status, created_at DESC)
+  WHERE subject_id IS NOT NULL;
+-- P1b: deferred FK from relay_authorization_grants.subject_id (NULLABLE — once
+-- and workspace scopes don't bind a sub-workspace subject).
+ALTER TABLE relay_authorization_grants
+  ADD CONSTRAINT fk_relay_authorization_grants_subject
+  FOREIGN KEY (subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;

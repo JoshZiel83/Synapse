@@ -184,7 +184,7 @@ function ownerRank(group: GroupRow, current: ResolveContext) {
 async function listAuthorizedModelGroupIds(current: ResolveContext) {
   const authorized = new Set<string>()
 
-  const actorResults = await listAuthorizedResourceIds({
+  const actorResults = await listAuthorizedResourceIds(db, {
     subject: actorSubject(current.actorId),
     action: "model_group.use",
   })
@@ -193,7 +193,7 @@ async function listAuthorizedModelGroupIds(current: ResolveContext) {
   }
 
   if (current.workspaceMemberId) {
-    const userResults = await listAuthorizedResourceIds({
+    const userResults = await listAuthorizedResourceIds(db, {
       subject: workspaceMemberSubject(current.workspaceMemberId),
       action: "model_group.use",
     })

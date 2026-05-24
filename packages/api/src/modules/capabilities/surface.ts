@@ -10,6 +10,7 @@ import {
   type ResolvedMcpTools,
 } from "../mcp-plugins/tool-resolver.js"
 import { listVisibleSkills } from "../skills/service.js"
+import { db } from "../../infrastructure/database/kysely.js"
 
 const EMPTY_MCP_TOOLS: ResolvedMcpTools = {
   tools: [],
@@ -47,9 +48,29 @@ export async function resolveActorCapabilitySurface(
   availableSkills: AvailableSkillSummary[]
   mcpTools: ResolvedMcpTools
 }> {
+  // Resolve the calling user's workspace_member so member-scoped grants
+  // (approval bindings, controller-issued member grants) become visible to the
+  // tool resolver and skills surface. Without this, an approved member would
+  // be granted a binding but the runtime wouldn't see it.
+  const resolved: RuntimeActorContext & { conversationId: string } = {
+    ...runtimeContext,
+  }
+  if (!resolved.workspaceMemberId && resolved.userId) {
+    const member = await db
+      .selectFrom("workspace_members")
+      .select("id")
+      .where("workspace_id", "=", resolved.workspaceId)
+      .where("user_id", "=", resolved.userId)
+      .limit(1)
+      .executeTakeFirst()
+    if (member) {
+      resolved.workspaceMemberId = member.id
+    }
+  }
+
   let mcpTools = EMPTY_MCP_TOOLS
   try {
-    mcpTools = await resolveMcpToolsForActor(runtimeContext)
+    mcpTools = await resolveMcpToolsForActor(resolved)
   } catch (error: any) {
     console.error(
       "[capabilities] Failed to resolve MCP tools:",
@@ -58,16 +79,17 @@ export async function resolveActorCapabilitySurface(
   }
 
   const availableSkills = await listVisibleSkills({
-    workspaceId: runtimeContext.workspaceId,
-    actorId: runtimeContext.actorId,
-    sessionId: runtimeContext.sessionId,
-    conversationId: runtimeContext.conversationId,
-    conversationKind: runtimeContext.conversationKind,
-    conversationBoundary: runtimeContext.conversationBoundary,
+    workspaceId: resolved.workspaceId,
+    workspaceMemberId: resolved.workspaceMemberId,
+    actorId: resolved.actorId,
+    sessionId: resolved.sessionId,
+    conversationId: resolved.conversationId,
+    conversationKind: resolved.conversationKind,
+    conversationBoundary: resolved.conversationBoundary,
   })
 
   return {
-    runtimeContext,
+    runtimeContext: resolved,
     surface: {
       tools: mcpTools.tools.map((tool) => mapToolSurfaceItem(tool.name)),
       skills: availableSkills.map(mapSkillSurfaceItem),

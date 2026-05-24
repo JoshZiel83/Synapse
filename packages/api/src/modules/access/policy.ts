@@ -1,20 +1,26 @@
-import type pg from "pg"
+/**
+ * Conversation-type policy enforcement helpers for access grants.
+ *
+ * P0/P1b: this file (formerly `conversation-type-validation.ts`) is the
+ * canonical entry point access guards/grant-issuance flows use to check that
+ * a target conversation matches the policy mask. It accepts an injected
+ * `db: KyselyDb` so tests can run against a per-test database, and avoids
+ * importing chat/service (which would drag in the global pool through
+ * `listConversationParticipants`) — the participant check is inlined here.
+ */
+
 import {
   isValidConversationTypeMask,
   maskAllowsConversationType,
   normalizeConversationTypeMask,
   resolveConversationTypeKey,
   resolveNarrowedConversationTypeMask,
+  SUBJECT_KIND,
   type ConversationTypeKey,
 } from "@synapse/shared"
 import type { CapabilityAccessTargetType } from "@synapse/shared/types"
-import {
-  executeSql,
-  executeSqlOn,
-} from "../../infrastructure/database/kysely.js"
-import { listConversationParticipants } from "../chat/service.js"
-
-type Queryable = Pick<pg.PoolClient, "query">
+import type { KyselyDb } from "../../infrastructure/database/kysely.js"
+import { upsertAccessSubject } from "./subject-registry.js"
 
 type ConversationTargetRecord = {
   conversationId: string
@@ -30,7 +36,18 @@ function formatConversationTypeKey(value: ConversationTypeKey) {
 export function targetSupportsConversationTypeOverride(
   targetType: CapabilityAccessTargetType
 ) {
-  return targetType === "workspace" || targetType === "actor"
+  // Only workspace + actor targets carry a custom conversation-type policy
+  // mask; conversation/workspace_member/actor_in_conversation targets are
+  // pinned to the parent.
+  switch (targetType) {
+    case "workspace":
+    case "actor":
+      return true
+    case "workspace_member":
+    case "conversation":
+    case "actor_in_conversation":
+      return false
+  }
 }
 
 export function assertConversationTypeMaskWithinParent(params: {
@@ -87,63 +104,60 @@ export function assertGrantConversationTypeOverrideAllowed(params: {
 }
 
 async function loadConversationTargetRecord(
-  conversationId: string,
-  queryable?: Queryable
-) {
-  const result = queryable
-    ? await executeSqlOn<{
-        id: string
-        kind: string
-        boundary: string
-      }>(
-        queryable,
-        `
-          SELECT id, kind, boundary
-          FROM conversations
-          WHERE id = $1
-          LIMIT 1
-        `,
-        [conversationId]
-      )
-    : await executeSql<{
-        id: string
-        kind: string
-        boundary: string
-      }>(
-        `
-          SELECT id, kind, boundary
-          FROM conversations
-          WHERE id = $1
-          LIMIT 1
-        `,
-        [conversationId]
-      )
-
-  const row = result.rows[0]
+  db: KyselyDb,
+  conversationId: string
+): Promise<ConversationTargetRecord | null> {
+  const row = await db
+    .selectFrom("conversations")
+    .select(["id", "kind", "boundary"])
+    .where("id", "=", conversationId)
+    .limit(1)
+    .executeTakeFirst()
   if (!row) {
     return null
   }
-
   const conversationTypeKey = resolveConversationTypeKey(row.kind, row.boundary)
   if (!conversationTypeKey) {
     return null
   }
-
   return {
     conversationId: row.id,
     kind: row.kind,
     boundary: row.boundary,
     conversationTypeKey,
-  } satisfies ConversationTargetRecord
+  }
+}
+
+async function isActorActiveParticipantInConversation(
+  db: KyselyDb,
+  conversationId: string,
+  actorId: string
+): Promise<boolean> {
+  // P0 DI / P1b: lookup the actor subject id, then filter conversation_participants
+  // by subject_id (the polymorphic actor_id column was dropped).
+  const actorSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.ACTOR,
+    actorId,
+  })
+  const row = await db
+    .selectFrom("conversation_participants")
+    .select("id")
+    .where("conversation_id", "=", conversationId)
+    .where("participant_kind", "=", "actor")
+    .where("subject_id", "=", actorSubjectId)
+    .where("state", "=", "active")
+    .limit(1)
+    .executeTakeFirst()
+  return Boolean(row)
 }
 
 export async function validateConversationScopedAccessTarget(params: {
+  db: KyselyDb
   targetType: CapabilityAccessTargetType
   conversationId?: string | null
   actorId?: string | null
   effectiveConversationTypeMask: number
   buildError: (message: string) => Error
-  queryable?: Queryable
 }) {
   if (
     params.targetType !== "conversation" &&
@@ -159,8 +173,8 @@ export async function validateConversationScopedAccessTarget(params: {
   }
 
   const conversation = await loadConversationTargetRecord(
-    params.conversationId,
-    params.queryable
+    params.db,
+    params.conversationId
   )
   if (!conversation) {
     throw params.buildError("Selected conversation was not found.")
@@ -190,13 +204,10 @@ export async function validateConversationScopedAccessTarget(params: {
     )
   }
 
-  const participants = await listConversationParticipants(
+  const hasActiveActor = await isActorActiveParticipantInConversation(
+    params.db,
     params.conversationId,
-    { queryable: params.queryable }
-  )
-  const hasActiveActor = participants.some(
-    (participant) =>
-      participant.actor_id === params.actorId && participant.state === "active"
+    params.actorId
   )
   if (!hasActiveActor) {
     throw params.buildError(

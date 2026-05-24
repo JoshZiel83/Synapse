@@ -58,6 +58,11 @@ import {
   executeSql,
   executeSqlOn,
 } from "../../infrastructure/database/kysely.js"
+import { SUBJECT_KIND } from "@synapse/shared"
+import {
+  upsertAccessSubject,
+  upsertAccessSubjectOn,
+} from "../access/subject-registry.js"
 import {
   enqueueTransactionalEvent,
   type Queryable,
@@ -831,9 +836,9 @@ async function listConversationParticipantRows(
         cp.id,
         cp.conversation_id,
         cp.participant_kind,
-        cp.workspace_member_id,
-        cp.actor_id,
-        cp.remote_agent_id,
+        cpsubj.workspace_member_id AS workspace_member_id,
+        cpsubj.actor_id AS actor_id,
+        cpsubj.remote_agent_id AS remote_agent_id,
         cp.actor_join_version_id,
         cp.display_name,
         cp.role_key,
@@ -883,10 +888,11 @@ async function listConversationParticipantRows(
         ls.id AS session_id,
         COALESCE(ls.status::text, rab.runtime_state::text) AS session_status
       FROM conversation_participants cp
-      LEFT JOIN workspace_members wm ON wm.id = cp.workspace_member_id
+      LEFT JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
+      LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
-      LEFT JOIN actors a ON a.id = cp.actor_id
-      LEFT JOIN remote_agents ra ON ra.id = cp.remote_agent_id
+      LEFT JOIN actors a ON a.id = cpsubj.actor_id
+      LEFT JOIN remote_agents ra ON ra.id = cpsubj.remote_agent_id
       LEFT JOIN actor_versions current_version
         ON current_version.actor_id = a.id
        AND current_version.version = a.current_version
@@ -909,12 +915,12 @@ async function listConversationParticipantRows(
       ) primary_address ON TRUE
       LEFT JOIN users linked_user ON linked_user.id = primary_address.linked_user_id
       LEFT JOIN remote_agent_bindings rab
-        ON rab.remote_agent_id = cp.remote_agent_id
+        ON rab.remote_agent_id = cpsubj.remote_agent_id
       LEFT JOIN LATERAL (
         SELECT s.id, s.status
         FROM sessions s
         WHERE s.conversation_id = cp.conversation_id
-          AND s.actor_id = cp.actor_id
+          AND s.actor_id = cpsubj.actor_id
         ORDER BY s.created_at DESC
         LIMIT 1
       ) ls ON TRUE
@@ -939,9 +945,9 @@ async function getWorkspaceMemberConversationParticipantRow(
         cp.id,
         cp.conversation_id,
         cp.participant_kind,
-        cp.workspace_member_id,
-        cp.actor_id,
-        cp.remote_agent_id,
+        cpsubj.workspace_member_id AS workspace_member_id,
+        cpsubj.actor_id AS actor_id,
+        cpsubj.remote_agent_id AS remote_agent_id,
         cp.actor_join_version_id,
         cp.display_name,
         cp.role_key,
@@ -972,10 +978,11 @@ async function getWorkspaceMemberConversationParticipantRow(
         ls.id AS session_id,
         COALESCE(ls.status::text, rab.runtime_state::text) AS session_status
       FROM conversation_participants cp
-      LEFT JOIN workspace_members wm ON wm.id = cp.workspace_member_id
+      LEFT JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
+      LEFT JOIN workspace_members wm ON wm.id = cpsubj.workspace_member_id
       LEFT JOIN users u ON u.id = wm.user_id
-      LEFT JOIN actors a ON a.id = cp.actor_id
-      LEFT JOIN remote_agents ra ON ra.id = cp.remote_agent_id
+      LEFT JOIN actors a ON a.id = cpsubj.actor_id
+      LEFT JOIN remote_agents ra ON ra.id = cpsubj.remote_agent_id
       LEFT JOIN LATERAL (
         SELECT
           ta.id,
@@ -993,17 +1000,17 @@ async function getWorkspaceMemberConversationParticipantRow(
       ) primary_address ON TRUE
       LEFT JOIN users linked_user ON linked_user.id = primary_address.linked_user_id
       LEFT JOIN remote_agent_bindings rab
-        ON rab.remote_agent_id = cp.remote_agent_id
+        ON rab.remote_agent_id = cpsubj.remote_agent_id
       LEFT JOIN LATERAL (
         SELECT s.id, s.status
         FROM sessions s
         WHERE s.conversation_id = cp.conversation_id
-          AND s.actor_id = cp.actor_id
+          AND s.actor_id = cpsubj.actor_id
         ORDER BY s.created_at DESC
         LIMIT 1
       ) ls ON TRUE
       WHERE cp.conversation_id = $1
-        AND cp.workspace_member_id = $2
+        AND cpsubj.workspace_member_id = $2
       LIMIT 1
     `,
     [conversationId, workspaceMemberId]
@@ -2314,6 +2321,41 @@ async function insertParticipant(
   }
 ) {
   const participantId = crypto.randomUUID()
+  // P1b: every participant gets a subject_id (no NULL escape hatch).
+  // Workspace_member / actor / remote_agent map to their canonical
+  // access_subjects rows. External + system participants are anonymous and
+  // would have nothing to point to under the strict {kind, payload} schema, so
+  // we mint a per-participant kind='external' subject keyed by the participant
+  // id itself ('participant:<uuid>'). participant_kind stays as the display
+  // discriminator (external vs system) since both share kind='external' here.
+  let participantSubjectId: string
+  if (
+    params.participantKind === "workspace_member" &&
+    params.workspaceMemberId
+  ) {
+    participantSubjectId = await upsertAccessSubjectOn(queryable, {
+      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+      memberId: params.workspaceMemberId,
+    })
+  } else if (params.participantKind === "actor" && params.actorId) {
+    participantSubjectId = await upsertAccessSubjectOn(queryable, {
+      kind: SUBJECT_KIND.ACTOR,
+      actorId: params.actorId,
+    })
+  } else if (
+    params.participantKind === "remote_agent" &&
+    params.remoteAgentId
+  ) {
+    participantSubjectId = await upsertAccessSubjectOn(queryable, {
+      kind: SUBJECT_KIND.REMOTE_AGENT,
+      remoteAgentId: params.remoteAgentId,
+    })
+  } else {
+    participantSubjectId = await upsertAccessSubjectOn(queryable, {
+      kind: SUBJECT_KIND.EXTERNAL,
+      externalIdentityKey: `participant:${participantId}`,
+    })
+  }
   await executeSqlOn(
     queryable,
     `
@@ -2321,9 +2363,7 @@ async function insertParticipant(
         id,
         conversation_id,
         participant_kind,
-        workspace_member_id,
-        actor_id,
-        remote_agent_id,
+        subject_id,
         actor_join_version_id,
         display_name,
         role_key,
@@ -2331,15 +2371,13 @@ async function insertParticipant(
         metadata,
         joined_at
       )
-      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'active', $10::jsonb, NOW())
+      VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8::jsonb, NOW())
     `,
     [
       participantId,
       params.conversationId,
       params.participantKind,
-      params.workspaceMemberId ?? null,
-      params.actorId ?? null,
-      params.remoteAgentId ?? null,
+      participantSubjectId,
       params.actorJoinVersionId ?? null,
       params.displayName ?? null,
       params.roleKey,
@@ -2787,17 +2825,18 @@ export async function ensureConversationParticipant(params: {
   const existing = await executeSqlOn<{ id: string; state: string }>(
     queryable,
     `
-      SELECT id, state
-      FROM conversation_participants
-      WHERE conversation_id = $1
-        AND participant_kind = $2
+      SELECT cp.id, cp.state
+      FROM conversation_participants cp
+      LEFT JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
+      WHERE cp.conversation_id = $1
+        AND cp.participant_kind = $2
         AND (
-          ($2 = 'workspace_member' AND workspace_member_id = $3)
-          OR ($2 = 'actor' AND actor_id = $4)
-          OR ($2 = 'remote_agent' AND remote_agent_id = $5)
+          ($2 = 'workspace_member' AND cpsubj.workspace_member_id = $3)
+          OR ($2 = 'actor' AND cpsubj.actor_id = $4)
+          OR ($2 = 'remote_agent' AND cpsubj.remote_agent_id = $5)
           OR (
             $2 IN ('external', 'system')
-            AND COALESCE(display_name, '') = COALESCE($6, '')
+            AND COALESCE(cp.display_name, '') = COALESCE($6, '')
           )
         )
       LIMIT 1
@@ -2814,26 +2853,23 @@ export async function ensureConversationParticipant(params: {
 
   const existingId = existing.rows[0]?.id
   if (existingId) {
+    // P1b: subject_id is fixed at insert time. The existing-participant path
+    // only refreshes presentation/state fields; the workspace_member_id /
+    // actor_id / remote_agent_id columns no longer exist on this table.
     await executeSqlOn(
       queryable,
       `
         UPDATE conversation_participants
-        SET workspace_member_id = COALESCE($2, workspace_member_id),
-            actor_id = COALESCE($3, actor_id),
-            remote_agent_id = COALESCE($4, remote_agent_id),
-            actor_join_version_id = COALESCE($5, actor_join_version_id),
-            display_name = COALESCE($6, display_name),
-            role_key = COALESCE($7, role_key),
+        SET actor_join_version_id = COALESCE($2, actor_join_version_id),
+            display_name = COALESCE($3, display_name),
+            role_key = COALESCE($4, role_key),
             state = 'active',
             left_at = NULL,
-            metadata = COALESCE(conversation_participants.metadata, '{}'::jsonb) || $8::jsonb
+            metadata = COALESCE(conversation_participants.metadata, '{}'::jsonb) || $5::jsonb
         WHERE id = $1
       `,
       [
         existingId,
-        params.workspaceMemberId ?? null,
-        params.actorId ?? null,
-        params.remoteAgentId ?? null,
         params.actorJoinVersionId ?? null,
         params.displayName ?? null,
         params.roleKey ?? "member",
@@ -4207,13 +4243,14 @@ export async function listConversationRealtimeRecipients(
   }>(
     queryable,
     `
-      SELECT wm.workspace_id, cp.workspace_member_id
+      SELECT wm.workspace_id, cpsubj.workspace_member_id
       FROM conversation_participants cp
+      INNER JOIN access_subjects cpsubj ON cpsubj.id = cp.subject_id
       INNER JOIN workspace_members wm
-        ON wm.id = cp.workspace_member_id
+        ON wm.id = cpsubj.workspace_member_id
       WHERE cp.conversation_id = $1
         AND cp.state = 'active'
-        AND cp.workspace_member_id IS NOT NULL
+        AND cpsubj.workspace_member_id IS NOT NULL
     `,
     [conversationId]
   )

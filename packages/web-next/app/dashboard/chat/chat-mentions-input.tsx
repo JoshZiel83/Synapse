@@ -8,6 +8,7 @@ import {
   type MentionsInputStyle,
 } from "react-mentions"
 import ChatAvatar from "./chat-avatar"
+import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
 
 export type MentionableParticipant = {
   id: string
@@ -206,11 +207,14 @@ export default function ChatMentionsInput({
                 </div>
                 <div className="truncate text-[11px] text-muted-foreground">
                   {participant.description ||
-                    (participant.participantType === "actor"
+                    (participant.participantType ===
+                    CONVERSATION_PARTICIPANT_TYPE.ACTOR
                       ? participant.role || "Actor"
-                      : participant.participantType === "remote_agent"
+                      : participant.participantType ===
+                          CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT
                         ? participant.role || "Remote agent"
-                        : participant.participantType === "external"
+                        : participant.participantType ===
+                            CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
                           ? "External participant"
                           : "Workspace user")}
                 </div>

@@ -4,12 +4,15 @@ import {
   validateModelProviderConfig,
 } from "@synapse/shared"
 import type {
-  ModelGroupGrantsGrantScope,
   ModelGroupsOwnerType,
   ModelGroupsRoutingStrategy,
 } from "../../infrastructure/database/generated/db.js"
 import { query } from "../../infrastructure/database/index.js"
 import { db, type TableInsert } from "../../infrastructure/database/kysely.js"
+import { MODEL_GROUP_GRANT_SCOPE } from "@synapse/shared/constants"
+import type { ModelGroupGrantScope } from "@synapse/shared/types"
+import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
   DEFAULT_MODEL_ATTEMPT_POLICY,
   DEFAULT_MODEL_ATTEMPT_TIMEOUT_MS,
@@ -19,7 +22,61 @@ import { sql } from "kysely"
 
 type JsonMap = Record<string, unknown>
 type ModelGroupOwnerType = ModelGroupsOwnerType
-type ModelGroupGrantScope = ModelGroupGrantsGrantScope
+
+/**
+ * P1b helpers: translate (grantScope, ids) ↔ SubjectRef. The dropped
+ * `grant_scope` column is now inferred from `access_subjects.kind`.
+ */
+function buildModelGroupGrantSubjectRef(input: {
+  grantScope: ModelGroupGrantScope
+  workspaceId?: string | null
+  workspaceMemberId?: string | null
+  actorId?: string | null
+}): SubjectRef {
+  switch (input.grantScope) {
+    case MODEL_GROUP_GRANT_SCOPE.PLATFORM:
+      return { kind: SUBJECT_KIND.SYSTEM }
+    case MODEL_GROUP_GRANT_SCOPE.WORKSPACE:
+      if (!input.workspaceId) {
+        throw new Error("workspaceId required for workspace grant scope")
+      }
+      return { kind: SUBJECT_KIND.WORKSPACE, workspaceId: input.workspaceId }
+    case MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER:
+      if (!input.workspaceMemberId) {
+        throw new Error(
+          "workspaceMemberId required for workspace_member grant scope"
+        )
+      }
+      return {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: input.workspaceMemberId,
+      }
+    case MODEL_GROUP_GRANT_SCOPE.ACTOR:
+      if (!input.actorId) {
+        throw new Error("actorId required for actor grant scope")
+      }
+      return { kind: SUBJECT_KIND.ACTOR, actorId: input.actorId }
+  }
+}
+
+function subjectKindToModelGroupGrantScope(
+  kind: SubjectRef["kind"]
+): ModelGroupGrantScope {
+  switch (kind) {
+    case SUBJECT_KIND.SYSTEM:
+      return MODEL_GROUP_GRANT_SCOPE.PLATFORM
+    case SUBJECT_KIND.WORKSPACE:
+      return MODEL_GROUP_GRANT_SCOPE.WORKSPACE
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      return MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER
+    case SUBJECT_KIND.ACTOR:
+      return MODEL_GROUP_GRANT_SCOPE.ACTOR
+    default:
+      throw new Error(
+        `Unsupported subject kind for model_group_grants: ${kind}`
+      )
+  }
+}
 
 type ModelGroupRow = {
   id: string
@@ -40,6 +97,7 @@ type ModelGroupRow = {
 type ModelGroupGrantRow = {
   id?: string
   group_id?: string
+  // P1b: derived from the joined access_subjects row, not a column.
   grant_scope: ModelGroupGrantScope
   workspace_id: string | null
   workspace_member_id: string | null
@@ -49,6 +107,42 @@ type ModelGroupGrantRow = {
   reason?: string | null
   created_at?: string | Date
   revoked_at?: string | Date | null
+}
+
+type ModelGroupGrantDbRow = {
+  id: string
+  group_id: string
+  status: "active" | "revoked"
+  reason: string | null
+  created_at: Date | null
+  revoked_at: Date | null
+  subject_id: string
+  granted_by_workspace_member_id: string | null
+  // From joined access_subjects (aliased mgs)
+  mgs_kind?: string | null
+  mgs_workspace_id?: string | null
+  mgs_workspace_member_id?: string | null
+  mgs_actor_id?: string | null
+}
+
+function dbRowToGrantRow(
+  row: ModelGroupGrantDbRow
+): ModelGroupGrantRow & { id: string; group_id: string } {
+  return {
+    id: row.id,
+    group_id: row.group_id,
+    grant_scope: row.mgs_kind
+      ? subjectKindToModelGroupGrantScope(row.mgs_kind as SubjectRef["kind"])
+      : MODEL_GROUP_GRANT_SCOPE.PLATFORM,
+    workspace_id: row.mgs_workspace_id ?? null,
+    workspace_member_id: row.mgs_workspace_member_id ?? null,
+    actor_id: row.mgs_actor_id ?? null,
+    status: row.status,
+    granted_by_workspace_member_id: row.granted_by_workspace_member_id,
+    reason: row.reason,
+    created_at: row.created_at || undefined,
+    revoked_at: row.revoked_at,
+  }
 }
 
 export class ModelGroupError extends Error {
@@ -292,28 +386,28 @@ async function createDefaultGroupGrant(
   ownerWorkspaceMemberId?: string | null,
   grantedByWorkspaceMemberId?: string | null
 ) {
+  const subjectRef = buildModelGroupGrantSubjectRef({
+    grantScope:
+      ownerType === "platform"
+        ? MODEL_GROUP_GRANT_SCOPE.PLATFORM
+        : ownerType === "workspace"
+          ? MODEL_GROUP_GRANT_SCOPE.WORKSPACE
+          : MODEL_GROUP_GRANT_SCOPE.WORKSPACE_MEMBER,
+    workspaceId: ownerWorkspaceId,
+    workspaceMemberId: ownerWorkspaceMemberId,
+  })
+  const subjectId = await upsertAccessSubject(db, subjectRef)
   return (await db
     .insertInto("model_group_grants")
     .values({
       group_id: groupId,
-      grant_scope:
-        ownerType === "platform"
-          ? "platform"
-          : ownerType === "workspace"
-            ? "workspace"
-            : "workspace_member",
-      workspace_id: ownerType === "workspace" ? ownerWorkspaceId || null : null,
-      workspace_member_id:
-        ownerType === "workspace_member"
-          ? ownerWorkspaceMemberId || null
-          : null,
-      actor_id: null,
+      subject_id: subjectId,
       status: "active",
       granted_by_workspace_member_id: grantedByWorkspaceMemberId || null,
       reason: "default_group_scope",
     })
     .returningAll()
-    .executeTakeFirstOrThrow()) as ModelGroupGrantRow
+    .executeTakeFirstOrThrow()) as { id: string }
 }
 
 async function ensureWorkspaceExists(workspaceId: string) {
@@ -410,21 +504,21 @@ async function ensureNoDuplicateActiveGrant(
     actorId?: string
   }
 ) {
+  // P1b: resolve the SubjectRef the new grant would target, then look up
+  // whether any active row already points at the same access_subjects id.
+  const subjectRef = buildModelGroupGrantSubjectRef({
+    grantScope: input.grantScope,
+    workspaceId: input.workspaceId,
+    workspaceMemberId: input.workspaceMemberId,
+    actorId: input.actorId,
+  })
+  const subjectId = await upsertAccessSubject(db, subjectRef)
   const row = await db
     .selectFrom("model_group_grants")
     .select("group_id")
     .where("group_id", "=", groupId)
     .where("status", "=", "active")
-    .where("grant_scope", "=", input.grantScope)
-    .where(
-      sql<boolean>`workspace_id IS NOT DISTINCT FROM ${input.workspaceId || null}::uuid`
-    )
-    .where(
-      sql<boolean>`workspace_member_id IS NOT DISTINCT FROM ${input.workspaceMemberId || null}::uuid`
-    )
-    .where(
-      sql<boolean>`actor_id IS NOT DISTINCT FROM ${input.actorId || null}::uuid`
-    )
+    .where("subject_id", "=", subjectId)
     .limit(1)
     .executeTakeFirst()
   if (row) {
@@ -451,6 +545,7 @@ export async function listWorkspaceModelGroups(workspaceId: string) {
     .leftJoin("model_group_grants as mgg", (join) =>
       join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
     )
+    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
     .selectAll("mg")
     .select(
       sql<number>`CASE mg.owner_type
@@ -466,23 +561,23 @@ export async function listWorkspaceModelGroups(workspaceId: string) {
           eb("mg.owner_type", "=", "workspace"),
           eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb("mgg.grant_scope", "=", "platform"),
+        eb("mgs.kind", "=", "system"),
         eb.and([
-          eb("mgg.grant_scope", "=", "workspace"),
-          eb("mgg.workspace_id", "=", workspaceId),
+          eb("mgs.kind", "=", "workspace"),
+          eb("mgs.workspace_id", "=", workspaceId),
         ]),
         eb.and([
-          eb("mgg.grant_scope", "=", "workspace_member"),
+          eb("mgs.kind", "=", "workspace_member"),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM workspace_members wm
-            WHERE wm.id = mgg.workspace_member_id
+            WHERE wm.id = mgs.workspace_member_id
               AND wm.workspace_id = ${workspaceId}
           )`,
         ]),
         eb.and([
-          eb("mgg.grant_scope", "=", "actor"),
-          eb("mgg.workspace_id", "=", workspaceId),
+          eb("mgs.kind", "=", "actor"),
+          eb("mgs.workspace_id", "=", workspaceId),
         ]),
       ])
     )
@@ -552,21 +647,33 @@ export async function getModelGroup(groupId: string) {
       .orderBy("mp.display_name")
       .execute(),
     db
-      .selectFrom("model_group_grants")
-      .selectAll()
-      .where("group_id", "=", groupId)
-      .orderBy("created_at", "desc")
+      .selectFrom("model_group_grants as mgg")
+      .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
+      .select([
+        "mgg.id",
+        "mgg.group_id",
+        "mgg.status",
+        "mgg.reason",
+        "mgg.created_at",
+        "mgg.revoked_at",
+        "mgg.subject_id",
+        "mgg.granted_by_workspace_member_id",
+        "mgs.kind as mgs_kind",
+        "mgs.workspace_id as mgs_workspace_id",
+        "mgs.workspace_member_id as mgs_workspace_member_id",
+        "mgs.actor_id as mgs_actor_id",
+      ])
+      .where("mgg.group_id", "=", groupId)
+      .orderBy("mgg.created_at", "desc")
       .execute(),
   ])
 
   return {
     ...mapGroupRow(group),
     items: itemsResult.map(mapGroupItem),
-    grants: (
-      grantsResult as Array<
-        ModelGroupGrantRow & { id: string; group_id: string }
-      >
-    ).map(mapGrantRow),
+    grants: (grantsResult as ModelGroupGrantDbRow[])
+      .map(dbRowToGrantRow)
+      .map(mapGrantRow),
   }
 }
 
@@ -579,6 +686,7 @@ export async function isModelGroupAvailableInWorkspace(
     .leftJoin("model_group_grants as mgg", (join) =>
       join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
     )
+    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
     .select("mg.id")
     .where("mg.id", "=", groupId)
     .where("mg.is_enabled", "=", true)
@@ -588,23 +696,23 @@ export async function isModelGroupAvailableInWorkspace(
           eb("mg.owner_type", "=", "workspace"),
           eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb("mgg.grant_scope", "=", "platform"),
+        eb("mgs.kind", "=", "system"),
         eb.and([
-          eb("mgg.grant_scope", "=", "workspace"),
-          eb("mgg.workspace_id", "=", workspaceId),
+          eb("mgs.kind", "=", "workspace"),
+          eb("mgs.workspace_id", "=", workspaceId),
         ]),
         eb.and([
-          eb("mgg.grant_scope", "=", "workspace_member"),
+          eb("mgs.kind", "=", "workspace_member"),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM workspace_members wm
-            WHERE wm.id = mgg.workspace_member_id
+            WHERE wm.id = mgs.workspace_member_id
               AND wm.workspace_id = ${workspaceId}
           )`,
         ]),
         eb.and([
-          eb("mgg.grant_scope", "=", "actor"),
-          eb("mgg.workspace_id", "=", workspaceId),
+          eb("mgs.kind", "=", "actor"),
+          eb("mgs.workspace_id", "=", workspaceId),
         ]),
       ])
     )
@@ -1113,6 +1221,7 @@ async function ensureAssignableModelGroups(
     .leftJoin("model_group_grants as mgg", (join) =>
       join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
     )
+    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
     .select("mg.id")
     .where("mg.id", "in", groupIds)
     .where("mg.is_enabled", "=", true)
@@ -1122,24 +1231,24 @@ async function ensureAssignableModelGroups(
           eb("mg.owner_type", "=", "workspace"),
           eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb("mgg.grant_scope", "=", "platform"),
+        eb("mgs.kind", "=", "system"),
         eb.and([
-          eb("mgg.grant_scope", "=", "workspace"),
-          eb("mgg.workspace_id", "=", workspaceId),
+          eb("mgs.kind", "=", "workspace"),
+          eb("mgs.workspace_id", "=", workspaceId),
         ]),
         eb.and([
-          eb("mgg.grant_scope", "=", "workspace_member"),
+          eb("mgs.kind", "=", "workspace_member"),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM workspace_members wm
-            WHERE wm.id = mgg.workspace_member_id
+            WHERE wm.id = mgs.workspace_member_id
               AND wm.workspace_id = ${workspaceId}
           )`,
         ]),
         eb.and([
-          eb("mgg.grant_scope", "=", "actor"),
-          eb("mgg.workspace_id", "=", workspaceId),
-          actorId ? eb("mgg.actor_id", "=", actorId) : sql<boolean>`TRUE`,
+          eb("mgs.kind", "=", "actor"),
+          eb("mgs.workspace_id", "=", workspaceId),
+          actorId ? eb("mgs.actor_id", "=", actorId) : sql<boolean>`TRUE`,
         ]),
       ])
     )
@@ -1225,21 +1334,22 @@ export async function getActorModelGroups(
         sql<boolean>`EXISTS (
           SELECT 1
           FROM model_group_grants mgg
+          JOIN access_subjects mgs2 ON mgs2.id = mgg.subject_id
           WHERE mgg.group_id = mg.id
             AND mgg.status = 'active'
             AND (
-              mgg.grant_scope = 'platform'
-              OR (mgg.grant_scope = 'workspace' AND mgg.workspace_id = ${workspaceId})
+              mgs2.kind = 'system'
+              OR (mgs2.kind = 'workspace' AND mgs2.workspace_id = ${workspaceId})
               OR (
-                mgg.grant_scope = 'workspace_member'
+                mgs2.kind = 'workspace_member'
                 AND EXISTS (
                   SELECT 1
                   FROM workspace_members wm
-                  WHERE wm.id = mgg.workspace_member_id
+                  WHERE wm.id = mgs2.workspace_member_id
                     AND wm.workspace_id = ${workspaceId}
                 )
               )
-              OR (mgg.grant_scope = 'actor' AND mgg.workspace_id = ${workspaceId})
+              OR (mgs2.kind = 'actor' AND mgs2.workspace_id = ${workspaceId})
             )
         )`,
       ])
@@ -1290,6 +1400,7 @@ export async function listVisibleActorModelGroups(
     .leftJoin("model_group_grants as mgg", (join) =>
       join.onRef("mgg.group_id", "=", "mg.id").on("mgg.status", "=", "active")
     )
+    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
     .selectAll("mg")
     .select(
       sql<number>`CASE mg.owner_type
@@ -1305,15 +1416,15 @@ export async function listVisibleActorModelGroups(
           eb("mg.owner_type", "=", "workspace"),
           eb("mg.owner_workspace_id", "=", workspaceId),
         ]),
-        eb("mgg.grant_scope", "=", "platform"),
+        eb("mgs.kind", "=", "system"),
         eb.and([
-          eb("mgg.grant_scope", "=", "workspace"),
-          eb("mgg.workspace_id", "=", workspaceId),
+          eb("mgs.kind", "=", "workspace"),
+          eb("mgs.workspace_id", "=", workspaceId),
         ]),
         eb.and([
-          eb("mgg.grant_scope", "=", "actor"),
-          eb("mgg.workspace_id", "=", workspaceId),
-          eb("mgg.actor_id", "=", actorId),
+          eb("mgs.kind", "=", "actor"),
+          eb("mgs.workspace_id", "=", workspaceId),
+          eb("mgs.actor_id", "=", actorId),
         ]),
       ])
     )
@@ -1328,14 +1439,28 @@ export async function listVisibleActorModelGroups(
 export async function listModelGroupGrants(groupId: string) {
   await getGroupRow(groupId)
   const result = await db
-    .selectFrom("model_group_grants")
-    .selectAll()
-    .where("group_id", "=", groupId)
-    .orderBy("created_at", "desc")
+    .selectFrom("model_group_grants as mgg")
+    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
+    .select([
+      "mgg.id",
+      "mgg.group_id",
+      "mgg.status",
+      "mgg.reason",
+      "mgg.created_at",
+      "mgg.revoked_at",
+      "mgg.subject_id",
+      "mgg.granted_by_workspace_member_id",
+      "mgs.kind as mgs_kind",
+      "mgs.workspace_id as mgs_workspace_id",
+      "mgs.workspace_member_id as mgs_workspace_member_id",
+      "mgs.actor_id as mgs_actor_id",
+    ])
+    .where("mgg.group_id", "=", groupId)
+    .orderBy("mgg.created_at", "desc")
     .execute()
-  return (
-    result as Array<ModelGroupGrantRow & { id: string; group_id: string }>
-  ).map(mapGrantRow)
+  return (result as ModelGroupGrantDbRow[])
+    .map(dbRowToGrantRow)
+    .map(mapGrantRow)
 }
 
 export async function issueModelGroupGrant(
@@ -1352,24 +1477,48 @@ export async function issueModelGroupGrant(
   await validateGrantTarget(input)
   await ensureNoDuplicateActiveGrant(groupId, input)
 
-  const result = await db
+  const subjectRef = buildModelGroupGrantSubjectRef({
+    grantScope: input.grantScope,
+    workspaceId: input.workspaceId,
+    workspaceMemberId: input.workspaceMemberId,
+    actorId: input.actorId,
+  })
+  const subjectId = await upsertAccessSubject(db, subjectRef)
+  const inserted = await db
     .insertInto("model_group_grants")
     .values({
       group_id: groupId,
-      grant_scope: input.grantScope,
-      workspace_id: input.workspaceId || null,
-      workspace_member_id: input.workspaceMemberId || null,
-      actor_id: input.actorId || null,
+      subject_id: subjectId,
       status: "active",
       granted_by_workspace_member_id: input.grantedByWorkspaceMemberId || null,
       reason: input.reason || null,
     })
-    .returningAll()
+    .returning("id")
     .executeTakeFirstOrThrow()
 
-  return mapGrantRow(
-    result as ModelGroupGrantRow & { id: string; group_id: string }
-  )
+  // Re-fetch with the access_subjects JOIN to populate the derived
+  // grant_scope / workspace_id / actor_id / workspace_member_id fields the
+  // mapGrantRow output shape exposes.
+  const full = await db
+    .selectFrom("model_group_grants as mgg")
+    .leftJoin("access_subjects as mgs", "mgs.id", "mgg.subject_id")
+    .select([
+      "mgg.id",
+      "mgg.group_id",
+      "mgg.status",
+      "mgg.reason",
+      "mgg.created_at",
+      "mgg.revoked_at",
+      "mgg.subject_id",
+      "mgg.granted_by_workspace_member_id",
+      "mgs.kind as mgs_kind",
+      "mgs.workspace_id as mgs_workspace_id",
+      "mgs.workspace_member_id as mgs_workspace_member_id",
+      "mgs.actor_id as mgs_actor_id",
+    ])
+    .where("mgg.id", "=", inserted.id)
+    .executeTakeFirstOrThrow()
+  return mapGrantRow(dbRowToGrantRow(full as ModelGroupGrantDbRow))
 }
 
 export async function revokeModelGroupGrant(groupId: string, grantId: string) {

@@ -1,0 +1,123 @@
+[
+  {
+    "description": "origin scope matches exact origin",
+    "policies": [
+      {
+        "capability": "browser",
+        "browser": {
+          "action": "read",
+          "scopeType": "origin",
+          "origin": "https://example.com"
+        }
+      }
+    ],
+    "request": {
+      "action": "read",
+      "origin": "https://example.com",
+      "host": "example.com",
+      "registrableDomain": "example.com"
+    },
+    "expected": true
+  },
+  {
+    "description": "host scope matches host",
+    "policies": [
+      {
+        "capability": "browser",
+        "browser": {
+          "action": "read",
+          "scopeType": "host",
+          "host": "example.com"
+        }
+      }
+    ],
+    "request": {
+      "action": "read",
+      "origin": "https://example.com:8443",
+      "host": "example.com",
+      "registrableDomain": "example.com"
+    },
+    "expected": true
+  },
+  {
+    "description": "domain scope matches registrable domain",
+    "policies": [
+      {
+        "capability": "browser",
+        "browser": {
+          "action": "read",
+          "scopeType": "domain",
+          "registrableDomain": "example.com"
+        }
+      }
+    ],
+    "request": {
+      "action": "read",
+      "origin": "https://sub.example.com",
+      "host": "sub.example.com",
+      "registrableDomain": "example.com"
+    },
+    "expected": true
+  },
+  {
+    "description": "origin scope rejects different origin",
+    "policies": [
+      {
+        "capability": "browser",
+        "browser": {
+          "action": "read",
+          "scopeType": "origin",
+          "origin": "https://example.com"
+        }
+      }
+    ],
+    "request": {
+      "action": "read",
+      "origin": "https://evil.example",
+      "host": "evil.example",
+      "registrableDomain": "example"
+    },
+    "expected": false
+  },
+  {
+    "description": "action mismatch denies",
+    "policies": [
+      {
+        "capability": "browser",
+        "browser": {
+          "action": "read",
+          "scopeType": "host",
+          "host": "example.com"
+        }
+      }
+    ],
+    "request": {
+      "action": "write",
+      "origin": "https://example.com",
+      "host": "example.com",
+      "registrableDomain": "example.com"
+    },
+    "expected": false
+  },
+  {
+    "description": "unknown scope type denies (safe default)",
+    "policies": [
+      {
+        "capability": "browser",
+        "browser": {
+          "action": "read",
+          "scopeType": "galactic",
+          "host": "example.com"
+        }
+      }
+    ],
+    "request": {
+      "action": "read",
+      "origin": "https://example.com",
+      "host": "example.com",
+      "registrableDomain": "example.com"
+    },
+    "expected": false,
+    "note": "Unknown scopeType must NOT grant access. This catches the historical 'default: return true' bug."
+  }
+]

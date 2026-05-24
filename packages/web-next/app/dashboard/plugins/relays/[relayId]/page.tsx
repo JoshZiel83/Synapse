@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import type {
   AutomationEventSource,
+  CapabilityAccessTarget,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
   RelayExposureView,
@@ -300,15 +301,7 @@ export default function RelayDevicePage() {
         targetWorkspaceId: string,
         targetExposureId: string,
         payload: {
-          accessTarget?: {
-            type:
-              | "workspace"
-              | "conversation"
-              | "actor"
-              | "actor_in_conversation"
-            actorId?: string
-            conversationId?: string
-          }
+          accessTarget?: CapabilityAccessTarget
           conversationTypeMaskOverride?: number | null
           permissions?: string[]
         }
