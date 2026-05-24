@@ -94,7 +94,7 @@ test(
 
       const first = await ensureConversationParticipant({
         conversationId,
-        participantKind: "actor",
+        participantType: "actor",
         actorId,
         roleKey: "member",
         displayName: "first display",
@@ -107,7 +107,7 @@ test(
       // Hit the existing-participant UPDATE branch.
       const again = await ensureConversationParticipant({
         conversationId,
-        participantKind: "actor",
+        participantType: "actor",
         actorId,
         roleKey: "owner",
         displayName: "second display",
@@ -145,7 +145,7 @@ test(
 
       const first = await ensureConversationParticipant({
         conversationId,
-        participantKind: "workspace_member",
+        participantType: "workspace_member",
         workspaceMemberId: memberId,
         roleKey: "member",
         queryable: client,
@@ -162,7 +162,7 @@ test(
 
       const again = await ensureConversationParticipant({
         conversationId,
-        participantKind: "workspace_member",
+        participantType: "workspace_member",
         workspaceMemberId: memberId,
         queryable: client,
       })
