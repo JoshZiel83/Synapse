@@ -131,11 +131,12 @@ export async function getReachableTransportAddressForParticipant(params: {
                FALSE AS is_primary,
                ta.created_at AS binding_created_at
         FROM conversation_participants cm
+        JOIN access_subjects cm_subj ON cm_subj.id = cm.subject_id
         JOIN transport_addresses ta
-          ON ta.workspace_member_id = cm.workspace_member_id
+          ON ta.workspace_member_id = cm_subj.workspace_member_id
          AND ta.address_type = 'user'
         WHERE cm.id = ${params.conversationParticipantId}
-          AND cm.workspace_member_id IS NOT NULL
+          AND cm_subj.workspace_member_id IS NOT NULL
           AND ta.transport_account_id = ${params.transportAccountId}
       ) candidate
       ORDER BY candidate.is_attached DESC,
