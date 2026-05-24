@@ -14,8 +14,8 @@ export type ProxyEnvOptions = {
 
 /**
  * Build env variables that route the child runtime's outbound HTTPS through a
- * proxy. Use a `socks5h://` URL when DNS must also resolve through the proxy
- * (e.g. when the target hostname is only reachable inside the tunnel).
+ * proxy. The URL scheme is passed through unchanged so the deployment can use
+ * whatever proxy type the child runtime supports.
  *
  * Returns an empty overlay when no proxy URL is configured — callers can
  * always merge it on top of `process.env` unconditionally.

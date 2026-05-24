@@ -72,7 +72,7 @@ export type SessionSpec = {
   runtimePath?: string
   mcpServers?: Record<string, McpServerConfig>
   initialPrompt: string
-  /** Extra env (e.g. SOCKS5 proxy) merged on top of process.env for the agent child process. */
+  /** Extra env merged on top of process.env for the agent child process. */
   childEnvOverlay?: Record<string, string | undefined>
   abortSignal?: AbortSignal
 }

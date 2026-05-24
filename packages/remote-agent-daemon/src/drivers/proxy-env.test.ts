@@ -2,7 +2,7 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { buildAgentChildEnv } from "./proxy-env.js"
 
-const EXAMPLE_PROXY = "socks5h://proxy.example.invalid:1080"
+const EXAMPLE_PROXY = "http://proxy.example.invalid:8080"
 
 test("buildAgentChildEnv returns empty when no proxyUrl is configured", () => {
   // No silent default — daemons not on a tunnel host would dead-route

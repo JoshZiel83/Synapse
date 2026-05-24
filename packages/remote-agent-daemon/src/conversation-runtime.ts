@@ -45,10 +45,10 @@ export type ConversationRuntimeSpec = {
   serverUrl: string
   machineKey: string
   /**
-   * Optional proxy URL for the agent child process. When set, the SOCKS5 /
-   * HTTPS env vars are injected so claude / codex traffic routes through it.
-   * Leave unset (the default) for direct outbound; the runtime never assumes
-   * a localhost proxy on its own.
+   * Optional proxy URL for the agent child process. When set, standard proxy
+   * env vars are injected so claude / codex traffic routes through it. Leave
+   * unset (the default) for direct outbound; the runtime never assumes a
+   * localhost proxy on its own.
    */
   proxyUrl?: string
   resumeSessionId?: string

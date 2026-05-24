@@ -156,11 +156,11 @@ function parseArgs(argv: string[]): DaemonConfig {
     : resolveLogLevel(
         args.get("log-level") || process.env.SYNAPSE_REMOTE_AGENT_LOG_LEVEL
       )
-  // Proxy is opt-in: pass --proxy-url socks5h://host:port (or set
-  // SYNAPSE_AGENT_PROXY_URL) to inject HTTPS_PROXY into the claude / codex
-  // child processes. Without it the child runs with the daemon's own
-  // outbound network. No default — a daemon not on a tunnel host would
-  // dead-route every claude / codex API call if we shipped one.
+  // Proxy is opt-in: pass --proxy-url (or set SYNAPSE_AGENT_PROXY_URL) to
+  // inject proxy env vars into the claude / codex child processes. Without it
+  // the child runs with the daemon's own outbound network. No default — a
+  // daemon not on a tunnel host would dead-route every claude / codex API call
+  // if we shipped one.
   const proxyUrl = args.get("proxy-url") || process.env.SYNAPSE_AGENT_PROXY_URL
 
   if (!serverUrl) throw new Error("--server-url is required")
