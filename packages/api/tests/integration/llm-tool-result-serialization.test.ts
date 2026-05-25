@@ -207,7 +207,7 @@ describe("Anthropic tool_result wire-level serialization", () => {
     const r2Msg = r2.context[0]
     if (r2Msg?.role !== "assistant") throw new Error("unreachable")
     // Final assistant text contains the result content.
-    assert.ok(r2.stopReason === "end_turn" || r2.stopReason === "stop")
+    assert.equal(r2.stopReason, "end_turn")
     // text content includes 22 (from the canned response).
     const final = r2Msg.content
       .map((b) => (b.type === "text" ? b.text : ""))

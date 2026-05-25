@@ -66,8 +66,14 @@ export interface MockLLMHandle {
   baseUrl: string
   expect(input: ExpectationInput): Promise<void>
   reset(): Promise<void>
-  recorded(matcher: { method?: string; path?: string }): Promise<RecordedRequest[]>
-  verify(matcher: VerifyMatcher, times: { atLeast?: number; atMost?: number }): Promise<void>
+  recorded(matcher: {
+    method?: string
+    path?: string
+  }): Promise<RecordedRequest[]>
+  verify(
+    matcher: VerifyMatcher,
+    times: { atLeast?: number; atMost?: number }
+  ): Promise<void>
   stop(): Promise<void>
   matchers: typeof matchers
 }
@@ -82,10 +88,12 @@ export interface MockLLMHandle {
  * then insertion order; we MUST NOT rely on the implicit "more specific
  * matcher wins" rule (it doesn't exist).
  *
- * Body markers per provider:
- *   Anthropic           — `tool_use_id` field on a content block
- *   OpenAI Chat / BigModel — `"role":"tool"` message entry
- *   OpenAI Responses    — `function_call_output` input entry
+ * Body markers per provider (all matchers are wire-shape-specific, NOT
+ * key-name recursive descent — the latter would false-match if a fixture
+ * ever embedded the literal marker string inside user content):
+ *   Anthropic           — user message content with a tool_result block
+ *   OpenAI Chat/BigModel— messages array entry with role:"tool"
+ *   OpenAI Responses    — input array entry with type:"function_call_output"
  */
 export const matchers = {
   anthropic: {
@@ -93,7 +101,11 @@ export const matchers = {
     round2: {
       method: "POST",
       path: "/v1/messages",
-      body: { type: "JSON_PATH", jsonPath: "$..tool_use_id" },
+      body: {
+        type: "JSON_PATH",
+        jsonPath:
+          "$.messages[?(@.role=='user')].content[?(@.type=='tool_result')]",
+      },
     },
   },
   openaiChat: {
@@ -481,6 +493,10 @@ export async function startMockLLM(): Promise<MockLLMHandle> {
     },
 
     async verify(matcher, times) {
+      // Reserved for future negative-path tests (e.g. "the second provider
+      // round should NOT happen because the test errored out"). Currently
+      // unused by the three default test files because `recorded()` +
+      // .length assertions cover the positive path more directly.
       const httpRequest: Record<string, unknown> = {}
       if (matcher.method) httpRequest.method = matcher.method
       if (matcher.path) httpRequest.path = matcher.path
@@ -503,6 +519,12 @@ export async function startMockLLM(): Promise<MockLLMHandle> {
     },
 
     async stop() {
+      // Idempotent under single-caller semantics (which is what node:test
+      // gives us — `after()` runs once per file). The cached stopPromise
+      // collapses repeated calls to the same outcome. If the underlying
+      // container.stop() throws, stopPromise is reset to null so a later
+      // retry can attempt again — that path is rare and not expected
+      // under normal test teardown.
       if (!stopPromise) {
         stopPromise = (async () => {
           try {
@@ -588,7 +610,9 @@ function normalizeHeaders(raw: unknown): Record<string, string[]> {
   if (typeof raw === "object") {
     for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
       if (Array.isArray(v)) {
-        out[k.toLowerCase()] = v.filter((x): x is string => typeof x === "string")
+        out[k.toLowerCase()] = v.filter(
+          (x): x is string => typeof x === "string"
+        )
       } else if (typeof v === "string") {
         out[k.toLowerCase()] = [v]
       }

@@ -75,9 +75,7 @@ beforeEach(async () => {
 
 function userWindow(text: string) {
   return buildAdHocProviderContextWindow(
-    buildAdHocContextItems([
-      { role: "user", content: [textBlock(text)] },
-    ])
+    buildAdHocContextItems([{ role: "user", content: [textBlock(text)] }])
   )
 }
 
@@ -225,17 +223,10 @@ describe("AnthropicProvider conformance", () => {
 
     // The mock returns the rewritten alias in tool_use.name; that's what
     // would actually come back from Anthropic in production after the
-    // provider sent the aliased tools[] up. We register *after* checking
-    // what alias the provider mints so the mock echoes the same alias.
-    //
-    // We can't easily compute the sha8 here without depending on internal
-    // helpers, so register a permissive expectation and read the actual
-    // wire-side name from the recorded request to construct the expected
-    // alias for the response parse step instead — but for THIS test we
-    // care only that:
-    //   (a) the wire name matches /^weather_ge_[0-9a-f]{8}$/
+    // provider sent the aliased tools[] up. The alias is deterministic so
+    // we can compute it here and assert on both sides:
+    //   (a) the wire name matches /^weather_get_[0-9a-f]{8}$/
     //   (b) the parsed toolName surfaces back as "weather.get"
-    // So we structure the test in two phases.
 
     // Phase 1: register a tool_use response that mirrors WHATEVER alias the
     // provider sends. The alias is constructed deterministically as
@@ -243,7 +234,10 @@ describe("AnthropicProvider conformance", () => {
     // rawName="weather.get": normalized="weather_get", so the alias is
     // "weather_get_<sha8>".
     const { createHash } = await import("node:crypto")
-    const hash = createHash("sha256").update("weather.get").digest("hex").slice(0, 8)
+    const hash = createHash("sha256")
+      .update("weather.get")
+      .digest("hex")
+      .slice(0, 8)
     const expectedAlias = `weather_get_${hash}`
 
     const responseBody = buildAnthropicToolUseResponse({
@@ -597,7 +591,7 @@ describe("BigModelChatCompletionsProvider conformance", () => {
   })
 
   test("buildBigModelChatEndpoint URL normalization", async () => {
-    // All three baseUrl shapes must POST to /paas/v4/chat/completions
+    // All four baseUrl shapes must POST to /paas/v4/chat/completions
     // (providers/bigmodel.ts:68-73). Run the same minimal request three
     // times with different baseUrl suffixes and confirm the mock received
     // exactly three requests at the canonical path.

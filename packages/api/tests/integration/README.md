@@ -168,12 +168,16 @@ file spawns its own `mockserver/mockserver:5.15.0` container via
 nothing changes in `docker-compose.test.yaml` / `up.sh`).
 
 - First-run cost: pulls the MockServer image (~150 MB). Cached
-  afterwards.
+  afterwards. On cold CI, warm the cache once with
+  `docker pull mockserver/mockserver:5.15.0`.
 - Per-file cost: ~5–8 s container start. `run-all.sh` runs files
   serially, so at most one MockServer container is alive at a time.
 - The harness (`harness/mock-llm.ts`) auto-cleans the container via
   an idempotent `stop()` in each test file's `after()` hook. Failed
   tests still tear the container down.
+- Requires a working Docker daemon. If a test fails with a raw
+  `testcontainers`-shaped error (e.g. "could not find a working
+  container runtime strategy"), run `docker info` first.
 
 The three files do **not** depend on the postgres / redis stack —
 they instantiate providers directly and only touch MockServer via
