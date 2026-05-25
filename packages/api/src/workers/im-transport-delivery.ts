@@ -11,6 +11,7 @@ import {
   getConversationTransportBinding,
   getPrimaryTransportAddressForParticipant,
   getReachableTransportAddressForParticipant,
+  getTransportAddressByExternalId,
   loadTransportMessageLinkForDelivery,
   updateTransportMessageLinkStatus,
 } from "../modules/im/service.js"
@@ -25,6 +26,19 @@ import { registerWorker } from "./registry.js"
 
 function nonEmptyString(value: unknown) {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
+}
+
+/**
+ * The transport_address row's `metadata` JSONB column is typed as
+ * Kysely's `JsonValue`, which permits primitives and arrays. Connectors
+ * always want `Record<string, unknown> | undefined` here, so normalize
+ * once at the worker boundary instead of asking every connector to
+ * re-validate.
+ */
+function asObjectMetadata(value: unknown): Record<string, unknown> | undefined {
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined
 }
 
 async function resolveTransportMentionRecipients(params: {
@@ -103,6 +117,13 @@ async function resolveTransportMentionRecipients(params: {
 export interface ImTransportDeliveryDeps {
   loadLink: typeof loadTransportMessageLinkForDelivery
   findExternalMessageIdForItem: typeof findExternalMessageIdForItem
+  /**
+   * Looks up the recipient transport_address row when the connector
+   * declares `requiresRecipientAddressMetadata = true`. The result's
+   * `metadata` is normalized to a plain object before being passed to
+   * `connector.sendMessage` (see `asObjectMetadata`).
+   */
+  loadRecipientAddress: typeof getTransportAddressByExternalId
   updateStatus: typeof updateTransportMessageLinkStatus
   getBinding: typeof getConversationTransportBinding
   getItem: typeof getConversationFeedItemById
@@ -257,6 +278,21 @@ export async function processImTransportDeliveryJob(
       }
     }
 
+    // Pre-load the recipient transport_address metadata when the connector
+    // wants it. Lookup throws are caught by the surrounding try/catch and
+    // surface as `status="failed"` + re-throw, which is what we want for
+    // BullMQ retries — the address row may be created on a subsequent
+    // inbound and the retry will succeed.
+    let recipientAddressMetadata: Record<string, unknown> | undefined
+    if (connector.requiresRecipientAddressMetadata) {
+      const addressRow = await deps.loadRecipientAddress({
+        transportAccountId: link.account.id,
+        addressType: "user",
+        externalId: link.endpoint.externalId,
+      })
+      recipientAddressMetadata = asObjectMetadata(addressRow?.metadata)
+    }
+
     const deliveryResult = await connector.sendMessage({
       account: link.account,
       endpoint: {
@@ -266,6 +302,7 @@ export async function processImTransportDeliveryJob(
       },
       message,
       replyTo,
+      recipientAddressMetadata,
     })
 
     await deps.updateStatus({
@@ -295,6 +332,7 @@ export function defaultImTransportDeliveryDeps(): ImTransportDeliveryDeps {
   return {
     loadLink: loadTransportMessageLinkForDelivery,
     findExternalMessageIdForItem,
+    loadRecipientAddress: getTransportAddressByExternalId,
     updateStatus: updateTransportMessageLinkStatus,
     getBinding: getConversationTransportBinding,
     getItem: getConversationFeedItemById,

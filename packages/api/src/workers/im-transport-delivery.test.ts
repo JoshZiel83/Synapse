@@ -26,6 +26,7 @@ function baseDeps(overrides: Partial<Deps> = {}): Deps {
   return {
     loadLink: FAIL("loadLink"),
     findExternalMessageIdForItem: FAIL("findExternalMessageIdForItem"),
+    loadRecipientAddress: FAIL("loadRecipientAddress"),
     updateStatus: FAIL("updateStatus"),
     getBinding: FAIL("getBinding"),
     getItem: FAIL("getItem"),
@@ -450,3 +451,147 @@ test("happy path → connector.sendMessage called, status updated to sent, retur
   assert.equal(updateCalls[0].status, "sent")
   assert.equal(updateCalls[0].externalMessageId, "om_external_123")
 })
+
+// ─── Commit 3: recipientAddressMetadata pre-load ───
+
+function recipientMetadataConnector(opts: {
+  requires: boolean
+  capture: { received?: any }
+}) {
+  return {
+    requiresRecipientAddressMetadata: opts.requires,
+    messageCapabilities: { directMentionPolicy: "attached_only" },
+    sendMessage: async (input: any) => {
+      opts.capture.received = input.recipientAddressMetadata
+      return { externalMessageId: "om_external_123" }
+    },
+  } as any
+}
+
+test(
+  "Commit 3: requiresRecipientAddressMetadata=true + address row present " +
+    "→ connector receives recipientAddressMetadata with contextToken",
+  async () => {
+    const capture: { received?: any } = {}
+    let loadCallCount = 0
+    const deps = baseDeps({
+      ...happyPathDepsExceptConnector(),
+      getConnector: () =>
+        recipientMetadataConnector({ requires: true, capture }),
+      loadRecipientAddress: async (params) => {
+        loadCallCount++
+        assert.equal(params.transportAccountId, "acc-1")
+        assert.equal(params.addressType, "user")
+        assert.equal(params.externalId, "oc_chat_1")
+        return { id: "addr-1", metadata: { contextToken: "ctx-abc" } } as any
+      },
+      findExternalMessageIdForItem: async () => null,
+      updateStatus: async () => null,
+    })
+    await processImTransportDeliveryJob({ linkId: "x" }, deps)
+    assert.equal(loadCallCount, 1)
+    assert.deepEqual(capture.received, { contextToken: "ctx-abc" })
+  }
+)
+
+test(
+  "Commit 3: requiresRecipientAddressMetadata=true + null address row " +
+    "→ connector receives undefined",
+  async () => {
+    const capture: { received?: any } = {}
+    const deps = baseDeps({
+      ...happyPathDepsExceptConnector(),
+      getConnector: () =>
+        recipientMetadataConnector({ requires: true, capture }),
+      loadRecipientAddress: async () => null,
+      findExternalMessageIdForItem: async () => null,
+      updateStatus: async () => null,
+    })
+    await processImTransportDeliveryJob({ linkId: "x" }, deps)
+    assert.equal(capture.received, undefined)
+  }
+)
+
+test(
+  "Commit 3: requiresRecipientAddressMetadata=false " +
+    "→ loadRecipientAddress NOT called, connector receives undefined (Feishu regression)",
+  async () => {
+    const capture: { received?: any } = {}
+    const deps = baseDeps({
+      ...happyPathDepsExceptConnector(),
+      getConnector: () =>
+        recipientMetadataConnector({ requires: false, capture }),
+      // loadRecipientAddress left as FAIL — must not be called.
+      findExternalMessageIdForItem: async () => null,
+      updateStatus: async () => null,
+    })
+    await processImTransportDeliveryJob({ linkId: "x" }, deps)
+    assert.equal(capture.received, undefined)
+  }
+)
+
+test(
+  "Commit 3: address row metadata is a primitive " +
+    "→ connector receives undefined (asObjectMetadata guard)",
+  async () => {
+    const capture: { received?: any } = {}
+    const deps = baseDeps({
+      ...happyPathDepsExceptConnector(),
+      getConnector: () =>
+        recipientMetadataConnector({ requires: true, capture }),
+      loadRecipientAddress: async () =>
+        ({ id: "addr-1", metadata: "a string, not an object" }) as any,
+      findExternalMessageIdForItem: async () => null,
+      updateStatus: async () => null,
+    })
+    await processImTransportDeliveryJob({ linkId: "x" }, deps)
+    assert.equal(capture.received, undefined)
+  }
+)
+
+test(
+  "Commit 3: address row metadata is an array " +
+    "→ connector receives undefined (asObjectMetadata guard)",
+  async () => {
+    const capture: { received?: any } = {}
+    const deps = baseDeps({
+      ...happyPathDepsExceptConnector(),
+      getConnector: () =>
+        recipientMetadataConnector({ requires: true, capture }),
+      loadRecipientAddress: async () =>
+        ({ id: "addr-1", metadata: [1, 2, 3] }) as any,
+      findExternalMessageIdForItem: async () => null,
+      updateStatus: async () => null,
+    })
+    await processImTransportDeliveryJob({ linkId: "x" }, deps)
+    assert.equal(capture.received, undefined)
+  }
+)
+
+test(
+  "Commit 3: loadRecipientAddress throws → updateStatus failed with error, re-throws " +
+    "(catch range preserved from Commit 2)",
+  async () => {
+    const updateCalls: any[] = []
+    const capture: { received?: any } = {}
+    const deps = baseDeps({
+      ...happyPathDepsExceptConnector(),
+      getConnector: () =>
+        recipientMetadataConnector({ requires: true, capture }),
+      loadRecipientAddress: async () => {
+        throw new Error("address lookup boom")
+      },
+      updateStatus: async (params) => {
+        updateCalls.push(params)
+        return null
+      },
+    })
+    await assert.rejects(
+      processImTransportDeliveryJob({ linkId: "x" }, deps),
+      /address lookup boom/
+    )
+    assert.equal(updateCalls.length, 1)
+    assert.equal(updateCalls[0].status, "failed")
+    assert.equal(updateCalls[0].error, "address lookup boom")
+  }
+)
