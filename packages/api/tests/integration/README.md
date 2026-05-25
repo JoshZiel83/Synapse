@@ -39,6 +39,10 @@ harness/
                                  # STAGING_API_URL setup.ts)
   db.ts                          # pg client + resetDb + seedMinimal
   http-server.ts                 # tiny mock HTTP server for image-url / plugin-remote mocks
+  mock-llm.ts                    # testcontainers wrapper around mockserver/mockserver
+                                 # for the LLM-endpoint provider/error tests below.
+                                 # Per-file dynamic-port container; no impact on
+                                 # docker-compose.test.yaml.
   relay.ts                       # pair + start synapse-relay against the test API
   index.ts                       # re-exports
 mocks/
@@ -51,6 +55,21 @@ manual/                          # NOT in the default test:integration glob;
                                  # opt-in via dedicated package scripts
   llm-smoke.test.ts              # optional external-endpoint Anthropic probe;
                                  # run with `npm run test:integration:llm-smoke`
+llm-providers.test.ts            # provider conformance: per-provider HTTP shape,
+                                 # tools envelope, parsed ToolCall + tokens. Uses
+                                 # MockServer via harness/mock-llm.ts. No DB.
+llm-tool-result-serialization.test.ts
+                                 # per-provider wire-level serialization of
+                                 # tool_call_batch + tool_result_batch ContextItems
+                                 # (Anthropic tool_result block, OpenAI Chat
+                                 # role:"tool", OpenAI Responses
+                                 # function_call_output, BigModel role:"tool").
+                                 # Two-round provider.chat() against MockServer
+                                 # with priority-distinguished expectations.
+                                 # No DB.
+llm-error-behavior.test.ts       # 4xx/5xx Error.message contract; malformed
+                                 # JSON; empty content[]; bad tool_call args;
+                                 # ECONNREFUSED via close-listener trick. No DB.
 sanity.test.ts                   # smoke test (requires `build-relay.sh`)
 ```
 
@@ -132,6 +151,36 @@ LLM_SMOKE_API_KEY=$KEY \
   npm run test:integration:llm-smoke -w packages/api
 ```
 
+Note that the default suite now has its own MockServer-backed LLM
+coverage (`llm-providers.test.ts`, `llm-tool-result-serialization.test.ts`,
+`llm-error-behavior.test.ts`), so `manual/llm-smoke.test.ts` is no
+longer the only path that exercises a provider — it is a thin "real
+gateway still responds" sanity check on top of the determinstic mock
+coverage.
+
+## MockServer mock LLM endpoint
+
+The three `llm-*.test.ts` files at the top level mock the LLM
+endpoint deterministically rather than calling a real upstream. Each
+file spawns its own `mockserver/mockserver:5.15.0` container via
+[testcontainers](https://www.npmjs.com/package/testcontainers) on a
+**dynamic** mapped port (so no fixed worktree port is reserved, and
+nothing changes in `docker-compose.test.yaml` / `up.sh`).
+
+- First-run cost: pulls the MockServer image (~150 MB). Cached
+  afterwards.
+- Per-file cost: ~5–8 s container start. `run-all.sh` runs files
+  serially, so at most one MockServer container is alive at a time.
+- The harness (`harness/mock-llm.ts`) auto-cleans the container via
+  an idempotent `stop()` in each test file's `after()` hook. Failed
+  tests still tear the container down.
+
+The three files do **not** depend on the postgres / redis stack —
+they instantiate providers directly and only touch MockServer via
+`fetch`. `up.sh` is therefore optional when running these three in
+isolation, though `run-all.sh` still requires it because other
+default files need pg/redis.
+
 ## Production-style API build verification
 
 After backend code changes per `AGENTS.md` §Backend, rebuild the API image
@@ -153,11 +202,12 @@ ensure this never collides with `synapse-*` production containers.
 
 ## Notes
 
-- The optional LLM smoke test now lives under `manual/llm-smoke.test.ts`
+- The optional LLM smoke test lives under `manual/llm-smoke.test.ts`
   and is excluded from the default `test:integration` glob. See
   [Opt-in manual tests](#opt-in-manual-tests) above for configuration
-  and how to invoke it. Everything else in this directory is fully
-  self-contained.
+  and how to invoke it. The default LLM coverage is now provided by
+  the three MockServer-backed `llm-*.test.ts` files at the top level —
+  see [MockServer mock LLM endpoint](#mockserver-mock-llm-endpoint).
 - `.cache/` and `tmp-profiles/` are gitignored.
 - Mock MCP servers are pure stdio Node scripts — they don't need any
   runtime bundle; the relay's plain `make cli` build is sufficient.
