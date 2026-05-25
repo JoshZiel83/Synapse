@@ -68,11 +68,11 @@ Most AI products treat chat as a thin interface on top of isolated bots. Synapse
 
 Synapse uses a conversation-centric architecture. Around that core, the system separates resource runtimes, access control, memory, transport integration, and context management into distinct subsystems.
 
-- **Conversation and session runtime.** `conversation`, participants, conversation items, actor sessions, and `session_wakeups` define the primary collaboration and execution model. Web chat, remote-agent bridges, and IM transports reuse this model rather than implementing separate conversation systems.
+- **Conversation and session runtime.** `conversation`, participants, conversation items, conversation-scoped actor sessions, and `session_wakeups` define the primary collaboration and execution model. Every actor session is bound to a conversation; there is no standalone API-invoked session. Web chat, remote-agent bridges, and IM transports reuse this model rather than implementing separate conversation systems.
 - **Resource runtimes.** Plugins, installed skills, relay exposures, actors, and remote agents are represented as distinct runtime resources with independent state, lifecycle, and APIs. Marketplace catalog metadata is stored separately from installed runtime state.
 - **Access control.** Authorization is evaluated against explicit resource types, including `workspace`, `conversation`, `actor`, `remote_agent`, `plugin_installation`, `installed_skill`, `relay_capability`, and `memory_item`. Sharing, invocation, and governance therefore rely on the same access model.
 - **Memory subsystem.** Memory is partitioned by scope: `workspace_shared`, `conversation_shared`, `actor_private`, `participant_private`, and `user_private`. Retrieval combines lexical indexing and embeddings to support both durable memory and thread-local working state.
-- **Transport and automation integration.** IM transports bind external endpoints back to conversations. Event sources, schedules, webhooks, and integration triggers enter the same runtime so they can wake sessions and emit conversation-visible events.
+- **Transport and automation integration.** IM transports bind external endpoints back to conversations. Event sources, schedules, webhooks, and integration triggers enter the same runtime so they can wake the conversation's actor runtimes and emit conversation-visible events.
 - **Context window management.** Model context is compiled from canonical context items into shared and private archive chains plus a live tail window. Archive points, compaction runs, and per-event context policies bound prompt size while preserving scope and event semantics.
 
 ## Example Flows

@@ -647,8 +647,6 @@ export const SESSION_STATUSES = [
   "blocked",
   "closed",
 ] as const
-export const SESSION_CHANNELS = ["web", "api", "bridge"] as const
-export const SESSION_CHANNEL_INPUTS = ["web", "im", "api"] as const
 export const SESSION_COLLABORATION_MODES = [
   "default",
   "plan_drafting",

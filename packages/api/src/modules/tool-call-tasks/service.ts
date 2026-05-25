@@ -5,7 +5,6 @@ import {
   type TaskNoticeStatus,
 } from "@synapse/shared"
 import type {
-  SessionsChannelType,
   SessionsStatus,
   ToolCallTasksDeliveryPolicy,
   ToolCallTasksDispatchStatus,
@@ -205,21 +204,17 @@ async function assertSessionAllowsToolCallTasks(
 ) {
   const row = await executeTakeFirst<{
     id: string
-    channel_type: SessionsChannelType
     status: SessionsStatus
   }>(
     client,
     db
       .selectFrom("sessions")
-      .select(["id", "channel_type", "status"])
+      .select(["id", "status"])
       .where("id", "=", sessionId)
       .limit(1)
   )
   if (!row) {
     throw new Error(`Session ${sessionId} not found`)
-  }
-  if (row.channel_type === "api") {
-    throw new Error("Tool-call tasks are not supported for API sessions")
   }
   if (row.status === "closed") {
     throw new Error(`Session ${sessionId} is closed`)

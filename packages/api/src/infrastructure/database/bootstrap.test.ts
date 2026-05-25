@@ -2,11 +2,13 @@ import test from "node:test"
 import assert from "node:assert/strict"
 import { decideBootstrapAction } from "./bootstrap.js"
 
+const TEST_SCHEMA_VERSION = "test-schema-version"
+
 test("decideBootstrapAction noop when current version already recorded", () => {
   const result = decideBootstrapAction({
     hasCurrentVersion: true,
     tableCount: 42,
-    currentVersion: "2026-05-24-auth-refactor",
+    currentVersion: TEST_SCHEMA_VERSION,
   })
   assert.equal(result.kind, "noop")
 })
@@ -15,7 +17,7 @@ test("decideBootstrapAction applies schema on empty database", () => {
   const result = decideBootstrapAction({
     hasCurrentVersion: false,
     tableCount: 0,
-    currentVersion: "2026-05-24-auth-refactor",
+    currentVersion: TEST_SCHEMA_VERSION,
   })
   assert.equal(result.kind, "apply")
 })
@@ -24,11 +26,11 @@ test("decideBootstrapAction fails loudly when prior schema exists at a different
   const result = decideBootstrapAction({
     hasCurrentVersion: false,
     tableCount: 42,
-    currentVersion: "2026-05-24-auth-refactor",
+    currentVersion: TEST_SCHEMA_VERSION,
   })
   assert.equal(result.kind, "fail")
   if (result.kind !== "fail") return
-  assert.match(result.message, /auth-refactor/)
+  assert.match(result.message, new RegExp(TEST_SCHEMA_VERSION))
   assert.match(result.message, /db:rebuild/)
   assert.match(result.message, /42 public tables/)
 })
