@@ -33,6 +33,13 @@ import type { RuntimeAuthorizationGrantSpec } from "@synapse/device-protocol"
 import { createHash } from "node:crypto"
 import { listActiveRuntimeAuthorizationGrantsForExposure } from "../runtime-authorizations/service.js"
 import {
+  beginDeviceOperation,
+  completeDeviceOperation,
+  RevisionDriftError,
+  type OperationPrincipalKind,
+} from "../devices/operations.js"
+import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
+import {
   loadDeviceCapabilityToolsForSubjects,
   type DeviceCapabilityToolRow,
 } from "./device-capabilities.js"
@@ -320,7 +327,7 @@ function normalizeInputSchema(raw: unknown): ToolDefinition["parameters"] {
 }
 
 function unionWithDevice(
-  input: ProjectToolsInput,
+  projectInput: ProjectToolsInput,
   legacy: ProjectedToolList,
   device: DeviceToolBundle
 ): ProjectedToolList {
@@ -435,6 +442,43 @@ function unionWithDevice(
         `envelope signing failed (operator must set SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY): ${(err as Error).message}`
       )
     }
+    // Open a device_operations + first device_operation_attempts row pair
+    // BEFORE dispatch so the audit trail captures partial failures (e.g.
+    // tunnel unreachable). Also performs the revision-drift check: if the
+    // device re-synced its catalog between projection and this call, the
+    // envelope's tool_revision_id is stale and we must signal replan.
+    let operationId: string
+    let attemptId: string
+    try {
+      const begin = await beginDeviceOperation({
+        workspaceId: projectInput.workspaceId,
+        conversationId: projectInput.conversationId ?? null,
+        envelope,
+        args: input,
+        toolName: row.visible_tool_name,
+        deviceId: row.device_id,
+        deviceServiceId: row.device_service_id,
+        tunnelInternalUrl:
+          getDeviceTunnelRegistry().resolve(row.device_service_id)
+            ?.internalUrl ?? null,
+        principalKind: principalKindFor(projectInput.principal),
+        principalSubjectId: device.subjectIds[0] ?? null,
+        initiatedByWorkspaceMemberId: projectInput.workspaceMemberId ?? null,
+        initiatedBySessionId: projectInput.sessionId ?? null,
+      })
+      operationId = begin.operationId
+      attemptId = begin.attemptId
+    } catch (err) {
+      if (err instanceof RevisionDriftError) {
+        return mcpErrorBlock(
+          `tool definition changed since planning: ${err.message}`
+        )
+      }
+      return mcpErrorBlock(
+        `device_operations insert failed: ${(err as Error).message}`
+      )
+    }
+
     // dispatchSyncTool resolves the tunnel endpoint by deviceServiceId, which
     // is the device_services row id (what the runtime registered its tunnel
     // under). We use row.device_service_id from the catalog projection — NOT
@@ -444,6 +488,15 @@ function unionWithDevice(
       envelope,
       args: input,
       toolName: row.visible_tool_name,
+    })
+    await completeDeviceOperation({
+      operationId,
+      attemptId,
+      ok: result.ok,
+      error: result.error,
+    }).catch(() => {
+      /* operation-complete logging is best-effort; the dispatch result is
+       * already in hand and shouldn't be hidden behind audit-write errors */
     })
     if (!result.ok) {
       return mcpErrorBlock(
@@ -475,7 +528,7 @@ function unionWithDevice(
     // Re-query device tools on each refresh so newly granted bindings show
     // up without restarting the session. Use the captured input so the
     // principal + subject set stays consistent across refreshes.
-    const freshDevice = await projectDeviceTools(input)
+    const freshDevice = await projectDeviceTools(projectInput)
     // Replace the stale device-bundle handlers/subjectIds in place so the
     // dispatchDeviceTool closure (which closes over `device`) sees the
     // refreshed handlers on the next tool call.
@@ -502,6 +555,17 @@ function mcpErrorBlock(message: string): NormalizedMcpToolResult {
   return {
     content: [textBlock(message) as CanonicalContentBlock],
     isError: true,
+  }
+}
+
+function principalKindFor(principal: DevicePrincipal): OperationPrincipalKind {
+  switch (principal.kind) {
+    case "actor":
+    case "actor_in_conversation":
+    case "conversation":
+    case "remote_agent":
+    case "workspace_member":
+      return principal.kind
   }
 }
 

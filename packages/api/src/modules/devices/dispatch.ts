@@ -2,11 +2,11 @@
 // operation envelope, args), resolves the device's MCP HTTP endpoint via
 // DeviceTunnelRegistry and issues a `tools/call` to it.
 //
-// v3.0 skeleton: uses fetch directly to keep the dependency surface minimal.
-// PR #7 swaps to the @modelcontextprotocol/sdk client so we get session
-// management + streaming for free.
+// v3.0 ships a raw JSON-RPC client (no MCP SDK) because the surface is
+// stateless and the McpServer SDK costs ~150KB on the API side. A follow-up
+// PR can swap to @modelcontextprotocol/sdk's StreamableHttp client without
+// touching the projection layer.
 
-import { setTimeout as sleep } from "node:timers/promises"
 import type { OperationEnvelope, SynapseError } from "@synapse/device-protocol"
 import { getDeviceTunnelRegistry } from "./tunnel-registry.js"
 
@@ -52,7 +52,15 @@ export async function dispatchSyncTool(
   const fetchImpl = opts.fetchImpl ?? fetch
   const url = `${endpoint.internalUrl.replace(/\/$/, "")}/mcp`
   const controller = new AbortController()
-  const timer = sleep(opts.timeoutMs ?? 60_000).then(() => controller.abort())
+  // Wall-clock timer that aborts the in-flight fetch. CRITICAL: clear it in
+  // every exit path (success / HTTP error / synapse_error / catch) so the
+  // process doesn't leak timers under steady load. Prior version used
+  // sleep().then(abort) which left an unowned promise + timer in node's
+  // queue on every successful call.
+  const timer = setTimeout(
+    () => controller.abort(),
+    opts.timeoutMs ?? 60_000
+  )
 
   try {
     const res = await fetchImpl(url, {
@@ -112,6 +120,6 @@ export async function dispatchSyncTool(
       },
     }
   } finally {
-    void timer
+    clearTimeout(timer)
   }
 }
