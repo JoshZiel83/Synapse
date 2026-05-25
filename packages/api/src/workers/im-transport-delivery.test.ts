@@ -27,6 +27,7 @@ function baseDeps(overrides: Partial<Deps> = {}): Deps {
     loadLink: FAIL("loadLink"),
     findExternalMessageIdForItem: FAIL("findExternalMessageIdForItem"),
     loadRecipientAddress: FAIL("loadRecipientAddress"),
+    resolveMentions: FAIL("resolveMentions"),
     updateStatus: FAIL("updateStatus"),
     getBinding: FAIL("getBinding"),
     getItem: FAIL("getItem"),
@@ -350,6 +351,9 @@ function happyPathDepsExceptConnector(): Partial<Deps> {
         parts: [],
         plainText: "",
       }) as any,
+    // Default to "no mentions" so connector-path tests that don't care
+    // about the mention pipeline don't have to opt in.
+    resolveMentions: async () => new Map(),
   }
 }
 
@@ -593,5 +597,238 @@ test(
     assert.equal(updateCalls.length, 1)
     assert.equal(updateCalls[0].status, "failed")
     assert.equal(updateCalls[0].error, "address lookup boom")
+  }
+)
+
+// ─── Commit 4: in-place mention fill via deps.resolveMentions ───
+
+/**
+ * Build a `decode` stub that returns a CanonicalMessage with the supplied
+ * parts. The worker calls `deps.decode` to translate the conversation_item
+ * into CanonicalMessage; in tests we skip that translation and hand the
+ * parts directly.
+ */
+function decodeStub(parts: any[]) {
+  return () =>
+    ({
+      schemaVersion: 1,
+      parts,
+      plainText: "",
+    }) as any
+}
+
+/**
+ * Connector that captures the final `message.parts` array passed into
+ * `sendMessage`. The worker's mutation must be observable so we can
+ * assert in-place fill (not append).
+ */
+function capturingConnector(): {
+  connector: any
+  capture: { receivedParts?: any[] }
+} {
+  const capture: { receivedParts?: any[] } = {}
+  const connector = {
+    messageCapabilities: { directMentionPolicy: "attached_only" },
+    sendMessage: async (input: any) => {
+      capture.receivedParts = input.message.parts
+      return { externalMessageId: "om_x" }
+    },
+  } as any
+  return { connector, capture }
+}
+
+test("Commit 4: single mention with participantId → external fill in place, no appended parts", async () => {
+  const { connector, capture } = capturingConnector()
+  const initialParts = [
+    { type: "text", text: "hello " },
+    { type: "mention", participantId: "p1", displayName: "Alice" },
+    { type: "text", text: " bye" },
+  ]
+  const deps = baseDeps({
+    ...happyPathDepsExceptConnector(),
+    getConnector: () => connector,
+    decode: decodeStub(initialParts),
+    resolveMentions: async () =>
+      new Map([["p1", { externalId: "ou_a", displayName: "Alice" }]]),
+    findExternalMessageIdForItem: async () => null,
+    updateStatus: async () => null,
+  })
+  await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  const parts = capture.receivedParts!
+  assert.equal(parts.length, 3, "no appended parts")
+  assert.equal(parts[0].type, "text")
+  assert.equal(parts[1].type, "mention")
+  assert.equal(parts[1].externalId, "ou_a")
+  assert.equal(parts[1].displayName, "Alice")
+  assert.equal(parts[2].type, "text")
+})
+
+test("Commit 4: inbound-mirrored mention (externalId set, no participantId) → unchanged", async () => {
+  const { connector, capture } = capturingConnector()
+  const initialParts = [
+    { type: "mention", externalId: "ou_already", displayName: "Pre" },
+  ]
+  const deps = baseDeps({
+    ...happyPathDepsExceptConnector(),
+    getConnector: () => connector,
+    decode: decodeStub(initialParts),
+    resolveMentions: async () => new Map(), // no participants to resolve
+    findExternalMessageIdForItem: async () => null,
+    updateStatus: async () => null,
+  })
+  await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  const parts = capture.receivedParts!
+  assert.equal(parts.length, 1)
+  assert.equal(parts[0].externalId, "ou_already")
+  assert.equal(parts[0].displayName, "Pre")
+})
+
+test("Commit 4: two parts with same participantId → both filled to same externalId", async () => {
+  const { connector, capture } = capturingConnector()
+  const initialParts = [
+    { type: "mention", participantId: "p1", displayName: "Alice" },
+    { type: "text", text: " and " },
+    { type: "mention", participantId: "p1", displayName: "Alice" },
+  ]
+  const deps = baseDeps({
+    ...happyPathDepsExceptConnector(),
+    getConnector: () => connector,
+    decode: decodeStub(initialParts),
+    resolveMentions: async () =>
+      new Map([["p1", { externalId: "ou_a", displayName: "Alice" }]]),
+    findExternalMessageIdForItem: async () => null,
+    updateStatus: async () => null,
+  })
+  await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  const parts = capture.receivedParts!
+  assert.equal(parts.length, 3)
+  assert.equal(parts[0].externalId, "ou_a")
+  assert.equal(parts[2].externalId, "ou_a")
+})
+
+test("Commit 4: stubbed resolver returns empty Map → message.parts unchanged", async () => {
+  const { connector, capture } = capturingConnector()
+  const initialParts = [
+    { type: "mention", participantId: "p_missing", displayName: "Alice" },
+  ]
+  const deps = baseDeps({
+    ...happyPathDepsExceptConnector(),
+    getConnector: () => connector,
+    decode: decodeStub(initialParts),
+    resolveMentions: async () => new Map(),
+    findExternalMessageIdForItem: async () => null,
+    updateStatus: async () => null,
+  })
+  await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  const parts = capture.receivedParts!
+  assert.equal(parts.length, 1)
+  assert.equal(parts[0].externalId, undefined)
+  assert.equal(parts[0].displayName, "Alice")
+})
+
+test("Commit 4: empty displayName + resolver returns name → part.displayName fills", async () => {
+  const { connector, capture } = capturingConnector()
+  const initialParts = [
+    { type: "mention", participantId: "p1", displayName: "" },
+  ]
+  const deps = baseDeps({
+    ...happyPathDepsExceptConnector(),
+    getConnector: () => connector,
+    decode: decodeStub(initialParts),
+    resolveMentions: async () =>
+      new Map([["p1", { externalId: "ou_a", displayName: "Alice" }]]),
+    findExternalMessageIdForItem: async () => null,
+    updateStatus: async () => null,
+  })
+  await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  const parts = capture.receivedParts!
+  assert.equal(parts[0].displayName, "Alice")
+})
+
+test(
+  "Commit 4: whitespace-only displayName + resolver returns name → part.displayName fills " +
+    "(trim-based emptiness check, not just falsy)",
+  async () => {
+    const { connector, capture } = capturingConnector()
+    const initialParts = [
+      { type: "mention", participantId: "p1", displayName: "   " },
+    ]
+    const deps = baseDeps({
+      ...happyPathDepsExceptConnector(),
+      getConnector: () => connector,
+      decode: decodeStub(initialParts),
+      resolveMentions: async () =>
+        new Map([["p1", { externalId: "ou_a", displayName: "Alice" }]]),
+      findExternalMessageIdForItem: async () => null,
+      updateStatus: async () => null,
+    })
+    await processImTransportDeliveryJob({ linkId: "x" }, deps)
+    const parts = capture.receivedParts!
+    assert.equal(parts[0].displayName, "Alice")
+  }
+)
+
+test(
+  "Commit 4: resolveMentions throws → updateStatus failed with error, re-throws " +
+    "(catch range preservation, mirrors the Commit 3 loadRecipientAddress test)",
+  async () => {
+    const { connector } = capturingConnector()
+    const updateCalls: any[] = []
+    const deps = baseDeps({
+      ...happyPathDepsExceptConnector(),
+      getConnector: () => connector,
+      decode: decodeStub([]),
+      resolveMentions: async () => {
+        throw new Error("resolve boom")
+      },
+      updateStatus: async (params) => {
+        updateCalls.push(params)
+        return null
+      },
+    })
+    await assert.rejects(
+      processImTransportDeliveryJob({ linkId: "x" }, deps),
+      /resolve boom/
+    )
+    assert.equal(updateCalls.length, 1)
+    assert.equal(updateCalls[0].status, "failed")
+    assert.equal(updateCalls[0].error, "resolve boom")
+  }
+)
+
+test(
+  "Commit 4: original positional order preserved — no trailing block of duplicate mentions " +
+    "(the pre-Commit-4 worker appended mentions to the end of message.parts)",
+  async () => {
+    const { connector, capture } = capturingConnector()
+    const initialParts = [
+      { type: "text", text: "ping " },
+      { type: "mention", participantId: "p1", displayName: "Alice" },
+      { type: "text", text: " and " },
+      { type: "mention", participantId: "p2", displayName: "Bob" },
+      { type: "text", text: " — done" },
+    ]
+    const deps = baseDeps({
+      ...happyPathDepsExceptConnector(),
+      getConnector: () => connector,
+      decode: decodeStub(initialParts),
+      resolveMentions: async () =>
+        new Map([
+          ["p1", { externalId: "ou_a", displayName: "Alice" }],
+          ["p2", { externalId: "ou_b", displayName: "Bob" }],
+        ]),
+      findExternalMessageIdForItem: async () => null,
+      updateStatus: async () => null,
+    })
+    await processImTransportDeliveryJob({ linkId: "x" }, deps)
+    const parts = capture.receivedParts!
+    assert.equal(parts.length, 5, "exactly the original 5 parts — no append")
+    assert.equal(parts[0].type, "text")
+    assert.equal(parts[1].type, "mention")
+    assert.equal(parts[1].externalId, "ou_a")
+    assert.equal(parts[2].type, "text")
+    assert.equal(parts[3].type, "mention")
+    assert.equal(parts[3].externalId, "ou_b")
+    assert.equal(parts[4].type, "text")
   }
 )

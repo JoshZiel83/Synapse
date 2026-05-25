@@ -1,9 +1,6 @@
 import { Worker } from "bullmq"
 import { CONVERSATION_PARTICIPANT_TYPE, QUEUE_NAMES } from "@synapse/shared"
-import type {
-  ConversationFeedMessageItem,
-  TransportKind,
-} from "@synapse/shared/types"
+import type { TransportKind } from "@synapse/shared/types"
 import { redis } from "../infrastructure/redis/index.js"
 import { getConversationFeedItemById } from "../modules/chat/service.js"
 import {
@@ -17,11 +14,15 @@ import {
 } from "../modules/im/service.js"
 import { tryGetConnector } from "../modules/im/connectors/registry.js"
 import type { TransportConnector } from "../modules/im/connectors/types.js"
-import type { MessageCapabilities } from "../modules/im/messaging/degradation.js"
 import {
   decodeFromConversationItem,
   type EncodedContentBlock,
 } from "../modules/im/messaging/canonical-encoding.js"
+import {
+  resolveMentionRecipientsByParticipant,
+  type ResolveMentionsInput,
+  type ResolvedMention,
+} from "../modules/im/messaging/mention-resolver.js"
 import { registerWorker } from "./registry.js"
 
 function nonEmptyString(value: unknown) {
@@ -39,63 +40,6 @@ function asObjectMetadata(value: unknown): Record<string, unknown> | undefined {
   return value && typeof value === "object" && !Array.isArray(value)
     ? (value as Record<string, unknown>)
     : undefined
-}
-
-async function resolveTransportMentionRecipients(params: {
-  capabilities: MessageCapabilities
-  transportAccountId: string
-  endpointType: "direct" | "group"
-  endpointExternalId: string
-  item: ConversationFeedMessageItem
-}) {
-  const recipients = new Map<
-    string,
-    { externalId: string; displayName?: string }
-  >()
-
-  const useAttachedAddressOnly =
-    params.endpointType === "group" ||
-    (params.endpointType === "direct" &&
-      params.capabilities.directMentionPolicy === "attached_only")
-
-  for (const block of params.item.contentBlocks) {
-    if (block.type !== "mention") {
-      continue
-    }
-    const participantId = block.mention.participantId || ""
-    if (!participantId) continue
-
-    const address = useAttachedAddressOnly
-      ? await getPrimaryTransportAddressForParticipant({
-          conversationParticipantId: participantId,
-          transportAccountId: params.transportAccountId,
-        })
-      : await getReachableTransportAddressForParticipant({
-          conversationParticipantId: participantId,
-          transportAccountId: params.transportAccountId,
-        })
-    const externalId = nonEmptyString(address?.external_id)
-    if (!externalId) continue
-    if (
-      params.endpointType === "direct" &&
-      params.capabilities.directMentionPolicy === "self_only" &&
-      externalId !== params.endpointExternalId
-    ) {
-      continue
-    }
-
-    if (!recipients.has(externalId)) {
-      recipients.set(externalId, {
-        externalId,
-        displayName:
-          nonEmptyString(address?.display_name) ||
-          block.mention.name ||
-          externalId,
-      })
-    }
-  }
-
-  return Array.from(recipients.values())
 }
 
 /**
@@ -124,6 +68,17 @@ export interface ImTransportDeliveryDeps {
    * `connector.sendMessage` (see `asObjectMetadata`).
    */
   loadRecipientAddress: typeof getTransportAddressByExternalId
+  /**
+   * Resolves mention parts in the decoded CanonicalMessage to a
+   * `participantId → ResolvedMention` map. The worker uses the map to
+   * fill `externalId` in place on each mention part, instead of
+   * appending new mention parts at the end. The default deps wire this
+   * to `resolveMentionRecipientsByParticipant` with the by-participant
+   * variant of the resolver.
+   */
+  resolveMentions: (
+    input: ResolveMentionsInput
+  ) => Promise<Map<string, ResolvedMention>>
   updateStatus: typeof updateTransportMessageLinkStatus
   getBinding: typeof getConversationTransportBinding
   getItem: typeof getConversationFeedItemById
@@ -241,19 +196,34 @@ export async function processImTransportDeliveryJob(
         ((item as unknown as { metadata?: Record<string, unknown> }).metadata
           ?.transport as Record<string, unknown>) || undefined,
     })
-    const mentions = await resolveTransportMentionRecipients({
+    // Resolve mentions to a participantId → ResolvedMention map, then
+    // fill `externalId` in place on each mention part. This preserves the
+    // original positional order in `message.parts` instead of appending
+    // duplicate mention parts at the end (the pre-Commit-4 behavior).
+    //
+    // Mentions with no participantId (inbound-mirrored — already carry an
+    // externalId from the parsing pass) pass through untouched.
+    //
+    // The displayName fill uses a trim-based emptiness check: a part with
+    // `displayName: " "` is treated as missing so the connector renderer
+    // doesn't emit an `<at>` tag with a whitespace name.
+    const resolvedMentions = await deps.resolveMentions({
+      parts: message.parts,
       capabilities: connector.messageCapabilities,
       transportAccountId: link.account.id,
       endpointType: link.endpoint.endpointType,
       endpointExternalId: link.endpoint.externalId,
-      item,
     })
-    for (const m of mentions) {
-      message.parts.push({
-        type: "mention",
-        externalId: m.externalId,
-        displayName: m.displayName || m.externalId,
-      })
+    for (const part of message.parts) {
+      if (part.type !== "mention") continue
+      const participantId = part.participantId
+      if (!participantId) continue
+      const resolved = resolvedMentions.get(participantId)
+      if (!resolved) continue
+      part.externalId = resolved.externalId
+      if (!part.displayName?.trim()) {
+        part.displayName = resolved.displayName
+      }
     }
 
     // If this outbound is a reply to a previous IM message, look up the
@@ -333,6 +303,42 @@ export function defaultImTransportDeliveryDeps(): ImTransportDeliveryDeps {
     loadLink: loadTransportMessageLinkForDelivery,
     findExternalMessageIdForItem,
     loadRecipientAddress: getTransportAddressByExternalId,
+    // Bind the by-participant resolver to the real address loaders. The
+    // mapper translates the snake_case transport_addresses row shape into
+    // the resolver's expected ParticipantAddressLookup (camelCase fields).
+    resolveMentions: (input) =>
+      resolveMentionRecipientsByParticipant(input, {
+        loadAttachedAddress: async ({
+          conversationParticipantId,
+          transportAccountId,
+        }) => {
+          const row = await getPrimaryTransportAddressForParticipant({
+            conversationParticipantId,
+            transportAccountId,
+          })
+          return row
+            ? {
+                externalId: String(row.external_id),
+                displayName: row.display_name ?? undefined,
+              }
+            : null
+        },
+        loadReachableAddress: async ({
+          conversationParticipantId,
+          transportAccountId,
+        }) => {
+          const row = await getReachableTransportAddressForParticipant({
+            conversationParticipantId,
+            transportAccountId,
+          })
+          return row
+            ? {
+                externalId: String(row.external_id),
+                displayName: row.display_name ?? undefined,
+              }
+            : null
+        },
+      }),
     updateStatus: updateTransportMessageLinkStatus,
     getBinding: getConversationTransportBinding,
     getItem: getConversationFeedItemById,
