@@ -138,10 +138,10 @@ async function resolveConversationIdForSession(
 /**
  * Most recent RUNNING turn for a session.
  *
- * Does NOT fall back to completed turns — the previous behavior at
- * actor-status-hooks.ts:122-128 (pre-Commit-5) would pick the most recent
- * turn regardless of status, which let a stale completed turn's
- * `started_at` extend the fallback cutoff far into the past.
+ * Does NOT fall back to completed turns — the prior lookup at this site
+ * picked the most recent turn regardless of status, which let a stale
+ * completed turn's `started_at` extend the fallback cutoff far into the
+ * past.
  *
  * `ORDER BY started_at DESC NULLS LAST, id DESC LIMIT 1`: a dirty row
  * with `started_at = NULL` must not eclipse a real running turn (Postgres
@@ -149,7 +149,7 @@ async function resolveConversationIdForSession(
  * the deterministic tiebreaker. The returned `started_at` is the ISO
  * string form so the decide helper does string-vs-string comparisons.
  *
- * Exported for tests (`actor-status-hooks-loaders.test.ts`).
+ * Exported for tests (`im-status-loaders.test.ts`).
  */
 export async function loadCurrentRunningTurnRow(
   sessionId: string

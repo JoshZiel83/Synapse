@@ -225,7 +225,7 @@ test("feishu direct uses attached lookup (matches V1 bot semantics)", async () =
   assert.deepEqual(calls, ["attached:p1"])
 })
 
-// ─── resolveMentionRecipientsByParticipant (Commit 4) ───
+// ─── resolveMentionRecipientsByParticipant: by-participant lookup ───
 
 test("by-participant: feishu group attached lookup, keyed by participantId", async () => {
   const calls: string[] = []

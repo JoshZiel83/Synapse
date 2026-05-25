@@ -1,4 +1,4 @@
-// DB-loader behavior tests for the actor-status-hooks (Commit 5).
+// DB-loader behavior tests for the actor-status-hooks fallback path.
 //
 // The pure decideStatusLookupSource tests in
 // `src/modules/im/integration/actor-status-hooks-decide.test.ts` cover
@@ -6,7 +6,7 @@
 // three loaders themselves:
 //
 //   1. `loadCurrentRunningTurnRow` MUST filter `status = 'running'` (the
-//      pre-Commit-5 bug at actor-status-hooks.ts:122-128 would silently
+//      prior lookup at actor-status-hooks.ts:122-128 would silently
 //      fall back to the most recent turn regardless of status, which let
 //      a stale completed turn's `started_at` extend the fallback cutoff
 //      far into the past). It also must order `started_at DESC NULLS

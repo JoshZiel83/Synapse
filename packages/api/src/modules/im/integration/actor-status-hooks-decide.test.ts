@@ -9,7 +9,7 @@ import {
 } from "./actor-status-hooks.js"
 
 /**
- * Pure-helper tests for the status fallback decision logic (Commit 5).
+ * Pure-helper tests for the status fallback decision logic.
  *
  * Two helpers are covered:
  *

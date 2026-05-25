@@ -456,7 +456,7 @@ test("happy path → connector.sendMessage called, status updated to sent, retur
   assert.equal(updateCalls[0].externalMessageId, "om_external_123")
 })
 
-// ─── Commit 3: recipientAddressMetadata pre-load ───
+// ─── recipientAddressMetadata pre-load (Weixin contextToken path) ───
 
 function recipientMetadataConnector(opts: {
   requires: boolean
@@ -473,7 +473,7 @@ function recipientMetadataConnector(opts: {
 }
 
 test(
-  "Commit 3: requiresRecipientAddressMetadata=true + address row present " +
+  "recipient pre-load: requiresRecipientAddressMetadata=true + address row present " +
     "→ connector receives recipientAddressMetadata with contextToken",
   async () => {
     const capture: { received?: any } = {}
@@ -499,7 +499,7 @@ test(
 )
 
 test(
-  "Commit 3: requiresRecipientAddressMetadata=true + null address row " +
+  "recipient pre-load: requiresRecipientAddressMetadata=true + null address row " +
     "→ connector receives undefined",
   async () => {
     const capture: { received?: any } = {}
@@ -517,7 +517,7 @@ test(
 )
 
 test(
-  "Commit 3: requiresRecipientAddressMetadata=false " +
+  "recipient pre-load: requiresRecipientAddressMetadata=false " +
     "→ loadRecipientAddress NOT called, connector receives undefined (Feishu regression)",
   async () => {
     const capture: { received?: any } = {}
@@ -535,7 +535,7 @@ test(
 )
 
 test(
-  "Commit 3: address row metadata is a primitive " +
+  "recipient pre-load: address row metadata is a primitive " +
     "→ connector receives undefined (asObjectMetadata guard)",
   async () => {
     const capture: { received?: any } = {}
@@ -554,7 +554,7 @@ test(
 )
 
 test(
-  "Commit 3: address row metadata is an array " +
+  "recipient pre-load: address row metadata is an array " +
     "→ connector receives undefined (asObjectMetadata guard)",
   async () => {
     const capture: { received?: any } = {}
@@ -573,8 +573,8 @@ test(
 )
 
 test(
-  "Commit 3: loadRecipientAddress throws → updateStatus failed with error, re-throws " +
-    "(catch range preserved from Commit 2)",
+  "recipient pre-load: loadRecipientAddress throws → updateStatus failed with error, re-throws " +
+    "(catch range covers the address pre-fetch)",
   async () => {
     const updateCalls: any[] = []
     const capture: { received?: any } = {}
@@ -600,7 +600,7 @@ test(
   }
 )
 
-// ─── Commit 4: in-place mention fill via deps.resolveMentions ───
+// ─── in-place mention fill via deps.resolveMentions ───
 
 /**
  * Build a `decode` stub that returns a CanonicalMessage with the supplied
@@ -637,7 +637,7 @@ function capturingConnector(): {
   return { connector, capture }
 }
 
-test("Commit 4: single mention with participantId → external fill in place, no appended parts", async () => {
+test("mention fill: single mention with participantId → external fill in place, no appended parts", async () => {
   const { connector, capture } = capturingConnector()
   const initialParts = [
     { type: "text", text: "hello " },
@@ -663,7 +663,7 @@ test("Commit 4: single mention with participantId → external fill in place, no
   assert.equal(parts[2].type, "text")
 })
 
-test("Commit 4: inbound-mirrored mention (externalId set, no participantId) → unchanged", async () => {
+test("mention fill: inbound-mirrored mention (externalId set, no participantId) → unchanged", async () => {
   const { connector, capture } = capturingConnector()
   const initialParts = [
     { type: "mention", externalId: "ou_already", displayName: "Pre" },
@@ -683,7 +683,7 @@ test("Commit 4: inbound-mirrored mention (externalId set, no participantId) → 
   assert.equal(parts[0].displayName, "Pre")
 })
 
-test("Commit 4: two parts with same participantId → both filled to same externalId", async () => {
+test("mention fill: two parts with same participantId → both filled to same externalId", async () => {
   const { connector, capture } = capturingConnector()
   const initialParts = [
     { type: "mention", participantId: "p1", displayName: "Alice" },
@@ -706,7 +706,7 @@ test("Commit 4: two parts with same participantId → both filled to same extern
   assert.equal(parts[2].externalId, "ou_a")
 })
 
-test("Commit 4: stubbed resolver returns empty Map → message.parts unchanged", async () => {
+test("mention fill: stubbed resolver returns empty Map → message.parts unchanged", async () => {
   const { connector, capture } = capturingConnector()
   const initialParts = [
     { type: "mention", participantId: "p_missing", displayName: "Alice" },
@@ -726,7 +726,7 @@ test("Commit 4: stubbed resolver returns empty Map → message.parts unchanged",
   assert.equal(parts[0].displayName, "Alice")
 })
 
-test("Commit 4: empty displayName + resolver returns name → part.displayName fills", async () => {
+test("mention fill: empty displayName + resolver returns name → part.displayName fills", async () => {
   const { connector, capture } = capturingConnector()
   const initialParts = [
     { type: "mention", participantId: "p1", displayName: "" },
@@ -746,7 +746,7 @@ test("Commit 4: empty displayName + resolver returns name → part.displayName f
 })
 
 test(
-  "Commit 4: whitespace-only displayName + resolver returns name → part.displayName fills " +
+  "mention fill: whitespace-only displayName + resolver returns name → part.displayName fills " +
     "(trim-based emptiness check, not just falsy)",
   async () => {
     const { connector, capture } = capturingConnector()
@@ -769,8 +769,8 @@ test(
 )
 
 test(
-  "Commit 4: resolveMentions throws → updateStatus failed with error, re-throws " +
-    "(catch range preservation, mirrors the Commit 3 loadRecipientAddress test)",
+  "mention fill: resolveMentions throws → updateStatus failed with error, re-throws " +
+    "(catch range covers the resolver call, mirroring the loadRecipientAddress test)",
   async () => {
     const { connector } = capturingConnector()
     const updateCalls: any[] = []
@@ -797,8 +797,8 @@ test(
 )
 
 test(
-  "Commit 4: original positional order preserved — no trailing block of duplicate mentions " +
-    "(the pre-Commit-4 worker appended mentions to the end of message.parts)",
+  "mention fill: original positional order preserved — no trailing block of duplicate mentions " +
+    "(the prior worker appended mentions to the end of message.parts)",
   async () => {
     const { connector, capture } = capturingConnector()
     const initialParts = [

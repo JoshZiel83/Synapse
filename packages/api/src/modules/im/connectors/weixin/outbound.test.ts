@@ -4,7 +4,7 @@ import { sendWeixinMessage } from "./outbound.js"
 
 /**
  * Verifies the contextToken source-of-truth for Weixin outbound sends
- * after the Commit 3 refactor that removed the connector → IM service
+ * after the refactor that removed the connector → IM service
  * back-reference. The connector now reads `contextToken` from the
  * worker-supplied `recipientAddressMetadata`, with `endpoint.metadata`
  * as fallback.

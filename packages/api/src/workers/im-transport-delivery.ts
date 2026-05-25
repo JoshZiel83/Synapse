@@ -52,11 +52,11 @@ function asObjectMetadata(value: unknown): Record<string, unknown> | undefined {
  * `getConnector` wraps tryGetConnector and throws the exact same error
  * string the handler used to throw inline, so behavior is preserved.
  *
- * Future commits add fields here:
- *   - Commit 3 adds `loadRecipientAddress` (for Weixin recipient address
- *     metadata pre-load).
- *   - Commit 4 adds `resolveMentions` (when the mention pipeline moves to
- *     the shared resolver).
+ * `loadRecipientAddress` is invoked only for connectors that set
+ * `requiresRecipientAddressMetadata` (today: Weixin, which needs the
+ * ilink contextToken from the address row). `resolveMentions` is the
+ * shared participant-keyed resolver used to fill `externalId` in place
+ * on each mention part before the connector send.
  */
 export interface ImTransportDeliveryDeps {
   loadLink: typeof loadTransportMessageLinkForDelivery
@@ -199,7 +199,8 @@ export async function processImTransportDeliveryJob(
     // Resolve mentions to a participantId → ResolvedMention map, then
     // fill `externalId` in place on each mention part. This preserves the
     // original positional order in `message.parts` instead of appending
-    // duplicate mention parts at the end (the pre-Commit-4 behavior).
+    // duplicate mention parts at the end (which the prior worker did, and
+    // which caused renderers like Feishu to show the same @ twice).
     //
     // Mentions with no participantId (inbound-mirrored — already carry an
     // externalId from the parsing pass) pass through untouched.
