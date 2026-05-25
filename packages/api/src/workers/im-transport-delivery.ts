@@ -1,6 +1,9 @@
 import { Worker } from "bullmq"
 import { CONVERSATION_PARTICIPANT_TYPE, QUEUE_NAMES } from "@synapse/shared"
-import type { ConversationFeedMessageItem } from "@synapse/shared/types"
+import type {
+  ConversationFeedMessageItem,
+  TransportKind,
+} from "@synapse/shared/types"
 import { redis } from "../infrastructure/redis/index.js"
 import { getConversationFeedItemById } from "../modules/chat/service.js"
 import {
@@ -12,6 +15,7 @@ import {
   updateTransportMessageLinkStatus,
 } from "../modules/im/service.js"
 import { tryGetConnector } from "../modules/im/connectors/registry.js"
+import type { TransportConnector } from "../modules/im/connectors/types.js"
 import type { MessageCapabilities } from "../modules/im/messaging/degradation.js"
 import {
   decodeFromConversationItem,
@@ -80,167 +84,238 @@ async function resolveTransportMentionRecipients(params: {
   return Array.from(recipients.values())
 }
 
+/**
+ * Dependencies injected into processImTransportDeliveryJob.
+ *
+ * Each field corresponds to a cross-module call the handler currently makes
+ * directly. Tests pass stub implementations; production wires the real
+ * helpers via defaultImTransportDeliveryDeps().
+ *
+ * `getConnector` wraps tryGetConnector and throws the exact same error
+ * string the handler used to throw inline, so behavior is preserved.
+ *
+ * Future commits add fields here:
+ *   - Commit 3 adds `loadRecipientAddress` (for Weixin recipient address
+ *     metadata pre-load).
+ *   - Commit 4 adds `resolveMentions` (when the mention pipeline moves to
+ *     the shared resolver).
+ */
+export interface ImTransportDeliveryDeps {
+  loadLink: typeof loadTransportMessageLinkForDelivery
+  findExternalMessageIdForItem: typeof findExternalMessageIdForItem
+  updateStatus: typeof updateTransportMessageLinkStatus
+  getBinding: typeof getConversationTransportBinding
+  getItem: typeof getConversationFeedItemById
+  decode: typeof decodeFromConversationItem
+  getConnector: (transportKind: TransportKind) => TransportConnector
+}
+
+export interface ImTransportDeliveryResult {
+  success: boolean
+  reason?: string
+  messageId?: string
+}
+
+/**
+ * Pure handler body lifted out of the BullMQ Worker constructor so it can
+ * be unit-tested with stub deps. The BullMQ wrapper at
+ * startImTransportDeliveryWorker() is now 3 lines.
+ *
+ * Behavior is preserved 1:1 with the previous inline handler, including:
+ *   - defensive parsing of jobData (may be null/undefined; linkId may be
+ *     missing or non-string)
+ *   - the try/catch that wraps everything from connector lookup through
+ *     send + status update — any throw inside that block flips the link
+ *     to status="failed" and re-throws so BullMQ retries per its policy
+ *   - skipped-reason metadata for every short-circuit path
+ */
+export async function processImTransportDeliveryJob(
+  jobData: { linkId?: unknown } | null | undefined,
+  deps: ImTransportDeliveryDeps
+): Promise<ImTransportDeliveryResult> {
+  const linkId = nonEmptyString(jobData?.linkId)
+  if (!linkId) {
+    return { success: false, reason: "missing linkId" }
+  }
+
+  const link = await deps.loadLink(linkId)
+  if (!link) {
+    return { success: false, reason: "missing link" }
+  }
+  if (link.direction !== "outbound") {
+    await deps.updateStatus({
+      linkId,
+      status: "skipped",
+      metadata: { skippedReason: "not_outbound" },
+    })
+    return { success: true, reason: "not outbound" }
+  }
+  // Allow BullMQ retries: pending or failed are eligible to (re-)send.
+  // sent/skipped are terminal and short-circuit.
+  if (link.deliveryStatus === "sent" || link.deliveryStatus === "skipped") {
+    return {
+      success: true,
+      reason: `already ${link.deliveryStatus}`,
+    }
+  }
+  if (link.account.status !== "active") {
+    await deps.updateStatus({
+      linkId,
+      status: "skipped",
+      metadata: { skippedReason: "account_disabled" },
+    })
+    return { success: true, reason: "account disabled" }
+  }
+
+  const binding = await deps.getBinding({
+    workspaceId: link.workspaceId,
+    conversationId: link.conversationId,
+  })
+  if (
+    !binding ||
+    binding.account.status !== "active" ||
+    !binding.outboundEnabled ||
+    binding.account.id !== link.transportAccountId ||
+    binding.endpoint.id !== link.transportEndpointId
+  ) {
+    await deps.updateStatus({
+      linkId,
+      status: "skipped",
+      metadata: {
+        skippedReason: !binding
+          ? "binding_missing"
+          : binding.account.status !== "active"
+            ? "account_disabled"
+            : !binding.outboundEnabled
+              ? "binding_disabled"
+              : "binding_changed",
+      },
+    })
+    return { success: true, reason: "binding unavailable" }
+  }
+
+  const item = await deps.getItem(link.itemId)
+  if (!item || item.kind !== "message") {
+    await deps.updateStatus({
+      linkId,
+      status: "skipped",
+      metadata: { skippedReason: "item_missing_or_not_message" },
+    })
+    return { success: true, reason: "item missing" }
+  }
+  if (item.author?.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
+    await deps.updateStatus({
+      linkId,
+      status: "skipped",
+      metadata: { skippedReason: "external_author" },
+    })
+    return { success: true, reason: "external author" }
+  }
+  try {
+    const connector = deps.getConnector(link.transportKind)
+    const message = deps.decode({
+      content: item.content,
+      contentBlocks: item.contentBlocks as EncodedContentBlock[],
+      transportMetadata:
+        ((item as unknown as { metadata?: Record<string, unknown> }).metadata
+          ?.transport as Record<string, unknown>) || undefined,
+    })
+    const mentions = await resolveTransportMentionRecipients({
+      capabilities: connector.messageCapabilities,
+      transportAccountId: link.account.id,
+      endpointType: link.endpoint.endpointType,
+      endpointExternalId: link.endpoint.externalId,
+      item,
+    })
+    for (const m of mentions) {
+      message.parts.push({
+        type: "mention",
+        externalId: m.externalId,
+        displayName: m.displayName || m.externalId,
+      })
+    }
+
+    // If this outbound is a reply to a previous IM message, look up the
+    // platform's message_id for that conversation_item and pass it to
+    // the connector. The connector decides how to use it (Feishu uses
+    // im.message.reply; weixin has no reply concept and may ignore).
+    let replyTo:
+      | { externalMessageId: string; endpointExternalId: string }
+      | undefined
+    const replyToItemId = (item as unknown as { replyToItemId?: string })
+      .replyToItemId
+    if (replyToItemId) {
+      const externalReplyMsgId = await deps.findExternalMessageIdForItem({
+        itemId: replyToItemId,
+        transportEndpointId: link.endpoint.id,
+      })
+      if (externalReplyMsgId) {
+        replyTo = {
+          externalMessageId: externalReplyMsgId,
+          endpointExternalId: link.endpoint.externalId,
+        }
+      }
+    }
+
+    const deliveryResult = await connector.sendMessage({
+      account: link.account,
+      endpoint: {
+        endpointType: link.endpoint.endpointType,
+        externalId: link.endpoint.externalId,
+        metadata: link.endpoint.metadata,
+      },
+      message,
+      replyTo,
+    })
+
+    await deps.updateStatus({
+      linkId,
+      status: "sent",
+      externalMessageId: deliveryResult.externalMessageId,
+    })
+    return { success: true, messageId: deliveryResult.externalMessageId }
+  } catch (error: any) {
+    await deps.updateStatus({
+      linkId,
+      status: "failed",
+      error: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
+}
+
+/**
+ * Default deps factory wiring the real service implementations.
+ *
+ * The `getConnector` wrapper preserves the inline error string the previous
+ * handler threw (im-transport-delivery.ts:170-172 pre-extraction), so the
+ * catch block produces the same `metadata.lastError` text as before.
+ */
+export function defaultImTransportDeliveryDeps(): ImTransportDeliveryDeps {
+  return {
+    loadLink: loadTransportMessageLinkForDelivery,
+    findExternalMessageIdForItem,
+    updateStatus: updateTransportMessageLinkStatus,
+    getBinding: getConversationTransportBinding,
+    getItem: getConversationFeedItemById,
+    decode: decodeFromConversationItem,
+    getConnector: (transportKind) => {
+      const c = tryGetConnector(transportKind)
+      if (!c) {
+        throw new Error(
+          `no TransportConnector registered for transport_kind=${transportKind}`
+        )
+      }
+      return c
+    },
+  }
+}
+
 export function startImTransportDeliveryWorker() {
+  const deps = defaultImTransportDeliveryDeps()
   const worker = new Worker(
     QUEUE_NAMES.IM_TRANSPORT_DELIVERY,
-    async (job) => {
-      const linkId = nonEmptyString(job.data?.linkId)
-      if (!linkId) {
-        return { success: false, reason: "missing linkId" }
-      }
-
-      const link = await loadTransportMessageLinkForDelivery(linkId)
-      if (!link) {
-        return { success: false, reason: "missing link" }
-      }
-      if (link.direction !== "outbound") {
-        await updateTransportMessageLinkStatus({
-          linkId,
-          status: "skipped",
-          metadata: { skippedReason: "not_outbound" },
-        })
-        return { success: true, reason: "not outbound" }
-      }
-      // Allow BullMQ retries: pending or failed are eligible to (re-)send.
-      // sent/skipped are terminal and short-circuit.
-      if (link.deliveryStatus === "sent" || link.deliveryStatus === "skipped") {
-        return {
-          success: true,
-          reason: `already ${link.deliveryStatus}`,
-        }
-      }
-      if (link.account.status !== "active") {
-        await updateTransportMessageLinkStatus({
-          linkId,
-          status: "skipped",
-          metadata: { skippedReason: "account_disabled" },
-        })
-        return { success: true, reason: "account disabled" }
-      }
-
-      const binding = await getConversationTransportBinding({
-        workspaceId: link.workspaceId,
-        conversationId: link.conversationId,
-      })
-      if (
-        !binding ||
-        binding.account.status !== "active" ||
-        !binding.outboundEnabled ||
-        binding.account.id !== link.transportAccountId ||
-        binding.endpoint.id !== link.transportEndpointId
-      ) {
-        await updateTransportMessageLinkStatus({
-          linkId,
-          status: "skipped",
-          metadata: {
-            skippedReason: !binding
-              ? "binding_missing"
-              : binding.account.status !== "active"
-                ? "account_disabled"
-                : !binding.outboundEnabled
-                  ? "binding_disabled"
-                  : "binding_changed",
-          },
-        })
-        return { success: true, reason: "binding unavailable" }
-      }
-
-      const item = await getConversationFeedItemById(link.itemId)
-      if (!item || item.kind !== "message") {
-        await updateTransportMessageLinkStatus({
-          linkId,
-          status: "skipped",
-          metadata: { skippedReason: "item_missing_or_not_message" },
-        })
-        return { success: true, reason: "item missing" }
-      }
-      if (
-        item.author?.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL
-      ) {
-        await updateTransportMessageLinkStatus({
-          linkId,
-          status: "skipped",
-          metadata: { skippedReason: "external_author" },
-        })
-        return { success: true, reason: "external author" }
-      }
-      try {
-        const connector = tryGetConnector(link.transportKind)
-        if (!connector) {
-          throw new Error(
-            `no TransportConnector registered for transport_kind=${link.transportKind}`
-          )
-        }
-        const message = decodeFromConversationItem({
-          content: item.content,
-          contentBlocks: item.contentBlocks as EncodedContentBlock[],
-          transportMetadata:
-            ((item as unknown as { metadata?: Record<string, unknown> })
-              .metadata?.transport as Record<string, unknown>) || undefined,
-        })
-        const mentions = await resolveTransportMentionRecipients({
-          capabilities: connector.messageCapabilities,
-          transportAccountId: link.account.id,
-          endpointType: link.endpoint.endpointType,
-          endpointExternalId: link.endpoint.externalId,
-          item,
-        })
-        for (const m of mentions) {
-          message.parts.push({
-            type: "mention",
-            externalId: m.externalId,
-            displayName: m.displayName || m.externalId,
-          })
-        }
-
-        // If this outbound is a reply to a previous IM message, look up the
-        // platform's message_id for that conversation_item and pass it to
-        // the connector. The connector decides how to use it (Feishu uses
-        // im.message.reply; weixin has no reply concept and may ignore).
-        let replyTo:
-          | { externalMessageId: string; endpointExternalId: string }
-          | undefined
-        const replyToItemId = (item as unknown as { replyToItemId?: string })
-          .replyToItemId
-        if (replyToItemId) {
-          const externalReplyMsgId = await findExternalMessageIdForItem({
-            itemId: replyToItemId,
-            transportEndpointId: link.endpoint.id,
-          })
-          if (externalReplyMsgId) {
-            replyTo = {
-              externalMessageId: externalReplyMsgId,
-              endpointExternalId: link.endpoint.externalId,
-            }
-          }
-        }
-
-        const deliveryResult = await connector.sendMessage({
-          account: link.account,
-          endpoint: {
-            endpointType: link.endpoint.endpointType,
-            externalId: link.endpoint.externalId,
-            metadata: link.endpoint.metadata,
-          },
-          message,
-          replyTo,
-        })
-
-        await updateTransportMessageLinkStatus({
-          linkId,
-          status: "sent",
-          externalMessageId: deliveryResult.externalMessageId,
-        })
-        return { success: true, messageId: deliveryResult.externalMessageId }
-      } catch (error: any) {
-        await updateTransportMessageLinkStatus({
-          linkId,
-          status: "failed",
-          error: error instanceof Error ? error.message : String(error),
-        })
-        throw error
-      }
-    },
+    async (job) => processImTransportDeliveryJob(job.data, deps),
     { connection: redis }
   )
 
