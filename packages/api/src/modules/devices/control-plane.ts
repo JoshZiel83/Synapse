@@ -33,6 +33,18 @@ import { persistCatalogSync } from "./catalog-sync.js"
 import { authenticateDeviceHello } from "./control-plane-auth.js"
 import { getEnvelopeServerPublicKey } from "./envelope-signer.js"
 import { getDeviceTunnelRegistry } from "./tunnel-registry.js"
+import {
+  persistDeviceEventEmit,
+  persistRuntimeSessionClosed,
+  persistRuntimeSessionOpened,
+  persistTaskOutput,
+  persistTaskReceived,
+  persistTaskResult,
+  persistTaskStarted,
+  persistTaskStatus,
+  persistVfsExposureUpsert,
+  type PersistResult,
+} from "./control-plane-events.js"
 
 interface ParsedFrame {
   raw: string
@@ -91,11 +103,24 @@ function writeNotification(
   socket.send(JSON.stringify({ jsonrpc: "2.0", method, params }))
 }
 
+function writePersistResult(
+  socket: WebSocket,
+  id: string | number | null | undefined,
+  result: PersistResult
+) {
+  if (result.ok) {
+    writeResult(socket, id, { accepted: true, ...(result.payload ?? {}) })
+  } else {
+    writeError(socket, id, result.code, result.message)
+  }
+}
+
 interface ConnectionState {
   challengeNonce: string
   helloSeen: boolean
   authenticatedDeviceId: string | null
   authenticatedServiceId: string | null
+  authenticatedWorkspaceId: string | null
   sessionId: string | null
   registeredTunnelServiceId: string | null
 }
@@ -189,6 +214,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
         helloSeen: false,
         authenticatedDeviceId: null,
         authenticatedServiceId: null,
+        authenticatedWorkspaceId: null,
         sessionId: null,
         registeredTunnelServiceId: null,
       }
@@ -270,6 +296,21 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 }
                 state.authenticatedDeviceId = result.deviceId
                 state.authenticatedServiceId = result.serviceId
+                // Cache the device's workspace_id so per-message event
+                // persistence (runtime_events) doesn't have to re-query it.
+                try {
+                  const deviceRow = await db
+                    .selectFrom("devices")
+                    .select(["workspace_id"])
+                    .where("id", "=", result.deviceId)
+                    .executeTakeFirst()
+                  state.authenticatedWorkspaceId =
+                    (deviceRow?.workspace_id as string | undefined) ?? null
+                } catch {
+                  /* workspace lookup is best-effort; event.emit will
+                   * surface a structured error if it tries to write without
+                   * it. */
+                }
                 // Persist the CP session so runtime-authorization requests
                 // can find an active session and not reject themselves.
                 try {
@@ -400,24 +441,121 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
             return
           }
           case "device.catalog.delta":
-          case "device.service.status":
-          case "device.runtime_session.opened":
-          case "device.runtime_session.closed":
-          case "device.task.received":
-          case "device.task.started":
-          case "device.task.output":
-          case "device.task.status":
-          case "device.task.result":
-          case "device.event.emit":
-          case "device.vfs.exposure.upsert": {
+          case "device.service.status": {
             if (!requireAuthenticated(req)) return
-            // v3.0 skeleton: ack only. Real persistence lands in a follow-up PR.
+            // v3.0 skeleton: ack only (catalog delta + service status
+            // streaming aren't yet wired into the projection invalidation
+            // hooks). Scoped for a follow-up.
             writeResult(socket, req.id ?? null, {
               accepted: true,
               method: req.method,
               device_id: state.authenticatedDeviceId,
               service_id: state.authenticatedServiceId,
             })
+            return
+          }
+          case "device.runtime_session.opened": {
+            if (!requireAuthenticated(req)) return
+            persistRuntimeSessionOpened(
+              state.authenticatedDeviceId!,
+              state.authenticatedServiceId!,
+              req.params
+            )
+              .then((r) => writePersistResult(socket, req.id ?? null, r))
+              .catch((err) =>
+                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+              )
+            return
+          }
+          case "device.runtime_session.closed": {
+            if (!requireAuthenticated(req)) return
+            persistRuntimeSessionClosed(
+              state.authenticatedDeviceId!,
+              state.authenticatedServiceId!,
+              req.params
+            )
+              .then((r) => writePersistResult(socket, req.id ?? null, r))
+              .catch((err) =>
+                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+              )
+            return
+          }
+          case "device.task.received": {
+            if (!requireAuthenticated(req)) return
+            persistTaskReceived(req.params)
+              .then((r) => writePersistResult(socket, req.id ?? null, r))
+              .catch((err) =>
+                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+              )
+            return
+          }
+          case "device.task.started": {
+            if (!requireAuthenticated(req)) return
+            persistTaskStarted(req.params)
+              .then((r) => writePersistResult(socket, req.id ?? null, r))
+              .catch((err) =>
+                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+              )
+            return
+          }
+          case "device.task.output": {
+            if (!requireAuthenticated(req)) return
+            persistTaskOutput(req.params)
+              .then((r) => writePersistResult(socket, req.id ?? null, r))
+              .catch((err) =>
+                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+              )
+            return
+          }
+          case "device.task.status": {
+            if (!requireAuthenticated(req)) return
+            persistTaskStatus(req.params)
+              .then((r) => writePersistResult(socket, req.id ?? null, r))
+              .catch((err) =>
+                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+              )
+            return
+          }
+          case "device.task.result": {
+            if (!requireAuthenticated(req)) return
+            persistTaskResult(req.params)
+              .then((r) => writePersistResult(socket, req.id ?? null, r))
+              .catch((err) =>
+                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+              )
+            return
+          }
+          case "device.event.emit": {
+            if (!requireAuthenticated(req)) return
+            if (!state.authenticatedWorkspaceId) {
+              writeError(
+                socket,
+                req.id ?? null,
+                -32603,
+                "device.event.emit needs workspace context; auth did not resolve workspace_id"
+              )
+              return
+            }
+            persistDeviceEventEmit(
+              state.authenticatedWorkspaceId,
+              req.params
+            )
+              .then((r) => writePersistResult(socket, req.id ?? null, r))
+              .catch((err) =>
+                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+              )
+            return
+          }
+          case "device.vfs.exposure.upsert": {
+            if (!requireAuthenticated(req)) return
+            persistVfsExposureUpsert(
+              state.authenticatedDeviceId!,
+              req.params
+            )
+              .then((r) => writePersistResult(socket, req.id ?? null, r))
+              .catch((err) =>
+                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+              )
             return
           }
           default: {
