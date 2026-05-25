@@ -418,7 +418,24 @@ export async function startMockLLM(): Promise<MockLLMHandle> {
   // control API answers. A successful reset is a stronger signal than a TCP
   // bind because mockserver opens the listening port slightly before the
   // control endpoints are routable.
-  await probeRestApi(baseUrl)
+  //
+  // If the probe fails, the container is already running but the caller will
+  // never receive a MockLLMHandle to clean it up via stop(). Tear it down
+  // here before rethrowing so we never leak a container on cold-start hiccups
+  // / control-API issues / CI Docker flakes.
+  try {
+    await probeRestApi(baseUrl)
+  } catch (probeErr) {
+    await started.stop({ timeout: 10_000 }).catch((stopErr) => {
+      // Surface both errors so the operator can see the real cause and the
+      // cleanup failure. Don't let stop() failure mask the probe error.
+      console.error(
+        "[mock-llm] cleanup after probe failure also failed:",
+        stopErr instanceof Error ? stopErr.message : stopErr
+      )
+    })
+    throw probeErr
+  }
 
   let stopPromise: Promise<void> | null = null
 
