@@ -291,7 +291,7 @@ export type RuntimeAuthorizationRequestMode = "background" | "blocking";
 
 export type RuntimeEventsLevel = "debug" | "error" | "info" | "warn";
 
-export type RuntimeEventsSource = "a2a" | "conversation" | "provider" | "relay" | "system" | "tool";
+export type RuntimeEventsSource = "a2a" | "conversation" | "device" | "provider" | "system" | "tool";
 
 export type SessionEngineBranchesStatus = "active" | "archived" | "superseded";
 

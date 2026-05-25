@@ -144,73 +144,176 @@ const TaskResultSchema = TaskRefSchema.extend({
   result_hash: z.string().optional(),
 })
 
+/**
+ * Verifies the operation row belongs to the authenticated device + the
+ * attempt (if any) belongs to the authenticated service. Without this
+ * check any authenticated device could forge state transitions on
+ * another device's operations by guessing UUIDs.
+ */
+async function assertOperationOwnership(args: {
+  operationId: string
+  attemptId?: string
+  deviceId: string
+  serviceId: string
+}): Promise<PersistResult> {
+  const op = await db
+    .selectFrom("device_operations")
+    .select(["id", "device_id"])
+    .where("id", "=", args.operationId)
+    .executeTakeFirst()
+  if (!op) {
+    return {
+      ok: false,
+      code: -32004,
+      message: `operation ${args.operationId} not found`,
+    }
+  }
+  if ((op.device_id as string) !== args.deviceId) {
+    return {
+      ok: false,
+      code: -32005,
+      message: `operation ${args.operationId} does not belong to authenticated device`,
+    }
+  }
+  if (args.attemptId) {
+    const attempt = await db
+      .selectFrom("device_operation_attempts")
+      .select(["id", "operation_id", "device_service_id"])
+      .where("id", "=", args.attemptId)
+      .executeTakeFirst()
+    if (!attempt) {
+      return {
+        ok: false,
+        code: -32004,
+        message: `attempt ${args.attemptId} not found`,
+      }
+    }
+    if ((attempt.operation_id as string) !== args.operationId) {
+      return {
+        ok: false,
+        code: -32005,
+        message: `attempt ${args.attemptId} does not belong to operation ${args.operationId}`,
+      }
+    }
+    if ((attempt.device_service_id as string) !== args.serviceId) {
+      return {
+        ok: false,
+        code: -32005,
+        message: `attempt ${args.attemptId} does not belong to authenticated service`,
+      }
+    }
+  }
+  return { ok: true }
+}
+
 export async function persistTaskReceived(
+  deviceId: string,
+  serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
   const parsed = TaskRefSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
+  const ownership = await assertOperationOwnership({
+    operationId: parsed.data.operation_id,
+    attemptId: parsed.data.attempt_id,
+    deviceId,
+    serviceId,
+  })
+  if (!ownership.ok) return ownership
   await db
     .updateTable("device_operations")
     .set({ status: "received", updated_at: sql`NOW()` })
     .where("id", "=", parsed.data.operation_id)
+    .where("device_id", "=", deviceId)
     .execute()
   if (parsed.data.attempt_id) {
     await db
       .updateTable("device_operation_attempts")
       .set({ status: "sent", updated_at: sql`NOW()` })
       .where("id", "=", parsed.data.attempt_id)
+      .where("device_service_id", "=", serviceId)
       .execute()
   }
   return { ok: true }
 }
 
 export async function persistTaskStarted(
+  deviceId: string,
+  serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
   const parsed = TaskRefSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
+  const ownership = await assertOperationOwnership({
+    operationId: parsed.data.operation_id,
+    attemptId: parsed.data.attempt_id,
+    deviceId,
+    serviceId,
+  })
+  if (!ownership.ok) return ownership
   await db
     .updateTable("device_operations")
     .set({ status: "started", updated_at: sql`NOW()` })
     .where("id", "=", parsed.data.operation_id)
+    .where("device_id", "=", deviceId)
     .execute()
   return { ok: true }
 }
 
-export async function persistTaskOutput(raw: unknown): Promise<PersistResult> {
+export async function persistTaskOutput(
+  deviceId: string,
+  serviceId: string,
+  raw: unknown
+): Promise<PersistResult> {
   const parsed = TaskOutputSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
+  const ownership = await assertOperationOwnership({
+    operationId: parsed.data.operation_id,
+    attemptId: parsed.data.attempt_id,
+    deviceId,
+    serviceId,
+  })
+  if (!ownership.ok) return ownership
   await db
     .updateTable("device_operations")
     .set({ status: "output_streaming", updated_at: sql`NOW()` })
     .where("id", "=", parsed.data.operation_id)
+    .where("device_id", "=", deviceId)
     .where("status", "in", ["started", "output_streaming"])
     .execute()
-  // The device_operation_results table is for the final result; streamed
-  // intermediate output is not persisted in v3.0 to keep the audit row
-  // single-source-of-truth. A follow-up can add device_operation_outputs.
   return { ok: true }
 }
 
 export async function persistTaskStatus(
+  deviceId: string,
+  serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
-  return persistTaskStarted(raw)
+  return persistTaskStarted(deviceId, serviceId, raw)
 }
 
 export async function persistTaskResult(
+  deviceId: string,
+  serviceId: string,
   raw: unknown
 ): Promise<PersistResult> {
   const parsed = TaskResultSchema.safeParse(raw)
   if (!parsed.success) {
     return { ok: false, code: -32602, message: parsed.error.message }
   }
+  const ownership = await assertOperationOwnership({
+    operationId: parsed.data.operation_id,
+    attemptId: parsed.data.attempt_id,
+    deviceId,
+    serviceId,
+  })
+  if (!ownership.ok) return ownership
   await db.transaction().execute(async (trx) => {
     await trx
       .updateTable("device_operations")
@@ -223,6 +326,7 @@ export async function persistTaskResult(
         updated_at: sql`NOW()`,
       })
       .where("id", "=", parsed.data.operation_id)
+      .where("device_id", "=", deviceId)
       .execute()
     if (parsed.data.attempt_id) {
       await trx
@@ -234,6 +338,7 @@ export async function persistTaskResult(
           updated_at: sql`NOW()`,
         })
         .where("id", "=", parsed.data.attempt_id)
+        .where("device_service_id", "=", serviceId)
         .execute()
     }
   })
@@ -262,9 +367,9 @@ export async function persistDeviceEventEmit(
     .values({
       workspace_id: workspaceId,
       conversation_id: parsed.data.conversation_id ?? null,
-      // runtime_events_source still carries the historical 'relay' value
-      // for backwards compatibility — that's the channel devices emit on.
-      source: "relay",
+      // runtime_events_source enum carries 'device' as the device-emitted
+      // event channel.
+      source: "device",
       level: parsed.data.level ?? "info",
       event_type: parsed.data.event_type,
       payload: sql`${JSON.stringify(parsed.data.payload ?? {})}::jsonb`,

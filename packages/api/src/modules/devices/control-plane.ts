@@ -482,7 +482,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.task.received": {
             if (!requireAuthenticated(req)) return
-            persistTaskReceived(req.params)
+            persistTaskReceived(state.authenticatedDeviceId!, state.authenticatedServiceId!, req.params)
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
                 writeError(socket, req.id ?? null, -32603, (err as Error).message)
@@ -491,7 +491,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.task.started": {
             if (!requireAuthenticated(req)) return
-            persistTaskStarted(req.params)
+            persistTaskStarted(state.authenticatedDeviceId!, state.authenticatedServiceId!, req.params)
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
                 writeError(socket, req.id ?? null, -32603, (err as Error).message)
@@ -500,7 +500,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.task.output": {
             if (!requireAuthenticated(req)) return
-            persistTaskOutput(req.params)
+            persistTaskOutput(state.authenticatedDeviceId!, state.authenticatedServiceId!, req.params)
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
                 writeError(socket, req.id ?? null, -32603, (err as Error).message)
@@ -509,7 +509,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.task.status": {
             if (!requireAuthenticated(req)) return
-            persistTaskStatus(req.params)
+            persistTaskStatus(state.authenticatedDeviceId!, state.authenticatedServiceId!, req.params)
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
                 writeError(socket, req.id ?? null, -32603, (err as Error).message)
@@ -518,7 +518,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.task.result": {
             if (!requireAuthenticated(req)) return
-            persistTaskResult(req.params)
+            persistTaskResult(state.authenticatedDeviceId!, state.authenticatedServiceId!, req.params)
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
                 writeError(socket, req.id ?? null, -32603, (err as Error).message)

@@ -32,7 +32,9 @@ import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
 import type { RuntimeAuthorizationGrantSpec } from "@synapse/device-protocol"
 import { createHash } from "node:crypto"
-import { listActiveRuntimeAuthorizationGrantsForExposure } from "../runtime-authorizations/service.js"
+import { listActiveRuntimeAuthorizationGrantsForExposure, consumeRuntimeAuthorizationGrant } from "../runtime-authorizations/service.js"
+import { createRuntimeAuthorizationRequest } from "../runtime-authorizations/requests.js"
+import type { RuntimeAuthorizationRequestedAction } from "@synapse/shared"
 import {
   beginDeviceOperation,
   completeDeviceOperation,
@@ -427,16 +429,33 @@ function unionWithDevice(
     // capability — a critical security hole.
     let grantSpecs: RuntimeAuthorizationGrantSpec[] = []
     const grantIds: string[] = []
+    let onceGrantIdsForConsume: string[] = []
     let grantScope: "once" | "actor" | "conversation" | "actor_in_conversation" | "workspace" = "workspace"
     try {
       const allGrants = await listActiveRuntimeAuthorizationGrantsForExposure(
         row.device_capability_id
       )
       const subjectSet = new Set(device.subjects.allIds)
+      // Retry-nonce gating: `once` grants are NOT global — they must be
+      // matched explicitly by an envelope-side retry_nonce that equals the
+      // grant's source_retry_nonce. Without this, a `once` grant created
+      // for one tool call would silently leak into every subsequent
+      // dispatch of the same capability.
+      const envelopeRetryNonce: string | undefined = undefined // projection
+      // never has a retry_nonce on the first attempt; the planner only
+      // re-issues with a nonce after an authorization request was created.
       const applicable = allGrants.filter((g) => {
-        if (g.scope === "workspace" || g.scope === "once") return true
-        // Other scopes are subject-bound. A grant with no subject_id at a
-        // non-workspace scope is malformed; conservatively drop it.
+        if (g.scope === "workspace") return true
+        if (g.scope === "once") {
+          return !!(
+            envelopeRetryNonce &&
+            g.sourceRetryNonce &&
+            g.sourceRetryNonce === envelopeRetryNonce
+          )
+        }
+        // actor / conversation / actor_in_conversation / remote_agent: must
+        // be subject-bound. A grant with no subject_id at a non-workspace
+        // scope is malformed; conservatively drop it.
         if (!g.subjectId) return false
         return subjectSet.has(g.subjectId)
       })
@@ -472,6 +491,9 @@ function unionWithDevice(
         }
         grantSpecs.push(spec)
         grantIds.push(grant.id)
+        if (grant.scope === "once") {
+          onceGrantIdsForConsume.push(grant.id)
+        }
       }
       if (applicable.length > 0) {
         grantScope = applicable[0]!.scope
@@ -490,9 +512,88 @@ function unionWithDevice(
     // createRuntimeAuthorizationRequest separately and re-issue once the
     // user resolves.
     if (grantSpecs.length === 0) {
-      return mcpErrorBlock(
-        `runtime_authorization_required: no active grant covers device capability ${row.device_capability_id} for this principal — request authorization via the runtime-authorizations API and retry`
-      )
+      // Auto-fire an interaction_runtime_authorization_requests row so the
+      // dashboard shows the prompt and the user can approve. Only actor /
+      // actor_in_conversation principals can drive this — there's no user
+      // to ask in conversation / remote_agent / workspace_member contexts.
+      const supportsAuthRequest =
+        projectInput.principal.kind === "actor" ||
+        projectInput.principal.kind === "actor_in_conversation"
+      if (!supportsAuthRequest) {
+        return mcpErrorBlock(
+          `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal; only chat actors can request authorization interactively`
+        )
+      }
+      const principal = projectInput.principal as
+        | { kind: "actor"; actorId: string; conversationId?: string }
+        | {
+            kind: "actor_in_conversation"
+            actorId: string
+            conversationId: string
+            conversationActorContextId: string
+          }
+      const conversationId =
+        principal.conversationId ?? projectInput.conversationId
+      if (!conversationId) {
+        return mcpErrorBlock(
+          `permission_denied: cannot create authorization request without a conversation context`
+        )
+      }
+      try {
+        const result = await createRuntimeAuthorizationRequest({
+          source: {
+            workspaceId: projectInput.workspaceId,
+            conversationId,
+            sessionId: projectInput.sessionId ?? "",
+            actorId: principal.actorId,
+            sourceToolName: toolName,
+            conversationKind: projectInput.conversationKind,
+            conversationBoundary: projectInput.conversationBoundary,
+            workspaceMemberId: projectInput.workspaceMemberId,
+          },
+          runtimeTarget: {
+            deviceCapabilityId: row.device_capability_id,
+            deviceId: row.device_id,
+            deviceExposureId: row.device_exposure_id,
+            requestedToolName: toolName,
+            deviceToolStableKey: row.visible_tool_name,
+            runtimeSessionId: "",
+            relayDeviceDisplayName: row.device_name,
+          },
+          authorizationPlan: {
+            requestedAction: buildRequestedAction({
+              capability: row.builtin_kind,
+              toolName,
+              args: input,
+            }),
+            grantOptions: [],
+          },
+          requestMode: "background",
+          availablePresets: ["once", "actor", "conversation", "workspace"],
+          reason: `Tool ${toolName} requires authorization for device capability ${row.device_capability_id}`,
+          sourceRequestArgs: input,
+        })
+        return {
+          content: [
+            textBlock(
+              `runtime_authorization_requested: created interaction ${result.interaction.id}. Approve the request to retry with retry_nonce=${result.retryNonce}.`
+            ) as CanonicalContentBlock,
+          ],
+          isError: true,
+          metadata: {
+            synapse_error: {
+              code: "runtime_authorization_requested",
+              message: "user approval required",
+              authorization_task_id: result.task?.id,
+              retry_nonce: result.retryNonce,
+            },
+          },
+        }
+      } catch (err) {
+        return mcpErrorBlock(
+          `authorization request failed: ${(err as Error).message}`
+        )
+      }
     }
 
     let envelope
@@ -576,6 +677,17 @@ function unionWithDevice(
       /* operation-complete logging is best-effort; the dispatch result is
        * already in hand and shouldn't be hidden behind audit-write errors */
     })
+    // Consume `once` grants we used on success — without this, the same
+    // once grant could be reused indefinitely after the first dispatch.
+    // Failure path leaves them active so the planner can retry with the
+    // same retry_nonce.
+    if (result.ok && onceGrantIdsForConsume.length > 0) {
+      await Promise.all(
+        onceGrantIdsForConsume.map((id) =>
+          consumeRuntimeAuthorizationGrant(id).catch(() => undefined)
+        )
+      )
+    }
     if (!result.ok) {
       return mcpErrorBlock(
         `device dispatch failed (${result.error?.code}): ${result.error?.message}`
@@ -644,6 +756,95 @@ function principalKindFor(principal: DevicePrincipal): OperationPrincipalKind {
     case "remote_agent":
     case "workspace_member":
       return principal.kind
+  }
+}
+
+/**
+ * Build a minimal RuntimeAuthorizationRequestedAction from the tool args +
+ * declared capability. Used when the projection has to fire an
+ * interaction_runtime_authorization_requests row because no grant covers
+ * the call yet. The UI uses requestedAction to render "Allow X to do Y"
+ * to the user; the user then picks a preset that becomes the grant.
+ */
+function buildRequestedAction(args: {
+  capability: "filesystem" | "commandline" | "browser" | "cua" | null
+  toolName: string
+  args: Record<string, unknown>
+}): RuntimeAuthorizationRequestedAction {
+  const summary = `Tool ${args.toolName} requires authorization`
+  const detail = `args: ${JSON.stringify(args.args).slice(0, 200)}`
+  switch (args.capability) {
+    case "filesystem": {
+      const path =
+        typeof args.args["path"] === "string"
+          ? (args.args["path"] as string)
+          : "/"
+      return {
+        capability: "filesystem",
+        toolName: args.toolName,
+        summary,
+        detail,
+        filesystem: { access: "read", pathPrefixes: [path] },
+      }
+    }
+    case "commandline": {
+      const command =
+        typeof args.args["command"] === "string"
+          ? (args.args["command"] as string)
+          : ""
+      const workingDirectory =
+        typeof args.args["working_directory"] === "string"
+          ? (args.args["working_directory"] as string)
+          : undefined
+      return {
+        capability: "commandline",
+        toolName: args.toolName,
+        summary,
+        detail,
+        commandline: {
+          executor: "bash",
+          commandMatchType: "tool",
+          commandText: command,
+          workingDirectory,
+        },
+      }
+    }
+    case "browser": {
+      const url =
+        typeof args.args["url"] === "string"
+          ? (args.args["url"] as string)
+          : ""
+      // Default to read; the UI lets the user pick read/write.
+      return {
+        capability: "browser",
+        toolName: args.toolName,
+        summary,
+        detail,
+        browser: {
+          action: "read",
+          scopeType: "origin",
+          origin: safeOrigin(url),
+        },
+      }
+    }
+    case "cua":
+    default:
+      // CUA + unknown → default to read; UI can promote to write.
+      return {
+        capability: "cua",
+        toolName: args.toolName,
+        summary,
+        detail,
+        cua: { access: "read" },
+      }
+  }
+}
+
+function safeOrigin(url: string): string | undefined {
+  try {
+    return new URL(url).origin
+  } catch {
+    return undefined
   }
 }
 

@@ -537,7 +537,7 @@ export async function logRuntimeEvent(params: {
   toolAttemptId?: string
   actorId?: string
   userId?: string
-  source: "conversation" | "provider" | "tool" | "relay" | "a2a" | "system"
+  source: "conversation" | "provider" | "tool" | "device" | "a2a" | "system"
   level?: "debug" | "info" | "warn" | "error"
   eventType: string
   payload?: Record<string, unknown>

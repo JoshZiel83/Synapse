@@ -34,7 +34,7 @@ export async function logToolCall(data: {
     turnId: data.turnId,
     actorId: data.actorId,
     userId: data.userId,
-    source: data.toolType === "relay" ? "relay" : "tool",
+    source: data.toolType === "relay" ? "device" : "tool",
     level: data.isError ? "error" : "info",
     eventType: "tool.call.legacy",
     payload: {
@@ -65,7 +65,7 @@ export async function logEvent(data: {
   await logRuntimeEvent({
     workspaceId: data.workspaceId,
     userId: data.userId,
-    source: data.relayId ? "relay" : "tool",
+    source: data.relayId ? "device" : "tool",
     level: "info",
     eventType: data.eventType,
     payload: {

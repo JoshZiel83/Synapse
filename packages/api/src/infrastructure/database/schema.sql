@@ -135,7 +135,7 @@ CREATE TYPE context_compaction_run_inputs_input_kind AS ENUM ('archive_point', '
 CREATE TYPE session_engine_branches_status AS ENUM ('active', 'superseded', 'archived');
 CREATE TYPE engine_branch_checkpoints_checkpoint_kind AS ENUM ('snapshot', 'compaction');
 CREATE TYPE session_interrupts_type AS ENUM ('remote_control_terminated');
-CREATE TYPE runtime_events_source AS ENUM ('conversation', 'provider', 'tool', 'relay', 'a2a', 'system');
+CREATE TYPE runtime_events_source AS ENUM ('conversation', 'provider', 'tool', 'device', 'a2a', 'system');
 CREATE TYPE runtime_events_level AS ENUM ('debug', 'info', 'warn', 'error');
 CREATE TYPE skill_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'follow_upstream', 'detached');
 CREATE TYPE skill_mirror_sources_source_type AS ENUM ('github', 'clawhub');

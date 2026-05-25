@@ -6,3 +6,13 @@ export {
   type CommandlinePolicy,
 } from "./commandline.js"
 export { GrantPolicySchema, type GrantPolicy } from "./grant.js"
+export {
+  filesystemPolicyAllows,
+  commandlinePolicyAllows,
+  normalizePathPrefix,
+  normalizeCommandText,
+  hasCompoundShellOperators,
+  commandPrefixMatches,
+  pathWithinPrefix,
+  normalizeFilesystemPolicy,
+} from "./matchers.js"
