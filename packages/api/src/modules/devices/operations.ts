@@ -1,11 +1,10 @@
 // Device operations + attempts lifecycle. Every dispatch creates a
-// device_operations row (status='created' → 'dispatched' → 'completed' /
+// device_operations row (status='created' → 'dispatched' → 'succeeded' /
 // 'failed') and a device_operation_attempts row (status='issued' →
 // 'acknowledged' / 'failed'). The lifecycle gives the dashboard a
 // complete audit trail of which actor invoked which device tool with
 // which envelope, and lets retry logic key off attempt_seq.
 
-import { randomUUID } from "node:crypto"
 import { sql, type Transaction } from "kysely"
 import type { OperationEnvelope, SynapseError } from "@synapse/device-protocol"
 import { db } from "../../infrastructure/database/kysely.js"
@@ -88,7 +87,7 @@ export async function beginDeviceOperation(
         )}::jsonb`,
         input_hash: input.envelope.input_hash,
         expires_at: input.envelope.expires_at,
-      } as never)
+      })
       .execute()
 
     await trx
@@ -96,15 +95,19 @@ export async function beginDeviceOperation(
       .values({
         id: attemptId,
         operation_id: operationId,
-        attempt_seq: 1,
-        transport: "tunnel_http",
+        attempt_seq: 1n,
+        // Schema's device_operation_attempts_transport enum is
+        // {mcp_http, control_plane_task}. The MCP-over-frp path is
+        // mcp_http — control_plane_task is reserved for the async
+        // task path (PR follow-up).
+        transport: "mcp_http",
         device_service_id: input.deviceServiceId,
         tunnel_internal_url: input.tunnelInternalUrl,
         mcp_request_id: attemptId,
         envelope_signature_kid: input.envelope.signature_kid,
         status: "issued",
         started_at: sql`NOW()`,
-      } as never)
+      })
       .execute()
 
     return { operationId, attemptId, attemptSeq: 1 }
@@ -138,19 +141,21 @@ export async function completeDeviceOperation(
         metadata: input.error
           ? sql`${JSON.stringify({ error: input.error })}::jsonb`
           : sql`'{}'::jsonb`,
-      } as never)
+      })
       .where("id", "=", input.attemptId)
       .execute()
     await trx
       .updateTable("device_operations")
       .set({
-        status: input.ok ? "completed" : "failed",
+        // Schema's device_operations_status terminal enum value is
+        // 'succeeded' (not 'completed'). Failed dispatches use 'failed'.
+        status: input.ok ? "succeeded" : "failed",
         result_hash: input.resultHash ?? null,
         error_code: input.error?.code ?? null,
         error_message: input.error?.message ?? null,
         completed_at: sql`NOW()`,
         updated_at: sql`NOW()`,
-      } as never)
+      })
       .where("id", "=", input.operationId)
       .execute()
   })

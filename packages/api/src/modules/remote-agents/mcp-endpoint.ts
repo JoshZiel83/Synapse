@@ -278,9 +278,9 @@ async function registerResolvedTools(params: {
   //
   // conversationKind + conversationBoundary are LOAD-BEARING here: the
   // resolver's conversation_type mask filter (loadVisiblePlugins +
-  // loadVisibleRelayExposures) rejects rows that don't match the conversation
+  // projectDeviceTools) rejects rows that don't match the conversation
   // type, and shared/utils:maskAllowsConversationType returns false when
-  // either field is missing. Without these two values plugin / relay tools
+  // either field is missing. Without these two values plugin / device tools
   // would be silently filtered out even when authorization passes.
   const resolved = await projectToolsForPrincipal({
     workspaceId: params.workspaceId,

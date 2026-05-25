@@ -1,12 +1,13 @@
 // @synapse/api/src/modules/capability-projection
 // Unified tool projection per docs/device-runtime-v3.md §11.
 //
-// v3.0 skeleton: this module is the single canonical entry point used by chat
-// runtime and reverse MCP. It delegates to mcp-plugins/tool-resolver.ts for
-// plugin + legacy relay_capability projections AND now unions device_capability
-// tools alongside, so the planner sees device-side bash / list_dir / etc.
-// alongside MCP plugins. Device dispatch goes through DeviceTunnelRegistry +
-// the synchronous tools/call client in devices/dispatch.ts.
+// Single canonical entry point used by chat runtime and reverse MCP. Delegates
+// to mcp-plugins/tool-resolver.ts for plugin projections, then unions
+// device_capability tools alongside so the planner sees device-side bash /
+// list_dir / etc. alongside MCP plugins. Device dispatch goes through
+// DeviceTunnelRegistry + the synchronous tools/call client in
+// devices/dispatch.ts; every dispatch opens a device_operations + first
+// device_operation_attempts row pair (see devices/operations.ts).
 
 import { randomUUID } from "node:crypto"
 import type {
@@ -43,6 +44,11 @@ import {
   loadDeviceCapabilityToolsForSubjects,
   type DeviceCapabilityToolRow,
 } from "./device-capabilities.js"
+import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
+import {
+  maskAllowsConversationType,
+  resolveNarrowedConversationTypeMask,
+} from "@synapse/shared"
 
 /**
  * Discriminated union of principals that capability projection evaluates
@@ -186,7 +192,7 @@ async function projectLegacyTools(
 interface DeviceToolBundle {
   tools: ToolDefinition[]
   handlers: Map<string, DeviceCapabilityToolRow>
-  subjectIds: string[]
+  subjects: ResolvedPrincipalSubjects
 }
 
 // Tools we project from device_capabilities are namespaced so they cannot
@@ -197,91 +203,113 @@ function namespaceDeviceToolName(row: DeviceCapabilityToolRow): string {
   return `${DEVICE_TOOL_PREFIX}${row.device_capability_id}__${row.visible_tool_name}`
 }
 
+/**
+ * Resolved subject ids for a principal. `workspaceSubjectId` is always
+ * populated (every caller can see workspace-scoped bindings). The
+ * principal-specific subject id (actor / conversation / context /
+ * remote_agent) is the one used for audit + grant filtering — never use
+ * `workspaceSubjectId` as the "principal" identity or the audit row will
+ * mis-attribute the operation to the workspace bucket.
+ */
+export interface ResolvedPrincipalSubjects {
+  workspaceSubjectId: string
+  principalSubjectId: string | null
+  actorSubjectId?: string
+  conversationSubjectId?: string
+  contextSubjectId?: string
+  remoteAgentSubjectId?: string
+  /** Every subject id that participates in binding visibility checks. */
+  allIds: string[]
+}
+
 async function principalSubjectIds(
   input: ProjectToolsInput
-): Promise<string[]> {
-  const ids: string[] = []
-  // Every principal can see workspace-scoped bindings.
-  ids.push(
-    await upsertAccessSubject(db, {
-      kind: SUBJECT_KIND.WORKSPACE,
-      workspaceId: input.workspaceId,
-    })
-  )
+): Promise<ResolvedPrincipalSubjects> {
+  const workspaceSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE,
+    workspaceId: input.workspaceId,
+  })
+  const out: ResolvedPrincipalSubjects = {
+    workspaceSubjectId,
+    principalSubjectId: null,
+    allIds: [workspaceSubjectId],
+  }
   const principal = input.principal
   switch (principal.kind) {
     case "actor": {
-      ids.push(
-        await upsertAccessSubject(db, {
-          kind: SUBJECT_KIND.ACTOR,
-          actorId: principal.actorId,
-        })
-      )
+      out.actorSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: principal.actorId,
+      })
+      out.allIds.push(out.actorSubjectId)
+      out.principalSubjectId = out.actorSubjectId
       if (principal.conversationId) {
-        ids.push(
-          await upsertAccessSubject(db, {
-            kind: SUBJECT_KIND.CONVERSATION,
-            conversationId: principal.conversationId,
-          })
-        )
+        out.conversationSubjectId = await upsertAccessSubject(db, {
+          kind: SUBJECT_KIND.CONVERSATION,
+          conversationId: principal.conversationId,
+        })
+        out.allIds.push(out.conversationSubjectId)
       }
       break
     }
     case "actor_in_conversation": {
-      ids.push(
-        await upsertAccessSubject(db, {
-          kind: SUBJECT_KIND.ACTOR,
-          actorId: principal.actorId,
-        }),
-        await upsertAccessSubject(db, {
-          kind: SUBJECT_KIND.CONVERSATION,
-          conversationId: principal.conversationId,
-        })
-      )
+      out.actorSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: principal.actorId,
+      })
+      out.conversationSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: principal.conversationId,
+      })
+      out.allIds.push(out.actorSubjectId, out.conversationSubjectId)
       try {
         const ctx = await ensureConversationActorContext({
           actorId: principal.actorId,
           conversationId: principal.conversationId,
         })
-        ids.push(
-          await upsertAccessSubject(db, {
-            kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-            contextId: ctx.conversationActorContextId,
-          })
-        )
+        out.contextSubjectId = await upsertAccessSubject(db, {
+          kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
+          contextId: ctx.conversationActorContextId,
+        })
+        out.allIds.push(out.contextSubjectId)
+        out.principalSubjectId = out.contextSubjectId
       } catch {
-        /* if the context can't be resolved we still surface workspace/actor
-         * bindings — the planner just won't see actor_in_conversation grants */
+        // context resolution failed — fall back to actor subject so audit
+        // still attributes correctly; planner just won't see context grants.
+        out.principalSubjectId = out.actorSubjectId
       }
       break
     }
     case "conversation": {
-      ids.push(
-        await upsertAccessSubject(db, {
-          kind: SUBJECT_KIND.CONVERSATION,
-          conversationId: principal.conversationId,
-        })
-      )
+      out.conversationSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: principal.conversationId,
+      })
+      out.allIds.push(out.conversationSubjectId)
+      out.principalSubjectId = out.conversationSubjectId
       break
     }
     case "remote_agent": {
-      ids.push(
-        await upsertAccessSubject(db, {
-          kind: SUBJECT_KIND.REMOTE_AGENT,
-          remoteAgentId: principal.remoteAgentId,
-        }),
-        await upsertAccessSubject(db, {
-          kind: SUBJECT_KIND.CONVERSATION,
-          conversationId: principal.conversationId,
-        })
+      out.remoteAgentSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: principal.remoteAgentId,
+      })
+      out.conversationSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: principal.conversationId,
+      })
+      out.allIds.push(
+        out.remoteAgentSubjectId,
+        out.conversationSubjectId
       )
+      out.principalSubjectId = out.remoteAgentSubjectId
       break
     }
     case "workspace_member":
       // Already gated by the projectToolsForPrincipal switch above.
       break
   }
-  return ids
+  return out
 }
 
 async function projectDeviceTools(
@@ -290,16 +318,55 @@ async function projectDeviceTools(
   // workspace_member never reaches here (throws above) and the chat-runtime
   // consumer is the only one currently wired for device dispatch.
   if (input.principal.kind === "workspace_member") {
-    return { tools: [], handlers: new Map(), subjectIds: [] }
+    return {
+      tools: [],
+      handlers: new Map(),
+      subjects: {
+        workspaceSubjectId: "",
+        principalSubjectId: null,
+        allIds: [],
+      },
+    }
   }
-  const subjectIds = await principalSubjectIds(input)
+  const subjects = await principalSubjectIds(input)
   const rows = await loadDeviceCapabilityToolsForSubjects({
     workspaceId: input.workspaceId,
-    subjectIds,
+    subjectIds: subjects.allIds,
   })
+
+  // Conversation-type-mask filter: every device capability row gets
+  // narrowed to (workspace default ∩ device override ∩ capability override).
+  // A capability whose effective mask doesn't include the current
+  // conversation's (kind, boundary) bit is dropped from the surface.
+  const conversationKind = input.conversationKind ?? null
+  const conversationBoundary = input.conversationBoundary ?? null
+  const workspacePolicies =
+    await getWorkspaceCapabilityConversationTypePolicyMap([input.workspaceId])
+  const workspaceDefault =
+    workspacePolicies.get(input.workspaceId)?.device_capability ?? null
+  const filteredRows = rows.filter((row) => {
+    if (!conversationKind) {
+      // No conversation context (e.g. dashboard introspection) — surface
+      // everything; the dispatch-side check still rejects per-call.
+      return true
+    }
+    const effectiveMask = resolveNarrowedConversationTypeMask(
+      resolveNarrowedConversationTypeMask(
+        workspaceDefault,
+        row.device_conversation_type_mask_override
+      ),
+      row.capability_conversation_type_mask_override
+    )
+    return maskAllowsConversationType(
+      effectiveMask,
+      conversationKind,
+      conversationBoundary
+    )
+  })
+
   const handlers = new Map<string, DeviceCapabilityToolRow>()
   const tools: ToolDefinition[] = []
-  for (const row of rows) {
+  for (const row of filteredRows) {
     const name = namespaceDeviceToolName(row)
     handlers.set(name, row)
     tools.push({
@@ -308,7 +375,7 @@ async function projectDeviceTools(
       parameters: normalizeInputSchema(row.input_schema),
     })
   }
-  return { tools, handlers, subjectIds }
+  return { tools, handlers, subjects }
 }
 
 function normalizeInputSchema(raw: unknown): ToolDefinition["parameters"] {
@@ -352,8 +419,12 @@ function unionWithDevice(
     // Look up runtime_authorization_grants that apply to this capability so
     // the device-side bash/cua enforcement has matching grant_specs to
     // consult. Without this, the device runtime would reject every call.
-    // We include all active grants for the capability whose subject_id is
-    // null (workspace scope) or in the principal's subject set.
+    // Pull active grants for this capability and filter strictly to ones the
+    // current principal actually owns: scope IN (workspace, once) → applies
+    // to everyone; otherwise grant.subject_id MUST be in the principal's
+    // subject set. Without this filter, every actor in the workspace
+    // inherits every other actor's actor/conversation grants on the same
+    // capability — a critical security hole.
     let grantSpecs: RuntimeAuthorizationGrantSpec[] = []
     const grantIds: string[] = []
     let grantScope: "once" | "actor" | "conversation" | "actor_in_conversation" | "workspace" = "workspace"
@@ -361,19 +432,13 @@ function unionWithDevice(
       const allGrants = await listActiveRuntimeAuthorizationGrantsForExposure(
         row.device_capability_id
       )
-      // We approximate "applicable" as: grant scope === workspace OR
-      // grant.subject in the principal's subject set. The richer matching
-      // (filesystem path prefix, browser scope, etc.) happens on the
-      // device side via the per-capability matcher functions.
-      const subjectSet = new Set(device.subjectIds)
+      const subjectSet = new Set(device.subjects.allIds)
       const applicable = allGrants.filter((g) => {
         if (g.scope === "workspace" || g.scope === "once") return true
-        // For actor / conversation / actor_in_conversation scopes the grant
-        // row's subject_id (queried into createdAt block, not surfaced on
-        // the public record). Since the public record doesn't expose
-        // subject_id, the conservative call is to include any non-workspace
-        // grant on this capability and let the device-side matcher reject.
-        return subjectSet.size > 0
+        // Other scopes are subject-bound. A grant with no subject_id at a
+        // non-workspace scope is malformed; conservatively drop it.
+        if (!g.subjectId) return false
+        return subjectSet.has(g.subjectId)
       })
       for (const grant of applicable) {
         const spec: RuntimeAuthorizationGrantSpec = {
@@ -414,6 +479,19 @@ function unionWithDevice(
     } catch (err) {
       return mcpErrorBlock(
         `grant lookup failed for capability ${row.device_capability_id}: ${(err as Error).message}`
+      )
+    }
+
+    // Hard gate: if no grants apply, refuse to dispatch. Without this check
+    // the server would ship an envelope with empty grant_specs and the
+    // device-side filesystem / browser / cua-read builtins would silently
+    // allow the call (since their authz check is "no policies present? skip
+    // gating"). The planner / UI is expected to call
+    // createRuntimeAuthorizationRequest separately and re-issue once the
+    // user resolves.
+    if (grantSpecs.length === 0) {
+      return mcpErrorBlock(
+        `runtime_authorization_required: no active grant covers device capability ${row.device_capability_id} for this principal — request authorization via the runtime-authorizations API and retry`
       )
     }
 
@@ -462,7 +540,7 @@ function unionWithDevice(
           getDeviceTunnelRegistry().resolve(row.device_service_id)
             ?.internalUrl ?? null,
         principalKind: principalKindFor(projectInput.principal),
-        principalSubjectId: device.subjectIds[0] ?? null,
+        principalSubjectId: device.subjects.principalSubjectId,
         initiatedByWorkspaceMemberId: projectInput.workspaceMemberId ?? null,
         initiatedBySessionId: projectInput.sessionId ?? null,
       })
@@ -534,7 +612,7 @@ function unionWithDevice(
     // refreshed handlers on the next tool call.
     device.tools = freshDevice.tools
     device.handlers = freshDevice.handlers
-    device.subjectIds = freshDevice.subjectIds
+    device.subjects = freshDevice.subjects
     return {
       tools: [...refreshed.tools, ...device.tools],
       mcpVersion: refreshed.mcpVersion,

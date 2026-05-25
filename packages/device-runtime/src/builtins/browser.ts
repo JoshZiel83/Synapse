@@ -100,6 +100,49 @@ export function createBrowserBuiltin(
           message: `browser builtin does not handle ${input.toolName}`,
         })
       }
+      // Device-side runtime authorization. browser_navigate is a "write"
+      // (changes page URL); browser_read_text is a "read".
+      const requiredAction: "read" | "write" =
+        input.toolName === "browser_navigate" ? "write" : "read"
+      if (input.envelope) {
+        const browserGrants = (
+          input.envelope.runtime_authorization?.grant_specs ?? []
+        ).filter((g) => g.capability === "browser" && g.browser)
+        // We can't statically verify the target URL because Page.navigate
+        // hasn't run yet — for navigate we check the supplied url; for
+        // read_text we check the current target's url (already resolved
+        // below). Defer to per-tool blocks for url-level checks.
+        const hasAnyAction = browserGrants.some(
+          (g) => g.browser!.action === requiredAction || g.browser!.action === "write"
+        )
+        if (!hasAnyAction) {
+          return toolErrorResult({
+            code: "permission_denied",
+            message: `browser ${input.toolName} requires a runtime_authorization grant with capability='browser' action='${requiredAction}'`,
+          })
+        }
+        // Origin check: at least one grant must cover the relevant URL.
+        const targetUrl =
+          input.toolName === "browser_navigate"
+            ? typeof input.args["url"] === "string"
+              ? (input.args["url"] as string)
+              : ""
+            : "" // read_text: check at dispatch time below after we have the current target
+        if (input.toolName === "browser_navigate" && targetUrl) {
+          const allowed = browserGrants.some(
+            (g) =>
+              (g.browser!.action === requiredAction ||
+                g.browser!.action === "write") &&
+              browserPolicyCoversUrl(g.browser!, targetUrl)
+          )
+          if (!allowed) {
+            return toolErrorResult({
+              code: "permission_denied",
+              message: `browser_navigate(${targetUrl}) not covered by any browser grant scope`,
+            })
+          }
+        }
+      }
       let targets: CdpTarget[]
       try {
         targets = await listCdpTargets(opts.cdpEndpoint)
@@ -153,6 +196,22 @@ export function createBrowserBuiltin(
           }
         }
         // browser_read_text
+        // Origin check: the active target's URL must be covered by at least
+        // one browser grant with action read (or write — write implies read).
+        if (input.envelope) {
+          const browserGrants = (
+            input.envelope.runtime_authorization?.grant_specs ?? []
+          ).filter((g) => g.capability === "browser" && g.browser)
+          const allowed = browserGrants.some((g) =>
+            browserPolicyCoversUrl(g.browser!, target.url)
+          )
+          if (!allowed) {
+            return toolErrorResult({
+              code: "permission_denied",
+              message: `browser_read_text on ${target.url} not covered by any browser grant scope`,
+            })
+          }
+        }
         const maxChars =
           typeof input.args["max_chars"] === "number"
             ? Math.max(1, Math.min(input.args["max_chars"], 200_000))
@@ -192,6 +251,46 @@ export interface CdpTarget {
   type: string
   url: string
   webSocketDebuggerUrl: string
+}
+
+/**
+ * Check whether a browser grant_spec policy covers a given URL. The policy
+ * pins either an exact origin, a host, or a registrable domain; an empty
+ * policy (no scope_type) is treated as "no coverage" — callers must require
+ * an explicit scope.
+ */
+export function browserPolicyCoversUrl(
+  policy: {
+    action: "read" | "write"
+    scope_type?: "host" | "domain" | "origin"
+    origin?: string
+    host?: string
+    registrable_domain?: string
+  },
+  url: string
+): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+  switch (policy.scope_type) {
+    case "origin":
+      return !!policy.origin && parsed.origin === policy.origin
+    case "host":
+      return !!policy.host && parsed.hostname === policy.host
+    case "domain": {
+      if (!policy.registrable_domain) return false
+      // crude eTLD+1 match: hostname equals or ends with ".${registrable_domain}".
+      return (
+        parsed.hostname === policy.registrable_domain ||
+        parsed.hostname.endsWith("." + policy.registrable_domain)
+      )
+    }
+    default:
+      return false
+  }
 }
 
 /**

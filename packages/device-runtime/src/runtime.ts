@@ -225,6 +225,17 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
             })
           }
         }
+        // Push the initial catalog AFTER hello-ack so the socket is
+        // guaranteed open + authenticated. The old setImmediate(pushCatalog)
+        // raced the hello round-trip and silently dropped the notification
+        // when socket.readyState !== OPEN.
+        try {
+          await this.pushCatalog()
+        } catch (err) {
+          logger.error("initial catalog sync failed", {
+            error: (err as Error).message,
+          })
+        }
       },
       onStatus: (status) => this.updateStatus(status),
       onMessage: (method, params) => {
@@ -233,21 +244,16 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
       logger,
     })
     this.transport.start()
-
-    setImmediate(() => {
-      void this.pushCatalog().catch((err) => {
-        logger.error("initial catalog sync failed", {
-          error: (err as Error).message,
-        })
-      })
-    })
   }
 
   private async pushCatalog() {
     if (!this.mcpHost || !this.transport) return
     const exposures = await this.mcpHost.getCatalogSnapshot()
     const params: DeviceCatalogSyncParams = { exposures }
-    this.transport.notify("device.catalog.sync", params)
+    // Use request (not notify) so we know whether the server actually
+    // accepted the catalog. notify() silently returns if the socket isn't
+    // OPEN, which was the original race that lost the initial sync.
+    await this.transport.request("device.catalog.sync", params)
   }
 
   private updateStatus(status: RuntimeStatus) {

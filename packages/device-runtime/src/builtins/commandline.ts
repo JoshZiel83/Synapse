@@ -94,7 +94,11 @@ export function createCommandlineBuiltin(
       }
       if (commandlinePolicies.length > 0) {
         const matched = commandlinePolicies.some((p) =>
-          commandMatchesPolicy(command, p)
+          commandMatchesPolicy(
+            command,
+            typeof workingDirectory === "string" ? workingDirectory : undefined,
+            p
+          )
         )
         if (!matched) {
           return toolErrorResult({
@@ -135,6 +139,7 @@ export function createCommandlineBuiltin(
 
 function commandMatchesPolicy(
   command: string,
+  workingDirectory: string | undefined,
   policy: {
     executor: "bash"
     command_match_type: "exact" | "prefix" | "tool"
@@ -143,14 +148,34 @@ function commandMatchesPolicy(
   }
 ): boolean {
   if (policy.executor !== "bash") return false
+  // If the policy pins a working directory, the call's working_directory must
+  // match (or be a child of the prefix). A missing call-side cwd against a
+  // pinned policy cwd fails closed.
+  if (policy.working_directory) {
+    if (!workingDirectory) return false
+    const pinned = policy.working_directory.endsWith("/")
+      ? policy.working_directory
+      : policy.working_directory + "/"
+    if (
+      workingDirectory !== policy.working_directory &&
+      !workingDirectory.startsWith(pinned)
+    ) {
+      return false
+    }
+  }
   switch (policy.command_match_type) {
     case "exact":
       return policy.command_text === command
-    case "prefix":
-      return (
-        typeof policy.command_text === "string" &&
-        command.startsWith(policy.command_text)
-      )
+    case "prefix": {
+      // Token-boundary aware: prefix "git" must NOT match "git-credential" or
+      // "github-cli". Either the prefix equals the command outright, or the
+      // command continues with whitespace after the prefix.
+      if (typeof policy.command_text !== "string") return false
+      if (policy.command_text === command) return true
+      if (!command.startsWith(policy.command_text)) return false
+      const next = command.charAt(policy.command_text.length)
+      return next === " " || next === "\t" || next === "\n"
+    }
     case "tool": {
       // "tool" match: the command_text is the leading token (binary name).
       if (typeof policy.command_text !== "string") return false

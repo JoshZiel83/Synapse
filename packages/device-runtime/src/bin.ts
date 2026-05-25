@@ -20,6 +20,8 @@ import { createCommandlineBuiltin } from "./builtins/commandline.js"
 import { createCuaBuiltin } from "./builtins/cua.js"
 import { createBrowserBuiltin } from "./builtins/browser.js"
 import { existsSync } from "node:fs"
+import { dirname, join, resolve } from "node:path"
+import { fileURLToPath } from "node:url"
 import type { CatalogProvider } from "./types.js"
 
 interface CliArgs {
@@ -46,6 +48,26 @@ function parseArgs(argv: string[]): CliArgs {
 
 function getFlag(flags: Map<string, string>, name: string, fallback?: string) {
   return flags.get(name) ?? fallback
+}
+
+/**
+ * Look for synapse-device-cua-helper alongside the runtime install. Returns
+ * the first existing path; null if none found. Covers two common layouts:
+ *   1. Monorepo dev: <repo>/sidecars/cua/synapse-device-cua-helper
+ *   2. Packaged release: <bin-dir>/synapse-device-cua-helper next to the
+ *      `synapse-device` JS bundle.
+ */
+function autoDiscoverCuaHelperPath(): string | undefined {
+  const here = dirname(fileURLToPath(import.meta.url))
+  const candidates = [
+    resolve(here, "..", "..", "..", "sidecars", "cua", "synapse-device-cua-helper"),
+    resolve(here, "..", "..", "sidecars", "cua", "synapse-device-cua-helper"),
+    join(here, "synapse-device-cua-helper"),
+  ]
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate
+  }
+  return undefined
 }
 
 /**
@@ -108,7 +130,8 @@ async function main() {
       ]
       const cuaHelperPath =
         getFlag(args.flags, "cua-helper") ??
-        process.env.SYNAPSE_DEVICE_CUA_HELPER_PATH
+        process.env.SYNAPSE_DEVICE_CUA_HELPER_PATH ??
+        autoDiscoverCuaHelperPath()
       if (cuaHelperPath && existsSync(cuaHelperPath)) {
         providers.push(createCuaBuiltin({ helperPath: cuaHelperPath }))
       } else if (getFlag(args.flags, "cua") === "off") {

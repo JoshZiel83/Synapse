@@ -177,6 +177,15 @@ export interface RuntimeAuthorizationGrantRecord extends RuntimeAuthorizationGra
   deviceId: string
   deviceCapabilityId: string
   deviceExposureId: string
+  /**
+   * Raw access_subjects.id this grant binds to. NULL only for `once` and
+   * `workspace` scopes; non-null for actor / conversation /
+   * actor_in_conversation / remote_agent. Callers MUST use this (not the
+   * derived actor/conversation ids) to verify the grant applies to the
+   * caller's principal — without it, grant selection cross-contaminates
+   * between actors that share a capability.
+   */
+  subjectId: string | null
   conversationId?: string
   actorId?: string
   createdByWorkspaceMemberId?: string
@@ -302,6 +311,7 @@ function mapRuntimeAuthorizationGrantRow(
     // project subj.actor_id AS subject_actor_id and subj.conversation_id AS
     // subject_conversation_id so this mapper can pick them up. (For `once` /
     // `workspace` scopes subject_id is NULL, so these are also undefined.)
+    subjectId: row.subject_id || null,
     conversationId: row.subject_conversation_id || undefined,
     actorId: row.subject_actor_id || undefined,
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,

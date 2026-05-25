@@ -2410,7 +2410,7 @@ export type MarketplaceSourceType =
   | "official"
   | "workspace_upload"
   | "user_upload"
-  | "relay_derived"
+  | "device_derived"
 export type MarketplaceLineageKind =
   | "installed_copy"
   | "fork"
@@ -2430,7 +2430,7 @@ export type MarketplaceRequirementTargetKind = "package" | "tag"
 export type PluginInstallationMode =
   | "manual"
   | "seeded"
-  | "relay_derived"
+  | "device_derived"
   | "package_required"
   | "package_recommended"
 export type MarketplaceVersionStatus =

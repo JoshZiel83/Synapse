@@ -24,6 +24,10 @@ export interface DeviceCapabilityToolRow {
   visible_tool_name: string
   visible_description: string
   input_schema: unknown
+  /** Per-capability mask override (NULL → fall back to workspace policy). */
+  capability_conversation_type_mask_override: number | null
+  /** Per-device mask override. */
+  device_conversation_type_mask_override: number | null
 }
 
 export interface LoadDeviceToolsParams {
@@ -76,6 +80,8 @@ export async function loadDeviceCapabilityToolsForSubjects(
       "dt.current_name as visible_tool_name",
       "dtr.description as visible_description",
       "dtr.input_schema as input_schema",
+      "dc.conversation_type_mask_override as capability_conversation_type_mask_override",
+      "d.conversation_type_mask_override as device_conversation_type_mask_override",
     ])
     .where("dc.workspace_id", "=", params.workspaceId)
     .where("dc.status", "=", "active")

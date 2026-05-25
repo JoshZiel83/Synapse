@@ -136,10 +136,10 @@ test("buildActorPrompt rejects plan mode in group conversations", () => {
   )
 })
 
-test("buildActorPrompt mentions relay request_authorization guidance for builtin tools", () => {
+test("buildActorPrompt mentions device request_authorization guidance for builtin tools", () => {
   const tools: ToolDefinition[] = [
     {
-      name: "relay__shell__bash",
+      name: "device__shell__bash",
       description: "Run bash",
       parameters: {
         type: "object",

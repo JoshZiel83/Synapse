@@ -79,6 +79,28 @@ export function createFilesystemBuiltin(
           message: `filesystem builtin does not handle ${input.toolName}`,
         })
       }
+      // Device-side runtime authorization: list_dir is a read; require at
+      // least one filesystem grant_spec with access in {read, write} whose
+      // path_prefixes cover the requested path. Without this, an envelope
+      // signed with empty grant_specs would silently list the root.
+      const path =
+        typeof input.args["path"] === "string"
+          ? (input.args["path"] as string)
+          : "/"
+      if (input.envelope) {
+        const fsGrants = (
+          input.envelope.runtime_authorization?.grant_specs ?? []
+        ).filter((g) => g.capability === "filesystem" && g.filesystem)
+        const allowed = fsGrants.some((g) =>
+          fsPolicyAllows(g.filesystem!, "read", path)
+        )
+        if (!allowed) {
+          return toolErrorResult({
+            code: "permission_denied",
+            message: `list_dir(${path}) not covered by any filesystem grant`,
+          })
+        }
+      }
       const fs = await ensureBackend()
       if (!fs) {
         return toolErrorResult({
@@ -86,10 +108,6 @@ export function createFilesystemBuiltin(
           message: "filesystem builtin has no rootPath configured",
         })
       }
-      const path =
-        typeof input.args["path"] === "string"
-          ? (input.args["path"] as string)
-          : "/"
       try {
         const entries = await fs.list(path)
         return {
@@ -109,4 +127,22 @@ export function createFilesystemBuiltin(
       }
     },
   }
+}
+
+function fsPolicyAllows(
+  policy: { access: "read" | "write"; path_prefixes: string[] },
+  needed: "read" | "write",
+  path: string
+): boolean {
+  // write implies read; read does not imply write.
+  if (needed === "write" && policy.access !== "write") return false
+  if (policy.path_prefixes.length === 0) return false
+  // Normalize the candidate so trailing-slash differences don't sneak past
+  // (path "/etc/passwd" against prefix "/etc" → match; "/etcd" should NOT).
+  const normalized = path.endsWith("/") ? path : path
+  return policy.path_prefixes.some((prefix) => {
+    if (prefix === path) return true
+    const withSep = prefix.endsWith("/") ? prefix : prefix + "/"
+    return normalized.startsWith(withSep)
+  })
 }

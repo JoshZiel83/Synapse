@@ -163,19 +163,25 @@ export function createCuaBuiltin(opts: CuaBuiltinOptions = {}): CatalogProvider 
           message: `cua builtin does not handle ${input.toolName}`,
         })
       }
-      // Device-side runtime authorization for write actions (click, type_text):
-      // the envelope must carry a cua grant_spec with access='write'.
-      // list_displays / capture_display are read-only and don't require write.
+      // Device-side runtime authorization. Every cua tool needs a cua
+      // grant_spec; write tools (click, type_text) need access='write'
+      // and reads (list_displays, capture_display) accept 'read' or
+      // 'write'.
       const writeTools = new Set(["cua_click", "cua_type_text"])
-      if (writeTools.has(input.toolName) && input.envelope) {
+      if (input.envelope) {
         const cuaGrants = (
           input.envelope.runtime_authorization?.grant_specs ?? []
         ).filter((g) => g.capability === "cua" && g.cua)
-        const hasWrite = cuaGrants.some((g) => g.cua?.access === "write")
-        if (!hasWrite) {
+        const requiredAccess = writeTools.has(input.toolName) ? "write" : "read"
+        const allowed = cuaGrants.some((g) =>
+          requiredAccess === "write"
+            ? g.cua!.access === "write"
+            : g.cua!.access === "read" || g.cua!.access === "write"
+        )
+        if (!allowed) {
           return toolErrorResult({
             code: "permission_denied",
-            message: `cua ${input.toolName} requires a runtime_authorization grant with capability='cua' access='write'`,
+            message: `cua ${input.toolName} requires a runtime_authorization grant with capability='cua' access='${requiredAccess}'`,
           })
         }
       }

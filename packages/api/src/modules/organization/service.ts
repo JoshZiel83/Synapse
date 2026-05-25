@@ -349,7 +349,7 @@ function mapCatalogSourceKind(
     case "user":
       return "user_upload"
     case "relay":
-      return "relay_derived"
+      return "device_derived"
   }
 }
 
