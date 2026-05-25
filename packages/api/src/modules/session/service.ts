@@ -5,15 +5,11 @@ import {
   executeTakeFirst,
   type QueryExecutor,
 } from "../../infrastructure/database/kysely.js"
-import { shutdownSessionInstances } from "../mcp-plugins/instance-manager.js"
 import { queueConversationTransportProjection } from "../im/service.js"
 import {
-  createConversation,
   createConversationItem,
   ensureConversationParticipant,
-  getConversation,
 } from "../chat/service.js"
-import { getWorkspaceMemberIdentityById } from "../chat/workspace-identity.js"
 import {
   buildNormalizedMessageContent,
   itemPartsToCanonicalContentBlocks,
@@ -55,7 +51,6 @@ type SessionConversationMessageSubtype = Exclude<
   "chat.message"
 >
 import { v4 as uuidv4 } from "uuid"
-import type { SessionsChannelType } from "../../infrastructure/database/generated/db.js"
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
   if (!value) return {}
@@ -212,9 +207,7 @@ export async function ensureConversationActorSessionContext(
     workspaceId?: UUID
     actorId: UUID
     conversationId: UUID
-    channelType?: SessionsChannelType
     trigger?: SessionTrigger
-    metadata?: Record<string, unknown>
   },
   queryable: QueryExecutor = pool
 ) {
@@ -266,7 +259,6 @@ export async function ensureConversationActorSessionContext(
           workspace_id: params.workspaceId,
           actor_id: params.actorId,
           conversation_id: params.conversationId,
-          channel_type: params.channelType || "web",
           trigger: params.trigger || "user_message",
           status: "idle",
         })
@@ -438,106 +430,8 @@ function buildMetadataFromItem(item: any) {
 
 // ============ Session CRUD ============
 
-export async function createSession(params: {
-  workspaceId: UUID
-  actorId: UUID
-  conversationId?: UUID
-  workspaceMemberId?: UUID
-  channelType?: SessionsChannelType
-  trigger?: SessionTrigger
-  metadata?: Record<string, unknown>
-}): Promise<any> {
-  const {
-    workspaceId,
-    actorId,
-    conversationId,
-    workspaceMemberId,
-    channelType = "web",
-    trigger = "user_message",
-    metadata = {},
-  } = params
-
-  let resolvedConversationId = conversationId
-  let privateConversationCreated = false
-  if (!resolvedConversationId) {
-    const conversation = await createConversation({
-      kind: "private",
-      boundary: "internal",
-      workspaceId,
-      metadata: { channelType, trigger },
-    })
-    resolvedConversationId = conversation.id as string
-    privateConversationCreated = true
-  } else {
-    const conversation = await getConversation(resolvedConversationId)
-    if (!conversation) {
-      throw new Error(`Conversation ${resolvedConversationId} not found`)
-    }
-  }
-  const finalConversationId = resolvedConversationId as string
-
-  await ensureConversationParticipant({
-    conversationId: finalConversationId,
-    participantType: "actor",
-    actorId,
-    actorJoinVersionId: await getActorJoinVersionId(actorId),
-  })
-
-  let resolvedWorkspaceMemberId: string | undefined
-  if (privateConversationCreated && workspaceMemberId) {
-    const workspaceMember =
-      await getWorkspaceMemberIdentityById(workspaceMemberId)
-    if (!workspaceMember) {
-      throw new Error("Workspace member not found for session creator")
-    }
-    resolvedWorkspaceMemberId = workspaceMember.workspaceMemberId
-    await ensureConversationParticipant({
-      conversationId: finalConversationId,
-      participantType: "workspace_member",
-      workspaceMemberId: resolvedWorkspaceMemberId,
-    })
-  }
-
-  const ensuredContext = await ensureConversationActorSessionContext({
-    workspaceId,
-    actorId,
-    conversationId: finalConversationId,
-    channelType,
-    trigger,
-    metadata,
-  })
-
-  return loadSession(ensuredContext.sessionId)
-}
-
 export async function getSession(sessionId: UUID): Promise<any | null> {
   return loadSession(sessionId)
-}
-
-export async function getSessionsByActor(
-  workspaceId: UUID,
-  actorId: UUID,
-  status?: SessionStatus
-): Promise<any[]> {
-  let sessionsQuery = db
-    .selectFrom("sessions as s")
-    .innerJoin("conversations as c", "c.id", "s.conversation_id")
-    .selectAll("s")
-    .select([
-      "c.kind as conversation_kind",
-      "c.boundary as conversation_boundary",
-      "c.title as conversation_title",
-    ])
-    .where("s.workspace_id", "=", workspaceId)
-    .where("s.actor_id", "=", actorId)
-
-  if (status) {
-    sessionsQuery = sessionsQuery.where("s.status", "=", status)
-  }
-
-  const sessions = await sessionsQuery.orderBy("s.created_at", "desc").execute()
-
-  return sessions.map(normalizeSessionRow)
 }
 
 export async function updateSessionStatus(
@@ -852,44 +746,4 @@ export async function hasPendingInterrupt(
 
   const row = await query.limit(1).executeTakeFirst()
   return Boolean(row?.id)
-}
-
-// ============ Cancel Session ============
-
-export async function cancelSession(sessionId: UUID): Promise<void> {
-  const session = await getSession(sessionId)
-  if (!session) throw new Error("Session not found")
-  if (session.status === "closed") {
-    throw new Error(`Session already ${session.status}`)
-  }
-
-  await updateSessionStatus(sessionId, "closed")
-  await shutdownSessionInstances(sessionId).catch(() => {})
-}
-
-// ============ Actor concurrent session count ============
-
-export async function getActiveSessionCount(actorId: UUID): Promise<number> {
-  const row = await db
-    .selectFrom("sessions")
-    .select(({ fn }) => fn.count<string>("id").as("count"))
-    .where("actor_id", "=", actorId)
-    .where("status", "=", "running")
-    .executeTakeFirst()
-  return parseInt(row?.count || "0", 10)
-}
-
-export async function getMaxConcurrentSessions(actorId: UUID): Promise<number> {
-  const row = await db
-    .selectFrom("actors")
-    .select(
-      sql<number>`CASE
-        WHEN COALESCE(config->>'maxConcurrentSessions', '') ~ '^[0-9]+$'
-          THEN GREATEST((config->>'maxConcurrentSessions')::int, 1)
-        ELSE 3
-      END`.as("max_concurrent_sessions")
-    )
-    .where("id", "=", actorId)
-    .executeTakeFirst()
-  return row?.max_concurrent_sessions ?? 3
 }

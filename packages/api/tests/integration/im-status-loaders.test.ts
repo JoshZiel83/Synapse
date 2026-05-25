@@ -94,8 +94,8 @@ async function makeConversationCtx(label: string): Promise<ConversationCtx> {
   const conversationId = convRow.rows[0].id
 
   const sessRow = await client.query<{ id: string }>(
-    `INSERT INTO sessions (workspace_id, actor_id, conversation_id, channel_type)
-     VALUES ($1, $2, $3, 'web')
+    `INSERT INTO sessions (workspace_id, actor_id, conversation_id)
+     VALUES ($1, $2, $3)
      RETURNING id`,
     [seed.workspaceId, actorId, conversationId]
   )
