@@ -1,4 +1,4 @@
-// Regression test: editing a `participant_private` memory must NOT create
+// Regression test: writing a `participant_private` memory must NOT create
 // a `sessions` row.
 //
 // The legacy memory path called `ensureConversationActorSessionContext`,
