@@ -155,7 +155,7 @@ Note that the default suite now has its own MockServer-backed LLM
 coverage (`llm-providers.test.ts`, `llm-tool-result-serialization.test.ts`,
 `llm-error-behavior.test.ts`), so `manual/llm-smoke.test.ts` is no
 longer the only path that exercises a provider — it is a thin "real
-gateway still responds" sanity check on top of the determinstic mock
+gateway still responds" sanity check on top of the deterministic mock
 coverage.
 
 ## MockServer mock LLM endpoint
