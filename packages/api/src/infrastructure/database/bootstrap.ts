@@ -7,9 +7,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION = "2026-05-25-device-runtime-v3-foundation-2"
+const CURRENT_SCHEMA_VERSION =
+  "2026-05-25-device-runtime-v3-pr20-relay-deletion"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "device runtime v3 PR #1 foundation + PR #16 add 'device_admin' workspace_access_bindings_access_key variant"
+  "device runtime v3 PR #20: drop relay_* tables/enums, rename relay_authorization_grants → runtime_authorization_grants, interaction_relay_authorization_requests → interaction_runtime_authorization_requests, drop relay_capability from resource_access_binding_resource_type"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

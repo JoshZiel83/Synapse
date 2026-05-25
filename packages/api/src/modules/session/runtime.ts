@@ -25,8 +25,17 @@ import {
 } from "@synapse/shared"
 import { sql } from "kysely"
 import { itemPartsToCanonicalContentBlocks } from "../chat/message-content.js"
-import { normalizeRelayBuiltinAuthorizationKind } from "../mcp-plugins/relay-invoke-options.js"
 import { getSession, updateSessionStatus } from "./service.js"
+
+// Device-runtime v3 (PR #20): the relay-invoke-options helper is gone. Replicate
+// the trimmed-string normalization inline so the relay-tool fallback branch in
+// buildRelayBuiltinToolBlocks still works for legacy task rows that may still
+// carry a builtinKind metadata field.
+function normalizeRelayBuiltinAuthorizationKind(value: unknown): string | null {
+  if (typeof value !== "string") return null
+  const trimmed = value.trim()
+  return trimmed.length > 0 ? trimmed : null
+}
 
 function runtimeHashKey(conversationId: string) {
   return `runtime:conversation:${conversationId}`
@@ -248,7 +257,7 @@ async function loadProcessingTargetsForTurn(
 
 async function loadRelayExposureSummary(exposureId: string) {
   const row = await db
-    .selectFrom("relay_exposures")
+    .selectFrom("device_exposures")
     .select(["id", "device_id", "metadata"])
     .where("id", "=", exposureId)
     .limit(1)

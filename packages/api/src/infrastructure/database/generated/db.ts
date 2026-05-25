@@ -185,7 +185,7 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export type Int8 = ColumnType<string, bigint | number | string, bigint | number | string>;
 
-export type InteractionRequestsKind = "plan_approval" | "relay_authorization" | "user_input";
+export type InteractionRequestsKind = "plan_approval" | "runtime_authorization" | "user_input";
 
 export type InteractionRequestsStatus = "answered" | "approved" | "cancelled" | "expired" | "pending" | "rejected" | "superseded";
 
@@ -255,48 +255,6 @@ export type RelationshipApprovalMode = "auto" | "manual";
 
 export type RelationshipRequestStatus = "approved" | "pending" | "rejected";
 
-export type RelayAuthorizationGrantsRetention = "consume_once" | "until_revoked";
-
-export type RelayAuthorizationGrantsScope = "actor" | "actor_in_conversation" | "conversation" | "once" | "workspace";
-
-export type RelayAuthorizationGrantsStatus = "active" | "consumed" | "revoked" | "superseded";
-
-export type RelayAuthorizationRequestMode = "background" | "blocking";
-
-export type RelayCapabilitiesStatus = "active" | "archived" | "unavailable";
-
-export type RelayCatalogRevisionsStatus = "active" | "superseded";
-
-export type RelayDevicesAutomationLifecycleState = "offline" | "online";
-
-export type RelayDevicesDeviceType = "custom" | "desktop_computer" | "laptop_computer" | "mobile_phone" | "server" | "tablet" | "virtual_machine";
-
-export type RelayDeviceSessionsStatus = "active" | "closed" | "closing" | "connecting" | "rejected";
-
-export type RelayDeviceSessionsTransport = "websocket";
-
-export type RelayDevicesTrustStatus = "active" | "blocked" | "pending" | "revoked";
-
-export type RelayExposuresRuntimeStatus = "degraded" | "discovered" | "failed" | "healthy" | "offline" | "quarantined" | "starting";
-
-export type RelayExposuresTransport = "builtin" | "custom" | "http" | "sse" | "stdio";
-
-export type RelayOperationDeliveriesStatus = "acked" | "cancelled" | "nacked" | "queued" | "sent" | "timed_out";
-
-export type RelayOperationsDeliveryPolicy = "online_only" | "store_and_forward";
-
-export type RelayOperationsStatus = "aborted" | "cancel_requested" | "cancelled" | "completed" | "created" | "dispatched" | "expired" | "failed" | "received" | "started";
-
-export type RelayPairingSessionsStatus = "cancelled" | "confirmed" | "consumed" | "expired" | "pending" | "rejected";
-
-export type RelaySyncSourcesSourceKind = "claude_code" | "claude_desktop" | "codex" | "custom" | "gemini" | "manual" | "opencode";
-
-export type RelaySyncSourcesStatus = "disabled" | "error" | "idle" | "syncing" | "unknown";
-
-export type RelaySyncSourcesSyncMode = "follow" | "snapshot";
-
-export type RelayToolsStatus = "active" | "removed";
-
 export type RemoteAgentBindingsRuntimeState = "error" | "idle" | "offline" | "plan_drafting" | "running" | "waiting_plan_approval" | "waiting_user_input";
 
 export type RemoteAgentBindingsStatus = "active" | "disabled" | "error";
@@ -317,11 +275,19 @@ export type RemoteAgentRuntimeCatalogStatus = "available" | "broken_path" | "mis
 
 export type RemoteAgentsRuntimeKind = "claude_code" | "codex";
 
-export type ResourceAccessBindingResourceType = "actor" | "automation_event_source" | "device_capability" | "installed_skill" | "plugin_installation" | "relay_capability" | "remote_agent";
+export type ResourceAccessBindingResourceType = "actor" | "automation_event_source" | "device_capability" | "installed_skill" | "plugin_installation" | "remote_agent";
 
 export type ResourceAccessBindingsSource = "approval" | "default_open" | "manual" | "relay_auto" | "system";
 
 export type ResourceAccessBindingsStatus = "active" | "revoked";
+
+export type RuntimeAuthorizationGrantsRetention = "consume_once" | "until_revoked";
+
+export type RuntimeAuthorizationGrantsScope = "actor" | "actor_in_conversation" | "conversation" | "once" | "workspace";
+
+export type RuntimeAuthorizationGrantsStatus = "active" | "consumed" | "revoked" | "superseded";
+
+export type RuntimeAuthorizationRequestMode = "background" | "blocking";
 
 export type RuntimeEventsLevel = "debug" | "error" | "info" | "warn";
 
@@ -1399,28 +1365,6 @@ export interface InteractionPlanApprovalRequests {
   resolution_payload: Generated<Json>;
 }
 
-export interface InteractionRelayAuthorizationRequests {
-  available_presets: Generated<Json>;
-  dedupe_key: string;
-  device_capability_id: string | null;
-  device_exposure_id: string | null;
-  device_id: string | null;
-  grant_options: Generated<Json>;
-  interaction_id: string;
-  reason: Generated<string>;
-  relay_capability_id: string | null;
-  relay_device_id: string | null;
-  relay_exposure_id: string | null;
-  relay_tool_stable_key: string;
-  request_mode: RelayAuthorizationRequestMode;
-  requested_action: Generated<Json>;
-  requested_tool_name: string;
-  resolution_payload: Generated<Json>;
-  source_request_args: Generated<Json>;
-  source_retry_nonce: string | null;
-  source_runtime_session_id: string | null;
-}
-
 export interface InteractionRequests {
   conversation_id: string;
   conversation_item_id: string | null;
@@ -1452,6 +1396,25 @@ export interface InteractionResponseCommands {
   request_payload: Generated<Json>;
   response_payload: Generated<Json>;
   updated_at: Generated<Timestamp>;
+}
+
+export interface InteractionRuntimeAuthorizationRequests {
+  available_presets: Generated<Json>;
+  dedupe_key: string;
+  device_capability_id: string;
+  device_exposure_id: string;
+  device_id: string;
+  device_tool_stable_key: string;
+  grant_options: Generated<Json>;
+  interaction_id: string;
+  reason: Generated<string>;
+  request_mode: RuntimeAuthorizationRequestMode;
+  requested_action: Generated<Json>;
+  requested_tool_name: string;
+  resolution_payload: Generated<Json>;
+  source_request_args: Generated<Json>;
+  source_retry_nonce: string | null;
+  source_runtime_session_id: string | null;
 }
 
 export interface InteractionUserInputRequests {
@@ -1802,226 +1765,6 @@ export interface RealtimeEventOutbox {
   workspace_id: string;
 }
 
-export interface RelayAuthorizationGrants {
-  consumed_at: Timestamp | null;
-  conversation_actor_context_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  created_by_workspace_member_id: string | null;
-  device_capability_id: string | null;
-  device_exposure_id: string | null;
-  device_id: string | null;
-  id: Generated<string>;
-  policy: Generated<Json>;
-  relay_capability_id: string | null;
-  relay_device_id: string | null;
-  relay_exposure_id: string | null;
-  retention: RelayAuthorizationGrantsRetention;
-  revoked_at: Timestamp | null;
-  scope: RelayAuthorizationGrantsScope;
-  source_interaction_id: string | null;
-  source_request_args: Generated<Json>;
-  source_retry_nonce: string | null;
-  source_runtime_session_id: string | null;
-  source_task_id: string | null;
-  status: Generated<RelayAuthorizationGrantsStatus>;
-  subject_id: string | null;
-  superseded_at: Timestamp | null;
-  updated_at: Generated<Timestamp | null>;
-  workspace_id: string;
-}
-
-export interface RelayCapabilities {
-  conversation_type_mask_override: number | null;
-  created_at: Generated<Timestamp | null>;
-  exposure_id: string;
-  id: Generated<string>;
-  status: Generated<RelayCapabilitiesStatus>;
-  updated_at: Generated<Timestamp | null>;
-  workspace_id: string;
-}
-
-export interface RelayCatalogRevisions {
-  activated_at: Generated<Timestamp | null>;
-  created_at: Generated<Timestamp | null>;
-  exposure_id: string;
-  id: Generated<string>;
-  invalidated_at: Timestamp | null;
-  revision_seq: Int8;
-  schema_hash: string;
-  status: Generated<RelayCatalogRevisionsStatus>;
-  updated_at: Generated<Timestamp | null>;
-}
-
-export interface RelayDevices {
-  automation_lifecycle_event_at: Timestamp | null;
-  automation_lifecycle_grace_until: Timestamp | null;
-  automation_lifecycle_state: RelayDevicesAutomationLifecycleState | null;
-  conversation_type_mask_override: number | null;
-  created_at: Generated<Timestamp | null>;
-  description: string | null;
-  device_type: Generated<RelayDevicesDeviceType>;
-  id: Generated<string>;
-  last_catalog_changed_at: Timestamp | null;
-  last_connected_at: Timestamp | null;
-  last_seen_at: Timestamp | null;
-  owner_workspace_member_id: string | null;
-  platform: string | null;
-  public_key: string;
-  public_key_fingerprint: string;
-  title: string;
-  trust_status: Generated<RelayDevicesTrustStatus>;
-  updated_at: Generated<Timestamp | null>;
-  workspace_id: string;
-}
-
-export interface RelayDeviceSessions {
-  client_version: string | null;
-  close_reason: string | null;
-  created_at: Generated<Timestamp | null>;
-  device_id: string;
-  ended_at: Timestamp | null;
-  id: Generated<string>;
-  last_heartbeat_at: Timestamp | null;
-  last_sequence: Generated<Int8>;
-  protocol_version: Generated<number>;
-  remote_addr: string | null;
-  started_at: Generated<Timestamp | null>;
-  status: Generated<RelayDeviceSessionsStatus>;
-  transport: Generated<RelayDeviceSessionsTransport>;
-  updated_at: Generated<Timestamp | null>;
-}
-
-export interface RelayExposures {
-  created_at: Generated<Timestamp | null>;
-  description: string | null;
-  device_id: string;
-  display_name: string;
-  id: Generated<string>;
-  last_error: string | null;
-  last_healthy_at: Timestamp | null;
-  last_seen_at: Timestamp | null;
-  metadata: Generated<Json | null>;
-  runtime_status: Generated<RelayExposuresRuntimeStatus>;
-  stable_key: string;
-  sync_source_id: string | null;
-  transport: RelayExposuresTransport;
-  updated_at: Generated<Timestamp | null>;
-}
-
-export interface RelayOperationDeliveries {
-  acknowledged_at: Timestamp | null;
-  created_at: Generated<Timestamp | null>;
-  delivery_seq: Int8;
-  id: Generated<string>;
-  metadata: Generated<Json | null>;
-  operation_id: string;
-  relay_session_id: string | null;
-  sent_at: Timestamp | null;
-  status: Generated<RelayOperationDeliveriesStatus>;
-  updated_at: Generated<Timestamp | null>;
-}
-
-export interface RelayOperationResults {
-  created_at: Generated<Timestamp | null>;
-  id: Generated<string>;
-  operation_id: string;
-  output_payload: Generated<Json>;
-  output_preview: string | null;
-  result_hash: string | null;
-  updated_at: Generated<Timestamp | null>;
-}
-
-export interface RelayOperations {
-  authorization_payload: Generated<Json>;
-  catalog_revision_id: string;
-  completed_at: Timestamp | null;
-  conversation_id: string | null;
-  created_at: Generated<Timestamp | null>;
-  delivery_policy: Generated<RelayOperationsDeliveryPolicy>;
-  device_id: string;
-  error_code: string | null;
-  error_message: string | null;
-  expires_at: Timestamp | null;
-  exposure_id: string;
-  id: Generated<string>;
-  input_hash: string;
-  input_payload: Generated<Json>;
-  operation_timeout_ms: number | null;
-  requested_by_actor_id: string | null;
-  requested_by_session_id: string | null;
-  requested_by_workspace_member_id: string | null;
-  requires_replan: Generated<boolean>;
-  result_hash: string | null;
-  runtime_session_id: string | null;
-  status: Generated<RelayOperationsStatus>;
-  task_id: string | null;
-  tool_id: string;
-  tool_revision_id: string;
-  updated_at: Generated<Timestamp | null>;
-  visible_tool_name: string;
-  workspace_id: string;
-}
-
-export interface RelayPairingSessions {
-  confirmed_at: Timestamp | null;
-  consumed_at: Timestamp | null;
-  created_at: Generated<Timestamp | null>;
-  device_id: string | null;
-  expires_at: Timestamp;
-  id: Generated<string>;
-  pairing_code: string;
-  requested_by_workspace_member_id: string | null;
-  requested_description: string | null;
-  requested_device_type: RelayDevicesDeviceType | null;
-  requested_title: string | null;
-  server_base_url: string;
-  status: Generated<RelayPairingSessionsStatus>;
-  updated_at: Generated<Timestamp | null>;
-  verification_uri: string;
-  verification_uri_complete: string | null;
-  workspace_id: string;
-}
-
-export interface RelaySyncSources {
-  config_path: string | null;
-  created_at: Generated<Timestamp | null>;
-  device_id: string;
-  id: Generated<string>;
-  last_error: string | null;
-  last_synced_at: Timestamp | null;
-  source_key: string;
-  source_kind: RelaySyncSourcesSourceKind;
-  status: Generated<RelaySyncSourcesStatus>;
-  sync_mode: Generated<RelaySyncSourcesSyncMode>;
-  updated_at: Generated<Timestamp | null>;
-}
-
-export interface RelayToolRevisions {
-  annotations: Generated<Json>;
-  catalog_revision_id: string;
-  created_at: Generated<Timestamp | null>;
-  definition_hash: string;
-  description: Generated<string>;
-  id: Generated<string>;
-  input_schema: Generated<Json>;
-  tool_id: string;
-  tool_name: string;
-}
-
-export interface RelayTools {
-  created_at: Generated<Timestamp | null>;
-  current_name: string;
-  exposure_id: string;
-  first_seen_at: Generated<Timestamp | null>;
-  id: Generated<string>;
-  last_seen_at: Generated<Timestamp | null>;
-  latest_revision_id: string | null;
-  metadata: Generated<Json | null>;
-  stable_key: string;
-  status: Generated<RelayToolsStatus>;
-  updated_at: Generated<Timestamp | null>;
-}
-
 export interface RemoteAgentBindings {
   capabilities: Generated<Json>;
   created_at: Generated<Timestamp | null>;
@@ -2179,13 +1922,37 @@ export interface ResourceAccessBindings {
   installed_skill_id: string | null;
   plugin_installation_id: string | null;
   reason: string | null;
-  relay_capability_id: string | null;
   remote_agent_id: string | null;
   resource_type: ResourceAccessBindingResourceType;
   revoked_at: Timestamp | null;
   source: Generated<ResourceAccessBindingsSource>;
   status: Generated<ResourceAccessBindingsStatus>;
   subject_id: string;
+  workspace_id: string;
+}
+
+export interface RuntimeAuthorizationGrants {
+  consumed_at: Timestamp | null;
+  conversation_actor_context_id: string | null;
+  created_at: Generated<Timestamp | null>;
+  created_by_workspace_member_id: string | null;
+  device_capability_id: string;
+  device_exposure_id: string;
+  device_id: string;
+  id: Generated<string>;
+  policy: Generated<Json>;
+  retention: RuntimeAuthorizationGrantsRetention;
+  revoked_at: Timestamp | null;
+  scope: RuntimeAuthorizationGrantsScope;
+  source_interaction_id: string | null;
+  source_request_args: Generated<Json>;
+  source_retry_nonce: string | null;
+  source_runtime_session_id: string | null;
+  source_task_id: string | null;
+  status: Generated<RuntimeAuthorizationGrantsStatus>;
+  subject_id: string | null;
+  superseded_at: Timestamp | null;
+  updated_at: Generated<Timestamp | null>;
   workspace_id: string;
 }
 
@@ -2749,9 +2516,9 @@ export interface DB {
   files: Files;
   installed_skills: InstalledSkills;
   interaction_plan_approval_requests: InteractionPlanApprovalRequests;
-  interaction_relay_authorization_requests: InteractionRelayAuthorizationRequests;
   interaction_requests: InteractionRequests;
   interaction_response_commands: InteractionResponseCommands;
+  interaction_runtime_authorization_requests: InteractionRuntimeAuthorizationRequests;
   interaction_user_input_requests: InteractionUserInputRequests;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_item_chunks: MemoryItemChunks;
@@ -2776,19 +2543,6 @@ export interface DB {
   provider_steps: ProviderSteps;
   publishers: Publishers;
   realtime_event_outbox: RealtimeEventOutbox;
-  relay_authorization_grants: RelayAuthorizationGrants;
-  relay_capabilities: RelayCapabilities;
-  relay_catalog_revisions: RelayCatalogRevisions;
-  relay_device_sessions: RelayDeviceSessions;
-  relay_devices: RelayDevices;
-  relay_exposures: RelayExposures;
-  relay_operation_deliveries: RelayOperationDeliveries;
-  relay_operation_results: RelayOperationResults;
-  relay_operations: RelayOperations;
-  relay_pairing_sessions: RelayPairingSessions;
-  relay_sync_sources: RelaySyncSources;
-  relay_tool_revisions: RelayToolRevisions;
-  relay_tools: RelayTools;
   remote_agent_bindings: RemoteAgentBindings;
   remote_agent_conversation_contexts: RemoteAgentConversationContexts;
   remote_agent_conversation_views: RemoteAgentConversationViews;
@@ -2800,6 +2554,7 @@ export interface DB {
   remote_agent_runtime_catalog: RemoteAgentRuntimeCatalog;
   remote_agents: RemoteAgents;
   resource_access_bindings: ResourceAccessBindings;
+  runtime_authorization_grants: RuntimeAuthorizationGrants;
   runtime_events: RuntimeEvents;
   schema_migrations: SchemaMigrations;
   session_context_states: SessionContextStates;

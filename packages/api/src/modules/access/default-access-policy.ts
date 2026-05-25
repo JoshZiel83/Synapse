@@ -207,18 +207,17 @@ export async function setAccessPolicyOn(
       client,
       `INSERT INTO resource_access_bindings (
          workspace_id, resource_type, installed_skill_id, plugin_installation_id,
-         relay_capability_id, automation_event_source_id, actor_id, remote_agent_id,
+         automation_event_source_id, actor_id, remote_agent_id,
          subject_id, conversation_type_mask_override, status, source,
          created_by_workspace_member_id, reason
        )
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        ON CONFLICT DO NOTHING`,
       [
         values.workspace_id,
         values.resource_type,
         values.installed_skill_id,
         values.plugin_installation_id,
-        values.relay_capability_id,
         values.automation_event_source_id,
         values.actor_id,
         values.remote_agent_id,
@@ -329,11 +328,11 @@ export async function grantApprovedAccessOn(
     client,
     `INSERT INTO resource_access_bindings (
        workspace_id, resource_type, installed_skill_id, plugin_installation_id,
-       relay_capability_id, automation_event_source_id, actor_id, remote_agent_id,
+       automation_event_source_id, actor_id, remote_agent_id,
        subject_id, conversation_type_mask_override, status, source,
        created_by_workspace_member_id, reason
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
      ON CONFLICT DO NOTHING
      RETURNING id`,
     [
@@ -341,7 +340,6 @@ export async function grantApprovedAccessOn(
       values.resource_type,
       values.installed_skill_id,
       values.plugin_installation_id,
-      values.relay_capability_id,
       values.automation_event_source_id,
       values.actor_id,
       values.remote_agent_id,

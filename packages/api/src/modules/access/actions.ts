@@ -197,46 +197,7 @@ export const ACCESS_ACTIONS = {
     permission: "delete",
   },
 
-  "relay_device.view": { resourceType: "relay_device", permission: "view" },
-  "relay_device.manage": { resourceType: "relay_device", permission: "manage" },
-  "relay_device.authorize_relay_authorization": {
-    resourceType: "relay_device",
-    permission: "authorize_relay_authorization",
-  },
-  "relay_device.delete": { resourceType: "relay_device", permission: "delete" },
-  "relay_exposure.view": { resourceType: "relay_exposure", permission: "view" },
-  "relay_exposure.edit": { resourceType: "relay_exposure", permission: "edit" },
-  "relay_exposure.delete": {
-    resourceType: "relay_exposure",
-    permission: "delete",
-  },
-  "relay_capability.view": {
-    resourceType: "relay_capability",
-    permission: "view",
-  },
-  "relay_capability.use": {
-    resourceType: "relay_capability",
-    permission: "use",
-  },
-  "relay_capability.request_relay_authorization": {
-    resourceType: "relay_capability",
-    permission: "request_relay_authorization",
-  },
-  "relay_capability.edit": {
-    resourceType: "relay_capability",
-    permission: "edit",
-  },
-  "relay_capability.grant": {
-    resourceType: "relay_capability",
-    permission: "grant",
-  },
-  "relay_capability.delete": {
-    resourceType: "relay_capability",
-    permission: "delete",
-  },
-
-  // v3 device-runtime parallel actions; the relay_capability.* entries above
-  // continue to exist until PR #17 deletes the legacy relay code paths.
+  // v3 device-runtime parallel actions.
   "device_capability.view": {
     resourceType: "device_capability",
     permission: "view",

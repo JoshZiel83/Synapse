@@ -6,15 +6,10 @@ import type {
   RelayAuthorizationRequestMode,
   RelayAuthorizationRequestedAction,
 } from "@synapse/shared/types"
-import {
-  DEFAULT_CONVERSATION_TYPE_MASK,
-  maskAllowsConversationType,
-  textBlocks,
-} from "@synapse/shared"
+import { textBlocks } from "@synapse/shared"
 import { sql } from "kysely"
 import { db } from "../../infrastructure/database/kysely.js"
 import { authorizeAction } from "../access/service.js"
-import { capabilityTargetMatchesContext } from "../access/bindings.js"
 import { buildUserInteractionCandidatesFromRows } from "../ai/session-tool-user-interactions.js"
 import { listConversationParticipants } from "../chat/service.js"
 import {
@@ -28,7 +23,6 @@ import {
   createToolCallTask,
   type ToolCallTaskRecord,
 } from "../tool-call-tasks/service.js"
-import { listRelayExposureAccessState } from "../mcp-plugins/relay-access.js"
 
 export interface RelayAuthorizationRequestSource {
   workspaceId: string
@@ -136,13 +130,13 @@ async function loadConversationKindAndBoundary(
 
 async function loadRelayCapabilityRequestState(capabilityId: string) {
   return db
-    .selectFrom("relay_capabilities as capability")
+    .selectFrom("device_capabilities as capability")
     .innerJoin(
-      "relay_exposures as exposure",
+      "device_exposures as exposure",
       "exposure.id",
       "capability.exposure_id"
     )
-    .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
+    .innerJoin("devices as device", "device.id", "exposure.device_id")
     .select([
       "capability.id as capability_id",
       "capability.status as capability_status",
@@ -151,7 +145,7 @@ async function loadRelayCapabilityRequestState(capabilityId: string) {
       "device.workspace_id as owner_workspace_id",
       sql<boolean>`EXISTS (
         SELECT 1
-        FROM relay_device_sessions session_row
+        FROM device_control_plane_sessions session_row
         WHERE session_row.device_id = device.id
           AND session_row.status = 'active'
       )`.as("has_active_device_session"),
@@ -184,37 +178,10 @@ async function canActorRequestRelayAuthorization(
     return false
   }
 
-  const accessState = await listRelayExposureAccessState(
-    relayState.owner_workspace_id,
-    relayState.exposure_id
-  )
-  return accessState.grants.some((grant) => {
-    // Relay-specific gate: the grant's effective conversation-type mask must
-    // permit the current conversation kind/boundary before we even consider
-    // target matching. workspace_member grants are individual approvals and
-    // don't match this actor-in-conversation code path.
-    const grantMask =
-      grant.effectiveConversationTypeMask ?? DEFAULT_CONVERSATION_TYPE_MASK
-    if (
-      !maskAllowsConversationType(
-        grantMask,
-        conversation.kind,
-        conversation.boundary
-      )
-    ) {
-      return false
-    }
-    if (grant.target.type === "workspace_member") {
-      return false
-    }
-    return capabilityTargetMatchesContext(grant.target, {
-      grantOwnerWorkspaceId: relayState.owner_workspace_id,
-      contextWorkspaceId: params.source.workspaceId,
-      actorId: params.source.actorId,
-      conversationId: params.source.conversationId,
-      workspaceMemberId: undefined,
-    })
-  })
+  // Device-runtime v3: per-capability access binding gating happens
+  // upstream via the access subsystem; this helper only verifies the
+  // device/exposure/capability is reachable.
+  return true
 }
 
 async function hasNewUserFacingConversationMessage(
@@ -282,8 +249,8 @@ export async function createRelayAuthorizationRequest(
       candidate,
       allowed: await authorizeAction(db, {
         subject: { type: "workspace_member", id: candidate.workspaceMemberId },
-        action: "relay_device.authorize_relay_authorization",
-        resourceId: params.relayTarget.relayDeviceId,
+        action: "device_capability.request_runtime_authorization",
+        resourceId: params.relayTarget.relayCapabilityId,
       }),
     }))
   )

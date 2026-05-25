@@ -109,10 +109,10 @@ type RawInteractionRow = {
   resolved_by_workspace_member_id: string | null
   resolved_by_remote_agent_id: string | null
   resolved_by_participant_id: string | null
-  relay_capability_id: string | null
-  relay_device_id: string | null
-  relay_exposure_id: string | null
-  relay_tool_stable_key: string | null
+  device_capability_id: string | null
+  device_id: string | null
+  device_exposure_id: string | null
+  device_tool_stable_key: string | null
   device_display_name: string | null
   exposure_display_name: string | null
   exposure_stable_key: string | null
@@ -439,7 +439,7 @@ function buildRelayAuthorizationInteractionRequestKey(params: {
   return stableJsonStringify({
     conversationId: params.conversationId,
     requesterParticipantId: params.requesterParticipantId,
-    kind: INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
+    kind: INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
     dedupeKey: params.dedupeKey,
   })
 }
@@ -1018,29 +1018,29 @@ function buildInteractionSummary(
       `Interaction ${row.id} requested_tool_name`
     ),
     relayToolStableKey: requireTrimmedString(
-      row.relay_tool_stable_key,
-      `Interaction ${row.id} relay_tool_stable_key`
+      row.device_tool_stable_key,
+      `Interaction ${row.id} device_tool_stable_key`
     ),
     requestedAction,
     reason: requireTrimmedString(
       row.reason,
-      `Interaction ${row.id} relay_authorization.reason`
+      `Interaction ${row.id} runtime_authorization.reason`
     ),
     deviceId: requireTrimmedString(
-      row.relay_device_id,
-      `Interaction ${row.id} relay_device_id`
+      row.device_id,
+      `Interaction ${row.id} device_id`
     ),
     deviceDisplayName: requireTrimmedString(
       row.device_display_name,
       `Interaction ${row.id} device_display_name`
     ),
     relayCapabilityId: requireTrimmedString(
-      row.relay_capability_id,
-      `Interaction ${row.id} relay_capability_id`
+      row.device_capability_id,
+      `Interaction ${row.id} device_capability_id`
     ),
     exposureId: requireTrimmedString(
-      row.relay_exposure_id,
-      `Interaction ${row.id} relay_exposure_id`
+      row.device_exposure_id,
+      `Interaction ${row.id} device_exposure_id`
     ),
     exposureDisplayName: requireTrimmedString(
       row.exposure_display_name,
@@ -1063,14 +1063,14 @@ function buildInteractionSummary(
         ? (row.request_mode as RelayAuthorizationRequestMode)
         : (() => {
             throw new Error(
-              `Interaction ${row.id} relay_authorization.requestMode is invalid`
+              `Interaction ${row.id} runtime_authorization.requestMode is invalid`
             )
           })(),
   }
 
   return {
     ...baseInteraction,
-    kind: INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
+    kind: INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
     relayAuthorization,
   }
 }
@@ -1098,10 +1098,10 @@ async function getInteractionRowById(
               auth.resolution_payload,
               '{}'::jsonb
             ) AS resolution_payload,
-            auth.relay_device_id,
-            auth.relay_capability_id,
-            auth.relay_exposure_id,
-            auth.relay_tool_stable_key,
+            auth.device_id,
+            auth.device_capability_id,
+            auth.device_exposure_id,
+            auth.device_tool_stable_key,
             requester_subj.workspace_member_id AS requester_workspace_member_id,
             requester_subj.actor_id AS requester_actor_id,
             requester_subj.remote_agent_id AS requester_remote_agent_id,
@@ -1143,7 +1143,7 @@ async function getInteractionRowById(
        ON user_input.interaction_id = ir.id
      LEFT JOIN interaction_plan_approval_requests plan
        ON plan.interaction_id = ir.id
-     LEFT JOIN interaction_relay_authorization_requests auth
+     LEFT JOIN interaction_runtime_authorization_requests auth
        ON auth.interaction_id = ir.id
      LEFT JOIN conversation_participants requester
        ON requester.id = ir.requester_participant_id
@@ -1181,10 +1181,10 @@ async function getInteractionRowById(
        ON resolver_wm.id = resolver_subj.workspace_member_id
      LEFT JOIN users resolver_user
        ON resolver_user.id = resolver_wm.user_id
-     LEFT JOIN relay_devices device
-       ON device.id = auth.relay_device_id
-     LEFT JOIN relay_exposures exposure
-       ON exposure.id = auth.relay_exposure_id
+     LEFT JOIN devices device
+       ON device.id = auth.device_id
+     LEFT JOIN device_exposures exposure
+       ON exposure.id = auth.device_exposure_id
      WHERE ir.id = ${interactionId}
      LIMIT 1
   `.compile(db)
@@ -1268,10 +1268,10 @@ async function getInteractionRowByIdForUpdate(
               auth.resolution_payload,
               '{}'::jsonb
             ) AS resolution_payload,
-            auth.relay_device_id,
-            auth.relay_capability_id,
-            auth.relay_exposure_id,
-            auth.relay_tool_stable_key,
+            auth.device_id,
+            auth.device_capability_id,
+            auth.device_exposure_id,
+            auth.device_tool_stable_key,
             requester_subj.workspace_member_id AS requester_workspace_member_id,
             requester_subj.actor_id AS requester_actor_id,
             requester_subj.remote_agent_id AS requester_remote_agent_id,
@@ -1313,7 +1313,7 @@ async function getInteractionRowByIdForUpdate(
        ON user_input.interaction_id = ir.id
      LEFT JOIN interaction_plan_approval_requests plan
        ON plan.interaction_id = ir.id
-     LEFT JOIN interaction_relay_authorization_requests auth
+     LEFT JOIN interaction_runtime_authorization_requests auth
        ON auth.interaction_id = ir.id
      LEFT JOIN conversation_participants requester
        ON requester.id = ir.requester_participant_id
@@ -1351,10 +1351,10 @@ async function getInteractionRowByIdForUpdate(
        ON resolver_wm.id = resolver_subj.workspace_member_id
      LEFT JOIN users resolver_user
        ON resolver_user.id = resolver_wm.user_id
-     LEFT JOIN relay_devices device
-       ON device.id = auth.relay_device_id
-     LEFT JOIN relay_exposures exposure
-       ON exposure.id = auth.relay_exposure_id
+     LEFT JOIN devices device
+       ON device.id = auth.device_id
+     LEFT JOIN device_exposures exposure
+       ON exposure.id = auth.device_exposure_id
      WHERE ir.id = ${interactionId}
      LIMIT 1
      FOR UPDATE OF ir
@@ -1406,7 +1406,7 @@ async function appendInteractionUpdatedSyncEvent(
     queryable
   )
   const recipients =
-    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION ||
+    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION ||
     (interaction.requester?.participantType ===
       CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
       !interaction.target)
@@ -1805,32 +1805,32 @@ async function insertRelayAuthorizationInteractionDetails(
 ) {
   await executeCompiledQuery(
     client,
-    db.insertInto("interaction_relay_authorization_requests").values({
+    db.insertInto("interaction_runtime_authorization_requests").values({
       interaction_id: params.interactionId,
-      relay_device_id: params.relayDeviceId,
-      relay_capability_id: params.relayCapabilityId,
-      relay_exposure_id: params.relayExposureId,
+      device_id: params.relayDeviceId,
+      device_capability_id: params.relayCapabilityId,
+      device_exposure_id: params.relayExposureId,
       requested_tool_name: params.requestedToolName,
-      relay_tool_stable_key: params.relayToolStableKey,
+      device_tool_stable_key: params.relayToolStableKey,
       reason: params.reason,
       request_mode: params.requestMode,
       source_runtime_session_id: params.sourceRuntimeSessionId || null,
       source_retry_nonce: params.sourceRetryNonce || null,
       source_request_args: jsonbValue(
         params.sourceRequestArgs
-      ) as unknown as TableInsert<"interaction_relay_authorization_requests">["source_request_args"],
+      ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["source_request_args"],
       requested_action: jsonbValue(
         params.requestedAction
-      ) as unknown as TableInsert<"interaction_relay_authorization_requests">["requested_action"],
+      ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["requested_action"],
       grant_options: jsonbValue(
         params.grantOptions
-      ) as unknown as TableInsert<"interaction_relay_authorization_requests">["grant_options"],
+      ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["grant_options"],
       available_presets: jsonbValue(
         params.availablePresets
-      ) as unknown as TableInsert<"interaction_relay_authorization_requests">["available_presets"],
+      ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["available_presets"],
       resolution_payload: jsonbValue(
         {}
-      ) as unknown as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
+      ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["resolution_payload"],
       dedupe_key: params.dedupeKey,
     })
   )
@@ -1926,17 +1926,17 @@ async function updateInteractionResolutionPayload(
   const result = await executeCompiledQuery(
     client,
     db
-      .updateTable("interaction_relay_authorization_requests")
+      .updateTable("interaction_runtime_authorization_requests")
       .set({
         resolution_payload: jsonbValue(
           payload
-        ) as unknown as TableInsert<"interaction_relay_authorization_requests">["resolution_payload"],
+        ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["resolution_payload"],
       })
       .where("interaction_id", "=", interactionId)
   )
   if (result.rowCount !== 1) {
     throw new Error(
-      `Expected relay_authorization details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
+      `Expected runtime_authorization details for interaction ${interactionId}, but affected ${result.rowCount ?? 0} rows`
     )
   }
 }
@@ -2356,7 +2356,7 @@ export async function createRelayAuthorizationInteractionRequest(
       conversationId: params.conversationId,
       taskId: params.taskId,
       requesterParticipantId: params.requesterParticipantId,
-      kind: INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
+      kind: INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
       requestKey,
       expiresAt: params.expiresAt,
     })
@@ -2428,7 +2428,7 @@ export async function findOpenRelayAuthorizationInteraction(
   const row = await db
     .selectFrom("interaction_requests as ir")
     .innerJoin(
-      "interaction_relay_authorization_requests as auth",
+      "interaction_runtime_authorization_requests as auth",
       "auth.interaction_id",
       "ir.id"
     )
@@ -2438,7 +2438,7 @@ export async function findOpenRelayAuthorizationInteraction(
     .where(
       sql<boolean>`ir.requester_participant_id = ${params.requesterParticipantId}`
     )
-    .where("ir.kind", "=", INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION)
+    .where("ir.kind", "=", INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION)
     .where("ir.status", "=", "pending")
     .where((eb) =>
       eb.or([
@@ -2446,12 +2446,12 @@ export async function findOpenRelayAuthorizationInteraction(
         eb("ir.expires_at", ">", new Date()),
       ])
     )
-    .where("auth.relay_device_id", "=", params.relayDeviceId)
-    .where("auth.relay_capability_id", "=", params.relayCapabilityId)
-    .where("auth.relay_exposure_id", "=", params.relayExposureId)
+    .where("auth.device_id", "=", params.relayDeviceId)
+    .where("auth.device_capability_id", "=", params.relayCapabilityId)
+    .where("auth.device_exposure_id", "=", params.relayExposureId)
     .where("auth.requested_tool_name", "=", params.requestedToolName)
     .where(
-      sql<boolean>`auth.relay_tool_stable_key = ${params.relayToolStableKey}`
+      sql<boolean>`auth.device_tool_stable_key = ${params.relayToolStableKey}`
     )
     .where("auth.request_mode", "=", params.requestMode)
     .where("auth.dedupe_key", "=", dedupeKey)
@@ -2606,7 +2606,7 @@ export async function canUserViewInteraction(params: {
           ]),
         ]),
         eb.and([
-          eb("ir.kind", "=", INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION),
+          eb("ir.kind", "=", INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION),
           sql<boolean>`EXISTS (
             SELECT 1
             FROM conversation_participants cm
@@ -2635,7 +2635,7 @@ export async function canUserResolveInteraction(params: {
   }
 
   if (
-    interaction.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+    interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
     interaction.target?.participantId
   ) {
     const targetParticipantId = interaction.target?.participantId
@@ -2654,7 +2654,7 @@ export async function canUserResolveInteraction(params: {
   }
 
   if (
-    interaction.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+    interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
     interaction.requester?.participantType ===
       CONVERSATION_PARTICIPANT_TYPE.REMOTE_AGENT &&
     interaction.requester.remoteAgentId
@@ -2700,14 +2700,15 @@ export async function canUserResolveInteraction(params: {
   }
 
   const deviceId = interaction.relayAuthorization?.deviceId
-  if (!deviceId) {
+  const deviceCapabilityId = interaction.relayAuthorization?.relayCapabilityId
+  if (!deviceId || !deviceCapabilityId) {
     return false
   }
 
   return authorizeAction(db, {
     subject: userSubject(userId),
-    action: "relay_device.authorize_relay_authorization",
-    resourceId: deviceId,
+    action: "device_capability.request_runtime_authorization",
+    resourceId: deviceCapabilityId,
   })
 }
 
@@ -2997,7 +2998,7 @@ export async function resolveInteractionRequest(
     }
 
     if (
-      locked.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+      locked.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
       locked.target_participant_id &&
       locked.target_participant_id !== params.resolverParticipantId
     ) {
@@ -3005,7 +3006,7 @@ export async function resolveInteractionRequest(
     }
 
     if (
-      locked.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+      locked.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
       !locked.target_participant_id &&
       locked.requester_remote_agent_id
     ) {
@@ -3040,19 +3041,25 @@ export async function resolveInteractionRequest(
       }
     }
 
-    if (locked.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION) {
-      const relayDeviceId = locked.relay_device_id || ""
+    if (locked.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
+      const relayDeviceId = locked.device_id || ""
       if (!relayDeviceId) {
-        throw new Error(`Interaction ${locked.id} is missing relay_device_id`)
+        throw new Error(`Interaction ${locked.id} is missing device_id`)
+      }
+      const deviceCapabilityId = locked.device_capability_id || ""
+      if (!deviceCapabilityId) {
+        throw new Error(
+          `Interaction ${locked.id} is missing device_capability_id`
+        )
       }
       const canResolveRelayAuthorization = await authorizeAction(db, {
         subject: workspaceMemberSubject(params.resolverWorkspaceMemberId),
-        action: "relay_device.authorize_relay_authorization",
-        resourceId: relayDeviceId,
+        action: "device_capability.request_runtime_authorization",
+        resourceId: deviceCapabilityId,
       })
       if (!canResolveRelayAuthorization) {
         throw new Error(
-          "You are not allowed to resolve this relay authorization interaction"
+          "You are not allowed to resolve this runtime authorization interaction"
         )
       }
     }
@@ -3287,9 +3294,9 @@ export async function resolveInteractionRequest(
         createdGrant = await createRelayAuthorizationGrant(
           {
             workspaceId: locked.workspace_id,
-            relayDeviceId: locked.relay_device_id || "",
-            relayCapabilityId: locked.relay_capability_id || "",
-            relayExposureId: locked.relay_exposure_id || "",
+            relayDeviceId: locked.device_id || "",
+            relayCapabilityId: locked.device_capability_id || "",
+            relayExposureId: locked.device_exposure_id || "",
             conversationId: locked.conversation_id,
             actorId: locked.requester_actor_id || undefined,
             createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
@@ -3431,7 +3438,7 @@ export async function markRelayAuthorizationInteractionSuperseded(
     throw new Error("Interaction request not found")
   }
   if (
-    existing.kind !== INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION ||
+    existing.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION ||
     existing.status !== "pending"
   ) {
     const current = await getInteractionRequestSummary(interactionId)
@@ -3451,7 +3458,7 @@ export async function markRelayAuthorizationInteractionSuperseded(
     })
     await updateInteractionResolutionPayload(
       client,
-      INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
+      INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
       interactionId,
       {
         ...resolutionPayload,

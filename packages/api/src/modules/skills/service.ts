@@ -70,10 +70,6 @@ import {
   getFileUrlById,
 } from "../files/service.js"
 import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js"
-import {
-  listRelayAutoLoadedSkills,
-  readRelayAutoLoadedSkill,
-} from "./relay-auto-skills.js"
 import { compareAvailableSkillDiscoveryOrder } from "./discovery-order.js"
 import {
   SKILL_ENTRY_PATH,
@@ -3340,16 +3336,8 @@ export async function listVisibleSkills(input: {
   conversationBoundary?: "internal" | "external"
 }) {
   const subjects = await buildVisibilitySubjects(input)
-  const relayAutoLoadedSkills = await listRelayAutoLoadedSkills({
-    workspaceId: input.workspaceId,
-    actorId: input.actorId,
-    sessionId: input.sessionId,
-    conversationId: input.conversationId,
-    conversationKind: input.conversationKind,
-    conversationBoundary: input.conversationBoundary,
-  })
   if (subjects.length === 0) {
-    return relayAutoLoadedSkills
+    return []
   }
 
   const visibleSkillIds = new Set<string>()
@@ -3481,11 +3469,6 @@ export async function listVisibleSkills(input: {
   for (const skill of installedSkills) {
     combined.set(skill.slug.toLowerCase(), skill)
   }
-  for (const skill of relayAutoLoadedSkills) {
-    if (!combined.has(skill.slug.toLowerCase())) {
-      combined.set(skill.slug.toLowerCase(), skill)
-    }
-  }
 
   return Array.from(combined.values()).sort(compareAvailableSkillDiscoveryOrder)
 }
@@ -3520,38 +3503,8 @@ export async function readVisibleSkill(input: {
     throw new SkillError(404, `Visible skill "${input.skillName}" not found`)
   }
 
-  if (match.sourceKind === "relay_auto_loaded") {
-    try {
-      const relayAutoLoaded = await readRelayAutoLoadedSkill({
-        skillName: input.skillName,
-        actorId: input.actorId,
-        conversationId: input.conversationId,
-        assetPath: input.assetPath,
-        skill: match,
-      })
-      if (!relayAutoLoaded) {
-        throw new SkillError(
-          404,
-          `Visible skill "${input.skillName}" not found`
-        )
-      }
-      return relayAutoLoaded
-    } catch (error) {
-      if (error instanceof SkillError) {
-        throw error
-      }
-      if (error instanceof Error) {
-        if (error.message.startsWith("Invalid skill file path: ")) {
-          throw new SkillError(400, error.message)
-        }
-        throw new SkillError(
-          404,
-          `Skill attachment "${input.assetPath || SKILL_ENTRY_PATH}" not found`
-        )
-      }
-      throw error
-    }
-  }
+  // Device-runtime v3: the relay_auto_loaded source has been removed alongside
+  // the relay subsystem (PR #20). Any match must now be an installed skill.
 
   const installedSkill = await loadInstalledSkillById(match.instanceId)
   if (!installedSkill) {

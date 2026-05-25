@@ -773,7 +773,7 @@ function InteractionCard({
     viewerCanResolve &&
     interaction.status === "pending"
   const canResolveRelayAuthorization =
-    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
     Boolean(onResolveInteraction) &&
     viewerCanResolve &&
     interaction.status === "pending"
@@ -1350,7 +1350,7 @@ function InteractionCard({
   }
 
   if (
-    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
     interaction.relayAuthorization
   ) {
     const relayAuthorization = interaction.relayAuthorization

@@ -63,20 +63,20 @@ import {
   RELATIONSHIP_PROFILE_SUBJECT_TYPES,
   RELATIONSHIP_REQUEST_STATUSES,
   RELATIONSHIP_SCAN_OUTCOMES,
-  RELAY_ACCESS_DENIAL_KINDS,
-  RELAY_ACCESS_DENIAL_RESOLUTIONS,
-  RELAY_AUTHORIZATION_BROWSER_ACTIONS,
-  RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES,
-  RELAY_AUTHORIZATION_CAPABILITIES,
-  RELAY_AUTHORIZATION_COMMAND_EXECUTORS,
-  RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES,
-  RELAY_AUTHORIZATION_CUA_ACCESSES,
-  RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES,
-  RELAY_AUTHORIZATION_GRANT_RETENTIONS,
-  RELAY_AUTHORIZATION_GRANT_SCOPES,
-  RELAY_AUTHORIZATION_GRANT_STATUSES,
-  RELAY_AUTHORIZATION_PRESETS,
-  RELAY_AUTHORIZATION_REQUEST_MODES,
+  DEVICE_ACCESS_DENIAL_KINDS,
+  DEVICE_ACCESS_DENIAL_RESOLUTIONS,
+  RUNTIME_AUTHORIZATION_BROWSER_ACTIONS,
+  RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES,
+  RUNTIME_AUTHORIZATION_CAPABILITIES,
+  RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS,
+  RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES,
+  RUNTIME_AUTHORIZATION_CUA_ACCESSES,
+  RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES,
+  RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPES,
+  RUNTIME_AUTHORIZATION_GRANT_STATUSES,
+  RUNTIME_AUTHORIZATION_PRESETS,
+  RUNTIME_AUTHORIZATION_REQUEST_MODES,
   SESSION_CHANNEL_INPUTS,
   SESSION_CHANNELS,
   SESSION_COLLABORATION_MODES,
@@ -115,8 +115,6 @@ import type {
   CommandlinePolicy as CommandlinePolicyBase,
   GrantPolicy as GrantPolicyBase,
 } from "../access/policies/index.js"
-
-export * from "./relay.js"
 
 // ============ Common ============
 export type UUID = string
@@ -3493,15 +3491,15 @@ export type InteractionDecision = (typeof INTERACTION_DECISIONS)[number]
 export type PlanApprovalDecision = (typeof PLAN_APPROVAL_DECISIONS)[number]
 
 export type RelayAuthorizationPreset =
-  (typeof RELAY_AUTHORIZATION_PRESETS)[number]
+  (typeof RUNTIME_AUTHORIZATION_PRESETS)[number]
 
 export type RelayAuthorizationRequestMode =
-  (typeof RELAY_AUTHORIZATION_REQUEST_MODES)[number]
+  (typeof RUNTIME_AUTHORIZATION_REQUEST_MODES)[number]
 
-export type RelayAccessDenialKind = (typeof RELAY_ACCESS_DENIAL_KINDS)[number]
+export type RelayAccessDenialKind = (typeof DEVICE_ACCESS_DENIAL_KINDS)[number]
 
 export type RelayAccessDenialResolution =
-  (typeof RELAY_ACCESS_DENIAL_RESOLUTIONS)[number]
+  (typeof DEVICE_ACCESS_DENIAL_RESOLUTIONS)[number]
 
 export interface RelayAccessDenialDescriptor {
   kind: RelayAccessDenialKind
@@ -3509,34 +3507,34 @@ export interface RelayAccessDenialDescriptor {
 }
 
 export type RelayAuthorizationGrantScope =
-  (typeof RELAY_AUTHORIZATION_GRANT_SCOPES)[number]
+  (typeof RUNTIME_AUTHORIZATION_GRANT_SCOPES)[number]
 
 export type RelayAuthorizationGrantRetention =
-  (typeof RELAY_AUTHORIZATION_GRANT_RETENTIONS)[number]
+  (typeof RUNTIME_AUTHORIZATION_GRANT_RETENTIONS)[number]
 
 export type RelayAuthorizationGrantStatus =
-  (typeof RELAY_AUTHORIZATION_GRANT_STATUSES)[number]
+  (typeof RUNTIME_AUTHORIZATION_GRANT_STATUSES)[number]
 
 export type RelayAuthorizationCapability =
-  (typeof RELAY_AUTHORIZATION_CAPABILITIES)[number]
+  (typeof RUNTIME_AUTHORIZATION_CAPABILITIES)[number]
 
 export type RelayAuthorizationBrowserScopeType =
-  (typeof RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES)[number]
+  (typeof RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES)[number]
 
 export type RelayAuthorizationCommandExecutor =
-  (typeof RELAY_AUTHORIZATION_COMMAND_EXECUTORS)[number]
+  (typeof RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS)[number]
 
 export type RelayAuthorizationCommandMatchType =
-  (typeof RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES)[number]
+  (typeof RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES)[number]
 
 export type RelayAuthorizationFilesystemAccess =
-  (typeof RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES)[number]
+  (typeof RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES)[number]
 
 export type RelayAuthorizationCUAAccess =
-  (typeof RELAY_AUTHORIZATION_CUA_ACCESSES)[number]
+  (typeof RUNTIME_AUTHORIZATION_CUA_ACCESSES)[number]
 
 export type RelayAuthorizationBrowserAction =
-  (typeof RELAY_AUTHORIZATION_BROWSER_ACTIONS)[number]
+  (typeof RUNTIME_AUTHORIZATION_BROWSER_ACTIONS)[number]
 
 export interface RelayAuthorizationFilesystemPolicy extends FilesystemPolicyBase {}
 
@@ -3644,7 +3642,7 @@ export interface PlanApprovalInteractionRequestSummary extends InteractionReques
 }
 
 export interface RelayAuthorizationInteractionRequestSummary extends InteractionRequestSummaryBase {
-  kind: "relay_authorization"
+  kind: "runtime_authorization"
   target?: never
   userInput?: never
   planApproval?: never

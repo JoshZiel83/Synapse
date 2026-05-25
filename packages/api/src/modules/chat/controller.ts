@@ -7,7 +7,7 @@ import {
   INTERACTION_DECISIONS,
   PLAN_APPROVAL_DECISIONS,
   PUSH_TOKEN_PLATFORMS,
-  RELAY_AUTHORIZATION_PRESETS,
+  RUNTIME_AUTHORIZATION_PRESETS,
 } from "@synapse/shared"
 import { CanonicalContentBlockSchema } from "@synapse/shared/schemas"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
@@ -209,7 +209,7 @@ const resolveInteractionPlanApprovalSchema = resolveInteractionCommandSchema
 const resolveInteractionRelayApproveSchema = resolveInteractionCommandSchema
   .extend({
     decision: z.literal(INTERACTION_DECISIONS[0]),
-    preset: z.enum(RELAY_AUTHORIZATION_PRESETS),
+    preset: z.enum(RUNTIME_AUTHORIZATION_PRESETS),
     selectedGrantOptionId: z.string().trim().min(1),
     note: z.string().trim().optional(),
   })

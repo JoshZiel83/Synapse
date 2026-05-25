@@ -1,5 +1,5 @@
 import { z } from "zod"
-import { RELAY_AUTHORIZATION_CAPABILITIES } from "../../constants/enums.js"
+import { RUNTIME_AUTHORIZATION_CAPABILITIES } from "../../constants/enums.js"
 import { FilesystemPolicySchema } from "./filesystem.js"
 import { CUAPolicySchema } from "./cua.js"
 import { BrowserPolicySchema } from "./browser.js"
@@ -10,7 +10,7 @@ import { CommandlinePolicySchema } from "./commandline.js"
 // every per-capability sub-policy is optional so the matcher functions can
 // route on `capability` plus the populated branch.
 export const GrantPolicySchema = z.object({
-  capability: z.enum(RELAY_AUTHORIZATION_CAPABILITIES),
+  capability: z.enum(RUNTIME_AUTHORIZATION_CAPABILITIES),
   filesystem: FilesystemPolicySchema.optional(),
   cua: CUAPolicySchema.optional(),
   browser: BrowserPolicySchema.optional(),

@@ -51,10 +51,6 @@ import {
 import { syncConfiguredPlatformAdmins } from "./modules/platform/admin-service.js"
 import { initBuiltinRegistry } from "./modules/mcp-plugins/builtin/index.js"
 import {
-  initRelayManager,
-  shutdownAllRelays,
-} from "./modules/mcp-plugins/relay-manager.js"
-import {
   initInstanceManagerListeners,
   shutdownAllInstances,
 } from "./modules/mcp-plugins/instance-manager.js"
@@ -217,7 +213,6 @@ async function main() {
   try {
     await initBuiltinRegistry()
     initInstanceManagerListeners()
-    await initRelayManager()
   } catch (err) {
     console.error("Failed to initialize MCP runtime:", err)
     process.exit(1)
@@ -380,13 +375,6 @@ async function main() {
         3000
       ).catch((err) => {
         app.log.error({ err }, "Plugin instance shutdown timed out")
-      })
-      await waitWithTimeout(
-        "relay runtime shutdown",
-        shutdownAllRelays(),
-        3000
-      ).catch((err) => {
-        app.log.error({ err }, "Relay runtime shutdown timed out")
       })
       await waitWithTimeout("fastify close", app.close(), 5000).catch((err) => {
         app.log.error({ err }, "Fastify close timed out")

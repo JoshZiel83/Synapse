@@ -78,10 +78,6 @@ import type {
   TransportSessionSummary,
   WeixinQrLoginSessionSummary,
   WorkspaceChiefActorPreference,
-  RelayDashboardView,
-  RelayDeviceDetailView,
-  RelayDeviceSummaryView,
-  RelayPairingSessionView,
   SkillMarketplaceEntry,
   WorkspaceCapabilityConversationTypePoliciesView,
 } from "@synapse/shared"
@@ -93,7 +89,6 @@ import {
   isChatInteractionResolveConflictResponse,
   type ChatInteractionResolvePayload,
   type FileRecordView,
-  type RelayAuthorizationGrantView,
 } from "@synapse/shared/types"
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
@@ -1823,12 +1818,7 @@ class ApiClient {
     )
   }
 
-  // MCP Relays
-  getRelayDashboard(wsId: string): Promise<RelayDashboardView> {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays`)
-  }
-
-  // Devices (v3) — parallel to Relays during the migration window.
+  // Devices (v3)
   listDevices(wsId: string): Promise<{ devices: DeviceSummaryView[] }> {
     return this.fetch(`/workspaces/${wsId}/devices`)
   }
@@ -1877,184 +1867,6 @@ class ApiClient {
       `/workspaces/${wsId}/devices/${deviceId}/services/${serviceId}`,
       { method: "DELETE" }
     )
-  }
-  createRelayPairingSession(
-    wsId: string,
-    data: { title?: string }
-  ): Promise<{ pairing: RelayPairingSessionView }> {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/pairing-sessions`, {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
-  }
-  getRelayPairingSession(
-    wsId: string,
-    pairingId: string
-  ): Promise<{ pairing: RelayPairingSessionView }> {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/pairing-sessions/${pairingId}`
-    )
-  }
-  cancelRelayPairingSession(
-    wsId: string,
-    pairingId: string
-  ): Promise<{ pairing: RelayPairingSessionView }> {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/pairing-sessions/${pairingId}/cancel`,
-      { method: "POST", body: "{}" }
-    )
-  }
-  claimRelayPairing(data: {
-    pairingCode: string
-    title?: string
-    description?: string
-    deviceType?: string
-    platform?: string
-    publicKey: string
-    publicKeyFingerprint: string
-  }) {
-    return this.fetch("/mcp/relay/pairing/claim", {
-      method: "POST",
-      body: JSON.stringify(data),
-    })
-  }
-  getRelayDevice(
-    wsId: string,
-    relayId: string
-  ): Promise<RelayDeviceDetailView> {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`)
-  }
-  getRelayExposureAccess(wsId: string, relayId: string, exposureId: string) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access`
-    )
-  }
-  updateRelayExposure(
-    wsId: string,
-    relayId: string,
-    exposureId: string,
-    data: {
-      conversationTypeMaskOverride?: number | null
-    }
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}`,
-      {
-        method: "PUT",
-        body: JSON.stringify(data),
-      }
-    )
-  }
-  grantRelayExposureAccess(
-    wsId: string,
-    relayId: string,
-    exposureId: string,
-    data: {
-      accessTarget?: CapabilityAccessTarget
-      conversationTypeMaskOverride?: number | null
-      permissions?: string[]
-      reason?: string
-    }
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access`,
-      {
-        method: "POST",
-        body: JSON.stringify(data),
-      }
-    )
-  }
-  updateRelayExposureAccessGrant(
-    wsId: string,
-    relayId: string,
-    exposureId: string,
-    bindingId: string,
-    data: {
-      conversationTypeMaskOverride?: number | null
-    }
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access/${bindingId}`,
-      {
-        method: "PUT",
-        body: JSON.stringify(data),
-      }
-    )
-  }
-  revokeRelayExposureAccess(
-    wsId: string,
-    relayId: string,
-    exposureId: string,
-    bindingId: string
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/access/${bindingId}`,
-      {
-        method: "DELETE",
-      }
-    )
-  }
-  listRelayAuthorizations(
-    wsId: string,
-    relayId: string,
-    exposureId: string
-  ): Promise<{ grants: RelayAuthorizationGrantView[] }> {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/relay-authorizations`
-    )
-  }
-  revokeRelayAuthorizationGrant(
-    wsId: string,
-    relayId: string,
-    exposureId: string,
-    grantId: string
-  ) {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/exposures/${exposureId}/relay-authorizations/${grantId}/revoke`,
-      {
-        method: "POST",
-        body: "{}",
-      }
-    )
-  }
-  updateRelayDevice(
-    wsId: string,
-    relayId: string,
-    data: {
-      title?: string
-      description?: string | null
-      deviceType?: string
-      conversationTypeMaskOverride?: number | null
-    }
-  ): Promise<RelayDeviceSummaryView> {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`, {
-      method: "PUT",
-      body: JSON.stringify(data),
-    })
-  }
-  disconnectRelayDevice(wsId: string, relayId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}/disconnect`, {
-      method: "POST",
-      body: "{}",
-    })
-  }
-  updateRelayTrustStatus(
-    wsId: string,
-    relayId: string,
-    trustStatus: "active" | "revoked" | "blocked"
-  ): Promise<{ device: RelayDeviceSummaryView }> {
-    return this.fetch(
-      `/workspaces/${wsId}/mcp/relays/${relayId}/trust-status`,
-      {
-        method: "POST",
-        body: JSON.stringify({ trustStatus }),
-      }
-    )
-  }
-  deleteRelayDevice(wsId: string, relayId: string) {
-    return this.fetch(`/workspaces/${wsId}/mcp/relays/${relayId}`, {
-      method: "DELETE",
-    })
   }
 
   // Automation Event Sources

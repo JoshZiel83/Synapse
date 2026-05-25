@@ -21,7 +21,7 @@ CREATE TYPE file_parse_run_status AS ENUM ('pending', 'running', 'succeeded', 'f
 CREATE TYPE file_parse_output_kind AS ENUM ('text', 'structured_json', 'derived_file');
 CREATE TYPE resource_access_bindings_status AS ENUM ('active', 'revoked');
 CREATE TYPE resource_access_bindings_source AS ENUM ('manual', 'default_open', 'relay_auto', 'approval', 'system');
-CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'plugin_installation', 'relay_capability', 'device_capability', 'automation_event_source', 'actor', 'remote_agent');
+CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'plugin_installation', 'device_capability', 'automation_event_source', 'actor', 'remote_agent');
 CREATE TYPE realtime_event_outbox_status AS ENUM ('pending', 'processing', 'dispatched', 'failed');
 CREATE TYPE catalog_categories_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
 CREATE TYPE catalog_items_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
@@ -150,29 +150,15 @@ CREATE TYPE plugin_auth_sessions_status AS ENUM ('pending', 'completed', 'failed
 CREATE TYPE plugin_connections_owner_scope AS ENUM ('installation', 'workspace_member', 'workspace');
 CREATE TYPE plugin_connections_status AS ENUM ('active', 'expired', 'revoked');
 CREATE TYPE plugin_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'follow_upstream', 'detached');
-CREATE TYPE relay_devices_trust_status AS ENUM ('pending', 'active', 'revoked', 'blocked');
-CREATE TYPE relay_devices_automation_lifecycle_state AS ENUM ('online', 'offline');
-CREATE TYPE relay_devices_device_type AS ENUM ('desktop_computer', 'laptop_computer', 'mobile_phone', 'tablet', 'server', 'virtual_machine', 'custom');
-CREATE TYPE relay_pairing_sessions_status AS ENUM ('pending', 'confirmed', 'consumed', 'expired', 'cancelled', 'rejected');
-CREATE TYPE relay_device_sessions_status AS ENUM ('connecting', 'active', 'closing', 'closed', 'rejected');
-CREATE TYPE relay_device_sessions_transport AS ENUM ('websocket');
-CREATE TYPE relay_sync_sources_source_kind AS ENUM ('manual', 'claude_code', 'claude_desktop', 'codex', 'gemini', 'opencode', 'custom');
-CREATE TYPE relay_sync_sources_sync_mode AS ENUM ('snapshot', 'follow');
-CREATE TYPE relay_sync_sources_status AS ENUM ('unknown', 'idle', 'syncing', 'error', 'disabled');
-CREATE TYPE relay_exposures_transport AS ENUM ('builtin', 'stdio', 'http', 'sse', 'custom');
-CREATE TYPE relay_exposures_runtime_status AS ENUM ('discovered', 'starting', 'healthy', 'degraded', 'failed', 'quarantined', 'offline');
-CREATE TYPE relay_catalog_revisions_status AS ENUM ('active', 'superseded');
-CREATE TYPE relay_tools_status AS ENUM ('active', 'removed');
-CREATE TYPE relay_capabilities_status AS ENUM ('active', 'unavailable', 'archived');
-CREATE TYPE relay_operations_delivery_policy AS ENUM ('online_only', 'store_and_forward');
-CREATE TYPE relay_operations_status AS ENUM ('created', 'dispatched', 'received', 'started', 'cancel_requested', 'completed', 'failed', 'cancelled', 'aborted', 'expired');
-CREATE TYPE relay_operation_deliveries_status AS ENUM ('queued', 'sent', 'acked', 'nacked', 'timed_out', 'cancelled');
-CREATE TYPE interaction_requests_kind AS ENUM ('user_input', 'plan_approval', 'relay_authorization');
+-- Runtime authorization enums (renamed from relay_* in PR #20). These back the
+-- runtime_authorization_grants + interaction_runtime_authorization_requests
+-- tables and the matching shared enum re-exports.
+CREATE TYPE interaction_requests_kind AS ENUM ('user_input', 'plan_approval', 'runtime_authorization');
 CREATE TYPE interaction_requests_status AS ENUM ('pending', 'answered', 'approved', 'rejected', 'cancelled', 'expired', 'superseded');
-CREATE TYPE relay_authorization_request_mode AS ENUM ('background', 'blocking');
-CREATE TYPE relay_authorization_grants_scope AS ENUM ('once', 'actor', 'conversation', 'actor_in_conversation', 'workspace');
-CREATE TYPE relay_authorization_grants_retention AS ENUM ('consume_once', 'until_revoked');
-CREATE TYPE relay_authorization_grants_status AS ENUM ('active', 'consumed', 'revoked', 'superseded');
+CREATE TYPE runtime_authorization_request_mode AS ENUM ('background', 'blocking');
+CREATE TYPE runtime_authorization_grants_scope AS ENUM ('once', 'actor', 'conversation', 'actor_in_conversation', 'workspace');
+CREATE TYPE runtime_authorization_grants_retention AS ENUM ('consume_once', 'until_revoked');
+CREATE TYPE runtime_authorization_grants_status AS ENUM ('active', 'consumed', 'revoked', 'superseded');
 
 -- ============ Device Runtime v3 enum types ============
 -- See docs/device-runtime-v3.md §3 and §6. v1 keeps the relay_* enum types
@@ -330,7 +316,7 @@ CREATE TABLE workspace_capability_conversation_type_policies (
   -- defined.
   subject_id UUID NOT NULL,
   resource_family VARCHAR(60) NOT NULL
-    CHECK (resource_family IN ('plugin_installation', 'installed_skill', 'relay_capability')),
+    CHECK (resource_family IN ('plugin_installation', 'installed_skill', 'device_capability')),
   default_conversation_type_mask INT NOT NULL
     CHECK (default_conversation_type_mask > 0 AND default_conversation_type_mask <= 31),
   created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -3084,118 +3070,7 @@ CREATE TABLE plugin_source_refs (
   updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
--- ============ Relay Runtime ============
-CREATE TABLE relay_devices (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  owner_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  title VARCHAR(255) NOT NULL,
-  description TEXT,
-  device_type relay_devices_device_type NOT NULL DEFAULT 'desktop_computer',
-  platform VARCHAR(40),
-  conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
-  public_key TEXT NOT NULL,
-  public_key_fingerprint VARCHAR(128) NOT NULL UNIQUE,
-  trust_status relay_devices_trust_status NOT NULL DEFAULT 'pending',
-  last_seen_at TIMESTAMPTZ,
-  last_connected_at TIMESTAMPTZ,
-  last_catalog_changed_at TIMESTAMPTZ,
-  automation_lifecycle_state relay_devices_automation_lifecycle_state,
-  automation_lifecycle_grace_until TIMESTAMPTZ,
-  automation_lifecycle_event_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_relay_devices_workspace ON relay_devices(workspace_id, created_at DESC);
-CREATE INDEX idx_relay_devices_automation_lifecycle_due
-  ON relay_devices(automation_lifecycle_grace_until)
-  WHERE automation_lifecycle_grace_until IS NOT NULL;
-
-CREATE TABLE relay_pairing_sessions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  requested_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  device_id UUID REFERENCES relay_devices(id) ON DELETE SET NULL,
-  server_base_url TEXT NOT NULL,
-  requested_title VARCHAR(255),
-  requested_description TEXT,
-  requested_device_type relay_devices_device_type,
-  pairing_code VARCHAR(32) NOT NULL UNIQUE,
-  verification_uri TEXT NOT NULL,
-  verification_uri_complete TEXT,
-  expires_at TIMESTAMPTZ NOT NULL,
-  confirmed_at TIMESTAMPTZ,
-  consumed_at TIMESTAMPTZ,
-  status relay_pairing_sessions_status NOT NULL DEFAULT 'pending',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE relay_device_sessions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
-  protocol_version INT NOT NULL DEFAULT 2,
-  client_version VARCHAR(64),
-  status relay_device_sessions_status NOT NULL DEFAULT 'connecting',
-  transport relay_device_sessions_transport NOT NULL DEFAULT 'websocket',
-  remote_addr TEXT,
-  last_sequence BIGINT NOT NULL DEFAULT 0,
-  last_heartbeat_at TIMESTAMPTZ,
-  close_reason TEXT,
-  started_at TIMESTAMPTZ DEFAULT NOW(),
-  ended_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE relay_sync_sources (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
-  source_kind relay_sync_sources_source_kind NOT NULL,
-  source_key VARCHAR(255) NOT NULL,
-  config_path TEXT,
-  sync_mode relay_sync_sources_sync_mode NOT NULL DEFAULT 'follow',
-  status relay_sync_sources_status NOT NULL DEFAULT 'unknown',
-  last_synced_at TIMESTAMPTZ,
-  last_error TEXT,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(device_id, source_key)
-);
-
-CREATE TABLE relay_exposures (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
-  sync_source_id UUID REFERENCES relay_sync_sources(id) ON DELETE SET NULL,
-  stable_key VARCHAR(255) NOT NULL,
-  display_name VARCHAR(255) NOT NULL,
-  description TEXT,
-  transport relay_exposures_transport NOT NULL,
-  runtime_status relay_exposures_runtime_status NOT NULL DEFAULT 'discovered',
-  last_seen_at TIMESTAMPTZ,
-  last_healthy_at TIMESTAMPTZ,
-  last_error TEXT,
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(device_id, stable_key)
-);
-
-CREATE TABLE relay_capabilities (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  exposure_id UUID NOT NULL UNIQUE REFERENCES relay_exposures(id) ON DELETE CASCADE,
-  status relay_capabilities_status NOT NULL DEFAULT 'active',
-  conversation_type_mask_override INT
-    CHECK (conversation_type_mask_override IS NULL OR (conversation_type_mask_override > 0 AND conversation_type_mask_override <= 31)),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_relay_capabilities_workspace ON relay_capabilities(workspace_id, created_at DESC);
-
+-- ============ Resource access bindings ============
 -- Keep resource access bindings here so every resource and subject foreign key
 -- can be declared inline instead of being patched in later.
 CREATE TABLE resource_access_bindings (
@@ -3204,7 +3079,6 @@ CREATE TABLE resource_access_bindings (
   resource_type resource_access_binding_resource_type NOT NULL,
   installed_skill_id UUID REFERENCES installed_skills(id) ON DELETE CASCADE,
   plugin_installation_id UUID REFERENCES plugin_installations(id) ON DELETE CASCADE,
-  relay_capability_id UUID REFERENCES relay_capabilities(id) ON DELETE CASCADE,
   device_capability_id UUID,                       -- v3 addition; FK added at bottom
   automation_event_source_id UUID REFERENCES automation_event_sources(id) ON DELETE CASCADE,
   actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
@@ -3223,13 +3097,12 @@ CREATE TABLE resource_access_bindings (
   created_at TIMESTAMPTZ DEFAULT NOW(),
   revoked_at TIMESTAMPTZ,
   CONSTRAINT chk_resource_access_bindings_resource CHECK (
-    (resource_type = 'installed_skill' AND installed_skill_id IS NOT NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (resource_type = 'plugin_installation' AND installed_skill_id IS NULL AND plugin_installation_id IS NOT NULL AND relay_capability_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (resource_type = 'relay_capability' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NOT NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (resource_type = 'device_capability' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND device_capability_id IS NOT NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (resource_type = 'automation_event_source' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
-    (resource_type = 'actor' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL) OR
-    (resource_type = 'remote_agent' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND relay_capability_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL)
+    (resource_type = 'installed_skill' AND installed_skill_id IS NOT NULL AND plugin_installation_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
+    (resource_type = 'plugin_installation' AND installed_skill_id IS NULL AND plugin_installation_id IS NOT NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
+    (resource_type = 'device_capability' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND device_capability_id IS NOT NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
+    (resource_type = 'automation_event_source' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL) OR
+    (resource_type = 'actor' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL) OR
+    (resource_type = 'remote_agent' AND installed_skill_id IS NULL AND plugin_installation_id IS NULL AND device_capability_id IS NULL AND automation_event_source_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL)
   )
 );
 
@@ -3238,7 +3111,6 @@ CREATE UNIQUE INDEX uq_resource_access_bindings_active
     resource_type,
     COALESCE(installed_skill_id::text, ''),
     COALESCE(plugin_installation_id::text, ''),
-    COALESCE(relay_capability_id::text, ''),
     COALESCE(device_capability_id::text, ''),
     COALESCE(automation_event_source_id::text, ''),
     COALESCE(actor_id::text, ''),
@@ -3254,9 +3126,6 @@ CREATE INDEX idx_resource_access_bindings_installed_skill
 CREATE INDEX idx_resource_access_bindings_plugin_installation
   ON resource_access_bindings(plugin_installation_id, created_at DESC)
   WHERE plugin_installation_id IS NOT NULL;
-CREATE INDEX idx_resource_access_bindings_relay_capability
-  ON resource_access_bindings(relay_capability_id, created_at DESC)
-  WHERE relay_capability_id IS NOT NULL;
 CREATE INDEX idx_resource_access_bindings_device_capability
   ON resource_access_bindings(device_capability_id, created_at DESC)
   WHERE device_capability_id IS NOT NULL;
@@ -3271,115 +3140,6 @@ CREATE INDEX idx_resource_access_bindings_remote_agent
   WHERE remote_agent_id IS NOT NULL;
 CREATE INDEX idx_resource_access_bindings_subject_id
   ON resource_access_bindings(subject_id, status, created_at DESC);
-
-CREATE TABLE relay_catalog_revisions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
-  revision_seq BIGINT NOT NULL,
-  schema_hash VARCHAR(128) NOT NULL,
-  status relay_catalog_revisions_status NOT NULL DEFAULT 'active',
-  activated_at TIMESTAMPTZ DEFAULT NOW(),
-  invalidated_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(exposure_id, revision_seq)
-);
-
-CREATE TABLE relay_tools (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
-  stable_key VARCHAR(255) NOT NULL,
-  latest_revision_id UUID,
-  current_name VARCHAR(255) NOT NULL,
-  status relay_tools_status NOT NULL DEFAULT 'active',
-  first_seen_at TIMESTAMPTZ DEFAULT NOW(),
-  last_seen_at TIMESTAMPTZ DEFAULT NOW(),
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(exposure_id, stable_key)
-);
-
-CREATE TABLE relay_tool_revisions (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  tool_id UUID NOT NULL REFERENCES relay_tools(id) ON DELETE CASCADE,
-  catalog_revision_id UUID NOT NULL REFERENCES relay_catalog_revisions(id) ON DELETE CASCADE,
-  tool_name VARCHAR(255) NOT NULL,
-  description TEXT NOT NULL DEFAULT '',
-  input_schema JSONB NOT NULL DEFAULT '{}',
-  annotations JSONB NOT NULL DEFAULT '{}',
-  definition_hash VARCHAR(128) NOT NULL,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(tool_id, catalog_revision_id)
-);
-
-ALTER TABLE relay_tools
-  ADD CONSTRAINT fk_relay_tools_latest_revision
-  FOREIGN KEY (latest_revision_id) REFERENCES relay_tool_revisions(id) ON DELETE SET NULL;
-
-CREATE TABLE relay_operations (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
-  requested_by_session_id UUID REFERENCES sessions(id) ON DELETE SET NULL,
-  requested_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
-  requested_by_actor_id UUID REFERENCES actors(id) ON DELETE SET NULL,
-  task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
-  device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
-  exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
-  catalog_revision_id UUID NOT NULL REFERENCES relay_catalog_revisions(id) ON DELETE CASCADE,
-  tool_id UUID NOT NULL REFERENCES relay_tools(id) ON DELETE CASCADE,
-  tool_revision_id UUID NOT NULL REFERENCES relay_tool_revisions(id) ON DELETE CASCADE,
-  visible_tool_name VARCHAR(255) NOT NULL,
-  runtime_session_id VARCHAR(255),
-  delivery_policy relay_operations_delivery_policy NOT NULL DEFAULT 'online_only',
-  status relay_operations_status NOT NULL DEFAULT 'created',
-  input_payload JSONB NOT NULL DEFAULT '{}',
-  authorization_payload JSONB NOT NULL DEFAULT '{}',
-  input_hash VARCHAR(128) NOT NULL,
-  operation_timeout_ms INT,
-  expires_at TIMESTAMPTZ,
-  result_hash VARCHAR(128),
-  error_code VARCHAR(100),
-  error_message TEXT,
-  requires_replan BOOLEAN NOT NULL DEFAULT FALSE,
-  completed_at TIMESTAMPTZ,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE TABLE relay_operation_deliveries (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  operation_id UUID NOT NULL REFERENCES relay_operations(id) ON DELETE CASCADE,
-  relay_session_id UUID REFERENCES relay_device_sessions(id) ON DELETE SET NULL,
-  delivery_seq BIGINT NOT NULL,
-  status relay_operation_deliveries_status NOT NULL DEFAULT 'queued',
-  metadata JSONB DEFAULT '{}',
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  sent_at TIMESTAMPTZ,
-  acknowledged_at TIMESTAMPTZ,
-  UNIQUE(operation_id, delivery_seq)
-);
-
-CREATE TABLE relay_operation_results (
-  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  operation_id UUID NOT NULL UNIQUE REFERENCES relay_operations(id) ON DELETE CASCADE,
-  output_payload JSONB NOT NULL DEFAULT '{}',
-  output_preview TEXT,
-  result_hash VARCHAR(128),
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW()
-);
-
-CREATE INDEX idx_relay_operations_device_status
-  ON relay_operations(device_id, status, created_at DESC);
-CREATE INDEX idx_relay_operations_task
-  ON relay_operations(task_id)
-  WHERE task_id IS NOT NULL;
-CREATE INDEX idx_relay_operations_runtime_session
-  ON relay_operations(runtime_session_id)
-  WHERE runtime_session_id IS NOT NULL;
 
 CREATE TABLE interaction_requests (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3412,7 +3172,7 @@ CREATE TABLE interaction_requests (
       )
     )
     OR (
-      kind = 'relay_authorization'
+      kind = 'runtime_authorization'
       AND target_participant_id IS NULL
       AND remote_agent_run_id IS NULL
     )
@@ -3431,21 +3191,17 @@ CREATE TABLE interaction_plan_approval_requests (
   resolution_payload JSONB NOT NULL DEFAULT '{}'
 );
 
-CREATE TABLE interaction_relay_authorization_requests (
+-- Runtime authorization requests (renamed from interaction_runtime_authorization_requests
+-- in PR #20). Device-only; legacy relay_* columns are gone.
+CREATE TABLE interaction_runtime_authorization_requests (
   interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE CASCADE,
-  -- v3.0 dual-FK: legacy relay triple stays nullable so device-side rows can
-  -- omit it; the new device triple is added alongside. CHECK XOR enforces
-  -- exactly one family is populated. Renamed + legacy dropped in PR #18.
-  relay_device_id UUID REFERENCES relay_devices(id) ON DELETE CASCADE,
-  relay_capability_id UUID REFERENCES relay_capabilities(id) ON DELETE CASCADE,
-  relay_exposure_id UUID REFERENCES relay_exposures(id) ON DELETE CASCADE,
-  device_id UUID,                                  -- FK added at bottom (devices not yet defined here)
-  device_capability_id UUID,                       -- FK added at bottom
-  device_exposure_id UUID,                         -- FK added at bottom
+  device_id UUID NOT NULL,                         -- FK added at bottom
+  device_capability_id UUID NOT NULL,              -- FK added at bottom
+  device_exposure_id UUID NOT NULL,                -- FK added at bottom
   requested_tool_name TEXT NOT NULL,
-  relay_tool_stable_key TEXT NOT NULL,
+  device_tool_stable_key TEXT NOT NULL,
   reason TEXT NOT NULL DEFAULT '',
-  request_mode relay_authorization_request_mode NOT NULL,
+  request_mode runtime_authorization_request_mode NOT NULL,
   source_runtime_session_id TEXT,
   source_retry_nonce TEXT,
   source_request_args JSONB NOT NULL DEFAULT '{}',
@@ -3453,14 +3209,7 @@ CREATE TABLE interaction_relay_authorization_requests (
   grant_options JSONB NOT NULL DEFAULT '[]',
   available_presets JSONB NOT NULL DEFAULT '[]',
   resolution_payload JSONB NOT NULL DEFAULT '{}',
-  dedupe_key TEXT NOT NULL,
-  CONSTRAINT chk_interaction_relay_auth_requests_dual_fk CHECK (
-    (relay_device_id IS NOT NULL AND relay_capability_id IS NOT NULL AND relay_exposure_id IS NOT NULL
-       AND device_id IS NULL AND device_capability_id IS NULL AND device_exposure_id IS NULL)
-    OR
-    (device_id IS NOT NULL AND device_capability_id IS NOT NULL AND device_exposure_id IS NOT NULL
-       AND relay_device_id IS NULL AND relay_capability_id IS NULL AND relay_exposure_id IS NULL)
-  )
+  dedupe_key TEXT NOT NULL
 );
 
 CREATE TABLE interaction_response_commands (
@@ -3485,7 +3234,7 @@ DECLARE
   v_kind interaction_requests_kind;
   v_has_user_input BOOLEAN;
   v_has_plan_approval BOOLEAN;
-  v_has_relay_authorization BOOLEAN;
+  v_has_runtime_authorization BOOLEAN;
   v_subtype_count INT;
 BEGIN
   IF TG_OP = 'DELETE' THEN
@@ -3515,14 +3264,14 @@ BEGIN
          ) AS has_plan_approval,
          EXISTS (
            SELECT 1
-           FROM interaction_relay_authorization_requests auth
+           FROM interaction_runtime_authorization_requests auth
            WHERE auth.interaction_id = ir.id
-         ) AS has_relay_authorization
+         ) AS has_runtime_authorization
     INTO
       v_kind,
       v_has_user_input,
       v_has_plan_approval,
-      v_has_relay_authorization
+      v_has_runtime_authorization
     FROM interaction_requests ir
    WHERE ir.id = v_interaction_id;
 
@@ -3533,15 +3282,15 @@ BEGIN
   v_subtype_count :=
     v_has_user_input::INT +
     v_has_plan_approval::INT +
-    v_has_relay_authorization::INT;
+    v_has_runtime_authorization::INT;
 
   IF v_subtype_count <> 1 THEN
     RAISE EXCEPTION
-      'interaction_request % must have exactly one subtype row, found user_input=% plan_approval=% relay_authorization=%',
+      'interaction_request % must have exactly one subtype row, found user_input=% plan_approval=% runtime_authorization=%',
       v_interaction_id,
       v_has_user_input,
       v_has_plan_approval,
-      v_has_relay_authorization
+      v_has_runtime_authorization
       USING ERRCODE = '23514',
             CONSTRAINT = 'interaction_requests_exactly_one_subtype_chk';
   END IF;
@@ -3562,9 +3311,9 @@ BEGIN
             CONSTRAINT = 'interaction_requests_kind_subtype_match_chk';
   END IF;
 
-  IF v_kind = 'relay_authorization' AND NOT v_has_relay_authorization THEN
+  IF v_kind = 'runtime_authorization' AND NOT v_has_runtime_authorization THEN
     RAISE EXCEPTION
-      'interaction_request % has kind=relay_authorization but is missing interaction_relay_authorization_requests row',
+      'interaction_request % has kind=runtime_authorization but is missing interaction_runtime_authorization_requests row',
       v_interaction_id
       USING ERRCODE = '23514',
             CONSTRAINT = 'interaction_requests_kind_subtype_match_chk';
@@ -3592,8 +3341,8 @@ DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION validate_interaction_request_subtype_consistency();
 
-CREATE CONSTRAINT TRIGGER interaction_relay_authorization_requests_parent_kind_chk
-AFTER INSERT OR UPDATE OR DELETE ON interaction_relay_authorization_requests
+CREATE CONSTRAINT TRIGGER interaction_runtime_authorization_requests_parent_kind_chk
+AFTER INSERT OR UPDATE OR DELETE ON interaction_runtime_authorization_requests
 DEFERRABLE INITIALLY DEFERRED
 FOR EACH ROW
 EXECUTE FUNCTION validate_interaction_request_subtype_consistency();
@@ -3620,20 +3369,16 @@ ALTER TABLE remote_agent_runs ADD CONSTRAINT fk_remote_agent_runs_interaction
   REFERENCES interaction_requests(id)
   ON DELETE SET NULL;
 
-CREATE TABLE relay_authorization_grants (
+-- Runtime authorization grants (renamed from runtime_authorization_grants in
+-- PR #20). Device-only; legacy relay_* columns are gone.
+CREATE TABLE runtime_authorization_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  -- v3.0 dual-FK: legacy relay triple stays nullable so device-side rows can
-  -- omit it; the new device triple is added alongside. CHECK XOR enforces
-  -- exactly one family is populated. Renamed + legacy dropped in PR #18.
-  relay_device_id UUID REFERENCES relay_devices(id) ON DELETE CASCADE,
-  relay_capability_id UUID REFERENCES relay_capabilities(id) ON DELETE CASCADE,
-  relay_exposure_id UUID REFERENCES relay_exposures(id) ON DELETE CASCADE,
-  device_id UUID,                                  -- FK added at bottom
-  device_capability_id UUID,                       -- FK added at bottom
-  device_exposure_id UUID,                         -- FK added at bottom
-  -- conversation_actor_context_id is set when scope='actor_in_conversation'
-  -- (v3 addition). All other scopes leave it NULL. FK added at bottom.
+  device_id UUID NOT NULL,                         -- FK added at bottom
+  device_capability_id UUID NOT NULL,              -- FK added at bottom
+  device_exposure_id UUID NOT NULL,                -- FK added at bottom
+  -- conversation_actor_context_id is set when scope='actor_in_conversation'.
+  -- All other scopes leave it NULL. FK added at bottom.
   conversation_actor_context_id UUID,
   -- P1b: actor_id + conversation_id polymorphic columns collapsed into a
   -- single subject_id FK into access_subjects (nullable because `once` and
@@ -3643,9 +3388,9 @@ CREATE TABLE relay_authorization_grants (
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
   source_task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
-  scope relay_authorization_grants_scope NOT NULL,
-  retention relay_authorization_grants_retention NOT NULL,
-  status relay_authorization_grants_status NOT NULL DEFAULT 'active',
+  scope runtime_authorization_grants_scope NOT NULL,
+  retention runtime_authorization_grants_retention NOT NULL,
+  status runtime_authorization_grants_status NOT NULL DEFAULT 'active',
   policy JSONB NOT NULL DEFAULT '{}',
   source_retry_nonce TEXT,
   source_runtime_session_id TEXT,
@@ -3655,17 +3400,8 @@ CREATE TABLE relay_authorization_grants (
   superseded_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT chk_relay_authorization_grants_dual_fk CHECK (
-    (relay_device_id IS NOT NULL AND relay_capability_id IS NOT NULL AND relay_exposure_id IS NOT NULL
-       AND device_id IS NULL AND device_capability_id IS NULL AND device_exposure_id IS NULL)
-    OR
-    (device_id IS NOT NULL AND device_capability_id IS NOT NULL AND device_exposure_id IS NOT NULL
-       AND relay_device_id IS NULL AND relay_capability_id IS NULL AND relay_exposure_id IS NULL)
-  ),
   -- actor_in_conversation scope ⇔ conversation_actor_context_id populated.
-  -- Cross-table kind check against access_subjects is enforced by trigger
-  -- (Postgres CHECK can't reach another table); see docs/device-runtime-v3.md §6.
-  CONSTRAINT chk_relay_authorization_grants_scope_context CHECK (
+  CONSTRAINT chk_runtime_authorization_grants_scope_context CHECK (
     (scope = 'actor_in_conversation' AND conversation_actor_context_id IS NOT NULL)
     OR
     (scope <> 'actor_in_conversation' AND conversation_actor_context_id IS NULL)
@@ -3685,27 +3421,26 @@ CREATE INDEX idx_interaction_requests_target
 CREATE UNIQUE INDEX idx_interaction_requests_pending_request_key
   ON interaction_requests(workspace_id, request_key)
   WHERE status = 'pending';
-CREATE INDEX idx_interaction_relay_authorization_requests_device
-  ON interaction_relay_authorization_requests(relay_device_id, interaction_id);
-CREATE INDEX idx_interaction_relay_authorization_requests_dedupe
-  ON interaction_relay_authorization_requests(dedupe_key);
+CREATE INDEX idx_interaction_runtime_authorization_requests_device
+  ON interaction_runtime_authorization_requests(device_id, interaction_id);
+CREATE INDEX idx_interaction_runtime_authorization_requests_dedupe
+  ON interaction_runtime_authorization_requests(dedupe_key);
 CREATE INDEX idx_interaction_response_commands_interaction
   ON interaction_response_commands(interaction_id, created_at DESC);
-CREATE INDEX idx_relay_authorization_grants_exposure
-  ON relay_authorization_grants(relay_capability_id, status, scope, created_at DESC);
-CREATE INDEX idx_relay_authorization_grants_subject
-  ON relay_authorization_grants(subject_id, relay_capability_id, status, created_at DESC)
+CREATE INDEX idx_runtime_authorization_grants_capability
+  ON runtime_authorization_grants(device_capability_id, status, scope, created_at DESC);
+CREATE INDEX idx_runtime_authorization_grants_subject
+  ON runtime_authorization_grants(subject_id, device_capability_id, status, created_at DESC)
   WHERE subject_id IS NOT NULL;
--- P1b: deferred FK from relay_authorization_grants.subject_id (NULLABLE — once
--- and workspace scopes don't bind a sub-workspace subject).
-ALTER TABLE relay_authorization_grants
-  ADD CONSTRAINT fk_relay_authorization_grants_subject
+-- P1b: deferred FK from runtime_authorization_grants.subject_id (NULLABLE —
+-- `once` and `workspace` scopes don't bind a sub-workspace subject).
+ALTER TABLE runtime_authorization_grants
+  ADD CONSTRAINT fk_runtime_authorization_grants_subject
   FOREIGN KEY (subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
 
 -- ============ Device Runtime v3 (devices subsystem) ============
--- See docs/device-runtime-v3.md §6. v1 adds device_* tables alongside the
--- relay_* tables; the relay_* tables are dropped in PR #18 after the legacy
--- code paths are removed in PR #17.
+-- See docs/device-runtime-v3.md §6. Device tables now own all runtime
+-- capability state; the legacy relay_* tables were removed in PR #20.
 
 CREATE TABLE devices (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -4064,37 +3799,34 @@ ALTER TABLE device_services
 ALTER TABLE resource_access_bindings
   ADD CONSTRAINT fk_resource_access_bindings_device_capability
   FOREIGN KEY (device_capability_id) REFERENCES device_capabilities(id) ON DELETE CASCADE;
-ALTER TABLE relay_authorization_grants
-  ADD CONSTRAINT fk_relay_authorization_grants_device
+ALTER TABLE runtime_authorization_grants
+  ADD CONSTRAINT fk_runtime_authorization_grants_device
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE;
-ALTER TABLE relay_authorization_grants
-  ADD CONSTRAINT fk_relay_authorization_grants_device_capability
+ALTER TABLE runtime_authorization_grants
+  ADD CONSTRAINT fk_runtime_authorization_grants_device_capability
   FOREIGN KEY (device_capability_id) REFERENCES device_capabilities(id) ON DELETE CASCADE;
-ALTER TABLE relay_authorization_grants
-  ADD CONSTRAINT fk_relay_authorization_grants_device_exposure
+ALTER TABLE runtime_authorization_grants
+  ADD CONSTRAINT fk_runtime_authorization_grants_device_exposure
   FOREIGN KEY (device_exposure_id) REFERENCES device_exposures(id) ON DELETE CASCADE;
-ALTER TABLE relay_authorization_grants
-  ADD CONSTRAINT fk_relay_authorization_grants_conversation_actor_context
+ALTER TABLE runtime_authorization_grants
+  ADD CONSTRAINT fk_runtime_authorization_grants_conversation_actor_context
   FOREIGN KEY (conversation_actor_context_id) REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE;
-ALTER TABLE interaction_relay_authorization_requests
-  ADD CONSTRAINT fk_interaction_relay_auth_requests_device
+ALTER TABLE interaction_runtime_authorization_requests
+  ADD CONSTRAINT fk_interaction_runtime_auth_requests_device
   FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE;
-ALTER TABLE interaction_relay_authorization_requests
-  ADD CONSTRAINT fk_interaction_relay_auth_requests_device_capability
+ALTER TABLE interaction_runtime_authorization_requests
+  ADD CONSTRAINT fk_interaction_runtime_auth_requests_device_capability
   FOREIGN KEY (device_capability_id) REFERENCES device_capabilities(id) ON DELETE CASCADE;
-ALTER TABLE interaction_relay_authorization_requests
-  ADD CONSTRAINT fk_interaction_relay_auth_requests_device_exposure
+ALTER TABLE interaction_runtime_authorization_requests
+  ADD CONSTRAINT fk_interaction_runtime_auth_requests_device_exposure
   FOREIGN KEY (device_exposure_id) REFERENCES device_exposures(id) ON DELETE CASCADE;
 
--- Duplicated indexes covering device-side columns so query plans don't
--- regress when chat dispatch reads device-capability grants (PR #1 mirror
--- of existing relay_capability_id index).
-CREATE INDEX idx_relay_authorization_grants_device_capability
-  ON relay_authorization_grants(device_capability_id, status, scope, created_at DESC)
-  WHERE device_capability_id IS NOT NULL;
-CREATE INDEX idx_interaction_relay_auth_requests_device_capability
-  ON interaction_relay_authorization_requests(device_capability_id, interaction_id)
-  WHERE device_capability_id IS NOT NULL;
+-- Indexes covering device-side columns so chat dispatch reading device-capability
+-- grants stays on an index plan.
+CREATE INDEX idx_runtime_authorization_grants_device_capability
+  ON runtime_authorization_grants(device_capability_id, status, scope, created_at DESC);
+CREATE INDEX idx_interaction_runtime_auth_requests_device_capability
+  ON interaction_runtime_authorization_requests(device_capability_id, interaction_id);
 
 -- ============ Chat push notification tokens (S7) ============
 CREATE TABLE IF NOT EXISTS chat_push_tokens (

@@ -13,18 +13,6 @@ import type {
   PluginAuthConnectionStatus,
   PluginAuthOwnerScope,
   PluginAuthSessionStatus,
-  RelayCatalogRevisionStatus,
-  RelayDeliveryStatus,
-  RelayDeviceTrustStatus,
-  RelayExposureRuntimeStatus,
-  RelayExposureTransport,
-  RelayOperationStatus,
-  RelayPairingStatus,
-  RelaySessionStatus,
-  RelaySyncMode,
-  RelaySyncSourceKind,
-  RelaySyncStatus,
-  RelayToolStatus,
   SessionChannelType,
   SessionInterruptType,
   SessionStatus,
@@ -60,11 +48,10 @@ import {
   RELATIONSHIP_ACCESS_POLICIES,
   RELATIONSHIP_APPROVAL_MODES,
   RELATIONSHIP_REQUEST_STATUSES,
-  RELAY_AUTHORIZATION_GRANT_RETENTIONS,
-  RELAY_AUTHORIZATION_GRANT_SCOPES,
-  RELAY_AUTHORIZATION_GRANT_STATUSES,
-  RELAY_AUTHORIZATION_REQUEST_MODES,
-  RELAY_MANAGEABLE_TRUST_STATUSES,
+  RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPES,
+  RUNTIME_AUTHORIZATION_GRANT_STATUSES,
+  RUNTIME_AUTHORIZATION_REQUEST_MODES,
   TRANSPORT_ACCOUNT_INBOUND_ACTOR_MODES,
   TRANSPORT_ACCOUNT_OWNER_SCOPES,
   TRANSPORT_ACCOUNT_STATUSES,
@@ -103,24 +90,12 @@ import type {
   PluginAuthSessionsStatus,
   PluginConnectionsOwnerScope,
   PluginConnectionsStatus,
-  RelayAuthorizationGrantsRetention,
-  RelayAuthorizationGrantsScope,
-  RelayAuthorizationGrantsStatus,
-  RelayAuthorizationRequestMode,
-  RelayCatalogRevisionsStatus,
+  RuntimeAuthorizationGrantsRetention,
+  RuntimeAuthorizationGrantsScope,
+  RuntimeAuthorizationGrantsStatus,
+  RuntimeAuthorizationRequestMode,
   RelationshipApprovalMode,
   RelationshipRequestStatus,
-  RelayDeviceSessionsStatus,
-  RelayDevicesTrustStatus,
-  RelayExposuresRuntimeStatus,
-  RelayExposuresTransport,
-  RelayOperationDeliveriesStatus,
-  RelayOperationsStatus,
-  RelayPairingSessionsStatus,
-  RelaySyncSourcesSourceKind,
-  RelaySyncSourcesStatus,
-  RelaySyncSourcesSyncMode,
-  RelayToolsStatus,
   ResourceAccessBindingResourceType,
   ResourceAccessBindingsSource,
   ResourceAccessBindingsStatus,
@@ -320,48 +295,7 @@ type _PluginAuthSessionStatusMatchesDb = Assert<
 type _PluginAuthConnectionStatusMatchesDb = Assert<
   IsEqual<PluginAuthConnectionStatus, PluginConnectionsStatus>
 >
-type _RelayDeviceTrustStatusMatchesDb = Assert<
-  IsEqual<RelayDeviceTrustStatus, RelayDevicesTrustStatus>
->
-type _RelayManageableTrustStatusesAreDbSubset = Assert<
-  IsEqual<
-    (typeof RELAY_MANAGEABLE_TRUST_STATUSES)[number],
-    Extract<RelayDevicesTrustStatus, "active" | "revoked" | "blocked">
-  >
->
-type _RelayPairingStatusMatchesDb = Assert<
-  IsEqual<RelayPairingStatus, RelayPairingSessionsStatus>
->
-type _RelaySessionStatusMatchesDb = Assert<
-  IsEqual<RelaySessionStatus, RelayDeviceSessionsStatus>
->
-type _RelaySyncSourceKindMatchesDb = Assert<
-  IsEqual<RelaySyncSourceKind, RelaySyncSourcesSourceKind>
->
-type _RelaySyncModeMatchesDb = Assert<
-  IsEqual<RelaySyncMode, RelaySyncSourcesSyncMode>
->
-type _RelaySyncStatusMatchesDb = Assert<
-  IsEqual<RelaySyncStatus, RelaySyncSourcesStatus>
->
-type _RelayExposureRuntimeStatusMatchesDb = Assert<
-  IsEqual<RelayExposureRuntimeStatus, RelayExposuresRuntimeStatus>
->
-type _RelayExposureTransportMatchesDb = Assert<
-  IsEqual<RelayExposureTransport, RelayExposuresTransport>
->
-type _RelayCatalogRevisionStatusMatchesDb = Assert<
-  IsEqual<RelayCatalogRevisionStatus, RelayCatalogRevisionsStatus>
->
-type _RelayToolStatusMatchesDb = Assert<
-  IsEqual<RelayToolStatus, RelayToolsStatus>
->
-type _RelayOperationStatusMatchesDb = Assert<
-  IsEqual<RelayOperationStatus, RelayOperationsStatus>
->
-type _RelayDeliveryStatusMatchesDb = Assert<
-  IsEqual<RelayDeliveryStatus, RelayOperationDeliveriesStatus>
->
+// Relay enum assertions were removed in PR #20 along with the relay_* tables.
 type _TaskNoticeStatusMatchesTerminalToolTaskStatuses = Assert<
   IsEqual<
     TaskNoticeStatus,
@@ -440,28 +374,28 @@ type _RelationshipRequestStatusMatchesDb = Assert<
     RelationshipRequestStatus
   >
 >
-type _RelayAuthorizationGrantScopeMatchesDb = Assert<
+type _RuntimeAuthorizationGrantScopeMatchesDb = Assert<
   IsEqual<
-    (typeof RELAY_AUTHORIZATION_GRANT_SCOPES)[number],
-    RelayAuthorizationGrantsScope
+    (typeof RUNTIME_AUTHORIZATION_GRANT_SCOPES)[number],
+    RuntimeAuthorizationGrantsScope
   >
 >
-type _RelayAuthorizationGrantStatusMatchesDb = Assert<
+type _RuntimeAuthorizationGrantStatusMatchesDb = Assert<
   IsEqual<
-    (typeof RELAY_AUTHORIZATION_GRANT_STATUSES)[number],
-    RelayAuthorizationGrantsStatus
+    (typeof RUNTIME_AUTHORIZATION_GRANT_STATUSES)[number],
+    RuntimeAuthorizationGrantsStatus
   >
 >
-type _RelayAuthorizationGrantRetentionMatchesDb = Assert<
+type _RuntimeAuthorizationGrantRetentionMatchesDb = Assert<
   IsEqual<
-    (typeof RELAY_AUTHORIZATION_GRANT_RETENTIONS)[number],
-    RelayAuthorizationGrantsRetention
+    (typeof RUNTIME_AUTHORIZATION_GRANT_RETENTIONS)[number],
+    RuntimeAuthorizationGrantsRetention
   >
 >
-type _RelayAuthorizationRequestModeMatchesDb = Assert<
+type _RuntimeAuthorizationRequestModeMatchesDb = Assert<
   IsEqual<
-    (typeof RELAY_AUTHORIZATION_REQUEST_MODES)[number],
-    RelayAuthorizationRequestMode
+    (typeof RUNTIME_AUTHORIZATION_REQUEST_MODES)[number],
+    RuntimeAuthorizationRequestMode
   >
 >
 

@@ -456,12 +456,12 @@ export const CONVERSATION_GRANT_PERMISSIONS = [
 export const INTERACTION_REQUEST_KIND = {
   USER_INPUT: "user_input",
   PLAN_APPROVAL: "plan_approval",
-  RELAY_AUTHORIZATION: "relay_authorization",
+  RUNTIME_AUTHORIZATION: "runtime_authorization",
 } as const
 export const INTERACTION_REQUEST_KINDS = [
   INTERACTION_REQUEST_KIND.USER_INPUT,
   INTERACTION_REQUEST_KIND.PLAN_APPROVAL,
-  INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION,
+  INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
 ] as const
 export const TARGETED_INTERACTION_REQUEST_KINDS = [
   INTERACTION_REQUEST_KIND.USER_INPUT,
@@ -751,162 +751,70 @@ export const TASK_NOTICE_STATUSES = [
   "cancelled",
 ] as const
 
-export const RELAY_DEVICE_TRUST_STATUSES = [
-  "pending",
-  "active",
-  "revoked",
-  "blocked",
-] as const
-export const RELAY_MANAGEABLE_TRUST_STATUSES = [
-  "active",
-  "revoked",
-  "blocked",
-] as const
-export const RELAY_DEVICE_TYPES = [
-  "desktop_computer",
-  "laptop_computer",
-  "mobile_phone",
-  "tablet",
-  "server",
-  "virtual_machine",
-  "custom",
-] as const
-export const RELAY_PAIRING_STATUSES = [
-  "pending",
-  "confirmed",
-  "consumed",
-  "expired",
-  "cancelled",
-  "rejected",
-] as const
+// ============ Runtime authorization + device access (PR #20) ============
+// Replaces the legacy RELAY_AUTHORIZATION_* / RELAY_DEVICE_* / RELAY_EXPOSURE_*
+// constants. All consumers were migrated to the RUNTIME_* / DEVICE_* names; the
+// relay_* tables and the Go relay binaries were deleted at the same time.
 
-export const RELAY_SESSION_STATUSES = [
-  "connecting",
-  "active",
-  "closing",
-  "closed",
-  "rejected",
-] as const
-
-export const RELAY_SYNC_SOURCE_KINDS = [
-  "manual",
-  "claude_code",
-  "claude_desktop",
-  "codex",
-  "gemini",
-  "opencode",
-  "custom",
-] as const
-
-export const RELAY_SYNC_MODES = ["snapshot", "follow"] as const
-export const RELAY_SYNC_STATUSES = [
-  "unknown",
-  "idle",
-  "syncing",
-  "error",
-  "disabled",
-] as const
-export const RELAY_AUTHORIZATION_PRESETS = [
+export const RUNTIME_AUTHORIZATION_PRESETS = [
   "once",
   "actor",
   "conversation",
   "workspace",
 ] as const
-export const RELAY_AUTHORIZATION_GRANT_SCOPES = [
+export const RUNTIME_AUTHORIZATION_GRANT_SCOPES = [
   "once",
   "actor",
   "conversation",
   "actor_in_conversation",
   "workspace",
 ] as const
-export const RELAY_AUTHORIZATION_GRANT_RETENTIONS = [
+export const RUNTIME_AUTHORIZATION_GRANT_RETENTIONS = [
   "consume_once",
   "until_revoked",
 ] as const
-export const RELAY_AUTHORIZATION_GRANT_STATUSES = [
+export const RUNTIME_AUTHORIZATION_GRANT_STATUSES = [
   "active",
   "consumed",
   "revoked",
   "superseded",
 ] as const
-export const RELAY_AUTHORIZATION_REQUEST_MODES = [
+export const RUNTIME_AUTHORIZATION_REQUEST_MODES = [
   "background",
   "blocking",
 ] as const
-export const RELAY_ACCESS_DENIAL_KINDS = [
+export const DEVICE_ACCESS_DENIAL_KINDS = [
   "permission_denied",
   "runtime_constraint",
   "invalid_request",
 ] as const
-export const RELAY_ACCESS_DENIAL_RESOLUTIONS = [
+export const DEVICE_ACCESS_DENIAL_RESOLUTIONS = [
   "server_grant",
   "local_setting",
   "unresolvable",
 ] as const
-export const RELAY_AUTHORIZATION_CAPABILITIES = [
+export const RUNTIME_AUTHORIZATION_CAPABILITIES = [
   "filesystem",
   "cua",
   "browser",
   "commandline",
 ] as const
-export const RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES = [
+export const RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES = [
   "read",
   "write",
 ] as const
-export const RELAY_AUTHORIZATION_CUA_ACCESSES = ["read", "write"] as const
-export const RELAY_AUTHORIZATION_BROWSER_ACTIONS = ["read", "write"] as const
-export const RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES = [
+export const RUNTIME_AUTHORIZATION_CUA_ACCESSES = ["read", "write"] as const
+export const RUNTIME_AUTHORIZATION_BROWSER_ACTIONS = ["read", "write"] as const
+export const RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES = [
   "host",
   "domain",
   "origin",
 ] as const
-export const RELAY_AUTHORIZATION_COMMAND_EXECUTORS = ["bash"] as const
-export const RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES = [
+export const RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS = ["bash"] as const
+export const RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES = [
   "exact",
   "prefix",
   "tool",
-] as const
-
-export const RELAY_EXPOSURE_RUNTIME_STATUSES = [
-  "discovered",
-  "starting",
-  "healthy",
-  "degraded",
-  "failed",
-  "quarantined",
-  "offline",
-] as const
-
-export const RELAY_EXPOSURE_TRANSPORTS = [
-  "builtin",
-  "stdio",
-  "http",
-  "sse",
-  "custom",
-] as const
-export const RELAY_CATALOG_REVISION_STATUSES = ["active", "superseded"] as const
-export const RELAY_TOOL_STATUSES = ["active", "removed"] as const
-
-export const RELAY_OPERATION_STATUSES = [
-  "created",
-  "cancel_requested",
-  "dispatched",
-  "received",
-  "started",
-  "completed",
-  "failed",
-  "cancelled",
-  "aborted",
-  "expired",
-] as const
-
-export const RELAY_DELIVERY_STATUSES = [
-  "queued",
-  "sent",
-  "acked",
-  "nacked",
-  "timed_out",
-  "cancelled",
 ] as const
 
 export const AUTOMATION_TRIGGER_KINDS = ["schedule", "event"] as const
@@ -960,12 +868,17 @@ export const ACTOR_PACKAGE_SYNC_MODES = ["notify", "manual_merge"] as const
 
 // ============ v3 device-runtime aliases (PR #16) ============
 // PR #16 of the device-runtime refactor introduces device-shaped names that
-// shadow the legacy RELAY_* exports. Consumers are migrated to the new names
-// over time; PR #18 drops the legacy aliases. Authorization grants are
-// renamed to RUNTIME_AUTHORIZATION_* because the namespace is no longer
-// relay-specific.
+// are now the only ones. PR #20 finally dropped the legacy RELAY_* aliases.
 
-export const DEVICE_KINDS = RELAY_DEVICE_TYPES
+export const DEVICE_KINDS = [
+  "desktop_computer",
+  "laptop_computer",
+  "mobile_phone",
+  "tablet",
+  "server",
+  "virtual_machine",
+  "custom",
+] as const
 export const DEVICE_TRUST_STATUSES_V3 = [
   "pending",
   "trusted",
@@ -986,28 +899,3 @@ export const DEVICE_EXPOSURE_TRANSPORTS = [
   "sse",
   "custom",
 ] as const
-export const DEVICE_ACCESS_DENIAL_KINDS = RELAY_ACCESS_DENIAL_KINDS
-export const DEVICE_ACCESS_DENIAL_RESOLUTIONS = RELAY_ACCESS_DENIAL_RESOLUTIONS
-
-export const RUNTIME_AUTHORIZATION_PRESETS = RELAY_AUTHORIZATION_PRESETS
-export const RUNTIME_AUTHORIZATION_GRANT_SCOPES =
-  RELAY_AUTHORIZATION_GRANT_SCOPES
-export const RUNTIME_AUTHORIZATION_GRANT_RETENTIONS =
-  RELAY_AUTHORIZATION_GRANT_RETENTIONS
-export const RUNTIME_AUTHORIZATION_GRANT_STATUSES =
-  RELAY_AUTHORIZATION_GRANT_STATUSES
-export const RUNTIME_AUTHORIZATION_REQUEST_MODES = [
-  "none",
-  "background",
-  "blocking",
-] as const
-export const RUNTIME_AUTHORIZATION_CAPABILITIES =
-  RELAY_AUTHORIZATION_CAPABILITIES
-export const RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES =
-  RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES
-export const RUNTIME_AUTHORIZATION_CUA_ACCESSES =
-  RELAY_AUTHORIZATION_CUA_ACCESSES
-export const RUNTIME_AUTHORIZATION_BROWSER_ACTIONS =
-  RELAY_AUTHORIZATION_BROWSER_ACTIONS
-export const RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES =
-  RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES

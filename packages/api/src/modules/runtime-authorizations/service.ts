@@ -294,9 +294,9 @@ function mapRelayAuthorizationGrantRow(
   return {
     id: row.id,
     workspaceId: row.workspace_id,
-    relayDeviceId: row.relay_device_id,
-    relayCapabilityId: row.relay_capability_id,
-    relayExposureId: row.relay_exposure_id,
+    relayDeviceId: row.device_id,
+    relayCapabilityId: row.device_capability_id,
+    relayExposureId: row.device_exposure_id,
     // P1b: actor_id and conversation_id are no longer stored on the grant
     // row; they live on the joined access_subjects row. SELECT helpers below
     // project subj.actor_id AS subject_actor_id and subj.conversation_id AS
@@ -323,7 +323,7 @@ function mapRelayAuthorizationGrantRow(
 }
 
 /**
- * P1b: the canonical SELECT projection for relay_authorization_grants rows
+ * P1b: the canonical SELECT projection for runtime_authorization_grants rows
  * that will be passed to mapRelayAuthorizationGrantRow. LEFT JOINs
  * access_subjects (subject_id is nullable for `once` / `workspace` scopes)
  * and surfaces subject_actor_id / subject_conversation_id derived from the
@@ -333,9 +333,9 @@ function relayGrantSelectColumns() {
   return [
     "g.id",
     "g.workspace_id",
-    "g.relay_device_id",
-    "g.relay_capability_id",
-    "g.relay_exposure_id",
+    "g.device_id",
+    "g.device_capability_id",
+    "g.device_exposure_id",
     "g.subject_id",
     "g.created_by_workspace_member_id",
     "g.source_interaction_id",
@@ -400,12 +400,12 @@ export async function createRelayAuthorizationGrant(
       : await upsertAccessSubject(db, subjectRef)
     : null
   const insertStatement = db
-    .insertInto("relay_authorization_grants")
+    .insertInto("runtime_authorization_grants")
     .values({
       workspace_id: params.workspaceId,
-      relay_device_id: params.relayDeviceId,
-      relay_capability_id: params.relayCapabilityId,
-      relay_exposure_id: params.relayExposureId,
+      device_id: params.relayDeviceId,
+      device_capability_id: params.relayCapabilityId,
+      device_exposure_id: params.relayExposureId,
       subject_id: subjectId,
       created_by_workspace_member_id: params.createdByWorkspaceMemberId || null,
       source_interaction_id: params.sourceInteractionId || null,
@@ -414,11 +414,11 @@ export async function createRelayAuthorizationGrant(
       retention,
       status: "active",
       policy:
-        grantSpec as unknown as TableInsert<"relay_authorization_grants">["policy"],
+        grantSpec as unknown as TableInsert<"runtime_authorization_grants">["policy"],
       source_retry_nonce: params.sourceRetryNonce || null,
       source_runtime_session_id: params.sourceRuntimeSessionId || null,
       source_request_args: (params.sourceRequestArgs ||
-        {}) as TableInsert<"relay_authorization_grants">["source_request_args"],
+        {}) as TableInsert<"runtime_authorization_grants">["source_request_args"],
     })
     .returning("id")
 
@@ -432,7 +432,7 @@ export async function createRelayAuthorizationGrant(
   // actorId / conversationId from the subject row (P1b: actor_id and
   // conversation_id were dropped from the grant table).
   const selectStatement = db
-    .selectFrom("relay_authorization_grants as g")
+    .selectFrom("runtime_authorization_grants as g")
     .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
     .select(relayGrantSelectColumns())
     .where("g.id", "=", inserted.id)
@@ -451,7 +451,7 @@ export async function getRelayAuthorizationGrant(
   queryable?: Queryable
 ) {
   const statement = db
-    .selectFrom("relay_authorization_grants as g")
+    .selectFrom("runtime_authorization_grants as g")
     .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
     .select(relayGrantSelectColumns())
     .where("g.id", "=", id)
@@ -467,7 +467,7 @@ export async function revokeRelayAuthorizationGrant(
   queryable?: Queryable
 ) {
   const statement = db
-    .updateTable("relay_authorization_grants")
+    .updateTable("runtime_authorization_grants")
     .set({
       status: "revoked",
       revoked_at: sql`NOW()`,
@@ -487,7 +487,7 @@ export async function supersedeRelayAuthorizationGrant(
   queryable?: Queryable
 ) {
   const statement = db
-    .updateTable("relay_authorization_grants")
+    .updateTable("runtime_authorization_grants")
     .set({
       status: "superseded",
       superseded_at: sql`NOW()`,
@@ -507,7 +507,7 @@ export async function consumeRelayAuthorizationGrant(
   queryable?: Queryable
 ) {
   const statement = db
-    .updateTable("relay_authorization_grants")
+    .updateTable("runtime_authorization_grants")
     .set({
       status: "consumed",
       consumed_at: sql`NOW()`,
@@ -671,13 +671,13 @@ export async function findMatchingRelayAuthorizationGrant(
     : null
 
   const statement = db
-    .selectFrom("relay_authorization_grants as g")
+    .selectFrom("runtime_authorization_grants as g")
     .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
     .select(relayGrantSelectColumns())
     .where("g.workspace_id", "=", params.workspaceId)
-    .where("g.relay_device_id", "=", params.relayDeviceId)
-    .where("g.relay_capability_id", "=", params.relayCapabilityId)
-    .where("g.relay_exposure_id", "=", params.relayExposureId)
+    .where("g.device_id", "=", params.relayDeviceId)
+    .where("g.device_capability_id", "=", params.relayCapabilityId)
+    .where("g.device_exposure_id", "=", params.relayExposureId)
     .where("g.status", "=", "active")
     .where((eb) =>
       eb.or([
@@ -745,10 +745,10 @@ export async function listActiveRelayAuthorizationGrantsForExposure(
   queryable?: Queryable
 ) {
   const statement = db
-    .selectFrom("relay_authorization_grants as g")
+    .selectFrom("runtime_authorization_grants as g")
     .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
     .select(relayGrantSelectColumns())
-    .where("g.relay_capability_id", "=", relayCapabilityId)
+    .where("g.device_capability_id", "=", relayCapabilityId)
     .where("g.status", "=", "active")
     .orderBy("g.created_at", "desc")
   const rows = isQueryExecutor(queryable)
