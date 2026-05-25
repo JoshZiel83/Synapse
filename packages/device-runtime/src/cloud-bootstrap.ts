@@ -52,11 +52,13 @@ export async function bootstrapCloudDevice(
     serverOrigin: opts.serverOrigin,
     hostKind: "cloud",
     devicePubkeyFingerprint: deviceKey.publicKeyFingerprint,
+    devicePrivateKeyRef: deviceKey.privateKeyRef,
     services: [
       {
         serviceKind: "device_runtime",
         serviceId: result.service_id,
         pubkeyFingerprint: serviceKey.publicKeyFingerprint,
+        privateKeyRef: serviceKey.privateKeyRef,
       },
     ],
   }

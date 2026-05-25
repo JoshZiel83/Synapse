@@ -11,7 +11,7 @@
     "test": "tsx --test --test-force-exit \"src/**/*.test.ts\"",
     "test:integration": "bash tests/integration/scripts/run-all.sh",
     "test:integration:llm-smoke": "bash tests/integration/scripts/run-test.sh tests/integration/manual/llm-smoke.test.ts",
-    "test:conformance": "tsx --test \"src/modules/relay-authorizations/conformance.test.ts\"",
+    "test:conformance": "tsx --test \"src/modules/runtime-authorizations/conformance.test.ts\"",
     "test:coverage": "tsx --test --experimental-test-coverage --test-coverage-include=\"src/modules/access/*.ts\" --test-coverage-exclude=\"src/**/*.test.ts\" \"src/modules/access/*.test.ts\" \"src/test/helpers/db.test.ts\"",
     "db:bootstrap": "tsx src/infrastructure/database/bootstrap.ts && npm run db:codegen",
     "db:bootstrap:runtime": "tsx src/infrastructure/database/bootstrap.ts",

@@ -367,40 +367,73 @@ export async function consumePairing(
     .digest("hex")
 
   return db.transaction().execute(async (trx) => {
-    const session = await trx
-      .selectFrom("device_pairing_sessions")
-      .selectAll()
+    // Atomic single-shot consume: UPDATE the pairing session with status
+    // change conditioned on it still being pending + matching mode + not
+    // expired. RETURNING gives us the full row on success; nothing on any
+    // race-loss or invalid state. Two concurrent claim attempts can no
+    // longer both produce a trusted device.
+    const claimedRows = await trx
+      .updateTable("device_pairing_sessions")
+      .set({
+        status: "consumed",
+        confirmed_at: sql`NOW()`,
+        consumed_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      } as never)
       .where("pairing_code", "=", input.pairingCode)
-      .executeTakeFirst()
+      .where("status", "=", "pending")
+      .where("mode", "=", "local_qr")
+      .where("expires_at", ">", sql<Date>`NOW()`)
+      .returningAll()
+      .execute()
+    const session = claimedRows[0]
     if (!session) {
-      throw new DeviceModuleError({
-        statusCode: 404,
-        code: "pairing_code_not_found",
-        message: "pairing code not found or already consumed",
-      })
-    }
-    if ((session.status as string) !== "pending") {
+      // Distinguish the failure mode for a better error code so the
+      // operator/runtime can react. We do a follow-up SELECT (still inside
+      // the transaction) to figure out which precondition failed.
+      const existing = await trx
+        .selectFrom("device_pairing_sessions")
+        .selectAll()
+        .where("pairing_code", "=", input.pairingCode)
+        .executeTakeFirst()
+      if (!existing) {
+        throw new DeviceModuleError({
+          statusCode: 404,
+          code: "pairing_code_not_found",
+          message: "pairing code not found or already consumed",
+        })
+      }
+      if ((existing.status as string) !== "pending") {
+        throw new DeviceModuleError({
+          statusCode: 409,
+          code: "pairing_session_not_pending",
+          message: `pairing session is ${existing.status as string}`,
+        })
+      }
+      const expiresAt = new Date(
+        existing.expires_at as unknown as string
+      ).getTime()
+      if (Number.isFinite(expiresAt) && expiresAt < Date.now()) {
+        throw new DeviceModuleError({
+          statusCode: 410,
+          code: "pairing_session_expired",
+          message: "pairing session expired",
+        })
+      }
+      if ((existing.mode as string) !== "local_qr") {
+        throw new DeviceModuleError({
+          statusCode: 400,
+          code: "pairing_mode_mismatch",
+          message: `consumePairing only handles local_qr; got ${existing.mode as string}`,
+        })
+      }
+      // Should not happen — race with another worker that claimed it between
+      // our UPDATE and our diagnostic SELECT.
       throw new DeviceModuleError({
         statusCode: 409,
-        code: "pairing_session_not_pending",
-        message: `pairing session is ${session.status as string}`,
-      })
-    }
-    const expiresAt = new Date(
-      session.expires_at as unknown as string
-    ).getTime()
-    if (Number.isFinite(expiresAt) && expiresAt < Date.now()) {
-      throw new DeviceModuleError({
-        statusCode: 410,
-        code: "pairing_session_expired",
-        message: "pairing session expired",
-      })
-    }
-    if ((session.mode as string) !== "local_qr") {
-      throw new DeviceModuleError({
-        statusCode: 400,
-        code: "pairing_mode_mismatch",
-        message: `consumePairing only handles local_qr; got ${session.mode as string}`,
+        code: "pairing_session_race",
+        message:
+          "pairing session was claimed by another consumer; retry not allowed",
       })
     }
 
@@ -454,14 +487,13 @@ export async function consumePairing(
       } as never)
       .execute()
 
+    // Backfill device_id on the already-consumed pairing session row. The
+    // earlier atomic UPDATE flipped status/timestamps; we just need the FK
+    // wired now that the device row exists.
     await trx
       .updateTable("device_pairing_sessions")
       .set({
-        status: "consumed",
         device_id: deviceId,
-        confirmed_at: new Date().toISOString(),
-        consumed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
       } as never)
       .where("id", "=", session.id as string)
       .execute()

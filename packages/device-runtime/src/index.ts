@@ -9,6 +9,7 @@ export {
   executeBash,
 } from "./builtins/commandline.js"
 export { createBrowserBuiltin, listCdpTargets } from "./builtins/browser.js"
+export { createCuaBuiltin } from "./builtins/cua.js"
 export {
   startSidecar,
   type SidecarHandle,

@@ -12,9 +12,11 @@
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import type { WebSocket } from "ws"
 import {
+  DeviceCatalogSyncParamsSchema,
   DeviceHelloParamsSchema,
   type JsonRpcRequest,
 } from "@synapse/device-protocol"
+import { persistCatalogSync } from "./catalog-sync.js"
 
 interface ParsedFrame {
   raw: string
@@ -115,7 +117,50 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
             })
             return
           }
-          case "device.catalog.sync":
+          case "device.catalog.sync": {
+            if (!helloSeen || !helloMeta) {
+              writeError(
+                socket,
+                req.id ?? null,
+                -32002,
+                "device.hello required before any other method"
+              )
+              return
+            }
+            const parsedCatalog = DeviceCatalogSyncParamsSchema.safeParse(
+              req.params
+            )
+            if (!parsedCatalog.success) {
+              writeError(
+                socket,
+                req.id ?? null,
+                -32602,
+                "Invalid device.catalog.sync params",
+                parsedCatalog.error.flatten()
+              )
+              return
+            }
+            persistCatalogSync({
+              deviceId: helloMeta.deviceId,
+              serviceId: helloMeta.serviceId,
+              exposures: parsedCatalog.data.exposures,
+            })
+              .then((result) => {
+                writeResult(socket, req.id ?? null, {
+                  accepted: true,
+                  ...result,
+                })
+              })
+              .catch((err) => {
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  `catalog persist failed: ${(err as Error).message}`
+                )
+              })
+            return
+          }
           case "device.catalog.delta":
           case "device.service.status":
           case "device.runtime_session.opened":

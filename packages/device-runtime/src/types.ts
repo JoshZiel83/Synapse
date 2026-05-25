@@ -39,9 +39,13 @@ export interface DeviceIdentityRecord {
     serviceKind: DeviceServiceKind
     serviceId: string
     pubkeyFingerprint: string
+    /** Broker-internal handle to the service private key. */
+    privateKeyRef: string
   }>
   /** Fingerprint of the device-level public key (NOT the service key). */
   devicePubkeyFingerprint: string
+  /** Broker-internal handle to the device-level private key. */
+  devicePrivateKeyRef: string
 }
 
 /**
@@ -52,6 +56,25 @@ export interface DeviceIdentityRecord {
 export interface CatalogProvider {
   readonly providerKey: string
   describeExposures(): Promise<DeviceCatalogExposure[]>
+  /**
+   * Optional tool invocation hook. Called when the MCP host receives a
+   * tools/call for a tool the provider declared in describeExposures().
+   * Returns the same shape as MCP's CallToolResult ({content, isError,
+   * _meta}); providers that have no executable surface yet can omit this
+   * method and the host will respond with `tool_not_implemented`.
+   */
+  invokeTool?(input: {
+    toolName: string
+    args: Record<string, unknown>
+    /** Operation envelope from `_meta.synapse_operation`, when present. */
+    envelope?: OperationEnvelope
+  }): Promise<CatalogToolInvocationResult>
+}
+
+export interface CatalogToolInvocationResult {
+  content: Array<{ type: "text"; text: string } | Record<string, unknown>>
+  isError?: boolean
+  _meta?: Record<string, unknown>
 }
 
 /**
@@ -100,8 +123,17 @@ export interface DeviceRuntimeOptions {
   broker: DeviceIdentityBroker
   /** Optional initial catalog providers. */
   initialCatalog?: CatalogProvider[]
-  /** Optional tunnel adapter; v3.0 stub if absent. */
-  tunnel?: TunnelAdapter
+  /**
+   * Optional tunnel adapter + per-service registration token. When provided,
+   * the runtime spawns the tunnel after the MCP host is listening so the API
+   * side can resolve `https://tunnel-edge/d/<token>` → loopback. v3.0 ships
+   * with FrpTunnelAdapter; the absence of this block leaves the runtime
+   * reachable only on loopback (local smoke tests).
+   */
+  tunnel?: {
+    adapter: TunnelAdapter
+    registrationToken: string
+  }
   /** Optional MCP host override. v3.0 ships an in-process default. */
   mcpHost?: McpHost
   /** Client version string sent on hello. */

@@ -4,11 +4,15 @@
 // when the API-side task plumbing is in place.
 
 import { spawn } from "node:child_process"
-import type { CatalogProvider } from "../types.js"
+import type {
+  CatalogProvider,
+  CatalogToolInvocationResult,
+} from "../types.js"
 import type {
   DeviceCatalogExposure,
   DeviceCatalogTool,
 } from "@synapse/device-protocol"
+import { toolErrorResult } from "../mcp-host.js"
 
 const PROVIDER_KEY = "builtin.commandline"
 
@@ -58,6 +62,48 @@ export function createCommandlineBuiltin(
           tools: [BASH_TOOL],
         },
       ]
+    },
+    async invokeTool(input): Promise<CatalogToolInvocationResult> {
+      if (input.toolName !== "bash") {
+        return toolErrorResult({
+          code: "invalid_request",
+          message: `commandline builtin does not handle ${input.toolName}`,
+        })
+      }
+      const command = input.args["command"]
+      if (typeof command !== "string" || command.length === 0) {
+        return toolErrorResult({
+          code: "invalid_request",
+          message: "bash: 'command' (string) is required",
+        })
+      }
+      const workingDirectory = input.args["working_directory"]
+      const timeoutMs = input.args["timeout_ms"]
+      const exec = await executeBash({
+        command,
+        workingDirectory:
+          typeof workingDirectory === "string" ? workingDirectory : undefined,
+        timeoutMs: typeof timeoutMs === "number" ? timeoutMs : undefined,
+      })
+      const exitText = exec.killed
+        ? `(killed after ${exec.durationMs}ms)`
+        : `exit ${exec.exitCode} in ${exec.durationMs}ms`
+      const text = [
+        `# ${exitText}`,
+        exec.stdout ? `## stdout\n${exec.stdout}` : "",
+        exec.stderr ? `## stderr\n${exec.stderr}` : "",
+      ]
+        .filter(Boolean)
+        .join("\n")
+      return {
+        content: [{ type: "text", text }],
+        isError: exec.exitCode !== 0 || exec.killed,
+        _meta: {
+          exit_code: exec.exitCode,
+          duration_ms: exec.durationMs,
+          killed: exec.killed,
+        },
+      }
     },
   }
 }

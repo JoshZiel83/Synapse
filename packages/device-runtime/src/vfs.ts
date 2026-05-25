@@ -7,7 +7,7 @@
 
 import { promises as fsp } from "node:fs"
 import { randomUUID } from "node:crypto"
-import { join } from "node:path"
+import { resolve, sep } from "node:path"
 
 export type VfsNodeKind = "directory" | "file"
 
@@ -121,22 +121,44 @@ export class VfsService {
 
 /**
  * Local-filesystem VfsBackend. Roots browsing at a configurable directory.
- * The runtime authorization layer (§4.5 step 6) is enforced upstream — this
- * backend trusts its inputs.
+ * Every input path is resolved against the root and rejected if it escapes
+ * outside (defeats `../../etc/passwd`-style traversal). The runtime
+ * authorization layer (§4.5 step 6) is enforced upstream; this backend
+ * still gates path containment defensively because VFS exposures are
+ * commonly the seed for user-visible file pickers.
  */
 export function createLocalFsBackend(opts: { rootPath: string }): VfsBackend {
+  const root = resolve(opts.rootPath)
+  // Normalize so `root === "/srv/data"` and a child like `/srv/data/foo` both
+  // share the same `/srv/data/` prefix. Without the trailing sep, `/srv/data2`
+  // would slip past the containment check.
+  const rootWithSep = root.endsWith(sep) ? root : root + sep
+
+  function safeResolve(input: string): string {
+    // resolve() collapses `..` segments and produces an absolute path; we
+    // anchor at root so relative inputs cannot escape via an absolute prefix.
+    const cleaned = input.replace(/^\/+/, "")
+    const candidate = resolve(root, cleaned)
+    if (candidate !== root && !candidate.startsWith(rootWithSep)) {
+      throw new Error(
+        `vfs: path escapes root (input=${JSON.stringify(input)})`
+      )
+    }
+    return candidate
+  }
+
   return {
     async start() {
-      await fsp.mkdir(opts.rootPath, { recursive: true })
+      await fsp.mkdir(root, { recursive: true })
     },
     async list(path: string) {
-      const target = join(opts.rootPath, path)
+      const target = safeResolve(path)
       const entries = await fsp.readdir(target, { withFileTypes: true })
       const out: VfsEntry[] = []
       for (const e of entries) {
         const childPath = `${path.replace(/\/$/, "")}/${e.name}`
         try {
-          const st = await fsp.stat(join(target, e.name))
+          const st = await fsp.stat(safeResolve(childPath))
           out.push({
             name: e.name,
             path: childPath,
@@ -152,11 +174,16 @@ export function createLocalFsBackend(opts: { rootPath: string }): VfsBackend {
       return out
     },
     async stat(path: string) {
-      const target = join(opts.rootPath, path)
+      let target: string
+      try {
+        target = safeResolve(path)
+      } catch {
+        return null
+      }
       try {
         const st = await fsp.stat(target)
         return {
-          name: target.split("/").pop() ?? "",
+          name: target.split(sep).pop() ?? "",
           path,
           kind: st.isDirectory() ? "directory" : "file",
           size: st.isFile() ? st.size : undefined,
@@ -168,7 +195,7 @@ export function createLocalFsBackend(opts: { rootPath: string }): VfsBackend {
       }
     },
     async read(path: string) {
-      const target = join(opts.rootPath, path)
+      const target = safeResolve(path)
       const data = await fsp.readFile(target)
       return {
         data: new Uint8Array(data),
@@ -177,7 +204,7 @@ export function createLocalFsBackend(opts: { rootPath: string }): VfsBackend {
       }
     },
     async write(path: string, data: Uint8Array) {
-      const target = join(opts.rootPath, path)
+      const target = safeResolve(path)
       await fsp.writeFile(target, data)
       return { data, mimeType: "application/octet-stream" }
     },

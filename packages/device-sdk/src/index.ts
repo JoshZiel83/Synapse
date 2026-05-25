@@ -6,6 +6,7 @@ import {
   ClaimDaemonInputSchema,
   ConsumePairingInputSchema,
   CreateCloudDeviceInputSchema,
+  CreateCloudDeviceResultSchema,
   DeviceDetailSchema,
   DeviceServiceSummarySchema,
   DeviceSummarySchema,
@@ -16,6 +17,7 @@ import {
   type ConsumePairingInput,
   type ConsumePairingResult,
   type CreateCloudDeviceInput,
+  type CreateCloudDeviceResult,
   type DeviceDetail,
   type DeviceServiceSummary,
   type DeviceSummary,
@@ -125,16 +127,23 @@ export class DeviceSdk {
   }
 
   // PR #12: createCloudDevice + bootstrap flow.
+  //
+  // The API does NOT immediately return a DeviceDetail — it returns the
+  // pending pairing session info (pending_device_id, one-time
+  // bootstrap_token, expires_at). The caller injects the token into the
+  // sandbox env; the runtime inside the sandbox then calls
+  // /api/v1/devices/bootstrap to claim the actual device row. Polling for
+  // the materialized device happens via listDevices once the sandbox is up.
   async createCloudDevice(
     input: CreateCloudDeviceInput
-  ): Promise<DeviceDetail> {
+  ): Promise<CreateCloudDeviceResult> {
     const parsed = CreateCloudDeviceInputSchema.parse(input)
     const raw = await this.request<unknown>(
       "POST",
       `/api/v1/workspaces/${parsed.workspace_id}/devices/cloud`,
       parsed
     )
-    return DeviceDetailSchema.parse(raw)
+    return CreateCloudDeviceResultSchema.parse(raw)
   }
 
   // ───────────────────────────── pairing ─────────────────────────────────────
@@ -205,13 +214,22 @@ export class DeviceSdk {
   /**
    * Single canonical write for "switch active device" UX. PR #7 (1:1) and
    * PR #8 (group-chat actor-hover) both call this with the right
-   * AccessTarget kind.
+   * AccessTarget kind. The server validates that:
+   *   - the caller has workspace.manage_devices on the workspace
+   *   - the caller has device_capability.grant on every listed capability
+   *   - the AccessTarget's target row (actor / conversation / context)
+   *     belongs to the same workspace
+   *   - every listed capability belongs to the same workspace
    */
   async setActiveDeviceCapabilitiesForTarget(
     input: SetActiveDeviceCapabilitiesInput
   ): Promise<void> {
     const parsed = SetActiveDeviceCapabilitiesInputSchema.parse(input)
-    await this.request<void>("POST", `/api/v1/devices/access-bindings`, parsed)
+    await this.request<void>(
+      "POST",
+      `/api/v1/workspaces/${parsed.workspaceId}/devices/access-bindings`,
+      parsed
+    )
   }
 }
 
@@ -224,6 +242,7 @@ export type {
   ConsumePairingInput,
   ConsumePairingResult,
   CreateCloudDeviceInput,
+  CreateCloudDeviceResult,
   ClaimDaemonInput,
   SetActiveDeviceCapabilitiesInput,
   StartPairingInput,

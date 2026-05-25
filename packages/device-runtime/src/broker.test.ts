@@ -21,11 +21,13 @@ test("file-backed broker round-trips identity + key pair", async () => {
       serverOrigin: "http://localhost:3001",
       hostKind: "local",
       devicePubkeyFingerprint: deviceKey.publicKeyFingerprint,
+      devicePrivateKeyRef: deviceKey.privateKeyRef,
       services: [
         {
           serviceKind: "device_runtime",
           serviceId: "svc-1",
           pubkeyFingerprint: deviceKey.publicKeyFingerprint,
+          privateKeyRef: deviceKey.privateKeyRef,
         },
       ],
     })
@@ -34,6 +36,8 @@ test("file-backed broker round-trips identity + key pair", async () => {
     assert.ok(loaded)
     assert.equal(loaded!.deviceId, "dev-1")
     assert.equal(loaded!.services[0]!.serviceKind, "device_runtime")
+    assert.equal(loaded!.services[0]!.privateKeyRef, deviceKey.privateKeyRef)
+    assert.equal(loaded!.devicePrivateKeyRef, deviceKey.privateKeyRef)
 
     const reread = await broker.loadKeyPair(deviceKey.privateKeyRef)
     assert.ok(reread)

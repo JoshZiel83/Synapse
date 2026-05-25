@@ -4,6 +4,7 @@ import { EventEmitter } from "node:events"
 import type {
   DeviceCatalogSyncParams,
   DeviceHelloParams,
+  TunnelHandle,
 } from "@synapse/device-protocol"
 import { TransportClient } from "./transport.js"
 import {
@@ -45,6 +46,7 @@ function controlPlaneUrlFor(origin: string): string {
 class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
   private transport: TransportClient | null = null
   private mcpHost: InMemoryMcpHostHandle | null = null
+  private tunnelHandle: TunnelHandle | null = null
   private stopResolve!: () => void
   readonly done: Promise<void>
   private status: RuntimeStatus = "starting"
@@ -73,12 +75,10 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
         "device-runtime: identity has no device_runtime service entry"
       )
     }
-    const serviceKey = await broker.loadKeyPair(
-      runtimeService.pubkeyFingerprint
-    )
+    const serviceKey = await broker.loadKeyPair(runtimeService.privateKeyRef)
     if (!serviceKey) {
       throw new Error(
-        `device-runtime: missing service private key for ${runtimeService.pubkeyFingerprint}`
+        `device-runtime: missing service private key for ref ${runtimeService.privateKeyRef}`
       )
     }
 
@@ -91,6 +91,30 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     ]
     for (const provider of providers) {
       await this.mcpHost.registerCatalog(provider)
+    }
+
+    // Tunnel: bring the MCP host's loopback port up through the operator's
+    // frp edge so the API side can reach `tools/call`. Failure here is fatal
+    // when explicitly configured — silently falling back would let the
+    // dispatcher 502 forever with no operator-visible signal.
+    if (this.opts.tunnel) {
+      try {
+        this.tunnelHandle = await this.opts.tunnel.adapter.start({
+          deviceServiceId: runtimeService.serviceId,
+          localPort: this.mcpHost.localPort,
+          registrationToken: this.opts.tunnel.registrationToken,
+        })
+        logger.info("device tunnel up", {
+          deviceServiceId: runtimeService.serviceId,
+          internalUrl: this.tunnelHandle.internalUrl,
+          localPort: this.mcpHost.localPort,
+        })
+      } catch (err) {
+        logger.error("device tunnel start failed", {
+          error: (err as Error).message,
+        })
+        throw err
+      }
     }
 
     const helloFactory = async (): Promise<DeviceHelloParams> => ({
@@ -139,6 +163,14 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
 
   async stop(): Promise<void> {
     if (this.transport) await this.transport.stop()
+    if (this.tunnelHandle && this.opts.tunnel) {
+      try {
+        await this.opts.tunnel.adapter.stop(this.tunnelHandle)
+      } catch {
+        /* tunnel adapter swallowed errors during stop — best effort */
+      }
+      this.tunnelHandle = null
+    }
     if (this.mcpHost) await this.mcpHost.stop()
     this.updateStatus("offline")
     this.stopResolve()

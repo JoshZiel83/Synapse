@@ -171,6 +171,19 @@ export type CreateCloudDeviceInput = z.infer<
   typeof CreateCloudDeviceInputSchema
 >
 
+// POST /workspaces/:wsId/devices/cloud returns the pending pairing-session
+// info, NOT a DeviceDetail. The sandbox runtime claims the device row via
+// /api/v1/devices/bootstrap with the bootstrap_token.
+export const CreateCloudDeviceResultSchema = z.object({
+  pending_device_id: z.string().uuid(),
+  bootstrap_token: z.string(),
+  pairing_session_id: z.string().uuid(),
+  expires_at: z.string(),
+})
+export type CreateCloudDeviceResult = z.infer<
+  typeof CreateCloudDeviceResultSchema
+>
+
 export const StartPairingInputSchema = z.object({
   workspace_id: z.string().uuid(),
   mode: z.enum(DEVICE_PAIRING_MODES),
@@ -217,6 +230,7 @@ export const ClaimDaemonInputSchema = z.object({
 export type ClaimDaemonInput = z.infer<typeof ClaimDaemonInputSchema>
 
 export const SetActiveDeviceCapabilitiesInputSchema = z.object({
+  workspaceId: z.string().uuid(),
   target: z.discriminatedUnion("kind", [
     z.object({ kind: z.literal("workspace"), workspaceId: z.string().uuid() }),
     z.object({ kind: z.literal("actor"), actorId: z.string().uuid() }),

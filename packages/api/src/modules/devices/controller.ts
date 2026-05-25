@@ -21,6 +21,7 @@ import {
 } from "@synapse/device-protocol"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
+import { requireRequestAction } from "../access/guards.js"
 import {
   DeviceModuleError,
   claimRemoteAgentDaemon,
@@ -77,6 +78,29 @@ function resolveControlPlaneUrl(): string {
   return `${base.replace(/\/$/, "")}/api/v1/devices/control-plane`
 }
 
+/**
+ * Authorize a workspace-scoped device action. Wraps requireRequestAction so
+ * every device route enforces the right RBAC action against the workspace
+ * resource (workspace.view / workspace.manage_devices / etc.) instead of
+ * relying on workspaceMiddleware (which only checks workspace.view).
+ *
+ * Returns true if authorized; false if the request was already terminated
+ * with a 403.
+ */
+async function authorizeWorkspaceDeviceAction(
+  request: any,
+  reply: any,
+  action:
+    | "workspace.manage_devices"
+    | "workspace.view"
+    | "device_capability.grant"
+    | "device_capability.use",
+  resourceId: string,
+  errorMessage = "Forbidden"
+): Promise<boolean> {
+  return requireRequestAction(request, reply, action, resourceId, errorMessage)
+}
+
 export function registerDeviceRoutes(app: FastifyInstance): void {
   const workspaceHook = { preHandler: [authMiddleware, workspaceMiddleware] }
   const authHook = { preHandler: [authMiddleware] }
@@ -86,6 +110,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     workspaceHook,
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
+      if (
+        !(await authorizeWorkspaceDeviceAction(
+          request,
+          reply,
+          "workspace.view",
+          workspaceId,
+          "Cannot list devices in this workspace"
+        ))
+      )
+        return
       try {
         const devices = await listDevices(workspaceId)
         reply.send({ devices })
@@ -104,6 +138,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         workspaceId: string
         deviceId: string
       }
+      if (
+        !(await authorizeWorkspaceDeviceAction(
+          request,
+          reply,
+          "workspace.view",
+          workspaceId,
+          "Cannot view devices in this workspace"
+        ))
+      )
+        return
       try {
         reply.send(await getDevice(workspaceId, deviceId))
       } catch (err) {
@@ -121,6 +165,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         workspaceId: string
         deviceId: string
       }
+      if (
+        !(await authorizeWorkspaceDeviceAction(
+          request,
+          reply,
+          "workspace.manage_devices",
+          workspaceId,
+          "Cannot delete devices in this workspace"
+        ))
+      )
+        return
       try {
         await deleteDevice(workspaceId, deviceId)
         reply.status(204).send()
@@ -136,6 +190,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     workspaceHook,
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
+      if (
+        !(await authorizeWorkspaceDeviceAction(
+          request,
+          reply,
+          "workspace.manage_devices",
+          workspaceId,
+          "Cannot start a device pairing in this workspace"
+        ))
+      )
+        return
       const parsed = startPairingBodySchema.safeParse(request.body)
       if (!parsed.success) {
         reply
@@ -209,6 +273,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         workspaceId: string
         deviceId: string
       }
+      if (
+        !(await authorizeWorkspaceDeviceAction(
+          request,
+          reply,
+          "workspace.manage_devices",
+          workspaceId,
+          "Cannot manage services on this workspace's devices"
+        ))
+      )
+        return
       const parsed = claimDaemonBodySchema.safeParse(request.body)
       if (!parsed.success) {
         reply
@@ -239,6 +313,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
         deviceId: string
         serviceId: string
       }
+      if (
+        !(await authorizeWorkspaceDeviceAction(
+          request,
+          reply,
+          "workspace.manage_devices",
+          workspaceId,
+          "Cannot detach services from this workspace's devices"
+        ))
+      )
+        return
       try {
         await detachDeviceService(workspaceId, deviceId, serviceId)
         reply.status(204).send()
@@ -262,6 +346,16 @@ export function registerDeviceRoutes(app: FastifyInstance): void {
     workspaceHook,
     async (request, reply) => {
       const { workspaceId } = request.params as { workspaceId: string }
+      if (
+        !(await authorizeWorkspaceDeviceAction(
+          request,
+          reply,
+          "workspace.manage_devices",
+          workspaceId,
+          "Cannot create cloud devices in this workspace"
+        ))
+      )
+        return
       const body = request.body as {
         title?: string
         preset?: string

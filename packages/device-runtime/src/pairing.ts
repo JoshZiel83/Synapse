@@ -101,11 +101,13 @@ export async function pair(opts: PairOptions): Promise<PairResult> {
     serverOrigin: opts.serverOrigin,
     hostKind: "local",
     devicePubkeyFingerprint: deviceKey.publicKeyFingerprint,
+    devicePrivateKeyRef: deviceKey.privateKeyRef,
     services: [
       {
         serviceKind: "device_runtime",
         serviceId: result.service_id,
         pubkeyFingerprint: serviceKey.publicKeyFingerprint,
+        privateKeyRef: serviceKey.privateKeyRef,
       },
     ],
   }

@@ -101,34 +101,64 @@ export async function consumeCloudBootstrap(
 ): Promise<ConsumeBootstrapResult> {
   const tokenHash = createHash("sha256").update(input.bootstrapToken).digest()
   return db.transaction().execute(async (trx) => {
-    const session = await trx
-      .selectFrom("device_pairing_sessions")
-      .selectAll()
+    // Atomic single-shot consume: flip status to "consumed" only if the
+    // session is still pending + matching mode + not expired. Two concurrent
+    // sandbox boots can no longer both succeed and double-insert a device.
+    const claimedRows = await trx
+      .updateTable("device_pairing_sessions")
+      .set({
+        status: "consumed",
+        confirmed_at: sql`NOW()`,
+        consumed_at: sql`NOW()`,
+        updated_at: sql`NOW()`,
+      } as never)
       .where("bootstrap_token_hash", "=", tokenHash)
+      .where("status", "=", "pending")
       .where("mode", "=", "cloud_bootstrap")
-      .executeTakeFirst()
+      .where("expires_at", ">", sql<Date>`NOW()`)
+      .returningAll()
+      .execute()
+    const session = claimedRows[0]
     if (!session) {
-      throw new DeviceModuleError({
-        statusCode: 404,
-        code: "bootstrap_token_not_found",
-        message: "bootstrap token not recognised",
-      })
-    }
-    if ((session.status as string) !== "pending") {
+      // Diagnose which precondition failed for a sharper error code.
+      const existing = await trx
+        .selectFrom("device_pairing_sessions")
+        .selectAll()
+        .where("bootstrap_token_hash", "=", tokenHash)
+        .where("mode", "=", "cloud_bootstrap")
+        .executeTakeFirst()
+      if (!existing) {
+        throw new DeviceModuleError({
+          statusCode: 404,
+          code: "bootstrap_token_not_found",
+          message: "bootstrap token not recognised",
+        })
+      }
+      if ((existing.status as string) !== "pending") {
+        throw new DeviceModuleError({
+          statusCode: 409,
+          code: "pairing_session_not_pending",
+          message: `pairing session is ${existing.status as string}`,
+        })
+      }
+      const existingExpiresAt = new Date(
+        existing.expires_at as unknown as string
+      ).getTime()
+      if (
+        Number.isFinite(existingExpiresAt) &&
+        existingExpiresAt < Date.now()
+      ) {
+        throw new DeviceModuleError({
+          statusCode: 410,
+          code: "pairing_session_expired",
+          message: "bootstrap window expired",
+        })
+      }
       throw new DeviceModuleError({
         statusCode: 409,
-        code: "pairing_session_not_pending",
-        message: `pairing session is ${session.status as string}`,
-      })
-    }
-    const expiresAt = new Date(
-      session.expires_at as unknown as string
-    ).getTime()
-    if (Number.isFinite(expiresAt) && expiresAt < Date.now()) {
-      throw new DeviceModuleError({
-        statusCode: 410,
-        code: "pairing_session_expired",
-        message: "bootstrap window expired",
+        code: "pairing_session_race",
+        message:
+          "bootstrap session was claimed by another consumer; retry not allowed",
       })
     }
 
@@ -192,14 +222,12 @@ export async function consumeCloudBootstrap(
         pubkey_fingerprint: serviceFingerprint,
       } as never)
       .execute()
+    // Atomic UPDATE above already flipped status/timestamps. Just backfill
+    // the device_id FK now that the device row exists.
     await trx
       .updateTable("device_pairing_sessions")
       .set({
-        status: "consumed",
         device_id: pendingDeviceId,
-        confirmed_at: new Date().toISOString(),
-        consumed_at: new Date().toISOString(),
-        updated_at: new Date().toISOString(),
       } as never)
       .where("id", "=", session.id as string)
       .execute()

@@ -42,3 +42,27 @@ test("VfsService exposure registry + sessions", () => {
   assert.equal(session.runtimeSessionId, "rt-1")
   svc.closeSession(session.sessionId)
 })
+
+test("VfsService local backend rejects ../ escapes", async () => {
+  const root = mkdtempSync(join(tmpdir(), "synapse-vfs-trav-"))
+  try {
+    writeFileSync(join(root, "inside.txt"), "ok")
+    // Drop a sibling file outside the root that an escape would target.
+    const outsideDir = mkdtempSync(join(tmpdir(), "synapse-vfs-outside-"))
+    writeFileSync(join(outsideDir, "secret.txt"), "leak")
+    const backend = createLocalFsBackend({ rootPath: root })
+    const svc = createVfsService({ backend })
+    await svc.start()
+
+    await assert.rejects(() => svc.read("/../../etc/passwd"), /escapes root/)
+    await assert.rejects(
+      () => svc.write("/../escape.txt", new Uint8Array([1])),
+      /escapes root/
+    )
+    assert.equal(await svc.stat("/../foo"), null)
+
+    rmSync(outsideDir, { recursive: true, force: true })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})

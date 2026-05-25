@@ -3,22 +3,34 @@
 //
 // v3.0 skeleton: this module is the single canonical entry point used by chat
 // runtime and reverse MCP. It delegates to mcp-plugins/tool-resolver.ts for
-// plugin + legacy relay_capability projections; the device_capability path
-// will be added in PR #7. Skill projection rides on the same resolver because
-// tool-resolver already unions installed skills.
+// plugin + legacy relay_capability projections AND now unions device_capability
+// tools alongside, so the planner sees device-side bash / list_dir / etc.
+// alongside MCP plugins. Device dispatch goes through DeviceTunnelRegistry +
+// the synchronous tools/call client in devices/dispatch.ts.
 
+import { randomUUID } from "node:crypto"
 import type {
   ToolDefinition,
   NormalizedMcpToolResult,
   RuntimeActorContext,
   ConversationBoundary,
+  CanonicalContentBlock,
 } from "@synapse/shared/types"
+import { SUBJECT_KIND, textBlock } from "@synapse/shared"
 import type { McpExecutionContext } from "../mcp-plugins/instance-manager.js"
 import {
   resolveMcpToolsForActor,
   resolveMcpToolsForRemoteAgent,
   type ResolvedMcpTools,
 } from "../mcp-plugins/tool-resolver.js"
+import { db } from "../../infrastructure/database/kysely.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
+import { ensureConversationActorContext } from "../session/service.js"
+import { dispatchSyncTool } from "../devices/dispatch.js"
+import {
+  loadDeviceCapabilityToolsForSubjects,
+  type DeviceCapabilityToolRow,
+} from "./device-capabilities.js"
 
 /**
  * Discriminated union of principals that capability projection evaluates
@@ -91,6 +103,15 @@ export type ProjectedToolList = ResolvedMcpTools
 export async function projectToolsForPrincipal(
   input: ProjectToolsInput
 ): Promise<ProjectedToolList> {
+  const legacy = await projectLegacyTools(input)
+  const device = await projectDeviceTools(input)
+  if (device.tools.length === 0) return legacy
+  return unionWithDevice(legacy, device)
+}
+
+async function projectLegacyTools(
+  input: ProjectToolsInput
+): Promise<ProjectedToolList> {
   const { principal } = input
   switch (principal.kind) {
     case "actor":
@@ -135,6 +156,244 @@ export async function projectToolsForPrincipal(
         "capability-projection: workspace_member principal is dashboard-only and not yet wired"
       )
     }
+  }
+}
+
+interface DeviceToolBundle {
+  tools: ToolDefinition[]
+  handlers: Map<string, DeviceCapabilityToolRow>
+}
+
+// Tools we project from device_capabilities are namespaced so they cannot
+// collide with MCP-plugin tools that happen to share a bare name.
+const DEVICE_TOOL_PREFIX = "device__"
+
+function namespaceDeviceToolName(row: DeviceCapabilityToolRow): string {
+  return `${DEVICE_TOOL_PREFIX}${row.device_capability_id}__${row.visible_tool_name}`
+}
+
+async function principalSubjectIds(
+  input: ProjectToolsInput
+): Promise<string[]> {
+  const ids: string[] = []
+  // Every principal can see workspace-scoped bindings.
+  ids.push(
+    await upsertAccessSubject(db, {
+      kind: SUBJECT_KIND.WORKSPACE,
+      workspaceId: input.workspaceId,
+    })
+  )
+  const principal = input.principal
+  switch (principal.kind) {
+    case "actor": {
+      ids.push(
+        await upsertAccessSubject(db, {
+          kind: SUBJECT_KIND.ACTOR,
+          actorId: principal.actorId,
+        })
+      )
+      if (principal.conversationId) {
+        ids.push(
+          await upsertAccessSubject(db, {
+            kind: SUBJECT_KIND.CONVERSATION,
+            conversationId: principal.conversationId,
+          })
+        )
+      }
+      break
+    }
+    case "actor_in_conversation": {
+      ids.push(
+        await upsertAccessSubject(db, {
+          kind: SUBJECT_KIND.ACTOR,
+          actorId: principal.actorId,
+        }),
+        await upsertAccessSubject(db, {
+          kind: SUBJECT_KIND.CONVERSATION,
+          conversationId: principal.conversationId,
+        })
+      )
+      try {
+        const ctx = await ensureConversationActorContext({
+          actorId: principal.actorId,
+          conversationId: principal.conversationId,
+        })
+        ids.push(
+          await upsertAccessSubject(db, {
+            kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
+            contextId: ctx.conversationActorContextId,
+          })
+        )
+      } catch {
+        /* if the context can't be resolved we still surface workspace/actor
+         * bindings — the planner just won't see actor_in_conversation grants */
+      }
+      break
+    }
+    case "conversation": {
+      ids.push(
+        await upsertAccessSubject(db, {
+          kind: SUBJECT_KIND.CONVERSATION,
+          conversationId: principal.conversationId,
+        })
+      )
+      break
+    }
+    case "remote_agent": {
+      ids.push(
+        await upsertAccessSubject(db, {
+          kind: SUBJECT_KIND.REMOTE_AGENT,
+          remoteAgentId: principal.remoteAgentId,
+        }),
+        await upsertAccessSubject(db, {
+          kind: SUBJECT_KIND.CONVERSATION,
+          conversationId: principal.conversationId,
+        })
+      )
+      break
+    }
+    case "workspace_member":
+      // Already gated by the projectToolsForPrincipal switch above.
+      break
+  }
+  return ids
+}
+
+async function projectDeviceTools(
+  input: ProjectToolsInput
+): Promise<DeviceToolBundle> {
+  // workspace_member never reaches here (throws above) and the chat-runtime
+  // consumer is the only one currently wired for device dispatch.
+  if (input.principal.kind === "workspace_member") {
+    return { tools: [], handlers: new Map() }
+  }
+  const subjectIds = await principalSubjectIds(input)
+  const rows = await loadDeviceCapabilityToolsForSubjects({
+    workspaceId: input.workspaceId,
+    subjectIds,
+  })
+  const handlers = new Map<string, DeviceCapabilityToolRow>()
+  const tools: ToolDefinition[] = []
+  for (const row of rows) {
+    const name = namespaceDeviceToolName(row)
+    handlers.set(name, row)
+    tools.push({
+      name,
+      description: row.visible_description || `Device tool: ${row.visible_tool_name} on ${row.device_name}`,
+      parameters: normalizeInputSchema(row.input_schema),
+    })
+  }
+  return { tools, handlers }
+}
+
+function normalizeInputSchema(raw: unknown): ToolDefinition["parameters"] {
+  if (raw && typeof raw === "object") {
+    const obj = raw as Record<string, unknown>
+    const props =
+      obj["properties"] && typeof obj["properties"] === "object"
+        ? (obj["properties"] as ToolDefinition["parameters"]["properties"])
+        : {}
+    const required = Array.isArray(obj["required"])
+      ? (obj["required"] as string[])
+      : []
+    return { type: "object", properties: props, required }
+  }
+  return { type: "object", properties: {}, required: [] }
+}
+
+function unionWithDevice(
+  legacy: ProjectedToolList,
+  device: DeviceToolBundle
+): ProjectedToolList {
+  const dispatchDeviceTool = async (
+    toolName: string,
+    input: Record<string, unknown>
+  ): Promise<NormalizedMcpToolResult> => {
+    const row = device.handlers.get(toolName)
+    if (!row) {
+      return mcpErrorBlock(
+        `device tool ${toolName} not found in projection`
+      )
+    }
+    // v3.0 skeleton dispatches without a signed OperationEnvelope; the dispatcher
+    // currently treats the envelope as opaque metadata so this works for smoke
+    // tests but PR #6 will require a real signed envelope (see §4.5). The
+    // attempt_id is generated here so retries surface as distinct attempts in
+    // device_operation_attempts.
+    const envelopeStub = {
+      operation_id: randomUUID(),
+      attempt_id: randomUUID(),
+      device_runtime_session_id: randomUUID(),
+      device_capability_id: row.device_capability_id,
+      device_exposure_id: row.device_exposure_id,
+      device_tool_id: row.device_tool_id,
+      device_tool_revision_id: row.device_tool_revision_id,
+      input_hash: "",
+      task_mode: "sync" as const,
+      issued_at: new Date().toISOString(),
+      expires_at: new Date(Date.now() + 60_000).toISOString(),
+      signature_kid: "v3-skeleton-unsigned",
+      signature: "v3-skeleton-unsigned",
+    }
+    // device_service_id is the runtime currently serving the capability; in
+    // v3.0 skeleton we look it up from the exposure -> service join already
+    // baked into the row's device_exposure_id metadata. For now we delegate
+    // to dispatchSyncTool which calls DeviceTunnelRegistry.resolve(); we use
+    // the exposure_id as the service-key surrogate. When PR #6 wires the
+    // session table the lookup will resolve via the catalog_revision_id.
+    const result = await dispatchSyncTool({
+      deviceServiceId: row.device_exposure_id,
+      envelope: envelopeStub,
+      args: input,
+      toolName: row.visible_tool_name,
+    })
+    if (!result.ok) {
+      return mcpErrorBlock(
+        `device dispatch failed (${result.error?.code}): ${result.error?.message}`
+      )
+    }
+    const tool = result.result as
+      | { content?: CanonicalContentBlock[]; isError?: boolean }
+      | undefined
+    return {
+      content: tool?.content ?? [],
+      isError: tool?.isError,
+    }
+  }
+
+  const executor = async (
+    toolName: string,
+    input: Record<string, unknown>,
+    executionContext?: McpExecutionContext
+  ): Promise<NormalizedMcpToolResult> => {
+    if (device.handlers.has(toolName)) {
+      return dispatchDeviceTool(toolName, input)
+    }
+    return legacy.executor(toolName, input, executionContext)
+  }
+
+  const refresh = async () => {
+    const refreshed = await legacy.refresh()
+    return {
+      tools: [...refreshed.tools, ...device.tools],
+      mcpVersion: refreshed.mcpVersion,
+    }
+  }
+
+  return {
+    tools: [...legacy.tools, ...device.tools],
+    executor,
+    mcpVersion: legacy.mcpVersion,
+    refresh,
+    setTurnId: legacy.setTurnId,
+    shutdown: legacy.shutdown,
+  }
+}
+
+function mcpErrorBlock(message: string): NormalizedMcpToolResult {
+  return {
+    content: [textBlock(message) as CanonicalContentBlock],
+    isError: true,
   }
 }
 
