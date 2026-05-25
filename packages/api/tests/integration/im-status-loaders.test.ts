@@ -6,12 +6,12 @@
 // three loaders themselves:
 //
 //   1. `loadCurrentRunningTurnRow` MUST filter `status = 'running'` (the
-//      prior lookup at actor-status-hooks.ts:122-128 would silently
-//      fall back to the most recent turn regardless of status, which let
-//      a stale completed turn's `started_at` extend the fallback cutoff
-//      far into the past). It also must order `started_at DESC NULLS
-//      LAST, id DESC` so a dirty null started_at doesn't eclipse a real
-//      running turn (Postgres default `NULLS FIRST` on DESC).
+//      prior lookup would silently fall back to the most recent turn
+//      regardless of status, which let a stale completed turn's
+//      `started_at` extend the fallback cutoff far into the past). It
+//      also must order `started_at DESC NULLS LAST, id DESC` so a dirty
+//      null started_at doesn't eclipse a real running turn (Postgres
+//      default `NULLS FIRST` on DESC).
 //
 //   2. `findInboundLinkForTriggerItem` MUST exclude links whose
 //      `external_message_id` is null / empty / whitespace-only — schema
