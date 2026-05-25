@@ -20,8 +20,10 @@ import type {
 import type {
   CatalogProvider,
   CatalogToolInvocationResult,
+  EnvelopeVerifier,
   McpHost,
 } from "./types.js"
+import { hashArguments } from "./envelope.js"
 
 export interface InMemoryMcpHostHandle extends McpHost {
   getCatalogSnapshot(): Promise<DeviceCatalogExposure[]>
@@ -31,6 +33,15 @@ export interface InMemoryMcpHostOptions {
   /** Optional hostname / port override. Defaults to 127.0.0.1 + random port. */
   host?: string
   port?: number
+  /**
+   * Required when running outside loopback-only smoke tests: every tools/call
+   * envelope must verify against this verifier + the serverPublicKeys map
+   * before the provider is invoked. If absent, the host falls back to a
+   * "no verification" mode (signed-but-not-checked) which is fine for
+   * tests that exercise the host in isolation but unsafe for production.
+   */
+  envelopeVerifier?: EnvelopeVerifier
+  serverPublicKeys?: ReadonlyMap<string, string>
 }
 
 interface ToolEntry {
@@ -92,6 +103,40 @@ export function createInMemoryMcpHost(
         ? (params.arguments as Record<string, unknown>)
         : {}
     const envelope = extractEnvelope(params._meta)
+    // Envelope verification gates every tool call. If the runtime was
+    // configured with a verifier + trusted server keys, every call MUST
+    // present a verified envelope; calls without one (or with an envelope
+    // that fails verification) get a `permission_denied` synapse_error.
+    if (opts.envelopeVerifier && opts.serverPublicKeys) {
+      if (!envelope) {
+        const synapseError: SynapseError = {
+          code: "permission_denied",
+          message:
+            "tools/call requires _meta.synapse_operation envelope when the runtime is configured with trusted server keys",
+        }
+        return {
+          content: [{ type: "text", text: synapseError.message }],
+          isError: true,
+          _meta: { synapse_error: synapseError },
+        }
+      }
+      const verifyResult = await opts.envelopeVerifier.verify(
+        envelope,
+        hashArguments(args),
+        opts.serverPublicKeys
+      )
+      if (!verifyResult.ok) {
+        const synapseError: SynapseError = {
+          code: verifyResult.code,
+          message: verifyResult.message,
+        }
+        return {
+          content: [{ type: "text", text: synapseError.message }],
+          isError: true,
+          _meta: { synapse_error: synapseError },
+        }
+      }
+    }
     const index = await buildToolIndex()
     const entry = index.get(params.name)
     if (!entry) {

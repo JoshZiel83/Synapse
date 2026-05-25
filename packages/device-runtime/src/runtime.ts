@@ -11,6 +11,7 @@ import {
   createInMemoryMcpHost,
   type InMemoryMcpHostHandle,
 } from "./mcp-host.js"
+import { createInMemoryEnvelopeVerifier } from "./envelope.js"
 import { createFilesystemBuiltin } from "./builtins/filesystem.js"
 import type {
   CatalogProvider,
@@ -47,6 +48,7 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
   private transport: TransportClient | null = null
   private mcpHost: InMemoryMcpHostHandle | null = null
   private tunnelHandle: TunnelHandle | null = null
+  private registeredProviders: CatalogProvider[] = []
   private stopResolve!: () => void
   readonly done: Promise<void>
   private status: RuntimeStatus = "starting"
@@ -83,12 +85,19 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     }
 
     this.mcpHost = (this.opts.mcpHost ??
-      createInMemoryMcpHost()) as InMemoryMcpHostHandle
+      createInMemoryMcpHost({
+        envelopeVerifier:
+          this.opts.trustedServerKeys && this.opts.trustedServerKeys.size > 0
+            ? createInMemoryEnvelopeVerifier()
+            : undefined,
+        serverPublicKeys: this.opts.trustedServerKeys,
+      })) as InMemoryMcpHostHandle
     await this.mcpHost.start()
 
     const providers: CatalogProvider[] = this.opts.initialCatalog ?? [
       createFilesystemBuiltin(),
     ]
+    this.registeredProviders = providers
     for (const provider of providers) {
       await this.mcpHost.registerCatalog(provider)
     }
@@ -117,16 +126,56 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
       }
     }
 
-    const helloFactory = async (): Promise<DeviceHelloParams> => ({
-      device_id: identity.deviceId,
-      service_id: runtimeService.serviceId,
-      service_kind: "device_runtime",
-      client_version: this.opts.clientVersion,
-      // v3.0 skeleton: signed_challenge is a placeholder fingerprint. PR #6
-      // will replace this with an Ed25519 signature over a server-issued
-      // nonce.
-      signed_challenge: serviceKey.publicKeyFingerprint,
-    })
+    const helloFactory = async (
+      challengeNonce: string
+    ): Promise<DeviceHelloParams> => {
+      // PR #21: sign the server-issued challenge with the service private key
+      // so the API can verify against device_service_keys.pubkey before
+      // accepting any further frames.
+      const { createPrivateKey, sign: cryptoSign } = await import("node:crypto")
+      const keyEntry = await broker.loadKeyPair(runtimeService.privateKeyRef)
+      if (!keyEntry) {
+        throw new Error(
+          `device-runtime: missing service private key for ref ${runtimeService.privateKeyRef}`
+        )
+      }
+      // The broker only exposes the public PEM + a ref; we need the private
+      // PEM to sign. Re-read the keystore directly. For Ed25519 the digest
+      // argument MUST be null.
+      const { readFileSync, existsSync } = await import("node:fs")
+      const { join } = await import("node:path")
+      const keystorePath = join(broker.brokerFilePath, "..", "device-keys.json")
+      let privateKeyPem: string | null = null
+      if (existsSync(keystorePath)) {
+        try {
+          const ks = JSON.parse(readFileSync(keystorePath, "utf-8")) as Record<
+            string,
+            { privateKey?: string }
+          >
+          privateKeyPem = ks[runtimeService.privateKeyRef]?.privateKey ?? null
+        } catch {
+          /* fall through */
+        }
+      }
+      if (!privateKeyPem) {
+        throw new Error(
+          `device-runtime: cannot read private PEM for ref ${runtimeService.privateKeyRef}`
+        )
+      }
+      const privKey = createPrivateKey({ key: privateKeyPem, format: "pem" })
+      const signature = cryptoSign(
+        null,
+        Buffer.from(challengeNonce, "utf8"),
+        privKey
+      )
+      return {
+        device_id: identity.deviceId,
+        service_id: runtimeService.serviceId,
+        service_kind: "device_runtime",
+        client_version: this.opts.clientVersion,
+        signed_challenge: signature.toString("base64"),
+      }
+    }
 
     this.transport = new TransportClient({
       controlPlaneUrl: controlPlaneUrlFor(this.opts.serverOrigin),
@@ -171,6 +220,19 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
       }
       this.tunnelHandle = null
     }
+    // Tear down provider sidecars BEFORE the host so in-flight tool calls
+    // get rejected with a "sidecar exited" error instead of leaking past
+    // the host close.
+    for (const provider of this.registeredProviders) {
+      if (provider.dispose) {
+        try {
+          await provider.dispose()
+        } catch {
+          /* dispose is best-effort */
+        }
+      }
+    }
+    this.registeredProviders = []
     if (this.mcpHost) await this.mcpHost.stop()
     this.updateStatus("offline")
     this.stopResolve()

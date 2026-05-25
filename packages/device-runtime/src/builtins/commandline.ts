@@ -78,6 +78,31 @@ export function createCommandlineBuiltin(
         })
       }
       const workingDirectory = input.args["working_directory"]
+      // Device-side runtime authorization: the server-signed envelope must
+      // carry a commandline grant_spec whose policy allows this command.
+      // Reject if no commandline policy is present.
+      const grantSpecs = input.envelope?.runtime_authorization?.grant_specs ?? []
+      const commandlinePolicies = grantSpecs
+        .filter((g) => g.capability === "commandline" && g.commandline)
+        .map((g) => g.commandline!)
+      if (input.envelope && commandlinePolicies.length === 0) {
+        return toolErrorResult({
+          code: "permission_denied",
+          message:
+            "no runtime_authorization grant covers capability='commandline' for this bash call",
+        })
+      }
+      if (commandlinePolicies.length > 0) {
+        const matched = commandlinePolicies.some((p) =>
+          commandMatchesPolicy(command, p)
+        )
+        if (!matched) {
+          return toolErrorResult({
+            code: "permission_denied",
+            message: `bash command not covered by any commandline grant policy: ${command.slice(0, 80)}`,
+          })
+        }
+      }
       const timeoutMs = input.args["timeout_ms"]
       const exec = await executeBash({
         command,
@@ -105,6 +130,35 @@ export function createCommandlineBuiltin(
         },
       }
     },
+  }
+}
+
+function commandMatchesPolicy(
+  command: string,
+  policy: {
+    executor: "bash"
+    command_match_type: "exact" | "prefix" | "tool"
+    command_text?: string
+    working_directory?: string
+  }
+): boolean {
+  if (policy.executor !== "bash") return false
+  switch (policy.command_match_type) {
+    case "exact":
+      return policy.command_text === command
+    case "prefix":
+      return (
+        typeof policy.command_text === "string" &&
+        command.startsWith(policy.command_text)
+      )
+    case "tool": {
+      // "tool" match: the command_text is the leading token (binary name).
+      if (typeof policy.command_text !== "string") return false
+      const head = command.trim().split(/\s+/)[0] ?? ""
+      return head === policy.command_text
+    }
+    default:
+      return false
   }
 }
 

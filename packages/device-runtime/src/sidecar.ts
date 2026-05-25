@@ -36,6 +36,7 @@ export function startSidecar(opts: SidecarOptions): SidecarHandle {
   const emitter = new EventEmitter() as SidecarHandle
   const pending = new Map<string, PendingRequest>()
   let nextId = 1
+  let exited = false
 
   if (child.stdout) {
     const rl = createInterface({ input: child.stdout })
@@ -63,25 +64,62 @@ export function startSidecar(opts: SidecarOptions): SidecarHandle {
     })
   }
 
-  child.on("exit", (code) => emitter.emit("exit", code))
+  child.on("exit", (code) => {
+    exited = true
+    // Fail every in-flight request so callers don't hang forever when the
+    // sidecar dies mid-call (e.g. helper crash, host shutdown).
+    for (const [, p] of pending) {
+      p.reject(new Error(`sidecar exited (code=${code ?? "null"})`))
+    }
+    pending.clear()
+    emitter.emit("exit", code)
+  })
 
   emitter.request = (method, params) =>
     new Promise<unknown>((resolve, reject) => {
+      if (exited) {
+        reject(new Error("sidecar already exited"))
+        return
+      }
       const id = String(nextId++)
       pending.set(id, { resolve, reject })
       const frame = { jsonrpc: "2.0", id, method, params }
       child.stdin?.write(JSON.stringify(frame) + "\n")
     })
   emitter.notify = (method, params) => {
+    if (exited) return
     const frame = { jsonrpc: "2.0", method, params }
     child.stdin?.write(JSON.stringify(frame) + "\n")
   }
   emitter.stop = async () => {
     try {
       child.stdin?.end()
+    } catch {
+      /* ignore */
+    }
+    if (exited) return
+    try {
       child.kill("SIGTERM")
     } catch {
       /* ignore */
+    }
+    // Wait for the child to actually exit so the caller can be sure no more
+    // tool calls are in flight.
+    if (child.exitCode === null) {
+      await new Promise<void>((resolve) => {
+        const t = setTimeout(() => {
+          try {
+            child.kill("SIGKILL")
+          } catch {
+            /* ignore */
+          }
+          resolve()
+        }, 2_000)
+        child.once("exit", () => {
+          clearTimeout(t)
+          resolve()
+        })
+      })
     }
   }
   return emitter

@@ -69,6 +69,11 @@ export interface CatalogProvider {
     /** Operation envelope from `_meta.synapse_operation`, when present. */
     envelope?: OperationEnvelope
   }): Promise<CatalogToolInvocationResult>
+  /**
+   * Optional teardown hook. Called by the runtime in stop() so providers can
+   * tear down resources (e.g. supervisors that own a sidecar subprocess).
+   */
+  dispose?(): Promise<void>
 }
 
 export interface CatalogToolInvocationResult {
@@ -136,6 +141,13 @@ export interface DeviceRuntimeOptions {
   }
   /** Optional MCP host override. v3.0 ships an in-process default. */
   mcpHost?: McpHost
+  /**
+   * Trusted server signing keys keyed by signature_kid. The runtime refuses
+   * to invoke any tool whose envelope can't be verified against one of these
+   * keys (set via SYNAPSE_DEVICE_TRUSTED_SERVER_KEYS, or programmatically).
+   * Empty map = "no verification" mode (loopback smoke tests only).
+   */
+  trustedServerKeys?: ReadonlyMap<string, string>
   /** Client version string sent on hello. */
   clientVersion: string
   /** Logger. Defaults to console. */

@@ -27,6 +27,9 @@ import { db } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import { ensureConversationActorContext } from "../session/service.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
+import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
+import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
+import { createHash } from "node:crypto"
 import {
   loadDeviceCapabilityToolsForSubjects,
   type DeviceCapabilityToolRow,
@@ -315,35 +318,40 @@ function unionWithDevice(
         `device tool ${toolName} not found in projection`
       )
     }
-    // v3.0 skeleton dispatches without a signed OperationEnvelope; the dispatcher
-    // currently treats the envelope as opaque metadata so this works for smoke
-    // tests but PR #6 will require a real signed envelope (see §4.5). The
-    // attempt_id is generated here so retries surface as distinct attempts in
-    // device_operation_attempts.
-    const envelopeStub = {
-      operation_id: randomUUID(),
-      attempt_id: randomUUID(),
-      device_runtime_session_id: randomUUID(),
-      device_capability_id: row.device_capability_id,
-      device_exposure_id: row.device_exposure_id,
-      device_tool_id: row.device_tool_id,
-      device_tool_revision_id: row.device_tool_revision_id,
-      input_hash: "",
-      task_mode: "sync" as const,
-      issued_at: new Date().toISOString(),
-      expires_at: new Date(Date.now() + 60_000).toISOString(),
-      signature_kid: "v3-skeleton-unsigned",
-      signature: "v3-skeleton-unsigned",
+    // Build the unsigned payload first so we can compute input_hash from the
+    // canonicalized arguments — the device verifier rejects envelopes whose
+    // input_hash doesn't match the actual `arguments` it received.
+    const inputCanonical = canonicalizeEnvelopePayload(input)
+    const inputHash =
+      "sha256:" +
+      createHash("sha256").update(inputCanonical).digest("hex")
+    let envelope
+    try {
+      envelope = signEnvelopeForDispatch({
+        operation_id: randomUUID(),
+        attempt_id: randomUUID(),
+        device_runtime_session_id: randomUUID(),
+        device_capability_id: row.device_capability_id,
+        device_exposure_id: row.device_exposure_id,
+        device_tool_id: row.device_tool_id,
+        device_tool_revision_id: row.device_tool_revision_id,
+        input_hash: inputHash,
+        task_mode: "sync" as const,
+        issued_at: new Date().toISOString(),
+        expires_at: new Date(Date.now() + 60_000).toISOString(),
+      })
+    } catch (err) {
+      return mcpErrorBlock(
+        `envelope signing failed (operator must set SYNAPSE_DEVICE_ENVELOPE_SIGNING_KEY): ${(err as Error).message}`
+      )
     }
-    // device_service_id is the runtime currently serving the capability; in
-    // v3.0 skeleton we look it up from the exposure -> service join already
-    // baked into the row's device_exposure_id metadata. For now we delegate
-    // to dispatchSyncTool which calls DeviceTunnelRegistry.resolve(); we use
-    // the exposure_id as the service-key surrogate. When PR #6 wires the
-    // session table the lookup will resolve via the catalog_revision_id.
+    // dispatchSyncTool resolves the tunnel endpoint by deviceServiceId, which
+    // is the device_services row id (what the runtime registered its tunnel
+    // under). We use row.device_service_id from the catalog projection — NOT
+    // device_exposure_id, which would never match a registered endpoint.
     const result = await dispatchSyncTool({
-      deviceServiceId: row.device_exposure_id,
-      envelope: envelopeStub,
+      deviceServiceId: row.device_service_id,
+      envelope,
       args: input,
       toolName: row.visible_tool_name,
     })

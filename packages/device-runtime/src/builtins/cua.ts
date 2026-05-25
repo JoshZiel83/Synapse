@@ -163,6 +163,22 @@ export function createCuaBuiltin(opts: CuaBuiltinOptions = {}): CatalogProvider 
           message: `cua builtin does not handle ${input.toolName}`,
         })
       }
+      // Device-side runtime authorization for write actions (click, type_text):
+      // the envelope must carry a cua grant_spec with access='write'.
+      // list_displays / capture_display are read-only and don't require write.
+      const writeTools = new Set(["cua_click", "cua_type_text"])
+      if (writeTools.has(input.toolName) && input.envelope) {
+        const cuaGrants = (
+          input.envelope.runtime_authorization?.grant_specs ?? []
+        ).filter((g) => g.capability === "cua" && g.cua)
+        const hasWrite = cuaGrants.some((g) => g.cua?.access === "write")
+        if (!hasWrite) {
+          return toolErrorResult({
+            code: "permission_denied",
+            message: `cua ${input.toolName} requires a runtime_authorization grant with capability='cua' access='write'`,
+          })
+        }
+      }
       const handle = ensureHandle()
       if (!handle) {
         return toolErrorResult({
@@ -183,6 +199,12 @@ export function createCuaBuiltin(opts: CuaBuiltinOptions = {}): CatalogProvider 
           code: "runtime_constraint",
           message: `cua ${meta.rpcMethod} failed: ${(err as Error).message}`,
         })
+      }
+    },
+    async dispose() {
+      if (handle) {
+        await handle.stop()
+        handle = null
       }
     },
   }

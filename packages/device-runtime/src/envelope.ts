@@ -1,10 +1,12 @@
 // EnvelopeVerifier — v3.0 implementation of the §4.5 device-side verification
-// chain. The MCP host (PR #6 follow-up) calls verify() before any side
-// effect; failures map to the device-side error codes in
-// DEVICE_MCP_ERROR_CODES.
+// chain. The MCP host calls verify() before any side effect; failures map to
+// the device-side error codes in DEVICE_MCP_ERROR_CODES.
 
-import { createHash, createVerify } from "node:crypto"
-import type { OperationEnvelope } from "@synapse/device-protocol"
+import { createHash, createPublicKey, verify as cryptoVerify } from "node:crypto"
+import {
+  canonicalizeEnvelopePayload,
+  type OperationEnvelope,
+} from "@synapse/device-protocol"
 import type { EnvelopeVerifier, EnvelopeVerifyResult } from "./types.js"
 
 interface ReplayStoreEntry {
@@ -51,15 +53,21 @@ export function createInMemoryEnvelopeVerifier(
           message: `unknown signature_kid: ${envelope.signature_kid}`,
         }
       }
-      const signedPayload = canonicalize({
+      const signedPayload = canonicalizeEnvelopePayload({
         ...envelope,
         signature: undefined,
       })
       try {
-        const verifier = createVerify("sha256")
-        verifier.update(signedPayload)
-        verifier.end()
-        const ok = verifier.verify(serverPubkey, envelope.signature, "base64")
+        const pubKey = createPublicKey({
+          key: serverPubkey,
+          format: "pem",
+        })
+        const ok = cryptoVerify(
+          null,
+          Buffer.from(signedPayload, "utf8"),
+          pubKey,
+          Buffer.from(envelope.signature, "base64")
+        )
         if (!ok) {
           return {
             ok: false,
@@ -107,19 +115,7 @@ export function createInMemoryEnvelopeVerifier(
 }
 
 export function canonicalize(value: unknown): string {
-  if (value === undefined) return "null"
-  if (value === null || typeof value !== "object") {
-    return JSON.stringify(value)
-  }
-  if (Array.isArray(value)) {
-    return `[${value.map(canonicalize).join(",")}]`
-  }
-  const obj = value as Record<string, unknown>
-  const keys = Object.keys(obj).sort()
-  return `{${keys
-    .filter((k) => obj[k] !== undefined)
-    .map((k) => `${JSON.stringify(k)}:${canonicalize(obj[k])}`)
-    .join(",")}}`
+  return canonicalizeEnvelopePayload(value)
 }
 
 export function hashArguments(value: unknown): string {

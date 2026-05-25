@@ -13,6 +13,7 @@ import { ensureConversationActorContext } from "../session/service.js"
 export interface DeviceCapabilityToolRow {
   device_id: string
   device_name: string
+  device_service_id: string
   device_exposure_id: string
   device_capability_id: string
   device_tool_id: string
@@ -59,6 +60,7 @@ export async function loadDeviceCapabilityToolsForSubjects(
     .select([
       "d.id as device_id",
       "d.title as device_name",
+      "dx.service_id as device_service_id",
       "dx.id as device_exposure_id",
       "dc.id as device_capability_id",
       "dt.id as device_tool_id",

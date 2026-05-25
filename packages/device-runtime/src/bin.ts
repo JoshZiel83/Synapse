@@ -15,6 +15,12 @@ import { createFileBackedBroker } from "./broker.js"
 import { pair, rekeyDeviceRuntime } from "./pairing.js"
 import { runDeviceRuntime } from "./runtime.js"
 import { bootstrapCloudDevice } from "./cloud-bootstrap.js"
+import { createFilesystemBuiltin } from "./builtins/filesystem.js"
+import { createCommandlineBuiltin } from "./builtins/commandline.js"
+import { createCuaBuiltin } from "./builtins/cua.js"
+import { createBrowserBuiltin } from "./builtins/browser.js"
+import { existsSync } from "node:fs"
+import type { CatalogProvider } from "./types.js"
 
 interface CliArgs {
   cmd: string
@@ -40,6 +46,30 @@ function parseArgs(argv: string[]): CliArgs {
 
 function getFlag(flags: Map<string, string>, name: string, fallback?: string) {
   return flags.get(name) ?? fallback
+}
+
+/**
+ * Parse SYNAPSE_DEVICE_TRUSTED_SERVER_KEYS into a kid → PEM map. Format:
+ *   <kid1>:<base64-PEM1>,<kid2>:<base64-PEM2>
+ * Empty input returns an empty map (no envelope verification — loopback only).
+ */
+function parseTrustedServerKeys(raw: string): ReadonlyMap<string, string> {
+  const out = new Map<string, string>()
+  if (!raw.trim()) return out
+  for (const segment of raw.split(",")) {
+    const idx = segment.indexOf(":")
+    if (idx <= 0) continue
+    const kid = segment.slice(0, idx).trim()
+    const pemB64 = segment.slice(idx + 1).trim()
+    if (!kid || !pemB64) continue
+    try {
+      const pem = Buffer.from(pemB64, "base64").toString("utf8")
+      if (pem.includes("BEGIN PUBLIC KEY")) out.set(kid, pem)
+    } catch {
+      /* ignore malformed segment */
+    }
+  }
+  return out
 }
 
 async function main() {
@@ -70,10 +100,39 @@ async function main() {
       return
     }
     case "run": {
+      const providers: CatalogProvider[] = [
+        createFilesystemBuiltin({
+          rootPath: getFlag(args.flags, "fs-root"),
+        }),
+        createCommandlineBuiltin(),
+      ]
+      const cuaHelperPath =
+        getFlag(args.flags, "cua-helper") ??
+        process.env.SYNAPSE_DEVICE_CUA_HELPER_PATH
+      if (cuaHelperPath && existsSync(cuaHelperPath)) {
+        providers.push(createCuaBuiltin({ helperPath: cuaHelperPath }))
+      } else if (getFlag(args.flags, "cua") === "off") {
+        // explicit opt-out — no-op
+      }
+      const browserCdp = getFlag(args.flags, "browser-cdp")
+      if (browserCdp) {
+        providers.push(createBrowserBuiltin({ cdpEndpoint: browserCdp }))
+      }
+      // Parse trusted server keys: env value is "<kid>:<base64-PEM>,..." so
+      // multiple kids can be carried for rotation. The runtime refuses to
+      // invoke any tool whose envelope can't be verified against one of these
+      // keys — set to empty string for loopback smoke tests only.
+      const trustedServerKeys = parseTrustedServerKeys(
+        getFlag(args.flags, "trusted-server-keys") ??
+          process.env.SYNAPSE_DEVICE_TRUSTED_SERVER_KEYS ??
+          ""
+      )
       const handle = await runDeviceRuntime({
         serverOrigin,
         broker,
         clientVersion: "0.1.0-device-runtime-v3",
+        initialCatalog: providers,
+        trustedServerKeys,
       })
       process.on("SIGINT", () => {
         void handle.stop()

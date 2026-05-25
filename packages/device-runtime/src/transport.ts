@@ -18,7 +18,7 @@ const BACKOFF_JITTER = 0.25
 
 export interface TransportClientOptions {
   controlPlaneUrl: string
-  hello: () => Promise<DeviceHelloParams>
+  hello: (challengeNonce: string) => Promise<DeviceHelloParams>
   onStatus(status: RuntimeStatus): void
   onMessage?(method: string, params: unknown): void
   logger: RuntimeLogger
@@ -133,9 +133,31 @@ export class TransportClient {
       const socket = new WebSocket(this.opts.controlPlaneUrl)
       this.socket = socket
       this.opts.onStatus("starting")
-      socket.on("open", async () => {
+
+      // The server issues `server.challenge` immediately on connect; we hold
+      // the open path open until either it arrives (then we sign + send
+      // device.hello) or the socket dies / a timeout elapses.
+      let challengeSettled = false
+      const challengeTimer = setTimeout(() => {
+        if (challengeSettled) return
+        challengeSettled = true
+        this.opts.logger.error(
+          "control-plane challenge not received within 10s — closing",
+          {}
+        )
         try {
-          const hello = await this.opts.hello()
+          socket.close()
+        } catch {
+          /* ignore */
+        }
+      }, 10_000)
+
+      const sendHelloForChallenge = async (challengeNonce: string) => {
+        if (challengeSettled) return
+        challengeSettled = true
+        clearTimeout(challengeTimer)
+        try {
+          const hello = await this.opts.hello(challengeNonce)
           const ack = await this.request("device.hello", hello)
           this.opts.logger.info("control-plane hello acknowledged", {
             ack,
@@ -145,9 +167,14 @@ export class TransportClient {
           this.opts.logger.error("control-plane hello failed", {
             error: (err as Error).message,
           })
-          socket.close()
+          try {
+            socket.close()
+          } catch {
+            /* ignore */
+          }
         }
-      })
+      }
+
       socket.on("message", (raw) => {
         const text = raw.toString()
         let parsed: JsonRpcResponse | JsonRpcRequest
@@ -177,15 +204,26 @@ export class TransportClient {
           return
         }
         const req = parsed as JsonRpcRequest
+        if (req.method === "server.challenge") {
+          const params = req.params as { nonce?: unknown } | undefined
+          if (params && typeof params.nonce === "string") {
+            void sendHelloForChallenge(params.nonce)
+          } else {
+            this.opts.logger.error("server.challenge missing nonce", { params })
+          }
+          return
+        }
         if (this.opts.onMessage && typeof req.method === "string") {
           this.opts.onMessage(req.method, req.params)
         }
       })
       socket.on("error", (err) => {
+        clearTimeout(challengeTimer)
         if (this.socket === socket) this.socket = null
         reject(err)
       })
       socket.on("close", () => {
+        clearTimeout(challengeTimer)
         if (this.socket === socket) this.socket = null
         resolve()
       })

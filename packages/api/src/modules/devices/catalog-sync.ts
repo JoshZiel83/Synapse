@@ -79,6 +79,8 @@ export interface PersistCatalogSyncResult {
   exposureCount: number
   newRevisionCount: number
   toolRevisionCount: number
+  offlineExposureCount: number
+  removedToolCount: number
 }
 
 export async function persistCatalogSync(
@@ -98,6 +100,8 @@ export async function persistCatalogSync(
 
     let newRevisionCount = 0
     let toolRevisionCount = 0
+    const seenExposureIds = new Set<string>()
+    const seenToolIdsByExposure = new Map<string, Set<string>>()
 
     for (const exposure of input.exposures) {
       const exposureId = await upsertExposure(trx, {
@@ -105,6 +109,7 @@ export async function persistCatalogSync(
         serviceId: input.serviceId,
         exposure,
       })
+      seenExposureIds.add(exposureId)
       await ensureCapability(trx, {
         workspaceId: device.workspace_id as string,
         exposureId,
@@ -114,18 +119,70 @@ export async function persistCatalogSync(
         schemaHash: exposureSchemaHash(exposure),
       })
       if (isNew) newRevisionCount += 1
-      const written = await upsertTools(trx, {
+      const { writtenRevisions, seenToolIds } = await upsertTools(trx, {
         exposureId,
         catalogRevisionId: revisionId,
         tools: exposure.tools,
       })
-      toolRevisionCount += written
+      toolRevisionCount += writtenRevisions
+      seenToolIdsByExposure.set(exposureId, seenToolIds)
+    }
+
+    // Reap stale state: every exposure on this device that wasn't in the
+    // snapshot goes offline (so projection stops surfacing it). Every tool
+    // under a seen exposure that wasn't in the snapshot goes removed.
+    // Unseen exposures get their tools left alone — they'll be removed
+    // transitively when the exposure flips offline.
+    let offlineExposureCount = 0
+    let removedToolCount = 0
+    const allExposureIds = await trx
+      .selectFrom("device_exposures")
+      .select(["id"])
+      .where("device_id", "=", input.deviceId)
+      .execute()
+    const staleExposureIds = allExposureIds
+      .map((r) => r.id as string)
+      .filter((id) => !seenExposureIds.has(id))
+    if (staleExposureIds.length > 0) {
+      const updated = await trx
+        .updateTable("device_exposures")
+        .set({
+          runtime_status: "offline",
+          updated_at: sql`NOW()`,
+        } as never)
+        .where("id", "in", staleExposureIds)
+        .where("runtime_status", "!=", "offline")
+        .executeTakeFirst()
+      offlineExposureCount = Number(updated?.numUpdatedRows ?? 0n)
+    }
+    for (const [exposureId, seenToolIds] of seenToolIdsByExposure) {
+      const allToolIds = await trx
+        .selectFrom("device_tools")
+        .select(["id"])
+        .where("exposure_id", "=", exposureId)
+        .execute()
+      const stale = allToolIds
+        .map((r) => r.id as string)
+        .filter((id) => !seenToolIds.has(id))
+      if (stale.length === 0) continue
+      const updated = await trx
+        .updateTable("device_tools")
+        .set({
+          status: "removed",
+          updated_at: sql`NOW()`,
+        } as never)
+        .where("id", "in", stale)
+        .where("status", "!=", "removed")
+        .executeTakeFirst()
+      removedToolCount += Number(updated?.numUpdatedRows ?? 0n)
     }
 
     return {
       exposureCount: input.exposures.length,
       newRevisionCount,
       toolRevisionCount,
+      offlineExposureCount,
+      removedToolCount,
     }
   })
 }
@@ -264,8 +321,9 @@ async function upsertTools(
     catalogRevisionId: string
     tools: DeviceCatalogTool[]
   }
-): Promise<number> {
-  let inserted = 0
+): Promise<{ writtenRevisions: number; seenToolIds: Set<string> }> {
+  let writtenRevisions = 0
+  const seenToolIds = new Set<string>()
   for (const tool of args.tools) {
     const definitionHash = toolDefinitionHash(tool)
     const existingTool = await trx
@@ -300,6 +358,7 @@ async function upsertTools(
         .executeTakeFirstOrThrow()
       toolId = insertedTool.id as string
     }
+    seenToolIds.add(toolId)
 
     const existingRevision = await trx
       .selectFrom("device_tool_revisions")
@@ -338,7 +397,7 @@ async function upsertTools(
         .returning("id")
         .executeTakeFirstOrThrow()
       revisionId = insertedRevision.id as string
-      inserted += 1
+      writtenRevisions += 1
     }
     await trx
       .updateTable("device_tools")
@@ -346,5 +405,5 @@ async function upsertTools(
       .where("id", "=", toolId)
       .execute()
   }
-  return inserted
+  return { writtenRevisions, seenToolIds }
 }

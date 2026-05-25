@@ -1,14 +1,16 @@
-// Device Control Plane WSS handler skeleton (§7.1).
+// Device Control Plane WSS handler (§7.1).
 //
-// v3.0 skeleton: accepts a WebSocket connection, parses JSON-RPC 2.0 frames,
-// validates `device.hello` (handshake + signed challenge), and emits ack
-// responses. Catalog sync, runtime session, operation cancel etc. land in
-// later PRs as the runtime side is built out.
-//
-// The handler intentionally does NOT yet drive Postgres state — that is the
-// job of PR #6 (real handshake against device_service_keys) and PR #7
-// (catalog_sync against device_exposures / device_tools).
+// Authentication flow:
+//   1. WS connect → server sends `server.challenge` notification with a fresh
+//      32-byte hex nonce.
+//   2. Device responds with `device.hello` whose `signed_challenge` is the
+//      base64-Ed25519 signature of the nonce, signed by its service private
+//      key (loaded from the broker).
+//   3. Server verifies the signature against the device_service_keys row
+//      matching the claimed (device_id, service_id) pair. Only then does
+//      catalog.sync / runtime_session / event.emit / etc. become callable.
 
+import { randomBytes } from "node:crypto"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import type { WebSocket } from "ws"
 import {
@@ -17,6 +19,7 @@ import {
   type JsonRpcRequest,
 } from "@synapse/device-protocol"
 import { persistCatalogSync } from "./catalog-sync.js"
+import { authenticateDeviceHello } from "./control-plane-auth.js"
 
 interface ParsedFrame {
   raw: string
@@ -67,18 +70,71 @@ function writeError(
   )
 }
 
+function writeNotification(
+  socket: WebSocket,
+  method: string,
+  params: unknown
+) {
+  socket.send(JSON.stringify({ jsonrpc: "2.0", method, params }))
+}
+
+interface ConnectionState {
+  challengeNonce: string
+  helloSeen: boolean
+  authenticatedDeviceId: string | null
+  authenticatedServiceId: string | null
+}
+
 /**
- * v3.0 skeleton handler. Real authentication + state transitions land in PR #6.
- * The path here is intentionally minimal so that other PRs can wire a real
- * Device Runtime against it for end-to-end smoke testing.
+ * Maps device.hello auth failure codes to JSON-RPC error codes so the device
+ * runtime can distinguish "you don't exist" from "your signature was wrong".
  */
+function jsonRpcCodeForAuthFailure(code: string): number {
+  switch (code) {
+    case "device_not_found":
+    case "service_not_found":
+      return -32004 // resource not found
+    case "service_key_missing":
+    case "service_revoked":
+      return -32005 // forbidden
+    case "signature_invalid":
+    case "unsupported_key":
+      return -32003 // unauthenticated
+    default:
+      return -32603
+  }
+}
+
 export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
   app.get(
     "/api/v1/devices/control-plane",
     { websocket: true },
     (socket: WebSocket, _request: FastifyRequest) => {
-      let helloSeen = false
-      let helloMeta: { deviceId: string; serviceId: string } | null = null
+      const state: ConnectionState = {
+        challengeNonce: randomBytes(32).toString("hex"),
+        helloSeen: false,
+        authenticatedDeviceId: null,
+        authenticatedServiceId: null,
+      }
+
+      // Issue the challenge as the very first frame so the device runtime
+      // has it before it sends device.hello.
+      writeNotification(socket, "server.challenge", {
+        nonce: state.challengeNonce,
+      })
+
+      const requireAuthenticated = (req: JsonRpcRequest): boolean => {
+        if (state.authenticatedDeviceId && state.authenticatedServiceId) {
+          return true
+        }
+        writeError(
+          socket,
+          req.id ?? null,
+          -32003,
+          "device.hello must succeed before any other method"
+        )
+        return false
+      }
 
       socket.on("message", (raw) => {
         let frame: ParsedFrame
@@ -95,6 +151,15 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
         }
         switch (req.method) {
           case "device.hello": {
+            if (state.helloSeen) {
+              writeError(
+                socket,
+                req.id ?? null,
+                -32001,
+                "device.hello already received on this connection"
+              )
+              return
+            }
             const parsed = DeviceHelloParamsSchema.safeParse(req.params)
             if (!parsed.success) {
               writeError(
@@ -106,27 +171,50 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               )
               return
             }
-            helloSeen = true
-            helloMeta = {
+            state.helloSeen = true
+            authenticateDeviceHello({
               deviceId: parsed.data.device_id,
               serviceId: parsed.data.service_id,
-            }
-            writeResult(socket, req.id ?? null, {
-              accepted: true,
-              server_time: new Date().toISOString(),
+              signedChallenge: parsed.data.signed_challenge,
+              challengeNonce: state.challengeNonce,
             })
+              .then((result) => {
+                if (!result.ok) {
+                  writeError(
+                    socket,
+                    req.id ?? null,
+                    jsonRpcCodeForAuthFailure(result.code),
+                    result.message,
+                    { code: result.code }
+                  )
+                  try {
+                    socket.close(4003, result.code)
+                  } catch {
+                    /* ignore */
+                  }
+                  return
+                }
+                state.authenticatedDeviceId = result.deviceId
+                state.authenticatedServiceId = result.serviceId
+                writeResult(socket, req.id ?? null, {
+                  accepted: true,
+                  server_time: new Date().toISOString(),
+                  service_key_id: result.serviceKeyId,
+                  pubkey_fingerprint: result.pubkeyFingerprint,
+                })
+              })
+              .catch((err) => {
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  `auth lookup failed: ${(err as Error).message}`
+                )
+              })
             return
           }
           case "device.catalog.sync": {
-            if (!helloSeen || !helloMeta) {
-              writeError(
-                socket,
-                req.id ?? null,
-                -32002,
-                "device.hello required before any other method"
-              )
-              return
-            }
+            if (!requireAuthenticated(req)) return
             const parsedCatalog = DeviceCatalogSyncParamsSchema.safeParse(
               req.params
             )
@@ -141,8 +229,8 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               return
             }
             persistCatalogSync({
-              deviceId: helloMeta.deviceId,
-              serviceId: helloMeta.serviceId,
+              deviceId: state.authenticatedDeviceId!,
+              serviceId: state.authenticatedServiceId!,
               exposures: parsedCatalog.data.exposures,
             })
               .then((result) => {
@@ -172,21 +260,13 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           case "device.task.result":
           case "device.event.emit":
           case "device.vfs.exposure.upsert": {
-            if (!helloSeen) {
-              writeError(
-                socket,
-                req.id ?? null,
-                -32002,
-                "device.hello required before any other method"
-              )
-              return
-            }
+            if (!requireAuthenticated(req)) return
             // v3.0 skeleton: ack only. Real persistence lands in later PRs.
             writeResult(socket, req.id ?? null, {
               accepted: true,
               method: req.method,
-              device_id: helloMeta?.deviceId,
-              service_id: helloMeta?.serviceId,
+              device_id: state.authenticatedDeviceId,
+              service_id: state.authenticatedServiceId,
             })
             return
           }
@@ -202,7 +282,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
       })
 
       socket.on("close", () => {
-        // v3.0 skeleton: nothing to clean up. PR #6 closes the
+        // v3.0 skeleton: nothing to clean up. A later PR closes the
         // device_control_plane_sessions row here.
       })
     }
