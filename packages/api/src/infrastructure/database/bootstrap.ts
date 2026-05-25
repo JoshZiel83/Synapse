@@ -9,7 +9,7 @@ const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
 const CURRENT_SCHEMA_VERSION = "2026-05-25-drop-sessions-channel-type"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "drop legacy sessions.channel_type column and sessions_channel_type enum (external/API session removal); prior baseline: auth refactor (access_subjects registry + subject_id FKs across access/relationship/conversation tables); remote-agent per-conversation runtime sessions + fenced machine connections + delivery retry; IM transport-layer rewrite (connector abstraction, wecom enum, reaction tracking columns); chat refactor (participant_kind -> participant_type, relationship_target_type 'member' -> 'workspace_member', chat_push_tokens)"
+  "drop legacy session channel discriminator (external/API session removal); prior baseline: auth refactor (access_subjects registry + subject_id FKs across access/relationship/conversation tables); remote-agent per-conversation runtime sessions + fenced machine connections + delivery retry; IM transport-layer rewrite (connector abstraction, wecom enum, reaction tracking columns); chat refactor (participant_kind -> participant_type, relationship_target_type 'member' -> 'workspace_member', chat_push_tokens)"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`
