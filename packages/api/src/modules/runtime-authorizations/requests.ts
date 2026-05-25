@@ -1,10 +1,10 @@
 import type {
   ConversationBoundary,
   InteractionRequestSummary,
-  RelayAuthorizationGrantOption,
-  RelayAuthorizationPreset,
-  RelayAuthorizationRequestMode,
-  RelayAuthorizationRequestedAction,
+  RuntimeAuthorizationGrantOption,
+  RuntimeAuthorizationPreset,
+  RuntimeAuthorizationRequestMode,
+  RuntimeAuthorizationRequestedAction,
 } from "@synapse/shared/types"
 import { textBlocks } from "@synapse/shared"
 import { sql } from "kysely"
@@ -13,10 +13,10 @@ import { authorizeAction } from "../access/service.js"
 import { buildUserInteractionCandidatesFromRows } from "../ai/session-tool-user-interactions.js"
 import { listConversationParticipants } from "../chat/service.js"
 import {
-  createRelayAuthorizationInteractionRequest,
-  findOpenRelayAuthorizationInteraction,
+  createRuntimeAuthorizationInteractionRequest,
+  findOpenRuntimeAuthorizationInteraction,
   getInteractionRequestSummary,
-  markRelayAuthorizationInteractionSuperseded,
+  markRuntimeAuthorizationInteractionSuperseded,
 } from "../interactions/service.js"
 import {
   cancelToolCallTask,
@@ -24,7 +24,7 @@ import {
   type ToolCallTaskRecord,
 } from "../tool-call-tasks/service.js"
 
-export interface RelayAuthorizationRequestSource {
+export interface RuntimeAuthorizationRequestSource {
   workspaceId: string
   conversationId: string
   sessionId: string
@@ -37,34 +37,34 @@ export interface RelayAuthorizationRequestSource {
   sourceToolCallId?: string
 }
 
-export interface RelayAuthorizationRequestTarget {
-  relayCapabilityId: string
-  relayDeviceId: string
-  relayExposureId: string
+export interface RuntimeAuthorizationRequestTarget {
+  deviceCapabilityId: string
+  deviceId: string
+  deviceExposureId: string
   requestedToolName: string
-  relayToolStableKey: string
+  deviceToolStableKey: string
   runtimeSessionId: string
   relayDeviceDisplayName?: string
   relayExposureDisplayName?: string
 }
 
-export interface RelayAuthorizationRequestPlanSnapshot {
-  requestedAction: RelayAuthorizationRequestedAction
-  grantOptions: RelayAuthorizationGrantOption[]
+export interface RuntimeAuthorizationRequestPlanSnapshot {
+  requestedAction: RuntimeAuthorizationRequestedAction
+  grantOptions: RuntimeAuthorizationGrantOption[]
 }
 
-export interface CreateRelayAuthorizationRequestParams {
-  source: RelayAuthorizationRequestSource
-  relayTarget: RelayAuthorizationRequestTarget
-  authorizationPlan: RelayAuthorizationRequestPlanSnapshot
-  requestMode: RelayAuthorizationRequestMode
-  availablePresets: RelayAuthorizationPreset[]
+export interface CreateRuntimeAuthorizationRequestParams {
+  source: RuntimeAuthorizationRequestSource
+  runtimeTarget: RuntimeAuthorizationRequestTarget
+  authorizationPlan: RuntimeAuthorizationRequestPlanSnapshot
+  requestMode: RuntimeAuthorizationRequestMode
+  availablePresets: RuntimeAuthorizationPreset[]
   reason: string
   sourceRequestArgs: Record<string, unknown>
   retryNonce?: string
 }
 
-export interface RelayAuthorizationRequestResult {
+export interface RuntimeAuthorizationRequestResult {
   interaction: InteractionRequestSummary
   task: ToolCallTaskRecord | null
   availableAuthorizerCount: number
@@ -79,7 +79,7 @@ export interface RelayAuthorizationRequestResult {
   retryNonce: string
 }
 
-export interface WaitForRelayAuthorizationResolutionParams<T> {
+export interface WaitForRuntimeAuthorizationResolutionParams<T> {
   interactionId: string
   conversationId: string
   createdAt: string
@@ -87,7 +87,7 @@ export interface WaitForRelayAuthorizationResolutionParams<T> {
   maxWaitMs?: number
 }
 
-export type RelayAuthorizationWaitResult<T> =
+export type RuntimeAuthorizationWaitResult<T> =
   | {
       status: "approved"
       interaction: InteractionRequestSummary
@@ -109,7 +109,7 @@ function buildWaitingSummary(deviceDisplayName?: string) {
 async function loadConversationKindAndBoundary(
   conversationId: string,
   fallback?: Pick<
-    RelayAuthorizationRequestSource,
+    RuntimeAuthorizationRequestSource,
     "conversationKind" | "conversationBoundary"
   >
 ) {
@@ -155,8 +155,8 @@ async function loadRelayCapabilityRequestState(capabilityId: string) {
     .executeTakeFirst()
 }
 
-async function canActorRequestRelayAuthorization(
-  params: CreateRelayAuthorizationRequestParams
+async function canActorRequestRuntimeAuthorization(
+  params: CreateRuntimeAuthorizationRequestParams
 ) {
   const conversation = await loadConversationKindAndBoundary(
     params.source.conversationId,
@@ -167,7 +167,7 @@ async function canActorRequestRelayAuthorization(
   }
 
   const relayState = await loadRelayCapabilityRequestState(
-    params.relayTarget.relayCapabilityId
+    params.runtimeTarget.deviceCapabilityId
   )
   if (
     !relayState ||
@@ -210,13 +210,13 @@ async function hasNewUserFacingConversationMessage(
   return Boolean(row)
 }
 
-export function buildRelayAuthorizationRetryNonce() {
+export function buildRuntimeAuthorizationRetryNonce() {
   return Math.random().toString(36).slice(2) + Date.now().toString(36)
 }
 
-export async function createRelayAuthorizationRequest(
-  params: CreateRelayAuthorizationRequestParams
-): Promise<RelayAuthorizationRequestResult> {
+export async function createRuntimeAuthorizationRequest(
+  params: CreateRuntimeAuthorizationRequestParams
+): Promise<RuntimeAuthorizationRequestResult> {
   const allMembers = await listConversationParticipants(
     params.source.conversationId
   )
@@ -230,7 +230,7 @@ export async function createRelayAuthorizationRequest(
     )
   }
 
-  const requesterAllowed = await canActorRequestRelayAuthorization(params)
+  const requesterAllowed = await canActorRequestRuntimeAuthorization(params)
   if (!requesterAllowed) {
     throw new Error(
       "Current actor is not allowed to request authorization for this relay capability"
@@ -250,7 +250,7 @@ export async function createRelayAuthorizationRequest(
       allowed: await authorizeAction(db, {
         subject: { type: "workspace_member", id: candidate.workspaceMemberId },
         action: "device_capability.request_runtime_authorization",
-        resourceId: params.relayTarget.relayCapabilityId,
+        resourceId: params.runtimeTarget.deviceCapabilityId,
       }),
     }))
   )
@@ -264,18 +264,18 @@ export async function createRelayAuthorizationRequest(
   }
 
   const retryNonce =
-    params.retryNonce?.trim() || buildRelayAuthorizationRetryNonce()
+    params.retryNonce?.trim() || buildRuntimeAuthorizationRetryNonce()
 
   if (params.requestMode === "background") {
-    const existing = await findOpenRelayAuthorizationInteraction({
+    const existing = await findOpenRuntimeAuthorizationInteraction({
       workspaceId: params.source.workspaceId,
       conversationId: params.source.conversationId,
       requesterParticipantId: requesterMember.id,
-      relayCapabilityId: params.relayTarget.relayCapabilityId,
-      relayDeviceId: params.relayTarget.relayDeviceId,
-      relayExposureId: params.relayTarget.relayExposureId,
-      requestedToolName: params.relayTarget.requestedToolName,
-      relayToolStableKey: params.relayTarget.relayToolStableKey,
+      deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
+      deviceId: params.runtimeTarget.deviceId,
+      deviceExposureId: params.runtimeTarget.deviceExposureId,
+      requestedToolName: params.runtimeTarget.requestedToolName,
+      deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
       requestedAction: params.authorizationPlan.requestedAction,
       grantOptions: params.authorizationPlan.grantOptions,
       availablePresets: params.availablePresets,
@@ -303,21 +303,21 @@ export async function createRelayAuthorizationRequest(
     turnId: params.source.turnId,
     sourceToolCallId: params.source.sourceToolCallId,
     sourceToolName: params.source.sourceToolName,
-    executorKind: "relay_authorization",
+    executorKind: "runtime_authorization",
     deliveryPolicy: "human_interaction",
     status: "input_required",
     statusMessage: buildWaitingSummary(
-      params.relayTarget.relayDeviceDisplayName
+      params.runtimeTarget.relayDeviceDisplayName
     ),
     dispatchStatus: "input_requested",
     supportsCancel: true,
     requestPayload: {
-      relayCapabilityId: params.relayTarget.relayCapabilityId,
-      relayDeviceId: params.relayTarget.relayDeviceId,
-      relayExposureId: params.relayTarget.relayExposureId,
-      runtimeSessionId: params.relayTarget.runtimeSessionId,
-      requestedToolName: params.relayTarget.requestedToolName,
-      relayToolStableKey: params.relayTarget.relayToolStableKey,
+      deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
+      deviceId: params.runtimeTarget.deviceId,
+      deviceExposureId: params.runtimeTarget.deviceExposureId,
+      runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+      requestedToolName: params.runtimeTarget.requestedToolName,
+      deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
       reason: params.reason,
       requestMode: params.requestMode,
       requestedAction: params.authorizationPlan.requestedAction,
@@ -329,17 +329,17 @@ export async function createRelayAuthorizationRequest(
   })
 
   try {
-    const interaction = await createRelayAuthorizationInteractionRequest({
+    const interaction = await createRuntimeAuthorizationInteractionRequest({
       workspaceId: params.source.workspaceId,
       conversationId: params.source.conversationId,
       taskId: task.id,
       requesterParticipantId: requesterMember.id,
-      relayCapabilityId: params.relayTarget.relayCapabilityId,
-      relayDeviceId: params.relayTarget.relayDeviceId,
-      relayExposureId: params.relayTarget.relayExposureId,
-      requestedToolName: params.relayTarget.requestedToolName,
-      runtimeSessionId: params.relayTarget.runtimeSessionId,
-      relayToolStableKey: params.relayTarget.relayToolStableKey,
+      deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
+      deviceId: params.runtimeTarget.deviceId,
+      deviceExposureId: params.runtimeTarget.deviceExposureId,
+      requestedToolName: params.runtimeTarget.requestedToolName,
+      runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+      deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
       reason: params.reason,
       requestedAction: params.authorizationPlan.requestedAction,
       grantOptions: params.authorizationPlan.grantOptions,
@@ -360,10 +360,10 @@ export async function createRelayAuthorizationRequest(
     }
   } catch (error) {
     await cancelToolCallTask(task.id, {
-      summary: `Relay authorization request for ${params.relayTarget.relayDeviceDisplayName?.trim() || "the relay device"} failed before dispatch.`,
+      summary: `Relay authorization request for ${params.runtimeTarget.relayDeviceDisplayName?.trim() || "the relay device"} failed before dispatch.`,
       finalResultPayload: {
         content: textBlocks(
-          `Relay authorization request for ${params.relayTarget.relayDeviceDisplayName?.trim() || "the relay device"} failed before dispatch.`
+          `Relay authorization request for ${params.runtimeTarget.relayDeviceDisplayName?.trim() || "the relay device"} failed before dispatch.`
         ),
         isError: true,
       },
@@ -376,9 +376,9 @@ export async function createRelayAuthorizationRequest(
   }
 }
 
-export async function waitForRelayAuthorizationResolution<T>(
-  params: WaitForRelayAuthorizationResolutionParams<T>
-): Promise<RelayAuthorizationWaitResult<T>> {
+export async function waitForRuntimeAuthorizationResolution<T>(
+  params: WaitForRuntimeAuthorizationResolutionParams<T>
+): Promise<RuntimeAuthorizationWaitResult<T>> {
   const startedAt = Date.now()
   const maxWaitMs = params.maxWaitMs ?? 10 * 60 * 1000
 
@@ -389,7 +389,7 @@ export async function waitForRelayAuthorizationResolution<T>(
         params.createdAt
       )
     ) {
-      const superseded = await markRelayAuthorizationInteractionSuperseded(
+      const superseded = await markRuntimeAuthorizationInteractionSuperseded(
         params.interactionId,
         "Superseded by a newer user message."
       )

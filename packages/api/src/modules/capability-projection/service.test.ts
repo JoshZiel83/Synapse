@@ -37,17 +37,8 @@ test("projectToolsForPrincipal rejects chat-runtime principal without conversati
   )
 })
 
-test("projectToolsForPrincipal rejects pure conversation principal in v3.0 (no actor)", async () => {
-  await assert.rejects(
-    () =>
-      projectToolsForPrincipal({
-        workspaceId: "00000000-0000-0000-0000-000000000001",
-        principal: {
-          kind: "conversation",
-          conversationId: "00000000-0000-0000-0000-000000000004",
-        },
-        consumer: "chat_runtime",
-      }),
-    /actorId is required/
-  )
-})
+// Per Issue P (PR #22): pure-conversation principal is now supported — the
+// legacy MCP-plugin resolver short-circuits to an empty surface and the
+// device-tool projection handles the rest without requiring an actorId. The
+// "actorId is required" assertion that used to live here was deleted along
+// with the limitation it described.

@@ -51,7 +51,7 @@ export type AccessBindingRow = ResourceAccessBindingStorageRow & {
   subject_conversation_actor_context_id: string | null
   conversation_type_mask_override: number | null
   status: "active" | "revoked"
-  source: "manual" | "default_open" | "relay_auto" | "approval" | "system"
+  source: "manual" | "default_open" | "approval" | "system"
   created_by_workspace_member_id: string | null
   reason: string | null
   created_at: string

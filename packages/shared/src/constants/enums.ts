@@ -33,7 +33,6 @@ export const WORKSPACE_ACCESS_KEYS = [
   "skill_admin",
   "plugin_admin",
   "memory_admin",
-  "relay_admin",
   "device_admin",
   "conversation_admin",
 ] as const
@@ -417,7 +416,7 @@ export const DEFAULT_CONVERSATION_TYPE_MASK = CONVERSATION_TYPE_MASK_PRESETS.ALL
 export const CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES = [
   "plugin_installation",
   "installed_skill",
-  "relay_capability",
+  "device_capability",
 ] as const
 export const ATTACHMENT_TARGET_TYPES = [
   "workspace",

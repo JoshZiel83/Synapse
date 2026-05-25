@@ -277,7 +277,7 @@ export type RemoteAgentsRuntimeKind = "claude_code" | "codex";
 
 export type ResourceAccessBindingResourceType = "actor" | "automation_event_source" | "device_capability" | "installed_skill" | "plugin_installation" | "remote_agent";
 
-export type ResourceAccessBindingsSource = "approval" | "default_open" | "manual" | "relay_auto" | "system";
+export type ResourceAccessBindingsSource = "approval" | "default_open" | "manual" | "system";
 
 export type ResourceAccessBindingsStatus = "active" | "revoked";
 
@@ -323,7 +323,7 @@ export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
 export type ToolCallsStatus = "completed" | "failed" | "pending" | "running" | "skipped";
 
-export type ToolCallsToolKind = "a2a_proxy" | "action" | "builtin" | "callable" | "mcp_plugin" | "mcp_relay" | "provider_builtin";
+export type ToolCallsToolKind = "a2a_proxy" | "action" | "builtin" | "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
 
 export type ToolCallTaskOutputChunksStream = "stderr" | "stdout" | "system";
 
@@ -331,11 +331,11 @@ export type ToolCallTasksDeliveryPolicy = "human_interaction" | "online_only" | 
 
 export type ToolCallTasksDispatchStatus = "accepted" | "cancel_requested" | "dispatched" | "input_requested" | "queued" | "received" | "started";
 
-export type ToolCallTasksExecutorKind = "interaction_user_input" | "plan_approval" | "relay_authorization" | "relay_mcp";
+export type ToolCallTasksExecutorKind = "device_mcp" | "interaction_user_input" | "plan_approval" | "runtime_authorization";
 
 export type ToolCallTasksStatus = "cancelled" | "completed" | "failed" | "input_required" | "working";
 
-export type ToolExecutionAttemptsExecutorKind = "a2a_proxy" | "action" | "builtin" | "callable" | "mcp_plugin" | "mcp_relay" | "provider_builtin";
+export type ToolExecutionAttemptsExecutorKind = "a2a_proxy" | "action" | "builtin" | "callable" | "mcp_device" | "mcp_plugin" | "provider_builtin";
 
 export type ToolExecutionAttemptsStatus = "error" | "success" | "timeout";
 
@@ -365,7 +365,7 @@ export type TransportMessageLinksTransportKind = "feishu" | "wecom" | "weixin";
 
 export type TurnsStatus = "cancelled" | "completed" | "failed" | "running";
 
-export type WorkspaceAccessBindingsAccessKey = "actor_admin" | "conversation_admin" | "device_admin" | "memory_admin" | "model_admin" | "plugin_admin" | "relay_admin" | "remote_agent_admin" | "skill_admin";
+export type WorkspaceAccessBindingsAccessKey = "actor_admin" | "conversation_admin" | "device_admin" | "memory_admin" | "model_admin" | "plugin_admin" | "remote_agent_admin" | "skill_admin";
 
 export type WorkspaceInvitesTrustLevel = "admin" | "guest" | "member";
 

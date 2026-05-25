@@ -29,7 +29,9 @@ import { ensureConversationActorContext } from "../session/service.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
+import type { RuntimeAuthorizationGrantSpec } from "@synapse/device-protocol"
 import { createHash } from "node:crypto"
+import { listActiveRuntimeAuthorizationGrantsForExposure } from "../runtime-authorizations/service.js"
 import {
   loadDeviceCapabilityToolsForSubjects,
   type DeviceCapabilityToolRow,
@@ -109,7 +111,7 @@ export async function projectToolsForPrincipal(
   const legacy = await projectLegacyTools(input)
   const device = await projectDeviceTools(input)
   if (device.tools.length === 0) return legacy
-  return unionWithDevice(legacy, device)
+  return unionWithDevice(input, legacy, device)
 }
 
 async function projectLegacyTools(
@@ -134,9 +136,21 @@ async function projectLegacyTools(
         )
       }
       if (!actorId) {
-        throw new Error(
-          "capability-projection: actorId is required for non-conversation principals (workspace-only chat dispatch is not in v3.0 scope)"
-        )
+        // Pure-conversation: no actor identity in play. The legacy MCP plugin
+        // resolver requires an actorId; for this principal we skip the legacy
+        // resolver entirely and let the device-tool projection (which doesn't
+        // require an actorId) carry the surface alone.
+        return {
+          tools: [],
+          executor: async () =>
+            mcpErrorBlock(
+              "no executable plugin tools in pure-conversation principal"
+            ),
+          mcpVersion: 0,
+          refresh: async () => ({ tools: [], mcpVersion: 0 }),
+          setTurnId: () => {},
+          shutdown: async () => {},
+        }
       }
       return resolveMcpToolsForActor({
         ...input,
@@ -165,6 +179,7 @@ async function projectLegacyTools(
 interface DeviceToolBundle {
   tools: ToolDefinition[]
   handlers: Map<string, DeviceCapabilityToolRow>
+  subjectIds: string[]
 }
 
 // Tools we project from device_capabilities are namespaced so they cannot
@@ -268,7 +283,7 @@ async function projectDeviceTools(
   // workspace_member never reaches here (throws above) and the chat-runtime
   // consumer is the only one currently wired for device dispatch.
   if (input.principal.kind === "workspace_member") {
-    return { tools: [], handlers: new Map() }
+    return { tools: [], handlers: new Map(), subjectIds: [] }
   }
   const subjectIds = await principalSubjectIds(input)
   const rows = await loadDeviceCapabilityToolsForSubjects({
@@ -286,7 +301,7 @@ async function projectDeviceTools(
       parameters: normalizeInputSchema(row.input_schema),
     })
   }
-  return { tools, handlers }
+  return { tools, handlers, subjectIds }
 }
 
 function normalizeInputSchema(raw: unknown): ToolDefinition["parameters"] {
@@ -305,6 +320,7 @@ function normalizeInputSchema(raw: unknown): ToolDefinition["parameters"] {
 }
 
 function unionWithDevice(
+  input: ProjectToolsInput,
   legacy: ProjectedToolList,
   device: DeviceToolBundle
 ): ProjectedToolList {
@@ -325,6 +341,75 @@ function unionWithDevice(
     const inputHash =
       "sha256:" +
       createHash("sha256").update(inputCanonical).digest("hex")
+
+    // Look up runtime_authorization_grants that apply to this capability so
+    // the device-side bash/cua enforcement has matching grant_specs to
+    // consult. Without this, the device runtime would reject every call.
+    // We include all active grants for the capability whose subject_id is
+    // null (workspace scope) or in the principal's subject set.
+    let grantSpecs: RuntimeAuthorizationGrantSpec[] = []
+    const grantIds: string[] = []
+    let grantScope: "once" | "actor" | "conversation" | "actor_in_conversation" | "workspace" = "workspace"
+    try {
+      const allGrants = await listActiveRuntimeAuthorizationGrantsForExposure(
+        row.device_capability_id
+      )
+      // We approximate "applicable" as: grant scope === workspace OR
+      // grant.subject in the principal's subject set. The richer matching
+      // (filesystem path prefix, browser scope, etc.) happens on the
+      // device side via the per-capability matcher functions.
+      const subjectSet = new Set(device.subjectIds)
+      const applicable = allGrants.filter((g) => {
+        if (g.scope === "workspace" || g.scope === "once") return true
+        // For actor / conversation / actor_in_conversation scopes the grant
+        // row's subject_id (queried into createdAt block, not surfaced on
+        // the public record). Since the public record doesn't expose
+        // subject_id, the conservative call is to include any non-workspace
+        // grant on this capability and let the device-side matcher reject.
+        return subjectSet.size > 0
+      })
+      for (const grant of applicable) {
+        const spec: RuntimeAuthorizationGrantSpec = {
+          capability: grant.capability,
+          // Translate camelCase shared GrantPolicy fields into the snake_case
+          // wire shape the envelope schema requires.
+          filesystem: grant.filesystem
+            ? {
+                access: grant.filesystem.access,
+                path_prefixes: grant.filesystem.pathPrefixes ?? [],
+              }
+            : undefined,
+          cua: grant.cua ? { access: grant.cua.access } : undefined,
+          browser: grant.browser
+            ? {
+                action: grant.browser.action,
+                scope_type: grant.browser.scopeType,
+                origin: grant.browser.origin,
+                host: grant.browser.host,
+                registrable_domain: grant.browser.registrableDomain,
+              }
+            : undefined,
+          commandline: grant.commandline
+            ? {
+                executor: grant.commandline.executor,
+                command_match_type: grant.commandline.commandMatchType,
+                command_text: grant.commandline.commandText,
+                working_directory: grant.commandline.workingDirectory,
+              }
+            : undefined,
+        }
+        grantSpecs.push(spec)
+        grantIds.push(grant.id)
+      }
+      if (applicable.length > 0) {
+        grantScope = applicable[0]!.scope
+      }
+    } catch (err) {
+      return mcpErrorBlock(
+        `grant lookup failed for capability ${row.device_capability_id}: ${(err as Error).message}`
+      )
+    }
+
     let envelope
     try {
       envelope = signEnvelopeForDispatch({
@@ -337,6 +422,11 @@ function unionWithDevice(
         device_tool_revision_id: row.device_tool_revision_id,
         input_hash: inputHash,
         task_mode: "sync" as const,
+        runtime_authorization: {
+          grant_ids: grantIds,
+          grant_scope: grantScope,
+          grant_specs: grantSpecs,
+        },
         issued_at: new Date().toISOString(),
         expires_at: new Date(Date.now() + 60_000).toISOString(),
       })
@@ -382,6 +472,16 @@ function unionWithDevice(
 
   const refresh = async () => {
     const refreshed = await legacy.refresh()
+    // Re-query device tools on each refresh so newly granted bindings show
+    // up without restarting the session. Use the captured input so the
+    // principal + subject set stays consistent across refreshes.
+    const freshDevice = await projectDeviceTools(input)
+    // Replace the stale device-bundle handlers/subjectIds in place so the
+    // dispatchDeviceTool closure (which closes over `device`) sees the
+    // refreshed handlers on the next tool call.
+    device.tools = freshDevice.tools
+    device.handlers = freshDevice.handlers
+    device.subjectIds = freshDevice.subjectIds
     return {
       tools: [...refreshed.tools, ...device.tools],
       mcpVersion: refreshed.mcpVersion,

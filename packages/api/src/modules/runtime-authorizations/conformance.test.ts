@@ -7,7 +7,7 @@ import {
   browserPolicyMatches,
   commandlinePolicyMatches,
   filesystemPolicyMatches,
-  relayAuthorizationGrantMatches,
+  runtimeAuthorizationGrantMatches,
 } from "./service.js"
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
@@ -88,7 +88,7 @@ test("conformance: filesystem matcher", async (t) => {
           capability: "filesystem" as const,
           filesystem: fixture.request,
         }
-        // We run through relayAuthorizationGrantMatches to cover the dispatch
+        // We run through runtimeAuthorizationGrantMatches to cover the dispatch
         // path that real callers use; non-filesystem policies in the fixture
         // are handled by their dispatch branches.
         const actual = filesystemPolicyMatches(grantSpec as any, action as any)
@@ -134,7 +134,7 @@ test("conformance: cua matcher", async (t) => {
           capability: "cua" as const,
           cua: policy.cua,
         } as any
-        if (relayAuthorizationGrantMatches(grant, action as any)) {
+        if (runtimeAuthorizationGrantMatches(grant, action as any)) {
           anyMatched = true
           break
         }

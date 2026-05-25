@@ -395,10 +395,7 @@ export function buildActorPrompt(
         `These skills are available on demand. Do not assume their detailed contents are already loaded.\n` +
         `If one skill clearly matches the task, call \`read_skill\` to read its description or a referenced attachment before using it.\n` +
         orderedSkills
-          .map(
-            (skill) =>
-              `- \`${skill.slug}\`${skill.sourceKind === "relay_auto_loaded" ? " (relay auto-loaded)" : ""}: ${skill.description}`
-          )
+          .map((skill) => `- \`${skill.slug}\`: ${skill.description}`)
           .join("\n")
     )
   }

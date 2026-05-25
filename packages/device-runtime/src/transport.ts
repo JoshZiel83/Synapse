@@ -19,6 +19,13 @@ const BACKOFF_JITTER = 0.25
 export interface TransportClientOptions {
   controlPlaneUrl: string
   hello: (challengeNonce: string) => Promise<DeviceHelloParams>
+  /**
+   * Called after a successful device.hello round-trip with the ack payload
+   * from the server. Lets the runtime absorb the envelope-signing pubkey
+   * the server hands back so trusted_server_keys is populated even without
+   * out-of-band config.
+   */
+  onHelloAck?(ack: unknown): Promise<void> | void
   onStatus(status: RuntimeStatus): void
   onMessage?(method: string, params: unknown): void
   logger: RuntimeLogger
@@ -162,6 +169,15 @@ export class TransportClient {
           this.opts.logger.info("control-plane hello acknowledged", {
             ack,
           })
+          if (this.opts.onHelloAck) {
+            try {
+              await this.opts.onHelloAck(ack)
+            } catch (err) {
+              this.opts.logger.error("onHelloAck handler threw", {
+                error: (err as Error).message,
+              })
+            }
+          }
           this.opts.onStatus("online")
         } catch (err) {
           this.opts.logger.error("control-plane hello failed", {

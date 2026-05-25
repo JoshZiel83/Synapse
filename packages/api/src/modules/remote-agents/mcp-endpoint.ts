@@ -107,8 +107,6 @@ function describeToolOrigin(def: ToolDefinition): string {
     case "installed_skill":
     case "skill":
       return name ? `[skill:${name}]` : "[skill]"
-    case "relay_capability":
-      return name ? `[device:${name}]` : "[device]"
     default:
       return ""
   }

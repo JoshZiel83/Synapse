@@ -1,11 +1,11 @@
 import path from "node:path"
 import type {
-  RelayAuthorizationGrantSpec,
-  RelayAuthorizationPreset,
-  RelayAuthorizationGrantRetention,
-  RelayAuthorizationGrantScope,
-  RelayAuthorizationGrantStatus,
-  RelayAuthorizationRequestedAction,
+  RuntimeAuthorizationGrantSpec,
+  RuntimeAuthorizationPreset,
+  RuntimeAuthorizationGrantRetention,
+  RuntimeAuthorizationGrantScope,
+  RuntimeAuthorizationGrantStatus,
+  RuntimeAuthorizationRequestedAction,
 } from "@synapse/shared/types"
 import { sql } from "kysely"
 import {
@@ -29,7 +29,7 @@ import {
  * no actor/conversation context.
  */
 function buildRelayGrantSubjectRef(input: {
-  scope: RelayAuthorizationGrantScope
+  scope: RuntimeAuthorizationGrantScope
   workspaceId: string
   actorId?: string | null
   conversationId?: string | null
@@ -97,7 +97,7 @@ function toIsoString(value: string | Date | null | undefined) {
   return value instanceof Date ? value.toISOString() : value
 }
 
-function relayAuthorizationScopeRank(scope: RelayAuthorizationGrantScope) {
+function runtimeAuthorizationScopeRank(scope: RuntimeAuthorizationGrantScope) {
   switch (scope) {
     case "once":
       return 0
@@ -171,12 +171,12 @@ function commandPrefixMatches(prefix: string, command: string) {
   return command === prefix || command.startsWith(`${prefix} `)
 }
 
-export interface RelayAuthorizationGrantRecord extends RelayAuthorizationGrantSpec {
+export interface RuntimeAuthorizationGrantRecord extends RuntimeAuthorizationGrantSpec {
   id: string
   workspaceId: string
-  relayDeviceId: string
-  relayCapabilityId: string
-  relayExposureId: string
+  deviceId: string
+  deviceCapabilityId: string
+  deviceExposureId: string
   conversationId?: string
   actorId?: string
   createdByWorkspaceMemberId?: string
@@ -185,9 +185,9 @@ export interface RelayAuthorizationGrantRecord extends RelayAuthorizationGrantSp
   sourceRetryNonce?: string
   sourceRuntimeSessionId?: string
   sourceRequestArgs: Record<string, unknown>
-  scope: RelayAuthorizationGrantScope
-  retention: RelayAuthorizationGrantRetention
-  status: RelayAuthorizationGrantStatus
+  scope: RuntimeAuthorizationGrantScope
+  retention: RuntimeAuthorizationGrantRetention
+  status: RuntimeAuthorizationGrantStatus
   createdAt: string
   updatedAt: string
   consumedAt?: string
@@ -195,38 +195,38 @@ export interface RelayAuthorizationGrantRecord extends RelayAuthorizationGrantSp
   supersededAt?: string
 }
 
-export interface CreateRelayAuthorizationGrantParams {
+export interface CreateRuntimeAuthorizationGrantParams {
   workspaceId: string
-  relayDeviceId: string
-  relayCapabilityId: string
-  relayExposureId: string
+  deviceId: string
+  deviceCapabilityId: string
+  deviceExposureId: string
   conversationId?: string
   actorId?: string
   createdByWorkspaceMemberId?: string
   sourceInteractionId?: string
   sourceTaskId?: string
-  preset: RelayAuthorizationPreset
-  grantSpec: RelayAuthorizationGrantSpec
+  preset: RuntimeAuthorizationPreset
+  grantSpec: RuntimeAuthorizationGrantSpec
   sourceRetryNonce?: string
   sourceRuntimeSessionId?: string
   sourceRequestArgs?: Record<string, unknown>
 }
 
-export interface FindMatchingRelayAuthorizationGrantParams {
+export interface FindMatchingRuntimeAuthorizationGrantParams {
   workspaceId: string
-  relayDeviceId: string
-  relayCapabilityId: string
-  relayExposureId: string
+  deviceId: string
+  deviceCapabilityId: string
+  deviceExposureId: string
   conversationId?: string
   actorId?: string
   retryNonce?: string
-  requestedAction: RelayAuthorizationRequestedAction
+  requestedAction: RuntimeAuthorizationRequestedAction
   consumeOnce?: boolean
 }
 
 function normalizeGrantSpecForInsert(
-  grantSpec: RelayAuthorizationGrantSpec
-): RelayAuthorizationGrantSpec {
+  grantSpec: RuntimeAuthorizationGrantSpec
+): RuntimeAuthorizationGrantSpec {
   return {
     capability: grantSpec.capability,
     filesystem: grantSpec.filesystem
@@ -278,25 +278,25 @@ function normalizeGrantSpecForInsert(
   }
 }
 
-function parseGrantSpec(value: unknown): RelayAuthorizationGrantSpec {
+function parseGrantSpec(value: unknown): RuntimeAuthorizationGrantSpec {
   // Validate the JSON we read out of the DB against the Zod schema before
   // handing it back up. This guarantees the wire shape we emit matches what
   // the Go relay expects, even if older rows pre-date the current schema.
   const policy = GrantPolicySchema.parse(
     parseJsonObject(value)
-  ) as RelayAuthorizationGrantSpec
+  ) as RuntimeAuthorizationGrantSpec
   return normalizeGrantSpecForInsert(policy)
 }
 
-function mapRelayAuthorizationGrantRow(
+function mapRuntimeAuthorizationGrantRow(
   row: any
-): RelayAuthorizationGrantRecord {
+): RuntimeAuthorizationGrantRecord {
   return {
     id: row.id,
     workspaceId: row.workspace_id,
-    relayDeviceId: row.device_id,
-    relayCapabilityId: row.device_capability_id,
-    relayExposureId: row.device_exposure_id,
+    deviceId: row.device_id,
+    deviceCapabilityId: row.device_capability_id,
+    deviceExposureId: row.device_exposure_id,
     // P1b: actor_id and conversation_id are no longer stored on the grant
     // row; they live on the joined access_subjects row. SELECT helpers below
     // project subj.actor_id AS subject_actor_id and subj.conversation_id AS
@@ -324,7 +324,7 @@ function mapRelayAuthorizationGrantRow(
 
 /**
  * P1b: the canonical SELECT projection for runtime_authorization_grants rows
- * that will be passed to mapRelayAuthorizationGrantRow. LEFT JOINs
+ * that will be passed to mapRuntimeAuthorizationGrantRow. LEFT JOINs
  * access_subjects (subject_id is nullable for `once` / `workspace` scopes)
  * and surfaces subject_actor_id / subject_conversation_id derived from the
  * subject row, so the mapper doesn't have to know about the join.
@@ -358,11 +358,11 @@ function relayGrantSelectColumns() {
   ] as const
 }
 
-export function relayAuthorizationPresetToGrant(
-  preset: RelayAuthorizationPreset
+export function runtimeAuthorizationPresetToGrant(
+  preset: RuntimeAuthorizationPreset
 ): {
-  scope: RelayAuthorizationGrantScope
-  retention: RelayAuthorizationGrantRetention
+  scope: RuntimeAuthorizationGrantScope
+  retention: RuntimeAuthorizationGrantRetention
 } {
   switch (preset) {
     case "once":
@@ -378,15 +378,15 @@ export function relayAuthorizationPresetToGrant(
   }
 }
 
-export async function createRelayAuthorizationGrant(
-  params: CreateRelayAuthorizationGrantParams,
+export async function createRuntimeAuthorizationGrant(
+  params: CreateRuntimeAuthorizationGrantParams,
   queryable?: Queryable
 ) {
-  const { scope, retention } = relayAuthorizationPresetToGrant(params.preset)
+  const { scope, retention } = runtimeAuthorizationPresetToGrant(params.preset)
   // Zod-parse on the write side as well — any caller that hand-builds a
   // grantSpec gets the same shape validation as the read path.
   const grantSpec = normalizeGrantSpecForInsert(
-    GrantPolicySchema.parse(params.grantSpec) as RelayAuthorizationGrantSpec
+    GrantPolicySchema.parse(params.grantSpec) as RuntimeAuthorizationGrantSpec
   )
   const subjectRef = buildRelayGrantSubjectRef({
     scope,
@@ -403,9 +403,9 @@ export async function createRelayAuthorizationGrant(
     .insertInto("runtime_authorization_grants")
     .values({
       workspace_id: params.workspaceId,
-      device_id: params.relayDeviceId,
-      device_capability_id: params.relayCapabilityId,
-      device_exposure_id: params.relayExposureId,
+      device_id: params.deviceId,
+      device_capability_id: params.deviceCapabilityId,
+      device_exposure_id: params.deviceExposureId,
       subject_id: subjectId,
       created_by_workspace_member_id: params.createdByWorkspaceMemberId || null,
       source_interaction_id: params.sourceInteractionId || null,
@@ -443,10 +443,10 @@ export async function createRelayAuthorizationGrant(
   if (!row) {
     throw new Error("Failed to re-fetch inserted relay authorization grant")
   }
-  return mapRelayAuthorizationGrantRow(row)
+  return mapRuntimeAuthorizationGrantRow(row)
 }
 
-export async function getRelayAuthorizationGrant(
+export async function getRuntimeAuthorizationGrant(
   id: string,
   queryable?: Queryable
 ) {
@@ -459,10 +459,10 @@ export async function getRelayAuthorizationGrant(
   const row = isQueryExecutor(queryable)
     ? await executeTakeFirst<any>(queryable, statement)
     : await statement.executeTakeFirst()
-  return row ? mapRelayAuthorizationGrantRow(row) : null
+  return row ? mapRuntimeAuthorizationGrantRow(row) : null
 }
 
-export async function revokeRelayAuthorizationGrant(
+export async function revokeRuntimeAuthorizationGrant(
   id: string,
   queryable?: Queryable
 ) {
@@ -482,7 +482,7 @@ export async function revokeRelayAuthorizationGrant(
   await statement.execute()
 }
 
-export async function supersedeRelayAuthorizationGrant(
+export async function supersedeRuntimeAuthorizationGrant(
   id: string,
   queryable?: Queryable
 ) {
@@ -502,7 +502,7 @@ export async function supersedeRelayAuthorizationGrant(
   await statement.execute()
 }
 
-export async function consumeRelayAuthorizationGrant(
+export async function consumeRuntimeAuthorizationGrant(
   id: string,
   queryable?: Queryable
 ) {
@@ -523,8 +523,8 @@ export async function consumeRelayAuthorizationGrant(
 }
 
 export function filesystemPolicyMatches(
-  grant: RelayAuthorizationGrantSpec,
-  action: RelayAuthorizationRequestedAction
+  grant: RuntimeAuthorizationGrantSpec,
+  action: RuntimeAuthorizationRequestedAction
 ) {
   const granted = grant.filesystem
   const requested = action.filesystem
@@ -545,8 +545,8 @@ export function filesystemPolicyMatches(
 }
 
 export function browserPolicyMatches(
-  grant: RelayAuthorizationGrantSpec,
-  action: RelayAuthorizationRequestedAction
+  grant: RuntimeAuthorizationGrantSpec,
+  action: RuntimeAuthorizationRequestedAction
 ) {
   const granted = grant.browser
   const requested = action.browser
@@ -578,8 +578,8 @@ export function browserPolicyMatches(
 }
 
 export function commandlinePolicyMatches(
-  grant: RelayAuthorizationGrantSpec,
-  action: RelayAuthorizationRequestedAction
+  grant: RuntimeAuthorizationGrantSpec,
+  action: RuntimeAuthorizationRequestedAction
 ) {
   const granted = grant.commandline
   const requested = action.commandline
@@ -622,9 +622,9 @@ export function commandlinePolicyMatches(
   }
 }
 
-export function relayAuthorizationGrantMatches(
-  grant: RelayAuthorizationGrantRecord,
-  requestedAction: RelayAuthorizationRequestedAction
+export function runtimeAuthorizationGrantMatches(
+  grant: RuntimeAuthorizationGrantRecord,
+  requestedAction: RuntimeAuthorizationRequestedAction
 ) {
   if (grant.capability !== requestedAction.capability) {
     return false
@@ -647,8 +647,8 @@ export function relayAuthorizationGrantMatches(
   }
 }
 
-export async function findMatchingRelayAuthorizationGrant(
-  params: FindMatchingRelayAuthorizationGrantParams,
+export async function findMatchingRuntimeAuthorizationGrant(
+  params: FindMatchingRuntimeAuthorizationGrantParams,
   queryable?: Queryable
 ) {
   // P1b: subject upserts must run on the same connection as the surrounding
@@ -675,9 +675,9 @@ export async function findMatchingRelayAuthorizationGrant(
     .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
     .select(relayGrantSelectColumns())
     .where("g.workspace_id", "=", params.workspaceId)
-    .where("g.device_id", "=", params.relayDeviceId)
-    .where("g.device_capability_id", "=", params.relayCapabilityId)
-    .where("g.device_exposure_id", "=", params.relayExposureId)
+    .where("g.device_id", "=", params.deviceId)
+    .where("g.device_capability_id", "=", params.deviceCapabilityId)
+    .where("g.device_exposure_id", "=", params.deviceExposureId)
     .where("g.status", "=", "active")
     .where((eb) =>
       eb.or([
@@ -713,11 +713,11 @@ export async function findMatchingRelayAuthorizationGrant(
     ? (await executeCompiledQuery<any>(queryable, statement)).rows
     : await statement.execute()
   const candidates = rows
-    .map((row) => mapRelayAuthorizationGrantRow(row))
+    .map((row) => mapRuntimeAuthorizationGrantRow(row))
     .sort((left, right) => {
       const byScope =
-        relayAuthorizationScopeRank(left.scope) -
-        relayAuthorizationScopeRank(right.scope)
+        runtimeAuthorizationScopeRank(left.scope) -
+        runtimeAuthorizationScopeRank(right.scope)
       if (byScope !== 0) {
         return byScope
       }
@@ -726,11 +726,11 @@ export async function findMatchingRelayAuthorizationGrant(
 
   const matchedGrant =
     candidates.find((candidate) =>
-      relayAuthorizationGrantMatches(candidate, params.requestedAction)
+      runtimeAuthorizationGrantMatches(candidate, params.requestedAction)
     ) || null
 
   if (matchedGrant && params.consumeOnce && matchedGrant.scope === "once") {
-    await consumeRelayAuthorizationGrant(matchedGrant.id, queryable)
+    await consumeRuntimeAuthorizationGrant(matchedGrant.id, queryable)
     matchedGrant.status = "consumed"
     matchedGrant.consumedAt = new Date().toISOString()
   }
@@ -740,19 +740,19 @@ export async function findMatchingRelayAuthorizationGrant(
   }
 }
 
-export async function listActiveRelayAuthorizationGrantsForExposure(
-  relayCapabilityId: string,
+export async function listActiveRuntimeAuthorizationGrantsForExposure(
+  deviceCapabilityId: string,
   queryable?: Queryable
 ) {
   const statement = db
     .selectFrom("runtime_authorization_grants as g")
     .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
     .select(relayGrantSelectColumns())
-    .where("g.device_capability_id", "=", relayCapabilityId)
+    .where("g.device_capability_id", "=", deviceCapabilityId)
     .where("g.status", "=", "active")
     .orderBy("g.created_at", "desc")
   const rows = isQueryExecutor(queryable)
     ? (await executeCompiledQuery<any>(queryable, statement)).rows
     : await statement.execute()
-  return rows.map((row) => mapRelayAuthorizationGrantRow(row))
+  return rows.map((row) => mapRuntimeAuthorizationGrantRow(row))
 }

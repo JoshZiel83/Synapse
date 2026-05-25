@@ -132,7 +132,7 @@ test("loadExecutionToolResultsForSession returns rehydrated CanonicalToolResult 
       toolName: "filesystem__View",
       providerCallId,
       origin: {
-        kind: "mcp_relay",
+        kind: "mcp_device",
         deviceId: "dev-abc",
         exposureStableKey: "synapse.builtin.filesystem.v1",
       },
@@ -156,7 +156,7 @@ test("loadExecutionToolResultsForSession returns rehydrated CanonicalToolResult 
   assert.equal(byProviderId!.toolCallId, providerCallId)
   assert.equal(byProviderId!.providerCallId, providerCallId)
   assert.equal(byProviderId!.isError, false)
-  assert.equal(byProviderId!.origin?.kind, "mcp_relay")
+  assert.equal(byProviderId!.origin?.kind, "mcp_device")
   assert.deepEqual(byProviderId!.structuredContent, {
     lines: 1,
     path: "/tmp/x",

@@ -36,6 +36,10 @@ export async function loadDeviceCapabilityToolsForSubjects(
   params: LoadDeviceToolsParams
 ): Promise<DeviceCapabilityToolRow[]> {
   if (params.subjectIds.length === 0) return []
+  // distinctOn collapses duplicate rows when multiple subject bindings cover
+  // the same capability (e.g. workspace-scope + actor-scope both grant the
+  // bash tool — without distinctOn the projection surfaces it twice and the
+  // planner sees duplicate names).
   const rows = await db
     .selectFrom("device_capabilities as dc")
     .innerJoin("resource_access_bindings as rab", (join) =>
@@ -57,6 +61,7 @@ export async function loadDeviceCapabilityToolsForSubjects(
       "dcr.id",
       "dtr.catalog_revision_id"
     )
+    .distinctOn(["dt.id"])
     .select([
       "d.id as device_id",
       "d.title as device_name",
@@ -78,6 +83,7 @@ export async function loadDeviceCapabilityToolsForSubjects(
     .where("dcr.status", "=", "active")
     .where("dx.runtime_status", "in", ["healthy", "degraded"])
     .where("rab.subject_id", "in", params.subjectIds)
+    .orderBy("dt.id")
     .execute()
   return rows as unknown as DeviceCapabilityToolRow[]
 }

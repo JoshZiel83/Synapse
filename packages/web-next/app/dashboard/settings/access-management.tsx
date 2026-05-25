@@ -40,7 +40,7 @@ type WorkspaceAccessKey =
   | "skill_admin"
   | "plugin_admin"
   | "memory_admin"
-  | "relay_admin"
+  | "device_admin"
   | "conversation_admin"
 
 type PlatformAccessKey =
@@ -116,9 +116,9 @@ const workspaceAccessOptions: Array<{
     description: "Can manage workspace memories and retention rules.",
   },
   {
-    value: "relay_admin",
-    label: "MCP Relays",
-    description: "Can manage relay devices, pairing, and tokens.",
+    value: "device_admin",
+    label: "Devices",
+    description: "Can manage devices, pairing, and tokens.",
   },
   {
     value: "conversation_admin",
@@ -267,10 +267,10 @@ const workspaceCapabilityPolicyFamilies: Array<{
       "Default conversation types for installed skills before any installation or grant override narrows them further.",
   },
   {
-    family: "relay_capability",
-    label: "Relay Capabilities",
+    family: "device_capability",
+    label: "Device Capabilities",
     description:
-      "Default conversation types for relay devices and exposures before any device, exposure, or grant override narrows them further.",
+      "Default conversation types for devices and exposures before any device, exposure, or grant override narrows them further.",
   },
 ]
 

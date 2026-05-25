@@ -7,19 +7,32 @@
 //      base64-Ed25519 signature of the nonce, signed by its service private
 //      key (loaded from the broker).
 //   3. Server verifies the signature against the device_service_keys row
-//      matching the claimed (device_id, service_id) pair. Only then does
-//      catalog.sync / runtime_session / event.emit / etc. become callable.
+//      matching the claimed (device_id, service_id) pair. On success, a
+//      device_control_plane_sessions row is INSERTed with status='active'
+//      and device_services.current_session_id is bumped.
+//   4. Server returns the envelope-signing pubkey + kid in the hello ack so
+//      the runtime can populate its trusted_server_keys map without out-of-
+//      band config.
+//   5. Catalog sync + runtime sessions + tunnel registration are gated behind
+//      requireAuthenticated.
+//   6. On `device.tunnel.up`, the server registers the device's internalUrl
+//      with DeviceTunnelRegistry so dispatchSyncTool can route to it. On
+//      `device.tunnel.down` (or socket close), the registry entry is removed.
 
-import { randomBytes } from "node:crypto"
+import { randomBytes, randomUUID } from "node:crypto"
 import type { FastifyInstance, FastifyRequest } from "fastify"
 import type { WebSocket } from "ws"
+import { sql } from "kysely"
 import {
   DeviceCatalogSyncParamsSchema,
   DeviceHelloParamsSchema,
   type JsonRpcRequest,
 } from "@synapse/device-protocol"
+import { db } from "../../infrastructure/database/kysely.js"
 import { persistCatalogSync } from "./catalog-sync.js"
 import { authenticateDeviceHello } from "./control-plane-auth.js"
+import { getEnvelopeServerPublicKey } from "./envelope-signer.js"
+import { getDeviceTunnelRegistry } from "./tunnel-registry.js"
 
 interface ParsedFrame {
   raw: string
@@ -83,25 +96,86 @@ interface ConnectionState {
   helloSeen: boolean
   authenticatedDeviceId: string | null
   authenticatedServiceId: string | null
+  sessionId: string | null
+  registeredTunnelServiceId: string | null
 }
 
-/**
- * Maps device.hello auth failure codes to JSON-RPC error codes so the device
- * runtime can distinguish "you don't exist" from "your signature was wrong".
- */
 function jsonRpcCodeForAuthFailure(code: string): number {
   switch (code) {
     case "device_not_found":
     case "service_not_found":
-      return -32004 // resource not found
+      return -32004
     case "service_key_missing":
     case "service_revoked":
-      return -32005 // forbidden
+      return -32005
     case "signature_invalid":
     case "unsupported_key":
-      return -32003 // unauthenticated
+      return -32003
     default:
       return -32603
+  }
+}
+
+async function insertControlPlaneSession(args: {
+  deviceId: string
+  serviceId: string
+  clientVersion: string | null
+  remoteAddr: string | null
+}): Promise<string> {
+  const sessionId = randomUUID()
+  await db
+    .insertInto("device_control_plane_sessions")
+    .values({
+      id: sessionId,
+      device_id: args.deviceId,
+      service_id: args.serviceId,
+      protocol_version: 1,
+      client_version: args.clientVersion,
+      status: "active",
+      transport: "websocket",
+      remote_addr: args.remoteAddr,
+      last_sequence: 0,
+      last_heartbeat_at: sql`NOW()`,
+      started_at: sql`NOW()`,
+    } as never)
+    .execute()
+  await db
+    .updateTable("device_services")
+    .set({
+      current_session_id: sessionId,
+      last_seen_at: sql`NOW()`,
+      updated_at: sql`NOW()`,
+    } as never)
+    .where("id", "=", args.serviceId)
+    .execute()
+  return sessionId
+}
+
+async function closeControlPlaneSession(
+  sessionId: string,
+  reason: string
+): Promise<void> {
+  try {
+    await db
+      .updateTable("device_control_plane_sessions")
+      .set({
+        status: "closed",
+        ended_at: sql`NOW()`,
+        close_reason: reason,
+        updated_at: sql`NOW()`,
+      } as never)
+      .where("id", "=", sessionId)
+      .execute()
+    await db
+      .updateTable("device_services")
+      .set({
+        current_session_id: null,
+        updated_at: sql`NOW()`,
+      } as never)
+      .where("current_session_id", "=", sessionId)
+      .execute()
+  } catch {
+    /* best effort; DB unavailability shouldn't block socket teardown */
   }
 }
 
@@ -109,16 +183,16 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
   app.get(
     "/api/v1/devices/control-plane",
     { websocket: true },
-    (socket: WebSocket, _request: FastifyRequest) => {
+    (socket: WebSocket, request: FastifyRequest) => {
       const state: ConnectionState = {
         challengeNonce: randomBytes(32).toString("hex"),
         helloSeen: false,
         authenticatedDeviceId: null,
         authenticatedServiceId: null,
+        sessionId: null,
+        registeredTunnelServiceId: null,
       }
 
-      // Issue the challenge as the very first frame so the device runtime
-      // has it before it sends device.hello.
       writeNotification(socket, "server.challenge", {
         nonce: state.challengeNonce,
       })
@@ -178,7 +252,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               signedChallenge: parsed.data.signed_challenge,
               challengeNonce: state.challengeNonce,
             })
-              .then((result) => {
+              .then(async (result) => {
                 if (!result.ok) {
                   writeError(
                     socket,
@@ -196,11 +270,54 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 }
                 state.authenticatedDeviceId = result.deviceId
                 state.authenticatedServiceId = result.serviceId
+                // Persist the CP session so runtime-authorization requests
+                // can find an active session and not reject themselves.
+                try {
+                  state.sessionId = await insertControlPlaneSession({
+                    deviceId: result.deviceId,
+                    serviceId: result.serviceId,
+                    clientVersion: parsed.data.client_version ?? null,
+                    remoteAddr: request.ip ?? null,
+                  })
+                } catch (err) {
+                  writeError(
+                    socket,
+                    req.id ?? null,
+                    -32603,
+                    `session insert failed: ${(err as Error).message}`
+                  )
+                  try {
+                    socket.close(1011, "session insert failed")
+                  } catch {
+                    /* ignore */
+                  }
+                  return
+                }
+                // Hand the device our envelope-signing pubkey + kid so it
+                // can populate trusted_server_keys without out-of-band
+                // config. If the env var isn't set, ship null so the
+                // operator notices on the dashboard.
+                let serverEnvelopeKey: {
+                  signatureKid: string
+                  publicKeyPem: string
+                } | null = null
+                try {
+                  serverEnvelopeKey = getEnvelopeServerPublicKey()
+                } catch {
+                  serverEnvelopeKey = null
+                }
                 writeResult(socket, req.id ?? null, {
                   accepted: true,
                   server_time: new Date().toISOString(),
                   service_key_id: result.serviceKeyId,
                   pubkey_fingerprint: result.pubkeyFingerprint,
+                  control_plane_session_id: state.sessionId,
+                  envelope_signing: serverEnvelopeKey
+                    ? {
+                        kid: serverEnvelopeKey.signatureKid,
+                        public_key_pem: serverEnvelopeKey.publicKeyPem,
+                      }
+                    : null,
                 })
               })
               .catch((err) => {
@@ -249,6 +366,39 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               })
             return
           }
+          case "device.tunnel.up": {
+            if (!requireAuthenticated(req)) return
+            const params = req.params as
+              | { internal_url?: unknown }
+              | undefined
+            if (!params || typeof params.internal_url !== "string") {
+              writeError(
+                socket,
+                req.id ?? null,
+                -32602,
+                "device.tunnel.up: 'internal_url' (string) required"
+              )
+              return
+            }
+            getDeviceTunnelRegistry().register({
+              deviceServiceId: state.authenticatedServiceId!,
+              internalUrl: params.internal_url,
+            })
+            state.registeredTunnelServiceId = state.authenticatedServiceId
+            writeResult(socket, req.id ?? null, { registered: true })
+            return
+          }
+          case "device.tunnel.down": {
+            if (!requireAuthenticated(req)) return
+            if (state.registeredTunnelServiceId) {
+              getDeviceTunnelRegistry().unregister(
+                state.registeredTunnelServiceId
+              )
+              state.registeredTunnelServiceId = null
+            }
+            writeResult(socket, req.id ?? null, { unregistered: true })
+            return
+          }
           case "device.catalog.delta":
           case "device.service.status":
           case "device.runtime_session.opened":
@@ -261,7 +411,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           case "device.event.emit":
           case "device.vfs.exposure.upsert": {
             if (!requireAuthenticated(req)) return
-            // v3.0 skeleton: ack only. Real persistence lands in later PRs.
+            // v3.0 skeleton: ack only. Real persistence lands in a follow-up PR.
             writeResult(socket, req.id ?? null, {
               accepted: true,
               method: req.method,
@@ -282,8 +432,16 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
       })
 
       socket.on("close", () => {
-        // v3.0 skeleton: nothing to clean up. A later PR closes the
-        // device_control_plane_sessions row here.
+        if (state.registeredTunnelServiceId) {
+          getDeviceTunnelRegistry().unregister(
+            state.registeredTunnelServiceId
+          )
+          state.registeredTunnelServiceId = null
+        }
+        if (state.sessionId) {
+          void closeControlPlaneSession(state.sessionId, "socket_close")
+          state.sessionId = null
+        }
       })
     }
   )

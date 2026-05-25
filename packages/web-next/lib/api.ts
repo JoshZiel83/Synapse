@@ -338,7 +338,7 @@ class ApiClient {
     data: {
       policies: Partial<
         Record<
-          "plugin_installation" | "installed_skill" | "relay_capability",
+          "plugin_installation" | "installed_skill" | "device_capability",
           number
         >
       >
@@ -362,7 +362,7 @@ class ApiClient {
         | "skill_admin"
         | "plugin_admin"
         | "memory_admin"
-        | "relay_admin"
+        | "device_admin"
         | "conversation_admin"
     }
   ) {
@@ -380,7 +380,7 @@ class ApiClient {
       | "skill_admin"
       | "plugin_admin"
       | "memory_admin"
-      | "relay_admin"
+      | "device_admin"
       | "conversation_admin"
   ) {
     return this.fetch(

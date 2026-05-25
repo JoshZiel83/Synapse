@@ -21,7 +21,6 @@ import type {
 export type AccessBindingSource =
   | "manual"
   | "default_open"
-  | "relay_auto"
   | "approval"
   | "system"
 

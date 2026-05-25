@@ -25,8 +25,8 @@ import {
   INTERACTION_REQUEST_KIND,
   type InteractionInputQuestionSummary,
   type InteractionRequestSummary,
-  type RelayAuthorizationGrantSpec,
-  type RelayAuthorizationRequestedAction,
+  type RuntimeAuthorizationGrantSpec,
+  type RuntimeAuthorizationRequestedAction,
 } from "@shared"
 
 type InteractionResolutionDraftPayload = ChatInteractionResolvePayload
@@ -240,7 +240,7 @@ function getStatusNote(
   return "点击查看详情"
 }
 
-function formatRelayAuthorizationPresetLabel(preset: string) {
+function formatRuntimeAuthorizationPresetLabel(preset: string) {
   switch (preset) {
     case "once":
       return "仅本次"
@@ -255,7 +255,7 @@ function formatRelayAuthorizationPresetLabel(preset: string) {
   }
 }
 
-function describeRelayAuthorizationSpec(scope: RelayAuthorizationGrantSpec) {
+function describeRuntimeAuthorizationSpec(scope: RuntimeAuthorizationGrantSpec) {
   if (scope.capability === "filesystem" && scope.filesystem) {
     return {
       summary:
@@ -309,10 +309,10 @@ function describeRelayAuthorizationSpec(scope: RelayAuthorizationGrantSpec) {
   }
 }
 
-function describeRelayAuthorizationRequestedAction(
-  action: RelayAuthorizationRequestedAction
+function describeRuntimeAuthorizationRequestedAction(
+  action: RuntimeAuthorizationRequestedAction
 ) {
-  const describedScope = describeRelayAuthorizationSpec(action)
+  const describedScope = describeRuntimeAuthorizationSpec(action)
   return {
     summary: action.summary,
     detailLines: action.detail
@@ -562,7 +562,7 @@ export function ChatQuestionInteractionCard({
   const [resolutionNoteDraft, setResolutionNoteDraft] = useState("")
   const [selectedRelayGrantOptionId, setSelectedRelayGrantOptionId] = useState<
     string | null
-  >(interaction.relayAuthorization?.grantOptions[0]?.id || null)
+  >(interaction.runtimeAuthorization?.grantOptions[0]?.id || null)
   const draftAnswersRef = useRef(draftAnswers)
   const questionCardOffset = useRef(new Animated.Value(0)).current
   const userInput = interaction.userInput
@@ -578,7 +578,7 @@ export function ChatQuestionInteractionCard({
     Boolean(onResolveInteraction) &&
     viewerCanResolve &&
     interaction.status === "pending"
-  const canResolveRelayAuthorization =
+  const canResolveRuntimeAuthorization =
     interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
     Boolean(onResolveInteraction) &&
     viewerCanResolve &&
@@ -586,7 +586,7 @@ export function ChatQuestionInteractionCard({
   const canResolve =
     canResolveUserInput ||
     canResolvePlanApproval ||
-    canResolveRelayAuthorization
+    canResolveRuntimeAuthorization
   const statusMeta = getStatusMeta(interaction.status)
 
   useEffect(() => {
@@ -598,7 +598,7 @@ export function ChatQuestionInteractionCard({
     setSubmitError(null)
     setResolutionNoteDraft("")
     setSelectedRelayGrantOptionId(
-      interaction.relayAuthorization?.grantOptions[0]?.id || null
+      interaction.runtimeAuthorization?.grantOptions[0]?.id || null
     )
   }, [interaction.id, interaction.revision, interaction.status])
 
@@ -786,8 +786,8 @@ export function ChatQuestionInteractionCard({
       ? interaction.userInput?.title || "表单"
       : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
         ? interaction.planApproval?.title || "计划审批"
-        : interaction.relayAuthorization
-          ? `授权 ${interaction.relayAuthorization.relayToolStableKey}`
+        : interaction.runtimeAuthorization
+          ? `授权 ${interaction.runtimeAuthorization.deviceToolStableKey}`
           : "授权请求"
 
   const cardDescription =
@@ -795,16 +795,16 @@ export function ChatQuestionInteractionCard({
       ? interaction.userInput?.instructions
       : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
         ? interaction.planApproval?.summary
-        : interaction.relayAuthorization?.reason
+        : interaction.runtimeAuthorization?.reason
 
   const cardSummary =
     interaction.kind === INTERACTION_REQUEST_KIND.USER_INPUT
       ? answerSummary
       : interaction.kind === INTERACTION_REQUEST_KIND.PLAN_APPROVAL
         ? interaction.resolutionNote
-        : interaction.relayAuthorization?.approvedGrant
+        : interaction.runtimeAuthorization?.approvedGrant
           ? "已生成授权范围"
-          : interaction.relayAuthorization?.exposureDisplayName
+          : interaction.runtimeAuthorization?.exposureDisplayName
 
   return (
     <View style={styles.eventWrap}>
@@ -1116,36 +1116,36 @@ export function ChatQuestionInteractionCard({
                       <View style={styles.summarySection}>
                         <Text style={styles.summaryIndex}>设备</Text>
                         <Text style={styles.summaryTitle}>
-                          {interaction.relayAuthorization?.deviceDisplayName ||
+                          {interaction.runtimeAuthorization?.deviceDisplayName ||
                             "Relay"}
                         </Text>
                         <Text style={styles.summaryDescription}>
-                          {interaction.relayAuthorization?.reason || "等待授权"}
+                          {interaction.runtimeAuthorization?.reason || "等待授权"}
                         </Text>
                       </View>
                       <View style={styles.summarySection}>
                         <Text style={styles.summaryIndex}>暴露能力</Text>
                         <Text style={styles.summaryAnswer}>
-                          {interaction.relayAuthorization
+                          {interaction.runtimeAuthorization
                             ?.exposureDisplayName || "未提供"}
                         </Text>
                       </View>
-                      {interaction.relayAuthorization?.requestedAction ? (
+                      {interaction.runtimeAuthorization?.requestedAction ? (
                         <RelaySpecSection
                           eyebrow="请求操作"
                           summary={
-                            describeRelayAuthorizationRequestedAction(
-                              interaction.relayAuthorization.requestedAction
+                            describeRuntimeAuthorizationRequestedAction(
+                              interaction.runtimeAuthorization.requestedAction
                             ).summary
                           }
                           detailLines={
-                            describeRelayAuthorizationRequestedAction(
-                              interaction.relayAuthorization.requestedAction
+                            describeRuntimeAuthorizationRequestedAction(
+                              interaction.runtimeAuthorization.requestedAction
                             ).detailLines
                           }
                         />
                       ) : null}
-                      {(interaction.relayAuthorization?.grantOptions || []).map(
+                      {(interaction.runtimeAuthorization?.grantOptions || []).map(
                         (option) => (
                           <FieldOptionButton
                             key={option.id}
@@ -1153,7 +1153,7 @@ export function ChatQuestionInteractionCard({
                             label={option.summary}
                             description={option.detail}
                             disabled={
-                              !canResolveRelayAuthorization || submitting
+                              !canResolveRuntimeAuthorization || submitting
                             }
                             onPress={() =>
                               setSelectedRelayGrantOptionId(option.id)
@@ -1161,47 +1161,47 @@ export function ChatQuestionInteractionCard({
                           />
                         )
                       )}
-                      {(interaction.relayAuthorization?.availablePresets || [])
+                      {(interaction.runtimeAuthorization?.availablePresets || [])
                         .length ? (
                         <View style={styles.summarySection}>
                           <Text style={styles.summaryIndex}>授权范围</Text>
                           <Text style={styles.summaryAnswer}>
                             {(
-                              interaction.relayAuthorization
+                              interaction.runtimeAuthorization
                                 ?.availablePresets || []
                             )
                               .map((preset) =>
-                                formatRelayAuthorizationPresetLabel(preset)
+                                formatRuntimeAuthorizationPresetLabel(preset)
                               )
                               .join(" / ")}
                           </Text>
                         </View>
                       ) : null}
-                      {interaction.relayAuthorization?.approvedPreset ? (
+                      {interaction.runtimeAuthorization?.approvedPreset ? (
                         <View style={styles.summarySection}>
                           <Text style={styles.summaryIndex}>已批准范围</Text>
                           <Text style={styles.summaryAnswer}>
-                            {formatRelayAuthorizationPresetLabel(
-                              interaction.relayAuthorization.approvedPreset
+                            {formatRuntimeAuthorizationPresetLabel(
+                              interaction.runtimeAuthorization.approvedPreset
                             )}
                           </Text>
                         </View>
                       ) : null}
-                      {interaction.relayAuthorization?.approvedGrant ? (
+                      {interaction.runtimeAuthorization?.approvedGrant ? (
                         <>
                           <RelaySpecSection
                             eyebrow="已批准授权"
                             summary={
-                              describeRelayAuthorizationSpec(
-                                interaction.relayAuthorization.approvedGrant
+                              describeRuntimeAuthorizationSpec(
+                                interaction.runtimeAuthorization.approvedGrant
                               ).summary
                             }
                             detailLines={[
-                              ...describeRelayAuthorizationSpec(
-                                interaction.relayAuthorization.approvedGrant
+                              ...describeRuntimeAuthorizationSpec(
+                                interaction.runtimeAuthorization.approvedGrant
                               ).detailLines,
-                              `scope: ${interaction.relayAuthorization.approvedGrant.scope}`,
-                              `retention: ${interaction.relayAuthorization.approvedGrant.retention}`,
+                              `scope: ${interaction.runtimeAuthorization.approvedGrant.scope}`,
+                              `retention: ${interaction.runtimeAuthorization.approvedGrant.retention}`,
                             ]}
                           />
                         </>
@@ -1214,7 +1214,7 @@ export function ChatQuestionInteractionCard({
                           </Text>
                         </View>
                       ) : null}
-                      {canResolveRelayAuthorization ? (
+                      {canResolveRuntimeAuthorization ? (
                         <View style={styles.summarySection}>
                           <Text style={styles.summaryIndex}>审批备注</Text>
                           <TextInput
@@ -1270,17 +1270,17 @@ export function ChatQuestionInteractionCard({
                         disabled={submitting}
                       />
                     </>
-                  ) : canResolveRelayAuthorization ? (
+                  ) : canResolveRuntimeAuthorization ? (
                     <View style={styles.multiActionWrap}>
                       {(
-                        interaction.relayAuthorization?.availablePresets || []
+                        interaction.runtimeAuthorization?.availablePresets || []
                       ).map((preset) => (
                         <Button
                           key={preset}
                           label={
                             submitting
                               ? "处理中..."
-                              : formatRelayAuthorizationPresetLabel(preset)
+                              : formatRuntimeAuthorizationPresetLabel(preset)
                           }
                           onPress={() =>
                             selectedRelayGrantOptionId

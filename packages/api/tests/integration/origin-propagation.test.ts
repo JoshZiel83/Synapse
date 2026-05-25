@@ -75,7 +75,7 @@ after(async () => {
 // Set up minimal session+turn+conversation+tool_call rows so we can write
 // to tool_results without going through the full actor pipeline.
 async function buildToolCall(opts: {
-  toolKind: "callable" | "mcp_plugin" | "mcp_relay" | "builtin"
+  toolKind: "callable" | "mcp_plugin" | "mcp_device" | "builtin"
   toolName: string
 }): Promise<string> {
   if (!seed || !client) throw new Error("test fixtures missing")
@@ -146,7 +146,7 @@ test("MCP path: createToolResult persists origin into tool_results.metadata JSON
       toolCallId: "call-1",
       toolName: "filesystem__View",
       origin: {
-        kind: "mcp_relay",
+        kind: "mcp_device",
         deviceId: "dev-mcp-1",
         exposureStableKey: "synapse.builtin.filesystem.v1",
         runtimeSessionId: "rs-1",
@@ -162,7 +162,7 @@ test("MCP path: createToolResult persists origin into tool_results.metadata JSON
   )
   assert.equal(rows.rows.length, 1)
   const meta = rows.rows[0].metadata
-  assert.equal(meta.origin.kind, "mcp_relay")
+  assert.equal(meta.origin.kind, "mcp_device")
   assert.equal(meta.origin.deviceId, "dev-mcp-1")
   assert.equal(meta.origin.exposureStableKey, "synapse.builtin.filesystem.v1")
   assert.deepEqual(meta.structuredContent, { entries: 12 })
@@ -206,7 +206,7 @@ test("Origin survives all 5 ToolResultOrigin kinds through the JSONB column", as
   const kinds = [
     { kind: "mcp_remote", serverKey: "github" },
     {
-      kind: "mcp_relay",
+      kind: "mcp_device",
       deviceId: "dev-x",
       exposureStableKey: "syn.builtin.cua.v1",
     },

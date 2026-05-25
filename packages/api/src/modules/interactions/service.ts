@@ -25,12 +25,12 @@ import type {
   InteractionRequestSummary,
   PlanApprovalDecision,
   PlanChecklistStep,
-  RelayAuthorizationGrantOption,
-  RelayAuthorizationGrantSpec,
-  RelayAuthorizationInteractionSummary,
-  RelayAuthorizationPreset,
-  RelayAuthorizationRequestMode,
-  RelayAuthorizationRequestedAction,
+  RuntimeAuthorizationGrantOption,
+  RuntimeAuthorizationGrantSpec,
+  RuntimeAuthorizationInteractionSummary,
+  RuntimeAuthorizationPreset,
+  RuntimeAuthorizationRequestMode,
+  RuntimeAuthorizationRequestedAction,
   SessionCollaborationState,
 } from "@synapse/shared/types"
 import { type Queryable } from "../../infrastructure/events/index.js"
@@ -63,8 +63,8 @@ import {
 import { getFileUrlById } from "../files/service.js"
 import { sql } from "kysely"
 import {
-  createRelayAuthorizationGrant,
-  type RelayAuthorizationGrantRecord,
+  createRuntimeAuthorizationGrant,
+  type RuntimeAuthorizationGrantRecord,
 } from "../runtime-authorizations/service.js"
 import {
   buildSessionPlanDraftState,
@@ -230,22 +230,22 @@ export interface CreateRemoteAgentPlanApprovalInteractionParams {
   expiresAt?: string
 }
 
-export interface CreateRelayAuthorizationInteractionParams {
+export interface CreateRuntimeAuthorizationInteractionParams {
   workspaceId: string
   conversationId: string
   taskId: string
   requesterParticipantId: string
-  relayCapabilityId: string
-  relayDeviceId: string
-  relayExposureId: string
+  deviceCapabilityId: string
+  deviceId: string
+  deviceExposureId: string
   requestedToolName: string
   runtimeSessionId: string
-  relayToolStableKey: string
+  deviceToolStableKey: string
   reason: string
-  requestedAction: RelayAuthorizationRequestedAction
-  grantOptions: RelayAuthorizationGrantOption[]
-  availablePresets: RelayAuthorizationPreset[]
-  requestMode: RelayAuthorizationRequestMode
+  requestedAction: RuntimeAuthorizationRequestedAction
+  grantOptions: RuntimeAuthorizationGrantOption[]
+  availablePresets: RuntimeAuthorizationPreset[]
+  requestMode: RuntimeAuthorizationRequestMode
   sourceRetryNonce?: string
   sourceRequestArgs?: Record<string, unknown>
   expiresAt?: string
@@ -260,23 +260,23 @@ export type ResolveInteractionRequestParams = ChatInteractionResolveInput & {
 export interface ResolveInteractionRequestResult {
   outcome: ChatInteractionResolveOutcome
   interaction: InteractionRequestSummary
-  createdGrant?: RelayAuthorizationGrantRecord
-  createdGrants?: RelayAuthorizationGrantRecord[]
+  createdGrant?: RuntimeAuthorizationGrantRecord
+  createdGrants?: RuntimeAuthorizationGrantRecord[]
 }
 
-export interface FindOpenRelayAuthorizationInteractionParams {
+export interface FindOpenRuntimeAuthorizationInteractionParams {
   workspaceId: string
   conversationId: string
   requesterParticipantId: string
-  relayCapabilityId: string
-  relayDeviceId: string
-  relayExposureId: string
+  deviceCapabilityId: string
+  deviceId: string
+  deviceExposureId: string
   requestedToolName: string
-  relayToolStableKey: string
-  requestedAction: RelayAuthorizationRequestedAction
-  grantOptions: RelayAuthorizationGrantOption[]
-  availablePresets: RelayAuthorizationPreset[]
-  requestMode: RelayAuthorizationRequestMode
+  deviceToolStableKey: string
+  requestedAction: RuntimeAuthorizationRequestedAction
+  grantOptions: RuntimeAuthorizationGrantOption[]
+  availablePresets: RuntimeAuthorizationPreset[]
+  requestMode: RuntimeAuthorizationRequestMode
 }
 
 function parseJsonObject(value: unknown): Record<string, unknown> {
@@ -396,23 +396,23 @@ function jsonbValue<T>(value: T) {
   return sql<T>`${JSON.stringify(value ?? null)}::jsonb`
 }
 
-function buildRelayAuthorizationDedupeKey(params: {
-  relayDeviceId: string
-  relayCapabilityId: string
-  relayExposureId: string
+function buildRuntimeAuthorizationDedupeKey(params: {
+  deviceId: string
+  deviceCapabilityId: string
+  deviceExposureId: string
   requestedToolName: string
-  relayToolStableKey: string
-  requestMode: RelayAuthorizationRequestMode
-  requestedAction: RelayAuthorizationRequestedAction
-  grantOptions: RelayAuthorizationGrantOption[]
-  availablePresets: RelayAuthorizationPreset[]
+  deviceToolStableKey: string
+  requestMode: RuntimeAuthorizationRequestMode
+  requestedAction: RuntimeAuthorizationRequestedAction
+  grantOptions: RuntimeAuthorizationGrantOption[]
+  availablePresets: RuntimeAuthorizationPreset[]
 }) {
   return stableJsonStringify({
-    relayDeviceId: params.relayDeviceId,
-    relayCapabilityId: params.relayCapabilityId,
-    relayExposureId: params.relayExposureId,
+    deviceId: params.deviceId,
+    deviceCapabilityId: params.deviceCapabilityId,
+    deviceExposureId: params.deviceExposureId,
     requestedToolName: params.requestedToolName,
-    relayToolStableKey: params.relayToolStableKey,
+    deviceToolStableKey: params.deviceToolStableKey,
     requestMode: params.requestMode,
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
@@ -431,7 +431,7 @@ function buildRemoteAgentInteractionRequestKey(params: {
   return `remote-agent-run:${params.remoteAgentRunId}:${params.kind}`
 }
 
-function buildRelayAuthorizationInteractionRequestKey(params: {
+function buildRuntimeAuthorizationInteractionRequestKey(params: {
   conversationId: string
   requesterParticipantId: string
   dedupeKey: string
@@ -1003,21 +1003,21 @@ function buildInteractionSummary(
   const requestedAction = requireJsonObject(
     row.requested_action,
     `Interaction ${row.id} requested_action`
-  ) as unknown as RelayAuthorizationRequestedAction
-  const grantOptions = parseJsonArray<RelayAuthorizationGrantOption>(
+  ) as unknown as RuntimeAuthorizationRequestedAction
+  const grantOptions = parseJsonArray<RuntimeAuthorizationGrantOption>(
     row.grant_options,
     `Interaction ${row.id} grant_options`
   )
-  const availablePresets = parseJsonArray<RelayAuthorizationPreset>(
+  const availablePresets = parseJsonArray<RuntimeAuthorizationPreset>(
     row.available_presets,
     `Interaction ${row.id} available_presets`
   )
-  const relayAuthorization: RelayAuthorizationInteractionSummary = {
+  const runtimeAuthorization: RuntimeAuthorizationInteractionSummary = {
     requestedToolName: requireTrimmedString(
       row.requested_tool_name,
       `Interaction ${row.id} requested_tool_name`
     ),
-    relayToolStableKey: requireTrimmedString(
+    deviceToolStableKey: requireTrimmedString(
       row.device_tool_stable_key,
       `Interaction ${row.id} device_tool_stable_key`
     ),
@@ -1034,7 +1034,7 @@ function buildInteractionSummary(
       row.device_display_name,
       `Interaction ${row.id} device_display_name`
     ),
-    relayCapabilityId: requireTrimmedString(
+    deviceCapabilityId: requireTrimmedString(
       row.device_capability_id,
       `Interaction ${row.id} device_capability_id`
     ),
@@ -1050,17 +1050,17 @@ function buildInteractionSummary(
     availablePresets,
     approvedPreset:
       typeof resolutionPayload.approvedPreset === "string"
-        ? (resolutionPayload.approvedPreset as RelayAuthorizationPreset)
+        ? (resolutionPayload.approvedPreset as RuntimeAuthorizationPreset)
         : undefined,
     approvedGrant:
       resolutionPayload.approvedGrant &&
       typeof resolutionPayload.approvedGrant === "object" &&
       !Array.isArray(resolutionPayload.approvedGrant)
-        ? (resolutionPayload.approvedGrant as RelayAuthorizationInteractionSummary["approvedGrant"])
+        ? (resolutionPayload.approvedGrant as RuntimeAuthorizationInteractionSummary["approvedGrant"])
         : undefined,
     requestMode:
       row.request_mode === "blocking" || row.request_mode === "background"
-        ? (row.request_mode as RelayAuthorizationRequestMode)
+        ? (row.request_mode as RuntimeAuthorizationRequestMode)
         : (() => {
             throw new Error(
               `Interaction ${row.id} runtime_authorization.requestMode is invalid`
@@ -1071,7 +1071,7 @@ function buildInteractionSummary(
   return {
     ...baseInteraction,
     kind: INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION,
-    relayAuthorization,
+    runtimeAuthorization,
   }
 }
 
@@ -1549,12 +1549,12 @@ function buildPlanApprovalRevisionNotice(
   }
 }
 
-function buildRelayAuthorizationRejectedNotice(
+function buildRuntimeAuthorizationRejectedNotice(
   interaction: InteractionRequestSummary
 ) {
   const resolverName = interaction.resolvedBy?.name || "An authorized user"
   const deviceName =
-    interaction.relayAuthorization?.deviceDisplayName || "relay device"
+    interaction.runtimeAuthorization?.deviceDisplayName || "relay device"
   const summary = `${resolverName} rejected access for ${deviceName}.`
   const lines = [
     summary,
@@ -1587,14 +1587,14 @@ function buildRelayAuthorizationRejectedNotice(
   }
 }
 
-function buildRelayAuthorizationApprovedNotice(
+function buildRuntimeAuthorizationApprovedNotice(
   interaction: InteractionRequestSummary
 ) {
   const resolverName = interaction.resolvedBy?.name || "An authorized user"
   const deviceName =
-    interaction.relayAuthorization?.deviceDisplayName || "relay device"
+    interaction.runtimeAuthorization?.deviceDisplayName || "relay device"
   const approvedPreset =
-    interaction.relayAuthorization?.approvedPreset || "conversation"
+    interaction.runtimeAuthorization?.approvedPreset || "conversation"
   const summary = `${resolverName} approved ${approvedPreset} access for ${deviceName}.`
   const lines = [
     summary,
@@ -1623,7 +1623,7 @@ function buildRelayAuthorizationApprovedNotice(
   }
 }
 
-function buildRelayAuthorizationSupersededNotice(
+function buildRuntimeAuthorizationSupersededNotice(
   interaction: InteractionRequestSummary
 ) {
   const summary =
@@ -1783,23 +1783,23 @@ async function insertPlanApprovalInteractionDetails(
   )
 }
 
-async function insertRelayAuthorizationInteractionDetails(
+async function insertRuntimeAuthorizationInteractionDetails(
   client: Queryable,
   params: {
     interactionId: string
-    relayDeviceId: string
-    relayCapabilityId: string
-    relayExposureId: string
+    deviceId: string
+    deviceCapabilityId: string
+    deviceExposureId: string
     requestedToolName: string
-    relayToolStableKey: string
+    deviceToolStableKey: string
     reason: string
-    requestMode: RelayAuthorizationRequestMode
+    requestMode: RuntimeAuthorizationRequestMode
     sourceRuntimeSessionId?: string
     sourceRetryNonce?: string
     sourceRequestArgs: Record<string, unknown>
-    requestedAction: RelayAuthorizationRequestedAction
-    grantOptions: RelayAuthorizationGrantOption[]
-    availablePresets: RelayAuthorizationPreset[]
+    requestedAction: RuntimeAuthorizationRequestedAction
+    grantOptions: RuntimeAuthorizationGrantOption[]
+    availablePresets: RuntimeAuthorizationPreset[]
     dedupeKey: string
   }
 ) {
@@ -1807,11 +1807,11 @@ async function insertRelayAuthorizationInteractionDetails(
     client,
     db.insertInto("interaction_runtime_authorization_requests").values({
       interaction_id: params.interactionId,
-      device_id: params.relayDeviceId,
-      device_capability_id: params.relayCapabilityId,
-      device_exposure_id: params.relayExposureId,
+      device_id: params.deviceId,
+      device_capability_id: params.deviceCapabilityId,
+      device_exposure_id: params.deviceExposureId,
       requested_tool_name: params.requestedToolName,
-      device_tool_stable_key: params.relayToolStableKey,
+      device_tool_stable_key: params.deviceToolStableKey,
       reason: params.reason,
       request_mode: params.requestMode,
       source_runtime_session_id: params.sourceRuntimeSessionId || null,
@@ -2314,22 +2314,22 @@ export async function createRemoteAgentPlanApprovalInteractionRequest(
   })
 }
 
-export async function createRelayAuthorizationInteractionRequest(
-  params: CreateRelayAuthorizationInteractionParams
+export async function createRuntimeAuthorizationInteractionRequest(
+  params: CreateRuntimeAuthorizationInteractionParams
 ) {
   return transaction(async (client) => {
-    const dedupeKey = buildRelayAuthorizationDedupeKey({
-      relayDeviceId: params.relayDeviceId,
-      relayCapabilityId: params.relayCapabilityId,
-      relayExposureId: params.relayExposureId,
+    const dedupeKey = buildRuntimeAuthorizationDedupeKey({
+      deviceId: params.deviceId,
+      deviceCapabilityId: params.deviceCapabilityId,
+      deviceExposureId: params.deviceExposureId,
       requestedToolName: params.requestedToolName,
-      relayToolStableKey: params.relayToolStableKey,
+      deviceToolStableKey: params.deviceToolStableKey,
       requestMode: params.requestMode,
       requestedAction: params.requestedAction,
       grantOptions: params.grantOptions,
       availablePresets: params.availablePresets,
     })
-    const requestKey = buildRelayAuthorizationInteractionRequestKey({
+    const requestKey = buildRuntimeAuthorizationInteractionRequestKey({
       conversationId: params.conversationId,
       requesterParticipantId: params.requesterParticipantId,
       dedupeKey,
@@ -2361,13 +2361,13 @@ export async function createRelayAuthorizationInteractionRequest(
       expiresAt: params.expiresAt,
     })
 
-    await insertRelayAuthorizationInteractionDetails(client, {
+    await insertRuntimeAuthorizationInteractionDetails(client, {
       interactionId,
-      relayDeviceId: params.relayDeviceId,
-      relayCapabilityId: params.relayCapabilityId,
-      relayExposureId: params.relayExposureId,
+      deviceId: params.deviceId,
+      deviceCapabilityId: params.deviceCapabilityId,
+      deviceExposureId: params.deviceExposureId,
       requestedToolName: params.requestedToolName,
-      relayToolStableKey: params.relayToolStableKey,
+      deviceToolStableKey: params.deviceToolStableKey,
       reason: params.reason,
       requestMode: params.requestMode,
       sourceRuntimeSessionId: params.runtimeSessionId,
@@ -2411,15 +2411,15 @@ export async function createRelayAuthorizationInteractionRequest(
   })
 }
 
-export async function findOpenRelayAuthorizationInteraction(
-  params: FindOpenRelayAuthorizationInteractionParams
+export async function findOpenRuntimeAuthorizationInteraction(
+  params: FindOpenRuntimeAuthorizationInteractionParams
 ) {
-  const dedupeKey = buildRelayAuthorizationDedupeKey({
-    relayDeviceId: params.relayDeviceId,
-    relayCapabilityId: params.relayCapabilityId,
-    relayExposureId: params.relayExposureId,
+  const dedupeKey = buildRuntimeAuthorizationDedupeKey({
+    deviceId: params.deviceId,
+    deviceCapabilityId: params.deviceCapabilityId,
+    deviceExposureId: params.deviceExposureId,
     requestedToolName: params.requestedToolName,
-    relayToolStableKey: params.relayToolStableKey,
+    deviceToolStableKey: params.deviceToolStableKey,
     requestMode: params.requestMode,
     requestedAction: params.requestedAction,
     grantOptions: params.grantOptions,
@@ -2446,12 +2446,12 @@ export async function findOpenRelayAuthorizationInteraction(
         eb("ir.expires_at", ">", new Date()),
       ])
     )
-    .where("auth.device_id", "=", params.relayDeviceId)
-    .where("auth.device_capability_id", "=", params.relayCapabilityId)
-    .where("auth.device_exposure_id", "=", params.relayExposureId)
+    .where("auth.device_id", "=", params.deviceId)
+    .where("auth.device_capability_id", "=", params.deviceCapabilityId)
+    .where("auth.device_exposure_id", "=", params.deviceExposureId)
     .where("auth.requested_tool_name", "=", params.requestedToolName)
     .where(
-      sql<boolean>`auth.device_tool_stable_key = ${params.relayToolStableKey}`
+      sql<boolean>`auth.device_tool_stable_key = ${params.deviceToolStableKey}`
     )
     .where("auth.request_mode", "=", params.requestMode)
     .where("auth.dedupe_key", "=", dedupeKey)
@@ -2699,8 +2699,8 @@ export async function canUserResolveInteraction(params: {
     return Boolean(grant.rows[0]?.workspace_member_id)
   }
 
-  const deviceId = interaction.relayAuthorization?.deviceId
-  const deviceCapabilityId = interaction.relayAuthorization?.relayCapabilityId
+  const deviceId = interaction.runtimeAuthorization?.deviceId
+  const deviceCapabilityId = interaction.runtimeAuthorization?.deviceCapabilityId
   if (!deviceId || !deviceCapabilityId) {
     return false
   }
@@ -3042,8 +3042,8 @@ export async function resolveInteractionRequest(
     }
 
     if (locked.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
-      const relayDeviceId = locked.device_id || ""
-      if (!relayDeviceId) {
+      const deviceId = locked.device_id || ""
+      if (!deviceId) {
         throw new Error(`Interaction ${locked.id} is missing device_id`)
       }
       const deviceCapabilityId = locked.device_capability_id || ""
@@ -3052,12 +3052,12 @@ export async function resolveInteractionRequest(
           `Interaction ${locked.id} is missing device_capability_id`
         )
       }
-      const canResolveRelayAuthorization = await authorizeAction(db, {
+      const canResolveRuntimeAuthorization = await authorizeAction(db, {
         subject: workspaceMemberSubject(params.resolverWorkspaceMemberId),
         action: "device_capability.request_runtime_authorization",
         resourceId: deviceCapabilityId,
       })
-      if (!canResolveRelayAuthorization) {
+      if (!canResolveRuntimeAuthorization) {
         throw new Error(
           "You are not allowed to resolve this runtime authorization interaction"
         )
@@ -3092,7 +3092,7 @@ export async function resolveInteractionRequest(
 
     let nextStatus: InteractionRequestStatus
     let resolutionPayload: Record<string, unknown>
-    let createdGrant: RelayAuthorizationGrantRecord | undefined
+    let createdGrant: RuntimeAuthorizationGrantRecord | undefined
 
     if (locked.kind === INTERACTION_REQUEST_KIND.USER_INPUT) {
       const promptPayload = parseJsonObject(locked.prompt_payload)
@@ -3269,11 +3269,11 @@ export async function resolveInteractionRequest(
           )
         }
 
-        const grantOptions = parseJsonArray<RelayAuthorizationGrantOption>(
+        const grantOptions = parseJsonArray<RuntimeAuthorizationGrantOption>(
           locked.grant_options,
           `Interaction ${locked.id} grant_options`
         )
-        const availablePresets = parseJsonArray<RelayAuthorizationPreset>(
+        const availablePresets = parseJsonArray<RuntimeAuthorizationPreset>(
           locked.available_presets,
           `Interaction ${locked.id} available_presets`
         )
@@ -3291,12 +3291,12 @@ export async function resolveInteractionRequest(
           )
         }
 
-        createdGrant = await createRelayAuthorizationGrant(
+        createdGrant = await createRuntimeAuthorizationGrant(
           {
             workspaceId: locked.workspace_id,
-            relayDeviceId: locked.device_id || "",
-            relayCapabilityId: locked.device_capability_id || "",
-            relayExposureId: locked.device_exposure_id || "",
+            deviceId: locked.device_id || "",
+            deviceCapabilityId: locked.device_capability_id || "",
+            deviceExposureId: locked.device_exposure_id || "",
             conversationId: locked.conversation_id,
             actorId: locked.requester_actor_id || undefined,
             createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
@@ -3412,12 +3412,12 @@ export async function resolveInteractionRequest(
   } else if (interaction.status === "rejected") {
     await failToolCallTask(
       interaction.taskId,
-      buildRelayAuthorizationRejectedNotice(interaction)
+      buildRuntimeAuthorizationRejectedNotice(interaction)
     )
   } else {
     await completeToolCallTask(
       interaction.taskId,
-      buildRelayAuthorizationApprovedNotice(interaction)
+      buildRuntimeAuthorizationApprovedNotice(interaction)
     )
   }
 
@@ -3429,7 +3429,7 @@ export async function resolveInteractionRequest(
   }
 }
 
-export async function markRelayAuthorizationInteractionSuperseded(
+export async function markRuntimeAuthorizationInteractionSuperseded(
   interactionId: string,
   note?: string
 ) {
@@ -3480,7 +3480,7 @@ export async function markRelayAuthorizationInteractionSuperseded(
   if (interaction.taskId) {
     await failToolCallTask(
       interaction.taskId,
-      buildRelayAuthorizationSupersededNotice(interaction)
+      buildRuntimeAuthorizationSupersededNotice(interaction)
     )
   }
   return interaction

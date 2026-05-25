@@ -29,9 +29,9 @@ import { getSession, updateSessionStatus } from "./service.js"
 
 // Device-runtime v3 (PR #20): the relay-invoke-options helper is gone. Replicate
 // the trimmed-string normalization inline so the relay-tool fallback branch in
-// buildRelayBuiltinToolBlocks still works for legacy task rows that may still
+// buildDeviceBuiltinToolBlocks still works for legacy task rows that may still
 // carry a builtinKind metadata field.
-function normalizeRelayBuiltinAuthorizationKind(value: unknown): string | null {
+function normalizeDeviceBuiltinAuthorizationKind(value: unknown): string | null {
   if (typeof value !== "string") return null
   const trimmed = value.trim()
   return trimmed.length > 0 ? trimmed : null
@@ -255,7 +255,7 @@ async function loadProcessingTargetsForTurn(
   }))
 }
 
-async function loadRelayExposureSummary(exposureId: string) {
+async function loadDeviceExposureSummary(exposureId: string) {
   const row = await db
     .selectFrom("device_exposures")
     .select(["id", "device_id", "metadata"])
@@ -330,7 +330,7 @@ function buildGenericToolResultBlocks(params: {
   return []
 }
 
-async function buildRelayBuiltinToolBlocks(params: {
+async function buildDeviceBuiltinToolBlocks(params: {
   toolName: string
   input: unknown
   requestPayload?: Record<string, unknown>
@@ -355,9 +355,9 @@ async function buildRelayBuiltinToolBlocks(params: {
       ? params.requestPayload.exposureId
       : ""
   const exposureSummary = exposureId
-    ? await loadRelayExposureSummary(exposureId)
+    ? await loadDeviceExposureSummary(exposureId)
     : null
-  const builtinKind = normalizeRelayBuiltinAuthorizationKind(
+  const builtinKind = normalizeDeviceBuiltinAuthorizationKind(
     exposureSummary?.metadata?.builtinKind
   )
 
@@ -587,8 +587,8 @@ async function buildToolActivityDetail(turnId: string) {
     const blocks =
       toolCall.tool_kind === "builtin"
         ? await buildBuiltinToolBlocks(blockParams)
-        : toolCall.tool_kind === "mcp_relay"
-          ? await buildRelayBuiltinToolBlocks(blockParams)
+        : toolCall.tool_kind === "mcp_device"
+          ? await buildDeviceBuiltinToolBlocks(blockParams)
           : {
               requestBlocks: buildGenericToolRequestBlocks(
                 displayTitle,

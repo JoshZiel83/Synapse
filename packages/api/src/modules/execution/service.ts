@@ -286,7 +286,7 @@ export async function createToolCall(params: {
     | "callable"
     | "action"
     | "mcp_plugin"
-    | "mcp_relay"
+    | "mcp_device"
     | "provider_builtin"
     | "a2a_proxy"
   toolName: string
@@ -351,7 +351,7 @@ export async function createToolExecutionAttempt(params: {
     | "callable"
     | "action"
     | "mcp_plugin"
-    | "mcp_relay"
+    | "mcp_device"
     | "provider_builtin"
     | "a2a_proxy"
   pluginId?: string | null

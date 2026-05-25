@@ -10,7 +10,7 @@ import { normalizeMcpToolResult } from "./result-normalizer.js"
 import type { ToolResultOrigin } from "@synapse/shared"
 
 const MCP_RELAY_ORIGIN: ToolResultOrigin = {
-  kind: "mcp_relay",
+  kind: "mcp_device",
   deviceId: "dev-1",
   deviceName: "MacBook Pro",
   exposureStableKey: "synapse.builtin.filesystem.v1",
@@ -95,7 +95,7 @@ test("structuredContent-only object input flows through with origin", async () =
 test("origin kind enumeration covers all 5 documented ToolResultOrigin kinds", async () => {
   const origins: ToolResultOrigin[] = [
     { kind: "mcp_remote", serverKey: "s" },
-    { kind: "mcp_relay", deviceId: "d", exposureStableKey: "e" },
+    { kind: "mcp_device", deviceId: "d", exposureStableKey: "e" },
     { kind: "callable_plugin", pluginKey: "p" },
     { kind: "builtin", toolKind: "create_memory" },
     { kind: "model_response", providerType: "anthropic" },

@@ -612,7 +612,7 @@ async function createGovernedToolCallTask(params: {
   executorKind:
     | "interaction_user_input"
     | "plan_approval"
-    | "relay_authorization"
+    | "runtime_authorization"
   deliveryPolicy: "human_interaction"
   requestPayload: Record<string, unknown>
   summary: string
@@ -723,7 +723,7 @@ async function cancelHumanInteractionTask(
 }
 
 // Device-runtime v3: relay subsystem removed. The previous
-// `resolveRelayAuthorizationPlanOrThrow` helper and the `request_relay_authorization`
+// `resolveRuntimeAuthorizationPlanOrThrow` helper and the `request_runtime_authorization`
 // callable plugin were deleted alongside the relay tables in PR #20.
 
 function normalizeUserInputQuestionType(
@@ -2222,7 +2222,7 @@ export function registerCallableToolPlugins(): void {
       const interaction =
         task.executorKind === "interaction_user_input" ||
         task.executorKind === "plan_approval" ||
-        task.executorKind === "relay_authorization"
+        task.executorKind === "runtime_authorization"
           ? await getInteractionRequestSummaryByTaskId(task.id)
           : null
 
@@ -2295,14 +2295,14 @@ export function registerCallableToolPlugins(): void {
         throwToolError(`Task "${task.id}" does not support cancellation.`)
       }
 
-      // Device-runtime v3: relay_mcp executor was deleted along with the relay
+      // Device-runtime v3: device_mcp executor was deleted along with the relay
       // subsystem; only human-interaction tasks reach the cancel path now.
       const updated = await cancelHumanInteractionTask(task, reason)
       const current = await loadSessionTaskOrThrow(context.sessionId, task.id)
       const interaction =
         current.executorKind === "interaction_user_input" ||
         current.executorKind === "plan_approval" ||
-        current.executorKind === "relay_authorization"
+        current.executorKind === "runtime_authorization"
           ? await getInteractionRequestSummaryByTaskId(current.id)
           : null
 

@@ -1339,7 +1339,7 @@ export async function actorThink(
             metadata?: Record<string, unknown>
             responsePayload?: unknown
             // Phase 8 review: origin must be carried into failures so audit
-            // trails attribute the failure to the right transport (mcp_relay /
+            // trails attribute the failure to the right transport (mcp_device /
             // mcp_remote / callable_plugin) instead of falling back to the
             // synthesized {kind:"builtin"} default.
             origin?: ToolResultOrigin

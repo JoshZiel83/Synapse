@@ -86,10 +86,12 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
 
     this.mcpHost = (this.opts.mcpHost ??
       createInMemoryMcpHost({
-        envelopeVerifier:
-          this.opts.trustedServerKeys && this.opts.trustedServerKeys.size > 0
-            ? createInMemoryEnvelopeVerifier()
-            : undefined,
+        // Always install a verifier so production runs reject unsigned
+        // tool calls. The trusted-server-keys map starts seeded from
+        // SYNAPSE_DEVICE_TRUSTED_SERVER_KEYS (if set) and the runtime
+        // augments it via addServerPublicKey() once device.hello returns
+        // the server's envelope-signing pubkey.
+        envelopeVerifier: createInMemoryEnvelopeVerifier(),
         serverPublicKeys: this.opts.trustedServerKeys,
       })) as InMemoryMcpHostHandle
     await this.mcpHost.start()
@@ -180,6 +182,50 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     this.transport = new TransportClient({
       controlPlaneUrl: controlPlaneUrlFor(this.opts.serverOrigin),
       hello: helloFactory,
+      onHelloAck: async (ack) => {
+        // The server hands back its envelope-signing pubkey in the hello
+        // ack so the runtime can verify dispatched envelopes without
+        // out-of-band trusted-key config. If absent, the runtime falls
+        // back to whatever was pre-configured via SYNAPSE_DEVICE_TRUSTED_SERVER_KEYS.
+        const envelopeSigning =
+          ack &&
+          typeof ack === "object" &&
+          "envelope_signing" in ack &&
+          (ack as { envelope_signing?: unknown }).envelope_signing
+        if (
+          envelopeSigning &&
+          typeof envelopeSigning === "object" &&
+          typeof (envelopeSigning as { kid?: unknown }).kid === "string" &&
+          typeof (envelopeSigning as { public_key_pem?: unknown })
+            .public_key_pem === "string"
+        ) {
+          const { kid, public_key_pem } = envelopeSigning as {
+            kid: string
+            public_key_pem: string
+          }
+          this.mcpHost?.addServerPublicKey(kid, public_key_pem)
+          logger.info("envelope server pubkey absorbed from hello ack", {
+            kid,
+          })
+        }
+        // Announce our tunnel internal URL so the API's DeviceTunnelRegistry
+        // can route dispatchSyncTool to us. Without this, every device tool
+        // call returns no_tunnel_endpoint.
+        if (this.tunnelHandle) {
+          try {
+            await this.transport!.request("device.tunnel.up", {
+              internal_url: this.tunnelHandle.internalUrl,
+            })
+            logger.info("device.tunnel.up registered with server", {
+              internalUrl: this.tunnelHandle.internalUrl,
+            })
+          } catch (err) {
+            logger.error("device.tunnel.up failed", {
+              error: (err as Error).message,
+            })
+          }
+        }
+      },
       onStatus: (status) => this.updateStatus(status),
       onMessage: (method, params) => {
         logger.info("control-plane message", { method, params })

@@ -122,12 +122,11 @@ export type AccessBindingStatus = (typeof ACCESS_BINDING_STATUSES)[number]
 
 /**
  * Provenance marker for binding rows — distinguishes manually-granted rows from
- * rows auto-created by lifecycle hooks (e.g. actor-default-open, relay auto-skill).
+ * rows auto-created by lifecycle hooks (e.g. actor-default-open).
  */
 export const ACCESS_BINDING_SOURCE = {
   MANUAL: "manual",
   DEFAULT_OPEN: "default_open",
-  RELAY_AUTO: "relay_auto",
   APPROVAL: "approval",
   SYSTEM: "system",
 } as const
@@ -135,7 +134,6 @@ export const ACCESS_BINDING_SOURCE = {
 export const ACCESS_BINDING_SOURCES = [
   ACCESS_BINDING_SOURCE.MANUAL,
   ACCESS_BINDING_SOURCE.DEFAULT_OPEN,
-  ACCESS_BINDING_SOURCE.RELAY_AUTO,
   ACCESS_BINDING_SOURCE.APPROVAL,
   ACCESS_BINDING_SOURCE.SYSTEM,
 ] as const

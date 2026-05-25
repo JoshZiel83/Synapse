@@ -114,12 +114,12 @@ export const WORKSPACE_PERMISSION_RULES: Record<
   manage_relays: {
     kind: "admin_or_keys",
     adminGrants: true,
-    accessKeys: ["relay_admin"],
+    accessKeys: ["device_admin"],
   },
   manage_devices: {
     kind: "admin_or_keys",
     adminGrants: true,
-    accessKeys: ["device_admin", "relay_admin"],
+    accessKeys: ["device_admin"],
   },
   manage_models: {
     kind: "admin_or_keys",

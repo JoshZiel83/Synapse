@@ -27,6 +27,13 @@ import { hashArguments } from "./envelope.js"
 
 export interface InMemoryMcpHostHandle extends McpHost {
   getCatalogSnapshot(): Promise<DeviceCatalogExposure[]>
+  /**
+   * Push a freshly delivered server public key (e.g. learned from the
+   * device.hello ack envelope_signing block) into the verifier's trusted
+   * map. Without this, runtimes that don't pre-configure trusted keys via
+   * env would never see a server key and always reject tools/call.
+   */
+  addServerPublicKey(kid: string, publicKeyPem: string): void
 }
 
 export interface InMemoryMcpHostOptions {
@@ -54,6 +61,14 @@ export function createInMemoryMcpHost(
   opts: InMemoryMcpHostOptions = {}
 ): InMemoryMcpHostHandle {
   const providers = new Map<string, CatalogProvider>()
+  // Live trusted-server-keys map: seeded from opts.serverPublicKeys (if
+  // provided) and mutated at runtime via addServerPublicKey() when the
+  // device.hello ack delivers fresh keys. The verifier reads through this
+  // map on every call so the envelope verification surface always sees the
+  // current state.
+  const trustedServerKeys = new Map<string, string>(
+    opts.serverPublicKeys ? Array.from(opts.serverPublicKeys.entries()) : []
+  )
   let server: Server | null = null
   let listenPort = 0
 
@@ -103,16 +118,30 @@ export function createInMemoryMcpHost(
         ? (params.arguments as Record<string, unknown>)
         : {}
     const envelope = extractEnvelope(params._meta)
-    // Envelope verification gates every tool call. If the runtime was
-    // configured with a verifier + trusted server keys, every call MUST
-    // present a verified envelope; calls without one (or with an envelope
-    // that fails verification) get a `permission_denied` synapse_error.
-    if (opts.envelopeVerifier && opts.serverPublicKeys) {
+    // Envelope verification gates every tool call. Without a verifier
+    // configured, this is a v3-skeleton loopback smoke test (no envelope
+    // means no enforcement); ANY production wiring MUST pass an
+    // envelopeVerifier so missing/unsigned calls are rejected.
+    if (opts.envelopeVerifier) {
       if (!envelope) {
         const synapseError: SynapseError = {
           code: "permission_denied",
           message:
-            "tools/call requires _meta.synapse_operation envelope when the runtime is configured with trusted server keys",
+            "tools/call requires _meta.synapse_operation envelope; the server must sign every dispatch",
+        }
+        return {
+          content: [{ type: "text", text: synapseError.message }],
+          isError: true,
+          _meta: { synapse_error: synapseError },
+        }
+      }
+      if (trustedServerKeys.size === 0) {
+        // No keys yet (e.g. hello hasn't completed): refuse rather than
+        // silently letting unauthenticated calls through.
+        const synapseError: SynapseError = {
+          code: "permission_denied",
+          message:
+            "tools/call rejected: runtime has no trusted server signing keys yet",
         }
         return {
           content: [{ type: "text", text: synapseError.message }],
@@ -123,7 +152,7 @@ export function createInMemoryMcpHost(
       const verifyResult = await opts.envelopeVerifier.verify(
         envelope,
         hashArguments(args),
-        opts.serverPublicKeys
+        trustedServerKeys
       )
       if (!verifyResult.ok) {
         const synapseError: SynapseError = {
@@ -307,6 +336,9 @@ export function createInMemoryMcpHost(
     },
     async stop() {
       await stopServer()
+    },
+    addServerPublicKey(kid: string, publicKeyPem: string) {
+      trustedServerKeys.set(kid, publicKeyPem)
     },
     async registerCatalog(provider: CatalogProvider) {
       providers.set(provider.providerKey, provider)

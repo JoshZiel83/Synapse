@@ -102,7 +102,7 @@ export interface McpInstance {
   configHash: string
   tools: ToolDefinition[]
   // Relay-only metadata exposed at instance level so tool-resolver can
-  // build a correct mcp_relay origin BEFORE invoking execute (the
+  // build a correct mcp_device origin BEFORE invoking execute (the
   // per-tool runtime context with deviceId/exposureStableKey isn't
   // populated until ensureRuntimeSession runs inside execute). Without
   // this, the failure path or the first tool call gets mis-tagged as
