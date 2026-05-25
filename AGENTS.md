@@ -98,7 +98,7 @@
   - `./infrastructure/scripts/issue-cert.sh`
 - 续期命令：
   - `./infrastructure/scripts/renew-cert.sh`
-- 续期 cron 模板在 `infrastructure/cron/synapse-certbot-renew`。
+- 续期 cron 模板在 `infrastructure/cron/synapse-certbot-renew.template`，安装时由 `deploy.md` 中的 `sed` 命令把 `__REPO_ROOT__` 替换为当前仓库根目录后写入 `/etc/cron.d/`。
 - 公网 nginx 已启用 OCSP stapling；证书变更后需要 reload nginx：
   - `docker compose --profile production --profile tls exec -T nginx nginx -s reload`
 
