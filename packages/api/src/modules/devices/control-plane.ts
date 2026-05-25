@@ -95,11 +95,7 @@ function writeError(
   )
 }
 
-function writeNotification(
-  socket: WebSocket,
-  method: string,
-  params: unknown
-) {
+function writeNotification(socket: WebSocket, method: string, params: unknown) {
   socket.send(JSON.stringify({ jsonrpc: "2.0", method, params }))
 }
 
@@ -113,6 +109,58 @@ function writePersistResult(
   } else {
     writeError(socket, id, result.code, result.message)
   }
+}
+
+/**
+ * Validate a device-supplied tunnel internal_url. The operator pins the
+ * trusted tunnel edge via SYNAPSE_DEVICE_TUNNEL_EDGE_URL (e.g.
+ * "http://tunnel-edge:7000"). Devices may only register URLs under that
+ * prefix; otherwise we'd be giving every authenticated device a SSRF
+ * primitive into the API process's network namespace. The URL must also
+ * contain the device-service token path segment ("/d/<token>") so a
+ * compromised device can't squat on another device's route. The token
+ * segment can be any non-empty string — the API does not yet sign or
+ * validate the token itself; that's a follow-up alongside the frp control
+ * plane handshake.
+ *
+ * Fails closed if SYNAPSE_DEVICE_TUNNEL_EDGE_URL is unset.
+ */
+function validateTunnelInternalUrl(args: {
+  candidate: string
+  deviceServiceId: string
+}): { ok: true } | { ok: false; message: string } {
+  void args.deviceServiceId // reserved for future per-service token check
+  const trustedPrefix = process.env.SYNAPSE_DEVICE_TUNNEL_EDGE_URL?.trim()
+  if (!trustedPrefix) {
+    return {
+      ok: false,
+      message:
+        "SYNAPSE_DEVICE_TUNNEL_EDGE_URL not configured — refusing to register any device tunnel endpoint",
+    }
+  }
+  let candidateUrl: URL
+  let trustedUrl: URL
+  try {
+    candidateUrl = new URL(args.candidate)
+    trustedUrl = new URL(trustedPrefix)
+  } catch {
+    return { ok: false, message: "internal_url must be a valid http(s) URL" }
+  }
+  if (candidateUrl.origin !== trustedUrl.origin) {
+    return {
+      ok: false,
+      message: `internal_url origin ${candidateUrl.origin} is not under the trusted tunnel edge ${trustedUrl.origin}`,
+    }
+  }
+  // The path must include "/d/<token>" so dispatcher posting to
+  // "${internalUrl}/mcp" lands on a path the frp edge can route to.
+  if (!/\/d\/[^/]+/.test(candidateUrl.pathname)) {
+    return {
+      ok: false,
+      message: "internal_url must include a /d/<token> path segment",
+    }
+  }
+  return { ok: true }
 }
 
 interface ConnectionState {
@@ -409,15 +457,33 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
           }
           case "device.tunnel.up": {
             if (!requireAuthenticated(req)) return
-            const params = req.params as
-              | { internal_url?: unknown }
-              | undefined
+            const params = req.params as { internal_url?: unknown } | undefined
             if (!params || typeof params.internal_url !== "string") {
               writeError(
                 socket,
                 req.id ?? null,
                 -32602,
                 "device.tunnel.up: 'internal_url' (string) required"
+              )
+              return
+            }
+            // SSRF gate: an authenticated device must not be able to point
+            // the dispatcher at arbitrary URLs (e.g. http://169.254.169.254
+            // for cloud metadata, or internal admin endpoints). The URL
+            // must be under the operator-configured tunnel-edge prefix
+            // (SYNAPSE_DEVICE_TUNNEL_EDGE_URL), and the path must end
+            // with the per-service token path segment so different devices
+            // can't squat on each other's routes.
+            const validation = validateTunnelInternalUrl({
+              candidate: params.internal_url,
+              deviceServiceId: state.authenticatedServiceId!,
+            })
+            if (!validation.ok) {
+              writeError(
+                socket,
+                req.id ?? null,
+                -32005,
+                `device.tunnel.up rejected: ${validation.message}`
               )
               return
             }
@@ -463,7 +529,12 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
             )
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
-                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  (err as Error).message
+                )
               )
             return
           }
@@ -476,52 +547,102 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
             )
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
-                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  (err as Error).message
+                )
               )
             return
           }
           case "device.task.received": {
             if (!requireAuthenticated(req)) return
-            persistTaskReceived(state.authenticatedDeviceId!, state.authenticatedServiceId!, req.params)
+            persistTaskReceived(
+              state.authenticatedDeviceId!,
+              state.authenticatedServiceId!,
+              req.params
+            )
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
-                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  (err as Error).message
+                )
               )
             return
           }
           case "device.task.started": {
             if (!requireAuthenticated(req)) return
-            persistTaskStarted(state.authenticatedDeviceId!, state.authenticatedServiceId!, req.params)
+            persistTaskStarted(
+              state.authenticatedDeviceId!,
+              state.authenticatedServiceId!,
+              req.params
+            )
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
-                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  (err as Error).message
+                )
               )
             return
           }
           case "device.task.output": {
             if (!requireAuthenticated(req)) return
-            persistTaskOutput(state.authenticatedDeviceId!, state.authenticatedServiceId!, req.params)
+            persistTaskOutput(
+              state.authenticatedDeviceId!,
+              state.authenticatedServiceId!,
+              req.params
+            )
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
-                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  (err as Error).message
+                )
               )
             return
           }
           case "device.task.status": {
             if (!requireAuthenticated(req)) return
-            persistTaskStatus(state.authenticatedDeviceId!, state.authenticatedServiceId!, req.params)
+            persistTaskStatus(
+              state.authenticatedDeviceId!,
+              state.authenticatedServiceId!,
+              req.params
+            )
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
-                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  (err as Error).message
+                )
               )
             return
           }
           case "device.task.result": {
             if (!requireAuthenticated(req)) return
-            persistTaskResult(state.authenticatedDeviceId!, state.authenticatedServiceId!, req.params)
+            persistTaskResult(
+              state.authenticatedDeviceId!,
+              state.authenticatedServiceId!,
+              req.params
+            )
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
-                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  (err as Error).message
+                )
               )
             return
           }
@@ -536,25 +657,29 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               )
               return
             }
-            persistDeviceEventEmit(
-              state.authenticatedWorkspaceId,
-              req.params
-            )
+            persistDeviceEventEmit(state.authenticatedWorkspaceId, req.params)
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
-                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  (err as Error).message
+                )
               )
             return
           }
           case "device.vfs.exposure.upsert": {
             if (!requireAuthenticated(req)) return
-            persistVfsExposureUpsert(
-              state.authenticatedDeviceId!,
-              req.params
-            )
+            persistVfsExposureUpsert(state.authenticatedDeviceId!, req.params)
               .then((r) => writePersistResult(socket, req.id ?? null, r))
               .catch((err) =>
-                writeError(socket, req.id ?? null, -32603, (err as Error).message)
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  (err as Error).message
+                )
               )
             return
           }
@@ -571,9 +696,7 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
 
       socket.on("close", () => {
         if (state.registeredTunnelServiceId) {
-          getDeviceTunnelRegistry().unregister(
-            state.registeredTunnelServiceId
-          )
+          getDeviceTunnelRegistry().unregister(state.registeredTunnelServiceId)
           state.registeredTunnelServiceId = null
         }
         if (state.sessionId) {

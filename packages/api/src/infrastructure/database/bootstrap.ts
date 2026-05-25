@@ -8,9 +8,9 @@ const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
 const CURRENT_SCHEMA_VERSION =
-  "2026-05-25-device-runtime-v3-pr26-runtime-events-rename"
+  "2026-05-25-device-runtime-v3-pr27-drop-tool-calls-relay-id"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "device runtime v3 PR #26: runtime_events_source 'relay' → 'device'; finishes the deletion of relay-era naming in the schema"
+  "device runtime v3 PR #27: drop relay_id columns from tool_calls + tool_execution_attempts; rename to device_id"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

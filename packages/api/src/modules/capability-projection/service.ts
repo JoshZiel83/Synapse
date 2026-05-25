@@ -32,7 +32,11 @@ import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
 import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
 import type { RuntimeAuthorizationGrantSpec } from "@synapse/device-protocol"
 import { createHash } from "node:crypto"
-import { listActiveRuntimeAuthorizationGrantsForExposure, consumeRuntimeAuthorizationGrant } from "../runtime-authorizations/service.js"
+import {
+  listActiveRuntimeAuthorizationGrantsForExposure,
+  consumeRuntimeAuthorizationGrant,
+  runtimeAuthorizationGrantMatches,
+} from "../runtime-authorizations/service.js"
 import { createRuntimeAuthorizationRequest } from "../runtime-authorizations/requests.js"
 import type { RuntimeAuthorizationRequestedAction } from "@synapse/shared"
 import {
@@ -300,10 +304,7 @@ async function principalSubjectIds(
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: principal.conversationId,
       })
-      out.allIds.push(
-        out.remoteAgentSubjectId,
-        out.conversationSubjectId
-      )
+      out.allIds.push(out.remoteAgentSubjectId, out.conversationSubjectId)
       out.principalSubjectId = out.remoteAgentSubjectId
       break
     }
@@ -373,7 +374,9 @@ async function projectDeviceTools(
     handlers.set(name, row)
     tools.push({
       name,
-      description: row.visible_description || `Device tool: ${row.visible_tool_name} on ${row.device_name}`,
+      description:
+        row.visible_description ||
+        `Device tool: ${row.visible_tool_name} on ${row.device_name}`,
       parameters: normalizeInputSchema(row.input_schema),
     })
   }
@@ -406,17 +409,19 @@ function unionWithDevice(
   ): Promise<NormalizedMcpToolResult> => {
     const row = device.handlers.get(toolName)
     if (!row) {
-      return mcpErrorBlock(
-        `device tool ${toolName} not found in projection`
-      )
+      return mcpErrorBlock(`device tool ${toolName} not found in projection`)
     }
     // Build the unsigned payload first so we can compute input_hash from the
+    // Strip the planner-injected retry-nonce hint before everything that
+    // operates on tool args, so the device never sees it and the input_hash
+    // is computed over the user-facing schema.
+    const sanitizedInput: Record<string, unknown> = { ...input }
+    delete sanitizedInput["__synapse_retry_nonce"]
     // canonicalized arguments — the device verifier rejects envelopes whose
     // input_hash doesn't match the actual `arguments` it received.
-    const inputCanonical = canonicalizeEnvelopePayload(input)
+    const inputCanonical = canonicalizeEnvelopePayload(sanitizedInput)
     const inputHash =
-      "sha256:" +
-      createHash("sha256").update(inputCanonical).digest("hex")
+      "sha256:" + createHash("sha256").update(inputCanonical).digest("hex")
 
     // Look up runtime_authorization_grants that apply to this capability so
     // the device-side bash/cua enforcement has matching grant_specs to
@@ -430,7 +435,21 @@ function unionWithDevice(
     let grantSpecs: RuntimeAuthorizationGrantSpec[] = []
     const grantIds: string[] = []
     let onceGrantIdsForConsume: string[] = []
-    let grantScope: "once" | "actor" | "conversation" | "actor_in_conversation" | "workspace" = "workspace"
+    let grantScope:
+      | "once"
+      | "actor"
+      | "conversation"
+      | "actor_in_conversation"
+      | "workspace" = "workspace"
+    // The planner injects __synapse_retry_nonce into the tool args when
+    // re-issuing a call after a user approved an authorization request.
+    // The projection extracts it, uses it for the filter + envelope, and
+    // strips it from the args the device sees so it doesn't pollute the
+    // tool's schema.
+    const envelopeRetryNonce =
+      typeof input["__synapse_retry_nonce"] === "string"
+        ? (input["__synapse_retry_nonce"] as string)
+        : undefined
     try {
       const allGrants = await listActiveRuntimeAuthorizationGrantsForExposure(
         row.device_capability_id
@@ -441,10 +460,13 @@ function unionWithDevice(
       // grant's source_retry_nonce. Without this, a `once` grant created
       // for one tool call would silently leak into every subsequent
       // dispatch of the same capability.
-      const envelopeRetryNonce: string | undefined = undefined // projection
-      // never has a retry_nonce on the first attempt; the planner only
-      // re-issues with a nonce after an authorization request was created.
-      const applicable = allGrants.filter((g) => {
+      //
+      // The planner injects __synapse_retry_nonce into the tool args when
+      // re-issuing a call after a user approved an authorization request.
+      // The projection extracts it, uses it for the filter + envelope, and
+      // strips it from the args the device sees so it doesn't pollute the
+      // tool's schema.
+      const subjectScoped = allGrants.filter((g) => {
         if (g.scope === "workspace") return true
         if (g.scope === "once") {
           return !!(
@@ -459,6 +481,20 @@ function unionWithDevice(
         if (!g.subjectId) return false
         return subjectSet.has(g.subjectId)
       })
+      // Second pass: per-call action coverage. A grant that's scoped to the
+      // principal but doesn't COVER the specific filesystem path / browser
+      // origin / commandline command must not satisfy this dispatch. Build
+      // the requestedAction up-front (same shape used by the authorization
+      // request flow below) so server and UI agree on what's being asked.
+      const requestedActionForCheck = buildRequestedAction({
+        capability: row.builtin_kind,
+        toolName,
+        visibleToolName: row.visible_tool_name,
+        args: sanitizedInput,
+      })
+      const applicable = subjectScoped.filter((g) =>
+        runtimeAuthorizationGrantMatches(g, requestedActionForCheck)
+      )
       for (const grant of applicable) {
         const spec: RuntimeAuthorizationGrantSpec = {
           capability: grant.capability,
@@ -560,14 +596,35 @@ function unionWithDevice(
             runtimeSessionId: "",
             relayDeviceDisplayName: row.device_name,
           },
-          authorizationPlan: {
-            requestedAction: buildRequestedAction({
+          authorizationPlan: (() => {
+            const requestedAction = buildRequestedAction({
               capability: row.builtin_kind,
               toolName,
-              args: input,
-            }),
-            grantOptions: [],
-          },
+              visibleToolName: row.visible_tool_name,
+              args: sanitizedInput,
+            })
+            return {
+              requestedAction,
+              // Surface at least one default grantOption so the UI has
+              // something the user can approve. The default mirrors the
+              // requested action verbatim — UI may render more granular
+              // options on top.
+              grantOptions: [
+                {
+                  id: "default",
+                  summary: requestedAction.summary,
+                  detail: requestedAction.detail,
+                  grantSpec: {
+                    capability: requestedAction.capability,
+                    filesystem: requestedAction.filesystem,
+                    cua: requestedAction.cua,
+                    browser: requestedAction.browser,
+                    commandline: requestedAction.commandline,
+                  },
+                },
+              ],
+            }
+          })(),
           requestMode: "background",
           availablePresets: ["once", "actor", "conversation", "workspace"],
           reason: `Tool ${toolName} requires authorization for device capability ${row.device_capability_id}`,
@@ -612,6 +669,7 @@ function unionWithDevice(
           grant_ids: grantIds,
           grant_scope: grantScope,
           grant_specs: grantSpecs,
+          retry_nonce: envelopeRetryNonce,
         },
         issued_at: new Date().toISOString(),
         expires_at: new Date(Date.now() + 60_000).toISOString(),
@@ -633,7 +691,7 @@ function unionWithDevice(
         workspaceId: projectInput.workspaceId,
         conversationId: projectInput.conversationId ?? null,
         envelope,
-        args: input,
+        args: sanitizedInput,
         toolName: row.visible_tool_name,
         deviceId: row.device_id,
         deviceServiceId: row.device_service_id,
@@ -665,7 +723,7 @@ function unionWithDevice(
     const result = await dispatchSyncTool({
       deviceServiceId: row.device_service_id,
       envelope,
-      args: input,
+      args: sanitizedInput,
       toolName: row.visible_tool_name,
     })
     await completeDeviceOperation({
@@ -761,24 +819,37 @@ function principalKindFor(principal: DevicePrincipal): OperationPrincipalKind {
 
 /**
  * Build a minimal RuntimeAuthorizationRequestedAction from the tool args +
- * declared capability. Used when the projection has to fire an
- * interaction_runtime_authorization_requests row because no grant covers
- * the call yet. The UI uses requestedAction to render "Allow X to do Y"
- * to the user; the user then picks a preset that becomes the grant.
+ * declared capability + visible tool name. Used both to evaluate whether
+ * an existing grant covers the call (KK) and to populate an authorization
+ * request when no grant matches (FF). The matcher contract:
+ *   - commandline: commandMatchType='exact' + commandText=full command,
+ *     so the grant matcher compares exact text and the device-side prefix
+ *     can still be widened by the user when approving.
+ *   - browser_navigate: action='write' (navigate changes URL).
+ *   - browser_read_text: action='read'.
+ *   - cua_click / cua_type_text: access='write'.
+ *   - cua_capture_display / cua_list_displays: access='read'.
+ *   - filesystem list_dir: access='read'.
  */
 function buildRequestedAction(args: {
   capability: "filesystem" | "commandline" | "browser" | "cua" | null
   toolName: string
+  /** The unnamespaced tool name as the device exposes it (e.g. "bash",
+   *  "cua_click"). Used to distinguish read vs write at the tool level. */
+  visibleToolName?: string
   args: Record<string, unknown>
 }): RuntimeAuthorizationRequestedAction {
   const summary = `Tool ${args.toolName} requires authorization`
   const detail = `args: ${JSON.stringify(args.args).slice(0, 200)}`
+  const tool = (args.visibleToolName ?? args.toolName).toLowerCase()
   switch (args.capability) {
     case "filesystem": {
       const path =
         typeof args.args["path"] === "string"
           ? (args.args["path"] as string)
           : "/"
+      // VFS paths are virtual-absolute (rooted at "/"); normalizePathPrefix
+      // on both sides will canonicalize them.
       return {
         capability: "filesystem",
         toolName: args.toolName,
@@ -803,7 +874,10 @@ function buildRequestedAction(args: {
         detail,
         commandline: {
           executor: "bash",
-          commandMatchType: "tool",
+          // exact match: the requested action carries the full command so
+          // the matcher can verify a grant of (exact, command) covers it.
+          // The UI can offer the user a "tool" or "prefix" grant on top.
+          commandMatchType: "exact",
           commandText: command,
           workingDirectory,
         },
@@ -811,32 +885,32 @@ function buildRequestedAction(args: {
     }
     case "browser": {
       const url =
-        typeof args.args["url"] === "string"
-          ? (args.args["url"] as string)
-          : ""
-      // Default to read; the UI lets the user pick read/write.
+        typeof args.args["url"] === "string" ? (args.args["url"] as string) : ""
+      const action: "read" | "write" =
+        tool === "browser_navigate" ? "write" : "read"
       return {
         capability: "browser",
         toolName: args.toolName,
         summary,
         detail,
         browser: {
-          action: "read",
+          action,
           scopeType: "origin",
           origin: safeOrigin(url),
         },
       }
     }
     case "cua":
-    default:
-      // CUA + unknown → default to read; UI can promote to write.
+    default: {
+      const writeTools = new Set(["cua_click", "cua_type_text"])
       return {
         capability: "cua",
         toolName: args.toolName,
         summary,
         detail,
-        cua: { access: "read" },
+        cua: { access: writeTools.has(tool) ? "write" : "read" },
       }
+    }
   }
 }
 

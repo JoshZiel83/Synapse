@@ -243,6 +243,10 @@ export const SetActiveDeviceCapabilitiesInputSchema = z.object({
       actorId: z.string().uuid(),
       conversationId: z.string().uuid(),
     }),
+    z.object({
+      kind: z.literal("remote_agent"),
+      remoteAgentId: z.string().uuid(),
+    }),
   ]),
   device_capability_ids: z.array(z.string().uuid()),
 })

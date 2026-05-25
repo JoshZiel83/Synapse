@@ -825,7 +825,7 @@ export default function AccessManagement({
                       </div>
                       <p className="text-sm text-muted-foreground">
                         These workspace defaults are the top-level parent for
-                        plugin installations, installed skills, and relay
+                        plugin installations, installed skills, and device
                         exposures. Instance overrides and grant overrides can
                         only narrow them.
                       </p>

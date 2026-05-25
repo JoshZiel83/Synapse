@@ -2136,12 +2136,12 @@ export interface ToolCalls {
   completed_at: Timestamp | null;
   conversation_id: string;
   created_at: Generated<Timestamp | null>;
+  device_id: string | null;
   id: Generated<string>;
   normalized_input: Generated<Json>;
   plugin_id: string | null;
   provider_call_id: string | null;
   provider_step_id: string | null;
-  relay_id: string | null;
   session_id: string | null;
   status: Generated<ToolCallsStatus>;
   tool_kind: ToolCallsToolKind;
@@ -2196,6 +2196,7 @@ export interface ToolCallTasks {
 export interface ToolExecutionAttempts {
   attempt_no: number;
   created_at: Generated<Timestamp | null>;
+  device_id: string | null;
   duration_ms: number | null;
   error_message: string | null;
   executor_kind: ToolExecutionAttemptsExecutorKind;
@@ -2203,7 +2204,6 @@ export interface ToolExecutionAttempts {
   instance_key: string | null;
   is_error: Generated<boolean | null>;
   plugin_id: string | null;
-  relay_id: string | null;
   request_payload_blob_id: string | null;
   response_payload_blob_id: string | null;
   status: Generated<ToolExecutionAttemptsStatus>;

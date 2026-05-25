@@ -40,6 +40,7 @@ export type AccessTarget =
       actorId: string
       conversationId: string
     }
+  | { kind: "remote_agent"; remoteAgentId: string }
 
 /** DevicePrincipal — server-internal type, but useful in SDK consumers that
  * call projection-style debug endpoints (future PR). */

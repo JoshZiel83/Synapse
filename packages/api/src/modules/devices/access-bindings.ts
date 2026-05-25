@@ -32,6 +32,10 @@ const accessTargetSchema = z.discriminatedUnion("kind", [
     actorId: z.string().uuid(),
     conversationId: z.string().uuid(),
   }),
+  z.object({
+    kind: z.literal("remote_agent"),
+    remoteAgentId: z.string().uuid(),
+  }),
 ])
 
 const setActiveBodySchema = z.object({
@@ -58,8 +62,7 @@ async function assertTargetInWorkspace(
       }
       return { ok: true }
     case "actor": {
-      if (!target.actorId)
-        return { ok: false, reason: "actorId required" }
+      if (!target.actorId) return { ok: false, reason: "actorId required" }
       const row = await db
         .selectFrom("actors")
         .select("workspace_id")
@@ -108,13 +111,26 @@ async function assertTargetInWorkspace(
       if (!actor || actor.workspace_id !== workspaceId) {
         return { ok: false, reason: "actor not found in this workspace" }
       }
-      if (
-        !conversation ||
-        conversation.internal_workspace_id !== workspaceId
-      ) {
+      if (!conversation || conversation.internal_workspace_id !== workspaceId) {
         return {
           ok: false,
           reason: "conversation not found in this workspace",
+        }
+      }
+      return { ok: true }
+    }
+    case "remote_agent": {
+      if (!target.remoteAgentId)
+        return { ok: false, reason: "remoteAgentId required" }
+      const row = await db
+        .selectFrom("remote_agents")
+        .select("workspace_id")
+        .where("id", "=", target.remoteAgentId)
+        .executeTakeFirst()
+      if (!row || row.workspace_id !== workspaceId) {
+        return {
+          ok: false,
+          reason: "remote_agent not found in this workspace",
         }
       }
       return { ok: true }
@@ -251,6 +267,7 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
         target_kind?: string
         actor_id?: string
         conversation_id?: string
+        remote_agent_id?: string
       }
       if (
         !(await requireRequestAction(
@@ -281,6 +298,13 @@ export function registerDeviceAccessBindingRoutes(app: FastifyInstance): void {
                   kind: "actor_in_conversation",
                   actorId: query.actor_id,
                   conversationId: query.conversation_id,
+                }
+              : null
+          case "remote_agent":
+            return query.remote_agent_id
+              ? {
+                  kind: "remote_agent",
+                  remoteAgentId: query.remote_agent_id,
                 }
               : null
           default:

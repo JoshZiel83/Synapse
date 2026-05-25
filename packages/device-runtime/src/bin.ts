@@ -19,6 +19,7 @@ import { createFilesystemBuiltin } from "./builtins/filesystem.js"
 import { createCommandlineBuiltin } from "./builtins/commandline.js"
 import { createCuaBuiltin } from "./builtins/cua.js"
 import { createBrowserBuiltin } from "./builtins/browser.js"
+import { createFrpTunnelAdapter } from "./tunnel/frp.js"
 import { existsSync } from "node:fs"
 import { dirname, join, resolve } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -60,7 +61,15 @@ function getFlag(flags: Map<string, string>, name: string, fallback?: string) {
 function autoDiscoverCuaHelperPath(): string | undefined {
   const here = dirname(fileURLToPath(import.meta.url))
   const candidates = [
-    resolve(here, "..", "..", "..", "sidecars", "cua", "synapse-device-cua-helper"),
+    resolve(
+      here,
+      "..",
+      "..",
+      "..",
+      "sidecars",
+      "cua",
+      "synapse-device-cua-helper"
+    ),
     resolve(here, "..", "..", "sidecars", "cua", "synapse-device-cua-helper"),
     join(here, "synapse-device-cua-helper"),
   ]
@@ -150,12 +159,55 @@ async function main() {
           process.env.SYNAPSE_DEVICE_TRUSTED_SERVER_KEYS ??
           ""
       )
+      // Auto-wire the frp tunnel when the operator provides the edge config.
+      // Without this, the runtime would connect to the control-plane but
+      // never register a tunnel endpoint, and every dispatched tool call
+      // would fail with no_tunnel_endpoint. The four flags can all come
+      // from env (SYNAPSE_TUNNEL_*) so packaged binaries don't need flags.
+      const tunnelServerAddr =
+        getFlag(args.flags, "tunnel-server-addr") ??
+        process.env.SYNAPSE_TUNNEL_SERVER_ADDR
+      const tunnelServerPortRaw =
+        getFlag(args.flags, "tunnel-server-port") ??
+        process.env.SYNAPSE_TUNNEL_SERVER_PORT
+      const tunnelAuthToken =
+        getFlag(args.flags, "tunnel-auth-token") ??
+        process.env.SYNAPSE_TUNNEL_AUTH_TOKEN
+      const tunnelVhost =
+        getFlag(args.flags, "tunnel-vhost") ??
+        process.env.SYNAPSE_TUNNEL_VHOST_HOST
+      const tunnelRegistrationToken =
+        getFlag(args.flags, "tunnel-registration-token") ??
+        process.env.SYNAPSE_TUNNEL_REGISTRATION_TOKEN
+      let tunnel: { adapter: any; registrationToken: string } | undefined
+      if (
+        tunnelServerAddr &&
+        tunnelServerPortRaw &&
+        tunnelAuthToken &&
+        tunnelVhost &&
+        tunnelRegistrationToken
+      ) {
+        const tunnelServerPort = Number.parseInt(tunnelServerPortRaw, 10)
+        if (Number.isFinite(tunnelServerPort)) {
+          tunnel = {
+            adapter: createFrpTunnelAdapter({
+              serverAddr: tunnelServerAddr,
+              serverPort: tunnelServerPort,
+              authToken: tunnelAuthToken,
+              vhostHost: tunnelVhost,
+              frpcPath: getFlag(args.flags, "frpc-path") ?? "frpc",
+            }),
+            registrationToken: tunnelRegistrationToken,
+          }
+        }
+      }
       const handle = await runDeviceRuntime({
         serverOrigin,
         broker,
         clientVersion: "0.1.0-device-runtime-v3",
         initialCatalog: providers,
         trustedServerKeys,
+        tunnel,
       })
       process.on("SIGINT", () => {
         void handle.stop()

@@ -291,7 +291,7 @@ export async function createToolCall(params: {
     | "a2a_proxy"
   toolName: string
   pluginId?: string | null
-  relayId?: string
+  deviceId?: string
   normalizedInput: Record<string, unknown>
 }) {
   const row = await db
@@ -308,7 +308,7 @@ export async function createToolCall(params: {
       tool_kind: params.toolKind,
       tool_name: params.toolName,
       plugin_id: params.pluginId || null,
-      relay_id: params.relayId || null,
+      device_id: params.deviceId || null,
       normalized_input:
         params.normalizedInput as TableInsert<"tool_calls">["normalized_input"],
       status: "pending",
@@ -355,7 +355,7 @@ export async function createToolExecutionAttempt(params: {
     | "provider_builtin"
     | "a2a_proxy"
   pluginId?: string | null
-  relayId?: string
+  deviceId?: string
   transport?: string
   instanceKey?: string
   requestPayload?: unknown
@@ -373,7 +373,7 @@ export async function createToolExecutionAttempt(params: {
       attempt_no: params.attemptNo,
       executor_kind: params.executorKind,
       plugin_id: params.pluginId || null,
-      relay_id: params.relayId || null,
+      device_id: params.deviceId || null,
       transport: params.transport || null,
       instance_key: params.instanceKey || null,
       request_payload_blob_id: requestPayloadBlobId,
@@ -500,7 +500,7 @@ export async function getToolHistoryForSession(sessionId: string) {
       "tc.tool_kind",
       "tc.tool_name",
       "tc.plugin_id",
-      "tc.relay_id",
+      "tc.device_id",
       "tc.normalized_input",
       "tc.status",
       "tc.created_at",

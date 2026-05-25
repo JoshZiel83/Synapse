@@ -103,7 +103,7 @@ function sleep(ms: number) {
 }
 
 function buildWaitingSummary(deviceDisplayName?: string) {
-  return `Waiting for a user to authorize ${deviceDisplayName?.trim() || "the relay device"}.`
+  return `Waiting for a user to authorize ${deviceDisplayName?.trim() || "the device"}.`
 }
 
 async function loadConversationKindAndBoundary(
@@ -240,7 +240,7 @@ export async function createRuntimeAuthorizationRequest(
   const candidates = buildUserInteractionCandidatesFromRows(allMembers)
   if (candidates.length === 0) {
     throw new Error(
-      "This conversation has no active user who could receive a relay authorization request"
+      "This conversation has no active user who could receive a runtime authorization request"
     )
   }
 
@@ -259,7 +259,7 @@ export async function createRuntimeAuthorizationRequest(
     .map((entry) => entry.candidate)
   if (availableAuthorizers.length === 0) {
     throw new Error(
-      "No active user in this conversation is currently allowed to approve relay authorization for this relay device"
+      "No active user in this conversation is currently allowed to approve runtime authorization for this device"
     )
   }
 
@@ -360,10 +360,10 @@ export async function createRuntimeAuthorizationRequest(
     }
   } catch (error) {
     await cancelToolCallTask(task.id, {
-      summary: `Relay authorization request for ${params.runtimeTarget.relayDeviceDisplayName?.trim() || "the relay device"} failed before dispatch.`,
+      summary: `Runtime authorization request for ${params.runtimeTarget.relayDeviceDisplayName?.trim() || "the device"} failed before dispatch.`,
       finalResultPayload: {
         content: textBlocks(
-          `Relay authorization request for ${params.runtimeTarget.relayDeviceDisplayName?.trim() || "the relay device"} failed before dispatch.`
+          `Runtime authorization request for ${params.runtimeTarget.relayDeviceDisplayName?.trim() || "the device"} failed before dispatch.`
         ),
         isError: true,
       },

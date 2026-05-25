@@ -1,4 +1,10 @@
-import path from "node:path"
+import {
+  normalizePathPrefix as sharedNormalizePathPrefix,
+  pathWithinPrefix as sharedPathWithinPrefix,
+  normalizeCommandText as sharedNormalizeCommandText,
+  hasCompoundShellOperators as sharedHasCompoundShellOperators,
+  commandPrefixMatches as sharedCommandPrefixMatches,
+} from "@synapse/shared"
 import type {
   RuntimeAuthorizationGrantSpec,
   RuntimeAuthorizationPreset,
@@ -119,10 +125,11 @@ function runtimeAuthorizationScopeRank(scope: RuntimeAuthorizationGrantScope) {
 }
 
 function normalizePathPrefix(value: unknown) {
-  if (typeof value !== "string" || value.trim().length === 0) {
-    return null
-  }
-  return path.resolve(path.normalize(value.trim()))
+  // Delegate to the shared bundle-safe POSIX normalizer. VFS paths are
+  // virtual-absolute (rooted at "/"); we don't resolve against the API
+  // host's cwd. The shared helper collapses ".." segments and rejects
+  // empty strings.
+  return sharedNormalizePathPrefix(value)
 }
 
 function normalizePathPrefixes(values: unknown) {
@@ -138,37 +145,20 @@ function normalizePathPrefixes(values: unknown) {
   ).sort()
 }
 
-function pathSeparatorForMatch(value: string) {
-  return value.endsWith(path.sep) ? "" : path.sep
-}
-
 function pathWithinPrefix(target: string, prefix: string) {
-  return (
-    target === prefix ||
-    target.startsWith(`${prefix}${pathSeparatorForMatch(prefix)}`)
-  )
+  return sharedPathWithinPrefix(target, prefix)
 }
 
 function normalizeCommandText(value: unknown) {
-  if (typeof value !== "string") {
-    return null
-  }
-  const normalized = value.trim()
-  return normalized.length > 0 ? normalized : null
+  return sharedNormalizeCommandText(value)
 }
 
 function hasCompoundShellOperators(command: string) {
-  return (
-    command.includes("&&") ||
-    command.includes("||") ||
-    command.includes(";") ||
-    command.includes("|") ||
-    command.includes("\n")
-  )
+  return sharedHasCompoundShellOperators(command)
 }
 
 function commandPrefixMatches(prefix: string, command: string) {
-  return command === prefix || command.startsWith(`${prefix} `)
+  return sharedCommandPrefixMatches(prefix, command)
 }
 
 export interface RuntimeAuthorizationGrantRecord extends RuntimeAuthorizationGrantSpec {

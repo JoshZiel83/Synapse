@@ -15,9 +15,9 @@ export async function logToolCall(data: {
   actorId?: string
   userId?: string
   pluginId?: string | null
-  relayId?: string
+  deviceId?: string
   toolName: string
-  toolType?: "callable" | "mcp_plugin" | "relay" | "action"
+  toolType?: "callable" | "mcp_plugin" | "mcp_device" | "action"
   input: Record<string, unknown>
   output?: string
   isError?: boolean
@@ -34,13 +34,13 @@ export async function logToolCall(data: {
     turnId: data.turnId,
     actorId: data.actorId,
     userId: data.userId,
-    source: data.toolType === "relay" ? "device" : "tool",
+    source: data.toolType === "mcp_device" ? "device" : "tool",
     level: data.isError ? "error" : "info",
     eventType: "tool.call.legacy",
     payload: {
       round: data.round,
       pluginId: data.pluginId,
-      relayId: data.relayId,
+      deviceId: data.deviceId,
       toolName: data.toolName,
       toolType: data.toolType || "mcp_plugin",
       input: sanitizedInput,
@@ -58,19 +58,19 @@ export async function logEvent(data: {
   workspaceId?: string
   userId?: string
   pluginId?: string
-  relayId?: string
+  deviceId?: string
   eventType: string
   eventData?: Record<string, unknown>
 }) {
   await logRuntimeEvent({
     workspaceId: data.workspaceId,
     userId: data.userId,
-    source: data.relayId ? "device" : "tool",
+    source: data.deviceId ? "device" : "tool",
     level: "info",
     eventType: data.eventType,
     payload: {
       pluginId: data.pluginId,
-      relayId: data.relayId,
+      deviceId: data.deviceId,
       ...(data.eventData || {}),
     },
   })

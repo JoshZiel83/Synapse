@@ -486,7 +486,9 @@ function getInteractionStatusBadgeClassName(
   }
 }
 
-function formatRuntimeAuthorizationPresetLabel(preset: RuntimeAuthorizationPreset) {
+function formatRuntimeAuthorizationPresetLabel(
+  preset: RuntimeAuthorizationPreset
+) {
   switch (preset) {
     case "workspace":
       return "Always Allow"
@@ -516,7 +518,9 @@ function getRuntimeAuthorizationCapabilityIcon(
   }
 }
 
-function describeRuntimeAuthorizationSpec(scope: RuntimeAuthorizationGrantSpec) {
+function describeRuntimeAuthorizationSpec(
+  scope: RuntimeAuthorizationGrantSpec
+) {
   if (scope.capability === "filesystem" && scope.filesystem) {
     return {
       icon: FolderOpen,
@@ -708,7 +712,7 @@ function InteractionStatusNote({
     return (
       <p className="text-xs text-muted-foreground">
         {viewerCanResolve
-          ? "You can choose how broadly to allow this relay action if you have relay authorization permission."
+          ? "You can choose how broadly to allow this device action if you have runtime authorization permission."
           : "Waiting for an authorized user to approve or reject."}
       </p>
     )
@@ -716,7 +720,7 @@ function InteractionStatusNote({
   if (interaction.status === "approved") {
     return (
       <p className="text-xs text-muted-foreground">
-        The relay authorization is active and the blocked action can continue.
+        The runtime authorization is active and the blocked action can continue.
       </p>
     )
   }
@@ -757,9 +761,10 @@ function InteractionCard({
   const [draftAnswers, setDraftAnswers] = useState<
     Record<string, DraftQuestionAnswer>
   >(() => buildDraftQuestionAnswers(interaction))
-  const [selectedRelayGrantOptionId, setSelectedRelayGrantOptionId] = useState<
-    string | null
-  >(interaction.runtimeAuthorization?.grantOptions[0]?.id || null)
+  const [selectedRuntimeGrantOptionId, setSelectedRuntimeGrantOptionId] =
+    useState<string | null>(
+      interaction.runtimeAuthorization?.grantOptions[0]?.id || null
+    )
 
   const viewerCanResolve = interaction.viewerCanResolve === true
   const canResolveUserInput =
@@ -787,7 +792,7 @@ function InteractionCard({
     setSubmitError(null)
     setResolutionNoteDraft("")
     setDraftAnswers(buildDraftQuestionAnswers(interaction))
-    setSelectedRelayGrantOptionId(
+    setSelectedRuntimeGrantOptionId(
       interaction.runtimeAuthorization?.grantOptions[0]?.id || null
     )
   }, [interaction.id, interaction.revision, interaction.status])
@@ -1366,7 +1371,7 @@ function InteractionCard({
             className="rounded-full border-primary/20 bg-primary/5 text-primary"
           >
             <Shield className="mr-1 h-3 w-3" />
-            Relay Authorization
+            Runtime Authorization
           </Badge>
           <Badge
             variant="outline"
@@ -1468,7 +1473,7 @@ function InteractionCard({
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
                 {runtimeAuthorization.grantOptions.map((option) => {
-                  const selected = selectedRelayGrantOptionId === option.id
+                  const selected = selectedRuntimeGrantOptionId === option.id
                   return (
                     <Button
                       key={option.id}
@@ -1476,7 +1481,7 @@ function InteractionCard({
                       variant={selected ? "default" : "outline"}
                       size="sm"
                       disabled={Boolean(submittingAction)}
-                      onClick={() => setSelectedRelayGrantOptionId(option.id)}
+                      onClick={() => setSelectedRuntimeGrantOptionId(option.id)}
                       className="rounded-full"
                       title={option.detail}
                     >
@@ -1516,14 +1521,14 @@ function InteractionCard({
                   type="button"
                   variant={preset === "once" ? "default" : "outline"}
                   disabled={
-                    Boolean(submittingAction) || !selectedRelayGrantOptionId
+                    Boolean(submittingAction) || !selectedRuntimeGrantOptionId
                   }
                   onClick={() =>
-                    selectedRelayGrantOptionId
+                    selectedRuntimeGrantOptionId
                       ? void submitResolution(`approve_${preset}`, {
                           decision: "approve",
                           preset,
-                          selectedGrantOptionId: selectedRelayGrantOptionId,
+                          selectedGrantOptionId: selectedRuntimeGrantOptionId,
                           note: resolutionNoteDraft.trim() || undefined,
                         })
                       : undefined

@@ -95,10 +95,16 @@ export async function loadDeviceCapabilityToolsForSubjects(
 }
 
 export interface AccessTargetInput {
-  kind: "workspace" | "actor" | "conversation" | "actor_in_conversation"
+  kind:
+    | "workspace"
+    | "actor"
+    | "conversation"
+    | "actor_in_conversation"
+    | "remote_agent"
   workspaceId?: string
   actorId?: string
   conversationId?: string
+  remoteAgentId?: string
 }
 
 /**
@@ -144,6 +150,14 @@ export async function resolveAccessTargetSubjectId(
       return upsertAccessSubject(db, {
         kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
         contextId: context.conversationActorContextId,
+      })
+    }
+    case "remote_agent": {
+      if (!input.remoteAgentId)
+        throw new Error("remoteAgentId required for remote_agent target")
+      return upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: input.remoteAgentId,
       })
     }
   }

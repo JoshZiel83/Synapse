@@ -1554,7 +1554,7 @@ function buildRuntimeAuthorizationRejectedNotice(
 ) {
   const resolverName = interaction.resolvedBy?.name || "An authorized user"
   const deviceName =
-    interaction.runtimeAuthorization?.deviceDisplayName || "relay device"
+    interaction.runtimeAuthorization?.deviceDisplayName || "the device"
   const summary = `${resolverName} rejected access for ${deviceName}.`
   const lines = [
     summary,
@@ -1592,7 +1592,7 @@ function buildRuntimeAuthorizationApprovedNotice(
 ) {
   const resolverName = interaction.resolvedBy?.name || "An authorized user"
   const deviceName =
-    interaction.runtimeAuthorization?.deviceDisplayName || "relay device"
+    interaction.runtimeAuthorization?.deviceDisplayName || "the device"
   const approvedPreset =
     interaction.runtimeAuthorization?.approvedPreset || "conversation"
   const summary = `${resolverName} approved ${approvedPreset} access for ${deviceName}.`
@@ -2700,7 +2700,8 @@ export async function canUserResolveInteraction(params: {
   }
 
   const deviceId = interaction.runtimeAuthorization?.deviceId
-  const deviceCapabilityId = interaction.runtimeAuthorization?.deviceCapabilityId
+  const deviceCapabilityId =
+    interaction.runtimeAuthorization?.deviceCapabilityId
   if (!deviceId || !deviceCapabilityId) {
     return false
   }
@@ -3241,7 +3242,9 @@ export async function resolveInteractionRequest(
         throw new Error("decision must be approve or reject")
       }
       if (params.decision === "approve" && !params.preset) {
-        throw new Error("preset is required when approving relay authorization")
+        throw new Error(
+          "preset is required when approving runtime authorization"
+        )
       }
 
       nextStatus = params.decision === "approve" ? "approved" : "rejected"
@@ -3265,7 +3268,7 @@ export async function resolveInteractionRequest(
             : ""
         if (!selectedGrantOptionId) {
           throw new Error(
-            "selectedGrantOptionId is required when approving relay authorization"
+            "selectedGrantOptionId is required when approving runtime authorization"
           )
         }
 
@@ -3279,7 +3282,7 @@ export async function resolveInteractionRequest(
         )
         if (!availablePresets.includes(params.preset || "once")) {
           throw new Error(
-            `preset ${params.preset || "once"} is not allowed for this relay authorization request`
+            `preset ${params.preset || "once"} is not allowed for this runtime authorization request`
           )
         }
         const selectedOption = grantOptions.find(
@@ -3287,7 +3290,7 @@ export async function resolveInteractionRequest(
         )
         if (!selectedOption) {
           throw new Error(
-            `Unknown relay authorization option "${selectedGrantOptionId}"`
+            `Unknown runtime authorization option "${selectedGrantOptionId}"`
           )
         }
 

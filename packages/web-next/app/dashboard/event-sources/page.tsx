@@ -1268,7 +1268,7 @@ export default function EventSourcesPage() {
               `gitlab.pipeline`.
             </div>
             <div className="rounded-[22px] border border-border/70 bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
-              Relay lifecycle event sources are best managed from the relay
+              Device lifecycle event sources are best managed from the device
               detail page, where online/offline sources can be enabled without
               creating duplicates.
             </div>
