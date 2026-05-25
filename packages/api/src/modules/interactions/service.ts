@@ -10,6 +10,7 @@ import {
 } from "@synapse/shared/utils"
 import { v4 as uuidv4 } from "uuid"
 import type {
+  CanonicalContentBlock,
   ChatInteractionResolveInput,
   ChatInteractionResolveOutcome,
   ConversationFeedItem,
@@ -66,6 +67,7 @@ import {
   createRuntimeAuthorizationGrant,
   type RuntimeAuthorizationGrantRecord,
 } from "../runtime-authorizations/service.js"
+import { autoDispatchRuntimeAuthorizationRetry } from "../runtime-authorizations/auto-retry.js"
 import {
   buildSessionPlanDraftState,
   parseSessionCollaborationState,
@@ -1589,8 +1591,7 @@ function buildRuntimeAuthorizationRejectedNotice(
 
 function buildRuntimeAuthorizationApprovedNotice(
   interaction: InteractionRequestSummary
-) {
-  const resolverName = interaction.resolvedBy?.name || "An authorized user"
+) {  const resolverName = interaction.resolvedBy?.name || "An authorized user"
   const deviceName =
     interaction.runtimeAuthorization?.deviceDisplayName || "the device"
   const approvedPreset =
@@ -1623,10 +1624,88 @@ function buildRuntimeAuthorizationApprovedNotice(
   }
 }
 
+/**
+ * After a runtime_authorization interaction is approved, try to re-issue
+ * the original tool call server-side using the persisted args + the grant
+ * that was just created. The result becomes the task's finalResultPayload
+ * so the model sees the actual tool output instead of a placeholder
+ * "approved by ..." string. Returns null when the auto-retry can't be
+ * performed (no source args persisted, device offline, etc.) — caller
+ * falls back to buildRuntimeAuthorizationApprovedNotice.
+ *
+ * This is the load-bearing fix that makes runtime_authorization not depend
+ * on the model "noticing" the approval and "guessing" a magic retry_nonce
+ * arg. The dispatch envelope carries retry_nonce as a structured field
+ * (envelope.runtime_authorization.retry_nonce) so the device can match
+ * the once-grant safely.
+ */
+async function maybeAutoRetryAfterApproval(args: {
+  interaction: InteractionRequestSummary
+  sourceRequestArgs?: Record<string, unknown>
+  sourceRetryNonce?: string
+  createdGrant?: RuntimeAuthorizationGrantRecord
+}) {
+  if (args.interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
+    return null
+  }
+  const runtimeAuth = args.interaction.runtimeAuthorization
+  if (!runtimeAuth) return null
+  if (!args.createdGrant) return null
+  if (!args.sourceRetryNonce) return null
+  if (!args.sourceRequestArgs) return null
+  // The visible tool name (== device-side stable_key) is what the
+  // dispatcher uses as params.name when calling /mcp tools/call.
+  const visibleToolName =
+    runtimeAuth.deviceToolStableKey || runtimeAuth.requestedToolName
+  const retry = await autoDispatchRuntimeAuthorizationRetry({
+    deviceCapabilityId: runtimeAuth.deviceCapabilityId,
+    visibleToolName,
+    sourceRequestArgs: args.sourceRequestArgs,
+    sourceRetryNonce: args.sourceRetryNonce,
+    approvedGrant: args.createdGrant,
+  }).catch((err) => ({
+    ok: false as const,
+    errorCode: "runtime_constraint",
+    errorMessage: `auto-retry threw: ${(err as Error).message}`,
+  }))
+  if (!retry.ok || !retry.result) return null
+  const contentBlocks = Array.isArray(retry.result.content)
+    ? (retry.result.content as CanonicalContentBlock[])
+    : []
+  const summary = `Authorization approved — re-ran ${visibleToolName}.`
+  return {
+    summary,
+    messageBlocks: contentBlocks,
+    finalResultPayload: {
+      content: contentBlocks,
+      isError: retry.result.isError,
+      structuredContent: {
+        interactionId: args.interaction.id,
+        interaction: args.interaction,
+        synapseRetry: {
+          autoRedispatched: true,
+          retryNonce: args.sourceRetryNonce,
+          toolName: visibleToolName,
+        },
+        ...(retry.result.metadata && typeof retry.result.metadata === "object"
+          ? { toolMeta: retry.result.metadata }
+          : {}),
+      },
+    },
+    metadata: {
+      interactionId: args.interaction.id,
+      interactionKind: args.interaction.kind,
+      interactionStatus: args.interaction.status,
+      synapseRetry: {
+        autoRedispatched: true,
+      },
+    },
+  }
+}
+
 function buildRuntimeAuthorizationSupersededNotice(
   interaction: InteractionRequestSummary
-) {
-  const summary =
+) {  const summary =
     "This authorization request was superseded by a newer user message."
   const messageBlocks = textBlocks(summary)
 
@@ -3368,6 +3447,17 @@ export async function resolveInteractionRequest(
       outcome: "applied" as const,
       interaction: nextInteraction,
       createdGrant,
+      // Surface the original args + retry_nonce to the outer scope so the
+      // post-commit auto-retry path (autoDispatchRuntimeAuthorizationRetry)
+      // can re-issue the original tool call without the model having to
+      // notice the approval. Drops to undefined for non-RuntimeAuth
+      // interactions (these fields are only populated when locked.kind is
+      // RUNTIME_AUTHORIZATION).
+      lockedSourceRequestArgs:
+        locked.source_request_args && typeof locked.source_request_args === "object"
+          ? (locked.source_request_args as Record<string, unknown>)
+          : undefined,
+      lockedSourceRetryNonce: locked.source_retry_nonce ?? undefined,
     }
   })
 
@@ -3418,9 +3508,23 @@ export async function resolveInteractionRequest(
       buildRuntimeAuthorizationRejectedNotice(interaction)
     )
   } else {
+    // Approved runtime authorization: try to re-dispatch the original
+    // tool call server-side using the persisted sourceRequestArgs +
+    // retry_nonce + the grant we just created. The model never sees the
+    // nonce — the dispatcher injects it into the envelope on its behalf,
+    // so the previously-failing call's tool result lands directly in the
+    // task notice. Falls back to a plain approval notice if the auto-
+    // retry can't be performed (device went offline, grant was created
+    // without source args, etc.).
+    const approvedRetry = await maybeAutoRetryAfterApproval({
+      interaction,
+      sourceRequestArgs: result.lockedSourceRequestArgs,
+      sourceRetryNonce: result.lockedSourceRetryNonce,
+      createdGrant: result.createdGrant,
+    })
     await completeToolCallTask(
       interaction.taskId,
-      buildRuntimeAuthorizationApprovedNotice(interaction)
+      approvedRetry ?? buildRuntimeAuthorizationApprovedNotice(interaction)
     )
   }
 

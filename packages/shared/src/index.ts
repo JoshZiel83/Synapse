@@ -5,6 +5,8 @@ export * from "./constants/index.js"
 export {
   filesystemPolicyAllows,
   commandlinePolicyAllows,
+  cuaPolicyAllows,
+  browserPolicyAllows,
   normalizePathPrefix,
   normalizeCommandText,
   hasCompoundShellOperators,

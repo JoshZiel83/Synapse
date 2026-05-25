@@ -4,6 +4,10 @@ import {
   normalizeCommandText as sharedNormalizeCommandText,
   hasCompoundShellOperators as sharedHasCompoundShellOperators,
   commandPrefixMatches as sharedCommandPrefixMatches,
+  filesystemPolicyAllows as sharedFilesystemPolicyAllows,
+  commandlinePolicyAllows as sharedCommandlinePolicyAllows,
+  cuaPolicyAllows as sharedCuaPolicyAllows,
+  browserPolicyAllows as sharedBrowserPolicyAllows,
 } from "@synapse/shared"
 import type {
   RuntimeAuthorizationGrantSpec,
@@ -528,18 +532,25 @@ export function filesystemPolicyMatches(
 ) {
   const granted = grant.filesystem
   const requested = action.filesystem
-  if (!granted || !requested || granted.access !== requested.access) {
-    return false
-  }
+  if (!granted || !requested) return false
   if (
     granted.pathPrefixes.length === 0 ||
     requested.pathPrefixes.length === 0
   ) {
     return false
   }
+  // Delegate to the canonical shared matcher so the API can never accept a
+  // request the device would reject (or vice-versa). The shared matcher
+  // applies write-covers-read semantics: a 'write' grant satisfies a 'read'
+  // requested action without forcing a second authorization round-trip.
   return requested.pathPrefixes.every((requestedPrefix) =>
-    granted.pathPrefixes.some((grantedPrefix) =>
-      pathWithinPrefix(requestedPrefix, grantedPrefix)
+    sharedFilesystemPolicyAllows(
+      {
+        access: granted.access,
+        pathPrefixes: granted.pathPrefixes,
+      },
+      requested.access,
+      requestedPrefix
     )
   )
 }
@@ -550,31 +561,26 @@ export function browserPolicyMatches(
 ) {
   const granted = grant.browser
   const requested = action.browser
-  if (!granted || !requested || granted.action !== requested.action) {
-    return false
-  }
-  switch (granted.scopeType) {
-    case "origin":
-      return Boolean(
-        granted.origin &&
-        requested.origin &&
-        granted.origin === requested.origin
-      )
-    case "host":
-      return Boolean(
-        granted.host && requested.host && granted.host === requested.host
-      )
-    case "domain":
-      return Boolean(
-        granted.registrableDomain &&
-        requested.registrableDomain &&
-        granted.registrableDomain === requested.registrableDomain
-      )
-    default:
-      // P4: previously `return true` — that silently granted access for any
-      // unknown scopeType, which is unsafe. Match Go behavior: deny.
-      return false
-  }
+  if (!granted || !requested) return false
+  if (!granted.scopeType) return false
+  // Apply write-covers-read to mirror the device-side check in
+  // builtins/browser.ts; a navigate (write) grant should satisfy a
+  // read_text (read) request on the same scope.
+  return sharedBrowserPolicyAllows(
+    {
+      action: granted.action,
+      scopeType: granted.scopeType,
+      origin: granted.origin,
+      host: granted.host,
+      registrableDomain: granted.registrableDomain,
+    },
+    {
+      needed: requested.action,
+      origin: requested.origin,
+      host: requested.host,
+      registrableDomain: requested.registrableDomain,
+    }
+  )
 }
 
 export function commandlinePolicyMatches(
@@ -583,43 +589,27 @@ export function commandlinePolicyMatches(
 ) {
   const granted = grant.commandline
   const requested = action.commandline
-  if (!granted || !requested) {
-    return false
-  }
-  if (granted.executor !== requested.executor) {
-    return false
-  }
-  if (granted.workingDirectory) {
-    const requestedWorkingDirectory = normalizePathPrefix(
-      requested.workingDirectory
-    )
-    if (!requestedWorkingDirectory) {
-      return false
+  if (!granted || !requested) return false
+  if (granted.executor !== requested.executor) return false
+  const requestedText = sharedNormalizeCommandText(requested.commandText)
+  if (!requestedText) return false
+  // Delegate to the canonical shared matcher. Critically, the shared
+  // 'tool' branch checks the FIRST token of the requested command against
+  // the granted commandText — the old API matcher returned `true`
+  // unconditionally for 'tool' which let any command slip past a grant
+  // narrowed to a specific binary.
+  return sharedCommandlinePolicyAllows(
+    {
+      executor: granted.executor,
+      commandMatchType: granted.commandMatchType,
+      commandText: granted.commandText,
+      workingDirectory: granted.workingDirectory,
+    },
+    {
+      command: requestedText,
+      workingDirectory: requested.workingDirectory,
     }
-    if (
-      !pathWithinPrefix(requestedWorkingDirectory, granted.workingDirectory)
-    ) {
-      return false
-    }
-  }
-  const grantedText = normalizeCommandText(granted.commandText)
-  const requestedText = normalizeCommandText(requested.commandText)
-  if (!requestedText) {
-    return false
-  }
-  switch (granted.commandMatchType) {
-    case "exact":
-      return Boolean(grantedText && grantedText === requestedText)
-    case "prefix":
-      if (!grantedText || hasCompoundShellOperators(requestedText)) {
-        return false
-      }
-      return commandPrefixMatches(grantedText, requestedText)
-    case "tool":
-      return true
-    default:
-      return false
-  }
+  )
 }
 
 export function runtimeAuthorizationGrantMatches(
@@ -633,10 +623,15 @@ export function runtimeAuthorizationGrantMatches(
     case "filesystem":
       return filesystemPolicyMatches(grant, requestedAction)
     case "cua":
+      // Mirror device-side write-covers-read in builtins/cua.ts: a
+      // write grant satisfies a read request without re-prompting.
       return Boolean(
         grant.cua &&
-        requestedAction.cua &&
-        grant.cua.access === requestedAction.cua.access
+          requestedAction.cua &&
+          sharedCuaPolicyAllows(
+            { access: grant.cua.access },
+            requestedAction.cua.access
+          )
       )
     case "browser":
       return browserPolicyMatches(grant, requestedAction)

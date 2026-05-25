@@ -180,12 +180,16 @@ async function main() {
         getFlag(args.flags, "tunnel-registration-token") ??
         process.env.SYNAPSE_TUNNEL_REGISTRATION_TOKEN
       let tunnel: { adapter: any; registrationToken: string } | undefined
+      // Server-issued tunnel path token (delivered via device.hello ack)
+      // takes precedence; the env-supplied registrationToken is a fallback
+      // for environments where the server hasn't started issuing one. Both
+      // path token and adapter config (server addr / port / auth / vhost)
+      // must be present for the runtime to even attempt frpc.
       if (
         tunnelServerAddr &&
         tunnelServerPortRaw &&
         tunnelAuthToken &&
-        tunnelVhost &&
-        tunnelRegistrationToken
+        tunnelVhost
       ) {
         const tunnelServerPort = Number.parseInt(tunnelServerPortRaw, 10)
         if (Number.isFinite(tunnelServerPort)) {
@@ -197,7 +201,7 @@ async function main() {
               vhostHost: tunnelVhost,
               frpcPath: getFlag(args.flags, "frpc-path") ?? "frpc",
             }),
-            registrationToken: tunnelRegistrationToken,
+            registrationToken: tunnelRegistrationToken ?? "",
           }
         }
       }

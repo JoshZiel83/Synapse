@@ -75,12 +75,30 @@ export interface PersistCatalogSyncInput {
   exposures: DeviceCatalogExposure[]
 }
 
+export interface AssignedToolIds {
+  device_tool_id: string
+  device_tool_revision_id: string
+}
+export interface AssignedExposureIds {
+  device_exposure_id: string
+  tools: Record<string, AssignedToolIds>
+}
+export type AssignedCatalogIds = Record<string, AssignedExposureIds>
+
 export interface PersistCatalogSyncResult {
   exposureCount: number
   newRevisionCount: number
   toolRevisionCount: number
   offlineExposureCount: number
   removedToolCount: number
+  /**
+   * Server-assigned ids per exposure stable_key → tool name. Returned to
+   * the device runtime so it can verify dispatched envelopes target one
+   * of its own catalog entries before invoking the local provider. Without
+   * this round-trip the device has no way to know the UUIDs the server
+   * minted and could be tricked into running a tool by a peer's envelope.
+   */
+  assignedIds: AssignedCatalogIds
 }
 
 export async function persistCatalogSync(
@@ -102,6 +120,7 @@ export async function persistCatalogSync(
     let toolRevisionCount = 0
     const seenExposureIds = new Set<string>()
     const seenToolIdsByExposure = new Map<string, Set<string>>()
+    const assignedIds: AssignedCatalogIds = {}
 
     for (const exposure of input.exposures) {
       const exposureId = await upsertExposure(trx, {
@@ -119,13 +138,17 @@ export async function persistCatalogSync(
         schemaHash: exposureSchemaHash(exposure),
       })
       if (isNew) newRevisionCount += 1
-      const { writtenRevisions, seenToolIds } = await upsertTools(trx, {
+      const { writtenRevisions, seenToolIds, assignedTools } = await upsertTools(trx, {
         exposureId,
         catalogRevisionId: revisionId,
         tools: exposure.tools,
       })
       toolRevisionCount += writtenRevisions
       seenToolIdsByExposure.set(exposureId, seenToolIds)
+      assignedIds[exposure.stable_key] = {
+        device_exposure_id: exposureId,
+        tools: assignedTools,
+      }
     }
 
     // Reap stale state: every exposure on this device that wasn't in the
@@ -183,6 +206,7 @@ export async function persistCatalogSync(
       toolRevisionCount,
       offlineExposureCount,
       removedToolCount,
+      assignedIds,
     }
   })
 }
@@ -321,9 +345,14 @@ async function upsertTools(
     catalogRevisionId: string
     tools: DeviceCatalogTool[]
   }
-): Promise<{ writtenRevisions: number; seenToolIds: Set<string> }> {
+): Promise<{
+  writtenRevisions: number
+  seenToolIds: Set<string>
+  assignedTools: Record<string, AssignedToolIds>
+}> {
   let writtenRevisions = 0
   const seenToolIds = new Set<string>()
+  const assignedTools: Record<string, AssignedToolIds> = {}
   for (const tool of args.tools) {
     const definitionHash = toolDefinitionHash(tool)
     const existingTool = await trx
@@ -404,6 +433,10 @@ async function upsertTools(
       .set({ latest_revision_id: revisionId } as never)
       .where("id", "=", toolId)
       .execute()
+    assignedTools[tool.name] = {
+      device_tool_id: toolId,
+      device_tool_revision_id: revisionId,
+    }
   }
-  return { writtenRevisions, seenToolIds }
+  return { writtenRevisions, seenToolIds, assignedTools }
 }

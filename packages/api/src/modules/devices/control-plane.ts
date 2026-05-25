@@ -112,24 +112,25 @@ function writePersistResult(
 }
 
 /**
- * Validate a device-supplied tunnel internal_url. The operator pins the
- * trusted tunnel edge via SYNAPSE_DEVICE_TUNNEL_EDGE_URL (e.g.
- * "http://tunnel-edge:7000"). Devices may only register URLs under that
- * prefix; otherwise we'd be giving every authenticated device a SSRF
- * primitive into the API process's network namespace. The URL must also
- * contain the device-service token path segment ("/d/<token>") so a
- * compromised device can't squat on another device's route. The token
- * segment can be any non-empty string — the API does not yet sign or
- * validate the token itself; that's a follow-up alongside the frp control
- * plane handshake.
+ * Validate a device-supplied tunnel internal_url. Two enforcement layers:
  *
- * Fails closed if SYNAPSE_DEVICE_TUNNEL_EDGE_URL is unset.
+ *   1. SSRF gate — operator pins the trusted tunnel edge via
+ *      SYNAPSE_DEVICE_TUNNEL_EDGE_URL (e.g. "http://tunnel-edge:7000").
+ *      Without that env var we refuse to register any URL (fail closed),
+ *      otherwise a compromised device could point the dispatcher at
+ *      arbitrary internal addresses (cloud metadata, admin endpoints).
+ *
+ *   2. Token binding — the URL path must contain "/d/<token>" where
+ *      <token> matches the per-service path token issued by the server at
+ *      device.hello time and persisted on device_services.tunnel_path_token.
+ *      Without this check, a compromised device could squat on another
+ *      device's tunnel route by registering an internal_url that includes
+ *      a peer's well-known path segment.
  */
-function validateTunnelInternalUrl(args: {
+async function validateTunnelInternalUrl(args: {
   candidate: string
   deviceServiceId: string
-}): { ok: true } | { ok: false; message: string } {
-  void args.deviceServiceId // reserved for future per-service token check
+}): Promise<{ ok: true } | { ok: false; message: string }> {
   const trustedPrefix = process.env.SYNAPSE_DEVICE_TUNNEL_EDGE_URL?.trim()
   if (!trustedPrefix) {
     return {
@@ -152,12 +153,36 @@ function validateTunnelInternalUrl(args: {
       message: `internal_url origin ${candidateUrl.origin} is not under the trusted tunnel edge ${trustedUrl.origin}`,
     }
   }
-  // The path must include "/d/<token>" so dispatcher posting to
-  // "${internalUrl}/mcp" lands on a path the frp edge can route to.
-  if (!/\/d\/[^/]+/.test(candidateUrl.pathname)) {
+  const tokenMatch = /\/d\/([^/]+)/.exec(candidateUrl.pathname)
+  if (!tokenMatch) {
     return {
       ok: false,
       message: "internal_url must include a /d/<token> path segment",
+    }
+  }
+  const presentedToken = tokenMatch[1]!
+  // The server issues tunnel_path_token in the device.hello ack and persists
+  // it on the device_services row. Any mismatch means either the device is
+  // out of sync (re-registered without re-reading the ack) or is attempting
+  // to claim a peer's route — either way we reject.
+  const row = await db
+    .selectFrom("device_services")
+    .select(["tunnel_path_token"])
+    .where("id", "=", args.deviceServiceId)
+    .executeTakeFirst()
+  const expectedToken = (row?.tunnel_path_token as string | null) ?? null
+  if (!expectedToken) {
+    return {
+      ok: false,
+      message:
+        "device_services row has no tunnel_path_token; reconnect to receive a fresh token via device.hello",
+    }
+  }
+  if (presentedToken !== expectedToken) {
+    return {
+      ok: false,
+      message:
+        "internal_url tunnel path token does not match the token bound to this device_service",
     }
   }
   return { ok: true }
@@ -222,6 +247,35 @@ async function insertControlPlaneSession(args: {
     .where("id", "=", args.serviceId)
     .execute()
   return sessionId
+}
+
+/**
+ * Lookup-or-issue the per-service tunnel path token. The token is committed
+ * before we hand it to the device in the hello ack so a concurrent
+ * device.tunnel.up sees the same value. Concurrency-safe via a single
+ * UPDATE ... WHERE tunnel_path_token IS NULL; if a peer beat us to it we
+ * read whatever is already persisted.
+ */
+async function ensureTunnelPathToken(serviceId: string): Promise<string> {
+  const fresh = randomBytes(32).toString("hex")
+  await db
+    .updateTable("device_services")
+    .set({ tunnel_path_token: fresh, updated_at: sql`NOW()` } as never)
+    .where("id", "=", serviceId)
+    .where("tunnel_path_token", "is", null)
+    .execute()
+  const row = await db
+    .selectFrom("device_services")
+    .select(["tunnel_path_token"])
+    .where("id", "=", serviceId)
+    .executeTakeFirst()
+  const token = (row?.tunnel_path_token as string | null) ?? null
+  if (!token) {
+    throw new Error(
+      `device_services ${serviceId} disappeared while issuing tunnel_path_token`
+    )
+  }
+  return token
 }
 
 async function closeControlPlaneSession(
@@ -395,6 +449,19 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                 } catch {
                   serverEnvelopeKey = null
                 }
+                // Issue (or read) the per-service tunnel path token so the
+                // device can plug it into its frp endpoint URL. Without
+                // this, device.tunnel.up would either skip the binding
+                // check or look up a NULL token — both unsafe.
+                let tunnelPathToken: string | null = null
+                try {
+                  tunnelPathToken = await ensureTunnelPathToken(
+                    result.serviceId
+                  )
+                } catch {
+                  /* swallow — operator will see device.tunnel.up rejection
+                   * with the structured "no tunnel_path_token" message */
+                }
                 writeResult(socket, req.id ?? null, {
                   accepted: true,
                   server_time: new Date().toISOString(),
@@ -406,6 +473,9 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
                         kid: serverEnvelopeKey.signatureKid,
                         public_key_pem: serverEnvelopeKey.publicKeyPem,
                       }
+                    : null,
+                  tunnel: tunnelPathToken
+                    ? { path_token: tunnelPathToken }
                     : null,
                 })
               })
@@ -467,32 +537,39 @@ export function registerDeviceControlPlaneRoutes(app: FastifyInstance): void {
               )
               return
             }
-            // SSRF gate: an authenticated device must not be able to point
-            // the dispatcher at arbitrary URLs (e.g. http://169.254.169.254
-            // for cloud metadata, or internal admin endpoints). The URL
-            // must be under the operator-configured tunnel-edge prefix
-            // (SYNAPSE_DEVICE_TUNNEL_EDGE_URL), and the path must end
-            // with the per-service token path segment so different devices
-            // can't squat on each other's routes.
-            const validation = validateTunnelInternalUrl({
+            // SSRF + token-binding gates: an authenticated device must not
+            // be able to point the dispatcher at arbitrary URLs and must
+            // present the server-issued tunnel_path_token for its own
+            // service so peer devices can't squat on its route.
+            validateTunnelInternalUrl({
               candidate: params.internal_url,
               deviceServiceId: state.authenticatedServiceId!,
             })
-            if (!validation.ok) {
-              writeError(
-                socket,
-                req.id ?? null,
-                -32005,
-                `device.tunnel.up rejected: ${validation.message}`
+              .then((validation) => {
+                if (!validation.ok) {
+                  writeError(
+                    socket,
+                    req.id ?? null,
+                    -32005,
+                    `device.tunnel.up rejected: ${validation.message}`
+                  )
+                  return
+                }
+                getDeviceTunnelRegistry().register({
+                  deviceServiceId: state.authenticatedServiceId!,
+                  internalUrl: params.internal_url as string,
+                })
+                state.registeredTunnelServiceId = state.authenticatedServiceId
+                writeResult(socket, req.id ?? null, { registered: true })
+              })
+              .catch((err) =>
+                writeError(
+                  socket,
+                  req.id ?? null,
+                  -32603,
+                  `tunnel validation failed: ${(err as Error).message}`
+                )
               )
-              return
-            }
-            getDeviceTunnelRegistry().register({
-              deviceServiceId: state.authenticatedServiceId!,
-              internalUrl: params.internal_url,
-            })
-            state.registeredTunnelServiceId = state.authenticatedServiceId
-            writeResult(socket, req.id ?? null, { registered: true })
             return
           }
           case "device.tunnel.down": {

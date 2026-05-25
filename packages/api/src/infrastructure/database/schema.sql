@@ -3522,6 +3522,12 @@ CREATE TABLE device_services (
   -- ON DELETE CASCADE so removing the underlying machine row drops the
   -- daemon association row too.
   remote_agent_machine_id UUID REFERENCES remote_agent_machines(id) ON DELETE CASCADE,
+  -- Server-issued path token used by the device to register its tunnel
+  -- endpoint. The frp control-plane URL must include `/d/<tunnel_path_token>`
+  -- so device.tunnel.up requests for one device can never claim another
+  -- device's route. Set at first device.hello (random 32-byte hex);
+  -- persisted so the device can re-use it across reconnects.
+  tunnel_path_token VARCHAR(64),
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   UNIQUE(device_id, service_kind),

@@ -123,6 +123,67 @@ export interface CommandlinePolicyShape {
   workingDirectory?: string
 }
 
+export interface CuaPolicyShape {
+  access: "read" | "write"
+}
+
+/**
+ * Authoritative CUA authorization decision. `write` covers `read` so a
+ * principal with cua:write grants can also read-only enumerate displays
+ * without forcing a second authorization.
+ */
+export function cuaPolicyAllows(
+  policy: CuaPolicyShape,
+  needed: "read" | "write"
+): boolean {
+  if (needed === "write") return policy.access === "write"
+  return policy.access === "read" || policy.access === "write"
+}
+
+export interface BrowserPolicyShape {
+  action: "read" | "write"
+  scopeType: "origin" | "host" | "domain"
+  origin?: string
+  host?: string
+  registrableDomain?: string
+}
+
+/**
+ * Authoritative browser authorization decision. `write` covers `read`; the
+ * scope match is exact-equality on origin / host / registrable_domain
+ * depending on `scopeType`. Callers that don't have a target URL (planning
+ * phase) can omit `targetUrl` and we just check the action permission.
+ */
+export function browserPolicyAllows(
+  policy: BrowserPolicyShape,
+  args: {
+    needed: "read" | "write"
+    origin?: string
+    host?: string
+    registrableDomain?: string
+  }
+): boolean {
+  if (args.needed === "write" && policy.action !== "write") return false
+  switch (policy.scopeType) {
+    case "origin":
+      return Boolean(
+        policy.origin && args.origin && policy.origin === args.origin
+      )
+    case "host":
+      return Boolean(
+        policy.host && args.host && policy.host === args.host
+      )
+    case "domain":
+      return Boolean(
+        policy.registrableDomain &&
+          args.registrableDomain &&
+          policy.registrableDomain === args.registrableDomain
+      )
+    default:
+      return false
+  }
+}
+
 /**
  * Authoritative commandline authorization decision. Mirrors the server
  * matcher so device-side enforcement can't drift. Resolves the working

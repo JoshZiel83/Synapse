@@ -6,10 +6,11 @@
     "expected": true
   },
   {
-    "description": "write grant does not satisfy read request",
+    "description": "write grant satisfies read request (write covers read)",
     "policies": [{ "capability": "cua", "cua": { "access": "write" } }],
     "request": { "access": "read" },
-    "expected": false
+    "expected": true,
+    "note": "Aligned with device-side enforcement in packages/device-runtime/src/builtins/cua.ts — a principal with cua:write should not be asked again for cua:read."
   },
   {
     "description": "no cua policy denies",

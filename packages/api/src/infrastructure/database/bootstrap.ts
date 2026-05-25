@@ -8,9 +8,9 @@ const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
 const CURRENT_SCHEMA_VERSION =
-  "2026-05-25-device-runtime-v3-pr27-drop-tool-calls-relay-id"
+  "2026-05-26-device-runtime-v3-pr28-tunnel-path-token"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "device runtime v3 PR #27: drop relay_id columns from tool_calls + tool_execution_attempts; rename to device_id"
+  "device runtime v3 PR #28: add device_services.tunnel_path_token (server-issued per-service tunnel binding)"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

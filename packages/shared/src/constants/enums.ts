@@ -761,12 +761,19 @@ export const RUNTIME_AUTHORIZATION_PRESETS = [
   "conversation",
   "workspace",
 ] as const
+export const RUNTIME_AUTHORIZATION_GRANT_SCOPE = {
+  ONCE: "once",
+  ACTOR: "actor",
+  CONVERSATION: "conversation",
+  ACTOR_IN_CONVERSATION: "actor_in_conversation",
+  WORKSPACE: "workspace",
+} as const
 export const RUNTIME_AUTHORIZATION_GRANT_SCOPES = [
-  "once",
-  "actor",
-  "conversation",
-  "actor_in_conversation",
-  "workspace",
+  RUNTIME_AUTHORIZATION_GRANT_SCOPE.ONCE,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPE.CONVERSATION,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR_IN_CONVERSATION,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPE.WORKSPACE,
 ] as const
 export const RUNTIME_AUTHORIZATION_GRANT_RETENTIONS = [
   "consume_once",

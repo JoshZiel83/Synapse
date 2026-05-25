@@ -18,6 +18,7 @@ import type {
   CanonicalContentBlock,
 } from "@synapse/shared/types"
 import { SUBJECT_KIND, textBlock } from "@synapse/shared"
+import { RUNTIME_AUTHORIZATION_GRANT_SCOPE } from "@synapse/shared/constants"
 import type { McpExecutionContext } from "../mcp-plugins/instance-manager.js"
 import {
   resolveMcpToolsForActor,
@@ -378,6 +379,15 @@ async function projectDeviceTools(
         row.visible_description ||
         `Device tool: ${row.visible_tool_name} on ${row.device_name}`,
       parameters: normalizeInputSchema(row.input_schema),
+      // Origin metadata so reverse-MCP can stamp a "[device:Name]" attribution
+      // on the tool description it forwards to remote agents. Without this
+      // the badge falls back to "[device]" which loses the device name.
+      source: {
+        kind: "device_capability",
+        displayName: row.visible_tool_name,
+        deviceName: row.device_name,
+      },
+      sourceType: "mcp_device",
     })
   }
   return { tools, handlers, subjects }
@@ -467,8 +477,8 @@ function unionWithDevice(
       // strips it from the args the device sees so it doesn't pollute the
       // tool's schema.
       const subjectScoped = allGrants.filter((g) => {
-        if (g.scope === "workspace") return true
-        if (g.scope === "once") {
+        if (g.scope === RUNTIME_AUTHORIZATION_GRANT_SCOPE.WORKSPACE) return true
+        if (g.scope === RUNTIME_AUTHORIZATION_GRANT_SCOPE.ONCE) {
           return !!(
             envelopeRetryNonce &&
             g.sourceRetryNonce &&

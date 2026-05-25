@@ -34,6 +34,25 @@ export interface InMemoryMcpHostHandle extends McpHost {
    * env would never see a server key and always reject tools/call.
    */
   addServerPublicKey(kid: string, publicKeyPem: string): void
+  /**
+   * Absorb the server-assigned catalog IDs returned by device.catalog.sync
+   * so dispatchCallTool can reject any envelope whose target IDs don't
+   * match a tool we actually own. Without this check the device-side
+   * envelope verifier only proves the envelope was signed — not that it
+   * was meant for this device's catalog.
+   */
+  setCatalogTargetIds(
+    map: Record<
+      string,
+      {
+        device_exposure_id: string
+        tools: Record<
+          string,
+          { device_tool_id: string; device_tool_revision_id: string }
+        >
+      }
+    >
+  ): void
 }
 
 export interface InMemoryMcpHostOptions {
@@ -69,6 +88,17 @@ export function createInMemoryMcpHost(
   const trustedServerKeys = new Map<string, string>(
     opts.serverPublicKeys ? Array.from(opts.serverPublicKeys.entries()) : []
   )
+  // Server-assigned catalog target IDs, populated by setCatalogTargetIds()
+  // after each device.catalog.sync ack. Keyed by tool name (the same name
+  // dispatchCallTool resolves on) so the envelope target check is O(1).
+  const toolTargetIndex = new Map<
+    string,
+    {
+      device_exposure_id: string
+      device_tool_id: string
+      device_tool_revision_id: string
+    }
+  >()
   let server: Server | null = null
   let listenPort = 0
 
@@ -163,6 +193,43 @@ export function createInMemoryMcpHost(
           content: [{ type: "text", text: synapseError.message }],
           isError: true,
           _meta: { synapse_error: synapseError },
+        }
+      }
+      // Envelope target check: the signature proves the SERVER signed an
+      // envelope for SOME tool, but says nothing about whether that tool
+      // lives on this device. Cross-reference the envelope's target ids
+      // against the assigned-id map we got from device.catalog.sync. A
+      // mismatch means either we're being asked to run a peer's tool or
+      // the catalog hasn't synced yet — in both cases we refuse.
+      if (toolTargetIndex.size > 0) {
+        const expected = toolTargetIndex.get(params.name)
+        if (!expected) {
+          const synapseError: SynapseError = {
+            code: "invalid_request",
+            message: `tool ${params.name} is not in this device's synced catalog`,
+          }
+          return {
+            content: [{ type: "text", text: synapseError.message }],
+            isError: true,
+            _meta: { synapse_error: synapseError },
+          }
+        }
+        if (
+          envelope.device_exposure_id !== expected.device_exposure_id ||
+          envelope.device_tool_id !== expected.device_tool_id ||
+          envelope.device_tool_revision_id !==
+            expected.device_tool_revision_id
+        ) {
+          const synapseError: SynapseError = {
+            code: "permission_denied",
+            message:
+              "envelope target ids (capability/exposure/tool/revision) do not match this device's catalog",
+          }
+          return {
+            content: [{ type: "text", text: synapseError.message }],
+            isError: true,
+            _meta: { synapse_error: synapseError },
+          }
         }
       }
     }
@@ -339,6 +406,21 @@ export function createInMemoryMcpHost(
     },
     addServerPublicKey(kid: string, publicKeyPem: string) {
       trustedServerKeys.set(kid, publicKeyPem)
+    },
+    setCatalogTargetIds(map) {
+      // Replace, not merge — every catalog.sync ack is authoritative.
+      // Stale tools should disappear from the target index immediately
+      // so a dispatch for a removed tool fails closed.
+      toolTargetIndex.clear()
+      for (const exposure of Object.values(map)) {
+        for (const [toolName, ids] of Object.entries(exposure.tools)) {
+          toolTargetIndex.set(toolName, {
+            device_exposure_id: exposure.device_exposure_id,
+            device_tool_id: ids.device_tool_id,
+            device_tool_revision_id: ids.device_tool_revision_id,
+          })
+        }
+      }
     },
     async registerCatalog(provider: CatalogProvider) {
       providers.set(provider.providerKey, provider)

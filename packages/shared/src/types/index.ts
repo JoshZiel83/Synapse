@@ -73,6 +73,7 @@ import {
   RUNTIME_AUTHORIZATION_CUA_ACCESSES,
   RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPE,
   RUNTIME_AUTHORIZATION_GRANT_SCOPES,
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_PRESETS,
@@ -2212,6 +2213,16 @@ export interface ToolDefinition {
     properties: Record<string, ToolParameterProperty>
     required: string[]
   }
+  // Origin metadata so consumers that surface tools to a model (e.g. the
+  // reverse-MCP endpoint that exposes Synapse tools to a remote agent) can
+  // render a "[device:Name]" / "[plugin:Name]" attribution. Optional because
+  // most ad-hoc ToolDefinitions don't have an upstream source.
+  source?: {
+    kind: "device_capability" | "plugin_installation" | "installed_skill"
+    displayName?: string
+    deviceName?: string
+  }
+  sourceType?: "builtin" | "mcp_plugin" | "mcp_device"
 }
 
 export interface ToolCall {

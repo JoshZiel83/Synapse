@@ -105,28 +105,13 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     }
 
     // Tunnel: bring the MCP host's loopback port up through the operator's
-    // frp edge so the API side can reach `tools/call`. Failure here is fatal
-    // when explicitly configured — silently falling back would let the
-    // dispatcher 502 forever with no operator-visible signal.
-    if (this.opts.tunnel) {
-      try {
-        this.tunnelHandle = await this.opts.tunnel.adapter.start({
-          deviceServiceId: runtimeService.serviceId,
-          localPort: this.mcpHost.localPort,
-          registrationToken: this.opts.tunnel.registrationToken,
-        })
-        logger.info("device tunnel up", {
-          deviceServiceId: runtimeService.serviceId,
-          internalUrl: this.tunnelHandle.internalUrl,
-          localPort: this.mcpHost.localPort,
-        })
-      } catch (err) {
-        logger.error("device tunnel start failed", {
-          error: (err as Error).message,
-        })
-        throw err
-      }
-    }
+    // frp edge so the API side can reach `tools/call`. We defer the actual
+    // adapter.start() to the device.hello ack handler so we can use the
+    // server-issued tunnel_path_token — this prevents a compromised device
+    // from squatting on another device's /d/<token> route. The env-supplied
+    // registrationToken (opts.tunnel.registrationToken) remains a fallback
+    // for environments where the server hasn't started issuing tokens yet.
+    // No work happens here.
 
     const helloFactory = async (
       challengeNonce: string
@@ -208,6 +193,46 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
             kid,
           })
         }
+        // Pull the per-service tunnel path token the server issued (or
+        // re-issued) for this service. Falls back to the env-supplied
+        // registrationToken when the server didn't ship one. The token
+        // becomes the `/d/<token>` segment the frp edge routes on; the
+        // server validates it against device_services.tunnel_path_token
+        // when device.tunnel.up arrives.
+        const tunnelAck =
+          ack &&
+          typeof ack === "object" &&
+          "tunnel" in ack &&
+          (ack as { tunnel?: unknown }).tunnel
+        const serverTunnelToken =
+          tunnelAck &&
+          typeof tunnelAck === "object" &&
+          typeof (tunnelAck as { path_token?: unknown }).path_token === "string"
+            ? ((tunnelAck as { path_token: string }).path_token as string)
+            : null
+        // Start the tunnel adapter now that we know which token to bind to.
+        if (this.opts.tunnel && !this.tunnelHandle) {
+          const effectiveToken =
+            serverTunnelToken || this.opts.tunnel.registrationToken
+          try {
+            this.tunnelHandle = await this.opts.tunnel.adapter.start({
+              deviceServiceId: runtimeService.serviceId,
+              localPort: this.mcpHost!.localPort,
+              registrationToken: effectiveToken,
+            })
+            logger.info("device tunnel up", {
+              deviceServiceId: runtimeService.serviceId,
+              internalUrl: this.tunnelHandle.internalUrl,
+              localPort: this.mcpHost!.localPort,
+              tokenSource: serverTunnelToken ? "server_issued" : "fallback_env",
+            })
+          } catch (err) {
+            logger.error("device tunnel start failed", {
+              error: (err as Error).message,
+            })
+            throw err
+          }
+        }
         // Announce our tunnel internal URL so the API's DeviceTunnelRegistry
         // can route dispatchSyncTool to us. Without this, every device tool
         // call returns no_tunnel_endpoint.
@@ -253,7 +278,24 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     // Use request (not notify) so we know whether the server actually
     // accepted the catalog. notify() silently returns if the socket isn't
     // OPEN, which was the original race that lost the initial sync.
-    await this.transport.request("device.catalog.sync", params)
+    const ack = await this.transport.request("device.catalog.sync", params)
+    // Server returns assigned_ids: a {stable_key -> {device_exposure_id,
+    // tools: {tool_name -> {device_tool_id, device_tool_revision_id}}}}
+    // map. We store it in the MCP host so dispatchCallTool can reject any
+    // envelope whose target IDs don't match our local catalog — without
+    // this check a forged or misrouted envelope could trick us into
+    // running a tool that belongs to another device.
+    this.absorbAssignedIds(ack)
+  }
+
+  private absorbAssignedIds(ack: unknown) {
+    if (!ack || typeof ack !== "object") return
+    const assigned = (ack as { assignedIds?: unknown; assigned_ids?: unknown })
+      .assignedIds ?? (ack as { assigned_ids?: unknown }).assigned_ids
+    if (!assigned || typeof assigned !== "object") return
+    this.mcpHost?.setCatalogTargetIds(
+      assigned as Parameters<InMemoryMcpHostHandle["setCatalogTargetIds"]>[0]
+    )
   }
 
   private updateStatus(status: RuntimeStatus) {

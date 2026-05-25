@@ -1198,6 +1198,7 @@ export interface DeviceServices {
   remote_agent_machine_id: string | null;
   service_kind: DeviceServicesServiceKind;
   status: Generated<DeviceServicesStatus>;
+  tunnel_path_token: string | null;
   updated_at: Generated<Timestamp | null>;
   version: string | null;
 }

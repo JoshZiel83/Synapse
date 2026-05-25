@@ -9,6 +9,8 @@ export { GrantPolicySchema, type GrantPolicy } from "./grant.js"
 export {
   filesystemPolicyAllows,
   commandlinePolicyAllows,
+  cuaPolicyAllows,
+  browserPolicyAllows,
   normalizePathPrefix,
   normalizeCommandText,
   hasCompoundShellOperators,

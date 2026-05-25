@@ -95,22 +95,42 @@
     "expected": false
   },
   {
-    "description": "tool match allows any args",
+    "description": "tool match allows any args after matching head",
     "policies": [
       {
         "capability": "commandline",
         "commandline": {
           "executor": "bash",
-          "commandMatchType": "tool"
+          "commandMatchType": "tool",
+          "commandText": "git"
         }
       }
     ],
     "request": {
       "executor": "bash",
-      "commandText": "anything goes",
+      "commandText": "git status",
       "workingDirectory": ""
     },
     "expected": true
+  },
+  {
+    "description": "tool match denies when first token differs",
+    "policies": [
+      {
+        "capability": "commandline",
+        "commandline": {
+          "executor": "bash",
+          "commandMatchType": "tool",
+          "commandText": "git"
+        }
+      }
+    ],
+    "request": {
+      "executor": "bash",
+      "commandText": "rm -rf /",
+      "workingDirectory": ""
+    },
+    "expected": false
   },
   {
     "description": "executor mismatch denies",
