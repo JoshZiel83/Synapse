@@ -97,6 +97,34 @@ function jsonResponse(json: Record<string, unknown>, statusCode = 200) {
   }
 }
 
+// Extracts (callId, providerCallId) from a round-1 AIResponse and asserts
+// the provider-id was actually parsed out of the mock response. We then
+// thread BOTH ids back into roundTwoWindow(), which means the round-2
+// request-body assertion later in the test verifies the complete
+// "provider response parse → tool result → next request carries provider
+// id" path — not just the wire shape with a hardcoded id.
+function extractParsedCall(
+  r1: {
+    context: Array<{
+      role?: string
+      toolCalls?: Array<{ callId: string; providerCallId?: string }>
+    }>
+  },
+  expectedProviderCallId: string
+): { callId: string; providerCallId: string } {
+  const m = r1.context[0]
+  if (m?.role !== "assistant" || !m.toolCalls?.[0]) {
+    throw new Error("round 1 did not return a tool call")
+  }
+  const call = m.toolCalls[0]
+  assert.equal(
+    call.providerCallId,
+    expectedProviderCallId,
+    `round-1 parsed providerCallId mismatch; expected ${expectedProviderCallId}, got ${call.providerCallId}`
+  )
+  return { callId: call.callId, providerCallId: call.providerCallId! }
+}
+
 function buildToolResult(opts: {
   callId: string
   providerCallId: string
@@ -187,20 +215,14 @@ describe("Anthropic tool_result wire-level serialization", () => {
       contextWindow: userWindow("What's the weather in Beijing?"),
       tools: [weatherTool],
     })
-    const callId = (() => {
-      const m = r1.context[0]
-      if (m?.role !== "assistant" || !m.toolCalls?.[0]) {
-        throw new Error("round 1 did not return a tool call")
-      }
-      return m.toolCalls[0].callId
-    })()
+    const { callId, providerCallId } = extractParsedCall(r1, "toolu_abc")
 
     const r2 = await provider.chat({
       system: "x",
       contextWindow: roundTwoWindow({
         userText: "What's the weather in Beijing?",
         callId,
-        providerCallId: "toolu_abc",
+        providerCallId,
       }),
       tools: [weatherTool],
     })
@@ -297,20 +319,14 @@ describe("OpenAI Chat tool_call_id wire-level serialization", () => {
       contextWindow: userWindow("What's the weather in Beijing?"),
       tools: [weatherTool],
     })
-    const callId = (() => {
-      const m = r1.context[0]
-      if (m?.role !== "assistant" || !m.toolCalls?.[0]) {
-        throw new Error("round 1 did not return a tool call")
-      }
-      return m.toolCalls[0].callId
-    })()
+    const { callId, providerCallId } = extractParsedCall(r1, "call_abc")
 
     const r2 = await provider.chat({
       system: "x",
       contextWindow: roundTwoWindow({
         userText: "What's the weather in Beijing?",
         callId,
-        providerCallId: "call_abc",
+        providerCallId,
       }),
       tools: [weatherTool],
     })
@@ -383,20 +399,14 @@ describe("OpenAI Responses function_call_output wire-level serialization", () =>
       contextWindow: userWindow("What's the weather in Beijing?"),
       tools: [weatherTool],
     })
-    const callId = (() => {
-      const m = r1.context[0]
-      if (m?.role !== "assistant" || !m.toolCalls?.[0]) {
-        throw new Error("round 1 did not return a tool call")
-      }
-      return m.toolCalls[0].callId
-    })()
+    const { callId, providerCallId } = extractParsedCall(r1, "call_resp_abc")
 
     const r2 = await provider.chat({
       system: "x",
       contextWindow: roundTwoWindow({
         userText: "What's the weather in Beijing?",
         callId,
-        providerCallId: "call_resp_abc",
+        providerCallId,
       }),
       tools: [weatherTool],
     })
@@ -465,20 +475,14 @@ describe("BigModel tool_call_id wire-level serialization", () => {
       contextWindow: userWindow("What's the weather in Beijing?"),
       tools: [weatherTool],
     })
-    const callId = (() => {
-      const m = r1.context[0]
-      if (m?.role !== "assistant" || !m.toolCalls?.[0]) {
-        throw new Error("round 1 did not return a tool call")
-      }
-      return m.toolCalls[0].callId
-    })()
+    const { callId, providerCallId } = extractParsedCall(r1, "call_bm_abc")
 
     const r2 = await provider.chat({
       system: "x",
       contextWindow: roundTwoWindow({
         userText: "What's the weather in Beijing?",
         callId,
-        providerCallId: "call_bm_abc",
+        providerCallId,
       }),
       tools: [weatherTool],
     })
