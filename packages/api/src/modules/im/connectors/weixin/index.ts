@@ -19,6 +19,10 @@ export const weixinConnector: TransportConnector = {
   transportKind: "weixin",
   capability: WEIXIN_CONNECTOR_CAPABILITY,
   messageCapabilities: WEIXIN_MESSAGE_CAPABILITIES,
+  // ilink contextToken lives on the transport_address row, refreshed by
+  // every inbound. The worker pre-loads it so this connector never has to
+  // call back into the IM service layer.
+  requiresRecipientAddressMetadata: true,
 
   validateCredentials(input) {
     const r = validateWeixinCredentialsForMode(
@@ -43,6 +47,7 @@ export const weixinConnector: TransportConnector = {
       account: input.account,
       endpoint: input.endpoint,
       message: input.message,
+      recipientAddressMetadata: input.recipientAddressMetadata,
     })
   },
 

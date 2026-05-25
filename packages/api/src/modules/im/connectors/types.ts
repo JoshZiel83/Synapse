@@ -56,6 +56,13 @@ export interface OutboundSendInput {
   endpoint: OutboundEndpointRef
   message: CanonicalMessage
   replyTo?: MessageRef
+  /**
+   * Metadata of the transport_address row whose external_id matches the
+   * recipient endpoint. Pre-loaded by the worker only when the connector
+   * declares `requiresRecipientAddressMetadata = true`. Undefined when no
+   * address row exists, or when the connector did not request it.
+   */
+  recipientAddressMetadata?: Record<string, unknown>
 }
 
 export interface OutboundSendResult {
@@ -154,6 +161,20 @@ export interface TransportConnector {
 
   /** Per-message capabilities used by `degradation.ts` and by feature toggles. */
   readonly messageCapabilities: MessageCapabilities
+
+  /**
+   * When true, the worker pre-loads the recipient transport_address row's
+   * metadata (matched by `endpoint.externalId` + `addressType: "user"`)
+   * and passes it to `sendMessage` as `recipientAddressMetadata`. Used by
+   * Weixin (the ilink contextToken is on the address row). Default
+   * false; Feishu / WeCom leave it undefined so the worker skips the DB
+   * lookup for capabilities they don't use.
+   *
+   * Lives on the connector rather than `MessageCapabilities` because it
+   * describes a worker-side orchestration need (whether to pre-fetch a
+   * row), not a message-shape degradation rule.
+   */
+  readonly requiresRecipientAddressMetadata?: boolean
 
   validateCredentials(
     input: CredentialValidationInput

@@ -22,6 +22,7 @@ export interface CanonicalFileRef {
   height?: number
 }
 
+// TODO(canonical-card): namespace when a second card-producing connector lands
 export type CanonicalCardSchema = "feishu_interactive_v1"
 
 export type CanonicalSystemMarker =
