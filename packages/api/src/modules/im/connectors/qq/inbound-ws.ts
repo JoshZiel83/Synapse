@@ -39,6 +39,7 @@ import {
 import { qqApiFetch } from "./client.js"
 import { getQqCredentialsOrThrow } from "./credentials.js"
 import { getAccessToken } from "./client.js"
+import { writeLatestInboundAnchor } from "./latest-inbound-store.js"
 import {
   clearQqWsSession,
   loadQqWsSession,
@@ -382,6 +383,7 @@ async function routeBusinessDispatch(
         logger.warn("qq-gateway: C2C event missing required fields")
         return
       }
+      await recordWsAnchor(opts, env, "msg_id", env.externalMessageId, t)
       await opts.emitInbound(env)
       return
     }
@@ -391,16 +393,51 @@ async function routeBusinessDispatch(
         logger.warn("qq-gateway: GROUP_AT event missing required fields")
         return
       }
+      await recordWsAnchor(opts, env, "msg_id", env.externalMessageId, t)
       await opts.emitInbound(env)
       return
     }
-    case QQ_EVENT.INTERACTION_CREATE:
-      // Stage 8 handles this. Until then we just log it so a stray
-      // button event in v1 surfaces in dashboards.
+    case QQ_EVENT.INTERACTION_CREATE: {
+      // Stage 8 wires the resolver. Even today, record the event_id
+      // anchor so any outbound that needs to reply to the button click
+      // (passive `event_id` semantics) can find it.
+      const d = (data ?? {}) as {
+        id?: string
+        group_openid?: string
+        user_openid?: string
+      }
+      if (typeof d.id === "string" && d.id) {
+        if (typeof d.group_openid === "string" && d.group_openid) {
+          await writeLatestInboundAnchor(opts.redis, {
+            accountId: opts.account.id,
+            endpointType: "group",
+            endpointExternalId: d.group_openid,
+            anchor: {
+              anchorKind: "event_id",
+              anchorId: d.id,
+              eventType: t,
+              receivedAt: new Date().toISOString(),
+            },
+          }).catch(() => undefined)
+        } else if (typeof d.user_openid === "string" && d.user_openid) {
+          await writeLatestInboundAnchor(opts.redis, {
+            accountId: opts.account.id,
+            endpointType: "direct",
+            endpointExternalId: `c2c:${d.user_openid}`,
+            anchor: {
+              anchorKind: "event_id",
+              anchorId: d.id,
+              eventType: t,
+              receivedAt: new Date().toISOString(),
+            },
+          }).catch(() => undefined)
+        }
+      }
       logger.info(
         "qq-gateway: INTERACTION_CREATE received (Stage 8 handler pending)"
       )
       return
+    }
     case QQ_EVENT.GROUP_MESSAGE_CREATE:
       // Non-@ group message — v1 ignores.
       return
@@ -408,6 +445,31 @@ async function routeBusinessDispatch(
       logger.debug(`qq-gateway: ignored dispatch t=${t}`)
       return
   }
+}
+
+async function recordWsAnchor(
+  opts: QqGatewayClientOptions,
+  env: InboundEnvelope,
+  anchorKind: "msg_id" | "event_id",
+  anchorId: string,
+  eventType: QqEventName
+): Promise<void> {
+  await writeLatestInboundAnchor(opts.redis, {
+    accountId: opts.account.id,
+    endpointType: env.endpointType,
+    endpointExternalId: env.endpointExternalId,
+    anchor: {
+      anchorKind,
+      anchorId,
+      eventType,
+      receivedAt: env.receivedAt,
+    },
+  }).catch((err) => {
+    opts.logger.warn(
+      `qq-gateway: failed to write latest-inbound anchor for ${env.endpointExternalId}`,
+      { err: String(err) }
+    )
+  })
 }
 
 function sendJson(ws: WebSocket, value: unknown): void {

@@ -28,6 +28,7 @@ import type {
 } from "../types.js"
 import { getQqCredentialsOrThrow, getEd25519Seed } from "./credentials.js"
 import { runQqGateway } from "./inbound-ws.js"
+import { writeLatestInboundAnchor } from "./latest-inbound-store.js"
 import {
   normalizeQqC2cMessage,
   normalizeQqGroupAtMessage,
@@ -217,6 +218,15 @@ async function dispatchBusinessEvent(
         })
         return
       }
+      await recordInboundAnchor({
+        accountId: input.account.id,
+        endpointType: e.endpointType,
+        endpointExternalId: e.endpointExternalId,
+        anchorKind: "msg_id",
+        anchorId: e.externalMessageId,
+        eventType: QQ_EVENT.C2C_MESSAGE_CREATE,
+        receivedAt: e.receivedAt,
+      })
       await input.emitInbound(e)
       return
     }
@@ -230,6 +240,15 @@ async function dispatchBusinessEvent(
         })
         return
       }
+      await recordInboundAnchor({
+        accountId: input.account.id,
+        endpointType: e.endpointType,
+        endpointExternalId: e.endpointExternalId,
+        anchorKind: "msg_id",
+        anchorId: e.externalMessageId,
+        eventType: QQ_EVENT.GROUP_AT_MESSAGE_CREATE,
+        receivedAt: e.receivedAt,
+      })
       await input.emitInbound(e)
       return
     }
@@ -250,4 +269,38 @@ async function dispatchBusinessEvent(
       logger?.debug?.("qq: ignored event", { t: envelope.t })
       return
   }
+}
+
+/**
+ * Best-effort: stash the inbound anchor in Redis so the outbound flow
+ * (reply-quota.ts reserveFirstSend) can find it later. Failures are
+ * swallowed and logged — losing an anchor is recoverable (outbound
+ * fails fast with `no_passive_anchor`) but losing the inbound itself
+ * is not, so the emit path always wins.
+ */
+async function recordInboundAnchor(params: {
+  accountId: string
+  endpointType: "direct" | "group"
+  endpointExternalId: string
+  anchorKind: "msg_id" | "event_id"
+  anchorId: string
+  eventType: string
+  receivedAt: string
+}): Promise<void> {
+  await writeLatestInboundAnchor(redis, {
+    accountId: params.accountId,
+    endpointType: params.endpointType,
+    endpointExternalId: params.endpointExternalId,
+    anchor: {
+      anchorKind: params.anchorKind,
+      anchorId: params.anchorId,
+      eventType: params.eventType,
+      receivedAt: params.receivedAt,
+    },
+  }).catch((err) => {
+    console.warn(
+      `[im:qq] failed to record inbound anchor for account ${params.accountId}:`,
+      err
+    )
+  })
 }
