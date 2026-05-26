@@ -23,6 +23,40 @@ import type { CanonicalMessage } from "../messaging/canonical-message.js"
 import type { MessageCapabilities } from "../messaging/degradation.js"
 import type { StatusReactionAdapter } from "../status-reaction/controller.js"
 import type { TypingAdapter } from "../typing/controller.js"
+import type { TypingConfig } from "../typing/state.js"
+
+/**
+ * Return shape for `TransportConnector.createTypingAdapter`.
+ * A bare adapter works for platforms whose timing fits the
+ * `DEFAULT_TYPING_CONFIG` (3s heartbeat, 60s TTL — fine for Weixin's
+ * sendtyping). Connectors with different platform constraints (e.g. QQ
+ * single-chat input_notify expires every 60s and needs ~50s heartbeat)
+ * return `{ adapter, config }` to override the controller defaults.
+ */
+export type TypingAdapterResult =
+  | TypingAdapter
+  | { adapter: TypingAdapter; config?: Partial<TypingConfig> }
+
+/**
+ * Caller helper: normalize either shape to `{ adapter, config? }`.
+ * Returns null when the input is null (no typing on this platform).
+ *
+ * Discriminator is the presence of an `adapter` property on the result.
+ * A bare `TypingAdapter` exposes `start`/`stop` directly on the object,
+ * never an `adapter` field.
+ */
+export function unwrapTypingAdapterResult(
+  result: TypingAdapterResult | null
+): { adapter: TypingAdapter; config?: Partial<TypingConfig> } | null {
+  if (!result) return null
+  if (
+    "adapter" in (result as object) &&
+    (result as { adapter?: TypingAdapter }).adapter
+  ) {
+    return result as { adapter: TypingAdapter; config?: Partial<TypingConfig> }
+  }
+  return { adapter: result as TypingAdapter }
+}
 
 // ───────────────────────── Envelope types ─────────────────────────
 
@@ -218,11 +252,23 @@ export interface TransportConnector {
   /**
    * Build a per-endpoint TypingAdapter. Returns null on platforms with no
    * typing indicator.
+   *
+   * `lastInboundMessageRef` is the inbound message that triggered the current
+   * turn (e.g. QQ requires `msg_id` in the `input_notify` POST body; without
+   * it the connector cannot construct a valid request and should return
+   * `null`). Pass undefined for non-turn-bound callers (idle proactive).
+   *
+   * Return shape:
+   *   - `TypingAdapter` — plain adapter; controller uses DEFAULT_TYPING_CONFIG
+   *   - `{ adapter, config }` — adapter plus per-connector controller config
+   *     overrides (e.g. QQ needs `heartbeatMs: 50_000` instead of Weixin's 3s)
+   *   - `null` — no typing on this platform
    */
   createTypingAdapter(input: {
     account: TransportAccountSummary
     endpointRef: EndpointRef
-  }): TypingAdapter | null
+    lastInboundMessageRef?: MessageRef
+  }): TypingAdapterResult | null
 
   /**
    * Pure: take the raw inbound payload and produce a clean mention list +
