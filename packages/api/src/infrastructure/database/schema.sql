@@ -3189,7 +3189,7 @@ CREATE TABLE interaction_plan_approval_requests (
   resolution_payload JSONB NOT NULL DEFAULT '{}'
 );
 
--- Runtime authorization requests (renamed from interaction_runtime_authorization_requests
+-- Runtime authorization requests (renamed from interaction_relay_authorization_requests
 -- in PR #20). Device-only; legacy relay_* columns are gone.
 CREATE TABLE interaction_runtime_authorization_requests (
   interaction_id UUID PRIMARY KEY REFERENCES interaction_requests(id) ON DELETE CASCADE,
@@ -3379,7 +3379,7 @@ ALTER TABLE remote_agent_runs ADD CONSTRAINT fk_remote_agent_runs_interaction
   REFERENCES interaction_requests(id)
   ON DELETE SET NULL;
 
--- Runtime authorization grants (renamed from runtime_authorization_grants in
+-- Runtime authorization grants (renamed from relay_authorization_grants in
 -- PR #20). Device-only; legacy relay_* columns are gone.
 CREATE TABLE runtime_authorization_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
