@@ -97,10 +97,49 @@ export interface OutboundSendInput {
    * address row exists, or when the connector did not request it.
    */
   recipientAddressMetadata?: Record<string, unknown>
+  /**
+   * Identity of the `transport_message_links` row this send is fulfilling.
+   * Always provided; required by connectors that persist per-link state
+   * across retries (e.g. QQ msg_seq, anchor reservation). Connectors that
+   * don't need it may ignore.
+   */
+  transportMessageLinkId: string
+  /**
+   * Snapshot of `transport_message_links.metadata` JSONB at load time.
+   * Connectors read state written by previous attempts (msg_seq, anchor,
+   * in-flight markers) from here. Mutating this object has no DB effect;
+   * use `patchLinkMetadata` instead.
+   */
+  linkMetadata: Record<string, unknown>
+  /**
+   * BullMQ `job.attemptsMade` for this delivery. 0 on the first try, ≥1
+   * on retries triggered by RetryableTransportError. Connectors use this
+   * to scope per-attempt outcome records under `metadata.qq.attempts.<n>`
+   * and to drive crash-recovery logic (mark stale `in_flight` entries
+   * from prior attempts as `unknown_assumed` before running the current
+   * attempt).
+   */
+  attemptNumber: number
+  /**
+   * Deep-merge patch into `transport_message_links.metadata`. Awaitable;
+   * the worker performs `SELECT … FOR UPDATE` + application-level deep
+   * merge + UPDATE atomically, so multiple parallel attempts on the same
+   * link serialize cleanly. Connectors should patch BEFORE the HTTP POST
+   * to make state visible to recovery paths if the process crashes
+   * mid-flight.
+   */
+  patchLinkMetadata: (patch: Record<string, unknown>) => Promise<void>
 }
 
 export interface OutboundSendResult {
-  externalMessageId: string
+  /**
+   * Platform message id. Optional because the duplicate-ambiguous path
+   * (QQ returns "msg_seq already used" → connector classifies as
+   * `success_likely` based on a prior `unknown` attempt) cannot recover
+   * the original id. When omitted, the worker marks the link `sent` with
+   * `external_message_id` NULL and the deliveryAmbiguous flag in metadata.
+   */
+  externalMessageId?: string
   raw?: unknown
 }
 
@@ -302,5 +341,43 @@ export class TransportCredentialError extends Error {
   constructor(message: string) {
     super(message)
     this.name = "TransportCredentialError"
+  }
+}
+
+/**
+ * Connectors throw this from `sendMessage` / `startAccount` / `handleWebhook`
+ * to signal that the failure is transient (network timeout, 5xx, expired
+ * access token, platform-specific "please retry" codes). The IM delivery
+ * worker treats this as a BullMQ-retryable error: the job re-enters the
+ * queue with exponential backoff up to `attempts:5` (G7).
+ */
+export class RetryableTransportError extends Error {
+  constructor(message: string, options?: { cause?: unknown }) {
+    super(message, options)
+    this.name = "RetryableTransportError"
+  }
+}
+
+/**
+ * Connectors throw this when the failure is terminal: a 4xx business code
+ * with no retry semantics, quota exhausted, bot banned (QQ 4914/4915),
+ * group-file-not-supported, etc. The IM delivery worker wraps it in
+ * BullMQ's `UnrecoverableError` so the job stops retrying immediately.
+ *
+ * Bare `Error` thrown from a connector defaults to retryable behavior
+ * (BullMQ retries up to `attempts`). Use this class explicitly for known
+ * terminal cases to avoid wasted retries.
+ */
+export class PermanentTransportError extends Error {
+  /**
+   * Optional short code (e.g. `"qq_group_file_not_supported"`) persisted
+   * to `transport_message_links.metadata.lastError` so the dashboard /
+   * sweeper can introspect without parsing free-form messages.
+   */
+  readonly code?: string
+  constructor(message: string, options?: { code?: string; cause?: unknown }) {
+    super(message, { cause: options?.cause })
+    this.name = "PermanentTransportError"
+    if (options?.code) this.code = options.code
   }
 }

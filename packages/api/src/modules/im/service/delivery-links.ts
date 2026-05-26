@@ -9,10 +9,13 @@
 import { sql } from "kysely"
 import {
   db,
+  type DatabaseTransaction,
+  type KyselyDb,
   type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
 import { v4 as uuidv4 } from "uuid"
 import type {
+  ConversationTransportBindingSummary,
   TransportDeliveryStatus,
   TransportKind,
 } from "@synapse/shared/types"
@@ -25,50 +28,111 @@ import {
 } from "./_helpers.js"
 import { getConversationTransportBinding } from "../service.js"
 
-export async function queueConversationTransportProjection(params: {
+type DbOrTx = KyselyDb | DatabaseTransaction
+
+/**
+ * Step 1 of the projection split (G5): resolve the binding for an outbound
+ * projection and return `null` early when the link must not be created.
+ *
+ * Caller decides what to do with `null`: the legacy
+ * `queueConversationTransportProjection` returns null silently; the new
+ * `interaction-projection` worker uses the reason to mark
+ * `interaction_transport_projections.error` accordingly.
+ */
+export type ResolveOutboundBindingResult =
+  | {
+      ok: true
+      binding: ConversationTransportBindingSummary
+    }
+  | {
+      ok: false
+      reason:
+        | "no_binding"
+        | "account_inactive"
+        | "outbound_disabled"
+        | "not_supported_in_v1"
+        | "webhook_inbound_unavailable"
+    }
+
+export async function resolveBindingForOutbound(params: {
   workspaceId: string
   conversationId: string
-  itemId: string
-  direction?: "inbound" | "outbound"
-  externalMessageId?: string
-  externalReplyToId?: string
-  externalThreadId?: string
-  metadata?: Record<string, unknown>
-}) {
-  const direction = params.direction || "outbound"
+  /**
+   * Optional list of transport_kinds this projection supports. Used by the
+   * interaction-projection worker (v1: ["qq"]) to keep approval prompts
+   * off Feishu/Weixin until those connectors gain interaction-prompt
+   * rendering. Leave undefined for kind-agnostic projections (the legacy
+   * outbound path).
+   */
+  allowedTransportKinds?: readonly TransportKind[]
+}): Promise<ResolveOutboundBindingResult> {
   const binding = await getConversationTransportBinding({
     workspaceId: params.workspaceId,
     conversationId: params.conversationId,
   })
-  if (!binding) {
-    return null
+  if (!binding) return { ok: false, reason: "no_binding" }
+  if (
+    params.allowedTransportKinds &&
+    !params.allowedTransportKinds.includes(binding.transportKind)
+  ) {
+    return { ok: false, reason: "not_supported_in_v1" }
   }
-  if (direction === "outbound" && binding.account.status !== "active") {
-    return null
+  if (binding.account.status !== "active") {
+    return { ok: false, reason: "account_inactive" }
   }
-  if (direction === "outbound" && !binding.outboundEnabled) {
-    return null
+  if (!binding.outboundEnabled) {
+    return { ok: false, reason: "outbound_disabled" }
   }
+  return { ok: true, binding }
+}
 
-  const link = await db
+/**
+ * Step 2 of the projection split (G5): create the transport_message_links
+ * row inside an external transaction. Returns the linkId. Does NOT enqueue
+ * a BullMQ job; call `enqueueOutboundDelivery(linkId)` AFTER the outer
+ * transaction commits.
+ *
+ * Use this from worker code that needs both the link row and a related
+ * write (e.g. `interaction_transport_projections.status='projected'`) to
+ * happen atomically.
+ */
+export async function persistOutboundLinkRow(
+  exec: DbOrTx,
+  params: {
+    workspaceId: string
+    conversationId: string
+    itemId: string
+    binding: ConversationTransportBindingSummary
+    direction?: "inbound" | "outbound"
+    externalMessageId?: string
+    externalReplyToId?: string
+    externalThreadId?: string
+    metadata?: Record<string, unknown>
+  }
+): Promise<{
+  linkId: string
+  row: ReturnType<typeof normalizeTransportMessageLinkRow>
+}> {
+  const direction = params.direction || "outbound"
+  const row = await exec
     .insertInto("transport_message_links")
     .values({
       id: uuidv4(),
       workspace_id: params.workspaceId,
       conversation_id: params.conversationId,
       item_id: params.itemId,
-      transport_account_id: binding.account.id,
-      transport_endpoint_id: binding.endpoint.id,
-      transport_kind: binding.transportKind,
+      transport_account_id: params.binding.account.id,
+      transport_endpoint_id: params.binding.endpoint.id,
+      transport_kind: params.binding.transportKind,
       direction,
       delivery_status: "pending",
       external_message_id: params.externalMessageId || null,
       external_reply_to_id: params.externalReplyToId || null,
       external_thread_id: params.externalThreadId || null,
       metadata: {
-        bindingId: binding.id,
-        endpointType: binding.endpoint.endpointType,
-        endpointExternalId: binding.endpoint.externalId,
+        bindingId: params.binding.id,
+        endpointType: params.binding.endpoint.endpointType,
+        endpointExternalId: params.binding.endpoint.externalId,
         ...(params.metadata || {}),
       } as TableInsert<"transport_message_links">["metadata"],
       created_at: sql`NOW()`,
@@ -86,17 +150,77 @@ export async function queueConversationTransportProjection(params: {
         })
     )
     .returningAll()
-    .executeTakeFirst()
-  if (link && direction === "outbound") {
-    await enqueueTransportDeliveryJobs([link.id]).catch((error) => {
+    .executeTakeFirstOrThrow()
+  return { linkId: row.id, row: normalizeTransportMessageLinkRow(row) }
+}
+
+/**
+ * Step 3 of the projection split (G5): enqueue the BullMQ delivery job
+ * for an existing transport_message_links row. Must be called AFTER the
+ * tx that wrote the row commits — otherwise the worker may pick up the
+ * job before the row is visible.
+ *
+ * This is a thin wrapper around `enqueueTransportDeliveryJobs([linkId])`
+ * kept here so projection-side code never imports the queue module
+ * directly (avoiding the circular shape `workers → service → workers`).
+ */
+export async function enqueueOutboundDelivery(linkId: string): Promise<void> {
+  await enqueueTransportDeliveryJobs([linkId])
+}
+
+/**
+ * Legacy wrapper preserved for existing callers
+ * (session/service.ts session push, im/service/ingest.ts inbound dedupe).
+ *
+ * Behavior on inbound (`direction:"inbound"`): writes the row only;
+ * never enqueues a BullMQ job. Behavior on outbound:
+ * resolveBinding → persist → enqueue (no transaction; the three steps
+ * are sequential and the enqueue happens after the row is committed).
+ *
+ * Returns null when the binding is missing / account inactive / outbound
+ * disabled — matching the legacy "silently skip" contract.
+ */
+export async function queueConversationTransportProjection(params: {
+  workspaceId: string
+  conversationId: string
+  itemId: string
+  direction?: "inbound" | "outbound"
+  externalMessageId?: string
+  externalReplyToId?: string
+  externalThreadId?: string
+  metadata?: Record<string, unknown>
+}) {
+  const direction = params.direction || "outbound"
+  const binding = await getConversationTransportBinding({
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId,
+  })
+  if (!binding) return null
+  if (direction === "outbound" && binding.account.status !== "active") {
+    return null
+  }
+  if (direction === "outbound" && !binding.outboundEnabled) return null
+
+  const { row, linkId } = await persistOutboundLinkRow(db, {
+    workspaceId: params.workspaceId,
+    conversationId: params.conversationId,
+    itemId: params.itemId,
+    binding,
+    direction,
+    externalMessageId: params.externalMessageId,
+    externalReplyToId: params.externalReplyToId,
+    externalThreadId: params.externalThreadId,
+    metadata: params.metadata,
+  })
+  if (direction === "outbound") {
+    await enqueueOutboundDelivery(linkId).catch((error) => {
       console.error(
-        `[im] Failed to enqueue transport delivery job for link ${link.id}:`,
+        `[im] Failed to enqueue transport delivery job for link ${linkId}:`,
         error
       )
     })
   }
-
-  return link
+  return row
 }
 
 export async function findTransportMessageLinkByExternalMessage(params: {
@@ -239,4 +363,100 @@ export async function loadTransportMessageLinkForDelivery(linkId: string) {
     ),
     itemMetadata: parseJsonObject(row.item_metadata),
   }
+}
+
+/**
+ * Deep-merge a patch into `transport_message_links.metadata`. G6 callback:
+ * connectors invoke this from within `sendMessage` to persist per-attempt
+ * state (msg_seq, anchor reservation, attempts.<n>.outcome) BEFORE the
+ * HTTP POST, so a crash mid-flight doesn't lose the record.
+ *
+ * Implementation: `SELECT … FOR UPDATE` → application-level deep merge →
+ * `UPDATE`. The row lock serializes concurrent attempts on the same link
+ * so neither overwrites the other.
+ *
+ * Postgres jsonb `||` is shallow merge — does NOT recurse into nested
+ * objects (it would overwrite `metadata.qq` entirely with the patch's
+ * `qq` object). We therefore deep merge in application code.
+ *
+ * Arrays are replaced wholesale (not concatenated). Connectors should
+ * structure attempt history as `{ "0": {...}, "1": {...} }` keyed by
+ * attemptNumber instead of an array to keep updates additive.
+ */
+export async function patchTransportMessageLinkMetadata(
+  linkId: string,
+  patch: Record<string, unknown>
+): Promise<void> {
+  await db.transaction().execute(async (tx) => {
+    const row = await tx
+      .selectFrom("transport_message_links")
+      .select(["metadata"])
+      .where("id", "=", linkId)
+      .forUpdate()
+      .limit(1)
+      .executeTakeFirst()
+    if (!row) return
+    const current = parseJsonObject(row.metadata) as Record<string, unknown>
+    const merged = deepMergeJsonObjects(current, patch)
+    await tx
+      .updateTable("transport_message_links")
+      .set({
+        metadata: merged as TableInsert<"transport_message_links">["metadata"],
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", linkId)
+      .execute()
+  })
+}
+
+/**
+ * Delete a single top-level key from `transport_message_links.metadata`.
+ * Used by recovery paths to clear `skippedReason` after flipping a link
+ * back to `pending`. Postgres jsonb supports `metadata - $key` for this
+ * directly so we don't need a SELECT…UPDATE roundtrip.
+ */
+export async function removeTransportMessageLinkMetadataKey(
+  exec: DbOrTx,
+  linkId: string,
+  key: string
+): Promise<void> {
+  await exec
+    .updateTable("transport_message_links")
+    .set({
+      metadata: sql`transport_message_links.metadata - ${key}`,
+      updated_at: sql`NOW()`,
+    })
+    .where("id", "=", linkId)
+    .execute()
+}
+
+/**
+ * Recursive jsonb-shaped deep merge: `patch` keys take precedence,
+ * but nested plain objects are merged key-by-key. Arrays and scalars
+ * are replaced wholesale.
+ *
+ * Exported for unit-test coverage; production code reaches it via
+ * `patchTransportMessageLinkMetadata`.
+ */
+export function deepMergeJsonObjects(
+  base: Record<string, unknown>,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...base }
+  for (const [key, patchValue] of Object.entries(patch)) {
+    const baseValue = out[key]
+    if (isPlainObject(baseValue) && isPlainObject(patchValue)) {
+      out[key] = deepMergeJsonObjects(
+        baseValue as Record<string, unknown>,
+        patchValue as Record<string, unknown>
+      )
+    } else {
+      out[key] = patchValue
+    }
+  }
+  return out
+}
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value)
 }

@@ -1,4 +1,4 @@
-import { Worker } from "bullmq"
+import { UnrecoverableError, Worker } from "bullmq"
 import { CONVERSATION_PARTICIPANT_TYPE, QUEUE_NAMES } from "@synapse/shared"
 import type { TransportKind } from "@synapse/shared/types"
 import { redis } from "../infrastructure/redis/index.js"
@@ -10,10 +10,14 @@ import {
   getReachableTransportAddressForParticipant,
   getTransportAddressByExternalId,
   loadTransportMessageLinkForDelivery,
+  patchTransportMessageLinkMetadata,
   updateTransportMessageLinkStatus,
 } from "../modules/im/service.js"
 import { tryGetConnector } from "../modules/im/connectors/registry.js"
-import type { TransportConnector } from "../modules/im/connectors/types.js"
+import {
+  PermanentTransportError,
+  type TransportConnector,
+} from "../modules/im/connectors/types.js"
 import {
   decodeFromConversationItem,
   type EncodedContentBlock,
@@ -80,6 +84,14 @@ export interface ImTransportDeliveryDeps {
     input: ResolveMentionsInput
   ) => Promise<Map<string, ResolvedMention>>
   updateStatus: typeof updateTransportMessageLinkStatus
+  /**
+   * G6 deep-merge patch into `transport_message_links.metadata`. The
+   * worker hands a closure bound to the current link's id to each
+   * `connector.sendMessage` call so connectors can persist per-attempt
+   * state BEFORE the HTTP POST. Defaults to
+   * `patchTransportMessageLinkMetadata`.
+   */
+  patchLinkMetadata: typeof patchTransportMessageLinkMetadata
   getBinding: typeof getConversationTransportBinding
   getItem: typeof getConversationFeedItemById
   decode: typeof decodeFromConversationItem
@@ -90,6 +102,15 @@ export interface ImTransportDeliveryResult {
   success: boolean
   reason?: string
   messageId?: string
+}
+
+/**
+ * Per-job context the BullMQ wrapper hands to the pure handler. Today
+ * only `attemptNumber` lives here (sourced from `job.attemptsMade`); the
+ * shape stays open for future per-job fields.
+ */
+export interface ImTransportDeliveryJobContext {
+  attemptNumber: number
 }
 
 /**
@@ -107,7 +128,8 @@ export interface ImTransportDeliveryResult {
  */
 export async function processImTransportDeliveryJob(
   jobData: { linkId?: unknown } | null | undefined,
-  deps: ImTransportDeliveryDeps
+  deps: ImTransportDeliveryDeps,
+  context: ImTransportDeliveryJobContext = { attemptNumber: 0 }
 ): Promise<ImTransportDeliveryResult> {
   const linkId = nonEmptyString(jobData?.linkId)
   if (!linkId) {
@@ -274,20 +296,38 @@ export async function processImTransportDeliveryJob(
       message,
       replyTo,
       recipientAddressMetadata,
+      transportMessageLinkId: linkId,
+      linkMetadata: link.metadata,
+      attemptNumber: context.attemptNumber,
+      patchLinkMetadata: (patch) => deps.patchLinkMetadata(linkId, patch),
     })
 
+    // `externalMessageId` is now optional (G6): the duplicate-ambiguous
+    // path returns `{}` after marking `metadata.qq.deliveryAmbiguous`.
+    // When absent, leave `external_message_id` NULL on the link row;
+    // updateStatus only writes the column when an id is supplied.
     await deps.updateStatus({
       linkId,
       status: "sent",
       externalMessageId: deliveryResult.externalMessageId,
     })
     return { success: true, messageId: deliveryResult.externalMessageId }
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const errorMessage = error instanceof Error ? error.message : String(error)
+    const errorCode =
+      error instanceof PermanentTransportError ? error.code : undefined
     await deps.updateStatus({
       linkId,
       status: "failed",
-      error: error instanceof Error ? error.message : String(error),
+      error: errorCode ? `${errorCode}: ${errorMessage}` : errorMessage,
     })
+    // PermanentTransportError → BullMQ stops retrying immediately.
+    // Anything else (RetryableTransportError, bare Error, network) →
+    // re-throw so BullMQ counts the attempt against the configured
+    // `attempts` budget and backs off.
+    if (error instanceof PermanentTransportError) {
+      throw new UnrecoverableError(errorMessage)
+    }
     throw error
   }
 }
@@ -341,6 +381,7 @@ export function defaultImTransportDeliveryDeps(): ImTransportDeliveryDeps {
         },
       }),
     updateStatus: updateTransportMessageLinkStatus,
+    patchLinkMetadata: patchTransportMessageLinkMetadata,
     getBinding: getConversationTransportBinding,
     getItem: getConversationFeedItemById,
     decode: decodeFromConversationItem,
@@ -360,7 +401,10 @@ export function startImTransportDeliveryWorker() {
   const deps = defaultImTransportDeliveryDeps()
   const worker = new Worker(
     QUEUE_NAMES.IM_TRANSPORT_DELIVERY,
-    async (job) => processImTransportDeliveryJob(job.data, deps),
+    async (job) =>
+      processImTransportDeliveryJob(job.data, deps, {
+        attemptNumber: job.attemptsMade,
+      }),
     { connection: redis }
   )
 

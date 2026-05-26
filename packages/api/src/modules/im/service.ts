@@ -80,10 +80,16 @@ export {
 } from "./service/bindings.js"
 
 export {
+  enqueueOutboundDelivery,
   findTransportMessageLinkByExternalMessage,
   loadTransportMessageLinkForDelivery,
+  patchTransportMessageLinkMetadata,
+  persistOutboundLinkRow,
   queueConversationTransportProjection,
+  removeTransportMessageLinkMetadataKey,
+  resolveBindingForOutbound,
   updateTransportMessageLinkStatus,
+  type ResolveOutboundBindingResult,
 } from "./service/delivery-links.js"
 
 export { listTransportExternalUsers } from "./service/external-users.js"
