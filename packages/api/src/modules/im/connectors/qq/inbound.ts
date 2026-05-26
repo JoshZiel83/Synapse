@@ -1,13 +1,22 @@
 /**
- * QQ inbound — Stage 1 skeleton.
+ * QQ inbound — webhook entry + (in Stage 3) WebSocket-gateway entry.
  *
- * Webhook + WebSocket are filled in by Stages 2 and 3 respectively. For
- * now `startAccount` is a no-op (long_connection accounts will spawn
- * the WS client in Stage 3; webhook accounts never go through this
- * path anyway because the runtime manager only runs long_connection
- * accounts), and `handleWebhook` returns a 501-style response so any
- * misconfigured webhook routing surfaces in logs rather than silently
- * accepting payloads.
+ * Webhook flow:
+ *   - op=13 → URL verification challenge; sign event_ts + plain_token
+ *     and respond with {plain_token, signature(hex)}.
+ *   - op=0  → business event; verify Ed25519 signature over the raw
+ *     body bytes, then route by `t` (C2C_MESSAGE_CREATE,
+ *     GROUP_AT_MESSAGE_CREATE). On successful normalization, emit
+ *     into the IM ingest pipeline; ACK with {op:12} per the wiki.
+ *   - Anything else (op=2/6/7/9/10/11) → 200 + ignore (shouldn't reach
+ *     webhook paths; QQ delivers those over WS).
+ *
+ * OQ2 gate: when `account.config.webhookInboundConfirmed !== true` we
+ * accept op=13 (so the operator can verify the URL signature works) but
+ * short-circuit op=0 to log-only. This prevents accidentally consuming
+ * webhook-mode messages before the operator has confirmed that QQ
+ * actually delivers C2C / GROUP_AT events on this account's webhook
+ * endpoint.
  */
 
 import type {
@@ -16,6 +25,20 @@ import type {
   WebhookHandlerInput,
   WebhookHandlerResult,
 } from "../types.js"
+import { getQqCredentialsOrThrow, getEd25519Seed } from "./credentials.js"
+import {
+  normalizeQqC2cMessage,
+  normalizeQqGroupAtMessage,
+  type QqC2cMessageEventData,
+  type QqGroupAtMessageEventData,
+} from "./normalize.js"
+import { readQqAccountConfig } from "./qq-account-config.js"
+import { QQ_EVENT, QQ_OP } from "./types.js"
+import {
+  extractSignatureHeaders,
+  signEd25519UrlVerification,
+  verifyEd25519BusinessEvent,
+} from "./webhook-signature.js"
 
 export async function startQqAccount(
   ctx: AccountStartContext
@@ -32,16 +55,175 @@ export async function startQqAccount(
   return { stop: async () => {} }
 }
 
+interface QqWebhookEnvelope {
+  op?: number
+  t?: string
+  s?: number
+  d?: unknown
+  id?: string
+}
+
 export async function handleQqWebhook(
-  _input: WebhookHandlerInput
+  input: WebhookHandlerInput
 ): Promise<WebhookHandlerResult> {
-  // Stage 2 implements op=13 challenge + op=0 dispatch with Ed25519
-  // verification. Returning 503 keeps the route reachable but visible
-  // in monitoring until then.
+  const logger = input.logger
+  const creds = (() => {
+    try {
+      return getQqCredentialsOrThrow(input.account)
+    } catch (err) {
+      logger?.error?.("qq: webhook missing credentials", err)
+      return null
+    }
+  })()
+  if (!creds) {
+    return { statusCode: 500, body: { error: "qq credentials invalid" } }
+  }
+
+  const envelope = parseEnvelope(input.body)
+  if (!envelope) {
+    return { statusCode: 400, body: { error: "invalid envelope" } }
+  }
+
+  // URL verification: signature is computed locally and returned in the
+  // body — we do NOT verify an incoming signature header here.
+  if (envelope.op === QQ_OP.WEBHOOK_VERIFY) {
+    return handleUrlVerification({
+      secret: getEd25519Seed(creds),
+      data: envelope.d,
+    })
+  }
+
+  if (envelope.op !== QQ_OP.DISPATCH) {
+    // op=2/6/7/9/10/11 only flow over WS; if we see them here it's a
+    // misconfiguration. Ack 200 so the platform doesn't retry the
+    // payload we can't action.
+    logger?.warn?.(`qq: unexpected op on webhook`, { op: envelope.op })
+    return { statusCode: 200, body: { op: QQ_OP.HTTP_CALLBACK_ACK } }
+  }
+
+  // op=0 dispatch — must verify signature against the raw body.
+  if (!input.rawBody) {
+    logger?.error?.("qq: webhook rawBody missing — cannot verify signature")
+    return { statusCode: 400, body: { error: "raw body required" } }
+  }
+  const { signatureHex, timestamp } = extractSignatureHeaders(input.headers)
+  if (!signatureHex || !timestamp) {
+    return { statusCode: 401, body: { error: "missing signature headers" } }
+  }
+  const verified = verifyEd25519BusinessEvent({
+    secret: getEd25519Seed(creds),
+    signatureHex,
+    timestamp,
+    rawBody: input.rawBody,
+  })
+  if (!verified) {
+    return { statusCode: 401, body: { error: "signature verification failed" } }
+  }
+
+  // OQ2 gate. Webhook delivery of message events isn't fully verified;
+  // operator must explicitly opt in by flipping `webhookInboundConfirmed`.
+  const config = readQqAccountConfig(input.account)
+  if (!config.webhookInboundConfirmed) {
+    logger?.info?.(
+      "qq: webhook event received but webhookInboundConfirmed=false; ack-only",
+      { t: envelope.t, accountId: input.account.id }
+    )
+    return { statusCode: 200, body: { op: QQ_OP.HTTP_CALLBACK_ACK } }
+  }
+
+  await dispatchBusinessEvent(envelope, input, logger).catch((err) => {
+    logger?.error?.("qq: inbound dispatch failed", err)
+  })
+
+  return { statusCode: 200, body: { op: QQ_OP.HTTP_CALLBACK_ACK } }
+}
+
+function parseEnvelope(body: unknown): QqWebhookEnvelope | null {
+  if (!body || typeof body !== "object" || Array.isArray(body)) return null
+  return body as QqWebhookEnvelope
+}
+
+interface VerificationData {
+  plain_token?: string
+  event_ts?: string
+}
+
+function handleUrlVerification(input: {
+  secret: string
+  data: unknown
+}): WebhookHandlerResult {
+  if (
+    !input.data ||
+    typeof input.data !== "object" ||
+    Array.isArray(input.data)
+  ) {
+    return { statusCode: 400, body: { error: "invalid verification payload" } }
+  }
+  const d = input.data as VerificationData
+  const plainToken = typeof d.plain_token === "string" ? d.plain_token : ""
+  const eventTs = typeof d.event_ts === "string" ? d.event_ts : ""
+  if (!plainToken || !eventTs) {
+    return {
+      statusCode: 400,
+      body: { error: "verification payload missing plain_token/event_ts" },
+    }
+  }
+  const signature = signEd25519UrlVerification({
+    secret: input.secret,
+    plainToken,
+    eventTs,
+  })
   return {
-    statusCode: 503,
-    body: {
-      error: "qq webhook handler not yet implemented (Stage 2)",
-    },
+    statusCode: 200,
+    body: { plain_token: plainToken, signature },
+  }
+}
+
+async function dispatchBusinessEvent(
+  envelope: QqWebhookEnvelope,
+  input: WebhookHandlerInput,
+  logger: WebhookHandlerInput["logger"]
+): Promise<void> {
+  switch (envelope.t) {
+    case QQ_EVENT.C2C_MESSAGE_CREATE: {
+      const e = normalizeQqC2cMessage(envelope.d as QqC2cMessageEventData)
+      if (!e) {
+        logger?.warn?.("qq: C2C event missing required fields", {
+          eventId: envelope.id,
+        })
+        return
+      }
+      await input.emitInbound(e)
+      return
+    }
+    case QQ_EVENT.GROUP_AT_MESSAGE_CREATE: {
+      const e = normalizeQqGroupAtMessage(
+        envelope.d as QqGroupAtMessageEventData
+      )
+      if (!e) {
+        logger?.warn?.("qq: GROUP_AT event missing required fields", {
+          eventId: envelope.id,
+        })
+        return
+      }
+      await input.emitInbound(e)
+      return
+    }
+    case QQ_EVENT.GROUP_MESSAGE_CREATE:
+      // v1 ignores non-@ group messages; the bot only responds when
+      // explicitly invoked.
+      return
+    case QQ_EVENT.INTERACTION_CREATE:
+      // QQ button clicks are documented as WebSocket-only delivery; if
+      // one shows up on the webhook path we log and drop it (Stage 8
+      // handles INTERACTION_CREATE in the WS path).
+      logger?.warn?.(
+        "qq: INTERACTION_CREATE on webhook path (expected WS-only)",
+        { eventId: envelope.id }
+      )
+      return
+    default:
+      logger?.debug?.("qq: ignored event", { t: envelope.t })
+      return
   }
 }
