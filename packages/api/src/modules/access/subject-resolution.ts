@@ -335,6 +335,66 @@ export async function buildRuntimePrincipalContext(
  * the named conversation. The workspace subject is always included
  * when a workspaceId is supplied.
  */
+/**
+ * Post-D4 P2 fix: shared workspace-membership validator for the visibility
+ * helpers below. Mirrors the `assertPrincipalBelongsToWorkspace` checks used
+ * by `buildRuntimePrincipalContext` — without this guard the visibility
+ * helpers would mint the workspace subject from `params.workspaceId`
+ * unconditionally, so a caller passing an actor/member/remote_agent in
+ * workspace W1 plus `workspaceId = W2` would silently get back a runtime
+ * set that matches `subject=workspace W2` grants. The helpers refuse
+ * inconsistent inputs by throwing.
+ */
+async function assertVisibilityPrincipalsBelongToWorkspace(
+  db: KyselyDb,
+  params: {
+    workspaceId: string
+    workspaceMemberId?: string | null
+    actorId?: string | null
+    remoteAgentId?: string | null
+  }
+): Promise<void> {
+  if (params.workspaceMemberId) {
+    const row = await db
+      .selectFrom("workspace_members")
+      .select(["id", "workspace_id"])
+      .where("id", "=", params.workspaceMemberId)
+      .limit(1)
+      .executeTakeFirst()
+    if (!row || row.workspace_id !== params.workspaceId) {
+      throw new Error(
+        `workspace_member ${params.workspaceMemberId} does not belong to workspace ${params.workspaceId}`
+      )
+    }
+  }
+  if (params.actorId) {
+    const row = await db
+      .selectFrom("actors")
+      .select(["id", "workspace_id"])
+      .where("id", "=", params.actorId)
+      .limit(1)
+      .executeTakeFirst()
+    if (!row || row.workspace_id !== params.workspaceId) {
+      throw new Error(
+        `actor ${params.actorId} does not belong to workspace ${params.workspaceId}`
+      )
+    }
+  }
+  if (params.remoteAgentId) {
+    const row = await db
+      .selectFrom("remote_agents")
+      .select(["id", "workspace_id"])
+      .where("id", "=", params.remoteAgentId)
+      .limit(1)
+      .executeTakeFirst()
+    if (!row || row.workspace_id !== params.workspaceId) {
+      throw new Error(
+        `remote_agent ${params.remoteAgentId} does not belong to workspace ${params.workspaceId}`
+      )
+    }
+  }
+}
+
 export async function computeRuntimeScopeSubjectIds(
   db: KyselyDb,
   params: {
@@ -345,6 +405,7 @@ export async function computeRuntimeScopeSubjectIds(
     conversationId?: string | null
   }
 ): Promise<string[]> {
+  await assertVisibilityPrincipalsBelongToWorkspace(db, params)
   const scopeIds: string[] = []
   const workspaceSubjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE,
@@ -427,6 +488,7 @@ export async function computeRuntimeSubjectIdsForVisibility(
     conversationId?: string | null
   }
 ): Promise<string[]> {
+  await assertVisibilityPrincipalsBelongToWorkspace(db, params)
   const ids: string[] = []
   const workspaceSubjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.WORKSPACE,

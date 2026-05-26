@@ -350,6 +350,54 @@ export function buildMemoryOwnerPayloadFromPreset(
   }
 }
 
+/**
+ * P1 fix (post-D4 review): canonical (owner, scope?, namespaceKey) payload
+ * for the atomic move endpoint. Mirrors the preset→subject mapping the
+ * backend uses but emits the explicit shape (POST /memories/:id/move
+ * doesn't accept preset strings).
+ */
+export function buildMemoryMovePayloadFromPreset(
+  preset: MemoryFolderPreset,
+  currentWorkspaceMemberId: string,
+  workspaceId: string
+):
+  | {
+      owner: { kind: string; [k: string]: unknown }
+      scope?: { kind: string; [k: string]: unknown }
+      namespaceKey?: string
+    }
+  | null {
+  switch (preset.spaceType) {
+    case "workspace_shared":
+      return { owner: { kind: "workspace", workspaceId } }
+    case "conversation_shared":
+      if (!preset.conversationId) return null
+      return {
+        owner: { kind: "conversation", conversationId: preset.conversationId },
+      }
+    case "actor_private":
+      if (!preset.actorId) return null
+      return { owner: { kind: "actor", actorId: preset.actorId } }
+    case "participant_private":
+      if (!preset.actorId || !preset.conversationId) return null
+      return {
+        owner: { kind: "actor", actorId: preset.actorId },
+        scope: {
+          kind: "conversation",
+          conversationId: preset.conversationId,
+        },
+      }
+    case "user_private": {
+      const memberId =
+        preset.workspaceMemberId || currentWorkspaceMemberId || ""
+      if (!memberId) return null
+      return { owner: { kind: "workspace_member", memberId } }
+    }
+    default:
+      return null
+  }
+}
+
 export function getFolderIdForOwner(input: {
   workspaceId: string
   currentWorkspaceMemberId: string

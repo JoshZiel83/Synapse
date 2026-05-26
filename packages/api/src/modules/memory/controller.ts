@@ -29,6 +29,7 @@ import {
 import {
   createMemory,
   deleteMemory,
+  moveMemoryToSpace,
   getMemory,
   listMemories,
   MemoryError,
@@ -239,6 +240,17 @@ const createMemoryGrantSchema = z.object({
   scope: scopeSubjectRefSchema.optional(),
   permissions: z.array(z.enum(MEMORY_PERMISSIONS)).min(1),
   source: z.string().max(64).nullish(),
+})
+
+// P1 fix (post-D4 review): atomic move replaces the web UI's delete + create
+// (which dropped item-level grants, indexing state, and the stable id).
+// Caller supplies the target memory_space coordinates; the controller
+// checks `delete` on the source and `write` on the target before the
+// service swaps memory_space_id in a single transaction.
+const moveMemorySchema = z.object({
+  owner: ownerSubjectRefSchema,
+  scope: scopeSubjectRefSchema.optional(),
+  namespaceKey: z.string().max(255).optional(),
 })
 
 type CreateBody = z.infer<typeof createMemorySchema>
@@ -692,6 +704,88 @@ export function registerMemoryRoutes(app: FastifyInstance) {
 
         await deleteMemory(workspaceId, memoryId)
         return reply.status(204).send()
+      } catch (error) {
+        return handleError(error, reply)
+      }
+    }
+  )
+
+  // P1 fix (post-D4 review): atomic move endpoint. Caller needs `delete` on
+  // the source space + `write` on the target space (same contract as the
+  // documented "source delete + target write" pattern, just enforced
+  // together inside one transaction so the stable id, item-level grants,
+  // indexing state, and source_*_id relations all survive).
+  app.post(
+    `${prefix}/:memoryId/move`,
+    { preHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const { workspaceId, memoryId } = request.params as {
+          workspaceId: string
+          memoryId: string
+        }
+        const body = moveMemorySchema.parse(request.body)
+        // Source `delete` permission (requireMemoryPermission also resolves
+        // the source space's conversation anchor for the runtime context).
+        const sourceAllowed = await requireMemoryPermission(
+          request,
+          reply,
+          memoryId,
+          "delete",
+          "Not allowed to move this memory out of its current space"
+        )
+        if (!sourceAllowed) return
+
+        // Target write check is enforced inside `moveMemoryToSpace` after
+        // the target space is upserted (so the evaluator runs against the
+        // resolved space id). We build the runtime context here for the
+        // service to consult; if the principal can't be coerced into a
+        // RuntimePrincipalContext we fail closed.
+        const subject = getRequestAccessSubject(request)
+        const principal = accessSubjectToSubjectRef(subject)
+        if (!principal) {
+          reply.status(403).send({ error: "Caller is not a workspace principal" })
+          return
+        }
+        let runtimeSubjectIds: readonly string[] = []
+        let runtimeScopeSubjectIds: readonly string[] = []
+        try {
+          const ctx = await buildRuntimePrincipalContext(db, {
+            principal,
+            workspaceId,
+            // Surface the target conversation (if any) so write permission
+            // on a conversation-owned/scoped target evaluates correctly.
+            conversationId:
+              body.scope?.kind === SUBJECT_KIND.CONVERSATION
+                ? body.scope.conversationId
+                : body.owner.kind === SUBJECT_KIND.CONVERSATION
+                  ? body.owner.conversationId
+                  : null,
+          })
+          runtimeSubjectIds = ctx.runtimeSubjectIds
+          runtimeScopeSubjectIds = ctx.runtimeScopeSubjectIds
+        } catch {
+          reply.status(403).send({
+            error: "Caller does not belong to this workspace",
+          })
+          return
+        }
+
+        const moved = await moveMemoryToSpace(
+          workspaceId,
+          memoryId,
+          {
+            owner: body.owner,
+            scope: body.scope,
+            namespaceKey: body.namespaceKey,
+          },
+          {
+            accessSubject: subject,
+            runtimeSubjectIds,
+            runtimeScopeSubjectIds,
+          }
+        )
+        return reply.status(200).send(moved)
       } catch (error) {
         return handleError(error, reply)
       }

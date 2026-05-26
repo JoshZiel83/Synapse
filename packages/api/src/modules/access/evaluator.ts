@@ -1974,7 +1974,8 @@ export async function lookupResources(
             "automation_event_source",
             params.subject,
             params.limit,
-            params.runtimeScopeSubjectIds
+            params.runtimeScopeSubjectIds,
+            params.runtimeSubjectIds
           )
         : []
     default:

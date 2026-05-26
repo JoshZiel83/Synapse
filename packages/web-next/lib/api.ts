@@ -758,6 +758,26 @@ class ApiClient {
       method: "DELETE",
     })
   }
+  /**
+   * P1 fix (post-D4 review): atomic cross-space move. Replaces the
+   * delete + create the UI used to do, which dropped item-level grants,
+   * indexing state, and the stable memory id. The backend asserts
+   * `delete` on source + `write` on target inside a single transaction.
+   */
+  moveMemory(
+    wsId: string,
+    id: string,
+    target: {
+      owner: { kind: string; [k: string]: unknown }
+      scope?: { kind: string; [k: string]: unknown }
+      namespaceKey?: string
+    }
+  ) {
+    return this.fetch(`/workspaces/${wsId}/memories/${id}/move`, {
+      method: "POST",
+      body: JSON.stringify(target),
+    })
+  }
 
   // Audit
   getAuditLogs(wsId: string, params?: string) {

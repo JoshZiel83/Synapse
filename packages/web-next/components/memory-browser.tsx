@@ -28,6 +28,7 @@ import {
 import {
   buildMemoryFolders,
   buildMemoryOwnerPayloadFromPreset,
+  buildMemoryMovePayloadFromPreset,
   describeFolderVisibility,
   getFolderSegments,
   getFolderIdForOwner,
@@ -355,29 +356,26 @@ export default function MemoryBrowser() {
     if (!workspaceId || !movingMemory?.id || !folder.createPreset) return
 
     try {
-      // D4: cross-space moves now require delete + create. Source delete first
-      // (preserves grants on the old space if there are other items); then
-      // re-create using the new owner/scope shim.
-      await api.deleteMemory(workspaceId, movingMemory.id)
-      const ownerPayload = buildMemoryOwnerPayloadFromPreset(
+      // P1 fix (post-D4 review): atomic backend move replaces the previous
+      // delete + create. Preserves the stable id, item-level grants,
+      // indexing state, and source_*_id relations — and rolls back as one
+      // unit if the target write check fails (no data loss window).
+      const payload = buildMemoryMovePayloadFromPreset(
         folder.createPreset,
-        effectiveCurrentWorkspaceMemberId
+        effectiveCurrentWorkspaceMemberId,
+        workspaceId
       )
-      const result = await api.createMemory(workspaceId, {
-        ...ownerPayload,
-        category: movingMemory.category,
-        state: movingMemory.state,
-        importance: movingMemory.importance,
-        confidence: movingMemory.confidence,
-        tags: movingMemory.tags,
-        textDigest: movingMemory.textDigest,
-        contentBlocks: movingMemory.contentBlocks,
-      } as any)
+      if (!payload) {
+        toast.error("Target folder is missing required context")
+        return
+      }
+      const result = await api.moveMemory(workspaceId, movingMemory.id, payload)
       const savedMemory = projectMemory((result?.memory || result) as any)
-      setMemories((current) => [
-        savedMemory,
-        ...current.filter((memory) => memory.id !== movingMemory.id),
-      ])
+      setMemories((current) =>
+        current.map((memory) =>
+          memory.id === movingMemory.id ? savedMemory : memory
+        )
+      )
       toast.success("Memory path updated")
     } catch (error) {
       console.error("Failed to move memory:", error)

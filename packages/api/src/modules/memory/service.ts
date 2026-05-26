@@ -22,7 +22,10 @@ import {
 import { sql, type RawBuilder } from "kysely"
 import { v4 as uuidv4 } from "uuid"
 import { transaction } from "../../infrastructure/database/index.js"
-import { upsertAccessSubject } from "../access/subject-registry.js"
+import {
+  upsertAccessSubject,
+  upsertAccessSubjectOn,
+} from "../access/subject-registry.js"
 import {
   db,
   executeCompiledQuery,
@@ -765,50 +768,54 @@ async function resolveOrCreateMemorySpace(
     )
   }
 
-  const ownerSubjectId = await upsertAccessSubject(db, input.owner)
+  const ownerSubjectId = await upsertAccessSubjectOn(client, input.owner)
   const scopeSubjectId = input.scope
-    ? await upsertAccessSubject(db, input.scope)
+    ? await upsertAccessSubjectOn(client, input.scope)
     : null
   const namespaceKey =
     (input.namespaceKey || DEFAULT_NAMESPACE).trim() || DEFAULT_NAMESPACE
 
-  // Try existing first (avoids unique index violation noise in logs).
-  let query = db
-    .selectFrom("memory_spaces")
-    .selectAll()
-    .where("workspace_id", "=", input.workspaceId)
-    .where("owner_subject_id", "=", ownerSubjectId)
-    .where("namespace_key", "=", namespaceKey)
-  query = scopeSubjectId
-    ? query.where("scope_subject_id", "=", scopeSubjectId)
-    : query.where("scope_subject_id", "is", null)
-  const existing = (await executeTakeFirst<MemorySpaceRow>(
+  // P3 fix (post-D4): single-statement transactional upsert via
+  // INSERT ... ON CONFLICT ... DO UPDATE ... RETURNING. Replaces the
+  // earlier select-then-insert path (which races under concurrent
+  // createMemory calls for the same owner/scope/namespace) and pins both
+  // subject upserts to the caller's transaction client so they roll back
+  // together with the outer txn.
+  //
+  // ON CONFLICT targets one of the two partial unique indexes on
+  // memory_spaces:
+  //   uq_memory_spaces_scoped   (workspace_id, owner_subject_id,
+  //                              scope_subject_id, namespace_key)
+  //                              WHERE scope_subject_id IS NOT NULL
+  //   uq_memory_spaces_unscoped (workspace_id, owner_subject_id,
+  //                              namespace_key)
+  //                              WHERE scope_subject_id IS NULL
+  // We pick the right index by branching on scopeSubjectId. DO UPDATE
+  // (no-op) is required for RETURNING on the conflicting row (DO NOTHING
+  // would skip the RETURNING).
+  const conflictClause = scopeSubjectId
+    ? `(workspace_id, owner_subject_id, scope_subject_id, namespace_key) WHERE scope_subject_id IS NOT NULL`
+    : `(workspace_id, owner_subject_id, namespace_key) WHERE scope_subject_id IS NULL`
+  const result = await executeSqlOn<MemorySpaceRow>(
     client,
-    query.limit(1)
-  )) as MemorySpaceRow | undefined
-  if (existing) return existing
-
-  const spaceId = uuidv4()
-  await executeCompiledQuery(
-    client,
-    db.insertInto("memory_spaces").values({
-      id: spaceId,
-      workspace_id: input.workspaceId,
-      owner_subject_id: ownerSubjectId,
-      scope_subject_id: scopeSubjectId,
-      namespace_key: namespaceKey,
-      created_at: sql`NOW()`,
-      updated_at: sql`NOW()`,
-    })
+    `INSERT INTO memory_spaces (id, workspace_id, owner_subject_id, scope_subject_id, namespace_key, created_at, updated_at)
+     VALUES ($1, $2, $3, $4, $5, NOW(), NOW())
+     ON CONFLICT ${conflictClause}
+       DO UPDATE SET updated_at = memory_spaces.updated_at
+     RETURNING id, workspace_id, owner_subject_id, scope_subject_id, namespace_key`,
+    [
+      uuidv4(),
+      input.workspaceId,
+      ownerSubjectId,
+      scopeSubjectId,
+      namespaceKey,
+    ]
   )
-
-  return {
-    id: spaceId,
-    workspace_id: input.workspaceId,
-    owner_subject_id: ownerSubjectId,
-    scope_subject_id: scopeSubjectId,
-    namespace_key: namespaceKey,
+  const row = result.rows[0]
+  if (!row) {
+    throw new MemoryError("Failed to resolve or create memory_space", 500)
   }
+  return row
 }
 
 async function normalizeMemoryContent(input: {
@@ -1323,53 +1330,19 @@ async function loadOwnerImplicitSpaceIds(
 }
 
 /**
- * P2 fix (post-D4): admin reachability widener for list / search candidate
- * SQL. The evaluator's owner-implicit matrix gives `workspace_member` with
- * `manage_memories` workspace admin access to actor / member / remote_agent
- * -owned spaces, so a direct GET succeeds. Without this widener, the list
- * SQL only matches spaces where `owner_subject_id ∈ runtimeSubjectIds`
- * (i.e. the principal owns them) — admin sees nothing in list but can fetch
- * each by id. This function returns the additional set of unscoped spaces
- * in the workspace whose owner is workspace_member / actor / remote_agent
- * so list/search candidate SQL surfaces the same spaces evaluator allows.
- *
- * Note: scoped spaces (scope_subject_id IS NOT NULL) are deliberately
- * EXCLUDED — admin's manage override on a scoped space only unlocks
- * manage/delete (not read/recall, see hasMemorySpaceOwnerImplicitPermission)
- * so they shouldn't appear in a read-oriented list either.
+ * (Removed in P1 review fix.) An earlier round added an admin reachability
+ * widener that added unscoped private spaces (actor / member / remote_agent
+ * owned) to the list/search candidate set when the principal had workspace
+ * `manage_memories`. That contradicted the evaluator's owner-implicit matrix,
+ * which only grants `manage_memories` admins `manage` / `delete` on those
+ * spaces (NOT `read` / `recall`). The widener would surface unreadable rows
+ * that the post-fetch authz filter would then reject — but only after the
+ * SQL `LIMIT` had pushed authorized rows out of the candidate window, causing
+ * false negatives. Removed: admin's `read/recall` is intentionally narrower
+ * than their `manage/delete`, and list/search must reflect that. Admin who
+ * needs to read a private space's contents has to be granted access
+ * explicitly via memory_access_grants.
  */
-async function loadAdminReachableSpaceIds(
-  workspaceId: string,
-  subject: AccessSubject | null,
-  permission: "read" | "recall"
-): Promise<string[]> {
-  if (permission !== "read" && permission !== "recall") return []
-  if (!subject || subject.type !== "workspace_member") return []
-  const hasManage = await authorizePermission(db, {
-    subject,
-    resourceType: "workspace",
-    resourceId: workspaceId,
-    permission: "manage_memories",
-  })
-  if (!hasManage) return []
-  const rows = await db
-    .selectFrom("memory_spaces as ms")
-    .innerJoin(
-      "access_subjects as owner_subj",
-      "owner_subj.id",
-      "ms.owner_subject_id"
-    )
-    .select("ms.id")
-    .where("ms.workspace_id", "=", workspaceId)
-    .where("ms.scope_subject_id", "is", null)
-    .where("owner_subj.kind", "in", [
-      "workspace_member",
-      "actor",
-      "remote_agent",
-    ])
-    .execute()
-  return rows.map((row) => row.id)
-}
 
 async function buildSearchHits(params: {
   workspaceId: UUID
@@ -1745,6 +1718,105 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
   })
 }
 
+/**
+ * P1 fix (post-D4 review): atomic cross-space move. Replaces the web UI's
+ * delete + create dance, which dropped item-level grants, indexing state,
+ * source-* relations and the stable id whenever a memory hopped folders,
+ * and risked losing data entirely if the create-side failed.
+ *
+ * Permission contract: the caller must have `delete` on the SOURCE space
+ * AND `write` on the TARGET space — the same rule the documented
+ * "source delete + target write" pattern required, just enforced together
+ * inside one transaction. Source `delete` is asserted at the controller
+ * boundary (via `requireMemoryPermission`); target `write` is asserted
+ * here, after the target space is upserted, so the check runs against the
+ * concrete space_id the evaluator can consult.
+ *
+ * Mechanics: resolve-or-create the target memory_space (transactional, on
+ * the caller's client), evaluate `write` permission on the resolved id,
+ * then UPDATE `memory_items.memory_space_id`. All other columns (id,
+ * importance, embedding state, source_*_id, item-level memory_access_grants
+ * pointed at this item, indexing) survive untouched. If the target write
+ * check fails OR the trigger rejects (cross-workspace, etc.), the whole
+ * transaction rolls back and the source remains intact.
+ */
+export async function moveMemoryToSpace(
+  workspaceId: UUID,
+  memoryId: UUID,
+  target: {
+    owner: SubjectRef
+    scope?: SubjectRef
+    namespaceKey?: string
+  },
+  /**
+   * The runtime context of the caller — same shape as what the controller
+   * builds via `buildRuntimePrincipalContext`. The service needs it to
+   * evaluate `write` permission against the target space id (which may be
+   * newly created by this very call). Without it, the function falls back
+   * to a fail-closed deny on the target write check.
+   */
+  authContext: {
+    accessSubject: AccessSubject
+    runtimeSubjectIds: readonly string[]
+    runtimeScopeSubjectIds: readonly string[]
+  }
+): Promise<Memory> {
+  const existingRow = await getMemoryRow(workspaceId, memoryId)
+  if (!existingRow) {
+    throw new MemoryError("Memory not found", 404)
+  }
+  await transaction(async (client) => {
+    const targetSpace = await resolveOrCreateMemorySpace(client, {
+      workspaceId,
+      owner: target.owner,
+      scope: target.scope,
+      namespaceKey: target.namespaceKey,
+    })
+    if (targetSpace.id === existingRow.memory_space_id) {
+      return // no-op: already in target space
+    }
+    // Target write permission gate. Runs against the just-resolved id so the
+    // evaluator sees the concrete space (owner/scope columns + workspace_id).
+    // If the principal lacks `write` (owner-implicit OR explicit grant), the
+    // transaction rolls back — the target space row may persist as an
+    // empty container (benign: owner-implicit still controls it), but no
+    // memory was leaked into it.
+    const writeAllowed = await authorizePermission(db, {
+      subject: authContext.accessSubject,
+      resourceType: "memory_space",
+      resourceId: targetSpace.id,
+      permission: "write",
+      runtimeSubjectIds: authContext.runtimeSubjectIds,
+      runtimeScopeSubjectIds: authContext.runtimeScopeSubjectIds,
+    })
+    if (!writeAllowed) {
+      throw new MemoryError(
+        "Not allowed to move memory into the target space (write permission required)",
+        403
+      )
+    }
+    await executeCompiledQuery(
+      client,
+      db
+        .updateTable("memory_items")
+        .set({
+          memory_space_id: targetSpace.id,
+          updated_at: sql`NOW()`,
+        })
+        .where("id", "=", memoryId)
+        .where("workspace_id", "=", workspaceId)
+    )
+  })
+  const moved = await getMemory(workspaceId, memoryId)
+  if (!moved) {
+    throw new MemoryError(
+      "Memory disappeared during move (unexpected)",
+      500
+    )
+  }
+  return moved
+}
+
 export async function listMemories(
   workspaceId: UUID,
   input: ListMemoriesInput
@@ -1762,15 +1834,6 @@ export async function listMemories(
   const grantSpaceIds = runtimeContext
     ? await loadSpaceLevelGrantSpaceIds(workspaceId, runtimeContext, "read")
     : []
-  // P2 fix (post-D4): workspace admin (`manage_memories`) can read every
-  // unscoped actor/member/remote_agent-owned space per the evaluator
-  // matrix. Without this widener the list SQL hides those rows even
-  // though a direct GET allows them. See loadAdminReachableSpaceIds.
-  const adminSpaceIds = await loadAdminReachableSpaceIds(
-    workspaceId,
-    subject,
-    "read"
-  )
 
   const conditions: RawBuilder<unknown>[] = [
     sql`mi.workspace_id = ${workspaceId}`,
@@ -1795,10 +1858,12 @@ export async function listMemories(
   }
 
   if (subject) {
-    // Subject-based reachability gate (owner-implicit + space-grant + admin).
-    const reachable = Array.from(
-      new Set([...ownerSpaceIds, ...grantSpaceIds, ...adminSpaceIds])
-    )
+    // Subject-based reachability gate: owner-implicit + space-grant. The
+    // workspace-admin manage_memories override only unlocks manage/delete on
+    // private spaces (not read/recall — see hasMemorySpaceOwnerImplicitPermission)
+    // so it is NOT added here; surfacing those rows would only push authorized
+    // ones out of the SQL LIMIT window before the post-fetch authz filter ran.
+    const reachable = Array.from(new Set([...ownerSpaceIds, ...grantSpaceIds]))
     if (reachable.length === 0) {
       // No reachable spaces — bail early; nothing to fetch.
       return []
@@ -1864,15 +1929,6 @@ export async function searchMemories(
         permission
       )
     : []
-  // P2 fix (post-D4): admin reachable spaces (manage_memories override on
-  // unscoped actor/member/remote_agent-owned spaces). Merged into the
-  // candidate WHERE so search/recall agree with the evaluator's owner-
-  // implicit matrix.
-  const adminSpaceIds = await loadAdminReachableSpaceIds(
-    workspaceId,
-    resolveAccessSubject(input),
-    permission
-  )
   // P2 fix (post-D4): resolve the caller-supplied owners[] / scopes[]
   // SubjectRef filters into access_subjects ids so the SQL WHERE clause can
   // restrict candidates. Previously the schema accepted these fields but the
@@ -1893,9 +1949,7 @@ export async function searchMemories(
             input,
             candidateLimit,
             variant,
-            // pass union of grant + admin via grantSpaceIds slot; owner stays
-            // separate (buildSearchFilters unions them anyway).
-            Array.from(new Set([...grantSpaceIds, ...adminSpaceIds])),
+            grantSpaceIds,
             ownerSpaceIds,
             ownerSubjectIdFilters,
             scopeSubjectIdFilters
@@ -1926,7 +1980,7 @@ export async function searchMemories(
           input,
           embedding,
           candidateLimit,
-          Array.from(new Set([...grantSpaceIds, ...adminSpaceIds])),
+          grantSpaceIds,
           ownerSpaceIds,
           ownerSubjectIdFilters,
           scopeSubjectIdFilters

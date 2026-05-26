@@ -75,6 +75,14 @@ export async function authorizeAction(
     subject: AccessSubject
     action: AccessAction
     resourceId: string
+    /**
+     * Post-D4 P2 fix: same `runtimeSubjectIds` / `runtimeScopeSubjectIds`
+     * plumbing as authorizePermission, so callers using the action-named
+     * shortcut still benefit from group-subject grant visibility
+     * (`subject=conversation C`) and memory_access_grants overlay.
+     */
+    runtimeSubjectIds?: readonly string[]
+    runtimeScopeSubjectIds?: readonly string[]
   }
 ) {
   const spec = getAccessActionSpec(params.action)
@@ -83,6 +91,8 @@ export async function authorizeAction(
     resourceId: params.resourceId,
     permission: spec.permission,
     subject: params.subject,
+    runtimeSubjectIds: params.runtimeSubjectIds,
+    runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
   })
 }
 
@@ -124,6 +134,12 @@ export async function listAuthorizedResourceIds(
      * accept them. Pass through from buildRuntimePrincipalContext.
      */
     runtimeScopeSubjectIds?: readonly string[]
+    /**
+     * Post-D4 P2 fix: also thread runtimeSubjectIds so `subject=conversation C`
+     * RAB grants surface in tool/skill/plugin enumeration the same way
+     * they do in checkPermission.
+     */
+    runtimeSubjectIds?: readonly string[]
   }
 ) {
   const spec = getAccessActionSpec(params.action)
@@ -133,6 +149,7 @@ export async function listAuthorizedResourceIds(
     subject: params.subject,
     limit: params.limit,
     runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+    runtimeSubjectIds: params.runtimeSubjectIds,
   })
 }
 
