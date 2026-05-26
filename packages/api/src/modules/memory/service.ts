@@ -57,9 +57,9 @@ import {
   workspaceMemberSubject,
 } from "../access/service.js"
 import { MEMORY_PERMISSION } from "@synapse/shared"
-import type { MemoryPermission, SubjectRef } from "@synapse/shared"
+import type { SubjectRef } from "@synapse/shared"
 import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
-import { listMemoryItemIdsReachableByGrants } from "./access-grant-storage.js"
+import { listSpaceLevelGrantSpaceIds } from "./access-grant-storage.js"
 
 type MemoryRow = {
   id: string
@@ -1163,7 +1163,17 @@ function buildSearchFilters(
   workspaceId: string,
   input: SearchMemoriesInput,
   itemAlias = "mi",
-  spaceAlias = "ms"
+  spaceAlias = "ms",
+  /**
+   * PR-fix-round-2: space-level grant-reachable memory_space ids. When a
+   * granted space is `user_private`, the `isActorSearchContext` exclusion
+   * would normally strip it from the candidate set; we override that
+   * exclusion when the space is in this list so granted user_private
+   * memories DO show up in search/recall for the grant subject. Filters
+   * for state/category/tag still apply uniformly via the surrounding
+   * conditions.
+   */
+  grantSpaceIds: readonly string[] = []
 ) {
   const item = sql.raw(itemAlias)
   const space = sql.raw(spaceAlias)
@@ -1196,7 +1206,20 @@ function buildSearchFilters(
   conditions.push(sql`${item}.state::text = ANY(${states}::text[])`)
 
   if (isActorSearchContext(input)) {
-    if (input.directWorkspaceMemberId) {
+    if (grantSpaceIds.length > 0) {
+      const ids = sql.raw(
+        `ARRAY[${grantSpaceIds.map((id) => `'${id}'`).join(",")}]::uuid[]`
+      )
+      if (input.directWorkspaceMemberId) {
+        conditions.push(
+          sql`(${space}.space_type != 'user_private' OR ${space}.anchor_workspace_member_id = ${input.directWorkspaceMemberId} OR ${space}.id = ANY(${ids}))`
+        )
+      } else {
+        conditions.push(
+          sql`(${space}.space_type != 'user_private' OR ${space}.id = ANY(${ids}))`
+        )
+      }
+    } else if (input.directWorkspaceMemberId) {
       conditions.push(
         sql`(${space}.space_type != 'user_private' OR ${space}.anchor_workspace_member_id = ${input.directWorkspaceMemberId})`
       )
@@ -1212,9 +1235,16 @@ async function searchLexicalCandidates(
   workspaceId: string,
   input: SearchMemoriesInput,
   candidateLimit: number,
-  queryText: string
+  queryText: string,
+  grantSpaceIds: readonly string[] = []
 ) {
-  const whereClause = buildSearchFilters(workspaceId, input)
+  const whereClause = buildSearchFilters(
+    workspaceId,
+    input,
+    "mi",
+    "ms",
+    grantSpaceIds
+  )
   if (!queryText) return []
   const normalizedQueryText = normalizeWhitespace(queryText).toLowerCase()
   const result = await db.executeQuery(
@@ -1288,9 +1318,16 @@ async function searchVectorCandidates(
   workspaceId: string,
   input: SearchMemoriesInput,
   embedding: number[],
-  candidateLimit: number
+  candidateLimit: number,
+  grantSpaceIds: readonly string[] = []
 ) {
-  const whereClause = buildSearchFilters(workspaceId, input)
+  const whereClause = buildSearchFilters(
+    workspaceId,
+    input,
+    "mi",
+    "ms",
+    grantSpaceIds
+  )
   const formattedEmbedding = `[${embedding.map((value) => (Number.isFinite(value) ? value.toFixed(8) : "0")).join(",")}]`
   const result = await db.executeQuery(
     sql<SearchCandidateRow>`SELECT mi.id,
@@ -1440,72 +1477,31 @@ async function buildMemoryRuntimeContext(
 }
 
 /**
- * PR5 fix: enumerate memory_item rows reachable via active explicit grants
- * so list/search/recall can UNION them into the legacy candidate set. The
- * SQL mirrors the legacy candidate SELECT projection so the merged result
- * carries the same MemoryRow shape downstream code expects.
+ * PR-fix-round-2: previous round POST-fetch unioned grant-reachable items
+ * into the candidate set; that bypassed the lexical/vector match and the
+ * `state='active'` / category / tag filters in `buildSearchFilters` /
+ * `buildListWhereClause`. The correct shape is to WIDEN the SQL candidate
+ * filters so granted spaces participate in the same filters as everything
+ * else — implemented here for search/recall via
+ * `buildSearchFilters(..., grantSpaceIds)` which overrides the
+ * `isActorSearchContext` user_private exclusion for granted spaces. For
+ * list the legacy candidate SQL is already inclusive (no SQL-level
+ * visibility filter); auth filtering with `runtimeContext` is sufficient.
  */
-async function loadMemoryItemsByExplicitGrants(
+async function loadSpaceLevelGrantSpaceIds(
   workspaceId: string,
   ctx: NonNullable<Awaited<ReturnType<typeof buildMemoryRuntimeContext>>>,
-  permission: MemoryPermission,
-  excludeItemIds: Set<string>
-): Promise<MemoryRow[]> {
-  const grants = await listMemoryItemIdsReachableByGrants(db, {
+  permission: "read" | "recall"
+): Promise<string[]> {
+  return listSpaceLevelGrantSpaceIds(db, {
     workspaceId,
-    permission,
+    permission:
+      permission === "recall"
+        ? MEMORY_PERMISSION.RECALL
+        : MEMORY_PERMISSION.READ,
     runtimeSubjectIds: ctx.runtimeSubjectIds,
     runtimeScopeSubjectIds: ctx.runtimeScopeSubjectIds,
   })
-  const candidateItemIds = grants.memoryItemIds.filter(
-    (id) => !excludeItemIds.has(id)
-  )
-  if (candidateItemIds.length === 0 && grants.memorySpaceIds.length === 0) {
-    return []
-  }
-  let query = db
-    .selectFrom("memory_items as mi")
-    .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
-    .leftJoin(
-      "conversation_actor_contexts as cac",
-      "cac.id",
-      "ms.anchor_conversation_actor_context_id"
-    )
-    .leftJoin("actors as a_space", "a_space.id", "ms.anchor_actor_id")
-    .leftJoin("actors as a_participant", "a_participant.id", "cac.actor_id")
-    .leftJoin(
-      "conversations as c_space",
-      "c_space.id",
-      "ms.anchor_conversation_id"
-    )
-    .leftJoin(
-      "conversations as c_participant",
-      "c_participant.id",
-      "cac.conversation_id"
-    )
-    .leftJoin(
-      "workspace_members as wm",
-      "wm.id",
-      "ms.anchor_workspace_member_id"
-    )
-    .leftJoin("users as u", "u.id", "wm.user_id")
-    .select(baseMemorySelect())
-    .where("mi.workspace_id", "=", workspaceId)
-
-  if (candidateItemIds.length > 0 && grants.memorySpaceIds.length > 0) {
-    const items = candidateItemIds
-    const spaces = grants.memorySpaceIds
-    query = query.where((eb) =>
-      eb.or([eb("mi.id", "in", items), eb("mi.memory_space_id", "in", spaces)])
-    )
-  } else if (candidateItemIds.length > 0) {
-    query = query.where("mi.id", "in", candidateItemIds)
-  } else {
-    query = query.where("mi.memory_space_id", "in", grants.memorySpaceIds)
-  }
-
-  const rows = (await query.execute()) as MemoryRow[]
-  return rows.filter((row) => !excludeItemIds.has(row.id))
 }
 
 function isDirectUserPrivateRowVisible(
@@ -1530,41 +1526,18 @@ async function buildSearchHits(params: {
   const subject = resolveAccessSubject(params.target)
   let rows = params.rows
 
-  // PR5 fix: union explicit-grant-reachable items into the candidate set
-  // so a memory_space shared via memory_access_grants becomes searchable /
-  // recallable even when the legacy candidate query would have excluded it.
+  // PR-fix-round-2: previous round POST-fetch unioned every grant-reachable
+  // item; that pulled in items that didn't match the lexical/vector query.
+  // The grants now participate via buildSearchFilters (the legacy
+  // user_private exclusion is widened to allow granted spaces) so the
+  // query-match SQL handles them naturally. Here we only need to plumb
+  // the runtime context into filterAuthorizedPermissionResourceIds so the
+  // post-fetch auth gate sees the same grant overlay the evaluator uses.
   const runtimeContext = await buildMemoryRuntimeContext(
     params.workspaceId,
     params.target,
     subject
   )
-  if (runtimeContext) {
-    const existingIds = new Set(rows.map((row) => row.id))
-    const grantRows = await loadMemoryItemsByExplicitGrants(
-      params.workspaceId,
-      runtimeContext,
-      params.permission === "recall"
-        ? MEMORY_PERMISSION.RECALL
-        : MEMORY_PERMISSION.READ,
-      existingIds
-    )
-    if (grantRows.length > 0) {
-      // MemoryRow shape is compatible with SearchCandidateRow apart from
-      // search-score columns (rrf_score / chunk_id), which the downstream
-      // ranking treats as optional defaults of 0/null.
-      rows = [
-        ...rows,
-        ...grantRows.map(
-          (row) =>
-            ({
-              ...row,
-              chunk_id: null,
-              rrf_score: 0,
-            }) as unknown as SearchCandidateRow
-        ),
-      ]
-    }
-  }
 
   if (rows.length > 0) {
     const directVisibleIds = new Set(
@@ -1979,26 +1952,17 @@ export async function listMemories(
     .execute()) as MemoryRow[]
 
   const subject = resolveAccessSubject(input)
-  // PR5 fix: union explicit-grant-reachable items into the candidate set so
-  // a memory_space shared via memory_access_grants becomes visible in list
-  // even when the legacy space_type rules would have excluded it.
+  // PR-fix-round-2: the legacy list candidate SQL has no SQL-level
+  // visibility filter (post-fetch auth is the only gate). Build the
+  // runtime context so the explicit grant overlay sees the same subject
+  // set on the auth check; no candidate widening necessary (and the
+  // previous round's post-fetch union has been removed because it
+  // bypassed list filters like category/state/tags).
   const runtimeContext = await buildMemoryRuntimeContext(
     workspaceId,
     input,
     subject
   )
-  if (runtimeContext) {
-    const existingIds = new Set(rows.map((row) => row.id))
-    const grantRows = await loadMemoryItemsByExplicitGrants(
-      workspaceId,
-      runtimeContext,
-      MEMORY_PERMISSION.READ,
-      existingIds
-    )
-    if (grantRows.length > 0) {
-      rows = [...rows, ...grantRows]
-    }
-  }
   if (subject && rows.length > 0) {
     const allowedIds = new Set(
       await filterAuthorizedPermissionResourceIds(db, {
@@ -2035,6 +1999,25 @@ export async function searchMemories(
   const queryText = searchInput.queryText.trim()
   const lexicalSources: Array<{ rows: SearchCandidateRow[] }> = []
 
+  // PR-fix-round-2: compute the principal's space-level grant set ONCE per
+  // request and pass it into searchLexicalCandidates / searchVectorCandidates.
+  // The user_private exclusion in buildSearchFilters is overridden for
+  // granted spaces — items in those spaces participate in the same lexical
+  // / vector / state / category / tag filters as anything else, so the
+  // grant only widens which spaces are reachable, not which items match.
+  const runtimeContextForSearch = await buildMemoryRuntimeContext(
+    workspaceId,
+    searchInput,
+    resolveAccessSubject(searchInput)
+  )
+  const grantSpaceIds = runtimeContextForSearch
+    ? await loadSpaceLevelGrantSpaceIds(
+        workspaceId,
+        runtimeContextForSearch,
+        permission
+      )
+    : []
+
   if (queryText) {
     for (const variant of buildLexicalVariants(queryText)) {
       try {
@@ -2043,7 +2026,8 @@ export async function searchMemories(
             workspaceId,
             searchInput,
             candidateLimit,
-            variant
+            variant,
+            grantSpaceIds
           ),
         })
       } catch (error) {
@@ -2070,7 +2054,8 @@ export async function searchMemories(
           workspaceId,
           searchInput,
           embedding,
-          candidateLimit
+          candidateLimit,
+          grantSpaceIds
         )
       }
     } catch (error) {

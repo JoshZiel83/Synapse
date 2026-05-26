@@ -237,6 +237,32 @@ async function assertPrincipalBelongsToWorkspace(
   }
 }
 
+/**
+ * PR-fix-round-2: which principal kinds are validated to belong to the
+ * runtime workspace by `assertPrincipalBelongsToWorkspace`. Only these
+ * earn the workspace subject_id in `runtimeSubjectIds` /
+ * `runtimeScopeSubjectIds`. Platform-wide kinds (user/external/system)
+ * and conversation/conversation_actor_context principals are accepted as
+ * the principal itself but MUST NOT auto-collect workspace subject —
+ * otherwise a user principal could mint runtime context against any
+ * workspace and silently match `subject=workspace W` grants.
+ */
+function isPrincipalWorkspaceBound(principal: SubjectRef): boolean {
+  switch (principal.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+    case SUBJECT_KIND.ACTOR:
+    case SUBJECT_KIND.REMOTE_AGENT:
+      return true
+    case SUBJECT_KIND.CONVERSATION:
+    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
+    case SUBJECT_KIND.USER:
+    case SUBJECT_KIND.EXTERNAL:
+    case SUBJECT_KIND.SYSTEM:
+      return false
+  }
+}
+
 export async function buildRuntimePrincipalContext(
   db: KyselyDb,
   params: {
@@ -261,6 +287,14 @@ export async function buildRuntimePrincipalContext(
   // get back a runtime set that legitimately matches `subject=workspace W`
   // grants in W — an authorization-expansion bug if the builder is ever
   // wired to request-path code.
+  //
+  // PR-fix-round-2: assertPrincipalBelongsToWorkspace verifies the
+  // principal is in the workspace for workspace-bound kinds, but it
+  // intentionally accepts user/external/system/conversation (no single
+  // workspace identity). To prevent THOSE platform-wide principals from
+  // automatically picking up `subject=workspace W` grants, we only mint
+  // the workspace subject for principals that were positively verified
+  // as belonging to the workspace.
   await assertPrincipalBelongsToWorkspace(
     db,
     params.principal,
@@ -270,12 +304,15 @@ export async function buildRuntimePrincipalContext(
   const principalSubjectId = await upsertAccessSubject(db, params.principal)
   runtimeSubjectIds.push(principalSubjectId)
 
-  const workspaceSubjectId = await upsertAccessSubject(db, {
-    kind: SUBJECT_KIND.WORKSPACE,
-    workspaceId: params.workspaceId,
-  })
-  runtimeSubjectIds.push(workspaceSubjectId)
-  runtimeScopeSubjectIds.push(workspaceSubjectId)
+  const principalIsWorkspaceBound = isPrincipalWorkspaceBound(params.principal)
+  if (principalIsWorkspaceBound) {
+    const workspaceSubjectId = await upsertAccessSubject(db, {
+      kind: SUBJECT_KIND.WORKSPACE,
+      workspaceId: params.workspaceId,
+    })
+    runtimeSubjectIds.push(workspaceSubjectId)
+    runtimeScopeSubjectIds.push(workspaceSubjectId)
+  }
 
   if (params.conversationId) {
     const isActive = await isSubjectActiveConversationParticipant(

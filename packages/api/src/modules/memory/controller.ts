@@ -10,6 +10,7 @@ import {
   MEMORY_STABILITIES,
 } from "@synapse/shared/constants"
 import { MEMORY_PERMISSIONS, SUBJECT_KIND } from "@synapse/shared"
+import type { SubjectRef } from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -17,13 +18,33 @@ import {
   authorizeAction,
   authorizePermission,
   getRequestAccessSubject,
+  type AccessSubject,
 } from "../access/service.js"
 import { checkPermission } from "../access/evaluator.js"
+import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import {
   insertMemoryAccessGrant,
   listActiveMemoryAccessGrants,
   revokeMemoryAccessGrant,
 } from "./access-grant-storage.js"
+
+/**
+ * PR-fix-round-2: lift a resolved AccessSubject into the SubjectRef shape
+ * `buildRuntimePrincipalContext` needs. `user` and other platform-wide
+ * subjects can't anchor a workspace-bound memory grant — they return null
+ * so the runtime context build is skipped and the legacy decision tree
+ * stays in charge.
+ */
+function accessSubjectToSubjectRef(subject: AccessSubject): SubjectRef | null {
+  switch (subject.type) {
+    case "actor":
+      return { kind: SUBJECT_KIND.ACTOR, actorId: subject.id }
+    case "workspace_member":
+      return { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId: subject.id }
+    default:
+      return null
+  }
+}
 import {
   createMemory,
   deleteMemory,
@@ -664,13 +685,40 @@ export function registerMemoryRoutes(app: FastifyInstance) {
   async function assertSpaceManageable(
     request: FastifyRequest,
     reply: FastifyReply,
+    workspaceId: string,
     spaceId: string
   ): Promise<boolean> {
+    // PR-fix-round-2: previously called checkPermission without the runtime
+    // context, so an explicit `memory_access_grants.permissions=['manage']`
+    // grant never reached the evaluator overlay — a subject granted manage
+    // couldn't actually POST/GET/DELETE grants. Build the runtime context
+    // from the request's access subject + workspace + conversation
+    // (conversation isn't directly available here so we omit it; manage
+    // grants typically aren't scoped to a conversation anyway).
+    const subject = getRequestAccessSubject(request)
+    const principal = accessSubjectToSubjectRef(subject)
+    let runtimeSubjectIds: readonly string[] | undefined
+    let runtimeScopeSubjectIds: readonly string[] | undefined
+    if (principal) {
+      try {
+        const ctx = await buildRuntimePrincipalContext(db, {
+          principal,
+          workspaceId,
+        })
+        runtimeSubjectIds = ctx.runtimeSubjectIds
+        runtimeScopeSubjectIds = ctx.runtimeScopeSubjectIds
+      } catch {
+        // Principal doesn't belong to this workspace — fall through; the
+        // legacy decision tree will reject (no implicit owner permission).
+      }
+    }
     const managePermitted = await checkPermission(db, {
       resourceType: "memory_space",
       resourceId: spaceId,
       permission: "manage",
-      subject: getRequestAccessSubject(request),
+      subject,
+      runtimeSubjectIds,
+      runtimeScopeSubjectIds,
     })
     if (!managePermitted) {
       reply.status(403).send({
@@ -699,7 +747,10 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         }
         if (!(await assertSpaceBelongsToWorkspace(spaceId, workspaceId, reply)))
           return
-        if (!(await assertSpaceManageable(request, reply, spaceId))) return
+        if (
+          !(await assertSpaceManageable(request, reply, workspaceId, spaceId))
+        )
+          return
 
         const body = createMemoryGrantSchema.parse(request.body)
         // Item-level grants must reference an item within the named space.
@@ -761,7 +812,10 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           return
         // Listing grants on a space exposes who-has-access-to-what; require
         // `manage` rather than just workspace view.
-        if (!(await assertSpaceManageable(request, reply, spaceId))) return
+        if (
+          !(await assertSpaceManageable(request, reply, workspaceId, spaceId))
+        )
+          return
         const grants = await listActiveMemoryAccessGrants(db, spaceId)
         return reply.status(200).send({ grants })
       } catch (error) {
@@ -789,7 +843,10 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         }
         if (!(await assertSpaceBelongsToWorkspace(spaceId, workspaceId, reply)))
           return
-        if (!(await assertSpaceManageable(request, reply, spaceId))) return
+        if (
+          !(await assertSpaceManageable(request, reply, workspaceId, spaceId))
+        )
+          return
         // Pin the grant to (workspace, space) so a manager of space A
         // cannot revoke a grant on space B by guessing its grantId.
         const grantRow = await db
