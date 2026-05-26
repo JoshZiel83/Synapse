@@ -5596,41 +5596,6 @@ export interface PluginMountRecord {
   updatedAt: string
 }
 
-export interface DeviceRecord {
-  id: string
-  workspaceId: string
-  ownerWorkspaceMemberId?: string
-  title: string
-  description?: string
-  deviceType: string
-  platform?: string
-  publicKeyFingerprint: string
-  trustStatus: "pending" | "active" | "revoked" | "blocked"
-  createdAt: string
-  updatedAt: string
-}
-
-export interface DeviceExposureRecord {
-  id: string
-  deviceId: string
-  syncSourceId?: string
-  stableKey: string
-  displayName: string
-  transport: "builtin" | "stdio" | "http" | "sse" | "custom"
-  runtimeStatus:
-    | "discovered"
-    | "starting"
-    | "healthy"
-    | "degraded"
-    | "failed"
-    | "quarantined"
-    | "offline"
-  projectedCatalogItemId?: string
-  metadata: Record<string, unknown>
-  createdAt: string
-  updatedAt: string
-}
-
 export function buildConversationMessageRef(sequence: number): string {
   return `m_${Math.trunc(sequence)}`
 }

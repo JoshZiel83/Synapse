@@ -3839,8 +3839,6 @@ ALTER TABLE interaction_runtime_authorization_requests
 
 -- Indexes covering device-side columns so chat dispatch reading device-capability
 -- grants stays on an index plan.
-CREATE INDEX idx_runtime_authorization_grants_device_capability
-  ON runtime_authorization_grants(device_capability_id, status, scope, created_at DESC);
 CREATE INDEX idx_interaction_runtime_auth_requests_device_capability
   ON interaction_runtime_authorization_requests(device_capability_id, interaction_id);
 
