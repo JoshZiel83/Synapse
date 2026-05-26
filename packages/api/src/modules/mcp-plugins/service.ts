@@ -139,7 +139,7 @@ type PluginCatalogRow = {
   item_display_name: string
   item_summary: string
   item_long_description: string
-  item_source_kind: "builtin" | "official" | "workspace" | "user" | "relay"
+  item_source_kind: "builtin" | "official" | "workspace" | "user" | "device"
   item_visibility: "public" | "workspace" | "private"
   item_tags: string[] | null
   item_is_active: boolean
@@ -155,7 +155,7 @@ type PluginCatalogRow = {
   version_metadata: unknown
   version_created_by_user_id: string | null
   version_created_at: string | null
-  spec_transport: "builtin" | "stdio" | "http" | "relay" | null
+  spec_transport: "builtin" | "stdio" | "http" | "device" | null
   spec_entry_point: string | null
   spec_tool_manifest: unknown
   spec_config_schema: unknown
@@ -1335,8 +1335,8 @@ async function ensureCatalogItem(
         input.displayName,
         input.description || "",
         input.longDescription || "",
-        input.transport === "relay"
-          ? "relay"
+        input.transport === "device"
+          ? "device"
           : input.isBuiltin
             ? "builtin"
             : "official",
@@ -1376,8 +1376,8 @@ async function ensureCatalogItem(
       input.description || "",
       input.longDescription || "",
       input.iconFileId || null,
-      input.transport === "relay"
-        ? "relay"
+      input.transport === "device"
+        ? "device"
         : input.isBuiltin
           ? "builtin"
           : "official",

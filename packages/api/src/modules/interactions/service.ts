@@ -2,6 +2,7 @@ import {
   CONVERSATION_PARTICIPANT_TYPE,
   INTERACTION_INPUT_QUESTION_TYPES,
   INTERACTION_REQUEST_KIND,
+  SUBJECT_KIND,
   textBlocks,
 } from "@synapse/shared"
 import {
@@ -1591,7 +1592,8 @@ function buildRuntimeAuthorizationRejectedNotice(
 
 function buildRuntimeAuthorizationApprovedNotice(
   interaction: InteractionRequestSummary
-) {  const resolverName = interaction.resolvedBy?.name || "An authorized user"
+) {
+  const resolverName = interaction.resolvedBy?.name || "An authorized user"
   const deviceName =
     interaction.runtimeAuthorization?.deviceDisplayName || "the device"
   const approvedPreset =
@@ -1644,8 +1646,12 @@ async function maybeAutoRetryAfterApproval(args: {
   sourceRequestArgs?: Record<string, unknown>
   sourceRetryNonce?: string
   createdGrant?: RuntimeAuthorizationGrantRecord
+  requesterActorId?: string
+  resolverWorkspaceMemberId?: string
 }) {
-  if (args.interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION) {
+  if (
+    args.interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
+  ) {
     return null
   }
   const runtimeAuth = args.interaction.runtimeAuthorization
@@ -1653,6 +1659,19 @@ async function maybeAutoRetryAfterApproval(args: {
   if (!args.createdGrant) return null
   if (!args.sourceRetryNonce) return null
   if (!args.sourceRequestArgs) return null
+  // Resolve the actor's subject id so the audit row points back to the
+  // principal who originally triggered the dispatch (NOT the approver —
+  // they're recorded separately on the grant). Drops to null if we can't
+  // resolve; the operation row still records principalKind='actor'.
+  let principalSubjectId: string | null = null
+  if (args.requesterActorId) {
+    const { upsertAccessSubject } =
+      await import("../access/subject-registry.js")
+    principalSubjectId = await upsertAccessSubject(db, {
+      kind: SUBJECT_KIND.ACTOR,
+      actorId: args.requesterActorId,
+    }).catch(() => null)
+  }
   // The visible tool name (== device-side stable_key) is what the
   // dispatcher uses as params.name when calling /mcp tools/call.
   const visibleToolName =
@@ -1663,6 +1682,14 @@ async function maybeAutoRetryAfterApproval(args: {
     sourceRequestArgs: args.sourceRequestArgs,
     sourceRetryNonce: args.sourceRetryNonce,
     approvedGrant: args.createdGrant,
+    audit: {
+      workspaceId: args.interaction.workspaceId,
+      conversationId: args.interaction.conversationId,
+      principalKind: "actor",
+      principalSubjectId,
+      initiatedBySessionId: null,
+      initiatedByWorkspaceMemberId: args.resolverWorkspaceMemberId ?? null,
+    },
   }).catch((err) => ({
     ok: false as const,
     errorCode: "runtime_constraint",
@@ -1705,7 +1732,8 @@ async function maybeAutoRetryAfterApproval(args: {
 
 function buildRuntimeAuthorizationSupersededNotice(
   interaction: InteractionRequestSummary
-) {  const summary =
+) {
+  const summary =
     "This authorization request was superseded by a newer user message."
   const messageBlocks = textBlocks(summary)
 
@@ -3454,10 +3482,12 @@ export async function resolveInteractionRequest(
       // interactions (these fields are only populated when locked.kind is
       // RUNTIME_AUTHORIZATION).
       lockedSourceRequestArgs:
-        locked.source_request_args && typeof locked.source_request_args === "object"
+        locked.source_request_args &&
+        typeof locked.source_request_args === "object"
           ? (locked.source_request_args as Record<string, unknown>)
           : undefined,
       lockedSourceRetryNonce: locked.source_retry_nonce ?? undefined,
+      lockedRequesterActorId: locked.requester_actor_id ?? undefined,
     }
   })
 
@@ -3521,6 +3551,8 @@ export async function resolveInteractionRequest(
       sourceRequestArgs: result.lockedSourceRequestArgs,
       sourceRetryNonce: result.lockedSourceRetryNonce,
       createdGrant: result.createdGrant,
+      requesterActorId: result.lockedRequesterActorId,
+      resolverWorkspaceMemberId: params.resolverWorkspaceMemberId,
     })
     await completeToolCallTask(
       interaction.taskId,

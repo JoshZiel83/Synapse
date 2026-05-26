@@ -89,26 +89,39 @@ export function createInMemoryMcpHost(
     opts.serverPublicKeys ? Array.from(opts.serverPublicKeys.entries()) : []
   )
   // Server-assigned catalog target IDs, populated by setCatalogTargetIds()
-  // after each device.catalog.sync ack. Keyed by tool name (the same name
-  // dispatchCallTool resolves on) so the envelope target check is O(1).
+  // after each device.catalog.sync ack. Keyed by the server-assigned
+  // device_tool_id (a globally unique UUID) so multiple exposures that
+  // happen to ship same-named tools (search/read/bash) don't collide on
+  // dispatch. The value carries the composite (exposure_stable_key,
+  // tool_name) that maps back to the local provider's tool definition.
   const toolTargetIndex = new Map<
     string,
     {
-      device_exposure_id: string
-      device_tool_id: string
-      device_tool_revision_id: string
+      exposureStableKey: string
+      toolName: string
+      deviceExposureId: string
+      deviceToolRevisionId: string
     }
   >()
   let server: Server | null = null
   let listenPort = 0
 
+  function compositeToolKey(exposureStableKey: string, toolName: string) {
+    return `${exposureStableKey}::${toolName}`
+  }
+
   async function buildToolIndex(): Promise<Map<string, ToolEntry>> {
+    // Keyed by `${exposure_stable_key}::${tool_name}` composite. Without
+    // the exposure component, two providers (e.g. a filesystem mcp_plugin
+    // and a code-search mcp_plugin) that both register `tool.name = "read"`
+    // would clobber each other — the last writer would silently win and
+    // every dispatch would route to it regardless of the envelope target.
     const index = new Map<string, ToolEntry>()
     for (const provider of providers.values()) {
       const exposures = await provider.describeExposures()
       for (const exposure of exposures) {
         for (const tool of exposure.tools) {
-          index.set(tool.name, {
+          index.set(compositeToolKey(exposure.stable_key, tool.name), {
             exposureKey: exposure.stable_key,
             tool,
             provider,
@@ -195,46 +208,95 @@ export function createInMemoryMcpHost(
           _meta: { synapse_error: synapseError },
         }
       }
-      // Envelope target check: the signature proves the SERVER signed an
-      // envelope for SOME tool, but says nothing about whether that tool
-      // lives on this device. Cross-reference the envelope's target ids
-      // against the assigned-id map we got from device.catalog.sync. A
-      // mismatch means either we're being asked to run a peer's tool or
-      // the catalog hasn't synced yet — in both cases we refuse.
-      if (toolTargetIndex.size > 0) {
-        const expected = toolTargetIndex.get(params.name)
-        if (!expected) {
-          const synapseError: SynapseError = {
-            code: "invalid_request",
-            message: `tool ${params.name} is not in this device's synced catalog`,
-          }
-          return {
-            content: [{ type: "text", text: synapseError.message }],
-            isError: true,
-            _meta: { synapse_error: synapseError },
-          }
+      // Envelope target check (fail-closed). The signature proves the
+      // server signed an envelope for SOME tool — it says nothing about
+      // whether that tool lives on THIS device. We require an authoritative
+      // catalog-sync ack to have populated toolTargetIndex; if it hasn't
+      // (e.g. the WSS came up but device.catalog.sync hasn't completed
+      // yet), refuse rather than wave the dispatch through.
+      if (toolTargetIndex.size === 0) {
+        const synapseError: SynapseError = {
+          code: "permission_denied",
+          message:
+            "tools/call rejected: device catalog not yet synced — runtime will reject every envelope until device.catalog.sync ack populates the target index",
         }
-        if (
-          envelope.device_exposure_id !== expected.device_exposure_id ||
-          envelope.device_tool_id !== expected.device_tool_id ||
-          envelope.device_tool_revision_id !==
-            expected.device_tool_revision_id
-        ) {
-          const synapseError: SynapseError = {
-            code: "permission_denied",
-            message:
-              "envelope target ids (capability/exposure/tool/revision) do not match this device's catalog",
-          }
-          return {
-            content: [{ type: "text", text: synapseError.message }],
-            isError: true,
-            _meta: { synapse_error: synapseError },
-          }
+        return {
+          content: [{ type: "text", text: synapseError.message }],
+          isError: true,
+          _meta: { synapse_error: synapseError },
+        }
+      }
+      // Route by envelope.device_tool_id — a globally unique server-issued
+      // UUID. Bare params.name routing collapses two providers that ship
+      // same-named tools (search/read/bash) so we can't use it as the
+      // primary key.
+      const expectedTarget = toolTargetIndex.get(envelope.device_tool_id)
+      if (!expectedTarget) {
+        const synapseError: SynapseError = {
+          code: "permission_denied",
+          message: `envelope device_tool_id ${envelope.device_tool_id} is not in this device's synced catalog`,
+        }
+        return {
+          content: [{ type: "text", text: synapseError.message }],
+          isError: true,
+          _meta: { synapse_error: synapseError },
+        }
+      }
+      if (
+        envelope.device_exposure_id !== expectedTarget.deviceExposureId ||
+        envelope.device_tool_revision_id !== expectedTarget.deviceToolRevisionId
+      ) {
+        const synapseError: SynapseError = {
+          code: "permission_denied",
+          message:
+            "envelope target ids (exposure/tool/revision) do not match this device's catalog",
+        }
+        return {
+          content: [{ type: "text", text: synapseError.message }],
+          isError: true,
+          _meta: { synapse_error: synapseError },
+        }
+      }
+      // Defense in depth: the MCP `params.name` the caller supplied must
+      // match the tool the envelope actually targets. Without this check a
+      // forged tools/call could carry a valid envelope for tool A but
+      // params.name=B and we'd resolve A in the target index but call B's
+      // provider below.
+      if (params.name !== expectedTarget.toolName) {
+        const synapseError: SynapseError = {
+          code: "invalid_request",
+          message: `params.name (${params.name}) does not match the envelope's targeted tool (${expectedTarget.toolName})`,
+        }
+        return {
+          content: [{ type: "text", text: synapseError.message }],
+          isError: true,
+          _meta: { synapse_error: synapseError },
         }
       }
     }
     const index = await buildToolIndex()
-    const entry = index.get(params.name)
+    // Route by the same composite (exposure_stable_key, tool_name) that the
+    // local index is keyed under. When envelope verification is on we have
+    // expectedTarget; otherwise (skeleton/test runs) fall back to a
+    // single-exposure scan over params.name (unique within v3-skeleton
+    // catalogs that ship one builtin per provider).
+    let entry: ToolEntry | undefined
+    if (opts.envelopeVerifier && envelope) {
+      const expectedTarget = toolTargetIndex.get(envelope.device_tool_id)!
+      entry = index.get(
+        compositeToolKey(
+          expectedTarget.exposureStableKey,
+          expectedTarget.toolName
+        )
+      )
+    } else {
+      for (const candidate of index.values()) {
+        if (candidate.tool.name === params.name) {
+          entry = candidate
+          break
+        }
+      }
+    }
     if (!entry) {
       const synapseError: SynapseError = {
         code: "invalid_request",
@@ -287,7 +349,11 @@ export function createInMemoryMcpHost(
     id?: string | number | null
     method?: unknown
     params?: unknown
-  }): Promise<{ id: string | number | null; result?: unknown; error?: { code: number; message: string } }> {
+  }): Promise<{
+    id: string | number | null
+    result?: unknown
+    error?: { code: number; message: string }
+  }> {
     const id = (body.id ?? null) as string | number | null
     if (typeof body.method !== "string") {
       return { id, error: { code: -32600, message: "method required" } }
@@ -312,7 +378,11 @@ export function createInMemoryMcpHost(
       case "tools/call": {
         const params =
           body.params && typeof body.params === "object"
-            ? (body.params as { name: unknown; arguments?: unknown; _meta?: unknown })
+            ? (body.params as {
+                name: unknown
+                arguments?: unknown
+                _meta?: unknown
+              })
             : { name: undefined }
         const result = await dispatchCallTool(params)
         return { id, result }
@@ -334,7 +404,9 @@ export function createInMemoryMcpHost(
       if (req.method !== "POST" || req.url !== "/mcp") {
         res.statusCode = 404
         res.setHeader("content-type", "application/json")
-        res.end(JSON.stringify({ error: { code: -32601, message: "not found" } }))
+        res.end(
+          JSON.stringify({ error: { code: -32601, message: "not found" } })
+        )
         return
       }
       const chunks: Buffer[] = []
@@ -357,7 +429,11 @@ export function createInMemoryMcpHost(
             return
           }
           const envelope = await handleJsonRpc(
-            body as { id?: string | number | null; method?: unknown; params?: unknown }
+            body as {
+              id?: string | number | null
+              method?: unknown
+              params?: unknown
+            }
           )
           res.statusCode = 200
           res.setHeader("content-type", "application/json")
@@ -387,9 +463,7 @@ export function createInMemoryMcpHost(
 
   async function stopServer(): Promise<void> {
     if (!server) return
-    await new Promise<void>((resolve) =>
-      server!.close(() => resolve())
-    )
+    await new Promise<void>((resolve) => server!.close(() => resolve()))
     server = null
     listenPort = 0
   }
@@ -412,12 +486,16 @@ export function createInMemoryMcpHost(
       // Stale tools should disappear from the target index immediately
       // so a dispatch for a removed tool fails closed.
       toolTargetIndex.clear()
-      for (const exposure of Object.values(map)) {
+      for (const [exposureStableKey, exposure] of Object.entries(map)) {
         for (const [toolName, ids] of Object.entries(exposure.tools)) {
-          toolTargetIndex.set(toolName, {
-            device_exposure_id: exposure.device_exposure_id,
-            device_tool_id: ids.device_tool_id,
-            device_tool_revision_id: ids.device_tool_revision_id,
+          // Keyed by device_tool_id (globally unique server UUID), not
+          // toolName — two exposures with same-named tools must each
+          // route correctly.
+          toolTargetIndex.set(ids.device_tool_id, {
+            exposureStableKey,
+            toolName,
+            deviceExposureId: exposure.device_exposure_id,
+            deviceToolRevisionId: ids.device_tool_revision_id,
           })
         }
       }
@@ -444,7 +522,9 @@ export function createInMemoryMcpHost(
  * `_meta.synapse_error` field of the MCP CallToolResult so the API side can
  * recover the v3 device-side error code (§4.5).
  */
-export function toolErrorResult(err: SynapseError): CatalogToolInvocationResult {
+export function toolErrorResult(
+  err: SynapseError
+): CatalogToolInvocationResult {
   return {
     content: [{ type: "text" as const, text: err.message }],
     isError: true,

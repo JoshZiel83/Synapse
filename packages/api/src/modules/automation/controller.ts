@@ -294,7 +294,7 @@ export default async function automationController(app: FastifyInstance) {
 
       const query = request.query as {
         status?: "active" | "deprecated" | "disabled" | "archived"
-        providerKind?: "relay" | "webhook" | "internal" | "integration"
+        providerKind?: "device" | "webhook" | "internal" | "integration"
         providerRef?: string
         sourceKey?: string
       }

@@ -72,6 +72,15 @@ function buildRelayGrantSubjectRef(input: {
       throw new Error(
         "actor_in_conversation scope is not supported by the legacy relay-authorizations module; use the device path"
       )
+    case "remote_agent":
+      // PR #29 added remote_agent to the grant scope enum. Subject-id
+      // resolution for remote_agent grants happens in the device path
+      // (createRuntimeAuthorizationGrant uses upsertAccessSubject with
+      // SUBJECT_KIND.REMOTE_AGENT directly); the legacy helper has no
+      // remoteAgentId in its input so it can't synthesize a subject.
+      throw new Error(
+        "remote_agent scope is not supported by the legacy relay-authorizations helper; use the device path with createRuntimeAuthorizationGrant({ subjectId })"
+      )
   }
 }
 
@@ -627,11 +636,11 @@ export function runtimeAuthorizationGrantMatches(
       // write grant satisfies a read request without re-prompting.
       return Boolean(
         grant.cua &&
-          requestedAction.cua &&
-          sharedCuaPolicyAllows(
-            { access: grant.cua.access },
-            requestedAction.cua.access
-          )
+        requestedAction.cua &&
+        sharedCuaPolicyAllows(
+          { access: grant.cua.access },
+          requestedAction.cua.access
+        )
       )
     case "browser":
       return browserPolicyMatches(grant, requestedAction)

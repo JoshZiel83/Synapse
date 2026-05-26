@@ -25,11 +25,11 @@ CREATE TYPE resource_access_binding_resource_type AS ENUM ('installed_skill', 'p
 CREATE TYPE realtime_event_outbox_status AS ENUM ('pending', 'processing', 'dispatched', 'failed');
 CREATE TYPE catalog_categories_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
 CREATE TYPE catalog_items_item_kind AS ENUM ('actor_template', 'skill_package', 'plugin_package');
-CREATE TYPE catalog_items_source_kind AS ENUM ('builtin', 'official', 'workspace', 'user', 'relay');
+CREATE TYPE catalog_items_source_kind AS ENUM ('builtin', 'official', 'workspace', 'user', 'device');
 CREATE TYPE catalog_items_visibility AS ENUM ('public', 'workspace', 'private');
 CREATE TYPE catalog_versions_status AS ENUM ('draft', 'active', 'deprecated', 'archived');
 CREATE TYPE catalog_version_files_file_role AS ENUM ('document', 'reference', 'script', 'image', 'json', 'binary');
-CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 'http', 'relay');
+CREATE TYPE plugin_package_version_specs_transport AS ENUM ('builtin', 'stdio', 'http', 'device');
 CREATE TYPE plugin_package_version_specs_default_mount_scope AS ENUM ('workspace', 'conversation', 'actor', 'workspace_member');
 CREATE TYPE plugin_package_version_specs_default_reuse_scope AS ENUM ('turn', 'session', 'workspace', 'conversation', 'actor');
 CREATE TYPE actors_role AS ENUM ('secretary', 'manager', 'specialist', 'reviewer', 'archivist', 'receptionist', 'assistant');
@@ -109,15 +109,15 @@ CREATE TYPE session_wakeups_status AS ENUM ('pending', 'attached', 'processed', 
 CREATE TYPE automation_rules_category AS ENUM ('schedule', 'event_subscription');
 CREATE TYPE automation_rules_status AS ENUM ('active', 'paused', 'error', 'archived', 'completed', 'expired');
 CREATE TYPE automation_policies_completion_status AS ENUM ('completed', 'archived');
-CREATE TYPE automation_event_sources_provider_kind AS ENUM ('relay', 'webhook', 'internal', 'integration');
+CREATE TYPE automation_event_sources_provider_kind AS ENUM ('device', 'webhook', 'internal', 'integration');
 CREATE TYPE automation_event_sources_status AS ENUM ('active', 'deprecated', 'disabled', 'archived');
 CREATE TYPE automation_event_sources_created_by_kind AS ENUM ('workspace_member', 'session', 'system');
 CREATE TYPE automation_triggers_trigger_kind AS ENUM ('schedule', 'event');
-CREATE TYPE automation_triggers_source_kind AS ENUM ('clock', 'relay', 'webhook', 'internal', 'integration');
+CREATE TYPE automation_triggers_source_kind AS ENUM ('clock', 'device', 'webhook', 'internal', 'integration');
 CREATE TYPE automation_triggers_schedule_kind AS ENUM ('cron', 'at', 'interval');
 CREATE TYPE automation_deliveries_target_policy AS ENUM ('all_members', 'specified_members');
 CREATE TYPE automation_webhook_endpoints_status AS ENUM ('active', 'disabled', 'archived');
-CREATE TYPE automation_occurrences_source_kind AS ENUM ('clock', 'relay', 'webhook', 'internal', 'integration');
+CREATE TYPE automation_occurrences_source_kind AS ENUM ('clock', 'device', 'webhook', 'internal', 'integration');
 CREATE TYPE automation_executions_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
 CREATE TYPE automation_execution_targets_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
 CREATE TYPE memory_spaces_space_type AS ENUM ('workspace_shared', 'conversation_shared', 'actor_private', 'participant_private', 'user_private');
@@ -156,7 +156,7 @@ CREATE TYPE plugin_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'fol
 CREATE TYPE interaction_requests_kind AS ENUM ('user_input', 'plan_approval', 'runtime_authorization');
 CREATE TYPE interaction_requests_status AS ENUM ('pending', 'answered', 'approved', 'rejected', 'cancelled', 'expired', 'superseded');
 CREATE TYPE runtime_authorization_request_mode AS ENUM ('background', 'blocking');
-CREATE TYPE runtime_authorization_grants_scope AS ENUM ('once', 'actor', 'conversation', 'actor_in_conversation', 'workspace');
+CREATE TYPE runtime_authorization_grants_scope AS ENUM ('once', 'actor', 'conversation', 'actor_in_conversation', 'remote_agent', 'workspace');
 CREATE TYPE runtime_authorization_grants_retention AS ENUM ('consume_once', 'until_revoked');
 CREATE TYPE runtime_authorization_grants_status AS ENUM ('active', 'consumed', 'revoked', 'superseded');
 
@@ -2229,7 +2229,7 @@ CREATE TABLE automation_event_sources (
       provider_kind = 'webhook' AND
       webhook_endpoint_id IS NOT NULL
     ) OR (
-      provider_kind IN ('relay', 'internal', 'integration') AND
+      provider_kind IN ('device', 'internal', 'integration') AND
       webhook_endpoint_id IS NULL
     )
   )
@@ -2284,7 +2284,7 @@ CREATE TABLE automation_triggers (
   updated_at TIMESTAMPTZ DEFAULT NOW(),
   CHECK (
     (trigger_kind = 'schedule' AND source_kind = 'clock' AND event_source_id IS NULL) OR
-    (trigger_kind = 'event' AND source_kind IN ('relay', 'webhook', 'internal', 'integration') AND event_source_id IS NOT NULL)
+    (trigger_kind = 'event' AND source_kind IN ('device', 'webhook', 'internal', 'integration') AND event_source_id IS NOT NULL)
   ),
   CHECK (
     (trigger_kind = 'schedule' AND schedule_kind IS NOT NULL) OR

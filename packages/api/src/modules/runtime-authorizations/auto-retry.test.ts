@@ -17,9 +17,8 @@ test("auto-retry helper is exported with the contract the approval flow expects"
 })
 
 test("auto-retry helper fails closed when the device tool isn't in the catalog", async () => {
-  const { autoDispatchRuntimeAuthorizationRetry } = await import(
-    "./auto-retry.js"
-  )
+  const { autoDispatchRuntimeAuthorizationRetry } =
+    await import("./auto-retry.js")
   const result = await autoDispatchRuntimeAuthorizationRetry({
     // Random UUID that won't resolve in resolveAutoRetryTarget — the
     // helper should return ok:false rather than throw or paper over the
@@ -38,6 +37,14 @@ test("auto-retry helper fails closed when the device tool isn't in the catalog",
     } as unknown as Parameters<
       typeof autoDispatchRuntimeAuthorizationRetry
     >[0]["approvedGrant"],
+    audit: {
+      workspaceId: "00000000-0000-0000-0000-000000000000",
+      conversationId: null,
+      principalKind: "actor",
+      principalSubjectId: null,
+      initiatedBySessionId: null,
+      initiatedByWorkspaceMemberId: null,
+    },
   }).catch((err) => ({
     ok: false as const,
     errorCode: "runtime_constraint",

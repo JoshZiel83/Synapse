@@ -18,6 +18,13 @@ import { canonicalizeEnvelopePayload } from "@synapse/device-protocol"
 import { db } from "../../infrastructure/database/kysely.js"
 import { dispatchSyncTool } from "../devices/dispatch.js"
 import { signEnvelopeForDispatch } from "../devices/envelope-signer.js"
+import { getDeviceTunnelRegistry } from "../devices/tunnel-registry.js"
+import {
+  beginDeviceOperation,
+  completeDeviceOperation,
+  RevisionDriftError,
+  type OperationPrincipalKind,
+} from "../devices/operations.js"
 import {
   consumeRuntimeAuthorizationGrant,
   type RuntimeAuthorizationGrantRecord,
@@ -42,6 +49,7 @@ async function resolveAutoRetryTarget(args: {
   deviceCapabilityId: string
   visibleToolName: string
 }): Promise<{
+  deviceId: string
   deviceServiceId: string
   deviceExposureId: string
   deviceToolId: string
@@ -50,6 +58,7 @@ async function resolveAutoRetryTarget(args: {
   const row = await db
     .selectFrom("device_capabilities as dc")
     .innerJoin("device_exposures as dx", "dx.id", "dc.exposure_id")
+    .innerJoin("devices as d", "d.id", "dx.device_id")
     .innerJoin("device_tools as dt", "dt.exposure_id", "dx.id")
     .innerJoin(
       "device_tool_revisions as dtr",
@@ -57,6 +66,7 @@ async function resolveAutoRetryTarget(args: {
       "dt.latest_revision_id"
     )
     .select([
+      "d.id as device_id",
       "dx.service_id as device_service_id",
       "dx.id as device_exposure_id",
       "dt.id as device_tool_id",
@@ -69,6 +79,7 @@ async function resolveAutoRetryTarget(args: {
     .executeTakeFirst()
   if (!row) return null
   return {
+    deviceId: row.device_id as string,
     deviceServiceId: row.device_service_id as string,
     deviceExposureId: row.device_exposure_id as string,
     deviceToolId: row.device_tool_id as string,
@@ -91,6 +102,18 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
   sourceRequestArgs: Record<string, unknown>
   sourceRetryNonce: string
   approvedGrant: RuntimeAuthorizationGrantRecord
+  /** Audit context — required to thread device_operations + attempts so
+   * the dashboard still sees the auto-retry dispatch in its audit trail.
+   * Without these the dispatch happens "outside" the audit log and any
+   * downstream investigation has no operation row to anchor on. */
+  audit: {
+    workspaceId: string
+    conversationId: string | null
+    principalKind: OperationPrincipalKind
+    principalSubjectId: string | null
+    initiatedBySessionId: string | null
+    initiatedByWorkspaceMemberId: string | null
+  }
 }): Promise<AutoRetryDispatchResult> {
   const target = await resolveAutoRetryTarget({
     deviceCapabilityId: args.deviceCapabilityId,
@@ -137,8 +160,7 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
     commandline: args.approvedGrant.commandline
       ? {
           executor: args.approvedGrant.commandline.executor,
-          command_match_type:
-            args.approvedGrant.commandline.commandMatchType,
+          command_match_type: args.approvedGrant.commandline.commandMatchType,
           command_text: args.approvedGrant.commandline.commandText,
           working_directory: args.approvedGrant.commandline.workingDirectory,
         }
@@ -174,11 +196,60 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
     }
   }
 
+  // Open a device_operations + first device_operation_attempts row pair
+  // BEFORE dispatch so the auto-retry shows up in the same audit trail the
+  // normal projection executor produces. Without this the user-approved
+  // re-dispatch has no operation row, and dashboards / downstream events
+  // can't tie the resulting side-effect back to the interaction.
+  let operationId: string
+  let attemptId: string
+  try {
+    const begin = await beginDeviceOperation({
+      workspaceId: args.audit.workspaceId,
+      conversationId: args.audit.conversationId,
+      envelope,
+      args: args.sourceRequestArgs,
+      toolName: args.visibleToolName,
+      deviceId: target.deviceId,
+      deviceServiceId: target.deviceServiceId,
+      tunnelInternalUrl:
+        getDeviceTunnelRegistry().resolve(target.deviceServiceId)
+          ?.internalUrl ?? null,
+      principalKind: args.audit.principalKind,
+      principalSubjectId: args.audit.principalSubjectId,
+      initiatedByWorkspaceMemberId: args.audit.initiatedByWorkspaceMemberId,
+      initiatedBySessionId: args.audit.initiatedBySessionId,
+    })
+    operationId = begin.operationId
+    attemptId = begin.attemptId
+  } catch (err) {
+    if (err instanceof RevisionDriftError) {
+      return {
+        ok: false,
+        errorCode: "tool_definition_changed",
+        errorMessage: err.message,
+      }
+    }
+    return {
+      ok: false,
+      errorCode: "runtime_constraint",
+      errorMessage: `device_operations insert failed: ${(err as Error).message}`,
+    }
+  }
+
   const dispatchResult = await dispatchSyncTool({
     deviceServiceId: target.deviceServiceId,
     envelope,
     args: args.sourceRequestArgs,
     toolName: args.visibleToolName,
+  })
+  await completeDeviceOperation({
+    operationId,
+    attemptId,
+    ok: dispatchResult.ok,
+    error: dispatchResult.error,
+  }).catch(() => {
+    /* operation-complete logging is best-effort */
   })
 
   // Consume `once` grants we used on success — without this, the auto-retry

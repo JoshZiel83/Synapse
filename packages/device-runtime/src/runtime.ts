@@ -233,6 +233,21 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
             throw err
           }
         }
+        // Order matters here. We MUST push the catalog (and absorb the
+        // server-assigned IDs into the MCP host's target index) BEFORE
+        // calling device.tunnel.up — the latter writes
+        // DeviceTunnelRegistry, after which dispatchSyncTool can route to
+        // us. If we registered the tunnel first there's a window where
+        // the device is reachable but the envelope target index is
+        // empty, and the mcp-host fail-closed gate would reject every
+        // dispatch until catalog sync raced through.
+        try {
+          await this.pushCatalog()
+        } catch (err) {
+          logger.error("initial catalog sync failed", {
+            error: (err as Error).message,
+          })
+        }
         // Announce our tunnel internal URL so the API's DeviceTunnelRegistry
         // can route dispatchSyncTool to us. Without this, every device tool
         // call returns no_tunnel_endpoint.
@@ -249,17 +264,6 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
               error: (err as Error).message,
             })
           }
-        }
-        // Push the initial catalog AFTER hello-ack so the socket is
-        // guaranteed open + authenticated. The old setImmediate(pushCatalog)
-        // raced the hello round-trip and silently dropped the notification
-        // when socket.readyState !== OPEN.
-        try {
-          await this.pushCatalog()
-        } catch (err) {
-          logger.error("initial catalog sync failed", {
-            error: (err as Error).message,
-          })
         }
       },
       onStatus: (status) => this.updateStatus(status),
@@ -290,8 +294,9 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
 
   private absorbAssignedIds(ack: unknown) {
     if (!ack || typeof ack !== "object") return
-    const assigned = (ack as { assignedIds?: unknown; assigned_ids?: unknown })
-      .assignedIds ?? (ack as { assigned_ids?: unknown }).assigned_ids
+    const assigned =
+      (ack as { assignedIds?: unknown; assigned_ids?: unknown }).assignedIds ??
+      (ack as { assigned_ids?: unknown }).assigned_ids
     if (!assigned || typeof assigned !== "object") return
     this.mcpHost?.setCatalogTargetIds(
       assigned as Parameters<InMemoryMcpHostHandle["setCatalogTargetIds"]>[0]

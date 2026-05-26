@@ -678,6 +678,7 @@
     ACTOR: "actor",
     CONVERSATION: "conversation",
     ACTOR_IN_CONVERSATION: "actor_in_conversation",
+    REMOTE_AGENT: "remote_agent",
     WORKSPACE: "workspace"
   };
   var RUNTIME_AUTHORIZATION_GRANT_SCOPES = [
@@ -685,6 +686,7 @@
     RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR,
     RUNTIME_AUTHORIZATION_GRANT_SCOPE.CONVERSATION,
     RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR_IN_CONVERSATION,
+    RUNTIME_AUTHORIZATION_GRANT_SCOPE.REMOTE_AGENT,
     RUNTIME_AUTHORIZATION_GRANT_SCOPE.WORKSPACE
   ];
 
@@ -1421,33 +1423,33 @@
   ];
 
   // ../shared/dist/automation/event-definitions/relay.js
-  function relaySourceLabel(context) {
-    return context.providerLabel?.trim() || context.providerRef?.trim() || "Relay Device";
+  function deviceSourceLabel(context) {
+    return context.providerLabel?.trim() || context.providerRef?.trim() || "Device";
   }
-  function relaySourceId(context) {
-    return context.providerRef?.trim() || "unknown-relay";
+  function deviceSourceId(context) {
+    return context.providerRef?.trim() || "unknown-device";
   }
   function readString2(value) {
     return typeof value === "string" && value.trim() ? value.trim() : null;
   }
-  function relayOccurrenceLabel(context) {
-    return readString2(context.payload.displayName) || readString2(context.sourceSnapshot.relayDisplayName) || readString2(context.sourceSnapshot.displayName) || readString2(context.sourceName) || readString2(context.providerRef) || "Relay Device";
+  function deviceOccurrenceLabel(context) {
+    return readString2(context.payload.displayName) || readString2(context.sourceSnapshot.deviceDisplayName) || readString2(context.sourceSnapshot.displayName) || readString2(context.sourceName) || readString2(context.providerRef) || "Device";
   }
-  function relayOccurrenceId(context) {
-    return readString2(context.payload.deviceId) || readString2(context.sourceSnapshot.relayId) || readString2(context.sourceSnapshot.deviceId) || readString2(context.providerRef) || "unknown-relay";
+  function deviceOccurrenceId(context) {
+    return readString2(context.payload.deviceId) || readString2(context.sourceSnapshot.deviceId) || readString2(context.providerRef) || "unknown-device";
   }
-  var relayDeviceOnlineEventDefinition = {
-    definitionKey: "relay.device.online",
-    providerKind: "relay",
+  var deviceOnlineEventDefinition = {
+    definitionKey: "device.online",
+    providerKind: "device",
     managementMode: "system",
     buildSource: (context) => {
-      const label = relaySourceLabel(context);
-      const relayId = relaySourceId(context);
+      const label = deviceSourceLabel(context);
+      const deviceId = deviceSourceId(context);
       return {
-        sourceKey: "relay.device.online",
-        name: `Relay Online: ${label}`,
-        description: `Triggered when relay "${label}" (${relayId}) reconnects and is considered online.`,
-        recommendedUsage: `Use this when a workflow should resume only after relay "${label}" is reachable again, for example waking a session to retry device-specific work or notify operators that the device recovered.`,
+        sourceKey: "device.online",
+        name: `Device Online: ${label}`,
+        description: `Triggered when device "${label}" (${deviceId}) reconnects and is considered online.`,
+        recommendedUsage: `Use this when a workflow should resume only after device "${label}" is reachable again, for example waking a session to retry device-specific work or notify operators that the device recovered.`,
         payloadSchema: {
           type: "object",
           properties: {
@@ -1458,39 +1460,39 @@
           required: ["deviceId", "status"]
         },
         examplePayload: {
-          deviceId: relayId,
+          deviceId,
           displayName: label,
           status: "online"
         },
         metadata: {
-          managedBy: "relay_lifecycle",
-          definitionKey: "relay.device.online"
+          managedBy: "device_lifecycle",
+          definitionKey: "device.online"
         }
       };
     },
     buildOccurrenceDisplay: (context) => {
-      const label = relayOccurrenceLabel(context);
-      const relayId = relayOccurrenceId(context);
+      const label = deviceOccurrenceLabel(context);
+      const deviceId = deviceOccurrenceId(context);
       return {
         title: `${label} came online`,
         summary: "online",
-        description: `Relay "${label}" (${relayId}) reconnected and is considered online.`
+        description: `Device "${label}" (${deviceId}) reconnected and is considered online.`
       };
     }
   };
-  var relayDeviceOfflineEventDefinition = {
-    definitionKey: "relay.device.offline",
-    providerKind: "relay",
+  var deviceOfflineEventDefinition = {
+    definitionKey: "device.offline",
+    providerKind: "device",
     managementMode: "system",
     graceWindowMs: 6e4,
     buildSource: (context) => {
-      const label = relaySourceLabel(context);
-      const relayId = relaySourceId(context);
+      const label = deviceSourceLabel(context);
+      const deviceId = deviceSourceId(context);
       return {
-        sourceKey: "relay.device.offline",
-        name: `Relay Offline: ${label}`,
-        description: `Triggered when relay "${label}" (${relayId}) stays disconnected for at least one minute and is considered offline.`,
-        recommendedUsage: `Use this when a workflow should react to sustained device loss, for example waking a session to escalate, fail over, or inform humans that relay "${label}" is unavailable.`,
+        sourceKey: "device.offline",
+        name: `Device Offline: ${label}`,
+        description: `Triggered when device "${label}" (${deviceId}) stays disconnected for at least one minute and is considered offline.`,
+        recommendedUsage: `Use this when a workflow should react to sustained device loss, for example waking a session to escalate, fail over, or inform humans that device "${label}" is unavailable.`,
         payloadSchema: {
           type: "object",
           properties: {
@@ -1501,34 +1503,34 @@
           required: ["deviceId", "status"]
         },
         examplePayload: {
-          deviceId: relayId,
+          deviceId,
           displayName: label,
           status: "offline"
         },
         metadata: {
-          managedBy: "relay_lifecycle",
-          definitionKey: "relay.device.offline"
+          managedBy: "device_lifecycle",
+          definitionKey: "device.offline"
         }
       };
     },
     buildOccurrenceDisplay: (context) => {
-      const label = relayOccurrenceLabel(context);
-      const relayId = relayOccurrenceId(context);
+      const label = deviceOccurrenceLabel(context);
+      const deviceId = deviceOccurrenceId(context);
       return {
         title: `${label} went offline`,
         summary: "offline after 60s grace",
-        description: `Relay "${label}" (${relayId}) stayed disconnected for at least one minute and is considered offline.`
+        description: `Device "${label}" (${deviceId}) stayed disconnected for at least one minute and is considered offline.`
       };
     }
   };
-  var relayLifecycleEventDefinitions = [
-    relayDeviceOnlineEventDefinition,
-    relayDeviceOfflineEventDefinition
+  var deviceLifecycleEventDefinitions = [
+    deviceOnlineEventDefinition,
+    deviceOfflineEventDefinition
   ];
 
   // ../shared/dist/automation/event-definitions/index.js
   var automationEventDefinitions = [
-    ...relayLifecycleEventDefinitions,
+    ...deviceLifecycleEventDefinitions,
     ...integrationEventDefinitions
   ];
 

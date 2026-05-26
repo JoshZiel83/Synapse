@@ -8,9 +8,9 @@ const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
 const CURRENT_SCHEMA_VERSION =
-  "2026-05-26-device-runtime-v3-pr28-tunnel-path-token"
+  "2026-05-26-device-runtime-v3-pr29-purge-relay-remote-agent-scope"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "device runtime v3 PR #28: add device_services.tunnel_path_token (server-issued per-service tunnel binding)"
+  "device runtime v3 PR #29: rename 'relay' → 'device' in catalog_items_source_kind / plugin_package_version_specs_transport / automation_*_kind enums; add 'remote_agent' to runtime_authorization_grants_scope"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

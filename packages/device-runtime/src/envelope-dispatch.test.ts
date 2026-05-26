@@ -33,17 +33,24 @@ function makeEnvelope(
     ? R extends { grant_specs: infer G }
       ? G
       : never
-    : never
+    : never,
+  overrides?: Partial<{
+    device_capability_id: string
+    device_exposure_id: string
+    device_tool_id: string
+    device_tool_revision_id: string
+  }>
 ): OperationEnvelope {
   return signOperationEnvelope(
     {
       operation_id: randomUUID(),
       attempt_id: randomUUID(),
       device_runtime_session_id: randomUUID(),
-      device_capability_id: randomUUID(),
-      device_exposure_id: randomUUID(),
-      device_tool_id: randomUUID(),
-      device_tool_revision_id: randomUUID(),
+      device_capability_id: overrides?.device_capability_id ?? randomUUID(),
+      device_exposure_id: overrides?.device_exposure_id ?? randomUUID(),
+      device_tool_id: overrides?.device_tool_id ?? randomUUID(),
+      device_tool_revision_id:
+        overrides?.device_tool_revision_id ?? randomUUID(),
       input_hash: hashArguments(args),
       task_mode: "sync",
       runtime_authorization: {
@@ -57,6 +64,30 @@ function makeEnvelope(
     },
     signer.privPem
   )
+}
+
+/**
+ * Seed the host's toolTargetIndex with IDs that point at the bash builtin
+ * under the same exposure_stable_key the commandline builtin advertises.
+ * Without this, the fail-closed dispatch gate (WW1) rejects every envelope
+ * because the host has no proof the envelope targets a tool that lives on
+ * THIS device.
+ */
+function seedBashCatalogTargetIds(
+  host: ReturnType<typeof createInMemoryMcpHost>,
+  envelope: OperationEnvelope
+) {
+  host.setCatalogTargetIds({
+    "builtin/commandline": {
+      device_exposure_id: envelope.device_exposure_id,
+      tools: {
+        bash: {
+          device_tool_id: envelope.device_tool_id,
+          device_tool_revision_id: envelope.device_tool_revision_id,
+        },
+      },
+    },
+  })
 }
 
 async function callBash(
@@ -110,6 +141,7 @@ test("verified envelope with matching commandline grant runs bash", async () => 
         },
       },
     ])
+    seedBashCatalogTargetIds(host, envelope)
     const res = await callBash(host, envelope, args)
     assert.equal(res.result?.isError, false)
     assert.match(res.result?.content?.[0]?.text ?? "", /hi/)
@@ -155,6 +187,7 @@ test("envelope with no commandline grant is rejected", async () => {
         cua: { access: "write" },
       },
     ])
+    seedBashCatalogTargetIds(host, envelope)
     const res = await callBash(host, envelope, args)
     assert.equal(res.result?.isError, true)
     const synapseError = res.result?._meta?.["synapse_error"] as
@@ -162,6 +195,89 @@ test("envelope with no commandline grant is rejected", async () => {
       | undefined
     assert.equal(synapseError?.code, "permission_denied")
     assert.match(synapseError?.message ?? "", /commandline/)
+  } finally {
+    await host.stop()
+  }
+})
+
+test("envelope dispatch is rejected when catalog target index is empty (fail-closed)", async () => {
+  const signer = buildSigner()
+  const host = createInMemoryMcpHost({
+    envelopeVerifier: createInMemoryEnvelopeVerifier(),
+    serverPublicKeys: new Map([[signer.kid, signer.pubPem]]),
+  })
+  await host.start()
+  try {
+    await host.registerCatalog(createCommandlineBuiltin())
+    const args = { command: "ls" }
+    const envelope = makeEnvelope(signer, args, [
+      {
+        capability: "commandline",
+        commandline: {
+          executor: "bash",
+          command_match_type: "tool",
+          command_text: "ls",
+        },
+      },
+    ])
+    // Deliberately do NOT call setCatalogTargetIds — this exercises the
+    // window between WSS hello and the first device.catalog.sync ack.
+    const res = await callBash(host, envelope, args)
+    assert.equal(res.result?.isError, true)
+    const synapseError = res.result?._meta?.["synapse_error"] as
+      | { code: string; message: string }
+      | undefined
+    assert.equal(synapseError?.code, "permission_denied")
+    assert.match(synapseError?.message ?? "", /not yet synced/)
+  } finally {
+    await host.stop()
+  }
+})
+
+test("envelope with mismatched device_tool_id is rejected even when name matches", async () => {
+  const signer = buildSigner()
+  const host = createInMemoryMcpHost({
+    envelopeVerifier: createInMemoryEnvelopeVerifier(),
+    serverPublicKeys: new Map([[signer.kid, signer.pubPem]]),
+  })
+  await host.start()
+  try {
+    await host.registerCatalog(createCommandlineBuiltin())
+    const args = { command: "ls" }
+    const envelope = makeEnvelope(signer, args, [
+      {
+        capability: "commandline",
+        commandline: {
+          executor: "bash",
+          command_match_type: "tool",
+          command_text: "ls",
+        },
+      },
+    ])
+    // Seed the target index with a DIFFERENT device_tool_id than the
+    // envelope carries — this simulates a forged/misrouted envelope
+    // targeting a tool that doesn't live on this device.
+    host.setCatalogTargetIds({
+      "builtin/commandline": {
+        device_exposure_id: randomUUID(),
+        tools: {
+          bash: {
+            device_tool_id: randomUUID(),
+            device_tool_revision_id: randomUUID(),
+          },
+        },
+      },
+    })
+    const res = await callBash(host, envelope, args)
+    assert.equal(res.result?.isError, true)
+    const synapseError = res.result?._meta?.["synapse_error"] as
+      | { code: string; message: string }
+      | undefined
+    assert.equal(synapseError?.code, "permission_denied")
+    assert.match(
+      synapseError?.message ?? "",
+      /not in this device's synced catalog/
+    )
   } finally {
     await host.stop()
   }

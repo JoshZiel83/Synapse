@@ -127,12 +127,14 @@ export const DEVICE_PAIRING_STATUSES = [
 export type DevicePairingStatus = (typeof DEVICE_PAIRING_STATUSES)[number]
 
 // Runtime authorization grant. Scope set extended with actor_in_conversation
-// in v3 (see §4.2).
+// in v3 (see §4.2); remote_agent added so bridged remote agents can hold
+// device-capability grants in their own subject-scoped row.
 export const RUNTIME_AUTHORIZATION_GRANT_SCOPES = [
   "once",
   "actor",
   "conversation",
   "actor_in_conversation",
+  "remote_agent",
   "workspace",
 ] as const
 export type RuntimeAuthorizationGrantScope =

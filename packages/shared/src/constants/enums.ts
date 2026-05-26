@@ -766,6 +766,7 @@ export const RUNTIME_AUTHORIZATION_GRANT_SCOPE = {
   ACTOR: "actor",
   CONVERSATION: "conversation",
   ACTOR_IN_CONVERSATION: "actor_in_conversation",
+  REMOTE_AGENT: "remote_agent",
   WORKSPACE: "workspace",
 } as const
 export const RUNTIME_AUTHORIZATION_GRANT_SCOPES = [
@@ -773,6 +774,7 @@ export const RUNTIME_AUTHORIZATION_GRANT_SCOPES = [
   RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR,
   RUNTIME_AUTHORIZATION_GRANT_SCOPE.CONVERSATION,
   RUNTIME_AUTHORIZATION_GRANT_SCOPE.ACTOR_IN_CONVERSATION,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPE.REMOTE_AGENT,
   RUNTIME_AUTHORIZATION_GRANT_SCOPE.WORKSPACE,
 ] as const
 export const RUNTIME_AUTHORIZATION_GRANT_RETENTIONS = [
@@ -826,7 +828,7 @@ export const RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES = [
 export const AUTOMATION_TRIGGER_KINDS = ["schedule", "event"] as const
 export const AUTOMATION_TRIGGER_SOURCE_KINDS = [
   "clock",
-  "relay",
+  "device",
   "webhook",
   "internal",
   "integration",
@@ -857,7 +859,7 @@ export const AUTOMATION_INTEGRATION_TARGET_KINDS = [
   "project",
 ] as const
 export const AUTOMATION_EVENT_SOURCE_PROVIDER_KINDS = [
-  "relay",
+  "device",
   "webhook",
   "internal",
   "integration",

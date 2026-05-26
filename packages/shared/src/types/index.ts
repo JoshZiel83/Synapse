@@ -576,12 +576,12 @@ export type AutomationCreatorKind = "workspace_member" | "session" | "system"
 export type AutomationTriggerKind = "schedule" | "event"
 export type AutomationSourceKind =
   | "clock"
-  | "relay"
+  | "device"
   | "webhook"
   | "internal"
   | "integration"
 export type AutomationEventProviderKind =
-  | "relay"
+  | "device"
   | "webhook"
   | "internal"
   | "integration"
@@ -2404,7 +2404,7 @@ export type PluginTransport =
   | "builtin"
   | "stdio"
   | "http"
-  | "relay"
+  | "device"
   | "filesystem"
 export type ConversationBoundary = (typeof CONVERSATION_BOUNDARIES)[number]
 export type ConversationTypeKey = (typeof CONVERSATION_TYPE_KEYS)[number]
@@ -5355,7 +5355,7 @@ export type CatalogSourceKind =
   | "official"
   | "workspace"
   | "user"
-  | "relay"
+  | "device"
 export type CatalogVisibility = "public" | "workspace" | "private"
 export type CatalogVersionStatus =
   | "draft"
@@ -5486,7 +5486,7 @@ export interface PluginRuntimePermissionRecord {
 
 export interface PluginPackageVersionSpecRecord {
   catalogVersionId: string
-  transport: "builtin" | "stdio" | "http" | "relay"
+  transport: "builtin" | "stdio" | "http" | "device"
   entryPoint?: string
   toolManifest: MarketplaceTool[]
   configSchema: Record<string, unknown>

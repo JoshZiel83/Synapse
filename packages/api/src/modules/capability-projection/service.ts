@@ -450,6 +450,7 @@ function unionWithDevice(
       | "actor"
       | "conversation"
       | "actor_in_conversation"
+      | "remote_agent"
       | "workspace" = "workspace"
     // The planner injects __synapse_retry_nonce into the tool args when
     // re-issuing a call after a user approved an authorization request.
@@ -560,14 +561,25 @@ function unionWithDevice(
     if (grantSpecs.length === 0) {
       // Auto-fire an interaction_runtime_authorization_requests row so the
       // dashboard shows the prompt and the user can approve. Only actor /
-      // actor_in_conversation principals can drive this — there's no user
-      // to ask in conversation / remote_agent / workspace_member contexts.
+      // actor_in_conversation principals can drive the interactive flow
+      // today (the request schema requires source.actorId for participant
+      // resolution). `remote_agent` principals would also benefit from
+      // the interactive flow — the schema enum supports a `remote_agent`
+      // grant scope and projection consults `remote_agent` bindings — but
+      // the request source needs to be extended with `remoteAgentId` and
+      // a "who in the conversation can approve" policy first. Tracking
+      // that as a follow-up; for now we surface a structured permission
+      // error so the operator sees this gap rather than a silent reject.
       const supportsAuthRequest =
         projectInput.principal.kind === "actor" ||
         projectInput.principal.kind === "actor_in_conversation"
       if (!supportsAuthRequest) {
+        const remoteAgentNote =
+          projectInput.principal.kind === "remote_agent"
+            ? " — remote_agent runtime authorization request flow is not yet wired; pre-approve a grant via the dashboard for this remote agent"
+            : ""
         return mcpErrorBlock(
-          `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal; only chat actors can request authorization interactively`
+          `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal${remoteAgentNote}`
         )
       }
       const principal = projectInput.principal as

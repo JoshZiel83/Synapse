@@ -33,7 +33,7 @@ export type AutomationDeliveriesTargetPolicy = "all_members" | "specified_member
 
 export type AutomationEventSourcesCreatedByKind = "session" | "system" | "workspace_member";
 
-export type AutomationEventSourcesProviderKind = "integration" | "internal" | "relay" | "webhook";
+export type AutomationEventSourcesProviderKind = "device" | "integration" | "internal" | "webhook";
 
 export type AutomationEventSourcesStatus = "active" | "archived" | "deprecated" | "disabled";
 
@@ -47,7 +47,7 @@ export type AutomationIntegrationBindingsProvider = "github" | "gitlab";
 
 export type AutomationIntegrationBindingsTargetKind = "project" | "repository";
 
-export type AutomationOccurrencesSourceKind = "clock" | "integration" | "internal" | "relay" | "webhook";
+export type AutomationOccurrencesSourceKind = "clock" | "device" | "integration" | "internal" | "webhook";
 
 export type AutomationPoliciesCompletionStatus = "archived" | "completed";
 
@@ -57,7 +57,7 @@ export type AutomationRulesStatus = "active" | "archived" | "completed" | "error
 
 export type AutomationTriggersScheduleKind = "at" | "cron" | "interval";
 
-export type AutomationTriggersSourceKind = "clock" | "integration" | "internal" | "relay" | "webhook";
+export type AutomationTriggersSourceKind = "clock" | "device" | "integration" | "internal" | "webhook";
 
 export type AutomationTriggersTriggerKind = "event" | "schedule";
 
@@ -67,7 +67,7 @@ export type CatalogCategoriesItemKind = "actor_template" | "plugin_package" | "s
 
 export type CatalogItemsItemKind = "actor_template" | "plugin_package" | "skill_package";
 
-export type CatalogItemsSourceKind = "builtin" | "official" | "relay" | "user" | "workspace";
+export type CatalogItemsSourceKind = "builtin" | "device" | "official" | "user" | "workspace";
 
 export type CatalogItemsVisibility = "private" | "public" | "workspace";
 
@@ -241,7 +241,7 @@ export type PluginPackageVersionSpecsDefaultMountScope = "actor" | "conversation
 
 export type PluginPackageVersionSpecsDefaultReuseScope = "actor" | "conversation" | "session" | "turn" | "workspace";
 
-export type PluginPackageVersionSpecsTransport = "builtin" | "http" | "relay" | "stdio";
+export type PluginPackageVersionSpecsTransport = "builtin" | "device" | "http" | "stdio";
 
 export type PluginSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
 
@@ -283,7 +283,7 @@ export type ResourceAccessBindingsStatus = "active" | "revoked";
 
 export type RuntimeAuthorizationGrantsRetention = "consume_once" | "until_revoked";
 
-export type RuntimeAuthorizationGrantsScope = "actor" | "actor_in_conversation" | "conversation" | "once" | "workspace";
+export type RuntimeAuthorizationGrantsScope = "actor" | "actor_in_conversation" | "conversation" | "once" | "remote_agent" | "workspace";
 
 export type RuntimeAuthorizationGrantsStatus = "active" | "consumed" | "revoked" | "superseded";
 
