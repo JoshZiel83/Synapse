@@ -14,6 +14,9 @@
   "bin": {
     "synapse-device": "./dist/bin.js"
   },
+  "engines": {
+    "node": "^20.19.0 || ^22.12.0 || >=23"
+  },
   "scripts": {
     "build": "tsc",
     "dev": "tsc --watch",
@@ -22,11 +25,17 @@
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
     "@synapse/device-protocol": "*",
+    "@synapse/shared": "*",
+    "semver": "^7.6.3",
     "ws": "^8.18.0",
     "zod": "^3.23.0"
   },
+  "optionalDependencies": {
+    "chrome-devtools-mcp": "0.7.0"
+  },
   "devDependencies": {
     "@types/node": "^22.7.5",
+    "@types/semver": "^7.5.8",
     "@types/ws": "^8.5.13",
     "tsx": "^4.20.0",
     "typescript": "^5.4.0"

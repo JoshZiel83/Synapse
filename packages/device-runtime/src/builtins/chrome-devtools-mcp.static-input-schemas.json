@@ -1,0 +1,5 @@
+{
+  "_comment": "Static input-schema fallback for chrome-devtools-mcp tools. Refreshed by scripts/refresh-browser-tool-schemas.ts against the pinned version. Provider falls back to a minimal {type:object} when a tool isn't present here.",
+  "_pinnedVersion": "0.7.0",
+  "schemas": {}
+}
