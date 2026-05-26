@@ -2,14 +2,17 @@
  * Personal-WeChat (ilinkai) outbound sender.
  *
  * The protocol requires a contextToken to address an outbound reply.
- * We read it from the transport_address metadata (populated on inbound)
- * and fall back to the endpoint metadata.
+ * The worker pre-loads the recipient transport_address row's metadata
+ * (triggered by `requiresRecipientAddressMetadata = true` on the
+ * connector) and passes it in as `recipientAddressMetadata`. We fall
+ * back to the endpoint metadata if it's missing. This keeps the
+ * connector package self-contained — it does not reach into the
+ * modules/im/service layer.
  */
 
 import crypto from "node:crypto"
 import type { TransportAccountSummary } from "@synapse/shared/types"
 import { degradeForCapabilities } from "../../messaging/degradation.js"
-import { getTransportAddressByExternalId } from "../../service.js"
 import type { OutboundEndpointRef, OutboundSendResult } from "../types.js"
 import { WEIXIN_MESSAGE_CAPABILITIES } from "./capabilities.js"
 import {
@@ -23,6 +26,13 @@ export interface WeixinSendInput {
   account: TransportAccountSummary
   endpoint: OutboundEndpointRef
   message: import("../../messaging/canonical-message.js").CanonicalMessage
+  /**
+   * Metadata of the recipient transport_address row. Pre-loaded by the
+   * worker because we set `requiresRecipientAddressMetadata = true` on
+   * the connector. May be undefined if the worker found no row, in
+   * which case we fall back to `endpoint.metadata`.
+   */
+  recipientAddressMetadata?: Record<string, unknown>
 }
 
 export async function sendWeixinMessage(
@@ -31,22 +41,12 @@ export async function sendWeixinMessage(
   const { token, baseUrl } = getWeixinCredentialsOrThrow(input.account)
   const endpointExternalId = input.endpoint.externalId
 
-  // Resolve contextToken: prefer transport_address metadata (refreshed on
-  // every inbound), then endpoint metadata as fallback.
-  const endpointAddress = await getTransportAddressByExternalId({
-    transportAccountId: input.account.id,
-    externalId: endpointExternalId,
-    addressType: "user",
-  })
-  const endpointAddressMetadata =
-    endpointAddress &&
-    endpointAddress.metadata &&
-    typeof endpointAddress.metadata === "object" &&
-    !Array.isArray(endpointAddress.metadata)
-      ? (endpointAddress.metadata as Record<string, unknown>)
-      : {}
+  // Resolve contextToken: prefer the pre-loaded transport_address metadata
+  // (refreshed by every inbound, see weixin/inbound.ts), fall back to the
+  // endpoint metadata. The worker is responsible for the lookup; this
+  // connector stays self-contained.
   const contextToken =
-    nonEmpty(endpointAddressMetadata.contextToken) ||
+    nonEmpty(input.recipientAddressMetadata?.contextToken) ||
     nonEmpty(input.endpoint.metadata.contextToken)
   if (!contextToken) {
     throw new Error(

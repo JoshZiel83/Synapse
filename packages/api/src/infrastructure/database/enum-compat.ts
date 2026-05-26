@@ -13,7 +13,6 @@ import type {
   PluginAuthConnectionStatus,
   PluginAuthOwnerScope,
   PluginAuthSessionStatus,
-  SessionChannelType,
   SessionInterruptType,
   SessionStatus,
   SessionWakeupSourceType,
@@ -101,7 +100,6 @@ import type {
   ResourceAccessBindingsStatus,
   SubjectKind,
   SessionInterruptsType,
-  SessionsChannelType,
   SessionsStatus,
   SessionWakeupsSourceType,
   SessionWakeupsStatus,
@@ -244,9 +242,6 @@ type _MemoryRecallTypeMatchesDb = Assert<
   IsEqual<MemoryRecallType, MemoryRecallRunsRecallType>
 >
 type _SessionStatusMatchesDb = Assert<IsEqual<SessionStatus, SessionsStatus>>
-type _SessionChannelMatchesDb = Assert<
-  IsEqual<SessionChannelType, SessionsChannelType>
->
 type _SessionInterruptTypeMatchesDb = Assert<
   IsEqual<SessionInterruptType, SessionInterruptsType>
 >

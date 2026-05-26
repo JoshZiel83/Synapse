@@ -2270,11 +2270,7 @@ export async function enqueueActorWakeupsForConversationMessage(params: {
         workspaceId: params.workspaceId,
         actorId: participant.actor_id,
         conversationId: params.conversationId,
-        channelType: "web",
         trigger: sourceType,
-        metadata: {
-          source: "chat.message_wakeup",
-        },
       },
       queryable
     )

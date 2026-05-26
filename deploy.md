@@ -116,10 +116,12 @@ Issue a SAN certificate for all TLS public hostnames:
 
 The public nginx config enables OCSP stapling with the Let's Encrypt chain.
 
-Install the renewal cron:
+Install the renewal cron (substitutes the current repo root into the template; run from the repo root). The substitution shell-escapes the value for single-quote injection and escapes sed metacharacters, so paths containing spaces, `$`, backticks, `"`, `'`, `&`, `|`, and `\` are all preserved literally. The repo path must still avoid `%` (cron metacharacter) and newlines.
 
 ```bash
-install -m 644 infrastructure/cron/synapse-certbot-renew /etc/cron.d/synapse-certbot-renew
+REPO_ROOT_ESC=$(printf '%s' "$(pwd)" | sed -e "s/'/'\\\\''/g" -e 's/[\\&|]/\\&/g')
+sed "s|__REPO_ROOT__|${REPO_ROOT_ESC}|g" infrastructure/cron/synapse-certbot-renew.template \
+  | install -m 644 /dev/stdin /etc/cron.d/synapse-certbot-renew
 ```
 
 Manual renewal:

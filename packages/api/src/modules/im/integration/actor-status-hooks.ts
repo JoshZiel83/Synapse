@@ -42,6 +42,7 @@
  * session and released on terminal events / shutdown.
  */
 
+import { sql, type SqlBool } from "kysely"
 import { db } from "../../../infrastructure/database/kysely.js"
 import { onEvent } from "../../../infrastructure/events/index.js"
 import { redis } from "../../../infrastructure/redis/index.js"
@@ -84,7 +85,7 @@ interface ActiveStatusSession {
 
 const activeSessions = new Map<string, ActiveStatusSession>()
 
-const RECENT_INBOUND_WINDOW_MS = 5 * 60 * 1000 // 5 min fallback window
+const STARVATION_WINDOW_MS = 5 * 60 * 1000 // 5 min fallback window
 
 interface InboundLinkLookup {
   externalMessageId: string
@@ -92,6 +93,34 @@ interface InboundLinkLookup {
   endpointType: "direct" | "group"
   transportKind: string
   transportAccountId: string
+}
+
+interface InboundLinkLookupWithCreatedAt extends InboundLinkLookup {
+  createdAt: string
+}
+
+/**
+ * Snapshot of the most recent RUNNING turn for a session. Used by both the
+ * primary trigger-item lookup AND the fallback cutoff so the two see the
+ * same state.
+ *
+ * `started_at` is nullable in schema (`turns.started_at`, see
+ * generated/db.ts). `createTurn` writes NOW() in practice, but legacy /
+ * dirty rows could still be null. We return ISO strings (or null) so
+ * downstream string-based comparisons don't go through JS Date coercion.
+ */
+interface RunningTurnRow {
+  trigger_item_id: string | null
+  started_at: string | null
+}
+
+// Re-export the types the test file needs to type its fixtures. The
+// underlying interfaces stay module-private so they can evolve without
+// becoming part of a wider public surface.
+export type {
+  InboundLinkLookup as StatusInboundLinkLookup,
+  InboundLinkLookupWithCreatedAt as StatusFallbackInboundLink,
+  RunningTurnRow as StatusRunningTurnRow,
 }
 
 async function resolveConversationIdForSession(
@@ -106,33 +135,60 @@ async function resolveConversationIdForSession(
   return row?.conversation_id || null
 }
 
-async function findInboundLinkForSessionTurn(
+/**
+ * Most recent RUNNING turn for a session.
+ *
+ * Does NOT fall back to completed turns — the prior lookup at this site
+ * picked the most recent turn regardless of status, which let a stale
+ * completed turn's `started_at` extend the fallback cutoff far into the
+ * past.
+ *
+ * `ORDER BY started_at DESC NULLS LAST, id DESC LIMIT 1`: a dirty row
+ * with `started_at = NULL` must not eclipse a real running turn (Postgres
+ * default `NULLS FIRST` on DESC would put nulls at the top). `id DESC` is
+ * the deterministic tiebreaker. The returned `started_at` is the ISO
+ * string form so the decide helper does string-vs-string comparisons.
+ *
+ * Exported for tests (`im-status-loaders.test.ts`).
+ */
+export async function loadCurrentRunningTurnRow(
   sessionId: string
-): Promise<InboundLinkLookup | null> {
-  const turnRow = await db
+): Promise<RunningTurnRow | null> {
+  const row = await db
     .selectFrom("turns")
-    .select(["trigger_item_id"])
+    .select(["trigger_item_id", "started_at", "id"])
     .where("session_id", "=", sessionId)
     .where("status", "=", "running")
-    .orderBy("started_at", "desc")
+    .orderBy(sql`started_at DESC NULLS LAST`)
+    .orderBy("id", "desc")
     .limit(1)
     .executeTakeFirst()
-  const itemId = turnRow?.trigger_item_id
-  if (!itemId) {
-    const fallback = await db
-      .selectFrom("turns")
-      .select(["trigger_item_id"])
-      .where("session_id", "=", sessionId)
-      .orderBy("started_at", "desc")
-      .limit(1)
-      .executeTakeFirst()
-    if (!fallback?.trigger_item_id) return null
-    return findInboundLinkByItemId(fallback.trigger_item_id)
+  if (!row) return null
+  return {
+    trigger_item_id: row.trigger_item_id,
+    started_at:
+      row.started_at instanceof Date
+        ? row.started_at.toISOString()
+        : row.started_at
+          ? String(row.started_at)
+          : null,
   }
-  return findInboundLinkByItemId(itemId)
 }
 
-async function findInboundLinkByItemId(
+/**
+ * Resolve the inbound link for a given trigger item id (the conversation
+ * item that started the current actor turn).
+ *
+ * Adds `NULLIF(BTRIM(external_message_id), '') IS NOT NULL` to the SQL so
+ * a link row with a null / empty / whitespace external id is treated as
+ * "no link" by the loader and the caller falls through to the fallback
+ * path. The schema allows empty strings (see schema.sql for
+ * transport_message_links) and a `LIMIT 1` without this predicate could
+ * silently use a placeholder id downstream.
+ *
+ * Exported for tests.
+ */
+export async function findInboundLinkForTriggerItem(
   itemId: string
 ): Promise<InboundLinkLookup | null> {
   const row = await db
@@ -156,6 +212,9 @@ async function findInboundLinkByItemId(
     ])
     .where("transport_message_links.item_id", "=", itemId)
     .where("transport_message_links.direction", "=", "inbound")
+    .where(
+      sql<SqlBool>`NULLIF(BTRIM(transport_message_links.external_message_id), '') IS NOT NULL`
+    )
     .limit(1)
     .executeTakeFirst()
   if (!row || !row.externalMessageId) return null
@@ -168,12 +227,24 @@ async function findInboundLinkByItemId(
   }
 }
 
-async function findRecentInboundLinkForConversation(
-  conversationId: string
-): Promise<InboundLinkLookup | null> {
-  const cutoffIso = new Date(
-    Date.now() - RECENT_INBOUND_WINDOW_MS
-  ).toISOString()
+/**
+ * Most recent inbound link in the conversation, filtered to rows whose
+ * `created_at >= cutoffIso`. Returns `createdAt` alongside the link so
+ * the decide helper can verify the cutoff lexicographically.
+ *
+ * Same `NULLIF(BTRIM(...), '') IS NOT NULL` predicate as the trigger-item
+ * loader so a newer row with an empty external_message_id can't hide an
+ * older valid row via `ORDER BY created_at DESC LIMIT 1`.
+ *
+ * Caller supplies the cutoff so all observability flows through one
+ * formula (`computeStatusFallbackCutoffIso`).
+ *
+ * Exported for tests.
+ */
+export async function findRecentInboundLinkForConversation(
+  conversationId: string,
+  cutoffIso: string
+): Promise<InboundLinkLookupWithCreatedAt | null> {
   const row = await db
     .selectFrom("transport_message_links")
     .innerJoin(
@@ -192,9 +263,13 @@ async function findRecentInboundLinkForConversation(
       "transport_endpoints.endpoint_type as endpointType",
       "transport_accounts.transport_kind as transportKind",
       "transport_accounts.id as transportAccountId",
+      "transport_message_links.created_at as createdAt",
     ])
     .where("transport_message_links.conversation_id", "=", conversationId)
     .where("transport_message_links.direction", "=", "inbound")
+    .where(
+      sql<SqlBool>`NULLIF(BTRIM(transport_message_links.external_message_id), '') IS NOT NULL`
+    )
     .where("transport_message_links.created_at", ">=", cutoffIso as any)
     .orderBy("transport_message_links.created_at", "desc")
     .limit(1)
@@ -206,7 +281,98 @@ async function findRecentInboundLinkForConversation(
     endpointType: row.endpointType as "direct" | "group",
     transportKind: String(row.transportKind),
     transportAccountId: String(row.transportAccountId),
+    createdAt:
+      row.createdAt instanceof Date
+        ? row.createdAt.toISOString()
+        : String(row.createdAt),
   }
+}
+
+/**
+ * Cutoff for the fallback inbound-link query.
+ *
+ *   - If a running turn exists AND has a non-null `started_at`: use
+ *     `started_at`. The fallback cannot reach back before this turn
+ *     began — preventing the silent misattribution where a recent IM
+ *     message from before the current turn's start gets reactions.
+ *   - Otherwise (no running turn, or running turn with null
+ *     `started_at`): fall back to `now - starvationWindowMs`. Preserves
+ *     the legacy 5-minute starvation window for cases where the
+ *     runtime hasn't written the turn row yet (the early
+ *     `actor.thinking` race).
+ *
+ * Exported so both `ensureControllersForSession` (deriving cutoffIso for
+ * the SQL query) and `decideStatusLookupSource` (deriving cutoff for the
+ * in-helper comparison) share one formula and can't drift.
+ */
+export function computeStatusFallbackCutoffIso(
+  runningTurn: RunningTurnRow | null,
+  now: number,
+  starvationWindowMs: number = STARVATION_WINDOW_MS
+): string {
+  return (
+    runningTurn?.started_at ?? new Date(now - starvationWindowMs).toISOString()
+  )
+}
+
+/**
+ * Pure decision helper for which inbound link the status controllers
+ * should attach to.
+ *
+ *   - `primary` → trigger-item lookup succeeded; use it. Independent of
+ *     `started_at` (a dirty null started_at on the running turn does
+ *     NOT prevent the primary path).
+ *   - `fallback` → trigger-item lookup returned null AND the fallback
+ *     link's `createdAt` is within the cutoff window. The `reason`
+ *     reflects why we fell back so logs surface the underlying state.
+ *   - `none` → no usable link.
+ *
+ * `>=` on the cutoff includes the boundary. Both sides are normalized
+ * ISO-8601 with `Z` suffix (Postgres TIMESTAMPTZ → `.toISOString()`),
+ * so lexicographic comparison is correct.
+ */
+export function decideStatusLookupSource(input: {
+  primaryLink: InboundLinkLookup | null
+  runningTurn: RunningTurnRow | null
+  fallbackLink: InboundLinkLookupWithCreatedAt | null
+  now: number
+  starvationWindowMs?: number
+}): {
+  kind: "primary" | "fallback" | "none"
+  link?: InboundLinkLookup
+  reason?:
+    | "no-running-turn"
+    | "running-turn-without-trigger-item"
+    | "trigger-item-without-link"
+} {
+  if (input.primaryLink) {
+    return { kind: "primary", link: input.primaryLink }
+  }
+  if (!input.fallbackLink) {
+    return { kind: "none" }
+  }
+  const cutoff = computeStatusFallbackCutoffIso(
+    input.runningTurn,
+    input.now,
+    input.starvationWindowMs
+  )
+  if (input.fallbackLink.createdAt < cutoff) {
+    return { kind: "none" }
+  }
+  let reason:
+    | "no-running-turn"
+    | "running-turn-without-trigger-item"
+    | "trigger-item-without-link"
+  if (!input.runningTurn) {
+    reason = "no-running-turn"
+  } else if (input.runningTurn.trigger_item_id) {
+    // Running turn references a trigger item, but findInboundLinkForTriggerItem
+    // returned null (no inbound link for that item, e.g. non-IM origin).
+    reason = "trigger-item-without-link"
+  } else {
+    reason = "running-turn-without-trigger-item"
+  }
+  return { kind: "fallback", link: input.fallbackLink, reason }
 }
 
 async function ensureControllersForSession(input: {
@@ -214,13 +380,46 @@ async function ensureControllersForSession(input: {
   workspaceId: string
   conversationId: string
 }): Promise<ActiveStatusSession | null> {
-  let link = await findInboundLinkForSessionTurn(input.sessionId)
-  if (!link) {
-    link = await findRecentInboundLinkForConversation(input.conversationId)
+  // Single running-turn snapshot drives both the primary trigger-item
+  // lookup AND the fallback cutoff. Reading it twice would risk
+  // observing two different snapshots and logging a fallback `reason`
+  // that doesn't match the actual primary-lookup state.
+  const runningTurn = await loadCurrentRunningTurnRow(input.sessionId)
+  const primaryLink = runningTurn?.trigger_item_id
+    ? await findInboundLinkForTriggerItem(runningTurn.trigger_item_id)
+    : null
+  const now = Date.now()
+  const cutoffIso = computeStatusFallbackCutoffIso(runningTurn, now)
+  const fallbackLink = primaryLink
+    ? null
+    : await findRecentInboundLinkForConversation(
+        input.conversationId,
+        cutoffIso
+      )
+  const decision = decideStatusLookupSource({
+    primaryLink,
+    runningTurn,
+    fallbackLink,
+    now,
+  })
+  if (decision.kind === "fallback" && decision.link) {
+    // Surface every fallback hit so misattribution doesn't stay silent.
+    // The reason field tells operators whether the fallback fired because
+    // the runtime hadn't written a turn row yet (no-running-turn — the
+    // early actor.thinking starvation case, expected), because the turn
+    // had no trigger item (autonomous / actor-initiated), or because the
+    // trigger item existed but had no inbound IM link (non-IM trigger).
+    console.warn("[im:status] fallback inbound-link used", {
+      sessionId: input.sessionId,
+      conversationId: input.conversationId,
+      externalMessageId: decision.link.externalMessageId,
+      reason: decision.reason,
+    })
   }
-  if (!link) {
+  if (decision.kind === "none" || !decision.link) {
     return null
   }
+  const link = decision.link
 
   const existing = activeSessions.get(input.sessionId)
   if (existing && existing.externalMessageId === link.externalMessageId) {

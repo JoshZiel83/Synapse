@@ -51,7 +51,6 @@ CREATE TYPE actor_source_refs_sync_mode AS ENUM ('notify', 'manual_merge', 'foll
 CREATE TYPE model_groups_owner_type AS ENUM ('platform', 'workspace', 'workspace_member');
 CREATE TYPE model_groups_routing_strategy AS ENUM ('weighted_random', 'round_robin', 'priority_failover');
 CREATE TYPE model_group_grants_status AS ENUM ('active', 'revoked');
-CREATE TYPE sessions_channel_type AS ENUM ('web', 'api', 'bridge');
 CREATE TYPE sessions_status AS ENUM ('idle', 'queued', 'running', 'blocked', 'closed');
 CREATE TYPE sessions_collaboration_mode AS ENUM ('default', 'plan_drafting', 'plan_awaiting_approval');
 CREATE TYPE conversation_participants_type AS ENUM ('workspace_member', 'actor', 'remote_agent', 'external', 'system');
@@ -1343,7 +1342,6 @@ CREATE TABLE sessions (
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
   actor_id UUID NOT NULL REFERENCES actors(id) ON DELETE CASCADE,
   conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
-  channel_type sessions_channel_type NOT NULL DEFAULT 'web',
   trigger VARCHAR(50) NOT NULL DEFAULT 'user_message',
   status sessions_status NOT NULL DEFAULT 'idle',
   collaboration_mode sessions_collaboration_mode NOT NULL DEFAULT 'default',

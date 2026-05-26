@@ -5,6 +5,7 @@ import { FEISHU_MESSAGE_CAPABILITIES } from "../connectors/feishu/capabilities.j
 import { WEIXIN_MESSAGE_CAPABILITIES } from "../connectors/weixin/capabilities.js"
 import {
   resolveMentionRecipients,
+  resolveMentionRecipientsByParticipant,
   shouldUseAttachedAddressOnly,
   type MentionResolverDeps,
 } from "./mention-resolver.js"
@@ -223,3 +224,260 @@ test("feishu direct uses attached lookup (matches V1 bot semantics)", async () =
   assert.deepEqual(out, [{ externalId: "ou_a", displayName: "Alice" }])
   assert.deepEqual(calls, ["attached:p1"])
 })
+
+// ─── resolveMentionRecipientsByParticipant: by-participant lookup ───
+
+test("by-participant: feishu group attached lookup, keyed by participantId", async () => {
+  const calls: string[] = []
+  const deps = makeDeps({
+    loadAttachedAddress: async ({ conversationParticipantId }) => {
+      calls.push(`attached:${conversationParticipantId}`)
+      return { externalId: "ou_a", displayName: "Alice" }
+    },
+    loadReachableAddress: async () => {
+      throw new Error("should not be called for groups")
+    },
+  })
+  const msg = buildCanonicalMessage([
+    { type: "mention", participantId: "p1", displayName: "alice" },
+    { type: "text", text: "hi" },
+  ])
+  const out = await resolveMentionRecipientsByParticipant(
+    {
+      parts: msg.parts,
+      capabilities: FEISHU_MESSAGE_CAPABILITIES,
+      transportAccountId: "acc",
+      endpointType: "group",
+      endpointExternalId: "oc_g",
+    },
+    deps
+  )
+  assert.equal(out.size, 1)
+  assert.deepEqual(out.get("p1"), {
+    externalId: "ou_a",
+    displayName: "Alice",
+  })
+  assert.deepEqual(calls, ["attached:p1"])
+})
+
+test("by-participant: feishu direct uses reachable lookup when policy != attached_only", async () => {
+  // Compose a synthetic capability with a non-attached direct policy that
+  // still has supportsMention; ensures the function routes to reachable.
+  const caps = {
+    ...FEISHU_MESSAGE_CAPABILITIES,
+    directMentionPolicy: "self_only" as const,
+  }
+  const calls: string[] = []
+  const deps = makeDeps({
+    loadAttachedAddress: async () => {
+      throw new Error("should not be called when policy != attached_only")
+    },
+    loadReachableAddress: async ({ conversationParticipantId }) => {
+      calls.push(`reachable:${conversationParticipantId}`)
+      return { externalId: "ou_target", displayName: "Bob" }
+    },
+  })
+  const msg = buildCanonicalMessage([
+    { type: "mention", participantId: "p1", displayName: "Bob" },
+  ])
+  const out = await resolveMentionRecipientsByParticipant(
+    {
+      parts: msg.parts,
+      capabilities: caps,
+      transportAccountId: "acc",
+      endpointType: "direct",
+      endpointExternalId: "ou_target",
+    },
+    deps
+  )
+  assert.equal(out.size, 1)
+  assert.deepEqual(out.get("p1"), {
+    externalId: "ou_target",
+    displayName: "Bob",
+  })
+  assert.deepEqual(calls, ["reachable:p1"])
+})
+
+test("by-participant: self_only direct filters non-peer addresses", async () => {
+  const deps = makeDeps({
+    loadReachableAddress: async () => ({
+      externalId: "wx_other",
+      displayName: "Other",
+    }),
+  })
+  const msg = buildCanonicalMessage([
+    { type: "mention", participantId: "p1", displayName: "x" },
+  ])
+  const out = await resolveMentionRecipientsByParticipant(
+    {
+      parts: msg.parts,
+      capabilities: WEIXIN_MESSAGE_CAPABILITIES,
+      transportAccountId: "acc",
+      endpointType: "direct",
+      endpointExternalId: "wx_target",
+    },
+    deps
+  )
+  assert.equal(out.size, 0)
+})
+
+test("by-participant: two parts with same participantId → one lookup, one map entry", async () => {
+  let lookupCount = 0
+  const deps = makeDeps({
+    loadAttachedAddress: async () => {
+      lookupCount++
+      return { externalId: "ou_a", displayName: "Alice" }
+    },
+  })
+  const msg = buildCanonicalMessage([
+    { type: "mention", participantId: "p1", displayName: "first" },
+    { type: "text", text: " and again " },
+    { type: "mention", participantId: "p1", displayName: "second" },
+  ])
+  const out = await resolveMentionRecipientsByParticipant(
+    {
+      parts: msg.parts,
+      capabilities: FEISHU_MESSAGE_CAPABILITIES,
+      transportAccountId: "acc",
+      endpointType: "group",
+      endpointExternalId: "oc_g",
+    },
+    deps
+  )
+  assert.equal(out.size, 1)
+  assert.equal(
+    lookupCount,
+    1,
+    "second mention with same participantId is not re-looked-up"
+  )
+  assert.deepEqual(out.get("p1"), {
+    externalId: "ou_a",
+    displayName: "Alice",
+  })
+})
+
+test("by-participant: null address lookup → participant absent from map", async () => {
+  const deps = makeDeps({
+    loadAttachedAddress: async () => null,
+  })
+  const msg = buildCanonicalMessage([
+    { type: "mention", participantId: "p_missing", displayName: "Ghost" },
+  ])
+  const out = await resolveMentionRecipientsByParticipant(
+    {
+      parts: msg.parts,
+      capabilities: FEISHU_MESSAGE_CAPABILITIES,
+      transportAccountId: "acc",
+      endpointType: "group",
+      endpointExternalId: "oc_g",
+    },
+    deps
+  )
+  assert.equal(out.size, 0)
+})
+
+test("by-participant: mention without participantId is skipped (inbound-mirrored)", async () => {
+  let lookupCount = 0
+  const deps = makeDeps({
+    loadAttachedAddress: async () => {
+      lookupCount++
+      return null
+    },
+  })
+  const msg = buildCanonicalMessage([
+    { type: "mention", externalId: "ou_already", displayName: "X" },
+  ])
+  const out = await resolveMentionRecipientsByParticipant(
+    {
+      parts: msg.parts,
+      capabilities: FEISHU_MESSAGE_CAPABILITIES,
+      transportAccountId: "acc",
+      endpointType: "group",
+      endpointExternalId: "oc_g",
+    },
+    deps
+  )
+  assert.equal(out.size, 0)
+  assert.equal(lookupCount, 0)
+})
+
+test(
+  "by-participant: whitespace-only part displayName + address has displayName " +
+    "→ map entry uses the address displayName (not whitespace)",
+  async () => {
+    const deps = makeDeps({
+      loadAttachedAddress: async () => ({
+        externalId: "ou_a",
+        displayName: "Alice",
+      }),
+    })
+    const msg = buildCanonicalMessage([
+      { type: "mention", participantId: "p1", displayName: "   " },
+    ])
+    const out = await resolveMentionRecipientsByParticipant(
+      {
+        parts: msg.parts,
+        capabilities: FEISHU_MESSAGE_CAPABILITIES,
+        transportAccountId: "acc",
+        endpointType: "group",
+        endpointExternalId: "oc_g",
+      },
+      deps
+    )
+    assert.equal(out.get("p1")?.displayName, "Alice")
+  }
+)
+
+test(
+  "by-participant: whitespace-only part displayName + address has no displayName " +
+    "→ map entry falls back to externalId (not whitespace)",
+  async () => {
+    const deps = makeDeps({
+      loadAttachedAddress: async () => ({ externalId: "ou_a" }),
+    })
+    const msg = buildCanonicalMessage([
+      { type: "mention", participantId: "p1", displayName: "   " },
+    ])
+    const out = await resolveMentionRecipientsByParticipant(
+      {
+        parts: msg.parts,
+        capabilities: FEISHU_MESSAGE_CAPABILITIES,
+        transportAccountId: "acc",
+        endpointType: "group",
+        endpointExternalId: "oc_g",
+      },
+      deps
+    )
+    assert.equal(out.get("p1")?.displayName, "ou_a")
+  }
+)
+
+test(
+  "by-participant: two distinct participants resolving to the same externalId " +
+    "→ both kept as separate map entries",
+  async () => {
+    const deps = makeDeps({
+      loadAttachedAddress: async ({ conversationParticipantId }) => ({
+        externalId: "ou_shared",
+        displayName: conversationParticipantId === "p1" ? "FromP1" : "FromP2",
+      }),
+    })
+    const msg = buildCanonicalMessage([
+      { type: "mention", participantId: "p1", displayName: "Alice" },
+      { type: "mention", participantId: "p2", displayName: "Bob" },
+    ])
+    const out = await resolveMentionRecipientsByParticipant(
+      {
+        parts: msg.parts,
+        capabilities: FEISHU_MESSAGE_CAPABILITIES,
+        transportAccountId: "acc",
+        endpointType: "group",
+        endpointExternalId: "oc_g",
+      },
+      deps
+    )
+    assert.equal(out.size, 2)
+    assert.equal(out.get("p1")?.externalId, "ou_shared")
+    assert.equal(out.get("p2")?.externalId, "ou_shared")
+  }
+)

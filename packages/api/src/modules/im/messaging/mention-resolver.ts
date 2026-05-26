@@ -141,6 +141,77 @@ export function shouldUseAttachedAddressOnly(
   )
 }
 
+/**
+ * Resolves each mention part to its external address and returns a
+ * participantId → ResolvedMention map. Mentions without a participantId
+ * (inbound-mirrored — already carry externalId) are skipped.
+ *
+ * This is the by-participant complement to `resolveMentionRecipients`.
+ * The worker uses this variant so it can walk `message.parts` again and
+ * fill `externalId` in place at the same position, instead of appending
+ * resolved mentions to the end of the message.
+ *
+ * displayName fallback uses a trim-based emptiness check (not just
+ * truthy), so a part with `displayName: " "` is treated as missing and
+ * filled from the address lookup. The existing `resolveMentionRecipients`
+ * relies on `part.displayName || externalId` which keeps whitespace-only
+ * names as-is and pushes them down to the connector renderer — Feishu in
+ * particular accepts whitespace as a valid `<at>` display name.
+ *
+ * Order: first appearance in `parts` wins per-participant; later
+ * duplicates for the same participant are ignored (we make one lookup
+ * per participant). Two participants resolving to the same `externalId`
+ * are kept as separate map entries (the worker fills both occurrences).
+ */
+export async function resolveMentionRecipientsByParticipant(
+  input: ResolveMentionsInput,
+  deps: MentionResolverDeps
+): Promise<Map<string, ResolvedMention>> {
+  const resolved = new Map<string, ResolvedMention>()
+  const useAttached = shouldUseAttachedAddressOnly(
+    input.capabilities,
+    input.endpointType
+  )
+
+  for (const part of input.parts) {
+    if (part.type !== "mention") continue
+    const participantId = part.participantId
+    if (!participantId) continue
+    if (resolved.has(participantId)) continue
+
+    const address = useAttached
+      ? await deps.loadAttachedAddress({
+          conversationParticipantId: participantId,
+          transportAccountId: input.transportAccountId,
+        })
+      : await deps.loadReachableAddress({
+          conversationParticipantId: participantId,
+          transportAccountId: input.transportAccountId,
+        })
+    const externalId = nonEmptyString(address?.externalId)
+    if (!externalId) continue
+
+    if (
+      input.endpointType === "direct" &&
+      input.capabilities.directMentionPolicy === "self_only" &&
+      externalId !== input.endpointExternalId
+    ) {
+      // Direct chat with self-only policy: only the endpoint peer is
+      // addressable. Skip anyone else.
+      continue
+    }
+
+    const displayName =
+      nonEmptyString(address?.displayName) ??
+      nonEmptyString(part.displayName) ??
+      externalId
+
+    resolved.set(participantId, { externalId, displayName })
+  }
+
+  return resolved
+}
+
 function nonEmptyString(value: unknown): string | undefined {
   return typeof value === "string" && value.trim() ? value.trim() : undefined
 }

@@ -78,8 +78,6 @@ import {
   RUNTIME_AUTHORIZATION_GRANT_STATUSES,
   RUNTIME_AUTHORIZATION_PRESETS,
   RUNTIME_AUTHORIZATION_REQUEST_MODES,
-  SESSION_CHANNEL_INPUTS,
-  SESSION_CHANNELS,
   SESSION_COLLABORATION_MODES,
   SESSION_INTERRUPT_TYPES,
   SESSION_STATUSES,
@@ -847,9 +845,6 @@ export interface SystemEvent {
 
 // ============ AI ============
 export type SessionStatus = (typeof SESSION_STATUSES)[number]
-export type SessionChannelType = (typeof SESSION_CHANNELS)[number]
-export type SessionChannelInput = (typeof SESSION_CHANNEL_INPUTS)[number]
-export type ChannelType = SessionChannelType
 export type SessionCollaborationMode =
   (typeof SESSION_COLLABORATION_MODES)[number]
 export type PlanChecklistStepStatus =
@@ -875,18 +870,16 @@ export interface Session {
   id: UUID
   workspaceId: UUID
   actorId: UUID
-  conversationId?: UUID
+  conversationId: UUID
   conversationKind?: "private" | "group" | "virtual"
   conversationTitle?: string
   isGroupConversation?: boolean
   hasThreadContext?: boolean
-  channelType: SessionChannelType
   trigger: SessionTrigger
   status: SessionStatus
   collaborationMode: SessionCollaborationMode
   activePlanApprovalInteractionId?: UUID
   collaborationState: SessionCollaborationState
-  metadata: Record<string, unknown>
   errorMessage?: string
   createdAt: Timestamp
   updatedAt: Timestamp

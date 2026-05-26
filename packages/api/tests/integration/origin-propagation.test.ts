@@ -101,8 +101,8 @@ async function buildToolCall(opts: {
   )
 
   await client.query(
-    `INSERT INTO sessions (id, workspace_id, actor_id, conversation_id, channel_type, status)
-     VALUES ($1, $2, $3, $4, 'web', 'idle')`,
+    `INSERT INTO sessions (id, workspace_id, actor_id, conversation_id, status)
+     VALUES ($1, $2, $3, $4, 'idle')`,
     [sessionId, seed.workspaceId, actorId, conversationId]
   )
 

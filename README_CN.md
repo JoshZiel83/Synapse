@@ -72,11 +72,11 @@ Synapse 的核心不是“再做一个会聊天的机器人”，而是“把会
 
 Synapse 采用以 conversation 为核心的分层架构，在此基础上将资源运行时、权限控制、记忆、外部传输接入和上下文管理分别建模。
 
-- **会话与 session 运行时。** `conversation`、participants、conversation items、actor sessions、`session_wakeups` 共同定义协作与执行模型。Web chat、remote-agent bridge、IM transport 都复用这一模型，而不是各自实现独立聊天体系。
+- **会话与 session 运行时。** `conversation`、participants、conversation items、conversation 范围内的 actor sessions、`session_wakeups` 共同定义协作与执行模型。每个 actor session 都绑定到一个 conversation，没有脱离 conversation 的独立 API 调用 session。Web chat、remote-agent bridge、IM transport 都复用这一模型，而不是各自实现独立聊天体系。
 - **资源运行时。** 插件、已安装技能、设备 exposures、actors、remote agents 都作为独立 runtime resource 建模，拥有各自的状态、生命周期和 API。Marketplace catalog 与安装后的 runtime state 分离存储。
 - **权限控制。** 授权基于显式资源类型进行判定，包括 `workspace`、`conversation`、`actor`、`remote_agent`、`plugin_installation`、`installed_skill`、`device_capability`、`memory_item` 等，因此共享、调用和治理可以落到同一套访问模型上。
 - **记忆子系统。** Memory 按作用域划分为 `workspace_shared`、`conversation_shared`、`actor_private`、`participant_private`、`user_private`。召回同时结合 lexical indexing 与 embeddings，以支持长期记忆和线程内工作记忆。
-- **传输与自动化接入。** IM transport 将外部 endpoint 重新绑定回 conversation。事件源、定时任务、Webhook 和集成触发器也通过同一运行时进入系统，用于唤醒 session 并生成会话可见事件。
+- **传输与自动化接入。** IM transport 将外部 endpoint 重新绑定回 conversation。事件源、定时任务、Webhook 和集成触发器也通过同一运行时进入系统，用于唤醒该 conversation 中的 actor 运行时并生成会话可见事件。
 - **上下文窗口管理。** 模型上下文由 canonical context items 编译为 shared/private archive chains 与实时 tail window。archive points、compaction runs 与 per-event context policies 共同控制 prompt 大小，同时保留作用域和事件语义。
 
 ## 典型用法

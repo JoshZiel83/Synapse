@@ -49,7 +49,7 @@ import {
   itemPartsToCanonicalContentBlocks,
   type DraftConversationPart,
 } from "../chat/message-content.js"
-import { ensureConversationActorSessionContext } from "../session/service.js"
+import { ensureConversationActorContext } from "../session/service.js"
 import {
   actorSubject,
   filterAuthorizedPermissionResourceIds,
@@ -716,10 +716,7 @@ async function validateMemorySpaceTarget(
   }
 }
 
-async function resolveConversationActorContextId(
-  workspaceId: string,
-  binding: MemorySpaceBinding
-) {
+async function resolveConversationActorContextId(binding: MemorySpaceBinding) {
   if (
     binding.spaceType !== "participant_private" ||
     !binding.actorId ||
@@ -728,8 +725,7 @@ async function resolveConversationActorContextId(
     return null
   }
 
-  const context = await ensureConversationActorSessionContext({
-    workspaceId,
+  const context = await ensureConversationActorContext({
     actorId: binding.actorId,
     conversationId: binding.conversationId,
   })
@@ -825,10 +821,8 @@ async function ensureMemorySpace(
 ) {
   validateMemorySpaceBinding(binding, "Memory space")
   await validateMemorySpaceTarget(workspaceId, binding)
-  const conversationActorContextId = await resolveConversationActorContextId(
-    workspaceId,
-    binding
-  )
+  const conversationActorContextId =
+    await resolveConversationActorContextId(binding)
   const existing = await findExistingMemorySpace(
     client,
     workspaceId,

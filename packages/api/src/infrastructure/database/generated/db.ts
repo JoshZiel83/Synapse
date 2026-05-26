@@ -297,8 +297,6 @@ export type SessionEngineBranchesStatus = "active" | "archived" | "superseded";
 
 export type SessionInterruptsType = "remote_control_terminated";
 
-export type SessionsChannelType = "api" | "bridge" | "web";
-
 export type SessionsCollaborationMode = "default" | "plan_awaiting_approval" | "plan_drafting";
 
 export type SessionsStatus = "blocked" | "closed" | "idle" | "queued" | "running";
@@ -2019,7 +2017,6 @@ export interface SessionInterrupts {
 export interface Sessions {
   active_plan_approval_interaction_id: string | null;
   actor_id: string;
-  channel_type: Generated<SessionsChannelType>;
   collaboration_mode: Generated<SessionsCollaborationMode>;
   collaboration_state: Generated<Json>;
   completed_at: Timestamp | null;

@@ -29,7 +29,7 @@ import {
   type CreateMemoryInput,
   type UpdateMemoryInput,
 } from "./service.js"
-import { ensureConversationActorSessionContext } from "../session/service.js"
+import { ensureConversationActorContext } from "../session/service.js"
 
 const memorySpaceTypeEnum = z.enum(MEMORY_SPACE_TYPES)
 const memoryCategoryEnum = z.enum(MEMORY_CATEGORIES)
@@ -247,8 +247,7 @@ async function requireMemorySpaceWritePermission(
       break
     case "participant_private":
       if (body.actorId && body.conversationId) {
-        const context = await ensureConversationActorSessionContext({
-          workspaceId,
+        const context = await ensureConversationActorContext({
           actorId: body.actorId,
           conversationId: body.conversationId,
         })

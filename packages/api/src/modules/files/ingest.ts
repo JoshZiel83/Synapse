@@ -5,7 +5,7 @@
  * Sources:
  *   - Remote MCP server responses (text / image base64 / image url /
  *     audio / resource / pre-canonical file_ref / mention)
- *   - MCP relay async results (same shapes as remote MCP)
+ *   - Device-runtime MCP async results (same shapes as remote MCP)
  *   - Callable plugin returns (already canonical, but may include raw text)
  *   - Model response media (image blocks returned by Anthropic et al)
  *

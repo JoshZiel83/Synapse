@@ -7,10 +7,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION =
-  "2026-05-27-device-runtime-v3-pr30-runtime-authz-requester-cols"
+const CURRENT_SCHEMA_VERSION = "2026-05-28-device-runtime-v3-merge-into-dev"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "device runtime v3 PR #30: add requester_remote_agent_id + requester_conversation_actor_context_id to interaction_runtime_authorization_requests so remote_agent + actor_in_conversation grants can be created from the normal approval flow"
+  "device runtime v3 cutover merged into dev: full device_* surface (devices, device_services, device_capabilities, device_exposures, device_tools, device_tool_revisions, device_catalog_revisions, device_control_plane_sessions, device_operations, device_operation_attempts, runtime_authorization_grants, interaction_runtime_authorization_requests with principal_remote_agent_id + principal_conversation_actor_context_id, tunnel_path_token); drop legacy relay_* tables/enums; combined with dev's drop of the legacy sessions.channel_type discriminator (every actor session is now conversation-scoped)"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`
@@ -60,8 +59,8 @@ async function applyBootstrapSchema() {
 
 /**
  * Pure function that decides what to do given the current DB state. Extracted
- * so the auth-refactor fail-loud rule can be unit-tested without spinning up
- * a real Postgres + writing tables.
+ * so the fail-loud rule can be unit-tested without spinning up a real Postgres
+ * + writing tables.
  */
 export type BootstrapDecision =
   | { kind: "noop"; reason: string }
@@ -86,7 +85,7 @@ export function decideBootstrapAction(input: {
     kind: "fail",
     message:
       `Database already contains ${input.tableCount} public tables but is not at schema version ${input.currentVersion}. ` +
-      `This release ships the auth-refactor schema (access_subjects + subject_id) which has no in-place migration. ` +
+      `This release ships schema version ${input.currentVersion}, which has no in-place migration. ` +
       `Run \`npm run db:rebuild\` to drop and recreate the schema. ` +
       `If you need to preserve data, snapshot the database first and reapply business data after rebuild.`,
   }
@@ -118,10 +117,10 @@ export async function bootstrapDatabaseSchema() {
         return { bootstrapped: true, upgraded: false, tableCount: 0 }
       case "fail":
         // AGENTS.md: "initial design implementation phase, do not consider
-        // backward-compat with existing data". The auth refactor introduces
-        // breaking schema changes with no incremental migration path —
-        // pre-existing databases must be rebuilt. Fail loudly instead of
-        // skipping silently so the operator notices.
+        // backward-compat with existing data". Schema bumps without in-place
+        // migrations require an explicit rebuild — pre-existing databases
+        // must be dropped and recreated. Fail loudly instead of skipping
+        // silently so the operator notices.
         throw new Error(decision.message)
     }
   } catch (error) {
