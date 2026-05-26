@@ -69,6 +69,15 @@ interface ManagedTunnel {
    * collapsing localPort to 0 (which would route the frps proxy at a
    * port nothing is listening on after reload). */
   localPort: number
+  /**
+   * Set to true by stop() BEFORE killing the child so the eventual
+   * 'exit' handler can tell intentional teardown apart from a crash.
+   * Without this flag, runtime.notifyTunnelDown() runs even on a
+   * clean shutdown — which closes the WSS via forceReconnect and
+   * forces a needless re-handshake (or, worse, fights the runtime's
+   * own stop() if their ordering interleaves).
+   */
+  intentionallyStopped: boolean
 }
 
 function buildFrpcConfig(opts: {
@@ -228,12 +237,24 @@ export function createFrpTunnelAdapter(
           code,
           signal,
         })
+        // Read intentional-stop flag BEFORE deleting the managed entry —
+        // stop() sets it but does NOT delete (so the exit handler is the
+        // single point that cleans up + decides whether to notify).
+        const intentional =
+          managed.get(startOpts.deviceServiceId)?.intentionallyStopped ?? false
         managed.delete(startOpts.deviceServiceId)
-        rmSync(tmpDir, { recursive: true, force: true })
-        // Tell the runtime so it can unregister the tunnel. Skipping this
-        // would leave DeviceTunnelRegistry pointing at an internal URL
-        // that nothing answers; every dispatch then 502s until the next
-        // hello-ack races a fresh tunnel.up through.
+        try {
+          rmSync(tmpDir, { recursive: true, force: true })
+        } catch {
+          /* tmpdir cleanup is best-effort */
+        }
+        // Only flag unexpected exits. A SIGTERM from stop() is
+        // intentional teardown — calling onUnexpectedExit there would
+        // make the runtime call device.tunnel.down + forceReconnect on
+        // every clean shutdown, fighting the runtime's own stop()
+        // sequence (or, after the runtime is gone, churning the WSS
+        // for no reason).
+        if (intentional) return
         opts.onUnexpectedExit?.({
           deviceServiceId: startOpts.deviceServiceId,
           code,
@@ -247,6 +268,7 @@ export function createFrpTunnelAdapter(
         configPath,
         tmpDir,
         localPort: startOpts.localPort,
+        intentionallyStopped: false,
       })
       return handle
     },
@@ -283,12 +305,16 @@ export function createFrpTunnelAdapter(
     async stop(handle: TunnelHandle): Promise<void> {
       const existing = managed.get(handle.deviceServiceId)
       if (!existing) return
+      // Mark BEFORE killing so the exit handler (which runs on the next
+      // event-loop turn) reads the flag and skips onUnexpectedExit.
+      // The exit handler is also the single point that deletes the
+      // managed entry + cleans the tmpdir, so we don't delete here.
+      existing.intentionallyStopped = true
       try {
         existing.child.kill("SIGTERM")
       } catch {
         /* ignore */
       }
-      managed.delete(handle.deviceServiceId)
     },
   }
 }

@@ -248,8 +248,9 @@ function normalizeGrantSpecForInsert(
 
 function parseGrantSpec(value: unknown): RuntimeAuthorizationGrantSpec {
   // Validate the JSON we read out of the DB against the Zod schema before
-  // handing it back up. This guarantees the wire shape we emit matches what
-  // the Go relay expects, even if older rows pre-date the current schema.
+  // handing it back up. This guarantees the wire shape we emit matches
+  // GrantPolicySchema (which the device-runtime matcher also consumes),
+  // even if older rows pre-date the current schema.
   const policy = GrantPolicySchema.parse(
     parseJsonObject(value)
   ) as RuntimeAuthorizationGrantSpec
@@ -298,7 +299,7 @@ function mapRuntimeAuthorizationGrantRow(
  * and surfaces subject_actor_id / subject_conversation_id derived from the
  * subject row, so the mapper doesn't have to know about the join.
  */
-function relayGrantSelectColumns() {
+function runtimeAuthorizationGrantSelectColumns() {
   return [
     "g.id",
     "g.workspace_id",
@@ -472,7 +473,7 @@ export async function createRuntimeAuthorizationGrant(
     ? await executeTakeFirst<{ id: string }>(queryable, insertStatement)
     : await insertStatement.executeTakeFirst()
   if (!inserted) {
-    throw new Error("Failed to create relay authorization grant")
+    throw new Error("Failed to create runtime authorization grant")
   }
   // Re-fetch with the access_subjects join so the mapper can populate
   // actorId / conversationId from the subject row (P1b: actor_id and
@@ -480,14 +481,14 @@ export async function createRuntimeAuthorizationGrant(
   const selectStatement = db
     .selectFrom("runtime_authorization_grants as g")
     .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
-    .select(relayGrantSelectColumns())
+    .select(runtimeAuthorizationGrantSelectColumns())
     .where("g.id", "=", inserted.id)
     .limit(1)
   const row = isQueryExecutor(queryable)
     ? await executeTakeFirst<any>(queryable, selectStatement)
     : await selectStatement.executeTakeFirst()
   if (!row) {
-    throw new Error("Failed to re-fetch inserted relay authorization grant")
+    throw new Error("Failed to re-fetch inserted runtime authorization grant")
   }
   return mapRuntimeAuthorizationGrantRow(row)
 }
@@ -499,7 +500,7 @@ export async function getRuntimeAuthorizationGrant(
   const statement = db
     .selectFrom("runtime_authorization_grants as g")
     .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
-    .select(relayGrantSelectColumns())
+    .select(runtimeAuthorizationGrantSelectColumns())
     .where("g.id", "=", id)
     .limit(1)
   const row = isQueryExecutor(queryable)
@@ -710,7 +711,7 @@ export async function findMatchingRuntimeAuthorizationGrant(
   const statement = db
     .selectFrom("runtime_authorization_grants as g")
     .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
-    .select(relayGrantSelectColumns())
+    .select(runtimeAuthorizationGrantSelectColumns())
     .where("g.workspace_id", "=", params.workspaceId)
     .where("g.device_id", "=", params.deviceId)
     .where("g.device_capability_id", "=", params.deviceCapabilityId)
@@ -784,7 +785,7 @@ export async function listActiveRuntimeAuthorizationGrantsForExposure(
   const statement = db
     .selectFrom("runtime_authorization_grants as g")
     .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
-    .select(relayGrantSelectColumns())
+    .select(runtimeAuthorizationGrantSelectColumns())
     .where("g.device_capability_id", "=", deviceCapabilityId)
     .where("g.status", "=", "active")
     .orderBy("g.created_at", "desc")
