@@ -45,6 +45,10 @@ interface ManagedTunnel {
   child: ChildProcess
   configPath: string
   tmpDir: string
+  /** Captured at start() so rotateToken can re-emit the config without
+   * collapsing localPort to 0 (which would route the frps proxy at a
+   * port nothing is listening on after reload). */
+  localPort: number
 }
 
 function buildFrpcConfig(opts: {
@@ -99,18 +103,35 @@ export function createFrpTunnelAdapter(
         internalUrl: `http://tunnel-edge:8080/d/${startOpts.registrationToken}`,
       }
       const frpcPath = opts.frpcPath ?? "frpc"
+      // spawn() itself only synchronously throws for invalid options — a
+      // missing binary surfaces as an asynchronous 'error' event (ENOENT).
+      // Wrap both: the try/catch covers the immediate-throw path; the
+      // 'error' listener catches the async path and degrades to a no-op
+      // handle so the caller can decide what to do (the device runtime
+      // currently logs + treats it as "no tunnel registered").
+      let degradedToNoOp = false
+      const handleSpawnFailure = (err: unknown) => {
+        if (degradedToNoOp) return
+        degradedToNoOp = true
+        opts.logger?.error("frpc spawn failed; falling back to no-op tunnel", {
+          error: (err as Error).message,
+        })
+        try {
+          rmSync(tmpDir, { recursive: true, force: true })
+        } catch {
+          /* tmpdir cleanup is best-effort */
+        }
+      }
       let child: ChildProcess
       try {
         child = spawn(frpcPath, ["-c", configPath], {
           stdio: ["ignore", "pipe", "pipe"],
         })
       } catch (err) {
-        opts.logger?.error("frpc spawn failed; falling back to no-op tunnel", {
-          error: (err as Error).message,
-        })
-        rmSync(tmpDir, { recursive: true, force: true })
+        handleSpawnFailure(err)
         return handle
       }
+      child.on("error", handleSpawnFailure)
       child.stdout?.on("data", (b) =>
         opts.logger?.info(`frpc[${startOpts.deviceServiceId}] ${b}`)
       )
@@ -130,6 +151,7 @@ export function createFrpTunnelAdapter(
         child,
         configPath,
         tmpDir,
+        localPort: startOpts.localPort,
       })
       return handle
     },
@@ -139,6 +161,11 @@ export function createFrpTunnelAdapter(
     ): Promise<void> {
       const existing = managed.get(handle.deviceServiceId)
       if (!existing) return
+      // CRITICAL: preserve the original localPort. Previous code wrote
+      // localPort=0 here, which makes frpc reload a config that points at
+      // a port nothing is listening on — every dispatched tool call then
+      // 502s silently. The caller-side comment claimed v3 keeps the port
+      // but the buildFrpcConfig call below dropped it.
       writeFileSync(
         existing.configPath,
         buildFrpcConfig({
@@ -146,9 +173,7 @@ export function createFrpTunnelAdapter(
           serverPort: opts.serverPort,
           authToken: opts.authToken,
           registrationToken,
-          // localPort is encoded in the config; if it changed the caller
-          // should call stop+start. v3.0 keeps the existing port.
-          localPort: 0,
+          localPort: existing.localPort,
           vhostHost: opts.vhostHost,
         })
       )

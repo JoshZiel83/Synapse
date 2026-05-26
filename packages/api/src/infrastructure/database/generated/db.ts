@@ -1408,6 +1408,8 @@ export interface InteractionRuntimeAuthorizationRequests {
   device_tool_stable_key: string;
   grant_options: Generated<Json>;
   interaction_id: string;
+  principal_conversation_actor_context_id: string | null;
+  principal_remote_agent_id: string | null;
   reason: Generated<string>;
   request_mode: RuntimeAuthorizationRequestMode;
   requested_action: Generated<Json>;

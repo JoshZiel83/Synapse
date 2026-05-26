@@ -616,7 +616,7 @@ function unionWithDevice(
             requestedToolName: toolName,
             deviceToolStableKey: row.visible_tool_name,
             runtimeSessionId: "",
-            relayDeviceDisplayName: row.device_name,
+            deviceDisplayName: row.device_name,
           },
           authorizationPlan: (() => {
             const requestedAction = buildRequestedAction({

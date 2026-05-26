@@ -44,8 +44,8 @@ export interface RuntimeAuthorizationRequestTarget {
   requestedToolName: string
   deviceToolStableKey: string
   runtimeSessionId: string
-  relayDeviceDisplayName?: string
-  relayExposureDisplayName?: string
+  deviceDisplayName?: string
+  exposureDisplayName?: string
 }
 
 export interface RuntimeAuthorizationRequestPlanSnapshot {
@@ -128,7 +128,7 @@ async function loadConversationKindAndBoundary(
     .executeTakeFirst()
 }
 
-async function loadRelayCapabilityRequestState(capabilityId: string) {
+async function loadDeviceCapabilityRequestState(capabilityId: string) {
   return db
     .selectFrom("device_capabilities as capability")
     .innerJoin(
@@ -166,14 +166,14 @@ async function canActorRequestRuntimeAuthorization(
     return false
   }
 
-  const relayState = await loadRelayCapabilityRequestState(
+  const capabilityState = await loadDeviceCapabilityRequestState(
     params.runtimeTarget.deviceCapabilityId
   )
   if (
-    !relayState ||
-    relayState.capability_status !== "active" ||
-    relayState.exposure_runtime_status !== "healthy" ||
-    !relayState.has_active_device_session
+    !capabilityState ||
+    capabilityState.capability_status !== "active" ||
+    capabilityState.exposure_runtime_status !== "healthy" ||
+    !capabilityState.has_active_device_session
   ) {
     return false
   }
@@ -233,7 +233,7 @@ export async function createRuntimeAuthorizationRequest(
   const requesterAllowed = await canActorRequestRuntimeAuthorization(params)
   if (!requesterAllowed) {
     throw new Error(
-      "Current actor is not allowed to request authorization for this relay capability"
+      "Current actor is not allowed to request authorization for this device capability"
     )
   }
 
@@ -306,9 +306,7 @@ export async function createRuntimeAuthorizationRequest(
     executorKind: "runtime_authorization",
     deliveryPolicy: "human_interaction",
     status: "input_required",
-    statusMessage: buildWaitingSummary(
-      params.runtimeTarget.relayDeviceDisplayName
-    ),
+    statusMessage: buildWaitingSummary(params.runtimeTarget.deviceDisplayName),
     dispatchStatus: "input_requested",
     supportsCancel: true,
     requestPayload: {
@@ -360,10 +358,10 @@ export async function createRuntimeAuthorizationRequest(
     }
   } catch (error) {
     await cancelToolCallTask(task.id, {
-      summary: `Runtime authorization request for ${params.runtimeTarget.relayDeviceDisplayName?.trim() || "the device"} failed before dispatch.`,
+      summary: `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`,
       finalResultPayload: {
         content: textBlocks(
-          `Runtime authorization request for ${params.runtimeTarget.relayDeviceDisplayName?.trim() || "the device"} failed before dispatch.`
+          `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`
         ),
         isError: true,
       },

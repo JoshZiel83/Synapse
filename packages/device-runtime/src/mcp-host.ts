@@ -1,13 +1,23 @@
-// In-process catalog manager + MCP host. v3.0 implementation is a minimal
-// JSON-RPC over HTTP server bound to 127.0.0.1:0; the frp tunnel adapter
-// fronts it so the API side can reach `tools/list` and `tools/call` through
-// a Streamable HTTP transport without taking a hard dep on the upstream
-// `@modelcontextprotocol/sdk` McpServer wrapper.
+// In-process catalog manager + MCP host.
 //
-// MCP error-code preservation decision (§14 open item): we choose option (b)
-// — embed code in `CallToolResult._meta.synapse_error`. This lets the host
-// surface structured Synapse errors without leaving the high-level CallTool
-// contract.
+// **INTERIM IMPLEMENTATION — not the v3 data-plane terminus.** This is a
+// hand-rolled JSON-RPC-over-HTTP server bound to 127.0.0.1:0, paired with
+// the equally hand-rolled API-side dispatcher in
+// `packages/api/src/modules/devices/dispatch.ts`. Both stand in for a
+// Streamable-HTTP-based MCP transport (`@modelcontextprotocol/sdk`'s
+// `McpServer` + `StreamableHttpClientTransport`) which we will swap to
+// in a dedicated follow-up PR — see `docs/device-runtime-v3.md` §13 PR
+// #N1 (Tool Data Plane → MCP SDK Streamable HTTP). Today's surface is
+// just enough to validate envelope signing, target-id routing, and the
+// runtime-authorization grant flow end-to-end without taking a hard dep
+// on the upstream SDK; the wire shape is intentionally MCP-compatible so
+// the swap is mechanical (drop in McpServer, keep the catalog + envelope
+// glue).
+//
+// MCP error-code preservation decision (§14 open item): we choose option
+// (b) — embed code in `CallToolResult._meta.synapse_error`. This lets the
+// host surface structured Synapse errors without leaving the high-level
+// CallTool contract.
 
 import { createServer, type Server } from "node:http"
 import type { AddressInfo } from "node:net"

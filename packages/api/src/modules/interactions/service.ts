@@ -95,6 +95,8 @@ type RawInteractionRow = {
   source_request_args: unknown
   source_runtime_session_id: string | null
   source_retry_nonce: string | null
+  principal_remote_agent_id: string | null
+  principal_conversation_actor_context_id: string | null
   resolution_payload: unknown
   resolved_at: string | Date | null
   expires_at: string | Date | null
@@ -1095,6 +1097,8 @@ async function getInteractionRowById(
             auth.source_request_args AS source_request_args,
             auth.source_runtime_session_id AS source_runtime_session_id,
             auth.source_retry_nonce AS source_retry_nonce,
+            auth.principal_remote_agent_id AS principal_remote_agent_id,
+            auth.principal_conversation_actor_context_id AS principal_conversation_actor_context_id,
             COALESCE(
               user_input.resolution_payload,
               plan.resolution_payload,
@@ -1265,6 +1269,8 @@ async function getInteractionRowByIdForUpdate(
             auth.source_request_args AS source_request_args,
             auth.source_runtime_session_id AS source_runtime_session_id,
             auth.source_retry_nonce AS source_retry_nonce,
+            auth.principal_remote_agent_id AS principal_remote_agent_id,
+            auth.principal_conversation_actor_context_id AS principal_conversation_actor_context_id,
             COALESCE(
               user_input.resolution_payload,
               plan.resolution_payload,
@@ -1908,6 +1914,15 @@ async function insertRuntimeAuthorizationInteractionDetails(
     grantOptions: RuntimeAuthorizationGrantOption[]
     availablePresets: RuntimeAuthorizationPreset[]
     dedupeKey: string
+    /** When the triggering dispatch was a remote_agent principal, the
+     * remote_agent.id; otherwise null. The approval flow uses it to
+     * create a `remote_agent`-scoped grant. */
+    principalRemoteAgentId?: string
+    /** When the triggering dispatch was an actor_in_conversation
+     * principal, the conversation_actor_contexts.id; otherwise null. The
+     * approval flow uses it to create an `actor_in_conversation`-scoped
+     * grant. */
+    principalConversationActorContextId?: string
   }
 ) {
   await executeCompiledQuery(
@@ -1926,6 +1941,9 @@ async function insertRuntimeAuthorizationInteractionDetails(
       source_request_args: jsonbValue(
         params.sourceRequestArgs
       ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["source_request_args"],
+      principal_remote_agent_id: params.principalRemoteAgentId || null,
+      principal_conversation_actor_context_id:
+        params.principalConversationActorContextId || null,
       requested_action: jsonbValue(
         params.requestedAction
       ) as unknown as TableInsert<"interaction_runtime_authorization_requests">["requested_action"],
@@ -3409,6 +3427,9 @@ export async function resolveInteractionRequest(
             deviceExposureId: locked.device_exposure_id || "",
             conversationId: locked.conversation_id,
             actorId: locked.requester_actor_id || undefined,
+            remoteAgentId: locked.principal_remote_agent_id || undefined,
+            conversationActorContextId:
+              locked.principal_conversation_actor_context_id || undefined,
             createdByWorkspaceMemberId: params.resolverWorkspaceMemberId,
             sourceInteractionId: locked.id,
             sourceTaskId: locked.task_id || undefined,

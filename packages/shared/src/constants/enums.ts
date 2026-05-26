@@ -758,7 +758,9 @@ export const TASK_NOTICE_STATUSES = [
 export const RUNTIME_AUTHORIZATION_PRESETS = [
   "once",
   "actor",
+  "actor_in_conversation",
   "conversation",
+  "remote_agent",
   "workspace",
 ] as const
 export const RUNTIME_AUTHORIZATION_GRANT_SCOPE = {

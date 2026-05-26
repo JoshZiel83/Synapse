@@ -3205,6 +3205,18 @@ CREATE TABLE interaction_runtime_authorization_requests (
   source_runtime_session_id TEXT,
   source_retry_nonce TEXT,
   source_request_args JSONB NOT NULL DEFAULT '{}',
+  -- Optional principal-disambiguation fields. When the dispatch that
+  -- triggered this auth request came from a remote_agent or
+  -- actor_in_conversation principal, the projection persists the
+  -- principal-specific ids here so the eventual grant can be subject-
+  -- scoped to remote_agent / conversation_actor_context (not just
+  -- actor/conversation, which the parent interaction_requests row
+  -- carries via requester_participant_id). Both nullable; actor-only
+  -- principals leave them unset. Named `principal_*` to avoid collision
+  -- with the existing `requester_remote_agent_id` field projected from
+  -- access_subjects on the parent interaction_requests row.
+  principal_remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
+  principal_conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
   requested_action JSONB NOT NULL DEFAULT '{}',
   grant_options JSONB NOT NULL DEFAULT '[]',
   available_presets JSONB NOT NULL DEFAULT '[]',

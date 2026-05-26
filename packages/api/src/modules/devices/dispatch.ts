@@ -2,10 +2,17 @@
 // operation envelope, args), resolves the device's MCP HTTP endpoint via
 // DeviceTunnelRegistry and issues a `tools/call` to it.
 //
-// v3.0 ships a raw JSON-RPC client (no MCP SDK) because the surface is
-// stateless and the McpServer SDK costs ~150KB on the API side. A follow-up
-// PR can swap to @modelcontextprotocol/sdk's StreamableHttp client without
-// touching the projection layer.
+// **INTERIM IMPLEMENTATION — not the v3 data-plane terminus.** This is a
+// hand-rolled JSON-RPC HTTP client, paired with the equally hand-rolled
+// MCP host in `packages/device-runtime/src/mcp-host.ts`. Both will be
+// swapped to `@modelcontextprotocol/sdk`'s Streamable HTTP transport
+// (StreamableHttpClientTransport on this side, McpServer on the device
+// side) in a dedicated follow-up — see `docs/device-runtime-v3.md` §13
+// PR #N1 (Tool Data Plane → MCP SDK Streamable HTTP). The current shape
+// is wire-compatible with the SDK transport so the swap is mechanical;
+// today's hand-roll exists only because the surface is stateless and the
+// SDK client costs ~150KB on the API side, which we don't want to pay
+// until we've validated the envelope + target-id + grant flow end-to-end.
 
 import type { OperationEnvelope, SynapseError } from "@synapse/device-protocol"
 import { getDeviceTunnelRegistry } from "./tunnel-registry.js"
@@ -57,10 +64,7 @@ export async function dispatchSyncTool(
   // process doesn't leak timers under steady load. Prior version used
   // sleep().then(abort) which left an unowned promise + timer in node's
   // queue on every successful call.
-  const timer = setTimeout(
-    () => controller.abort(),
-    opts.timeoutMs ?? 60_000
-  )
+  const timer = setTimeout(() => controller.abort(), opts.timeoutMs ?? 60_000)
 
   try {
     const res = await fetchImpl(url, {

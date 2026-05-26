@@ -1874,7 +1874,7 @@ class ApiClient {
     wsId: string,
     filters?: {
       status?: "active" | "deprecated" | "disabled" | "archived"
-      providerKind?: "relay" | "webhook" | "internal" | "integration"
+      providerKind?: "device" | "webhook" | "internal" | "integration"
       providerRef?: string
       sourceKey?: string
     }
@@ -1892,7 +1892,7 @@ class ApiClient {
   createAutomationEventSource(
     wsId: string,
     data: {
-      providerKind: "relay" | "webhook" | "internal" | "integration"
+      providerKind: "device" | "webhook" | "internal" | "integration"
       providerRef?: string
       integration?: {
         installationId: string

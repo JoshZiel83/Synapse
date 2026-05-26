@@ -32,58 +32,6 @@ import {
   upsertAccessSubjectOn,
 } from "../access/subject-registry.js"
 
-/**
- * P1b: derive the SubjectRef for a relay authorization grant from the
- * (scope, actorId, conversationId, workspaceId) tuple. Returns null for
- * `once` scope (single-use grants don't bind a subject) and workspaces with
- * no actor/conversation context.
- */
-function buildRelayGrantSubjectRef(input: {
-  scope: RuntimeAuthorizationGrantScope
-  workspaceId: string
-  actorId?: string | null
-  conversationId?: string | null
-}): SubjectRef | null {
-  switch (input.scope) {
-    case "once":
-      return null
-    case "workspace":
-      return { kind: SUBJECT_KIND.WORKSPACE, workspaceId: input.workspaceId }
-    case "actor":
-      if (!input.actorId) {
-        throw new Error("actorId required for actor-scope relay grant")
-      }
-      return { kind: SUBJECT_KIND.ACTOR, actorId: input.actorId }
-    case "conversation":
-      if (!input.conversationId) {
-        throw new Error(
-          "conversationId required for conversation-scope relay grant"
-        )
-      }
-      return {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: input.conversationId,
-      }
-    case "actor_in_conversation":
-      // v3 scope added in PR #1 of the device-runtime refactor; the legacy
-      // relay code path does not emit this scope. The device-side runtime-
-      // authorizations module (PR #15 rename) handles it via
-      // ensureConversationActorContext + SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT.
-      throw new Error(
-        "actor_in_conversation scope is not supported by the legacy relay-authorizations module; use the device path"
-      )
-    case "remote_agent":
-      // PR #29 added remote_agent to the grant scope enum. Subject-id
-      // resolution for remote_agent grants happens in the device path
-      // (createRuntimeAuthorizationGrant uses upsertAccessSubject with
-      // SUBJECT_KIND.REMOTE_AGENT directly); the legacy helper has no
-      // remoteAgentId in its input so it can't synthesize a subject.
-      throw new Error(
-        "remote_agent scope is not supported by the legacy relay-authorizations helper; use the device path with createRuntimeAuthorizationGrant({ subjectId })"
-      )
-  }
-}
-
 type Queryable = QueryExecutor
 
 function isQueryExecutor(value: unknown): value is QueryExecutor {
@@ -214,6 +162,14 @@ export interface CreateRuntimeAuthorizationGrantParams {
   deviceExposureId: string
   conversationId?: string
   actorId?: string
+  /** Required when preset/scope = "remote_agent". */
+  remoteAgentId?: string
+  /**
+   * Required when preset/scope = "actor_in_conversation". Caller (the
+   * approval flow) computes this via ensureConversationActorContext(
+   * actorId, conversationId) before invoking.
+   */
+  conversationActorContextId?: string
   createdByWorkspaceMemberId?: string
   sourceInteractionId?: string
   sourceTaskId?: string
@@ -382,12 +338,81 @@ export function runtimeAuthorizationPresetToGrant(
       return { scope: "once", retention: "consume_once" }
     case "actor":
       return { scope: "actor", retention: "until_revoked" }
+    case "actor_in_conversation":
+      return { scope: "actor_in_conversation", retention: "until_revoked" }
     case "conversation":
       return { scope: "conversation", retention: "until_revoked" }
+    case "remote_agent":
+      return { scope: "remote_agent", retention: "until_revoked" }
     case "workspace":
       return { scope: "workspace", retention: "until_revoked" }
     default:
       return { scope: "once", retention: "consume_once" }
+  }
+}
+
+/**
+ * Resolve the SubjectRef for a runtime authorization grant. Covers all
+ * five v3 scopes — including `actor_in_conversation` and `remote_agent`
+ * — so the normal approval flow can produce grants for bridged remote
+ * agents and per-conversation-actor contexts.
+ *
+ * Returns null only for `once` scope; every other scope requires a
+ * subject. Throws when the required id is missing rather than falling
+ * back to a coarser subject (e.g. an actor_in_conversation grant without
+ * a context id would otherwise silently widen to an actor-scope grant).
+ */
+function buildRuntimeAuthorizationGrantSubjectRef(input: {
+  scope: RuntimeAuthorizationGrantScope
+  workspaceId: string
+  actorId?: string | null
+  conversationId?: string | null
+  remoteAgentId?: string | null
+  conversationActorContextId?: string | null
+}): SubjectRef | null {
+  switch (input.scope) {
+    case "once":
+      return null
+    case "workspace":
+      return {
+        kind: SUBJECT_KIND.WORKSPACE,
+        workspaceId: input.workspaceId,
+      }
+    case "actor":
+      if (!input.actorId) {
+        throw new Error("actorId required for actor-scope runtime authz grant")
+      }
+      return { kind: SUBJECT_KIND.ACTOR, actorId: input.actorId }
+    case "conversation":
+      if (!input.conversationId) {
+        throw new Error(
+          "conversationId required for conversation-scope runtime authz grant"
+        )
+      }
+      return {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: input.conversationId,
+      }
+    case "actor_in_conversation":
+      if (!input.conversationActorContextId) {
+        throw new Error(
+          "conversationActorContextId required for actor_in_conversation-scope runtime authz grant (caller must call ensureConversationActorContext(actorId, conversationId) first)"
+        )
+      }
+      return {
+        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
+        contextId: input.conversationActorContextId,
+      }
+    case "remote_agent":
+      if (!input.remoteAgentId) {
+        throw new Error(
+          "remoteAgentId required for remote_agent-scope runtime authz grant"
+        )
+      }
+      return {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: input.remoteAgentId,
+      }
   }
 }
 
@@ -401,11 +426,13 @@ export async function createRuntimeAuthorizationGrant(
   const grantSpec = normalizeGrantSpecForInsert(
     GrantPolicySchema.parse(params.grantSpec) as RuntimeAuthorizationGrantSpec
   )
-  const subjectRef = buildRelayGrantSubjectRef({
+  const subjectRef = buildRuntimeAuthorizationGrantSubjectRef({
     scope,
     workspaceId: params.workspaceId,
     actorId: params.actorId,
     conversationId: params.conversationId,
+    remoteAgentId: params.remoteAgentId,
+    conversationActorContextId: params.conversationActorContextId,
   })
   const subjectId = subjectRef
     ? isQueryExecutor(queryable)
@@ -420,6 +447,12 @@ export async function createRuntimeAuthorizationGrant(
       device_capability_id: params.deviceCapabilityId,
       device_exposure_id: params.deviceExposureId,
       subject_id: subjectId,
+      // chk_runtime_authorization_grants_scope_context requires this to
+      // be NOT NULL ⇔ scope = 'actor_in_conversation'; null otherwise.
+      conversation_actor_context_id:
+        scope === "actor_in_conversation"
+          ? (params.conversationActorContextId as string)
+          : null,
       created_by_workspace_member_id: params.createdByWorkspaceMemberId || null,
       source_interaction_id: params.sourceInteractionId || null,
       source_task_id: params.sourceTaskId || null,

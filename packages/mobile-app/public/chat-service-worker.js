@@ -1095,9 +1095,6 @@
     workspace: 60 * 60 * 1e3
     // 60 minutes
   };
-  var RELAY_PAIRING_TTL_MS = 10 * 60 * 1e3;
-  var RELAY_DELIVERY_ACK_TIMEOUT_MS = 15 * 1e3;
-  var RELAY_OPERATION_TTL_MS = 5 * 60 * 1e3;
 
   // ../shared/dist/utils/index.js
   var GROUP_CONVERSATION_KIND = CONVERSATION_KIND.GROUP;

@@ -241,29 +241,27 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
         // the device is reachable but the envelope target index is
         // empty, and the mcp-host fail-closed gate would reject every
         // dispatch until catalog sync raced through.
-        try {
-          await this.pushCatalog()
-        } catch (err) {
-          logger.error("initial catalog sync failed", {
-            error: (err as Error).message,
-          })
-        }
+        //
+        // pushCatalog() throws if the server responds without a usable
+        // assigned_ids map; absorbAssignedIds() throws if the map is
+        // missing or wrong-shaped. Either failure propagates out of
+        // onHelloAck, which the transport treats as a fatal handshake
+        // failure: it closes the socket and the connectLoop reconnects.
+        // We DO NOT want to register the tunnel or flip to "online" in
+        // the half-initialized state where dispatch would reject every
+        // call.
+        await this.pushCatalog()
         // Announce our tunnel internal URL so the API's DeviceTunnelRegistry
         // can route dispatchSyncTool to us. Without this, every device tool
-        // call returns no_tunnel_endpoint.
+        // call returns no_tunnel_endpoint. Throws on failure for the same
+        // fail-closed reason as pushCatalog above.
         if (this.tunnelHandle) {
-          try {
-            await this.transport!.request("device.tunnel.up", {
-              internal_url: this.tunnelHandle.internalUrl,
-            })
-            logger.info("device.tunnel.up registered with server", {
-              internalUrl: this.tunnelHandle.internalUrl,
-            })
-          } catch (err) {
-            logger.error("device.tunnel.up failed", {
-              error: (err as Error).message,
-            })
-          }
+          await this.transport!.request("device.tunnel.up", {
+            internal_url: this.tunnelHandle.internalUrl,
+          })
+          logger.info("device.tunnel.up registered with server", {
+            internalUrl: this.tunnelHandle.internalUrl,
+          })
         }
       },
       onStatus: (status) => this.updateStatus(status),
@@ -289,15 +287,29 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     // envelope whose target IDs don't match our local catalog — without
     // this check a forged or misrouted envelope could trick us into
     // running a tool that belongs to another device.
+    //
+    // Throws if the server didn't ship a map or shipped a wrong-shaped
+    // one. The transport's onHelloAck handler treats that as a fatal
+    // startup failure and reconnects, keeping the runtime out of the
+    // "online but not routable" state where the mcp-host's fail-closed
+    // gate would reject every dispatch.
     this.absorbAssignedIds(ack)
   }
 
   private absorbAssignedIds(ack: unknown) {
-    if (!ack || typeof ack !== "object") return
+    if (!ack || typeof ack !== "object") {
+      throw new Error(
+        "device.catalog.sync ack was not an object — server response shape changed"
+      )
+    }
     const assigned =
       (ack as { assignedIds?: unknown; assigned_ids?: unknown }).assignedIds ??
       (ack as { assigned_ids?: unknown }).assigned_ids
-    if (!assigned || typeof assigned !== "object") return
+    if (!assigned || typeof assigned !== "object") {
+      throw new Error(
+        "device.catalog.sync ack missing assigned_ids — refusing to route envelopes without a server-assigned target map"
+      )
+    }
     this.mcpHost?.setCatalogTargetIds(
       assigned as Parameters<InMemoryMcpHostHandle["setCatalogTargetIds"]>[0]
     )

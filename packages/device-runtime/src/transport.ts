@@ -170,12 +170,26 @@ export class TransportClient {
             ack,
           })
           if (this.opts.onHelloAck) {
+            // CRITICAL: onHelloAck owns post-handshake setup that gates
+            // safe dispatch (envelope target index, tunnel registration).
+            // If it throws we must NOT flip to 'online' — that would tell
+            // the rest of the system the device is ready while it's
+            // actually in a half-initialized state. Close the socket so
+            // the connectLoop retries; the next attempt re-runs the full
+            // hello → catalog → tunnel sequence.
             try {
               await this.opts.onHelloAck(ack)
             } catch (err) {
-              this.opts.logger.error("onHelloAck handler threw", {
-                error: (err as Error).message,
-              })
+              this.opts.logger.error(
+                "onHelloAck failed; closing socket so connectLoop retries",
+                { error: (err as Error).message }
+              )
+              try {
+                socket.close(4010, "onHelloAck failed")
+              } catch {
+                /* ignore */
+              }
+              return
             }
           }
           this.opts.onStatus("online")

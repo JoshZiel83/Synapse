@@ -8,9 +8,9 @@ const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
 const CURRENT_SCHEMA_VERSION =
-  "2026-05-26-device-runtime-v3-pr29-purge-relay-remote-agent-scope"
+  "2026-05-27-device-runtime-v3-pr30-runtime-authz-requester-cols"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "device runtime v3 PR #29: rename 'relay' → 'device' in catalog_items_source_kind / plugin_package_version_specs_transport / automation_*_kind enums; add 'remote_agent' to runtime_authorization_grants_scope"
+  "device runtime v3 PR #30: add requester_remote_agent_id + requester_conversation_actor_context_id to interaction_runtime_authorization_requests so remote_agent + actor_in_conversation grants can be created from the normal approval flow"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`
