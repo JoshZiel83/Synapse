@@ -1,5 +1,6 @@
 import { sql } from "kysely"
-import { SUBJECT_KIND } from "@synapse/shared"
+import { SUBJECT_KIND, MEMORY_PERMISSION } from "@synapse/shared"
+import type { MemoryPermission } from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
 import {
@@ -7,6 +8,7 @@ import {
   evaluateWorkspacePermission,
 } from "./rbac-rules.js"
 import { upsertAccessSubject } from "./subject-registry.js"
+import { memoryGrantMatches } from "../memory/access-grant-storage.js"
 
 type AccessResourceType =
   | "platform"
@@ -1417,7 +1419,11 @@ async function hasMemoryItemPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   memoryItemId: string,
-  permission: string
+  permission: string,
+  runtimeContext?: {
+    runtimeSubjectIds?: readonly string[]
+    runtimeScopeSubjectIds?: readonly string[]
+  }
 ): Promise<boolean> {
   const row = await db
     .selectFrom("memory_items as mi")
@@ -1428,6 +1434,8 @@ async function hasMemoryItemPermission(
       "ms.anchor_conversation_actor_context_id"
     )
     .select([
+      "mi.id as memory_item_id",
+      "ms.id as memory_space_id",
       "mi.workspace_id",
       "ms.space_type",
       "ms.anchor_conversation_id",
@@ -1442,6 +1450,30 @@ async function hasMemoryItemPermission(
     .executeTakeFirst()
   if (!row) {
     return false
+  }
+
+  // PR5: additive memory_access_grants check. Only meaningful when the caller
+  // passes a runtimeContext (legacy callers that pre-date PR5 still get the
+  // exact same space_type-driven decision). Maps the evaluator's loose
+  // permission string to the MEMORY_PERMISSION enum used by the grants table.
+  if (
+    runtimeContext?.runtimeSubjectIds &&
+    runtimeContext.runtimeSubjectIds.length > 0
+  ) {
+    const grantPermission = mapEvaluatorPermissionToMemoryPermission(permission)
+    if (grantPermission) {
+      const granted = await memoryGrantMatches(db, {
+        memorySpaceId: row.memory_space_id,
+        memoryItemId: row.memory_item_id,
+        permission: grantPermission,
+        runtimeSubjectIds: runtimeContext.runtimeSubjectIds,
+        runtimeScopeSubjectIds: runtimeContext.runtimeScopeSubjectIds ?? [],
+        mode: "with-item",
+      })
+      if (granted) {
+        return true
+      }
+    }
   }
 
   switch (row.space_type) {
@@ -1530,6 +1562,170 @@ async function hasMemoryItemPermission(
   }
 }
 
+function mapEvaluatorPermissionToMemoryPermission(
+  permission: string
+): MemoryPermission | null {
+  switch (permission) {
+    case "read":
+      return MEMORY_PERMISSION.READ
+    case "recall":
+      return MEMORY_PERMISSION.RECALL
+    case "edit":
+      return MEMORY_PERMISSION.EDIT
+    case "write":
+      return MEMORY_PERMISSION.WRITE
+    case "delete":
+      return MEMORY_PERMISSION.DELETE
+    case "manage":
+      return MEMORY_PERMISSION.MANAGE
+    case "retarget":
+      // PR5 plan retires retarget in favor of (source delete + target write).
+      // For PR5 transitional we keep mapping to DELETE so existing API
+      // surface continues to work; PR7 removes the action entirely.
+      return MEMORY_PERMISSION.DELETE
+    default:
+      return null
+  }
+}
+
+/**
+ * PR5: space-level permission check. Consumed by `checkPermission` for the
+ * new `memory_space` resource type. Returns true when either:
+ *   - the owner_subject_id of the space is one of `runtimeSubjectIds`
+ *     (implicit owner permission — the space-owner can always read/recall),
+ *   - or an active space-level memory_access_grants row matches.
+ *
+ * Item-level grants are intentionally NOT considered here (per the plan they
+ * only count in `hasMemoryItemPermission` when the item id also matches).
+ *
+ * The legacy memory_spaces shape (PR1-PR4 era) does not have owner_subject_id;
+ * we fall back to the existing space_type-driven evaluator in that case so
+ * pre-PR5 spaces keep working.
+ */
+async function hasMemorySpacePermission(
+  db: KyselyDb,
+  subject: PermissionSubject,
+  memorySpaceId: string,
+  permission: string,
+  runtimeContext?: {
+    runtimeSubjectIds?: readonly string[]
+    runtimeScopeSubjectIds?: readonly string[]
+  }
+): Promise<boolean> {
+  const row = await db
+    .selectFrom("memory_spaces")
+    .select([
+      "id",
+      "workspace_id",
+      "space_type",
+      "anchor_conversation_id",
+      "anchor_actor_id",
+      "anchor_conversation_actor_context_id",
+      "anchor_workspace_member_id",
+    ])
+    .where("id", "=", memorySpaceId)
+    .limit(1)
+    .executeTakeFirst()
+  if (!row) {
+    return false
+  }
+
+  // Explicit space-level grant check (PR5 hot path).
+  if (
+    runtimeContext?.runtimeSubjectIds &&
+    runtimeContext.runtimeSubjectIds.length > 0
+  ) {
+    const grantPermission = mapEvaluatorPermissionToMemoryPermission(permission)
+    if (grantPermission) {
+      const granted = await memoryGrantMatches(db, {
+        memorySpaceId: row.id,
+        permission: grantPermission,
+        runtimeSubjectIds: runtimeContext.runtimeSubjectIds,
+        runtimeScopeSubjectIds: runtimeContext.runtimeScopeSubjectIds ?? [],
+        mode: "space-only",
+      })
+      if (granted) return true
+    }
+  }
+
+  // Fall back to the existing legacy decision tree, but expressed at the
+  // space level rather than the item level. Reuse the same wiring as
+  // hasMemoryItemPermission's owner derivation.
+  switch (row.space_type) {
+    case "workspace_shared":
+      if (subject.type === "actor") {
+        const actor = await loadActorRow(db, subject.id)
+        if (!actor || actor.workspace_id !== row.workspace_id) {
+          return false
+        }
+        return (
+          permission === "read" ||
+          permission === "recall" ||
+          permission === "edit"
+        )
+      }
+      return hasWorkspacePermission(
+        db,
+        subject,
+        row.workspace_id,
+        permission === "read" || permission === "recall"
+          ? "view"
+          : "manage_memories"
+      )
+    case "conversation_shared":
+      if (!row.anchor_conversation_id) return false
+      return hasConversationPermission(
+        db,
+        subject,
+        row.anchor_conversation_id,
+        permission === "read" || permission === "recall"
+          ? "memory_read"
+          : permission === "edit"
+            ? "memory_edit"
+            : "memory_delete"
+      )
+    case "actor_private":
+      if (!row.anchor_actor_id) return false
+      return hasActorPermission(
+        db,
+        subject,
+        row.anchor_actor_id,
+        permission === "read" || permission === "recall"
+          ? "memory_read"
+          : permission === "edit"
+            ? "memory_edit"
+            : "memory_delete"
+      )
+    case "participant_private":
+      if (!row.anchor_conversation_actor_context_id) return false
+      return hasConversationActorContextPermission(
+        db,
+        subject,
+        row.anchor_conversation_actor_context_id,
+        permission === "read" || permission === "recall"
+          ? "memory_read"
+          : permission === "edit"
+            ? "memory_edit"
+            : "memory_delete"
+      )
+    case "user_private":
+      if (
+        subject.type === "workspace_member" &&
+        row.anchor_workspace_member_id === subject.id
+      ) {
+        return true
+      }
+      return hasWorkspacePermission(
+        db,
+        subject,
+        row.workspace_id,
+        "manage_memories"
+      )
+    default:
+      return false
+  }
+}
+
 export async function checkPermission(
   db: KyselyDb,
   params: {
@@ -1546,6 +1742,14 @@ export async function checkPermission(
      * `runtimeScopeSubjectIds` through here.
      */
     runtimeScopeSubjectIds?: readonly string[]
+    /**
+     * PR5: subject_id set the principal can claim under (the same field on
+     * RuntimePrincipalContext). Required for memory_access_grants matching
+     * — the grant table's subject_id is matched against this set. Callers
+     * that don't pass it get the legacy memory permission decision tree
+     * only (no explicit grants honored).
+     */
+    runtimeSubjectIds?: readonly string[]
   }
 ) {
   if (!params.resourceId) {
@@ -1599,7 +1803,22 @@ export async function checkPermission(
         db,
         params.subject,
         params.resourceId,
-        params.permission
+        params.permission,
+        {
+          runtimeSubjectIds: params.runtimeSubjectIds,
+          runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+        }
+      )
+    case "memory_space":
+      return hasMemorySpacePermission(
+        db,
+        params.subject,
+        params.resourceId,
+        params.permission,
+        {
+          runtimeSubjectIds: params.runtimeSubjectIds,
+          runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
+        }
       )
     case "installed_skill":
       return hasInstalledSkillPermission(
