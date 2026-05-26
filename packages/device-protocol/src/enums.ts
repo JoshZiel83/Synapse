@@ -175,6 +175,26 @@ export const RUNTIME_AUTHORIZATION_CAPABILITIES = [
 export type RuntimeAuthorizationCapability =
   (typeof RUNTIME_AUTHORIZATION_CAPABILITIES)[number]
 
+// Operation-level taxonomy for browser capability. fail-closed semantics: a
+// grant whose policy lacks `operations` does NOT cover any operation-requesting
+// call (matchers.ts enforces this). See docs/device-runtime-v3.md §Browser v3.1.
+export const RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS = [
+  "page.read",
+  "page.navigate",
+  "page.input",
+  "screenshot.capture",
+  "console.read",
+  "network.list",
+  "network.body.read",
+  "script.evaluate",
+  "performance.trace",
+  "file.upload",
+  "extension.manage",
+  "webmcp.execute",
+] as const
+export type BrowserOperation =
+  (typeof RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS)[number]
+
 // Operation lifecycle statuses. awaiting_authorization is new in v3 (§6).
 export const DEVICE_OPERATION_STATUSES = [
   "created",

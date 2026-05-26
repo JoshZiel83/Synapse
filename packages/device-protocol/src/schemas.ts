@@ -23,6 +23,7 @@ import {
   DEVICE_TRUST_STATUSES,
   DEVICE_TYPES,
   HOST_KINDS,
+  RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS,
   RUNTIME_AUTHORIZATION_CAPABILITIES,
   RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
   RUNTIME_AUTHORIZATION_GRANT_SCOPES,
@@ -44,6 +45,13 @@ export const RuntimeBrowserPolicySchema = z.object({
   origin: z.string().optional(),
   host: z.string().optional(),
   registrable_domain: z.string().optional(),
+  // v3.1: operation-level allowlist. Schema-optional for backward compat with
+  // any envelope serialized before v3.1 lands, but the runtime matcher treats
+  // missing `operations` as fail-closed when the requested action demands an
+  // operation (see @synapse/shared matchers.ts).
+  operations: z
+    .array(z.enum(RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS))
+    .optional(),
 })
 
 export const RuntimeCommandlinePolicySchema = z.object({
@@ -148,6 +156,10 @@ export const DeviceCapabilitySummarySchema = z.object({
   transport: z.enum(DEVICE_EXPOSURE_TRANSPORTS),
   builtin_kind: z.enum(DEVICE_BUILTIN_KINDS).nullable(),
   runtime_status: z.enum(DEVICE_EXPOSURE_RUNTIME_STATUSES),
+  // v3.1: exposure-level metadata pass-through. chrome-devtools-mcp provider
+  // sets metadata.enabled and metadata.disabledReason so the dashboard can
+  // render "Coming soon" / disabled rows without guessing.
+  metadata: z.record(z.unknown()).nullable().optional(),
 })
 export type DeviceCapabilitySummary = z.infer<
   typeof DeviceCapabilitySummarySchema
