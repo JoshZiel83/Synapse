@@ -3630,3 +3630,330 @@ CREATE TABLE IF NOT EXISTS chat_push_tokens (
 
 CREATE INDEX IF NOT EXISTS idx_chat_push_tokens_workspace_member
   ON chat_push_tokens(workspace_member_id);
+
+-- ============================================================================
+-- Subject + Memory refactor PR1: additive scope_subject_id, memory_access_grants,
+-- helper functions, per-table BEFORE triggers.
+-- ============================================================================
+
+CREATE TYPE memory_permission AS ENUM ('read','recall','write','edit','delete','manage');
+CREATE TYPE memory_access_grants_status AS ENUM ('active','revoked','superseded');
+
+ALTER TABLE resource_access_bindings
+  ADD COLUMN scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE CASCADE;
+
+ALTER TABLE relay_authorization_grants
+  ADD COLUMN scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE CASCADE;
+
+ALTER TABLE relay_authorization_grants
+  ALTER COLUMN scope DROP NOT NULL,
+  ALTER COLUMN scope SET DEFAULT NULL;
+
+DROP INDEX uq_resource_access_bindings_active;
+CREATE UNIQUE INDEX uq_resource_access_bindings_active
+  ON resource_access_bindings(
+    resource_type,
+    COALESCE(installed_skill_id::text, ''),
+    COALESCE(plugin_installation_id::text, ''),
+    COALESCE(relay_capability_id::text, ''),
+    COALESCE(automation_event_source_id::text, ''),
+    COALESCE(actor_id::text, ''),
+    COALESCE(remote_agent_id::text, ''),
+    subject_id,
+    COALESCE(scope_subject_id::text, '')
+  )
+  WHERE status = 'active';
+
+CREATE INDEX idx_resource_access_bindings_scope_subject_id
+  ON resource_access_bindings(scope_subject_id)
+  WHERE scope_subject_id IS NOT NULL;
+
+DROP INDEX idx_relay_authorization_grants_subject;
+CREATE INDEX idx_relay_authorization_grants_subject
+  ON relay_authorization_grants(subject_id, scope_subject_id, relay_capability_id, status, created_at DESC)
+  WHERE subject_id IS NOT NULL;
+
+CREATE INDEX idx_relay_authorization_grants_three_key
+  ON relay_authorization_grants(relay_device_id, relay_capability_id, relay_exposure_id, subject_id, scope_subject_id, status)
+  WHERE status = 'active';
+
+CREATE OR REPLACE FUNCTION is_scope_eligible_subject(p_subject_id UUID)
+RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
+DECLARE v_kind subject_kind;
+BEGIN
+  IF p_subject_id IS NULL THEN RETURN TRUE; END IF;
+  SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
+  IF v_kind IS NULL THEN RETURN FALSE; END IF;
+  RETURN v_kind IN ('workspace','conversation');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION is_workspace_bound_subject_kind(p_subject_id UUID)
+RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
+DECLARE v_kind subject_kind;
+BEGIN
+  IF p_subject_id IS NULL THEN RETURN TRUE; END IF;
+  SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
+  IF v_kind IS NULL THEN RETURN FALSE; END IF;
+  -- PR1 temporarily allows conversation_actor_context (legacy actor_in_conversation
+  -- writer at access-target-resolver.ts still produces it). PR7 removes from
+  -- allowlist together with dropping the enum value.
+  RETURN v_kind IN ('workspace_member','actor','remote_agent','workspace','conversation','conversation_actor_context');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION is_memory_owner_subject_kind(p_subject_id UUID)
+RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
+DECLARE v_kind subject_kind;
+BEGIN
+  IF p_subject_id IS NULL THEN RETURN TRUE; END IF;
+  SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
+  IF v_kind IS NULL THEN RETURN FALSE; END IF;
+  -- Memory owners must be one of these — no conversation_actor_context (memory
+  -- writes only start in PR5, no legacy path) and no user/external/system.
+  RETURN v_kind IN ('workspace_member','actor','remote_agent','workspace','conversation');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION access_subject_workspace_id(p_subject_id UUID)
+RETURNS UUID LANGUAGE plpgsql STABLE AS $$
+DECLARE v_ws UUID;
+BEGIN
+  IF p_subject_id IS NULL THEN RETURN NULL; END IF;
+  SELECT workspace_id INTO v_ws FROM access_subjects WHERE id = p_subject_id;
+  RETURN v_ws;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION relay_resource_workspace_id(
+  p_device_id     UUID,
+  p_capability_id UUID,
+  p_exposure_id   UUID
+) RETURNS UUID LANGUAGE plpgsql STABLE AS $$
+DECLARE
+  v_cap_ws  UUID;
+  v_cap_exp UUID;
+  v_exp_dev UUID;
+  v_dev_ws  UUID;
+BEGIN
+  IF p_device_id IS NULL OR p_capability_id IS NULL OR p_exposure_id IS NULL THEN
+    RAISE EXCEPTION 'relay_resource_workspace_id: device/capability/exposure ids must be NOT NULL';
+  END IF;
+
+  SELECT workspace_id, exposure_id INTO v_cap_ws, v_cap_exp
+    FROM relay_capabilities WHERE id = p_capability_id;
+  IF v_cap_ws IS NULL THEN
+    RAISE EXCEPTION 'relay_capability % not found', p_capability_id;
+  END IF;
+  IF v_cap_exp IS DISTINCT FROM p_exposure_id THEN
+    RAISE EXCEPTION 'relay_capability % does not belong to exposure %', p_capability_id, p_exposure_id;
+  END IF;
+
+  SELECT device_id INTO v_exp_dev FROM relay_exposures WHERE id = p_exposure_id;
+  IF v_exp_dev IS NULL THEN
+    RAISE EXCEPTION 'relay_exposure % not found', p_exposure_id;
+  END IF;
+  IF v_exp_dev IS DISTINCT FROM p_device_id THEN
+    RAISE EXCEPTION 'relay_exposure % does not belong to device %', p_exposure_id, p_device_id;
+  END IF;
+
+  SELECT workspace_id INTO v_dev_ws FROM relay_devices WHERE id = p_device_id;
+  IF v_dev_ws IS NULL THEN
+    RAISE EXCEPTION 'relay_device % not found', p_device_id;
+  END IF;
+  IF v_cap_ws IS DISTINCT FROM v_dev_ws THEN
+    RAISE EXCEPTION 'relay_capability/device workspace mismatch (% vs %)', v_cap_ws, v_dev_ws;
+  END IF;
+
+  RETURN v_cap_ws;
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION validate_resource_access_binding_subject_scope()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+  v_subject_ws  UUID;
+  v_scope_ws    UUID;
+  v_resource_ws UUID;
+BEGIN
+  IF NOT is_scope_eligible_subject(NEW.scope_subject_id) THEN
+    RAISE EXCEPTION 'resource_access_bindings.scope_subject_id % must reference a subject of kind workspace|conversation', NEW.scope_subject_id;
+  END IF;
+
+  IF NOT is_workspace_bound_subject_kind(NEW.subject_id) THEN
+    RAISE EXCEPTION 'resource_access_bindings.subject_id % refers to a kind that is not workspace-bound', NEW.subject_id;
+  END IF;
+
+  v_subject_ws := access_subject_workspace_id(NEW.subject_id);
+  IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'resource_access_bindings.subject_id % workspace % does not match binding workspace %', NEW.subject_id, v_subject_ws, NEW.workspace_id;
+  END IF;
+
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    v_scope_ws := access_subject_workspace_id(NEW.scope_subject_id);
+    IF v_scope_ws IS NULL OR v_scope_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'resource_access_bindings.scope_subject_id % workspace % does not match binding workspace %', NEW.scope_subject_id, v_scope_ws, NEW.workspace_id;
+    END IF;
+  END IF;
+
+  v_resource_ws := CASE NEW.resource_type
+    WHEN 'installed_skill'         THEN (SELECT workspace_id FROM installed_skills         WHERE id = NEW.installed_skill_id)
+    WHEN 'plugin_installation'     THEN (SELECT workspace_id FROM plugin_installations     WHERE id = NEW.plugin_installation_id)
+    WHEN 'relay_capability'        THEN (SELECT workspace_id FROM relay_capabilities       WHERE id = NEW.relay_capability_id)
+    WHEN 'automation_event_source' THEN (SELECT workspace_id FROM automation_event_sources WHERE id = NEW.automation_event_source_id)
+    WHEN 'actor'                   THEN (SELECT workspace_id FROM actors                   WHERE id = NEW.actor_id)
+    WHEN 'remote_agent'            THEN (SELECT workspace_id FROM remote_agents            WHERE id = NEW.remote_agent_id)
+  END;
+  IF v_resource_ws IS NULL OR v_resource_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'resource_access_bindings resource_type=% missing or workspace mismatch (% vs %)', NEW.resource_type, v_resource_ws, NEW.workspace_id;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_rab_validate
+  BEFORE INSERT OR UPDATE ON resource_access_bindings
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_resource_access_binding_subject_scope();
+
+CREATE OR REPLACE FUNCTION validate_relay_authorization_grant_subject_scope()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+  v_subject_ws  UUID;
+  v_scope_ws    UUID;
+  v_resource_ws UUID;
+BEGIN
+  IF NOT is_scope_eligible_subject(NEW.scope_subject_id) THEN
+    RAISE EXCEPTION 'relay_authorization_grants.scope_subject_id % must reference a subject of kind workspace|conversation', NEW.scope_subject_id;
+  END IF;
+
+  -- PR1: tolerate legacy NULL subject_id (once/workspace scope writers).
+  -- PR4 makes subject_id NOT NULL and removes this NULL branch.
+  IF NEW.subject_id IS NOT NULL THEN
+    IF NOT is_workspace_bound_subject_kind(NEW.subject_id) THEN
+      RAISE EXCEPTION 'relay_authorization_grants.subject_id % refers to a kind that is not workspace-bound', NEW.subject_id;
+    END IF;
+    v_subject_ws := access_subject_workspace_id(NEW.subject_id);
+    IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'relay_authorization_grants.subject_id % workspace mismatch', NEW.subject_id;
+    END IF;
+  END IF;
+
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    v_scope_ws := access_subject_workspace_id(NEW.scope_subject_id);
+    IF v_scope_ws IS NULL OR v_scope_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'relay_authorization_grants.scope_subject_id % workspace mismatch', NEW.scope_subject_id;
+    END IF;
+  END IF;
+
+  v_resource_ws := relay_resource_workspace_id(NEW.relay_device_id, NEW.relay_capability_id, NEW.relay_exposure_id);
+  IF v_resource_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'relay_authorization_grants resource workspace % does not match grant workspace %', v_resource_ws, NEW.workspace_id;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_relay_grant_validate
+  BEFORE INSERT OR UPDATE ON relay_authorization_grants
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_relay_authorization_grant_subject_scope();
+
+CREATE TABLE memory_access_grants (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  memory_space_id UUID NOT NULL REFERENCES memory_spaces(id) ON DELETE CASCADE,
+  memory_item_id UUID REFERENCES memory_items(id) ON DELETE CASCADE,
+  subject_id UUID NOT NULL REFERENCES access_subjects(id) ON DELETE CASCADE,
+  scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE CASCADE,
+  permissions memory_permission[] NOT NULL
+    CHECK (cardinality(permissions) > 0 AND array_position(permissions, NULL) IS NULL),
+  status memory_access_grants_status NOT NULL DEFAULT 'active',
+  source TEXT,
+  created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
+  source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
+  revoked_at TIMESTAMPTZ,
+  superseded_at TIMESTAMPTZ,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE UNIQUE INDEX uq_memory_access_grants_active
+  ON memory_access_grants(
+    memory_space_id,
+    COALESCE(memory_item_id::text, ''),
+    subject_id,
+    COALESCE(scope_subject_id::text, '')
+  )
+  WHERE status = 'active';
+CREATE INDEX idx_memory_access_grants_space
+  ON memory_access_grants(memory_space_id, status, created_at DESC);
+CREATE INDEX idx_memory_access_grants_subject
+  ON memory_access_grants(subject_id, status, created_at DESC);
+CREATE INDEX idx_memory_access_grants_item
+  ON memory_access_grants(memory_item_id)
+  WHERE memory_item_id IS NOT NULL;
+
+CREATE OR REPLACE FUNCTION validate_memory_access_grant()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+  v_subject_kind subject_kind;
+  v_subject_ws   UUID;
+  v_scope_ws     UUID;
+  v_space_ws     UUID;
+  v_item_space   UUID;
+  v_item_ws      UUID;
+BEGIN
+  IF NOT is_scope_eligible_subject(NEW.scope_subject_id) THEN
+    RAISE EXCEPTION 'memory_access_grants.scope_subject_id % must reference a subject of kind workspace|conversation', NEW.scope_subject_id;
+  END IF;
+
+  SELECT kind INTO v_subject_kind FROM access_subjects WHERE id = NEW.subject_id;
+  IF v_subject_kind IS NULL THEN
+    RAISE EXCEPTION 'memory_access_grants.subject_id % not found', NEW.subject_id;
+  END IF;
+  IF v_subject_kind NOT IN ('workspace_member','actor','remote_agent','workspace','conversation') THEN
+    RAISE EXCEPTION 'memory_access_grants.subject_id % refers to kind % which is not allowed (must be workspace_member|actor|remote_agent|workspace|conversation)', NEW.subject_id, v_subject_kind;
+  END IF;
+
+  v_subject_ws := access_subject_workspace_id(NEW.subject_id);
+  IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'memory_access_grants.subject_id % workspace mismatch (% vs %)', NEW.subject_id, v_subject_ws, NEW.workspace_id;
+  END IF;
+
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    v_scope_ws := access_subject_workspace_id(NEW.scope_subject_id);
+    IF v_scope_ws IS NULL OR v_scope_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'memory_access_grants.scope_subject_id % workspace mismatch', NEW.scope_subject_id;
+    END IF;
+  END IF;
+
+  SELECT workspace_id INTO v_space_ws FROM memory_spaces WHERE id = NEW.memory_space_id;
+  IF v_space_ws IS NULL OR v_space_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'memory_access_grants.memory_space_id % missing or workspace mismatch (% vs %)', NEW.memory_space_id, v_space_ws, NEW.workspace_id;
+  END IF;
+
+  IF NEW.memory_item_id IS NOT NULL THEN
+    SELECT memory_space_id, workspace_id INTO v_item_space, v_item_ws
+      FROM memory_items WHERE id = NEW.memory_item_id;
+    IF v_item_space IS NULL THEN
+      RAISE EXCEPTION 'memory_access_grants.memory_item_id % not found', NEW.memory_item_id;
+    END IF;
+    IF v_item_space IS DISTINCT FROM NEW.memory_space_id THEN
+      RAISE EXCEPTION 'memory_access_grants.memory_item_id % does not belong to memory_space %', NEW.memory_item_id, NEW.memory_space_id;
+    END IF;
+    IF v_item_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'memory_access_grants.memory_item_id % workspace mismatch', NEW.memory_item_id;
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_memory_grant_validate
+  BEFORE INSERT OR UPDATE ON memory_access_grants
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_memory_access_grant();

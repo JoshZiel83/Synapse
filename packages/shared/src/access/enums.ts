@@ -141,3 +141,44 @@ export const ACCESS_BINDING_SOURCES = [
 ] as const
 
 export type AccessBindingSource = (typeof ACCESS_BINDING_SOURCES)[number]
+
+/**
+ * Permission verbs recognized by `memory_access_grants.permissions`. Read and
+ * recall are distinct: `read` = explicit human/tool view; `recall` = automatic
+ * injection into LLM context. `manage` is the meta-permission for managing the
+ * grants of a memory_space itself.
+ */
+export const MEMORY_PERMISSION = {
+  READ: "read",
+  RECALL: "recall",
+  WRITE: "write",
+  EDIT: "edit",
+  DELETE: "delete",
+  MANAGE: "manage",
+} as const
+
+export const MEMORY_PERMISSIONS = [
+  MEMORY_PERMISSION.READ,
+  MEMORY_PERMISSION.RECALL,
+  MEMORY_PERMISSION.WRITE,
+  MEMORY_PERMISSION.EDIT,
+  MEMORY_PERMISSION.DELETE,
+  MEMORY_PERMISSION.MANAGE,
+] as const
+
+export type MemoryPermission = (typeof MEMORY_PERMISSIONS)[number]
+
+export const MEMORY_ACCESS_GRANT_STATUS = {
+  ACTIVE: "active",
+  REVOKED: "revoked",
+  SUPERSEDED: "superseded",
+} as const
+
+export const MEMORY_ACCESS_GRANT_STATUSES = [
+  MEMORY_ACCESS_GRANT_STATUS.ACTIVE,
+  MEMORY_ACCESS_GRANT_STATUS.REVOKED,
+  MEMORY_ACCESS_GRANT_STATUS.SUPERSEDED,
+] as const
+
+export type MemoryAccessGrantStatus =
+  (typeof MEMORY_ACCESS_GRANT_STATUSES)[number]

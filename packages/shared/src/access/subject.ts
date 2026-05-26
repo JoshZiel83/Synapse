@@ -289,3 +289,85 @@ export function dedupeSubjects(refs: readonly SubjectRef[]): SubjectRef[] {
   }
   return out
 }
+
+// ---------- Scope eligibility (PR1 additive) ----------
+
+/**
+ * A subject is eligible to act as a `scope_subject_id` if it represents a
+ * group-shaped entity that an authorization can be limited to. Mirrors the
+ * `is_scope_eligible_subject` SQL helper used by the schema triggers.
+ *
+ * Currently: workspace | conversation. `project` will join once the projects
+ * table lands.
+ */
+export function isScopeEligibleSubject(ref: SubjectRef): boolean {
+  return (
+    ref.kind === SUBJECT_KIND.WORKSPACE ||
+    ref.kind === SUBJECT_KIND.CONVERSATION
+  )
+}
+
+/**
+ * The kinds legitimate as subjects of a workspace-bound authorization row
+ * (resource_access_bindings / relay_authorization_grants / memory_access_grants).
+ * Excludes user / external / system — those are platform-wide subjects that
+ * cannot anchor a workspace-bound grant.
+ *
+ * PR1 transitional: also includes `conversation_actor_context` so the legacy
+ * `actor_in_conversation` writer continues to work until PR4. PR7 removes that
+ * kind together with the subject_kind enum value.
+ */
+export function isWorkspaceBoundSubjectKind(ref: SubjectRef): boolean {
+  return (
+    ref.kind === SUBJECT_KIND.WORKSPACE_MEMBER ||
+    ref.kind === SUBJECT_KIND.ACTOR ||
+    ref.kind === SUBJECT_KIND.REMOTE_AGENT ||
+    ref.kind === SUBJECT_KIND.WORKSPACE ||
+    ref.kind === SUBJECT_KIND.CONVERSATION ||
+    ref.kind === SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
+  )
+}
+
+/**
+ * Stricter allowlist for `memory_spaces.owner_subject_id` (PR5+). Excludes
+ * conversation_actor_context — memory writes only start in PR5, so there is no
+ * legacy path that produces this kind. Modeling owner as
+ * (actor, scope=conversation) is the canonical way to express
+ * "actor in conversation"'s memory.
+ */
+export function isMemoryOwnerSubjectKind(ref: SubjectRef): boolean {
+  return (
+    ref.kind === SUBJECT_KIND.WORKSPACE_MEMBER ||
+    ref.kind === SUBJECT_KIND.ACTOR ||
+    ref.kind === SUBJECT_KIND.REMOTE_AGENT ||
+    ref.kind === SUBJECT_KIND.WORKSPACE ||
+    ref.kind === SUBJECT_KIND.CONVERSATION
+  )
+}
+
+// ---------- Scoped target types (PR1 additive — not replacing legacy yet) ----------
+
+/**
+ * New target shape used by `resource_access_bindings.subject_id +
+ * scope_subject_id`. PR2 promotes this to be a variant of the exported
+ * `AccessTarget` / `CapabilityAccessTarget` unions; PR7 collapses to this
+ * variant only.
+ */
+export type ScopedSubjectTarget = {
+  readonly subject: SubjectRef
+  readonly scope?: SubjectRef
+}
+
+export type ScopedCapabilityAccessTarget = ScopedSubjectTarget
+
+// ---------- Memory space reference (PR1 additive) ----------
+
+/**
+ * A memory_spaces row keyed by (owner, scope?, namespace_key). PR5 introduces
+ * the table with this shape; this type is the SDK-facing reference.
+ */
+export type MemorySpaceRef = {
+  readonly owner: SubjectRef
+  readonly scope?: SubjectRef
+  readonly namespaceKey: string
+}

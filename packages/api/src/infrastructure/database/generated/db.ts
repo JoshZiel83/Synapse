@@ -157,6 +157,10 @@ export type MemoryItemsIndexStatus = "failed" | "lexical_ready" | "ready";
 
 export type MemoryItemsState = "active" | "archived" | "superseded";
 
+export type MemoryAccessGrantsStatus = "active" | "revoked" | "superseded";
+
+export type MemoryPermission = "delete" | "edit" | "manage" | "read" | "recall" | "write";
+
 export type MemoryRecallRunsRecallType = "bootstrap" | "manual_search" | "turn_recall";
 
 export type MemorySpacesSpaceType = "actor_private" | "conversation_shared" | "participant_private" | "user_private" | "workspace_shared";
@@ -1246,6 +1250,24 @@ export interface MemoryRecallRuns {
   workspace_member_id: string | null;
 }
 
+export interface MemoryAccessGrants {
+  created_at: Generated<Timestamp>;
+  created_by_workspace_member_id: string | null;
+  id: Generated<string>;
+  memory_item_id: string | null;
+  memory_space_id: string;
+  permissions: ArrayType<MemoryPermission>;
+  revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
+  source: string | null;
+  source_interaction_id: string | null;
+  status: Generated<MemoryAccessGrantsStatus>;
+  subject_id: string;
+  superseded_at: Timestamp | null;
+  updated_at: Generated<Timestamp>;
+  workspace_id: string;
+}
+
 export interface MemorySpaces {
   anchor_actor_id: string | null;
   anchor_conversation_actor_context_id: string | null;
@@ -1504,7 +1526,8 @@ export interface RelayAuthorizationGrants {
   relay_exposure_id: string;
   retention: RelayAuthorizationGrantsRetention;
   revoked_at: Timestamp | null;
-  scope: RelayAuthorizationGrantsScope;
+  scope: RelayAuthorizationGrantsScope | null;
+  scope_subject_id: string | null;
   source_interaction_id: string | null;
   source_request_args: Generated<Json>;
   source_retry_nonce: string | null;
@@ -1869,6 +1892,7 @@ export interface ResourceAccessBindings {
   remote_agent_id: string | null;
   resource_type: ResourceAccessBindingResourceType;
   revoked_at: Timestamp | null;
+  scope_subject_id: string | null;
   source: Generated<ResourceAccessBindingsSource>;
   status: Generated<ResourceAccessBindingsStatus>;
   subject_id: string;
@@ -2426,6 +2450,7 @@ export interface DB {
   memory_item_chunks: MemoryItemChunks;
   memory_item_parts: MemoryItemParts;
   memory_items: MemoryItems;
+  memory_access_grants: MemoryAccessGrants;
   memory_recall_run_results: MemoryRecallRunResults;
   memory_recall_runs: MemoryRecallRuns;
   memory_spaces: MemorySpaces;
