@@ -19,6 +19,7 @@
  * endpoint.
  */
 
+import { redis } from "../../../../infrastructure/redis/index.js"
 import type {
   AccountStartContext,
   RunningAccount,
@@ -26,6 +27,7 @@ import type {
   WebhookHandlerResult,
 } from "../types.js"
 import { getQqCredentialsOrThrow, getEd25519Seed } from "./credentials.js"
+import { runQqGateway } from "./inbound-ws.js"
 import {
   normalizeQqC2cMessage,
   normalizeQqGroupAtMessage,
@@ -48,11 +50,33 @@ export async function startQqAccount(
     ctx.logger.info("qq: webhook mode — no long connection started")
     return { stop: async () => {} }
   }
-  // long_connection — Stage 3 will replace this with the WS gateway.
-  ctx.logger.warn(
-    "qq: long_connection mode not yet implemented (Stage 3); leaving account idle"
-  )
-  return { stop: async () => {} }
+  // long_connection — drive the WS gateway until the IM runtime
+  // manager aborts our signal.
+  ctx.logger.info("qq: starting long_connection gateway", {
+    accountId: ctx.account.id,
+  })
+  // Validate creds up-front so we fail fast instead of looping reconnect
+  // on bad config.
+  getQqCredentialsOrThrow(ctx.account)
+  // Fire-and-forget; runQqGateway returns when the abort signal fires
+  // or when the bot is permanently offline/banned.
+  void runQqGateway({
+    account: ctx.account,
+    signal: ctx.signal,
+    logger: ctx.logger,
+    redis,
+    emitInbound: ctx.emitInbound,
+  }).catch((err) => {
+    if (!ctx.signal.aborted) {
+      ctx.logger.error("qq: gateway loop crashed", err)
+    }
+  })
+  return {
+    stop: async () => {
+      // runQqGateway listens to ctx.signal directly; the IM runtime
+      // manager aborts it when this account is being stopped.
+    },
+  }
 }
 
 interface QqWebhookEnvelope {
