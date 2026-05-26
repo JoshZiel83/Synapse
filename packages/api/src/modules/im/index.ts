@@ -6,6 +6,7 @@ import imPublicController from "./public-controller.js"
 import "./connectors/feishu/index.js"
 import "./connectors/weixin/index.js"
 import "./connectors/wecom/index.js"
+import "./connectors/qq/index.js"
 
 export default async function imModule(app: FastifyInstance) {
   await app.register(imPublicController)
