@@ -5,6 +5,12 @@
 // docs/device-runtime-v3.md §Browser capability v3.1.
 
 import type { BrowserOperation } from "./enums.js"
+// Re-export so consumers importing from the `./browser-tools` subpath get
+// both the operation enum and the descriptor types in one place.
+export {
+  RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS,
+  type BrowserOperation,
+} from "./enums.js"
 
 // ────────────────────────────── target shapes ───────────────────────────────
 

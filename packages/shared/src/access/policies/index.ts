@@ -18,3 +18,8 @@ export {
   pathWithinPrefix,
   normalizeFilesystemPolicy,
 } from "./matchers.js"
+export { resolveUrlScope, type ResolvedUrlScope } from "./url-scope.js"
+export {
+  normalizeBrowserGrantPolicy,
+  BrowserGrantPolicyError,
+} from "./browser-grant-validator.js"

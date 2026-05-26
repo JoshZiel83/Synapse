@@ -7,6 +7,8 @@
 // Bundle-safe: no node: imports so this module compiles into the web
 // service-worker bundle without polyfills.
 
+import type { BrowserOperation } from "@synapse/device-protocol/browser-tools"
+
 /**
  * Resolve + normalize a POSIX path. Handles leading slash, "..", ".",
  * doubled slashes, trailing slashes. Returns null for empty / non-string
@@ -146,6 +148,14 @@ export interface BrowserPolicyShape {
   origin?: string
   host?: string
   registrableDomain?: string
+  /**
+   * v3.1 fail-closed: when callers pass `args.neededOperations`, every needed
+   * op MUST appear in `policy.operations`. A grant whose `operations` is
+   * missing/null/empty does NOT cover any operation-requesting call —
+   * legacy compatibility was explicitly waived (dev environment, no
+   * production data). See plan §clarification A.
+   */
+  operations?: BrowserOperation[]
 }
 
 /**
@@ -153,6 +163,10 @@ export interface BrowserPolicyShape {
  * scope match is exact-equality on origin / host / registrable_domain
  * depending on `scopeType`. Callers that don't have a target URL (planning
  * phase) can omit `targetUrl` and we just check the action permission.
+ *
+ * `neededOperations` (v3.1): when supplied as a non-empty array, EVERY needed
+ * op must appear in `policy.operations`. Missing/empty `policy.operations`
+ * fails closed. Tests in browser.json fixture #3 lock this in.
  */
 export function browserPolicyAllows(
   policy: BrowserPolicyShape,
@@ -161,23 +175,31 @@ export function browserPolicyAllows(
     origin?: string
     host?: string
     registrableDomain?: string
+    neededOperations?: BrowserOperation[]
   }
 ): boolean {
   if (args.needed === "write" && policy.action !== "write") return false
+  if (args.neededOperations && args.neededOperations.length > 0) {
+    if (!Array.isArray(policy.operations) || policy.operations.length === 0) {
+      return false
+    }
+    const granted = new Set<BrowserOperation>(policy.operations)
+    for (const op of args.neededOperations) {
+      if (!granted.has(op)) return false
+    }
+  }
   switch (policy.scopeType) {
     case "origin":
       return Boolean(
         policy.origin && args.origin && policy.origin === args.origin
       )
     case "host":
-      return Boolean(
-        policy.host && args.host && policy.host === args.host
-      )
+      return Boolean(policy.host && args.host && policy.host === args.host)
     case "domain":
       return Boolean(
         policy.registrableDomain &&
-          args.registrableDomain &&
-          policy.registrableDomain === args.registrableDomain
+        args.registrableDomain &&
+        policy.registrableDomain === args.registrableDomain
       )
     default:
       return false
