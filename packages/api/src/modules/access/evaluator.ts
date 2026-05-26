@@ -33,10 +33,17 @@ type PermissionSubject = {
     | "user"
     | "workspace_member"
     | "actor"
+    | "remote_agent"
     | "workspace"
     | "conversation_actor_context"
   id: string
 }
+
+// PR3: re-export the runtime principal context shape so callers can pass it
+// to scope-aware overloads of checkPermission / hasResourceGrant. The full
+// builder lives in subject-resolution.ts; this is just the type surface
+// evaluator consumers need.
+export type { RuntimePrincipalContext } from "./subject-resolution.js"
 
 const PLATFORM_RESOURCE_ID = "synapse"
 
@@ -372,7 +379,8 @@ async function hasActorPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   actorId: string,
-  permission: string
+  permission: string,
+  runtimeScopeSubjectIds?: readonly string[]
 ): Promise<boolean> {
   const actor = await loadActorRow(db, actorId)
   if (!actor || !actor.is_active) {
@@ -420,10 +428,16 @@ async function hasActorPermission(
   //     binding written by the approval flow.
   const canUse =
     canManage ||
-    (await hasResourceGrant(db, "actor", actorId, {
-      type: "workspace_member",
-      id: access.id,
-    }))
+    (await hasResourceGrant(
+      db,
+      "actor",
+      actorId,
+      {
+        type: "workspace_member",
+        id: access.id,
+      },
+      runtimeScopeSubjectIds
+    ))
 
   switch (permission) {
     case "discover":
@@ -606,7 +620,11 @@ async function listResourceGrantRows(
   db: KyselyDb,
   resourceType: BindableResourceTypeLocal,
   resourceId: string | null,
-  subject: PermissionSubject
+  subject: PermissionSubject,
+  // PR3: optional scope context. When undefined → filter to scope_subject_id IS NULL
+  // (legacy callers don't see scoped-subject grants). When non-null → filter
+  // scope_subject_id IS NULL OR scope_subject_id ∈ runtimeScopeSubjectIds.
+  runtimeScopeSubjectIds?: readonly string[]
 ): Promise<ResourceGrantRow[]> {
   const resourceIdColumn = bindableResourceIdColumn(resourceType)
 
@@ -653,6 +671,21 @@ async function listResourceGrantRows(
       "subj.conversation_actor_context_id as subject_conversation_actor_context_id",
     ])
     .where("binding.status", "=", "active")
+
+  // PR3: scope filter — `subject_id ∈ runtime AND (scope_subject_id IS NULL OR
+  // scope_subject_id ∈ runtimeScopeSubjectIds)`. When no scope context is
+  // provided we keep the conservative "NULL scope only" filter so legacy
+  // callers don't accidentally see scoped grants.
+  if (runtimeScopeSubjectIds && runtimeScopeSubjectIds.length > 0) {
+    query = query.where((eb) =>
+      eb.or([
+        eb("binding.scope_subject_id", "is", null),
+        eb("binding.scope_subject_id", "in", [...runtimeScopeSubjectIds]),
+      ])
+    )
+  } else {
+    query = query.where("binding.scope_subject_id", "is", null)
+  }
 
   if (resourceId) {
     query = query.where(`binding.${resourceIdColumn}` as any, "=", resourceId)
@@ -727,13 +760,15 @@ async function hasResourceGrant(
   db: KyselyDb,
   resourceType: BindableResourceTypeLocal,
   resourceId: string,
-  subject: PermissionSubject
+  subject: PermissionSubject,
+  runtimeScopeSubjectIds?: readonly string[]
 ) {
   const rows = await listResourceGrantRows(
     db,
     resourceType,
     resourceId,
-    subject
+    subject,
+    runtimeScopeSubjectIds
   )
   return rows.length > 0
 }
@@ -742,9 +777,16 @@ async function listGrantedResourceIds(
   db: KyselyDb,
   resourceType: BindableResourceTypeLocal,
   subject: PermissionSubject,
-  limit?: number
+  limit?: number,
+  runtimeScopeSubjectIds?: readonly string[]
 ) {
-  const rows = await listResourceGrantRows(db, resourceType, null, subject)
+  const rows = await listResourceGrantRows(
+    db,
+    resourceType,
+    null,
+    subject,
+    runtimeScopeSubjectIds
+  )
   const ids = Array.from(new Set(rows.map((row) => row.resource_id)))
   return typeof limit === "number" && limit > 0 ? ids.slice(0, limit) : ids
 }
@@ -1495,6 +1537,15 @@ export async function checkPermission(
     resourceId: string
     permission: string
     subject: PermissionSubject
+    /**
+     * PR3: optional scope context. When provided, scope-aware visibility
+     * filtering kicks in (subject ∈ runtime AND (scope IS NULL OR scope ∈
+     * runtimeScopeSubjectIds)). When omitted, the legacy filter applies
+     * (scope IS NULL only). Callers that build a RuntimePrincipalContext
+     * via `buildRuntimePrincipalContext` should pass its
+     * `runtimeScopeSubjectIds` through here.
+     */
+    runtimeScopeSubjectIds?: readonly string[]
   }
 ) {
   if (!params.resourceId) {
@@ -1526,7 +1577,8 @@ export async function checkPermission(
         db,
         params.subject,
         params.resourceId,
-        params.permission
+        params.permission,
+        params.runtimeScopeSubjectIds
       )
     case "remote_agent":
       return hasRemoteAgentPermission(
