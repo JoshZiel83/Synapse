@@ -131,6 +131,7 @@ export function isAccessTargetRef(ref: SubjectRef): ref is AccessTargetRef {
     ref.kind === SUBJECT_KIND.WORKSPACE_MEMBER ||
     ref.kind === SUBJECT_KIND.CONVERSATION ||
     ref.kind === SUBJECT_KIND.ACTOR ||
+    ref.kind === SUBJECT_KIND.REMOTE_AGENT ||
     ref.kind === SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
   )
 }

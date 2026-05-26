@@ -117,6 +117,13 @@ export async function listAuthorizedResourceIds(
     subject: AccessSubject
     action: AccessAction
     limit?: number
+    /**
+     * PR-fix-round-3: scope-aware listing. Without it, `lookupResources`
+     * falls back to "scope IS NULL only" which hides scoped grants from
+     * tool/skill/plugin enumeration even though checkPermission would
+     * accept them. Pass through from buildRuntimePrincipalContext.
+     */
+    runtimeScopeSubjectIds?: readonly string[]
   }
 ) {
   const spec = getAccessActionSpec(params.action)
@@ -125,6 +132,7 @@ export async function listAuthorizedResourceIds(
     permission: spec.permission,
     subject: params.subject,
     limit: params.limit,
+    runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
   })
 }
 

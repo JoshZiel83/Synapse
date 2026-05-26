@@ -1,0 +1,154 @@
+import test from "node:test"
+import assert from "node:assert/strict"
+import { MEMORY_PERMISSION, SUBJECT_KIND, actorRef } from "@synapse/shared"
+import type { Kysely } from "kysely"
+import { withTestDb } from "../../test/helpers/db.js"
+import { authorizePermission, type AccessSubject } from "../access/service.js"
+import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
+import { insertMemoryAccessGrant } from "./access-grant-storage.js"
+
+/**
+ * Regression for round 3: a `memory.read/edit/delete` grant on item X must
+ * make `authorizePermission(memory_item, X, read)` return true when called
+ * with the grantee's runtime context — covering the GET/PUT/DELETE
+ * /:memoryId REST routes that used to call `authorizePermission` without
+ * a runtime context.
+ */
+
+const NS = "fixes3"
+
+function rid(): string {
+  return Math.random().toString(36).slice(2, 10)
+}
+
+async function newWorkspace(db: Kysely<any>): Promise<string> {
+  const user = await db
+    .insertInto("users")
+    .values({
+      email: `${rid()}@${NS}`,
+      name: "owner",
+      password_hash: "x",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const ws = await db
+    .insertInto("workspaces")
+    .values({
+      owner_id: user.id as string,
+      slug: `ws-${rid()}`,
+      name: `${NS} ws`,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return ws.id as string
+}
+
+async function newActor(db: Kysely<any>, wsId: string): Promise<string> {
+  const row = await db
+    .insertInto("actors")
+    .values({
+      workspace_id: wsId,
+      name: `actor-${rid()}`,
+      role: "assistant",
+      title: `${NS} actor`,
+      current_version: 1,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function newSpace(
+  db: Kysely<any>,
+  wsId: string,
+  actorId: string
+): Promise<string> {
+  const row = await db
+    .insertInto("memory_spaces")
+    .values({
+      workspace_id: wsId,
+      space_type: "actor_private",
+      anchor_actor_id: actorId,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function newItem(
+  db: Kysely<any>,
+  wsId: string,
+  spaceId: string
+): Promise<string> {
+  const row = await db
+    .insertInto("memory_items")
+    .values({
+      workspace_id: wsId,
+      memory_space_id: spaceId,
+      category: "fact",
+      text_digest: "x",
+      search_text: "x",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+test(
+  "authorizePermission(memory_item) with runtimeContext picks up item-level grant",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const wsId = await newWorkspace(db)
+      const owner = await newActor(db, wsId)
+      const grantee = await newActor(db, wsId)
+      const space = await newSpace(db, wsId, owner)
+      const item = await newItem(db, wsId, space)
+
+      await insertMemoryAccessGrant(db, {
+        workspaceId: wsId,
+        memorySpaceId: space,
+        memoryItemId: item,
+        subject: actorRef(grantee),
+        permissions: [MEMORY_PERMISSION.READ],
+      })
+
+      const subject: AccessSubject = { type: "actor", id: grantee }
+
+      // Without runtime context: 403 (the actor_private isolation kicks in,
+      // explicit item-level grant is invisible to the evaluator overlay
+      // because it has no runtimeSubjectIds to match against).
+      const bareCheck = await authorizePermission(db, {
+        subject,
+        resourceType: "memory_item",
+        resourceId: item,
+        permission: "read",
+      })
+      assert.equal(
+        bareCheck,
+        false,
+        "without runtime context the actor_private isolation must still deny"
+      )
+
+      // With runtime context (the REST routes now build this): the explicit
+      // grant overlay accepts.
+      const ctx = await buildRuntimePrincipalContext(db, {
+        principal: actorRef(grantee),
+        workspaceId: wsId,
+      })
+      const grantedCheck = await authorizePermission(db, {
+        subject,
+        resourceType: "memory_item",
+        resourceId: item,
+        permission: "read",
+        runtimeSubjectIds: ctx.runtimeSubjectIds,
+        runtimeScopeSubjectIds: ctx.runtimeScopeSubjectIds,
+      })
+      assert.equal(
+        grantedCheck,
+        true,
+        "with runtime context the explicit item-level grant must accept"
+      )
+    })
+  }
+)

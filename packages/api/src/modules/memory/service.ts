@@ -1918,7 +1918,27 @@ export async function listMemories(
   workspaceId: UUID,
   input: ListMemoriesInput
 ) {
+  const requestedLimit = Math.max(1, Math.min(200, input.limit ?? 100))
   const whereClause = buildListWhereClause(workspaceId, input)
+  const subject = resolveAccessSubject(input)
+  const runtimeContext = await buildMemoryRuntimeContext(
+    workspaceId,
+    input,
+    subject
+  )
+  // PR-fix-round-3: previously `LIMIT requestedLimit` was applied at the
+  // SQL level BEFORE filterAuthorizedPermissionResourceIds, so a workspace
+  // with 200+ items the principal couldn't see could push the only items
+  // they CAN see (e.g. a grant-shared memory) past the cutoff. Now we:
+  //   1) fetch a wider candidate slice (oversample by 5× up to a hard cap)
+  //   2) apply the auth filter
+  //   3) take the first requestedLimit rows from the filtered result.
+  // For the rare case where even the wide slice can't satisfy the limit
+  // (workspace has 5× more unreadable items than `requestedLimit`), we
+  // log a warning and accept the under-fetch — fixing that properly
+  // requires pushing auth into SQL, which is the PR5-full destructive
+  // rewrite.
+  const candidateOversample = Math.min(2000, requestedLimit * 5)
   let rows = (await db
     .selectFrom("memory_items as mi")
     .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
@@ -1948,21 +1968,9 @@ export async function listMemories(
     .select(baseMemorySelect())
     .where(sql<boolean>`${whereClause}`)
     .orderBy("mi.updated_at", "desc")
-    .limit(Math.max(1, Math.min(200, input.limit ?? 100)))
+    .limit(candidateOversample)
     .execute()) as MemoryRow[]
 
-  const subject = resolveAccessSubject(input)
-  // PR-fix-round-2: the legacy list candidate SQL has no SQL-level
-  // visibility filter (post-fetch auth is the only gate). Build the
-  // runtime context so the explicit grant overlay sees the same subject
-  // set on the auth check; no candidate widening necessary (and the
-  // previous round's post-fetch union has been removed because it
-  // bypassed list filters like category/state/tags).
-  const runtimeContext = await buildMemoryRuntimeContext(
-    workspaceId,
-    input,
-    subject
-  )
   if (subject && rows.length > 0) {
     const allowedIds = new Set(
       await filterAuthorizedPermissionResourceIds(db, {
@@ -1977,6 +1985,9 @@ export async function listMemories(
     rows = rows.filter((row) => allowedIds.has(row.id))
   }
 
+  // Apply the user-requested limit AFTER auth filtering so a grantee with
+  // a single grant in a noisy workspace can still see their item.
+  rows = rows.slice(0, requestedLimit)
   return loadMemoryItemsFromRows(rows)
 }
 

@@ -259,11 +259,37 @@ async function requireMemoryPermission(
   permission: "read" | "edit" | "retarget" | "delete",
   errorMessage: string
 ) {
+  // PR-fix-round-3: previously called authorizePermission without a runtime
+  // context, so the PR5 memory_access_grants overlay never fired on the
+  // single-item REST routes (GET/PUT/DELETE /:memoryId). A grantee with
+  // an explicit `memory.read/edit/delete` grant would see the item in
+  // list/search (which now wires runtimeContext) but still get 403 here.
+  // Build the runtime context from the request and pass it through.
+  const subject = getRequestAccessSubject(request)
+  const { workspaceId } = request.params as { workspaceId: string }
+  const principal = accessSubjectToSubjectRef(subject)
+  let runtimeSubjectIds: readonly string[] | undefined
+  let runtimeScopeSubjectIds: readonly string[] | undefined
+  if (principal) {
+    try {
+      const ctx = await buildRuntimePrincipalContext(db, {
+        principal,
+        workspaceId,
+      })
+      runtimeSubjectIds = ctx.runtimeSubjectIds
+      runtimeScopeSubjectIds = ctx.runtimeScopeSubjectIds
+    } catch {
+      // Principal not in workspace — fall through; the evaluator's legacy
+      // path will reject.
+    }
+  }
   const allowed = await authorizePermission(db, {
-    subject: getRequestAccessSubject(request),
+    subject,
     resourceType: "memory_item",
     resourceId: memoryId,
     permission,
+    runtimeSubjectIds,
+    runtimeScopeSubjectIds,
   })
 
   if (!allowed) {
@@ -688,15 +714,18 @@ export function registerMemoryRoutes(app: FastifyInstance) {
     workspaceId: string,
     spaceId: string
   ): Promise<boolean> {
-    // PR-fix-round-2: previously called checkPermission without the runtime
-    // context, so an explicit `memory_access_grants.permissions=['manage']`
-    // grant never reached the evaluator overlay — a subject granted manage
-    // couldn't actually POST/GET/DELETE grants. Build the runtime context
-    // from the request's access subject + workspace + conversation
-    // (conversation isn't directly available here so we omit it; manage
-    // grants typically aren't scoped to a conversation anyway).
+    // PR-fix-round-3: also honor a `?conversationId=` query so a
+    // `subject=actor + scope=conversation, permissions=['manage']` grant
+    // becomes usable. Without this the manage check ran with an empty
+    // conversation context and only matched unscoped manage grants.
     const subject = getRequestAccessSubject(request)
     const principal = accessSubjectToSubjectRef(subject)
+    const query = (request.query ?? {}) as { conversationId?: string }
+    const conversationId =
+      typeof query.conversationId === "string" &&
+      query.conversationId.length > 0
+        ? query.conversationId
+        : undefined
     let runtimeSubjectIds: readonly string[] | undefined
     let runtimeScopeSubjectIds: readonly string[] | undefined
     if (principal) {
@@ -704,12 +733,13 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         const ctx = await buildRuntimePrincipalContext(db, {
           principal,
           workspaceId,
+          conversationId,
         })
         runtimeSubjectIds = ctx.runtimeSubjectIds
         runtimeScopeSubjectIds = ctx.runtimeScopeSubjectIds
       } catch {
-        // Principal doesn't belong to this workspace — fall through; the
-        // legacy decision tree will reject (no implicit owner permission).
+        // Principal not in workspace — fall through; legacy decision tree
+        // will reject (no implicit owner permission).
       }
     }
     const managePermitted = await checkPermission(db, {

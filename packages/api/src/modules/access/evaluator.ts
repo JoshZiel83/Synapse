@@ -1888,6 +1888,16 @@ export async function lookupResources(
     permission: string
     subject: PermissionSubject
     limit?: number
+    /**
+     * PR-fix-round-3: scope-aware visibility. Without these, the underlying
+     * `listGrantedResourceIds` defaults to the conservative
+     * "scope_subject_id IS NULL only" filter, so a scoped grant
+     * (e.g. subject=actor + scope=conversation) never appears in any
+     * tool/skill/plugin listing — `checkPermission` could pass but the
+     * resource wouldn't be enumerated. Callers that already built a
+     * RuntimePrincipalContext should pass these through.
+     */
+    runtimeScopeSubjectIds?: readonly string[]
   }
 ) {
   switch (params.resourceType) {
@@ -1915,7 +1925,8 @@ export async function lookupResources(
                 db,
                 "installed_skill",
                 params.subject,
-                params.limit
+                params.limit,
+                params.runtimeScopeSubjectIds
               ),
               await listManageableInstalledSkillIds(
                 db,
@@ -1934,7 +1945,8 @@ export async function lookupResources(
                 db,
                 "plugin_installation",
                 params.subject,
-                params.limit
+                params.limit,
+                params.runtimeScopeSubjectIds
               ),
               await listManageablePluginInstallationIds(
                 db,
@@ -1955,7 +1967,8 @@ export async function lookupResources(
                 db,
                 "relay_capability",
                 params.subject,
-                params.limit
+                params.limit,
+                params.runtimeScopeSubjectIds
               ),
               await listManageableRelayCapabilityIds(
                 db,
@@ -1972,7 +1985,8 @@ export async function lookupResources(
             db,
             "automation_event_source",
             params.subject,
-            params.limit
+            params.limit,
+            params.runtimeScopeSubjectIds
           )
         : []
     default:
