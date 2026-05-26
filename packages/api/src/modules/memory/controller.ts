@@ -20,7 +20,10 @@ import {
   getRequestAccessSubject,
   type AccessSubject,
 } from "../access/service.js"
-import { checkPermission } from "../access/evaluator.js"
+import {
+  checkPermission,
+  hasMemorySpaceOwnerImplicitPermissionForTuple,
+} from "../access/evaluator.js"
 import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import {
   insertMemoryAccessGrant,
@@ -30,6 +33,7 @@ import {
 import {
   createMemory,
   deleteMemory,
+  findExistingMemorySpace,
   moveMemoryToSpace,
   resolveOrCreateMemorySpace,
   getMemory,
@@ -39,6 +43,7 @@ import {
   recallMemories,
   runMemorySearch,
   updateMemory,
+  validateMemorySpaceTuple,
   type CreateMemoryInput,
   type MemoryPreset,
   type UpdateMemoryInput,
@@ -402,24 +407,25 @@ async function requireMemoryPermission(
  * D4: gate writes to a (owner, scope?) tuple via the evaluator's
  * memory_space.write check.
  *
- * P2 fix (post-D4 round 2 review): unified with the move endpoint's write
- * check so create + move enforce the same target-write semantics. The
- * earlier per-owner-kind switch granted workspace admins write access to
- * actor / member / remote_agent private spaces via `manage_memories` /
- * `actor_admin` shortcuts, which contradicted the evaluator's
- * owner-implicit matrix (admin gets manage/delete only — not write).
- * Result: admin could create memories into another actor's private space
- * via this endpoint but couldn't then move them. Aligned: admin no longer
- * gets write into private spaces from either path. The "private" guarantee
- * is now consistent — admin can manage grants and delete content but
- * cannot author into someone else's private memory.
+ * Post-D4 round 3 review (P2): detect-then-check-then-create. Earlier
+ * iterations pre-upserted the target memory_space row and then asked the
+ * evaluator for `write` permission on the resolved id. That had two
+ * side effects:
+ *   1. Denied calls left an orphan empty memory_spaces row that any caller
+ *      with workspace.view could fabricate by sending a 403-ed request.
+ *   2. Cross-workspace owner/scope or other trigger-rejection cases
+ *      bubbled as a 500 instead of a clean 400.
+ * Now: validate the (workspace, owner, scope?) tuple (workspace alignment
+ * and owner-kind allowlist) up-front; look up any existing space row by
+ * tuple; run the auth check against the existing row OR — when no row
+ * exists yet — against a synthetic owner-implicit-only evaluation. Only
+ * the create transaction proceeds to actually INSERT the space row.
  *
- * Mechanics: same two-phase pattern as moveMemoryToSpace. Pre-resolve the
- * target memory_space outside the request transaction (autocommits via
- * the pool) so the subsequent permission check sees a real row, then ask
- * the evaluator's `memory_space.write` permission for the principal's
- * runtime context. Returns the resolved space's id on success so the
- * caller can pass it through to the create transaction.
+ * Returns `{ ok: boolean }`. The caller does not need the resolved space
+ * id because `createMemory` calls `resolveOrCreateMemorySpace` inside its
+ * own transaction (idempotent via ON CONFLICT). An earlier version of
+ * this helper returned the id, but no caller used it — that contract
+ * drift was flagged in review and removed.
  */
 async function requireMemorySpaceWritePermission(
   request: FastifyRequest,
@@ -428,7 +434,7 @@ async function requireMemorySpaceWritePermission(
   scope: SubjectRef | undefined,
   namespaceKey: string | undefined,
   errorMessage: string
-): Promise<{ ok: true; memorySpaceId: string } | { ok: false }> {
+): Promise<{ ok: true } | { ok: false }> {
   if (!owner) {
     reply.status(400).send({ error: "owner is required" })
     return { ok: false }
@@ -463,29 +469,59 @@ async function requireMemorySpaceWritePermission(
     return { ok: false }
   }
 
-  // Resolve the target space outside any txn so the permission check
-  // below sees the row. Idempotent — concurrent callers converge on the
-  // same id via ON CONFLICT, no race.
-  const targetSpace = await resolveOrCreateMemorySpace(pool, {
+  // Validate the tuple before any writes — workspace alignment + owner
+  // kind allowlist. Throws MemoryError(400) on mismatch.
+  let subjects: { ownerSubjectId: string; scopeSubjectId: string | null }
+  try {
+    subjects = await validateMemorySpaceTuple(workspaceId, owner, scope)
+  } catch (error) {
+    if (error instanceof MemoryError) {
+      reply.status(error.statusCode).send({ error: error.message })
+      return { ok: false }
+    }
+    throw error
+  }
+
+  const existing = await findExistingMemorySpace({
     workspaceId,
-    owner,
-    scope,
+    ownerSubjectId: subjects.ownerSubjectId,
+    scopeSubjectId: subjects.scopeSubjectId,
     namespaceKey,
   })
 
-  const allowed = await authorizePermission(db, {
-    subject,
-    resourceType: "memory_space",
-    resourceId: targetSpace.id,
-    permission: "write",
-    runtimeSubjectIds,
-    runtimeScopeSubjectIds,
-  })
+  let allowed = false
+  if (existing) {
+    allowed = await authorizePermission(db, {
+      subject,
+      resourceType: "memory_space",
+      resourceId: existing.id,
+      permission: "write",
+      runtimeSubjectIds,
+      runtimeScopeSubjectIds,
+    })
+  } else {
+    // No existing row — there can't be any memory_access_grants for it
+    // yet, so the owner-implicit evaluator is sufficient (and avoids
+    // writing the placeholder space we'd otherwise leak on denial).
+    allowed = await hasMemorySpaceOwnerImplicitPermissionForTuple(
+      db,
+      subject,
+      {
+        workspaceId,
+        owner,
+        scope,
+        ownerSubjectId: subjects.ownerSubjectId,
+        scopeSubjectId: subjects.scopeSubjectId,
+      },
+      "write",
+      { runtimeSubjectIds, runtimeScopeSubjectIds }
+    )
+  }
   if (!allowed) {
     reply.status(403).send({ error: errorMessage })
     return { ok: false }
   }
-  return { ok: true, memorySpaceId: targetSpace.id }
+  return { ok: true }
 }
 
 function updateTouchesMemoryEdit(body: UpdateBody) {

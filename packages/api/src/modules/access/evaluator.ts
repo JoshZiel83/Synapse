@@ -1,6 +1,6 @@
 import { sql } from "kysely"
 import { SUBJECT_KIND, MEMORY_PERMISSION } from "@synapse/shared"
-import type { MemoryPermission } from "@synapse/shared"
+import type { MemoryPermission, SubjectRef } from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
 import {
@@ -1463,6 +1463,14 @@ async function loadMemorySpaceWithSubjects(
  * exception is the workspace-admin manage override (`manage_memories`), which
  * only unlocks `manage` / `delete` so an admin can clean up scoped spaces
  * without being able to silently view their contents.
+ *
+ * Asymmetric admin/creator path (post-D4 round 3 review fix): for `actor`
+ * and `remote_agent` owners, write/edit/delete admit a curation path —
+ * workspace admins / `actor_admin` / `remote_agent_admin` / the resource's
+ * creator can author content into the space. Read/recall stay strictly
+ * private. This preserves the dashboard UX where a workspace member curates
+ * seed memories for an AI persona they manage without later being able to
+ * read what the persona has accumulated.
  */
 async function hasMemorySpaceOwnerImplicitPermission(
   db: KyselyDb,
@@ -1474,11 +1482,6 @@ async function hasMemorySpaceOwnerImplicitPermission(
     runtimeScopeSubjectIds?: readonly string[]
   }
 ): Promise<boolean> {
-  // Scope is a strong constraint. If a space carries scope_subject_id, this
-  // principal can only see it when the scope is part of their runtime context.
-  // The single exception is the workspace-admin manage override, gated to
-  // manage / delete only (never view / read / recall / write / edit) so an
-  // admin can clean up scoped spaces without being able to silently read them.
   const inRuntime = (subjectId: string) =>
     runtimeContext?.runtimeSubjectIds?.includes(subjectId) ?? false
 
@@ -1511,6 +1514,28 @@ async function hasMemorySpaceOwnerImplicitPermission(
       if (inRuntime(space.owner_subject_id)) {
         return permission !== "manage"
       }
+      // Curation path: workspace admin / actor_admin / actor creator can
+      // write/edit/delete the actor's memories. They can NOT read or
+      // recall — privacy stays. `hasActorPermission(actor, "memory_edit")`
+      // is the canonical canManage check (admin || actor_admin || creator)
+      // for this gate.
+      if (
+        space.owner_actor_id &&
+        (permission === "write" ||
+          permission === "edit" ||
+          permission === "delete")
+      ) {
+        if (
+          await hasActorPermission(
+            db,
+            subject,
+            space.owner_actor_id,
+            "memory_edit"
+          )
+        ) {
+          return true
+        }
+      }
       return adminManageOverride()
     case "remote_agent":
       if (inRuntime(space.owner_subject_id)) {
@@ -1520,6 +1545,24 @@ async function hasMemorySpaceOwnerImplicitPermission(
           permission === "write" ||
           permission === "edit"
         )
+      }
+      // Same curation pattern as actor: admin / remote_agent_admin /
+      // creator can write/edit the remote agent's memories (no delete
+      // here to match the owner-implicit cap on the principal itself).
+      if (
+        space.owner_remote_agent_id &&
+        (permission === "write" || permission === "edit")
+      ) {
+        if (
+          await hasRemoteAgentPermission(
+            db,
+            subject,
+            space.owner_remote_agent_id,
+            "edit"
+          )
+        ) {
+          return true
+        }
       }
       return adminManageOverride()
     case "workspace":
@@ -1695,6 +1738,80 @@ async function hasMemorySpacePermission(
   }
 
   return false
+}
+
+/**
+ * Post-D4 round 3 review: evaluate the owner-implicit memory_space
+ * permission against a (workspace_id, owner_subject_id + decoded fields,
+ * scope_subject_id) tuple WITHOUT requiring an existing space row. Used
+ * by the create / move auth gate so we can decide allowance before
+ * INSERTing a placeholder space (the previous flow created an empty
+ * orphan row on every denied write).
+ *
+ * No grant overlay is consulted — by definition the space doesn't exist
+ * yet, so no `memory_access_grants` row can target it. The caller path
+ * uses this only for the "space not yet in DB" branch; existing spaces
+ * still go through `checkPermission(memory_space, id, ...)` which
+ * applies the full owner-implicit + grant matrix.
+ */
+export async function hasMemorySpaceOwnerImplicitPermissionForTuple(
+  db: KyselyDb,
+  subject: PermissionSubject,
+  tuple: {
+    workspaceId: string
+    owner: SubjectRef
+    scope?: SubjectRef
+    ownerSubjectId: string
+    scopeSubjectId: string | null
+  },
+  permission: string,
+  runtimeContext?: {
+    runtimeSubjectIds?: readonly string[]
+    runtimeScopeSubjectIds?: readonly string[]
+  }
+): Promise<boolean> {
+  // Build a synthetic MemorySpaceLoadedRow from the decomposed inputs.
+  // owner_kind drives the per-kind branch in hasMemorySpaceOwnerImplicitPermission;
+  // owner_*_id fields are filled from the SubjectRef so the curation
+  // (admin/creator) paths can resolve the underlying resource.
+  const synthetic: MemorySpaceLoadedRow = {
+    id: "(synthetic-not-in-db)",
+    workspace_id: tuple.workspaceId,
+    owner_subject_id: tuple.ownerSubjectId,
+    scope_subject_id: tuple.scopeSubjectId,
+    namespace_key: "(synthetic)",
+    owner_kind: tuple.owner.kind,
+    owner_workspace_id:
+      tuple.owner.kind === SUBJECT_KIND.WORKSPACE
+        ? tuple.owner.workspaceId
+        : null,
+    owner_actor_id:
+      tuple.owner.kind === SUBJECT_KIND.ACTOR ? tuple.owner.actorId : null,
+    owner_remote_agent_id:
+      tuple.owner.kind === SUBJECT_KIND.REMOTE_AGENT
+        ? tuple.owner.remoteAgentId
+        : null,
+    owner_workspace_member_id:
+      tuple.owner.kind === SUBJECT_KIND.WORKSPACE_MEMBER
+        ? tuple.owner.memberId
+        : null,
+    owner_conversation_id:
+      tuple.owner.kind === SUBJECT_KIND.CONVERSATION
+        ? tuple.owner.conversationId
+        : null,
+    scope_kind: tuple.scope?.kind ?? null,
+    scope_conversation_id:
+      tuple.scope?.kind === SUBJECT_KIND.CONVERSATION
+        ? tuple.scope.conversationId
+        : null,
+  }
+  return hasMemorySpaceOwnerImplicitPermission(
+    db,
+    subject,
+    synthetic,
+    permission,
+    runtimeContext
+  )
 }
 
 export async function checkPermission(

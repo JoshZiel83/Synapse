@@ -60,6 +60,7 @@ import {
   type AccessSubject,
   workspaceMemberSubject,
 } from "../access/service.js"
+import { hasMemorySpaceOwnerImplicitPermissionForTuple } from "../access/evaluator.js"
 import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import { listSpaceLevelGrantSpaceIds } from "./access-grant-storage.js"
 
@@ -730,6 +731,121 @@ async function getMemoryRow(
        LIMIT 1`.compile(db)
   )
   return result.rows[0]
+}
+
+/**
+ * Post-D4 round 3 review: validate a (workspaceId, owner, scope?) tuple
+ * BEFORE writing anything. Catches cross-workspace owner/scope or invalid
+ * owner kind up-front with a friendly 400 instead of letting the
+ * trigger raise — and pairs with `findExistingMemorySpace` +
+ * `canWriteToMemorySpaceTuple` to keep the auth gate side-effect-free.
+ *
+ * Returns the upserted subject_ids so the caller (controller) can reuse
+ * them for the existing-row lookup. Upserting access_subjects is
+ * intentionally benign — it's a lookup table; new rows are append-only
+ * and don't confer any permissions on their own.
+ */
+export async function validateMemorySpaceTuple(
+  workspaceId: string,
+  owner: SubjectRef,
+  scope?: SubjectRef
+): Promise<{
+  ownerSubjectId: string
+  scopeSubjectId: string | null
+}> {
+  const ownerKind = owner.kind
+  if (
+    ownerKind === SUBJECT_KIND.USER ||
+    ownerKind === SUBJECT_KIND.EXTERNAL ||
+    ownerKind === SUBJECT_KIND.SYSTEM
+  ) {
+    throw new MemoryError(
+      `Memory space owner kind '${ownerKind}' is not permitted`,
+      400
+    )
+  }
+  if (
+    scope &&
+    scope.kind !== SUBJECT_KIND.WORKSPACE &&
+    scope.kind !== SUBJECT_KIND.CONVERSATION
+  ) {
+    throw new MemoryError(
+      `Memory space scope kind '${scope.kind}' must be workspace|conversation`,
+      400
+    )
+  }
+
+  // Workspace consistency: the subject upsert resolves the canonical
+  // workspace_id stored on the access_subjects row. We compare against
+  // the target workspace before touching memory_spaces so cross-workspace
+  // owner/scope is caught here (400) rather than at the DB trigger (500).
+  const ownerSubjectId = await upsertAccessSubject(db, owner)
+  const scopeSubjectId = scope ? await upsertAccessSubject(db, scope) : null
+
+  const subjectRows = await db
+    .selectFrom("access_subjects")
+    .select(["id", "workspace_id", "kind"])
+    .where(
+      "id",
+      "in",
+      scopeSubjectId ? [ownerSubjectId, scopeSubjectId] : [ownerSubjectId]
+    )
+    .execute()
+  const byId = new Map(subjectRows.map((r) => [r.id, r]))
+  const ownerRow = byId.get(ownerSubjectId)
+  const scopeRow = scopeSubjectId ? byId.get(scopeSubjectId) : null
+
+  if (
+    !ownerRow ||
+    !ownerRow.workspace_id ||
+    ownerRow.workspace_id !== workspaceId
+  ) {
+    throw new MemoryError(
+      `Memory space owner does not belong to workspace ${workspaceId}`,
+      400
+    )
+  }
+  if (
+    scopeRow &&
+    (!scopeRow.workspace_id || scopeRow.workspace_id !== workspaceId)
+  ) {
+    throw new MemoryError(
+      `Memory space scope does not belong to workspace ${workspaceId}`,
+      400
+    )
+  }
+
+  return { ownerSubjectId, scopeSubjectId }
+}
+
+/**
+ * Post-D4 round 3 review: pure read — look up the memory_space row keyed
+ * by (workspace_id, owner_subject_id, scope_subject_id?, namespace_key)
+ * WITHOUT writing. Used by the auth gate so we can decide allowance
+ * without first creating a placeholder space row that would orphan on
+ * denial.
+ */
+export async function findExistingMemorySpace(input: {
+  workspaceId: string
+  ownerSubjectId: string
+  scopeSubjectId: string | null
+  namespaceKey?: string
+}): Promise<MemorySpaceRow | null> {
+  const namespaceKey =
+    (input.namespaceKey || DEFAULT_NAMESPACE).trim() || DEFAULT_NAMESPACE
+  let query = db
+    .selectFrom("memory_spaces")
+    .selectAll()
+    .where("workspace_id", "=", input.workspaceId)
+    .where("owner_subject_id", "=", input.ownerSubjectId)
+    .where("namespace_key", "=", namespaceKey)
+  query = input.scopeSubjectId
+    ? query.where("scope_subject_id", "=", input.scopeSubjectId)
+    : query.where("scope_subject_id", "is", null)
+  const row = (await query.limit(1).executeTakeFirst()) as
+    | MemorySpaceRow
+    | undefined
+  return row ?? null
 }
 
 /**
@@ -1722,28 +1838,25 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
  * AND `write` on the TARGET space — the same rule the documented
  * "source delete + target write" pattern required. Source `delete` is
  * asserted at the controller boundary (via `requireMemoryPermission`);
- * target `write` is asserted here against a resolved target_space row.
+ * target `write` is asserted here.
  *
- * Mechanics (split into two phases so the permission check sees a
- * committed target row — earlier we did the upsert inside the move
- * transaction and authorized using the global db, which couldn't see
- * uncommitted writes and fail-closed denied every move-to-new-folder):
+ * Post-D4 round 3 review (P2): detect-then-check-then-create. The earlier
+ * iteration upserted the target space first and then asked the evaluator
+ * for write — that leaked an empty orphan target row on every denial.
+ * Now we:
+ *   1. validate the (workspace, owner, scope?) tuple (workspace alignment
+ *      and owner-kind allowlist) up-front (clean 400 instead of trigger 500)
+ *   2. look up existing target space; if present, evaluate against the
+ *      real row (covers owner-implicit + memory_access_grants overlay)
+ *   3. if no row yet, evaluate against a synthetic owner-implicit-only
+ *      tuple — no grants can target a non-existent space, so the
+ *      synthetic check is equivalent and avoids any write
+ *   4. only after the write check passes do we resolveOrCreateMemorySpace
+ *      (creating the row if necessary) and UPDATE memory_items.memory_space_id
  *
- *   1. resolve-or-create the target memory_space (its own short autocommit
- *      via the pool). If this is a brand-new space, the row commits before
- *      step 2 so the evaluator's read in step 3 sees it.
- *   2. evaluate `write` permission on the resolved id. If denied, throw
- *      403. The orphan empty target space row stays — benign (owner
- *      retains owner-implicit control over it), and the row is
- *      indistinguishable from a space the user intentionally created
- *      empty via UI/API.
- *   3. inside a transaction: re-check that the source memory still
- *      exists (it could have been deleted between phase 1 and phase 3),
- *      then UPDATE memory_items.memory_space_id. All other columns
- *      (id, importance, embedding state, source_*_id, item-level
- *      memory_access_grants, indexing) survive untouched. If the trigger
- *      rejects (cross-workspace, etc.) the UPDATE txn rolls back and
- *      the source stays put.
+ * The actual move runs in its own transaction with a source-exists
+ * re-check so a racing delete becomes a clean 404 rather than a silent
+ * 0-row UPDATE.
  */
 export async function moveMemoryToSpace(
   workspaceId: UUID,
@@ -1769,21 +1882,28 @@ export async function moveMemoryToSpace(
     throw new MemoryError("Memory not found", 404)
   }
 
-  // Phase 1: resolve target space outside the move txn so its row is
-  // committed and visible to the permission check below (the evaluator
-  // uses the global db pool, which can't see another connection's
-  // uncommitted writes). The space upsert is itself idempotent (ON CONFLICT
-  // ... DO UPDATE) so concurrent moves to the same target don't race.
-  const targetSpace = await resolveOrCreateMemorySpace(pool, {
+  // Phase 1: validate the target tuple (workspace alignment, owner-kind
+  // allowlist). Throws MemoryError(400) on mismatch.
+  const subjects = await validateMemorySpaceTuple(
     workspaceId,
-    owner: target.owner,
-    scope: target.scope,
+    target.owner,
+    target.scope
+  )
+
+  // Phase 2: look up the existing target space (read-only). If it exists
+  // we can evaluate against the real id (full owner-implicit + grant
+  // overlay). If not, the synthetic owner-implicit check is sufficient
+  // (no grants can target a non-existent space).
+  const existingTarget = await findExistingMemorySpace({
+    workspaceId,
+    ownerSubjectId: subjects.ownerSubjectId,
+    scopeSubjectId: subjects.scopeSubjectId,
     namespaceKey: target.namespaceKey,
   })
 
   // No-op move: source and target are the same space. Skip the permission
   // dance and the UPDATE; report the unchanged memory.
-  if (targetSpace.id === existingRow.memory_space_id) {
+  if (existingTarget && existingTarget.id === existingRow.memory_space_id) {
     const same = await getMemory(workspaceId, memoryId)
     if (!same) {
       throw new MemoryError("Memory disappeared during move (unexpected)", 500)
@@ -1791,17 +1911,35 @@ export async function moveMemoryToSpace(
     return same
   }
 
-  // Phase 2: target write permission. Runs against the resolved (now
-  // committed) space id, so the evaluator sees the real row and applies
-  // the owner-implicit matrix + space-level grant overlay correctly.
-  const writeAllowed = await authorizePermission(db, {
-    subject: authContext.accessSubject,
-    resourceType: "memory_space",
-    resourceId: targetSpace.id,
-    permission: "write",
-    runtimeSubjectIds: authContext.runtimeSubjectIds,
-    runtimeScopeSubjectIds: authContext.runtimeScopeSubjectIds,
-  })
+  // Phase 3: target write permission gate.
+  let writeAllowed = false
+  if (existingTarget) {
+    writeAllowed = await authorizePermission(db, {
+      subject: authContext.accessSubject,
+      resourceType: "memory_space",
+      resourceId: existingTarget.id,
+      permission: "write",
+      runtimeSubjectIds: authContext.runtimeSubjectIds,
+      runtimeScopeSubjectIds: authContext.runtimeScopeSubjectIds,
+    })
+  } else {
+    writeAllowed = await hasMemorySpaceOwnerImplicitPermissionForTuple(
+      db,
+      authContext.accessSubject,
+      {
+        workspaceId,
+        owner: target.owner,
+        scope: target.scope,
+        ownerSubjectId: subjects.ownerSubjectId,
+        scopeSubjectId: subjects.scopeSubjectId,
+      },
+      "write",
+      {
+        runtimeSubjectIds: authContext.runtimeSubjectIds,
+        runtimeScopeSubjectIds: authContext.runtimeScopeSubjectIds,
+      }
+    )
+  }
   if (!writeAllowed) {
     throw new MemoryError(
       "Not allowed to move memory into the target space (write permission required)",
@@ -1809,9 +1947,10 @@ export async function moveMemoryToSpace(
     )
   }
 
-  // Phase 3: the actual move. Re-check existence inside the txn so a
-  // racing delete is reflected as a clean 404 rather than a silent UPDATE
-  // with 0 rows affected.
+  // Phase 4: the actual move. Create the target space (if it doesn't
+  // already exist) and UPDATE the memory row in one transaction. The
+  // source-exists re-check inside the txn turns a racing delete into a
+  // clean 404 instead of a silent 0-row UPDATE.
   await transaction(async (client) => {
     const stillThere = await executeTakeFirst<{ id: string }>(
       client,
@@ -1824,6 +1963,15 @@ export async function moveMemoryToSpace(
     )
     if (!stillThere) {
       throw new MemoryError("Memory not found", 404)
+    }
+    const targetSpace = await resolveOrCreateMemorySpace(client, {
+      workspaceId,
+      owner: target.owner,
+      scope: target.scope,
+      namespaceKey: target.namespaceKey,
+    })
+    if (targetSpace.id === existingRow.memory_space_id) {
+      return // raced into a no-op
     }
     await executeCompiledQuery(
       client,

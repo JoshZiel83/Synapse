@@ -444,7 +444,15 @@ async function loadVisibleAccessBindings(params: {
     // any non-actor caller — both a missing match (the original target was
     // a specific remote_agent) and an over-match (any caller in the
     // workspace appeared to have the grant).
-    let target_type: VisibleAccessBindingRow["target_type"]
+    //
+    // P3 fix (post-D4 round 3 review): unknown subject kinds now SKIP the
+    // row instead of being mapped to `workspace`. The earlier fallback
+    // claimed to fail closed but actually widened — `workspace` matches
+    // every caller (see accessBindingMatchesContext). Skipping is the
+    // honest fail-closed behavior; when a new SUBJECT_KIND eventually
+    // lands (e.g. `project`) the visibility filter needs an explicit
+    // branch added rather than silently exposing rows.
+    let target_type: VisibleAccessBindingRow["target_type"] | null
     if (row.subject_kind === "actor" && row.scope_kind === "conversation") {
       target_type = "actor_in_conversation"
     } else if (
@@ -470,11 +478,12 @@ async function loadVisibleAccessBindings(params: {
           target_type = "remote_agent"
           break
         default:
-          // Unknown subject kind — fail closed by treating as workspace
-          // (the broadest match should be matched against the broadest
-          // intent, not silently widened to all bindings).
-          target_type = "workspace"
+          target_type = null
       }
+    }
+    if (target_type === null) {
+      // Unknown subject kind — fail closed by dropping the row entirely.
+      continue
     }
     const subjectActorId = row.subject_actor_id_via_join ?? null
     const subjectRemoteAgentId = row.subject_remote_agent_id_via_join ?? null
