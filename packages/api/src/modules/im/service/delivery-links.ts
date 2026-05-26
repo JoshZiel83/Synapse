@@ -9,8 +9,10 @@
 import { sql } from "kysely"
 import {
   db,
+  executeSqlOn,
   type DatabaseTransaction,
   type KyselyDb,
+  type QueryExecutor,
   type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
 import { v4 as uuidv4 } from "uuid"
@@ -166,6 +168,91 @@ export async function persistOutboundLinkRow(
  */
 export async function enqueueOutboundDelivery(linkId: string): Promise<void> {
   await enqueueTransportDeliveryJobs([linkId])
+}
+
+/**
+ * Raw-SQL variant of `persistOutboundLinkRow` that takes a `QueryExecutor`
+ * (PoolClient, pool, or any `{query(text, params)}` shim) instead of a
+ * Kysely `DbOrTx`. Used by the interaction-projection worker which runs
+ * inside a `transaction(async client => ...)` block where `client` is a
+ * raw `pg.PoolClient` (so we can also call `executeSqlOn` for the
+ * SAVEPOINT + SELECT FOR UPDATE pieces).
+ *
+ * Behavior is intentionally identical to the Kysely variant — same INSERT
+ * with the same `ON CONFLICT (item_id, transport_endpoint_id, direction)`
+ * upsert clause. Coverage by integration tests on either path stays
+ * representative because both flow through the same SQL.
+ */
+export async function persistOutboundLinkRowRaw(
+  client: QueryExecutor,
+  params: {
+    workspaceId: string
+    conversationId: string
+    itemId: string
+    binding: ConversationTransportBindingSummary
+    direction?: "inbound" | "outbound"
+    externalMessageId?: string
+    externalReplyToId?: string
+    externalThreadId?: string
+    metadata?: Record<string, unknown>
+  }
+): Promise<{
+  linkId: string
+  row: ReturnType<typeof normalizeTransportMessageLinkRow>
+}> {
+  const direction = params.direction || "outbound"
+  const linkMetadata: Record<string, unknown> = {
+    bindingId: params.binding.id,
+    endpointType: params.binding.endpoint.endpointType,
+    endpointExternalId: params.binding.endpoint.externalId,
+    ...(params.metadata || {}),
+  }
+  const id = uuidv4()
+  const result = await executeSqlOn(
+    client,
+    `
+      INSERT INTO transport_message_links (
+        id, workspace_id, conversation_id, item_id,
+        transport_account_id, transport_endpoint_id, transport_kind,
+        direction, delivery_status,
+        external_message_id, external_reply_to_id, external_thread_id,
+        metadata, created_at, updated_at
+      )
+      VALUES (
+        $1, $2, $3, $4, $5, $6, $7, $8, 'pending',
+        $9, $10, $11, $12::jsonb, NOW(), NOW()
+      )
+      ON CONFLICT (item_id, transport_endpoint_id, direction)
+      DO UPDATE SET
+        external_message_id = COALESCE(EXCLUDED.external_message_id, transport_message_links.external_message_id),
+        external_reply_to_id = COALESCE(EXCLUDED.external_reply_to_id, transport_message_links.external_reply_to_id),
+        external_thread_id = COALESCE(EXCLUDED.external_thread_id, transport_message_links.external_thread_id),
+        metadata = transport_message_links.metadata || EXCLUDED.metadata,
+        updated_at = NOW()
+      RETURNING *
+    `,
+    [
+      id,
+      params.workspaceId,
+      params.conversationId,
+      params.itemId,
+      params.binding.account.id,
+      params.binding.endpoint.id,
+      params.binding.transportKind,
+      direction,
+      params.externalMessageId || null,
+      params.externalReplyToId || null,
+      params.externalThreadId || null,
+      JSON.stringify(linkMetadata),
+    ]
+  )
+  const row = result.rows[0]
+  if (!row) {
+    throw new Error(
+      `persistOutboundLinkRowRaw: insert returned no row for item ${params.itemId}`
+    )
+  }
+  return { linkId: row.id, row: normalizeTransportMessageLinkRow(row) }
 }
 
 /**

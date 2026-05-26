@@ -1,0 +1,636 @@
+/**
+ * Interaction-projection worker (G5 / Stage 8).
+ *
+ * Consumes `interaction_transport_projections(status='pending')` rows
+ * (inserted by `createRuntimeAuthorizationInteractionRequest`) and
+ * materializes them into transport_message_links so a supporting
+ * connector can render the interaction as an IM message + keyboard.
+ *
+ * v1: QQ only (long_connection → keyboard; webhook+confirmed →
+ * fallback text). Feishu / Weixin / Wecom bindings get
+ * `status='skipped' error='not_supported_in_v1'`.
+ *
+ * Branch order (must stay strict — first match wins):
+ *   1. no binding                     → skipped, error='no_binding'
+ *   2. binding.transportKind!=='qq'   → skipped, error='not_supported_in_v1'
+ *   3. QQ webhook + !webhookInboundConfirmed
+ *                                     → skipped, error='webhook_inbound_unavailable'
+ *   4. account inactive or outbound disabled
+ *                                     → skipped, error='outbound_disabled'
+ *   5. QQ webhook + confirmed         → fallback text item + link
+ *   6. QQ long_connection             → keyboard item + link
+ *
+ * Each row is processed in one outer tx that takes `FOR UPDATE SKIP
+ * LOCKED` so multiple worker replicas don't double-project. Business
+ * work (mint tokens, create item, persist link) runs inside a
+ * SAVEPOINT — if any step throws, we ROLLBACK TO SAVEPOINT, advance
+ * `attempts++` + `next_attempt_at = NOW()+backoff` in the outer tx,
+ * and COMMIT. Successful runs flip status to `projected` and queue
+ * delivery AFTER the tx commits.
+ */
+
+import { sql } from "kysely"
+import {
+  INTERACTION_REQUEST_KIND,
+  type RuntimeAuthorizationPreset,
+} from "@synapse/shared"
+import type { PoolClient } from "pg"
+import { db, executeSqlOn } from "../infrastructure/database/kysely.js"
+import { transaction } from "../infrastructure/database/index.js"
+import {
+  mintActionToken,
+  sweepExpiredActionTokens,
+  type ActionTokenPayload,
+} from "../modules/interactions/action-tokens.js"
+import { getInteractionRequestSummary } from "../modules/interactions/service.js"
+import {
+  createConversationItem,
+  type ConversationItemPartInput,
+} from "../modules/chat/service.js"
+import {
+  enqueueOutboundDelivery,
+  persistOutboundLinkRowRaw,
+  resolveBindingForOutbound,
+} from "../modules/im/service/delivery-links.js"
+import { encodeForConversationItem } from "../modules/im/messaging/canonical-encoding.js"
+import { readQqAccountConfig } from "../modules/im/connectors/qq/qq-account-config.js"
+import {
+  CANONICAL_MESSAGE_SCHEMA_VERSION,
+  type CanonicalMessage,
+  type CanonicalPart,
+} from "../modules/im/messaging/canonical-message.js"
+
+const TICK_INTERVAL_MS = 5_000
+const BATCH_SIZE = 10
+const MAX_ATTEMPTS = 5
+const TOKEN_SWEEP_EVERY_TICKS = 60 // ≈ every 5 min
+
+/**
+ * Why this list and not a more general gate: the projection layer is the
+ * ONLY place that has to know about transport-specific gating — every
+ * other layer (canonical-encoding, render, outbound) is generic. Adding
+ * a new connector that supports interaction_prompt = listing it here.
+ */
+const ALLOWED_TRANSPORT_KINDS = ["qq"] as const
+
+const FALLBACK_TEXT_DEFAULT = "需要审批，请回到 Synapse dashboard 处理"
+
+interface PendingRow {
+  id: string
+  interaction_request_id: string
+  workspace_id: string
+  conversation_id: string
+  transport_message_link_id: string | null
+  attempts: number
+}
+
+interface ProjectionTickStats {
+  picked: number
+  projected: number
+  skipped: number
+  failed: number
+  errors: number
+}
+
+interface WorkerHandle {
+  stop(): Promise<void>
+}
+
+let active: WorkerHandle | null = null
+let tickCounter = 0
+
+/**
+ * Start the projection worker. Returns a stop handle. Safe to call
+ * multiple times — the second call is a no-op (the first stop()
+ * removes the handle).
+ */
+export function startInteractionProjectionWorker(): WorkerHandle {
+  if (active) return active
+  let stopped = false
+  let timer: NodeJS.Timeout | null = null
+
+  const tick = async () => {
+    if (stopped) return
+    try {
+      const stats = await runOneTick()
+      if (stats.errors > 0) {
+        console.warn("[interaction-projection] tick had errors", stats)
+      }
+      tickCounter += 1
+      if (tickCounter % TOKEN_SWEEP_EVERY_TICKS === 0) {
+        await sweepExpiredActionTokens().catch((err) => {
+          console.warn("[interaction-projection] token sweep failed:", err)
+        })
+      }
+    } catch (err) {
+      console.warn("[interaction-projection] tick crashed", err)
+    } finally {
+      if (!stopped) {
+        timer = setTimeout(tick, TICK_INTERVAL_MS)
+        timer.unref?.()
+      }
+    }
+  }
+
+  // Kick off immediately + schedule recurring.
+  setTimeout(tick, 0).unref?.()
+
+  const handle: WorkerHandle = {
+    async stop() {
+      stopped = true
+      if (timer) {
+        clearTimeout(timer)
+        timer = null
+      }
+    },
+  }
+  active = handle
+  return handle
+}
+
+export async function stopInteractionProjectionWorker(): Promise<void> {
+  if (!active) return
+  await active.stop()
+  active = null
+}
+
+export async function runOneTick(): Promise<ProjectionTickStats> {
+  const stats: ProjectionTickStats = {
+    picked: 0,
+    projected: 0,
+    skipped: 0,
+    failed: 0,
+    errors: 0,
+  }
+
+  // One outer tx per batch; FOR UPDATE SKIP LOCKED gives us isolation
+  // across worker replicas.
+  await transaction(async (client) => {
+    const result = await executeSqlOn<PendingRow>(
+      client,
+      `
+        SELECT id, interaction_request_id, workspace_id, conversation_id,
+               transport_message_link_id, attempts
+        FROM interaction_transport_projections
+        WHERE status = 'pending' AND next_attempt_at <= NOW()
+        ORDER BY next_attempt_at
+        LIMIT $1
+        FOR UPDATE SKIP LOCKED
+      `,
+      [BATCH_SIZE]
+    )
+    stats.picked = result.rows.length
+    for (const row of result.rows) {
+      try {
+        const outcome = await processOne(client, row)
+        if (outcome === "projected") stats.projected += 1
+        else if (outcome === "skipped") stats.skipped += 1
+        else if (outcome === "failed") stats.failed += 1
+      } catch (err) {
+        // Any throw from processOne is a bug, since processOne is
+        // supposed to convert all errors into a state update inside its
+        // savepoint. Surface it but don't break the rest of the batch.
+        stats.errors += 1
+        console.error(
+          "[interaction-projection] processOne unexpected throw",
+          err,
+          { rowId: row.id }
+        )
+        // Best-effort bump attempts so we don't get stuck on a poison row.
+        await bumpAttemptsOnRow(client, row, errorMessage(err)).catch(
+          () => undefined
+        )
+      }
+    }
+  })
+
+  return stats
+}
+
+/**
+ * Process one projection row. Returns the terminal outcome — caller
+ * tallies stats; we own the row's final state-update inside the same
+ * outer tx.
+ */
+async function processOne(
+  client: PoolClient,
+  row: PendingRow
+): Promise<"projected" | "skipped" | "failed"> {
+  // Idempotence: if a previous run wrote a link, just enqueue and mark
+  // projected. Don't rebuild item/link/token.
+  if (row.transport_message_link_id) {
+    await markRowProjected(client, row.id, row.transport_message_link_id)
+    // Queue side-effect goes outside this tx; we collect linkIds via a
+    // local array — but a single row is fine to enqueue inline post-commit.
+    // The outer caller commits this tx automatically; we defer enqueue via
+    // a microtask-style next() so it lands after the tx.
+    queueMicrotask(() => {
+      enqueueOutboundDelivery(row.transport_message_link_id!).catch((err) =>
+        console.warn(
+          "[interaction-projection] enqueue after idempotent project failed",
+          err
+        )
+      )
+    })
+    return "projected"
+  }
+
+  // Verify the interaction is still pending + not expired.
+  const lockedInteraction = await executeSqlOn<{
+    id: string
+    status: string
+    expires_at: string | Date | null
+  }>(
+    client,
+    `
+      SELECT id, status, expires_at
+      FROM interaction_requests
+      WHERE id = $1
+      FOR UPDATE
+    `,
+    [row.interaction_request_id]
+  )
+  const lock = lockedInteraction.rows[0]
+  if (!lock) {
+    await skipRow(client, row.id, "interaction_missing")
+    return "skipped"
+  }
+  if (lock.status !== "pending") {
+    await skipRow(client, row.id, "interaction_already_resolved_or_expired")
+    return "skipped"
+  }
+  if (lock.expires_at) {
+    const expiresAt =
+      lock.expires_at instanceof Date
+        ? lock.expires_at
+        : new Date(lock.expires_at)
+    if (expiresAt.getTime() < Date.now()) {
+      await skipRow(client, row.id, "interaction_already_resolved_or_expired")
+      return "skipped"
+    }
+  }
+
+  // Strict-order branch resolution.
+  const binding = await resolveBindingForOutbound({
+    workspaceId: row.workspace_id,
+    conversationId: row.conversation_id,
+    allowedTransportKinds: ALLOWED_TRANSPORT_KINDS,
+  })
+  if (!binding.ok) {
+    if (binding.reason === "no_binding") {
+      await skipRow(client, row.id, "no_binding")
+      return "skipped"
+    }
+    if (binding.reason === "not_supported_in_v1") {
+      await skipRow(client, row.id, "not_supported_in_v1")
+      return "skipped"
+    }
+    if (
+      binding.reason === "account_inactive" ||
+      binding.reason === "outbound_disabled"
+    ) {
+      await skipRow(client, row.id, "outbound_disabled")
+      return "skipped"
+    }
+    if (binding.reason === "webhook_inbound_unavailable") {
+      await skipRow(client, row.id, "webhook_inbound_unavailable")
+      return "skipped"
+    }
+    await skipRow(client, row.id, `unknown:${binding.reason}`)
+    return "skipped"
+  }
+
+  const account = binding.binding.account
+  const isQqWebhook =
+    account.transportKind === "qq" && account.connectionMode === "webhook"
+  if (isQqWebhook) {
+    const config = readQqAccountConfig(account)
+    if (!config.webhookInboundConfirmed) {
+      await skipRow(client, row.id, "webhook_inbound_unavailable")
+      return "skipped"
+    }
+  }
+
+  // Load the full interaction summary so we know what grant options /
+  // presets to mint tokens for.
+  const interaction = await getInteractionRequestSummary(
+    row.interaction_request_id,
+    client
+  )
+  if (
+    !interaction ||
+    interaction.kind !== INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION
+  ) {
+    await skipRow(client, row.id, "interaction_unsupported_kind")
+    return "skipped"
+  }
+
+  // Business work inside a savepoint so partial failures don't leak
+  // orphan items/links into the outer tx.
+  const useFallbackText =
+    isQqWebhook /* webhook+confirmed (long_connection path falls through to keyboard) */
+  let projectionLinkId: string | null = null
+  let savepointFailed = false
+  let savepointError: string | null = null
+  try {
+    await executeSqlOn(client, "SAVEPOINT projection_business", [])
+    const mintedOptions = await mintOptionsAndTokens(client, {
+      interactionRequestId: interaction.id,
+      interactionExpiresAt: interaction.expiresAt,
+      presets:
+        interaction.runtimeAuthorization?.availablePresets ??
+        (["once"] as RuntimeAuthorizationPreset[]),
+      grantOptions: interaction.runtimeAuthorization?.grantOptions ?? [],
+    })
+    const fallbackText = buildFallbackText({
+      interaction,
+    })
+    const message: CanonicalMessage = useFallbackText
+      ? buildFallbackCanonical(fallbackText)
+      : buildKeyboardCanonical({
+          interactionRequestId: interaction.id,
+          title: interaction.runtimeAuthorization?.deviceDisplayName
+            ? `${interaction.runtimeAuthorization.deviceDisplayName} 请求授权`
+            : "需要审批",
+          fallbackText,
+          options: mintedOptions,
+        })
+    const encoded = encodeForConversationItem(message)
+    const item = await createConversationItem({
+      workspaceId: row.workspace_id,
+      conversationId: row.conversation_id,
+      scope: "shared",
+      surface: "internal",
+      itemType: "message",
+      subtype: "system",
+      role: "system",
+      metadata: { transport: encoded.transportMetadata },
+      parts: buildItemParts(message),
+      queryable: client,
+    })
+    const persisted = await persistOutboundLinkRowRaw(client, {
+      workspaceId: row.workspace_id,
+      conversationId: row.conversation_id,
+      itemId: item.id,
+      binding: binding.binding,
+    })
+    await markRowProjected(client, row.id, persisted.linkId)
+    projectionLinkId = persisted.linkId
+    await executeSqlOn(client, "RELEASE SAVEPOINT projection_business", [])
+  } catch (err) {
+    savepointFailed = true
+    savepointError = errorMessage(err)
+    await executeSqlOn(
+      client,
+      "ROLLBACK TO SAVEPOINT projection_business",
+      []
+    ).catch(() => undefined)
+    await executeSqlOn(
+      client,
+      "RELEASE SAVEPOINT projection_business",
+      []
+    ).catch(() => undefined)
+  }
+
+  if (savepointFailed) {
+    await bumpAttemptsOnRow(client, row, savepointError ?? "savepoint_failed")
+    return row.attempts + 1 >= MAX_ATTEMPTS ? "failed" : "skipped"
+  }
+
+  // Tx commits below this function; enqueue must happen after.
+  if (projectionLinkId) {
+    const linkId = projectionLinkId
+    queueMicrotask(() => {
+      enqueueOutboundDelivery(linkId).catch((err) =>
+        console.warn(
+          "[interaction-projection] enqueue after first project failed",
+          err
+        )
+      )
+    })
+  }
+  return "projected"
+}
+
+async function markRowProjected(
+  client: PoolClient,
+  rowId: string,
+  linkId: string
+): Promise<void> {
+  await executeSqlOn(
+    client,
+    `
+      UPDATE interaction_transport_projections
+      SET status = 'projected',
+          transport_message_link_id = $2,
+          error = NULL,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [rowId, linkId]
+  )
+}
+
+async function skipRow(
+  client: PoolClient,
+  rowId: string,
+  error: string
+): Promise<void> {
+  await executeSqlOn(
+    client,
+    `
+      UPDATE interaction_transport_projections
+      SET status = 'skipped',
+          error = $2,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [rowId, error]
+  )
+}
+
+async function bumpAttemptsOnRow(
+  client: PoolClient,
+  row: PendingRow,
+  error: string
+): Promise<void> {
+  const nextAttempts = row.attempts + 1
+  if (nextAttempts >= MAX_ATTEMPTS) {
+    await executeSqlOn(
+      client,
+      `
+        UPDATE interaction_transport_projections
+        SET status = 'failed',
+            attempts = $2,
+            error = $3,
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+      [row.id, nextAttempts, error]
+    )
+    return
+  }
+  // Exponential backoff: 5s, 30s, 2min, 10min, 30min
+  const backoffSeconds = [5, 30, 120, 600, 1800][Math.min(nextAttempts - 1, 4)]
+  await executeSqlOn(
+    client,
+    `
+      UPDATE interaction_transport_projections
+      SET attempts = $2,
+          next_attempt_at = NOW() + ($3 || ' seconds')::interval,
+          error = $4,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+    [row.id, nextAttempts, String(backoffSeconds), error]
+  )
+}
+
+interface MintedOption {
+  id: string
+  label: string
+  actionToken: string
+  style?: "primary" | "danger" | "default"
+  decision: string
+  preset?: string
+  selectedGrantOptionId?: string
+}
+
+/**
+ * Build the option set we present in the keyboard. v1 mints a minimal
+ * three-button layout: "Allow once" / "Deny" + (if multi-grant) the
+ * grant-option labels. Each button gets its own action token (the
+ * decoder uses the token to recover the full payload server-side).
+ */
+async function mintOptionsAndTokens(
+  client: PoolClient,
+  params: {
+    interactionRequestId: string
+    interactionExpiresAt?: string | Date | null
+    presets: readonly RuntimeAuthorizationPreset[]
+    grantOptions: ReadonlyArray<{ id: string; summary: string }>
+  }
+): Promise<MintedOption[]> {
+  const minted: MintedOption[] = []
+  // Pick a default grant option if multiple exist; we currently mint one
+  // button per (preset × grant_option) pair, capped to keep the keyboard
+  // ≤5 buttons.
+  const grantOption = params.grantOptions[0]
+  const presetsToShow = params.presets.length > 0 ? params.presets : ["once"]
+  const presetLabels: Record<string, string> = {
+    once: "仅本次允许",
+    actor: "本会话期间允许",
+    actor_in_conversation: "本会话期间允许 (actor)",
+    conversation: "本会话期间允许",
+    remote_agent: "对此 Agent 始终允许",
+    workspace: "工作区内始终允许",
+  }
+  for (const preset of presetsToShow) {
+    if (minted.length >= 4) break // leave room for the deny button
+    const decisionLabel = presetLabels[preset] ?? preset
+    const token = await mintActionToken(client, {
+      interactionRequestId: params.interactionRequestId,
+      interactionExpiresAt: params.interactionExpiresAt,
+      payload: {
+        decision: "approve",
+        preset,
+        selectedGrantOptionId: grantOption?.id,
+      } as ActionTokenPayload,
+    })
+    minted.push({
+      id: `approve-${preset}`,
+      label: `✅ ${decisionLabel}`,
+      actionToken: token.token,
+      style: "primary",
+      decision: "approve",
+      preset,
+      selectedGrantOptionId: grantOption?.id,
+    })
+  }
+  const denyToken = await mintActionToken(client, {
+    interactionRequestId: params.interactionRequestId,
+    interactionExpiresAt: params.interactionExpiresAt,
+    payload: { decision: "reject" } as ActionTokenPayload,
+  })
+  minted.push({
+    id: "deny",
+    label: "❌ 拒绝",
+    actionToken: denyToken.token,
+    style: "danger",
+    decision: "reject",
+  })
+  return minted
+}
+
+function buildKeyboardCanonical(params: {
+  interactionRequestId: string
+  title: string
+  fallbackText: string
+  options: MintedOption[]
+}): CanonicalMessage {
+  const part: CanonicalPart = {
+    type: "interaction_prompt",
+    interactionRequestId: params.interactionRequestId,
+    title: params.title,
+    fallbackText: params.fallbackText,
+    options: params.options.map((o) => ({
+      id: o.id,
+      label: o.label,
+      actionToken: o.actionToken,
+      style: o.style,
+    })),
+  }
+  return {
+    schemaVersion: CANONICAL_MESSAGE_SCHEMA_VERSION,
+    plainText: params.fallbackText,
+    parts: [part],
+  }
+}
+
+function buildFallbackCanonical(text: string): CanonicalMessage {
+  return {
+    schemaVersion: CANONICAL_MESSAGE_SCHEMA_VERSION,
+    plainText: text,
+    parts: [{ type: "text", text }],
+  }
+}
+
+function buildItemParts(msg: CanonicalMessage): ConversationItemPartInput[] {
+  const parts: ConversationItemPartInput[] = []
+  let textBuf = ""
+  for (const part of msg.parts) {
+    if (part.type === "text") textBuf += (textBuf ? "\n" : "") + part.text
+    else if (part.type === "interaction_prompt") {
+      // chat layer only accepts text/file_ref/json — represent the
+      // prompt as text (plus the structured payload survives in
+      // metadata.transport.canonicalParts via encodeForConversationItem).
+      textBuf +=
+        (textBuf ? "\n" : "") +
+        (part.title ? `${part.title}\n${part.fallbackText}` : part.fallbackText)
+    }
+  }
+  if (textBuf) parts.push({ type: "text", text: textBuf })
+  return parts
+}
+
+function buildFallbackText(params: {
+  interaction: { runtimeAuthorization?: { deviceDisplayName?: string } }
+}): string {
+  const device = params.interaction.runtimeAuthorization?.deviceDisplayName
+  if (device) {
+    return `${device} 请求授权 — ${FALLBACK_TEXT_DEFAULT}`
+  }
+  return FALLBACK_TEXT_DEFAULT
+}
+
+function errorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err)
+}
+
+// re-exports for tests
+export const __testing__ = {
+  buildFallbackText,
+  buildItemParts,
+  buildFallbackCanonical,
+  buildKeyboardCanonical,
+}

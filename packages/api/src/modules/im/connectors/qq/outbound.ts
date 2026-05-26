@@ -50,6 +50,7 @@ import {
 } from "../types.js"
 import { qqApiFetch } from "./client.js"
 import { decodeUserOpenid } from "./address-encoding.js"
+import type { QqKeyboardPayload } from "./keyboard.js"
 import {
   getLatestInboundAnchor,
   type QqLatestInboundAnchor,
@@ -123,8 +124,13 @@ export async function sendQqMessage(
   const config = readQqAccountConfig(input.account)
   const meta = readQqMetadata(input.linkMetadata)
 
-  // Step 0: local determinism that doesn't touch any quota
-  const plan = planQqSends(input.message)
+  // Step 0: local determinism that doesn't touch any quota.
+  // Pass connectionMode so interaction_prompt parts render as a real
+  // keyboard for long_connection accounts and degrade to fallback text
+  // for webhook accounts (Stage 8 WS-only gate).
+  const plan = planQqSends(input.message, {
+    connectionMode: input.account.connectionMode,
+  })
   if (plan.length === 0) {
     throw new PermanentTransportError("qq: refusing to send empty message", {
       code: "qq_empty_message",
@@ -385,6 +391,7 @@ interface QqOutboundBody {
   msg_type: number
   content?: string
   markdown?: { content: string }
+  keyboard?: QqKeyboardPayload["keyboard"]
   media?: { file_info: string }
   msg_id?: string
   event_id?: string
@@ -414,6 +421,16 @@ async function buildOutboundBody(params: {
     } else {
       body.content = params.plan.content
     }
+  } else if (params.plan.kind === "keyboard") {
+    // Stage 8 keyboard payload: msg_type=2 markdown with a non-empty
+    // bubble + attached keyboard. The render layer has already gated
+    // this on connectionMode === "long_connection"; if we somehow see
+    // it here on a webhook account, QQ would reject the buttons (since
+    // INTERACTION_CREATE only flows over WS) — but that's a render bug,
+    // not an outbound concern, so we still build the body faithfully.
+    body.msg_type = QQ_MSG_TYPE.MARKDOWN
+    body.markdown = params.plan.payload.markdown
+    body.keyboard = params.plan.payload.keyboard
   } else {
     // media plan — upload + cache file_info
     const fileInfo = await resolveFileInfo({

@@ -39,6 +39,7 @@ import {
 import { qqApiFetch } from "./client.js"
 import { getQqCredentialsOrThrow } from "./credentials.js"
 import { getAccessToken } from "./client.js"
+import { handleQqInteractionCreate } from "./interaction-handler.js"
 import { writeLatestInboundAnchor } from "./latest-inbound-store.js"
 import {
   clearQqWsSession,
@@ -403,13 +404,22 @@ async function routeBusinessDispatch(
       return
     }
     case QQ_EVENT.INTERACTION_CREATE: {
-      // Stage 8 wires the resolver. Even today, record the event_id
-      // anchor so any outbound that needs to reply to the button click
-      // (passive `event_id` semantics) can find it.
+      // Record the event_id anchor first (independent of resolution) so
+      // any synchronous outbound that needs to reply to the button
+      // click can find it.
       const d = (data ?? {}) as {
         id?: string
         group_openid?: string
+        group_member_openid?: string
         user_openid?: string
+        data?: {
+          resolved?: {
+            button_data?: string
+            button_id?: string
+            user_id?: string
+          }
+          type?: number
+        }
       }
       if (typeof d.id === "string" && d.id) {
         if (typeof d.group_openid === "string" && d.group_openid) {
@@ -438,9 +448,16 @@ async function routeBusinessDispatch(
           }).catch(() => undefined)
         }
       }
-      logger.info(
-        "qq-gateway: INTERACTION_CREATE received (Stage 8 handler pending)"
-      )
+      // Stage 8: durable resolve then ACK. handleQqInteractionCreate
+      // owns the full flow (button parse → token lookup → workspace
+      // member resolution → resolveInteractionRequest → PUT ACK).
+      await handleQqInteractionCreate({
+        account: opts.account,
+        data: d,
+        logger,
+      }).catch((err) => {
+        logger.error("qq-gateway: INTERACTION_CREATE handler crashed", err)
+      })
       return
     }
     case QQ_EVENT.GROUP_MESSAGE_CREATE:

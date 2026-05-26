@@ -73,6 +73,7 @@ import {
   buildSessionPlanDraftState,
   parseSessionCollaborationState,
 } from "../session/collaboration-state.js"
+import { upsertInteractionTransportProjection } from "./transport-projections.js"
 
 type RawInteractionRow = {
   id: string
@@ -2524,6 +2525,17 @@ export async function createRuntimeAuthorizationInteractionRequest(
         client
       )
       if (existing) {
+        // Re-arm the transport projection so the projection worker
+        // re-tries delivery even though we returned an existing
+        // interaction. Only re-arms rows that were skipped for
+        // recoverable reasons (binding gone, outbound disabled,
+        // webhook not yet confirmed); skipped='not_supported_in_v1'
+        // requires a binding_created_or_replaced recovery event.
+        await upsertInteractionTransportProjection(client, {
+          interactionRequestId: existingInteractionId,
+          workspaceId: params.workspaceId,
+          conversationId: params.conversationId,
+        })
         return existing
       }
     }
@@ -2587,6 +2599,17 @@ export async function createRuntimeAuthorizationInteractionRequest(
     }
     await syncInteractionEventPayload(interaction, client)
     await appendInteractionUpdatedSyncEvent(client, interaction)
+
+    // G5: enqueue durable projection so the interaction can be rendered
+    // onto any supporting IM transport (v1: QQ only). The worker
+    // consumes this asynchronously; the dashboard / API caller doesn't
+    // wait on transport delivery.
+    await upsertInteractionTransportProjection(client, {
+      interactionRequestId: interactionId,
+      workspaceId: params.workspaceId,
+      conversationId: params.conversationId,
+    })
+
     return interaction
   })
 }

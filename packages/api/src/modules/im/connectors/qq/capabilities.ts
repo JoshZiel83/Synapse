@@ -64,8 +64,14 @@ export const QQ_MESSAGE_CAPABILITIES: MessageCapabilities = {
   supportsFile: true,
   supportsVoice: true,
   supportsVideo: true,
-  // Stage 8 flips this true; degradation produces fallback text until then.
-  supportsInteractionPrompt: false,
+  // Stage 8: keyboard payload renders for `connectionMode==='long_connection'`
+  // accounts only; webhook accounts degrade to fallback text inside
+  // render.ts (planQqSends checks options.connectionMode). The static
+  // descriptor stays true so the projection worker treats QQ as
+  // interaction-capable, then the render layer performs the per-account
+  // gate. Feishu / Weixin / Wecom remain false until each gets its own
+  // interaction_prompt renderer.
+  supportsInteractionPrompt: true,
   // 5000 is QQ's per-message markdown character cap (per
   // openclaw-qqbot:src/channel.ts TEXT_CHUNK_LIMIT). Plain text is
   // softer but using the markdown ceiling keeps a single number.
