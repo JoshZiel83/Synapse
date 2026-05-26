@@ -701,6 +701,13 @@ async function listResourceGrantRows(
     query = query
       .where("subj.kind", "=", "actor")
       .where("subj.actor_id", "=", subject.id)
+  } else if (subject.type === "remote_agent") {
+    // PR4 fix: previously fell through to the `return []` below, which meant
+    // a remote_agent principal never matched any binding even when the
+    // binding's subject_id pointed at exactly that remote_agent.
+    query = query
+      .where("subj.kind", "=", "remote_agent")
+      .where("subj.remote_agent_id", "=", subject.id)
   } else if (subject.type === "conversation_actor_context") {
     const context = await loadConversationActorContext(db, subject.id)
     if (!context) {

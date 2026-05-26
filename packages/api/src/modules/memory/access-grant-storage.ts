@@ -196,3 +196,83 @@ export async function memoryGrantMatches(
   const row = await query.executeTakeFirst()
   return Boolean(row)
 }
+
+/**
+ * PR5 fix: enumerate memory_item ids the principal can reach via active
+ * grants — both space-level grants on a space the principal isn't otherwise
+ * allowed into, and item-level grants on specific items. Returns an empty
+ * list when `runtimeSubjectIds` is empty (no principal in scope).
+ *
+ * Used by memory/service.ts list/search/recall to UNION grant-matched items
+ * into the candidate set so explicit grants actually widen visibility
+ * instead of only un-filtering items the legacy candidate query already
+ * returned.
+ */
+export async function listMemoryItemIdsReachableByGrants(
+  db: KyselyDb,
+  params: {
+    workspaceId: string
+    permission: MemoryPermission
+    runtimeSubjectIds: readonly string[]
+    runtimeScopeSubjectIds: readonly string[]
+    /** Optional: restrict to a single memory_space (e.g. when listing one space). */
+    memorySpaceId?: string
+    /** Cap on rows returned. */
+    limit?: number
+  }
+): Promise<{ memoryItemIds: string[]; memorySpaceIds: string[] }> {
+  if (params.runtimeSubjectIds.length === 0) {
+    return { memoryItemIds: [], memorySpaceIds: [] }
+  }
+  let query = db
+    .selectFrom("memory_access_grants as g")
+    .leftJoin("memory_items as mi", "mi.memory_space_id", "g.memory_space_id")
+    .select([
+      "mi.id as item_id",
+      "g.memory_space_id",
+      "g.memory_item_id",
+    ] as const)
+    .where("g.workspace_id", "=", params.workspaceId)
+    .where("g.status", "=", MEMORY_ACCESS_GRANT_STATUS.ACTIVE)
+    .where("g.subject_id", "in", [...params.runtimeSubjectIds])
+    .where(
+      sql<boolean>`${params.permission}::memory_permission = ANY(g.permissions)`
+    )
+
+  if (params.runtimeScopeSubjectIds.length > 0) {
+    const scopes = [...params.runtimeScopeSubjectIds]
+    query = query.where((eb) =>
+      eb.or([
+        eb("g.scope_subject_id", "is", null),
+        eb("g.scope_subject_id", "in", scopes),
+      ])
+    )
+  } else {
+    query = query.where("g.scope_subject_id", "is", null)
+  }
+  if (params.memorySpaceId) {
+    query = query.where("g.memory_space_id", "=", params.memorySpaceId)
+  }
+  if (params.limit && params.limit > 0) {
+    query = query.limit(params.limit)
+  }
+
+  const rows = await query.execute()
+  const memoryItemIds = new Set<string>()
+  const memorySpaceIds = new Set<string>()
+  for (const row of rows) {
+    memorySpaceIds.add(row.memory_space_id)
+    // Space-level grant (memory_item_id IS NULL): every item in the space is
+    // reachable; we surface mi.id (left-joined). Item-level grant: only the
+    // specific item — accepted via the LEFT JOIN's mi.id being the same item.
+    if (row.memory_item_id) {
+      memoryItemIds.add(row.memory_item_id)
+    } else if (row.item_id) {
+      memoryItemIds.add(row.item_id)
+    }
+  }
+  return {
+    memoryItemIds: Array.from(memoryItemIds),
+    memorySpaceIds: Array.from(memorySpaceIds),
+  }
+}

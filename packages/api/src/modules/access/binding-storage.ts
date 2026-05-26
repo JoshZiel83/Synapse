@@ -762,6 +762,12 @@ export async function loadAccessBindingRowsForResourcesAndContext(
   // The OR-of-target-kinds below is the SQL twin of
   // `capabilityTargetMatchesContext` in access/bindings.ts. Keep the two in
   // sync — a binding accepted by one must be accepted by the other.
+  //
+  // PR2 fix: the previous version of this query ignored `scope_subject_id`
+  // entirely, so a scoped binding (e.g. subject=actor + scope=conversation B)
+  // was returned even when the runtime context was a different conversation.
+  // We now add a parallel scope filter that mirrors the evaluator's runtime
+  // scope set (NULL OR matches the current workspace/conversation).
   query = query.where((eb) => {
     const conditions = [
       eb.and([
@@ -803,6 +809,29 @@ export async function loadAccessBindingRowsForResourcesAndContext(
       )
     }
     return eb.or(conditions)
+  })
+  // Scope filter: a non-null scope_subject_id only matches if the runtime
+  // context is inside that scope. The conditions mirror the runtime scope
+  // set RuntimePrincipalContext.runtimeScopeSubjectIds builds:
+  //   - workspace scope: scope_subj.kind='workspace' AND scope_subj.workspace_id = contextWorkspaceId
+  //   - conversation scope: scope_subj.kind='conversation' AND scope_subj.conversation_id = conversationId
+  query = query.where((eb) => {
+    const scopeConds = [
+      eb("binding.scope_subject_id", "is", null),
+      eb.and([
+        eb("scope_subj.kind", "=", "workspace"),
+        eb("scope_subj.workspace_id", "=", input.contextWorkspaceId),
+      ]),
+    ]
+    if (input.conversationId) {
+      scopeConds.push(
+        eb.and([
+          eb("scope_subj.kind", "=", "conversation"),
+          eb("scope_subj.conversation_id", "=", input.conversationId),
+        ])
+      )
+    }
+    return eb.or(scopeConds)
   })
   const rows = await query
     .orderBy(sql.ref(column))

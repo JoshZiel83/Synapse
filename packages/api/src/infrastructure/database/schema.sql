@@ -3695,10 +3695,31 @@ BEGIN
   IF p_subject_id IS NULL THEN RETURN TRUE; END IF;
   SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
   IF v_kind IS NULL THEN RETURN FALSE; END IF;
-  -- PR1 temporarily allows conversation_actor_context (legacy actor_in_conversation
-  -- writer at access-target-resolver.ts still produces it). PR7 removes from
-  -- allowlist together with dropping the enum value.
+  -- PR1 transitional: allows `conversation_actor_context` because the legacy
+  -- `actor_in_conversation` writer (access-target-resolver.ts) still produces
+  -- this kind on the resource_access_bindings path. PR7 removes the value
+  -- together with the subject_kind enum entry.
+  --
+  -- NOTE: per the refactor plan, relay_authorization_grants must NOT accept
+  -- this kind even transitionally — the legacy relay writers always wrote
+  -- NULL subject_id, never a conversation_actor_context subject. That
+  -- stricter check lives in `is_workspace_bound_subject_kind_strict` and is
+  -- used by `tg_relay_grant_validate`.
   RETURN v_kind IN ('workspace_member','actor','remote_agent','workspace','conversation','conversation_actor_context');
+END;
+$$;
+
+CREATE OR REPLACE FUNCTION is_workspace_bound_subject_kind_strict(p_subject_id UUID)
+RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
+DECLARE v_kind subject_kind;
+BEGIN
+  IF p_subject_id IS NULL THEN RETURN TRUE; END IF;
+  SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
+  IF v_kind IS NULL THEN RETURN FALSE; END IF;
+  -- Strict variant: excludes `conversation_actor_context`. Used by
+  -- tg_relay_grant_validate (relay legacy writer never produced CAC) and
+  -- intended for any new table that wants the final post-PR7 allowlist.
+  RETURN v_kind IN ('workspace_member','actor','remote_agent','workspace','conversation');
 END;
 $$;
 
@@ -3831,8 +3852,11 @@ BEGIN
   -- PR1: tolerate legacy NULL subject_id (once/workspace scope writers).
   -- PR4 makes subject_id NOT NULL and removes this NULL branch.
   IF NEW.subject_id IS NOT NULL THEN
-    IF NOT is_workspace_bound_subject_kind(NEW.subject_id) THEN
-      RAISE EXCEPTION 'relay_authorization_grants.subject_id % refers to a kind that is not workspace-bound', NEW.subject_id;
+    -- Strict allowlist — relay grants never accept conversation_actor_context
+    -- even transitionally (legacy relay writers always used NULL subject_id,
+    -- never a CAC subject).
+    IF NOT is_workspace_bound_subject_kind_strict(NEW.subject_id) THEN
+      RAISE EXCEPTION 'relay_authorization_grants.subject_id % refers to a kind that is not workspace-bound (strict: no conversation_actor_context)', NEW.subject_id;
     END IF;
     v_subject_ws := access_subject_workspace_id(NEW.subject_id);
     IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN

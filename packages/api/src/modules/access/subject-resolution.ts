@@ -157,6 +157,86 @@ export type RuntimePrincipalContext = {
   runtimeConversationId?: string
 }
 
+/**
+ * PR5 fix: principal-belongs-to-workspace guard for buildRuntimePrincipalContext.
+ *
+ * For workspace-bound principals (actor / remote_agent / workspace_member),
+ * the named principal MUST be in the named workspace before we mint runtime
+ * subject_ids in its name — otherwise a caller could ask for runtime
+ * context against any workspace and get back a set that legitimately
+ * matches `subject=workspace W` grants in W.
+ *
+ * `workspace` principals are accepted iff the principal IS the workspace.
+ * `user` / `external` / `system` principals are platform-wide and have no
+ * single workspace to validate against — we accept them here and rely on
+ * the per-resource permission helpers to refuse them as appropriate.
+ */
+async function assertPrincipalBelongsToWorkspace(
+  db: KyselyDb,
+  principal: SubjectRef,
+  workspaceId: string
+): Promise<void> {
+  switch (principal.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      if (principal.workspaceId !== workspaceId) {
+        throw new Error(
+          `principal workspace ${principal.workspaceId} does not match runtime workspace ${workspaceId}`
+        )
+      }
+      return
+    case SUBJECT_KIND.WORKSPACE_MEMBER: {
+      const row = await db
+        .selectFrom("workspace_members")
+        .select(["id", "workspace_id"])
+        .where("id", "=", principal.memberId)
+        .limit(1)
+        .executeTakeFirst()
+      if (!row || row.workspace_id !== workspaceId) {
+        throw new Error(
+          `workspace_member ${principal.memberId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.ACTOR: {
+      const row = await db
+        .selectFrom("actors")
+        .select(["id", "workspace_id"])
+        .where("id", "=", principal.actorId)
+        .limit(1)
+        .executeTakeFirst()
+      if (!row || row.workspace_id !== workspaceId) {
+        throw new Error(
+          `actor ${principal.actorId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.REMOTE_AGENT: {
+      const row = await db
+        .selectFrom("remote_agents")
+        .select(["id", "workspace_id"])
+        .where("id", "=", principal.remoteAgentId)
+        .limit(1)
+        .executeTakeFirst()
+      if (!row || row.workspace_id !== workspaceId) {
+        throw new Error(
+          `remote_agent ${principal.remoteAgentId} does not belong to workspace ${workspaceId}`
+        )
+      }
+      return
+    }
+    case SUBJECT_KIND.CONVERSATION:
+    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
+    case SUBJECT_KIND.USER:
+    case SUBJECT_KIND.EXTERNAL:
+    case SUBJECT_KIND.SYSTEM:
+      // No single-workspace identity; accept and let per-resource helpers
+      // refuse if appropriate.
+      return
+  }
+}
+
 export async function buildRuntimePrincipalContext(
   db: KyselyDb,
   params: {
@@ -174,6 +254,18 @@ export async function buildRuntimePrincipalContext(
 ): Promise<RuntimePrincipalContext> {
   const runtimeSubjectIds: string[] = []
   const runtimeScopeSubjectIds: string[] = []
+
+  // PR5 fix: verify the principal actually belongs to the named workspace
+  // before minting workspace subject_ids in their name. Without this check,
+  // a caller could ask the builder for context against any workspace and
+  // get back a runtime set that legitimately matches `subject=workspace W`
+  // grants in W — an authorization-expansion bug if the builder is ever
+  // wired to request-path code.
+  await assertPrincipalBelongsToWorkspace(
+    db,
+    params.principal,
+    params.workspaceId
+  )
 
   const principalSubjectId = await upsertAccessSubject(db, params.principal)
   runtimeSubjectIds.push(principalSubjectId)
@@ -295,6 +387,17 @@ export async function buildConversationCapabilitySubjects(
     subjects.push({
       type: "actor",
       id: params.actorId,
+    })
+  }
+
+  // PR4 fix: previously omitted, so `remote_agent + scope=conversation`
+  // (and even plain `remote_agent`) bindings never showed up in the
+  // expander. listResourceGrantRows in evaluator.ts now has a matching
+  // remote_agent branch.
+  if (params.remoteAgentId) {
+    subjects.push({
+      type: "remote_agent",
+      id: params.remoteAgentId,
     })
   }
 

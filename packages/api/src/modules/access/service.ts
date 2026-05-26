@@ -93,6 +93,12 @@ export async function authorizePermission(
     resourceType: AccessResourceType
     resourceId: string
     permission: string
+    /**
+     * PR5 fix: when provided, the evaluator's memory_access_grants overlay
+     * is consulted. Pass these through from `buildRuntimePrincipalContext`.
+     */
+    runtimeSubjectIds?: readonly string[]
+    runtimeScopeSubjectIds?: readonly string[]
   }
 ) {
   return checkPermission(db, {
@@ -100,6 +106,8 @@ export async function authorizePermission(
     resourceId: params.resourceId,
     permission: params.permission,
     subject: params.subject,
+    runtimeSubjectIds: params.runtimeSubjectIds,
+    runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
   })
 }
 
@@ -127,6 +135,14 @@ export async function filterAuthorizedPermissionResourceIds(
     resourceType: AccessResourceType
     permission: string
     resourceIds: string[]
+    /**
+     * PR5 fix: propagate runtime context so the memory_access_grants
+     * overlay (and the scope-aware RAB filter) sees the same subject set
+     * the controller built via buildRuntimePrincipalContext. Without these
+     * the explicit grants land in the DB but never affect read paths.
+     */
+    runtimeSubjectIds?: readonly string[]
+    runtimeScopeSubjectIds?: readonly string[]
   }
 ) {
   const uniqueIds = Array.from(new Set(params.resourceIds.filter(Boolean)))
@@ -138,6 +154,8 @@ export async function filterAuthorizedPermissionResourceIds(
         resourceType: params.resourceType,
         resourceId,
         permission: params.permission,
+        runtimeSubjectIds: params.runtimeSubjectIds,
+        runtimeScopeSubjectIds: params.runtimeScopeSubjectIds,
       }),
     }))
   )

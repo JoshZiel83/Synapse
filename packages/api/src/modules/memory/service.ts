@@ -56,6 +56,10 @@ import {
   type AccessSubject,
   workspaceMemberSubject,
 } from "../access/service.js"
+import { MEMORY_PERMISSION } from "@synapse/shared"
+import type { MemoryPermission, SubjectRef } from "@synapse/shared"
+import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
+import { listMemoryItemIdsReachableByGrants } from "./access-grant-storage.js"
 
 type MemoryRow = {
   id: string
@@ -1394,6 +1398,116 @@ function resolveAccessSubject(target: MemoryAccessTarget) {
   return null
 }
 
+/**
+ * PR5 fix: lift the resolved AccessSubject into a `SubjectRef` so we can
+ * build a RuntimePrincipalContext for the memory_access_grants overlay.
+ * `user` subjects are not workspace-bound and can't anchor a memory grant —
+ * we deliberately return null for them so the grant overlay stays off.
+ */
+function resolveSubjectRef(subject: AccessSubject | null): SubjectRef | null {
+  if (!subject) return null
+  switch (subject.type) {
+    case "actor":
+      return { kind: SUBJECT_KIND.ACTOR, actorId: subject.id }
+    case "workspace_member":
+      return { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId: subject.id }
+    default:
+      // `user` kind isn't workspace-bound and can't anchor a memory grant.
+      return null
+  }
+}
+
+async function buildMemoryRuntimeContext(
+  workspaceId: string,
+  target: MemoryAccessTarget,
+  subject: AccessSubject | null
+) {
+  const principal = resolveSubjectRef(subject)
+  if (!principal) return null
+  try {
+    return await buildRuntimePrincipalContext(db, {
+      principal,
+      workspaceId,
+      conversationId: target.conversationId ?? null,
+    })
+  } catch {
+    // Builder fails closed when the principal doesn't belong to the
+    // workspace (PR2 security guard). For memory reads we let the legacy
+    // path continue without a runtime context — it will deny access via
+    // the existing space_type rules.
+    return null
+  }
+}
+
+/**
+ * PR5 fix: enumerate memory_item rows reachable via active explicit grants
+ * so list/search/recall can UNION them into the legacy candidate set. The
+ * SQL mirrors the legacy candidate SELECT projection so the merged result
+ * carries the same MemoryRow shape downstream code expects.
+ */
+async function loadMemoryItemsByExplicitGrants(
+  workspaceId: string,
+  ctx: NonNullable<Awaited<ReturnType<typeof buildMemoryRuntimeContext>>>,
+  permission: MemoryPermission,
+  excludeItemIds: Set<string>
+): Promise<MemoryRow[]> {
+  const grants = await listMemoryItemIdsReachableByGrants(db, {
+    workspaceId,
+    permission,
+    runtimeSubjectIds: ctx.runtimeSubjectIds,
+    runtimeScopeSubjectIds: ctx.runtimeScopeSubjectIds,
+  })
+  const candidateItemIds = grants.memoryItemIds.filter(
+    (id) => !excludeItemIds.has(id)
+  )
+  if (candidateItemIds.length === 0 && grants.memorySpaceIds.length === 0) {
+    return []
+  }
+  let query = db
+    .selectFrom("memory_items as mi")
+    .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
+    .leftJoin(
+      "conversation_actor_contexts as cac",
+      "cac.id",
+      "ms.anchor_conversation_actor_context_id"
+    )
+    .leftJoin("actors as a_space", "a_space.id", "ms.anchor_actor_id")
+    .leftJoin("actors as a_participant", "a_participant.id", "cac.actor_id")
+    .leftJoin(
+      "conversations as c_space",
+      "c_space.id",
+      "ms.anchor_conversation_id"
+    )
+    .leftJoin(
+      "conversations as c_participant",
+      "c_participant.id",
+      "cac.conversation_id"
+    )
+    .leftJoin(
+      "workspace_members as wm",
+      "wm.id",
+      "ms.anchor_workspace_member_id"
+    )
+    .leftJoin("users as u", "u.id", "wm.user_id")
+    .select(baseMemorySelect())
+    .where("mi.workspace_id", "=", workspaceId)
+
+  if (candidateItemIds.length > 0 && grants.memorySpaceIds.length > 0) {
+    const items = candidateItemIds
+    const spaces = grants.memorySpaceIds
+    query = query.where((eb) =>
+      eb.or([eb("mi.id", "in", items), eb("mi.memory_space_id", "in", spaces)])
+    )
+  } else if (candidateItemIds.length > 0) {
+    query = query.where("mi.id", "in", candidateItemIds)
+  } else {
+    query = query.where("mi.memory_space_id", "in", grants.memorySpaceIds)
+  }
+
+  const rows = (await query.execute()) as MemoryRow[]
+  return rows.filter((row) => !excludeItemIds.has(row.id))
+}
+
 function isDirectUserPrivateRowVisible(
   row: SearchCandidateRow,
   target: MemoryAccessTarget
@@ -1406,6 +1520,7 @@ function isDirectUserPrivateRowVisible(
 }
 
 async function buildSearchHits(params: {
+  workspaceId: UUID
   rows: SearchCandidateRow[]
   queryText: string
   target: MemoryAccessTarget
@@ -1414,6 +1529,42 @@ async function buildSearchHits(params: {
 }) {
   const subject = resolveAccessSubject(params.target)
   let rows = params.rows
+
+  // PR5 fix: union explicit-grant-reachable items into the candidate set
+  // so a memory_space shared via memory_access_grants becomes searchable /
+  // recallable even when the legacy candidate query would have excluded it.
+  const runtimeContext = await buildMemoryRuntimeContext(
+    params.workspaceId,
+    params.target,
+    subject
+  )
+  if (runtimeContext) {
+    const existingIds = new Set(rows.map((row) => row.id))
+    const grantRows = await loadMemoryItemsByExplicitGrants(
+      params.workspaceId,
+      runtimeContext,
+      params.permission === "recall"
+        ? MEMORY_PERMISSION.RECALL
+        : MEMORY_PERMISSION.READ,
+      existingIds
+    )
+    if (grantRows.length > 0) {
+      // MemoryRow shape is compatible with SearchCandidateRow apart from
+      // search-score columns (rrf_score / chunk_id), which the downstream
+      // ranking treats as optional defaults of 0/null.
+      rows = [
+        ...rows,
+        ...grantRows.map(
+          (row) =>
+            ({
+              ...row,
+              chunk_id: null,
+              rrf_score: 0,
+            }) as unknown as SearchCandidateRow
+        ),
+      ]
+    }
+  }
 
   if (rows.length > 0) {
     const directVisibleIds = new Set(
@@ -1429,6 +1580,8 @@ async function buildSearchHits(params: {
           resourceType: "memory_item",
           permission: params.permission,
           resourceIds: rows.map((row) => row.id),
+          runtimeSubjectIds: runtimeContext?.runtimeSubjectIds,
+          runtimeScopeSubjectIds: runtimeContext?.runtimeScopeSubjectIds,
         })
       )
       rows = rows.filter(
@@ -1826,6 +1979,26 @@ export async function listMemories(
     .execute()) as MemoryRow[]
 
   const subject = resolveAccessSubject(input)
+  // PR5 fix: union explicit-grant-reachable items into the candidate set so
+  // a memory_space shared via memory_access_grants becomes visible in list
+  // even when the legacy space_type rules would have excluded it.
+  const runtimeContext = await buildMemoryRuntimeContext(
+    workspaceId,
+    input,
+    subject
+  )
+  if (runtimeContext) {
+    const existingIds = new Set(rows.map((row) => row.id))
+    const grantRows = await loadMemoryItemsByExplicitGrants(
+      workspaceId,
+      runtimeContext,
+      MEMORY_PERMISSION.READ,
+      existingIds
+    )
+    if (grantRows.length > 0) {
+      rows = [...rows, ...grantRows]
+    }
+  }
   if (subject && rows.length > 0) {
     const allowedIds = new Set(
       await filterAuthorizedPermissionResourceIds(db, {
@@ -1833,6 +2006,8 @@ export async function listMemories(
         resourceType: "memory_item",
         permission: "read",
         resourceIds: rows.map((row) => row.id),
+        runtimeSubjectIds: runtimeContext?.runtimeSubjectIds,
+        runtimeScopeSubjectIds: runtimeContext?.runtimeScopeSubjectIds,
       })
     )
     rows = rows.filter((row) => allowedIds.has(row.id))
@@ -1909,6 +2084,7 @@ export async function searchMemories(
   const fusedRows = fuseCandidateRows([...lexicalSources, { rows: vectorRows }])
 
   return buildSearchHits({
+    workspaceId,
     rows: fusedRows,
     queryText,
     target: searchInput,

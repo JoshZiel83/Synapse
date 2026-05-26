@@ -634,6 +634,53 @@ export function registerMemoryRoutes(app: FastifyInstance) {
   // "share my memory with project X" use case the user called out in the
   // refactor brief. The evaluator overlay (PR5) honors active grants
   // additively on top of the legacy decision tree.
+  //
+  // Every endpoint guards against the cross-space / cross-workspace shape
+  // confusions the original cut shipped with:
+  //   - the path `:spaceId` must belong to the path `:workspaceId`,
+  //   - the caller must hold `memory_space.manage` on that space
+  //     (the evaluator overlay folds explicit manage grants in),
+  //   - on DELETE, the target grant must belong to the same space + workspace
+  //     (otherwise a manager of space A could revoke a grant on space B by
+  //     guessing its grant id).
+  async function assertSpaceBelongsToWorkspace(
+    spaceId: string,
+    workspaceId: string,
+    reply: FastifyReply
+  ): Promise<boolean> {
+    const row = await db
+      .selectFrom("memory_spaces")
+      .select(["id", "workspace_id"])
+      .where("id", "=", spaceId)
+      .limit(1)
+      .executeTakeFirst()
+    if (!row || row.workspace_id !== workspaceId) {
+      reply.status(404).send({ error: "memory space not found in workspace" })
+      return false
+    }
+    return true
+  }
+
+  async function assertSpaceManageable(
+    request: FastifyRequest,
+    reply: FastifyReply,
+    spaceId: string
+  ): Promise<boolean> {
+    const managePermitted = await checkPermission(db, {
+      resourceType: "memory_space",
+      resourceId: spaceId,
+      permission: "manage",
+      subject: getRequestAccessSubject(request),
+    })
+    if (!managePermitted) {
+      reply.status(403).send({
+        error: "Not allowed to manage grants on this memory space",
+      })
+      return false
+    }
+    return true
+  }
+
   app.post(
     `${prefix}/spaces/:spaceId/grants`,
     { preHandler },
@@ -650,20 +697,28 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           workspaceId: string
           spaceId: string
         }
-        const body = createMemoryGrantSchema.parse(request.body)
+        if (!(await assertSpaceBelongsToWorkspace(spaceId, workspaceId, reply)))
+          return
+        if (!(await assertSpaceManageable(request, reply, spaceId))) return
 
-        // The grant manager must hold `memory.manage` on the space — the
-        // evaluator additionally folds in any explicit `manage` grant.
-        const managePermitted = await checkPermission(db, {
-          resourceType: "memory_space",
-          resourceId: spaceId,
-          permission: "manage",
-          subject: getRequestAccessSubject(request),
-        })
-        if (!managePermitted) {
-          return reply.status(403).send({
-            error: "Not allowed to manage grants on this memory space",
-          })
+        const body = createMemoryGrantSchema.parse(request.body)
+        // Item-level grants must reference an item within the named space.
+        if (body.memoryItemId) {
+          const itemRow = await db
+            .selectFrom("memory_items")
+            .select(["id", "memory_space_id", "workspace_id"])
+            .where("id", "=", body.memoryItemId)
+            .limit(1)
+            .executeTakeFirst()
+          if (
+            !itemRow ||
+            itemRow.memory_space_id !== spaceId ||
+            itemRow.workspace_id !== workspaceId
+          ) {
+            return reply
+              .status(404)
+              .send({ error: "memory item not found in space" })
+          }
         }
 
         const grant = await insertMemoryAccessGrant(db, {
@@ -698,7 +753,15 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           "Not allowed to view this workspace"
         )
         if (!allowed) return
-        const { spaceId } = request.params as { spaceId: string }
+        const { workspaceId, spaceId } = request.params as {
+          workspaceId: string
+          spaceId: string
+        }
+        if (!(await assertSpaceBelongsToWorkspace(spaceId, workspaceId, reply)))
+          return
+        // Listing grants on a space exposes who-has-access-to-what; require
+        // `manage` rather than just workspace view.
+        if (!(await assertSpaceManageable(request, reply, spaceId))) return
         const grants = await listActiveMemoryAccessGrants(db, spaceId)
         return reply.status(200).send({ grants })
       } catch (error) {
@@ -719,20 +782,28 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           "Not allowed to view this workspace"
         )
         if (!allowed) return
-        const { spaceId, grantId } = request.params as {
+        const { workspaceId, spaceId, grantId } = request.params as {
+          workspaceId: string
           spaceId: string
           grantId: string
         }
-        const managePermitted = await checkPermission(db, {
-          resourceType: "memory_space",
-          resourceId: spaceId,
-          permission: "manage",
-          subject: getRequestAccessSubject(request),
-        })
-        if (!managePermitted) {
-          return reply.status(403).send({
-            error: "Not allowed to manage grants on this memory space",
-          })
+        if (!(await assertSpaceBelongsToWorkspace(spaceId, workspaceId, reply)))
+          return
+        if (!(await assertSpaceManageable(request, reply, spaceId))) return
+        // Pin the grant to (workspace, space) so a manager of space A
+        // cannot revoke a grant on space B by guessing its grantId.
+        const grantRow = await db
+          .selectFrom("memory_access_grants")
+          .select(["id", "memory_space_id", "workspace_id"])
+          .where("id", "=", grantId)
+          .limit(1)
+          .executeTakeFirst()
+        if (
+          !grantRow ||
+          grantRow.memory_space_id !== spaceId ||
+          grantRow.workspace_id !== workspaceId
+        ) {
+          return reply.status(404).send({ error: "grant not found in space" })
         }
         const revoked = await revokeMemoryAccessGrant(db, grantId)
         return reply.status(200).send({ revoked })
