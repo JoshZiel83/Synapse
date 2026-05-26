@@ -5,6 +5,7 @@ import type { Kysely } from "kysely"
 import { withTestDb } from "../../test/helpers/db.js"
 import { authorizePermission, type AccessSubject } from "../access/service.js"
 import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
+import { upsertAccessSubject } from "../access/subject-registry.js"
 import { insertMemoryAccessGrant } from "./access-grant-storage.js"
 
 /**
@@ -63,12 +64,16 @@ async function newSpace(
   wsId: string,
   actorId: string
 ): Promise<string> {
+  const ownerSubjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.ACTOR,
+    actorId,
+  })
   const row = await db
     .insertInto("memory_spaces")
     .values({
       workspace_id: wsId,
-      space_type: "actor_private",
-      anchor_actor_id: actorId,
+      owner_subject_id: ownerSubjectId,
+      namespace_key: "default",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()

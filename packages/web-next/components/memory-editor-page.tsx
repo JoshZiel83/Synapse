@@ -18,6 +18,7 @@ import {
   hasMeaningfulBlocks,
   normalizeActorOption,
   normalizeGroupOption,
+  projectMemory,
   serializeEditorState,
   type EditorState,
   type MemoryFolderNode,
@@ -110,7 +111,9 @@ export default function MemoryEditorPage({ memoryId }: { memoryId?: string }) {
       setGroups(groupItems)
 
       if (memoryId) {
-        const nextMemory = (memoryData?.memory || memoryData) as Memory
+        const nextMemory = projectMemory(
+          (memoryData?.memory || memoryData) as any
+        )
         const nextEditor = createEditorStateFromMemory(nextMemory)
         setMemory(nextMemory)
         setEditor(nextEditor)

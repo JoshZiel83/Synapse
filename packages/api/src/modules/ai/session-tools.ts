@@ -3050,7 +3050,9 @@ export function registerCallableToolPlugins(): void {
           runId: result.run.id,
           results: result.memories.map((memory) => ({
             id: memory.id,
-            spaceType: memory.spaceType,
+            ownerKind: memory.owner.kind,
+            scopeKind: memory.scope?.kind,
+            namespaceKey: memory.namespaceKey,
             category: memory.category,
             textDigest: memory.textDigest,
             tags: memory.tags,

@@ -46,8 +46,6 @@ import {
   MEMORY_INDEX_STATUSES,
   MEMORY_ITEM_STATES,
   MEMORY_RECALL_TYPES,
-  MEMORY_SPACE_TYPES,
-  MEMORY_SCOPES,
   MEMORY_STABILITIES,
   MEMORY_STATUSES,
   PLUGIN_AUTH_CONNECTION_STATUSES,
@@ -482,8 +480,6 @@ export const WORK_ITEM_TRANSITIONS: Record<WorkItemStatus, WorkItemStatus[]> = {
 }
 
 // ============ Memory ============
-export type MemorySpaceType = (typeof MEMORY_SPACE_TYPES)[number]
-export type MemoryScope = (typeof MEMORY_SCOPES)[number]
 export type MemoryCategory = (typeof MEMORY_CATEGORIES)[number]
 export type MemoryItemState = (typeof MEMORY_ITEM_STATES)[number]
 export type MemoryStatus = (typeof MEMORY_STATUSES)[number]
@@ -495,14 +491,11 @@ export interface MemoryEntry {
   id: UUID
   workspaceId: UUID
   spaceId: UUID
-  spaceType: MemorySpaceType
-  ownerScope: MemoryScope
-  actorId?: UUID
-  conversationId?: UUID
-  workspaceMemberId?: UUID
-  ownerActorId?: UUID
-  ownerConversationId?: UUID
-  ownerWorkspaceMemberId?: UUID
+  // D4: memory_spaces is now (owner_subject_id, scope_subject_id?, namespace_key).
+  // The wire shape exposes owner / scope as SubjectRefs and the literal namespace key.
+  owner: SubjectRef
+  scope?: SubjectRef
+  namespaceKey: string
   category: MemoryCategory
   state: MemoryItemState
   status: MemoryStatus
@@ -525,9 +518,9 @@ export interface MemoryEntry {
   indexError?: string
   createdAt: Timestamp
   updatedAt: Timestamp
-  actorName?: string
-  conversationTitle?: string
-  workspaceMemberName?: string
+  /** Display-friendly labels derived from owner / scope subject joins. */
+  ownerLabel?: string
+  scopeLabel?: string
 }
 
 export type Memory = MemoryEntry
@@ -3692,8 +3685,9 @@ export interface ConversationFeedEventPayloadMap {
   memory_saved: {
     actor: ConversationEntityRef
     memoryId: UUID
-    memorySpaceType: MemorySpaceType
-    memoryScope?: MemoryScope
+    memoryOwner: SubjectRef
+    memoryScope?: SubjectRef
+    memoryNamespaceKey: string
     memoryCategory: MemoryCategory
     textDigest?: string
     sourceItemId?: UUID
@@ -3703,8 +3697,9 @@ export interface ConversationFeedEventPayloadMap {
     actor: ConversationEntityRef
     memoryId: UUID
     supersedesMemoryId?: UUID
-    memorySpaceType: MemorySpaceType
-    memoryScope?: MemoryScope
+    memoryOwner: SubjectRef
+    memoryScope?: SubjectRef
+    memoryNamespaceKey: string
     memoryCategory: MemoryCategory
     textDigest?: string
     sourceItemId?: UUID

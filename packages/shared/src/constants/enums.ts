@@ -587,17 +587,6 @@ export const ACTOR_DOC_VISIBILITIES = [
   "internal_only",
 ] as const
 
-export const MEMORY_SPACE_TYPES = [
-  "workspace_shared",
-  "conversation_shared",
-  "actor_private",
-  "participant_private",
-  "user_private",
-] as const
-
-// Deprecated alias kept for in-repo transition.
-export const MEMORY_SCOPES = MEMORY_SPACE_TYPES
-
 export const MEMORY_CATEGORIES = [
   "fact",
   "preference",

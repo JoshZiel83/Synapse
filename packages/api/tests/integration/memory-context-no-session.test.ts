@@ -1,11 +1,11 @@
-// Regression test: writing a `participant_private` memory must NOT create
-// a `sessions` row.
+// Regression test: writing a memory must NOT create a `sessions` row.
 //
 // The legacy memory path called `ensureConversationActorSessionContext`,
 // which guarantees a `sessions` row alongside the
-// `conversation_actor_contexts` row. After the external/API-session cleanup,
-// memory goes through `ensureConversationActorContext` instead, which only
-// upserts `conversation_actor_contexts`.
+// `conversation_actor_contexts` row. After the external/API-session cleanup
+// and the D4 subject-scope refactor, memory no longer touches sessions OR
+// conversation_actor_contexts — memory_spaces is keyed by
+// (owner_subject_id, scope_subject_id?, namespace_key) directly.
 //
 // This test pins that behavior so a future refactor can't silently regress
 // the "memory creates a session as a side effect" mistake.
@@ -27,6 +27,7 @@ import { after, before, test } from "node:test"
 import assert from "node:assert/strict"
 import { randomUUID } from "node:crypto"
 import pg from "pg"
+import { SUBJECT_KIND } from "@synapse/shared"
 
 import { createMemory } from "../../src/modules/memory/service.js"
 
@@ -63,7 +64,7 @@ after(async () => {
   await teardownApiConnections()
 })
 
-test("createMemory(participant_private) creates conversation_actor_contexts but NOT sessions", async () => {
+test("createMemory(owner=actor + scope=conversation) does NOT create a sessions row", async () => {
   if (!seed || !client) throw new Error("test fixtures missing")
 
   const conversationId = randomUUID()
@@ -82,10 +83,6 @@ test("createMemory(participant_private) creates conversation_actor_contexts but 
     [conversationId, seed.workspaceId, seed.workspaceMemberId]
   )
 
-  // `requireActiveActorConversationParticipant` (called transitively by
-  // both ensureConversationActorContext and assertActorInConversation)
-  // joins conversation_participants to access_subjects on subject_id, so
-  // we need an access_subjects row of kind='actor' first.
   const subjectRow = await client.query<{ id: string }>(
     `INSERT INTO access_subjects (kind, workspace_id, actor_id)
      VALUES ('actor', $1, $2)
@@ -108,40 +105,19 @@ test("createMemory(participant_private) creates conversation_actor_contexts but 
     [conversationId, actorParticipantId]
   )
 
-  // Sanity: no sessions or contexts exist for this pair before the
-  // memory write.
+  // Sanity: no sessions row before the memory write.
   const preSessions = await client.query(
     "SELECT id FROM sessions WHERE conversation_id = $1 AND actor_id = $2",
     [conversationId, actorId]
   )
   assert.equal(preSessions.rowCount, 0, "no sessions row before memory write")
-  const preContexts = await client.query(
-    "SELECT id FROM conversation_actor_contexts WHERE conversation_id = $1 AND actor_id = $2",
-    [conversationId, actorId]
-  )
-  assert.equal(
-    preContexts.rowCount,
-    0,
-    "no conversation_actor_contexts row before memory write"
-  )
 
   await createMemory(seed.workspaceId, {
-    spaceType: "participant_private",
-    actorId,
-    conversationId,
+    owner: { kind: SUBJECT_KIND.ACTOR, actorId },
+    scope: { kind: SUBJECT_KIND.CONVERSATION, conversationId },
     category: "fact",
     content: "memory regression: this write must not spawn a session row",
   })
-
-  const postContexts = await client.query<{ id: string }>(
-    "SELECT id FROM conversation_actor_contexts WHERE conversation_id = $1 AND actor_id = $2",
-    [conversationId, actorId]
-  )
-  assert.equal(
-    postContexts.rowCount,
-    1,
-    "conversation_actor_contexts row must exist after createMemory"
-  )
 
   const postSessions = await client.query<{ id: string }>(
     "SELECT id FROM sessions WHERE conversation_id = $1 AND actor_id = $2",
@@ -150,7 +126,7 @@ test("createMemory(participant_private) creates conversation_actor_contexts but 
   assert.equal(
     postSessions.rowCount,
     0,
-    "createMemory(participant_private) must NOT create a sessions row " +
+    "createMemory must NOT create a sessions row " +
       "(regression: legacy ensureConversationActorSessionContext path)"
   )
 })

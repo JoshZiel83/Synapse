@@ -6,7 +6,6 @@ import {
   MEMORY_CATEGORIES,
   MEMORY_ITEM_STATES,
   MEMORY_RECALL_TYPES,
-  MEMORY_SPACE_TYPES,
   MEMORY_STABILITIES,
 } from "@synapse/shared/constants"
 import { MEMORY_PERMISSIONS, SUBJECT_KIND } from "@synapse/shared"
@@ -27,14 +26,38 @@ import {
   listActiveMemoryAccessGrants,
   revokeMemoryAccessGrant,
 } from "./access-grant-storage.js"
+import {
+  createMemory,
+  deleteMemory,
+  getMemory,
+  listMemories,
+  MemoryError,
+  presetToOwnerScope,
+  recallMemories,
+  runMemorySearch,
+  updateMemory,
+  type CreateMemoryInput,
+  type MemoryPreset,
+  type UpdateMemoryInput,
+} from "./service.js"
 
 /**
- * PR-fix-round-2: lift a resolved AccessSubject into the SubjectRef shape
- * `buildRuntimePrincipalContext` needs. `user` and other platform-wide
- * subjects can't anchor a workspace-bound memory grant — they return null
- * so the runtime context build is skipped and the legacy decision tree
- * stays in charge.
+ * D4 preset shim: legacy callers send a literal preset string. The controller
+ * translates `{preset, actorId?, conversationId?, workspaceMemberId?}` into
+ * the canonical `{owner, scope?, namespaceKey}` shape the service expects.
  */
+const MEMORY_PRESETS = [
+  "workspace_shared",
+  "conversation_shared",
+  "actor_private",
+  "participant_private",
+  "user_private",
+] as const satisfies readonly MemoryPreset[]
+const memoryPresetEnum = z.enum(MEMORY_PRESETS)
+const memoryCategoryEnum = z.enum(MEMORY_CATEGORIES)
+const memoryStateEnum = z.enum(MEMORY_ITEM_STATES)
+const memoryStabilityEnum = z.enum(MEMORY_STABILITIES)
+
 function accessSubjectToSubjectRef(subject: AccessSubject): SubjectRef | null {
   switch (subject.type) {
     case "actor":
@@ -45,24 +68,6 @@ function accessSubjectToSubjectRef(subject: AccessSubject): SubjectRef | null {
       return null
   }
 }
-import {
-  createMemory,
-  deleteMemory,
-  getMemory,
-  listMemories,
-  MemoryError,
-  recallMemories,
-  runMemorySearch,
-  updateMemory,
-  type CreateMemoryInput,
-  type UpdateMemoryInput,
-} from "./service.js"
-import { ensureConversationActorContext } from "../session/service.js"
-
-const memorySpaceTypeEnum = z.enum(MEMORY_SPACE_TYPES)
-const memoryCategoryEnum = z.enum(MEMORY_CATEGORIES)
-const memoryStateEnum = z.enum(MEMORY_ITEM_STATES)
-const memoryStabilityEnum = z.enum(MEMORY_STABILITIES)
 
 const contentBlockSchema = z.discriminatedUnion("type", [
   z.object({
@@ -82,99 +87,9 @@ const contentBlockSchema = z.discriminatedUnion("type", [
   }),
 ])
 
-const memoryPayloadSchema = z.object({
-  spaceType: memorySpaceTypeEnum.optional(),
-  ownerScope: memorySpaceTypeEnum.optional(),
-  actorId: z.string().uuid().optional(),
-  ownerActorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  ownerConversationId: z.string().uuid().optional(),
-  workspaceMemberId: z.string().uuid().optional(),
-  ownerWorkspaceMemberId: z.string().uuid().optional(),
-  category: memoryCategoryEnum.optional(),
-  state: memoryStateEnum.optional(),
-  status: memoryStateEnum.optional(),
-  stability: memoryStabilityEnum.optional(),
-  importance: z.number().min(0).max(1).optional(),
-  confidence: z.number().min(0).max(1).optional(),
-  tags: z.array(z.string()).optional(),
-  content: z.string().optional(),
-  contentBlocks: z.array(contentBlockSchema).optional(),
-  textDigest: z.string().optional(),
-  searchText: z.string().optional(),
-  sourceItemId: z.string().uuid().optional(),
-  sourceToolCallId: z.string().uuid().optional(),
-  sourceTurnId: z.string().uuid().optional(),
-  supersedesMemoryId: z.string().uuid().optional(),
-  metadata: z.record(z.any()).optional(),
-})
-
-const createMemorySchema = memoryPayloadSchema
-  .extend({
-    category: memoryCategoryEnum,
-  })
-  .refine(
-    (value) => !!value.content || !!value.contentBlocks || !!value.textDigest,
-    {
-      message: "content, contentBlocks, or textDigest is required",
-    }
-  )
-
-const updateMemorySchema = memoryPayloadSchema.partial()
-
-const listMemoriesSchema = z.object({
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  workspaceMemberId: z.string().uuid().optional(),
-  spaceType: memorySpaceTypeEnum.optional(),
-  ownerScope: memorySpaceTypeEnum.optional(),
-  category: memoryCategoryEnum.optional(),
-  state: memoryStateEnum.optional(),
-  status: memoryStateEnum.optional(),
-  tags: z
-    .union([
-      z.string().transform((value) =>
-        value
-          .split(",")
-          .map((item) => item.trim())
-          .filter(Boolean)
-      ),
-      z.array(z.string()),
-    ])
-    .optional(),
-  limit: z.coerce.number().int().min(1).max(200).optional(),
-})
-
-const searchMemoriesSchema = z.object({
-  queryText: z.string().min(1),
-  actorId: z.string().uuid().optional(),
-  conversationId: z.string().uuid().optional(),
-  workspaceMemberId: z.string().uuid().optional(),
-  spaceTypes: z.array(memorySpaceTypeEnum).optional(),
-  scopes: z.array(memorySpaceTypeEnum).optional(),
-  categories: z.array(memoryCategoryEnum).optional(),
-  states: z.array(memoryStateEnum).optional(),
-  statuses: z.array(memoryStateEnum).optional(),
-  limit: z.number().int().min(1).max(50).optional(),
-  metadata: z.record(z.any()).optional(),
-})
-
-const recallMemoriesSchema = searchMemoriesSchema.extend({
-  recallType: z.enum(
-    MEMORY_RECALL_TYPES.filter((value) => value !== "manual_search") as [
-      "bootstrap",
-      "turn_recall",
-    ]
-  ),
-  queryBlocks: z.array(contentBlockSchema).optional(),
-})
-
-// PR6: zod schema for the memory grant endpoints. The subject + scope shapes
-// mirror the shared SubjectRef discriminated union. We accept the full kind
-// set the grants trigger allows; insertMemoryAccessGrant + the DB trigger
-// will reject anything that violates the workspace-bound / scope-eligible
-// invariants.
-const subjectRefSchema = z.discriminatedUnion("kind", [
+// SubjectRef for owner: workspace_member | actor | remote_agent | workspace | conversation.
+// User/external/system rejected at the trigger; reject early here too.
+const ownerSubjectRefSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal(SUBJECT_KIND.WORKSPACE),
     workspaceId: z.string().uuid(),
@@ -205,25 +120,163 @@ const scopeSubjectRefSchema = z.discriminatedUnion("kind", [
   }),
 ])
 
+const memoryPayloadBase = z.object({
+  // Preset shim
+  preset: memoryPresetEnum.optional(),
+  presetActorId: z.string().uuid().optional(),
+  presetConversationId: z.string().uuid().optional(),
+  presetWorkspaceMemberId: z.string().uuid().optional(),
+  // Canonical
+  owner: ownerSubjectRefSchema.optional(),
+  scope: scopeSubjectRefSchema.optional(),
+  namespaceKey: z.string().max(255).optional(),
+  category: memoryCategoryEnum.optional(),
+  state: memoryStateEnum.optional(),
+  status: memoryStateEnum.optional(),
+  stability: memoryStabilityEnum.optional(),
+  importance: z.number().min(0).max(1).optional(),
+  confidence: z.number().min(0).max(1).optional(),
+  tags: z.array(z.string()).optional(),
+  content: z.string().optional(),
+  contentBlocks: z.array(contentBlockSchema).optional(),
+  textDigest: z.string().optional(),
+  searchText: z.string().optional(),
+  sourceItemId: z.string().uuid().optional(),
+  sourceToolCallId: z.string().uuid().optional(),
+  sourceTurnId: z.string().uuid().optional(),
+  supersedesMemoryId: z.string().uuid().optional(),
+  metadata: z.record(z.any()).optional(),
+})
+
+const createMemorySchema = memoryPayloadBase
+  .extend({
+    category: memoryCategoryEnum,
+  })
+  .refine(
+    (value) => !!value.content || !!value.contentBlocks || !!value.textDigest,
+    {
+      message: "content, contentBlocks, or textDigest is required",
+    }
+  )
+
+const updateMemorySchema = memoryPayloadBase.partial()
+
+const listMemoriesSchema = z.object({
+  actorId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  workspaceMemberId: z.string().uuid().optional(),
+  owner: ownerSubjectRefSchema.optional(),
+  scope: scopeSubjectRefSchema.optional(),
+  namespaceKey: z.string().max(255).optional(),
+  category: memoryCategoryEnum.optional(),
+  state: memoryStateEnum.optional(),
+  status: memoryStateEnum.optional(),
+  tags: z
+    .union([
+      z.string().transform((value) =>
+        value
+          .split(",")
+          .map((item) => item.trim())
+          .filter(Boolean)
+      ),
+      z.array(z.string()),
+    ])
+    .optional(),
+  limit: z.coerce.number().int().min(1).max(200).optional(),
+})
+
+const searchMemoriesSchema = z.object({
+  queryText: z.string().min(1),
+  actorId: z.string().uuid().optional(),
+  conversationId: z.string().uuid().optional(),
+  workspaceMemberId: z.string().uuid().optional(),
+  owners: z.array(ownerSubjectRefSchema).optional(),
+  scopes: z.array(scopeSubjectRefSchema).optional(),
+  namespaceKeys: z.array(z.string().max(255)).optional(),
+  categories: z.array(memoryCategoryEnum).optional(),
+  states: z.array(memoryStateEnum).optional(),
+  statuses: z.array(memoryStateEnum).optional(),
+  limit: z.number().int().min(1).max(50).optional(),
+  metadata: z.record(z.any()).optional(),
+})
+
+const recallMemoriesSchema = searchMemoriesSchema.extend({
+  recallType: z.enum(
+    MEMORY_RECALL_TYPES.filter((value) => value !== "manual_search") as [
+      "bootstrap",
+      "turn_recall",
+    ]
+  ),
+  queryBlocks: z.array(contentBlockSchema).optional(),
+})
+
+const grantSubjectRefSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal(SUBJECT_KIND.WORKSPACE),
+    workspaceId: z.string().uuid(),
+  }),
+  z.object({
+    kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
+    memberId: z.string().uuid(),
+  }),
+  z.object({ kind: z.literal(SUBJECT_KIND.ACTOR), actorId: z.string().uuid() }),
+  z.object({
+    kind: z.literal(SUBJECT_KIND.REMOTE_AGENT),
+    remoteAgentId: z.string().uuid(),
+  }),
+  z.object({
+    kind: z.literal(SUBJECT_KIND.CONVERSATION),
+    conversationId: z.string().uuid(),
+  }),
+])
+
 const createMemoryGrantSchema = z.object({
   memoryItemId: z.string().uuid().nullish(),
-  subject: subjectRefSchema,
+  subject: grantSubjectRefSchema,
   scope: scopeSubjectRefSchema.optional(),
   permissions: z.array(z.enum(MEMORY_PERMISSIONS)).min(1),
   source: z.string().max(64).nullish(),
 })
 
-function normalizeMemoryPayload<T extends z.infer<typeof memoryPayloadSchema>>(
-  value: T
-) {
-  return {
-    ...value,
-    spaceType: value.spaceType || value.ownerScope,
-    actorId: value.actorId || value.ownerActorId,
-    conversationId: value.conversationId || value.ownerConversationId,
-    workspaceMemberId: value.workspaceMemberId || value.ownerWorkspaceMemberId,
-    state: value.state || value.status,
+type CreateBody = z.infer<typeof createMemorySchema>
+type UpdateBody = z.infer<typeof updateMemorySchema>
+
+/**
+ * Resolve a payload's owner/scope/namespaceKey from either the canonical
+ * fields or the legacy preset shim. Throws MemoryError when the preset is
+ * referenced but the required context is missing.
+ */
+function resolveOwnerScope(
+  workspaceId: string,
+  body: Pick<
+    CreateBody | UpdateBody,
+    | "owner"
+    | "scope"
+    | "preset"
+    | "presetActorId"
+    | "presetConversationId"
+    | "presetWorkspaceMemberId"
+  >
+): { owner?: SubjectRef; scope?: SubjectRef } {
+  if (body.owner) {
+    return { owner: body.owner, scope: body.scope }
   }
+  if (body.preset) {
+    const translated = presetToOwnerScope(body.preset, {
+      workspaceId,
+      actorId: body.presetActorId,
+      conversationId: body.presetConversationId,
+      workspaceMemberId: body.presetWorkspaceMemberId,
+    })
+    if (!translated) {
+      throw new MemoryError(
+        `Memory preset '${body.preset}' requires actor/conversation/workspaceMember context`,
+        400
+      )
+    }
+    return translated
+  }
+  return {}
 }
 
 function handleError(error: unknown, reply: FastifyReply) {
@@ -256,18 +309,12 @@ async function requireMemoryPermission(
   request: FastifyRequest,
   reply: FastifyReply,
   memoryId: string,
-  permission: "read" | "edit" | "retarget" | "delete",
+  permission: "read" | "edit" | "delete",
   errorMessage: string
 ) {
-  // PR-fix-round-4: also include the conversation context when building the
-  // runtime context — round 3 only passed workspaceId, so a
-  // `subject=actor + scope=conversation` item-level grant would still 403
-  // because the conversation subject wasn't in runtimeScopeSubjectIds.
-  // We pull conversationId from (a) explicit `?conversationId=` query
-  // override (chat surfaces) and (b) the memory_space's anchor — for
-  // conversation_shared / participant_private spaces the conversation is
-  // the space's anchor itself, so the scope match works without any
-  // client-side hint.
+  // D4: derive the conversation context from the memory_space owner / scope
+  // subject (conversation owner OR conversation scope). Used to enrich the
+  // runtime context so a `subject=actor + scope=conversation` grant matches.
   const subject = getRequestAccessSubject(request)
   const { workspaceId } = request.params as { workspaceId: string }
   const principal = accessSubjectToSubjectRef(subject)
@@ -284,21 +331,26 @@ async function requireMemoryPermission(
       const spaceAnchor = await db
         .selectFrom("memory_items as mi")
         .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
+        .innerJoin(
+          "access_subjects as owner_subj",
+          "owner_subj.id",
+          "ms.owner_subject_id"
+        )
         .leftJoin(
-          "conversation_actor_contexts as cac",
-          "cac.id",
-          "ms.anchor_conversation_actor_context_id"
+          "access_subjects as scope_subj",
+          "scope_subj.id",
+          "ms.scope_subject_id"
         )
         .select([
-          "ms.anchor_conversation_id as anchor_conv",
-          "cac.conversation_id as ctx_conv",
+          "owner_subj.conversation_id as owner_conv",
+          "scope_subj.conversation_id as scope_conv",
         ])
         .where("mi.id", "=", memoryId)
         .where("mi.workspace_id", "=", workspaceId)
         .limit(1)
         .executeTakeFirst()
       conversationId =
-        spaceAnchor?.anchor_conv ?? spaceAnchor?.ctx_conv ?? undefined
+        spaceAnchor?.scope_conv ?? spaceAnchor?.owner_conv ?? undefined
     }
     try {
       const ctx = await buildRuntimePrincipalContext(db, {
@@ -309,8 +361,7 @@ async function requireMemoryPermission(
       runtimeSubjectIds = ctx.runtimeSubjectIds
       runtimeScopeSubjectIds = ctx.runtimeScopeSubjectIds
     } catch {
-      // Principal not in workspace — fall through; the evaluator's legacy
-      // path will reject.
+      // principal not in workspace
     }
   }
   const allowed = await authorizePermission(db, {
@@ -330,68 +381,84 @@ async function requireMemoryPermission(
   return true
 }
 
+/**
+ * D4: gate writes to a (owner, scope?) tuple via per-owner-kind policy.
+ * The cases mirror the legacy preset semantics now that ownership is
+ * subject-driven:
+ *   - owner=workspace        -> workspace.manage_memories
+ *   - owner=conversation     -> conversation.memory_edit (active participant)
+ *   - owner=actor            -> actor.memory_edit
+ *   - owner=remote_agent     -> ownership match OR workspace.manage_memories
+ *   - owner=workspace_member -> self OR workspace.manage_memories
+ */
 async function requireMemorySpaceWritePermission(
   request: FastifyRequest,
   reply: FastifyReply,
-  body: Pick<
-    CreateMemoryInput,
-    "spaceType" | "actorId" | "conversationId" | "workspaceMemberId"
-  >,
+  owner: SubjectRef | undefined,
+  scope: SubjectRef | undefined,
   errorMessage: string
 ) {
+  if (!owner) {
+    reply.status(400).send({ error: "owner is required" })
+    return false
+  }
   const workspaceMemberId = (request as any).workspaceMember?.id as
     | string
     | undefined
   const { workspaceId } = request.params as { workspaceId: string }
+  const subject = getRequestAccessSubject(request)
   let allowed = false
 
-  switch (body.spaceType) {
-    case "workspace_shared":
+  switch (owner.kind) {
+    case SUBJECT_KIND.WORKSPACE:
       allowed = await authorizeAction(db, {
-        subject: getRequestAccessSubject(request),
+        subject,
         action: "workspace.manage_memories",
         resourceId: workspaceId,
       })
       break
-    case "conversation_shared":
-      if (body.conversationId) {
+    case SUBJECT_KIND.CONVERSATION:
+      allowed = await authorizePermission(db, {
+        subject,
+        resourceType: "conversation",
+        resourceId: owner.conversationId,
+        permission: "memory_edit",
+      })
+      break
+    case SUBJECT_KIND.ACTOR: {
+      const actorAllowed = await authorizePermission(db, {
+        subject,
+        resourceType: "actor",
+        resourceId: owner.actorId,
+        permission: "memory_edit",
+      })
+      if (actorAllowed && scope?.kind === SUBJECT_KIND.CONVERSATION) {
+        // For participant_private semantics: also require active conversation
+        // membership / memory_edit on the conversation. The conversation
+        // memory_edit check resolves to "is active participant" for actors.
         allowed = await authorizePermission(db, {
-          subject: getRequestAccessSubject(request),
+          subject,
           resourceType: "conversation",
-          resourceId: body.conversationId,
+          resourceId: scope.conversationId,
           permission: "memory_edit",
         })
+      } else {
+        allowed = actorAllowed
       }
       break
-    case "actor_private":
-      if (body.actorId) {
-        allowed = await authorizePermission(db, {
-          subject: getRequestAccessSubject(request),
-          resourceType: "actor",
-          resourceId: body.actorId,
-          permission: "memory_edit",
-        })
-      }
+    }
+    case SUBJECT_KIND.REMOTE_AGENT:
+      allowed = await authorizeAction(db, {
+        subject,
+        action: "workspace.manage_memories",
+        resourceId: workspaceId,
+      })
       break
-    case "participant_private":
-      if (body.actorId && body.conversationId) {
-        const context = await ensureConversationActorContext({
-          actorId: body.actorId,
-          conversationId: body.conversationId,
-        })
-        allowed = await authorizePermission(db, {
-          subject: getRequestAccessSubject(request),
-          resourceType: "conversation_actor_context",
-          resourceId: context.conversationActorContextId,
-          permission: "memory_edit",
-        })
-      }
-      break
-    case "user_private":
-      allowed = body.workspaceMemberId === workspaceMemberId
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      allowed = owner.memberId === workspaceMemberId
       if (!allowed) {
         allowed = await authorizeAction(db, {
-          subject: getRequestAccessSubject(request),
+          subject,
           action: "workspace.manage_memories",
           resourceId: workspaceId,
         })
@@ -409,30 +476,7 @@ async function requireMemorySpaceWritePermission(
   return true
 }
 
-function resolveTargetSpace(
-  existing: Awaited<ReturnType<typeof getMemory>>,
-  body: z.infer<typeof updateMemorySchema>
-) {
-  const normalized = normalizeMemoryPayload(body)
-  return {
-    spaceType: normalized.spaceType ?? existing.spaceType,
-    actorId:
-      normalized.actorId !== undefined ? normalized.actorId : existing.actorId,
-    conversationId:
-      normalized.conversationId !== undefined
-        ? normalized.conversationId
-        : existing.conversationId,
-    workspaceMemberId:
-      normalized.workspaceMemberId !== undefined
-        ? normalized.workspaceMemberId
-        : existing.workspaceMemberId,
-  } satisfies Pick<
-    CreateMemoryInput,
-    "spaceType" | "actorId" | "conversationId" | "workspaceMemberId"
-  >
-}
-
-function updateTouchesMemoryEdit(body: z.infer<typeof updateMemorySchema>) {
+function updateTouchesMemoryEdit(body: UpdateBody) {
   return (
     body.category !== undefined ||
     body.state !== undefined ||
@@ -452,16 +496,12 @@ function updateTouchesMemoryEdit(body: z.infer<typeof updateMemorySchema>) {
   )
 }
 
-function updateTouchesMemoryRetarget(body: z.infer<typeof updateMemorySchema>) {
+function updateTouchesRetarget(body: UpdateBody) {
   return (
-    body.spaceType !== undefined ||
-    body.ownerScope !== undefined ||
-    body.actorId !== undefined ||
-    body.ownerActorId !== undefined ||
-    body.conversationId !== undefined ||
-    body.ownerConversationId !== undefined ||
-    body.workspaceMemberId !== undefined ||
-    body.ownerWorkspaceMemberId !== undefined
+    body.owner !== undefined ||
+    body.scope !== undefined ||
+    body.namespaceKey !== undefined ||
+    body.preset !== undefined
   )
 }
 
@@ -483,24 +523,44 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         if (!allowed) return
 
         const { workspaceId } = request.params as { workspaceId: string }
-        const normalizedBody = normalizeMemoryPayload(
-          createMemorySchema.parse(request.body)
-        )
+        const body = createMemorySchema.parse(request.body)
+        const { owner, scope } = resolveOwnerScope(workspaceId, body)
+        if (!owner) {
+          return reply
+            .status(400)
+            .send({ error: "owner or preset is required" })
+        }
         const canWrite = await requireMemorySpaceWritePermission(
           request,
           reply,
-          normalizedBody as Pick<
-            CreateMemoryInput,
-            "spaceType" | "actorId" | "conversationId" | "workspaceMemberId"
-          >,
+          owner,
+          scope,
           "Not allowed to create a memory in this path"
         )
         if (!canWrite) return
 
-        const memory = await createMemory(
-          workspaceId,
-          normalizedBody as CreateMemoryInput
-        )
+        const input: CreateMemoryInput = {
+          owner,
+          scope,
+          namespaceKey: body.namespaceKey,
+          category: body.category,
+          state: body.state,
+          status: body.status,
+          stability: body.stability,
+          importance: body.importance,
+          confidence: body.confidence,
+          tags: body.tags,
+          content: body.content,
+          contentBlocks: body.contentBlocks,
+          textDigest: body.textDigest,
+          searchText: body.searchText,
+          sourceItemId: body.sourceItemId,
+          sourceToolCallId: body.sourceToolCallId,
+          sourceTurnId: body.sourceTurnId,
+          supersedesMemoryId: body.supersedesMemoryId,
+          metadata: body.metadata,
+        }
+        const memory = await createMemory(workspaceId, input)
         return reply.status(201).send({ memory })
       } catch (error) {
         return handleError(error, reply)
@@ -552,17 +612,14 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           memoryId: string
         }
         const memory = await getMemory(workspaceId, memoryId)
-        const readable = await authorizePermission(db, {
-          subject: getRequestAccessSubject(request),
-          resourceType: "memory_item",
-          resourceId: memoryId,
-          permission: "read",
-        })
-        if (!readable) {
-          return reply
-            .status(403)
-            .send({ error: "Not allowed to read this memory" })
-        }
+        const readable = await requireMemoryPermission(
+          request,
+          reply,
+          memoryId,
+          "read",
+          "Not allowed to read this memory"
+        )
+        if (!readable) return
         return reply.status(200).send({ memory })
       } catch (error) {
         return handleError(error, reply)
@@ -579,10 +636,15 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           workspaceId: string
           memoryId: string
         }
-        const body = normalizeMemoryPayload(
-          updateMemorySchema.parse(request.body)
-        )
-        const existing = await getMemory(workspaceId, memoryId)
+        const body = updateMemorySchema.parse(request.body)
+
+        if (updateTouchesRetarget(body)) {
+          // D4: cross-space moves go through delete + create. Refuse.
+          return reply.status(400).send({
+            error:
+              "Memory move is not supported via PUT; delete and re-create instead",
+          })
+        }
 
         if (updateTouchesMemoryEdit(body)) {
           const allowed = await requireMemoryPermission(
@@ -593,26 +655,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
             "Not allowed to edit this memory"
           )
           if (!allowed) return
-        }
-
-        if (updateTouchesMemoryRetarget(body)) {
-          const allowed = await requireMemoryPermission(
-            request,
-            reply,
-            memoryId,
-            "retarget",
-            "Not allowed to move this memory"
-          )
-          if (!allowed) return
-
-          const targetSpace = resolveTargetSpace(existing, body)
-          const canMoveToTarget = await requireMemorySpaceWritePermission(
-            request,
-            reply,
-            targetSpace,
-            "Not allowed to move this memory into the selected path"
-          )
-          if (!canMoveToTarget) return
         }
 
         const memory = await updateMemory(
@@ -705,21 +747,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
     }
   )
 
-  // PR6 (subject-scope refactor): memory_access_grants CRUD endpoints. These
-  // expose the PR5 storage layer so the UI (and any programmatic caller) can
-  // explicitly share a memory_space with another subject — the
-  // "share my memory with project X" use case the user called out in the
-  // refactor brief. The evaluator overlay (PR5) honors active grants
-  // additively on top of the legacy decision tree.
-  //
-  // Every endpoint guards against the cross-space / cross-workspace shape
-  // confusions the original cut shipped with:
-  //   - the path `:spaceId` must belong to the path `:workspaceId`,
-  //   - the caller must hold `memory_space.manage` on that space
-  //     (the evaluator overlay folds explicit manage grants in),
-  //   - on DELETE, the target grant must belong to the same space + workspace
-  //     (otherwise a manager of space A could revoke a grant on space B by
-  //     guessing its grant id).
+  // Memory space grants (PR6, unchanged shape).
   async function assertSpaceBelongsToWorkspace(
     spaceId: string,
     workspaceId: string,
@@ -744,10 +772,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
     workspaceId: string,
     spaceId: string
   ): Promise<boolean> {
-    // PR-fix-round-3: also honor a `?conversationId=` query so a
-    // `subject=actor + scope=conversation, permissions=['manage']` grant
-    // becomes usable. Without this the manage check ran with an empty
-    // conversation context and only matched unscoped manage grants.
     const subject = getRequestAccessSubject(request)
     const principal = accessSubjectToSubjectRef(subject)
     const query = (request.query ?? {}) as { conversationId?: string }
@@ -768,8 +792,7 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         runtimeSubjectIds = ctx.runtimeSubjectIds
         runtimeScopeSubjectIds = ctx.runtimeScopeSubjectIds
       } catch {
-        // Principal not in workspace — fall through; legacy decision tree
-        // will reject (no implicit owner permission).
+        // not in workspace
       }
     }
     const managePermitted = await checkPermission(db, {
@@ -813,7 +836,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           return
 
         const body = createMemoryGrantSchema.parse(request.body)
-        // Item-level grants must reference an item within the named space.
         if (body.memoryItemId) {
           const itemRow = await db
             .selectFrom("memory_items")
@@ -870,8 +892,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         }
         if (!(await assertSpaceBelongsToWorkspace(spaceId, workspaceId, reply)))
           return
-        // Listing grants on a space exposes who-has-access-to-what; require
-        // `manage` rather than just workspace view.
         if (
           !(await assertSpaceManageable(request, reply, workspaceId, spaceId))
         )
@@ -907,8 +927,6 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           !(await assertSpaceManageable(request, reply, workspaceId, spaceId))
         )
           return
-        // Pin the grant to (workspace, space) so a manager of space A
-        // cannot revoke a grant on space B by guessing its grantId.
         const grantRow = await db
           .selectFrom("memory_access_grants")
           .select(["id", "memory_space_id", "workspace_id"])

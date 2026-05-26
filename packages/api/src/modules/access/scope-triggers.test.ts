@@ -605,15 +605,18 @@ async function newLegacyMemorySpace(
   workspaceId: string,
   actorId: string
 ): Promise<string> {
-  // PR1 retains the legacy memory_spaces schema; PR5 swaps it. For trigger
-  // tests on memory_access_grants we just need *some* memory_space row in the
-  // target workspace, so an actor_private space works.
+  // D4: memory_spaces is keyed by (owner_subject_id, scope_subject_id?,
+  // namespace_key). owner=actor matches the historical actor_private shape.
+  const ownerSubjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.ACTOR,
+    actorId,
+  })
   const row = await db
     .insertInto("memory_spaces")
     .values({
       workspace_id: workspaceId,
-      space_type: "actor_private",
-      anchor_actor_id: actorId,
+      owner_subject_id: ownerSubjectId,
+      namespace_key: "default",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()

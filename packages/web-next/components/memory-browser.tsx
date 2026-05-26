@@ -33,6 +33,7 @@ import {
   getFolderIdForOwner,
   normalizeActorOption,
   normalizeGroupOption,
+  projectMemory,
   summarizeMemory,
   type Memory,
   type MemoryFolderNode,
@@ -172,7 +173,10 @@ export default function MemoryBrowser() {
       ])
 
       setMemories(
-        Array.isArray(memoryData) ? memoryData : memoryData?.memories || []
+        (Array.isArray(memoryData)
+          ? memoryData
+          : memoryData?.memories || []
+        ).map(projectMemory)
       )
       setActors(
         (Array.isArray(actorData) ? actorData : []).map(normalizeActorOption)
@@ -351,20 +355,29 @@ export default function MemoryBrowser() {
     if (!workspaceId || !movingMemory?.id || !folder.createPreset) return
 
     try {
-      const result = await api.updateMemory(
-        workspaceId,
-        movingMemory.id,
-        buildMemoryOwnerPayloadFromPreset(
-          folder.createPreset,
-          effectiveCurrentWorkspaceMemberId
-        )
+      // D4: cross-space moves now require delete + create. Source delete first
+      // (preserves grants on the old space if there are other items); then
+      // re-create using the new owner/scope shim.
+      await api.deleteMemory(workspaceId, movingMemory.id)
+      const ownerPayload = buildMemoryOwnerPayloadFromPreset(
+        folder.createPreset,
+        effectiveCurrentWorkspaceMemberId
       )
-      const savedMemory = (result?.memory || result) as Memory
-      setMemories((current) =>
-        current.map((memory) =>
-          memory.id === savedMemory.id ? savedMemory : memory
-        )
-      )
+      const result = await api.createMemory(workspaceId, {
+        ...ownerPayload,
+        category: movingMemory.category,
+        state: movingMemory.state,
+        importance: movingMemory.importance,
+        confidence: movingMemory.confidence,
+        tags: movingMemory.tags,
+        textDigest: movingMemory.textDigest,
+        contentBlocks: movingMemory.contentBlocks,
+      } as any)
+      const savedMemory = projectMemory((result?.memory || result) as any)
+      setMemories((current) => [
+        savedMemory,
+        ...current.filter((memory) => memory.id !== movingMemory.id),
+      ])
       toast.success("Memory path updated")
     } catch (error) {
       console.error("Failed to move memory:", error)
@@ -388,10 +401,10 @@ export default function MemoryBrowser() {
           file
         )) as UploadedFile
         const result = await api.createMemory(workspaceId, {
-          spaceType: pendingFileCreate.preset.spaceType,
-          actorId: pendingFileCreate.preset.actorId,
-          conversationId: pendingFileCreate.preset.conversationId,
-          workspaceMemberId: pendingFileCreate.preset.workspaceMemberId,
+          preset: pendingFileCreate.preset.spaceType,
+          presetActorId: pendingFileCreate.preset.actorId,
+          presetConversationId: pendingFileCreate.preset.conversationId,
+          presetWorkspaceMemberId: pendingFileCreate.preset.workspaceMemberId,
           category: "artifact",
           state: "active",
           importance: 0.75,
@@ -399,9 +412,9 @@ export default function MemoryBrowser() {
           tags: [],
           textDigest: file.name,
           contentBlocks: [fileRecordToBlock(uploaded)],
-        })
+        } as any)
 
-        createdMemories.push((result?.memory || result) as Memory)
+        createdMemories.push(projectMemory((result?.memory || result) as any))
       }
 
       await loadData()

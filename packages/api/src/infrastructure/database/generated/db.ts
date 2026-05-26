@@ -163,8 +163,6 @@ export type MemoryPermission = "delete" | "edit" | "manage" | "read" | "recall" 
 
 export type MemoryRecallRunsRecallType = "bootstrap" | "manual_search" | "turn_recall";
 
-export type MemorySpacesSpaceType = "actor_private" | "conversation_shared" | "participant_private" | "user_private" | "workspace_shared";
-
 export type ModelGroupGrantsStatus = "active" | "revoked";
 
 export type ModelGroupsOwnerType = "platform" | "workspace" | "workspace_member";
@@ -1266,14 +1264,12 @@ export interface MemoryAccessGrants {
 }
 
 export interface MemorySpaces {
-  anchor_actor_id: string | null;
-  anchor_conversation_actor_context_id: string | null;
-  anchor_conversation_id: string | null;
-  anchor_workspace_member_id: string | null;
-  created_at: Generated<Timestamp | null>;
+  created_at: Generated<Timestamp>;
   id: Generated<string>;
-  space_type: MemorySpacesSpaceType;
-  updated_at: Generated<Timestamp | null>;
+  namespace_key: Generated<string>;
+  owner_subject_id: string;
+  scope_subject_id: string | null;
+  updated_at: Generated<Timestamp>;
   workspace_id: string;
 }
 

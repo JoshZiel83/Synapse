@@ -2,11 +2,12 @@
 
 import {
   extractText,
+  SUBJECT_KIND,
   type CanonicalContentBlock,
   type Memory as SharedMemory,
   type MemoryCategory,
   type MemoryItemState,
-  type MemorySpaceType,
+  type SubjectRef,
 } from "@synapse/shared"
 import {
   Bot,
@@ -17,13 +18,76 @@ import {
 } from "lucide-react"
 import { createEmptyTextContentBlock } from "@/components/actor-editor-model"
 
+/**
+ * D4: web-next UI still organizes memory by the 5 legacy presets. The shared
+ * Memory wire type is now subject-driven (owner + scope?). This module keeps
+ * the legacy preset model intact by deriving (spaceType, actorId,
+ * conversationId, workspaceMemberId) from (owner, scope) on the way IN and
+ * translating back on the way OUT.
+ */
+export type MemorySpaceType =
+  | "workspace_shared"
+  | "conversation_shared"
+  | "actor_private"
+  | "participant_private"
+  | "user_private"
+
 export type Memory = SharedMemory & {
+  // Derived projections for UI grouping. NOT carried by SharedMemory.
+  spaceType: MemorySpaceType | "custom"
+  actorId?: string
+  conversationId?: string
+  workspaceMemberId?: string
   actorName?: string
   conversationTitle?: string
   workspaceMemberName?: string
 }
 
-export type { MemorySpaceType }
+function inferPresetFromSubjects(
+  owner: SubjectRef,
+  scope?: SubjectRef
+): MemorySpaceType | "custom" {
+  if (owner.kind === SUBJECT_KIND.WORKSPACE && !scope) return "workspace_shared"
+  if (owner.kind === SUBJECT_KIND.CONVERSATION && !scope)
+    return "conversation_shared"
+  if (owner.kind === SUBJECT_KIND.ACTOR && !scope) return "actor_private"
+  if (
+    owner.kind === SUBJECT_KIND.ACTOR &&
+    scope?.kind === SUBJECT_KIND.CONVERSATION
+  )
+    return "participant_private"
+  if (owner.kind === SUBJECT_KIND.WORKSPACE_MEMBER && !scope)
+    return "user_private"
+  return "custom"
+}
+
+/**
+ * Wire-projection: cast the shared Memory into the UI-facing Memory by
+ * deriving the legacy preset fields. Use this whenever you load a
+ * SharedMemory from the API.
+ */
+export function projectMemory(memory: SharedMemory): Memory {
+  const spaceType = inferPresetFromSubjects(memory.owner, memory.scope)
+  const actorId =
+    memory.owner.kind === SUBJECT_KIND.ACTOR ? memory.owner.actorId : undefined
+  const conversationId =
+    memory.owner.kind === SUBJECT_KIND.CONVERSATION
+      ? memory.owner.conversationId
+      : memory.scope?.kind === SUBJECT_KIND.CONVERSATION
+        ? memory.scope.conversationId
+        : undefined
+  const workspaceMemberId =
+    memory.owner.kind === SUBJECT_KIND.WORKSPACE_MEMBER
+      ? memory.owner.memberId
+      : undefined
+  return {
+    ...memory,
+    spaceType,
+    actorId,
+    conversationId,
+    workspaceMemberId,
+  }
+}
 
 export type ActorOption = {
   id: string
@@ -146,10 +210,13 @@ export function createDraftState(
 }
 
 export function createEditorStateFromMemory(memory: Memory): EditorState {
+  // Editor only supports the 5 legacy presets; coerce custom to actor_private.
+  const spaceType: MemorySpaceType =
+    memory.spaceType === "custom" ? "actor_private" : memory.spaceType
   return {
     id: memory.id,
     mode: "edit",
-    spaceType: memory.spaceType,
+    spaceType,
     actorId: memory.actorId || "",
     conversationId: memory.conversationId || "",
     workspaceMemberId: memory.workspaceMemberId || "",
@@ -176,20 +243,25 @@ export function serializeEditorState(editor: EditorState | null) {
   })
 }
 
+/**
+ * Build the wire payload for the memory controller. Uses the legacy preset
+ * shim (preset + presetActorId/...) so the controller's preset translator
+ * synthesizes the right (owner, scope) tuple server-side.
+ */
 export function buildMemoryPayload(editor: EditorState) {
   return {
-    spaceType: editor.spaceType,
-    actorId:
+    preset: editor.spaceType,
+    presetActorId:
       editor.spaceType === "actor_private" ||
       editor.spaceType === "participant_private"
         ? editor.actorId || undefined
         : undefined,
-    conversationId:
+    presetConversationId:
       editor.spaceType === "conversation_shared" ||
       editor.spaceType === "participant_private"
         ? editor.conversationId || undefined
         : undefined,
-    workspaceMemberId:
+    presetWorkspaceMemberId:
       editor.spaceType === "user_private"
         ? editor.workspaceMemberId || undefined
         : undefined,
@@ -268,10 +340,10 @@ export function buildMemoryOwnerPayloadFromPreset(
   currentWorkspaceMemberId: string
 ) {
   return {
-    spaceType: preset.spaceType,
-    actorId: preset.actorId || undefined,
-    conversationId: preset.conversationId || undefined,
-    workspaceMemberId:
+    preset: preset.spaceType,
+    presetActorId: preset.actorId || undefined,
+    presetConversationId: preset.conversationId || undefined,
+    presetWorkspaceMemberId:
       preset.spaceType === "user_private"
         ? preset.workspaceMemberId || currentWorkspaceMemberId
         : undefined,
@@ -281,7 +353,7 @@ export function buildMemoryOwnerPayloadFromPreset(
 export function getFolderIdForOwner(input: {
   workspaceId: string
   currentWorkspaceMemberId: string
-  spaceType: MemorySpaceType
+  spaceType: MemorySpaceType | "custom"
   actorId?: string
   conversationId?: string
   workspaceMemberId?: string

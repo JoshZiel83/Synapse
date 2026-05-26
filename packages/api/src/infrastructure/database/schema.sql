@@ -118,7 +118,6 @@ CREATE TYPE automation_webhook_endpoints_status AS ENUM ('active', 'disabled', '
 CREATE TYPE automation_occurrences_source_kind AS ENUM ('clock', 'relay', 'webhook', 'internal', 'integration');
 CREATE TYPE automation_executions_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
 CREATE TYPE automation_execution_targets_status AS ENUM ('pending', 'running', 'completed', 'failed', 'skipped');
-CREATE TYPE memory_spaces_space_type AS ENUM ('workspace_shared', 'conversation_shared', 'actor_private', 'participant_private', 'user_private');
 CREATE TYPE memory_items_category AS ENUM ('fact', 'preference', 'decision', 'relationship', 'procedure', 'artifact', 'summary');
 CREATE TYPE memory_items_state AS ENUM ('active', 'superseded', 'archived');
 CREATE TYPE memory_items_index_status AS ENUM ('lexical_ready', 'ready', 'failed');
@@ -2476,60 +2475,31 @@ CREATE INDEX idx_session_wakeups_automation_occurrence
   WHERE automation_occurrence_id IS NOT NULL;
 
 -- ============ Memory Runtime ============
+-- D4: memory_spaces is keyed by (owner_subject_id, scope_subject_id?, namespace_key)
+-- replacing the legacy `space_type + 5 anchor_*_id` shape. Owner kinds are
+-- restricted via the trigger to {workspace_member, actor, remote_agent,
+-- workspace, conversation} — user/external/system can never own a space.
+-- Scope (when present) must be workspace|conversation per is_scope_eligible_subject.
 CREATE TABLE memory_spaces (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-  space_type memory_spaces_space_type NOT NULL,
-  anchor_conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  anchor_actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
-  anchor_conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
-  anchor_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE CASCADE,
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CHECK (
-    (space_type = 'workspace_shared'
-      AND anchor_conversation_id IS NULL
-      AND anchor_actor_id IS NULL
-      AND anchor_conversation_actor_context_id IS NULL
-      AND anchor_workspace_member_id IS NULL) OR
-    (space_type = 'conversation_shared'
-      AND anchor_conversation_id IS NOT NULL
-      AND anchor_actor_id IS NULL
-      AND anchor_conversation_actor_context_id IS NULL
-      AND anchor_workspace_member_id IS NULL) OR
-    (space_type = 'actor_private'
-      AND anchor_conversation_id IS NULL
-      AND anchor_actor_id IS NOT NULL
-      AND anchor_conversation_actor_context_id IS NULL
-      AND anchor_workspace_member_id IS NULL) OR
-    (space_type = 'participant_private'
-      AND anchor_conversation_id IS NULL
-      AND anchor_actor_id IS NULL
-      AND anchor_conversation_actor_context_id IS NOT NULL
-      AND anchor_workspace_member_id IS NULL) OR
-    (space_type = 'user_private'
-      AND anchor_conversation_id IS NULL
-      AND anchor_actor_id IS NULL
-      AND anchor_conversation_actor_context_id IS NULL
-      AND anchor_workspace_member_id IS NOT NULL)
-  )
+  owner_subject_id UUID NOT NULL REFERENCES access_subjects(id) ON DELETE CASCADE,
+  scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE CASCADE,
+  namespace_key VARCHAR(255) NOT NULL DEFAULT 'default',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX idx_memory_spaces_workspace_shared
-  ON memory_spaces(workspace_id, space_type)
-  WHERE space_type = 'workspace_shared';
-CREATE UNIQUE INDEX idx_memory_spaces_conversation
-  ON memory_spaces(workspace_id, space_type, anchor_conversation_id)
-  WHERE anchor_conversation_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_memory_spaces_actor
-  ON memory_spaces(workspace_id, space_type, anchor_actor_id)
-  WHERE anchor_actor_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_memory_spaces_participant
-  ON memory_spaces(workspace_id, space_type, anchor_conversation_actor_context_id)
-  WHERE anchor_conversation_actor_context_id IS NOT NULL;
-CREATE UNIQUE INDEX idx_memory_spaces_workspace_member
-  ON memory_spaces(workspace_id, space_type, anchor_workspace_member_id)
-  WHERE anchor_workspace_member_id IS NOT NULL;
+CREATE UNIQUE INDEX uq_memory_spaces_scoped
+  ON memory_spaces(workspace_id, owner_subject_id, scope_subject_id, namespace_key)
+  WHERE scope_subject_id IS NOT NULL;
+
+CREATE UNIQUE INDEX uq_memory_spaces_unscoped
+  ON memory_spaces(workspace_id, owner_subject_id, namespace_key)
+  WHERE scope_subject_id IS NULL;
+
+CREATE INDEX idx_memory_spaces_owner ON memory_spaces(owner_subject_id);
+CREATE INDEX idx_memory_spaces_workspace ON memory_spaces(workspace_id);
 
 CREATE TABLE memory_items (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -3846,6 +3816,48 @@ CREATE TRIGGER tg_relay_grant_validate
   BEFORE INSERT OR UPDATE ON relay_authorization_grants
   FOR EACH ROW
   EXECUTE FUNCTION validate_relay_authorization_grant_subject_scope();
+
+-- D4: memory_spaces shape validator. Enforces:
+--   - owner_subject_id is one of {workspace_member, actor, remote_agent,
+--     workspace, conversation} via is_memory_owner_subject_kind (rejects
+--     user / external / system),
+--   - scope_subject_id (when set) is workspace|conversation via is_scope_eligible_subject,
+--   - owner_subject.workspace_id matches the row's workspace_id,
+--   - scope_subject.workspace_id (when set) matches the row's workspace_id.
+CREATE OR REPLACE FUNCTION validate_memory_space_subject_scope()
+RETURNS TRIGGER LANGUAGE plpgsql AS $$
+DECLARE
+  v_owner_ws UUID;
+  v_scope_ws UUID;
+BEGIN
+  IF NOT is_memory_owner_subject_kind(NEW.owner_subject_id) THEN
+    RAISE EXCEPTION 'memory_spaces.owner_subject_id % must reference a subject of kind workspace_member|actor|remote_agent|workspace|conversation', NEW.owner_subject_id;
+  END IF;
+
+  IF NOT is_scope_eligible_subject(NEW.scope_subject_id) THEN
+    RAISE EXCEPTION 'memory_spaces.scope_subject_id % must reference a subject of kind workspace|conversation', NEW.scope_subject_id;
+  END IF;
+
+  v_owner_ws := access_subject_workspace_id(NEW.owner_subject_id);
+  IF v_owner_ws IS NULL OR v_owner_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'memory_spaces.owner_subject_id % workspace % does not match space workspace %', NEW.owner_subject_id, v_owner_ws, NEW.workspace_id;
+  END IF;
+
+  IF NEW.scope_subject_id IS NOT NULL THEN
+    v_scope_ws := access_subject_workspace_id(NEW.scope_subject_id);
+    IF v_scope_ws IS NULL OR v_scope_ws IS DISTINCT FROM NEW.workspace_id THEN
+      RAISE EXCEPTION 'memory_spaces.scope_subject_id % workspace % does not match space workspace %', NEW.scope_subject_id, v_scope_ws, NEW.workspace_id;
+    END IF;
+  END IF;
+
+  RETURN NEW;
+END;
+$$;
+
+CREATE TRIGGER tg_memory_space_validate
+  BEFORE INSERT OR UPDATE ON memory_spaces
+  FOR EACH ROW
+  EXECUTE FUNCTION validate_memory_space_subject_scope();
 
 CREATE TABLE memory_access_grants (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

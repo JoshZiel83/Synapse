@@ -71,14 +71,19 @@ async function newSpace(
   wsId: string,
   actorId: string
 ): Promise<string> {
-  // The PR5 minimal-viable approach keeps the legacy memory_spaces shape;
-  // memory_access_grants is the additive grants overlay on top.
+  // D4: memory_spaces is now keyed by (owner_subject_id, scope_subject_id?,
+  // namespace_key). owner=actor (rooted on actorId) makes this an
+  // "actor_private" space in legacy terms.
+  const ownerSubjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.ACTOR,
+    actorId,
+  })
   const row = await db
     .insertInto("memory_spaces")
     .values({
       workspace_id: wsId,
-      space_type: "actor_private",
-      anchor_actor_id: actorId,
+      owner_subject_id: ownerSubjectId,
+      namespace_key: "default",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
@@ -279,20 +284,33 @@ test(
       const granteeActor = await newActor(db, wsId)
       const space = await newSpace(db, wsId, ownerActor)
       const item = await newItem(db, wsId, space)
-      // Owner can always read its own actor_private memory (legacy path).
+      // D4: owner-implicit permission is detected via runtimeSubjectIds. The
+      // controller path builds this; for unit-test parity we build it here.
+      const ownerCtx = await buildRuntimePrincipalContext(db, {
+        principal: actorRef(ownerActor),
+        workspaceId: wsId,
+      })
       const ownerVisible = await checkPermission(db, {
         resourceType: "memory_item",
         resourceId: item,
         permission: "read",
         subject: { type: "actor", id: ownerActor },
+        runtimeSubjectIds: ownerCtx.runtimeSubjectIds,
+        runtimeScopeSubjectIds: ownerCtx.runtimeScopeSubjectIds,
       })
       assert.equal(ownerVisible, true)
-      // Without an explicit grant, grantee cannot read owner's actor_private item.
+      // Without an explicit grant, grantee cannot read owner's actor-owned item.
+      const beforeCtx = await buildRuntimePrincipalContext(db, {
+        principal: actorRef(granteeActor),
+        workspaceId: wsId,
+      })
       const beforeGrant = await checkPermission(db, {
         resourceType: "memory_item",
         resourceId: item,
         permission: "read",
         subject: { type: "actor", id: granteeActor },
+        runtimeSubjectIds: beforeCtx.runtimeSubjectIds,
+        runtimeScopeSubjectIds: beforeCtx.runtimeScopeSubjectIds,
       })
       assert.equal(beforeGrant, false)
 

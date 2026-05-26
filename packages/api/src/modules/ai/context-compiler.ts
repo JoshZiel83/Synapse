@@ -334,7 +334,9 @@ function compileMemoryRecallItem(
       toXmlTextBlock(
         openXmlTag("memory", {
           memoryId: memory.id,
-          spaceType: memory.spaceType,
+          ownerKind: memory.owner.kind,
+          scopeKind: memory.scope?.kind,
+          namespaceKey: memory.namespaceKey,
           category: memory.category,
           importance: memory.importance,
           confidence: memory.confidence,

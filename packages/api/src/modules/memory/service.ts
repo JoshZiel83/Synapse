@@ -8,18 +8,19 @@ import type {
   MemoryRecallResult,
   MemoryRecallRun,
   MemoryRecallType,
-  MemorySpaceType,
   MemoryStability,
+  SubjectRef,
   UUID,
 } from "@synapse/shared"
 import {
   extractText,
+  MEMORY_PERMISSION,
   normalizeCanonicalContentBlocks,
+  SUBJECT_KIND,
   textBlocks,
 } from "@synapse/shared"
 import { sql, type RawBuilder } from "kysely"
 import { v4 as uuidv4 } from "uuid"
-import { SUBJECT_KIND } from "@synapse/shared"
 import { transaction } from "../../infrastructure/database/index.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
@@ -49,27 +50,53 @@ import {
   itemPartsToCanonicalContentBlocks,
   type DraftConversationPart,
 } from "../chat/message-content.js"
-import { ensureConversationActorContext } from "../session/service.js"
 import {
   actorSubject,
   filterAuthorizedPermissionResourceIds,
   type AccessSubject,
   workspaceMemberSubject,
 } from "../access/service.js"
-import { MEMORY_PERMISSION } from "@synapse/shared"
-import type { SubjectRef } from "@synapse/shared"
 import { buildRuntimePrincipalContext } from "../access/subject-resolution.js"
 import { listSpaceLevelGrantSpaceIds } from "./access-grant-storage.js"
+
+const DEFAULT_NAMESPACE = "default"
+
+/**
+ * D4: `memory_spaces` is now keyed by (owner_subject_id, scope_subject_id?,
+ * namespace_key). The 5 legacy presets (workspace_shared / conversation_shared
+ * / actor_private / participant_private / user_private) translate to:
+ *   - workspace_shared    -> owner=workspace, scope=none
+ *   - conversation_shared -> owner=conversation, scope=none
+ *   - actor_private       -> owner=actor, scope=none
+ *   - participant_private -> owner=actor, scope=conversation
+ *   - user_private        -> owner=workspace_member, scope=none
+ * Translation is exposed via {@link presetToOwnerScope} for backward-compat
+ * with controller / orchestrator / AI tool surfaces that still accept the
+ * literal preset strings.
+ */
+export type MemoryPreset =
+  | "workspace_shared"
+  | "conversation_shared"
+  | "actor_private"
+  | "participant_private"
+  | "user_private"
 
 type MemoryRow = {
   id: string
   workspace_id: string
   memory_space_id: string
-  space_type: MemorySpaceType
-  anchor_actor_id: string | null
-  anchor_conversation_id: string | null
-  anchor_conversation_actor_context_id: string | null
-  anchor_workspace_member_id: string | null
+  space_owner_subject_id: string
+  space_scope_subject_id: string | null
+  space_namespace_key: string
+  owner_kind: string
+  owner_workspace_id: string | null
+  owner_workspace_member_id: string | null
+  owner_actor_id: string | null
+  owner_remote_agent_id: string | null
+  owner_conversation_id: string | null
+  scope_kind: string | null
+  scope_workspace_id_via_join: string | null
+  scope_conversation_id_via_join: string | null
   category: MemoryCategory
   state: MemoryItemState
   importance: number
@@ -89,22 +116,16 @@ type MemoryRow = {
   metadata: Record<string, unknown> | string | null
   created_at: string | Date
   updated_at: string | Date
-  actor_name?: string | null
-  conversation_title?: string | null
-  workspace_member_name?: string | null
-  resolved_actor_id?: string | null
-  resolved_conversation_id?: string | null
-  resolved_workspace_member_id?: string | null
+  owner_label: string | null
+  scope_label: string | null
 }
 
 type MemorySpaceRow = {
   id: string
   workspace_id: string
-  space_type: MemorySpaceType
-  anchor_conversation_id: string | null
-  anchor_actor_id: string | null
-  anchor_conversation_actor_context_id: string | null
-  anchor_workspace_member_id: string | null
+  owner_subject_id: string
+  scope_subject_id: string | null
+  namespace_key: string
 }
 
 type MemoryPartRow = {
@@ -130,19 +151,22 @@ type SearchCandidateRow = MemoryRow & {
   rrf_score?: number | null
 }
 
+/**
+ * Loose target description carried through the access layer. We keep the
+ * legacy actor / conversation / workspaceMember projection because:
+ *   - the controller / orchestrator still receive it from request bodies, and
+ *   - the access layer's filterAuthorizedPermissionResourceIds still keys on
+ *     AccessSubject (actor / workspace_member / user).
+ *
+ * The new subject layer additionally lifts these into a SubjectRef-shaped
+ * principal context — see `buildMemoryRuntimeContext`.
+ */
 export type MemoryAccessTarget = {
   actorId?: string
   conversationId?: string
   workspaceMemberId?: string
   directWorkspaceMemberId?: string
   accessSubject?: AccessSubject
-}
-
-type MemorySpaceBinding = {
-  spaceType: MemorySpaceType
-  actorId?: string
-  conversationId?: string
-  workspaceMemberId?: string
 }
 
 const MEMORY_RECALL_MAX_CONTEXT_SNIPPETS = 8
@@ -210,61 +234,199 @@ function computeMatchedTerms(queryText: string, candidateText: string) {
   return queryTokens.filter((token) => candidateTokens.has(token))
 }
 
-function spaceRank(spaceType: MemorySpaceType) {
-  switch (spaceType) {
-    case "participant_private":
-      return 5
-    case "conversation_shared":
-      return 4
-    case "actor_private":
-      return 3
-    case "user_private":
-      return 2
+/**
+ * D4: subject-aware preset translation. Returns the (owner, scope?) tuple
+ * for a legacy preset name, given enough request context to construct the
+ * owner / scope subjects. Returns null when the request context is
+ * insufficient (e.g. participant_private without actorId+conversationId).
+ */
+export function presetToOwnerScope(
+  preset: MemoryPreset,
+  ctx: {
+    workspaceId: string
+    actorId?: string
+    conversationId?: string
+    workspaceMemberId?: string
+  }
+): { owner: SubjectRef; scope?: SubjectRef } | null {
+  switch (preset) {
     case "workspace_shared":
-      return 1
+      return {
+        owner: { kind: SUBJECT_KIND.WORKSPACE, workspaceId: ctx.workspaceId },
+      }
+    case "conversation_shared":
+      if (!ctx.conversationId) return null
+      return {
+        owner: {
+          kind: SUBJECT_KIND.CONVERSATION,
+          conversationId: ctx.conversationId,
+        },
+      }
+    case "actor_private":
+      if (!ctx.actorId) return null
+      return { owner: { kind: SUBJECT_KIND.ACTOR, actorId: ctx.actorId } }
+    case "participant_private":
+      if (!ctx.actorId || !ctx.conversationId) return null
+      return {
+        owner: { kind: SUBJECT_KIND.ACTOR, actorId: ctx.actorId },
+        scope: {
+          kind: SUBJECT_KIND.CONVERSATION,
+          conversationId: ctx.conversationId,
+        },
+      }
+    case "user_private":
+      // "user_private" historically meant workspace_member; the plan keeps
+      // it at workspace_member kind ("本轮不启 platform user memory").
+      if (!ctx.workspaceMemberId) return null
+      return {
+        owner: {
+          kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+          memberId: ctx.workspaceMemberId,
+        },
+      }
     default:
-      return 0
+      return null
   }
 }
 
-function spaceMatchesTarget(
-  memory: Pick<
-    Memory,
-    "spaceType" | "actorId" | "conversationId" | "workspaceMemberId"
-  >,
-  target: MemoryAccessTarget
-) {
+/**
+ * Best-effort reverse mapping: given an (owner, scope?) tuple, return the
+ * matching legacy preset name. Useful for UI labels. Returns null for
+ * combinations that don't correspond to any legacy preset (e.g.
+ * remote_agent ownership, custom namespace_key).
+ */
+export function inferMemoryPreset(
+  owner: SubjectRef,
+  scope?: SubjectRef
+): MemoryPreset | null {
+  if (owner.kind === SUBJECT_KIND.WORKSPACE && !scope) return "workspace_shared"
+  if (owner.kind === SUBJECT_KIND.CONVERSATION && !scope)
+    return "conversation_shared"
+  if (owner.kind === SUBJECT_KIND.ACTOR && !scope) return "actor_private"
+  if (
+    owner.kind === SUBJECT_KIND.ACTOR &&
+    scope?.kind === SUBJECT_KIND.CONVERSATION
+  ) {
+    return "participant_private"
+  }
+  if (owner.kind === SUBJECT_KIND.WORKSPACE_MEMBER && !scope)
+    return "user_private"
+  return null
+}
+
+function buildSubjectRefFromJoin(params: {
+  kind: string | null
+  workspaceId: string | null
+  workspaceMemberId: string | null
+  actorId: string | null
+  remoteAgentId: string | null
+  conversationId: string | null
+}): SubjectRef | undefined {
+  if (!params.kind) return undefined
+  switch (params.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      return params.workspaceId
+        ? { kind: SUBJECT_KIND.WORKSPACE, workspaceId: params.workspaceId }
+        : undefined
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      return params.workspaceMemberId
+        ? {
+            kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+            memberId: params.workspaceMemberId,
+          }
+        : undefined
+    case SUBJECT_KIND.ACTOR:
+      return params.actorId
+        ? { kind: SUBJECT_KIND.ACTOR, actorId: params.actorId }
+        : undefined
+    case SUBJECT_KIND.REMOTE_AGENT:
+      return params.remoteAgentId
+        ? {
+            kind: SUBJECT_KIND.REMOTE_AGENT,
+            remoteAgentId: params.remoteAgentId,
+          }
+        : undefined
+    case SUBJECT_KIND.CONVERSATION:
+      return params.conversationId
+        ? {
+            kind: SUBJECT_KIND.CONVERSATION,
+            conversationId: params.conversationId,
+          }
+        : undefined
+    default:
+      return undefined
+  }
+}
+
+function buildMemoryOwnerLabel(memory: {
+  owner: SubjectRef
+  ownerName?: string | null
+}): string {
+  if (memory.ownerName) return memory.ownerName
+  switch (memory.owner.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+      return "workspace"
+    case SUBJECT_KIND.CONVERSATION:
+      return "conversation"
+    default:
+      return memory.owner.kind
+  }
+}
+
+function rankOwnerScope(owner: SubjectRef, scope?: SubjectRef) {
+  // The legacy spaceRank biased toward more-specific spaces. Mirror that:
+  // scoped > workspace_member > actor > conversation > workspace.
+  if (scope) return 5
+  switch (owner.kind) {
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      return 4
+    case SUBJECT_KIND.ACTOR:
+      return 3
+    case SUBJECT_KIND.REMOTE_AGENT:
+      return 3
+    case SUBJECT_KIND.CONVERSATION:
+      return 2
+    case SUBJECT_KIND.WORKSPACE:
+    default:
+      return 1
+  }
+}
+
+function memoryMatchesTarget(memory: Memory, target: MemoryAccessTarget) {
+  // Subject-aware match: owner subject directly indicates whose memory it is.
   const targetWorkspaceMemberId =
     target.workspaceMemberId || target.directWorkspaceMemberId
-  switch (memory.spaceType) {
-    case "workspace_shared":
+  switch (memory.owner.kind) {
+    case SUBJECT_KIND.WORKSPACE:
       return true
-    case "conversation_shared":
+    case SUBJECT_KIND.CONVERSATION:
       return Boolean(
-        target.conversationId && memory.conversationId === target.conversationId
-      )
-    case "actor_private":
-      return Boolean(target.actorId && memory.actorId === target.actorId)
-    case "participant_private":
-      return Boolean(
-        target.actorId &&
         target.conversationId &&
-        memory.actorId === target.actorId &&
-        memory.conversationId === target.conversationId
+        memory.owner.conversationId === target.conversationId
       )
-    case "user_private":
+    case SUBJECT_KIND.ACTOR:
+      if (!target.actorId || memory.owner.actorId !== target.actorId) {
+        return false
+      }
+      if (memory.scope?.kind === SUBJECT_KIND.CONVERSATION) {
+        return memory.scope.conversationId === target.conversationId
+      }
+      return true
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
       return Boolean(
         targetWorkspaceMemberId &&
-        memory.workspaceMemberId === targetWorkspaceMemberId
+        memory.owner.memberId === targetWorkspaceMemberId
       )
+    case SUBJECT_KIND.REMOTE_AGENT:
+      return false
     default:
       return false
   }
 }
 
 function deriveSpaceBoost(memory: Memory, target: MemoryAccessTarget) {
-  return spaceMatchesTarget(memory, target)
-    ? spaceRank(memory.spaceType) * 0.03
+  return memoryMatchesTarget(memory, target)
+    ? rankOwnerScope(memory.owner, memory.scope) * 0.03
     : 0
 }
 
@@ -388,26 +550,35 @@ function mapMemoryRow(
   row: MemoryRow,
   contentBlocks: CanonicalContentBlock[]
 ): Memory {
-  const actorId = row.resolved_actor_id ?? row.anchor_actor_id ?? undefined
-  const conversationId =
-    row.resolved_conversation_id ?? row.anchor_conversation_id ?? undefined
-  const workspaceMemberId =
-    row.resolved_workspace_member_id ??
-    row.anchor_workspace_member_id ??
-    undefined
+  const owner = buildSubjectRefFromJoin({
+    kind: row.owner_kind,
+    workspaceId: row.owner_workspace_id,
+    workspaceMemberId: row.owner_workspace_member_id,
+    actorId: row.owner_actor_id,
+    remoteAgentId: row.owner_remote_agent_id,
+    conversationId: row.owner_conversation_id,
+  })
+  if (!owner) {
+    throw new Error(
+      `memory_items ${row.id}: could not decode owner subject (kind=${row.owner_kind})`
+    )
+  }
+  const scope = buildSubjectRefFromJoin({
+    kind: row.scope_kind,
+    workspaceId: row.scope_workspace_id_via_join,
+    workspaceMemberId: null,
+    actorId: null,
+    remoteAgentId: null,
+    conversationId: row.scope_conversation_id_via_join,
+  })
   const state = row.state
   return {
     id: row.id,
     workspaceId: row.workspace_id,
     spaceId: row.memory_space_id,
-    spaceType: row.space_type,
-    ownerScope: row.space_type,
-    actorId,
-    conversationId,
-    workspaceMemberId,
-    ownerActorId: actorId,
-    ownerConversationId: conversationId,
-    ownerWorkspaceMemberId: workspaceMemberId,
+    owner,
+    scope,
+    namespaceKey: row.space_namespace_key,
     category: row.category,
     state,
     status: state,
@@ -430,9 +601,8 @@ function mapMemoryRow(
     indexError: row.index_error ?? undefined,
     createdAt: toIsoString(row.created_at)!,
     updatedAt: toIsoString(row.updated_at)!,
-    actorName: row.actor_name ?? undefined,
-    conversationTitle: row.conversation_title ?? undefined,
-    workspaceMemberName: row.workspace_member_name ?? undefined,
+    ownerLabel: row.owner_label ?? undefined,
+    scopeLabel: row.scope_label ?? undefined,
   }
 }
 
@@ -477,398 +647,166 @@ async function loadMemoryItemsFromRows(rows: MemoryRow[]) {
   )
 }
 
-function baseMemorySelect() {
-  return [
-    "mi.id",
-    "mi.workspace_id",
-    "mi.memory_space_id",
-    "ms.space_type",
-    "ms.anchor_actor_id",
-    "ms.anchor_conversation_id",
-    "ms.anchor_conversation_actor_context_id",
-    "ms.anchor_workspace_member_id",
-    "mi.category",
-    "mi.state",
-    "mi.importance",
-    "mi.confidence",
-    "mi.tags",
-    "mi.text_digest",
-    "mi.search_text",
-    "mi.index_status",
-    "mi.embedding_model",
-    "mi.embedding_dim",
-    "mi.indexed_at",
-    "mi.index_error",
-    "mi.source_item_id",
-    "mi.source_tool_call_id",
-    "mi.source_turn_id",
-    "mi.supersedes_item_id",
-    "mi.metadata",
-    "mi.created_at",
-    "mi.updated_at",
-    sql<string | null>`COALESCE(a_space.name, a_participant.name)`.as(
-      "actor_name"
-    ),
-    sql<string | null>`COALESCE(c_space.title, c_participant.title)`.as(
-      "conversation_title"
-    ),
-    "u.name as workspace_member_name",
-    sql<string | null>`COALESCE(ms.anchor_actor_id, cac.actor_id)`.as(
-      "resolved_actor_id"
-    ),
-    sql<
-      string | null
-    >`COALESCE(ms.anchor_conversation_id, cac.conversation_id)`.as(
-      "resolved_conversation_id"
-    ),
-    sql<string | null>`ms.anchor_workspace_member_id`.as(
-      "resolved_workspace_member_id"
-    ),
-  ] as const
+/**
+ * Raw SQL projecting a memory_items row plus its memory_spaces owner / scope
+ * subject decomposition. Used by both the get/list paths (via Kysely
+ * .selectFrom) and by the raw-SQL search candidate queries. The SELECT body
+ * is duplicated rather than shared as a string template so that Kysely-side
+ * paths keep their aliases.
+ */
+function memoryRowSelectSql(itemAlias = "mi", spaceAlias = "ms") {
+  const item = sql.raw(itemAlias)
+  const space = sql.raw(spaceAlias)
+  return sql`
+    ${item}.id AS id,
+    ${item}.workspace_id AS workspace_id,
+    ${item}.memory_space_id AS memory_space_id,
+    ${space}.owner_subject_id AS space_owner_subject_id,
+    ${space}.scope_subject_id AS space_scope_subject_id,
+    ${space}.namespace_key AS space_namespace_key,
+    owner_subj.kind AS owner_kind,
+    owner_subj.workspace_id AS owner_workspace_id,
+    owner_subj.workspace_member_id AS owner_workspace_member_id,
+    owner_subj.actor_id AS owner_actor_id,
+    owner_subj.remote_agent_id AS owner_remote_agent_id,
+    owner_subj.conversation_id AS owner_conversation_id,
+    scope_subj.kind AS scope_kind,
+    scope_subj.workspace_id AS scope_workspace_id_via_join,
+    scope_subj.conversation_id AS scope_conversation_id_via_join,
+    ${item}.category AS category,
+    ${item}.state AS state,
+    ${item}.importance AS importance,
+    ${item}.confidence AS confidence,
+    ${item}.tags AS tags,
+    ${item}.text_digest AS text_digest,
+    ${item}.search_text AS search_text,
+    ${item}.index_status AS index_status,
+    ${item}.embedding_model AS embedding_model,
+    ${item}.embedding_dim AS embedding_dim,
+    ${item}.indexed_at AS indexed_at,
+    ${item}.index_error AS index_error,
+    ${item}.source_item_id AS source_item_id,
+    ${item}.source_tool_call_id AS source_tool_call_id,
+    ${item}.source_turn_id AS source_turn_id,
+    ${item}.supersedes_item_id AS supersedes_item_id,
+    ${item}.metadata AS metadata,
+    ${item}.created_at AS created_at,
+    ${item}.updated_at AS updated_at,
+    COALESCE(owner_actor.name, owner_remote_agent.name, owner_conv.title, owner_user.name) AS owner_label,
+    COALESCE(scope_conv.title) AS scope_label
+  `
 }
 
-async function getMemoryRow(workspaceId: string, memoryId: string) {
-  return db
-    .selectFrom("memory_items as mi")
-    .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
-    .leftJoin(
-      "conversation_actor_contexts as cac",
-      "cac.id",
-      "ms.anchor_conversation_actor_context_id"
-    )
-    .leftJoin("actors as a_space", "a_space.id", "ms.anchor_actor_id")
-    .leftJoin("actors as a_participant", "a_participant.id", "cac.actor_id")
-    .leftJoin(
-      "conversations as c_space",
-      "c_space.id",
-      "ms.anchor_conversation_id"
-    )
-    .leftJoin(
-      "conversations as c_participant",
-      "c_participant.id",
-      "cac.conversation_id"
-    )
-    .leftJoin(
-      "workspace_members as wm",
-      "wm.id",
-      "ms.anchor_workspace_member_id"
-    )
-    .leftJoin("users as u", "u.id", "wm.user_id")
-    .select(baseMemorySelect())
-    .where("mi.workspace_id", "=", workspaceId)
-    .where("mi.id", "=", memoryId)
-    .limit(1)
-    .executeTakeFirst() as Promise<MemoryRow | undefined>
+function memoryRowFromSql(itemAlias = "mi", spaceAlias = "ms") {
+  const item = sql.raw(itemAlias)
+  const space = sql.raw(spaceAlias)
+  return sql`
+    ${item}
+      JOIN memory_spaces ${space} ON ${space}.id = ${item}.memory_space_id
+      JOIN access_subjects owner_subj ON owner_subj.id = ${space}.owner_subject_id
+      LEFT JOIN access_subjects scope_subj ON scope_subj.id = ${space}.scope_subject_id
+      LEFT JOIN actors owner_actor ON owner_actor.id = owner_subj.actor_id
+      LEFT JOIN remote_agents owner_remote_agent ON owner_remote_agent.id = owner_subj.remote_agent_id
+      LEFT JOIN conversations owner_conv ON owner_conv.id = owner_subj.conversation_id
+      LEFT JOIN workspace_members owner_wm ON owner_wm.id = owner_subj.workspace_member_id
+      LEFT JOIN users owner_user ON owner_user.id = owner_wm.user_id
+      LEFT JOIN conversations scope_conv ON scope_conv.id = scope_subj.conversation_id
+  `
 }
 
-function validateMemorySpaceBinding(input: MemorySpaceBinding, label: string) {
-  switch (input.spaceType) {
-    case "workspace_shared":
-      if (input.actorId || input.conversationId || input.workspaceMemberId) {
-        throw new MemoryError(
-          `${label} workspace_shared cannot include actorId, conversationId, or workspaceMemberId`,
-          400
-        )
-      }
-      break
-    case "conversation_shared":
-      if (!input.conversationId || input.actorId || input.workspaceMemberId) {
-        throw new MemoryError(
-          `${label} conversation_shared requires conversationId and no actorId or workspaceMemberId`,
-          400
-        )
-      }
-      break
-    case "actor_private":
-      if (!input.actorId || input.conversationId || input.workspaceMemberId) {
-        throw new MemoryError(
-          `${label} actor_private requires actorId and no conversationId or workspaceMemberId`,
-          400
-        )
-      }
-      break
-    case "participant_private":
-      if (!input.actorId || !input.conversationId || input.workspaceMemberId) {
-        throw new MemoryError(
-          `${label} participant_private requires actorId and conversationId and no workspaceMemberId`,
-          400
-        )
-      }
-      break
-    case "user_private":
-      if (!input.workspaceMemberId || input.actorId || input.conversationId) {
-        throw new MemoryError(
-          `${label} user_private requires workspaceMemberId and no actorId or conversationId`,
-          400
-        )
-      }
-      break
-  }
-}
-
-async function assertWorkspaceMemberExists(
+async function getMemoryRow(
   workspaceId: string,
-  workspaceMemberId: string
-) {
-  const row = await db
-    .selectFrom("workspace_members")
-    .select("id")
-    .where("workspace_id", "=", workspaceId)
-    .where("id", "=", workspaceMemberId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) {
-    throw new MemoryError("Workspace member not found", 404)
-  }
+  memoryId: string
+): Promise<MemoryRow | undefined> {
+  const select = memoryRowSelectSql("mi", "ms")
+  const from = memoryRowFromSql("mi", "ms")
+  const result = await db.executeQuery(
+    sql<MemoryRow>`SELECT ${select} FROM memory_items ${from}
+       WHERE mi.workspace_id = ${workspaceId} AND mi.id = ${memoryId}
+       LIMIT 1`.compile(db)
+  )
+  return result.rows[0]
 }
 
-async function assertActorInWorkspace(workspaceId: string, actorId: string) {
-  const row = await db
-    .selectFrom("actors")
-    .select("id")
-    .where("id", "=", actorId)
-    .where("workspace_id", "=", workspaceId)
-    .where("is_active", "=", true)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) {
-    throw new MemoryError("Actor not found in this workspace", 404)
+/**
+ * D4 helper: resolve-or-create a memory_spaces row. The owner kind is checked
+ * up-front (rejects user/external/system) so the failure message is friendly;
+ * the trigger enforces the same invariant in case anyone bypasses this path.
+ */
+async function resolveOrCreateMemorySpace(
+  client: QueryExecutor,
+  input: {
+    workspaceId: string
+    owner: SubjectRef
+    scope?: SubjectRef
+    namespaceKey?: string
   }
-}
-
-async function assertConversationInWorkspace(
-  workspaceId: string,
-  conversationId: string
-) {
-  // P1b: traverse via access_subjects to recover workspace_member / actor refs
-  // from the joined subject row.
-  const row = await db
-    .selectFrom("conversation_participants as cp")
-    .innerJoin("access_subjects as subj", "subj.id", "cp.subject_id")
-    .leftJoin("workspace_members as wm", "wm.id", "subj.workspace_member_id")
-    .leftJoin("actors as a", "a.id", "subj.actor_id")
-    .select("cp.id")
-    .where("cp.conversation_id", "=", conversationId)
-    .where((eb) =>
-      eb.or([
-        eb("wm.workspace_id", "=", workspaceId),
-        eb("a.workspace_id", "=", workspaceId),
-      ])
-    )
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) {
-    throw new MemoryError("Conversation not found in this workspace", 404)
-  }
-}
-
-async function assertActorInConversation(
-  conversationId: string,
-  actorId: string
-) {
-  // P1b: filter by access_subjects FK via subject_id rather than the dropped
-  // polymorphic actor_id column.
-  const actorSubjectId = await upsertAccessSubject(db, {
-    kind: SUBJECT_KIND.ACTOR,
-    actorId,
-  })
-  const row = await db
-    .selectFrom("conversation_participants")
-    .select("id")
-    .where("conversation_id", "=", conversationId)
-    .where("subject_id", "=", actorSubjectId)
-    .where("state", "=", "active")
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) {
+): Promise<MemorySpaceRow> {
+  const ownerKind = input.owner.kind
+  if (
+    ownerKind === SUBJECT_KIND.USER ||
+    ownerKind === SUBJECT_KIND.EXTERNAL ||
+    ownerKind === SUBJECT_KIND.SYSTEM
+  ) {
     throw new MemoryError(
-      "Actor is not an active participant of this conversation",
+      `Memory space owner kind '${ownerKind}' is not permitted`,
       400
     )
   }
-}
-
-async function validateMemorySpaceTarget(
-  workspaceId: string,
-  input: MemorySpaceBinding
-) {
-  switch (input.spaceType) {
-    case "workspace_shared":
-      return
-    case "conversation_shared":
-      if (input.conversationId) {
-        await assertConversationInWorkspace(workspaceId, input.conversationId)
-      }
-      return
-    case "actor_private":
-      if (input.actorId) {
-        await assertActorInWorkspace(workspaceId, input.actorId)
-      }
-      return
-    case "participant_private":
-      if (input.actorId && input.conversationId) {
-        await assertActorInWorkspace(workspaceId, input.actorId)
-        await assertConversationInWorkspace(workspaceId, input.conversationId)
-        await assertActorInConversation(input.conversationId, input.actorId)
-      }
-      return
-    case "user_private":
-      if (input.workspaceMemberId) {
-        await assertWorkspaceMemberExists(workspaceId, input.workspaceMemberId)
-      }
-      return
-  }
-}
-
-async function resolveConversationActorContextId(binding: MemorySpaceBinding) {
   if (
-    binding.spaceType !== "participant_private" ||
-    !binding.actorId ||
-    !binding.conversationId
+    input.scope &&
+    input.scope.kind !== SUBJECT_KIND.WORKSPACE &&
+    input.scope.kind !== SUBJECT_KIND.CONVERSATION
   ) {
-    return null
+    throw new MemoryError(
+      `Memory space scope kind '${input.scope.kind}' must be workspace|conversation`,
+      400
+    )
   }
 
-  const context = await ensureConversationActorContext({
-    actorId: binding.actorId,
-    conversationId: binding.conversationId,
-  })
-  return context.conversationActorContextId
-}
+  const ownerSubjectId = await upsertAccessSubject(db, input.owner)
+  const scopeSubjectId = input.scope
+    ? await upsertAccessSubject(db, input.scope)
+    : null
+  const namespaceKey =
+    (input.namespaceKey || DEFAULT_NAMESPACE).trim() || DEFAULT_NAMESPACE
 
-async function findExistingMemorySpace(
-  client: QueryExecutor,
-  workspaceId: string,
-  binding: MemorySpaceBinding,
-  conversationActorContextId?: string | null
-) {
-  switch (binding.spaceType) {
-    case "workspace_shared":
-      return executeTakeFirst<MemorySpaceRow>(
-        client,
-        db
-          .selectFrom("memory_spaces")
-          .selectAll()
-          .where("workspace_id", "=", workspaceId)
-          .where("space_type", "=", binding.spaceType)
-          .limit(1)
-      )
-    case "conversation_shared":
-      return binding.conversationId
-        ? executeTakeFirst<MemorySpaceRow>(
-            client,
-            db
-              .selectFrom("memory_spaces")
-              .selectAll()
-              .where("workspace_id", "=", workspaceId)
-              .where("space_type", "=", binding.spaceType)
-              .where("anchor_conversation_id", "=", binding.conversationId)
-              .limit(1)
-          )
-        : null
-    case "actor_private":
-      return binding.actorId
-        ? executeTakeFirst<MemorySpaceRow>(
-            client,
-            db
-              .selectFrom("memory_spaces")
-              .selectAll()
-              .where("workspace_id", "=", workspaceId)
-              .where("space_type", "=", binding.spaceType)
-              .where("anchor_actor_id", "=", binding.actorId)
-              .limit(1)
-          )
-        : null
-    case "participant_private":
-      return conversationActorContextId
-        ? executeTakeFirst<MemorySpaceRow>(
-            client,
-            db
-              .selectFrom("memory_spaces")
-              .selectAll()
-              .where("workspace_id", "=", workspaceId)
-              .where("space_type", "=", binding.spaceType)
-              .where(
-                "anchor_conversation_actor_context_id",
-                "=",
-                conversationActorContextId
-              )
-              .limit(1)
-          )
-        : null
-    case "user_private":
-      return binding.workspaceMemberId
-        ? executeTakeFirst<MemorySpaceRow>(
-            client,
-            db
-              .selectFrom("memory_spaces")
-              .selectAll()
-              .where("workspace_id", "=", workspaceId)
-              .where("space_type", "=", binding.spaceType)
-              .where(
-                "anchor_workspace_member_id",
-                "=",
-                binding.workspaceMemberId
-              )
-              .limit(1)
-          )
-        : null
-    default:
-      return null
-  }
-}
-
-async function ensureMemorySpace(
-  client: QueryExecutor,
-  workspaceId: string,
-  binding: MemorySpaceBinding
-) {
-  validateMemorySpaceBinding(binding, "Memory space")
-  await validateMemorySpaceTarget(workspaceId, binding)
-  const conversationActorContextId =
-    await resolveConversationActorContextId(binding)
-  const existing = await findExistingMemorySpace(
+  // Try existing first (avoids unique index violation noise in logs).
+  let query = db
+    .selectFrom("memory_spaces")
+    .selectAll()
+    .where("workspace_id", "=", input.workspaceId)
+    .where("owner_subject_id", "=", ownerSubjectId)
+    .where("namespace_key", "=", namespaceKey)
+  query = scopeSubjectId
+    ? query.where("scope_subject_id", "=", scopeSubjectId)
+    : query.where("scope_subject_id", "is", null)
+  const existing = (await executeTakeFirst<MemorySpaceRow>(
     client,
-    workspaceId,
-    binding,
-    conversationActorContextId
-  )
-  if (existing) {
-    return {
-      spaceId: existing.id,
-      conversationActorContextId: conversationActorContextId || undefined,
-    }
-  }
+    query.limit(1)
+  )) as MemorySpaceRow | undefined
+  if (existing) return existing
 
   const spaceId = uuidv4()
   await executeCompiledQuery(
     client,
     db.insertInto("memory_spaces").values({
       id: spaceId,
-      workspace_id: workspaceId,
-      space_type: binding.spaceType,
-      anchor_conversation_id:
-        binding.spaceType === "conversation_shared"
-          ? binding.conversationId || null
-          : null,
-      anchor_actor_id:
-        binding.spaceType === "actor_private" ? binding.actorId || null : null,
-      anchor_conversation_actor_context_id:
-        binding.spaceType === "participant_private"
-          ? conversationActorContextId
-          : null,
-      anchor_workspace_member_id:
-        binding.spaceType === "user_private"
-          ? binding.workspaceMemberId || null
-          : null,
+      workspace_id: input.workspaceId,
+      owner_subject_id: ownerSubjectId,
+      scope_subject_id: scopeSubjectId,
+      namespace_key: namespaceKey,
       created_at: sql`NOW()`,
       updated_at: sql`NOW()`,
     })
   )
 
   return {
-    spaceId,
-    conversationActorContextId: conversationActorContextId || undefined,
+    id: spaceId,
+    workspace_id: input.workspaceId,
+    owner_subject_id: ownerSubjectId,
+    scope_subject_id: scopeSubjectId,
+    namespace_key: namespaceKey,
   }
 }
 
@@ -958,15 +896,29 @@ async function maybeMarkSuperseded(
   )
 }
 
-type MemoryInputAliases = {
-  spaceType?: MemorySpaceType
-  ownerScope?: MemorySpaceType
-  actorId?: string
-  ownerActorId?: string
-  conversationId?: string
-  ownerConversationId?: string
-  workspaceMemberId?: string
-  ownerWorkspaceMemberId?: string
+export interface CreateMemoryInput {
+  owner: SubjectRef
+  scope?: SubjectRef
+  namespaceKey?: string
+  category: MemoryCategory
+  state?: MemoryItemState
+  status?: MemoryItemState
+  stability?: MemoryStability
+  importance?: number
+  confidence?: number
+  tags?: string[]
+  content?: string
+  contentBlocks?: CanonicalContentBlockInput[]
+  textDigest?: string
+  searchText?: string
+  sourceItemId?: string
+  sourceToolCallId?: string
+  sourceTurnId?: string
+  supersedesMemoryId?: string
+  metadata?: Record<string, unknown>
+}
+
+export interface UpdateMemoryInput {
   category?: MemoryCategory
   state?: MemoryItemState
   status?: MemoryItemState
@@ -985,38 +937,10 @@ type MemoryInputAliases = {
   metadata?: Record<string, unknown>
 }
 
-function normalizeMemorySpaceBinding(
-  input: Pick<
-    MemoryInputAliases,
-    | "spaceType"
-    | "ownerScope"
-    | "actorId"
-    | "ownerActorId"
-    | "conversationId"
-    | "ownerConversationId"
-    | "workspaceMemberId"
-    | "ownerWorkspaceMemberId"
-  >
-): MemorySpaceBinding {
-  return {
-    spaceType: (input.spaceType ||
-      input.ownerScope ||
-      "workspace_shared") as MemorySpaceType,
-    actorId: input.actorId || input.ownerActorId,
-    conversationId: input.conversationId || input.ownerConversationId,
-    workspaceMemberId: input.workspaceMemberId || input.ownerWorkspaceMemberId,
-  }
-}
-
-export interface CreateMemoryInput extends MemoryInputAliases {
-  category: MemoryCategory
-}
-
-export interface UpdateMemoryInput extends MemoryInputAliases {}
-
 export interface ListMemoriesInput extends MemoryAccessTarget {
-  spaceType?: MemorySpaceType
-  ownerScope?: MemorySpaceType
+  owner?: SubjectRef
+  scope?: SubjectRef
+  namespaceKey?: string
   category?: MemoryCategory
   state?: MemoryItemState
   status?: MemoryItemState
@@ -1026,8 +950,9 @@ export interface ListMemoriesInput extends MemoryAccessTarget {
 
 export interface SearchMemoriesInput extends MemoryAccessTarget {
   queryText: string
-  spaceTypes?: MemorySpaceType[]
-  scopes?: MemorySpaceType[]
+  owners?: SubjectRef[]
+  scopes?: SubjectRef[]
+  namespaceKeys?: string[]
   categories?: MemoryCategory[]
   states?: MemoryItemState[]
   statuses?: MemoryItemState[]
@@ -1038,10 +963,6 @@ export interface SearchMemoriesInput extends MemoryAccessTarget {
 export interface RecallMemoriesInput extends SearchMemoriesInput {
   recallType: Exclude<MemoryRecallType, "manual_search">
   queryBlocks?: CanonicalContentBlockInput[]
-}
-
-type DirectUserPrivateContext = {
-  workspaceMemberId: string
 }
 
 function isActorSearchContext(
@@ -1062,101 +983,33 @@ function isActorSearchContext(
   return Boolean(input.actorId && !input.workspaceMemberId)
 }
 
-async function resolveDirectUserPrivateContext(
-  params: Pick<SearchMemoriesInput, "actorId" | "conversationId">
-): Promise<DirectUserPrivateContext | null> {
-  if (!params.actorId || !params.conversationId) {
-    return null
-  }
+function buildOwnerScopeFilter(params: {
+  spaceAlias: string
+  owners?: SubjectRef[]
+  scopes?: SubjectRef[]
+  namespaceKeys?: string[]
+}) {
+  const conditions: RawBuilder<unknown>[] = []
+  const space = sql.raw(params.spaceAlias)
 
-  // P1b: direct_conversation_bindings now exposes participant_*_subject_id
-  // referencing access_subjects; JOIN access_subjects twice (one per
-  // participant) to recover the actor_id / workspace_member_id values this
-  // memory bridge needs.
-  const row = await db
-    .selectFrom("conversations as c")
-    .innerJoin(
-      "direct_conversation_bindings as dcb",
-      "dcb.conversation_id",
-      "c.id"
+  if (params.namespaceKeys && params.namespaceKeys.length > 0) {
+    conditions.push(
+      sql`${space}.namespace_key = ANY(${params.namespaceKeys}::text[])`
     )
-    .innerJoin(
-      "access_subjects as p1",
-      "p1.id",
-      "dcb.participant_one_subject_id"
-    )
-    .innerJoin(
-      "access_subjects as p2",
-      "p2.id",
-      "dcb.participant_two_subject_id"
-    )
-    .select([
-      "p1.kind as participant_one_kind",
-      "p1.workspace_member_id as participant_one_workspace_member_id",
-      "p1.actor_id as participant_one_actor_id",
-      "p2.kind as participant_two_kind",
-      "p2.workspace_member_id as participant_two_workspace_member_id",
-      "p2.actor_id as participant_two_actor_id",
-    ])
-    .where("c.id", "=", params.conversationId)
-    .where("c.kind", "=", "private")
-    .limit(1)
-    .executeTakeFirst()
-
-  if (!row) {
-    return null
   }
 
-  const participantOneActorId =
-    row.participant_one_kind === "actor" ? row.participant_one_actor_id : null
-  const participantTwoActorId =
-    row.participant_two_kind === "actor" ? row.participant_two_actor_id : null
-  const participantOneWorkspaceMemberId =
-    row.participant_one_kind === "workspace_member"
-      ? row.participant_one_workspace_member_id
-      : null
-  const participantTwoWorkspaceMemberId =
-    row.participant_two_kind === "workspace_member"
-      ? row.participant_two_workspace_member_id
-      : null
-
-  const boundActorId = participantOneActorId || participantTwoActorId
-  const boundWorkspaceMemberId =
-    participantOneWorkspaceMemberId || participantTwoWorkspaceMemberId
-
-  if (
-    !boundActorId ||
-    !boundWorkspaceMemberId ||
-    boundActorId !== params.actorId
-  ) {
-    return null
-  }
-
-  return {
-    workspaceMemberId: boundWorkspaceMemberId,
-  }
+  // owner / scope filtering operates via the joined access_subjects rows.
+  // For each owner SubjectRef we accept any subject_id matching the requested
+  // kind+id; for scope similarly.
+  return conditions
 }
 
-function buildListWhereClause(workspaceId: string, input: ListMemoriesInput) {
-  const conditions: RawBuilder<unknown>[] = [
-    sql`mi.workspace_id = ${workspaceId}`,
-  ]
-
-  const spaceType = input.spaceType || input.ownerScope
-  if (spaceType) {
-    conditions.push(sql`ms.space_type = ${spaceType}`)
+async function subjectIdsForRefs(refs: SubjectRef[]): Promise<string[]> {
+  const ids: string[] = []
+  for (const ref of refs) {
+    ids.push(await upsertAccessSubject(db, ref))
   }
-  if (input.category) {
-    conditions.push(sql`mi.category = ${input.category}`)
-  }
-  if (input.state || input.status) {
-    conditions.push(sql`mi.state = ${(input.state || input.status)!}`)
-  }
-  if (input.tags && input.tags.length > 0) {
-    conditions.push(sql`mi.tags && ${input.tags}`)
-  }
-
-  return sql`${sql.join(conditions, sql` AND `)}`
+  return Array.from(new Set(ids))
 }
 
 function buildSearchFilters(
@@ -1165,15 +1018,13 @@ function buildSearchFilters(
   itemAlias = "mi",
   spaceAlias = "ms",
   /**
-   * PR-fix-round-2: space-level grant-reachable memory_space ids. When a
-   * granted space is `user_private`, the `isActorSearchContext` exclusion
-   * would normally strip it from the candidate set; we override that
-   * exclusion when the space is in this list so granted user_private
-   * memories DO show up in search/recall for the grant subject. Filters
-   * for state/category/tag still apply uniformly via the surrounding
-   * conditions.
+   * Space-level grant-reachable memory_space ids — these widen the visibility
+   * filter so a granted space (where the principal isn't the owner) still
+   * shows up in list/search/recall candidate SQL.
    */
-  grantSpaceIds: readonly string[] = []
+  grantSpaceIds: readonly string[] = [],
+  /** Owner-implicit reachable memory_space ids derived from runtimeSubjectIds. */
+  ownerSpaceIds: readonly string[] = []
 ) {
   const item = sql.raw(itemAlias)
   const space = sql.raw(spaceAlias)
@@ -1181,14 +1032,10 @@ function buildSearchFilters(
     sql`${item}.workspace_id = ${workspaceId}`,
   ]
 
-  const spaceTypes =
-    input.spaceTypes && input.spaceTypes.length > 0
-      ? input.spaceTypes
-      : input.scopes && input.scopes.length > 0
-        ? input.scopes
-        : undefined
-  if (spaceTypes) {
-    conditions.push(sql`${space}.space_type::text = ANY(${spaceTypes}::text[])`)
+  if (input.namespaceKeys && input.namespaceKeys.length > 0) {
+    conditions.push(
+      sql`${space}.namespace_key = ANY(${input.namespaceKeys}::text[])`
+    )
   }
 
   if (input.categories && input.categories.length > 0) {
@@ -1205,28 +1052,18 @@ function buildSearchFilters(
         : ["active"]
   conditions.push(sql`${item}.state::text = ANY(${states}::text[])`)
 
+  // Reachability gate: actor / workspace_member principal contexts only see
+  // spaces they have implicit owner access to, plus spaces with active
+  // space-level grants. The union of (ownerSpaceIds, grantSpaceIds) bounds
+  // the candidate set. When the caller has no principal context (e.g. legacy
+  // listMemories with just a target shape and no subject), we allow the full
+  // workspace's items through and rely on the post-fetch authz filter.
   if (isActorSearchContext(input)) {
-    if (grantSpaceIds.length > 0) {
-      // PR-fix-round-4: parameterized array literal instead of sql.raw with
-      // hand-quoted UUIDs. Source is currently the DB itself so injection
-      // risk is low, but `sql.raw` propagates easily — this keeps the
-      // injection surface zero.
-      const ids = [...grantSpaceIds]
-      if (input.directWorkspaceMemberId) {
-        conditions.push(
-          sql`(${space}.space_type != 'user_private' OR ${space}.anchor_workspace_member_id = ${input.directWorkspaceMemberId} OR ${space}.id = ANY(${ids}::uuid[]))`
-        )
-      } else {
-        conditions.push(
-          sql`(${space}.space_type != 'user_private' OR ${space}.id = ANY(${ids}::uuid[]))`
-        )
-      }
-    } else if (input.directWorkspaceMemberId) {
-      conditions.push(
-        sql`(${space}.space_type != 'user_private' OR ${space}.anchor_workspace_member_id = ${input.directWorkspaceMemberId})`
-      )
+    const reachable = Array.from(new Set([...ownerSpaceIds, ...grantSpaceIds]))
+    if (reachable.length === 0) {
+      conditions.push(sql`FALSE`)
     } else {
-      conditions.push(sql`${space}.space_type != 'user_private'`)
+      conditions.push(sql`${space}.id = ANY(${reachable}::uuid[])`)
     }
   }
 
@@ -1238,51 +1075,23 @@ async function searchLexicalCandidates(
   input: SearchMemoriesInput,
   candidateLimit: number,
   queryText: string,
-  grantSpaceIds: readonly string[] = []
+  grantSpaceIds: readonly string[] = [],
+  ownerSpaceIds: readonly string[] = []
 ) {
   const whereClause = buildSearchFilters(
     workspaceId,
     input,
     "mi",
     "ms",
-    grantSpaceIds
+    grantSpaceIds,
+    ownerSpaceIds
   )
   if (!queryText) return []
   const normalizedQueryText = normalizeWhitespace(queryText).toLowerCase()
+  const select = memoryRowSelectSql("mi", "ms")
+  const from = memoryRowFromSql("mi", "ms")
   const result = await db.executeQuery(
-    sql<SearchCandidateRow>`SELECT mi.id,
-        mi.workspace_id,
-        mi.memory_space_id,
-        ms.space_type,
-        ms.anchor_actor_id,
-        ms.anchor_conversation_id,
-        ms.anchor_conversation_actor_context_id,
-        ms.anchor_workspace_member_id,
-        mi.category,
-        mi.state,
-        mi.importance,
-        mi.confidence,
-        mi.tags,
-        mi.text_digest,
-        mi.search_text,
-        mi.index_status,
-        mi.embedding_model,
-        mi.embedding_dim,
-        mi.indexed_at,
-        mi.index_error,
-        mi.source_item_id,
-        mi.source_tool_call_id,
-        mi.source_turn_id,
-        mi.supersedes_item_id,
-        mi.metadata,
-        mi.created_at,
-        mi.updated_at,
-        COALESCE(a_space.name, a_participant.name) AS actor_name,
-        COALESCE(c_space.title, c_participant.title) AS conversation_title,
-        u.name AS workspace_member_name,
-        COALESCE(ms.anchor_actor_id, cac.actor_id) AS resolved_actor_id,
-        COALESCE(ms.anchor_conversation_id, cac.conversation_id) AS resolved_conversation_id,
-        ms.anchor_workspace_member_id AS resolved_workspace_member_id,
+    sql<SearchCandidateRow>`SELECT ${select},
         mic.id AS matched_chunk_id,
         mic.search_text AS chunk_search_text,
         GREATEST(
@@ -1293,15 +1102,7 @@ async function searchLexicalCandidates(
         NULL::real AS vector_score,
         NULL::real AS rrf_score
       FROM memory_item_chunks mic
-      JOIN memory_items mi ON mi.id = mic.memory_item_id
-      JOIN memory_spaces ms ON ms.id = mi.memory_space_id
-      LEFT JOIN conversation_actor_contexts cac ON cac.id = ms.anchor_conversation_actor_context_id
-      LEFT JOIN actors a_space ON a_space.id = ms.anchor_actor_id
-      LEFT JOIN actors a_participant ON a_participant.id = cac.actor_id
-      LEFT JOIN conversations c_space ON c_space.id = ms.anchor_conversation_id
-      LEFT JOIN conversations c_participant ON c_participant.id = cac.conversation_id
-      LEFT JOIN workspace_members wm ON wm.id = ms.anchor_workspace_member_id
-      LEFT JOIN users u ON u.id = wm.user_id
+      JOIN memory_items ${from} ON mi.id = mic.memory_item_id
       WHERE ${whereClause}
         AND mic.index_version = mi.active_index_version
         AND (
@@ -1321,50 +1122,22 @@ async function searchVectorCandidates(
   input: SearchMemoriesInput,
   embedding: number[],
   candidateLimit: number,
-  grantSpaceIds: readonly string[] = []
+  grantSpaceIds: readonly string[] = [],
+  ownerSpaceIds: readonly string[] = []
 ) {
   const whereClause = buildSearchFilters(
     workspaceId,
     input,
     "mi",
     "ms",
-    grantSpaceIds
+    grantSpaceIds,
+    ownerSpaceIds
   )
   const formattedEmbedding = `[${embedding.map((value) => (Number.isFinite(value) ? value.toFixed(8) : "0")).join(",")}]`
+  const select = memoryRowSelectSql("mi", "ms")
+  const from = memoryRowFromSql("mi", "ms")
   const result = await db.executeQuery(
-    sql<SearchCandidateRow>`SELECT mi.id,
-        mi.workspace_id,
-        mi.memory_space_id,
-        ms.space_type,
-        ms.anchor_actor_id,
-        ms.anchor_conversation_id,
-        ms.anchor_conversation_actor_context_id,
-        ms.anchor_workspace_member_id,
-        mi.category,
-        mi.state,
-        mi.importance,
-        mi.confidence,
-        mi.tags,
-        mi.text_digest,
-        mi.search_text,
-        mi.index_status,
-        mi.embedding_model,
-        mi.embedding_dim,
-        mi.indexed_at,
-        mi.index_error,
-        mi.source_item_id,
-        mi.source_tool_call_id,
-        mi.source_turn_id,
-        mi.supersedes_item_id,
-        mi.metadata,
-        mi.created_at,
-        mi.updated_at,
-        COALESCE(a_space.name, a_participant.name) AS actor_name,
-        COALESCE(c_space.title, c_participant.title) AS conversation_title,
-        u.name AS workspace_member_name,
-        COALESCE(ms.anchor_actor_id, cac.actor_id) AS resolved_actor_id,
-        COALESCE(ms.anchor_conversation_id, cac.conversation_id) AS resolved_conversation_id,
-        ms.anchor_workspace_member_id AS resolved_workspace_member_id,
+    sql<SearchCandidateRow>`SELECT ${select},
         mic.id AS matched_chunk_id,
         mic.search_text AS chunk_search_text,
         NULL::real AS text_score,
@@ -1372,15 +1145,7 @@ async function searchVectorCandidates(
         (1 - (mic.embedding <=> ${formattedEmbedding}::vector))::real AS vector_score,
         NULL::real AS rrf_score
       FROM memory_item_chunks mic
-      JOIN memory_items mi ON mi.id = mic.memory_item_id
-      JOIN memory_spaces ms ON ms.id = mi.memory_space_id
-      LEFT JOIN conversation_actor_contexts cac ON cac.id = ms.anchor_conversation_actor_context_id
-      LEFT JOIN actors a_space ON a_space.id = ms.anchor_actor_id
-      LEFT JOIN actors a_participant ON a_participant.id = cac.actor_id
-      LEFT JOIN conversations c_space ON c_space.id = ms.anchor_conversation_id
-      LEFT JOIN conversations c_participant ON c_participant.id = cac.conversation_id
-      LEFT JOIN workspace_members wm ON wm.id = ms.anchor_workspace_member_id
-      LEFT JOIN users u ON u.id = wm.user_id
+      JOIN memory_items ${from} ON mi.id = mic.memory_item_id
       WHERE ${whereClause}
         AND mic.index_version = mi.active_index_version
         AND mic.embedding IS NOT NULL
@@ -1437,12 +1202,6 @@ function resolveAccessSubject(target: MemoryAccessTarget) {
   return null
 }
 
-/**
- * PR5 fix: lift the resolved AccessSubject into a `SubjectRef` so we can
- * build a RuntimePrincipalContext for the memory_access_grants overlay.
- * `user` subjects are not workspace-bound and can't anchor a memory grant —
- * we deliberately return null for them so the grant overlay stays off.
- */
 function resolveSubjectRef(subject: AccessSubject | null): SubjectRef | null {
   if (!subject) return null
   switch (subject.type) {
@@ -1470,26 +1229,10 @@ async function buildMemoryRuntimeContext(
       conversationId: target.conversationId ?? null,
     })
   } catch {
-    // Builder fails closed when the principal doesn't belong to the
-    // workspace (PR2 security guard). For memory reads we let the legacy
-    // path continue without a runtime context — it will deny access via
-    // the existing space_type rules.
     return null
   }
 }
 
-/**
- * PR-fix-round-2: previous round POST-fetch unioned grant-reachable items
- * into the candidate set; that bypassed the lexical/vector match and the
- * `state='active'` / category / tag filters in `buildSearchFilters` /
- * `buildListWhereClause`. The correct shape is to WIDEN the SQL candidate
- * filters so granted spaces participate in the same filters as everything
- * else — implemented here for search/recall via
- * `buildSearchFilters(..., grantSpaceIds)` which overrides the
- * `isActorSearchContext` user_private exclusion for granted spaces. For
- * list the legacy candidate SQL is already inclusive (no SQL-level
- * visibility filter); auth filtering with `runtimeContext` is sufficient.
- */
 async function loadSpaceLevelGrantSpaceIds(
   workspaceId: string,
   ctx: NonNullable<Awaited<ReturnType<typeof buildMemoryRuntimeContext>>>,
@@ -1506,15 +1249,35 @@ async function loadSpaceLevelGrantSpaceIds(
   })
 }
 
-function isDirectUserPrivateRowVisible(
-  row: SearchCandidateRow,
-  target: MemoryAccessTarget
-) {
-  return Boolean(
-    target.directWorkspaceMemberId &&
-    row.space_type === "user_private" &&
-    row.anchor_workspace_member_id === target.directWorkspaceMemberId
-  )
+/**
+ * D4: spaces the principal can read by owner-implicit permission. The
+ * implicit-permission rule is: `owner_subject_id ∈ runtimeSubjectIds AND
+ * (scope_subject_id IS NULL OR scope_subject_id ∈ runtimeScopeSubjectIds)`.
+ * Used as a SQL-side filter to widen the candidate set.
+ */
+async function loadOwnerImplicitSpaceIds(
+  workspaceId: string,
+  ctx: NonNullable<Awaited<ReturnType<typeof buildMemoryRuntimeContext>>>
+): Promise<string[]> {
+  if (ctx.runtimeSubjectIds.length === 0) return []
+  let query = db
+    .selectFrom("memory_spaces")
+    .select("id")
+    .where("workspace_id", "=", workspaceId)
+    .where("owner_subject_id", "in", [...ctx.runtimeSubjectIds])
+  if (ctx.runtimeScopeSubjectIds.length > 0) {
+    const scopes = [...ctx.runtimeScopeSubjectIds]
+    query = query.where((eb) =>
+      eb.or([
+        eb("scope_subject_id", "is", null),
+        eb("scope_subject_id", "in", scopes),
+      ])
+    )
+  } else {
+    query = query.where("scope_subject_id", "is", null)
+  }
+  const rows = await query.execute()
+  return rows.map((row) => row.id)
 }
 
 async function buildSearchHits(params: {
@@ -1524,47 +1287,30 @@ async function buildSearchHits(params: {
   target: MemoryAccessTarget
   permission: "read" | "recall"
   limit: number
+  runtimeContext: Awaited<ReturnType<typeof buildMemoryRuntimeContext>>
 }) {
   const subject = resolveAccessSubject(params.target)
   let rows = params.rows
 
-  // PR-fix-round-2: previous round POST-fetch unioned every grant-reachable
-  // item; that pulled in items that didn't match the lexical/vector query.
-  // The grants now participate via buildSearchFilters (the legacy
-  // user_private exclusion is widened to allow granted spaces) so the
-  // query-match SQL handles them naturally. Here we only need to plumb
-  // the runtime context into filterAuthorizedPermissionResourceIds so the
-  // post-fetch auth gate sees the same grant overlay the evaluator uses.
-  const runtimeContext = await buildMemoryRuntimeContext(
-    params.workspaceId,
-    params.target,
-    subject
-  )
-
-  if (rows.length > 0) {
-    const directVisibleIds = new Set(
-      rows
-        .filter((row) => isDirectUserPrivateRowVisible(row, params.target))
-        .map((row) => row.id)
+  if (rows.length > 0 && subject) {
+    // Post-fetch auth gate honors space-level + item-level grant overlays
+    // (memory_access_grants with memory_item_id pointed at this item).
+    // For the rare case of grant=item-only on an item whose space the
+    // principal can't reach via owner_implicit/space-grant, the SQL filter
+    // already excluded the row — and that's intentional: the SQL gate is
+    // about reachability of the space; the item-level overlay only widens
+    // permission within a space the principal can already see.
+    const allowedIds = new Set(
+      await filterAuthorizedPermissionResourceIds(db, {
+        subject,
+        resourceType: "memory_item",
+        permission: params.permission,
+        resourceIds: rows.map((row) => row.id),
+        runtimeSubjectIds: params.runtimeContext?.runtimeSubjectIds,
+        runtimeScopeSubjectIds: params.runtimeContext?.runtimeScopeSubjectIds,
+      })
     )
-
-    if (subject) {
-      const allowedIds = new Set(
-        await filterAuthorizedPermissionResourceIds(db, {
-          subject,
-          resourceType: "memory_item",
-          permission: params.permission,
-          resourceIds: rows.map((row) => row.id),
-          runtimeSubjectIds: runtimeContext?.runtimeSubjectIds,
-          runtimeScopeSubjectIds: runtimeContext?.runtimeScopeSubjectIds,
-        })
-      )
-      rows = rows.filter(
-        (row) => allowedIds.has(row.id) || directVisibleIds.has(row.id)
-      )
-    } else if (directVisibleIds.size > 0) {
-      rows = rows.filter((row) => directVisibleIds.has(row.id))
-    }
+    rows = rows.filter((row) => allowedIds.has(row.id))
   }
 
   const bestByMemoryId = new Map<string, SearchCandidateRow>()
@@ -1678,7 +1424,9 @@ async function recordMemoryRecallRun(params: {
             []) as TableInsert<"memory_recall_run_results">["matched_terms"],
           recall_reason: result.recallReason || null,
           metadata: {
-            spaceType: result.spaceType,
+            ownerKind: result.owner.kind,
+            scopeKind: result.scope?.kind,
+            namespaceKey: result.namespaceKey,
             category: result.category,
           } as TableInsert<"memory_recall_run_results">["metadata"],
           created_at: sql`NOW()`,
@@ -1703,7 +1451,8 @@ async function recordMemoryRecallRun(params: {
 }
 
 function buildDefaultRecallReason(memory: Memory, target: MemoryAccessTarget) {
-  switch (memory.spaceType) {
+  const preset = inferMemoryPreset(memory.owner, memory.scope)
+  switch (preset) {
     case "participant_private":
       return "Participant-private memory strongly matched the current actor and conversation"
     case "conversation_shared":
@@ -1711,12 +1460,14 @@ function buildDefaultRecallReason(memory: Memory, target: MemoryAccessTarget) {
     case "actor_private":
       return "Actor-private memory matched the current task"
     case "user_private":
-      return target.directWorkspaceMemberId
-        ? "PM personal memory from this workspace matched the current direct conversation"
-        : "User-private memory matched the current member context"
+      return "User-private memory matched the current member context"
     case "workspace_shared":
-    default:
       return "Workspace-shared memory matched the current task"
+    default:
+      if (memory.owner.kind === SUBJECT_KIND.REMOTE_AGENT) {
+        return "Remote agent memory matched the current task"
+      }
+      return "Memory matched the current task"
   }
 }
 
@@ -1724,20 +1475,22 @@ export async function createMemory(
   workspaceId: UUID,
   input: CreateMemoryInput
 ) {
-  const binding = normalizeMemorySpaceBinding(input)
-  validateMemorySpaceBinding(binding, "Memory space")
-  await validateMemorySpaceTarget(workspaceId, binding)
   const normalizedContent = await normalizeMemoryContent(input)
   const memoryItemId = uuidv4()
 
   await transaction(async (client) => {
-    const ensuredSpace = await ensureMemorySpace(client, workspaceId, binding)
+    const space = await resolveOrCreateMemorySpace(client, {
+      workspaceId,
+      owner: input.owner,
+      scope: input.scope,
+      namespaceKey: input.namespaceKey,
+    })
     await executeCompiledQuery(
       client,
       db.insertInto("memory_items").values({
         id: memoryItemId,
         workspace_id: workspaceId,
-        memory_space_id: ensuredSpace.spaceId,
+        memory_space_id: space.id,
         category: input.category,
         state: input.state || input.status || "active",
         importance: input.importance ?? 0.5,
@@ -1778,10 +1531,9 @@ export async function createMemory(
     workspaceId,
     payload: {
       memoryId: memory.id,
-      spaceType: memory.spaceType,
-      actorId: memory.actorId,
-      conversationId: memory.conversationId,
-      workspaceMemberId: memory.workspaceMemberId,
+      ownerKind: memory.owner.kind,
+      scopeKind: memory.scope?.kind,
+      namespaceKey: memory.namespaceKey,
     },
     timestamp: new Date().toISOString(),
   })
@@ -1797,6 +1549,12 @@ export async function getMemory(workspaceId: UUID, memoryId: UUID) {
   return memory
 }
 
+/**
+ * D4: cross-space "moves" are no longer supported via update — per the plan
+ * "memory cross-space move = source delete + target write". updateMemory
+ * only touches content / tags / importance / state. The controller layer
+ * may still expose a separate move endpoint that wraps delete + create.
+ */
 export async function updateMemory(
   workspaceId: UUID,
   memoryId: UUID,
@@ -1807,20 +1565,6 @@ export async function updateMemory(
     throw new MemoryError("Memory not found", 404)
   }
   const [existing] = await loadMemoryItemsFromRows([existingRow])
-  const nextBinding = normalizeMemorySpaceBinding({
-    spaceType: input.spaceType ?? existing.spaceType,
-    actorId: input.actorId !== undefined ? input.actorId : existing.actorId,
-    conversationId:
-      input.conversationId !== undefined
-        ? input.conversationId
-        : existing.conversationId,
-    workspaceMemberId:
-      input.workspaceMemberId !== undefined
-        ? input.workspaceMemberId
-        : existing.workspaceMemberId,
-  })
-  validateMemorySpaceBinding(nextBinding, "Memory space")
-  await validateMemorySpaceTarget(workspaceId, nextBinding)
 
   const normalizedContent = await normalizeMemoryContent({
     content: input.content,
@@ -1838,17 +1582,11 @@ export async function updateMemory(
   })
 
   await transaction(async (client) => {
-    const ensuredSpace = await ensureMemorySpace(
-      client,
-      workspaceId,
-      nextBinding
-    )
     await executeCompiledQuery(
       client,
       db
         .updateTable("memory_items")
         .set({
-          memory_space_id: ensuredSpace.spaceId,
           category: input.category || existing.category,
           state: input.state || input.status || existing.state,
           importance: input.importance ?? existing.importance,
@@ -1921,57 +1659,63 @@ export async function listMemories(
   input: ListMemoriesInput
 ) {
   const requestedLimit = Math.max(1, Math.min(200, input.limit ?? 100))
-  const whereClause = buildListWhereClause(workspaceId, input)
   const subject = resolveAccessSubject(input)
   const runtimeContext = await buildMemoryRuntimeContext(
     workspaceId,
     input,
     subject
   )
-  // PR-fix-round-3: previously `LIMIT requestedLimit` was applied at the
-  // SQL level BEFORE filterAuthorizedPermissionResourceIds, so a workspace
-  // with 200+ items the principal couldn't see could push the only items
-  // they CAN see (e.g. a grant-shared memory) past the cutoff. Now we:
-  //   1) fetch a wider candidate slice (oversample by 5× up to a hard cap)
-  //   2) apply the auth filter
-  //   3) take the first requestedLimit rows from the filtered result.
-  // For the rare case where even the wide slice can't satisfy the limit
-  // (workspace has 5× more unreadable items than `requestedLimit`), we
-  // log a warning and accept the under-fetch — fixing that properly
-  // requires pushing auth into SQL, which is the PR5-full destructive
-  // rewrite.
+  const ownerSpaceIds = runtimeContext
+    ? await loadOwnerImplicitSpaceIds(workspaceId, runtimeContext)
+    : []
+  const grantSpaceIds = runtimeContext
+    ? await loadSpaceLevelGrantSpaceIds(workspaceId, runtimeContext, "read")
+    : []
+
+  const conditions: RawBuilder<unknown>[] = [
+    sql`mi.workspace_id = ${workspaceId}`,
+  ]
+  if (input.category) conditions.push(sql`mi.category = ${input.category}`)
+  if (input.state || input.status) {
+    conditions.push(sql`mi.state = ${(input.state || input.status)!}`)
+  }
+  if (input.tags && input.tags.length > 0) {
+    conditions.push(sql`mi.tags && ${input.tags}`)
+  }
+  if (input.namespaceKey) {
+    conditions.push(sql`ms.namespace_key = ${input.namespaceKey}`)
+  }
+  if (input.owner) {
+    const ownerSubjectId = await upsertAccessSubject(db, input.owner)
+    conditions.push(sql`ms.owner_subject_id = ${ownerSubjectId}`)
+  }
+  if (input.scope) {
+    const scopeSubjectId = await upsertAccessSubject(db, input.scope)
+    conditions.push(sql`ms.scope_subject_id = ${scopeSubjectId}`)
+  }
+
+  if (subject) {
+    // Subject-based reachability gate (owner-implicit + space-grant).
+    const reachable = Array.from(new Set([...ownerSpaceIds, ...grantSpaceIds]))
+    if (reachable.length === 0) {
+      // No reachable spaces — bail early; nothing to fetch.
+      return []
+    }
+    conditions.push(sql`ms.id = ANY(${reachable}::uuid[])`)
+  }
+
+  const whereClause = sql`${sql.join(conditions, sql` AND `)}`
+  // Oversample so post-fetch authz (item-level grants) has room to swap rows.
   const candidateOversample = Math.min(2000, requestedLimit * 5)
-  let rows = (await db
-    .selectFrom("memory_items as mi")
-    .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
-    .leftJoin(
-      "conversation_actor_contexts as cac",
-      "cac.id",
-      "ms.anchor_conversation_actor_context_id"
-    )
-    .leftJoin("actors as a_space", "a_space.id", "ms.anchor_actor_id")
-    .leftJoin("actors as a_participant", "a_participant.id", "cac.actor_id")
-    .leftJoin(
-      "conversations as c_space",
-      "c_space.id",
-      "ms.anchor_conversation_id"
-    )
-    .leftJoin(
-      "conversations as c_participant",
-      "c_participant.id",
-      "cac.conversation_id"
-    )
-    .leftJoin(
-      "workspace_members as wm",
-      "wm.id",
-      "ms.anchor_workspace_member_id"
-    )
-    .leftJoin("users as u", "u.id", "wm.user_id")
-    .select(baseMemorySelect())
-    .where(sql<boolean>`${whereClause}`)
-    .orderBy("mi.updated_at", "desc")
-    .limit(candidateOversample)
-    .execute()) as MemoryRow[]
+  const select = memoryRowSelectSql("mi", "ms")
+  const from = memoryRowFromSql("mi", "ms")
+  const result = await db.executeQuery(
+    sql<MemoryRow>`SELECT ${select} FROM memory_items ${from}
+       WHERE ${whereClause}
+       ORDER BY mi.updated_at DESC
+       LIMIT ${candidateOversample}`.compile(db)
+  )
+  let rows = result.rows
 
   if (subject && rows.length > 0) {
     const allowedIds = new Set(
@@ -1987,8 +1731,6 @@ export async function listMemories(
     rows = rows.filter((row) => allowedIds.has(row.id))
   }
 
-  // Apply the user-requested limit AFTER auth filtering so a grantee with
-  // a single grant in a noisy workspace can still see their item.
   rows = rows.slice(0, requestedLimit)
   return loadMemoryItemsFromRows(rows)
 }
@@ -1998,31 +1740,21 @@ export async function searchMemories(
   input: SearchMemoriesInput,
   permission: "read" | "recall" = "read"
 ): Promise<MemoryRecallResult[]> {
-  const directUserPrivateContext = await resolveDirectUserPrivateContext(input)
-  const searchInput = directUserPrivateContext
-    ? {
-        ...input,
-        directWorkspaceMemberId: directUserPrivateContext.workspaceMemberId,
-      }
-    : input
   const candidateLimit = Math.max(
     input.limit ?? config.memory.recallLimit,
     config.memory.searchCandidateLimit
   )
-  const queryText = searchInput.queryText.trim()
+  const queryText = input.queryText.trim()
   const lexicalSources: Array<{ rows: SearchCandidateRow[] }> = []
 
-  // PR-fix-round-2: compute the principal's space-level grant set ONCE per
-  // request and pass it into searchLexicalCandidates / searchVectorCandidates.
-  // The user_private exclusion in buildSearchFilters is overridden for
-  // granted spaces — items in those spaces participate in the same lexical
-  // / vector / state / category / tag filters as anything else, so the
-  // grant only widens which spaces are reachable, not which items match.
   const runtimeContextForSearch = await buildMemoryRuntimeContext(
     workspaceId,
-    searchInput,
-    resolveAccessSubject(searchInput)
+    input,
+    resolveAccessSubject(input)
   )
+  const ownerSpaceIds = runtimeContextForSearch
+    ? await loadOwnerImplicitSpaceIds(workspaceId, runtimeContextForSearch)
+    : []
   const grantSpaceIds = runtimeContextForSearch
     ? await loadSpaceLevelGrantSpaceIds(
         workspaceId,
@@ -2037,10 +1769,11 @@ export async function searchMemories(
         lexicalSources.push({
           rows: await searchLexicalCandidates(
             workspaceId,
-            searchInput,
+            input,
             candidateLimit,
             variant,
-            grantSpaceIds
+            grantSpaceIds,
+            ownerSpaceIds
           ),
         })
       } catch (error) {
@@ -2049,8 +1782,8 @@ export async function searchMemories(
           "[memory] lexical search degraded due to tsquery stack overflow",
           {
             workspaceId,
-            actorId: searchInput.actorId,
-            conversationId: searchInput.conversationId,
+            actorId: input.actorId,
+            conversationId: input.conversationId,
             queryLength: queryText.length,
           }
         )
@@ -2065,10 +1798,11 @@ export async function searchMemories(
       if (embedding) {
         vectorRows = await searchVectorCandidates(
           workspaceId,
-          searchInput,
+          input,
           embedding,
           candidateLimit,
-          grantSpaceIds
+          grantSpaceIds,
+          ownerSpaceIds
         )
       }
     } catch (error) {
@@ -2085,9 +1819,10 @@ export async function searchMemories(
     workspaceId,
     rows: fusedRows,
     queryText,
-    target: searchInput,
+    target: input,
     permission,
     limit: Math.max(1, Math.min(50, input.limit ?? config.memory.topK)),
+    runtimeContext: runtimeContextForSearch,
   })
 }
 

@@ -8,7 +8,6 @@ import type {
   MemoryCategory,
   MemoryIndexStatus,
   MemoryRecallType,
-  MemorySpaceType,
   MemoryItemState,
   PluginAuthConnectionStatus,
   PluginAuthOwnerScope,
@@ -52,7 +51,6 @@ import {
   ATTACHMENT_TARGET_TYPES,
   CONTACT_TARGET_TYPES,
   CONVERSATION_PARTICIPANT_TYPES,
-  MEMORY_SPACE_TYPES,
   MODEL_GROUP_GRANT_SCOPES,
   MODEL_GROUP_ROUTING_STRATEGIES,
   PLATFORM_ACCESS_KEYS,
@@ -95,7 +93,6 @@ import type {
   MemoryItemsIndexStatus,
   MemoryItemsState,
   MemoryRecallRunsRecallType,
-  MemorySpacesSpaceType,
   ModelGroupsRoutingStrategy,
   PlatformAccessBindingsAccessKey,
   PluginAuthSessionsStatus,
@@ -179,9 +176,6 @@ type _ActorRoleMatchesDb = Assert<IsEqual<ActorRole, ActorsRole>>
 type _ActorDocVisibilityMatchesDb = Assert<
   IsEqual<ActorDocVisibility, ActorVersionDocsVisibility>
 >
-type _MemorySpaceTypeListMatchesDb = Assert<
-  IsEqual<(typeof MEMORY_SPACE_TYPES)[number], MemorySpacesSpaceType>
->
 // Note: the Postgres `relationship_target_type` enum was dropped along with
 // its column users by the P1b polymorphic-FK collapse (all subject FKs now go
 // through `access_subjects.subject_id`). `CONTACT_TARGET_TYPES` is a pure
@@ -248,9 +242,6 @@ type _AutomationEventSourceStatusMatchesDb = Assert<
     (typeof AUTOMATION_EVENT_SOURCE_STATUSES)[number],
     AutomationEventSourcesStatus
   >
->
-type _MemorySpaceTypeMatchesDb = Assert<
-  IsEqual<MemorySpaceType, MemorySpacesSpaceType>
 >
 type _MemoryCategoryMatchesDb = Assert<
   IsEqual<MemoryCategory, MemoryItemsCategory>
