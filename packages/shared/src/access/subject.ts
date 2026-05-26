@@ -297,9 +297,19 @@ export function isWorkspaceBoundSubjectKind(ref: SubjectRef): boolean {
 }
 
 /**
- * Stricter allowlist for `memory_spaces.owner_subject_id` (PR5+). Modeling
- * owner as (actor, scope=conversation) is the canonical way to express
- * "actor in conversation"'s memory.
+ * Allowed `memory_spaces.owner_subject_id` kinds.
+ *
+ * Scope note: this iteration of the memory model is **workspace-bound only**.
+ * `user`, `external`, and `system` are intentionally NOT memory owners — they
+ * would require a separate platform-memory storage path (nullable
+ * `memory_items.workspace_id`, cross-workspace recall, cross-tenant indexing
+ * pipeline) that lives outside this refactor's scope. If platform user memory
+ * or per-project memory becomes a goal in a later phase, that needs its own
+ * schema design (likely a sibling `platform_memory_spaces` table, not lifting
+ * this restriction in place).
+ *
+ * The "actor's memory inside a single conversation" pattern is modeled as
+ * `owner = actor + scope = conversation`, not as a `user` owner.
  */
 export function isMemoryOwnerSubjectKind(ref: SubjectRef): boolean {
   return (

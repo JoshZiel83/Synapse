@@ -3669,7 +3669,12 @@ BEGIN
   IF p_subject_id IS NULL THEN RETURN TRUE; END IF;
   SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
   IF v_kind IS NULL THEN RETURN FALSE; END IF;
-  -- Memory owners must be one of these — no user/external/system.
+  -- Memory owners are workspace-bound only: workspace_member / actor /
+  -- remote_agent / workspace / conversation. user / external / system are
+  -- intentionally excluded — this iteration of the memory model is
+  -- workspace-tenant; platform-wide (user-owned cross-workspace) memory
+  -- requires a separate schema design (nullable memory_items.workspace_id +
+  -- a cross-tenant indexing/recall pipeline) that is out of scope here.
   RETURN v_kind IN ('workspace_member','actor','remote_agent','workspace','conversation');
 END;
 $$;

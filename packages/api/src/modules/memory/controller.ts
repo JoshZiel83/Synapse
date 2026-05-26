@@ -88,7 +88,10 @@ const contentBlockSchema = z.discriminatedUnion("type", [
 ])
 
 // SubjectRef for owner: workspace_member | actor | remote_agent | workspace | conversation.
-// User/external/system rejected at the trigger; reject early here too.
+// user / external / system are intentionally not memory owners in this
+// iteration — see `isMemoryOwnerSubjectKind` in shared for the rationale.
+// Platform-wide user memory would require a separate schema (cross-tenant
+// indexing + recall pipeline) and is out of scope here.
 const ownerSubjectRefSchema = z.discriminatedUnion("kind", [
   z.object({
     kind: z.literal(SUBJECT_KIND.WORKSPACE),

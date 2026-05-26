@@ -157,3 +157,118 @@ test(
     })
   }
 )
+
+/**
+ * P1 fix regression: `owner=workspace, scope=conversation C` memory must NOT
+ * leak to a workspace member who is outside conversation C. Pre-fix the
+ * workspace-owner branch in hasMemorySpaceOwnerImplicitPermission ignored
+ * scope_subject_id and let anyone with workspace `view` read it.
+ */
+async function newConversation(db: Kysely<any>, wsId: string): Promise<string> {
+  const row = await db
+    .insertInto("conversations")
+    .values({
+      kind: "group",
+      boundary: "internal",
+      internal_workspace_id: wsId,
+      title: `${NS} conv`,
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function newWorkspaceMember(
+  db: Kysely<any>,
+  wsId: string
+): Promise<string> {
+  const user = await db
+    .insertInto("users")
+    .values({
+      email: `${rid()}@${NS}`,
+      name: "member",
+      password_hash: "x",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const row = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: wsId,
+      user_id: user.id as string,
+      trust_level: "member",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function newWorkspaceOwnedConversationScopedSpace(
+  db: Kysely<any>,
+  wsId: string,
+  conversationId: string
+): Promise<string> {
+  const ownerSubjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.WORKSPACE,
+    workspaceId: wsId,
+  })
+  const scopeSubjectId = await upsertAccessSubject(db as any, {
+    kind: SUBJECT_KIND.CONVERSATION,
+    conversationId,
+  })
+  const row = await db
+    .insertInto("memory_spaces")
+    .values({
+      workspace_id: wsId,
+      owner_subject_id: ownerSubjectId,
+      scope_subject_id: scopeSubjectId,
+      namespace_key: "default",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+test(
+  "owner=workspace, scope=conversation C: workspace member outside C cannot read",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const wsId = await newWorkspace(db)
+      const conv = await newConversation(db, wsId)
+      const outsider = await newWorkspaceMember(db, wsId)
+      const space = await newWorkspaceOwnedConversationScopedSpace(
+        db,
+        wsId,
+        conv
+      )
+      const item = await newItem(db, wsId, space)
+
+      const subject: AccessSubject = { type: "workspace_member", id: outsider }
+      // Build a runtime context that does NOT include the conversation
+      // (outsider is not an active participant).
+      const ctx = await buildRuntimePrincipalContext(db, {
+        principal: {
+          kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+          memberId: outsider,
+        },
+        workspaceId: wsId,
+        conversationId: conv,
+      })
+
+      const allowed = await authorizePermission(db, {
+        subject,
+        resourceType: "memory_item",
+        resourceId: item,
+        permission: "read",
+        runtimeSubjectIds: ctx.runtimeSubjectIds,
+        runtimeScopeSubjectIds: ctx.runtimeScopeSubjectIds,
+      })
+      assert.equal(
+        allowed,
+        false,
+        "workspace member outside the scope conversation must NOT read scoped workspace-owned memory"
+      )
+    })
+  }
+)

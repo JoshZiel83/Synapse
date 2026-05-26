@@ -78,6 +78,7 @@ import {
 import {
   buildConversationCapabilitySubjects,
   computeRuntimeScopeSubjectIds,
+  computeRuntimeSubjectIdsForVisibility,
 } from "../access/subject-resolution.js"
 import {
   listRelayAutoLoadedSkills,
@@ -3566,6 +3567,16 @@ export async function listVisibleSkills(input: {
     actorId: input.actorId,
     conversationId: input.conversationId,
   })
+  // P1 fix (post-D4): subject_ids the principal can claim, including the
+  // conversation subject when an active participant. Without this,
+  // `subject=conversation C` bindings on skills are written + UI-visible
+  // but the evaluator never surfaces them to participants of C.
+  const runtimeSubjectIds = await computeRuntimeSubjectIdsForVisibility(db, {
+    workspaceId: input.workspaceId,
+    workspaceMemberId: input.workspaceMemberId,
+    actorId: input.actorId,
+    conversationId: input.conversationId,
+  })
   const relayAutoLoadedSkills = await listRelayAutoLoadedSkills({
     workspaceId: input.workspaceId,
     actorId: input.actorId,
@@ -3586,6 +3597,7 @@ export async function listVisibleSkills(input: {
         permission: ACCESS_ACTIONS["installed_skill.use"].permission,
         subject,
         runtimeScopeSubjectIds,
+        runtimeSubjectIds,
       })
     )
   )

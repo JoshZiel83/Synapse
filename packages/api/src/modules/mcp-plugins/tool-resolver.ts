@@ -21,6 +21,7 @@ import { loadAccessBindingRowsForResources } from "../access/binding-storage.js"
 import {
   buildConversationCapabilitySubjects,
   computeRuntimeScopeSubjectIds,
+  computeRuntimeSubjectIdsForVisibility,
 } from "../access/subject-resolution.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
 import { resolveInstallationConfig } from "./config-resolver.js"
@@ -935,6 +936,16 @@ async function loadVisiblePlugins(params: ResolveParams) {
     actorId: params.actorId,
     conversationId: params.conversationId,
   })
+  // P1 fix (post-D4): include the conversation subject in runtimeSubjectIds
+  // so `subject=conversation C` plugin grants surface to active participants
+  // (otherwise they were writable but never matched).
+  const runtimeSubjectIds = await computeRuntimeSubjectIdsForVisibility(db, {
+    workspaceId: params.workspaceId,
+    workspaceMemberId: params.workspaceMemberId,
+    actorId: params.actorId,
+    remoteAgentId: params.remoteAgentId,
+    conversationId: params.conversationId,
+  })
   const visibleInstallationIds = new Set<string>()
 
   const lookups = await Promise.all(
@@ -944,6 +955,7 @@ async function loadVisiblePlugins(params: ResolveParams) {
         permission: ACCESS_ACTIONS["plugin_installation.use"].permission,
         subject,
         runtimeScopeSubjectIds,
+        runtimeSubjectIds,
       })
     )
   )
@@ -1044,6 +1056,14 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
     actorId: params.actorId,
     conversationId: params.conversationId,
   })
+  // P1 fix (post-D4): include conversation subject for active participants.
+  const runtimeSubjectIds = await computeRuntimeSubjectIdsForVisibility(db, {
+    workspaceId: params.workspaceId,
+    workspaceMemberId: params.workspaceMemberId,
+    actorId: params.actorId,
+    remoteAgentId: params.remoteAgentId,
+    conversationId: params.conversationId,
+  })
   const visibleCapabilityIds = new Set<string>()
 
   const lookups = await Promise.all(
@@ -1053,6 +1073,7 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
         permission: ACCESS_ACTIONS["relay_capability.use"].permission,
         subject,
         runtimeScopeSubjectIds,
+        runtimeSubjectIds,
       })
     )
   )

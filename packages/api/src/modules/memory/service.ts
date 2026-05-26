@@ -52,6 +52,7 @@ import {
 } from "../chat/message-content.js"
 import {
   actorSubject,
+  authorizePermission,
   filterAuthorizedPermissionResourceIds,
   type AccessSubject,
   workspaceMemberSubject,
@@ -1024,7 +1025,18 @@ function buildSearchFilters(
    */
   grantSpaceIds: readonly string[] = [],
   /** Owner-implicit reachable memory_space ids derived from runtimeSubjectIds. */
-  ownerSpaceIds: readonly string[] = []
+  ownerSpaceIds: readonly string[] = [],
+  /**
+   * P2 fix (post-D4): caller-supplied owner / scope filters from
+   * `SearchMemoriesInput.owners` and `.scopes`. The schema accepted them but
+   * the SQL ignored them, so a UI filter like "only actor X's memories"
+   * silently degraded to "every reachable memory". When provided we restrict
+   * the candidate set by intersecting with the corresponding access_subjects
+   * ids (resolved once by the caller and passed through here).
+   */
+  ownerSubjectIdFilters: readonly string[] = [],
+  scopeSubjectIdFilters: readonly string[] = [],
+  scopeFilterIncludesUnscoped = false
 ) {
   const item = sql.raw(itemAlias)
   const space = sql.raw(spaceAlias)
@@ -1036,6 +1048,24 @@ function buildSearchFilters(
     conditions.push(
       sql`${space}.namespace_key = ANY(${input.namespaceKeys}::text[])`
     )
+  }
+
+  if (ownerSubjectIdFilters.length > 0) {
+    conditions.push(
+      sql`${space}.owner_subject_id = ANY(${[...ownerSubjectIdFilters]}::uuid[])`
+    )
+  }
+
+  if (scopeSubjectIdFilters.length > 0) {
+    if (scopeFilterIncludesUnscoped) {
+      conditions.push(
+        sql`(${space}.scope_subject_id IS NULL OR ${space}.scope_subject_id = ANY(${[...scopeSubjectIdFilters]}::uuid[]))`
+      )
+    } else {
+      conditions.push(
+        sql`${space}.scope_subject_id = ANY(${[...scopeSubjectIdFilters]}::uuid[])`
+      )
+    }
   }
 
   if (input.categories && input.categories.length > 0) {
@@ -1076,7 +1106,10 @@ async function searchLexicalCandidates(
   candidateLimit: number,
   queryText: string,
   grantSpaceIds: readonly string[] = [],
-  ownerSpaceIds: readonly string[] = []
+  ownerSpaceIds: readonly string[] = [],
+  ownerSubjectIdFilters: readonly string[] = [],
+  scopeSubjectIdFilters: readonly string[] = [],
+  scopeFilterIncludesUnscoped = false
 ) {
   const whereClause = buildSearchFilters(
     workspaceId,
@@ -1084,7 +1117,10 @@ async function searchLexicalCandidates(
     "mi",
     "ms",
     grantSpaceIds,
-    ownerSpaceIds
+    ownerSpaceIds,
+    ownerSubjectIdFilters,
+    scopeSubjectIdFilters,
+    scopeFilterIncludesUnscoped
   )
   if (!queryText) return []
   const normalizedQueryText = normalizeWhitespace(queryText).toLowerCase()
@@ -1123,7 +1159,10 @@ async function searchVectorCandidates(
   embedding: number[],
   candidateLimit: number,
   grantSpaceIds: readonly string[] = [],
-  ownerSpaceIds: readonly string[] = []
+  ownerSpaceIds: readonly string[] = [],
+  ownerSubjectIdFilters: readonly string[] = [],
+  scopeSubjectIdFilters: readonly string[] = [],
+  scopeFilterIncludesUnscoped = false
 ) {
   const whereClause = buildSearchFilters(
     workspaceId,
@@ -1131,7 +1170,10 @@ async function searchVectorCandidates(
     "mi",
     "ms",
     grantSpaceIds,
-    ownerSpaceIds
+    ownerSpaceIds,
+    ownerSubjectIdFilters,
+    scopeSubjectIdFilters,
+    scopeFilterIncludesUnscoped
   )
   const formattedEmbedding = `[${embedding.map((value) => (Number.isFinite(value) ? value.toFixed(8) : "0")).join(",")}]`
   const select = memoryRowSelectSql("mi", "ms")
@@ -1277,6 +1319,55 @@ async function loadOwnerImplicitSpaceIds(
     query = query.where("scope_subject_id", "is", null)
   }
   const rows = await query.execute()
+  return rows.map((row) => row.id)
+}
+
+/**
+ * P2 fix (post-D4): admin reachability widener for list / search candidate
+ * SQL. The evaluator's owner-implicit matrix gives `workspace_member` with
+ * `manage_memories` workspace admin access to actor / member / remote_agent
+ * -owned spaces, so a direct GET succeeds. Without this widener, the list
+ * SQL only matches spaces where `owner_subject_id ∈ runtimeSubjectIds`
+ * (i.e. the principal owns them) — admin sees nothing in list but can fetch
+ * each by id. This function returns the additional set of unscoped spaces
+ * in the workspace whose owner is workspace_member / actor / remote_agent
+ * so list/search candidate SQL surfaces the same spaces evaluator allows.
+ *
+ * Note: scoped spaces (scope_subject_id IS NOT NULL) are deliberately
+ * EXCLUDED — admin's manage override on a scoped space only unlocks
+ * manage/delete (not read/recall, see hasMemorySpaceOwnerImplicitPermission)
+ * so they shouldn't appear in a read-oriented list either.
+ */
+async function loadAdminReachableSpaceIds(
+  workspaceId: string,
+  subject: AccessSubject | null,
+  permission: "read" | "recall"
+): Promise<string[]> {
+  if (permission !== "read" && permission !== "recall") return []
+  if (!subject || subject.type !== "workspace_member") return []
+  const hasManage = await authorizePermission(db, {
+    subject,
+    resourceType: "workspace",
+    resourceId: workspaceId,
+    permission: "manage_memories",
+  })
+  if (!hasManage) return []
+  const rows = await db
+    .selectFrom("memory_spaces as ms")
+    .innerJoin(
+      "access_subjects as owner_subj",
+      "owner_subj.id",
+      "ms.owner_subject_id"
+    )
+    .select("ms.id")
+    .where("ms.workspace_id", "=", workspaceId)
+    .where("ms.scope_subject_id", "is", null)
+    .where("owner_subj.kind", "in", [
+      "workspace_member",
+      "actor",
+      "remote_agent",
+    ])
+    .execute()
   return rows.map((row) => row.id)
 }
 
@@ -1671,6 +1762,15 @@ export async function listMemories(
   const grantSpaceIds = runtimeContext
     ? await loadSpaceLevelGrantSpaceIds(workspaceId, runtimeContext, "read")
     : []
+  // P2 fix (post-D4): workspace admin (`manage_memories`) can read every
+  // unscoped actor/member/remote_agent-owned space per the evaluator
+  // matrix. Without this widener the list SQL hides those rows even
+  // though a direct GET allows them. See loadAdminReachableSpaceIds.
+  const adminSpaceIds = await loadAdminReachableSpaceIds(
+    workspaceId,
+    subject,
+    "read"
+  )
 
   const conditions: RawBuilder<unknown>[] = [
     sql`mi.workspace_id = ${workspaceId}`,
@@ -1695,8 +1795,10 @@ export async function listMemories(
   }
 
   if (subject) {
-    // Subject-based reachability gate (owner-implicit + space-grant).
-    const reachable = Array.from(new Set([...ownerSpaceIds, ...grantSpaceIds]))
+    // Subject-based reachability gate (owner-implicit + space-grant + admin).
+    const reachable = Array.from(
+      new Set([...ownerSpaceIds, ...grantSpaceIds, ...adminSpaceIds])
+    )
     if (reachable.length === 0) {
       // No reachable spaces — bail early; nothing to fetch.
       return []
@@ -1762,6 +1864,25 @@ export async function searchMemories(
         permission
       )
     : []
+  // P2 fix (post-D4): admin reachable spaces (manage_memories override on
+  // unscoped actor/member/remote_agent-owned spaces). Merged into the
+  // candidate WHERE so search/recall agree with the evaluator's owner-
+  // implicit matrix.
+  const adminSpaceIds = await loadAdminReachableSpaceIds(
+    workspaceId,
+    resolveAccessSubject(input),
+    permission
+  )
+  // P2 fix (post-D4): resolve the caller-supplied owners[] / scopes[]
+  // SubjectRef filters into access_subjects ids so the SQL WHERE clause can
+  // restrict candidates. Previously the schema accepted these fields but the
+  // SQL ignored them.
+  const ownerSubjectIdFilters = input.owners
+    ? await subjectIdsForRefs(input.owners)
+    : []
+  const scopeSubjectIdFilters = input.scopes
+    ? await subjectIdsForRefs(input.scopes)
+    : []
 
   if (queryText) {
     for (const variant of buildLexicalVariants(queryText)) {
@@ -1772,8 +1893,12 @@ export async function searchMemories(
             input,
             candidateLimit,
             variant,
-            grantSpaceIds,
-            ownerSpaceIds
+            // pass union of grant + admin via grantSpaceIds slot; owner stays
+            // separate (buildSearchFilters unions them anyway).
+            Array.from(new Set([...grantSpaceIds, ...adminSpaceIds])),
+            ownerSpaceIds,
+            ownerSubjectIdFilters,
+            scopeSubjectIdFilters
           ),
         })
       } catch (error) {
@@ -1801,8 +1926,10 @@ export async function searchMemories(
           input,
           embedding,
           candidateLimit,
-          grantSpaceIds,
-          ownerSpaceIds
+          Array.from(new Set([...grantSpaceIds, ...adminSpaceIds])),
+          ownerSpaceIds,
+          ownerSubjectIdFilters,
+          scopeSubjectIdFilters
         )
       }
     } catch (error) {
