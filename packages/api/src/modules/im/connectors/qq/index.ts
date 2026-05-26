@@ -30,6 +30,7 @@ import { validateQqCredentialsForMode } from "./credentials.js"
 import { handleQqWebhook, startQqAccount } from "./inbound.js"
 import { parseQqMentions, renderQqMention } from "./mentions.js"
 import { sendQqMessage } from "./outbound.js"
+import { createQqTypingAdapter } from "./typing.js"
 
 export const qqConnector: TransportConnector = {
   transportKind: "qq",
@@ -63,10 +64,12 @@ export const qqConnector: TransportConnector = {
     return null
   },
 
-  // Stage 6 returns `{adapter, config:{heartbeatMs:50_000}}` here when
-  // endpointRef.endpointType==='direct' AND lastInboundMessageRef is set.
-  createTypingAdapter() {
-    return null
+  // QQ C2C input_notify shows the "typing" bubble for ~60s; group
+  // endpoints have no equivalent (returns null). See typing.ts for
+  // why we hand back {adapter, config:{heartbeatMs:50_000}} so the
+  // controller refreshes inside the 60s expiry window.
+  createTypingAdapter(input) {
+    return createQqTypingAdapter(input)
   },
 
   parseInboundMentions(input) {

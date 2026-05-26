@@ -38,9 +38,10 @@ export const QQ_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
 export const QQ_MESSAGE_CAPABILITIES: MessageCapabilities = {
   canEdit: false,
   canReact: false,
-  // Flipped in Stage 6 (typing.ts). Today the connector returns null from
-  // createTypingAdapter so the actor-status path is a no-op.
-  canTyping: false,
+  // Stage 6: typing.ts returns a per-call adapter+config. Only
+  // effective for direct endpoints; group endpoints return null from
+  // createTypingAdapter so the IM typing controller is a no-op there.
+  canTyping: true,
   // QQ has Inline Keyboard which we render in Stage 8 via the new
   // interaction_prompt part (see G4 + G5). The classic "interactive
   // card" channel (Feishu-style) isn't supported.
