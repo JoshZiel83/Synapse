@@ -378,7 +378,9 @@ async function routeBusinessDispatch(
 ): Promise<void> {
   switch (t) {
     case QQ_EVENT.C2C_MESSAGE_CREATE: {
-      const env = normalizeQqC2cMessage(data as QqC2cMessageEventData)
+      const env = await normalizeQqC2cMessage(data as QqC2cMessageEventData, {
+        accountId: opts.account.id,
+      })
       if (!env) {
         logger.warn("qq-gateway: C2C event missing required fields")
         return
@@ -388,7 +390,10 @@ async function routeBusinessDispatch(
       return
     }
     case QQ_EVENT.GROUP_AT_MESSAGE_CREATE: {
-      const env = normalizeQqGroupAtMessage(data as QqGroupAtMessageEventData)
+      const env = await normalizeQqGroupAtMessage(
+        data as QqGroupAtMessageEventData,
+        { accountId: opts.account.id }
+      )
       if (!env) {
         logger.warn("qq-gateway: GROUP_AT event missing required fields")
         return

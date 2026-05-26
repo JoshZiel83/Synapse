@@ -14,10 +14,12 @@
  *     never carries these (QQ delivers them via WebSocket only).
  */
 
+import { redis } from "../../../../infrastructure/redis/index.js"
 import {
   buildCanonicalMessage,
   textOnlyMessage,
   type CanonicalMessage,
+  type CanonicalPart,
 } from "../../messaging/canonical-message.js"
 import type { InboundEnvelope } from "../types.js"
 import {
@@ -25,6 +27,11 @@ import {
   encodeGroupEndpointExternalId,
   encodeSenderExternalId,
 } from "./address-encoding.js"
+import {
+  getRefIndexEntry,
+  parseRefIndices,
+  setRefIndexEntry,
+} from "./ref-index.js"
 
 interface QqAuthor {
   user_openid?: string
@@ -62,24 +69,55 @@ export interface QqGroupAtMessageEventData {
  * Normalize a C2C_MESSAGE_CREATE payload into an InboundEnvelope.
  * Returns null when required fields are missing (logged at the call
  * site).
+ *
+ * If `accountId` is supplied, this function ALSO:
+ *   - reads `message_scene.ext` for ref_msg_idx; if present + cached,
+ *     prepends a `quote` CanonicalPart with the original sender/content
+ *     so the AI has the referenced context
+ *   - writes a new ref-index entry keyed by `msg_idx` so a future
+ *     "user quotes this message" event can recover the original
+ *
+ * Without `accountId`, ref-index lookups/writes are skipped (back-
+ * compat for callers that already plumb the envelope themselves).
  */
-export function normalizeQqC2cMessage(
-  data: QqC2cMessageEventData
-): InboundEnvelope | null {
+export async function normalizeQqC2cMessage(
+  data: QqC2cMessageEventData,
+  opts?: { accountId?: string }
+): Promise<InboundEnvelope | null> {
   const msgId = trimmed(data.id)
   const userOpenid = trimmed(data.author?.user_openid)
   if (!msgId || !userOpenid) return null
 
-  const message = bodyToCanonical(data.content ?? "")
+  const senderExternalId = encodeSenderExternalId({
+    kind: "c2c",
+    userOpenid,
+  })
+  const parts = await buildPartsWithQuote({
+    accountId: opts?.accountId,
+    rawText: data.content ?? "",
+    ext: data.message_scene?.ext,
+  })
+  const message =
+    parts.length === 0
+      ? buildCanonicalMessage([])
+      : buildCanonicalMessage(parts)
+
+  // Stash this message in the ref-index cache so a future "user quotes
+  // this one" event can recover the original content.
+  await recordSelfRefIndex({
+    accountId: opts?.accountId,
+    ext: data.message_scene?.ext,
+    content: textFromContent(data.content ?? ""),
+    senderExternalId,
+    timestamp: data.timestamp ?? new Date().toISOString(),
+  })
+
   return {
     endpointType: "direct",
     endpointExternalId: encodeDirectEndpointExternalId(userOpenid),
     externalMessageId: msgId,
     sender: {
-      externalId: encodeSenderExternalId({
-        kind: "c2c",
-        userOpenid,
-      }),
+      externalId: senderExternalId,
       metadata: {
         userOpenid,
         unionOpenid: trimmed(data.author?.union_openid),
@@ -99,26 +137,48 @@ export function normalizeQqC2cMessage(
  * Normalize a GROUP_AT_MESSAGE_CREATE payload. Group sender external_id
  * encodes (group_openid, member_openid) so the same human in two groups
  * does not collide.
+ *
+ * Same `accountId`-driven ref-index behavior as C2C.
  */
-export function normalizeQqGroupAtMessage(
-  data: QqGroupAtMessageEventData
-): InboundEnvelope | null {
+export async function normalizeQqGroupAtMessage(
+  data: QqGroupAtMessageEventData,
+  opts?: { accountId?: string }
+): Promise<InboundEnvelope | null> {
   const msgId = trimmed(data.id)
   const groupOpenid = trimmed(data.group_openid)
   const memberOpenid = trimmed(data.author?.member_openid)
   if (!msgId || !groupOpenid || !memberOpenid) return null
 
-  const message = bodyToCanonical(stripLeadingMention(data.content ?? ""))
+  const senderExternalId = encodeSenderExternalId({
+    kind: "group_member",
+    groupOpenid,
+    memberOpenid,
+  })
+  const cleanedText = stripLeadingMention(data.content ?? "")
+  const parts = await buildPartsWithQuote({
+    accountId: opts?.accountId,
+    rawText: cleanedText,
+    ext: data.message_scene?.ext,
+  })
+  const message =
+    parts.length === 0
+      ? buildCanonicalMessage([])
+      : buildCanonicalMessage(parts)
+
+  await recordSelfRefIndex({
+    accountId: opts?.accountId,
+    ext: data.message_scene?.ext,
+    content: textFromContent(cleanedText),
+    senderExternalId,
+    timestamp: data.timestamp ?? new Date().toISOString(),
+  })
+
   return {
     endpointType: "group",
     endpointExternalId: encodeGroupEndpointExternalId(groupOpenid),
     externalMessageId: msgId,
     sender: {
-      externalId: encodeSenderExternalId({
-        kind: "group_member",
-        groupOpenid,
-        memberOpenid,
-      }),
+      externalId: senderExternalId,
       metadata: {
         memberOpenid,
         groupOpenid,
@@ -141,10 +201,73 @@ function trimmed(v: unknown): string | undefined {
   return typeof v === "string" && v.trim() ? v.trim() : undefined
 }
 
-function bodyToCanonical(raw: string): CanonicalMessage {
-  const text = raw.trim()
-  if (!text) return buildCanonicalMessage([])
-  return textOnlyMessage(text)
+function textFromContent(raw: string): string {
+  return raw.trim()
+}
+
+/**
+ * Build canonical parts from raw content, optionally prepending a
+ * `quote` part recovered from the ref-index cache.
+ */
+async function buildPartsWithQuote(params: {
+  accountId: string | undefined
+  rawText: string
+  ext: unknown
+}): Promise<CanonicalPart[]> {
+  const parts: CanonicalPart[] = []
+  if (params.accountId) {
+    const { refMsgIdx } = parseRefIndices({ ext: params.ext })
+    if (refMsgIdx) {
+      const entry = await getRefIndexEntry(redis, {
+        accountId: params.accountId,
+        refIdx: refMsgIdx,
+      }).catch(() => null)
+      if (entry) {
+        parts.push({
+          type: "quote",
+          quoted: {
+            preview: entry.content.slice(0, 500),
+          },
+        })
+      }
+    }
+  }
+  const text = textFromContent(params.rawText)
+  if (text) parts.push({ type: "text", text })
+  return parts
+}
+
+/**
+ * Stash this message in the ref-index cache so a future "user quotes
+ * this message" event can recover its content. No-op when accountId or
+ * msg_idx is missing.
+ */
+async function recordSelfRefIndex(params: {
+  accountId: string | undefined
+  ext: unknown
+  content: string
+  senderExternalId: string
+  timestamp: string
+}): Promise<void> {
+  if (!params.accountId) return
+  const { msgIdx } = parseRefIndices({ ext: params.ext })
+  if (!msgIdx) return
+  await setRefIndexEntry(redis, {
+    accountId: params.accountId,
+    refIdx: msgIdx,
+    entry: {
+      content: params.content,
+      senderId: params.senderExternalId,
+      timestamp: params.timestamp,
+    },
+  }).catch((err) => {
+    // Logging only — losing ref-index is recoverable, the original
+    // message still emits.
+    console.warn(
+      `[im:qq] failed to write ref-index for account ${params.accountId}:`,
+      err
+    )
+  })
 }
 
 /**

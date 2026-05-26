@@ -5,8 +5,8 @@ import {
   normalizeQqGroupAtMessage,
 } from "./normalize.js"
 
-test("C2C: basic text", () => {
-  const env = normalizeQqC2cMessage({
+test("C2C: basic text", async () => {
+  const env = await normalizeQqC2cMessage({
     id: "MSG123",
     author: { user_openid: "USER1" },
     content: "hello world",
@@ -19,16 +19,16 @@ test("C2C: basic text", () => {
   assert.equal(env?.message.plainText, "hello world")
 })
 
-test("C2C: missing id or author → null", () => {
+test("C2C: missing id or author → null", async () => {
   assert.equal(
-    normalizeQqC2cMessage({ id: "", author: { user_openid: "U" } }),
+    await normalizeQqC2cMessage({ id: "", author: { user_openid: "U" } }),
     null
   )
-  assert.equal(normalizeQqC2cMessage({ id: "M", author: {} }), null)
+  assert.equal(await normalizeQqC2cMessage({ id: "M", author: {} }), null)
 })
 
-test("Group @bot: encodes gm:{group}:{member} and strips leading <@…>", () => {
-  const env = normalizeQqGroupAtMessage({
+test("Group @bot: encodes gm:{group}:{member} and strips leading <@…>", async () => {
+  const env = await normalizeQqGroupAtMessage({
     id: "MSG456",
     group_openid: "GRP1",
     author: { member_openid: "MEM1" },
@@ -41,16 +41,16 @@ test("Group @bot: encodes gm:{group}:{member} and strips leading <@…>", () => 
   assert.equal(env?.message.plainText, "hello group")
 })
 
-test("Group @bot: missing group_openid or member_openid → null", () => {
+test("Group @bot: missing group_openid or member_openid → null", async () => {
   assert.equal(
-    normalizeQqGroupAtMessage({
+    await normalizeQqGroupAtMessage({
       id: "M",
       author: { member_openid: "MEM" },
     }),
     null
   )
   assert.equal(
-    normalizeQqGroupAtMessage({
+    await normalizeQqGroupAtMessage({
       id: "M",
       group_openid: "GRP",
       author: {},
@@ -59,8 +59,8 @@ test("Group @bot: missing group_openid or member_openid → null", () => {
   )
 })
 
-test("Empty body produces a message with empty parts (caller decides what to do)", () => {
-  const env = normalizeQqC2cMessage({
+test("Empty body produces a message with empty parts (caller decides what to do)", async () => {
+  const env = await normalizeQqC2cMessage({
     id: "M1",
     author: { user_openid: "U" },
     content: "   ",
@@ -70,8 +70,8 @@ test("Empty body produces a message with empty parts (caller decides what to do)
   assert.equal(env?.message.plainText, "")
 })
 
-test("raw + endpointMetadata preserve QQ-specific fields", () => {
-  const env = normalizeQqGroupAtMessage({
+test("raw + endpointMetadata preserve QQ-specific fields", async () => {
+  const env = await normalizeQqGroupAtMessage({
     id: "M",
     group_openid: "G",
     author: { member_openid: "MEM", union_openid: "UNION" },

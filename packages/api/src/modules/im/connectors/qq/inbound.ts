@@ -211,7 +211,10 @@ async function dispatchBusinessEvent(
 ): Promise<void> {
   switch (envelope.t) {
     case QQ_EVENT.C2C_MESSAGE_CREATE: {
-      const e = normalizeQqC2cMessage(envelope.d as QqC2cMessageEventData)
+      const e = await normalizeQqC2cMessage(
+        envelope.d as QqC2cMessageEventData,
+        { accountId: input.account.id }
+      )
       if (!e) {
         logger?.warn?.("qq: C2C event missing required fields", {
           eventId: envelope.id,
@@ -231,8 +234,9 @@ async function dispatchBusinessEvent(
       return
     }
     case QQ_EVENT.GROUP_AT_MESSAGE_CREATE: {
-      const e = normalizeQqGroupAtMessage(
-        envelope.d as QqGroupAtMessageEventData
+      const e = await normalizeQqGroupAtMessage(
+        envelope.d as QqGroupAtMessageEventData,
+        { accountId: input.account.id }
       )
       if (!e) {
         logger?.warn?.("qq: GROUP_AT event missing required fields", {
