@@ -488,10 +488,19 @@ export async function supersedeRelayAuthorizationGrant(
   await statement.execute()
 }
 
+/**
+ * PR4 (subject-scope refactor): atomic consume of a once-only grant.
+ * Returns true if the UPDATE actually flipped status from 'active' →
+ * 'consumed'; false if the row was already consumed/revoked (lost the
+ * race to another consumer). Callers MUST check the return value when
+ * they care about strict once-only semantics — `findMatchingRelayAuthorizationGrant`
+ * uses this as the signal for its bounded-retry loop so concurrent matches
+ * for the same once grant degrade to "next candidate" instead of double-spend.
+ */
 export async function consumeRelayAuthorizationGrant(
   id: string,
   queryable?: Queryable
-) {
+): Promise<boolean> {
   const statement = db
     .updateTable("relay_authorization_grants")
     .set({
@@ -501,11 +510,15 @@ export async function consumeRelayAuthorizationGrant(
     })
     .where("id", "=", id)
     .where("status", "=", "active")
+    .returning("id")
+  let rows: { id: string }[]
   if (isQueryExecutor(queryable)) {
-    await executeCompiledQuery(queryable, statement)
-    return
+    rows = (await executeCompiledQuery<{ id: string }>(queryable, statement))
+      .rows
+  } else {
+    rows = await statement.execute()
   }
-  await statement.execute()
+  return rows.length > 0
 }
 
 export function filesystemPolicyMatches(
@@ -710,20 +723,41 @@ export async function findMatchingRelayAuthorizationGrant(
       return right.createdAt.localeCompare(left.createdAt)
     })
 
-  const matchedGrant =
-    candidates.find((candidate) =>
-      relayAuthorizationGrantMatches(candidate, params.requestedAction)
-    ) || null
-
-  if (matchedGrant && params.consumeOnce && matchedGrant.scope === "once") {
-    await consumeRelayAuthorizationGrant(matchedGrant.id, queryable)
-    matchedGrant.status = "consumed"
-    matchedGrant.consumedAt = new Date().toISOString()
+  // PR4: bounded-retry consume for once-only grants. The atomic UPDATE in
+  // consumeRelayAuthorizationGrant returns false when another concurrent
+  // matcher consumed the same row first; we then try the next matching
+  // candidate up to MAX_CONSUME_RETRIES times before giving up. This
+  // prevents both double-spend (single grant consumed twice) and the
+  // unbounded-retry storm that would replay every iteration of the loop
+  // under heavy concurrency.
+  const MAX_CONSUME_RETRIES = 3
+  let attempts = 0
+  for (const candidate of candidates) {
+    if (!relayAuthorizationGrantMatches(candidate, params.requestedAction)) {
+      continue
+    }
+    if (!params.consumeOnce || candidate.scope !== "once") {
+      // Non-once grants don't need an atomic claim — return the first match.
+      return { matchedGrant: candidate }
+    }
+    if (attempts >= MAX_CONSUME_RETRIES) {
+      // Bounded retry budget exhausted; treat as no-match (caller will
+      // create a fresh authorization request via the parent flow).
+      return { matchedGrant: null }
+    }
+    attempts += 1
+    const consumed = await consumeRelayAuthorizationGrant(
+      candidate.id,
+      queryable
+    )
+    if (consumed) {
+      candidate.status = "consumed"
+      candidate.consumedAt = new Date().toISOString()
+      return { matchedGrant: candidate }
+    }
+    // Lost the race — try the next candidate.
   }
-
-  return {
-    matchedGrant,
-  }
+  return { matchedGrant: null }
 }
 
 export async function listActiveRelayAuthorizationGrantsForExposure(
