@@ -1467,82 +1467,118 @@ function InteractionCard({
 
         {canResolve ? (
           <div className="space-y-3">
-            <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
-              <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
-                Authorization Range
+            {runtimeAuthorization.grantOptions.length === 0 ? (
+              // v3.1 §clarification #33: scope-less runtime_active_page tools
+              // surface here with grantOptions:[]. Show a manual-grant
+              // explainer instead of a useless empty approve UI.
+              <div className="rounded-2xl border border-amber-500/30 bg-amber-500/10 px-4 py-3 text-sm text-foreground">
+                <div className="text-[11px] font-medium tracking-[0.08em] text-amber-800 uppercase dark:text-amber-300">
+                  Manual grant required
+                </div>
+                <p className="mt-2 text-sm">
+                  This tool needs a target origin/scope you haven&apos;t
+                  granted. Open{" "}
+                  <strong>Settings → Runtime Authorizations</strong> to add a
+                  grant for this capability, then re-trigger the tool.
+                </p>
+                {(() => {
+                  const ra = runtimeAuthorization.requestedAction as {
+                    browser?: { scopeSource?: string }
+                  }
+                  const src = ra.browser?.scopeSource
+                  return src ? (
+                    <p className="mt-2 text-[11px] text-muted-foreground">
+                      scopeSource: <code>{src}</code>
+                    </p>
+                  ) : null
+                })()}
               </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {runtimeAuthorization.grantOptions.map((option) => {
-                  const selected = selectedRuntimeGrantOptionId === option.id
-                  return (
-                    <Button
-                      key={option.id}
-                      type="button"
-                      variant={selected ? "default" : "outline"}
-                      size="sm"
-                      disabled={Boolean(submittingAction)}
-                      onClick={() => setSelectedRuntimeGrantOptionId(option.id)}
-                      className="rounded-full"
-                      title={option.detail}
-                    >
-                      {selected ? (
-                        <CheckCircle2 className="mr-1 h-4 w-4" />
-                      ) : (
-                        <ChevronRight className="mr-1 h-4 w-4" />
-                      )}
-                      {option.summary}
-                    </Button>
-                  )
-                })}
+            ) : (
+              <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
+                <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
+                  Authorization Range
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {runtimeAuthorization.grantOptions.map((option) => {
+                    const selected = selectedRuntimeGrantOptionId === option.id
+                    return (
+                      <Button
+                        key={option.id}
+                        type="button"
+                        variant={selected ? "default" : "outline"}
+                        size="sm"
+                        disabled={Boolean(submittingAction)}
+                        onClick={() =>
+                          setSelectedRuntimeGrantOptionId(option.id)
+                        }
+                        className="rounded-full"
+                        title={option.detail}
+                      >
+                        {selected ? (
+                          <CheckCircle2 className="mr-1 h-4 w-4" />
+                        ) : (
+                          <ChevronRight className="mr-1 h-4 w-4" />
+                        )}
+                        {option.summary}
+                      </Button>
+                    )
+                  })}
+                </div>
               </div>
-            </div>
+            )}
 
-            <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
-              <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
-                Applies To
+            {runtimeAuthorization.grantOptions.length > 0 ? (
+              <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
+                <div className="text-[11px] font-medium tracking-[0.08em] text-muted-foreground/70 uppercase">
+                  Applies To
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {runtimeAuthorization.availablePresets.map((preset) => (
+                    <Badge
+                      key={preset}
+                      variant="outline"
+                      className="rounded-full"
+                    >
+                      {formatRuntimeAuthorizationPresetLabel(preset)}
+                    </Badge>
+                  ))}
+                </div>
               </div>
-              <div className="mt-2 flex flex-wrap gap-2">
-                {runtimeAuthorization.availablePresets.map((preset) => (
-                  <Badge
-                    key={preset}
-                    variant="outline"
-                    className="rounded-full"
-                  >
-                    {formatRuntimeAuthorizationPresetLabel(preset)}
-                  </Badge>
-                ))}
-              </div>
-            </div>
+            ) : null}
 
             <div className="flex flex-wrap items-center gap-2">
-              {runtimeAuthorization.availablePresets.map((preset) => (
-                <Button
-                  key={preset}
-                  type="button"
-                  variant={preset === "once" ? "default" : "outline"}
-                  disabled={
-                    Boolean(submittingAction) || !selectedRuntimeGrantOptionId
-                  }
-                  onClick={() =>
-                    selectedRuntimeGrantOptionId
-                      ? void submitResolution(`approve_${preset}`, {
-                          decision: "approve",
-                          preset,
-                          selectedGrantOptionId: selectedRuntimeGrantOptionId,
-                          note: resolutionNoteDraft.trim() || undefined,
-                        })
-                      : undefined
-                  }
-                  className="rounded-full"
-                >
-                  {submittingAction === `approve_${preset}` ? (
-                    <Loader2 className="mr-1 h-4 w-4 animate-spin" />
-                  ) : (
-                    <CheckCircle2 className="mr-1 h-4 w-4" />
-                  )}
-                  {formatRuntimeAuthorizationPresetLabel(preset)}
-                </Button>
-              ))}
+              {runtimeAuthorization.grantOptions.length > 0
+                ? runtimeAuthorization.availablePresets.map((preset) => (
+                    <Button
+                      key={preset}
+                      type="button"
+                      variant={preset === "once" ? "default" : "outline"}
+                      disabled={
+                        Boolean(submittingAction) ||
+                        !selectedRuntimeGrantOptionId
+                      }
+                      onClick={() =>
+                        selectedRuntimeGrantOptionId
+                          ? void submitResolution(`approve_${preset}`, {
+                              decision: "approve",
+                              preset,
+                              selectedGrantOptionId:
+                                selectedRuntimeGrantOptionId,
+                              note: resolutionNoteDraft.trim() || undefined,
+                            })
+                          : undefined
+                      }
+                      className="rounded-full"
+                    >
+                      {submittingAction === `approve_${preset}` ? (
+                        <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                      ) : (
+                        <CheckCircle2 className="mr-1 h-4 w-4" />
+                      )}
+                      {formatRuntimeAuthorizationPresetLabel(preset)}
+                    </Button>
+                  ))
+                : null}
               <Button
                 type="button"
                 variant="outline"

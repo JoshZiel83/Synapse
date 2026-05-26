@@ -39,6 +39,12 @@ export interface DeviceCapabilitySummaryView {
     | "failed"
     | "quarantined"
     | "offline"
+  /**
+   * v3.1: exposure-level metadata pass-through. chrome-devtools-mcp provider
+   * publishes `{enabled: boolean, disabledReason?: string, schemaVersion: string}`
+   * so the dashboard can render disabled / "Coming soon" rows.
+   */
+  metadata?: Record<string, unknown> | null
 }
 
 export interface DeviceDetailView extends DeviceSummaryView {
