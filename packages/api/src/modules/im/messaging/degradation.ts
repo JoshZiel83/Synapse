@@ -31,6 +31,24 @@ export interface MessageCapabilities {
   supportsReply: boolean
   supportsImage: boolean
   supportsFile: boolean
+  /** Native voice (audio) attachment send. Connectors that have only
+   *  generic file upload (and that's how voice would have to be sent) set
+   *  this false; degradation drops voice → system_marker(voice_placeholder)
+   *  with the transcript if present. */
+  supportsVoice: boolean
+  /** Native video attachment send. */
+  supportsVideo: boolean
+  /**
+   * Native server-side "approval card" with clickable buttons that produce
+   * a callback this connector can route back to `resolveInteractionRequest`.
+   * For QQ this is Inline Keyboard + INTERACTION_CREATE. For Feishu this
+   * would be a card with action elements (not implemented in v1; keep
+   * false until the Feishu renderer learns the new part).
+   *
+   * When false, degradation rewrites `interaction_prompt` parts to the
+   * part's `fallbackText` so the user at least sees a notice.
+   */
+  supportsInteractionPrompt: boolean
   maxTextBytes: number
   /**
    * How to pick the recipient address for a mention sent to a direct (1:1)
@@ -102,6 +120,25 @@ function degradePart(
           original: { fileRef: part.fileRef },
         },
       ]
+    case "voice":
+      if (caps.supportsVoice) return [part]
+      return [
+        {
+          type: "system_marker",
+          marker: "voice_placeholder",
+          label: part.transcript ? `[语音 ${part.transcript}]` : undefined,
+          original: { fileRef: part.fileRef, durationMs: part.durationMs },
+        },
+      ]
+    case "video":
+      if (caps.supportsVideo) return [part]
+      return [
+        {
+          type: "system_marker",
+          marker: "video_placeholder",
+          original: { fileRef: part.fileRef, durationMs: part.durationMs },
+        },
+      ]
     case "file":
       if (caps.supportsFile) return [part]
       return [
@@ -120,6 +157,16 @@ function degradePart(
     case "reaction":
       if (caps.canReact) return [part]
       return [] // dropped silently
+    case "interaction_prompt":
+      if (caps.supportsInteractionPrompt) return [part]
+      return [
+        {
+          type: "text",
+          text: part.title
+            ? `${part.title}\n${part.fallbackText}`
+            : part.fallbackText,
+        },
+      ]
     case "system_marker":
       return [part]
   }

@@ -27,6 +27,9 @@ export const WECOM_MESSAGE_CAPABILITIES: MessageCapabilities = {
   supportsReply: false,
   supportsImage: false,
   supportsFile: false,
+  supportsVoice: false,
+  supportsVideo: false,
+  supportsInteractionPrompt: false,
   maxTextBytes: 0,
   directMentionPolicy: "attached_only",
 }

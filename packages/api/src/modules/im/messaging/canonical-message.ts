@@ -42,6 +42,19 @@ export type CanonicalPart =
       displayName: string
     }
   | { type: "image"; fileRef: CanonicalFileRef }
+  | {
+      type: "voice"
+      fileRef: CanonicalFileRef
+      durationMs?: number
+      transcript?: string
+    }
+  | {
+      type: "video"
+      fileRef: CanonicalFileRef
+      durationMs?: number
+      width?: number
+      height?: number
+    }
   | { type: "file"; fileRef: CanonicalFileRef & { name: string } }
   | {
       type: "card"
@@ -57,6 +70,30 @@ export type CanonicalPart =
       type: "reaction"
       emoji: string
       target: { externalMessageId: string }
+    }
+  | {
+      /**
+       * Server-side projection of an `interaction_requests` row into a
+       * conversation. Carries the interaction id + a set of action
+       * tokens that the receiving connector renders as a native control
+       * (e.g. QQ Inline Keyboard buttons). The token is opaque to the
+       * connector and is redeemed at click time via
+       * `redeemActionToken(...)` to recover the full
+       * ResolveInteractionRequestParams payload.
+       *
+       * `fallbackText` is mandatory and rendered verbatim by connectors
+       * that don't support `supportsInteractionPrompt`.
+       */
+      type: "interaction_prompt"
+      interactionRequestId: string
+      title?: string
+      fallbackText: string
+      options: Array<{
+        id: string
+        label: string
+        actionToken: string
+        style?: "primary" | "danger" | "default"
+      }>
     }
   | {
       type: "system_marker"
@@ -131,6 +168,12 @@ function renderPartAsPlainText(part: CanonicalPart): string {
       return `@${part.displayName}`
     case "image":
       return SYSTEM_MARKER_LABELS.image_placeholder
+    case "voice":
+      return part.transcript
+        ? `[语音 ${part.transcript}]`
+        : SYSTEM_MARKER_LABELS.voice_placeholder
+    case "video":
+      return SYSTEM_MARKER_LABELS.video_placeholder
     case "file":
       return part.fileRef.name
         ? `[文件 ${part.fileRef.name}]`
@@ -141,6 +184,10 @@ function renderPartAsPlainText(part: CanonicalPart): string {
       return part.quoted.preview ? `> ${part.quoted.preview}` : ""
     case "reaction":
       return part.emoji
+    case "interaction_prompt":
+      return part.title
+        ? `${part.title}\n${part.fallbackText}`
+        : part.fallbackText
     case "system_marker":
       return part.label || SYSTEM_MARKER_LABELS[part.marker]
   }
@@ -214,12 +261,105 @@ function parsePart(input: unknown): CanonicalPart | null {
     }
     case "image":
       return { type: "image", fileRef: parseFileRef(raw.fileRef) }
+    case "voice": {
+      const part: CanonicalPart & { type: "voice" } = {
+        type: "voice",
+        fileRef: parseFileRef(raw.fileRef),
+      }
+      if (typeof raw.durationMs === "number") {
+        part.durationMs = raw.durationMs
+      }
+      if (typeof raw.transcript === "string") {
+        part.transcript = raw.transcript
+      }
+      return part
+    }
+    case "video": {
+      const part: CanonicalPart & { type: "video" } = {
+        type: "video",
+        fileRef: parseFileRef(raw.fileRef),
+      }
+      if (typeof raw.durationMs === "number") {
+        part.durationMs = raw.durationMs
+      }
+      if (typeof raw.width === "number") {
+        part.width = raw.width
+      }
+      if (typeof raw.height === "number") {
+        part.height = raw.height
+      }
+      return part
+    }
     case "file": {
       const fileRef = parseFileRef(raw.fileRef)
       return {
         type: "file",
         fileRef: { ...fileRef, name: fileRef.name || "file" },
       }
+    }
+    case "interaction_prompt": {
+      const interactionRequestId =
+        typeof raw.interactionRequestId === "string" &&
+        raw.interactionRequestId.trim()
+          ? raw.interactionRequestId
+          : ""
+      if (!interactionRequestId) {
+        // No anchor — degrade to system_marker so it survives roundtrip
+        // but can never be acted on.
+        return {
+          type: "system_marker",
+          marker: "unknown_placeholder",
+          original: raw,
+        }
+      }
+      const fallbackText =
+        typeof raw.fallbackText === "string" && raw.fallbackText.trim()
+          ? raw.fallbackText.trim().slice(0, 5000)
+          : "需要审批，请回到 Synapse dashboard 处理"
+      const optionsRaw = Array.isArray(raw.options) ? raw.options : []
+      const options: Array<{
+        id: string
+        label: string
+        actionToken: string
+        style?: "primary" | "danger" | "default"
+      }> = []
+      for (const candidate of optionsRaw) {
+        if (
+          !candidate ||
+          typeof candidate !== "object" ||
+          Array.isArray(candidate)
+        ) {
+          continue
+        }
+        const c = candidate as Record<string, unknown>
+        const id = typeof c.id === "string" ? c.id : ""
+        const label = typeof c.label === "string" ? c.label : ""
+        const actionToken =
+          typeof c.actionToken === "string" ? c.actionToken : ""
+        if (!id || !label || !actionToken) continue
+        const style =
+          c.style === "primary" || c.style === "danger" || c.style === "default"
+            ? (c.style as "primary" | "danger" | "default")
+            : undefined
+        const option: {
+          id: string
+          label: string
+          actionToken: string
+          style?: "primary" | "danger" | "default"
+        } = { id, label, actionToken }
+        if (style) option.style = style
+        options.push(option)
+      }
+      const part: CanonicalPart & { type: "interaction_prompt" } = {
+        type: "interaction_prompt",
+        interactionRequestId,
+        fallbackText,
+        options,
+      }
+      if (typeof raw.title === "string" && raw.title.trim()) {
+        part.title = raw.title.trim().slice(0, 500)
+      }
+      return part
     }
     case "card": {
       const schema =
@@ -303,15 +443,15 @@ function parseFileRef(input: unknown): CanonicalFileRef {
     return {}
   }
   const raw = input as Record<string, unknown>
-  return {
-    fileId: typeof raw.fileId === "string" ? raw.fileId : undefined,
-    url: typeof raw.url === "string" ? raw.url : undefined,
-    mime: typeof raw.mime === "string" ? raw.mime : undefined,
-    name: typeof raw.name === "string" ? raw.name : undefined,
-    sizeBytes: typeof raw.sizeBytes === "number" ? raw.sizeBytes : undefined,
-    width: typeof raw.width === "number" ? raw.width : undefined,
-    height: typeof raw.height === "number" ? raw.height : undefined,
-  }
+  const out: CanonicalFileRef = {}
+  if (typeof raw.fileId === "string") out.fileId = raw.fileId
+  if (typeof raw.url === "string") out.url = raw.url
+  if (typeof raw.mime === "string") out.mime = raw.mime
+  if (typeof raw.name === "string") out.name = raw.name
+  if (typeof raw.sizeBytes === "number") out.sizeBytes = raw.sizeBytes
+  if (typeof raw.width === "number") out.width = raw.width
+  if (typeof raw.height === "number") out.height = raw.height
+  return out
 }
 
 function isSystemMarker(input: unknown): input is CanonicalSystemMarker {
