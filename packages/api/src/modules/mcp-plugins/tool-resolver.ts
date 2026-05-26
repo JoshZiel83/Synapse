@@ -16,6 +16,7 @@ import { sql } from "kysely"
 import { lookupResources } from "../access/evaluator.js"
 import { ACCESS_ACTIONS } from "../access/actions.js"
 import { db } from "../../infrastructure/database/kysely.js"
+import { assertLegacyTargetType } from "../access/bindings.js"
 import { loadAccessBindingRowsForResources } from "../access/binding-storage.js"
 import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
@@ -408,7 +409,7 @@ async function loadVisibleAccessBindings(params: {
       workspace_id: row.workspace_id,
       resource_type: params.resourceType,
       resource_id: row.resource_id,
-      target_type: row.target_type,
+      target_type: assertLegacyTargetType(row.target_type),
       subject_workspace_id: row.subject_workspace_id,
       subject_workspace_member_id: row.subject_workspace_member_id,
       subject_actor_id: row.subject_actor_id,

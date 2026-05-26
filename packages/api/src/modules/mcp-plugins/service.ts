@@ -16,6 +16,7 @@ import type {
   AttachmentTargetType,
   CapabilityAccessTarget,
   CapabilityAccessTargetType,
+  LegacyCapabilityAccessTarget,
 } from "@synapse/shared/types"
 import type {
   PluginAuthBindingDefinition,
@@ -895,6 +896,21 @@ function buildInstallationAccessRow(
   row: AccessBindingRow
 ): InstallationAccessRow {
   const target = readAccessBindingTarget(row)
+  if ("subject" in target) {
+    // PR2: scoped-subject grants don't have a legacy access_target_type
+    // representation. mcp-plugins/service hasn't been widened to consume the
+    // new variant yet (PR4 handles that on the relay side; UI in PR6); for
+    // now we fall back to a workspace-shaped row so the rest of the pipeline
+    // doesn't blow up. The actual subject lives on row.subject_id.
+    return {
+      ...row,
+      installation_id: row.resource_id,
+      access_target_type: "workspace",
+      actor_id: null,
+      conversation_id: null,
+      workspace_member_id: null,
+    }
+  }
   return {
     ...row,
     installation_id: row.resource_id,
@@ -1069,7 +1085,7 @@ function buildPluginGrantPlan(input: {
 
 function defaultAccessTargetForAttachment(
   attachmentTarget: AttachmentTarget
-): CapabilityAccessTarget {
+): LegacyCapabilityAccessTarget {
   switch (attachmentTarget.type) {
     case "workspace":
       return { type: "workspace" }
@@ -1093,7 +1109,7 @@ function capabilityAccessTargetFromStored(input: {
   actorId?: string | null
   conversationId?: string | null
   workspaceMemberId?: string | null
-}): CapabilityAccessTarget {
+}): LegacyCapabilityAccessTarget {
   switch (input.targetType || "workspace") {
     case "workspace":
       return { type: "workspace" }
@@ -2371,10 +2387,21 @@ export async function grantPluginInstallationAccess(input: {
   const accessRows = await listAccessRows(input.installationId)
 
   const resolvedAccessTarget = input.accessTarget || installation.access_target
-  const accessTarget = await resolveAccessGrantTarget({
+  const accessTargetResolved = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: resolvedAccessTarget,
   })
+  // PR2: mcp-plugins/service hasn't been widened to consume scoped-subject
+  // grants yet (PR4 + PR6 work). Fail loud at the service boundary if a UI
+  // caller starts sending the new variant before the rest of this module
+  // catches up.
+  if ("subject" in accessTargetResolved) {
+    throw new McpPluginError(
+      400,
+      `Scoped-subject access grants are not yet supported for plugin installations (subject.kind=${accessTargetResolved.subject.kind}).`
+    )
+  }
+  const accessTarget = accessTargetResolved
   const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
     installation.conversation_type_mask_override ?? null

@@ -41,9 +41,13 @@ export type SubjectRef =
   | { readonly kind: typeof SUBJECT_KIND.SYSTEM }
 
 /**
- * Workspace-scoped subjects only — the variants that can hold an explicit
- * binding on `resource_access_bindings`. Maps 1:1 to ACCESS_TARGET_TYPES values
- * (with `actor_in_conversation` represented by the conversation_actor_context kind).
+ * Workspace-scoped subjects only — the variants that can be referenced from
+ * authorization rows. Maps 1:1 to ACCESS_TARGET_TYPES values plus the
+ * `remote_agent` kind which (as of PR2 of the subject-scope refactor) travels
+ * exclusively through the new `ScopedSubjectTarget` variant of AccessGrantTarget
+ * — it is intentionally NOT in `ACCESS_TARGET_TYPES` / `CAPABILITY_ACCESS_TARGET_TYPES`
+ * so the legacy projection layer in `bindings.ts` does not have to grow another
+ * column.
  */
 export type AccessTargetRef = Extract<
   SubjectRef,
@@ -53,6 +57,7 @@ export type AccessTargetRef = Extract<
       | typeof SUBJECT_KIND.WORKSPACE_MEMBER
       | typeof SUBJECT_KIND.CONVERSATION
       | typeof SUBJECT_KIND.ACTOR
+      | typeof SUBJECT_KIND.REMOTE_AGENT
       | typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
   }
 >

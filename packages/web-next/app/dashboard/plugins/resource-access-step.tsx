@@ -371,12 +371,33 @@ function getScopeLabel(scope: PluginGrantScope) {
   }
 }
 
+/**
+ * PR2: legacy callers want a single `targetType` string but `grant.target`
+ * may now be a scoped-subject variant (PR6 surfaces full UI). For the
+ * transition period the table view treats scoped grants as "workspace" so
+ * the legacy columns degrade gracefully.
+ */
+function legacyTargetTypeOf(
+  target: ResourceAccessGrant["target"]
+): CapabilityAccessTargetType {
+  if (target && "subject" in target) return "workspace"
+  return target?.type || "workspace"
+}
+
 function formatGrantTarget(
   grant: ResourceAccessGrant,
   actorsById: Map<string, string>,
   conversationsById: Map<string, string>
 ) {
   const target = grant.target
+  if (target && "subject" in target) {
+    // PR2: scoped-subject grants — PR6 will replace this with a richer
+    // <SubjectPicker /> renderer. For now show a minimal subject + scope
+    // summary so the row stays informative.
+    const subjectLabel = `${target.subject.kind}`
+    const scopeLabel = target.scope ? ` (in ${target.scope.kind})` : ""
+    return `${subjectLabel}${scopeLabel}`
+  }
   switch (target?.type) {
     case "workspace":
       return "Entire workspace"
@@ -914,7 +935,12 @@ export default function ResourceAccessStep({
   const hasConversationScopedGrants = useMemo(
     () =>
       grants.some((grant) => {
-        const targetType = grant.target?.type
+        const target = grant.target
+        if (target && "subject" in target) {
+          // PR2: scoped-subject grants with a conversation scope count.
+          return target.scope?.kind === "conversation"
+        }
+        const targetType = target?.type
         return (
           targetType === "conversation" ||
           targetType === "actor_in_conversation"
@@ -1277,6 +1303,11 @@ export default function ResourceAccessStep({
 
     for (const grant of grants) {
       const target = grant.target
+      if (target && "subject" in target) {
+        // PR2: scoped-subject grants — skip the legacy conversation validator.
+        // The richer validator lands with the SubjectPicker rewrite (PR6).
+        continue
+      }
       if (
         target?.type !== "conversation" &&
         target?.type !== "actor_in_conversation"
@@ -1500,7 +1531,7 @@ export default function ResourceAccessStep({
 
   const openGrantConversationTypeDialog = (grant: ResourceAccessGrant) => {
     if (
-      !supportsGrantConversationTypeOverride(grant.target?.type || "workspace")
+      !supportsGrantConversationTypeOverride(legacyTargetTypeOf(grant.target))
     ) {
       return
     }
@@ -1952,7 +1983,7 @@ export default function ResourceAccessStep({
                 grants.map((grant) => (
                   <TableRow key={grant.id}>
                     <TableCell className="px-6 font-medium">
-                      {getScopeLabel(grant.target?.type || "workspace")}
+                      {getScopeLabel(legacyTargetTypeOf(grant.target))}
                     </TableCell>
                     <TableCell className="max-w-0">
                       <div className="truncate">
@@ -1965,7 +1996,7 @@ export default function ResourceAccessStep({
                     </TableCell>
                     <TableCell className="max-w-0">
                       {supportsGrantConversationTypeOverride(
-                        grant.target?.type || "workspace"
+                        legacyTargetTypeOf(grant.target)
                       ) ? (
                         <div className="space-y-1">
                           <div className="truncate">
@@ -1987,7 +2018,9 @@ export default function ResourceAccessStep({
                       ) : (
                         <div className="space-y-1">
                           <div className="truncate">
-                            {grant.target?.conversationId &&
+                            {grant.target &&
+                            !("subject" in grant.target) &&
+                            grant.target.conversationId &&
                             conversationsById.get(grant.target.conversationId)
                               ? formatConversationTypeLabel(
                                   conversationsById.get(
@@ -2009,7 +2042,7 @@ export default function ResourceAccessStep({
                       <div className="flex justify-end gap-2">
                         {canManageGrantConversationTypes &&
                         supportsGrantConversationTypeOverride(
-                          grant.target?.type || "workspace"
+                          legacyTargetTypeOf(grant.target)
                         ) ? (
                           <Button
                             variant="ghost"
@@ -2292,7 +2325,7 @@ export default function ResourceAccessStep({
               </div>
               <div className="mt-1 text-sm text-muted-foreground">
                 {editingGrant
-                  ? getScopeLabel(editingGrant.target?.type || "workspace")
+                  ? getScopeLabel(legacyTargetTypeOf(editingGrant.target))
                   : "Grant"}
               </div>
             </div>

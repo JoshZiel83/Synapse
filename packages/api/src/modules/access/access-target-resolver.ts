@@ -1,9 +1,9 @@
 /**
  * Async resolver: takes an application-layer AccessTarget (workspace /
- * conversation / actor / actor_in_conversation) and resolves it into the
- * concrete AccessGrantTarget shape. The actor_in_conversation case requires
- * looking up or creating a conversation_actor_context, hence the dependency
- * on session/service.
+ * conversation / actor / actor_in_conversation, or the new scoped-subject
+ * variant) and resolves it into the concrete AccessGrantTarget shape. The
+ * actor_in_conversation legacy case requires looking up or creating a
+ * conversation_actor_context, hence the dependency on session/service.
  *
  * Lives in its own file (instead of bindings.ts) so that the pure-function
  * decoders / encoders can be imported in tests without triggering the heavy
@@ -11,6 +11,7 @@
  */
 
 import type { AccessTarget } from "@synapse/shared/types"
+import { isScopeEligibleSubject } from "@synapse/shared"
 import { ensureConversationActorContext } from "../session/service.js"
 import type { AccessGrantTarget } from "./bindings.js"
 
@@ -18,6 +19,18 @@ export async function resolveAccessGrantTarget(input: {
   workspaceId: string
   target: AccessTarget
 }): Promise<AccessGrantTarget> {
+  // PR2: scoped-subject input bypasses the legacy switch — it already carries
+  // the canonical SubjectRef + optional scope SubjectRef. We only validate the
+  // scope kind here so misuse fails fast at the resolver boundary rather than
+  // at the DB trigger.
+  if ("subject" in input.target) {
+    if (input.target.scope && !isScopeEligibleSubject(input.target.scope)) {
+      throw new Error(
+        `scope_subject_id must be workspace | conversation, got ${input.target.scope.kind}`
+      )
+    }
+    return input.target
+  }
   switch (input.target.type) {
     case "workspace":
       return {
@@ -87,7 +100,7 @@ export async function resolveAccessGrantTarget(input: {
       }
     default:
       throw new Error(
-        `Unsupported access target type: ${String(input.target.type)}`
+        `Unsupported access target type: ${String((input.target as { type?: string }).type)}`
       )
   }
 }

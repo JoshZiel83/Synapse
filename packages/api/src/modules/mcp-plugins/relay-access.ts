@@ -8,6 +8,7 @@ import {
 } from "../../infrastructure/database/kysely.js"
 import {
   accessBindingHasTarget,
+  assertLegacyTargetType,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   type AccessBindingRow,
@@ -268,10 +269,19 @@ export async function grantRelayExposureAccess(input: {
     capabilityConversationTypeMaskOverride:
       exposure.capability_conversation_type_mask_override,
   })
-  const target = await resolveAccessGrantTarget({
+  const targetResolved = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: input.accessTarget || { type: "workspace" },
   })
+  // PR2: relay-access still on the legacy path. PR4 will widen this when
+  // the relay-authorization rewrite makes scoped-subject grants first-class.
+  if ("subject" in targetResolved) {
+    throw buildRelayGrantPolicyError(
+      "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
+      `Scoped-subject access grants are not yet supported here (subject.kind=${targetResolved.subject.kind}).`
+    )
+  }
+  const target = targetResolved
   assertGrantConversationTypeOverrideAllowed({
     targetType: target.targetType,
     parentConversationTypeMask: effectiveConversationTypeMask,
@@ -429,7 +439,7 @@ export async function updateRelayExposurePolicy(input: {
   for (const accessRow of accessRows) {
     await validateConversationScopedAccessTarget({
       db,
-      targetType: accessRow.target_type,
+      targetType: assertLegacyTargetType(accessRow.target_type),
       conversationId: accessRow.subject_conversation_id,
       actorId: accessRow.subject_actor_id,
       effectiveConversationTypeMask: nextEffectiveConversationTypeMask,
@@ -507,7 +517,7 @@ export async function updateRelayExposureAccessGrant(input: {
 
   if (input.conversationTypeMaskOverride !== undefined) {
     assertGrantConversationTypeOverrideAllowed({
-      targetType: existing.target_type,
+      targetType: assertLegacyTargetType(existing.target_type),
       parentConversationTypeMask: effectiveConversationTypeMask,
       conversationTypeMaskOverride: input.conversationTypeMaskOverride,
       buildError: (message) =>
@@ -520,7 +530,7 @@ export async function updateRelayExposureAccessGrant(input: {
     })
     await validateConversationScopedAccessTarget({
       db,
-      targetType: existing.target_type,
+      targetType: assertLegacyTargetType(existing.target_type),
       conversationId: existing.subject_conversation_id,
       actorId: existing.subject_actor_id,
       effectiveConversationTypeMask,

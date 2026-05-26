@@ -106,6 +106,7 @@ import {
   TRANSPORT_KINDS,
 } from "../constants/enums.js"
 import type { ChatTypingState } from "../constants/enums.js"
+import type { ScopedSubjectTarget } from "../access/subject.js"
 import type {
   FilesystemPolicy as FilesystemPolicyBase,
   CUAPolicy as CUAPolicyBase,
@@ -2492,19 +2493,34 @@ export interface AttachmentTarget {
   workspaceMemberId?: string
 }
 
-export interface AccessTarget {
+export interface LegacyAccessTarget {
   type: AccessTargetType
   actorId?: string
   conversationId?: string
   workspaceMemberId?: string
 }
 
-export interface CapabilityAccessTarget {
+export interface LegacyCapabilityAccessTarget {
   type: CapabilityAccessTargetType
   actorId?: string
   conversationId?: string
   workspaceMemberId?: string
 }
+
+/**
+ * PR2 (subject-scope refactor): AccessTarget becomes a true union of the legacy
+ * shape (discriminated by `type`) and the new scoped-subject shape (discriminated
+ * by the presence of `subject`). Consumers MUST type-guard with
+ * `if ("subject" in target)` before destructuring legacy fields.
+ *
+ * PR7 will drop `LegacyAccessTarget` and the named alias will collapse to
+ * just `ScopedSubjectTarget`.
+ */
+export type AccessTarget = LegacyAccessTarget | ScopedSubjectTarget
+
+export type CapabilityAccessTarget =
+  | LegacyCapabilityAccessTarget
+  | ScopedSubjectTarget
 
 export interface PluginAuthValueSource {
   source: "config" | "env" | "literal" | "derived"

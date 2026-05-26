@@ -1416,6 +1416,12 @@ function automationEventSourceGrantApplies(params: {
   }
 
   const target = readAccessBindingTarget(params.row)
+  if ("subject" in target) {
+    // PR2: automation hasn't widened to scoped-subject grants yet.
+    // Conservative deny — these rows shouldn't exist on automation event
+    // sources until PR4+ writes them.
+    return false
+  }
   switch (target.targetType) {
     case "workspace":
       return (
@@ -1532,6 +1538,18 @@ export async function listAutomationEventSourceAccessState(
 }
 
 async function getBindingTargetConversation(target: CapabilityAccessTarget) {
+  if ("subject" in target) {
+    // PR2: scoped-subject grant — extract conversation from the scope field if
+    // present; otherwise no conversation-bound resolution needed.
+    if (target.scope && target.scope.kind === "conversation") {
+      const conversation = await getConversation(target.scope.conversationId)
+      if (!conversation) {
+        throw new Error(`Conversation ${target.scope.conversationId} not found`)
+      }
+      return conversation
+    }
+    return null
+  }
   if (
     target.type !== "conversation" &&
     target.type !== "actor_in_conversation"

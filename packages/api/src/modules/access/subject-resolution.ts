@@ -1,4 +1,4 @@
-import { SUBJECT_KIND } from "@synapse/shared"
+import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import type { PermissionSubject } from "./evaluator.js"
 import { upsertAccessSubject } from "./subject-registry.js"
@@ -101,6 +101,136 @@ export async function isRemoteAgentActiveConversationParticipant(
     .limit(1)
     .executeTakeFirst()
   return Boolean(row)
+}
+
+/**
+ * PR2: generic active-participant check, replacing the kind-specific
+ * `isActorActiveConversationParticipant` / `isRemoteAgentActiveConversationParticipant`
+ * helpers. Works for any participant kind backed by `conversation_participants.subject_id`
+ * — actor / remote_agent / workspace_member / external / system. Used by:
+ *   - `buildRuntimePrincipalContext` (PR2) to decide whether to add the
+ *     conversation subject_id to `runtimeScopeSubjectIds`.
+ *   - `hasConversationPermission` (PR3) to evaluate `subject=conversation`
+ *     grants without re-implementing the membership check per principal kind.
+ */
+export async function isSubjectActiveConversationParticipant(
+  db: KyselyDb,
+  conversationId: string,
+  subjectId: string
+): Promise<boolean> {
+  const row = await db
+    .selectFrom("conversation_participants")
+    .select("id")
+    .where("conversation_id", "=", conversationId)
+    .where("subject_id", "=", subjectId)
+    .where("state", "=", "active")
+    .limit(1)
+    .executeTakeFirst()
+  return Boolean(row)
+}
+
+/**
+ * PR2: structured runtime principal context expressed in subject_id terms.
+ *
+ * `runtimeSubjectIds` is the set of access_subjects.id values that, treated
+ * as a grant subject, the principal can claim under right now. It always
+ * contains the principal's own subject_id, the current workspace subject_id,
+ * the conversation subject_id (if the principal is an active participant),
+ * and — *only* if the caller explicitly passes `delegatedWorkspaceMemberId`
+ * AND the row belongs to the current workspace — the workspace_member
+ * subject_id.
+ *
+ * Critical security property: `runtimeSubjectIds` MUST NOT auto-include the
+ * `actors.created_by_workspace_member_id` / `remote_agents.created_by_workspace_member_id`
+ * — that would let an actor inherit its creator's `subject=workspace_member`
+ * grants (including user_private memory). Delegation is an explicit-act-on-behalf
+ * contract, surfaced via `delegatedWorkspaceMemberId`.
+ *
+ * `runtimeScopeSubjectIds` is the subset used as the right-hand side of a
+ * `scope_subject_id` match: the current workspace subject_id, plus the
+ * conversation subject_id when the principal is an active participant.
+ */
+export type RuntimePrincipalContext = {
+  principal: SubjectRef
+  runtimeSubjectIds: string[]
+  runtimeScopeSubjectIds: string[]
+  runtimeConversationId?: string
+}
+
+export async function buildRuntimePrincipalContext(
+  db: KyselyDb,
+  params: {
+    principal: SubjectRef
+    workspaceId: string
+    conversationId?: string | null
+    /**
+     * Explicit delegation: "this request acts on behalf of the named
+     * workspace_member". Builder validates that the member exists AND belongs
+     * to `workspaceId`; throws otherwise. Callers MUST set this only when
+     * they are confident the delegation matches the authenticated user.
+     */
+    delegatedWorkspaceMemberId?: string | null
+  }
+): Promise<RuntimePrincipalContext> {
+  const runtimeSubjectIds: string[] = []
+  const runtimeScopeSubjectIds: string[] = []
+
+  const principalSubjectId = await upsertAccessSubject(db, params.principal)
+  runtimeSubjectIds.push(principalSubjectId)
+
+  const workspaceSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE,
+    workspaceId: params.workspaceId,
+  })
+  runtimeSubjectIds.push(workspaceSubjectId)
+  runtimeScopeSubjectIds.push(workspaceSubjectId)
+
+  if (params.conversationId) {
+    const isActive = await isSubjectActiveConversationParticipant(
+      db,
+      params.conversationId,
+      principalSubjectId
+    )
+    if (isActive) {
+      const convSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: params.conversationId,
+      })
+      runtimeSubjectIds.push(convSubjectId)
+      runtimeScopeSubjectIds.push(convSubjectId)
+    }
+  }
+
+  if (params.delegatedWorkspaceMemberId) {
+    const member = await db
+      .selectFrom("workspace_members")
+      .select(["id", "workspace_id"])
+      .where("id", "=", params.delegatedWorkspaceMemberId)
+      .limit(1)
+      .executeTakeFirst()
+    if (!member) {
+      throw new Error(
+        `delegatedWorkspaceMemberId ${params.delegatedWorkspaceMemberId} not found`
+      )
+    }
+    if (member.workspace_id !== params.workspaceId) {
+      throw new Error(
+        `delegatedWorkspaceMemberId ${params.delegatedWorkspaceMemberId} belongs to workspace ${member.workspace_id}, not ${params.workspaceId}`
+      )
+    }
+    const memberSubjectId = await upsertAccessSubject(db, {
+      kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+      memberId: params.delegatedWorkspaceMemberId,
+    })
+    runtimeSubjectIds.push(memberSubjectId)
+  }
+
+  return {
+    principal: params.principal,
+    runtimeSubjectIds: Array.from(new Set(runtimeSubjectIds)),
+    runtimeScopeSubjectIds: Array.from(new Set(runtimeScopeSubjectIds)),
+    runtimeConversationId: params.conversationId ?? undefined,
+  }
 }
 
 export async function buildConversationCapabilitySubjects(

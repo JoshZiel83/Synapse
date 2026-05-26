@@ -17,6 +17,7 @@ import type {
   AccessBindableResourceType,
   AccessGrantTarget,
 } from "./bindings.js"
+import { accessGrantTargetScopeRef } from "./bindings.js"
 
 export type AccessBindingSource =
   | "manual"
@@ -51,6 +52,10 @@ export async function buildResourceAccessBindingInsertValues(
 ): Promise<TableInsert<"resource_access_bindings">> {
   const ref = accessGrantTargetToSubjectRefLocal(input.target)
   const subjectId = await upsertAccessSubject(db, ref)
+  const scopeRef = accessGrantTargetScopeRef(input.target)
+  const scopeSubjectId = scopeRef
+    ? await upsertAccessSubject(db, scopeRef)
+    : null
   return {
     workspace_id: input.workspaceId,
     resource_type: input.resourceType,
@@ -68,6 +73,7 @@ export async function buildResourceAccessBindingInsertValues(
     remote_agent_id:
       input.resourceType === "remote_agent" ? input.resourceId : null,
     subject_id: subjectId,
+    scope_subject_id: scopeSubjectId,
     conversation_type_mask_override: input.conversationTypeMaskOverride ?? null,
     status: "active" as const,
     source: input.source ?? "manual",
@@ -79,6 +85,9 @@ export async function buildResourceAccessBindingInsertValues(
 function accessGrantTargetToSubjectRefLocal(
   target: AccessGrantTarget
 ): SubjectRef {
+  if ("subject" in target) {
+    return target.subject
+  }
   switch (target.targetType) {
     case "workspace":
       return {
@@ -243,6 +252,10 @@ export async function buildResourceAccessBindingInsertValuesOn(
 ): Promise<TableInsert<"resource_access_bindings">> {
   const ref = accessGrantTargetToSubjectRefLocal(input.target)
   const subjectId = await upsertAccessSubjectOn(client, ref)
+  const scopeRef = accessGrantTargetScopeRef(input.target)
+  const scopeSubjectId = scopeRef
+    ? await upsertAccessSubjectOn(client, scopeRef)
+    : null
   return {
     workspace_id: input.workspaceId,
     resource_type: input.resourceType,
@@ -260,6 +273,7 @@ export async function buildResourceAccessBindingInsertValuesOn(
     remote_agent_id:
       input.resourceType === "remote_agent" ? input.resourceId : null,
     subject_id: subjectId,
+    scope_subject_id: scopeSubjectId,
     conversation_type_mask_override: input.conversationTypeMaskOverride ?? null,
     status: "active" as const,
     source: input.source ?? "manual",
@@ -332,16 +346,43 @@ export function augmentInsertedBindingRowWithTarget<
   inserted: T,
   target: AccessGrantTarget
 ): T & {
-  target_type: AccessBindingTargetType
+  target_type: AccessBindingTargetType | null
+  scope_subject_id: string | null
   subject_workspace_id: string | null
   subject_workspace_member_id: string | null
   subject_actor_id: string | null
   subject_conversation_id: string | null
   subject_conversation_actor_context_id: string | null
 } {
+  if ("subject" in target) {
+    // PR2: scoped-subject inserts don't have legacy target_type or
+    // subject_*_id projection fields. Leave them null; downstream
+    // readAccessBindingTarget will use subject_kind + scope_subject_id to
+    // decode the new variant. (augmentInsertedBindingRowWithTarget callers
+    // can't easily JOIN access_subjects post-INSERT, so we leave subject_kind
+    // undefined too — the row is mostly used as a write receipt at this
+    // point.)
+    return {
+      ...inserted,
+      target_type: null,
+      // scope_subject_id is already on the inserted row from RETURNING *;
+      // surface it explicitly so downstream readers see it.
+      scope_subject_id:
+        (inserted as { scope_subject_id?: string | null }).scope_subject_id ??
+        null,
+      subject_workspace_id: null,
+      subject_workspace_member_id: null,
+      subject_actor_id: null,
+      subject_conversation_id: null,
+      subject_conversation_actor_context_id: null,
+    }
+  }
   return {
     ...inserted,
     target_type: target.targetType,
+    scope_subject_id:
+      (inserted as { scope_subject_id?: string | null }).scope_subject_id ??
+      null,
     subject_workspace_id: target.subjectWorkspaceId,
     subject_workspace_member_id: target.subjectWorkspaceMemberId,
     subject_actor_id: target.subjectActorId,
@@ -398,6 +439,11 @@ export async function listGrantsForResource(
       "cac.id",
       "subj.conversation_actor_context_id"
     )
+    .leftJoin(
+      "access_subjects as scope_subj",
+      "scope_subj.id",
+      "binding.scope_subject_id"
+    )
     .select([
       "binding.id",
       "binding.workspace_id",
@@ -415,9 +461,16 @@ export async function listGrantsForResource(
       "binding.reason",
       "binding.created_at",
       "binding.revoked_at",
+      "binding.scope_subject_id",
       "subj.kind as subject_kind",
       "subj.workspace_id as subject_workspace_id",
       "subj.workspace_member_id as subject_workspace_member_id",
+      // PR2: expose subject_remote_agent_id_via_join so remote_agent grants
+      // get a proper SubjectRef through readAccessBindingTarget instead of
+      // throwing on the legacy decoder.
+      sql<string | null>`subj.remote_agent_id`.as(
+        "subject_remote_agent_id_via_join"
+      ),
       // For `conversation_actor_context` subjects the underlying actor and
       // conversation ids live on conversation_actor_contexts — readers
       // (readAccessBindingTarget → "actor_in_conversation") demand both, so
@@ -432,6 +485,15 @@ export async function listGrantsForResource(
         "subject_conversation_id"
       ),
       "subj.conversation_actor_context_id as subject_conversation_actor_context_id",
+      // PR2: scope subject projection — populated only for scoped-subject
+      // rows (scope_subject_id non-null).
+      sql<string | null>`scope_subj.kind`.as("scope_kind"),
+      sql<string | null>`scope_subj.workspace_id`.as(
+        "scope_workspace_id_via_join"
+      ),
+      sql<string | null>`scope_subj.conversation_id`.as(
+        "scope_conversation_id_via_join"
+      ),
     ] as const)
     .where("binding.resource_type", "=", input.resourceType)
     .where(sql.ref(column), "=", input.resourceId)
@@ -439,14 +501,21 @@ export async function listGrantsForResource(
     query = query.where("binding.status", "=", "active")
   }
   const rows = await query.execute()
-  // Map subject_kind to the legacy target_type enum readAccessBindingTarget
-  // dispatches on (workspace / workspace_member / conversation / actor /
-  // actor_in_conversation). The subject_*_id projections above already carry
-  // the resolved actor + conversation for actor_in_conversation grants.
+  // PR2: route through readAccessBindingTarget which handles both legacy
+  // (target_type-driven) and scoped-subject (subject_kind / remote_agent /
+  // non-null scope_subject_id) variants.
   return rows.map((row) => {
-    const target_type = subjectKindToTargetType(
-      row.subject_kind as AccessSubjectRow["kind"]
-    )
+    let target_type: AccessBindingTargetType | null = null
+    try {
+      target_type = subjectKindToTargetType(
+        row.subject_kind as AccessSubjectRow["kind"]
+      )
+    } catch {
+      // remote_agent (and any other kind not representable as a legacy
+      // target_type) stays null; readAccessBindingTarget routes via
+      // subject_kind to the scoped-subject decoder.
+      target_type = null
+    }
     return mapAccessBindingToGrant({ ...(row as any), target_type })
   })
 }
@@ -536,6 +605,11 @@ function bindingRowSelectFor(
       "cac.id",
       "subj.conversation_actor_context_id"
     )
+    .leftJoin(
+      "access_subjects as scope_subj",
+      "scope_subj.id",
+      "binding.scope_subject_id"
+    )
     .select([
       "binding.id",
       "binding.workspace_id",
@@ -547,16 +621,27 @@ function bindingRowSelectFor(
       "binding.actor_id",
       "binding.remote_agent_id",
       "binding.subject_id",
+      "binding.scope_subject_id",
       sql<string>`${sql.ref(column)}::text`.as("resource_id"),
-      sql<AccessBindingTargetType>`CASE subj.kind
+      sql<AccessBindingTargetType | null>`CASE subj.kind
         WHEN 'workspace' THEN 'workspace'
         WHEN 'workspace_member' THEN 'workspace_member'
         WHEN 'conversation' THEN 'conversation'
         WHEN 'actor' THEN 'actor'
         WHEN 'conversation_actor_context' THEN 'actor_in_conversation'
       END`.as("target_type"),
+      // PR2: surface subject_kind so the scoped-subject decoder can branch
+      // on it (especially `remote_agent`, which has no legacy target_type
+      // representation).
+      sql<string>`subj.kind`.as("subject_kind"),
       "subj.workspace_id as subject_workspace_id",
       "subj.workspace_member_id as subject_workspace_member_id",
+      // PR2: surface remote_agent_id via JOIN — the legacy projection set
+      // explicitly excluded it because there was no caller for remote_agent
+      // bindings before now.
+      sql<string | null>`subj.remote_agent_id`.as(
+        "subject_remote_agent_id_via_join"
+      ),
       sql<string | null>`COALESCE(subj.actor_id, cac.actor_id)`.as(
         "subject_actor_id"
       ),
@@ -566,6 +651,17 @@ function bindingRowSelectFor(
         "subject_conversation_id"
       ),
       "subj.conversation_actor_context_id as subject_conversation_actor_context_id",
+      // PR2: surface the scope subject's kind + workspace_id / conversation_id
+      // so readAccessBindingTarget can rebuild a complete SubjectRef without
+      // a second lookup. Only workspace / conversation kinds are valid
+      // (enforced by the tg_rab_validate trigger).
+      sql<string | null>`scope_subj.kind`.as("scope_kind"),
+      sql<string | null>`scope_subj.workspace_id`.as(
+        "scope_workspace_id_via_join"
+      ),
+      sql<string | null>`scope_subj.conversation_id`.as(
+        "scope_conversation_id_via_join"
+      ),
       "binding.conversation_type_mask_override",
       "binding.status",
       "binding.source",

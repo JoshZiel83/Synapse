@@ -9,6 +9,7 @@ import {
   resolveNarrowedConversationTypeMask,
   type AvailableSkillSummary,
   type CapabilityAccessTarget,
+  type LegacyCapabilityAccessTarget,
   type InstalledSkill,
   type CanonicalContentBlock,
   type CanonicalContentBlockInput,
@@ -39,7 +40,10 @@ import {
   normalizeAccessBindingRow,
   readAccessBindingTarget,
   relationForAccessTargetType,
+  assertLegacyTargetType,
   type AccessBindingRow,
+  type AccessGrantTarget,
+  type LegacyAccessGrantTarget,
 } from "../access/bindings.js"
 import { resolveAccessGrantTarget } from "../access/access-target-resolver.js"
 import {
@@ -96,7 +100,11 @@ import {
   type PreparedSkillSnapshot,
 } from "./mirror-import.js"
 
-type SkillUseScope = CapabilityAccessTarget["type"]
+// PR2: CapabilityAccessTarget is now a union; the legacy `type` field is only
+// present on the legacy variant. SkillUseScope expresses the historical 5
+// scope enum values directly here so callers don't need to discriminate when
+// they only care about the legacy slice.
+type SkillUseScope = LegacyCapabilityAccessTarget["type"]
 
 type QueryRow = pg.QueryResultRow
 type QueryResultLike<T extends QueryRow> = { rows: T[] }
@@ -1507,8 +1515,51 @@ async function loadInstalledSkillRows(params: {
   return result.rows
 }
 
+// PR2: skills (today) only support legacy CapabilityAccessTarget. The
+// scoped-subject variant becomes legal once PR6's UI starts producing it.
+// Until then, callers must funnel through this guard so we fail fast at the
+// service boundary rather than landing a malformed bind_scope.
+function legacyCapabilityAccessTargetOrThrow(
+  target: CapabilityAccessTarget
+): LegacyCapabilityAccessTarget {
+  if ("subject" in target) {
+    throw new SkillError(
+      400,
+      `Scoped-subject access targets are not yet supported for skills (subject.kind=${target.subject.kind}). Use the legacy {type, actorId?, conversationId?} shape.`
+    )
+  }
+  return target
+}
+
+function legacyAccessGrantTargetOrThrow(
+  target: AccessGrantTarget
+): LegacyAccessGrantTarget {
+  if ("subject" in target) {
+    throw new SkillError(
+      400,
+      `Scoped-subject access grant targets are not yet supported for skills (subject.kind=${target.subject.kind}).`
+    )
+  }
+  return target
+}
+
 function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
   const target = readAccessBindingTarget(row)
+  // PR2: skills only writes legacy-shape grants today; scoped-subject targets
+  // are not exposed to its UI yet. Fall back to the workspace-default bind
+  // scope when we hit one so the row still validates against the historical
+  // RuntimeBindingScope union (PR4 will widen this when relay-auto-skills
+  // starts emitting scoped grants).
+  if ("subject" in target) {
+    return {
+      ...row,
+      skill_id: row.resource_id,
+      bind_scope: "workspace",
+      conversation_id: null,
+      actor_id: null,
+      workspace_member_id: null,
+    }
+  }
   return {
     ...row,
     skill_id: row.resource_id,
@@ -2442,10 +2493,16 @@ export async function createWorkspaceSkill(input: {
         input.workspaceId
       )
     : null
+  // PR2: skill installs only support the legacy CapabilityAccessTarget shape
+  // today (UI hasn't switched to scoped-subject targets yet). The runtime
+  // check below makes that explicit so the new variant fails fast rather
+  // than landing as a malformed `bind_scope`. PR6 widens the UI to send
+  // scoped-subject targets; this guard can drop together.
+  const legacyTarget = legacyCapabilityAccessTargetOrThrow(input.accessTarget)
   const target = normalizeScopeTarget({
-    useScope: input.accessTarget.type,
-    actorId: input.accessTarget.actorId,
-    conversationId: input.accessTarget.conversationId,
+    useScope: legacyTarget.type,
+    actorId: legacyTarget.actorId,
+    conversationId: legacyTarget.conversationId,
   })
 
   const result = await transaction(async (client) => {
@@ -2672,10 +2729,11 @@ export async function grantInstalledSkillAccess(input: {
           type: "workspace",
         } satisfies CapabilityAccessTarget))
 
-  const accessTarget = await resolveAccessGrantTarget({
+  const accessTargetResolved = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
     target: accessTargetInput,
   })
+  const accessTarget = legacyAccessGrantTargetOrThrow(accessTargetResolved)
   const instanceConversationTypeMask = resolveNarrowedConversationTypeMask(
     workspaceConversationTypeMask,
     skillRow.conversation_type_mask_override ?? null
@@ -2772,7 +2830,7 @@ export async function updateInstalledSkillAccessGrant(input: {
   )
   const effectiveConversationTypeMask =
     assertGrantConversationTypeOverrideAllowed({
-      targetType: accessRow.target_type,
+      targetType: assertLegacyTargetType(accessRow.target_type),
       parentConversationTypeMask: instanceConversationTypeMask,
       conversationTypeMaskOverride: input.conversationTypeMaskOverride,
       buildError: (message) => new SkillError(400, message),
@@ -2781,7 +2839,7 @@ export async function updateInstalledSkillAccessGrant(input: {
     })
   await validateConversationScopedAccessTarget({
     db,
-    targetType: accessRow.target_type,
+    targetType: assertLegacyTargetType(accessRow.target_type),
     conversationId: accessRow.conversation_id,
     actorId: accessRow.actor_id,
     effectiveConversationTypeMask,
@@ -2834,10 +2892,11 @@ export async function installMarketplaceSkill(input: {
   accessTarget: CapabilityAccessTarget
   installedByWorkspaceMemberId?: string
 }) {
+  const legacyTarget = legacyCapabilityAccessTargetOrThrow(input.accessTarget)
   const target = normalizeScopeTarget({
-    useScope: input.accessTarget.type,
-    actorId: input.accessTarget.actorId,
-    conversationId: input.accessTarget.conversationId,
+    useScope: legacyTarget.type,
+    actorId: legacyTarget.actorId,
+    conversationId: legacyTarget.conversationId,
   })
 
   const marketplaceSkill = await getMarketplaceRowById(input.marketSkillId)
@@ -3000,7 +3059,7 @@ export async function updateInstalledSkill(input: {
     for (const accessRow of accessRows) {
       await validateConversationScopedAccessTarget({
         db,
-        targetType: accessRow.target_type,
+        targetType: assertLegacyTargetType(accessRow.target_type),
         conversationId: accessRow.conversation_id,
         actorId: accessRow.actor_id,
         effectiveConversationTypeMask: nextInstanceConversationTypeMask,
@@ -3309,6 +3368,7 @@ function visibleRowToAccessRow(
     target_type: publicScope,
     relation,
     subject_id: null,
+    scope_subject_id: null,
     subject_workspace_id: publicScope === "workspace" ? workspaceId : null,
     subject_workspace_member_id: null,
     subject_actor_id: publicScope === "actor" ? row.actor_id : null,
