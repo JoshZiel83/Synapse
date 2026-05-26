@@ -70,6 +70,31 @@ type WeixinFormState = TransportAccountOwnerFormState & {
   baseUrl: string
 }
 
+type QqFormState = TransportAccountOwnerFormState & {
+  displayName: string
+  appId: string
+  clientSecret: string
+  botSecret: string
+  connectionMode: TransportConnectionMode
+  /**
+   * OQ2 gate: webhook accounts ignore inbound message events until the
+   * operator manually flips this to true after sandbox validation.
+   * long_connection accounts ignore this field.
+   */
+  webhookInboundConfirmed: boolean
+  /**
+   * Legacy field — QQ proactive messaging API was discontinued 2025-04-21,
+   * so toggling this has no runtime effect; kept for future revivals.
+   */
+  allowProactiveBestEffort: boolean
+  /**
+   * Allowlist of URL hostnames that may appear in outbound text. QQ
+   * console must have these registered under "消息URL配置" or the send
+   * will be rejected.
+   */
+  configuredUrlDomains: string
+}
+
 type WorkspaceDirectoryMember = {
   id: string
   userId: string
@@ -122,7 +147,22 @@ const EMPTY_WEIXIN_FORM: WeixinFormState = {
   inboundActorId: "",
 }
 
-function prettyTransportKind(kind: "feishu" | "weixin" | "wecom") {
+const EMPTY_QQ_FORM: QqFormState = {
+  displayName: "",
+  appId: "",
+  clientSecret: "",
+  botSecret: "",
+  ownerScope: "workspace",
+  ownerWorkspaceMemberId: "",
+  inboundActorMode: "none",
+  inboundActorId: "",
+  connectionMode: "long_connection",
+  webhookInboundConfirmed: false,
+  allowProactiveBestEffort: false,
+  configuredUrlDomains: "",
+}
+
+function prettyTransportKind(kind: "feishu" | "weixin" | "wecom" | "qq") {
   switch (kind) {
     case "feishu":
       return "Feishu"
@@ -130,6 +170,8 @@ function prettyTransportKind(kind: "feishu" | "weixin" | "wecom") {
       return "WeChat"
     case "wecom":
       return "WeCom"
+    case "qq":
+      return "QQ"
   }
 }
 
@@ -180,13 +222,20 @@ function formatDateTime(value?: string) {
   }
 }
 
-function buildWebhookUrl(accountId: string) {
+function buildWebhookUrl(
+  transportKind: "feishu" | "weixin" | "wecom" | "qq",
+  accountId: string
+) {
   if (typeof window === "undefined") return ""
   try {
-    return new URL(
-      `${API_BASE}/im/public/feishu/accounts/${accountId}/webhook`,
-      window.location.origin
-    ).toString()
+    // Legacy /im/public/feishu/... endpoint is the only kind-specific
+    // shape kept for backwards compat. Everything else uses the
+    // generic /api/v1/im/webhooks/:transportKind/:accountId route.
+    const path =
+      transportKind === "feishu"
+        ? `${API_BASE}/im/public/feishu/accounts/${accountId}/webhook`
+        : `${API_BASE}/im/webhooks/${transportKind}/${accountId}`
+    return new URL(path, window.location.origin).toString()
   } catch {
     return ""
   }
@@ -512,6 +561,8 @@ export default function ImPage() {
     useState<FeishuFormState>(EMPTY_FEISHU_FORM)
   const [weixinForm, setWeixinForm] =
     useState<WeixinFormState>(EMPTY_WEIXIN_FORM)
+  const [qqForm, setQqForm] = useState<QqFormState>(EMPTY_QQ_FORM)
+  const [creatingQq, setCreatingQq] = useState(false)
   const [weixinSession, setWeixinSession] =
     useState<WeixinQrLoginSessionSummary | null>(null)
   const [weixinQrImageUrl, setWeixinQrImageUrl] = useState<string | null>(null)
@@ -827,6 +878,95 @@ export default function ImPage() {
       )
     } finally {
       setCreatingFeishu(false)
+    }
+  }
+
+  async function handleCreateQqAccount() {
+    if (!workspaceId) return
+    setCreatingQq(true)
+    setError(null)
+    if (!qqForm.appId.trim() || !qqForm.clientSecret.trim()) {
+      setError("appId and clientSecret are required for QQ bot accounts.")
+      setCreatingQq(false)
+      return
+    }
+    if (
+      qqForm.ownerScope === "workspace_member" &&
+      !qqForm.ownerWorkspaceMemberId
+    ) {
+      setError("Select a workspace member owner for the QQ account.")
+      setCreatingQq(false)
+      return
+    }
+    if (
+      qqForm.inboundActorMode === "specified_actor" &&
+      !qqForm.inboundActorId
+    ) {
+      setError("Select an actor for inbound routing.")
+      setCreatingQq(false)
+      return
+    }
+    const configuredUrlDomains = qqForm.configuredUrlDomains
+      .split(/[\n,]/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+    try {
+      const result = await api.createQqTransportAccount(workspaceId, {
+        displayName: qqForm.displayName.trim() || "QQ Bot",
+        appId: qqForm.appId.trim(),
+        clientSecret: qqForm.clientSecret.trim(),
+        botSecret: qqForm.botSecret.trim() || undefined,
+        ownerScope: qqForm.ownerScope,
+        ownerWorkspaceMemberId:
+          qqForm.ownerScope === "workspace_member"
+            ? qqForm.ownerWorkspaceMemberId
+            : null,
+        inboundActorMode: qqForm.inboundActorMode,
+        inboundActorId:
+          qqForm.inboundActorMode === "specified_actor"
+            ? qqForm.inboundActorId
+            : null,
+        connectionMode: qqForm.connectionMode,
+        webhookInboundConfirmed: qqForm.webhookInboundConfirmed,
+        allowProactiveBestEffort: qqForm.allowProactiveBestEffort,
+        configuredUrlDomains,
+      })
+      setQqForm((current) => ({
+        ...EMPTY_QQ_FORM,
+        connectionMode: current.connectionMode,
+        ownerScope: current.ownerScope,
+        ownerWorkspaceMemberId:
+          current.ownerScope === "workspace_member"
+            ? current.ownerWorkspaceMemberId
+            : "",
+        inboundActorMode:
+          current.ownerScope === "workspace_member"
+            ? current.inboundActorMode
+            : current.inboundActorMode === "follow_owner_chief_actor"
+              ? "none"
+              : current.inboundActorMode,
+        inboundActorId:
+          current.inboundActorMode === "specified_actor"
+            ? current.inboundActorId
+            : "",
+      }))
+      await loadData(true)
+      if (result?.account?.connectionMode === "webhook") {
+        toast.success(
+          "QQ account created. Configure the callback URL in QQ console next."
+        )
+      } else {
+        toast.success("QQ account created")
+      }
+    } catch (createError) {
+      console.error("Failed to create QQ account:", createError)
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Failed to create QQ account"
+      )
+    } finally {
+      setCreatingQq(false)
     }
   }
 
@@ -1450,6 +1590,221 @@ export default function ImPage() {
 
       <Card>
         <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Bot className="size-4" />
+            Add QQ Bot
+          </CardTitle>
+          <CardDescription>
+            Connect a QQ official bot via webhook or long connection. Long
+            connection is recommended for v1 — webhook needs the operator to
+            confirm that QQ actually delivers C2C / GROUP_AT events before
+            inbound messages are accepted.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="qq-display-name">Display name</Label>
+              <Input
+                id="qq-display-name"
+                value={qqForm.displayName}
+                onChange={(event) =>
+                  setQqForm((current) => ({
+                    ...current,
+                    displayName: event.target.value,
+                  }))
+                }
+                placeholder="QQ Customer Bot"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="qq-connection-mode">Connection mode</Label>
+              <Select
+                value={qqForm.connectionMode}
+                onValueChange={(value) =>
+                  setQqForm((current) => ({
+                    ...current,
+                    connectionMode: value as TransportConnectionMode,
+                  }))
+                }
+              >
+                <SelectTrigger id="qq-connection-mode">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="long_connection">
+                    Long connection (recommended)
+                  </SelectItem>
+                  <SelectItem value="webhook">Webhook</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          <div className="grid gap-4 md:grid-cols-2">
+            <div className="space-y-2">
+              <Label htmlFor="qq-app-id">App ID</Label>
+              <Input
+                id="qq-app-id"
+                value={qqForm.appId}
+                onChange={(event) =>
+                  setQqForm((current) => ({
+                    ...current,
+                    appId: event.target.value,
+                  }))
+                }
+                placeholder="102000000"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="qq-client-secret">Client secret</Label>
+              <Input
+                id="qq-client-secret"
+                type="password"
+                value={qqForm.clientSecret}
+                onChange={(event) =>
+                  setQqForm((current) => ({
+                    ...current,
+                    clientSecret: event.target.value,
+                  }))
+                }
+                placeholder="QQ console clientSecret"
+              />
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="qq-bot-secret">
+              Bot secret (optional, for webhook Ed25519)
+            </Label>
+            <Input
+              id="qq-bot-secret"
+              type="password"
+              value={qqForm.botSecret}
+              onChange={(event) =>
+                setQqForm((current) => ({
+                  ...current,
+                  botSecret: event.target.value,
+                }))
+              }
+              placeholder="Falls back to clientSecret if empty"
+            />
+            <p className="text-xs text-muted-foreground">
+              QQ webhooks sign payloads with an Ed25519 seed derived from the
+              bot secret. Leave empty unless the QQ console exposes a separate
+              botSecret distinct from clientSecret.
+            </p>
+          </div>
+
+          {qqForm.connectionMode === "webhook" ? (
+            <div className="space-y-2 rounded-2xl border border-dashed bg-muted/20 p-4">
+              <Label className="flex items-center gap-2">
+                <input
+                  type="checkbox"
+                  checked={qqForm.webhookInboundConfirmed}
+                  onChange={(event) =>
+                    setQqForm((current) => ({
+                      ...current,
+                      webhookInboundConfirmed: event.target.checked,
+                    }))
+                  }
+                  className="size-4"
+                />
+                I confirmed that QQ webhook delivers C2C / GROUP_AT message
+                events for this account (OQ2 verified).
+              </Label>
+              <p className="text-xs text-muted-foreground">
+                If unchecked: this account&apos;s bindings default to outbound
+                disabled and inbound messages are dropped. Long connection mode
+                ignores this gate.
+              </p>
+            </div>
+          ) : null}
+
+          <div className="space-y-2">
+            <Label htmlFor="qq-url-domains">
+              Allowed URL domains (one per line)
+            </Label>
+            <textarea
+              id="qq-url-domains"
+              value={qqForm.configuredUrlDomains}
+              onChange={(event) =>
+                setQqForm((current) => ({
+                  ...current,
+                  configuredUrlDomains: event.target.value,
+                }))
+              }
+              placeholder={"dashboard.example.com\nlinks.example.com"}
+              className="min-h-24 w-full rounded-md border bg-background px-3 py-2 text-sm"
+            />
+            <p className="text-xs text-muted-foreground">
+              Must match domains registered under QQ console &quot;消息URL
+              配置&quot;. Any unlisted hostname in an outbound message will fail
+              locally (no quota consumed). Wildcards and IPs are rejected.
+            </p>
+          </div>
+
+          <TransportAccountOwnerFields
+            idPrefix="qq"
+            ownerScope={qqForm.ownerScope}
+            ownerWorkspaceMemberId={qqForm.ownerWorkspaceMemberId}
+            workspaceMembers={sortedWorkspaceMembers}
+            onOwnerScopeChange={(value) =>
+              setQqForm((current) => ({
+                ...current,
+                ownerScope: value,
+                ownerWorkspaceMemberId:
+                  value === "workspace" ? "" : current.ownerWorkspaceMemberId,
+                inboundActorMode:
+                  value === "workspace" &&
+                  current.inboundActorMode === "follow_owner_chief_actor"
+                    ? "none"
+                    : current.inboundActorMode,
+              }))
+            }
+            onOwnerWorkspaceMemberIdChange={(value) =>
+              setQqForm((current) => ({
+                ...current,
+                ownerWorkspaceMemberId: value,
+              }))
+            }
+          />
+
+          <TransportAccountInboundActorFields
+            idPrefix="qq"
+            ownerScope={qqForm.ownerScope}
+            inboundActorMode={qqForm.inboundActorMode}
+            inboundActorId={qqForm.inboundActorId}
+            actors={actorOptions}
+            onInboundActorModeChange={(value) =>
+              setQqForm((current) => ({
+                ...current,
+                inboundActorMode: value,
+                inboundActorId:
+                  value === "specified_actor" ? current.inboundActorId : "",
+              }))
+            }
+            onInboundActorIdChange={(value) =>
+              setQqForm((current) => ({
+                ...current,
+                inboundActorId: value,
+              }))
+            }
+          />
+
+          <div className="flex justify-end">
+            <Button
+              onClick={() => void handleCreateQqAccount()}
+              disabled={creatingQq}
+            >
+              {creatingQq ? "Creating..." : "Create QQ account"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
           <CardTitle>Connected Accounts</CardTitle>
           <CardDescription>
             Accounts can be owned by the workspace or by a specific workspace
@@ -1472,9 +1827,10 @@ export default function ImPage() {
                 savingAccountId === account.id ||
                 disconnectingAccountId === account.id
               const webhookUrl =
-                account.transportKind === "feishu" &&
+                (account.transportKind === "feishu" ||
+                  account.transportKind === "qq") &&
                 account.connectionMode === "webhook"
-                  ? buildWebhookUrl(account.id)
+                  ? buildWebhookUrl(account.transportKind, account.id)
                   : ""
               const draft = accountSettingsDrafts[account.id] || {
                 ownerScope: account.ownerScope,

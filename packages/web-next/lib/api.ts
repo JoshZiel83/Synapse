@@ -1570,6 +1570,25 @@ class ApiClient {
       body: JSON.stringify(data),
     })
   }
+  createQqTransportAccount(
+    wsId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/qq`, {
+      method: "POST",
+      body: JSON.stringify(data),
+    })
+  }
+  updateQqTransportAccount(
+    wsId: string,
+    accountId: string,
+    data: Record<string, unknown>
+  ): Promise<{ account: TransportAccountSummary }> {
+    return this.fetch(`/workspaces/${wsId}/im/accounts/qq/${accountId}`, {
+      method: "PUT",
+      body: JSON.stringify(data),
+    })
+  }
   startWeixinQrTransportSession(
     wsId: string,
     data: Record<string, unknown>

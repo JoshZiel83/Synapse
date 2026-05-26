@@ -7,6 +7,7 @@
  * Per-transport routes that diverge from the generic shape live in:
  *   - controller/feishu.ts (POST/PUT /im/accounts/feishu)
  *   - controller/weixin.ts (binding lifecycle + QR-login flows)
+ *   - controller/qq.ts    (POST/PUT /im/accounts/qq)
  */
 
 import type { FastifyInstance } from "fastify"
@@ -31,6 +32,7 @@ import {
   updateAccountSchema,
 } from "./controller/_shared.js"
 import imFeishuController from "./controller/feishu.js"
+import imQqController from "./controller/qq.js"
 import imWeixinController from "./controller/weixin.js"
 
 export default async function imController(app: FastifyInstance) {
@@ -41,6 +43,7 @@ export default async function imController(app: FastifyInstance) {
   // inherit the auth + workspace middleware above.
   await imFeishuController(app)
   await imWeixinController(app)
+  await imQqController(app)
 
   app.get<{ Params: { workspaceId: string } }>(
     "/api/v1/workspaces/:workspaceId/im/connectors",
