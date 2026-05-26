@@ -105,22 +105,6 @@ async function addActiveActorParticipant(
     .execute()
 }
 
-async function insertConversationActorContext(
-  db: AnyDb,
-  conversationId: string,
-  actorId: string
-): Promise<string> {
-  const row = await db
-    .insertInto("conversation_actor_contexts")
-    .values({
-      conversation_id: conversationId,
-      actor_id: actorId,
-    })
-    .returning("id")
-    .executeTakeFirstOrThrow()
-  return row.id as string
-}
-
 test(
   "isActorActiveConversationParticipant returns false when no participant row exists",
   { timeout: 5 * 60_000 },
@@ -215,7 +199,7 @@ test(
 )
 
 test(
-  "buildConversationCapabilitySubjects adds actor + conversation_actor_context for active participant",
+  "buildConversationCapabilitySubjects adds actor (no CAC subject) for active participant",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -225,11 +209,6 @@ test(
       const actorId = await insertActor(db, workspaceId)
       const conversationId = await insertConversation(db, workspaceId)
       await addActiveActorParticipant(db, conversationId, actorId)
-      const contextId = await insertConversationActorContext(
-        db,
-        conversationId,
-        actorId
-      )
 
       const subjects = await buildConversationCapabilitySubjects(db, {
         workspaceId,
@@ -237,11 +216,13 @@ test(
         actorId,
         conversationId,
       })
+      // D2: previously also pushed a `conversation_actor_context` subject;
+      // that kind is gone — the actor + conversation runtime context now
+      // matches `actor + scope=conversation` grants instead.
       assert.deepEqual(subjects, [
         { type: "workspace", id: workspaceId },
         { type: "workspace_member", id: memberId },
         { type: "actor", id: actorId },
-        { type: "conversation_actor_context", id: contextId },
       ])
     })
   }
@@ -257,25 +238,16 @@ test(
       const actorId = await insertActor(db, workspaceId)
       const conversationId = await insertConversation(db, workspaceId)
       await addActiveActorParticipant(db, conversationId, actorId)
-      const contextId = await insertConversationActorContext(
-        db,
-        conversationId,
-        actorId
-      )
 
-      // Passing both the context id directly AND actor+conversation should
-      // yield exactly one conversation_actor_context subject.
+      // D2: the conversationActorContextId param is gone; the function now
+      // produces the workspace + actor subjects only — they should be unique.
       const subjects = await buildConversationCapabilitySubjects(db, {
         workspaceId,
         actorId,
         conversationId,
-        conversationActorContextId: contextId,
       })
-      const contextSubjects = subjects.filter(
-        (s) => s.type === "conversation_actor_context"
-      )
-      assert.equal(contextSubjects.length, 1)
-      assert.equal(contextSubjects[0].id, contextId)
+      const keys = subjects.map((s) => `${s.type}:${s.id}`)
+      assert.equal(new Set(keys).size, keys.length)
     })
   }
 )

@@ -19,47 +19,6 @@ function dedupeSubjects(subjects: PermissionSubject[]) {
   return deduped
 }
 
-async function loadConversationActorContextById(
-  db: KyselyDb,
-  contextId: string
-) {
-  return db
-    .selectFrom("conversation_actor_contexts")
-    .select(["id", "actor_id", "conversation_id", "session_id"])
-    .where("id", "=", contextId)
-    .limit(1)
-    .executeTakeFirst()
-}
-
-// P0/P6: previously delegated to session/service.ts helpers which fall back to
-// the global pool when no queryable is passed. Inline the queries so subject
-// resolution honors the injected `db` (test-container DB, transaction client).
-async function loadConversationActorContextByPair(
-  db: KyselyDb,
-  conversationId: string,
-  actorId: string
-) {
-  return db
-    .selectFrom("conversation_actor_contexts")
-    .select(["id", "actor_id", "conversation_id", "session_id"])
-    .where("conversation_id", "=", conversationId)
-    .where("actor_id", "=", actorId)
-    .limit(1)
-    .executeTakeFirst()
-}
-
-async function loadConversationActorContextBySessionId(
-  db: KyselyDb,
-  sessionId: string
-) {
-  return db
-    .selectFrom("conversation_actor_contexts")
-    .select(["id", "actor_id", "conversation_id", "session_id"])
-    .where("session_id", "=", sessionId)
-    .limit(1)
-    .executeTakeFirst()
-}
-
 export async function isActorActiveConversationParticipant(
   db: KyselyDb,
   conversationId: string,
@@ -227,7 +186,6 @@ async function assertPrincipalBelongsToWorkspace(
       return
     }
     case SUBJECT_KIND.CONVERSATION:
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
     case SUBJECT_KIND.SYSTEM:
@@ -242,10 +200,10 @@ async function assertPrincipalBelongsToWorkspace(
  * runtime workspace by `assertPrincipalBelongsToWorkspace`. Only these
  * earn the workspace subject_id in `runtimeSubjectIds` /
  * `runtimeScopeSubjectIds`. Platform-wide kinds (user/external/system)
- * and conversation/conversation_actor_context principals are accepted as
- * the principal itself but MUST NOT auto-collect workspace subject —
- * otherwise a user principal could mint runtime context against any
- * workspace and silently match `subject=workspace W` grants.
+ * and conversation principals are accepted as the principal itself but
+ * MUST NOT auto-collect workspace subject — otherwise a user principal
+ * could mint runtime context against any workspace and silently match
+ * `subject=workspace W` grants.
  */
 function isPrincipalWorkspaceBound(principal: SubjectRef): boolean {
   switch (principal.kind) {
@@ -255,7 +213,6 @@ function isPrincipalWorkspaceBound(principal: SubjectRef): boolean {
     case SUBJECT_KIND.REMOTE_AGENT:
       return true
     case SUBJECT_KIND.CONVERSATION:
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
     case SUBJECT_KIND.SYSTEM:
@@ -457,7 +414,6 @@ export async function buildConversationCapabilitySubjects(
     remoteAgentId?: string | null
     conversationId?: string | null
     sessionId?: string | null
-    conversationActorContextId?: string | null
   }
 ) {
   if (params.actorId && params.conversationId) {
@@ -521,61 +477,6 @@ export async function buildConversationCapabilitySubjects(
     subjects.push({
       type: "remote_agent",
       id: params.remoteAgentId,
-    })
-  }
-
-  let contextId = params.conversationActorContextId?.trim() || null
-  let context:
-    | {
-        id: string
-        actor_id: string
-        conversation_id: string
-        session_id: string | null
-      }
-    | undefined
-
-  if (contextId) {
-    context =
-      (await loadConversationActorContextById(db, contextId)) || undefined
-  }
-
-  if (!context && params.actorId && params.conversationId) {
-    context =
-      (await loadConversationActorContextByPair(
-        db,
-        params.conversationId,
-        params.actorId
-      )) || undefined
-  }
-
-  // The session→context fallback only makes sense for the actor path:
-  // conversation_actor_context.session_id is a UUID column and the row only
-  // exists for human actors. Remote agents have no actor identity and no
-  // matching context row, so calling this lookup with the synthetic cache key
-  // we use for reverse-MCP sessions ("remote_agent_mcp:…") would crash the
-  // SQL driver and silently mask plugin/relay tool resolution. Gating on
-  // actorId keeps the actor flow unchanged while making the remote-agent
-  // flow correct-by-construction.
-  if (!context && params.actorId && params.sessionId) {
-    context =
-      (await loadConversationActorContextBySessionId(db, params.sessionId)) ||
-      undefined
-  }
-
-  if (
-    context &&
-    (!params.actorId || context.actor_id === params.actorId) &&
-    (!params.conversationId ||
-      context.conversation_id === params.conversationId) &&
-    (await isActorActiveConversationParticipant(
-      db,
-      context.conversation_id,
-      context.actor_id
-    ))
-  ) {
-    subjects.push({
-      type: "conversation_actor_context",
-      id: context.id,
     })
   }
 

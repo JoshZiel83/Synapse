@@ -65,7 +65,6 @@ function relayBindingRowToTarget(
     subject_actor_id_via_join?: string | null
     subject_remote_agent_id_via_join?: string | null
     subject_conversation_id_via_join?: string | null
-    subject_conversation_actor_context_id_via_join?: string | null
     scope_kind?: string | null
     scope_workspace_id_via_join?: string | null
     scope_conversation_id_via_join?: string | null
@@ -99,20 +98,6 @@ function relayBindingRowToTarget(
       subject = row.subject_conversation_id_via_join
         ? conversationRef(row.subject_conversation_id_via_join)
         : workspaceRef(row.workspace_id)
-      break
-    case "conversation_actor_context":
-      // Treat CAC as actor + scope=conversation if the underlying ids are
-      // available via the cac JOIN.
-      if (
-        row.subject_actor_id_via_join &&
-        row.subject_conversation_id_via_join
-      ) {
-        return {
-          subject: actorRef(row.subject_actor_id_via_join),
-          scope: conversationRef(row.subject_conversation_id_via_join),
-        }
-      }
-      subject = workspaceRef(row.workspace_id)
       break
     default:
       subject = workspaceRef(row.workspace_id)

@@ -33,7 +33,6 @@ function subjectColumns(ref: SubjectRef): {
   actor_id: string | null
   remote_agent_id: string | null
   conversation_id: string | null
-  conversation_actor_context_id: string | null
   user_id: string | null
   external_identity_key: string | null
 } {
@@ -43,7 +42,6 @@ function subjectColumns(ref: SubjectRef): {
     actor_id: null,
     remote_agent_id: null,
     conversation_id: null,
-    conversation_actor_context_id: null,
     user_id: null,
     external_identity_key: null,
   }
@@ -71,12 +69,6 @@ function subjectColumns(ref: SubjectRef): {
         ...base,
         kind: "conversation",
         conversation_id: ref.conversationId,
-      }
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      return {
-        ...base,
-        kind: "conversation_actor_context",
-        conversation_actor_context_id: ref.contextId,
       }
     case SUBJECT_KIND.USER:
       return { ...base, kind: "user", user_id: ref.userId }
@@ -158,20 +150,6 @@ async function resolveOwningWorkspaceId(
       }
       return row.internal_workspace_id
     }
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT: {
-      const row = await db
-        .selectFrom("conversation_actor_contexts as cac")
-        .innerJoin("conversations as c", "c.id", "cac.conversation_id")
-        .select("c.internal_workspace_id")
-        .where("cac.id", "=", ref.contextId)
-        .executeTakeFirst()
-      if (!row) {
-        throw new Error(
-          `upsertAccessSubject: conversation_actor_contexts(${ref.contextId}) not found`
-        )
-      }
-      return row.internal_workspace_id
-    }
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
     case SUBJECT_KIND.SYSTEM:
@@ -199,11 +177,6 @@ export function rowToSubjectRef(row: AccessSubjectRow): SubjectRef {
       return {
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: row.conversation_id!,
-      }
-    case "conversation_actor_context":
-      return {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: row.conversation_actor_context_id!,
       }
     case "user":
       return { kind: SUBJECT_KIND.USER, userId: row.user_id! }
@@ -251,9 +224,6 @@ export async function upsertAccessSubject(
       break
     case SUBJECT_KIND.CONVERSATION:
       lookup = lookup.where("conversation_id", "=", ref.conversationId)
-      break
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      lookup = lookup.where("conversation_actor_context_id", "=", ref.contextId)
       break
     case SUBJECT_KIND.USER:
       lookup = lookup.where("user_id", "=", ref.userId)
@@ -362,9 +332,6 @@ export async function findAccessSubjectId(
     case SUBJECT_KIND.CONVERSATION:
       lookup = lookup.where("conversation_id", "=", ref.conversationId)
       break
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      lookup = lookup.where("conversation_actor_context_id", "=", ref.contextId)
-      break
     case SUBJECT_KIND.USER:
       lookup = lookup.where("user_id", "=", ref.userId)
       break
@@ -429,10 +396,10 @@ export async function upsertAccessSubjectOn(
     client,
     `INSERT INTO access_subjects (
        kind, workspace_id, workspace_member_id, actor_id,
-       remote_agent_id, conversation_id, conversation_actor_context_id,
+       remote_agent_id, conversation_id,
        user_id, external_identity_key
      )
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
      ON CONFLICT DO NOTHING
      RETURNING id`,
     [
@@ -442,7 +409,6 @@ export async function upsertAccessSubjectOn(
       columns.actor_id,
       columns.remote_agent_id,
       columns.conversation_id,
-      columns.conversation_actor_context_id,
       columns.user_id,
       columns.external_identity_key,
     ]
@@ -519,22 +485,6 @@ async function resolveOwningWorkspaceIdOn(
       }
       return r.rows[0].internal_workspace_id
     }
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT: {
-      const r = await executeSqlOn<{ internal_workspace_id: string | null }>(
-        client,
-        `SELECT c.internal_workspace_id
-         FROM conversation_actor_contexts cac
-         JOIN conversations c ON c.id = cac.conversation_id
-         WHERE cac.id = $1`,
-        [ref.contextId]
-      )
-      if (!r.rows[0]) {
-        throw new Error(
-          `upsertAccessSubjectOn: conversation_actor_contexts(${ref.contextId}) not found`
-        )
-      }
-      return r.rows[0].internal_workspace_id
-    }
     case SUBJECT_KIND.USER:
     case SUBJECT_KIND.EXTERNAL:
     case SUBJECT_KIND.SYSTEM:
@@ -569,11 +519,6 @@ function whereClauseFor(ref: SubjectRef): {
       return {
         condition: "conversation_id = $2",
         values: [ref.conversationId],
-      }
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      return {
-        condition: "conversation_actor_context_id = $2",
-        values: [ref.contextId],
       }
     case SUBJECT_KIND.USER:
       return { condition: "user_id = $2", values: [ref.userId] }

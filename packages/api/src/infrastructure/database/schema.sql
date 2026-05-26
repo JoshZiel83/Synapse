@@ -61,7 +61,6 @@ CREATE TYPE subject_kind AS ENUM (
   'actor',
   'remote_agent',
   'conversation',
-  'conversation_actor_context',
   'user',
   'external',
   'system'
@@ -1379,7 +1378,6 @@ CREATE TABLE access_subjects (
   actor_id UUID REFERENCES actors(id) ON DELETE CASCADE,
   remote_agent_id UUID REFERENCES remote_agents(id) ON DELETE CASCADE,
   conversation_id UUID REFERENCES conversations(id) ON DELETE CASCADE,
-  conversation_actor_context_id UUID REFERENCES conversation_actor_contexts(id) ON DELETE CASCADE,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
   external_identity_key VARCHAR(255),
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
@@ -1387,19 +1385,18 @@ CREATE TABLE access_subjects (
   -- (workspace, workspace_member, actor, remote_agent). It is denormalized from
   -- the underlying table by `upsertAccessSubject` via a SELECT lookup so that
   -- workspace-scoped queries on access_subjects can filter without a JOIN.
-  -- For conversation / conversation_actor_context it is best-effort (external
-  -- conversations have no owning workspace). `user` / `external` / `system`
-  -- are platform-wide subjects and intentionally have no workspace.
+  -- For conversation it is best-effort (external conversations have no
+  -- owning workspace). `user` / `external` / `system` are platform-wide
+  -- subjects and intentionally have no workspace.
   CONSTRAINT chk_access_subjects_payload CHECK (
-    (kind = 'workspace' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'workspace_member' AND workspace_id IS NOT NULL AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'actor' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'remote_agent' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'conversation' AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NOT NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'conversation_actor_context' AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NOT NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
-    (kind = 'user' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NOT NULL AND external_identity_key IS NULL) OR
-    (kind = 'external' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NOT NULL) OR
-    (kind = 'system' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND conversation_actor_context_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL)
+    (kind = 'workspace' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'workspace_member' AND workspace_id IS NOT NULL AND workspace_member_id IS NOT NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'actor' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NOT NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'remote_agent' AND workspace_id IS NOT NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NOT NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'conversation' AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NOT NULL AND user_id IS NULL AND external_identity_key IS NULL) OR
+    (kind = 'user' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NOT NULL AND external_identity_key IS NULL) OR
+    (kind = 'external' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NOT NULL) OR
+    (kind = 'system' AND workspace_id IS NULL AND workspace_member_id IS NULL AND actor_id IS NULL AND remote_agent_id IS NULL AND conversation_id IS NULL AND user_id IS NULL AND external_identity_key IS NULL)
   )
 );
 
@@ -1415,8 +1412,6 @@ CREATE UNIQUE INDEX uq_access_subjects_remote_agent
   ON access_subjects(remote_agent_id) WHERE kind = 'remote_agent';
 CREATE UNIQUE INDEX uq_access_subjects_conversation
   ON access_subjects(conversation_id) WHERE kind = 'conversation';
-CREATE UNIQUE INDEX uq_access_subjects_conversation_actor_context
-  ON access_subjects(conversation_actor_context_id) WHERE kind = 'conversation_actor_context';
 CREATE UNIQUE INDEX uq_access_subjects_user
   ON access_subjects(user_id) WHERE kind = 'user';
 CREATE UNIQUE INDEX uq_access_subjects_external
@@ -3689,30 +3684,10 @@ BEGIN
   IF p_subject_id IS NULL THEN RETURN TRUE; END IF;
   SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
   IF v_kind IS NULL THEN RETURN FALSE; END IF;
-  -- PR1 transitional: allows `conversation_actor_context` because the legacy
-  -- `actor_in_conversation` writer (access-target-resolver.ts) still produces
-  -- this kind on the resource_access_bindings path. PR7 removes the value
-  -- together with the subject_kind enum entry.
-  --
-  -- NOTE: per the refactor plan, relay_authorization_grants must NOT accept
-  -- this kind even transitionally — the legacy relay writers always wrote
-  -- NULL subject_id, never a conversation_actor_context subject. That
-  -- stricter check lives in `is_workspace_bound_subject_kind_strict` and is
-  -- used by `tg_relay_grant_validate`.
-  RETURN v_kind IN ('workspace_member','actor','remote_agent','workspace','conversation','conversation_actor_context');
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION is_workspace_bound_subject_kind_strict(p_subject_id UUID)
-RETURNS BOOLEAN LANGUAGE plpgsql STABLE AS $$
-DECLARE v_kind subject_kind;
-BEGIN
-  IF p_subject_id IS NULL THEN RETURN TRUE; END IF;
-  SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
-  IF v_kind IS NULL THEN RETURN FALSE; END IF;
-  -- Strict variant: excludes `conversation_actor_context`. Used by
-  -- tg_relay_grant_validate (relay legacy writer never produced CAC) and
-  -- intended for any new table that wants the final post-PR7 allowlist.
+  -- The canonical allowlist for subjects that can anchor a workspace-bound
+  -- authorization row (resource_access_bindings / relay_authorization_grants
+  -- / memory_access_grants). Excludes user / external / system — those are
+  -- platform-wide subjects.
   RETURN v_kind IN ('workspace_member','actor','remote_agent','workspace','conversation');
 END;
 $$;
@@ -3724,8 +3699,7 @@ BEGIN
   IF p_subject_id IS NULL THEN RETURN TRUE; END IF;
   SELECT kind INTO v_kind FROM access_subjects WHERE id = p_subject_id;
   IF v_kind IS NULL THEN RETURN FALSE; END IF;
-  -- Memory owners must be one of these — no conversation_actor_context (memory
-  -- writes only start in PR5, no legacy path) and no user/external/system.
+  -- Memory owners must be one of these — no user/external/system.
   RETURN v_kind IN ('workspace_member','actor','remote_agent','workspace','conversation');
 END;
 $$;
@@ -3843,10 +3817,9 @@ BEGIN
     RAISE EXCEPTION 'relay_authorization_grants.scope_subject_id % must reference a subject of kind workspace|conversation', NEW.scope_subject_id;
   END IF;
 
-  -- D1: subject_id is NOT NULL post-cleanup. Strict allowlist — relay grants
-  -- never accept conversation_actor_context.
-  IF NOT is_workspace_bound_subject_kind_strict(NEW.subject_id) THEN
-    RAISE EXCEPTION 'relay_authorization_grants.subject_id % refers to a kind that is not workspace-bound (strict: no conversation_actor_context)', NEW.subject_id;
+  -- D1: subject_id is NOT NULL post-cleanup.
+  IF NOT is_workspace_bound_subject_kind(NEW.subject_id) THEN
+    RAISE EXCEPTION 'relay_authorization_grants.subject_id % refers to a kind that is not workspace-bound', NEW.subject_id;
   END IF;
   v_subject_ws := access_subject_workspace_id(NEW.subject_id);
   IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN

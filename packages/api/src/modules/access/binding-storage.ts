@@ -188,7 +188,6 @@ export function augmentInsertedBindingRowWithTarget<
   subject_actor_id_via_join: string | null
   subject_remote_agent_id_via_join: string | null
   subject_conversation_id_via_join: string | null
-  subject_conversation_actor_context_id_via_join: string | null
   scope_kind: string | null
   scope_workspace_id_via_join: string | null
   scope_conversation_id_via_join: string | null
@@ -218,10 +217,6 @@ export function augmentInsertedBindingRowWithTarget<
     subject_conversation_id_via_join:
       target.subject.kind === "conversation"
         ? (target.subject as { conversationId: string }).conversationId
-        : null,
-    subject_conversation_actor_context_id_via_join:
-      target.subject.kind === "conversation_actor_context"
-        ? (target.subject as { contextId: string }).contextId
         : null,
     scope_kind: target.scope?.kind ?? null,
     scope_workspace_id_via_join:
@@ -275,11 +270,6 @@ export async function listGrantsForResource(
     .selectFrom("resource_access_bindings as binding")
     .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
     .leftJoin(
-      "conversation_actor_contexts as cac",
-      "cac.id",
-      "subj.conversation_actor_context_id"
-    )
-    .leftJoin(
       "access_subjects as scope_subj",
       "scope_subj.id",
       "binding.scope_subject_id"
@@ -309,19 +299,12 @@ export async function listGrantsForResource(
       sql<string | null>`subj.workspace_member_id`.as(
         "subject_workspace_member_id_via_join"
       ),
-      sql<string | null>`COALESCE(subj.actor_id, cac.actor_id)`.as(
-        "subject_actor_id_via_join"
-      ),
+      sql<string | null>`subj.actor_id`.as("subject_actor_id_via_join"),
       sql<string | null>`subj.remote_agent_id`.as(
         "subject_remote_agent_id_via_join"
       ),
-      sql<
-        string | null
-      >`COALESCE(subj.conversation_id, cac.conversation_id)`.as(
+      sql<string | null>`subj.conversation_id`.as(
         "subject_conversation_id_via_join"
-      ),
-      sql<string | null>`subj.conversation_actor_context_id`.as(
-        "subject_conversation_actor_context_id_via_join"
       ),
       sql<string | null>`scope_subj.kind`.as("scope_kind"),
       sql<string | null>`scope_subj.workspace_id`.as(
@@ -409,11 +392,6 @@ function bindingRowSelectFor(
     .selectFrom("resource_access_bindings as binding")
     .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
     .leftJoin(
-      "conversation_actor_contexts as cac",
-      "cac.id",
-      "subj.conversation_actor_context_id"
-    )
-    .leftJoin(
       "access_subjects as scope_subj",
       "scope_subj.id",
       "binding.scope_subject_id"
@@ -439,16 +417,9 @@ function bindingRowSelectFor(
       sql<string | null>`subj.remote_agent_id`.as(
         "subject_remote_agent_id_via_join"
       ),
-      sql<string | null>`COALESCE(subj.actor_id, cac.actor_id)`.as(
-        "subject_actor_id_via_join"
-      ),
-      sql<
-        string | null
-      >`COALESCE(subj.conversation_id, cac.conversation_id)`.as(
+      sql<string | null>`subj.actor_id`.as("subject_actor_id_via_join"),
+      sql<string | null>`subj.conversation_id`.as(
         "subject_conversation_id_via_join"
-      ),
-      sql<string | null>`subj.conversation_actor_context_id`.as(
-        "subject_conversation_actor_context_id_via_join"
       ),
       sql<string | null>`scope_subj.kind`.as("scope_kind"),
       sql<string | null>`scope_subj.workspace_id`.as(
@@ -572,15 +543,6 @@ export async function loadAccessBindingRowsForResourcesAndContext(
         eb.and([
           eb("subj.kind", "=", "conversation"),
           eb("subj.conversation_id", "=", input.conversationId),
-        ])
-      )
-    }
-    if (input.actorId && input.conversationId) {
-      conditions.push(
-        eb.and([
-          eb("subj.kind", "=", "conversation_actor_context"),
-          eb("cac.actor_id", "=", input.actorId),
-          eb("cac.conversation_id", "=", input.conversationId),
         ])
       )
     }
@@ -815,19 +777,11 @@ export async function listResourceIdsForWorkspaceByBindingFilter(
   } else {
     if (input.actorId) {
       values.push(input.actorId)
-      conditions.push(
-        `(subj.actor_id = $${values.length}::uuid OR subj.conversation_actor_context_id IN (
-          SELECT id FROM conversation_actor_contexts WHERE actor_id = $${values.length}::uuid
-        ))`
-      )
+      conditions.push(`subj.actor_id = $${values.length}::uuid`)
     }
     if (input.conversationId) {
       values.push(input.conversationId)
-      conditions.push(
-        `(subj.conversation_id = $${values.length}::uuid OR subj.conversation_actor_context_id IN (
-          SELECT id FROM conversation_actor_contexts WHERE conversation_id = $${values.length}::uuid
-        ))`
-      )
+      conditions.push(`subj.conversation_id = $${values.length}::uuid`)
     }
   }
   const sqlText = `

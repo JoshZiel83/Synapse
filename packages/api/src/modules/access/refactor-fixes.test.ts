@@ -343,69 +343,11 @@ test(
 )
 
 // -------- P2 fix #6: relay trigger CAC strict allowlist --------
-
-test(
-  "tg_relay_grant_validate: subject kind=conversation_actor_context is rejected",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const wsId = await newWorkspace(db)
-      const conv = await newConversation(db, wsId)
-      const actorId = await newActor(db, wsId)
-      const ctx = await db
-        .insertInto("conversation_actor_contexts")
-        .values({ conversation_id: conv, actor_id: actorId })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const cacSubject = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: ctx.id as string,
-      })
-
-      const dev = await db
-        .insertInto("relay_devices")
-        .values({
-          workspace_id: wsId,
-          title: `dev-${rid()}`,
-          public_key: `pk-${rid()}`,
-          public_key_fingerprint: `fp-${rid()}-${rid()}`,
-          trust_status: "active",
-        } as any)
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const exp = await db
-        .insertInto("relay_exposures")
-        .values({
-          device_id: dev.id as string,
-          stable_key: `exp-${rid()}`,
-          display_name: "x",
-          transport: "stdio",
-        } as any)
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const cap = await db
-        .insertInto("relay_capabilities")
-        .values({
-          workspace_id: wsId,
-          exposure_id: exp.id as string,
-        } as any)
-        .returning("id")
-        .executeTakeFirstOrThrow()
-
-      await assert.rejects(
-        db
-          .insertInto("relay_authorization_grants")
-          .values({
-            workspace_id: wsId,
-            relay_device_id: dev.id as string,
-            relay_capability_id: cap.id as string,
-            relay_exposure_id: exp.id as string,
-            subject_id: cacSubject,
-            retention: "until_revoked",
-          } as any)
-          .execute(),
-        /(strict: no conversation_actor_context|not workspace-bound)/
-      )
-    })
-  }
-)
+//
+// D2: the `conversation_actor_context` subject_kind has been removed from the
+// type system AND from the SQL ENUM, so the previous test ("CAC subjects are
+// rejected by the relay grant trigger") can no longer construct the offending
+// subject. The trigger now uses the canonical `is_workspace_bound_subject_kind`
+// allowlist (workspace_member / actor / remote_agent / workspace / conversation)
+// — the validation lives at three layers now: TS union, Postgres ENUM, and
+// trigger. Together they are stricter than the old runtime-only check.

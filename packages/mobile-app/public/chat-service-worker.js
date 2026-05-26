@@ -1525,7 +1525,6 @@
     ACTOR: "actor",
     REMOTE_AGENT: "remote_agent",
     CONVERSATION: "conversation",
-    CONVERSATION_ACTOR_CONTEXT: "conversation_actor_context",
     USER: "user",
     EXTERNAL: "external",
     SYSTEM: "system"
@@ -1536,7 +1535,6 @@
     SUBJECT_KIND.ACTOR,
     SUBJECT_KIND.REMOTE_AGENT,
     SUBJECT_KIND.CONVERSATION,
-    SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
     SUBJECT_KIND.USER,
     SUBJECT_KIND.EXTERNAL,
     SUBJECT_KIND.SYSTEM

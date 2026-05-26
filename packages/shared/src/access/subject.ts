@@ -29,10 +29,6 @@ export type SubjectRef =
       readonly kind: typeof SUBJECT_KIND.CONVERSATION
       readonly conversationId: string
     }
-  | {
-      readonly kind: typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
-      readonly contextId: string
-    }
   | { readonly kind: typeof SUBJECT_KIND.USER; readonly userId: string }
   | {
       readonly kind: typeof SUBJECT_KIND.EXTERNAL
@@ -58,7 +54,6 @@ export type AccessTargetRef = Extract<
       | typeof SUBJECT_KIND.CONVERSATION
       | typeof SUBJECT_KIND.ACTOR
       | typeof SUBJECT_KIND.REMOTE_AGENT
-      | typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
   }
 >
 
@@ -74,7 +69,6 @@ export type AccessPrincipalRef = Extract<
       | typeof SUBJECT_KIND.WORKSPACE_MEMBER
       | typeof SUBJECT_KIND.ACTOR
       | typeof SUBJECT_KIND.WORKSPACE
-      | typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
   }
 >
 
@@ -110,15 +104,6 @@ export function isConversationSubject(
   return ref.kind === SUBJECT_KIND.CONVERSATION
 }
 
-export function isConversationActorContextSubject(
-  ref: SubjectRef
-): ref is Extract<
-  SubjectRef,
-  { kind: typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT }
-> {
-  return ref.kind === SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
-}
-
 export function isUserSubject(
   ref: SubjectRef
 ): ref is Extract<SubjectRef, { kind: typeof SUBJECT_KIND.USER }> {
@@ -131,8 +116,7 @@ export function isAccessTargetRef(ref: SubjectRef): ref is AccessTargetRef {
     ref.kind === SUBJECT_KIND.WORKSPACE_MEMBER ||
     ref.kind === SUBJECT_KIND.CONVERSATION ||
     ref.kind === SUBJECT_KIND.ACTOR ||
-    ref.kind === SUBJECT_KIND.REMOTE_AGENT ||
-    ref.kind === SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
+    ref.kind === SUBJECT_KIND.REMOTE_AGENT
   )
 }
 
@@ -152,9 +136,6 @@ export function remoteAgentRef(remoteAgentId: string): SubjectRef {
 }
 export function conversationRef(conversationId: string): SubjectRef {
   return { kind: SUBJECT_KIND.CONVERSATION, conversationId }
-}
-export function conversationActorContextRef(contextId: string): SubjectRef {
-  return { kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT, contextId }
 }
 export function userRef(userId: string): SubjectRef {
   return { kind: SUBJECT_KIND.USER, userId }
@@ -202,16 +183,6 @@ export function subjectsEqual(a: SubjectRef, b: SubjectRef): boolean {
         (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.CONVERSATION }>)
           .conversationId
       )
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      return (
-        a.contextId ===
-        (
-          b as Extract<
-            SubjectRef,
-            { kind: typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT }
-          >
-        ).contextId
-      )
     case SUBJECT_KIND.USER:
       return (
         a.userId ===
@@ -244,8 +215,6 @@ export function subjectKey(ref: SubjectRef): string {
       return `remote_agent:${ref.remoteAgentId}`
     case SUBJECT_KIND.CONVERSATION:
       return `conversation:${ref.conversationId}`
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      return `conversation_actor_context:${ref.contextId}`
     case SUBJECT_KIND.USER:
       return `user:${ref.userId}`
     case SUBJECT_KIND.EXTERNAL:
@@ -271,8 +240,6 @@ export function parseSubjectKey(key: string): SubjectRef | null {
       return remoteAgentRef(payload)
     case SUBJECT_KIND.CONVERSATION:
       return conversationRef(payload)
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      return conversationActorContextRef(payload)
     case SUBJECT_KIND.USER:
       return userRef(payload)
     case SUBJECT_KIND.EXTERNAL:
@@ -318,10 +285,6 @@ export function isScopeEligibleSubject(ref: SubjectRef): boolean {
  * (resource_access_bindings / relay_authorization_grants / memory_access_grants).
  * Excludes user / external / system — those are platform-wide subjects that
  * cannot anchor a workspace-bound grant.
- *
- * PR1 transitional: also includes `conversation_actor_context` so the legacy
- * `actor_in_conversation` writer continues to work until PR4. PR7 removes that
- * kind together with the subject_kind enum value.
  */
 export function isWorkspaceBoundSubjectKind(ref: SubjectRef): boolean {
   return (
@@ -329,16 +292,13 @@ export function isWorkspaceBoundSubjectKind(ref: SubjectRef): boolean {
     ref.kind === SUBJECT_KIND.ACTOR ||
     ref.kind === SUBJECT_KIND.REMOTE_AGENT ||
     ref.kind === SUBJECT_KIND.WORKSPACE ||
-    ref.kind === SUBJECT_KIND.CONVERSATION ||
-    ref.kind === SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
+    ref.kind === SUBJECT_KIND.CONVERSATION
   )
 }
 
 /**
- * Stricter allowlist for `memory_spaces.owner_subject_id` (PR5+). Excludes
- * conversation_actor_context — memory writes only start in PR5, so there is no
- * legacy path that produces this kind. Modeling owner as
- * (actor, scope=conversation) is the canonical way to express
+ * Stricter allowlist for `memory_spaces.owner_subject_id` (PR5+). Modeling
+ * owner as (actor, scope=conversation) is the canonical way to express
  * "actor in conversation"'s memory.
  */
 export function isMemoryOwnerSubjectKind(ref: SubjectRef): boolean {
@@ -376,7 +336,7 @@ export type ScopedCapabilityAccessTarget = ScopedSubjectTarget
  *   - actor + scope=conversation    → "actor_in_conversation"
  *   - workspace / workspace_member / actor / conversation / remote_agent →
  *     mirrors the subject.kind value
- *   - anything else (CAC, user, external, system, scope-only) falls back to
+ *   - anything else (user, external, system, scope-only) falls back to
  *     the raw subject.kind for diagnostic use; UI maps should default-case.
  */
 export function subjectScopeLabel(target: ScopedSubjectTarget): string {

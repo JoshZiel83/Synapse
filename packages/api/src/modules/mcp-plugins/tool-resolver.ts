@@ -74,7 +74,7 @@ export interface ResolvedMcpTools {
 interface ResolveParams extends Omit<RuntimeActorContext, "actorId"> {
   conversationId: string
   // Exactly one of actorId / remoteAgentId is set for a given resolver call.
-  // Actors flow through the original conversation_actor_context grant path;
+  // Actors flow through `actor + scope=conversation` (or `actor` alone) grants;
   // remote_agents pick up workspace-shared resources plus an extra
   // conversation-target grant pass (since they have no actor identity and
   // therefore can't be evaluated against actor / actor_in_conversation grants).
@@ -142,7 +142,6 @@ type VisibleAccessBindingRow = {
   subject_workspace_member_id: string | null
   subject_actor_id: string | null
   subject_conversation_id: string | null
-  subject_conversation_actor_context_id: string | null
   conversation_type_mask_override: number | null
   status: "active" | "revoked"
   created_by_workspace_member_id: string | null
@@ -336,7 +335,6 @@ async function buildVisibilitySubjects(params: ResolveParams) {
     remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
     sessionId: params.sessionId,
-    conversationActorContextId: params.conversationActorContextId,
   })
 }
 
@@ -413,7 +411,6 @@ async function loadVisibleAccessBindings(params: {
       subject_workspace_member_id_via_join?: string | null
       subject_actor_id_via_join?: string | null
       subject_conversation_id_via_join?: string | null
-      subject_conversation_actor_context_id_via_join?: string | null
       scope_kind?: string | null
       scope_conversation_id_via_join?: string | null
     }
@@ -422,8 +419,6 @@ async function loadVisibleAccessBindings(params: {
     // while removing the legacy projection columns from the row reader.
     let target_type: VisibleAccessBindingRow["target_type"]
     if (row.subject_kind === "actor" && row.scope_kind === "conversation") {
-      target_type = "actor_in_conversation"
-    } else if (row.subject_kind === "conversation_actor_context") {
       target_type = "actor_in_conversation"
     } else {
       switch (row.subject_kind) {
@@ -459,8 +454,6 @@ async function loadVisibleAccessBindings(params: {
         row.subject_workspace_member_id_via_join ?? null,
       subject_actor_id: subjectActorId,
       subject_conversation_id: subjectConversationId,
-      subject_conversation_actor_context_id:
-        row.subject_conversation_actor_context_id_via_join ?? null,
       conversation_type_mask_override: row.conversation_type_mask_override,
       status: row.status,
       created_by_workspace_member_id: row.created_by_workspace_member_id,
@@ -908,12 +901,12 @@ async function loadConversationTargetedResourceIds(params: {
 }): Promise<string[]> {
   // Discover grants that target a whole conversation ("any participant in
   // conversation X can use resource Y"). The standard subject machinery only
-  // surfaces these when the caller has a conversation_actor_context subject,
-  // which actors get for free. Remote agents do not have a
-  // conversation_actor_context row, so we have to ask the bindings table
-  // directly. Workspace-scoped grants are still discovered via the normal
-  // lookupResources({type:'workspace'}) path; this helper only fills the
-  // conversation-target gap.
+  // surfaces these when the caller passes the conversation subject as part of
+  // the runtime scope, which actor flows do automatically. Remote agents have
+  // no actor identity and a different runtime-scope shape, so we have to ask
+  // the bindings table directly. Workspace-scoped grants are still discovered
+  // via the normal lookupResources({type:'workspace'}) path; this helper only
+  // fills the conversation-target gap.
   const column =
     params.resourceType === "plugin_installation"
       ? "plugin_installation_id"

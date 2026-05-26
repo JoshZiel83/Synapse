@@ -299,7 +299,7 @@ export type SkillMirrorSourcesSyncStatus = "error" | "pending" | "synced";
 
 export type SkillSourceRefsSyncMode = "detached" | "follow_upstream" | "manual_merge" | "notify";
 
-export type SubjectKind = "actor" | "conversation" | "conversation_actor_context" | "external" | "remote_agent" | "system" | "user" | "workspace" | "workspace_member";
+export type SubjectKind = "actor" | "conversation" | "external" | "remote_agent" | "system" | "user" | "workspace" | "workspace_member";
 
 export type Timestamp = ColumnType<Date, Date | string, Date | string>;
 
@@ -355,7 +355,6 @@ export type WorkspaceMembersTrustLevel = "admin" | "guest" | "member";
 
 export interface AccessSubjects {
   actor_id: string | null;
-  conversation_actor_context_id: string | null;
   conversation_id: string | null;
   created_at: Generated<Timestamp>;
   external_identity_key: string | null;

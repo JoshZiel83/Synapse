@@ -174,7 +174,6 @@ export function normalizeAccessBindingRow<
     subject_actor_id_via_join?: string | null
     subject_remote_agent_id_via_join?: string | null
     subject_conversation_id_via_join?: string | null
-    subject_conversation_actor_context_id_via_join?: string | null
     scope_kind?: string | null
     scope_workspace_id_via_join?: string | null
     scope_conversation_id_via_join?: string | null
@@ -257,7 +256,6 @@ export function readAccessBindingTarget(row: {
   subject_actor_id_via_join?: string | null
   subject_remote_agent_id_via_join?: string | null
   subject_conversation_id_via_join?: string | null
-  subject_conversation_actor_context_id_via_join?: string | null
   scope_kind?: string | null
   scope_workspace_id_via_join?: string | null
   scope_conversation_id_via_join?: string | null
@@ -274,7 +272,6 @@ function subjectRefFromRow(row: {
   subject_actor_id_via_join?: string | null
   subject_remote_agent_id_via_join?: string | null
   subject_conversation_id_via_join?: string | null
-  subject_conversation_actor_context_id_via_join?: string | null
 }): SubjectRef {
   switch (row.subject_kind) {
     case "workspace":
@@ -308,13 +305,6 @@ function subjectRefFromRow(row: {
       return {
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: row.subject_conversation_id_via_join,
-      }
-    case "conversation_actor_context":
-      if (!row.subject_conversation_actor_context_id_via_join)
-        throw new Error("conversation_actor_context subject missing context id")
-      return {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: row.subject_conversation_actor_context_id_via_join,
       }
     default:
       throw new Error(
@@ -359,7 +349,6 @@ export function accessBindingHasTarget(
     subject_actor_id_via_join?: string | null
     subject_remote_agent_id_via_join?: string | null
     subject_conversation_id_via_join?: string | null
-    subject_conversation_actor_context_id_via_join?: string | null
     scope_kind?: string | null
     scope_workspace_id_via_join?: string | null
     scope_conversation_id_via_join?: string | null
@@ -416,16 +405,6 @@ function subjectRefEqual(a: SubjectRef, b: SubjectRef): boolean {
         a.conversationId ===
         (b as Extract<SubjectRef, { kind: typeof SUBJECT_KIND.CONVERSATION }>)
           .conversationId
-      )
-    case SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT:
-      return (
-        a.contextId ===
-        (
-          b as Extract<
-            SubjectRef,
-            { kind: typeof SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT }
-          >
-        ).contextId
       )
     case SUBJECT_KIND.USER:
       return (
@@ -530,7 +509,6 @@ export function mapAccessBindingToGrant(
     subject_actor_id_via_join?: string | null
     subject_remote_agent_id_via_join?: string | null
     subject_conversation_id_via_join?: string | null
-    subject_conversation_actor_context_id_via_join?: string | null
     scope_kind?: string | null
     scope_workspace_id_via_join?: string | null
     scope_conversation_id_via_join?: string | null

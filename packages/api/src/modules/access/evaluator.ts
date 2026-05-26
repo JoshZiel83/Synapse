@@ -31,13 +31,7 @@ type AccessResourceType =
   | "model_profile"
 
 type PermissionSubject = {
-  type:
-    | "user"
-    | "workspace_member"
-    | "actor"
-    | "remote_agent"
-    | "workspace"
-    | "conversation_actor_context"
+  type: "user" | "workspace_member" | "actor" | "remote_agent" | "workspace"
   id: string
 }
 
@@ -584,7 +578,6 @@ type ResourceGrantRow = {
   subject_workspace_member_id_via_join: string | null
   subject_actor_id_via_join: string | null
   subject_conversation_id_via_join: string | null
-  subject_conversation_actor_context_id_via_join: string | null
 }
 
 type BindableResourceTypeLocal =
@@ -635,11 +628,6 @@ async function listResourceGrantRows(
   let query = db
     .selectFrom("resource_access_bindings as binding")
     .innerJoin("access_subjects as subj", "subj.id", "binding.subject_id")
-    .leftJoin(
-      "conversation_actor_contexts as cac",
-      "cac.id",
-      "subj.conversation_actor_context_id"
-    )
     .select([
       sql<string>`COALESCE(
         binding.installed_skill_id::text,
@@ -654,16 +642,9 @@ async function listResourceGrantRows(
       sql<string | null>`subj.workspace_member_id`.as(
         "subject_workspace_member_id_via_join"
       ),
-      sql<string | null>`COALESCE(subj.actor_id, cac.actor_id)`.as(
-        "subject_actor_id_via_join"
-      ),
-      sql<
-        string | null
-      >`COALESCE(subj.conversation_id, cac.conversation_id)`.as(
+      sql<string | null>`subj.actor_id`.as("subject_actor_id_via_join"),
+      sql<string | null>`subj.conversation_id`.as(
         "subject_conversation_id_via_join"
-      ),
-      sql<string | null>`subj.conversation_actor_context_id`.as(
-        "subject_conversation_actor_context_id_via_join"
       ),
     ])
     .where("binding.status", "=", "active")
@@ -702,32 +683,6 @@ async function listResourceGrantRows(
     query = query
       .where("subj.kind", "=", "remote_agent")
       .where("subj.remote_agent_id", "=", subject.id)
-  } else if (subject.type === "conversation_actor_context") {
-    const context = await loadConversationActorContext(db, subject.id)
-    if (!context) {
-      return []
-    }
-    const membership = await hasActiveConversationMembership(db, {
-      conversationId: context.conversation_id,
-      actorId: context.actor_id,
-    })
-    if (!membership) {
-      return []
-    }
-    const contextId = subject.id
-    const conversationId = context.conversation_id
-    query = query.where((eb) =>
-      eb.or([
-        eb.and([
-          eb("subj.kind", "=", "conversation_actor_context"),
-          eb("subj.conversation_actor_context_id", "=", contextId),
-        ]),
-        eb.and([
-          eb("subj.kind", "=", "conversation"),
-          eb("subj.conversation_id", "=", conversationId),
-        ]),
-      ])
-    )
   } else if (subject.type === "workspace_member") {
     const access = await loadWorkspaceMemberAccess(db, subject.id)
     if (!access) {

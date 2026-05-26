@@ -150,7 +150,6 @@ test("isWorkspaceBoundSubjectKind excludes user/external/system", () => {
     { kind: SUBJECT_KIND.WORKSPACE_MEMBER, memberId: "x" },
     { kind: SUBJECT_KIND.WORKSPACE, workspaceId: "x" },
     { kind: SUBJECT_KIND.CONVERSATION, conversationId: "x" },
-    { kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT, contextId: "x" },
   ] as SubjectRef[]) {
     assert.equal(
       isWorkspaceBoundSubjectKind(ref),
@@ -171,17 +170,14 @@ test("isWorkspaceBoundSubjectKind excludes user/external/system", () => {
   }
 })
 
-test("isMemoryOwnerSubjectKind excludes conversation_actor_context", () => {
-  assert.equal(
-    isMemoryOwnerSubjectKind({
-      kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-      contextId: "x",
-    }),
-    false
-  )
+test("isMemoryOwnerSubjectKind accepts workspace-bound kinds", () => {
   assert.equal(
     isMemoryOwnerSubjectKind({ kind: SUBJECT_KIND.ACTOR, actorId: "x" }),
     true
+  )
+  assert.equal(
+    isMemoryOwnerSubjectKind({ kind: SUBJECT_KIND.USER, userId: "x" }),
+    false
   )
 })
 
@@ -409,38 +405,11 @@ test(
   }
 )
 
-test(
-  "tg_rab_validate: legacy conversation_actor_context subject is allowed (PR1 transitional)",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const wsId = await newWorkspace(db)
-      const conv = await newConversation(db, wsId)
-      const subjectActor = await newActor(db, wsId)
-      const targetActor = await newActor(db, wsId)
-
-      const contextRow = await db
-        .insertInto("conversation_actor_contexts")
-        .values({ conversation_id: conv, actor_id: subjectActor })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const cacSubj = await subj(db, {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: contextRow.id as string,
-      })
-
-      await db
-        .insertInto("resource_access_bindings")
-        .values({
-          workspace_id: wsId,
-          resource_type: "actor",
-          actor_id: targetActor,
-          subject_id: cacSubj,
-        })
-        .execute()
-    })
-  }
-)
+// D2: the previous "legacy conversation_actor_context subject is allowed
+// (PR1 transitional)" test is gone — the subject kind was removed from
+// both the TS union and the Postgres ENUM, so the trigger no longer needs
+// a transitional CAC allowance. Subject-kind validation now happens at
+// three layers (TS / ENUM / trigger).
 
 // ---------- relay grant trigger ----------
 
@@ -670,40 +639,10 @@ async function newLegacyMemoryItem(
   return row.id as string
 }
 
-test(
-  "tg_memory_grant_validate: subject kind=conversation_actor_context is rejected (memory grants stricter)",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const wsId = await newWorkspace(db)
-      const actorId = await newActor(db, wsId)
-      const conv = await newConversation(db, wsId)
-      const spaceId = await newLegacyMemorySpace(db, wsId, actorId)
-      const ctx = await db
-        .insertInto("conversation_actor_contexts")
-        .values({ conversation_id: conv, actor_id: actorId })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const cacSubj = await subj(db, {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: ctx.id as string,
-      })
-
-      await expectReject(
-        db
-          .insertInto("memory_access_grants")
-          .values({
-            workspace_id: wsId,
-            memory_space_id: spaceId,
-            subject_id: cacSubj,
-            permissions: [MEMORY_PERMISSION.READ],
-          } as any)
-          .execute(),
-        /(not allowed|kind not allowed|workspace_member\|actor\|remote_agent)/
-      )
-    })
-  }
-)
+// D2: the previous "tg_memory_grant_validate rejects CAC subjects" test is
+// gone — the subject kind no longer exists in the TS union or the SQL ENUM,
+// so the trigger can never see a CAC subject_id. Validation is now stricter
+// (type-level + DB-ENUM) than the old runtime-only check.
 
 test(
   "tg_memory_grant_validate: item belonging to a different space is rejected",
