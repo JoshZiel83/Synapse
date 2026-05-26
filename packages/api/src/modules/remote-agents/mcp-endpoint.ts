@@ -273,8 +273,9 @@ async function registerResolvedTools(params: {
 }): Promise<() => Promise<void>> {
   // The resolver evaluates resource_access_bindings exactly like an actor
   // would (workspace + conversation grants for the remote-agent path) and
-  // returns ready-to-execute plugin + relay tool definitions. We mount each
-  // one as a passthrough that calls back into the same executor.
+  // returns ready-to-execute plugin + device_capability tool definitions.
+  // We mount each one as a passthrough that calls back into the same
+  // executor.
   //
   // conversationKind + conversationBoundary are LOAD-BEARING here: the
   // resolver's conversation_type mask filter (loadVisiblePlugins +
@@ -387,9 +388,10 @@ async function createSessionTransport(params: {
   // Deliberately NOT wrapped in try/catch: an earlier version swallowed the
   // resolver failure and mounted only the IM tools, which meant a UUID-column
   // crash in the resolver looked like a clean tools/list to the caller while
-  // plugin/relay grants silently disappeared. Re-throwing here makes the
-  // failure surface as an initialize HTTP 500 — the loud failure mode is the
-  // correct one for the "tool projection" acceptance point in the plan.
+  // plugin / device_capability grants silently disappeared. Re-throwing here
+  // makes the failure surface as an initialize HTTP 500 — the loud failure
+  // mode is the correct one for the "tool projection" acceptance point in
+  // the plan.
   const pluginShutdown = await registerResolvedTools({
     server,
     workspaceId: params.workspaceId,

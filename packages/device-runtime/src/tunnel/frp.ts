@@ -231,17 +231,43 @@ export function createFrpTunnelAdapter(
       child.stderr?.on("data", (b) =>
         opts.logger?.info(`frpc[${startOpts.deviceServiceId}] ${b}`)
       )
+      // Build the managed record FIRST so we can close over its identity
+      // in the exit handler. Without this, if the same deviceServiceId
+      // starts a new frpc before the old child's exit event fires, the
+      // stale exit handler would `managed.delete(id)` AND fire
+      // onUnexpectedExit against the FRESH tunnel — silently tearing
+      // down a healthy connection. The record-identity check below
+      // ignores stale exits.
+      const record: ManagedTunnel = {
+        handle,
+        child,
+        configPath,
+        tmpDir,
+        localPort: startOpts.localPort,
+        intentionallyStopped: false,
+      }
       child.on("exit", (code, signal) => {
         opts.logger?.info("frpc exited", {
           deviceServiceId: startOpts.deviceServiceId,
           code,
           signal,
         })
+        const current = managed.get(startOpts.deviceServiceId)
+        // Stale exit (a fresh start() already replaced us in the map):
+        // best-effort tmpdir cleanup and bail out. Don't touch the
+        // current managed entry — that's the new tunnel, still alive.
+        if (current !== record) {
+          try {
+            rmSync(tmpDir, { recursive: true, force: true })
+          } catch {
+            /* tmpdir cleanup is best-effort */
+          }
+          return
+        }
         // Read intentional-stop flag BEFORE deleting the managed entry —
         // stop() sets it but does NOT delete (so the exit handler is the
         // single point that cleans up + decides whether to notify).
-        const intentional =
-          managed.get(startOpts.deviceServiceId)?.intentionallyStopped ?? false
+        const intentional = record.intentionallyStopped
         managed.delete(startOpts.deviceServiceId)
         try {
           rmSync(tmpDir, { recursive: true, force: true })
@@ -262,14 +288,7 @@ export function createFrpTunnelAdapter(
         })
       })
 
-      managed.set(startOpts.deviceServiceId, {
-        handle,
-        child,
-        configPath,
-        tmpDir,
-        localPort: startOpts.localPort,
-        intentionallyStopped: false,
-      })
+      managed.set(startOpts.deviceServiceId, record)
       return handle
     },
     async rotateToken(
