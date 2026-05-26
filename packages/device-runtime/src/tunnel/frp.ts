@@ -297,6 +297,13 @@ export function createFrpTunnelAdapter(
     ): Promise<void> {
       const existing = managed.get(handle.deviceServiceId)
       if (!existing) return
+      // Identity check: ignore stale handles. A caller that retained an
+      // old TunnelHandle after a restart would otherwise rewrite the
+      // NEW tunnel's config — silently breaking a healthy connection.
+      // The exit-handler record-identity check (PR #35) prevents the
+      // mirror case (stale exit wiping the fresh entry); this is the
+      // matching guard for the call-in direction.
+      if (existing.handle !== handle) return
       // CRITICAL: preserve the original localPort. Previous code wrote
       // localPort=0 here, which makes frpc reload a config that points at
       // a port nothing is listening on — every dispatched tool call then
@@ -324,6 +331,10 @@ export function createFrpTunnelAdapter(
     async stop(handle: TunnelHandle): Promise<void> {
       const existing = managed.get(handle.deviceServiceId)
       if (!existing) return
+      // Same identity guard as rotateToken — calling stop(oldHandle)
+      // after a fresh start() replaced the entry would otherwise SIGTERM
+      // the wrong frpc, taking down the healthy new tunnel.
+      if (existing.handle !== handle) return
       // Mark BEFORE killing so the exit handler (which runs on the next
       // event-loop turn) reads the flag and skips onUnexpectedExit.
       // The exit handler is also the single point that deletes the

@@ -47,34 +47,34 @@
 
 Synapse no gira alrededor de un bot aislado, sino de la conversación como unidad real de trabajo.
 
-En una misma conversación pueden colaborar personas, Actors nativos de la plataforma y Remote Agents conectados por bridge. La memoria, los permisos, los plugins, las herramientas expuestas por MCP Relay y las fuentes de eventos se gobiernan a nivel de Workspace. Además, estos compañeros de IA pueden compartirse entre Workspaces, añadirse como contactos y recibir acceso únicamente a los recursos autorizados.
+En una misma conversación pueden colaborar personas, Actors nativos de la plataforma y Remote Agents conectados por bridge. La memoria, los permisos, los plugins, las herramientas expuestas por dispositivos (devices) y las fuentes de eventos se gobiernan a nivel de Workspace. Además, estos compañeros de IA pueden compartirse entre Workspaces, añadirse como contactos y recibir acceso únicamente a los recursos autorizados.
 
 ## Por qué Synapse
 
 - **La conversación es el centro.** La conversación define el límite operativo: participantes, visibilidad del historial, activación de Actors, contexto de ejecución y continuidad de memoria.
 - **Los compañeros de IA se pueden compartir.** Miembros del Workspace, Actors y Remote Agents pueden compartirse entre Workspaces y añadirse mediante una red de contactos.
-- **El acceso a recursos está gobernado.** Plugins, skills, capacidades de MCP Relay y fuentes de eventos se modelan como recursos del Workspace con permisos, auditoría y revocación.
+- **El acceso a recursos está gobernado.** Plugins, skills, capacidades de dispositivos (device capabilities) y fuentes de eventos se modelan como recursos del Workspace con permisos, auditoría y revocación.
 - **Coordinación en la nube, ejecución cerca del dispositivo.** El equipo colabora en la web, pero el trabajo puede aterrizar en navegadores locales, escritorios, sistemas de archivos, servicios internos o entornos externos de agentes.
 - **Los eventos también disparan trabajo.** Tareas programadas, webhooks e integraciones como GitHub o GitLab pueden activar conversaciones y poner a trabajar a los roles correctos.
 - **Agentes nativos y externos conviven.** Los Actors viven dentro de Synapse; los Remote Agents entran por bridge y conservan su propio entorno de ejecución.
 
 ## Modelo base
 
-| Concepto         | Qué significa en Synapse                                                                                                 |
-| ---------------- | ------------------------------------------------------------------------------------------------------------------------ |
-| `Workspace`      | Frontera de propiedad y gobierno para compañeros de IA, plugins, dispositivos Relay y fuentes de eventos.                |
-| `Conversation`   | El espacio compartido donde colaboran los participantes y queda persistido el trabajo.                                   |
-| `Actor`          | Un compañero digital administrado de forma nativa por Synapse.                                                           |
-| `Remote agent`   | Un runtime externo que entra a una conversación mediante bridge sin convertirse en Actor nativo.                         |
-| `Resource layer` | La capa de plugins, skills, capacidades de MCP Relay y fuentes de eventos que puede otorgarse, auditarse y reutilizarse. |
+| Concepto         | Qué significa en Synapse                                                                                                                          |
+| ---------------- | ------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Workspace`      | Frontera de propiedad y gobierno para compañeros de IA, plugins, dispositivos (devices) y fuentes de eventos.                                     |
+| `Conversation`   | El espacio compartido donde colaboran los participantes y queda persistido el trabajo.                                                            |
+| `Actor`          | Un compañero digital administrado de forma nativa por Synapse.                                                                                    |
+| `Remote agent`   | Un runtime externo que entra a una conversación mediante bridge sin convertirse en Actor nativo.                                                  |
+| `Resource layer` | La capa de plugins, skills, capacidades de dispositivos (device capabilities) y fuentes de eventos que puede otorgarse, auditarse y reutilizarse. |
 
 ## Resumen de arquitectura
 
 Synapse adopta una arquitectura centrada en la conversación. A partir de ese núcleo, el sistema separa los runtimes de recursos, el control de acceso, la memoria, la integración de transportes externos y la gestión de contexto.
 
 - **Runtime de conversación y sesión.** `conversation`, participantes, items de conversación, sesiones de Actor y `session_wakeups` definen el modelo principal de colaboración y ejecución. La web, los bridges de Remote Agents y los transportes IM reutilizan este modelo en lugar de implementar sistemas de chat separados.
-- **Runtimes de recursos.** Plugins, skills instaladas, exposiciones de Relay, Actors y Remote Agents se modelan como recursos de runtime independientes, con estado, ciclo de vida y APIs propios. El catálogo del marketplace se almacena por separado del estado instalado en runtime.
-- **Control de acceso.** La autorización se evalúa sobre tipos de recurso explícitos, entre ellos `workspace`, `conversation`, `actor`, `remote_agent`, `plugin_installation`, `installed_skill`, `relay_capability` y `memory_item`. Así, el uso compartido, la invocación y la gobernanza se apoyan en un único modelo de acceso.
+- **Runtimes de recursos.** Plugins, skills instaladas, exposiciones de dispositivos (devices), Actors y Remote Agents se modelan como recursos de runtime independientes, con estado, ciclo de vida y APIs propios. El catálogo del marketplace se almacena por separado del estado instalado en runtime.
+- **Control de acceso.** La autorización se evalúa sobre tipos de recurso explícitos, entre ellos `workspace`, `conversation`, `actor`, `remote_agent`, `plugin_installation`, `installed_skill`, `device_capability` y `memory_item`. Así, el uso compartido, la invocación y la gobernanza se apoyan en un único modelo de acceso.
 - **Subsistema de memoria.** La memoria se particiona por alcance: `workspace_shared`, `conversation_shared`, `actor_private`, `participant_private` y `user_private`. La recuperación combina indexación léxica y embeddings para cubrir tanto memoria duradera como estado de trabajo por hilo.
 - **Integración de transporte y automatización.** Los transportes IM vinculan endpoints externos de nuevo a conversaciones. Fuentes de eventos, tareas programadas, webhooks y disparadores de integraciones entran por el mismo runtime para despertar sesiones y producir eventos visibles en conversación.
 - **Gestión de la ventana de contexto.** El contexto del modelo se compila a partir de canonical context items en cadenas de archivo shared/private y una ventana viva de cola. Archive points, compaction runs y per-event context policies limitan el tamaño del prompt sin perder semántica de alcance ni de evento.
@@ -82,7 +82,7 @@ Synapse adopta una arquitectura centrada en la conversación. A partir de ese n�
 ## Flujos típicos
 
 - Compartir un Actor de investigación con otro Workspace, darle acceso a los plugins adecuados y ponerlo a trabajar en la misma conversación que las personas.
-- Emparejar un Relay de escritorio para habilitar navegador, sistema de archivos y línea de comandos sin abrir esos recursos a todo el mundo.
+- Emparejar un dispositivo (device) de escritorio para habilitar navegador, sistema de archivos y línea de comandos sin abrir esos recursos a todo el mundo.
 - Registrar fuentes de eventos de GitHub, GitLab o webhooks personalizados para abrir una conversación de incidente y convocar a los Actors correctos.
 - Conectar un agente de programación que corre en otra máquina como Remote Agent, manteniendo sus propias herramientas y su entorno de ejecución externo.
 
@@ -96,7 +96,7 @@ Synapse está explorando un modelo de proyección sobre sistema de archivos virt
 
 Lo implementado hoy incluye:
 
-- **Exposiciones VFS por sesión.** Relay VFS proyecta hoy los runtimes builtin de browser y CUA bajo rutas por sesión, con controles basados en archivos para crear, inspeccionar y cerrar sesiones.
+- **Exposiciones VFS por sesión.** El runtime de dispositivo (device runtime) proyecta los runtimes builtin de browser y CUA bajo rutas por sesión, con controles basados en archivos para crear, inspeccionar y cerrar sesiones.
 - **Proyección de browser.** La superficie de browser ya expone estado de páginas, listado de páginas, snapshots y screenshots de la página actual, una proyección en árbol con archivos por nodo, y archivos de acción escribibles para navegación e interacción.
 - **Proyección de CUA.** La superficie de CUA ya expone displays, ventanas, apps, capturas, estado del teclado, resúmenes del elemento enfocado y un árbol semántico de accesibilidad cuando el backend de escritorio está disponible.
 - **Archivos de acción.** Los nodos escribibles ya se traducen a acciones concretas del runtime. En browser esto incluye `navigate`, `new_page`, `select_page`, `click`, `fill`, `press_key` y `evaluate`; en CUA incluye `click`, `type_text`, `press_keys` y `scroll`, además de acciones semánticas por nodo cuando existen límites accionables.
@@ -182,12 +182,15 @@ Dentro de `packages/mobile-app` también puedes usar `npm run ios` o `npm run an
 
 ## Qué incluye este repositorio
 
-- `packages/api`: API con Fastify y runtime de orquestación, chat, memoria, archivos, automatización, plugins, Relay, IM y auditoría
+- `packages/api`: API con Fastify y runtime de orquestación, chat, memoria, archivos, automatización, plugins, dispositivos (devices), IM y auditoría
 - `packages/web-next`: aplicación web de escritorio en Next.js y dashboard del Workspace
 - `packages/mobile-app`: app móvil con Expo Router y versión web móvil exportable
+- `packages/device-runtime`: runtime del dispositivo en TS, con cliente WSS del Control Plane, host MCP, adaptador de túnel frp y exposiciones builtin de filesystem/commandline/browser/CUA
+- `packages/device-sdk`: SDK REST/eventos consumido por el dashboard y la CLI
+- `packages/device-protocol`: schemas Zod y enums compartidos entre la API y el runtime del dispositivo
 - `packages/remote-agent-daemon`: daemon que se ejecuta en la máquina para conectar runtimes externos como Codex CLI o Claude Code
 - `packages/shared`: tipos compartidos, contratos de protocolo, definiciones de automatización y constantes
-- `subprojects/cli-anything`: paquete vendorizado de capacidades usado por las skills cargadas automáticamente vía Relay
+- `subprojects/cli-anything`: paquete vendorizado de capacidades usado por las skills cargadas automáticamente desde los dispositivos
 
 ## Despliegue
 

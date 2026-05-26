@@ -43,34 +43,34 @@
 
 Synapse is a conversation-centric runtime for digital teammates.
 
-Most AI products treat chat as a thin interface on top of isolated bots. Synapse treats the conversation itself as the collaboration boundary: humans, platform-native actors, and bridged remote agents can work in the same thread; memory, permissions, plugins, relay-exposed tools, and event sources are governed at the workspace layer; shareable teammates can be added across workspaces like contacts and then granted the right resources to work.
+Most AI products treat chat as a thin interface on top of isolated bots. Synapse treats the conversation itself as the collaboration boundary: humans, platform-native actors, and bridged remote agents can work in the same thread; memory, permissions, plugins, device-exposed tools, and event sources are governed at the workspace layer; shareable teammates can be added across workspaces like contacts and then granted the right resources to work.
 
 ## Why Synapse
 
 - **Conversation-first, not bot-first.** A conversation is the runtime boundary for participants, transcript visibility, actor execution, wakeups, and memory handoff.
 - **Shareable teammates.** Workspace members, actors, and remote agents can be shared across workspaces and added through a contact-style graph. Shared actors can work with the destination workspace's granted resources.
-- **Governed resource access.** Plugins, skills, MCP relay exposures, and event sources are modeled as workspace-owned resources with explicit access control, grants, and audit trails.
+- **Governed resource access.** Plugins, skills, device exposures, and event sources are modeled as workspace-owned resources with explicit access control, grants, and audit trails.
 - **Cloud coordination plus local execution.** Teams can collaborate in the web app while still reaching local browsers, desktops, filesystems, internal services, or bridged remote-agent runtimes.
 - **Event-driven teamwork.** Scheduled jobs, custom webhooks, and integration-backed event sources can wake conversations and route work automatically.
 - **Native and remote agents together.** Platform-native actors live inside Synapse. Remote agents join through a bridge and keep their own runtime stack.
 
 ## Core Model
 
-| Concept          | What it means in Synapse                                                                          |
-| ---------------- | ------------------------------------------------------------------------------------------------- |
-| `Workspace`      | Ownership and governance boundary for teammates, plugins, relay devices, and event sources.       |
-| `Conversation`   | Shared runtime where participants collaborate and work is persisted.                              |
-| `Actor`          | A native Synapse teammate managed by the platform.                                                |
-| `Remote agent`   | An external runtime bridged into a conversation without becoming a native actor.                  |
-| `Resource layer` | Plugins, skills, MCP relay exposures, and event sources that can be granted, audited, and reused. |
+| Concept          | What it means in Synapse                                                                       |
+| ---------------- | ---------------------------------------------------------------------------------------------- |
+| `Workspace`      | Ownership and governance boundary for teammates, plugins, devices, and event sources.          |
+| `Conversation`   | Shared runtime where participants collaborate and work is persisted.                           |
+| `Actor`          | A native Synapse teammate managed by the platform.                                             |
+| `Remote agent`   | An external runtime bridged into a conversation without becoming a native actor.               |
+| `Resource layer` | Plugins, skills, device exposures, and event sources that can be granted, audited, and reused. |
 
 ## Architecture Overview
 
 Synapse uses a conversation-centric architecture. Around that core, the system separates resource runtimes, access control, memory, transport integration, and context management into distinct subsystems.
 
 - **Conversation and session runtime.** `conversation`, participants, conversation items, actor sessions, and `session_wakeups` define the primary collaboration and execution model. Web chat, remote-agent bridges, and IM transports reuse this model rather than implementing separate conversation systems.
-- **Resource runtimes.** Plugins, installed skills, relay exposures, actors, and remote agents are represented as distinct runtime resources with independent state, lifecycle, and APIs. Marketplace catalog metadata is stored separately from installed runtime state.
-- **Access control.** Authorization is evaluated against explicit resource types, including `workspace`, `conversation`, `actor`, `remote_agent`, `plugin_installation`, `installed_skill`, `relay_capability`, and `memory_item`. Sharing, invocation, and governance therefore rely on the same access model.
+- **Resource runtimes.** Plugins, installed skills, device exposures, actors, and remote agents are represented as distinct runtime resources with independent state, lifecycle, and APIs. Marketplace catalog metadata is stored separately from installed runtime state.
+- **Access control.** Authorization is evaluated against explicit resource types, including `workspace`, `conversation`, `actor`, `remote_agent`, `plugin_installation`, `installed_skill`, `device_capability`, and `memory_item`. Sharing, invocation, and governance therefore rely on the same access model.
 - **Memory subsystem.** Memory is partitioned by scope: `workspace_shared`, `conversation_shared`, `actor_private`, `participant_private`, and `user_private`. Retrieval combines lexical indexing and embeddings to support both durable memory and thread-local working state.
 - **Transport and automation integration.** IM transports bind external endpoints back to conversations. Event sources, schedules, webhooks, and integration triggers enter the same runtime so they can wake sessions and emit conversation-visible events.
 - **Context window management.** Model context is compiled from canonical context items into shared and private archive chains plus a live tail window. Archive points, compaction runs, and per-event context policies bound prompt size while preserving scope and event semantics.
@@ -78,7 +78,7 @@ Synapse uses a conversation-centric architecture. Around that core, the system s
 ## Example Flows
 
 - Share a research actor into another workspace, grant it the right plugins, and let it work in the same thread as people.
-- Pair a desktop relay so teammates can use browser, filesystem, or command-line capabilities without giving every conversation global access.
+- Pair a desktop device so teammates can use browser, filesystem, or command-line capabilities without giving every conversation global access.
 - Register GitHub, GitLab, or custom webhook event sources to wake an incident room and bring the right actors into the conversation.
 - Bridge a coding agent from another machine as a remote agent and let it collaborate in Synapse while keeping its own external runtime and tools.
 
@@ -92,7 +92,7 @@ Synapse is exploring a virtual-filesystem projection for selected local runtimes
 
 Current support includes:
 
-- **Session-scoped VFS exposures.** Relay VFS currently projects builtin browser and CUA runtimes under session paths, with file-based controls for session creation, inspection, and teardown.
+- **Session-scoped VFS exposures.** The device runtime projects builtin browser and CUA runtimes under session paths, with file-based controls for session creation, inspection, and teardown.
 - **Browser projection.** The browser surface exposes page state, page lists, current-page snapshots and screenshots, a tree projection with per-node files, and writable action files for navigation and interaction.
 - **CUA projection.** The CUA surface exposes displays, windows, apps, captures, keyboard state, focused-element summaries, and a semantic accessibility tree when the desktop backend is available.
 - **Action files.** Writable nodes are already mapped to concrete runtime actions. In the browser surface this includes operations such as `navigate`, `new_page`, `select_page`, `click`, `fill`, `press_key`, and `evaluate`; in the CUA surface this includes `click`, `type_text`, `press_keys`, and `scroll`, with per-node semantic actions where actionable bounds are available.
@@ -178,12 +178,15 @@ You can also use `npm run ios` or `npm run android` inside `packages/mobile-app`
 
 ## Surfaces in This Repo
 
-- `packages/api` — Fastify API, orchestration runtime, chat, memory, files, automation, plugins, relay, IM, and audit surfaces
+- `packages/api` — Fastify API, orchestration runtime, chat, memory, files, automation, plugins, devices, IM, and audit surfaces
 - `packages/web-next` — Next.js desktop web app and workspace dashboard
 - `packages/mobile-app` — Expo Router mobile app and exported mobile web surface
+- `packages/device-runtime` — TS device runtime: Control Plane WSS client, MCP host, frp tunnel adapter, builtin filesystem/commandline/browser/CUA exposures
+- `packages/device-sdk` — REST/event SDK consumed by the dashboard and CLI
+- `packages/device-protocol` — Zod schemas + enums shared by API and device runtime
 - `packages/remote-agent-daemon` — machine-side daemon for bridging external runtimes such as Codex CLI or Claude Code
 - `packages/shared` — shared types, protocol contracts, automation definitions, and constants
-- `subprojects/cli-anything` — vendored capability pack used by relay-backed auto-loaded skills
+- `subprojects/cli-anything` — vendored capability pack used by device-side auto-loaded skills
 
 ## Deployment
 

@@ -368,11 +368,12 @@ async function createSessionTransport(params: {
   conversationKind: "private" | "group" | "virtual"
   conversationBoundary: ConversationBoundary
 }): Promise<ActiveTransport> {
-  // sessionId is used downstream as a cache scope (relay tool runtime context
-  // map keys, "session:<id>:turn:<uuid>" reuse keys) AND historically fed into
-  // a UUID-typed column lookup in subject-resolution. The subject-resolution
-  // path is now gated on actorId so non-UUID values are safe there, but we
-  // still hand the resolver a real UUID so any future caller that treats
+  // sessionId is used downstream as a cache scope (device-tool runtime
+  // context map keys, "session:<id>:turn:<uuid>" reuse keys) AND
+  // historically fed into a UUID-typed column lookup in subject-
+  // resolution. The subject-resolution path is now gated on actorId so
+  // non-UUID values are safe there, but we still hand the resolver a
+  // real UUID so any future caller that treats
   // sessionId as a UUID does not silently break the reverse-MCP surface.
   const sessionKey = randomUUID()
   const server = new McpServer(
