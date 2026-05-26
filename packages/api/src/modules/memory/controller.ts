@@ -259,22 +259,52 @@ async function requireMemoryPermission(
   permission: "read" | "edit" | "retarget" | "delete",
   errorMessage: string
 ) {
-  // PR-fix-round-3: previously called authorizePermission without a runtime
-  // context, so the PR5 memory_access_grants overlay never fired on the
-  // single-item REST routes (GET/PUT/DELETE /:memoryId). A grantee with
-  // an explicit `memory.read/edit/delete` grant would see the item in
-  // list/search (which now wires runtimeContext) but still get 403 here.
-  // Build the runtime context from the request and pass it through.
+  // PR-fix-round-4: also include the conversation context when building the
+  // runtime context — round 3 only passed workspaceId, so a
+  // `subject=actor + scope=conversation` item-level grant would still 403
+  // because the conversation subject wasn't in runtimeScopeSubjectIds.
+  // We pull conversationId from (a) explicit `?conversationId=` query
+  // override (chat surfaces) and (b) the memory_space's anchor — for
+  // conversation_shared / participant_private spaces the conversation is
+  // the space's anchor itself, so the scope match works without any
+  // client-side hint.
   const subject = getRequestAccessSubject(request)
   const { workspaceId } = request.params as { workspaceId: string }
   const principal = accessSubjectToSubjectRef(subject)
   let runtimeSubjectIds: readonly string[] | undefined
   let runtimeScopeSubjectIds: readonly string[] | undefined
   if (principal) {
+    const query = (request.query ?? {}) as { conversationId?: string }
+    let conversationId =
+      typeof query.conversationId === "string" &&
+      query.conversationId.length > 0
+        ? query.conversationId
+        : undefined
+    if (!conversationId) {
+      const spaceAnchor = await db
+        .selectFrom("memory_items as mi")
+        .innerJoin("memory_spaces as ms", "ms.id", "mi.memory_space_id")
+        .leftJoin(
+          "conversation_actor_contexts as cac",
+          "cac.id",
+          "ms.anchor_conversation_actor_context_id"
+        )
+        .select([
+          "ms.anchor_conversation_id as anchor_conv",
+          "cac.conversation_id as ctx_conv",
+        ])
+        .where("mi.id", "=", memoryId)
+        .where("mi.workspace_id", "=", workspaceId)
+        .limit(1)
+        .executeTakeFirst()
+      conversationId =
+        spaceAnchor?.anchor_conv ?? spaceAnchor?.ctx_conv ?? undefined
+    }
     try {
       const ctx = await buildRuntimePrincipalContext(db, {
         principal,
         workspaceId,
+        conversationId,
       })
       runtimeSubjectIds = ctx.runtimeSubjectIds
       runtimeScopeSubjectIds = ctx.runtimeScopeSubjectIds

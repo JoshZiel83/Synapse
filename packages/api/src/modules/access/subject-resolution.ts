@@ -362,6 +362,92 @@ export async function buildRuntimePrincipalContext(
   }
 }
 
+/**
+ * PR-fix-round-4: companion to `buildConversationCapabilitySubjects`.
+ * Returns the access_subjects.id set used as the right-hand side of a
+ * scope_subject_id match — i.e. which subjects represent the runtime
+ * group context the principal is currently inside. Used by skill /
+ * plugin / relay visibility listings to pass `runtimeScopeSubjectIds`
+ * to `lookupResources` and `listGrantedResourceIds` so a scoped grant
+ * (subject=actor + scope=conversation) is actually visible in tool /
+ * skill / plugin enumeration.
+ *
+ * The function mirrors the gating in `buildConversationCapabilitySubjects`:
+ * the conversation subject is included only when the principal
+ * (actor / remote_agent / workspace_member) is an active participant of
+ * the named conversation. The workspace subject is always included
+ * when a workspaceId is supplied.
+ */
+export async function computeRuntimeScopeSubjectIds(
+  db: KyselyDb,
+  params: {
+    workspaceId: string
+    workspaceMemberId?: string | null
+    actorId?: string | null
+    remoteAgentId?: string | null
+    conversationId?: string | null
+  }
+): Promise<string[]> {
+  const scopeIds: string[] = []
+  const workspaceSubjectId = await upsertAccessSubject(db, {
+    kind: SUBJECT_KIND.WORKSPACE,
+    workspaceId: params.workspaceId,
+  })
+  scopeIds.push(workspaceSubjectId)
+
+  if (params.conversationId) {
+    let anyActive = false
+    if (params.actorId) {
+      const actorSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: params.actorId,
+      })
+      anyActive =
+        anyActive ||
+        (await isSubjectActiveConversationParticipant(
+          db,
+          params.conversationId,
+          actorSubjectId
+        ))
+    }
+    if (!anyActive && params.remoteAgentId) {
+      const remoteAgentSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: params.remoteAgentId,
+      })
+      anyActive =
+        anyActive ||
+        (await isSubjectActiveConversationParticipant(
+          db,
+          params.conversationId,
+          remoteAgentSubjectId
+        ))
+    }
+    if (!anyActive && params.workspaceMemberId) {
+      const memberSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: params.workspaceMemberId,
+      })
+      anyActive =
+        anyActive ||
+        (await isSubjectActiveConversationParticipant(
+          db,
+          params.conversationId,
+          memberSubjectId
+        ))
+    }
+    if (anyActive) {
+      const convSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: params.conversationId,
+      })
+      scopeIds.push(convSubjectId)
+    }
+  }
+
+  return Array.from(new Set(scopeIds))
+}
+
 export async function buildConversationCapabilitySubjects(
   db: KyselyDb,
   params: {

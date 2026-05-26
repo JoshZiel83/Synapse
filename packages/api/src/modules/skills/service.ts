@@ -73,7 +73,10 @@ import {
   getFileAccessInfo,
   getFileUrlById,
 } from "../files/service.js"
-import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js"
+import {
+  buildConversationCapabilitySubjects,
+  computeRuntimeScopeSubjectIds,
+} from "../access/subject-resolution.js"
 import {
   listRelayAutoLoadedSkills,
   readRelayAutoLoadedSkill,
@@ -3400,6 +3403,17 @@ export async function listVisibleSkills(input: {
   conversationBoundary?: "internal" | "external"
 }) {
   const subjects = await buildVisibilitySubjects(input)
+  // PR-fix-round-4: compute the scope subject set for this conversation
+  // context once and pass it through to every lookupResources call so
+  // scoped grants (subject=actor + scope=conversation) show up in the
+  // skill list. Without this scoped grants were silently filtered out by
+  // listGrantedResourceIds's default "scope IS NULL only" branch.
+  const runtimeScopeSubjectIds = await computeRuntimeScopeSubjectIds(db, {
+    workspaceId: input.workspaceId,
+    workspaceMemberId: input.workspaceMemberId,
+    actorId: input.actorId,
+    conversationId: input.conversationId,
+  })
   const relayAutoLoadedSkills = await listRelayAutoLoadedSkills({
     workspaceId: input.workspaceId,
     actorId: input.actorId,
@@ -3419,6 +3433,7 @@ export async function listVisibleSkills(input: {
         resourceType: ACCESS_ACTIONS["installed_skill.use"].resourceType,
         permission: ACCESS_ACTIONS["installed_skill.use"].permission,
         subject,
+        runtimeScopeSubjectIds,
       })
     )
   )

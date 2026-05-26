@@ -464,7 +464,8 @@ async function hasRemoteAgentPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   remoteAgentId: string,
-  permission: string
+  permission: string,
+  runtimeScopeSubjectIds?: readonly string[]
 ): Promise<boolean> {
   const remoteAgent = await loadRemoteAgentRow(db, remoteAgentId)
   if (!remoteAgent || !remoteAgent.is_active) {
@@ -491,10 +492,16 @@ async function hasRemoteAgentPermission(
   // be granted; the publishing workspace's auto-write happens on create.
   const canUse =
     canManage ||
-    (await hasResourceGrant(db, "remote_agent", remoteAgentId, {
-      type: "workspace_member",
-      id: access.id,
-    }))
+    (await hasResourceGrant(
+      db,
+      "remote_agent",
+      remoteAgentId,
+      {
+        type: "workspace_member",
+        id: access.id,
+      },
+      runtimeScopeSubjectIds
+    ))
 
   switch (permission) {
     case "discover":
@@ -917,7 +924,8 @@ async function hasInstalledSkillPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   skillId: string,
-  permission: string
+  permission: string,
+  runtimeScopeSubjectIds?: readonly string[]
 ): Promise<boolean> {
   const row = await db
     .selectFrom("installed_skills")
@@ -930,7 +938,15 @@ async function hasInstalledSkillPermission(
   }
 
   if (permission === "use" || permission === "view") {
-    if (await hasResourceGrant(db, "installed_skill", skillId, subject)) {
+    if (
+      await hasResourceGrant(
+        db,
+        "installed_skill",
+        skillId,
+        subject,
+        runtimeScopeSubjectIds
+      )
+    ) {
       return true
     }
   }
@@ -957,7 +973,8 @@ async function hasPluginInstallationPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   installationId: string,
-  permission: string
+  permission: string,
+  runtimeScopeSubjectIds?: readonly string[]
 ): Promise<boolean> {
   const row = await db
     .selectFrom("plugin_installations")
@@ -971,7 +988,13 @@ async function hasPluginInstallationPermission(
 
   if (permission === "use" || permission === "view") {
     if (
-      await hasResourceGrant(db, "plugin_installation", installationId, subject)
+      await hasResourceGrant(
+        db,
+        "plugin_installation",
+        installationId,
+        subject,
+        runtimeScopeSubjectIds
+      )
     ) {
       return true
     }
@@ -1070,7 +1093,8 @@ async function hasRelayCapabilityPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   capabilityId: string,
-  permission: string
+  permission: string,
+  runtimeScopeSubjectIds?: readonly string[]
 ): Promise<boolean> {
   const row = await db
     .selectFrom("relay_capabilities as capability")
@@ -1098,7 +1122,15 @@ async function hasRelayCapabilityPermission(
     permission === "view" ||
     permission === "request_relay_authorization"
   ) {
-    if (await hasResourceGrant(db, "relay_capability", capabilityId, subject)) {
+    if (
+      await hasResourceGrant(
+        db,
+        "relay_capability",
+        capabilityId,
+        subject,
+        runtimeScopeSubjectIds
+      )
+    ) {
       return true
     }
   }
@@ -1129,7 +1161,8 @@ async function hasRelayCapabilityPermission(
 async function listActorIds(
   db: KyselyDb,
   subject: PermissionSubject,
-  limit?: number
+  limit?: number,
+  runtimeScopeSubjectIds?: readonly string[]
 ) {
   if (subject.type !== "workspace_member") {
     return subject.type === "actor" ? [subject.id] : []
@@ -1171,7 +1204,13 @@ async function listActorIds(
       .where("a.created_by_workspace_member_id", "=", access.id)
       .orderBy("a.created_at", "desc")
       .execute(),
-    listGrantedResourceIds(db, "actor", subject),
+    listGrantedResourceIds(
+      db,
+      "actor",
+      subject,
+      undefined,
+      runtimeScopeSubjectIds
+    ),
   ])
   return finalizeResourceIdList(
     [ownActors.map((row) => row.id), grantedIds],
@@ -1182,7 +1221,8 @@ async function listActorIds(
 async function listRemoteAgentIds(
   db: KyselyDb,
   subject: PermissionSubject,
-  limit?: number
+  limit?: number,
+  runtimeScopeSubjectIds?: readonly string[]
 ) {
   if (subject.type !== "workspace_member") {
     return []
@@ -1228,7 +1268,13 @@ async function listRemoteAgentIds(
       .where("created_by_workspace_member_id", "=", access.id)
       .orderBy("created_at", "desc")
       .execute(),
-    listGrantedResourceIds(db, "remote_agent", subject),
+    listGrantedResourceIds(
+      db,
+      "remote_agent",
+      subject,
+      undefined,
+      runtimeScopeSubjectIds
+    ),
   ])
   return finalizeResourceIdList(
     [ownAgents.map((row) => row.id), grantedIds],
@@ -1796,7 +1842,8 @@ export async function checkPermission(
         db,
         params.subject,
         params.resourceId,
-        params.permission
+        params.permission,
+        params.runtimeScopeSubjectIds
       )
     case "conversation_actor_context":
       return hasConversationActorContextPermission(
@@ -1832,14 +1879,16 @@ export async function checkPermission(
         db,
         params.subject,
         params.resourceId,
-        params.permission
+        params.permission,
+        params.runtimeScopeSubjectIds
       )
     case "plugin_installation":
       return hasPluginInstallationPermission(
         db,
         params.subject,
         params.resourceId,
-        params.permission
+        params.permission,
+        params.runtimeScopeSubjectIds
       )
     case "relay_device":
       return hasRelayDevicePermission(
@@ -1860,7 +1909,8 @@ export async function checkPermission(
         db,
         params.subject,
         params.resourceId,
-        params.permission
+        params.permission,
+        params.runtimeScopeSubjectIds
       )
     case "model_group":
       return hasModelGroupPermission(
@@ -1905,13 +1955,23 @@ export async function lookupResources(
       return params.permission === "view" ||
         params.permission === "discover" ||
         params.permission === "invoke"
-        ? listActorIds(db, params.subject, params.limit)
+        ? listActorIds(
+            db,
+            params.subject,
+            params.limit,
+            params.runtimeScopeSubjectIds
+          )
         : []
     case "remote_agent":
       return params.permission === "view" ||
         params.permission === "discover" ||
         params.permission === "invoke"
-        ? listRemoteAgentIds(db, params.subject, params.limit)
+        ? listRemoteAgentIds(
+            db,
+            params.subject,
+            params.limit,
+            params.runtimeScopeSubjectIds
+          )
         : []
     case "model_group":
       return params.permission === "use" || params.permission === "view"

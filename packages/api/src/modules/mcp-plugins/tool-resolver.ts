@@ -18,7 +18,10 @@ import { ACCESS_ACTIONS } from "../access/actions.js"
 import { db } from "../../infrastructure/database/kysely.js"
 import { assertLegacyTargetType } from "../access/bindings.js"
 import { loadAccessBindingRowsForResources } from "../access/binding-storage.js"
-import { buildConversationCapabilitySubjects } from "../access/subject-resolution.js"
+import {
+  buildConversationCapabilitySubjects,
+  computeRuntimeScopeSubjectIds,
+} from "../access/subject-resolution.js"
 import { getWorkspaceCapabilityConversationTypePolicyMap } from "../capabilities/conversation-type-policies.js"
 import { resolveInstallationConfig } from "./config-resolver.js"
 import {
@@ -889,6 +892,14 @@ async function loadConversationTargetedResourceIds(params: {
 
 async function loadVisiblePlugins(params: ResolveParams) {
   const subjects = await buildVisibilitySubjects(params)
+  // PR-fix-round-4: scope-aware visibility so subject=actor + scope=conversation
+  // plugin grants appear in tool listings.
+  const runtimeScopeSubjectIds = await computeRuntimeScopeSubjectIds(db, {
+    workspaceId: params.workspaceId,
+    workspaceMemberId: params.workspaceMemberId,
+    actorId: params.actorId,
+    conversationId: params.conversationId,
+  })
   const visibleInstallationIds = new Set<string>()
 
   const lookups = await Promise.all(
@@ -897,6 +908,7 @@ async function loadVisiblePlugins(params: ResolveParams) {
         resourceType: ACCESS_ACTIONS["plugin_installation.use"].resourceType,
         permission: ACCESS_ACTIONS["plugin_installation.use"].permission,
         subject,
+        runtimeScopeSubjectIds,
       })
     )
   )
@@ -991,6 +1003,12 @@ async function loadVisiblePlugins(params: ResolveParams) {
 
 async function loadVisibleRelayExposures(params: ResolveParams) {
   const subjects = await buildVisibilitySubjects(params)
+  const runtimeScopeSubjectIds = await computeRuntimeScopeSubjectIds(db, {
+    workspaceId: params.workspaceId,
+    workspaceMemberId: params.workspaceMemberId,
+    actorId: params.actorId,
+    conversationId: params.conversationId,
+  })
   const visibleCapabilityIds = new Set<string>()
 
   const lookups = await Promise.all(
@@ -999,6 +1017,7 @@ async function loadVisibleRelayExposures(params: ResolveParams) {
         resourceType: ACCESS_ACTIONS["relay_capability.use"].resourceType,
         permission: ACCESS_ACTIONS["relay_capability.use"].permission,
         subject,
+        runtimeScopeSubjectIds,
       })
     )
   )

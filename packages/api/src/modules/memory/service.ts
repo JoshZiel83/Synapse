@@ -1207,16 +1207,18 @@ function buildSearchFilters(
 
   if (isActorSearchContext(input)) {
     if (grantSpaceIds.length > 0) {
-      const ids = sql.raw(
-        `ARRAY[${grantSpaceIds.map((id) => `'${id}'`).join(",")}]::uuid[]`
-      )
+      // PR-fix-round-4: parameterized array literal instead of sql.raw with
+      // hand-quoted UUIDs. Source is currently the DB itself so injection
+      // risk is low, but `sql.raw` propagates easily — this keeps the
+      // injection surface zero.
+      const ids = [...grantSpaceIds]
       if (input.directWorkspaceMemberId) {
         conditions.push(
-          sql`(${space}.space_type != 'user_private' OR ${space}.anchor_workspace_member_id = ${input.directWorkspaceMemberId} OR ${space}.id = ANY(${ids}))`
+          sql`(${space}.space_type != 'user_private' OR ${space}.anchor_workspace_member_id = ${input.directWorkspaceMemberId} OR ${space}.id = ANY(${ids}::uuid[]))`
         )
       } else {
         conditions.push(
-          sql`(${space}.space_type != 'user_private' OR ${space}.id = ANY(${ids}))`
+          sql`(${space}.space_type != 'user_private' OR ${space}.id = ANY(${ids}::uuid[]))`
         )
       }
     } else if (input.directWorkspaceMemberId) {
