@@ -43,6 +43,7 @@ export default async function imPublicController(app: FastifyInstance) {
         account,
         headers: request.headers as Record<string, unknown>,
         body: request.body,
+        rawBody: (request as unknown as { rawBody?: string }).rawBody,
         emitInbound: async (envelope) => {
           await ingestInboundEnvelope({ account, envelope })
         },
@@ -66,6 +67,7 @@ export default async function imPublicController(app: FastifyInstance) {
         accountId: request.params.accountId,
         headers: request.headers as Record<string, unknown>,
         body: request.body,
+        rawBody: (request as unknown as { rawBody?: string }).rawBody,
       })
       return reply.status(result.statusCode).send(result.body)
     }

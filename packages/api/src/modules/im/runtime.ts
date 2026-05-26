@@ -179,6 +179,7 @@ export async function handleFeishuWebhookRequest(params: {
   accountId: string
   headers: Record<string, unknown>
   body: unknown
+  rawBody?: string
 }) {
   // Legacy route. Delegates to the new connector.handleWebhook path so the
   // logic lives in exactly one place. Public-controller.ts also has a
@@ -211,6 +212,7 @@ export async function handleFeishuWebhookRequest(params: {
     account,
     headers: params.headers,
     body: params.body,
+    rawBody: params.rawBody,
     emitInbound: async (envelope) => {
       await ingestInboundEnvelope({ account, envelope })
     },

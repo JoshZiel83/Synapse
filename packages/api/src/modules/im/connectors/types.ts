@@ -136,6 +136,15 @@ export interface WebhookHandlerInput {
   headers: Record<string, unknown>
   body: unknown
   /**
+   * Raw, unparsed HTTP body string captured by the JSON content-type parser
+   * in `packages/api/src/index.ts` (stashed as `(request as any).rawBody`).
+   * Required for connectors that must verify a signature over the original
+   * bytes (e.g. QQ Ed25519: `timestamp + raw body`). Undefined for legacy
+   * paths that didn't plumb it; connectors should fall back to re-encoding
+   * `body` only if their signature scheme tolerates that (most don't).
+   */
+  rawBody?: string
+  /**
    * Where the connector should push normalized inbound events. Supplied by
    * the HTTP layer (public-controller.ts) — typically a thin wrapper around
    * `ingestInboundEnvelope`. Webhook accounts don't go through the runtime
