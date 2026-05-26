@@ -14,6 +14,13 @@ export {
   pathWithinPrefix,
   normalizeFilesystemPolicy,
 } from "./access/policies/matchers.js"
+export type {
+  FilesystemPolicyShape,
+  NormalizedFilesystemPolicy,
+  CommandlinePolicyShape,
+  CuaPolicyShape,
+  BrowserPolicyShape,
+} from "./access/policies/matchers.js"
 export * from "./utils/index.js"
 export * from "./automation/index.js"
 export * from "./access/index.js"

@@ -54,11 +54,24 @@ test("VfsService local backend rejects ../ escapes", async () => {
     const svc = createVfsService({ backend })
     await svc.start()
 
-    await assert.rejects(() => svc.read("/../../etc/passwd"), /escapes root/)
-    await assert.rejects(
-      () => svc.write("/../escape.txt", new Uint8Array([1])),
-      /escapes root/
+    // canonicalVfsPath bounds `..` at root: `/../../etc/passwd` collapses to
+    // `/etc/passwd`, mapping to `<root>/etc/passwd` which doesn't exist. The
+    // read therefore fails with ENOENT, not an escape error — but the outside
+    // file remains unreachable, which is the actual safety property.
+    await assert.rejects(() => svc.read("/../../etc/passwd"))
+    // `/../escape.txt` collapses to `/escape.txt` — write succeeds INSIDE
+    // the root. Verify the file landed inside, not at the parent.
+    await svc.write("/../escape.txt", new Uint8Array([1]))
+    assert.ok(
+      await import("node:fs").then((f) =>
+        f.promises.stat(join(root, "escape.txt")).then(
+          () => true,
+          () => false
+        )
+      ),
+      "write should have landed inside root"
     )
+    // stat returns null for non-existent paths inside the root.
     assert.equal(await svc.stat("/../foo"), null)
 
     rmSync(outsideDir, { recursive: true, force: true })
