@@ -401,7 +401,6 @@ test(
             relay_capability_id: cap.id as string,
             relay_exposure_id: exp.id as string,
             subject_id: cacSubject,
-            scope: "actor",
             retention: "until_revoked",
           } as any)
           .execute(),

@@ -60,7 +60,6 @@ import {
   RELATIONSHIP_APPROVAL_MODES,
   RELATIONSHIP_REQUEST_STATUSES,
   RELAY_AUTHORIZATION_GRANT_RETENTIONS,
-  RELAY_AUTHORIZATION_GRANT_SCOPES,
   RELAY_AUTHORIZATION_GRANT_STATUSES,
   RELAY_AUTHORIZATION_REQUEST_MODES,
   RELAY_MANAGEABLE_TRUST_STATUSES,
@@ -103,7 +102,6 @@ import type {
   PluginConnectionsOwnerScope,
   PluginConnectionsStatus,
   RelayAuthorizationGrantsRetention,
-  RelayAuthorizationGrantsScope,
   RelayAuthorizationGrantsStatus,
   RelayAuthorizationRequestMode,
   RelayCatalogRevisionsStatus,
@@ -433,12 +431,6 @@ type _RelationshipRequestStatusMatchesDb = Assert<
   IsEqual<
     (typeof RELATIONSHIP_REQUEST_STATUSES)[number],
     RelationshipRequestStatus
-  >
->
-type _RelayAuthorizationGrantScopeMatchesDb = Assert<
-  IsEqual<
-    (typeof RELAY_AUTHORIZATION_GRANT_SCOPES)[number],
-    RelayAuthorizationGrantsScope
   >
 >
 type _RelayAuthorizationGrantStatusMatchesDb = Assert<

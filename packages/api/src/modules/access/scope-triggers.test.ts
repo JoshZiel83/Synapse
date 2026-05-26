@@ -485,7 +485,7 @@ async function newRelayDevice(
 }
 
 test(
-  "tg_relay_grant_validate: legacy NULL subject_id with scope='once' is accepted",
+  "tg_relay_grant_validate: subject_id is NOT NULL post-D1 (legacy NULL writers rejected)",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -495,24 +495,26 @@ test(
         wsId
       )
 
-      await db
-        .insertInto("relay_authorization_grants")
-        .values({
-          workspace_id: wsId,
-          relay_device_id: deviceId,
-          relay_capability_id: capabilityId,
-          relay_exposure_id: exposureId,
-          subject_id: null,
-          scope: "once",
-          retention: "consume_once",
-        } as any)
-        .execute()
+      await expectReject(
+        db
+          .insertInto("relay_authorization_grants")
+          .values({
+            workspace_id: wsId,
+            relay_device_id: deviceId,
+            relay_capability_id: capabilityId,
+            relay_exposure_id: exposureId,
+            subject_id: null,
+            retention: "consume_once",
+          } as any)
+          .execute(),
+        /null value in column "subject_id"|violates not-null constraint|workspace mismatch|not workspace-bound/
+      )
     })
   }
 )
 
 test(
-  "tg_relay_grant_validate: scope_subject_id pointing at actor is rejected even with NULL subject_id",
+  "tg_relay_grant_validate: scope_subject_id pointing at actor is rejected",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -526,6 +528,10 @@ test(
         kind: SUBJECT_KIND.ACTOR,
         actorId,
       })
+      const workspaceSubj = await subj(db, {
+        kind: SUBJECT_KIND.WORKSPACE,
+        workspaceId: wsId,
+      })
 
       await expectReject(
         db
@@ -535,9 +541,8 @@ test(
             relay_device_id: deviceId,
             relay_capability_id: capabilityId,
             relay_exposure_id: exposureId,
-            subject_id: null,
+            subject_id: workspaceSubj,
             scope_subject_id: actorSubj,
-            scope: "once",
             retention: "consume_once",
           } as any)
           .execute(),
@@ -556,6 +561,10 @@ test(
       const wsB = await newWorkspace(db)
       const a = await newRelayDevice(db, wsA)
       const b = await newRelayDevice(db, wsB)
+      const wsASubj = await subj(db, {
+        kind: SUBJECT_KIND.WORKSPACE,
+        workspaceId: wsA,
+      })
 
       // Try to mix wsA device with wsB capability — the helper relay_resource_workspace_id
       // also enforces capability.exposure_id = exposure_id, so this throws either at the
@@ -568,8 +577,7 @@ test(
             relay_device_id: a.deviceId,
             relay_capability_id: b.capabilityId,
             relay_exposure_id: a.exposureId,
-            subject_id: null,
-            scope: "workspace",
+            subject_id: wsASubj,
             retention: "until_revoked",
           } as any)
           .execute(),
@@ -580,7 +588,7 @@ test(
 )
 
 test(
-  "tg_relay_grant_validate: subject_id kind=user rejected when subject_id provided",
+  "tg_relay_grant_validate: subject_id kind=user rejected",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -612,7 +620,6 @@ test(
             relay_capability_id: capabilityId,
             relay_exposure_id: exposureId,
             subject_id: userSubj,
-            scope: "actor",
             retention: "until_revoked",
           } as any)
           .execute(),

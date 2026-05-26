@@ -73,7 +73,6 @@ import {
   RELAY_AUTHORIZATION_CUA_ACCESSES,
   RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES,
   RELAY_AUTHORIZATION_GRANT_RETENTIONS,
-  RELAY_AUTHORIZATION_GRANT_SCOPES,
   RELAY_AUTHORIZATION_GRANT_STATUSES,
   RELAY_AUTHORIZATION_PRESETS,
   RELAY_AUTHORIZATION_REQUEST_MODES,
@@ -106,7 +105,7 @@ import {
   TRANSPORT_KINDS,
 } from "../constants/enums.js"
 import type { ChatTypingState } from "../constants/enums.js"
-import type { ScopedSubjectTarget } from "../access/subject.js"
+import type { ScopedSubjectTarget, SubjectRef } from "../access/subject.js"
 import type {
   FilesystemPolicy as FilesystemPolicyBase,
   CUAPolicy as CUAPolicyBase,
@@ -3517,9 +3516,6 @@ export interface RelayAccessDenialDescriptor {
   resolution: RelayAccessDenialResolution
 }
 
-export type RelayAuthorizationGrantScope =
-  (typeof RELAY_AUTHORIZATION_GRANT_SCOPES)[number]
-
 export type RelayAuthorizationGrantRetention =
   (typeof RELAY_AUTHORIZATION_GRANT_RETENTIONS)[number]
 
@@ -3582,7 +3578,13 @@ export interface RelayAuthorizationGrantOption {
 
 export interface RelayAuthorizationGrantSummary extends RelayAuthorizationGrantSpec {
   id: UUID
-  scope: RelayAuthorizationGrantScope
+  /**
+   * D1: replaces the legacy `scope` enum. `subject` is the principal/group the
+   * grant authorizes; `scope` is the optional runtime context the grant is
+   * restricted to (NULL = no restriction).
+   */
+  subject: SubjectRef
+  scope?: SubjectRef
   retention: RelayAuthorizationGrantRetention
   status: RelayAuthorizationGrantStatus
   createdAt: Timestamp

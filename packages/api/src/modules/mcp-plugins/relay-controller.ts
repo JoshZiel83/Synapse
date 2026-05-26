@@ -998,6 +998,7 @@ function mapRelayAuthorizationGrantView(
     exposureId: record.relayExposureId,
     conversationId: record.conversationId,
     actorId: record.actorId,
+    subject: record.subject,
     scope: record.scope,
     retention: record.retention,
     status: record.status,

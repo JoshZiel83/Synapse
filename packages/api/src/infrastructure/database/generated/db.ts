@@ -209,8 +209,6 @@ export type RelationshipRequestStatus = "approved" | "pending" | "rejected";
 
 export type RelayAuthorizationGrantsRetention = "consume_once" | "until_revoked";
 
-export type RelayAuthorizationGrantsScope = "actor" | "conversation" | "once" | "workspace";
-
 export type RelayAuthorizationGrantsStatus = "active" | "consumed" | "revoked" | "superseded";
 
 export type RelayAuthorizationRequestMode = "background" | "blocking";
@@ -1526,7 +1524,6 @@ export interface RelayAuthorizationGrants {
   relay_exposure_id: string;
   retention: RelayAuthorizationGrantsRetention;
   revoked_at: Timestamp | null;
-  scope: RelayAuthorizationGrantsScope | null;
   scope_subject_id: string | null;
   source_interaction_id: string | null;
   source_request_args: Generated<Json>;

@@ -3,7 +3,6 @@ import type {
   RelayAuthorizationGrantSpec,
   RelayAuthorizationPreset,
   RelayAuthorizationGrantRetention,
-  RelayAuthorizationGrantScope,
   RelayAuthorizationGrantStatus,
   RelayAuthorizationRequestedAction,
 } from "@synapse/shared/types"
@@ -23,36 +22,94 @@ import {
 } from "../access/subject-registry.js"
 
 /**
- * P1b: derive the SubjectRef for a relay authorization grant from the
- * (scope, actorId, conversationId, workspaceId) tuple. Returns null for
- * `once` scope (single-use grants don't bind a subject) and workspaces with
- * no actor/conversation context.
+ * D1 (subject-scope refactor, final): every grant now has a non-null
+ * `subject_id` (the principal/group authorized) and an optional
+ * `scope_subject_id` (the runtime context the grant is restricted to). The
+ * legacy `scope` enum is gone — preset selection translates to
+ * (subject, scope?, retention) here.
+ *
+ * Preset → grant shape:
+ *   - `once`              subject = originating principal (actor if known, else workspace),
+ *                         scope?  = conversation if known,
+ *                         retention = consume_once
+ *   - `actor`             subject = actor (required),
+ *                         scope?  = conversation if known,
+ *                         retention = until_revoked
+ *   - `conversation`      subject = conversation (required),
+ *                         scope?  = undefined,
+ *                         retention = until_revoked
+ *   - `workspace`         subject = workspace,
+ *                         scope?  = undefined,
+ *                         retention = until_revoked
  */
-function buildRelayGrantSubjectRef(input: {
-  scope: "once" | "actor" | "conversation" | "workspace"
+function buildRelayGrantSubjectAndScope(input: {
+  preset: RelayAuthorizationPreset
   workspaceId: string
   actorId?: string | null
   conversationId?: string | null
-}): SubjectRef | null {
-  switch (input.scope) {
-    case "once":
-      return null
-    case "workspace":
-      return { kind: SUBJECT_KIND.WORKSPACE, workspaceId: input.workspaceId }
-    case "actor":
+}): {
+  subject: SubjectRef
+  scope?: SubjectRef
+  retention: RelayAuthorizationGrantRetention
+} {
+  switch (input.preset) {
+    case "once": {
+      const subject: SubjectRef = input.actorId
+        ? { kind: SUBJECT_KIND.ACTOR, actorId: input.actorId }
+        : { kind: SUBJECT_KIND.WORKSPACE, workspaceId: input.workspaceId }
+      const scope: SubjectRef | undefined = input.conversationId
+        ? {
+            kind: SUBJECT_KIND.CONVERSATION,
+            conversationId: input.conversationId,
+          }
+        : undefined
+      return { subject, scope, retention: "consume_once" }
+    }
+    case "actor": {
       if (!input.actorId) {
-        throw new Error("actorId required for actor-scope relay grant")
+        throw new Error("actorId required for actor-preset relay grant")
       }
-      return { kind: SUBJECT_KIND.ACTOR, actorId: input.actorId }
+      const scope: SubjectRef | undefined = input.conversationId
+        ? {
+            kind: SUBJECT_KIND.CONVERSATION,
+            conversationId: input.conversationId,
+          }
+        : undefined
+      return {
+        subject: { kind: SUBJECT_KIND.ACTOR, actorId: input.actorId },
+        scope,
+        retention: "until_revoked",
+      }
+    }
     case "conversation":
       if (!input.conversationId) {
         throw new Error(
-          "conversationId required for conversation-scope relay grant"
+          "conversationId required for conversation-preset relay grant"
         )
       }
       return {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: input.conversationId,
+        subject: {
+          kind: SUBJECT_KIND.CONVERSATION,
+          conversationId: input.conversationId,
+        },
+        retention: "until_revoked",
+      }
+    case "workspace":
+      return {
+        subject: {
+          kind: SUBJECT_KIND.WORKSPACE,
+          workspaceId: input.workspaceId,
+        },
+        retention: "until_revoked",
+      }
+    default:
+      // Defensive default — treat unknown preset as `once` bound to workspace.
+      return {
+        subject: {
+          kind: SUBJECT_KIND.WORKSPACE,
+          workspaceId: input.workspaceId,
+        },
+        retention: "consume_once",
       }
   }
 }
@@ -89,19 +146,46 @@ function toIsoString(value: string | Date | null | undefined) {
   return value instanceof Date ? value.toISOString() : value
 }
 
-function relayAuthorizationScopeRank(scope: RelayAuthorizationGrantScope) {
-  switch (scope) {
-    case "once":
-      return 0
-    case "actor":
-      return 1
-    case "conversation":
-      return 2
-    case "workspace":
-      return 3
-    default:
-      return 99
+/**
+ * D1: rank candidate grants when multiple match the same request. More
+ * specific bindings win, so callers consume the tightest grant first.
+ *   - retention=consume_once outranks until_revoked (single-shot tickets
+ *     should be burnt first; per plan they are also ordered ahead of broad
+ *     long-lived grants)
+ *   - scope_subject_id present outranks scope_subject_id NULL (grant
+ *     restricted to a conversation outranks an unrestricted one)
+ *   - subject precision: actor/remote_agent/workspace_member > conversation
+ *     > workspace
+ * Returns smaller numbers for higher-precedence rows.
+ */
+function relayGrantSpecificityRank(grant: {
+  retention: RelayAuthorizationGrantRetention
+  hasScopeSubject: boolean
+  subjectKind: string | null
+}) {
+  let rank = 0
+  if (grant.retention !== "consume_once") {
+    rank += 100
   }
+  if (!grant.hasScopeSubject) {
+    rank += 20
+  }
+  switch (grant.subjectKind) {
+    case SUBJECT_KIND.ACTOR:
+    case SUBJECT_KIND.REMOTE_AGENT:
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      rank += 0
+      break
+    case SUBJECT_KIND.CONVERSATION:
+      rank += 2
+      break
+    case SUBJECT_KIND.WORKSPACE:
+      rank += 5
+      break
+    default:
+      rank += 9
+  }
+  return rank
 }
 
 function normalizePathPrefix(value: unknown) {
@@ -171,7 +255,14 @@ export interface RelayAuthorizationGrantRecord extends RelayAuthorizationGrantSp
   sourceRetryNonce?: string
   sourceRuntimeSessionId?: string
   sourceRequestArgs: Record<string, unknown>
-  scope: RelayAuthorizationGrantScope
+  /**
+   * D1: surface the SubjectRef + optional scope SubjectRef instead of the
+   * legacy `scope` enum. Consumers that want to display "what's bound" should
+   * read `subject` and `scope`; everyone else should rely on the matcher's
+   * runtimeSubjectIds/runtimeScopeSubjectIds and the (`retention`) field.
+   */
+  subject: SubjectRef
+  scope?: SubjectRef
   retention: RelayAuthorizationGrantRetention
   status: RelayAuthorizationGrantStatus
   createdAt: string
@@ -205,7 +296,27 @@ export interface FindMatchingRelayAuthorizationGrantParams {
   relayExposureId: string
   conversationId?: string
   actorId?: string
+  /**
+   * D1: subject_ids the principal can claim. If not provided, the matcher
+   * derives a default set from (workspaceId, actorId, conversationId-if-active)
+   * so existing tool-flow callers keep working without explicit runtime context.
+   */
+  runtimeSubjectIds?: string[]
+  /**
+   * D1: scope_subject_ids that represent the runtime context the principal is
+   * currently inside (workspace + active conversation). Defaults derived from
+   * the same params.
+   */
+  runtimeScopeSubjectIds?: string[]
+  /**
+   * D1: consume_once fail-closed key. Per plan, a once grant must have AT
+   * LEAST one of `source_retry_nonce` / `source_task_id` matched against the
+   * incoming dispatch; if neither is supplied, the matcher refuses to surface
+   * any once candidate (the grant is "burnt" but unclaimable from the wrong
+   * context).
+   */
   retryNonce?: string
+  sourceTaskId?: string
   requestedAction: RelayAuthorizationRequestedAction
   consumeOnce?: boolean
 }
@@ -274,29 +385,110 @@ function parseGrantSpec(value: unknown): RelayAuthorizationGrantSpec {
   return normalizeGrantSpecForInsert(policy)
 }
 
+function decodeSubjectRefFromRow(input: {
+  kind: string | null
+  actor_id: string | null
+  remote_agent_id: string | null
+  conversation_id: string | null
+  workspace_id: string | null
+  workspace_member_id: string | null
+  user_id: string | null
+}): SubjectRef | null {
+  if (!input.kind) {
+    return null
+  }
+  switch (input.kind) {
+    case SUBJECT_KIND.ACTOR:
+      return input.actor_id
+        ? { kind: SUBJECT_KIND.ACTOR, actorId: input.actor_id }
+        : null
+    case SUBJECT_KIND.REMOTE_AGENT:
+      return input.remote_agent_id
+        ? {
+            kind: SUBJECT_KIND.REMOTE_AGENT,
+            remoteAgentId: input.remote_agent_id,
+          }
+        : null
+    case SUBJECT_KIND.CONVERSATION:
+      return input.conversation_id
+        ? {
+            kind: SUBJECT_KIND.CONVERSATION,
+            conversationId: input.conversation_id,
+          }
+        : null
+    case SUBJECT_KIND.WORKSPACE:
+      return input.workspace_id
+        ? { kind: SUBJECT_KIND.WORKSPACE, workspaceId: input.workspace_id }
+        : null
+    case SUBJECT_KIND.WORKSPACE_MEMBER:
+      return input.workspace_member_id
+        ? {
+            kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+            memberId: input.workspace_member_id,
+          }
+        : null
+    case SUBJECT_KIND.USER:
+      return input.user_id
+        ? { kind: SUBJECT_KIND.USER, userId: input.user_id }
+        : null
+    default:
+      return null
+  }
+}
+
 function mapRelayAuthorizationGrantRow(
   row: any
 ): RelayAuthorizationGrantRecord {
+  const subject = decodeSubjectRefFromRow({
+    kind: row.subject_kind,
+    actor_id: row.subject_actor_id,
+    remote_agent_id: row.subject_remote_agent_id,
+    conversation_id: row.subject_conversation_id,
+    workspace_id: row.subject_workspace_id,
+    workspace_member_id: row.subject_workspace_member_id,
+    user_id: row.subject_user_id,
+  })
+  if (!subject) {
+    throw new Error(
+      `relay_authorization_grants row ${row.id} has invalid subject_id (kind=${row.subject_kind})`
+    )
+  }
+  const scopeSubject = decodeSubjectRefFromRow({
+    kind: row.scope_subject_kind,
+    actor_id: null,
+    remote_agent_id: null,
+    conversation_id: row.scope_subject_conversation_id,
+    workspace_id: row.scope_subject_workspace_id,
+    workspace_member_id: null,
+    user_id: null,
+  })
+  // Backwards-compatible derived fields for callers that haven't moved off
+  // actorId / conversationId — populate from the subject (and scope subject)
+  // SubjectRefs.
+  const conversationIdFromSubject =
+    subject.kind === SUBJECT_KIND.CONVERSATION
+      ? subject.conversationId
+      : scopeSubject?.kind === SUBJECT_KIND.CONVERSATION
+        ? scopeSubject.conversationId
+        : undefined
+  const actorIdFromSubject =
+    subject.kind === SUBJECT_KIND.ACTOR ? subject.actorId : undefined
   return {
     id: row.id,
     workspaceId: row.workspace_id,
     relayDeviceId: row.relay_device_id,
     relayCapabilityId: row.relay_capability_id,
     relayExposureId: row.relay_exposure_id,
-    // P1b: actor_id and conversation_id are no longer stored on the grant
-    // row; they live on the joined access_subjects row. SELECT helpers below
-    // project subj.actor_id AS subject_actor_id and subj.conversation_id AS
-    // subject_conversation_id so this mapper can pick them up. (For `once` /
-    // `workspace` scopes subject_id is NULL, so these are also undefined.)
-    conversationId: row.subject_conversation_id || undefined,
-    actorId: row.subject_actor_id || undefined,
+    conversationId: conversationIdFromSubject,
+    actorId: actorIdFromSubject,
     createdByWorkspaceMemberId: row.created_by_workspace_member_id || undefined,
     sourceInteractionId: row.source_interaction_id || undefined,
     sourceTaskId: row.source_task_id || undefined,
     sourceRetryNonce: row.source_retry_nonce || undefined,
     sourceRuntimeSessionId: row.source_runtime_session_id || undefined,
     sourceRequestArgs: parseJsonObject(row.source_request_args),
-    scope: row.scope,
+    subject,
+    scope: scopeSubject || undefined,
     retention: row.retention,
     status: row.status,
     ...parseGrantSpec(row.policy),
@@ -309,11 +501,10 @@ function mapRelayAuthorizationGrantRow(
 }
 
 /**
- * P1b: the canonical SELECT projection for relay_authorization_grants rows
- * that will be passed to mapRelayAuthorizationGrantRow. LEFT JOINs
- * access_subjects (subject_id is nullable for `once` / `workspace` scopes)
- * and surfaces subject_actor_id / subject_conversation_id derived from the
- * subject row, so the mapper doesn't have to know about the join.
+ * D1: canonical SELECT projection for relay_authorization_grants rows. JOINs
+ * access_subjects twice — once for `subject_id` (always non-null post-D1) and
+ * once for `scope_subject_id` (nullable). The mapper decodes both into
+ * SubjectRef using the column-by-kind decoder above.
  */
 function relayGrantSelectColumns() {
   return [
@@ -323,10 +514,10 @@ function relayGrantSelectColumns() {
     "g.relay_capability_id",
     "g.relay_exposure_id",
     "g.subject_id",
+    "g.scope_subject_id",
     "g.created_by_workspace_member_id",
     "g.source_interaction_id",
     "g.source_task_id",
-    "g.scope",
     "g.retention",
     "g.status",
     "g.policy",
@@ -338,29 +529,44 @@ function relayGrantSelectColumns() {
     "g.superseded_at",
     "g.created_at",
     "g.updated_at",
-    "subj.actor_id as subject_actor_id",
-    "subj.conversation_id as subject_conversation_id",
     "subj.kind as subject_kind",
+    "subj.actor_id as subject_actor_id",
+    "subj.remote_agent_id as subject_remote_agent_id",
+    "subj.conversation_id as subject_conversation_id",
+    "subj.workspace_id as subject_workspace_id",
+    "subj.workspace_member_id as subject_workspace_member_id",
+    "subj.user_id as subject_user_id",
+    "scope_subj.kind as scope_subject_kind",
+    "scope_subj.conversation_id as scope_subject_conversation_id",
+    "scope_subj.workspace_id as scope_subject_workspace_id",
   ] as const
+}
+
+function relayGrantSelectFrom() {
+  return db
+    .selectFrom("relay_authorization_grants as g")
+    .innerJoin("access_subjects as subj", "subj.id", "g.subject_id")
+    .leftJoin(
+      "access_subjects as scope_subj",
+      "scope_subj.id",
+      "g.scope_subject_id"
+    )
 }
 
 export function relayAuthorizationPresetToGrant(
   preset: RelayAuthorizationPreset
 ): {
-  scope: RelayAuthorizationGrantScope
   retention: RelayAuthorizationGrantRetention
 } {
   switch (preset) {
     case "once":
-      return { scope: "once", retention: "consume_once" }
+      return { retention: "consume_once" }
     case "actor":
-      return { scope: "actor", retention: "until_revoked" }
     case "conversation":
-      return { scope: "conversation", retention: "until_revoked" }
     case "workspace":
-      return { scope: "workspace", retention: "until_revoked" }
+      return { retention: "until_revoked" }
     default:
-      return { scope: "once", retention: "consume_once" }
+      return { retention: "consume_once" }
   }
 }
 
@@ -368,23 +574,23 @@ export async function createRelayAuthorizationGrant(
   params: CreateRelayAuthorizationGrantParams,
   queryable?: Queryable
 ) {
-  const { scope, retention } = relayAuthorizationPresetToGrant(params.preset)
+  const { subject, scope, retention } = buildRelayGrantSubjectAndScope({
+    preset: params.preset,
+    workspaceId: params.workspaceId,
+    actorId: params.actorId,
+    conversationId: params.conversationId,
+  })
   // Zod-parse on the write side as well — any caller that hand-builds a
   // grantSpec gets the same shape validation as the read path.
   const grantSpec = normalizeGrantSpecForInsert(
     GrantPolicySchema.parse(params.grantSpec) as RelayAuthorizationGrantSpec
   )
-  const subjectRef = buildRelayGrantSubjectRef({
-    scope,
-    workspaceId: params.workspaceId,
-    actorId: params.actorId,
-    conversationId: params.conversationId,
-  })
-  const subjectId = subjectRef
-    ? isQueryExecutor(queryable)
-      ? await upsertAccessSubjectOn(queryable, subjectRef)
-      : await upsertAccessSubject(db, subjectRef)
-    : null
+  const upsert = async (ref: SubjectRef) =>
+    isQueryExecutor(queryable)
+      ? upsertAccessSubjectOn(queryable, ref)
+      : upsertAccessSubject(db, ref)
+  const subjectId = await upsert(subject)
+  const scopeSubjectId = scope ? await upsert(scope) : null
   const insertStatement = db
     .insertInto("relay_authorization_grants")
     .values({
@@ -393,10 +599,10 @@ export async function createRelayAuthorizationGrant(
       relay_capability_id: params.relayCapabilityId,
       relay_exposure_id: params.relayExposureId,
       subject_id: subjectId,
+      scope_subject_id: scopeSubjectId,
       created_by_workspace_member_id: params.createdByWorkspaceMemberId || null,
       source_interaction_id: params.sourceInteractionId || null,
       source_task_id: params.sourceTaskId || null,
-      scope,
       retention,
       status: "active",
       policy:
@@ -414,12 +620,7 @@ export async function createRelayAuthorizationGrant(
   if (!inserted) {
     throw new Error("Failed to create relay authorization grant")
   }
-  // Re-fetch with the access_subjects join so the mapper can populate
-  // actorId / conversationId from the subject row (P1b: actor_id and
-  // conversation_id were dropped from the grant table).
-  const selectStatement = db
-    .selectFrom("relay_authorization_grants as g")
-    .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
+  const selectStatement = relayGrantSelectFrom()
     .select(relayGrantSelectColumns())
     .where("g.id", "=", inserted.id)
     .limit(1)
@@ -436,9 +637,7 @@ export async function getRelayAuthorizationGrant(
   id: string,
   queryable?: Queryable
 ) {
-  const statement = db
-    .selectFrom("relay_authorization_grants as g")
-    .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
+  const statement = relayGrantSelectFrom()
     .select(relayGrantSelectColumns())
     .where("g.id", "=", id)
     .limit(1)
@@ -650,63 +849,86 @@ export async function findMatchingRelayAuthorizationGrant(
   params: FindMatchingRelayAuthorizationGrantParams,
   queryable?: Queryable
 ) {
-  // P1b: subject upserts must run on the same connection as the surrounding
-  // transaction (when one was passed via `queryable`) — otherwise the upsert
-  // commits independently and the subsequent SELECT inside the trx sees a
-  // subject_id that hasn't been visible if the trx is later rolled back.
-  const upsertSubject = async (ref: SubjectRef) =>
+  // D1: derive runtimeSubjectIds / runtimeScopeSubjectIds from the legacy
+  // (actorId, conversationId, workspaceId) tuple when the caller didn't pass
+  // an explicit set. Subject upserts run on the surrounding txn so the join
+  // sees the same writes.
+  const upsert = async (ref: SubjectRef) =>
     isQueryExecutor(queryable)
       ? upsertAccessSubjectOn(queryable, ref)
       : upsertAccessSubject(db, ref)
 
-  const conversationSubjectId = params.conversationId
-    ? await upsertSubject({
+  let runtimeSubjectIds = params.runtimeSubjectIds
+    ? [...params.runtimeSubjectIds]
+    : null
+  let runtimeScopeSubjectIds = params.runtimeScopeSubjectIds
+    ? [...params.runtimeScopeSubjectIds]
+    : null
+
+  if (!runtimeSubjectIds || !runtimeScopeSubjectIds) {
+    const collected: string[] = []
+    const collectedScopes: string[] = []
+    const workspaceSubjectId = await upsert({
+      kind: SUBJECT_KIND.WORKSPACE,
+      workspaceId: params.workspaceId,
+    })
+    collected.push(workspaceSubjectId)
+    collectedScopes.push(workspaceSubjectId)
+    if (params.actorId) {
+      collected.push(
+        await upsert({ kind: SUBJECT_KIND.ACTOR, actorId: params.actorId })
+      )
+    }
+    if (params.conversationId) {
+      // Mirror buildConversationCapabilitySubjects gating: only surface the
+      // conversation subject when the actor is an active participant. The
+      // matcher caller usually passes a server-trusted actorId, so we let
+      // the upsert in (subject_id ANY check handles non-membership: an actor
+      // who isn't in the conversation won't have a matching binding).
+      const convSubjectId = await upsert({
         kind: SUBJECT_KIND.CONVERSATION,
         conversationId: params.conversationId,
       })
-    : null
-  const actorSubjectId = params.actorId
-    ? await upsertSubject({ kind: SUBJECT_KIND.ACTOR, actorId: params.actorId })
-    : null
+      collected.push(convSubjectId)
+      collectedScopes.push(convSubjectId)
+    }
+    runtimeSubjectIds = runtimeSubjectIds ?? Array.from(new Set(collected))
+    runtimeScopeSubjectIds =
+      runtimeScopeSubjectIds ?? Array.from(new Set(collectedScopes))
+  }
 
-  const statement = db
-    .selectFrom("relay_authorization_grants as g")
-    .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
+  if (runtimeSubjectIds.length === 0) {
+    return { matchedGrant: null }
+  }
+
+  // D1: once grants must additionally match at least one of source_retry_nonce
+  // or source_task_id — see plan. If the caller supplies neither, no `once`
+  // grant is eligible (fail-closed).
+  const onceUnlockExpr = sql<boolean>`(
+    g.retention <> 'consume_once'
+    OR (
+      (${params.retryNonce ?? null}::text IS NOT NULL AND g.source_retry_nonce = ${params.retryNonce ?? null}::text)
+      OR (${params.sourceTaskId ?? null}::uuid IS NOT NULL AND g.source_task_id = ${params.sourceTaskId ?? null}::uuid)
+    )
+  )`
+
+  const statement = relayGrantSelectFrom()
     .select(relayGrantSelectColumns())
     .where("g.workspace_id", "=", params.workspaceId)
     .where("g.relay_device_id", "=", params.relayDeviceId)
     .where("g.relay_capability_id", "=", params.relayCapabilityId)
     .where("g.relay_exposure_id", "=", params.relayExposureId)
     .where("g.status", "=", "active")
+    .where("g.subject_id", "in", runtimeSubjectIds)
     .where((eb) =>
       eb.or([
-        eb("g.scope", "=", "workspace"),
-        ...(conversationSubjectId
-          ? [
-              eb.and([
-                eb("g.scope", "=", "conversation"),
-                eb("g.subject_id", "=", conversationSubjectId),
-              ]),
-            ]
-          : []),
-        ...(actorSubjectId
-          ? [
-              eb.and([
-                eb("g.scope", "=", "actor"),
-                eb("g.subject_id", "=", actorSubjectId),
-              ]),
-            ]
-          : []),
-        ...(params.retryNonce
-          ? [
-              eb.and([
-                eb("g.scope", "=", "once"),
-                eb("g.source_retry_nonce", "=", params.retryNonce),
-              ]),
-            ]
+        eb("g.scope_subject_id", "is", null),
+        ...(runtimeScopeSubjectIds.length > 0
+          ? [eb("g.scope_subject_id", "in", runtimeScopeSubjectIds)]
           : []),
       ])
     )
+    .where(onceUnlockExpr)
 
   const rows = isQueryExecutor(queryable)
     ? (await executeCompiledQuery<any>(queryable, statement)).rows
@@ -714,35 +936,38 @@ export async function findMatchingRelayAuthorizationGrant(
   const candidates = rows
     .map((row) => mapRelayAuthorizationGrantRow(row))
     .sort((left, right) => {
-      const byScope =
-        relayAuthorizationScopeRank(left.scope) -
-        relayAuthorizationScopeRank(right.scope)
-      if (byScope !== 0) {
-        return byScope
+      const byRank =
+        relayGrantSpecificityRank({
+          retention: left.retention,
+          hasScopeSubject: Boolean(left.scope),
+          subjectKind: left.subject.kind,
+        }) -
+        relayGrantSpecificityRank({
+          retention: right.retention,
+          hasScopeSubject: Boolean(right.scope),
+          subjectKind: right.subject.kind,
+        })
+      if (byRank !== 0) {
+        return byRank
       }
       return right.createdAt.localeCompare(left.createdAt)
     })
 
-  // PR4: bounded-retry consume for once-only grants. The atomic UPDATE in
+  // D1: bounded-retry consume for once-only grants. Atomic UPDATE in
   // consumeRelayAuthorizationGrant returns false when another concurrent
-  // matcher consumed the same row first; we then try the next matching
-  // candidate up to MAX_CONSUME_RETRIES times before giving up. This
-  // prevents both double-spend (single grant consumed twice) and the
-  // unbounded-retry storm that would replay every iteration of the loop
-  // under heavy concurrency.
+  // matcher consumed the same row first; try the next matching candidate
+  // up to MAX_CONSUME_RETRIES times before giving up.
   const MAX_CONSUME_RETRIES = 3
   let attempts = 0
   for (const candidate of candidates) {
     if (!relayAuthorizationGrantMatches(candidate, params.requestedAction)) {
       continue
     }
-    if (!params.consumeOnce || candidate.scope !== "once") {
+    if (!params.consumeOnce || candidate.retention !== "consume_once") {
       // Non-once grants don't need an atomic claim — return the first match.
       return { matchedGrant: candidate }
     }
     if (attempts >= MAX_CONSUME_RETRIES) {
-      // Bounded retry budget exhausted; treat as no-match (caller will
-      // create a fresh authorization request via the parent flow).
       return { matchedGrant: null }
     }
     attempts += 1
@@ -764,9 +989,7 @@ export async function listActiveRelayAuthorizationGrantsForExposure(
   relayCapabilityId: string,
   queryable?: Queryable
 ) {
-  const statement = db
-    .selectFrom("relay_authorization_grants as g")
-    .leftJoin("access_subjects as subj", "subj.id", "g.subject_id")
+  const statement = relayGrantSelectFrom()
     .select(relayGrantSelectColumns())
     .where("g.relay_capability_id", "=", relayCapabilityId)
     .where("g.status", "=", "active")

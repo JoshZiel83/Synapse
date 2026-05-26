@@ -179,21 +179,33 @@ function syncSourceVariant(
   }
 }
 
-function formatRelayAuthorizationScope(
-  scope: RelayAuthorizationGrantView["scope"]
-) {
-  switch (scope) {
-    case "once":
-      return "Allow once"
-    case "actor":
-      return "Allow this actor"
-    case "conversation":
-      return "Allow this conversation"
-    case "workspace":
-      return "Always allow"
-    default:
-      return scope
+function formatRelayAuthorizationScope(grant: RelayAuthorizationGrantView) {
+  // D1: derive the human-readable scope label from (retention, subject, scope)
+  // instead of the legacy `scope` enum. consume_once retention reads as
+  // "Allow once"; otherwise we describe the bound subject (and optional scope
+  // SubjectRef) directly.
+  if (grant.retention === "consume_once") {
+    return "Allow once"
   }
+  const subjectLabel =
+    grant.subject?.kind === "actor"
+      ? "Allow this actor"
+      : grant.subject?.kind === "remote_agent"
+        ? "Allow this remote agent"
+        : grant.subject?.kind === "conversation"
+          ? "Allow this conversation"
+          : grant.subject?.kind === "workspace_member"
+            ? "Allow this workspace member"
+            : grant.subject?.kind === "workspace"
+              ? "Always allow"
+              : grant.subject?.kind || "—"
+  const scopeLabel =
+    grant.scope?.kind === "conversation"
+      ? " (this conversation)"
+      : grant.scope?.kind === "workspace"
+        ? " (this workspace)"
+        : ""
+  return `${subjectLabel}${scopeLabel}`
 }
 
 function describeRelayAuthorizationGrant(grant: RelayAuthorizationGrantView) {
@@ -1340,7 +1352,7 @@ export default function RelayDevicePage() {
                             <div className="min-w-0 space-y-2">
                               <div className="flex flex-wrap items-center gap-2">
                                 <Badge variant="secondary">
-                                  {formatRelayAuthorizationScope(grant.scope)}
+                                  {formatRelayAuthorizationScope(grant)}
                                 </Badge>
                                 <Badge variant="outline">
                                   {grant.capability}

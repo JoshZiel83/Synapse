@@ -5,12 +5,10 @@ import type {
   RelayHiddenToolBinding,
   RelayOperationError,
   RelayVisibleToolDefinition,
+  SubjectRef,
   ToolResultOrigin,
 } from "@synapse/shared"
-import type {
-  RelayAuthorizationGrantSpec,
-  RelayAuthorizationGrantScope,
-} from "@synapse/shared/types"
+import type { RelayAuthorizationGrantSpec } from "@synapse/shared/types"
 import {
   extractText,
   RELAY_AUTH_TIMEOUT,
@@ -204,7 +202,13 @@ interface RelayExposureCatalog {
 
 interface RelayAuthorizationEnvelope {
   grantIds?: string[]
-  grantScope?: RelayAuthorizationGrantScope
+  /**
+   * D1: replaces the legacy `grantScope: RelayAuthorizationGrantScope` field.
+   * Carries the grant's subject (and optional scope SubjectRef) so the relay
+   * dispatch layer can label what was claimed.
+   */
+  grantSubject?: SubjectRef
+  grantScopeSubject?: SubjectRef
   grantSpecs?: RelayAuthorizationGrantSpec[]
   retryNonce?: string
 }
@@ -906,7 +910,8 @@ export async function resolveRelayToolAuthorization(params: {
   return {
     authorization: {
       grantIds: [matched.matchedGrant.id],
-      grantScope: matched.matchedGrant.scope,
+      grantSubject: matched.matchedGrant.subject,
+      grantScopeSubject: matched.matchedGrant.scope,
       grantSpecs: [relayAuthorizationGrantToSpec(matched.matchedGrant)],
       retryNonce: params.authorization?.retryNonce,
     } satisfies RelayAuthorizationEnvelope,

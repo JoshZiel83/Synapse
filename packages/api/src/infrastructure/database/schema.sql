@@ -169,7 +169,6 @@ CREATE TYPE relay_operation_deliveries_status AS ENUM ('queued', 'sent', 'acked'
 CREATE TYPE interaction_requests_kind AS ENUM ('user_input', 'plan_approval', 'relay_authorization');
 CREATE TYPE interaction_requests_status AS ENUM ('pending', 'answered', 'approved', 'rejected', 'cancelled', 'expired', 'superseded');
 CREATE TYPE relay_authorization_request_mode AS ENUM ('background', 'blocking');
-CREATE TYPE relay_authorization_grants_scope AS ENUM ('once', 'actor', 'conversation', 'workspace');
 CREATE TYPE relay_authorization_grants_retention AS ENUM ('consume_once', 'until_revoked');
 CREATE TYPE relay_authorization_grants_status AS ENUM ('active', 'consumed', 'revoked', 'superseded');
 
@@ -3563,15 +3562,15 @@ CREATE TABLE relay_authorization_grants (
   relay_device_id UUID NOT NULL REFERENCES relay_devices(id) ON DELETE CASCADE,
   relay_capability_id UUID NOT NULL REFERENCES relay_capabilities(id) ON DELETE CASCADE,
   relay_exposure_id UUID NOT NULL REFERENCES relay_exposures(id) ON DELETE CASCADE,
-  -- P1b: actor_id + conversation_id polymorphic columns collapsed into a
-  -- single subject_id FK into access_subjects (nullable because `once` and
-  -- `workspace` scopes don't bind to a sub-workspace subject). Deferred FK
-  -- applied below in the post-access_subjects ALTER section.
-  subject_id UUID,
+  -- D1 (subject-scope refactor, final cleanup): subject_id is NOT NULL (every
+  -- grant now binds a principal/group via access_subjects), scope_subject_id
+  -- carries the optional runtime restriction. The legacy `scope` enum column
+  -- was dropped — preset selection in service.ts directly produces
+  -- (subject, scope?, retention) without a scope literal.
+  subject_id UUID NOT NULL,
   created_by_workspace_member_id UUID REFERENCES workspace_members(id) ON DELETE SET NULL,
   source_interaction_id UUID REFERENCES interaction_requests(id) ON DELETE SET NULL,
   source_task_id UUID REFERENCES tool_call_tasks(id) ON DELETE SET NULL,
-  scope relay_authorization_grants_scope NOT NULL,
   retention relay_authorization_grants_retention NOT NULL,
   status relay_authorization_grants_status NOT NULL DEFAULT 'active',
   policy JSONB NOT NULL DEFAULT '{}',
@@ -3605,12 +3604,11 @@ CREATE INDEX idx_interaction_relay_authorization_requests_dedupe
 CREATE INDEX idx_interaction_response_commands_interaction
   ON interaction_response_commands(interaction_id, created_at DESC);
 CREATE INDEX idx_relay_authorization_grants_exposure
-  ON relay_authorization_grants(relay_capability_id, status, scope, created_at DESC);
+  ON relay_authorization_grants(relay_capability_id, status, created_at DESC);
 CREATE INDEX idx_relay_authorization_grants_subject
-  ON relay_authorization_grants(subject_id, relay_capability_id, status, created_at DESC)
-  WHERE subject_id IS NOT NULL;
--- P1b: deferred FK from relay_authorization_grants.subject_id (NULLABLE — once
--- and workspace scopes don't bind a sub-workspace subject).
+  ON relay_authorization_grants(subject_id, relay_capability_id, status, created_at DESC);
+-- D1: deferred FK from relay_authorization_grants.subject_id (NOT NULL — every
+-- grant binds to a principal/group via access_subjects).
 ALTER TABLE relay_authorization_grants
   ADD CONSTRAINT fk_relay_authorization_grants_subject
   FOREIGN KEY (subject_id) REFERENCES access_subjects(id) ON DELETE CASCADE;
@@ -3644,10 +3642,6 @@ ALTER TABLE resource_access_bindings
 
 ALTER TABLE relay_authorization_grants
   ADD COLUMN scope_subject_id UUID REFERENCES access_subjects(id) ON DELETE CASCADE;
-
-ALTER TABLE relay_authorization_grants
-  ALTER COLUMN scope DROP NOT NULL,
-  ALTER COLUMN scope SET DEFAULT NULL;
 
 DROP INDEX uq_resource_access_bindings_active;
 CREATE UNIQUE INDEX uq_resource_access_bindings_active
@@ -3849,19 +3843,14 @@ BEGIN
     RAISE EXCEPTION 'relay_authorization_grants.scope_subject_id % must reference a subject of kind workspace|conversation', NEW.scope_subject_id;
   END IF;
 
-  -- PR1: tolerate legacy NULL subject_id (once/workspace scope writers).
-  -- PR4 makes subject_id NOT NULL and removes this NULL branch.
-  IF NEW.subject_id IS NOT NULL THEN
-    -- Strict allowlist — relay grants never accept conversation_actor_context
-    -- even transitionally (legacy relay writers always used NULL subject_id,
-    -- never a CAC subject).
-    IF NOT is_workspace_bound_subject_kind_strict(NEW.subject_id) THEN
-      RAISE EXCEPTION 'relay_authorization_grants.subject_id % refers to a kind that is not workspace-bound (strict: no conversation_actor_context)', NEW.subject_id;
-    END IF;
-    v_subject_ws := access_subject_workspace_id(NEW.subject_id);
-    IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN
-      RAISE EXCEPTION 'relay_authorization_grants.subject_id % workspace mismatch', NEW.subject_id;
-    END IF;
+  -- D1: subject_id is NOT NULL post-cleanup. Strict allowlist — relay grants
+  -- never accept conversation_actor_context.
+  IF NOT is_workspace_bound_subject_kind_strict(NEW.subject_id) THEN
+    RAISE EXCEPTION 'relay_authorization_grants.subject_id % refers to a kind that is not workspace-bound (strict: no conversation_actor_context)', NEW.subject_id;
+  END IF;
+  v_subject_ws := access_subject_workspace_id(NEW.subject_id);
+  IF v_subject_ws IS NULL OR v_subject_ws IS DISTINCT FROM NEW.workspace_id THEN
+    RAISE EXCEPTION 'relay_authorization_grants.subject_id % workspace mismatch', NEW.subject_id;
   END IF;
 
   IF NEW.scope_subject_id IS NOT NULL THEN
