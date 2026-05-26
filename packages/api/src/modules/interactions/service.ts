@@ -238,7 +238,13 @@ export interface CreateRemoteAgentPlanApprovalInteractionParams {
 export interface CreateRuntimeAuthorizationInteractionParams {
   workspaceId: string
   conversationId: string
-  taskId: string
+  /**
+   * Optional. Actor / actor_in_conversation principals create a
+   * tool_call_task so the approval can drive a chat wakeup; remote_agent
+   * principals leave it undefined — the bridged agent retries its own
+   * tool call on the next round-trip.
+   */
+  taskId?: string
   requesterParticipantId: string
   deviceCapabilityId: string
   deviceId: string
@@ -254,6 +260,19 @@ export interface CreateRuntimeAuthorizationInteractionParams {
   sourceRetryNonce?: string
   sourceRequestArgs?: Record<string, unknown>
   expiresAt?: string
+  /**
+   * Set when the triggering dispatch was a remote_agent principal.
+   * Lands on interaction_runtime_authorization_requests.principal_remote_agent_id
+   * so the approval flow can build a remote_agent-scoped grant.
+   */
+  principalRemoteAgentId?: string
+  /**
+   * Set when the triggering dispatch was an actor_in_conversation
+   * principal. Lands on
+   * interaction_runtime_authorization_requests.principal_conversation_actor_context_id
+   * so the approval flow can build an actor_in_conversation-scoped grant.
+   */
+  principalConversationActorContextId?: string
 }
 
 export type ResolveInteractionRequestParams = ChatInteractionResolveInput & {
@@ -2460,7 +2479,9 @@ export async function createRuntimeAuthorizationInteractionRequest(
       dedupeKey,
     })
     const existingInteractionId =
-      (await findInteractionIdByTaskId(params.taskId, client)) ||
+      (params.taskId
+        ? await findInteractionIdByTaskId(params.taskId, client)
+        : null) ||
       (await findPendingInteractionIdByRequestKey(
         params.workspaceId,
         requestKey,
@@ -2498,6 +2519,9 @@ export async function createRuntimeAuthorizationInteractionRequest(
       sourceRuntimeSessionId: params.runtimeSessionId,
       sourceRetryNonce: params.sourceRetryNonce,
       sourceRequestArgs: params.sourceRequestArgs || {},
+      principalRemoteAgentId: params.principalRemoteAgentId,
+      principalConversationActorContextId:
+        params.principalConversationActorContextId,
       requestedAction: params.requestedAction,
       grantOptions: params.grantOptions,
       availablePresets: params.availablePresets,

@@ -111,11 +111,6 @@ export const WORKSPACE_PERMISSION_RULES: Record<
     adminGrants: true,
     accessKeys: ["memory_admin"],
   },
-  manage_relays: {
-    kind: "admin_or_keys",
-    adminGrants: true,
-    accessKeys: ["device_admin"],
-  },
   manage_devices: {
     kind: "admin_or_keys",
     adminGrants: true,

@@ -20,10 +20,8 @@
     "format": "node scripts/format-files.mjs --all",
     "format:check": "node scripts/format-files.mjs --all --check",
     "format:staged": "lint-staged",
-    "codegen:runtime-policies": "tsx scripts/codegen/runtime-policies.ts",
-    "codegen:verify": "tsx scripts/codegen/runtime-policies.ts && git diff --exit-code -- relay/internal/runtimeauth/policies_gen.go && git ls-files --error-unmatch relay/internal/runtimeauth/policies_gen.go",
     "build:cua-helper": "bash scripts/build-cua-helper.sh",
-    "build": "npm run codegen:runtime-policies && npm run build:cua-helper && npm run build -w packages/shared && npm run build -w packages/device-protocol && npm run build -w packages/device-runtime && npm run build -w packages/device-sdk && npm run build -w packages/api && npm run build -w packages/remote-agent-daemon && npm run build -w packages/web-next",
+    "build": "npm run build:cua-helper && npm run build -w packages/shared && npm run build -w packages/device-protocol && npm run build -w packages/device-runtime && npm run build -w packages/device-sdk && npm run build -w packages/api && npm run build -w packages/remote-agent-daemon && npm run build -w packages/web-next",
     "build:shared": "npm run build -w packages/shared",
     "build:device-protocol": "npm run build -w packages/device-protocol",
     "build:device-runtime": "npm run build -w packages/device-runtime",
@@ -33,7 +31,7 @@
     "build:web": "npm run build -w packages/shared && npm run build -w packages/device-protocol && npm run build -w packages/web-next",
     "test": "npm run test -w packages/api",
     "test:api": "npm run test -w packages/api",
-    "test:conformance": "npm run test:conformance -w packages/api && cd relay && go test ./internal/runtimeauth/...",
+    "test:conformance": "npm run test:conformance -w packages/api",
     "audit:business-enums": "node ./scripts/audit-business-enum-literals.mjs",
     "db:bootstrap": "npm run db:bootstrap -w packages/api",
     "db:codegen": "npm run db:codegen -w packages/api",
@@ -57,7 +55,6 @@
     "shadcn": "^4.0.5"
   },
   "lint-staged": {
-    "*.{js,mjs,cjs,jsx,ts,tsx,json,css,md,mdx,yml,yaml,html}": "node scripts/format-files.mjs --formatter=prettier",
-    "relay/**/*.go": "node scripts/format-files.mjs --formatter=gofmt"
+    "*.{js,mjs,cjs,jsx,ts,tsx,json,css,md,mdx,yml,yaml,html}": "node scripts/format-files.mjs --formatter=prettier"
   }
 }

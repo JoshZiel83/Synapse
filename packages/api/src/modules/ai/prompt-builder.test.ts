@@ -136,7 +136,14 @@ test("buildActorPrompt rejects plan mode in group conversations", () => {
   )
 })
 
-test("buildActorPrompt mentions device request_authorization guidance for builtin tools", () => {
+test("buildActorPrompt no longer emits legacy relay routing guidance for builtin tools", () => {
+  // PR #31 (KKK): the per-tool routing block that taught the model
+  // about `request_authorization`, relay `bash` `execution_mode`,
+  // and the `Relay builtin filesystem/browser/desktop/commandline`
+  // surface was removed because v3 redefines those tools and the old
+  // prompts pushed the model to emit calls that don't exist on the
+  // new surface. This test pins the new behavior so a future
+  // accidental re-introduction is caught.
   const tools: ToolDefinition[] = [
     {
       name: "device__shell__bash",
@@ -147,11 +154,6 @@ test("buildActorPrompt mentions device request_authorization guidance for builti
           command: {
             type: "string",
             description: "Command",
-          },
-          request_authorization: {
-            type: "string",
-            description: "Server-only authorization mode",
-            enum: ["none", "background", "blocking"],
           },
         },
         required: ["command"],
@@ -177,7 +179,11 @@ test("buildActorPrompt mentions device request_authorization guidance for builti
     "default"
   )
 
-  assert.match(prompt.system, /request_authorization/)
-  assert.match(prompt.system, /not send it to the relay client/i)
-  assert.match(prompt.system, /execution_mode: "async".*blocking/i)
+  // The system prompt must not contain any of the legacy relay-era
+  // tool-routing language: that surface no longer exists.
+  assert.doesNotMatch(prompt.system, /relay client/i)
+  assert.doesNotMatch(prompt.system, /relay builtin/i)
+  assert.doesNotMatch(prompt.system, /execution_mode/i)
+  assert.doesNotMatch(prompt.system, /request_authorization/i)
+  assert.doesNotMatch(prompt.system, /# Tool Routing/i)
 })

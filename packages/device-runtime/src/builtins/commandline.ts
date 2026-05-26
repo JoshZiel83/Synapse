@@ -1,13 +1,10 @@
-// Commandline builtin (§4.5 / spec §10). v3.0 replaces relay/internal/builtinmcp/
-// commandline. Provides two tools: bash (sync) and bash_task (async via
+// Commandline builtin (§4.5 / spec §10). v3.0 device-runtime commandline
+// host. Provides two tools: bash (sync) and bash_task (async via
 // task_mode='async'); v3.0 ships sync only — async lifecycle wiring lands
 // when the API-side task plumbing is in place.
 
 import { spawn } from "node:child_process"
-import type {
-  CatalogProvider,
-  CatalogToolInvocationResult,
-} from "../types.js"
+import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
   DeviceCatalogExposure,
   DeviceCatalogTool,
@@ -82,7 +79,8 @@ export function createCommandlineBuiltin(
       // Device-side runtime authorization: the server-signed envelope must
       // carry a commandline grant_spec whose policy allows this command.
       // Reject if no commandline policy is present.
-      const grantSpecs = input.envelope?.runtime_authorization?.grant_specs ?? []
+      const grantSpecs =
+        input.envelope?.runtime_authorization?.grant_specs ?? []
       const commandlinePolicies = grantSpecs
         .filter((g) => g.capability === "commandline" && g.commandline)
         .map((g) => g.commandline!)
@@ -147,7 +145,6 @@ export function createCommandlineBuiltin(
     },
   }
 }
-
 
 export interface BashExecutionResult {
   exitCode: number

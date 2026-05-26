@@ -3,11 +3,12 @@
 // spawns frpc with a per-service config, and the adapter exposes the
 // resulting internal URL (which the API resolves via DeviceTunnelRegistry).
 //
-// The "real" tunneling (frpc → frps) requires the operator to deploy the
-// tunnel-edge docker service (`docker compose --profile devices up
-// tunnel-edge`) and set FRP_SHARED_TOKEN. If the binary is absent the
-// adapter falls back to a no-op handle so unit tests / integration tests can
-// still run end-to-end against an API + runtime co-located on the same host.
+// FAIL-HARD POLICY: if the operator configured a tunnel (via
+// SYNAPSE_TUNNEL_*) and the frpc binary can't actually start, this adapter
+// throws. Returning a fake "tunnel-edge" handle in that case used to make
+// the device flip to "online" while every dispatch silently 502'd against
+// a non-existent frpc. Callers that need a no-op tunnel for tests should
+// import `createNoopTunnelAdapter` from `./noop.js` and wire it explicitly.
 
 import { spawn, type ChildProcess } from "node:child_process"
 import { mkdtempSync, writeFileSync, rmSync } from "node:fs"
@@ -103,35 +104,66 @@ export function createFrpTunnelAdapter(
         internalUrl: `http://tunnel-edge:8080/d/${startOpts.registrationToken}`,
       }
       const frpcPath = opts.frpcPath ?? "frpc"
-      // spawn() itself only synchronously throws for invalid options — a
-      // missing binary surfaces as an asynchronous 'error' event (ENOENT).
-      // Wrap both: the try/catch covers the immediate-throw path; the
-      // 'error' listener catches the async path and degrades to a no-op
-      // handle so the caller can decide what to do (the device runtime
-      // currently logs + treats it as "no tunnel registered").
-      let degradedToNoOp = false
-      const handleSpawnFailure = (err: unknown) => {
-        if (degradedToNoOp) return
-        degradedToNoOp = true
-        opts.logger?.error("frpc spawn failed; falling back to no-op tunnel", {
-          error: (err as Error).message,
-        })
-        try {
-          rmSync(tmpDir, { recursive: true, force: true })
-        } catch {
-          /* tmpdir cleanup is best-effort */
-        }
-      }
+      // spawn() returns synchronously and the child becomes "alive" only
+      // when the OS confirms the binary actually exists; ENOENT surfaces
+      // as an asynchronous 'error' event on the next tick. Race
+      // 'spawn' vs 'error' before we hand the handle back — any error
+      // here (immediate-throw OR async ENOENT) propagates out of start()
+      // so the runtime never registers a tunnel.up that points at a frpc
+      // that never came up.
       let child: ChildProcess
       try {
         child = spawn(frpcPath, ["-c", configPath], {
           stdio: ["ignore", "pipe", "pipe"],
         })
       } catch (err) {
-        handleSpawnFailure(err)
-        return handle
+        try {
+          rmSync(tmpDir, { recursive: true, force: true })
+        } catch {
+          /* tmpdir cleanup is best-effort */
+        }
+        throw new Error(
+          `frpc spawn failed (${frpcPath}): ${(err as Error).message}`
+        )
       }
-      child.on("error", handleSpawnFailure)
+      try {
+        await new Promise<void>((resolve, reject) => {
+          let settled = false
+          const onSpawn = () => {
+            if (settled) return
+            settled = true
+            resolve()
+          }
+          const onError = (err: Error) => {
+            if (settled) return
+            settled = true
+            reject(err)
+          }
+          child.once("spawn", onSpawn)
+          child.once("error", onError)
+        })
+      } catch (err) {
+        try {
+          rmSync(tmpDir, { recursive: true, force: true })
+        } catch {
+          /* tmpdir cleanup is best-effort */
+        }
+        throw new Error(
+          `frpc spawn failed (${frpcPath}): ${(err as Error).message}. ` +
+            `Install frpc and put it on PATH, or use createNoopTunnelAdapter() ` +
+            `for tests that don't need a real tunnel.`
+        )
+      }
+      // After spawn() has settled successfully, keep watching child errors —
+      // operator log only at this point; the runtime sees the tunnel as up
+      // and dispatch will surface failures via the device.tunnel.down /
+      // unhealthy path.
+      child.on("error", (err) => {
+        opts.logger?.error("frpc post-spawn error", {
+          deviceServiceId: startOpts.deviceServiceId,
+          error: err.message,
+        })
+      })
       child.stdout?.on("data", (b) =>
         opts.logger?.info(`frpc[${startOpts.deviceServiceId}] ${b}`)
       )

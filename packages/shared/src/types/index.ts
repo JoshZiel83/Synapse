@@ -835,9 +835,6 @@ export type EventType =
   | "chat.sync.event"
   | "runtime.updated"
   | "mcp.config.changed"
-  | "relay.connected"
-  | "relay.disconnected"
-  | "relay.servers_updated"
   | "chat.typing"
 
 export interface SystemEvent {
@@ -2426,7 +2423,7 @@ export type MarketplaceLineageKind =
   | "installed_copy"
   | "fork"
   | "share"
-  | "relay_derivation"
+  | "device_derivation"
 export type MarketplaceSyncMode =
   | "notify"
   | "manual_merge"
@@ -5366,7 +5363,7 @@ export type CatalogLineageKind =
   | "installed_copy"
   | "fork"
   | "share"
-  | "relay_projection"
+  | "device_projection"
 export type CatalogSyncMode =
   | "notify"
   | "manual_merge"

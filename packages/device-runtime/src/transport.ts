@@ -107,7 +107,23 @@ export class TransportClient {
     while (!this.stopped) {
       try {
         await this.connectAndServe()
-        this.attempt = 0
+        // connectAndServe RESOLVES on close (clean disconnect) and REJECTS
+        // on socket error / setup failure. Either way we need to bump the
+        // attempt counter and back off — otherwise an onHelloAck failure
+        // that close()s the socket would loop instantly (the prior code
+        // only backed off on the reject path).
+        this.attempt += 1
+        const delay = this.computeBackoff()
+        this.opts.logger.warn(
+          "control-plane disconnect; reconnecting after backoff",
+          {
+            attempt: this.attempt,
+            delayMs: delay,
+            reason: "close",
+          }
+        )
+        this.opts.onStatus("offline")
+        await this.sleep(delay)
       } catch (err) {
         this.attempt += 1
         const delay = this.computeBackoff()
@@ -193,6 +209,11 @@ export class TransportClient {
             }
           }
           this.opts.onStatus("online")
+          // Connection reached steady state: reset the backoff counter so
+          // a clean disconnect later doesn't compound the previous setup-
+          // failure backoff. Setup-failure paths (hello throws,
+          // onHelloAck throws) skip this and let attempt accumulate.
+          this.attempt = 0
         } catch (err) {
           this.opts.logger.error("control-plane hello failed", {
             error: (err as Error).message,
@@ -250,14 +271,29 @@ export class TransportClient {
       socket.on("error", (err) => {
         clearTimeout(challengeTimer)
         if (this.socket === socket) this.socket = null
+        // Reject every in-flight RPC. Without this, callers wait the
+        // full REQUEST_TIMEOUT_MS for a socket we already know is dead.
+        this.rejectAllPending(
+          new Error(`control-plane socket error: ${err.message}`)
+        )
         reject(err)
       })
       socket.on("close", () => {
         clearTimeout(challengeTimer)
         if (this.socket === socket) this.socket = null
+        this.rejectAllPending(new Error("control-plane socket closed"))
         resolve()
       })
     })
+  }
+
+  private rejectAllPending(err: Error) {
+    if (this.pending.size === 0) return
+    for (const [, p] of this.pending) {
+      clearTimeout(p.timer)
+      p.reject(err)
+    }
+    this.pending.clear()
   }
 }
 

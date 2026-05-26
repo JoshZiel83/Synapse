@@ -1,9 +1,8 @@
 // VFS — Virtual File System projection inside the device runtime. Per spec
 // §6 Notes, VFS is NOT a capability_kind — it is a projection layered on top
-// of filesystem / browser / cua exposures. This module ports
-// relay/internal/vfs/ to TS at the abstraction level (path tree, sessions,
-// exposures, capability-grant bridge). The FUSE mount adapter is deferred
-// (v3.0 non-goal).
+// of filesystem / browser / cua exposures. The TS implementation covers
+// the abstraction surface (path tree, sessions, exposures, capability-grant
+// bridge). The FUSE mount adapter is deferred (v3.0 non-goal).
 
 import { promises as fsp } from "node:fs"
 import { randomUUID } from "node:crypto"
@@ -61,8 +60,8 @@ export interface VfsServiceOptions {
 }
 
 /**
- * VfsService — TS port of relay/internal/vfs/service.go. The backend layer
- * is abstracted so the v3.0 filesystem builtin can plug in a local-fs
+ * VfsService — device-runtime VFS implementation. The backend layer is
+ * abstracted so the v3.0 filesystem builtin can plug in a local-fs
  * implementation while future browser / cua backends provide their own.
  */
 export class VfsService {
@@ -140,9 +139,7 @@ export function createLocalFsBackend(opts: { rootPath: string }): VfsBackend {
     const cleaned = input.replace(/^\/+/, "")
     const candidate = resolve(root, cleaned)
     if (candidate !== root && !candidate.startsWith(rootWithSep)) {
-      throw new Error(
-        `vfs: path escapes root (input=${JSON.stringify(input)})`
-      )
+      throw new Error(`vfs: path escapes root (input=${JSON.stringify(input)})`)
     }
     return candidate
   }

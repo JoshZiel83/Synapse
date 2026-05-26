@@ -25,8 +25,8 @@ test("repo path helpers resolve from module location instead of cwd", async () =
 
     assert.equal(repoPaths.repoRoot, expectedRepoRoot)
     assert.equal(
-      repoPaths.resolveRepoPath("relay", "managed-command-providers.json"),
-      join(expectedRepoRoot, "relay", "managed-command-providers.json")
+      repoPaths.resolveRepoPath("docs", "device-runtime-v3.md"),
+      join(expectedRepoRoot, "docs", "device-runtime-v3.md")
     )
     assert.equal(
       subprojects.resolveRepoSubprojectRoot("cli-anything"),
@@ -38,9 +38,7 @@ test("repo path helpers resolve from module location instead of cwd", async () =
     )
 
     assert.equal(
-      existsSync(
-        repoPaths.resolveRepoPath("relay", "managed-command-providers.json")
-      ),
+      existsSync(repoPaths.resolveRepoPath("docs", "device-runtime-v3.md")),
       true
     )
 

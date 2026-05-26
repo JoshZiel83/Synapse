@@ -853,13 +853,9 @@ async function listManageableDeviceCapabilityIds(
     .where("capability.status", "=", "active")
     .orderBy("capability.updated_at", "desc")
 
-  // device_admin can manage all device capabilities in the workspace; otherwise
-  // only the device owner can. `manage_relays` is the automation-event-source
-  // permission and remains scoped to the automation domain.
-  if (
-    !workspacePermissionFromAccess(access, "manage_devices") &&
-    !workspacePermissionFromAccess(access, "manage_relays")
-  ) {
+  // Only device_admin (manage_devices) can list every workspace's device
+  // capabilities; otherwise we surface only the ones the actor owns.
+  if (!workspacePermissionFromAccess(access, "manage_devices")) {
     query = query.where("device.owner_workspace_member_id", "=", access.id)
   }
 
@@ -997,11 +993,10 @@ async function hasDeviceCapabilityPermission(
     return false
   }
 
-  // device_admin can manage device capabilities. `manage_relays` is the
-  // automation-event-source permission (legacy name, scoped to automation).
+  // device_admin (manage_devices) can manage every device capability in
+  // the workspace; otherwise the binding owner is the only one allowed.
   const canManage =
     workspacePermissionFromAccess(access, "manage_devices") ||
-    workspacePermissionFromAccess(access, "manage_relays") ||
     row.owner_workspace_member_id === access.id
   return canManage
 }

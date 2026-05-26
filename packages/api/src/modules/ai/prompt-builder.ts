@@ -133,119 +133,17 @@ function buildRosterEntry(member: ConversationParticipantInfo): string {
   return `- [actor] **${member.actor_name}**${version} — ${title}${participantIdNote}${summary ? ` — ${summary}` : ""}`
 }
 
-function toolBaseName(toolName: string): string {
-  const parts = toolName.split("__")
-  return parts[parts.length - 1] || toolName
-}
-
-function hasToolBaseName(
-  tools: ToolDefinition[] | undefined,
-  names: string[]
-): boolean {
-  if (!tools || tools.length === 0) return false
-  const targetNames = new Set(names)
-  return tools.some((tool) => targetNames.has(toolBaseName(tool.name)))
-}
-
 function buildToolRoutingGuidance(tools: ToolDefinition[] | undefined): string {
-  if (!tools || tools.length === 0) return ""
-
-  const lines: string[] = []
-
-  if (
-    hasToolBaseName(tools, [
-      "View",
-      "ViewMany",
-      "GetFile",
-      "GlobTool",
-      "GrepTool",
-      "SearchFiles",
-      "bash",
-      "desktop_capture_display",
-      "desktop_capture_overview",
-      "desktop_click",
-      "desktop_drag",
-      "desktop_move_pointer",
-      "desktop_scroll",
-      "desktop_type_text",
-      "list_pages",
-      "select_page",
-      "take_snapshot",
-      "take_screenshot",
-      "navigate_page",
-      "click",
-      "navigate",
-      "screenshot",
-    ])
-  ) {
-    lines.push(
-      "- Relay builtin filesystem, browser, desktop, and commandline tools accept `request_authorization`. Synapse handles this option on the server and does not send it to the relay client. Use `background` to create a user authorization request only if the relay client locally denies the action. Use `blocking` only when the current step must wait for approval and retry immediately."
-    )
-  }
-
-  if (
-    hasToolBaseName(tools, [
-      "View",
-      "ViewMany",
-      "GetFile",
-      "GlobTool",
-      "GrepTool",
-      "SearchFiles",
-    ])
-  ) {
-    lines.push(
-      "- When relay filesystem tools are available, prefer `View` or `ViewMany` for inspection, `GetFile` for original bytes, `GlobTool` for filename or path discovery, `GrepTool` for regex content search, and `SearchFiles` for indexed broad discovery. Do not default to shell `cat`, `find`, or `grep`."
-    )
-  }
-
-  if (hasToolBaseName(tools, ["bash"])) {
-    lines.push(
-      "- Reserve relay `bash` for shell commands that dedicated tools cannot handle. The bundled commandline runtime already places git, gh, glab, node, python, ffmpeg, and managed upstream CLI wrappers on PATH."
-    )
-    lines.push(
-      '- Relay `bash` accepts `execution_mode`. Use `execution_mode: "async"` for long-running shell or CLI jobs when you do not need the final output in the current reasoning step. Synapse will create a background task now and wake you later with the result.'
-    )
-    lines.push(
-      '- Do not combine relay `bash` `execution_mode: "async"` with `request_authorization: "blocking"`. Use `background` or omit `request_authorization` for async command execution.'
-    )
-  }
-
-  if (
-    hasToolBaseName(tools, [
-      "desktop_capture_display",
-      "desktop_capture_overview",
-      "desktop_click",
-      "desktop_drag",
-      "desktop_move_pointer",
-      "desktop_scroll",
-      "desktop_type_text",
-    ])
-  ) {
-    lines.push(
-      "- For desktop automation, take a fresh display capture before coordinate-based actions and recapture if the UI or display layout changes. Recompute coordinates from the newest image instead of reusing stale ones."
-    )
-  }
-
-  if (
-    hasToolBaseName(tools, [
-      "list_pages",
-      "select_page",
-      "take_snapshot",
-      "take_screenshot",
-      "navigate_page",
-      "click",
-      "navigate",
-      "screenshot",
-    ])
-  ) {
-    lines.push(
-      "- For browser automation, identify the target page with `list_pages` and `select_page` when available, prefer `take_snapshot` for structured page inspection, and use screenshots only when pixel-level visual inspection matters."
-    )
-  }
-
-  if (lines.length === 0) return ""
-
-  return `# Tool Routing\n` + lines.join("\n")
+  // Device-runtime v3.0: the legacy tool-routing guidance that hand-rolled
+  // advice for `View` / `bash` / `desktop_capture_display` /
+  // `take_snapshot` (the old Relay builtin surface — `request_authorization`,
+  // `execution_mode`, etc.) has been removed. Those tool names + arg
+  // shapes are being redefined as part of the device-runtime cutover and
+  // the previous prompts would push the model to emit calls that don't
+  // exist on the new surface. A future PR (#N3 — Tool Surface Spec) will
+  // ship device-generic prompts once the v3 tool catalog is finalized.
+  void tools
+  return ""
 }
 
 function hasHumanConversationParticipant(

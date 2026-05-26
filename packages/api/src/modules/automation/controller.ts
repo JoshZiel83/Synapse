@@ -315,7 +315,7 @@ export default async function automationController(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request as any,
         reply as any,
-        "workspace.manage_relays",
+        "workspace.manage_devices",
         workspaceId,
         "Not allowed to manage automation event sources"
       )
@@ -370,7 +370,7 @@ export default async function automationController(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request as any,
         reply as any,
-        "workspace.manage_relays",
+        "workspace.manage_devices",
         workspaceId,
         "Not allowed to manage automation event source access"
       )
@@ -391,7 +391,7 @@ export default async function automationController(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request as any,
         reply as any,
-        "workspace.manage_relays",
+        "workspace.manage_devices",
         workspaceId,
         "Not allowed to manage automation event source access"
       )
@@ -423,7 +423,7 @@ export default async function automationController(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request as any,
         reply as any,
-        "workspace.manage_relays",
+        "workspace.manage_devices",
         workspaceId,
         "Not allowed to manage automation event source access"
       )
@@ -452,7 +452,7 @@ export default async function automationController(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request as any,
         reply as any,
-        "workspace.manage_relays",
+        "workspace.manage_devices",
         workspaceId,
         "Not allowed to manage automation event source access"
       )
@@ -503,7 +503,7 @@ export default async function automationController(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request as any,
         reply as any,
-        "workspace.manage_relays",
+        "workspace.manage_devices",
         workspaceId,
         "Not allowed to update this automation event source"
       )
@@ -531,7 +531,7 @@ export default async function automationController(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request as any,
         reply as any,
-        "workspace.manage_relays",
+        "workspace.manage_devices",
         workspaceId,
         "Not allowed to archive this automation event source"
       )
@@ -556,7 +556,7 @@ export default async function automationController(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request as any,
         reply as any,
-        "workspace.manage_relays",
+        "workspace.manage_devices",
         workspaceId,
         "Not allowed to trigger this automation event source"
       )
@@ -767,7 +767,7 @@ export default async function automationController(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request as any,
         reply as any,
-        "workspace.manage_relays",
+        "workspace.manage_devices",
         workspaceId,
         "Not allowed to view automation webhooks"
       )
@@ -785,7 +785,7 @@ export default async function automationController(app: FastifyInstance) {
       const allowed = await requireRequestAction(
         request as any,
         reply as any,
-        "workspace.manage_relays",
+        "workspace.manage_devices",
         workspaceId,
         "Not allowed to manage automation webhooks"
       )

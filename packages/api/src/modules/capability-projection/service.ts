@@ -560,26 +560,21 @@ function unionWithDevice(
     // user resolves.
     if (grantSpecs.length === 0) {
       // Auto-fire an interaction_runtime_authorization_requests row so the
-      // dashboard shows the prompt and the user can approve. Only actor /
-      // actor_in_conversation principals can drive the interactive flow
-      // today (the request schema requires source.actorId for participant
-      // resolution). `remote_agent` principals would also benefit from
-      // the interactive flow — the schema enum supports a `remote_agent`
-      // grant scope and projection consults `remote_agent` bindings — but
-      // the request source needs to be extended with `remoteAgentId` and
-      // a "who in the conversation can approve" policy first. Tracking
-      // that as a follow-up; for now we surface a structured permission
-      // error so the operator sees this gap rather than a silent reject.
+      // dashboard shows the prompt and the user can approve. Supported
+      // principal kinds:
+      //  - actor              → grant subject = actor
+      //  - actor_in_conversation → grant subject = conversation_actor_context
+      //  - remote_agent       → grant subject = remote_agent; no
+      //                          tool_call_task is created (the bridged
+      //                          agent retries the call itself rather than
+      //                          waking a chat session)
       const supportsAuthRequest =
         projectInput.principal.kind === "actor" ||
-        projectInput.principal.kind === "actor_in_conversation"
+        projectInput.principal.kind === "actor_in_conversation" ||
+        projectInput.principal.kind === "remote_agent"
       if (!supportsAuthRequest) {
-        const remoteAgentNote =
-          projectInput.principal.kind === "remote_agent"
-            ? " — remote_agent runtime authorization request flow is not yet wired; pre-approve a grant via the dashboard for this remote agent"
-            : ""
         return mcpErrorBlock(
-          `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal${remoteAgentNote}`
+          `permission_denied: no active grant covers device capability ${row.device_capability_id} for this ${projectInput.principal.kind} principal`
         )
       }
       const principal = projectInput.principal as
@@ -590,8 +585,15 @@ function unionWithDevice(
             conversationId: string
             conversationActorContextId: string
           }
+        | {
+            kind: "remote_agent"
+            remoteAgentId: string
+            conversationId: string
+          }
       const conversationId =
-        principal.conversationId ?? projectInput.conversationId
+        ("conversationId" in principal
+          ? principal.conversationId
+          : undefined) ?? projectInput.conversationId
       if (!conversationId) {
         return mcpErrorBlock(
           `permission_denied: cannot create authorization request without a conversation context`
@@ -603,7 +605,16 @@ function unionWithDevice(
             workspaceId: projectInput.workspaceId,
             conversationId,
             sessionId: projectInput.sessionId ?? "",
-            actorId: principal.actorId,
+            actorId:
+              principal.kind === "remote_agent" ? undefined : principal.actorId,
+            remoteAgentId:
+              principal.kind === "remote_agent"
+                ? principal.remoteAgentId
+                : undefined,
+            conversationActorContextId:
+              principal.kind === "actor_in_conversation"
+                ? principal.conversationActorContextId
+                : undefined,
             sourceToolName: toolName,
             conversationKind: projectInput.conversationKind,
             conversationBoundary: projectInput.conversationBoundary,
@@ -648,7 +659,22 @@ function unionWithDevice(
             }
           })(),
           requestMode: "background",
-          availablePresets: ["once", "actor", "conversation", "workspace"],
+          // Surface principal-appropriate scope presets so the approver
+          // can write a grant narrowed to the principal that triggered
+          // the dispatch. The list always includes the universally-safe
+          // once / conversation / workspace presets.
+          availablePresets:
+            principal.kind === "remote_agent"
+              ? ["once", "remote_agent", "conversation", "workspace"]
+              : principal.kind === "actor_in_conversation"
+                ? [
+                    "once",
+                    "actor",
+                    "actor_in_conversation",
+                    "conversation",
+                    "workspace",
+                  ]
+                : ["once", "actor", "conversation", "workspace"],
           reason: `Tool ${toolName} requires authorization for device capability ${row.device_capability_id}`,
           sourceRequestArgs: input,
         })

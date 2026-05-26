@@ -255,7 +255,9 @@ function formatRuntimeAuthorizationPresetLabel(preset: string) {
   }
 }
 
-function describeRuntimeAuthorizationSpec(scope: RuntimeAuthorizationGrantSpec) {
+function describeRuntimeAuthorizationSpec(
+  scope: RuntimeAuthorizationGrantSpec
+) {
   if (scope.capability === "filesystem" && scope.filesystem) {
     return {
       summary:
@@ -579,7 +581,7 @@ export function ChatQuestionInteractionCard({
     viewerCanResolve &&
     interaction.status === "pending"
   const canResolveRuntimeAuthorization =
-    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
     Boolean(onResolveInteraction) &&
     viewerCanResolve &&
     interaction.status === "pending"
@@ -1116,11 +1118,12 @@ export function ChatQuestionInteractionCard({
                       <View style={styles.summarySection}>
                         <Text style={styles.summaryIndex}>设备</Text>
                         <Text style={styles.summaryTitle}>
-                          {interaction.runtimeAuthorization?.deviceDisplayName ||
-                            "Relay"}
+                          {interaction.runtimeAuthorization
+                            ?.deviceDisplayName || "Relay"}
                         </Text>
                         <Text style={styles.summaryDescription}>
-                          {interaction.runtimeAuthorization?.reason || "等待授权"}
+                          {interaction.runtimeAuthorization?.reason ||
+                            "等待授权"}
                         </Text>
                       </View>
                       <View style={styles.summarySection}>
@@ -1145,24 +1148,25 @@ export function ChatQuestionInteractionCard({
                           }
                         />
                       ) : null}
-                      {(interaction.runtimeAuthorization?.grantOptions || []).map(
-                        (option) => (
-                          <FieldOptionButton
-                            key={option.id}
-                            selected={selectedRelayGrantOptionId === option.id}
-                            label={option.summary}
-                            description={option.detail}
-                            disabled={
-                              !canResolveRuntimeAuthorization || submitting
-                            }
-                            onPress={() =>
-                              setSelectedRelayGrantOptionId(option.id)
-                            }
-                          />
-                        )
-                      )}
-                      {(interaction.runtimeAuthorization?.availablePresets || [])
-                        .length ? (
+                      {(
+                        interaction.runtimeAuthorization?.grantOptions || []
+                      ).map((option) => (
+                        <FieldOptionButton
+                          key={option.id}
+                          selected={selectedRelayGrantOptionId === option.id}
+                          label={option.summary}
+                          description={option.detail}
+                          disabled={
+                            !canResolveRuntimeAuthorization || submitting
+                          }
+                          onPress={() =>
+                            setSelectedRelayGrantOptionId(option.id)
+                          }
+                        />
+                      ))}
+                      {(
+                        interaction.runtimeAuthorization?.availablePresets || []
+                      ).length ? (
                         <View style={styles.summarySection}>
                           <Text style={styles.summaryIndex}>授权范围</Text>
                           <Text style={styles.summaryAnswer}>

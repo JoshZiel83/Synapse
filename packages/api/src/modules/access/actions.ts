@@ -58,10 +58,6 @@ export const ACCESS_ACTIONS = {
     resourceType: "workspace",
     permission: "manage_memories",
   },
-  "workspace.manage_relays": {
-    resourceType: "workspace",
-    permission: "manage_relays",
-  },
   "workspace.manage_devices": {
     resourceType: "workspace",
     permission: "manage_devices",

@@ -28,7 +28,26 @@ export interface RuntimeAuthorizationRequestSource {
   workspaceId: string
   conversationId: string
   sessionId: string
-  actorId: string
+  /**
+   * Required for actor / actor_in_conversation principals. For
+   * remote_agent principals leave undefined and set `remoteAgentId`
+   * instead — the requester is then resolved as the bridged
+   * remote_agent participant of the conversation, not a chat actor.
+   */
+  actorId?: string
+  /**
+   * Required for remote_agent principals. Populates
+   * interaction_runtime_authorization_requests.principal_remote_agent_id
+   * so the eventual grant can be subject-scoped to the remote agent.
+   */
+  remoteAgentId?: string
+  /**
+   * Required for actor_in_conversation principals. Populates
+   * interaction_runtime_authorization_requests.principal_conversation_actor_context_id
+   * so the eventual grant can be subject-scoped to the per-conversation
+   * actor context.
+   */
+  conversationActorContextId?: string
   sourceToolName: string
   conversationKind?: "private" | "group" | "virtual"
   conversationBoundary?: ConversationBoundary
@@ -220,13 +239,24 @@ export async function createRuntimeAuthorizationRequest(
   const allMembers = await listConversationParticipants(
     params.source.conversationId
   )
-  const requesterMember = allMembers.find(
-    (member) =>
-      member.actor_id === params.source.actorId && member.state === "active"
-  )
+  // Resolve the requester by whichever principal id the caller supplied.
+  // actor / actor_in_conversation principals match on actor_id; remote_agent
+  // principals match on remote_agent_id (the bridged participant of the
+  // conversation). The interaction needs a participant id either way so
+  // the dashboard knows whose request this is.
+  const requesterMember = allMembers.find((member) => {
+    if (member.state !== "active") return false
+    if (params.source.remoteAgentId) {
+      return member.remote_agent_id === params.source.remoteAgentId
+    }
+    if (params.source.actorId) {
+      return member.actor_id === params.source.actorId
+    }
+    return false
+  })
   if (!requesterMember) {
     throw new Error(
-      "Current actor is not an active participant of this conversation"
+      "Current principal is not an active participant of this conversation"
     )
   }
 
@@ -295,42 +325,51 @@ export async function createRuntimeAuthorizationRequest(
     }
   }
 
-  const task = await createToolCallTask({
-    workspaceId: params.source.workspaceId,
-    conversationId: params.source.conversationId,
-    sessionId: params.source.sessionId,
-    actorId: params.source.actorId,
-    turnId: params.source.turnId,
-    sourceToolCallId: params.source.sourceToolCallId,
-    sourceToolName: params.source.sourceToolName,
-    executorKind: "runtime_authorization",
-    deliveryPolicy: "human_interaction",
-    status: "input_required",
-    statusMessage: buildWaitingSummary(params.runtimeTarget.deviceDisplayName),
-    dispatchStatus: "input_requested",
-    supportsCancel: true,
-    requestPayload: {
-      deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
-      deviceId: params.runtimeTarget.deviceId,
-      deviceExposureId: params.runtimeTarget.deviceExposureId,
-      runtimeSessionId: params.runtimeTarget.runtimeSessionId,
-      requestedToolName: params.runtimeTarget.requestedToolName,
-      deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
-      reason: params.reason,
-      requestMode: params.requestMode,
-      requestedAction: params.authorizationPlan.requestedAction,
-      grantOptions: params.authorizationPlan.grantOptions,
-      availablePresets: params.availablePresets,
-      sourceRetryNonce: retryNonce,
-      sourceRequestArgs: params.sourceRequestArgs,
-    },
-  })
+  // Skip the tool_call_task for remote_agent principals: tool_call_tasks
+  // requires actor_id NOT NULL and is wired to chat session wakeups, which
+  // remote agents don't have. The bridged agent retries its own tool call
+  // on the next round-trip, so the interaction alone is enough to gate
+  // approval.
+  const task = params.source.remoteAgentId
+    ? null
+    : await createToolCallTask({
+        workspaceId: params.source.workspaceId,
+        conversationId: params.source.conversationId,
+        sessionId: params.source.sessionId,
+        actorId: params.source.actorId!,
+        turnId: params.source.turnId,
+        sourceToolCallId: params.source.sourceToolCallId,
+        sourceToolName: params.source.sourceToolName,
+        executorKind: "runtime_authorization",
+        deliveryPolicy: "human_interaction",
+        status: "input_required",
+        statusMessage: buildWaitingSummary(
+          params.runtimeTarget.deviceDisplayName
+        ),
+        dispatchStatus: "input_requested",
+        supportsCancel: true,
+        requestPayload: {
+          deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
+          deviceId: params.runtimeTarget.deviceId,
+          deviceExposureId: params.runtimeTarget.deviceExposureId,
+          runtimeSessionId: params.runtimeTarget.runtimeSessionId,
+          requestedToolName: params.runtimeTarget.requestedToolName,
+          deviceToolStableKey: params.runtimeTarget.deviceToolStableKey,
+          reason: params.reason,
+          requestMode: params.requestMode,
+          requestedAction: params.authorizationPlan.requestedAction,
+          grantOptions: params.authorizationPlan.grantOptions,
+          availablePresets: params.availablePresets,
+          sourceRetryNonce: retryNonce,
+          sourceRequestArgs: params.sourceRequestArgs,
+        },
+      })
 
   try {
     const interaction = await createRuntimeAuthorizationInteractionRequest({
       workspaceId: params.source.workspaceId,
       conversationId: params.source.conversationId,
-      taskId: task.id,
+      taskId: task?.id,
       requesterParticipantId: requesterMember.id,
       deviceCapabilityId: params.runtimeTarget.deviceCapabilityId,
       deviceId: params.runtimeTarget.deviceId,
@@ -345,6 +384,9 @@ export async function createRuntimeAuthorizationRequest(
       requestMode: params.requestMode,
       sourceRetryNonce: retryNonce,
       sourceRequestArgs: params.sourceRequestArgs,
+      principalRemoteAgentId: params.source.remoteAgentId,
+      principalConversationActorContextId:
+        params.source.conversationActorContextId,
     })
 
     return {
@@ -357,19 +399,21 @@ export async function createRuntimeAuthorizationRequest(
       retryNonce,
     }
   } catch (error) {
-    await cancelToolCallTask(task.id, {
-      summary: `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`,
-      finalResultPayload: {
-        content: textBlocks(
-          `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`
-        ),
-        isError: true,
-      },
-      finalErrorPayload: {
-        message: error instanceof Error ? error.message : String(error),
-      },
-      notifyActor: false,
-    })
+    if (task) {
+      await cancelToolCallTask(task.id, {
+        summary: `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`,
+        finalResultPayload: {
+          content: textBlocks(
+            `Runtime authorization request for ${params.runtimeTarget.deviceDisplayName?.trim() || "the device"} failed before dispatch.`
+          ),
+          isError: true,
+        },
+        finalErrorPayload: {
+          message: error instanceof Error ? error.message : String(error),
+        },
+        notifyActor: false,
+      })
+    }
     throw error
   }
 }

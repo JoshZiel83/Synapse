@@ -1,5 +1,5 @@
-// Browser builtin (§4.5 / spec §10). v3.0 replaces relay/internal/builtinmcp/
-// chrome. v1 ships a minimal CDP-based navigate + read-text surface; full
+// Browser builtin (§4.5 / spec §10). v3.0 device-runtime browser host.
+// v1 ships a minimal CDP-based navigate + read-text surface; full
 // chrome-devtools-bundle parity lands incrementally.
 //
 // The implementation deliberately avoids puppeteer to keep the dependency
@@ -8,10 +8,7 @@
 // --remote-debugging-port=NNNN.
 
 import WebSocket from "ws"
-import type {
-  CatalogProvider,
-  CatalogToolInvocationResult,
-} from "../types.js"
+import type { CatalogProvider, CatalogToolInvocationResult } from "../types.js"
 import type {
   DeviceCatalogExposure,
   DeviceCatalogTool,
@@ -94,7 +91,10 @@ export function createBrowserBuiltin(
             "browser builtin has no cdpEndpoint; start Chrome with --remote-debugging-port=NNNN and pass --browser-cdp http://127.0.0.1:NNNN",
         })
       }
-      if (input.toolName !== "browser_navigate" && input.toolName !== "browser_read_text") {
+      if (
+        input.toolName !== "browser_navigate" &&
+        input.toolName !== "browser_read_text"
+      ) {
         return toolErrorResult({
           code: "invalid_request",
           message: `browser builtin does not handle ${input.toolName}`,
@@ -113,7 +113,9 @@ export function createBrowserBuiltin(
         // read_text we check the current target's url (already resolved
         // below). Defer to per-tool blocks for url-level checks.
         const hasAnyAction = browserGrants.some(
-          (g) => g.browser!.action === requiredAction || g.browser!.action === "write"
+          (g) =>
+            g.browser!.action === requiredAction ||
+            g.browser!.action === "write"
         )
         if (!hasAnyAction) {
           return toolErrorResult({
