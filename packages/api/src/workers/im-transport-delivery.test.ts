@@ -29,6 +29,8 @@ function baseDeps(overrides: Partial<Deps> = {}): Deps {
     loadRecipientAddress: FAIL("loadRecipientAddress"),
     resolveMentions: FAIL("resolveMentions"),
     updateStatus: FAIL("updateStatus"),
+    patchLinkMetadata: async () => undefined,
+    recoverBindingChangedLink: async () => undefined,
     getBinding: FAIL("getBinding"),
     getItem: FAIL("getItem"),
     decode: FAIL("decode"),
@@ -244,26 +246,54 @@ test("outboundEnabled=false → skipped/binding_disabled", async () => {
   })
 })
 
-test("account.id mismatch → skipped/binding_changed", async () => {
-  const { updateCalls } = await runWithBinding({
-    account: { id: "acc-OTHER", status: "active" },
-    endpoint: { id: "ep-1" },
-    outboundEnabled: true,
+test("account.id mismatch → triggers recoverBindingChangedLink (no updateStatus)", async () => {
+  const updateCalls: any[] = []
+  const recoveredFor: string[] = []
+  const deps = baseDeps({
+    loadLink: async () => outboundLink(),
+    getBinding: async () => ({
+      account: { id: "acc-OTHER", status: "active" },
+      endpoint: { id: "ep-1" },
+      outboundEnabled: true,
+    }),
+    updateStatus: async (params) => {
+      updateCalls.push(params)
+      return null
+    },
+    recoverBindingChangedLink: async (linkId) => {
+      recoveredFor.push(linkId)
+    },
   })
-  assert.deepEqual(updateCalls[0].metadata, {
-    skippedReason: "binding_changed",
-  })
+  const result = await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  assert.equal(result.success, true)
+  assert.match(result.reason ?? "", /binding changed/)
+  assert.deepEqual(recoveredFor, ["x"])
+  assert.equal(updateCalls.length, 0)
 })
 
-test("endpoint.id mismatch → skipped/binding_changed", async () => {
-  const { updateCalls } = await runWithBinding({
-    account: { id: "acc-1", status: "active" },
-    endpoint: { id: "ep-OTHER" },
-    outboundEnabled: true,
+test("endpoint.id mismatch → triggers recoverBindingChangedLink (no updateStatus)", async () => {
+  const updateCalls: any[] = []
+  const recoveredFor: string[] = []
+  const deps = baseDeps({
+    loadLink: async () => outboundLink(),
+    getBinding: async () => ({
+      account: { id: "acc-1", status: "active" },
+      endpoint: { id: "ep-OTHER" },
+      outboundEnabled: true,
+    }),
+    updateStatus: async (params) => {
+      updateCalls.push(params)
+      return null
+    },
+    recoverBindingChangedLink: async (linkId) => {
+      recoveredFor.push(linkId)
+    },
   })
-  assert.deepEqual(updateCalls[0].metadata, {
-    skippedReason: "binding_changed",
-  })
+  const result = await processImTransportDeliveryJob({ linkId: "x" }, deps)
+  assert.equal(result.success, true)
+  assert.match(result.reason ?? "", /binding changed/)
+  assert.deepEqual(recoveredFor, ["x"])
+  assert.equal(updateCalls.length, 0)
 })
 
 // ─── item checks ───

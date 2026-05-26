@@ -80,6 +80,23 @@ export async function enqueueAutomationExecutionJobs(executionIds: string[]) {
   )
 }
 
+/**
+ * Default BullMQ job options for IM delivery jobs (G7).
+ *
+ * Up to 5 attempts with exponential backoff (2s, 4s, 8s, 16s, 32s).
+ * `removeOnComplete:100` keeps the last 100 completed jobs so the
+ * outbox sweeper (`outbox-sweeper.ts`) can introspect job state for
+ * a recently-completed-but-now-stuck link; older completions are
+ * trimmed by BullMQ automatically. `removeOnFail:false` keeps failed
+ * jobs around so `job.retry()` is available to the recovery helper.
+ */
+export const IM_TRANSPORT_DELIVERY_JOB_DEFAULTS = {
+  attempts: 5,
+  backoff: { type: "exponential" as const, delay: 2000 },
+  removeOnFail: false,
+  removeOnComplete: 100,
+}
+
 export async function enqueueTransportDeliveryJobs(linkIds: string[]) {
   const uniqueLinkIds = Array.from(
     new Set(linkIds.map((linkId) => linkId.trim()).filter(Boolean))
@@ -89,7 +106,10 @@ export async function enqueueTransportDeliveryJobs(linkIds: string[]) {
       imTransportDeliveryQueue.add(
         "deliver",
         { linkId },
-        { jobId: `im-transport-delivery-${linkId}` }
+        {
+          jobId: `im-transport-delivery-${linkId}`,
+          ...IM_TRANSPORT_DELIVERY_JOB_DEFAULTS,
+        }
       )
     )
   )

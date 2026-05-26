@@ -92,6 +92,13 @@ export {
   type ResolveOutboundBindingResult,
 } from "./service/delivery-links.js"
 
+export {
+  canDeliverNow,
+  recoverProjectionForBindingChangedLink,
+  recoverSkippedDisabledLink,
+  type CanDeliverNowResult,
+} from "./service/recovery.js"
+
 export { listTransportExternalUsers } from "./service/external-users.js"
 
 export {

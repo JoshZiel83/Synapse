@@ -11,6 +11,7 @@ import {
   getTransportAddressByExternalId,
   loadTransportMessageLinkForDelivery,
   patchTransportMessageLinkMetadata,
+  recoverProjectionForBindingChangedLink,
   updateTransportMessageLinkStatus,
 } from "../modules/im/service.js"
 import { tryGetConnector } from "../modules/im/connectors/registry.js"
@@ -92,6 +93,14 @@ export interface ImTransportDeliveryDeps {
    * `patchTransportMessageLinkMetadata`.
    */
   patchLinkMetadata: typeof patchTransportMessageLinkMetadata
+  /**
+   * G5/G7 recovery: invoked from the binding-unavailable branch when the
+   * current binding's account/endpoint no longer matches the link.
+   * Atomically resets any projection pinned to this link + marks the old
+   * link `skippedReason='binding_changed'` so the sweeper won't keep
+   * re-enqueueing it. Defaults to `recoverProjectionForBindingChangedLink`.
+   */
+  recoverBindingChangedLink: (linkId: string) => Promise<void>
   getBinding: typeof getConversationTransportBinding
   getItem: typeof getConversationFeedItemById
   decode: typeof decodeFromConversationItem
@@ -176,18 +185,31 @@ export async function processImTransportDeliveryJob(
     binding.account.id !== link.transportAccountId ||
     binding.endpoint.id !== link.transportEndpointId
   ) {
+    const isBindingChanged =
+      !!binding &&
+      binding.account.status === "active" &&
+      binding.outboundEnabled &&
+      (binding.account.id !== link.transportAccountId ||
+        binding.endpoint.id !== link.transportEndpointId)
+    const skippedReason = !binding
+      ? "binding_missing"
+      : binding.account.status !== "active"
+        ? "account_disabled"
+        : !binding.outboundEnabled
+          ? "binding_disabled"
+          : "binding_changed"
+    if (isBindingChanged) {
+      // Atomically reset any projection pinned to this link + mark the
+      // old link terminal so the sweeper won't keep re-enqueueing it.
+      // The next projection-worker tick rebuilds token + item + link
+      // under the new binding.
+      await deps.recoverBindingChangedLink(linkId)
+      return { success: true, reason: "binding changed (recovered)" }
+    }
     await deps.updateStatus({
       linkId,
       status: "skipped",
-      metadata: {
-        skippedReason: !binding
-          ? "binding_missing"
-          : binding.account.status !== "active"
-            ? "account_disabled"
-            : !binding.outboundEnabled
-              ? "binding_disabled"
-              : "binding_changed",
-      },
+      metadata: { skippedReason },
     })
     return { success: true, reason: "binding unavailable" }
   }
@@ -382,6 +404,8 @@ export function defaultImTransportDeliveryDeps(): ImTransportDeliveryDeps {
       }),
     updateStatus: updateTransportMessageLinkStatus,
     patchLinkMetadata: patchTransportMessageLinkMetadata,
+    recoverBindingChangedLink: (linkId) =>
+      recoverProjectionForBindingChangedLink(linkId),
     getBinding: getConversationTransportBinding,
     getItem: getConversationFeedItemById,
     decode: decodeFromConversationItem,
