@@ -53,11 +53,16 @@ export const QQ_MESSAGE_CAPABILITIES: MessageCapabilities = {
   // this once the group renderer + address-encoding decode lands.
   supportsMention: false,
   supportsReply: true,
-  // Stage 5 flips Image/Voice/Video/File true.
-  supportsImage: false,
-  supportsFile: false,
-  supportsVoice: false,
-  supportsVideo: false,
+  // Stage 5 outbound is wired: image/voice/video flow via
+  // media-upload.ts → file_info → POST /messages with msg_type=7.
+  // `supportsFile=true` is platform-true for C2C; group `file_type=4`
+  // is explicitly rejected at upload time with code
+  // qq_group_file_not_supported, surfacing in dashboards rather than
+  // silently being dropped.
+  supportsImage: true,
+  supportsFile: true,
+  supportsVoice: true,
+  supportsVideo: true,
   // Stage 8 flips this true; degradation produces fallback text until then.
   supportsInteractionPrompt: false,
   // 5000 is QQ's per-message markdown character cap (per

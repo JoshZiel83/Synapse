@@ -37,16 +37,35 @@ test("planQqSends: quote part becomes leading > preview", () => {
   assert.equal(plan[0].content, "> earlier line follow-up")
 })
 
-test("planQqSends: media-only parts (image/voice/video/file) produce empty plan", () => {
-  // Degradation has already converted them to system_markers in
-  // production (supportsImage/Voice/Video/File=false in Stage 4
-  // capabilities); if we still see typed media here, they render to
-  // nothing because Stage 4 doesn't ship media (Stage 5 does).
+test("planQqSends: media parts produce a media plan item (Stage 5)", () => {
   const msg = buildCanonicalMessage([
     { type: "image", fileRef: { fileId: "f1", url: "https://x/y" } },
   ])
   const plan = planQqSends(msg)
-  assert.equal(plan.length, 0)
+  assert.equal(plan.length, 1)
+  assert.equal(plan[0].kind, "media")
+  if (plan[0].kind === "media") {
+    assert.equal(plan[0].fileType, 1) // QQ_FILE_TYPE.IMAGE
+    assert.equal(plan[0].fileRef.url, "https://x/y")
+  }
+})
+
+test("planQqSends: media parts with neither url nor fileId are dropped", () => {
+  const msg = buildCanonicalMessage([{ type: "image", fileRef: {} }])
+  assert.deepEqual(planQqSends(msg), [])
+})
+
+test("planQqSends: mixed text + media interleave in canonical order", () => {
+  const msg = buildCanonicalMessage([
+    { type: "text", text: "before" },
+    { type: "image", fileRef: { url: "https://x/y" } },
+    { type: "text", text: "after" },
+  ])
+  const plan = planQqSends(msg)
+  assert.equal(plan.length, 3)
+  assert.equal(plan[0].kind, "text")
+  assert.equal(plan[1].kind, "media")
+  assert.equal(plan[2].kind, "text")
 })
 
 test("planQqSends: interaction_prompt falls back to title + fallbackText", () => {

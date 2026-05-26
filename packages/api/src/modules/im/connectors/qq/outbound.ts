@@ -54,6 +54,8 @@ import {
   getLatestInboundAnchor,
   type QqLatestInboundAnchor,
 } from "./latest-inbound-store.js"
+import { downloadForQqUpload, uploadQqMedia } from "./media-upload.js"
+import { QQ_FILE_TYPE, type QqFileType } from "./media-constants.js"
 import {
   readQqAccountConfig,
   type QqAccountConfig,
@@ -157,12 +159,19 @@ export async function sendQqMessage(
     },
   })
 
-  // Step 4: POST
+  // Step 4: POST. v1 sends plan[0] only — mixed text+media canonical
+  // messages would each cost an anchor-quota slot (capped 5/window),
+  // so we keep the cost predictable and let the AI repeat the message
+  // if it really wanted both. Future revisions can chain plan items
+  // by reserving a fresh msg_seq per send.
   const { url } = endpointUrlFor(input)
-  const body = buildOutboundBody({
-    plan: plan[0]!,
+  const planItem = plan[0]!
+  const body = await buildOutboundBody({
+    plan: planItem,
     reservation,
     replyTo: input.replyTo?.externalMessageId,
+    account: input.account,
+    endpoint: input.endpoint,
   })
 
   let res: Response
@@ -376,25 +385,47 @@ interface QqOutboundBody {
   msg_type: number
   content?: string
   markdown?: { content: string }
+  media?: { file_info: string }
   msg_id?: string
   event_id?: string
   msg_seq: number
   message_reference?: { message_id: string }
 }
 
-function buildOutboundBody(params: {
+/**
+ * Materialize a single QqSendPlanItem into the body QQ expects. Async
+ * because media plans may upload bytes / pull a cached file_info as
+ * part of the construction.
+ */
+async function buildOutboundBody(params: {
   plan: QqSendPlanItem
   reservation: QqReservation
   replyTo?: string
-}): QqOutboundBody {
+  account: OutboundSendInput["account"]
+  endpoint: OutboundSendInput["endpoint"]
+}): Promise<QqOutboundBody> {
   const body: QqOutboundBody = {
     msg_type: params.plan.msgType,
     msg_seq: params.reservation.msgSeq,
   }
-  if (params.plan.msgType === QQ_MSG_TYPE.MARKDOWN) {
-    body.markdown = { content: params.plan.content }
+  if (params.plan.kind === "text") {
+    if (params.plan.msgType === QQ_MSG_TYPE.MARKDOWN) {
+      body.markdown = { content: params.plan.content }
+    } else {
+      body.content = params.plan.content
+    }
   } else {
-    body.content = params.plan.content
+    // media plan — upload + cache file_info
+    const fileInfo = await resolveFileInfo({
+      account: params.account,
+      endpoint: params.endpoint,
+      plan: params.plan,
+    })
+    body.media = { file_info: fileInfo }
+    body.msg_type = QQ_MSG_TYPE.MEDIA
+    // The platform requires a non-empty content even for media messages;
+    // send a single space so the message renders cleanly.
+    body.content = " "
   }
   if (params.reservation.anchorKind === "msg_id") {
     body.msg_id = params.reservation.anchorId
@@ -575,8 +606,10 @@ function enforceConfiguredUrlDomains(
   config: QqAccountConfig
 ): void {
   if (config.configuredUrlDomains.length === 0) {
-    // No allowlist configured at all. Only reject if a URL exists.
+    // No allowlist configured at all. Only reject if a URL exists in
+    // any text plan item (media plans don't carry user-visible URLs).
     for (const p of plan) {
+      if (p.kind !== "text") continue
       if (containsHttpUrl(p.content)) {
         throw new PermanentTransportError(
           "qq: outbound contains URL but account.config.configuredUrlDomains is empty (QQ console 消息URL配置 required)",
@@ -590,6 +623,7 @@ function enforceConfiguredUrlDomains(
     config.configuredUrlDomains.map((h) => h.toLowerCase())
   )
   for (const p of plan) {
+    if (p.kind !== "text") continue
     for (const host of extractHosts(p.content)) {
       if (!allowed.has(host)) {
         throw new PermanentTransportError(
@@ -619,3 +653,80 @@ function extractHosts(text: string): string[] {
   }
   return hosts
 }
+
+/**
+ * Resolve a media plan item to a QQ `file_info` token. Strategy:
+ *   - If fileRef.url is reachable by the QQ CDN: pass the URL through
+ *     to upload, let QQ pull it (saves us the download bandwidth).
+ *   - If we only have local bytes (fileRef.url is internal, or future
+ *     Synapse `files:`/local paths): download via the safe helper +
+ *     base64-inline upload.
+ *
+ * Cache hits (same content twice within the file_info TTL) skip the
+ * upload altogether (see upload-cache.ts).
+ *
+ * Stage 5 doesn't yet wire local-file paths — `fileRef.url` is the
+ * only path tested in v1. Buffers will land when Synapse `files`
+ * service integration matures (see plan OQ3).
+ */
+async function resolveFileInfo(params: {
+  account: OutboundSendInput["account"]
+  endpoint: OutboundSendInput["endpoint"]
+  plan: Extract<QqSendPlanItem, { kind: "media" }>
+}): Promise<string> {
+  const { fileRef, fileType } = params.plan
+  if (!fileRef.url) {
+    throw new PermanentTransportError(
+      "qq: media fileRef has no url (local-buffer path not yet wired)",
+      { code: "qq_media_no_url" }
+    )
+  }
+  const scope = params.endpoint.endpointType === "direct" ? "c2c" : "group"
+  const targetId =
+    scope === "c2c"
+      ? (decodeUserOpenid(params.endpoint.externalId) ?? "")
+      : params.endpoint.externalId
+  if (!targetId) {
+    throw new PermanentTransportError(
+      `qq: cannot derive target id from endpoint ${params.endpoint.externalId}`,
+      { code: "qq_invalid_endpoint" }
+    )
+  }
+
+  // Prefer URL pass-through: the QQ CDN will pull from the source
+  // directly without us downloading anything.
+  try {
+    const result = await uploadQqMedia({
+      account: params.account,
+      scope,
+      targetId,
+      fileType,
+      source: { url: fileRef.url, mime: fileRef.mime },
+    })
+    return result.fileInfo
+  } catch (err) {
+    // If the platform refused to pull from this URL (e.g. private CDN
+    // we serve internally), download via the safe helper and retry
+    // with inline bytes. Only do this for known retryable errors so we
+    // don't spend two upload slots on a permanent failure.
+    if (!(err instanceof RetryableTransportError)) throw err
+    const buffer = await downloadForQqUpload({
+      url: fileRef.url,
+      fileType,
+    })
+    const result = await uploadQqMedia({
+      account: params.account,
+      scope,
+      targetId,
+      fileType,
+      source: { buffer, mime: fileRef.mime },
+    })
+    return result.fileInfo
+  }
+}
+
+// re-exported for downstream code (Stage 8 keyboard render needs the
+// file_type constant set; reads it from here so we only have one source
+// of truth).
+export { QQ_FILE_TYPE }
+export type { QqFileType }

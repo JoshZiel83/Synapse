@@ -24,34 +24,95 @@
  */
 
 import type {
+  CanonicalFileRef,
   CanonicalMessage,
   CanonicalPart,
 } from "../../messaging/canonical-message.js"
+import { QQ_FILE_TYPE, type QqFileType } from "./media-constants.js"
 import { QQ_MSG_TYPE } from "./types.js"
 
-export type QqSendPlanItem = {
-  /** msg_type sent to QQ — 0 (text) for Stage 4. */
-  msgType: typeof QQ_MSG_TYPE.TEXT | typeof QQ_MSG_TYPE.MARKDOWN
-  /** Body string — content for text, markdown.content for markdown. */
-  content: string
-}
+export type QqSendPlanItem =
+  | {
+      kind: "text"
+      msgType: typeof QQ_MSG_TYPE.TEXT | typeof QQ_MSG_TYPE.MARKDOWN
+      content: string
+    }
+  | {
+      kind: "media"
+      msgType: typeof QQ_MSG_TYPE.MEDIA
+      fileType: QqFileType
+      fileRef: CanonicalFileRef
+    }
 
+/**
+ * Plan one or more outbound POSTs from a CanonicalMessage. QQ's message
+ * envelope is single-message-type per POST so a mixed text+image+voice
+ * canonical message becomes (text, image, voice) plans in order.
+ *
+ * Stage 4 emitted text-only. Stage 5 adds image/voice/video/file plans
+ * (one per media part). Plans are ordered to match canonical part
+ * order so the user sees them in the same sequence the AI emitted.
+ *
+ * Mentions are flattened to `@name` text by degradation
+ * (supportsMention=false in v1); media without fileRef.url/fileId is
+ * dropped silently (canonical-encoding lossy fallback already saved
+ * the canonicalParts so a future replay could recover it).
+ */
 export function planQqSends(msg: CanonicalMessage): QqSendPlanItem[] {
-  const text = flattenToText(msg.parts)
-  if (!text) return []
-  return [{ msgType: QQ_MSG_TYPE.TEXT, content: text }]
-}
+  const items: QqSendPlanItem[] = []
+  let textBuf: string[] = []
 
-function flattenToText(parts: CanonicalPart[]): string {
-  const out: string[] = []
-  for (const part of parts) {
-    const piece = renderPart(part)
-    if (piece) out.push(piece)
+  const flushText = () => {
+    const text = textBuf.join(" ").trim()
+    textBuf = []
+    if (text) {
+      items.push({ kind: "text", msgType: QQ_MSG_TYPE.TEXT, content: text })
+    }
   }
-  return out.join(" ").trim()
+
+  for (const part of msg.parts) {
+    const mediaItem = renderMediaPart(part)
+    if (mediaItem) {
+      flushText()
+      items.push(mediaItem)
+      continue
+    }
+    const piece = renderTextPart(part)
+    if (piece) textBuf.push(piece)
+  }
+  flushText()
+  return items
 }
 
-function renderPart(part: CanonicalPart): string {
+function renderMediaPart(part: CanonicalPart): QqSendPlanItem | null {
+  switch (part.type) {
+    case "image":
+      return mediaPlanForRef(part.fileRef, QQ_FILE_TYPE.IMAGE)
+    case "voice":
+      return mediaPlanForRef(part.fileRef, QQ_FILE_TYPE.VOICE)
+    case "video":
+      return mediaPlanForRef(part.fileRef, QQ_FILE_TYPE.VIDEO)
+    case "file":
+      return mediaPlanForRef(part.fileRef, QQ_FILE_TYPE.FILE)
+    default:
+      return null
+  }
+}
+
+function mediaPlanForRef(
+  fileRef: CanonicalFileRef,
+  fileType: QqFileType
+): QqSendPlanItem | null {
+  if (!fileRef.url && !fileRef.fileId) return null
+  return {
+    kind: "media",
+    msgType: QQ_MSG_TYPE.MEDIA,
+    fileType,
+    fileRef,
+  }
+}
+
+function renderTextPart(part: CanonicalPart): string {
   switch (part.type) {
     case "text":
       return part.text
@@ -64,9 +125,8 @@ function renderPart(part: CanonicalPart): string {
     case "system_marker":
       return part.label ?? labelForMarker(part.marker)
     case "interaction_prompt":
-      // Stage 8 owns this; Stage 4 has capability false → degradation
-      // already converted it to text. If we still see one, render the
-      // fallback text inline.
+      // Stage 8 owns this; until then degradation converts it to text.
+      // If we still see one, render the fallback text inline.
       return part.title
         ? `${part.title}\n${part.fallbackText}`
         : part.fallbackText
@@ -78,8 +138,7 @@ function renderPart(part: CanonicalPart): string {
     case "voice":
     case "video":
     case "file":
-      // Stage 5 handles media as separate plan items + uploads; until
-      // then degradation has already converted these to system_marker.
+      // Handled by renderMediaPart; never contributes to the text buf.
       return ""
   }
 }
