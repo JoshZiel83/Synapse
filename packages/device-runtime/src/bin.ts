@@ -185,6 +185,15 @@ async function main() {
       // for environments where the server hasn't started issuing one. Both
       // path token and adapter config (server addr / port / auth / vhost)
       // must be present for the runtime to even attempt frpc.
+      //
+      // The runtime handle is created AFTER the adapter, so we wire the
+      // adapter's onUnexpectedExit through a mutable closure: bin.ts
+      // populates `runtimeRef.handle` once runDeviceRuntime resolves; if
+      // frpc dies later, the callback fires runtimeRef.handle.notifyTunnelDown
+      // so the API stops routing dispatches to a dead tunnel.
+      const runtimeRef: {
+        handle: { notifyTunnelDown(reason: string): void } | null
+      } = { handle: null }
       if (
         tunnelServerAddr &&
         tunnelServerPortRaw &&
@@ -200,6 +209,11 @@ async function main() {
               authToken: tunnelAuthToken,
               vhostHost: tunnelVhost,
               frpcPath: getFlag(args.flags, "frpc-path") ?? "frpc",
+              onUnexpectedExit: ({ code, signal }) => {
+                runtimeRef.handle?.notifyTunnelDown(
+                  `frpc exited unexpectedly (code=${code ?? "null"}, signal=${signal ?? "null"})`
+                )
+              },
             }),
             registrationToken: tunnelRegistrationToken ?? "",
           }
@@ -213,6 +227,13 @@ async function main() {
         trustedServerKeys,
         tunnel,
       })
+      // Now that the runtime is up, hook its notifyTunnelDown into the
+      // closure the frp adapter captured at construction time. The cast
+      // is safe because notifyTunnelDown was added to EmbeddedRuntimeHandle
+      // alongside this wiring (see runtime.ts).
+      runtimeRef.handle = handle as unknown as {
+        notifyTunnelDown(reason: string): void
+      }
       process.on("SIGINT", () => {
         void handle.stop()
       })

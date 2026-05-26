@@ -452,17 +452,6 @@ async function loadVisiblePlugins(params: ResolveParams) {
   }) as VisiblePluginRow[]
 }
 
-// Relay subsystem is gone, and `relay-auto-skills.ts` has been deleted too.
-// This helper used to enumerate visible relay commandline exposures so the
-// auto-skills layer could mint virtual skill wrappers around them. It has
-// no current callers; keep the no-op signature for any external imports
-// that may still reference it until they are pruned in a follow-up.
-export async function listVisibleHealthyRelayCommandlineExposureMetadata(
-  _params: ResolveParams
-): Promise<Record<string, unknown>[]> {
-  return []
-}
-
 async function resolveTools(
   params: ResolveParams,
   instances: Map<string, McpInstance>,

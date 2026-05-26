@@ -321,6 +321,26 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
     this.emit("status", status)
   }
 
+  /**
+   * Notify the API that our tunnel went down so DeviceTunnelRegistry stops
+   * routing dispatches to it. Called from the FrpTunnelAdapter's
+   * onUnexpectedExit hook when frpc dies after passing the startup grace
+   * period — without this, every dispatch silently 502s against a dead
+   * tunnel until the WSS reconnects and re-pushes catalog + tunnel.up.
+   * Best-effort: if the WSS is itself dead the runtime will pick up the
+   * absence of tunnel registration on its next hello.
+   */
+  notifyTunnelDown(reason: string): void {
+    this.tunnelHandle = null
+    this.updateStatus("degraded")
+    if (!this.transport) return
+    try {
+      this.transport.notify("device.tunnel.down", { reason })
+    } catch {
+      /* best-effort: WSS may already be gone */
+    }
+  }
+
   async stop(): Promise<void> {
     if (this.transport) await this.transport.stop()
     if (this.tunnelHandle && this.opts.tunnel) {

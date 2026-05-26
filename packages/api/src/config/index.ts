@@ -91,16 +91,6 @@ export const config = {
   im: {
     runtimeManagerEnabled: process.env.IM_RUNTIME_MANAGER_ENABLED !== "false",
   },
-  relay: {
-    updateCosBaseUrl:
-      process.env.RELAY_UPDATE_COS_BASE_URL ||
-      process.env.RELAY_COS_BASE_URL ||
-      "",
-    updateLatestCommit:
-      process.env.RELAY_UPDATE_LATEST_COMMIT ||
-      process.env.RELAY_LATEST_COMMIT ||
-      "",
-  },
   skills: {
     import: {
       githubRawProxyPrefixes: readEnvList("SKILL_GITHUB_RAW_PROXY_PREFIXES"),

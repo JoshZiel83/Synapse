@@ -34,6 +34,25 @@ export interface FrpTunnelAdapterOptions {
    * builder below).
    */
   vhostHost: string
+  /**
+   * How long start() waits after spawn() before declaring the tunnel
+   * "started". If frpc exits within this window we treat the start as a
+   * configuration / auth / connectivity failure and throw — the alternative
+   * is silently treating the tunnel as up while frpc has already died.
+   * Defaults to 2000 ms.
+   */
+  startupGraceMs?: number
+  /**
+   * Invoked when an already-started frpc exits unexpectedly. The runtime
+   * uses this to call `device.tunnel.down` so the API stops routing
+   * dispatches to a dead tunnel. Pass null/undefined to skip the
+   * notification (test-only).
+   */
+  onUnexpectedExit?: (info: {
+    deviceServiceId: string
+    code: number | null
+    signal: NodeJS.Signals | null
+  }) => void
   /** Optional log sink. */
   logger?: {
     info(msg: string, data?: unknown): void
@@ -154,10 +173,43 @@ export function createFrpTunnelAdapter(
             `for tests that don't need a real tunnel.`
         )
       }
-      // After spawn() has settled successfully, keep watching child errors —
-      // operator log only at this point; the runtime sees the tunnel as up
-      // and dispatch will surface failures via the device.tunnel.down /
-      // unhealthy path.
+      // Readiness probe: spawn() resolving only proves the OS started the
+      // process — not that frpc successfully attached to frps. A bad
+      // serverAddr / authToken / TLS handshake will let spawn succeed and
+      // then exit within a few hundred ms. If that happens we MUST reject
+      // start() so the runtime never flips the device to "tunnel up" while
+      // every dispatch silently 502s. Window default: 2s.
+      const startupGraceMs = opts.startupGraceMs ?? 2000
+      const earlyExit = await new Promise<{
+        code: number | null
+        signal: NodeJS.Signals | null
+      } | null>((resolve) => {
+        const onExit = (code: number | null, signal: NodeJS.Signals | null) => {
+          clearTimeout(timer)
+          resolve({ code, signal })
+        }
+        const timer = setTimeout(() => {
+          child.off("exit", onExit)
+          resolve(null)
+        }, startupGraceMs)
+        child.once("exit", onExit)
+      })
+      if (earlyExit) {
+        try {
+          rmSync(tmpDir, { recursive: true, force: true })
+        } catch {
+          /* tmpdir cleanup is best-effort */
+        }
+        throw new Error(
+          `frpc exited within ${startupGraceMs}ms of startup ` +
+            `(code=${earlyExit.code ?? "null"}, signal=${earlyExit.signal ?? "null"}). ` +
+            `Check serverAddr/authToken/vhostHost — frpc usually logs the ` +
+            `reason on stderr above.`
+        )
+      }
+      // After the readiness window, any subsequent exit is unexpected —
+      // notify the runtime so it can call device.tunnel.down and stop
+      // accepting dispatches against this handle.
       child.on("error", (err) => {
         opts.logger?.error("frpc post-spawn error", {
           deviceServiceId: startOpts.deviceServiceId,
@@ -170,12 +222,23 @@ export function createFrpTunnelAdapter(
       child.stderr?.on("data", (b) =>
         opts.logger?.info(`frpc[${startOpts.deviceServiceId}] ${b}`)
       )
-      child.on("exit", (code) => {
+      child.on("exit", (code, signal) => {
         opts.logger?.info("frpc exited", {
           deviceServiceId: startOpts.deviceServiceId,
           code,
+          signal,
         })
+        managed.delete(startOpts.deviceServiceId)
         rmSync(tmpDir, { recursive: true, force: true })
+        // Tell the runtime so it can unregister the tunnel. Skipping this
+        // would leave DeviceTunnelRegistry pointing at an internal URL
+        // that nothing answers; every dispatch then 502s until the next
+        // hello-ack races a fresh tunnel.up through.
+        opts.onUnexpectedExit?.({
+          deviceServiceId: startOpts.deviceServiceId,
+          code,
+          signal,
+        })
       })
 
       managed.set(startOpts.deviceServiceId, {

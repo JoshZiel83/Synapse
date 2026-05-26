@@ -275,6 +275,34 @@ export interface CreateRuntimeAuthorizationInteractionParams {
   principalConversationActorContextId?: string
 }
 
+/**
+ * Returns true when an approved interaction request does NOT need a
+ * tool_call_task completion to drive the next chat turn.
+ *
+ * Two cases hit this branch:
+ *   1. remote_agent_run-rooted interactions — handled by the remote agent
+ *      notify path elsewhere; this helper isn't consulted there.
+ *   2. runtime_authorization requests created for a remote_agent principal —
+ *      the projection skips createToolCallTask (the bridged agent retries
+ *      its own tool call on the next round-trip, no chat session to wake)
+ *      so taskId is undefined. Without this branch, the generic guard
+ *      "missing task governance" throws AFTER the approval transaction
+ *      already created the grant, leaving the grant valid but the API
+ *      caller seeing a 500.
+ *
+ * Pure function — exported so regression tests can pin the contract
+ * without spinning up the full resolveInteractionRequest transaction.
+ */
+export function runtimeAuthorizationApprovalSkipsTaskCompletion(input: {
+  kind: InteractionRequestKind
+  taskId?: string | null
+}): boolean {
+  return (
+    input.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+    !input.taskId
+  )
+}
+
 export type ResolveInteractionRequestParams = ChatInteractionResolveInput & {
   interactionId: string
   resolverWorkspaceMemberId: string
@@ -3548,6 +3576,29 @@ export async function resolveInteractionRequest(
     const { notifyRemoteAgentInteractionResolved } =
       await import("../remote-agents/service.js")
     await notifyRemoteAgentInteractionResolved(interaction.id)
+    return {
+      outcome: result.outcome,
+      interaction,
+      createdGrant: result.createdGrant,
+      createdGrants: result.createdGrant ? [result.createdGrant] : undefined,
+    }
+  }
+
+  // runtime_authorization requests created for a remote_agent principal
+  // deliberately skip the tool_call_task (the bridged agent retries its
+  // own tool call on the next round-trip instead of being woken up via
+  // chat session machinery). PR #31's createRuntimeAuthorizationRequest
+  // sets task=null in that branch, so by the time we reach this point
+  // interaction.taskId is undefined. Without this short-circuit the
+  // generic "missing task governance" guard below would throw AFTER the
+  // approval transaction already created the grant — leaving the grant
+  // valid but the API caller seeing a 500.
+  if (
+    runtimeAuthorizationApprovalSkipsTaskCompletion({
+      kind: interaction.kind,
+      taskId: interaction.taskId,
+    })
+  ) {
     return {
       outcome: result.outcome,
       interaction,

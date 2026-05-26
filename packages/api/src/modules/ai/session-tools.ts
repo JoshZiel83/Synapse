@@ -2130,7 +2130,7 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "list_tasks",
       description:
-        "List task-backed tool calls created in this session, including pending ask-user flows and async relay command execution.",
+        "List task-backed tool calls created in this session, including pending ask-user flows and async device command execution.",
       parameters: {
         type: "object",
         properties: {
@@ -2242,7 +2242,7 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "cancel_task",
       description:
-        "Request cancellation for a task in this session. Human-interaction tasks cancel immediately; relay command tasks cancel best-effort.",
+        "Request cancellation for a task in this session. Human-interaction tasks cancel immediately; device command tasks cancel best-effort.",
       parameters: {
         type: "object",
         properties: {
@@ -2326,14 +2326,14 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "tail_task_output",
       description:
-        "Read the latest output chunks from a task-backed relay command execution in this session.",
+        "Read the latest output chunks from a task-backed device command execution in this session.",
       parameters: {
         type: "object",
         properties: {
           taskId: {
             type: "string",
             description:
-              "The exact task ID returned by a previous async relay command call.",
+              "The exact task ID returned by a previous async device command call.",
           },
           afterSeq: {
             type: "number",

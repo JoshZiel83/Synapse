@@ -3103,19 +3103,6 @@ export interface McpInstallation extends PluginInstallationView {
   plugin?: McpPlugin
 }
 
-export interface McpRelay {
-  id: string
-  userId?: string
-  workspaceId?: string
-  name: string
-  authToken: string
-  isConnected: boolean
-  lastConnectedAt?: string
-  metadata: Record<string, unknown>
-  createdAt: string
-  updatedAt: string
-}
-
 export interface McpDeviceServer {
   id: string
   deviceId: string
@@ -3137,7 +3124,7 @@ export interface McpToolCallLog {
   actorId?: string
   userId?: string
   pluginId: string
-  relayId?: string
+  deviceId?: string
   toolName: string
   input: Record<string, unknown>
   output?: string
@@ -3154,7 +3141,7 @@ export interface McpEventLog {
   workspaceId?: string
   userId?: string
   pluginId?: string
-  relayId?: string
+  deviceId?: string
   eventType: string
   eventData: Record<string, unknown>
   createdAt: string

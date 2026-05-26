@@ -521,7 +521,7 @@ function ReadOnlyUserInputQuestion({
   )
 }
 
-function RelaySpecSection({
+function DeviceGrantSpecSection({
   eyebrow,
   summary,
   detailLines,
@@ -1119,7 +1119,7 @@ export function ChatQuestionInteractionCard({
                         <Text style={styles.summaryIndex}>设备</Text>
                         <Text style={styles.summaryTitle}>
                           {interaction.runtimeAuthorization
-                            ?.deviceDisplayName || "Relay"}
+                            ?.deviceDisplayName || "Device"}
                         </Text>
                         <Text style={styles.summaryDescription}>
                           {interaction.runtimeAuthorization?.reason ||
@@ -1134,7 +1134,7 @@ export function ChatQuestionInteractionCard({
                         </Text>
                       </View>
                       {interaction.runtimeAuthorization?.requestedAction ? (
-                        <RelaySpecSection
+                        <DeviceGrantSpecSection
                           eyebrow="请求操作"
                           summary={
                             describeRuntimeAuthorizationRequestedAction(
@@ -1193,7 +1193,7 @@ export function ChatQuestionInteractionCard({
                       ) : null}
                       {interaction.runtimeAuthorization?.approvedGrant ? (
                         <>
-                          <RelaySpecSection
+                          <DeviceGrantSpecSection
                             eyebrow="已批准授权"
                             summary={
                               describeRuntimeAuthorizationSpec(
