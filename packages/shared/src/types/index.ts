@@ -1,8 +1,6 @@
 import {
   ACTOR_DOC_VISIBILITIES,
   ACTOR_ROLES,
-  ACCESS_TARGET_TYPES,
-  CAPABILITY_ACCESS_TARGET_TYPES,
   CONTACT_DIRECT_STATES,
   CONTACT_HUB_KINDS,
   CONTACT_TARGET_TYPES,
@@ -2396,9 +2394,6 @@ export type ConversationTypeMask = number
 export type CapabilityConversationTypePolicyResourceFamily =
   (typeof CAPABILITY_CONVERSATION_TYPE_POLICY_RESOURCE_FAMILIES)[number]
 export type AttachmentTargetType = (typeof ATTACHMENT_TARGET_TYPES)[number]
-export type AccessTargetType = (typeof ACCESS_TARGET_TYPES)[number]
-export type CapabilityAccessTargetType =
-  (typeof CAPABILITY_ACCESS_TARGET_TYPES)[number]
 export type ReuseScope = (typeof REUSE_SCOPES)[number]
 export type MarketplaceSourceType =
   | "builtin"
@@ -2492,34 +2487,15 @@ export interface AttachmentTarget {
   workspaceMemberId?: string
 }
 
-export interface LegacyAccessTarget {
-  type: AccessTargetType
-  actorId?: string
-  conversationId?: string
-  workspaceMemberId?: string
-}
-
-export interface LegacyCapabilityAccessTarget {
-  type: CapabilityAccessTargetType
-  actorId?: string
-  conversationId?: string
-  workspaceMemberId?: string
-}
-
 /**
- * PR2 (subject-scope refactor): AccessTarget becomes a true union of the legacy
- * shape (discriminated by `type`) and the new scoped-subject shape (discriminated
- * by the presence of `subject`). Consumers MUST type-guard with
- * `if ("subject" in target)` before destructuring legacy fields.
- *
- * PR7 will drop `LegacyAccessTarget` and the named alias will collapse to
- * just `ScopedSubjectTarget`.
+ * D3: AccessTarget collapsed to the single `ScopedSubjectTarget` shape.
+ * Consumers carry `{ subject: SubjectRef; scope?: SubjectRef }` and read
+ * `target.subject.kind` / `target.scope?.kind` for discrimination — there is
+ * no `type` field any more.
  */
-export type AccessTarget = LegacyAccessTarget | ScopedSubjectTarget
+export type AccessTarget = ScopedSubjectTarget
 
-export type CapabilityAccessTarget =
-  | LegacyCapabilityAccessTarget
-  | ScopedSubjectTarget
+export type CapabilityAccessTarget = ScopedSubjectTarget
 
 export interface PluginAuthValueSource {
   source: "config" | "env" | "literal" | "derived"
@@ -2620,7 +2596,6 @@ export interface PluginConfigFieldState {
 
 export interface AccessPolicy {
   requiredPermissions: string[]
-  defaultAccessTargetType?: CapabilityAccessTargetType
   reason?: string
 }
 
@@ -2874,7 +2849,6 @@ export interface PluginInstallPlan {
   grantPlan?: {
     requiresGrant: boolean
     requiredPermissions: string[]
-    suggestedAccessTargetType?: CapabilityAccessTargetType
     reason?: string
   }
 }
@@ -2961,7 +2935,12 @@ export interface AvailableSkillSummary {
   entryPoint?: string
 }
 
-export type SkillAccessTargetType = CapabilityAccessTargetType
+export type SkillAccessTargetType =
+  | "workspace"
+  | "workspace_member"
+  | "conversation"
+  | "actor"
+  | "actor_in_conversation"
 
 export type SkillSourceType = "github" | "clawhub"
 export type SkillMirrorRefreshMode = "manual"
@@ -5381,7 +5360,19 @@ export type CatalogFileRole =
   | "image"
   | "json"
   | "binary"
-export type RuntimeBindingScope = AccessTargetType
+/**
+ * D3: legacy string label for the historical 5-value "bind scope" used by
+ * per-resource SQL views (`bind_scope`, `access_bind_scope`) and FE display
+ * code. Subjects of any other kind (remote_agent, etc.) get their raw
+ * subject.kind string from `subjectScopeLabel`. Use `subjectScopeLabel` from
+ * `@synapse/shared/access` to convert a ScopedSubjectTarget into this label.
+ */
+export type RuntimeBindingScope =
+  | "workspace"
+  | "workspace_member"
+  | "conversation"
+  | "actor"
+  | "actor_in_conversation"
 export type PluginReuseScopeV2 =
   | "turn"
   | "session"

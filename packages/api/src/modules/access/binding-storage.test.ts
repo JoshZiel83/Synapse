@@ -1,6 +1,12 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { SUBJECT_KIND } from "@synapse/shared"
+import {
+  SUBJECT_KIND,
+  actorRef,
+  conversationRef,
+  workspaceMemberRef,
+  workspaceRef,
+} from "@synapse/shared"
 import { withTestDb, withTestDbAndClient } from "../../test/helpers/db.js"
 import {
   augmentInsertedBindingRowWithTarget,
@@ -36,13 +42,7 @@ test(
         workspaceId,
         resourceType: "installed_skill",
         resourceId: "00000000-0000-0000-0000-000000000001",
-        target: {
-          targetType: "workspace",
-          subjectWorkspaceId: workspaceId,
-          subjectActorId: null,
-          subjectConversationId: null,
-          subjectConversationActorContextId: null,
-        },
+        target: { subject: workspaceRef(workspaceId) },
       })
 
       assert.ok(insert.subject_id, "subject_id should be populated")
@@ -75,13 +75,7 @@ test(
   async () => {
     await withTestDb(async (db) => {
       const workspaceId = await insertWorkspace(db)
-      const target = {
-        targetType: "workspace" as const,
-        subjectWorkspaceId: workspaceId,
-        subjectActorId: null,
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
-      }
+      const target = { subject: workspaceRef(workspaceId) }
 
       const first = await buildResourceAccessBindingInsertValues(db, {
         workspaceId,
@@ -114,13 +108,7 @@ test(
         workspaceId,
         resourceType: "installed_skill",
         resourceId: "00000000-0000-0000-0000-000000000003",
-        target: {
-          targetType: "workspace",
-          subjectWorkspaceId: workspaceId,
-          subjectActorId: null,
-          subjectConversationId: null,
-          subjectConversationActorContextId: null,
-        },
+        target: { subject: workspaceRef(workspaceId) },
         source: "default_open",
       })
       assert.equal(insert.source, "default_open")
@@ -144,28 +132,12 @@ async function insertWorkspace(
   return row.id as string
 }
 
-// P3 regression: listGrantsForResource was crashing with "Unsupported stored
-// access target type: undefined" because its SELECT projected `subject_kind`
-// from access_subjects but mapAccessBindingToGrant -> readAccessBindingTarget
-// reads the legacy `target_type` enum. Now subject_kind is mapped to
-// target_type inside listGrantsForResource so callers get a fully decoded
-// AccessGrant.
 test(
   "listGrantsForResource decodes the joined access_subjects row for an actor target",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
-      const ownerId = await insertUser(db, "owner@example.test")
-      const workspaceRow = await db
-        .insertInto("workspaces")
-        .values({
-          owner_id: ownerId,
-          slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
-          name: "test workspace",
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const workspaceId = workspaceRow.id as string
+      const workspaceId = await insertWorkspaceWithOwner(db)
       const grantedActorId = await insertActor(db, workspaceId)
       const targetActorId = await insertActor(db, workspaceId)
 
@@ -173,14 +145,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: targetActorId,
-        target: {
-          targetType: "actor",
-          subjectWorkspaceId: null,
-          subjectWorkspaceMemberId: null,
-          subjectActorId: grantedActorId,
-          subjectConversationId: null,
-          subjectConversationActorContextId: null,
-        },
+        target: { subject: actorRef(grantedActorId) },
       })
       await db.insertInto("resource_access_bindings").values(insert).execute()
 
@@ -189,8 +154,11 @@ test(
         resourceId: targetActorId,
       })
       assert.equal(grants.length, 1)
-      assert.equal(grants[0].target.type, "actor")
-      assert.equal(grants[0].target.actorId, grantedActorId)
+      assert.equal(grants[0].target.subject.kind, "actor")
+      assert.equal(
+        (grants[0].target.subject as { actorId: string }).actorId,
+        grantedActorId
+      )
     })
   }
 )
@@ -223,14 +191,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: targetActorId,
-        target: {
-          targetType: "workspace_member",
-          subjectWorkspaceId: null,
-          subjectWorkspaceMemberId: memberId,
-          subjectActorId: null,
-          subjectConversationId: null,
-          subjectConversationActorContextId: null,
-        },
+        target: { subject: workspaceMemberRef(memberId) },
       })
       await db.insertInto("resource_access_bindings").values(insert).execute()
 
@@ -239,34 +200,21 @@ test(
         resourceId: targetActorId,
       })
       assert.equal(grants.length, 1)
-      assert.equal(grants[0].target.type, "workspace_member")
-      assert.equal(grants[0].target.workspaceMemberId, memberId)
+      assert.equal(grants[0].target.subject.kind, "workspace_member")
+      assert.equal(
+        (grants[0].target.subject as { memberId: string }).memberId,
+        memberId
+      )
     })
   }
 )
 
-// P3 regression: actor_in_conversation grants store a SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT
-// in access_subjects. The decoded AccessGrantTarget requires actor_id AND
-// conversation_id (see readAccessBindingTarget). listGrantsForResource has to
-// LEFT JOIN conversation_actor_contexts and COALESCE those fields from the
-// cac row — without that, the assertion at bindings.ts:340 throws
-// "subject_actor_id is required for resolved actor_in_conversation".
 test(
-  "listGrantsForResource decodes an actor_in_conversation target via the cac join",
+  "listGrantsForResource decodes an actor + scope=conversation target",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
-      const ownerId = await insertUser(db, "owner@example.test")
-      const workspaceRow = await db
-        .insertInto("workspaces")
-        .values({
-          owner_id: ownerId,
-          slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
-          name: "test workspace",
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const workspaceId = workspaceRow.id as string
+      const workspaceId = await insertWorkspaceWithOwner(db)
       const grantedActorId = await insertActor(db, workspaceId)
       const targetActorId = await insertActor(db, workspaceId)
       const conversationRow = await db
@@ -280,27 +228,14 @@ test(
         .returning("id")
         .executeTakeFirstOrThrow()
       const conversationId = conversationRow.id as string
-      const contextRow = await db
-        .insertInto("conversation_actor_contexts")
-        .values({
-          conversation_id: conversationId,
-          actor_id: grantedActorId,
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const contextId = contextRow.id as string
 
       const insert = await buildResourceAccessBindingInsertValues(db, {
         workspaceId,
         resourceType: "actor",
         resourceId: targetActorId,
         target: {
-          targetType: "actor_in_conversation",
-          subjectWorkspaceId: null,
-          subjectWorkspaceMemberId: null,
-          subjectActorId: grantedActorId,
-          subjectConversationId: conversationId,
-          subjectConversationActorContextId: contextId,
+          subject: actorRef(grantedActorId),
+          scope: conversationRef(conversationId),
         },
       })
       await db.insertInto("resource_access_bindings").values(insert).execute()
@@ -310,9 +245,16 @@ test(
         resourceId: targetActorId,
       })
       assert.equal(grants.length, 1)
-      assert.equal(grants[0].target.type, "actor_in_conversation")
-      assert.equal(grants[0].target.actorId, grantedActorId)
-      assert.equal(grants[0].target.conversationId, conversationId)
+      assert.equal(grants[0].target.subject.kind, "actor")
+      assert.equal(
+        (grants[0].target.subject as { actorId: string }).actorId,
+        grantedActorId
+      )
+      assert.equal(grants[0].target.scope?.kind, "conversation")
+      assert.equal(
+        (grants[0].target.scope as { conversationId: string }).conversationId,
+        conversationId
+      )
     })
   }
 )
@@ -368,12 +310,6 @@ async function insertActor(
   return row.id as string
 }
 
-// P2/P3 regression: two member-scoped bindings on the same resource for two
-// DIFFERENT members must produce two distinct access_subjects rows AND two
-// distinct binding rows. The dedupe bug at skills/service.ts:2749 (and the
-// equivalent in mcp-plugins/service.ts) collapsed them both into
-// {target_type=workspace_member, actor_id=null, conversation_id=null} and
-// silently dropped the second member's binding.
 test(
   "member-scoped bindings for different members on the same actor don't collapse",
   { timeout: 5 * 60_000 },
@@ -409,14 +345,7 @@ test(
           workspaceId,
           resourceType: "actor",
           resourceId: actorId,
-          target: {
-            targetType: "workspace_member",
-            subjectWorkspaceId: null,
-            subjectWorkspaceMemberId: memberId,
-            subjectActorId: null,
-            subjectConversationId: null,
-            subjectConversationActorContextId: null,
-          },
+          target: { subject: workspaceMemberRef(memberId) },
         })
         await db.insertInto("resource_access_bindings").values(insert).execute()
       }
@@ -436,21 +365,14 @@ test(
   }
 )
 
-test("augmentInsertedBindingRowWithTarget copies the target shape onto the raw row", () => {
+test("augmentInsertedBindingRowWithTarget copies the subject shape onto the raw row", () => {
   const augmented = augmentInsertedBindingRowWithTarget(
     { subject_id: "subj-1", extra: "passthrough" } as any,
-    {
-      targetType: "workspace_member",
-      subjectWorkspaceId: null,
-      subjectWorkspaceMemberId: "m-1",
-      subjectActorId: null,
-      subjectConversationId: null,
-      subjectConversationActorContextId: null,
-    }
+    { subject: workspaceMemberRef("m-1") }
   )
-  assert.equal(augmented.target_type, "workspace_member")
-  assert.equal(augmented.subject_workspace_member_id, "m-1")
-  assert.equal(augmented.subject_actor_id, null)
+  assert.equal(augmented.subject_kind, "workspace_member")
+  assert.equal(augmented.subject_workspace_member_id_via_join, "m-1")
+  assert.equal(augmented.subject_actor_id_via_join, null)
   assert.equal((augmented as any).extra, "passthrough")
 })
 
@@ -459,30 +381,13 @@ test(
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
-      const ownerId = await insertUser(db, "owner@example.test")
-      const workspaceRow = await db
-        .insertInto("workspaces")
-        .values({
-          owner_id: ownerId,
-          slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
-          name: "test workspace",
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const workspaceId = workspaceRow.id as string
+      const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
       const values = await buildResourceAccessBindingInsertValues(db, {
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: {
-          targetType: "workspace",
-          subjectWorkspaceId: workspaceId,
-          subjectWorkspaceMemberId: null,
-          subjectActorId: null,
-          subjectConversationId: null,
-          subjectConversationActorContextId: null,
-        },
+        target: { subject: workspaceRef(workspaceId) },
       })
       const inserted = await db
         .insertInto("resource_access_bindings")
@@ -531,14 +436,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: {
-          targetType: "workspace",
-          subjectWorkspaceId: workspaceId,
-          subjectWorkspaceMemberId: null,
-          subjectActorId: null,
-          subjectConversationId: null,
-          subjectConversationActorContextId: null,
-        },
+        target: { subject: workspaceRef(workspaceId) },
       })
       const inserted = await db
         .insertInto("resource_access_bindings")
@@ -548,14 +446,7 @@ test(
 
       await updateGrantTargets(db, {
         bindingId: inserted.id as string,
-        newTarget: {
-          targetType: "workspace_member",
-          subjectWorkspaceId: null,
-          subjectWorkspaceMemberId: guestMemberId,
-          subjectActorId: null,
-          subjectConversationId: null,
-          subjectConversationActorContextId: null,
-        },
+        newTarget: { subject: workspaceMemberRef(guestMemberId) },
       })
 
       const row = await db
@@ -577,30 +468,13 @@ test(
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
-      const ownerId = await insertUser(db, "owner@example.test")
-      const workspaceRow = await db
-        .insertInto("workspaces")
-        .values({
-          owner_id: ownerId,
-          slug: `ws-${Math.random().toString(36).slice(2, 10)}`,
-          name: "test workspace",
-        })
-        .returning("id")
-        .executeTakeFirstOrThrow()
-      const workspaceId = workspaceRow.id as string
+      const workspaceId = await insertWorkspaceWithOwner(db)
       const actorId = await insertActor(db, workspaceId)
       const values = await buildResourceAccessBindingInsertValues(db, {
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: {
-          targetType: "workspace",
-          subjectWorkspaceId: workspaceId,
-          subjectWorkspaceMemberId: null,
-          subjectActorId: null,
-          subjectConversationId: null,
-          subjectConversationActorContextId: null,
-        },
+        target: { subject: workspaceRef(workspaceId) },
       })
       await db.insertInto("resource_access_bindings").values(values).execute()
       const result = await describeAccessGrants(db, {
@@ -638,7 +512,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: workspaceTargetShape(workspaceId),
+        target: { subject: workspaceRef(workspaceId) },
       })
       await db.insertInto("resource_access_bindings").values(values).execute()
       const rows = await loadAccessBindingRowsForResources(db, {
@@ -647,7 +521,7 @@ test(
       })
       assert.equal(rows.length, 1)
       assert.equal(rows[0].resource_id, actorId)
-      assert.equal(rows[0].target_type, "workspace")
+      assert.equal((rows[0] as any).subject_kind, "workspace")
     })
   }
 )
@@ -671,7 +545,7 @@ test(
           workspaceId: wsId,
           resourceType: "actor",
           resourceId: aId,
-          target: workspaceTargetShape(wsId),
+          target: { subject: workspaceRef(wsId) },
         })
         await db.insertInto("resource_access_bindings").values(values).execute()
       }
@@ -714,7 +588,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: workspaceTargetShape(workspaceId),
+        target: { subject: workspaceRef(workspaceId) },
       })
       await db.insertInto("resource_access_bindings").values(values).execute()
       const rows = await loadAccessBindingRowsForResource(db, {
@@ -744,7 +618,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: workspaceTargetShape(workspaceId),
+        target: { subject: workspaceRef(workspaceId) },
       })
       await db.insertInto("resource_access_bindings").values(values).execute()
       const after = await hasAnyBindingForResourceOn(client, {
@@ -767,7 +641,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: workspaceTargetShape(workspaceId),
+        target: { subject: workspaceRef(workspaceId) },
       })
       const inserted = await db
         .insertInto("resource_access_bindings")
@@ -803,7 +677,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: workspaceTargetShape(workspaceId),
+        target: { subject: workspaceRef(workspaceId) },
       })
       const inserted = await db
         .insertInto("resource_access_bindings")
@@ -859,7 +733,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: workspaceTargetShape(workspaceId),
+        target: { subject: workspaceRef(workspaceId) },
       })
       const inserted = await db
         .insertInto("resource_access_bindings")
@@ -907,7 +781,7 @@ test(
           workspaceId,
           resourceType: "actor",
           resourceId: a,
-          target: workspaceTargetShape(workspaceId),
+          target: { subject: workspaceRef(workspaceId) },
         })
         const inserted = await db
           .insertInto("resource_access_bindings")
@@ -949,7 +823,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: workspaceTargetShape(workspaceId),
+        target: { subject: workspaceRef(workspaceId) },
       })
       await db.insertInto("resource_access_bindings").values(values).execute()
       const before = await db
@@ -987,13 +861,7 @@ test(
             workspaceId,
             resourceType: "actor",
             resourceId: actorId,
-            target: {
-              targetType: "workspace",
-              subjectWorkspaceId: workspaceId,
-              subjectActorId: null,
-              subjectConversationId: null,
-              subjectConversationActorContextId: null,
-            },
+            target: { subject: workspaceRef(workspaceId) },
           })
         )
         .execute()
@@ -1030,13 +898,7 @@ test(
             workspaceId,
             resourceType: "actor",
             resourceId: actorIdA,
-            target: {
-              targetType: "workspace",
-              subjectWorkspaceId: workspaceId,
-              subjectActorId: null,
-              subjectConversationId: null,
-              subjectConversationActorContextId: null,
-            },
+            target: { subject: workspaceRef(workspaceId) },
           })
         )
         .execute()
@@ -1076,7 +938,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: workspaceTargetShape(workspaceId),
+        target: { subject: workspaceRef(workspaceId) },
       })
       const inserted = await db
         .insertInto("resource_access_bindings")
@@ -1093,7 +955,7 @@ test(
       assert.ok(matchAll)
       assert.equal(matchAll!.id, inserted.id)
       assert.equal(matchAll!.resource_id, actorId)
-      assert.equal(matchAll!.target_type, "workspace")
+      assert.equal((matchAll as any).subject_kind, "workspace")
 
       const matchByType = await getAccessBindingRowById(db, {
         bindingId: inserted.id as string,
@@ -1113,60 +975,6 @@ test(
         resourceType: "actor",
       })
       assert.equal(missing, null)
-    })
-  }
-)
-
-test(
-  "listResourceIdsForWorkspaceByBindingFilter returns matching resource ids by workspace + subject filter",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      const workspaceId = await insertWorkspaceWithOwner(db)
-      const actorIdA = await insertActor(db, workspaceId)
-      const actorIdB = await insertActor(db, workspaceId)
-      const subjectId = await upsertAccessSubject(db, {
-        kind: SUBJECT_KIND.WORKSPACE,
-        workspaceId,
-      })
-      await db
-        .insertInto("resource_access_bindings")
-        .values(
-          await buildResourceAccessBindingInsertValues(db, {
-            workspaceId,
-            resourceType: "actor",
-            resourceId: actorIdA,
-            target: {
-              targetType: "workspace",
-              subjectWorkspaceId: workspaceId,
-              subjectActorId: null,
-              subjectConversationId: null,
-              subjectConversationActorContextId: null,
-            },
-          })
-        )
-        .execute()
-      const all = await listResourceIdsForWorkspaceByBindingFilter(db, {
-        workspaceId,
-        resourceType: "actor",
-      })
-      assert.ok(all.includes(actorIdA))
-      assert.ok(!all.includes(actorIdB))
-
-      const filteredBySubject =
-        await listResourceIdsForWorkspaceByBindingFilter(db, {
-          workspaceId,
-          resourceType: "actor",
-          subjectId,
-        })
-      assert.deepEqual(filteredBySubject, [actorIdA])
-
-      const noMatch = await listResourceIdsForWorkspaceByBindingFilter(db, {
-        workspaceId,
-        resourceType: "actor",
-        subjectId: "00000000-0000-0000-0000-000000000000",
-      })
-      assert.deepEqual(noMatch, [])
     })
   }
 )
@@ -1198,7 +1006,7 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: workspaceTargetShape(workspaceId),
+        target: { subject: workspaceRef(workspaceId) },
         source: "manual",
         reason: "test",
       })
@@ -1217,7 +1025,7 @@ test(
 )
 
 test(
-  "insertAccessBindingReturningRowOn returns a row with target_type + subject_* projections reconstructed",
+  "insertAccessBindingReturningRowOn returns a row with subject_kind + projections reconstructed",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDbAndClient(async ({ db, client }) => {
@@ -1227,16 +1035,12 @@ test(
         workspaceId,
         resourceType: "actor",
         resourceId: actorId,
-        target: workspaceTargetShape(workspaceId),
+        target: { subject: workspaceRef(workspaceId) },
       })
       assert.equal(row.workspace_id, workspaceId)
       assert.equal(row.actor_id, actorId)
-      assert.equal(row.target_type, "workspace")
-      assert.equal(row.subject_workspace_id, workspaceId)
-      assert.equal(row.subject_workspace_member_id, null)
-      assert.equal(row.subject_actor_id, null)
-      assert.equal(row.subject_conversation_id, null)
-      assert.equal(row.subject_conversation_actor_context_id, null)
+      assert.equal((row as any).subject_kind, "workspace")
+      assert.equal((row as any).subject_workspace_id_via_join, workspaceId)
       assert.ok(row.subject_id, "subject_id must be populated")
 
       const persisted = await db
@@ -1248,14 +1052,3 @@ test(
     })
   }
 )
-
-function workspaceTargetShape(workspaceId: string) {
-  return {
-    targetType: "workspace" as const,
-    subjectWorkspaceId: workspaceId,
-    subjectWorkspaceMemberId: null,
-    subjectActorId: null,
-    subjectConversationId: null,
-    subjectConversationActorContextId: null,
-  }
-}

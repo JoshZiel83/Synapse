@@ -1,11 +1,19 @@
 "use client"
 
 import { useEffect, useMemo, useState } from "react"
-import type {
-  AccessTargetType,
-  AttachmentTargetType,
-  ReuseScope,
-} from "@synapse/shared"
+import type { AttachmentTargetType, ReuseScope } from "@synapse/shared"
+
+// D3 / PR6 TODO: this string label is the historical 5-value access-target enum
+// the UI still emits from its selectors. The wire shape it produces should
+// fold into a ScopedSubjectTarget at the API boundary (see
+// `inputToCapabilityAccessTarget` in each controller). Once PR6's
+// SubjectPicker+ScopePicker land this whole label-union can be deleted.
+export type AccessTargetType =
+  | "workspace"
+  | "workspace_member"
+  | "conversation"
+  | "actor"
+  | "actor_in_conversation"
 import {
   Activity,
   Bot,

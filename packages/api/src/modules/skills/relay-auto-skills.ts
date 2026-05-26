@@ -1,7 +1,10 @@
 import { readdir, readFile } from "node:fs/promises"
 import { basename, join } from "node:path"
 import {
+  actorRef,
+  conversationRef,
   textBlocks,
+  workspaceRef,
   type AvailableSkillSummary,
   type CapabilityAccessTarget,
 } from "@synapse/shared"
@@ -437,30 +440,30 @@ async function loadRelayAutoSkillIndex() {
 }
 
 function buildAccessTarget(input: {
+  workspaceId: string
   actorId?: string
   conversationId?: string
 }): CapabilityAccessTarget {
   if (input.actorId && input.conversationId) {
     return {
-      type: "actor_in_conversation",
-      actorId: input.actorId,
-      conversationId: input.conversationId,
+      subject: actorRef(input.actorId),
+      scope: conversationRef(input.conversationId),
     }
   }
   if (input.actorId) {
     return {
-      type: "actor",
-      actorId: input.actorId,
+      subject: actorRef(input.actorId),
     }
   }
   return {
-    type: "workspace",
+    subject: workspaceRef(input.workspaceId),
   }
 }
 
 function buildAvailableSkillSummary(
   definition: RelayAutoSkillDefinition,
   input: {
+    workspaceId: string
     actorId?: string
     conversationId?: string
     version: string
@@ -635,6 +638,7 @@ export async function listRelayAutoLoadedSkills(input: {
     }
     skills.push(
       buildAvailableSkillSummary(definition, {
+        workspaceId: input.workspaceId,
         actorId: input.actorId,
         conversationId: input.conversationId,
         version: resolveRelayAutoSkillVersion(capabilityVersions.get(key)),
@@ -647,6 +651,7 @@ export async function listRelayAutoLoadedSkills(input: {
 
 export async function readRelayAutoLoadedSkill(input: {
   skillName: string
+  workspaceId?: string
   actorId?: string
   conversationId?: string
   assetPath?: string
@@ -670,6 +675,7 @@ export async function readRelayAutoLoadedSkill(input: {
   const skill =
     input.skill ||
     buildAvailableSkillSummary(definition, {
+      workspaceId: input.workspaceId || "",
       actorId: input.actorId,
       conversationId: input.conversationId,
       version: "relay-auto",

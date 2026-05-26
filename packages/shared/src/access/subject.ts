@@ -366,6 +366,29 @@ export type ScopedSubjectTarget = {
 
 export type ScopedCapabilityAccessTarget = ScopedSubjectTarget
 
+/**
+ * D3: derive the legacy display/SQL label from a `ScopedSubjectTarget`. The
+ * label is the historical string used by the per-resource SQL views
+ * (`bind_scope`, `access_bind_scope`) and by FE badge/description maps; we
+ * keep it for back-compat indexing/display only, never for storage decisions.
+ *
+ * Mapping:
+ *   - actor + scope=conversation    → "actor_in_conversation"
+ *   - workspace / workspace_member / actor / conversation / remote_agent →
+ *     mirrors the subject.kind value
+ *   - anything else (CAC, user, external, system, scope-only) falls back to
+ *     the raw subject.kind for diagnostic use; UI maps should default-case.
+ */
+export function subjectScopeLabel(target: ScopedSubjectTarget): string {
+  if (
+    target.subject.kind === SUBJECT_KIND.ACTOR &&
+    target.scope?.kind === SUBJECT_KIND.CONVERSATION
+  ) {
+    return "actor_in_conversation"
+  }
+  return target.subject.kind
+}
+
 // ---------- Memory space reference (PR1 additive) ----------
 
 /**

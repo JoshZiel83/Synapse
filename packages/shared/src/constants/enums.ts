@@ -424,20 +424,6 @@ export const ATTACHMENT_TARGET_TYPES = [
   "actor",
   "workspace_member",
 ] as const
-export const ACCESS_TARGET_TYPES = [
-  "workspace",
-  "workspace_member",
-  "conversation",
-  "actor",
-  "actor_in_conversation",
-] as const
-export const CAPABILITY_ACCESS_TARGET_TYPES = [
-  "workspace",
-  "workspace_member",
-  "conversation",
-  "actor",
-  "actor_in_conversation",
-] as const
 export const REUSE_SCOPES = [
   "turn",
   "session",

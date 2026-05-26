@@ -37,6 +37,7 @@ import {
   nowISO,
   resolveAutomationOccurrenceDisplay,
   resolveNarrowedConversationTypeMask,
+  workspaceRef,
 } from "@synapse/shared"
 import {
   mergeAutomationRuleUpdatePayload,
@@ -1415,36 +1416,39 @@ function automationEventSourceGrantApplies(params: {
     return false
   }
 
-  const target = readAccessBindingTarget(params.row)
-  if ("subject" in target) {
-    // PR2: automation hasn't widened to scoped-subject grants yet.
-    // Conservative deny — these rows shouldn't exist on automation event
-    // sources until PR4+ writes them.
-    return false
-  }
-  switch (target.targetType) {
+  const target = readAccessBindingTarget(params.row as any)
+  const subject = target.subject
+  const scope = target.scope
+  switch (subject.kind) {
     case "workspace":
       return (
-        (params.row.subject_workspace_id || null) ===
+        ((subject as { workspaceId: string }).workspaceId || null) ===
           ((params.conversation.internal_workspace_id as
             | string
             | null
             | undefined) || null) ||
-        (params.row.subject_workspace_id || null) ===
+        ((subject as { workspaceId: string }).workspaceId || null) ===
           (params.row.workspace_id || null)
       )
     case "conversation":
-      return target.subjectConversationId === params.context.conversationId
-    case "actor":
       return (
-        Boolean(params.context.actorId) &&
-        target.subjectActorId === (params.context.actorId || null)
+        (subject as { conversationId: string }).conversationId ===
+        params.context.conversationId
       )
-    case "actor_in_conversation":
+    case "actor":
+      if (scope?.kind === "conversation") {
+        return (
+          Boolean(params.context.actorId) &&
+          (subject as { actorId: string }).actorId ===
+            (params.context.actorId || null) &&
+          (scope as { conversationId: string }).conversationId ===
+            params.context.conversationId
+        )
+      }
       return (
         Boolean(params.context.actorId) &&
-        target.subjectActorId === (params.context.actorId || null) &&
-        target.subjectConversationId === params.context.conversationId
+        (subject as { actorId: string }).actorId ===
+          (params.context.actorId || null)
       )
     default:
       return false
@@ -1538,30 +1542,19 @@ export async function listAutomationEventSourceAccessState(
 }
 
 async function getBindingTargetConversation(target: CapabilityAccessTarget) {
-  if ("subject" in target) {
-    // PR2: scoped-subject grant — extract conversation from the scope field if
-    // present; otherwise no conversation-bound resolution needed.
-    if (target.scope && target.scope.kind === "conversation") {
-      const conversation = await getConversation(target.scope.conversationId)
-      if (!conversation) {
-        throw new Error(`Conversation ${target.scope.conversationId} not found`)
-      }
-      return conversation
-    }
-    return null
+  // D3: only `subject=conversation` or `scope=conversation` targets need a
+  // conversation lookup.
+  let conversationId: string | null = null
+  if (target.scope?.kind === "conversation") {
+    conversationId = (target.scope as { conversationId: string }).conversationId
+  } else if (target.subject.kind === "conversation") {
+    conversationId = (target.subject as { conversationId: string })
+      .conversationId
   }
-  if (
-    target.type !== "conversation" &&
-    target.type !== "actor_in_conversation"
-  ) {
-    return null
-  }
-  if (!target.conversationId) {
-    throw new Error("conversationId is required for the selected access target")
-  }
-  const conversation = await getConversation(target.conversationId)
+  if (!conversationId) return null
+  const conversation = await getConversation(conversationId)
   if (!conversation) {
-    throw new Error(`Conversation ${target.conversationId} not found`)
+    throw new Error(`Conversation ${conversationId} not found`)
   }
   return conversation
 }
@@ -1584,10 +1577,10 @@ export async function grantAutomationEventSourceAccess(input: {
 
   const target = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
-    target: input.accessTarget || { type: "workspace" },
+    target: input.accessTarget || { subject: workspaceRef(input.workspaceId) },
   })
   const targetConversation = await getBindingTargetConversation(
-    input.accessTarget || { type: "workspace" }
+    input.accessTarget || { subject: workspaceRef(input.workspaceId) }
   )
   if (targetConversation) {
     assertBindingMaskAllowsConversation({

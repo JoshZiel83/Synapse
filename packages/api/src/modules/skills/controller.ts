@@ -1,7 +1,14 @@
 import { db } from "../../infrastructure/database/kysely.js"
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
-import { CAPABILITY_ACCESS_TARGET_TYPES } from "@synapse/shared/constants"
+import {
+  actorRef,
+  conversationRef,
+  workspaceMemberRef,
+  workspaceRef,
+  type CapabilityAccessTarget,
+  type SkillAccessTargetType,
+} from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { PLATFORM_RESOURCE_ID } from "../access/evaluator.js"
@@ -31,7 +38,18 @@ import {
   upgradeInstalledSkill,
 } from "./service.js"
 
-const accessTargetTypeSchema = z.enum(CAPABILITY_ACCESS_TARGET_TYPES)
+// D3: controller accepts the legacy {type, actorId?, conversationId?,
+// workspaceMemberId?} input shape for back-compat with existing FE code; we
+// fold it into a ScopedSubjectTarget here at the boundary so the service
+// layer only sees the canonical shape. PR6 widens the FE to emit
+// ScopedSubjectTarget directly and this schema collapses.
+const accessTargetTypeSchema = z.enum([
+  "workspace",
+  "workspace_member",
+  "conversation",
+  "actor",
+  "actor_in_conversation",
+]) satisfies z.ZodType<SkillAccessTargetType>
 const conversationTypeMaskSchema = z.number().int().min(1).max(31)
 const accessTargetSchema = z.object({
   type: accessTargetTypeSchema,
@@ -39,6 +57,48 @@ const accessTargetSchema = z.object({
   conversationId: z.string().uuid().optional(),
   workspaceMemberId: z.string().uuid().optional(),
 })
+
+function inputToCapabilityAccessTarget(
+  workspaceId: string,
+  input: z.infer<typeof accessTargetSchema>
+): CapabilityAccessTarget {
+  switch (input.type) {
+    case "workspace":
+      return { subject: workspaceRef(workspaceId) }
+    case "workspace_member":
+      if (!input.workspaceMemberId) {
+        throw new SkillError(
+          400,
+          "workspaceMemberId is required for workspace_member access target"
+        )
+      }
+      return { subject: workspaceMemberRef(input.workspaceMemberId) }
+    case "actor":
+      if (!input.actorId) {
+        throw new SkillError(400, "actorId is required for actor access target")
+      }
+      return { subject: actorRef(input.actorId) }
+    case "conversation":
+      if (!input.conversationId) {
+        throw new SkillError(
+          400,
+          "conversationId is required for conversation access target"
+        )
+      }
+      return { subject: conversationRef(input.conversationId) }
+    case "actor_in_conversation":
+      if (!input.actorId || !input.conversationId) {
+        throw new SkillError(
+          400,
+          "actorId and conversationId are required for actor_in_conversation access target"
+        )
+      }
+      return {
+        subject: actorRef(input.actorId),
+        scope: conversationRef(input.conversationId),
+      }
+  }
+}
 
 const skillAttachmentSchema = z.object({
   path: z.string().min(1),
@@ -361,7 +421,10 @@ export function registerSkillRoutes(app: FastifyInstance) {
         const skill = await installMarketplaceSkill({
           workspaceId,
           marketSkillId: body.marketSkillId,
-          accessTarget: body.accessTarget,
+          accessTarget: inputToCapabilityAccessTarget(
+            workspaceId,
+            body.accessTarget
+          ),
           installedByWorkspaceMemberId: workspaceMemberId,
         })
         return reply.status(201).send({ skill })
@@ -395,7 +458,10 @@ export function registerSkillRoutes(app: FastifyInstance) {
           iconFileId: body.iconFileId,
           tags: body.tags,
           attachmentFiles: body.attachmentFiles,
-          accessTarget: body.accessTarget,
+          accessTarget: inputToCapabilityAccessTarget(
+            workspaceId,
+            body.accessTarget
+          ),
           installedByWorkspaceMemberId: workspaceMemberId,
         })
         return reply.status(201).send({ skill })
@@ -569,7 +635,9 @@ export function registerSkillRoutes(app: FastifyInstance) {
         const grant = await grantInstalledSkillAccess({
           workspaceId,
           installedSkillId,
-          accessTarget: body.accessTarget,
+          accessTarget: body.accessTarget
+            ? inputToCapabilityAccessTarget(workspaceId, body.accessTarget)
+            : undefined,
           conversationTypeMaskOverride: body.conversationTypeMaskOverride,
           reason: body.reason,
           grantedByWorkspaceMemberId: workspaceMemberId,

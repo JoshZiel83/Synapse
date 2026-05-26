@@ -12,11 +12,15 @@ import type {
 } from "@synapse/shared"
 import type { RelayAuthorizationGrantView } from "@synapse/shared/types"
 import {
-  CAPABILITY_ACCESS_TARGET_TYPES,
   RELAY_MANAGEABLE_TRUST_STATUSES,
   RELAY_PAIRING_TTL_MS,
   RELAY_PROTOCOL_VERSION,
   relayLifecycleEventDefinitions,
+  actorRef,
+  conversationRef,
+  workspaceMemberRef,
+  workspaceRef,
+  type CapabilityAccessTarget,
 } from "@synapse/shared"
 import { config } from "../../config/index.js"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
@@ -81,13 +85,58 @@ const updateRelayTrustSchema = z.object({
   trustStatus: z.enum(RELAY_MANAGEABLE_TRUST_STATUSES),
 })
 
-const accessTargetTypeSchema = z.enum(CAPABILITY_ACCESS_TARGET_TYPES)
+const accessTargetTypeSchema = z.enum([
+  "workspace",
+  "workspace_member",
+  "conversation",
+  "actor",
+  "actor_in_conversation",
+])
 const accessTargetSchema = z.object({
   type: accessTargetTypeSchema,
   actorId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   workspaceMemberId: z.string().uuid().optional(),
 })
+
+function inputToCapabilityAccessTarget(
+  workspaceId: string,
+  input: z.infer<typeof accessTargetSchema>
+): CapabilityAccessTarget {
+  switch (input.type) {
+    case "workspace":
+      return { subject: workspaceRef(workspaceId) }
+    case "workspace_member":
+      if (!input.workspaceMemberId) {
+        throw new Error(
+          "workspaceMemberId is required for workspace_member access target"
+        )
+      }
+      return { subject: workspaceMemberRef(input.workspaceMemberId) }
+    case "actor":
+      if (!input.actorId) {
+        throw new Error("actorId is required for actor access target")
+      }
+      return { subject: actorRef(input.actorId) }
+    case "conversation":
+      if (!input.conversationId) {
+        throw new Error(
+          "conversationId is required for conversation access target"
+        )
+      }
+      return { subject: conversationRef(input.conversationId) }
+    case "actor_in_conversation":
+      if (!input.actorId || !input.conversationId) {
+        throw new Error(
+          "actorId and conversationId are required for actor_in_conversation access target"
+        )
+      }
+      return {
+        subject: actorRef(input.actorId),
+        scope: conversationRef(input.conversationId),
+      }
+  }
+}
 
 const accessGrantSchema = z.object({
   accessTarget: accessTargetSchema.optional(),
@@ -1695,7 +1744,9 @@ export function registerRelayRoutes(app: FastifyInstance) {
         const grant = await grantRelayExposureAccess({
           workspaceId,
           exposureId,
-          accessTarget: body.accessTarget,
+          accessTarget: body.accessTarget
+            ? inputToCapabilityAccessTarget(workspaceId, body.accessTarget)
+            : undefined,
           conversationTypeMaskOverride: body.conversationTypeMaskOverride,
           reason: body.reason,
           grantedByWorkspaceMemberId: (request as any).workspaceMember!.id,

@@ -204,10 +204,7 @@ async function canActorRequestRelayAuthorization(
     ) {
       return false
     }
-    if (
-      !("subject" in grant.target) &&
-      grant.target.type === "workspace_member"
-    ) {
+    if (grant.target.subject.kind === "workspace_member") {
       return false
     }
     return capabilityTargetMatchesContext(grant.target, {

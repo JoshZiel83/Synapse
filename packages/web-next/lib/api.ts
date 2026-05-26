@@ -91,6 +91,25 @@ import {
 
 export const API_BASE = process.env.NEXT_PUBLIC_API_URL || "/api/v1"
 
+/**
+ * D3 / PR6 TODO: FE wire shape for `accessTarget` request bodies. The backend
+ * controllers normalize this into a ScopedSubjectTarget at the boundary;
+ * keeping the legacy {type, *Id} shape here lets existing FE callers stay
+ * unchanged until PR6 introduces SubjectPicker+ScopePicker components that
+ * emit a ScopedSubjectTarget directly.
+ */
+export type AccessTargetInput = {
+  type:
+    | "workspace"
+    | "workspace_member"
+    | "conversation"
+    | "actor"
+    | "actor_in_conversation"
+  actorId?: string
+  conversationId?: string
+  workspaceMemberId?: string
+}
+
 export type {
   ActorAccessRequestListResponse,
   ChatInteractionResolveInput,
@@ -508,7 +527,7 @@ class ApiClient {
         contentBlocks: CanonicalContentBlock[]
         mediaType?: string
       }>
-      accessTarget: CapabilityAccessTarget
+      accessTarget: AccessTargetInput
     }
   ): Promise<{ skill: InstalledSkill }> {
     return this.fetch(`/workspaces/${wsId}/skills/custom`, {
@@ -534,7 +553,7 @@ class ApiClient {
     wsId: string,
     data: {
       marketSkillId: string
-      accessTarget: CapabilityAccessTarget
+      accessTarget: AccessTargetInput
     }
   ): Promise<{ skill: InstalledSkill }> {
     return this.fetch(`/workspaces/${wsId}/skills`, {
@@ -588,7 +607,7 @@ class ApiClient {
     wsId: string,
     installedSkillId: string,
     data: {
-      accessTarget?: CapabilityAccessTarget
+      accessTarget?: AccessTargetInput
       conversationTypeMaskOverride?: number | null
       permissions?: string[]
       reason?: string
@@ -1761,7 +1780,7 @@ class ApiClient {
     wsId: string,
     installId: string,
     data: {
-      accessTarget?: CapabilityAccessTarget
+      accessTarget?: AccessTargetInput
       conversationTypeMaskOverride?: number | null
       permissions?: string[]
       reason?: string
@@ -1892,7 +1911,7 @@ class ApiClient {
     relayId: string,
     exposureId: string,
     data: {
-      accessTarget?: CapabilityAccessTarget
+      accessTarget?: AccessTargetInput
       conversationTypeMaskOverride?: number | null
       permissions?: string[]
       reason?: string

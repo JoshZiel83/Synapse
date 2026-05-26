@@ -7,17 +7,18 @@ import type {
   QueryExecutor,
   TableInsert,
 } from "../../infrastructure/database/kysely.js"
-import { SUBJECT_KIND, type SubjectRef } from "@synapse/shared"
 import {
   upsertAccessSubject,
   upsertAccessSubjectOn,
-  type AccessSubjectRow,
 } from "./subject-registry.js"
 import type {
   AccessBindableResourceType,
   AccessGrantTarget,
 } from "./bindings.js"
-import { accessGrantTargetScopeRef } from "./bindings.js"
+import {
+  accessGrantTargetScopeRef,
+  accessGrantTargetToSubjectRef,
+} from "./bindings.js"
 
 export type AccessBindingSource =
   | "manual"
@@ -27,15 +28,9 @@ export type AccessBindingSource =
   | "system"
 
 /**
- * P1b contract: only `subject_id` is written. The historical polymorphic
- * columns (`target_type`, `subject_workspace_id`, `subject_actor_id`,
- * `subject_conversation_id`, `subject_conversation_actor_context_id`) have
- * been dropped from `resource_access_bindings`. SELECT-side code JOINs
- * `access_subjects` to reconstruct equivalent fields when needed
- * (see `accessSubjectRowToGrantTarget` below).
- *
- * Callers should already be in a transaction so that the access_subjects
- * upsert and the binding insert commit atomically.
+ * D3: build the insert values for resource_access_bindings. `subject_id` is
+ * the canonical reference; `scope_subject_id` is set when the target is
+ * scoped (e.g. actor + scope=conversation).
  */
 export async function buildResourceAccessBindingInsertValues(
   db: KyselyDb,
@@ -50,7 +45,7 @@ export async function buildResourceAccessBindingInsertValues(
     source?: AccessBindingSource
   }
 ): Promise<TableInsert<"resource_access_bindings">> {
-  const ref = accessGrantTargetToSubjectRefLocal(input.target)
+  const ref = accessGrantTargetToSubjectRef(input.target)
   const subjectId = await upsertAccessSubject(db, ref)
   const scopeRef = accessGrantTargetScopeRef(input.target)
   const scopeSubjectId = scopeRef
@@ -82,160 +77,8 @@ export async function buildResourceAccessBindingInsertValues(
   } satisfies TableInsert<"resource_access_bindings">
 }
 
-function accessGrantTargetToSubjectRefLocal(
-  target: AccessGrantTarget
-): SubjectRef {
-  if ("subject" in target) {
-    return target.subject
-  }
-  switch (target.targetType) {
-    case "workspace":
-      return {
-        kind: SUBJECT_KIND.WORKSPACE,
-        workspaceId: target.subjectWorkspaceId,
-      }
-    case "workspace_member":
-      return {
-        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
-        memberId: target.subjectWorkspaceMemberId,
-      }
-    case "conversation":
-      return {
-        kind: SUBJECT_KIND.CONVERSATION,
-        conversationId: target.subjectConversationId,
-      }
-    case "actor":
-      return { kind: SUBJECT_KIND.ACTOR, actorId: target.subjectActorId }
-    case "actor_in_conversation":
-      return {
-        kind: SUBJECT_KIND.CONVERSATION_ACTOR_CONTEXT,
-        contextId: target.subjectConversationActorContextId,
-      }
-  }
-}
-
-/**
- * SELECT-side projection from an `access_subjects` row (joined onto a
- * binding) back to the application-layer `AccessGrantTarget`. The
- * `conversation_actor_context_id` case requires the joined
- * `conversation_actor_contexts` row to recover `actor_id` + `conversation_id`.
- */
-export type AccessSubjectRowFields = {
-  kind: string
-  workspace_id: string | null
-  workspace_member_id: string | null
-  actor_id: string | null
-  conversation_id: string | null
-  conversation_actor_context_id: string | null
-}
-
-export function accessSubjectRowToGrantTarget(
-  subjectRow: AccessSubjectRowFields,
-  contextRow?: { actor_id: string; conversation_id: string } | null
-): AccessGrantTarget {
-  switch (subjectRow.kind) {
-    case "workspace":
-      if (!subjectRow.workspace_id)
-        throw new Error("workspace subject missing workspace_id")
-      return {
-        targetType: "workspace",
-        subjectWorkspaceId: subjectRow.workspace_id,
-        subjectWorkspaceMemberId: null,
-        subjectActorId: null,
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
-      }
-    case "workspace_member":
-      if (!subjectRow.workspace_member_id)
-        throw new Error("workspace_member subject missing workspace_member_id")
-      return {
-        targetType: "workspace_member",
-        subjectWorkspaceId: null,
-        subjectWorkspaceMemberId: subjectRow.workspace_member_id,
-        subjectActorId: null,
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
-      }
-    case "conversation":
-      if (!subjectRow.conversation_id)
-        throw new Error("conversation subject missing conversation_id")
-      return {
-        targetType: "conversation",
-        subjectWorkspaceId: null,
-        subjectWorkspaceMemberId: null,
-        subjectActorId: null,
-        subjectConversationId: subjectRow.conversation_id,
-        subjectConversationActorContextId: null,
-      }
-    case "actor":
-      if (!subjectRow.actor_id)
-        throw new Error("actor subject missing actor_id")
-      return {
-        targetType: "actor",
-        subjectWorkspaceId: null,
-        subjectWorkspaceMemberId: null,
-        subjectActorId: subjectRow.actor_id,
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
-      }
-    case "conversation_actor_context":
-      if (!subjectRow.conversation_actor_context_id)
-        throw new Error("conversation_actor_context subject missing context id")
-      if (!contextRow)
-        throw new Error(
-          "actor_in_conversation binding requires the conversation_actor_contexts JOIN row to derive actor_id/conversation_id"
-        )
-      return {
-        targetType: "actor_in_conversation",
-        subjectWorkspaceId: null,
-        subjectWorkspaceMemberId: null,
-        subjectActorId: contextRow.actor_id,
-        subjectConversationId: contextRow.conversation_id,
-        subjectConversationActorContextId:
-          subjectRow.conversation_actor_context_id,
-      }
-    default:
-      throw new Error(
-        `Subject kind ${subjectRow.kind} cannot be a resource_access_bindings target`
-      )
-  }
-}
-
-/**
- * Map an access_subjects row's `kind` to the legacy `target_type` enum value
- * used by AccessGrantTarget. The `conversation_actor_context` kind maps to
- * `actor_in_conversation` for legacy compatibility.
- */
-export function subjectKindToTargetType(
-  kind: string
-):
-  | "workspace"
-  | "workspace_member"
-  | "conversation"
-  | "actor"
-  | "actor_in_conversation" {
-  switch (kind) {
-    case "workspace":
-      return "workspace"
-    case "workspace_member":
-      return "workspace_member"
-    case "conversation":
-      return "conversation"
-    case "actor":
-      return "actor"
-    case "conversation_actor_context":
-      return "actor_in_conversation"
-    default:
-      throw new Error(`Unsupported subject kind for binding target: ${kind}`)
-  }
-}
-
 /**
  * `pg.PoolClient`-compatible variant of `buildResourceAccessBindingInsertValues`.
- *
- * Use this from inside `transaction(async client => ...)` blocks so that both
- * the subject upsert AND the binding insert commit (or roll back) atomically
- * on the same transactional connection.
  */
 export async function buildResourceAccessBindingInsertValuesOn(
   client: QueryExecutor,
@@ -250,7 +93,7 @@ export async function buildResourceAccessBindingInsertValuesOn(
     source?: AccessBindingSource
   }
 ): Promise<TableInsert<"resource_access_bindings">> {
-  const ref = accessGrantTargetToSubjectRefLocal(input.target)
+  const ref = accessGrantTargetToSubjectRef(input.target)
   const subjectId = await upsertAccessSubjectOn(client, ref)
   const scopeRef = accessGrantTargetScopeRef(input.target)
   const scopeSubjectId = scopeRef
@@ -283,14 +126,8 @@ export async function buildResourceAccessBindingInsertValuesOn(
 }
 
 // ---------- P3 consolidation: unified read / mutate entry points ----------
-//
-// These helpers are the single intended API surface for callers that previously
-// wrote bare `resource_access_bindings` SQL (mcp-plugins/relay-access.ts,
-// mcp-plugins/service.ts, skills/service.ts, automation/service.ts). They JOIN
-// `access_subjects` so the caller never has to think about the subject_id
-// indirection.
 
-import type { AccessBindingRow, AccessBindingTargetType } from "./bindings.js"
+import type { AccessBindingRow } from "./bindings.js"
 
 export async function insertAccessBindingReturningIdOn(
   client: QueryExecutor,
@@ -332,63 +169,69 @@ export async function insertAccessBindingReturningRowOn(
 }
 
 /**
- * After an INSERT ... RETURNING * on resource_access_bindings, the returned
- * row only has `subject_id` — no `target_type` or `subject_*_id` projections
- * (those columns were dropped in P1b). Callers that need to feed the row to
- * `normalizeAccessBindingRow` / `mapAccessBindingToGrant` must reconstruct
- * those derived fields from the AccessGrantTarget they originally wrote. This
- * helper performs that augmentation in one place — without it the downstream
- * functions throw "Unsupported access binding target type: undefined".
+ * D3: after an INSERT ... RETURNING * the returned row only has `subject_id`
+ * and `scope_subject_id`. Augment the row with subject/scope projection
+ * fields synthesized from the AccessGrantTarget so downstream readers
+ * (`mapAccessBindingToGrant` / `normalizeAccessBindingRow`) decode the
+ * subject without a second lookup.
  */
 export function augmentInsertedBindingRowWithTarget<
-  T extends { subject_id: string | null },
+  T extends { subject_id: string | null; scope_subject_id?: string | null },
 >(
   inserted: T,
   target: AccessGrantTarget
 ): T & {
-  target_type: AccessBindingTargetType | null
   scope_subject_id: string | null
-  subject_workspace_id: string | null
-  subject_workspace_member_id: string | null
-  subject_actor_id: string | null
-  subject_conversation_id: string | null
-  subject_conversation_actor_context_id: string | null
+  subject_kind: string
+  subject_workspace_id_via_join: string | null
+  subject_workspace_member_id_via_join: string | null
+  subject_actor_id_via_join: string | null
+  subject_remote_agent_id_via_join: string | null
+  subject_conversation_id_via_join: string | null
+  subject_conversation_actor_context_id_via_join: string | null
+  scope_kind: string | null
+  scope_workspace_id_via_join: string | null
+  scope_conversation_id_via_join: string | null
 } {
-  if ("subject" in target) {
-    // PR2: scoped-subject inserts don't have legacy target_type or
-    // subject_*_id projection fields. Leave them null; downstream
-    // readAccessBindingTarget will use subject_kind + scope_subject_id to
-    // decode the new variant. (augmentInsertedBindingRowWithTarget callers
-    // can't easily JOIN access_subjects post-INSERT, so we leave subject_kind
-    // undefined too — the row is mostly used as a write receipt at this
-    // point.)
-    return {
-      ...inserted,
-      target_type: null,
-      // scope_subject_id is already on the inserted row from RETURNING *;
-      // surface it explicitly so downstream readers see it.
-      scope_subject_id:
-        (inserted as { scope_subject_id?: string | null }).scope_subject_id ??
-        null,
-      subject_workspace_id: null,
-      subject_workspace_member_id: null,
-      subject_actor_id: null,
-      subject_conversation_id: null,
-      subject_conversation_actor_context_id: null,
-    }
-  }
   return {
     ...inserted,
-    target_type: target.targetType,
     scope_subject_id:
       (inserted as { scope_subject_id?: string | null }).scope_subject_id ??
       null,
-    subject_workspace_id: target.subjectWorkspaceId,
-    subject_workspace_member_id: target.subjectWorkspaceMemberId,
-    subject_actor_id: target.subjectActorId,
-    subject_conversation_id: target.subjectConversationId,
-    subject_conversation_actor_context_id:
-      target.subjectConversationActorContextId,
+    subject_kind: target.subject.kind,
+    subject_workspace_id_via_join:
+      target.subject.kind === "workspace"
+        ? (target.subject as { workspaceId: string }).workspaceId
+        : null,
+    subject_workspace_member_id_via_join:
+      target.subject.kind === "workspace_member"
+        ? (target.subject as { memberId: string }).memberId
+        : null,
+    subject_actor_id_via_join:
+      target.subject.kind === "actor"
+        ? (target.subject as { actorId: string }).actorId
+        : null,
+    subject_remote_agent_id_via_join:
+      target.subject.kind === "remote_agent"
+        ? (target.subject as { remoteAgentId: string }).remoteAgentId
+        : null,
+    subject_conversation_id_via_join:
+      target.subject.kind === "conversation"
+        ? (target.subject as { conversationId: string }).conversationId
+        : null,
+    subject_conversation_actor_context_id_via_join:
+      target.subject.kind === "conversation_actor_context"
+        ? (target.subject as { contextId: string }).contextId
+        : null,
+    scope_kind: target.scope?.kind ?? null,
+    scope_workspace_id_via_join:
+      target.scope?.kind === "workspace"
+        ? (target.scope as { workspaceId: string }).workspaceId
+        : null,
+    scope_conversation_id_via_join:
+      target.scope?.kind === "conversation"
+        ? (target.scope as { conversationId: string }).conversationId
+        : null,
   }
 }
 
@@ -417,10 +260,7 @@ function resourceIdColumnFor(resourceType: AccessBindableResourceType) {
 /**
  * List the active access grants on a given resource. Always JOINs
  * access_subjects so the returned grants carry a decoded AccessGrantTarget,
- * not a raw subject_id. For `conversation_actor_context` subjects we also
- * LEFT JOIN `conversation_actor_contexts` so the `actor_in_conversation`
- * target shape (which downstream readers require) carries the underlying
- * actor_id + conversation_id.
+ * not a raw subject_id.
  */
 export async function listGrantsForResource(
   db: KyselyDb,
@@ -462,31 +302,27 @@ export async function listGrantsForResource(
       "binding.created_at",
       "binding.revoked_at",
       "binding.scope_subject_id",
+      "binding.subject_id",
+      sql<string>`${sql.ref(column)}::text`.as("resource_id"),
       "subj.kind as subject_kind",
-      "subj.workspace_id as subject_workspace_id",
-      "subj.workspace_member_id as subject_workspace_member_id",
-      // PR2: expose subject_remote_agent_id_via_join so remote_agent grants
-      // get a proper SubjectRef through readAccessBindingTarget instead of
-      // throwing on the legacy decoder.
+      sql<string | null>`subj.workspace_id`.as("subject_workspace_id_via_join"),
+      sql<string | null>`subj.workspace_member_id`.as(
+        "subject_workspace_member_id_via_join"
+      ),
+      sql<string | null>`COALESCE(subj.actor_id, cac.actor_id)`.as(
+        "subject_actor_id_via_join"
+      ),
       sql<string | null>`subj.remote_agent_id`.as(
         "subject_remote_agent_id_via_join"
-      ),
-      // For `conversation_actor_context` subjects the underlying actor and
-      // conversation ids live on conversation_actor_contexts — readers
-      // (readAccessBindingTarget → "actor_in_conversation") demand both, so
-      // COALESCE in from the cac row when the subject itself doesn't carry
-      // them.
-      sql<string | null>`COALESCE(subj.actor_id, cac.actor_id)`.as(
-        "subject_actor_id"
       ),
       sql<
         string | null
       >`COALESCE(subj.conversation_id, cac.conversation_id)`.as(
-        "subject_conversation_id"
+        "subject_conversation_id_via_join"
       ),
-      "subj.conversation_actor_context_id as subject_conversation_actor_context_id",
-      // PR2: scope subject projection — populated only for scoped-subject
-      // rows (scope_subject_id non-null).
+      sql<string | null>`subj.conversation_actor_context_id`.as(
+        "subject_conversation_actor_context_id_via_join"
+      ),
       sql<string | null>`scope_subj.kind`.as("scope_kind"),
       sql<string | null>`scope_subj.workspace_id`.as(
         "scope_workspace_id_via_join"
@@ -501,23 +337,7 @@ export async function listGrantsForResource(
     query = query.where("binding.status", "=", "active")
   }
   const rows = await query.execute()
-  // PR2: route through readAccessBindingTarget which handles both legacy
-  // (target_type-driven) and scoped-subject (subject_kind / remote_agent /
-  // non-null scope_subject_id) variants.
-  return rows.map((row) => {
-    let target_type: AccessBindingTargetType | null = null
-    try {
-      target_type = subjectKindToTargetType(
-        row.subject_kind as AccessSubjectRow["kind"]
-      )
-    } catch {
-      // remote_agent (and any other kind not representable as a legacy
-      // target_type) stays null; readAccessBindingTarget routes via
-      // subject_kind to the scoped-subject decoder.
-      target_type = null
-    }
-    return mapAccessBindingToGrant({ ...(row as any), target_type })
-  })
+  return rows.map((row) => mapAccessBindingToGrant(row as any))
 }
 
 /**
@@ -555,7 +375,7 @@ export async function updateGrantTargets(
     newTarget: AccessGrantTarget
   }
 ): Promise<void> {
-  const ref = accessGrantTargetToSubjectRefLocal(input.newTarget)
+  const ref = accessGrantTargetToSubjectRef(input.newTarget)
   const subjectId = await upsertAccessSubject(db, ref)
   await db
     .updateTable("resource_access_bindings")
@@ -565,10 +385,7 @@ export async function updateGrantTargets(
 }
 
 /**
- * Describe the access grants on a resource as a structured summary. Replaces
- * the hand-rolled summary at skills/service.ts:2639-2660. The shape mirrors
- * what callers were building inline so they can swap to this helper one
- * resource at a time.
+ * Describe the access grants on a resource as a structured summary.
  */
 export async function describeAccessGrants(
   db: KyselyDb,
@@ -580,15 +397,6 @@ export async function describeAccessGrants(
   const grants = await listGrantsForResource(db, input)
   return { grants, activeCount: grants.length }
 }
-
-// ---------- P3 consolidation: bulk row helpers for the per-resource service
-// layers (skills/automation/mcp-plugins). These return `AccessBindingRow`-shaped
-// rows (with `target_type` / `subject_*_id` reconstructed from `access_subjects`
-// + `conversation_actor_contexts`) so that the historical per-service decorator
-// functions (buildSkillAccessRow, buildInstallationAccessRow, ...) can keep
-// working unchanged. Without these, every service file would re-implement the
-// same SELECT-with-JOIN over and over — which is exactly the duplication we
-// are trying to remove.
 
 import { normalizeAccessBindingRow } from "./bindings.js"
 
@@ -623,38 +431,25 @@ function bindingRowSelectFor(
       "binding.subject_id",
       "binding.scope_subject_id",
       sql<string>`${sql.ref(column)}::text`.as("resource_id"),
-      sql<AccessBindingTargetType | null>`CASE subj.kind
-        WHEN 'workspace' THEN 'workspace'
-        WHEN 'workspace_member' THEN 'workspace_member'
-        WHEN 'conversation' THEN 'conversation'
-        WHEN 'actor' THEN 'actor'
-        WHEN 'conversation_actor_context' THEN 'actor_in_conversation'
-      END`.as("target_type"),
-      // PR2: surface subject_kind so the scoped-subject decoder can branch
-      // on it (especially `remote_agent`, which has no legacy target_type
-      // representation).
       sql<string>`subj.kind`.as("subject_kind"),
-      "subj.workspace_id as subject_workspace_id",
-      "subj.workspace_member_id as subject_workspace_member_id",
-      // PR2: surface remote_agent_id via JOIN — the legacy projection set
-      // explicitly excluded it because there was no caller for remote_agent
-      // bindings before now.
+      sql<string | null>`subj.workspace_id`.as("subject_workspace_id_via_join"),
+      sql<string | null>`subj.workspace_member_id`.as(
+        "subject_workspace_member_id_via_join"
+      ),
       sql<string | null>`subj.remote_agent_id`.as(
         "subject_remote_agent_id_via_join"
       ),
       sql<string | null>`COALESCE(subj.actor_id, cac.actor_id)`.as(
-        "subject_actor_id"
+        "subject_actor_id_via_join"
       ),
       sql<
         string | null
       >`COALESCE(subj.conversation_id, cac.conversation_id)`.as(
-        "subject_conversation_id"
+        "subject_conversation_id_via_join"
       ),
-      "subj.conversation_actor_context_id as subject_conversation_actor_context_id",
-      // PR2: surface the scope subject's kind + workspace_id / conversation_id
-      // so readAccessBindingTarget can rebuild a complete SubjectRef without
-      // a second lookup. Only workspace / conversation kinds are valid
-      // (enforced by the tg_rab_validate trigger).
+      sql<string | null>`subj.conversation_actor_context_id`.as(
+        "subject_conversation_actor_context_id_via_join"
+      ),
       sql<string | null>`scope_subj.kind`.as("scope_kind"),
       sql<string | null>`scope_subj.workspace_id`.as(
         "scope_workspace_id_via_join"
@@ -674,11 +469,7 @@ function bindingRowSelectFor(
 
 /**
  * Load the `AccessBindingRow`-shaped rows for one or more resources of the
- * same type. Used by per-service loaders (skills, automation, mcp-plugins,
- * tool-resolver) that previously hand-rolled the same SELECT + JOIN. Rows are
- * already passed through `normalizeAccessBindingRow` so callers can feed them
- * directly into `buildSkillAccessRow` / `buildInstallationAccessRow` /
- * `mapAccessBindingToGrant` without any extra plumbing.
+ * same type.
  */
 export async function loadAccessBindingRowsForResources(
   db: KyselyDb,
@@ -710,9 +501,7 @@ export async function loadAccessBindingRowsForResources(
 }
 
 /**
- * Convenience wrapper around `loadAccessBindingRowsForResources` for the
- * common single-resource case. Returns the raw rows (not yet decoded into
- * AccessGrant — use `listGrantsForResource` for that).
+ * Convenience wrapper for the single-resource case.
  */
 export async function loadAccessBindingRowsForResource(
   db: KyselyDb,
@@ -734,10 +523,6 @@ export async function loadAccessBindingRowsForResource(
 /**
  * SQL-side variant of `loadAccessBindingRowsForResources` that pre-filters
  * bindings to only those whose target shape matches the given runtime context.
- * Replaces the legacy "load all bindings + client-side `accessMatches…` filter"
- * dance with a single round-trip — the WHERE clause below mirrors
- * `capabilityTargetMatchesContext` semantics exactly so a binding included by
- * the SQL is one that the client-side matcher would have accepted.
  */
 export async function loadAccessBindingRowsForResourcesAndContext(
   db: KyselyDb,
@@ -759,15 +544,6 @@ export async function loadAccessBindingRowsForResourcesAndContext(
   if (!input.includeRevoked) {
     query = query.where("binding.status", "=", "active")
   }
-  // The OR-of-target-kinds below is the SQL twin of
-  // `capabilityTargetMatchesContext` in access/bindings.ts. Keep the two in
-  // sync — a binding accepted by one must be accepted by the other.
-  //
-  // PR2 fix: the previous version of this query ignored `scope_subject_id`
-  // entirely, so a scoped binding (e.g. subject=actor + scope=conversation B)
-  // was returned even when the runtime context was a different conversation.
-  // We now add a parallel scope filter that mirrors the evaluator's runtime
-  // scope set (NULL OR matches the current workspace/conversation).
   query = query.where((eb) => {
     const conditions = [
       eb.and([
@@ -810,11 +586,6 @@ export async function loadAccessBindingRowsForResourcesAndContext(
     }
     return eb.or(conditions)
   })
-  // Scope filter: a non-null scope_subject_id only matches if the runtime
-  // context is inside that scope. The conditions mirror the runtime scope
-  // set RuntimePrincipalContext.runtimeScopeSubjectIds builds:
-  //   - workspace scope: scope_subj.kind='workspace' AND scope_subj.workspace_id = contextWorkspaceId
-  //   - conversation scope: scope_subj.kind='conversation' AND scope_subj.conversation_id = conversationId
   query = query.where((eb) => {
     const scopeConds = [
       eb("binding.scope_subject_id", "is", null),
@@ -844,10 +615,7 @@ export async function loadAccessBindingRowsForResourcesAndContext(
 
 /**
  * True iff there is at least one binding (active or otherwise) for the given
- * resource. Replaces inline `SELECT id FROM resource_access_bindings WHERE
- * <resource> = ? LIMIT 1` existence probes. The `activeOnly` flag narrows to
- * status='active' bindings; callers like relay default-access setup leave it
- * false because they want to detect any previously-written binding.
+ * resource.
  */
 export async function hasAnyBindingForResourceOn(
   client: QueryExecutor,
@@ -885,9 +653,7 @@ function resourceIdColumnForRaw(resourceType: AccessBindableResourceType) {
 }
 
 /**
- * Find an active binding by (resource, subject). Used by per-service
- * idempotent "ensure" flows. Returns the binding id (or null) without
- * materializing the whole row.
+ * Find an active binding by (resource, subject).
  */
 export async function findActiveBindingIdByResourceAndSubject(
   client: QueryExecutor,
@@ -914,9 +680,7 @@ export async function findActiveBindingIdByResourceAndSubject(
 }
 
 /**
- * Update only the `conversation_type_mask_override` column on a binding. The
- * binding's subject/target stays the same. Used by the per-service "update
- * grant visibility mask" endpoints that previously wrote bare UPDATE SQL.
+ * Update only the `conversation_type_mask_override` column on a binding.
  */
 export async function updateGrantConversationTypeMaskOverride(
   db: KyselyDb,
@@ -939,8 +703,7 @@ export async function updateGrantConversationTypeMaskOverride(
 }
 
 /**
- * Bulk revoke variant of `revokeGrant`. Used by tear-down flows that pause
- * an entire device or remove a set of capabilities at once.
+ * Bulk revoke variant of `revokeGrant`.
  */
 export async function revokeGrantsByIdsOn(
   client: QueryExecutor,
@@ -958,10 +721,7 @@ export async function revokeGrantsByIdsOn(
 }
 
 /**
- * Hard-delete every binding pointing at a resource. Use this only when the
- * underlying resource row itself is also being deleted (cascade-style) — in
- * which case there is no point keeping a revoked tombstone. For "user removed
- * this grant but the resource lives on" flows use `revokeGrant`.
+ * Hard-delete every binding pointing at a resource.
  */
 export async function hardDeleteBindingsForResourceOn(
   client: QueryExecutor,
@@ -978,8 +738,7 @@ export async function hardDeleteBindingsForResourceOn(
 }
 
 /**
- * Hard-delete bindings for a resource — Kysely flavour for callers already
- * holding a KyselyDb (not a transaction client).
+ * Hard-delete bindings for a resource — Kysely flavour.
  */
 export async function hardDeleteBindingsForResource(
   db: KyselyDb,
@@ -996,10 +755,7 @@ export async function hardDeleteBindingsForResource(
 }
 
 /**
- * Read a single binding row by id (and optionally workspace). Returns the
- * full `AccessBindingRow` shape — with `target_type` and the subject_*_id
- * projections reconstructed from the access_subjects JOIN — or null if no
- * matching binding exists.
+ * Read a single binding row by id (and optionally workspace).
  */
 export async function getAccessBindingRowById(
   db: KyselyDb,
@@ -1033,15 +789,7 @@ export async function getAccessBindingRowById(
 
 /**
  * Return the distinct resource ids in a workspace whose active bindings
- * match a subject-side filter. Centralizes the dynamic SQL that
- * `findSkillIdsByBindingFilter` used to build inline.
- *
- * Filter semantics (only the provided ones apply, ANDed together):
- *  - `subjectId`: exact subject_id match
- *  - `actorId`: subj.actor_id matches OR the binding's
- *     conversation_actor_context resolves to that actor
- *  - `conversationId`: subj.conversation_id matches OR the binding's
- *     conversation_actor_context resolves to that conversation
+ * match a subject-side filter.
  */
 export async function listResourceIdsForWorkspaceByBindingFilter(
   db: KyselyDb,

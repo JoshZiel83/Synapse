@@ -1,5 +1,12 @@
 import type pg from "pg"
 import type { CapabilityAccessTarget } from "@synapse/shared/types"
+import {
+  actorRef,
+  conversationRef,
+  subjectScopeLabel,
+  workspaceMemberRef,
+  workspaceRef,
+} from "@synapse/shared"
 import { transaction } from "../../infrastructure/database/index.js"
 import {
   db,
@@ -8,7 +15,6 @@ import {
 } from "../../infrastructure/database/kysely.js"
 import {
   accessBindingHasTarget,
-  assertLegacyTargetType,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
   type AccessBindingRow,
@@ -41,9 +47,90 @@ type Queryable = Pick<pg.PoolClient, "query">
 
 const RELAY_CAPABILITY_PERMISSION_SUMMARY = {
   requiredPermissions: ["use"],
-  suggestedAccessTargetType: "workspace" as const,
   reason:
     "Relay capability access controls who can use tools from this relay exposure.",
+}
+
+/**
+ * D3: convert a stored AccessBindingRow into a ScopedSubjectTarget for handing
+ * to policy / grant helpers. This wraps `readAccessBindingTarget` so callers
+ * with row-shaped rows from binding-storage's bindingRowSelectFor can recover
+ * the target without re-implementing the projection.
+ */
+function relayBindingRowToTarget(
+  row: AccessBindingRow & {
+    subject_kind?: string | null
+    subject_workspace_id_via_join?: string | null
+    subject_workspace_member_id_via_join?: string | null
+    subject_actor_id_via_join?: string | null
+    subject_remote_agent_id_via_join?: string | null
+    subject_conversation_id_via_join?: string | null
+    subject_conversation_actor_context_id_via_join?: string | null
+    scope_kind?: string | null
+    scope_workspace_id_via_join?: string | null
+    scope_conversation_id_via_join?: string | null
+  }
+): CapabilityAccessTarget {
+  // Decode the projection — the bindingRowSelectFor JOIN-aliased fields carry
+  // the data needed to reconstruct subject/scope.
+  const subjectKind = row.subject_kind
+  if (!subjectKind) {
+    // Fallback: use the workspace as principal so callers don't crash.
+    return { subject: workspaceRef(row.workspace_id) }
+  }
+  let subject
+  switch (subjectKind) {
+    case "workspace":
+      subject = workspaceRef(
+        row.subject_workspace_id_via_join || row.workspace_id
+      )
+      break
+    case "workspace_member":
+      subject = row.subject_workspace_member_id_via_join
+        ? workspaceMemberRef(row.subject_workspace_member_id_via_join)
+        : workspaceRef(row.workspace_id)
+      break
+    case "actor":
+      subject = row.subject_actor_id_via_join
+        ? actorRef(row.subject_actor_id_via_join)
+        : workspaceRef(row.workspace_id)
+      break
+    case "conversation":
+      subject = row.subject_conversation_id_via_join
+        ? conversationRef(row.subject_conversation_id_via_join)
+        : workspaceRef(row.workspace_id)
+      break
+    case "conversation_actor_context":
+      // Treat CAC as actor + scope=conversation if the underlying ids are
+      // available via the cac JOIN.
+      if (
+        row.subject_actor_id_via_join &&
+        row.subject_conversation_id_via_join
+      ) {
+        return {
+          subject: actorRef(row.subject_actor_id_via_join),
+          scope: conversationRef(row.subject_conversation_id_via_join),
+        }
+      }
+      subject = workspaceRef(row.workspace_id)
+      break
+    default:
+      subject = workspaceRef(row.workspace_id)
+  }
+  const scopeKind = row.scope_kind
+  if (scopeKind === "conversation" && row.scope_conversation_id_via_join) {
+    return {
+      subject,
+      scope: conversationRef(row.scope_conversation_id_via_join),
+    }
+  }
+  if (scopeKind === "workspace" && row.scope_workspace_id_via_join) {
+    return {
+      subject,
+      scope: workspaceRef(row.scope_workspace_id_via_join),
+    }
+  }
+  return { subject }
 }
 
 function buildRelayGrantPolicyError(code: string, message: string) {
@@ -135,14 +222,7 @@ export async function ensureRelayExposureDefaultAccess(params: {
       workspaceId: params.workspaceId,
       resourceType: "relay_capability",
       resourceId: params.capabilityId,
-      target: {
-        targetType: "workspace",
-        subjectWorkspaceId: params.workspaceId,
-        subjectWorkspaceMemberId: null,
-        subjectActorId: null,
-        subjectConversationId: null,
-        subjectConversationActorContextId: null,
-      },
+      target: { subject: workspaceRef(params.workspaceId) },
       source: "relay_auto",
       reason: RELAY_CAPABILITY_PERMISSION_SUMMARY.reason,
     })
@@ -269,21 +349,12 @@ export async function grantRelayExposureAccess(input: {
     capabilityConversationTypeMaskOverride:
       exposure.capability_conversation_type_mask_override,
   })
-  const targetResolved = await resolveAccessGrantTarget({
+  const target = await resolveAccessGrantTarget({
     workspaceId: input.workspaceId,
-    target: input.accessTarget || { type: "workspace" },
+    target: input.accessTarget || { subject: workspaceRef(input.workspaceId) },
   })
-  // PR2: relay-access still on the legacy path. PR4 will widen this when
-  // the relay-authorization rewrite makes scoped-subject grants first-class.
-  if ("subject" in targetResolved) {
-    throw buildRelayGrantPolicyError(
-      "RELAY_EXPOSURE_GRANT_CONVERSATION_POLICY_INVALID",
-      `Scoped-subject access grants are not yet supported here (subject.kind=${targetResolved.subject.kind}).`
-    )
-  }
-  const target = targetResolved
   assertGrantConversationTypeOverrideAllowed({
-    targetType: target.targetType,
+    target,
     parentConversationTypeMask: effectiveConversationTypeMask,
     conversationTypeMaskOverride: input.conversationTypeMaskOverride,
     buildError: (message) =>
@@ -296,9 +367,7 @@ export async function grantRelayExposureAccess(input: {
   })
   await validateConversationScopedAccessTarget({
     db,
-    targetType: target.targetType,
-    conversationId: target.subjectConversationId,
-    actorId: target.subjectActorId,
+    target,
     effectiveConversationTypeMask,
     buildError: (message) =>
       buildRelayGrantPolicyError(
@@ -439,9 +508,7 @@ export async function updateRelayExposurePolicy(input: {
   for (const accessRow of accessRows) {
     await validateConversationScopedAccessTarget({
       db,
-      targetType: assertLegacyTargetType(accessRow.target_type),
-      conversationId: accessRow.subject_conversation_id,
-      actorId: accessRow.subject_actor_id,
+      target: relayBindingRowToTarget(accessRow as any),
       effectiveConversationTypeMask: nextEffectiveConversationTypeMask,
       buildError: (message) =>
         buildRelayGrantPolicyError(
@@ -516,8 +583,9 @@ export async function updateRelayExposureAccessGrant(input: {
   })
 
   if (input.conversationTypeMaskOverride !== undefined) {
+    const existingTarget = relayBindingRowToTarget(existing as any)
     assertGrantConversationTypeOverrideAllowed({
-      targetType: assertLegacyTargetType(existing.target_type),
+      target: existingTarget,
       parentConversationTypeMask: effectiveConversationTypeMask,
       conversationTypeMaskOverride: input.conversationTypeMaskOverride,
       buildError: (message) =>
@@ -530,9 +598,7 @@ export async function updateRelayExposureAccessGrant(input: {
     })
     await validateConversationScopedAccessTarget({
       db,
-      targetType: assertLegacyTargetType(existing.target_type),
-      conversationId: existing.subject_conversation_id,
-      actorId: existing.subject_actor_id,
+      target: existingTarget,
       effectiveConversationTypeMask,
       buildError: (message) =>
         buildRelayGrantPolicyError(

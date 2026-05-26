@@ -2,8 +2,7 @@
 
 import {
   CONVERSATION_TYPE_MASK_PRESETS,
-  type CapabilityAccessTarget,
-  type CapabilityAccessTargetType,
+  type SkillAccessTargetType,
   conversationTypeKeysToMask,
   conversationTypeMaskToKeys,
   createCanonicalContentBlockId,
@@ -14,6 +13,7 @@ import {
   type InstalledSkill,
   type SkillMarketplaceEntry,
 } from "@synapse/shared"
+import { type AccessTargetInput } from "@/lib/api"
 import {
   useCallback,
   useDeferredValue,
@@ -121,7 +121,7 @@ type ScopeDraft = {
   userId: string | null
 }
 
-type SkillUseScope = CapabilityAccessTargetType
+type SkillUseScope = SkillAccessTargetType
 
 type UploadedFile = {
   id: string
@@ -138,7 +138,7 @@ const skillAccessAdapter = {
     workspaceId: string,
     resourceId: string,
     payload: {
-      accessTarget?: CapabilityAccessTarget
+      accessTarget?: AccessTargetInput
       conversationTypeMaskOverride?: number | null
       permissions?: string[]
     }
@@ -513,7 +513,7 @@ function createScopeDraft(): ScopeDraft {
 
 function buildAccessTargetFromScopeDraft(
   draft: Pick<ScopeDraft, "useScope" | "actorId" | "conversationId" | "userId">
-): CapabilityAccessTarget {
+): AccessTargetInput {
   return {
     type: draft.useScope,
     actorId:

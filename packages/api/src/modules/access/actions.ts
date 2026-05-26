@@ -99,23 +99,6 @@ export const ACCESS_ACTIONS = {
   "remote_agent.grant": { resourceType: "remote_agent", permission: "grant" },
   "remote_agent.delete": { resourceType: "remote_agent", permission: "delete" },
 
-  "actor_in_conversation.memory_read": {
-    resourceType: "conversation_actor_context",
-    permission: "memory_read",
-  },
-  "actor_in_conversation.memory_edit": {
-    resourceType: "conversation_actor_context",
-    permission: "memory_edit",
-  },
-  "actor_in_conversation.memory_retarget": {
-    resourceType: "conversation_actor_context",
-    permission: "memory_retarget",
-  },
-  "actor_in_conversation.memory_delete": {
-    resourceType: "conversation_actor_context",
-    permission: "memory_delete",
-  },
-
   "conversation.view": { resourceType: "conversation", permission: "view" },
   "conversation.send": { resourceType: "conversation", permission: "send" },
   "conversation.moderate": {

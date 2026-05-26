@@ -16,7 +16,7 @@ import { sql } from "kysely"
 import { lookupResources } from "../access/evaluator.js"
 import { ACCESS_ACTIONS } from "../access/actions.js"
 import { db } from "../../infrastructure/database/kysely.js"
-import { assertLegacyTargetType } from "../access/bindings.js"
+import type { AccessBindingRow } from "../access/bindings.js"
 import { loadAccessBindingRowsForResources } from "../access/binding-storage.js"
 import {
   buildConversationCapabilitySubjects,
@@ -406,19 +406,61 @@ async function loadVisibleAccessBindings(params: {
   })
 
   const map = new Map<string, VisibleAccessBindingRow[]>()
-  for (const row of rows) {
+  for (const rawRow of rows) {
+    const row = rawRow as AccessBindingRow & {
+      subject_kind?: string | null
+      subject_workspace_id_via_join?: string | null
+      subject_workspace_member_id_via_join?: string | null
+      subject_actor_id_via_join?: string | null
+      subject_conversation_id_via_join?: string | null
+      subject_conversation_actor_context_id_via_join?: string | null
+      scope_kind?: string | null
+      scope_conversation_id_via_join?: string | null
+    }
+    // D3: derive the legacy target_type label from subject_kind + scope_kind.
+    // This preserves the visibility filter contract (which keys on the label)
+    // while removing the legacy projection columns from the row reader.
+    let target_type: VisibleAccessBindingRow["target_type"]
+    if (row.subject_kind === "actor" && row.scope_kind === "conversation") {
+      target_type = "actor_in_conversation"
+    } else if (row.subject_kind === "conversation_actor_context") {
+      target_type = "actor_in_conversation"
+    } else {
+      switch (row.subject_kind) {
+        case "workspace":
+          target_type = "workspace"
+          break
+        case "workspace_member":
+          target_type = "workspace_member"
+          break
+        case "conversation":
+          target_type = "conversation"
+          break
+        case "actor":
+          target_type = "actor"
+          break
+        default:
+          target_type = "workspace"
+      }
+    }
+    const subjectActorId = row.subject_actor_id_via_join ?? null
+    const subjectConversationId =
+      row.scope_conversation_id_via_join ??
+      row.subject_conversation_id_via_join ??
+      null
     const visible: VisibleAccessBindingRow = {
       id: row.id,
       workspace_id: row.workspace_id,
       resource_type: params.resourceType,
       resource_id: row.resource_id,
-      target_type: assertLegacyTargetType(row.target_type),
-      subject_workspace_id: row.subject_workspace_id,
-      subject_workspace_member_id: row.subject_workspace_member_id,
-      subject_actor_id: row.subject_actor_id,
-      subject_conversation_id: row.subject_conversation_id,
+      target_type,
+      subject_workspace_id: row.subject_workspace_id_via_join ?? null,
+      subject_workspace_member_id:
+        row.subject_workspace_member_id_via_join ?? null,
+      subject_actor_id: subjectActorId,
+      subject_conversation_id: subjectConversationId,
       subject_conversation_actor_context_id:
-        row.subject_conversation_actor_context_id,
+        row.subject_conversation_actor_context_id_via_join ?? null,
       conversation_type_mask_override: row.conversation_type_mask_override,
       status: row.status,
       created_by_workspace_member_id: row.created_by_workspace_member_id,
@@ -426,8 +468,8 @@ async function loadVisibleAccessBindings(params: {
       metadata: {},
       created_at: row.created_at,
       revoked_at: row.revoked_at,
-      actor_id: row.subject_actor_id,
-      conversation_id: row.subject_conversation_id,
+      actor_id: subjectActorId,
+      conversation_id: subjectConversationId,
     }
     const entries = map.get(visible.resource_id) || []
     entries.push(visible)

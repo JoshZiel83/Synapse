@@ -223,7 +223,6 @@ export const mijiaSeed: BuiltinOrgSeed = {
       ],
       authorization: {
         requiredPermissions: ["network:outbound"],
-        defaultAccessTargetType: "workspace",
         reason:
           "Mijia cloud access requires outbound network requests to Xiaomi account and Mi Home device APIs on behalf of the connected user.",
       },

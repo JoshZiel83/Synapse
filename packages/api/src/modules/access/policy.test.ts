@@ -1,6 +1,12 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { SUBJECT_KIND } from "@synapse/shared"
+import {
+  SUBJECT_KIND,
+  actorRef,
+  conversationRef,
+  workspaceMemberRef,
+  workspaceRef,
+} from "@synapse/shared"
 import { withTestDb } from "../../test/helpers/db.js"
 import { upsertAccessSubject } from "./subject-registry.js"
 import {
@@ -13,15 +19,31 @@ import {
 type AnyDb = import("kysely").Kysely<any>
 
 test("targetSupportsConversationTypeOverride accepts workspace + actor only", () => {
-  assert.equal(targetSupportsConversationTypeOverride("workspace"), true)
-  assert.equal(targetSupportsConversationTypeOverride("actor"), true)
   assert.equal(
-    targetSupportsConversationTypeOverride("workspace_member"),
+    targetSupportsConversationTypeOverride({ subject: workspaceRef("ws-1") }),
+    true
+  )
+  assert.equal(
+    targetSupportsConversationTypeOverride({ subject: actorRef("a-1") }),
+    true
+  )
+  assert.equal(
+    targetSupportsConversationTypeOverride({
+      subject: workspaceMemberRef("m-1"),
+    }),
     false
   )
-  assert.equal(targetSupportsConversationTypeOverride("conversation"), false)
   assert.equal(
-    targetSupportsConversationTypeOverride("actor_in_conversation"),
+    targetSupportsConversationTypeOverride({
+      subject: conversationRef("c-1"),
+    }),
+    false
+  )
+  assert.equal(
+    targetSupportsConversationTypeOverride({
+      subject: actorRef("a-1"),
+      scope: conversationRef("c-1"),
+    }),
     false
   )
 })
@@ -73,7 +95,7 @@ test("assertConversationTypeMaskWithinParent throws when narrowing yields an inv
 test("assertGrantConversationTypeOverrideAllowed rejects an override on a conversation-scoped target", () => {
   assert.throws(() =>
     assertGrantConversationTypeOverrideAllowed({
-      targetType: "conversation",
+      target: { subject: conversationRef("c-1") },
       parentConversationTypeMask: 0b11111,
       conversationTypeMaskOverride: 0b00001,
       buildError: (m) => new Error(m),
@@ -84,7 +106,7 @@ test("assertGrantConversationTypeOverrideAllowed rejects an override on a conver
 
 test("assertGrantConversationTypeOverrideAllowed allows overrides on workspace + actor scopes", () => {
   const ws = assertGrantConversationTypeOverrideAllowed({
-    targetType: "workspace",
+    target: { subject: workspaceRef("ws-1") },
     parentConversationTypeMask: 0b11111,
     conversationTypeMaskOverride: 0b00111,
     buildError: (m) => new Error(m),
@@ -92,7 +114,7 @@ test("assertGrantConversationTypeOverrideAllowed allows overrides on workspace +
   })
   assert.equal(ws, 0b00111)
   const actor = assertGrantConversationTypeOverrideAllowed({
-    targetType: "actor",
+    target: { subject: actorRef("a-1") },
     parentConversationTypeMask: 0b11111,
     conversationTypeMaskOverride: null,
     buildError: (m) => new Error(m),
@@ -108,29 +130,11 @@ test(
     await withTestDb(async (db) => {
       const result = await validateConversationScopedAccessTarget({
         db,
-        targetType: "workspace",
+        target: { subject: workspaceRef("ws-1") },
         effectiveConversationTypeMask: 0b11111,
         buildError: (m) => new Error(m),
       })
       assert.equal(result, null)
-    })
-  }
-)
-
-test(
-  "validateConversationScopedAccessTarget throws when conversationId is missing",
-  { timeout: 5 * 60_000 },
-  async () => {
-    await withTestDb(async (db) => {
-      await assert.rejects(
-        validateConversationScopedAccessTarget({
-          db,
-          targetType: "conversation",
-          effectiveConversationTypeMask: 0b11111,
-          buildError: (m) => new Error(m),
-        }),
-        /conversationId is required/
-      )
     })
   }
 )
@@ -145,8 +149,7 @@ test(
       const conversationId = await insertConversation(db, workspaceId)
       const result = await validateConversationScopedAccessTarget({
         db,
-        targetType: "conversation",
-        conversationId,
+        target: { subject: conversationRef(conversationId) },
         effectiveConversationTypeMask: 0b11111,
         buildError: (m) => new Error(m),
       })
@@ -168,8 +171,7 @@ test(
       await assert.rejects(
         validateConversationScopedAccessTarget({
           db,
-          targetType: "conversation",
-          conversationId,
+          target: { subject: conversationRef(conversationId) },
           effectiveConversationTypeMask: 0b10000,
           buildError: (m) => new Error(m),
         }),
@@ -180,7 +182,7 @@ test(
 )
 
 test(
-  "validateConversationScopedAccessTarget(actor_in_conversation) requires actorId AND active participant",
+  "validateConversationScopedAccessTarget(actor + scope=conversation) requires an active participant",
   { timeout: 5 * 60_000 },
   async () => {
     await withTestDb(async (db) => {
@@ -192,20 +194,10 @@ test(
       await assert.rejects(
         validateConversationScopedAccessTarget({
           db,
-          targetType: "actor_in_conversation",
-          conversationId,
-          effectiveConversationTypeMask: 0b11111,
-          buildError: (m) => new Error(m),
-        }),
-        /actorId is required/
-      )
-
-      await assert.rejects(
-        validateConversationScopedAccessTarget({
-          db,
-          targetType: "actor_in_conversation",
-          conversationId,
-          actorId,
+          target: {
+            subject: actorRef(actorId),
+            scope: conversationRef(conversationId),
+          },
           effectiveConversationTypeMask: 0b11111,
           buildError: (m) => new Error(m),
         }),
@@ -227,9 +219,10 @@ test(
         .execute()
       const ok = await validateConversationScopedAccessTarget({
         db,
-        targetType: "actor_in_conversation",
-        conversationId,
-        actorId,
+        target: {
+          subject: actorRef(actorId),
+          scope: conversationRef(conversationId),
+        },
         effectiveConversationTypeMask: 0b11111,
         buildError: (m) => new Error(m),
       })

@@ -579,17 +579,12 @@ async function hasConversationActorContextPermission(
 
 type ResourceGrantRow = {
   resource_id: string
-  target_type:
-    | "workspace"
-    | "workspace_member"
-    | "conversation"
-    | "actor"
-    | "actor_in_conversation"
-  subject_workspace_id: string | null
-  subject_workspace_member_id: string | null
-  subject_actor_id: string | null
-  subject_conversation_id: string | null
-  subject_conversation_actor_context_id: string | null
+  subject_kind: string
+  subject_workspace_id_via_join: string | null
+  subject_workspace_member_id_via_join: string | null
+  subject_actor_id_via_join: string | null
+  subject_conversation_id_via_join: string | null
+  subject_conversation_actor_context_id_via_join: string | null
 }
 
 type BindableResourceTypeLocal =
@@ -654,30 +649,22 @@ async function listResourceGrantRows(
         binding.actor_id::text,
         binding.remote_agent_id::text
       )`.as("resource_id"),
-      sql<
-        | "workspace"
-        | "workspace_member"
-        | "conversation"
-        | "actor"
-        | "actor_in_conversation"
-      >`CASE subj.kind
-        WHEN 'workspace' THEN 'workspace'
-        WHEN 'workspace_member' THEN 'workspace_member'
-        WHEN 'conversation' THEN 'conversation'
-        WHEN 'actor' THEN 'actor'
-        WHEN 'conversation_actor_context' THEN 'actor_in_conversation'
-      END`.as("target_type"),
-      "subj.workspace_id as subject_workspace_id",
-      "subj.workspace_member_id as subject_workspace_member_id",
+      sql<string>`subj.kind`.as("subject_kind"),
+      sql<string | null>`subj.workspace_id`.as("subject_workspace_id_via_join"),
+      sql<string | null>`subj.workspace_member_id`.as(
+        "subject_workspace_member_id_via_join"
+      ),
       sql<string | null>`COALESCE(subj.actor_id, cac.actor_id)`.as(
-        "subject_actor_id"
+        "subject_actor_id_via_join"
       ),
       sql<
         string | null
       >`COALESCE(subj.conversation_id, cac.conversation_id)`.as(
-        "subject_conversation_id"
+        "subject_conversation_id_via_join"
       ),
-      "subj.conversation_actor_context_id as subject_conversation_actor_context_id",
+      sql<string | null>`subj.conversation_actor_context_id`.as(
+        "subject_conversation_actor_context_id_via_join"
+      ),
     ])
     .where("binding.status", "=", "active")
 

@@ -4,11 +4,11 @@ import { useEffect, useMemo, useState } from "react"
 import { useParams, useRouter, useSearchParams } from "next/navigation"
 import type {
   AutomationEventSource,
-  CapabilityAccessTarget,
   RelayDeviceDetailView,
   RelayDeviceSummaryView,
   RelayExposureView,
 } from "@synapse/shared"
+import { type AccessTargetInput } from "@/lib/api"
 import type {
   ConversationTypeKey,
   RelayAuthorizationGrantView,
@@ -313,7 +313,7 @@ export default function RelayDevicePage() {
         targetWorkspaceId: string,
         targetExposureId: string,
         payload: {
-          accessTarget?: CapabilityAccessTarget
+          accessTarget?: AccessTargetInput
           conversationTypeMaskOverride?: number | null
           permissions?: string[]
         }

@@ -1,12 +1,9 @@
 /**
  * Conversation-type policy enforcement helpers for access grants.
  *
- * P0/P1b: this file (formerly `conversation-type-validation.ts`) is the
- * canonical entry point access guards/grant-issuance flows use to check that
- * a target conversation matches the policy mask. It accepts an injected
- * `db: KyselyDb` so tests can run against a per-test database, and avoids
- * importing chat/service (which would drag in the global pool through
- * `listConversationParticipants`) — the participant check is inlined here.
+ * D3: refactored to accept ScopedSubjectTarget (`{ subject, scope? }`) directly
+ * instead of the legacy string `CapabilityAccessTargetType`. Callers branch on
+ * `target.subject.kind` + `target.scope?.kind` for routing.
  */
 
 import {
@@ -18,7 +15,7 @@ import {
   SUBJECT_KIND,
   type ConversationTypeKey,
 } from "@synapse/shared"
-import type { CapabilityAccessTargetType } from "@synapse/shared/types"
+import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import type { KyselyDb } from "../../infrastructure/database/kysely.js"
 import { upsertAccessSubject } from "./subject-registry.js"
 
@@ -33,19 +30,25 @@ function formatConversationTypeKey(value: ConversationTypeKey) {
   return value.replaceAll("_", " ")
 }
 
+/**
+ * D3: a target carries an optional `conversation_type_mask_override` only when
+ * its principal is workspace-wide (workspace) or actor-wide (actor) and not
+ * already scoped to a single conversation. Scoped targets (conversation
+ * subject, or actor + scope=conversation) inherit the parent mask verbatim.
+ */
 export function targetSupportsConversationTypeOverride(
-  targetType: CapabilityAccessTargetType
+  target: CapabilityAccessTarget
 ) {
-  // Only workspace + actor targets carry a custom conversation-type policy
-  // mask; conversation/workspace_member/actor_in_conversation targets are
-  // pinned to the parent.
-  switch (targetType) {
-    case "workspace":
-    case "actor":
+  if (target.scope?.kind === SUBJECT_KIND.CONVERSATION) {
+    // e.g. actor + scope=conversation — pinned to the scope's conversation.
+    return false
+  }
+  switch (target.subject.kind) {
+    case SUBJECT_KIND.WORKSPACE:
+    case SUBJECT_KIND.ACTOR:
+    case SUBJECT_KIND.REMOTE_AGENT:
       return true
-    case "workspace_member":
-    case "conversation":
-    case "actor_in_conversation":
+    default:
       return false
   }
 }
@@ -77,13 +80,13 @@ export function assertConversationTypeMaskWithinParent(params: {
 }
 
 export function assertGrantConversationTypeOverrideAllowed(params: {
-  targetType: CapabilityAccessTargetType
+  target: CapabilityAccessTarget
   parentConversationTypeMask: number
   conversationTypeMaskOverride: number | null | undefined
   buildError: (message: string) => Error
   invalidMaskMessage: string
 }) {
-  if (!targetSupportsConversationTypeOverride(params.targetType)) {
+  if (!targetSupportsConversationTypeOverride(params.target)) {
     if (
       params.conversationTypeMaskOverride !== null &&
       params.conversationTypeMaskOverride !== undefined
@@ -133,8 +136,6 @@ async function isActorActiveParticipantInConversation(
   conversationId: string,
   actorId: string
 ): Promise<boolean> {
-  // P0 DI / P1b: lookup the actor subject id, then filter conversation_participants
-  // by subject_id (the polymorphic actor_id column was dropped).
   const actorSubjectId = await upsertAccessSubject(db, {
     kind: SUBJECT_KIND.ACTOR,
     actorId,
@@ -153,20 +154,31 @@ async function isActorActiveParticipantInConversation(
 
 export async function validateConversationScopedAccessTarget(params: {
   db: KyselyDb
-  targetType: CapabilityAccessTargetType
-  conversationId?: string | null
-  actorId?: string | null
+  target: CapabilityAccessTarget
   effectiveConversationTypeMask: number
   buildError: (message: string) => Error
 }) {
-  if (
-    params.targetType !== "conversation" &&
-    params.targetType !== "actor_in_conversation"
+  // Determine which conversation the target is anchored to (if any).
+  let conversationId: string | null = null
+  let actorIdForActiveParticipantCheck: string | null = null
+  if (params.target.subject.kind === SUBJECT_KIND.CONVERSATION) {
+    conversationId = (params.target.subject as { conversationId: string })
+      .conversationId
+  } else if (
+    params.target.subject.kind === SUBJECT_KIND.ACTOR &&
+    params.target.scope?.kind === SUBJECT_KIND.CONVERSATION
   ) {
+    conversationId = (params.target.scope as { conversationId: string })
+      .conversationId
+    actorIdForActiveParticipantCheck = (
+      params.target.subject as { actorId: string }
+    ).actorId
+  } else {
+    // Not a conversation-scoped target — nothing to validate.
     return null
   }
 
-  if (!params.conversationId) {
+  if (!conversationId) {
     throw params.buildError(
       "conversationId is required for conversation-scoped access targets."
     )
@@ -174,7 +186,7 @@ export async function validateConversationScopedAccessTarget(params: {
 
   const conversation = await loadConversationTargetRecord(
     params.db,
-    params.conversationId
+    conversationId
   )
   if (!conversation) {
     throw params.buildError("Selected conversation was not found.")
@@ -194,20 +206,14 @@ export async function validateConversationScopedAccessTarget(params: {
     )
   }
 
-  if (params.targetType !== "actor_in_conversation") {
+  if (!actorIdForActiveParticipantCheck) {
     return conversation
-  }
-
-  if (!params.actorId) {
-    throw params.buildError(
-      "actorId is required for actor_in_conversation access targets."
-    )
   }
 
   const hasActiveActor = await isActorActiveParticipantInConversation(
     params.db,
-    params.conversationId,
-    params.actorId
+    conversationId,
+    actorIdForActiveParticipantCheck
   )
   if (!hasActiveActor) {
     throw params.buildError(
