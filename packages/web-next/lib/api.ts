@@ -763,6 +763,12 @@ class ApiClient {
    * delete + create the UI used to do, which dropped item-level grants,
    * indexing state, and the stable memory id. The backend asserts
    * `delete` on source + `write` on target inside a single transaction.
+   *
+   * P2 (post-D4 round 6 review): response is a discriminated union —
+   * `{ moved: true, id, spaceId }` when the caller cannot read the
+   * destination (e.g. admin moved into a private space they don't own),
+   * otherwise the full Memory record. Callers MUST narrow before
+   * accessing memory-shaped fields.
    */
   moveMemory(
     wsId: string,

@@ -369,7 +369,24 @@ export default function MemoryBrowser() {
         toast.error("Target folder is missing required context")
         return
       }
-      const result = await api.moveMemory(workspaceId, movingMemory.id, payload)
+      const result = (await api.moveMemory(
+        workspaceId,
+        movingMemory.id,
+        payload
+      )) as any
+      // P2 fix (post-D4 round 6 review): the backend returns a thin
+      // {id, spaceId, moved: true} body when the caller can't read the
+      // destination (e.g. admin moved into a private space they don't
+      // own). projectMemory would throw on the missing owner field, so
+      // detect the thin shape explicitly and drop the row from the
+      // local list — the principal can no longer see it.
+      if (result?.moved === true && !result?.owner) {
+        setMemories((current) =>
+          current.filter((memory) => memory.id !== movingMemory.id)
+        )
+        toast.success("Memory moved (out of view)")
+        return
+      }
       const savedMemory = projectMemory((result?.memory || result) as any)
       setMemories((current) =>
         current.map((memory) =>
