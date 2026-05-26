@@ -772,6 +772,25 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           memoryId: string
         }
         const body = moveMemorySchema.parse(request.body)
+
+        // P1 fix (post-D4 round 5 review): source `read` AND source
+        // `delete` both required. The previous "delete is enough" rule
+        // let workspace admins (who hold `manage_memories` and therefore
+        // get `delete` on private spaces via the cleanup
+        // adminManageOverride) move actor_private memory into
+        // workspace_shared and read the contents from the response —
+        // i.e., cleanup-delete became silent read. Requiring read on
+        // the source closes that path: admin doesn't have read on
+        // private spaces (curation is write-only too), so the move 403s
+        // before any contents are touched.
+        const sourceReadable = await requireMemoryPermission(
+          request,
+          reply,
+          memoryId,
+          "read",
+          "Not allowed to move this memory (source read required)"
+        )
+        if (!sourceReadable) return
         // Source `delete` permission (requireMemoryPermission also resolves
         // the source space's conversation anchor for the runtime context).
         const sourceAllowed = await requireMemoryPermission(
@@ -834,6 +853,60 @@ export function registerMemoryRoutes(app: FastifyInstance) {
             runtimeScopeSubjectIds,
           }
         )
+
+        // P1 fix (post-D4 round 5 review): re-check `read` on the moved
+        // memory before returning contents. After the move the item
+        // lives in the target space, where the principal may have only
+        // `write` (admin curation path or workspace-admin manage_memories
+        // on workspace-owned target) but not `read`. Without this gate
+        // the move response leaks contents the caller can't otherwise
+        // read. Build a fresh runtime context for the target's
+        // conversation (if any) so conversation-scoped target read
+        // evaluates correctly.
+        let postMoveReadCtx = {
+          runtimeSubjectIds: runtimeSubjectIds,
+          runtimeScopeSubjectIds: runtimeScopeSubjectIds,
+        }
+        try {
+          // The moved memory now belongs to the target space — recompute
+          // the runtime context against the target's conversation
+          // anchor (the request-time context may have been tuned for
+          // the SOURCE conversation by requireMemoryPermission).
+          const targetConversationId =
+            body.scope?.kind === SUBJECT_KIND.CONVERSATION
+              ? body.scope.conversationId
+              : body.owner.kind === SUBJECT_KIND.CONVERSATION
+                ? body.owner.conversationId
+                : null
+          const targetCtx = await buildRuntimePrincipalContext(db, {
+            principal,
+            workspaceId,
+            conversationId: targetConversationId,
+          })
+          postMoveReadCtx = {
+            runtimeSubjectIds: targetCtx.runtimeSubjectIds,
+            runtimeScopeSubjectIds: targetCtx.runtimeScopeSubjectIds,
+          }
+        } catch {
+          // keep the source-side context as a conservative fallback
+        }
+        const readAllowed = await authorizePermission(db, {
+          subject,
+          resourceType: "memory_item",
+          resourceId: memoryId,
+          permission: "read",
+          runtimeSubjectIds: postMoveReadCtx.runtimeSubjectIds,
+          runtimeScopeSubjectIds: postMoveReadCtx.runtimeScopeSubjectIds,
+        })
+        if (!readAllowed) {
+          // Move succeeded but the principal can't read the destination
+          // — surface success without leaking contents.
+          return reply.status(200).send({
+            id: moved.id,
+            spaceId: moved.spaceId,
+            moved: true,
+          })
+        }
         return reply.status(200).send(moved)
       } catch (error) {
         return handleError(error, reply)
