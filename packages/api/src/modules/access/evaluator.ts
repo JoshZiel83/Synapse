@@ -1464,13 +1464,21 @@ async function loadMemorySpaceWithSubjects(
  * only unlocks `manage` / `delete` so an admin can clean up scoped spaces
  * without being able to silently view their contents.
  *
- * Asymmetric admin/creator path (post-D4 round 3 review fix): for `actor`
- * and `remote_agent` owners, write/edit/delete admit a curation path —
- * workspace admins / `actor_admin` / `remote_agent_admin` / the resource's
- * creator can author content into the space. Read/recall stay strictly
- * private. This preserves the dashboard UX where a workspace member curates
- * seed memories for an AI persona they manage without later being able to
- * read what the persona has accumulated.
+ * Asymmetric admin/creator path (post-D4 round 3 review fix, narrowed
+ * further in round 4 review): for `actor` and `remote_agent` owners,
+ * **write only** admits a curation path — workspace admins /
+ * `actor_admin` / `remote_agent_admin` / the resource's creator can
+ * author new content into the space. Read/recall stay strictly private,
+ * AND `edit` / `delete` are NOT in the curation path either: edit on an
+ * existing item lets the caller PUT and read back the contents, which
+ * would defeat the "admin can curate seed memories without later being
+ * able to read what accumulated" invariant. Removed-edit is a deliberate
+ * narrowing — admin who needs to amend a private memory must hold an
+ * explicit memory_access_grant. The strict allowlist is enforced by
+ * routing through `hasActorPermission(... "edit")` / `hasRemoteAgentPermission(... "edit")`
+ * which return only `canManage` (admin / *_admin / creator) — not the
+ * `canUse` superset that would have admitted any caller with an
+ * `actor.memory_edit` grant.
  */
 async function hasMemorySpaceOwnerImplicitPermission(
   db: KyselyDb,
@@ -1514,27 +1522,22 @@ async function hasMemorySpaceOwnerImplicitPermission(
       if (inRuntime(space.owner_subject_id)) {
         return permission !== "manage"
       }
-      // Curation path: workspace admin / actor_admin / actor creator can
-      // write/edit/delete the actor's memories. They can NOT read or
-      // recall — privacy stays. `hasActorPermission(actor, "memory_edit")`
-      // is the canonical canManage check (admin || actor_admin || creator)
-      // for this gate.
+      // Curation path (post-D4 round 4 narrowing): admins / actor_admin /
+      // actor creator can author NEW content (write only) into the
+      // actor's private memory space. `edit` and `delete` are NOT in
+      // this allowlist — edit on an existing item lets the caller PUT
+      // and read back the contents (defeats the read-isolation invariant)
+      // and delete should require an explicit memory_access_grant or the
+      // workspace manage_memories override below. Calling
+      // `hasActorPermission(actor, "edit")` returns the strict canManage
+      // (admin/*_admin/creator) — not `canUse`, which would have admitted
+      // anyone with an `actor.memory_edit` grant.
       if (
         space.owner_actor_id &&
-        (permission === "write" ||
-          permission === "edit" ||
-          permission === "delete")
+        permission === "write" &&
+        (await hasActorPermission(db, subject, space.owner_actor_id, "edit"))
       ) {
-        if (
-          await hasActorPermission(
-            db,
-            subject,
-            space.owner_actor_id,
-            "memory_edit"
-          )
-        ) {
-          return true
-        }
+        return true
       }
       return adminManageOverride()
     case "remote_agent":
@@ -1546,23 +1549,18 @@ async function hasMemorySpaceOwnerImplicitPermission(
           permission === "edit"
         )
       }
-      // Same curation pattern as actor: admin / remote_agent_admin /
-      // creator can write/edit the remote agent's memories (no delete
-      // here to match the owner-implicit cap on the principal itself).
+      // Same write-only curation pattern as actor — see comment above.
       if (
         space.owner_remote_agent_id &&
-        (permission === "write" || permission === "edit")
+        permission === "write" &&
+        (await hasRemoteAgentPermission(
+          db,
+          subject,
+          space.owner_remote_agent_id,
+          "edit"
+        ))
       ) {
-        if (
-          await hasRemoteAgentPermission(
-            db,
-            subject,
-            space.owner_remote_agent_id,
-            "edit"
-          )
-        ) {
-          return true
-        }
+        return true
       }
       return adminManageOverride()
     case "workspace":

@@ -695,16 +695,29 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           })
         }
 
-        if (updateTouchesMemoryEdit(body)) {
-          const allowed = await requireMemoryPermission(
-            request,
-            reply,
-            memoryId,
-            "edit",
-            "Not allowed to edit this memory"
-          )
-          if (!allowed) return
+        // P1 fix (post-D4 round 4 review): empty PUT must not pass through
+        // un-authorized. The update schema is fully optional; an empty body
+        // would skip both the retarget check above and the edit check below,
+        // but `updateMemory` still loaded + returned the memory contents.
+        // Net: any caller with workspace.view could read any memory by
+        // sending PUT {}. Reject empty body up-front so the route always
+        // requires a permission-checked path (edit for content changes,
+        // the explicit no-op shape isn't supported).
+        if (!updateTouchesMemoryEdit(body)) {
+          return reply.status(400).send({
+            error:
+              "PUT body must include at least one editable field (category, state, importance, confidence, tags, content, contentBlocks, textDigest, metadata, …)",
+          })
         }
+
+        const allowed = await requireMemoryPermission(
+          request,
+          reply,
+          memoryId,
+          "edit",
+          "Not allowed to edit this memory"
+        )
+        if (!allowed) return
 
         const memory = await updateMemory(
           workspaceId,

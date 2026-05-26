@@ -779,8 +779,31 @@ export async function validateMemorySpaceTuple(
   // workspace_id stored on the access_subjects row. We compare against
   // the target workspace before touching memory_spaces so cross-workspace
   // owner/scope is caught here (400) rather than at the DB trigger (500).
-  const ownerSubjectId = await upsertAccessSubject(db, owner)
-  const scopeSubjectId = scope ? await upsertAccessSubject(db, scope) : null
+  //
+  // Round 4 review fix: upsertAccessSubject throws a plain `Error`
+  // ("...not found") when the referenced entity (actor/conversation/...)
+  // doesn't exist. The controller catches MemoryError only, so a bad
+  // owner/scope id would bubble as 500. Wrap each upsert so we get a
+  // clean 404 (entity missing) instead.
+  const safeUpsert = async (
+    ref: SubjectRef,
+    label: "owner" | "scope"
+  ): Promise<string> => {
+    try {
+      return await upsertAccessSubject(db, ref)
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error)
+      if (/not found/i.test(message)) {
+        throw new MemoryError(
+          `Memory space ${label} not found: ${message}`,
+          404
+        )
+      }
+      throw error
+    }
+  }
+  const ownerSubjectId = await safeUpsert(owner, "owner")
+  const scopeSubjectId = scope ? await safeUpsert(scope, "scope") : null
 
   const subjectRows = await db
     .selectFrom("access_subjects")
