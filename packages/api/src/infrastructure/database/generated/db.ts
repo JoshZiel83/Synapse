@@ -347,11 +347,11 @@ export type TransportAccountsOwnerScope = "workspace" | "workspace_member";
 
 export type TransportAccountsStatus = "active" | "disabled" | "error";
 
-export type TransportAccountsTransportKind = "feishu" | "wecom" | "weixin";
+export type TransportAccountsTransportKind = "feishu" | "qq" | "wecom" | "weixin";
 
 export type TransportAddressesAddressType = "bot" | "system" | "user";
 
-export type TransportAddressesTransportKind = "feishu" | "wecom" | "weixin";
+export type TransportAddressesTransportKind = "feishu" | "qq" | "wecom" | "weixin";
 
 export type TransportEndpointsEndpointType = "direct" | "group";
 
@@ -359,7 +359,7 @@ export type TransportMessageLinksDeliveryStatus = "failed" | "pending" | "sent" 
 
 export type TransportMessageLinksDirection = "inbound" | "outbound";
 
-export type TransportMessageLinksTransportKind = "feishu" | "wecom" | "weixin";
+export type TransportMessageLinksTransportKind = "feishu" | "qq" | "wecom" | "weixin";
 
 export type TurnsStatus = "cancelled" | "completed" | "failed" | "running";
 
@@ -1358,6 +1358,14 @@ export interface InstalledSkills {
   workspace_id: string;
 }
 
+export interface InteractionActionTokens {
+  created_at: Generated<Timestamp>;
+  expires_at: Timestamp;
+  interaction_request_id: string;
+  payload: Json;
+  token: Generated<string>;
+}
+
 export interface InteractionPlanApprovalRequests {
   interaction_id: string;
   plan_payload: Generated<Json>;
@@ -1416,6 +1424,20 @@ export interface InteractionRuntimeAuthorizationRequests {
   source_request_args: Generated<Json>;
   source_retry_nonce: string | null;
   source_runtime_session_id: string | null;
+}
+
+export interface InteractionTransportProjections {
+  attempts: Generated<number>;
+  conversation_id: string;
+  created_at: Generated<Timestamp>;
+  error: string | null;
+  id: Generated<string>;
+  interaction_request_id: string;
+  next_attempt_at: Generated<Timestamp>;
+  status: Generated<string>;
+  transport_message_link_id: string | null;
+  updated_at: Generated<Timestamp>;
+  workspace_id: string;
 }
 
 export interface InteractionUserInputRequests {
@@ -2515,10 +2537,12 @@ export interface DB {
   file_parse_runs: FileParseRuns;
   files: Files;
   installed_skills: InstalledSkills;
+  interaction_action_tokens: InteractionActionTokens;
   interaction_plan_approval_requests: InteractionPlanApprovalRequests;
   interaction_requests: InteractionRequests;
   interaction_response_commands: InteractionResponseCommands;
   interaction_runtime_authorization_requests: InteractionRuntimeAuthorizationRequests;
+  interaction_transport_projections: InteractionTransportProjections;
   interaction_user_input_requests: InteractionUserInputRequests;
   memory_embedding_cache: MemoryEmbeddingCache;
   memory_item_chunks: MemoryItemChunks;

@@ -394,6 +394,7 @@
     GENERIC_MODEL_RESPONSE_MEDIA_INGEST: "generic_model_response_media_ingest",
     FEISHU_DOCS_DOWNLOAD_MEDIA: "feishu_docs_download_media",
     FEISHU_DRIVE_DOWNLOAD_FILE: "feishu_drive_download_file",
+    QQ_INBOUND_MEDIA_INGEST: "qq_inbound_media_ingest",
     SKILL_MIRROR_IMPORT: "skill_mirror_import",
     GENERATED_USER_AVATAR: "generated_user_avatar",
     GENERATED_OFFICIAL_ACTOR_AVATAR: "generated_official_actor_avatar",
@@ -423,7 +424,8 @@
   ];
   var EXTERNAL_IMPORT_FILE_ORIGIN_SYSTEMS = [
     FILE_ORIGIN_SYSTEMS.FEISHU_DOCS_DOWNLOAD_MEDIA,
-    FILE_ORIGIN_SYSTEMS.FEISHU_DRIVE_DOWNLOAD_FILE
+    FILE_ORIGIN_SYSTEMS.FEISHU_DRIVE_DOWNLOAD_FILE,
+    FILE_ORIGIN_SYSTEMS.QQ_INBOUND_MEDIA_INGEST
   ];
   var PACKAGE_IMPORT_FILE_ORIGIN_SYSTEMS = [
     FILE_ORIGIN_SYSTEMS.SKILL_MIRROR_IMPORT
@@ -856,7 +858,7 @@
     if (!value || typeof value !== "object")
       return false;
     const entity = value;
-    return typeof entity.participantType === "string" && entity.participantType.trim().length > 0 && (entity.participantId === void 0 || typeof entity.participantId === "string") && (entity.workspaceMemberId === void 0 || typeof entity.workspaceMemberId === "string") && (entity.actorId === void 0 || typeof entity.actorId === "string") && (entity.userId === void 0 || typeof entity.userId === "string") && (entity.externalUserKey === void 0 || typeof entity.externalUserKey === "string") && (entity.transportAddressId === void 0 || typeof entity.transportAddressId === "string") && (entity.transportKind === void 0 || entity.transportKind === "feishu" || entity.transportKind === "weixin") && (entity.name === void 0 || typeof entity.name === "string") && (entity.title === void 0 || typeof entity.title === "string") && (entity.role === void 0 || typeof entity.role === "string") && (entity.avatarUrl === void 0 || typeof entity.avatarUrl === "string") && (entity.avatarEmoji === void 0 || typeof entity.avatarEmoji === "string");
+    return typeof entity.participantType === "string" && entity.participantType.trim().length > 0 && (entity.participantId === void 0 || typeof entity.participantId === "string") && (entity.workspaceMemberId === void 0 || typeof entity.workspaceMemberId === "string") && (entity.actorId === void 0 || typeof entity.actorId === "string") && (entity.userId === void 0 || typeof entity.userId === "string") && (entity.externalUserKey === void 0 || typeof entity.externalUserKey === "string") && (entity.transportAddressId === void 0 || typeof entity.transportAddressId === "string") && (entity.transportKind === void 0 || entity.transportKind === "feishu" || entity.transportKind === "weixin" || entity.transportKind === "wecom" || entity.transportKind === "qq") && (entity.name === void 0 || typeof entity.name === "string") && (entity.title === void 0 || typeof entity.title === "string") && (entity.role === void 0 || typeof entity.role === "string") && (entity.avatarUrl === void 0 || typeof entity.avatarUrl === "string") && (entity.avatarEmoji === void 0 || typeof entity.avatarEmoji === "string");
   }
   function normalizeCanonicalContentBlocks(blocks) {
     const normalized = [];

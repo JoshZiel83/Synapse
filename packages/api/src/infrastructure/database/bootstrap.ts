@@ -7,9 +7,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION = "2026-05-26-device-runtime-v3-merge-into-dev"
+const CURRENT_SCHEMA_VERSION =
+  "2026-05-27-qq-transport-kind-plus-interaction-projection-tables"
 const CURRENT_SCHEMA_DESCRIPTION =
-  "device runtime v3 cutover merged into dev: full device_* surface (devices, device_services, device_capabilities, device_exposures, device_tools, device_tool_revisions, device_catalog_revisions, device_control_plane_sessions, device_operations, device_operation_attempts, runtime_authorization_grants, interaction_runtime_authorization_requests with principal_remote_agent_id + principal_conversation_actor_context_id, tunnel_path_token); drop legacy relay_* tables/enums; combined with dev's drop of the legacy sessions.channel_type discriminator (every actor session is now conversation-scoped)"
+  "add 'qq' to transport_accounts/transport_addresses/transport_message_links transport_kind enums; new interaction_action_tokens + interaction_transport_projections tables for QQ inline-keyboard projection; new conversation_transport_bindings(account, conversation) index for recovery lookups; prior baseline: device runtime v3 cutover merged into dev"
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

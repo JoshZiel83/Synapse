@@ -497,7 +497,9 @@ async function enrichChatSyncEventPayloadForViewer<T extends ChatSyncEventType>(
 function asParticipantTransportKind(
   value: string | null | undefined
 ): ConversationEntityRef["transportKind"] {
-  return value === "feishu" || value === "weixin" ? value : undefined
+  return value === "feishu" || value === "weixin" || value === "qq"
+    ? value
+    : undefined
 }
 
 function participantDisplayName(row: ParticipantRow): string {
@@ -3935,7 +3937,9 @@ function mapTransportContext(
       ? value.direction
       : undefined
   const transportKind =
-    value.transportKind === "feishu" || value.transportKind === "weixin"
+    value.transportKind === "feishu" ||
+    value.transportKind === "weixin" ||
+    value.transportKind === "qq"
       ? value.transportKind
       : undefined
   if (!direction || !transportKind) {
@@ -3981,7 +3985,7 @@ async function loadTransportDeliveriesForItems(
   const result = await executeSqlOn<{
     item_id: string
     link_id: string
-    transport_kind: "feishu" | "weixin"
+    transport_kind: "feishu" | "weixin" | "qq"
     direction: "inbound" | "outbound"
     delivery_status: "pending" | "sent" | "failed" | "skipped"
     external_message_id: string | null

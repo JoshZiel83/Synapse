@@ -67,14 +67,14 @@ CREATE TYPE subject_kind AS ENUM (
   'system'
 );
 CREATE TYPE chat_client_instances_status AS ENUM ('active', 'revoked');
-CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
+CREATE TYPE transport_accounts_transport_kind AS ENUM ('feishu', 'weixin', 'wecom', 'qq');
 CREATE TYPE transport_accounts_owner_scope AS ENUM ('workspace', 'workspace_member');
 CREATE TYPE transport_accounts_inbound_actor_mode AS ENUM ('none', 'specified_actor', 'follow_owner_chief_actor');
 CREATE TYPE transport_accounts_connection_mode AS ENUM ('webhook', 'long_connection');
 CREATE TYPE transport_accounts_status AS ENUM ('active', 'disabled', 'error');
 CREATE TYPE transport_endpoints_endpoint_type AS ENUM ('direct', 'group');
 CREATE TYPE conversation_transport_bindings_inbound_actor_mode AS ENUM ('inherit_account', 'none', 'specified_actor');
-CREATE TYPE transport_addresses_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
+CREATE TYPE transport_addresses_transport_kind AS ENUM ('feishu', 'weixin', 'wecom', 'qq');
 CREATE TYPE transport_addresses_address_type AS ENUM ('user', 'bot', 'system');
 CREATE TYPE conversation_items_scope AS ENUM ('shared', 'private');
 CREATE TYPE conversation_items_surface AS ENUM ('visible', 'internal');
@@ -84,7 +84,7 @@ CREATE TYPE conversation_items_event_timeline_policy AS ENUM ('none', 'all_membe
 CREATE TYPE conversation_items_event_context_policy AS ENUM ('none', 'shared', 'actor_private', 'targeted_members');
 CREATE TYPE conversation_item_parts_part_type AS ENUM ('text', 'file_ref', 'json');
 CREATE TYPE conversation_item_targets_target_kind AS ENUM ('to', 'cc', 'visible');
-CREATE TYPE transport_message_links_transport_kind AS ENUM ('feishu', 'weixin', 'wecom');
+CREATE TYPE transport_message_links_transport_kind AS ENUM ('feishu', 'weixin', 'wecom', 'qq');
 CREATE TYPE transport_message_links_direction AS ENUM ('inbound', 'outbound');
 CREATE TYPE transport_message_links_delivery_status AS ENUM ('pending', 'sent', 'failed', 'skipped');
 CREATE TYPE turns_status AS ENUM ('running', 'completed', 'failed', 'cancelled');
@@ -3221,6 +3221,88 @@ CREATE TABLE interaction_runtime_authorization_requests (
   resolution_payload JSONB NOT NULL DEFAULT '{}',
   dedupe_key TEXT NOT NULL
 );
+
+-- ────────────────────────────────────────────────────────────────────
+-- interaction_action_tokens (G5)
+--
+-- Short, opaque tokens minted by `interactions/action-tokens.ts` when a
+-- runtime-authorization interaction is projected onto an IM transport
+-- that supports interaction_prompt (e.g. QQ Inline Keyboard). The token
+-- lives in the button's `action.data` field; on click, the connector's
+-- INTERACTION_CREATE handler redeems it to recover the full
+-- ResolveInteractionRequestParams payload (decision, baseRevision,
+-- preset, selectedGrantOptionId, …) without having to encode all of
+-- those in the limited button_data string.
+--
+-- The redeem path is intentionally NOT one-shot: ACK round-trips can
+-- fail, and QQ replays the same INTERACTION_CREATE event on retry. The
+-- redeem helper only checks the token's own `expires_at`; idempotence
+-- comes from `resolveInteractionRequest`'s (interaction_id, command_id)
+-- dedup, with command_id deterministically derived from
+-- uuidv5(qqEvent.id + actionToken + clickerExternalId).
+-- ────────────────────────────────────────────────────────────────────
+CREATE TABLE interaction_action_tokens (
+  token UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  interaction_request_id UUID NOT NULL REFERENCES interaction_requests(id) ON DELETE CASCADE,
+  payload JSONB NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_interaction_action_tokens_interaction
+  ON interaction_action_tokens(interaction_request_id);
+CREATE INDEX idx_interaction_action_tokens_expires
+  ON interaction_action_tokens(expires_at);
+
+-- ────────────────────────────────────────────────────────────────────
+-- interaction_transport_projections (G5)
+--
+-- Durable "this interaction needs to be (re)projected onto an IM
+-- transport" state. Inserted from the core RUNTIME_AUTHORIZATION
+-- creation tx so projection cannot be lost on crash. Consumed by the
+-- interaction-projection worker which performs:
+--    binding resolve → mint tokens → create conversation item →
+--    persist link → enqueue delivery
+-- inside a SAVEPOINT so partial failure cleans up.
+--
+-- Status lifecycle:
+--   pending → projected (everything ok; link queued)
+--   pending → skipped   (no binding / not QQ in v1 / outbound disabled /
+--                        webhook_inbound_unavailable / etc.)
+--   pending → failed    (sweeper budget exhausted, or 5 retries)
+--
+-- `ON CONFLICT (interaction_request_id) DO UPDATE … WHERE status='skipped'
+--  AND error IN ('no_binding','outbound_disabled','webhook_inbound_unavailable')`
+-- in the creation path lets existing-interaction reuse trigger a re-project
+-- after the user fixes the binding.
+-- ────────────────────────────────────────────────────────────────────
+CREATE TABLE interaction_transport_projections (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  interaction_request_id UUID NOT NULL UNIQUE REFERENCES interaction_requests(id) ON DELETE CASCADE,
+  workspace_id UUID NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+  conversation_id UUID NOT NULL REFERENCES conversations(id) ON DELETE CASCADE,
+  status TEXT NOT NULL DEFAULT 'pending'
+    CHECK (status IN ('pending', 'projected', 'skipped', 'failed')),
+  transport_message_link_id UUID REFERENCES transport_message_links(id) ON DELETE SET NULL,
+  error TEXT,
+  attempts INT NOT NULL DEFAULT 0,
+  next_attempt_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+CREATE INDEX idx_interaction_transport_projections_pending
+  ON interaction_transport_projections(next_attempt_at)
+  WHERE status = 'pending';
+CREATE INDEX idx_interaction_transport_projections_skipped_recovery
+  ON interaction_transport_projections(workspace_id, conversation_id, error)
+  WHERE status = 'skipped';
+CREATE INDEX idx_interaction_transport_projections_link
+  ON interaction_transport_projections(transport_message_link_id)
+  WHERE transport_message_link_id IS NOT NULL;
+
+-- Help the account/binding recovery helpers find bindings to flip when a
+-- QQ account's webhookInboundConfirmed/connectionMode/status changes.
+CREATE INDEX idx_conversation_transport_bindings_account
+  ON conversation_transport_bindings(transport_account_id, conversation_id);
 
 CREATE TABLE interaction_response_commands (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),

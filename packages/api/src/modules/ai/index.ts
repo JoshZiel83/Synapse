@@ -366,7 +366,9 @@ async function loadToolResolveConversationParticipants(params: {
         )
       }
       const transportKind =
-        member.transport_kind === "feishu" || member.transport_kind === "weixin"
+        member.transport_kind === "feishu" ||
+        member.transport_kind === "weixin" ||
+        member.transport_kind === "qq"
           ? member.transport_kind
           : undefined
       entries.push({

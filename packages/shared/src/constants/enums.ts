@@ -707,7 +707,7 @@ export const TRANSPORT_CONVERSATION_INBOUND_ACTOR_MODES = [
   "specified_actor",
 ] as const
 
-export const TRANSPORT_KINDS = ["feishu", "weixin", "wecom"] as const
+export const TRANSPORT_KINDS = ["feishu", "weixin", "wecom", "qq"] as const
 export const TRANSPORT_CONNECTION_MODES = [
   "webhook",
   "long_connection",

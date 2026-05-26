@@ -4757,7 +4757,9 @@ function isConversationEntityRef(
       typeof entity.transportAddressId === "string") &&
     (entity.transportKind === undefined ||
       entity.transportKind === "feishu" ||
-      entity.transportKind === "weixin") &&
+      entity.transportKind === "weixin" ||
+      entity.transportKind === "wecom" ||
+      entity.transportKind === "qq") &&
     (entity.name === undefined || typeof entity.name === "string") &&
     (entity.title === undefined || typeof entity.title === "string") &&
     (entity.role === undefined || typeof entity.role === "string") &&
