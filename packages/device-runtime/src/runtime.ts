@@ -323,12 +323,13 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
 
   /**
    * Notify the API that our tunnel went down so DeviceTunnelRegistry stops
-   * routing dispatches to it. Called from the FrpTunnelAdapter's
-   * onUnexpectedExit hook when frpc dies after passing the startup grace
-   * period — without this, every dispatch silently 502s against a dead
-   * tunnel until the WSS reconnects and re-pushes catalog + tunnel.up.
-   * Best-effort: if the WSS is itself dead the runtime will pick up the
-   * absence of tunnel registration on its next hello.
+   * routing dispatches to it, then force the WSS to reconnect so the full
+   * hello → catalog → tunnel sequence reruns. Called from the
+   * FrpTunnelAdapter's onUnexpectedExit hook when frpc dies after passing
+   * the startup grace period. Without the forceReconnect the device would
+   * stay degraded indefinitely (until the WSS happens to drop on its own
+   * or the process restarts) — the tunnel is only ever started inside
+   * onHelloAck, and onHelloAck only runs on (re)connect.
    */
   notifyTunnelDown(reason: string): void {
     this.tunnelHandle = null
@@ -338,6 +339,16 @@ class RuntimeImpl extends EventEmitter implements EmbeddedRuntimeHandle {
       this.transport.notify("device.tunnel.down", { reason })
     } catch {
       /* best-effort: WSS may already be gone */
+    }
+    // Trigger the reconnect AFTER notify so the API has a chance to
+    // process the down signal before we drop the socket. forceReconnect
+    // closes with code 1012 (Service Restart) — the API treats this as
+    // a normal disconnect and the transport's connectLoop reconnects
+    // with backoff, re-running the full hello/catalog/tunnel flow.
+    try {
+      this.transport.forceReconnect(`tunnel-down: ${reason}`)
+    } catch {
+      /* best-effort */
     }
   }
 

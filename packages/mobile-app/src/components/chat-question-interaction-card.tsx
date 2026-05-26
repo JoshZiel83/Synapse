@@ -562,9 +562,10 @@ export function ChatQuestionInteractionCard({
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
   const [resolutionNoteDraft, setResolutionNoteDraft] = useState("")
-  const [selectedRelayGrantOptionId, setSelectedRelayGrantOptionId] = useState<
-    string | null
-  >(interaction.runtimeAuthorization?.grantOptions[0]?.id || null)
+  const [selectedRuntimeGrantOptionId, setSelectedRuntimeGrantOptionId] =
+    useState<string | null>(
+      interaction.runtimeAuthorization?.grantOptions[0]?.id || null
+    )
   const draftAnswersRef = useRef(draftAnswers)
   const questionCardOffset = useRef(new Animated.Value(0)).current
   const userInput = interaction.userInput
@@ -599,7 +600,7 @@ export function ChatQuestionInteractionCard({
     setSubmitting(false)
     setSubmitError(null)
     setResolutionNoteDraft("")
-    setSelectedRelayGrantOptionId(
+    setSelectedRuntimeGrantOptionId(
       interaction.runtimeAuthorization?.grantOptions[0]?.id || null
     )
   }, [interaction.id, interaction.revision, interaction.status])
@@ -1153,14 +1154,14 @@ export function ChatQuestionInteractionCard({
                       ).map((option) => (
                         <FieldOptionButton
                           key={option.id}
-                          selected={selectedRelayGrantOptionId === option.id}
+                          selected={selectedRuntimeGrantOptionId === option.id}
                           label={option.summary}
                           description={option.detail}
                           disabled={
                             !canResolveRuntimeAuthorization || submitting
                           }
                           onPress={() =>
-                            setSelectedRelayGrantOptionId(option.id)
+                            setSelectedRuntimeGrantOptionId(option.id)
                           }
                         />
                       ))}
@@ -1287,13 +1288,13 @@ export function ChatQuestionInteractionCard({
                               : formatRuntimeAuthorizationPresetLabel(preset)
                           }
                           onPress={() =>
-                            selectedRelayGrantOptionId
+                            selectedRuntimeGrantOptionId
                               ? void submitInteractionResolution(
                                   {
                                     decision: "approve",
                                     preset,
                                     selectedGrantOptionId:
-                                      selectedRelayGrantOptionId,
+                                      selectedRuntimeGrantOptionId,
                                     note:
                                       resolutionNoteDraft.trim() || undefined,
                                   },
@@ -1302,7 +1303,7 @@ export function ChatQuestionInteractionCard({
                               : undefined
                           }
                           style={styles.singleActionButton}
-                          disabled={submitting || !selectedRelayGrantOptionId}
+                          disabled={submitting || !selectedRuntimeGrantOptionId}
                         />
                       ))}
                       <Button

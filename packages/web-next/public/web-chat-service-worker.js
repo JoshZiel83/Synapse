@@ -1413,7 +1413,7 @@
     gitlabPushEventDefinition
   ];
 
-  // ../shared/dist/automation/event-definitions/relay.js
+  // ../shared/dist/automation/event-definitions/device.js
   function deviceSourceLabel(context) {
     return context.providerLabel?.trim() || context.providerRef?.trim() || "Device";
   }

@@ -48,7 +48,7 @@ const transportLabels: Record<string, string> = {
   http: "Remote MCP (HTTP)",
   builtin: "Built-in",
   stdio: "Local (stdio)",
-  relay: "Relay Tunnel",
+  device: "Device Tunnel",
 }
 
 const attachmentTypeLabels: Record<string, string> = {

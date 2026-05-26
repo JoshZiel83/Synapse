@@ -161,8 +161,8 @@ CREATE TYPE runtime_authorization_grants_retention AS ENUM ('consume_once', 'unt
 CREATE TYPE runtime_authorization_grants_status AS ENUM ('active', 'consumed', 'revoked', 'superseded');
 
 -- ============ Device Runtime v3 enum types ============
--- See docs/device-runtime-v3.md §3 and §6. v1 keeps the relay_* enum types
--- alive until PR #18; new device_* enum types are added alongside.
+-- See docs/device-runtime-v3.md §3 and §6. relay_* enums were dropped at
+-- the v3 cutover (PR #1); only the device_* enum types live here.
 CREATE TYPE devices_host_kind AS ENUM ('local', 'cloud');
 CREATE TYPE devices_device_type AS ENUM (
   'desktop_computer', 'laptop_computer', 'mobile_phone', 'tablet',

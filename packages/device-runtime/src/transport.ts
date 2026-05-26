@@ -68,6 +68,24 @@ export class TransportClient {
     this.pending.clear()
   }
 
+  /**
+   * Force-close the current WebSocket and let connectLoop reconnect with
+   * backoff. Unlike stop(), this leaves `stopped=false` so the loop keeps
+   * running. Used by the runtime when post-setup state (tunnel) fails and
+   * the only way back to "online" is to re-run the full hello → catalog →
+   * tunnel sequence. The 1012 close code (Service Restart) tells the API
+   * this isn't a "device went away" event.
+   */
+  forceReconnect(reason: string): void {
+    const socket = this.socket
+    if (!socket) return
+    try {
+      socket.close(1012, reason)
+    } catch {
+      /* ignore — connectLoop will catch the close event */
+    }
+  }
+
   async request(method: string, params: unknown): Promise<unknown> {
     const socket = this.socket
     if (!socket || socket.readyState !== WebSocket.OPEN) {

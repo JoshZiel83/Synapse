@@ -21,7 +21,7 @@ import {
   deviceOfflineEventDefinition,
   deviceOnlineEventDefinition,
   deviceLifecycleEventDefinitions,
-} from "./relay.js"
+} from "./device.js"
 
 const automationEventDefinitions = [
   ...deviceLifecycleEventDefinitions,

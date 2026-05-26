@@ -276,19 +276,20 @@ export interface CreateRuntimeAuthorizationInteractionParams {
 }
 
 /**
- * Returns true when an approved interaction request does NOT need a
- * tool_call_task completion to drive the next chat turn.
+ * Returns true when an approved runtime_authorization interaction
+ * deliberately has no tool_call_task to complete. The ONLY supported
+ * case is a remote_agent principal: capability-projection's
+ * createRuntimeAuthorizationRequest skips createToolCallTask because
+ * the bridged agent retries its own tool call on the next round-trip
+ * (no chat session to wake). Every other principal kind MUST carry a
+ * taskId — if one slips through without it, the generic
+ * "missing task governance" guard should still fire so a regression
+ * doesn't silently succeed.
  *
- * Two cases hit this branch:
- *   1. remote_agent_run-rooted interactions — handled by the remote agent
- *      notify path elsewhere; this helper isn't consulted there.
- *   2. runtime_authorization requests created for a remote_agent principal —
- *      the projection skips createToolCallTask (the bridged agent retries
- *      its own tool call on the next round-trip, no chat session to wake)
- *      so taskId is undefined. Without this branch, the generic guard
- *      "missing task governance" throws AFTER the approval transaction
- *      already created the grant, leaving the grant valid but the API
- *      caller seeing a 500.
+ * The previous version of this helper short-circuited on
+ * `kind=runtime_authorization && !taskId` alone, which would mask
+ * task-governance bugs on the actor path. Narrowed here to also
+ * require principalRemoteAgentId.
  *
  * Pure function — exported so regression tests can pin the contract
  * without spinning up the full resolveInteractionRequest transaction.
@@ -296,10 +297,12 @@ export interface CreateRuntimeAuthorizationInteractionParams {
 export function runtimeAuthorizationApprovalSkipsTaskCompletion(input: {
   kind: InteractionRequestKind
   taskId?: string | null
+  principalRemoteAgentId?: string | null
 }): boolean {
   return (
     input.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
-    !input.taskId
+    !input.taskId &&
+    !!input.principalRemoteAgentId
   )
 }
 
@@ -3561,6 +3564,8 @@ export async function resolveInteractionRequest(
           : undefined,
       lockedSourceRetryNonce: locked.source_retry_nonce ?? undefined,
       lockedRequesterActorId: locked.requester_actor_id ?? undefined,
+      lockedPrincipalRemoteAgentId:
+        locked.principal_remote_agent_id ?? undefined,
     }
   })
 
@@ -3597,6 +3602,7 @@ export async function resolveInteractionRequest(
     runtimeAuthorizationApprovalSkipsTaskCompletion({
       kind: interaction.kind,
       taskId: interaction.taskId,
+      principalRemoteAgentId: result.lockedPrincipalRemoteAgentId,
     })
   ) {
     return {
