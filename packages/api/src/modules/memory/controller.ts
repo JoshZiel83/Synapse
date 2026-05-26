@@ -9,6 +9,7 @@ import {
   MEMORY_SPACE_TYPES,
   MEMORY_STABILITIES,
 } from "@synapse/shared/constants"
+import { MEMORY_PERMISSIONS, SUBJECT_KIND } from "@synapse/shared"
 import { authMiddleware } from "../../infrastructure/middleware/auth.js"
 import { workspaceMiddleware } from "../../infrastructure/middleware/workspace.js"
 import { requireRequestAction } from "../access/guards.js"
@@ -17,6 +18,12 @@ import {
   authorizePermission,
   getRequestAccessSubject,
 } from "../access/service.js"
+import { checkPermission } from "../access/evaluator.js"
+import {
+  insertMemoryAccessGrant,
+  listActiveMemoryAccessGrants,
+  revokeMemoryAccessGrant,
+} from "./access-grant-storage.js"
 import {
   createMemory,
   deleteMemory,
@@ -139,6 +146,50 @@ const recallMemoriesSchema = searchMemoriesSchema.extend({
     ]
   ),
   queryBlocks: z.array(contentBlockSchema).optional(),
+})
+
+// PR6: zod schema for the memory grant endpoints. The subject + scope shapes
+// mirror the shared SubjectRef discriminated union. We accept the full kind
+// set the grants trigger allows; insertMemoryAccessGrant + the DB trigger
+// will reject anything that violates the workspace-bound / scope-eligible
+// invariants.
+const subjectRefSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal(SUBJECT_KIND.WORKSPACE),
+    workspaceId: z.string().uuid(),
+  }),
+  z.object({
+    kind: z.literal(SUBJECT_KIND.WORKSPACE_MEMBER),
+    memberId: z.string().uuid(),
+  }),
+  z.object({ kind: z.literal(SUBJECT_KIND.ACTOR), actorId: z.string().uuid() }),
+  z.object({
+    kind: z.literal(SUBJECT_KIND.REMOTE_AGENT),
+    remoteAgentId: z.string().uuid(),
+  }),
+  z.object({
+    kind: z.literal(SUBJECT_KIND.CONVERSATION),
+    conversationId: z.string().uuid(),
+  }),
+])
+
+const scopeSubjectRefSchema = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal(SUBJECT_KIND.WORKSPACE),
+    workspaceId: z.string().uuid(),
+  }),
+  z.object({
+    kind: z.literal(SUBJECT_KIND.CONVERSATION),
+    conversationId: z.string().uuid(),
+  }),
+])
+
+const createMemoryGrantSchema = z.object({
+  memoryItemId: z.string().uuid().nullish(),
+  subject: subjectRefSchema,
+  scope: scopeSubjectRefSchema.optional(),
+  permissions: z.array(z.enum(MEMORY_PERMISSIONS)).min(1),
+  source: z.string().max(64).nullish(),
 })
 
 function normalizeMemoryPayload<T extends z.infer<typeof memoryPayloadSchema>>(
@@ -571,6 +622,120 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           accessSubject: getRequestAccessSubject(request),
         })
         return reply.status(200).send(result)
+      } catch (error) {
+        return handleError(error, reply)
+      }
+    }
+  )
+
+  // PR6 (subject-scope refactor): memory_access_grants CRUD endpoints. These
+  // expose the PR5 storage layer so the UI (and any programmatic caller) can
+  // explicitly share a memory_space with another subject — the
+  // "share my memory with project X" use case the user called out in the
+  // refactor brief. The evaluator overlay (PR5) honors active grants
+  // additively on top of the legacy decision tree.
+  app.post(
+    `${prefix}/spaces/:spaceId/grants`,
+    { preHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const allowed = await requireWorkspacePermission(
+          request,
+          reply,
+          "workspace.view",
+          "Not allowed to view this workspace"
+        )
+        if (!allowed) return
+        const { workspaceId, spaceId } = request.params as {
+          workspaceId: string
+          spaceId: string
+        }
+        const body = createMemoryGrantSchema.parse(request.body)
+
+        // The grant manager must hold `memory.manage` on the space — the
+        // evaluator additionally folds in any explicit `manage` grant.
+        const managePermitted = await checkPermission(db, {
+          resourceType: "memory_space",
+          resourceId: spaceId,
+          permission: "manage",
+          subject: getRequestAccessSubject(request),
+        })
+        if (!managePermitted) {
+          return reply.status(403).send({
+            error: "Not allowed to manage grants on this memory space",
+          })
+        }
+
+        const grant = await insertMemoryAccessGrant(db, {
+          workspaceId,
+          memorySpaceId: spaceId,
+          memoryItemId: body.memoryItemId ?? null,
+          subject: body.subject,
+          scope: body.scope,
+          permissions: body.permissions,
+          source: body.source ?? null,
+          createdByWorkspaceMemberId:
+            getRequestAccessSubject(request).type === "workspace_member"
+              ? getRequestAccessSubject(request).id
+              : null,
+        })
+        return reply.status(201).send({ grant })
+      } catch (error) {
+        return handleError(error, reply)
+      }
+    }
+  )
+
+  app.get(
+    `${prefix}/spaces/:spaceId/grants`,
+    { preHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const allowed = await requireWorkspacePermission(
+          request,
+          reply,
+          "workspace.view",
+          "Not allowed to view this workspace"
+        )
+        if (!allowed) return
+        const { spaceId } = request.params as { spaceId: string }
+        const grants = await listActiveMemoryAccessGrants(db, spaceId)
+        return reply.status(200).send({ grants })
+      } catch (error) {
+        return handleError(error, reply)
+      }
+    }
+  )
+
+  app.delete(
+    `${prefix}/spaces/:spaceId/grants/:grantId`,
+    { preHandler },
+    async (request: FastifyRequest, reply: FastifyReply) => {
+      try {
+        const allowed = await requireWorkspacePermission(
+          request,
+          reply,
+          "workspace.view",
+          "Not allowed to view this workspace"
+        )
+        if (!allowed) return
+        const { spaceId, grantId } = request.params as {
+          spaceId: string
+          grantId: string
+        }
+        const managePermitted = await checkPermission(db, {
+          resourceType: "memory_space",
+          resourceId: spaceId,
+          permission: "manage",
+          subject: getRequestAccessSubject(request),
+        })
+        if (!managePermitted) {
+          return reply.status(403).send({
+            error: "Not allowed to manage grants on this memory space",
+          })
+        }
+        const revoked = await revokeMemoryAccessGrant(db, grantId)
+        return reply.status(200).send({ revoked })
       } catch (error) {
         return handleError(error, reply)
       }
