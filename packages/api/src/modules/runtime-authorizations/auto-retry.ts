@@ -155,6 +155,14 @@ export async function autoDispatchRuntimeAuthorizationRetry(args: {
           origin: args.approvedGrant.browser.origin,
           host: args.approvedGrant.browser.host,
           registrable_domain: args.approvedGrant.browser.registrableDomain,
+          // v3.1: forward operations[] on the wire so the runtime matcher
+          // can fail-closed on missing/wrong op. scopeSource is intentionally
+          // not propagated — it's a request-only signal.
+          operations:
+            args.approvedGrant.browser.operations &&
+            args.approvedGrant.browser.operations.length > 0
+              ? args.approvedGrant.browser.operations
+              : undefined,
         }
       : undefined,
     commandline: args.approvedGrant.commandline

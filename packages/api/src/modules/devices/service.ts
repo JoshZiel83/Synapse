@@ -134,6 +134,7 @@ export async function getDevice(
       "dx.transport as transport",
       "dx.builtin_kind as builtin_kind",
       "dx.runtime_status as runtime_status",
+      "dx.metadata as exposure_metadata",
     ])
     .where("dx.device_id", "=", deviceId)
     .where("dc.status", "=", "active")
@@ -148,6 +149,7 @@ export async function getDevice(
       (row.builtin_kind as DeviceCapabilitySummary["builtin_kind"]) ?? null,
     runtime_status:
       row.runtime_status as DeviceCapabilitySummary["runtime_status"],
+    metadata: (row.exposure_metadata as Record<string, unknown> | null) ?? null,
   }))
 
   return {

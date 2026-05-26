@@ -236,6 +236,20 @@
     }
   }));
 
+  // ../device-protocol/dist/enums.js
+  var DEVICE_MCP_ERROR_CODES = [
+    "tool_definition_changed",
+    "permission_denied",
+    "runtime_constraint",
+    "invalid_request",
+    "expired_envelope",
+    "replay_detected"
+  ];
+  var SERVER_FACADE_ERROR_CODES = [
+    ...DEVICE_MCP_ERROR_CODES,
+    "runtime_authorization_requested"
+  ];
+
   // ../shared/dist/constants/enums.js
   var RELATIONSHIP_PROFILE_SUBJECT_TYPE = {
     MEMBER: "workspace_member",
