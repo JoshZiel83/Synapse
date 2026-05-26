@@ -21,7 +21,7 @@ import {
 } from "@synapse/shared"
 import { sql, type RawBuilder } from "kysely"
 import { v4 as uuidv4 } from "uuid"
-import { transaction } from "../../infrastructure/database/index.js"
+import { pool, transaction } from "../../infrastructure/database/index.js"
 import {
   upsertAccessSubject,
   upsertAccessSubjectOn,
@@ -737,7 +737,7 @@ async function getMemoryRow(
  * up-front (rejects user/external/system) so the failure message is friendly;
  * the trigger enforces the same invariant in case anyone bypasses this path.
  */
-async function resolveOrCreateMemorySpace(
+export async function resolveOrCreateMemorySpace(
   client: QueryExecutor,
   input: {
     workspaceId: string
@@ -803,13 +803,7 @@ async function resolveOrCreateMemorySpace(
      ON CONFLICT ${conflictClause}
        DO UPDATE SET updated_at = memory_spaces.updated_at
      RETURNING id, workspace_id, owner_subject_id, scope_subject_id, namespace_key`,
-    [
-      uuidv4(),
-      input.workspaceId,
-      ownerSubjectId,
-      scopeSubjectId,
-      namespaceKey,
-    ]
+    [uuidv4(), input.workspaceId, ownerSubjectId, scopeSubjectId, namespaceKey]
   )
   const row = result.rows[0]
   if (!row) {
@@ -1726,19 +1720,30 @@ export async function deleteMemory(workspaceId: UUID, memoryId: UUID) {
  *
  * Permission contract: the caller must have `delete` on the SOURCE space
  * AND `write` on the TARGET space — the same rule the documented
- * "source delete + target write" pattern required, just enforced together
- * inside one transaction. Source `delete` is asserted at the controller
- * boundary (via `requireMemoryPermission`); target `write` is asserted
- * here, after the target space is upserted, so the check runs against the
- * concrete space_id the evaluator can consult.
+ * "source delete + target write" pattern required. Source `delete` is
+ * asserted at the controller boundary (via `requireMemoryPermission`);
+ * target `write` is asserted here against a resolved target_space row.
  *
- * Mechanics: resolve-or-create the target memory_space (transactional, on
- * the caller's client), evaluate `write` permission on the resolved id,
- * then UPDATE `memory_items.memory_space_id`. All other columns (id,
- * importance, embedding state, source_*_id, item-level memory_access_grants
- * pointed at this item, indexing) survive untouched. If the target write
- * check fails OR the trigger rejects (cross-workspace, etc.), the whole
- * transaction rolls back and the source remains intact.
+ * Mechanics (split into two phases so the permission check sees a
+ * committed target row — earlier we did the upsert inside the move
+ * transaction and authorized using the global db, which couldn't see
+ * uncommitted writes and fail-closed denied every move-to-new-folder):
+ *
+ *   1. resolve-or-create the target memory_space (its own short autocommit
+ *      via the pool). If this is a brand-new space, the row commits before
+ *      step 2 so the evaluator's read in step 3 sees it.
+ *   2. evaluate `write` permission on the resolved id. If denied, throw
+ *      403. The orphan empty target space row stays — benign (owner
+ *      retains owner-implicit control over it), and the row is
+ *      indistinguishable from a space the user intentionally created
+ *      empty via UI/API.
+ *   3. inside a transaction: re-check that the source memory still
+ *      exists (it could have been deleted between phase 1 and phase 3),
+ *      then UPDATE memory_items.memory_space_id. All other columns
+ *      (id, importance, embedding state, source_*_id, item-level
+ *      memory_access_grants, indexing) survive untouched. If the trigger
+ *      rejects (cross-workspace, etc.) the UPDATE txn rolls back and
+ *      the source stays put.
  */
 export async function moveMemoryToSpace(
   workspaceId: UUID,
@@ -1751,9 +1756,7 @@ export async function moveMemoryToSpace(
   /**
    * The runtime context of the caller — same shape as what the controller
    * builds via `buildRuntimePrincipalContext`. The service needs it to
-   * evaluate `write` permission against the target space id (which may be
-   * newly created by this very call). Without it, the function falls back
-   * to a fail-closed deny on the target write check.
+   * evaluate `write` permission against the target space id.
    */
   authContext: {
     accessSubject: AccessSubject
@@ -1765,35 +1768,62 @@ export async function moveMemoryToSpace(
   if (!existingRow) {
     throw new MemoryError("Memory not found", 404)
   }
-  await transaction(async (client) => {
-    const targetSpace = await resolveOrCreateMemorySpace(client, {
-      workspaceId,
-      owner: target.owner,
-      scope: target.scope,
-      namespaceKey: target.namespaceKey,
-    })
-    if (targetSpace.id === existingRow.memory_space_id) {
-      return // no-op: already in target space
+
+  // Phase 1: resolve target space outside the move txn so its row is
+  // committed and visible to the permission check below (the evaluator
+  // uses the global db pool, which can't see another connection's
+  // uncommitted writes). The space upsert is itself idempotent (ON CONFLICT
+  // ... DO UPDATE) so concurrent moves to the same target don't race.
+  const targetSpace = await resolveOrCreateMemorySpace(pool, {
+    workspaceId,
+    owner: target.owner,
+    scope: target.scope,
+    namespaceKey: target.namespaceKey,
+  })
+
+  // No-op move: source and target are the same space. Skip the permission
+  // dance and the UPDATE; report the unchanged memory.
+  if (targetSpace.id === existingRow.memory_space_id) {
+    const same = await getMemory(workspaceId, memoryId)
+    if (!same) {
+      throw new MemoryError("Memory disappeared during move (unexpected)", 500)
     }
-    // Target write permission gate. Runs against the just-resolved id so the
-    // evaluator sees the concrete space (owner/scope columns + workspace_id).
-    // If the principal lacks `write` (owner-implicit OR explicit grant), the
-    // transaction rolls back — the target space row may persist as an
-    // empty container (benign: owner-implicit still controls it), but no
-    // memory was leaked into it.
-    const writeAllowed = await authorizePermission(db, {
-      subject: authContext.accessSubject,
-      resourceType: "memory_space",
-      resourceId: targetSpace.id,
-      permission: "write",
-      runtimeSubjectIds: authContext.runtimeSubjectIds,
-      runtimeScopeSubjectIds: authContext.runtimeScopeSubjectIds,
-    })
-    if (!writeAllowed) {
-      throw new MemoryError(
-        "Not allowed to move memory into the target space (write permission required)",
-        403
-      )
+    return same
+  }
+
+  // Phase 2: target write permission. Runs against the resolved (now
+  // committed) space id, so the evaluator sees the real row and applies
+  // the owner-implicit matrix + space-level grant overlay correctly.
+  const writeAllowed = await authorizePermission(db, {
+    subject: authContext.accessSubject,
+    resourceType: "memory_space",
+    resourceId: targetSpace.id,
+    permission: "write",
+    runtimeSubjectIds: authContext.runtimeSubjectIds,
+    runtimeScopeSubjectIds: authContext.runtimeScopeSubjectIds,
+  })
+  if (!writeAllowed) {
+    throw new MemoryError(
+      "Not allowed to move memory into the target space (write permission required)",
+      403
+    )
+  }
+
+  // Phase 3: the actual move. Re-check existence inside the txn so a
+  // racing delete is reflected as a clean 404 rather than a silent UPDATE
+  // with 0 rows affected.
+  await transaction(async (client) => {
+    const stillThere = await executeTakeFirst<{ id: string }>(
+      client,
+      db
+        .selectFrom("memory_items")
+        .select("id")
+        .where("id", "=", memoryId)
+        .where("workspace_id", "=", workspaceId)
+        .limit(1)
+    )
+    if (!stillThere) {
+      throw new MemoryError("Memory not found", 404)
     }
     await executeCompiledQuery(
       client,
@@ -1809,10 +1839,7 @@ export async function moveMemoryToSpace(
   })
   const moved = await getMemory(workspaceId, memoryId)
   if (!moved) {
-    throw new MemoryError(
-      "Memory disappeared during move (unexpected)",
-      500
-    )
+    throw new MemoryError("Memory disappeared during move (unexpected)", 500)
   }
   return moved
 }

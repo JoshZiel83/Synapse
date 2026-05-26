@@ -139,9 +139,12 @@ type VisibleAccessBindingRow = {
     | "conversation"
     | "actor"
     | "actor_in_conversation"
+    | "remote_agent"
+    | "remote_agent_in_conversation"
   subject_workspace_id: string | null
   subject_workspace_member_id: string | null
   subject_actor_id: string | null
+  subject_remote_agent_id: string | null
   subject_conversation_id: string | null
   conversation_type_mask_override: number | null
   status: "active" | "revoked"
@@ -151,6 +154,7 @@ type VisibleAccessBindingRow = {
   created_at: string | Date | null
   revoked_at: string | Date | null
   actor_id: string | null
+  remote_agent_id: string | null
   conversation_id: string | null
 }
 
@@ -358,7 +362,7 @@ function accessBindingMatchesContext(
   row: VisibleAccessBindingRow,
   params: Pick<
     ResolveParams,
-    "actorId" | "conversationId" | "workspaceMemberId"
+    "actorId" | "conversationId" | "workspaceMemberId" | "remoteAgentId"
   >
 ) {
   switch (row.target_type) {
@@ -380,6 +384,20 @@ function accessBindingMatchesContext(
       return (
         params.actorId !== undefined &&
         row.actor_id === params.actorId &&
+        row.conversation_id === params.conversationId
+      )
+    case "remote_agent":
+      // P2 fix (post-D4 round 2 review): mirror of the actor case for
+      // remote-agent principals. Without this case the legacy target_type
+      // switch silently dropped remote_agent-target plugin/relay grants.
+      return (
+        params.remoteAgentId !== undefined &&
+        row.remote_agent_id === params.remoteAgentId
+      )
+    case "remote_agent_in_conversation":
+      return (
+        params.remoteAgentId !== undefined &&
+        row.remote_agent_id === params.remoteAgentId &&
         row.conversation_id === params.conversationId
       )
   }
@@ -411,6 +429,7 @@ async function loadVisibleAccessBindings(params: {
       subject_workspace_id_via_join?: string | null
       subject_workspace_member_id_via_join?: string | null
       subject_actor_id_via_join?: string | null
+      subject_remote_agent_id_via_join?: string | null
       subject_conversation_id_via_join?: string | null
       scope_kind?: string | null
       scope_conversation_id_via_join?: string | null
@@ -418,9 +437,21 @@ async function loadVisibleAccessBindings(params: {
     // D3: derive the legacy target_type label from subject_kind + scope_kind.
     // This preserves the visibility filter contract (which keys on the label)
     // while removing the legacy projection columns from the row reader.
+    //
+    // P2 fix (post-D4 round 2 review): include remote_agent /
+    // remote_agent_in_conversation branches. Previously remote_agent grants
+    // fell through to the `default: workspace` clause, silently matching
+    // any non-actor caller — both a missing match (the original target was
+    // a specific remote_agent) and an over-match (any caller in the
+    // workspace appeared to have the grant).
     let target_type: VisibleAccessBindingRow["target_type"]
     if (row.subject_kind === "actor" && row.scope_kind === "conversation") {
       target_type = "actor_in_conversation"
+    } else if (
+      row.subject_kind === "remote_agent" &&
+      row.scope_kind === "conversation"
+    ) {
+      target_type = "remote_agent_in_conversation"
     } else {
       switch (row.subject_kind) {
         case "workspace":
@@ -435,11 +466,18 @@ async function loadVisibleAccessBindings(params: {
         case "actor":
           target_type = "actor"
           break
+        case "remote_agent":
+          target_type = "remote_agent"
+          break
         default:
+          // Unknown subject kind — fail closed by treating as workspace
+          // (the broadest match should be matched against the broadest
+          // intent, not silently widened to all bindings).
           target_type = "workspace"
       }
     }
     const subjectActorId = row.subject_actor_id_via_join ?? null
+    const subjectRemoteAgentId = row.subject_remote_agent_id_via_join ?? null
     const subjectConversationId =
       row.scope_conversation_id_via_join ??
       row.subject_conversation_id_via_join ??
@@ -454,6 +492,7 @@ async function loadVisibleAccessBindings(params: {
       subject_workspace_member_id:
         row.subject_workspace_member_id_via_join ?? null,
       subject_actor_id: subjectActorId,
+      subject_remote_agent_id: subjectRemoteAgentId,
       subject_conversation_id: subjectConversationId,
       conversation_type_mask_override: row.conversation_type_mask_override,
       status: row.status,
@@ -463,6 +502,7 @@ async function loadVisibleAccessBindings(params: {
       created_at: row.created_at,
       revoked_at: row.revoked_at,
       actor_id: subjectActorId,
+      remote_agent_id: subjectRemoteAgentId,
       conversation_id: subjectConversationId,
     }
     const entries = map.get(visible.resource_id) || []
@@ -930,10 +970,17 @@ async function loadVisiblePlugins(params: ResolveParams) {
   const subjects = await buildVisibilitySubjects(params)
   // PR-fix-round-4: scope-aware visibility so subject=actor + scope=conversation
   // plugin grants appear in tool listings.
+  //
+  // P2 fix (post-D4 round 2 review): pass remoteAgentId too. Without it,
+  // a remote-agent session evaluating `subject=remote_agent R + scope=conversation C`
+  // grants never sees the conversation scope subject — the helper gates the
+  // conversation subject on active participation, and only checks actor /
+  // workspace_member ids when remoteAgentId is missing.
   const runtimeScopeSubjectIds = await computeRuntimeScopeSubjectIds(db, {
     workspaceId: params.workspaceId,
     workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
+    remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
   })
   // P1 fix (post-D4): include the conversation subject in runtimeSubjectIds
@@ -1050,10 +1097,15 @@ async function loadVisiblePlugins(params: ResolveParams) {
 
 async function loadVisibleRelayExposures(params: ResolveParams) {
   const subjects = await buildVisibilitySubjects(params)
+  // P2 fix (post-D4 round 2 review): pass remoteAgentId so a remote-agent
+  // session in conversation C sees its conversation scope subject — without
+  // this, `subject=remote_agent + scope=conversation` relay grants stayed
+  // invisible to remote-agent callers.
   const runtimeScopeSubjectIds = await computeRuntimeScopeSubjectIds(db, {
     workspaceId: params.workspaceId,
     workspaceMemberId: params.workspaceMemberId,
     actorId: params.actorId,
+    remoteAgentId: params.remoteAgentId,
     conversationId: params.conversationId,
   })
   // P1 fix (post-D4): include conversation subject for active participants.

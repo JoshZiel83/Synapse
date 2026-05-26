@@ -1,4 +1,5 @@
 import { db } from "../../infrastructure/database/kysely.js"
+import { pool } from "../../infrastructure/database/index.js"
 import { z } from "zod"
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify"
 import {
@@ -30,6 +31,7 @@ import {
   createMemory,
   deleteMemory,
   moveMemoryToSpace,
+  resolveOrCreateMemorySpace,
   getMemory,
   listMemories,
   MemoryError,
@@ -397,98 +399,93 @@ async function requireMemoryPermission(
 }
 
 /**
- * D4: gate writes to a (owner, scope?) tuple via per-owner-kind policy.
- * The cases mirror the legacy preset semantics now that ownership is
- * subject-driven:
- *   - owner=workspace        -> workspace.manage_memories
- *   - owner=conversation     -> conversation.memory_edit (active participant)
- *   - owner=actor            -> actor.memory_edit
- *   - owner=remote_agent     -> ownership match OR workspace.manage_memories
- *   - owner=workspace_member -> self OR workspace.manage_memories
+ * D4: gate writes to a (owner, scope?) tuple via the evaluator's
+ * memory_space.write check.
+ *
+ * P2 fix (post-D4 round 2 review): unified with the move endpoint's write
+ * check so create + move enforce the same target-write semantics. The
+ * earlier per-owner-kind switch granted workspace admins write access to
+ * actor / member / remote_agent private spaces via `manage_memories` /
+ * `actor_admin` shortcuts, which contradicted the evaluator's
+ * owner-implicit matrix (admin gets manage/delete only — not write).
+ * Result: admin could create memories into another actor's private space
+ * via this endpoint but couldn't then move them. Aligned: admin no longer
+ * gets write into private spaces from either path. The "private" guarantee
+ * is now consistent — admin can manage grants and delete content but
+ * cannot author into someone else's private memory.
+ *
+ * Mechanics: same two-phase pattern as moveMemoryToSpace. Pre-resolve the
+ * target memory_space outside the request transaction (autocommits via
+ * the pool) so the subsequent permission check sees a real row, then ask
+ * the evaluator's `memory_space.write` permission for the principal's
+ * runtime context. Returns the resolved space's id on success so the
+ * caller can pass it through to the create transaction.
  */
 async function requireMemorySpaceWritePermission(
   request: FastifyRequest,
   reply: FastifyReply,
   owner: SubjectRef | undefined,
   scope: SubjectRef | undefined,
+  namespaceKey: string | undefined,
   errorMessage: string
-) {
+): Promise<{ ok: true; memorySpaceId: string } | { ok: false }> {
   if (!owner) {
     reply.status(400).send({ error: "owner is required" })
-    return false
+    return { ok: false }
   }
-  const workspaceMemberId = (request as any).workspaceMember?.id as
-    | string
-    | undefined
   const { workspaceId } = request.params as { workspaceId: string }
   const subject = getRequestAccessSubject(request)
-  let allowed = false
-
-  switch (owner.kind) {
-    case SUBJECT_KIND.WORKSPACE:
-      allowed = await authorizeAction(db, {
-        subject,
-        action: "workspace.manage_memories",
-        resourceId: workspaceId,
-      })
-      break
-    case SUBJECT_KIND.CONVERSATION:
-      allowed = await authorizePermission(db, {
-        subject,
-        resourceType: "conversation",
-        resourceId: owner.conversationId,
-        permission: "memory_edit",
-      })
-      break
-    case SUBJECT_KIND.ACTOR: {
-      const actorAllowed = await authorizePermission(db, {
-        subject,
-        resourceType: "actor",
-        resourceId: owner.actorId,
-        permission: "memory_edit",
-      })
-      if (actorAllowed && scope?.kind === SUBJECT_KIND.CONVERSATION) {
-        // For participant_private semantics: also require active conversation
-        // membership / memory_edit on the conversation. The conversation
-        // memory_edit check resolves to "is active participant" for actors.
-        allowed = await authorizePermission(db, {
-          subject,
-          resourceType: "conversation",
-          resourceId: scope.conversationId,
-          permission: "memory_edit",
-        })
-      } else {
-        allowed = actorAllowed
-      }
-      break
-    }
-    case SUBJECT_KIND.REMOTE_AGENT:
-      allowed = await authorizeAction(db, {
-        subject,
-        action: "workspace.manage_memories",
-        resourceId: workspaceId,
-      })
-      break
-    case SUBJECT_KIND.WORKSPACE_MEMBER:
-      allowed = owner.memberId === workspaceMemberId
-      if (!allowed) {
-        allowed = await authorizeAction(db, {
-          subject,
-          action: "workspace.manage_memories",
-          resourceId: workspaceId,
-        })
-      }
-      break
-    default:
-      allowed = false
+  const principal = accessSubjectToSubjectRef(subject)
+  if (!principal) {
+    reply.status(403).send({ error: "Caller is not a workspace principal" })
+    return { ok: false }
   }
 
+  let runtimeSubjectIds: readonly string[] = []
+  let runtimeScopeSubjectIds: readonly string[] = []
+  try {
+    const ctx = await buildRuntimePrincipalContext(db, {
+      principal,
+      workspaceId,
+      conversationId:
+        scope?.kind === SUBJECT_KIND.CONVERSATION
+          ? scope.conversationId
+          : owner.kind === SUBJECT_KIND.CONVERSATION
+            ? owner.conversationId
+            : null,
+    })
+    runtimeSubjectIds = ctx.runtimeSubjectIds
+    runtimeScopeSubjectIds = ctx.runtimeScopeSubjectIds
+  } catch {
+    reply
+      .status(403)
+      .send({ error: "Caller does not belong to this workspace" })
+    return { ok: false }
+  }
+
+  // Resolve the target space outside any txn so the permission check
+  // below sees the row. Idempotent — concurrent callers converge on the
+  // same id via ON CONFLICT, no race.
+  const targetSpace = await resolveOrCreateMemorySpace(pool, {
+    workspaceId,
+    owner,
+    scope,
+    namespaceKey,
+  })
+
+  const allowed = await authorizePermission(db, {
+    subject,
+    resourceType: "memory_space",
+    resourceId: targetSpace.id,
+    permission: "write",
+    runtimeSubjectIds,
+    runtimeScopeSubjectIds,
+  })
   if (!allowed) {
     reply.status(403).send({ error: errorMessage })
-    return false
+    return { ok: false }
   }
-
-  return true
+  return { ok: true, memorySpaceId: targetSpace.id }
 }
 
 function updateTouchesMemoryEdit(body: UpdateBody) {
@@ -550,9 +547,10 @@ export function registerMemoryRoutes(app: FastifyInstance) {
           reply,
           owner,
           scope,
+          body.namespaceKey,
           "Not allowed to create a memory in this path"
         )
-        if (!canWrite) return
+        if (!canWrite.ok) return
 
         const input: CreateMemoryInput = {
           owner,
@@ -744,7 +742,9 @@ export function registerMemoryRoutes(app: FastifyInstance) {
         const subject = getRequestAccessSubject(request)
         const principal = accessSubjectToSubjectRef(subject)
         if (!principal) {
-          reply.status(403).send({ error: "Caller is not a workspace principal" })
+          reply
+            .status(403)
+            .send({ error: "Caller is not a workspace principal" })
           return
         }
         let runtimeSubjectIds: readonly string[] = []
