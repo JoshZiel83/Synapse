@@ -1195,3 +1195,234 @@ fn status_on_unrelated_subtree_does_not_leak_busy_state_via_doc_count_pending() 
     assert!(samples >= 5, "too few /public samples: {samples}");
     helper.stop();
 }
+
+#[test]
+fn stale_v1_index_with_backslash_misattributed_row_is_purged_on_upgrade() {
+    // The pre-round-8 rebuild generated VFS paths via
+    // `replace('\\', "/")`, so a real POSIX file `public\leak.txt`
+    // landed in the FTS index as `/public/leak.txt`. Round-8 fixed
+    // future rebuilds but did NOT erase rows already in the v1 db —
+    // they survived the upgrade and remained searchable. Round-9
+    // bumps SCHEMA_VERSION to 2 so any pre-existing v1 index file
+    // gets reset on the next startup, dropping the poisoned rows.
+    //
+    // This test seeds the current v1 shape (matching what the buggy
+    // helper would have written), then spawns the new helper (now v2)
+    // and confirms the leaked content can no longer be searched.
+    use rusqlite::Connection;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(root.join("public")).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    // Legitimate /public file the fresh rebuild WILL pick up — used as
+    // a positive sanity check that the reset/rebuild actually ran.
+    std::fs::write(root.join("public/ok.txt"), "freshmarker").unwrap();
+    // Seed a v1 index.sqlite containing a poisoned row at the VFS path
+    // `/public/leak.txt` that does NOT correspond to any real file
+    // under root/public. user_version=1 so the OLD reset logic would
+    // accept it as up-to-date.
+    {
+        let conn = Connection::open(work.join("index.sqlite")).unwrap();
+        conn.execute_batch(
+            "PRAGMA user_version = 1;
+             CREATE TABLE docs (
+                rowid INTEGER PRIMARY KEY,
+                path TEXT UNIQUE NOT NULL,
+                extension TEXT,
+                mime TEXT,
+                size INTEGER,
+                mtime_ms INTEGER,
+                source TEXT,
+                indexed_at TEXT
+             );
+             CREATE VIRTUAL TABLE docs_fts USING fts5(
+                content,
+                tokenize='unicode61'
+             );
+             INSERT INTO docs (rowid, path, extension, mime, size, mtime_ms, source, indexed_at)
+                VALUES (1, '/public/leak.txt', 'txt', 'text/plain', 16, 0, 'text', '2026-01-01T00:00:00Z');
+             INSERT INTO docs_fts (rowid, content) VALUES (1, 'STALE_LEAK_TOKEN');",
+        )
+        .unwrap();
+    }
+    let mut helper = Helper::spawn(&root, &work);
+    // Critically: do NOT call fs.index.rebuild before searching. The
+    // reported repro is "stale row survives upgrade" — i.e. the user
+    // upgrades, hasn't yet rebuilt, and an indexed search still hits
+    // poisoned content. A rebuild would mask the bug because
+    // `delete_subtree("/")` purges every row before the walk. The
+    // schema bump must clear the index at *startup*, not rely on a
+    // user-initiated rebuild.
+    // Negative: STALE_LEAK_TOKEN must NOT appear in indexed search even
+    // for an unrestricted caller (allowed_path_prefixes:["/"]).
+    let r = helper.call(
+        2,
+        "fs.search.content",
+        serde_json::json!({
+            "query": "STALE_LEAK_TOKEN",
+            "limit": 50, "offset": 0,
+            "allowed_path_prefixes": ["/"],
+        }),
+    );
+    let hits = r["result"]["hits"].as_array().unwrap();
+    assert!(
+        hits.is_empty(),
+        "stale v1 row survived schema upgrade: {hits:?}",
+    );
+    // Negative #2: the prefix-scoped form (which is how a /public-only
+    // caller hits this) also must not surface it.
+    let r2 = helper.call(
+        3,
+        "fs.search.content",
+        serde_json::json!({
+            "query": "STALE_LEAK_TOKEN",
+            "limit": 50, "offset": 0,
+            "allowed_path_prefixes": ["/public"],
+        }),
+    );
+    let hits2 = r2["result"]["hits"].as_array().unwrap();
+    assert!(
+        hits2.is_empty(),
+        "stale v1 row survived schema upgrade on /public scope: {hits2:?}",
+    );
+    // Positive: status reports doc_count=0, confirming the reset
+    // happened rather than the stale row merely being filtered out.
+    let s = helper.call(
+        4,
+        "fs.index.status",
+        serde_json::json!({ "subtree": "/" }),
+    );
+    assert_eq!(
+        s["result"]["doc_count"].as_i64(),
+        Some(0),
+        "post-reset status should show empty index, got: {s}",
+    );
+    helper.stop();
+}
+
+#[test]
+fn fs_index_status_surfaces_real_db_errors_instead_of_pretending_empty() {
+    // Regression: fs.index.status used to swallow ALL Err(_) from
+    // open_status_conn / compute_status and return the quiet stub
+    // `{doc_count: 0, ...}`. That silently masked real DB problems
+    // (corruption, schema drift, permission failure) — a caller
+    // searching the index would see no hits and think the helper was
+    // simply idle.
+    //
+    // We seed a v1 index, then on startup the helper bumps to v2 and
+    // recreates the schema (so a fresh open works). Then we corrupt
+    // the index file from the test process to break subsequent
+    // read-only opens. fs.index.status must surface this as an
+    // explicit error, not pretend the index is empty.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    std::fs::write(root.join("a.txt"), "alpha").unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    helper.call(
+        1,
+        "fs.index.rebuild",
+        serde_json::json!({ "subtree": "/" }),
+    );
+    wait_for_rebuild_complete(&mut helper, "/");
+    // Sanity: healthy status before corruption.
+    let healthy = helper.call(
+        2,
+        "fs.index.status",
+        serde_json::json!({ "subtree": "/" }),
+    );
+    assert!(
+        healthy.get("error").is_none() && healthy["result"]["doc_count"].as_i64() == Some(1),
+        "pre-corruption sanity check: {healthy}",
+    );
+    // Corrupt the SQLite header AND the WAL file. The corruption must
+    // be aggressive enough that a fresh read-only `Connection::open` on
+    // the file cannot pretend the index is intact:
+    //   - Truncate the main db file to 0 bytes (SQLite refuses to open
+    //     a zero-byte file as a database; "file is not a database").
+    //   - Truncate the WAL file too (otherwise SQLite would recover
+    //     pages from the journal and successfully open the db).
+    // The helper's own long-lived write handle still references the
+    // old inode contents via its open file descriptor, but the per-
+    // status read-only handle opens fresh from the path and will see
+    // the empty file.
+    {
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .truncate(true)
+            .open(work.join("index.sqlite"))
+            .unwrap();
+        // WAL/SHM may not exist if no writes happened recently; ignore
+        // errors here.
+        for suffix in ["-wal", "-shm"] {
+            let p = work.join(format!("index.sqlite{suffix}"));
+            let _ = std::fs::OpenOptions::new()
+                .write(true)
+                .truncate(true)
+                .open(&p);
+        }
+    }
+    // Status must now error explicitly, not silently report 0 docs.
+    let broken = helper.call(
+        3,
+        "fs.index.status",
+        serde_json::json!({ "subtree": "/" }),
+    );
+    assert!(
+        broken.get("error").is_some(),
+        "status silently swallowed DB corruption (got result instead of error): {broken}",
+    );
+    let err = &broken["error"];
+    // Either an open failure or a compute_status failure — both go
+    // through the same `index_status_unavailable:` wrapper.
+    assert_eq!(err["code"].as_i64(), Some(-32603), "{broken}");
+    assert!(
+        err["message"]
+            .as_str()
+            .unwrap_or("")
+            .contains("index_status_unavailable"),
+        "expected index_status_unavailable wrapper, got: {broken}",
+    );
+    helper.stop();
+}
+
+#[test]
+fn fs_index_status_returns_quiet_stub_when_index_file_absent() {
+    // The acceptable error branch: index.sqlite doesn't exist yet
+    // (helper has only just started, no rebuild yet, plus the file
+    // got removed). `open_status_conn` returns Ok(None) — status
+    // emits the quiet zero stub since "nothing indexed" really is
+    // doc_count:0. This is the ONE case where a stub is correct and
+    // not a cover for a real failure.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    // Helper startup creates index.sqlite. Remove it (plus wal/shm) so
+    // the next status call hits the absent-file branch.
+    for suffix in ["", "-wal", "-shm"] {
+        let p = work.join(format!("index.sqlite{suffix}"));
+        let _ = std::fs::remove_file(&p);
+    }
+    let s = helper.call(
+        1,
+        "fs.index.status",
+        serde_json::json!({ "subtree": "/" }),
+    );
+    assert!(s.get("error").is_none(), "absent file should not error: {s}");
+    assert_eq!(s["result"]["doc_count"].as_i64(), Some(0), "{s}");
+    assert!(
+        s["result"]["last_indexed_at"].is_null(),
+        "absent file stub should null last_indexed_at: {s}",
+    );
+    assert!(
+        s["result"].get("doc_count_pending").is_none(),
+        "absent-file stub must NOT re-introduce doc_count_pending: {s}",
+    );
+    helper.stop();
+}

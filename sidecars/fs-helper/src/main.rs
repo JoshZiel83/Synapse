@@ -331,21 +331,38 @@ async fn dispatch(
                     .cloned()
             };
             // Read the per-subtree counts via a fresh read-only connection.
-            // No mutex contention, no busy-state side channel. If opening
-            // the read-only handle itself fails (rare; e.g. db not yet
-            // initialized), emit a quiet zero-stub that looks identical
-            // whether or not a sibling rebuild is in flight.
+            // No mutex contention, no busy-state side channel.
+            //
+            // Error policy:
+            //   - `Ok(None)` from open_status_conn = db file genuinely
+            //     absent (helper not fully initialized yet). Emit the
+            //     quiet zero stub; nothing has been indexed, so doc_count:0
+            //     is correct, not a cover for a real failure.
+            //   - Real `Err(_)` from either opening the conn or running
+            //     compute_status = SQLite-level failure (corruption,
+            //     permissions, schema drift). Propagate as an explicit
+            //     `index_status_unavailable` error rather than masking it
+            //     as `doc_count:0` — silently lying about an empty index
+            //     would let DB corruption masquerade as an idle helper.
+            //     This does NOT re-introduce the doc_count_pending side
+            //     channel because such failures are global, not per-
+            //     subtree (every caller sees the same error regardless
+            //     of which subtree they query).
             let mut out = match crate::index::open_status_conn(&state.cli.work_dir)
-                .and_then(|c| crate::index::compute_status(&c, &requested_subtree))
+                .map_err(|e| RpcError::Internal(format!("index_status_unavailable: {e:?}")))?
             {
-                Ok(s) => serde_json::to_value(s).unwrap(),
-                Err(_) => serde_json::json!({
+                None => serde_json::json!({
                     "subtree": requested_subtree,
                     "last_indexed_at": null,
                     "doc_count": 0,
                     "queue_depth": 0,
                     "errors": { "extract_failed": 0, "watcher_starved": 0 },
                 }),
+                Some(conn) => {
+                    let s = crate::index::compute_status(&conn, &requested_subtree)
+                        .map_err(|e| RpcError::Internal(format!("index_status_unavailable: {e:?}")))?;
+                    serde_json::to_value(s).unwrap()
+                }
             };
             if let Some(t) = task_snapshot {
                 if let Value::Object(ref mut m) = out {
