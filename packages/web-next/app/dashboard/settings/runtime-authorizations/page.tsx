@@ -110,9 +110,7 @@ export default function RuntimeAuthorizationsSettingsPage() {
                 capabilityId: cap.id,
                 displayName: cap.display_name,
                 builtinKind: cap.builtin_kind ?? null,
-                exposureStableKey:
-                  (cap as unknown as { exposure_stable_key?: string })
-                    .exposure_stable_key ?? null,
+                exposureStableKey: cap.exposure_stable_key ?? null,
                 exposureMetadata: cap.metadata ?? null,
               })
             }

@@ -130,6 +130,7 @@ export async function getDevice(
       "dc.id as id",
       "dc.workspace_id as workspace_id",
       "dc.exposure_id as exposure_id",
+      "dx.stable_key as exposure_stable_key",
       "dx.display_name as display_name",
       "dx.transport as transport",
       "dx.builtin_kind as builtin_kind",
@@ -143,6 +144,7 @@ export async function getDevice(
     id: row.id as string,
     workspace_id: row.workspace_id as string,
     exposure_id: row.exposure_id as string,
+    exposure_stable_key: row.exposure_stable_key as string,
     display_name: row.display_name as string,
     transport: row.transport as DeviceCapabilitySummary["transport"],
     builtin_kind:

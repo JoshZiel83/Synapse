@@ -307,27 +307,59 @@ export const BROWSER_EXPOSURE_TOOLS: Record<BrowserExposureKey, string[]> = {
 // ────────────────────────────── operation→action lookup ─────────────────────
 
 /**
- * Minimum action level required to invoke each browser operation, derived
- * from BROWSER_TOOL_MAP. A grant whose `action` doesn't cover this minimum
- * will fail at runtime authorization — UI / API helpers should use this to
- * auto-derive the right action when an operator builds a manual grant.
+ * Minimum action level required to invoke each browser operation.
  *
- * write covers read; an operation listed as "write" here must be granted
- * with action="write".
+ * Exhaustive over `RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS` — every enum
+ * member MUST appear so `browserActionCoversOperations` never silently
+ * falls into a fail-open path on a deferred-but-defined operation
+ * (file.upload / extension.manage / webmcp.execute are not in
+ * BROWSER_TOOL_MAP today but the enum still lets a caller request them).
+ *
+ * The TypeScript compiler enforces exhaustiveness at this site:
+ * `Record<BrowserOperation, ...>` will fail to typecheck if a new
+ * operation lands without an entry here.
+ *
+ * Runtime extra safety: the per-op table is also cross-checked against
+ * BROWSER_TOOL_MAP — if a tool there demands action="write" for an
+ * operation we listed here as "read" the constructor escalates.
  */
-export const BROWSER_OPERATION_REQUIRED_ACTION: Record<
+const BROWSER_OPERATION_REQUIRED_ACTION_BASE: Record<
   BrowserOperation,
   "read" | "write"
+> = {
+  "page.read": "read",
+  "page.navigate": "write",
+  "page.input": "write",
+  "screenshot.capture": "read",
+  "console.read": "read",
+  "network.list": "read",
+  "network.body.read": "read",
+  "script.evaluate": "write",
+  "performance.trace": "read",
+  // Deferred operations: not in BROWSER_TOOL_MAP today, but listed in the
+  // enum so a grant policy can name them. Each one is write-sensitive
+  // (uploads files, manages extensions, executes WebMCP tools), so
+  // explicit "write" prevents an action=read grant from covering them
+  // if/when the deferred exposure ships.
+  "file.upload": "write",
+  "extension.manage": "write",
+  "webmcp.execute": "write",
+}
+
+export const BROWSER_OPERATION_REQUIRED_ACTION: Readonly<
+  Record<BrowserOperation, "read" | "write">
 > = (() => {
-  const map: Partial<Record<BrowserOperation, "read" | "write">> = {}
-  for (const desc of Object.values(BROWSER_TOOL_MAP)) {
-    const prior = map[desc.operation]
-    // If two tools share an operation but disagree on action, escalate
-    // to "write" (the stricter requirement).
-    map[desc.operation] =
-      prior === "write" || desc.action === "write" ? "write" : "read"
+  const out: Record<BrowserOperation, "read" | "write"> = {
+    ...BROWSER_OPERATION_REQUIRED_ACTION_BASE,
   }
-  return map as Record<BrowserOperation, "read" | "write">
+  // Cross-check / escalate from BROWSER_TOOL_MAP. If a tool surfaces an
+  // operation as write, force it even if the table above marked it read.
+  for (const desc of Object.values(BROWSER_TOOL_MAP)) {
+    if (desc.action === "write") {
+      out[desc.operation] = "write"
+    }
+  }
+  return out
 })()
 
 /**
@@ -336,15 +368,23 @@ export const BROWSER_OPERATION_REQUIRED_ACTION: Record<
  * operation. Used by the manual-grant endpoint and the Settings UI to
  * reject "action:read + operations:[page.input]" type misconfigurations
  * that would silently produce a dead grant.
+ *
+ * Fail-closed on unknown operations: if a caller smuggles in a string
+ * that isn't in `RUNTIME_AUTHORIZATION_BROWSER_OPERATIONS` (e.g. via an
+ * older deployment talking to a newer one), it counts as offending so
+ * action=read can never cover it. Zod usually catches this upstream but
+ * direct callers of `browserActionCoversOperations` need the defence.
  */
 export function browserActionCoversOperations(
   action: "read" | "write",
   operations: readonly BrowserOperation[]
 ): { ok: true } | { ok: false; offending: BrowserOperation[] } {
   if (action === "write") return { ok: true }
-  const offending = operations.filter(
-    (op) => BROWSER_OPERATION_REQUIRED_ACTION[op] === "write"
-  )
+  const offending = operations.filter((op) => {
+    const required = BROWSER_OPERATION_REQUIRED_ACTION[op]
+    if (required === undefined) return true // unknown op → deny
+    return required === "write"
+  })
   return offending.length === 0 ? { ok: true } : { ok: false, offending }
 }
 

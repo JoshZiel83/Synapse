@@ -152,6 +152,11 @@ export const DeviceCapabilitySummarySchema = z.object({
   id: z.string().uuid(),
   workspace_id: z.string().uuid(),
   exposure_id: z.string().uuid(),
+  // v3.1: stable_key (e.g. "builtin/browser/navigation") so UI can group /
+  // filter without guessing from display_name. Needed by the Settings →
+  // Runtime Authorizations page to scope the operation chip list to
+  // operations the exposure can actually request.
+  exposure_stable_key: z.string(),
   display_name: z.string(),
   transport: z.enum(DEVICE_EXPOSURE_TRANSPORTS),
   builtin_kind: z.enum(DEVICE_BUILTIN_KINDS).nullable(),

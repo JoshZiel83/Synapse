@@ -437,13 +437,35 @@
       enabledByDefault: true
     }
   };
+  var BROWSER_OPERATION_REQUIRED_ACTION_BASE = {
+    "page.read": "read",
+    "page.navigate": "write",
+    "page.input": "write",
+    "screenshot.capture": "read",
+    "console.read": "read",
+    "network.list": "read",
+    "network.body.read": "read",
+    "script.evaluate": "write",
+    "performance.trace": "read",
+    // Deferred operations: not in BROWSER_TOOL_MAP today, but listed in the
+    // enum so a grant policy can name them. Each one is write-sensitive
+    // (uploads files, manages extensions, executes WebMCP tools), so
+    // explicit "write" prevents an action=read grant from covering them
+    // if/when the deferred exposure ships.
+    "file.upload": "write",
+    "extension.manage": "write",
+    "webmcp.execute": "write"
+  };
   var BROWSER_OPERATION_REQUIRED_ACTION = (() => {
-    const map = {};
+    const out = {
+      ...BROWSER_OPERATION_REQUIRED_ACTION_BASE
+    };
     for (const desc of Object.values(BROWSER_TOOL_MAP)) {
-      const prior = map[desc.operation];
-      map[desc.operation] = prior === "write" || desc.action === "write" ? "write" : "read";
+      if (desc.action === "write") {
+        out[desc.operation] = "write";
+      }
     }
-    return map;
+    return out;
   })();
 
   // ../shared/dist/constants/enums.js

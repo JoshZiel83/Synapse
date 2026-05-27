@@ -29,6 +29,12 @@ export interface DeviceCapabilitySummaryView {
   id: string
   workspace_id: string
   exposure_id: string
+  /**
+   * v3.1: e.g. "builtin/browser/navigation". Used by the Settings →
+   * Runtime Authorizations page to scope the operation chip list to
+   * operations the selected exposure can actually request.
+   */
+  exposure_stable_key: string
   display_name: string
   transport: "builtin" | "stdio" | "http" | "sse" | "custom"
   builtin_kind: "filesystem" | "commandline" | "browser" | "cua" | null

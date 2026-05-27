@@ -211,3 +211,55 @@ test("normalizeBrowserGrantPolicy — action=read + read-only operations passes"
   })
   assert.equal(r.action, "read")
 })
+
+// Deferred operations: not in BROWSER_TOOL_MAP today but defined in the
+// enum so a grant could name them. All three are write-sensitive — must
+// not silently slip past action=read coverage.
+test("normalizeBrowserGrantPolicy — action=read + file.upload rejected", () => {
+  shouldThrow(
+    {
+      action: "read",
+      scopeType: "origin",
+      origin: "https://example.com",
+      operations: ["file.upload"],
+    },
+    "action",
+    /file\.upload/
+  )
+})
+
+test("normalizeBrowserGrantPolicy — action=read + extension.manage rejected", () => {
+  shouldThrow(
+    {
+      action: "read",
+      scopeType: "origin",
+      origin: "https://example.com",
+      operations: ["extension.manage"],
+    },
+    "action",
+    /extension\.manage/
+  )
+})
+
+test("normalizeBrowserGrantPolicy — action=read + webmcp.execute rejected", () => {
+  shouldThrow(
+    {
+      action: "read",
+      scopeType: "origin",
+      origin: "https://example.com",
+      operations: ["webmcp.execute"],
+    },
+    "action",
+    /webmcp\.execute/
+  )
+})
+
+test("normalizeBrowserGrantPolicy — action=write + deferred ops permitted", () => {
+  const r = normalizeBrowserGrantPolicy({
+    action: "write",
+    scopeType: "origin",
+    origin: "https://example.com",
+    operations: ["file.upload", "extension.manage", "webmcp.execute"],
+  })
+  assert.equal(r.action, "write")
+})
