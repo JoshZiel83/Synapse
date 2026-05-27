@@ -294,6 +294,49 @@ test("withGrantPrefixes scopes the realpath grant recheck", async () => {
   }
 })
 
+test("withGrantPrefixes isolates concurrent tool calls (no cross-talk)", async () => {
+  const root = freshRoot()
+  try {
+    mkdirSync(join(root, "public"))
+    mkdirSync(join(root, "secret"))
+    writeFileSync(join(root, "secret", "leak"), "x")
+    symlinkSync(join(root, "secret"), join(root, "public", "link"))
+    const be = createLocalFsBackend({ rootPath: root })
+    await be.start()
+    let narrowSuccess = 0
+    let narrowDenied = 0
+    const iterations = 30
+    const narrow = async () => {
+      for (let i = 0; i < iterations; i++) {
+        await be.withGrantPrefixes(["/public"], async () => {
+          try {
+            await be.safeResolve("/public/link/leak")
+            narrowSuccess += 1
+          } catch (e) {
+            if (e instanceof GrantPrefixDeniedError) narrowDenied += 1
+          }
+        })
+      }
+    }
+    const wide = async () => {
+      for (let i = 0; i < iterations; i++) {
+        await be.withGrantPrefixes(["/"], async () => {
+          await be.safeResolve("/public/link/leak")
+        })
+      }
+    }
+    await Promise.all([narrow(), wide()])
+    assert.equal(
+      narrowSuccess,
+      0,
+      "narrow grant scope must never see the symlink target despite concurrent wide-scope calls"
+    )
+    assert.equal(narrowDenied, iterations)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("list root excludes /.synapse-internal directory entry", async () => {
   const root = freshRoot()
   try {

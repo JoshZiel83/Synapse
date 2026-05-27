@@ -94,12 +94,25 @@ impl IndexStore {
             self.conn.execute("DELETE FROM docs", [])?;
             return Ok(());
         }
-        // Delete entries where path == canon or starts with canon/.
-        let prefix = format!("{}/%", canon);
-        self.conn.execute(
-            "DELETE FROM docs WHERE path = ? OR path LIKE ?",
-            params![canon, prefix],
-        )?;
+        // Collect candidate paths via boundary-aware Rust filter, then delete
+        // by exact path. Using SQL `LIKE` would mis-handle literal `_` / `%`
+        // in paths (e.g. `/foo_` would also match `/fooa` under LIKE).
+        let mut victims: Vec<String> = Vec::new();
+        {
+            let mut stmt = self.conn.prepare("SELECT path FROM docs")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            for row in rows {
+                let p = row?;
+                if under_prefix(&p, canon) {
+                    victims.push(p);
+                }
+            }
+        }
+        let tx = self.conn.transaction()?;
+        for p in victims {
+            tx.execute("DELETE FROM docs WHERE path = ?", params![p])?;
+        }
+        tx.commit()?;
         Ok(())
     }
 
@@ -118,7 +131,9 @@ impl IndexStore {
             Ok(m) => m,
             Err(_) => return Ok(()),
         };
-        if !meta.is_file() { return Ok(()); }
+        if !meta.is_file() {
+            return Ok(());
+        }
         let size = meta.len() as i64;
         let mtime_ms = meta
             .modified()
@@ -126,26 +141,36 @@ impl IndexStore {
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
             .map(|d| d.as_millis() as i64)
             .unwrap_or(0);
-        // Read up to a sane cap as content for search.
-        let content = match fs::read(host) {
-            Ok(b) => {
-                if b.len() > 1024 * 1024 {
+        // Stream up to 1 MiB only — never read the full file. Files larger
+        // than the cap are indexed metadata-only (no content).
+        const INDEX_CONTENT_CAP: u64 = 1024 * 1024;
+        let content = if (meta.len() as u64) > INDEX_CONTENT_CAP {
+            self.extract_failed += 1;
+            String::new()
+        } else {
+            let mut buf = Vec::with_capacity(meta.len() as usize);
+            match fs::File::open(host).and_then(|f| {
+                use std::io::Read;
+                f.take(INDEX_CONTENT_CAP).read_to_end(&mut buf).map(|_| ())
+            }) {
+                Ok(()) => String::from_utf8(buf).unwrap_or_else(|_| {
                     self.extract_failed += 1;
                     String::new()
-                } else {
-                    String::from_utf8(b).unwrap_or_default()
+                }),
+                Err(_) => {
+                    self.extract_failed += 1;
+                    String::new()
                 }
-            }
-            Err(_) => {
-                self.extract_failed += 1;
-                String::new()
             }
         };
         let ext = host
             .extension()
             .map(|e| e.to_string_lossy().to_string())
             .unwrap_or_default();
-        let mime = mime_guess::from_path(host).first_or_octet_stream().essence_str().to_string();
+        let mime = mime_guess::from_path(host)
+            .first_or_octet_stream()
+            .essence_str()
+            .to_string();
         let indexed_at = now_stamp();
         self.conn.execute(
             "INSERT INTO docs(path, extension, mime, size, mtime_ms, content, indexed_at) VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -169,15 +194,17 @@ impl IndexStore {
                 .optional()?
                 .unwrap_or(0)
         } else {
-            let prefix = format!("{}/%", canon);
-            self.conn
-                .query_row(
-                    "SELECT COUNT(*) FROM docs WHERE path = ? OR path LIKE ?",
-                    params![canon, prefix],
-                    |r| r.get(0),
-                )
-                .optional()?
-                .unwrap_or(0)
+            // Boundary-aware count via Rust filter (avoids SQL LIKE wildcard
+            // collisions on paths containing `_` or `%`).
+            let mut stmt = self.conn.prepare("SELECT path FROM docs")?;
+            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
+            let mut n: i64 = 0;
+            for r in rows {
+                if under_prefix(&r?, &canon) {
+                    n += 1;
+                }
+            }
+            n
         };
         Ok(IndexStatusResult {
             subtree: canon,

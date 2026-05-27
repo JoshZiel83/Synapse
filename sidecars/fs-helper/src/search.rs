@@ -1,4 +1,9 @@
-//! Search dispatch — content (substring) + path (substring/fuzzy).
+//! Search dispatch — content (substring) + path (nucleo fuzzy).
+
+use nucleo_matcher::{
+    pattern::{CaseMatching, Normalization, Pattern},
+    Config, Matcher,
+};
 
 use crate::index::{allowed, IndexStore};
 use crate::rpc::{
@@ -38,7 +43,6 @@ pub fn search_content(
         if !lower.contains(&needle_lower) {
             return;
         }
-        // line + offset of first match
         let idx_pos = lower.find(&needle_lower).unwrap();
         let line_no = content[..idx_pos].matches('\n').count() as u32 + 1;
         let line_start = content[..idx_pos].rfind('\n').map(|p| p + 1).unwrap_or(0);
@@ -80,36 +84,43 @@ pub fn search_path(
         ));
     }
     validate_pagination(input.limit, input.offset, max_limit, max_offset)?;
-    let needle = input.query.to_lowercase();
-    let mut hits: Vec<SearchPathHit> = Vec::new();
-    let target = input.offset as usize + input.limit as usize;
+    // Collect every authorized path; nucleo scores them. Sort by score desc,
+    // then slice (offset, offset+limit). This gives semantics like classic
+    // fuzzy finders and avoids the surprise of "limit=10 returns the first
+    // 10 alphabetical matches".
+    let mut candidates: Vec<String> = Vec::new();
     idx.all_paths_with_content(|path, _content| {
-        if hits.len() >= target {
-            return;
+        if allowed(path, &input.allowed_path_prefixes) {
+            candidates.push(path.to_string());
         }
-        if !allowed(path, &input.allowed_path_prefixes) {
-            return;
-        }
-        let lp = path.to_lowercase();
-        let score = if needle.is_empty() {
-            1.0
-        } else if lp.contains(&needle) {
-            // Simple fuzzy-ish score: shorter paths score higher.
-            1.0 - (path.len() as f64 / 1000.0).min(1.0)
-        } else {
-            return;
-        };
-        hits.push(SearchPathHit {
-            path: path.to_string(),
-            score,
-        });
     })?;
-    let sliced = hits
+    let mut matcher = Matcher::new(Config::DEFAULT.match_paths());
+    let pattern = Pattern::parse(
+        &input.query,
+        CaseMatching::Smart,
+        Normalization::Smart,
+    );
+    let mut scored: Vec<(u32, String)> = candidates
+        .into_iter()
+        .filter_map(|p| {
+            let score = pattern.score(
+                nucleo_matcher::Utf32String::from(p.as_str()).slice(..),
+                &mut matcher,
+            )?;
+            Some((score, p))
+        })
+        .collect();
+    scored.sort_by(|a, b| b.0.cmp(&a.0));
+    let hits: Vec<SearchPathHit> = scored
         .into_iter()
         .skip(input.offset as usize)
         .take(input.limit as usize)
+        .map(|(score, p)| SearchPathHit {
+            path: p,
+            score: score as f64,
+        })
         .collect();
-    Ok(SearchPathResult { hits: sliced })
+    Ok(SearchPathResult { hits })
 }
 
 fn validate_pagination(

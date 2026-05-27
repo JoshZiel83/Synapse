@@ -169,7 +169,11 @@ async function main() {
       const fsWorkDir =
         getFlag(args.flags, "fs-work-dir") ??
         process.env.SYNAPSE_DEVICE_FS_WORK_DIR ??
-        (brokerDir ? join(brokerDir, "fs") : undefined)
+        // Default: <dirname(broker file)>/fs. The broker always has a file
+        // path even when --broker-dir wasn't passed (createFileBackedBroker
+        // picks the OS-conventional location), so this default works in
+        // every deployment without requiring extra flags.
+        join(dirname(broker.brokerFilePath), "fs")
       const fsTika =
         getFlag(args.flags, "fs-tika-endpoint") ??
         process.env.SYNAPSE_DEVICE_FS_TIKA_ENDPOINT

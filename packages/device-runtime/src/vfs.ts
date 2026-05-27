@@ -7,6 +7,7 @@
 import { constants as fsConstants, promises as fsp } from "node:fs"
 import { createHash, randomBytes } from "node:crypto"
 import { createReadStream } from "node:fs"
+import { AsyncLocalStorage } from "node:async_hooks"
 import { dirname, relative, resolve, sep } from "node:path"
 import {
   filesystemPolicyAllows,
@@ -359,8 +360,14 @@ export interface LocalFsBackendOptions {
 }
 
 interface InternalState {
-  activeGrantPrefixes: string[] | null
   pathLocks: Map<string, Promise<void>>
+  // Concurrent tool calls must NOT share grant prefixes — AsyncLocalStorage
+  // gives each invocation its own context, preventing a wide-grant call
+  // from leaking permissions into a concurrent narrow-grant call.
+  grantPrefixStore: AsyncLocalStorage<readonly string[] | null>
+  // Fallback for direct backend consumers that set prefixes at construction
+  // time (no per-call wrapping). Tests use this.
+  fallbackGrantPrefixes: readonly string[] | null
 }
 
 export function createLocalFsBackend(
@@ -375,11 +382,20 @@ export function createLocalFsBackend(
   const internalRestoreAbs = resolve(internalDirAbs, "restore")
 
   const state: InternalState = {
-    activeGrantPrefixes:
+    pathLocks: new Map(),
+    grantPrefixStore: new AsyncLocalStorage<readonly string[] | null>(),
+    fallbackGrantPrefixes:
       opts.initialGrantPrefixes && opts.initialGrantPrefixes.length > 0
         ? [...opts.initialGrantPrefixes]
         : null,
-    pathLocks: new Map(),
+  }
+
+  function currentGrantPrefixes(): readonly string[] | null {
+    // AsyncLocalStorage carries the per-call value; fall back to the
+    // construction-time prefixes (tests) when no call frame is active.
+    const fromStore = state.grantPrefixStore.getStore()
+    if (fromStore !== undefined) return fromStore
+    return state.fallbackGrantPrefixes
   }
 
   function realpathToCanonical(hostPath: string): string | null {
@@ -449,12 +465,14 @@ export function createLocalFsBackend(
       )
     }
     // Realpath grant recheck (closes /allowed/link -> /secret bypass).
-    if (state.activeGrantPrefixes) {
+    // The active prefixes come from AsyncLocalStorage so concurrent tool
+    // calls each see their own set, not a shared mutable field.
+    const grants = currentGrantPrefixes()
+    if (grants) {
       const realCanonical = realpathToCanonical(real)
       if (realCanonical === null) {
         throw new GrantPrefixDeniedError(canonical)
       }
-      const grants = state.activeGrantPrefixes
       const ok = grants.some((p) => pathUnderPrefix(realCanonical, p))
       if (!ok) throw new GrantPrefixDeniedError(canonical)
     }
@@ -630,13 +648,9 @@ export function createLocalFsBackend(
     prefixes: string[],
     fn: () => Promise<T>
   ): Promise<T> {
-    const prev = state.activeGrantPrefixes
-    state.activeGrantPrefixes = prefixes.length > 0 ? [...prefixes] : null
-    try {
-      return await fn()
-    } finally {
-      state.activeGrantPrefixes = prev
-    }
+    const scoped: readonly string[] | null =
+      prefixes.length > 0 ? Object.freeze([...prefixes]) : null
+    return await state.grantPrefixStore.run(scoped, fn)
   }
 
   async function atomicWrite(

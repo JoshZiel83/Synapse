@@ -340,7 +340,7 @@ const TOOLS: ToolDescriptor[] = [
         indexed: { type: "boolean" },
       },
     },
-    visible: (_c, a) => a.liveAvailable || a.indexAvailable,
+    visible: (c, a) => c.enableRead && (a.liveAvailable || a.indexAvailable),
   },
   {
     name: "fs_index_status",
@@ -588,7 +588,9 @@ export function createFilesystemBuiltin(
         ? existsSync(cfg.ripgrepPath)
         : detectRipgrep(opts.ripgrepDeps)
     )
-  const helperAvailable = Boolean(cfg.helperPath && existsSync(cfg.helperPath))
+  const helperAvailable =
+    Boolean(cfg.helperPath && existsSync(cfg.helperPath)) &&
+    Boolean(cfg.helperWorkDir)
   const indexAvailable = helperAvailable && cfg.enableIndex
   const historyAvailable = helperAvailable && cfg.enableHistory
 
@@ -1149,7 +1151,8 @@ async function handleFsWrite(
         }
       } else if (!priorExists) {
         // create new — still call snapshot with prior_exists=false so restore
-        // can roll back to "deleted" state.
+        // can roll back to "deleted" state. Enforce the same
+        // history-required-by-default rule as the overwrite branch above.
         if (ctx.helper && ctx.helper.isAvailable()) {
           await ctx.helper.historySnapshot({
             path: canonical,
@@ -1159,6 +1162,11 @@ async function handleFsWrite(
             prior_mtime_ms: null,
             op: "pre_write",
           })
+        } else if (!ctx.cfg.allowUnversionedWrite) {
+          throw new ToolFailure(
+            "runtime_constraint",
+            "history_unavailable: cannot create new file without history"
+          )
         }
       }
       const result = await ctx.backend.atomicWrite(canonical, bytes, {
@@ -1457,6 +1465,20 @@ async function handleFsDelete(
         })
         trashMode = "history_only"
       } else {
+        // Final pre-trash CAS: re-hash the file right before invoking the
+        // OS trash and reject if external content changed since snapshot.
+        // Without this, trash silently moves the modified file and we
+        // claim history covers it when in fact the snapshot is stale.
+        if (priorSha != null) {
+          const recheck = await ctx.backend.streamSha256(canonical)
+          if (recheck.sha256 !== priorSha) {
+            throw new ToolFailure(
+              "runtime_constraint",
+              `stale_write_detected: pre_delete on ${canonical}`,
+              { stale_write: true, stale_write_phase: "pre_delete" }
+            )
+          }
+        }
         const trashFn = ctx.trashImpl ?? defaultTrash
         try {
           await trashFn([hostPath])
@@ -1469,7 +1491,10 @@ async function handleFsDelete(
               `trash_unavailable: OS trash failed and history disabled: ${(err as Error).message}`
             )
           }
-          // Fall back to fs.rm — snapshot already exists.
+          // Fall back to fs.rm — snapshot already exists. deleteFile also
+          // runs the CAS, but we already verified above; double-checking
+          // is cheap and protects against any modification during the
+          // failed trash attempt.
           await ctx.backend.deleteFile(canonical, {
             expectedShaForCAS: priorSha ?? undefined,
           })

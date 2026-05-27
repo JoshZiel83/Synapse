@@ -970,3 +970,114 @@ test("fs_index_rebuild silently drops any caller-supplied ignore_patterns", asyn
     cleanup()
   }
 })
+
+// ─────────────────────────── P1 regression tests ─────────────────────────────
+
+test("fs_delete trash path performs final pre_delete CAS", async () => {
+  const root = freshRoot()
+  const work = freshWorkDir()
+  const fake = makeFakeHelper()
+  let trashCalls = 0
+  // trash impl that always succeeds — we want the CAS recheck to fire BEFORE
+  // we get to trashFn, not just on the fallback fs.rm path.
+  const builtin = createFilesystemBuiltin({
+    rootPath: root,
+    helperPath: "/usr/bin/true",
+    helperWorkDir: work,
+    enableWrite: true,
+    enableDelete: true,
+    enableHistory: true,
+    enableIndex: false,
+    enableLiveSearch: false,
+    skipWorkDirAssertion: true,
+    helperClientImpl: fake.helper,
+    trashImpl: async (paths) => {
+      trashCalls += 1
+      // simulate OS trash removing the file
+      for (const p of paths) {
+        await fsp.unlink(p).catch(() => {})
+      }
+    },
+  })
+  try {
+    writeFileSync(join(root, "f"), "original")
+    // Race the delete: between snapshot and trash, an external process
+    // overwrites the file. The handler must detect this via the final CAS.
+    const origStreamSha256 = fake.helper.historySnapshotDelete
+    fake.helper.historySnapshotDelete = async (
+      input: Parameters<typeof origStreamSha256>[0]
+    ) => {
+      // After snapshot is recorded, simulate the external write.
+      const result = await (origStreamSha256 as typeof origStreamSha256).call(
+        fake.helper,
+        input
+      )
+      writeFileSync(join(root, "f"), "TAMPERED")
+      return result
+    }
+    const r = await builtin.invokeTool!({
+      toolName: "fs_delete",
+      args: { path: "/f", mode: "trash" },
+      envelope: makeEnvelope([{ access: "write", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(r.isError, true, JSON.stringify(r._meta))
+    const err = getMeta(r).synapse_error
+    assert.match(err?.message ?? "", /stale_write_detected/)
+    const meta = r._meta as {
+      synapse_error?: { details?: { stale_write_phase?: string } }
+    }
+    assert.equal(meta.synapse_error?.details?.stale_write_phase, "pre_delete")
+    // Trash MUST NOT have run (CAS short-circuits before).
+    assert.equal(trashCalls, 0)
+    // File still has the externally-written content.
+    assert.equal((await fsp.readFile(join(root, "f"))).toString(), "TAMPERED")
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(work, { recursive: true, force: true })
+  }
+})
+
+test("fs_write of NEW file with helper unavailable + !allowUnversionedWrite rejects history_unavailable", async () => {
+  const root = freshRoot()
+  try {
+    const builtin = createFilesystemBuiltin({
+      rootPath: root,
+      // No helperPath → helper unavailable.
+      enableWrite: true,
+      enableHistory: true,
+      enableLiveSearch: false,
+      enableIndex: false,
+      allowUnversionedWrite: false,
+    })
+    // The catalog rule already hides fs_write when (history OR
+    // allowUnversionedWrite) is false; runtime call must also reject.
+    const r = await builtin.invokeTool!({
+      toolName: "fs_write",
+      args: { path: "/newfile", content: "x", encoding: "utf-8" },
+      envelope: makeEnvelope([{ access: "write", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(r.isError, true)
+    // Either permission_denied (catalog rule) or runtime_constraint —
+    // both are correct disposition; the load-bearing assertion is "we
+    // didn't silently create /newfile".
+    await assert.rejects(() => fsp.stat(join(root, "newfile")))
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("fs_search hidden when enableRead=false even with index/live available", async () => {
+  const { builtin, cleanup } = await makeBuiltin({
+    enableRead: false,
+    enableIndex: true,
+  })
+  try {
+    const ex = (await builtin.describeExposures())[0]!
+    const names = ex.tools.map((t) => t.name)
+    assert.ok(!names.includes("fs_search"))
+    assert.ok(!names.includes("fs_index_status"))
+    assert.ok(!names.includes("fs_index_rebuild"))
+  } finally {
+    cleanup()
+  }
+})
