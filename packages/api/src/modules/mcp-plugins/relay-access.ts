@@ -3,6 +3,7 @@ import type { CapabilityAccessTarget } from "@synapse/shared/types"
 import {
   actorRef,
   conversationRef,
+  remoteAgentRef,
   subjectScopeLabel,
   workspaceMemberRef,
   workspaceRef,
@@ -56,6 +57,14 @@ const RELAY_CAPABILITY_PERMISSION_SUMMARY = {
  * to policy / grant helpers. This wraps `readAccessBindingTarget` so callers
  * with row-shaped rows from binding-storage's bindingRowSelectFor can recover
  * the target without re-implementing the projection.
+ *
+ * Post-D4 round 8 review (P3): added `remote_agent` to the subject_kind
+ * switch. Previously remote_agent rows fell through to the
+ * `default: workspace` fallback, so relay policy updates re-validated
+ * existing remote-agent scoped grants against the wrong target —
+ * conversation-type policy was evaluated for a "workspace" instead of
+ * the actual remote_agent + scope=conversation shape, and any subject-
+ * specific checks downstream silently misidentified the binding.
  */
 function relayBindingRowToTarget(
   row: AccessBindingRow & {
@@ -92,6 +101,11 @@ function relayBindingRowToTarget(
     case "actor":
       subject = row.subject_actor_id_via_join
         ? actorRef(row.subject_actor_id_via_join)
+        : workspaceRef(row.workspace_id)
+      break
+    case "remote_agent":
+      subject = row.subject_remote_agent_id_via_join
+        ? remoteAgentRef(row.subject_remote_agent_id_via_join)
         : workspaceRef(row.workspace_id)
       break
     case "conversation":

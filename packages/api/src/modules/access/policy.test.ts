@@ -4,6 +4,7 @@ import {
   SUBJECT_KIND,
   actorRef,
   conversationRef,
+  remoteAgentRef,
   workspaceMemberRef,
   workspaceRef,
 } from "@synapse/shared"
@@ -231,6 +232,64 @@ test(
   }
 )
 
+test(
+  "validateConversationScopedAccessTarget(remote_agent + scope=conversation) requires an active participant — round-8 P2",
+  { timeout: 5 * 60_000 },
+  async () => {
+    // Round-8 P2 regression: validator used to only know about actor +
+    // scope=conversation. The runtime visibility path matches
+    // remote_agent_in_conversation (tool-resolver) so creation must
+    // validate it too — otherwise a remote_agent + scope=conv grant
+    // could be written for a remote agent that isn't in the
+    // conversation.
+    await withTestDb(async (db) => {
+      const ownerId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, ownerId)
+      const conversationId = await insertConversation(db, workspaceId)
+      const remoteAgentId = await insertRemoteAgent(db, workspaceId)
+
+      // No participant row yet → must reject.
+      await assert.rejects(
+        validateConversationScopedAccessTarget({
+          db,
+          target: {
+            subject: remoteAgentRef(remoteAgentId),
+            scope: conversationRef(conversationId),
+          },
+          effectiveConversationTypeMask: 0b11111,
+          buildError: (m) => new Error(m),
+        }),
+        /active participant/
+      )
+
+      // Add the participant row → must accept.
+      const remoteAgentSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId,
+      })
+      await db
+        .insertInto("conversation_participants")
+        .values({
+          conversation_id: conversationId,
+          participant_type: "remote_agent",
+          subject_id: remoteAgentSubjectId,
+          state: "active",
+        })
+        .execute()
+      const ok = await validateConversationScopedAccessTarget({
+        db,
+        target: {
+          subject: remoteAgentRef(remoteAgentId),
+          scope: conversationRef(conversationId),
+        },
+        effectiveConversationTypeMask: 0b11111,
+        buildError: (m) => new Error(m),
+      })
+      assert.ok(ok)
+    })
+  }
+)
+
 async function insertUser(db: AnyDb): Promise<string> {
   const row = await db
     .insertInto("users")
@@ -284,6 +343,23 @@ async function insertActor(db: AnyDb, workspaceId: string): Promise<string> {
       title: "test",
       current_version: 1,
     })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function insertRemoteAgent(
+  db: AnyDb,
+  workspaceId: string
+): Promise<string> {
+  const row = await db
+    .insertInto("remote_agents")
+    .values({
+      workspace_id: workspaceId,
+      name: `agent-${Math.random().toString(36).slice(2, 10)}`,
+      title: "test remote agent",
+      runtime_kind: "claude_code",
+    } as any)
     .returning("id")
     .executeTakeFirstOrThrow()
   return row.id as string

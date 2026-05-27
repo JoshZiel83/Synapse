@@ -822,6 +822,177 @@ test(
 )
 
 test(
+  "findActiveBindingIdByResourceAndSubject scoped bindings don't collide with unscoped — round-8 P2 regression",
+  { timeout: 5 * 60_000 },
+  async () => {
+    // The pre-fix bug: when ensureSkillBinding for (actor + scope=conv)
+    // ran while the conversation's access_subjects row didn't exist
+    // yet, findAccessSubjectIdOn(scopeRef) returned null, and the
+    // dedup query degraded to "scope_subject_id IS NOT DISTINCT FROM
+    // NULL" — matching an existing UNSCOPED binding. Ensuring a scoped
+    // binding then silently returned the old unscoped id and the new
+    // scoped row never got inserted. This test directly asserts that
+    // an unscoped binding is NOT returned when the caller searches for
+    // a scoped one.
+    await withTestDbAndClient(async ({ db, client }) => {
+      const workspaceId = await insertWorkspaceWithOwner(db)
+      const grantedActorId = await insertActor(db, workspaceId)
+      const targetActorId = await insertActor(db, workspaceId)
+      const convId = (
+        await db
+          .insertInto("conversations")
+          .values({
+            kind: "group",
+            boundary: "internal",
+            internal_workspace_id: workspaceId,
+            title: "scope-vs-unscoped",
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow()
+      ).id as string
+
+      // Insert an UNSCOPED binding for actor → actor.
+      const unscopedValues = await buildResourceAccessBindingInsertValues(db, {
+        workspaceId,
+        resourceType: "actor",
+        resourceId: targetActorId,
+        target: { subject: actorRef(grantedActorId) },
+      })
+      const unscoped = await db
+        .insertInto("resource_access_bindings")
+        .values(unscopedValues)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      const subjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: grantedActorId,
+      })
+      const scopeSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: convId,
+      })
+
+      // Look up the unscoped binding — should match.
+      const foundUnscoped = await findActiveBindingIdByResourceAndSubject(
+        client,
+        {
+          workspaceId,
+          resourceType: "actor",
+          resourceId: targetActorId,
+          subjectId,
+          scopeSubjectId: null,
+        }
+      )
+      assert.equal(foundUnscoped, unscoped.id)
+
+      // Look up the SCOPED binding — must NOT collapse onto the
+      // unscoped one. Pre-fix this returned `unscoped.id`.
+      const foundScoped = await findActiveBindingIdByResourceAndSubject(
+        client,
+        {
+          workspaceId,
+          resourceType: "actor",
+          resourceId: targetActorId,
+          subjectId,
+          scopeSubjectId,
+        }
+      )
+      assert.equal(
+        foundScoped,
+        null,
+        "scope_subject_id must be matched exactly — unscoped binding must NOT satisfy a scoped lookup"
+      )
+    })
+  }
+)
+
+test(
+  "listResourceIdsForWorkspaceByBindingFilter scope filter excludes other-scope bindings — round-8 P2 regression",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const workspaceId = await insertWorkspaceWithOwner(db)
+      const grantedActorId = await insertActor(db, workspaceId)
+      // Use `actor` as the bindable resource — installed_skills has
+      // many required columns we'd otherwise have to fabricate.
+      const targetActorA = await insertActor(db, workspaceId)
+      const targetActorB = await insertActor(db, workspaceId)
+      const convA = (
+        await db
+          .insertInto("conversations")
+          .values({
+            kind: "group",
+            boundary: "internal",
+            internal_workspace_id: workspaceId,
+            title: "conv A",
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow()
+      ).id as string
+      const convB = (
+        await db
+          .insertInto("conversations")
+          .values({
+            kind: "group",
+            boundary: "internal",
+            internal_workspace_id: workspaceId,
+            title: "conv B",
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow()
+      ).id as string
+
+      // Two scoped bindings for the same actor subject, different
+      // conversations — one for target actor A in conv A, one for
+      // target actor B in conv B.
+      const insertScoped = async (resourceId: string, convId: string) => {
+        const values = await buildResourceAccessBindingInsertValues(db, {
+          workspaceId,
+          resourceType: "actor",
+          resourceId,
+          target: {
+            subject: actorRef(grantedActorId),
+            scope: conversationRef(convId),
+          },
+        })
+        await db.insertInto("resource_access_bindings").values(values).execute()
+      }
+      await insertScoped(targetActorA, convA)
+      await insertScoped(targetActorB, convB)
+
+      const subjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: grantedActorId,
+      })
+      const convAScopeId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.CONVERSATION,
+        conversationId: convA,
+      })
+
+      // Asking for (granted actor in conv A) must return ONLY targetActorA
+      // — the pre-fix listing also returned targetActorB (other-scope
+      // bindings) because scope_subject_id wasn't part of the filter.
+      const inA = await listResourceIdsForWorkspaceByBindingFilter(db, {
+        workspaceId,
+        resourceType: "actor",
+        subjectId,
+        scopeSubjectId: convAScopeId,
+      })
+      assert.deepEqual([...inA].sort(), [targetActorA].sort())
+
+      // Sanity: unscoped lookup (scope filter omitted) still returns both.
+      const all = await listResourceIdsForWorkspaceByBindingFilter(db, {
+        workspaceId,
+        resourceType: "actor",
+        subjectId,
+      })
+      assert.deepEqual([...all].sort(), [targetActorA, targetActorB].sort())
+    })
+  }
+)
+
+test(
   "updateGrantConversationTypeMaskOverride writes the override and round-trips",
   { timeout: 5 * 60_000 },
   async () => {

@@ -63,6 +63,7 @@ import {
 import {
   findAccessSubjectId,
   findAccessSubjectIdOn,
+  upsertAccessSubjectOn,
 } from "../access/subject-registry.js"
 import {
   assertConversationTypeMaskWithinParent,
@@ -1930,8 +1931,19 @@ async function ensureSkillBinding(
   // scope (e.g. actor A + scope=conv C1 vs actor A + scope=conv C2)
   // must be treated as distinct rows. Resolve the scope subject id too so
   // findActiveBindingIdByResourceAndSubject matches the right pair.
+  //
+  // P2 fix (post-D4 round 8 review): use upsert (not find) for the scope
+  // subject. If we used `findAccessSubjectIdOn` here and the conversation
+  // hadn't been registered in access_subjects yet, the lookup returns
+  // null — and the dedup query downstream matches `scope_subject_id IS
+  // NOT DISTINCT FROM NULL`, i.e. UNSCOPED bindings. Net: an install of
+  // (actor A + scope=conv C) would silently collapse onto an existing
+  // (actor A, unscoped) binding instead of creating a distinct scoped
+  // row. Upserting access_subjects is benign — it's a lookup table; the
+  // row gets created either way when the binding insert reaches the
+  // trigger that requires a real scope_subject_id.
   const scopeSubjectId = scopeRef
-    ? await findAccessSubjectIdOn(client, scopeRef)
+    ? await upsertAccessSubjectOn(client, scopeRef)
     : null
 
   const existingBindingId = subjectId
