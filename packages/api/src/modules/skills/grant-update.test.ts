@@ -286,3 +286,212 @@ test(
     })
   }
 )
+
+/**
+ * Round 11 review (P3, plugin side): same shape as the skill tests above.
+ * The plugin install / update entry points use
+ * `installationAccessRowToTarget` (mcp-plugins/service.ts) — the
+ * mcp-plugins counterpart of `skillBindingToAccessTarget` — and feed
+ * into the same `targetSupportsConversationTypeOverride` and
+ * `validateConversationScopedAccessTarget` gates. The round-10 fix
+ * collapsed both reverse mappers to `readAccessBindingTarget`, so the
+ * regression coverage must match on both sides.
+ *
+ * Service-level architectural constraint: grantPluginInstallationAccess
+ * / updatePluginInstallationAccessGrant / updatePluginInstallation use
+ * the global db / pool, which the testcontainer-backed withTestDb
+ * helper can't override without an infrastructure refactor (same
+ * limitation as moveMemoryToSpace — see move-permission.test.ts).
+ * So this test reproduces the same three-step pipeline the service
+ * walks (load row → decode target → policy gate) directly against the
+ * test container.
+ */
+async function newPluginInstallation(
+  db: Kysely<any>,
+  wsId: string
+): Promise<string> {
+  const user = await db
+    .insertInto("users")
+    .values({
+      email: `${rid()}@${NS}-plg`,
+      name: "installer",
+      password_hash: "x",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const member = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: wsId,
+      user_id: user.id as string,
+      trust_level: "admin",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const publisher = await db
+    .insertInto("publishers")
+    .values({
+      slug: `pub-${rid()}`,
+      display_name: "pub",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const item = await db
+    .insertInto("catalog_items")
+    .values({
+      publisher_id: publisher.id as string,
+      item_kind: "plugin_package",
+      slug: `plg-${rid()}`,
+      display_name: "plg",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const version = await db
+    .insertInto("catalog_versions")
+    .values({
+      catalog_item_id: item.id as string,
+      version: "1.0.0",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const attachmentSubject = await upsertAccessSubject(db as any, {
+    kind: "workspace" as any,
+    workspaceId: wsId,
+  })
+  const row = await db
+    .insertInto("plugin_installations")
+    .values({
+      workspace_id: wsId,
+      catalog_item_id: item.id as string,
+      catalog_version_id: version.id as string,
+      display_name: "plg",
+      attachment_subject_id: attachmentSubject,
+      installed_by_workspace_member_id: member.id as string,
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+test(
+  "installationAccessRowToTarget decodes remote_agent_in_conversation correctly (plugin side parallel of P2)",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const wsId = await newWorkspace(db)
+      const remoteAgentId = await newRemoteAgent(db, wsId)
+      const conversationId = await newConversation(db, wsId)
+      const installationId = await newPluginInstallation(db, wsId)
+
+      const bindingValues = await buildResourceAccessBindingInsertValues(db, {
+        workspaceId: wsId,
+        resourceType: "plugin_installation",
+        resourceId: installationId,
+        target: {
+          subject: remoteAgentRef(remoteAgentId),
+          scope: conversationRef(conversationId),
+        },
+      })
+      await db
+        .insertInto("resource_access_bindings")
+        .values(bindingValues)
+        .execute()
+
+      const rows = await loadAccessBindingRowsForResources(db, {
+        resourceType: "plugin_installation",
+        resourceIds: [installationId],
+      })
+      assert.equal(rows.length, 1)
+      const target = readAccessBindingTarget(
+        normalizeAccessBindingRow(rows[0] as any) as any
+      )
+
+      assert.equal(
+        subjectScopeLabel(target as any),
+        "remote_agent_in_conversation"
+      )
+      assert.equal(target.subject.kind, "remote_agent")
+      assert.equal(target.scope?.kind, "conversation")
+
+      assert.equal(
+        targetSupportsConversationTypeOverride(target as any),
+        false,
+        "remote_agent + scope=conversation plugin grant must NOT support conversation-type override"
+      )
+    })
+  }
+)
+
+/**
+ * Round 11 review (P2 regression coverage for workspace_member):
+ * exercises the full insert-then-decode round-trip for a
+ * workspace_member-target skill binding. Pre-round-11, SkillScopeTarget
+ * didn't carry workspaceMemberId — so although a controller could
+ * accept a workspace_member grant, the install / attach flow crashed
+ * at the second scopedTargetFromSkillUseScope call inside
+ * ensureSkillBinding with "workspaceMemberId is required for
+ * workspace_member scope". The unit-test surface
+ * (scopedTargetFromSkillUseScope, normalizeScopeTarget) is not
+ * exported, so we verify the same load-path the service uses:
+ * insert a workspace_member binding, decode via the
+ * readAccessBindingTarget pipeline, and assert the workspace_member
+ * subject survives intact.
+ */
+test(
+  "workspace_member skill grant round-trips via the canonical decoder — round-11 P2",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const wsId = await newWorkspace(db)
+      // Reuse the same user→member fixture builder by inserting a
+      // workspace member directly (no admin trust needed for this test).
+      const user = await db
+        .insertInto("users")
+        .values({
+          email: `${rid()}@${NS}-wm`,
+          name: "member",
+          password_hash: "x",
+        })
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const member = await db
+        .insertInto("workspace_members")
+        .values({
+          workspace_id: wsId,
+          user_id: user.id as string,
+          trust_level: "member",
+        } as any)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+      const memberId = member.id as string
+      const skillId = await newInstalledSkill(db, wsId)
+
+      const bindingValues = await buildResourceAccessBindingInsertValues(db, {
+        workspaceId: wsId,
+        resourceType: "installed_skill",
+        resourceId: skillId,
+        target: { subject: { kind: "workspace_member", memberId } },
+      })
+      await db
+        .insertInto("resource_access_bindings")
+        .values(bindingValues)
+        .execute()
+
+      const rows = await loadAccessBindingRowsForResources(db, {
+        resourceType: "installed_skill",
+        resourceIds: [skillId],
+      })
+      assert.equal(rows.length, 1)
+      const target = readAccessBindingTarget(
+        normalizeAccessBindingRow(rows[0] as any) as any
+      )
+      assert.equal(target.subject.kind, "workspace_member")
+      assert.equal(
+        (target.subject as { memberId: string }).memberId,
+        memberId,
+        "workspace_member id must survive the insert→decode round-trip"
+      )
+      assert.equal(subjectScopeLabel(target as any), "workspace_member")
+    })
+  }
+)

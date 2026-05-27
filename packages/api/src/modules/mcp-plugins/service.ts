@@ -914,13 +914,15 @@ function normalizeAttachmentTarget(input: {
 function installationAccessRowToTarget(
   row: InstallationAccessRow
 ): CapabilityAccessTarget {
-  try {
-    return readAccessBindingTarget(row as any)
-  } catch {
-    // Defensive fallback for synthetic / legacy rows that lack the
-    // via_join projection. Behavior unchanged from the old fallback.
-    return { subject: workspaceRef(row.workspace_id) }
-  }
+  // Round 11 review (P3): no fail-open fallback. The earlier version
+  // caught decode failures and returned `{ subject: workspaceRef(...) }`
+  // — but the callers (grantPluginInstallationAccess update path,
+  // updatePluginInstallation) feed the result into permission gates,
+  // so a silent workspace fallback would widen access on malformed
+  // rows. If the projection is missing the via_join fields
+  // readAccessBindingTarget expects, that's a load-path bug; propagate
+  // it instead of laundering it into a workspace grant.
+  return readAccessBindingTarget(row as any)
 }
 
 function buildInstallationAccessRow(

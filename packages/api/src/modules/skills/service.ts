@@ -248,6 +248,14 @@ type SkillScopeTarget = {
   // target through the legacy intermediate-shape pipeline (instead of
   // silently collapsing the remote_agent identity into workspace).
   remoteAgentId: string | null
+  // Round 11 review (P2): same fix for workspace_member — controller
+  // accepts workspace_member targets, scopedTargetFromSkillUseScope
+  // requires workspaceMemberId, but SkillScopeTarget previously didn't
+  // carry it. ensureSkillBinding would then call
+  // scopedTargetFromSkillUseScope with workspaceMemberId=undefined and
+  // crash on the "workspaceMemberId is required" error — making the
+  // public skill-grant flow broken for workspace_member targets.
+  workspaceMemberId: string | null
   conversationId: string | null
 }
 
@@ -594,6 +602,7 @@ function normalizeScopeTarget(input: {
   useScope: SkillUseScope
   actorId?: string | null
   remoteAgentId?: string | null
+  workspaceMemberId?: string | null
   conversationId?: string | null
 }): SkillScopeTarget {
   switch (input.useScope) {
@@ -603,19 +612,24 @@ function normalizeScopeTarget(input: {
         useScope: "workspace",
         actorId: null,
         remoteAgentId: null,
+        workspaceMemberId: null,
         conversationId: null,
       }
     case "workspace_member":
       // workspace_member-scoped skill bindings are individual approvals.
-      // The intermediate type doesn't carry the workspace_member_id (the
-      // upstream resolver already knows it) but we still need to map the
-      // useScope through so downstream switches don't fall to the
-      // "Unsupported skill scope" error.
+      // Round 11 review (P2): the intermediate SkillScopeTarget now
+      // carries `workspaceMemberId` so the write path (ensureSkillBinding
+      // → scopedTargetFromSkillUseScope) doesn't crash on a legitimate
+      // workspace_member grant. We tolerate `input.workspaceMemberId
+      // == null` here (filter-mode callers may not have it) — the
+      // write-side `scopedTargetFromSkillUseScope` is still strict and
+      // throws when actually building the SubjectRef.
       return {
         bindScope: "workspace_member",
         useScope: "workspace_member",
         actorId: null,
         remoteAgentId: null,
+        workspaceMemberId: input.workspaceMemberId ?? null,
         conversationId: null,
       }
     case "conversation":
@@ -630,6 +644,7 @@ function normalizeScopeTarget(input: {
         useScope: "conversation",
         actorId: null,
         remoteAgentId: null,
+        workspaceMemberId: null,
         conversationId: input.conversationId,
       }
     case "actor":
@@ -641,6 +656,7 @@ function normalizeScopeTarget(input: {
         useScope: "actor",
         actorId: input.actorId,
         remoteAgentId: null,
+        workspaceMemberId: null,
         conversationId: null,
       }
     case "actor_in_conversation":
@@ -655,6 +671,7 @@ function normalizeScopeTarget(input: {
         useScope: "actor_in_conversation",
         actorId: input.actorId,
         remoteAgentId: null,
+        workspaceMemberId: null,
         conversationId: input.conversationId,
       }
     case "remote_agent":
@@ -669,6 +686,7 @@ function normalizeScopeTarget(input: {
         useScope: "remote_agent",
         actorId: null,
         remoteAgentId: input.remoteAgentId,
+        workspaceMemberId: null,
         conversationId: null,
       }
     case "remote_agent_in_conversation":
@@ -683,6 +701,7 @@ function normalizeScopeTarget(input: {
         useScope: "remote_agent_in_conversation",
         actorId: null,
         remoteAgentId: input.remoteAgentId,
+        workspaceMemberId: null,
         conversationId: input.conversationId,
       }
     default:
@@ -1188,17 +1207,17 @@ function buildInstalledSkillPayload(
  */
 function skillBindingToAccessTarget(
   binding: SkillAccessRow,
-  fallbackWorkspaceId: string
+  _fallbackWorkspaceId: string
 ): CapabilityAccessTarget {
-  try {
-    return readAccessBindingTarget(binding as any)
-  } catch {
-    // Fallback if the row somehow lacks the via_join projection
-    // (legacy code path / synthetic rows). Returning a workspace target
-    // is safe-ish but reaches the same questionable place as before —
-    // log and keep behavior.
-    return { subject: workspaceRef(fallbackWorkspaceId) }
-  }
+  // Round 11 review (P3): no fail-open fallback. The earlier version
+  // caught decode failures and returned `{ subject: workspaceRef(...) }`
+  // — but the callers (updateInstalledSkillAccessGrant /
+  // updateInstalledSkill) feed the result into permission gates, so a
+  // silent workspace fallback would widen access on malformed rows. If
+  // the projection is missing the via_join fields readAccessBindingTarget
+  // expects, that's a load-path bug; propagate it instead of laundering
+  // it into a workspace grant.
+  return readAccessBindingTarget(binding as any)
 }
 
 function buildAvailableSkillPayload(
@@ -2030,6 +2049,7 @@ async function ensureSkillBinding(
       workspaceId: input.workspaceId,
       actorId: input.target.actorId || undefined,
       remoteAgentId: input.target.remoteAgentId || undefined,
+      workspaceMemberId: input.target.workspaceMemberId || undefined,
       conversationId: input.target.conversationId || undefined,
     }),
   })
@@ -2765,6 +2785,8 @@ export async function createWorkspaceSkill(input: {
   // Round 10 review (P2): also extract remoteAgentId so SkillScopeTarget
   // doesn't drop the remote_agent identity when the target subject is
   // a remote agent.
+  // Round 11 review (P2): same for workspace_member — without this the
+  // workspace_member skill grant path would crash in ensureSkillBinding.
   const target = normalizeScopeTarget({
     useScope: skillUseScopeFromTarget(input.accessTarget),
     actorId:
@@ -2775,6 +2797,10 @@ export async function createWorkspaceSkill(input: {
       input.accessTarget.subject.kind === "remote_agent"
         ? (input.accessTarget.subject as { remoteAgentId: string })
             .remoteAgentId
+        : null,
+    workspaceMemberId:
+      input.accessTarget.subject.kind === "workspace_member"
+        ? (input.accessTarget.subject as { memberId: string }).memberId
         : null,
     conversationId:
       input.accessTarget.scope?.kind === "conversation"
@@ -3201,6 +3227,10 @@ export async function installMarketplaceSkill(input: {
       input.accessTarget.subject.kind === "remote_agent"
         ? (input.accessTarget.subject as { remoteAgentId: string })
             .remoteAgentId
+        : null,
+    workspaceMemberId:
+      input.accessTarget.subject.kind === "workspace_member"
+        ? (input.accessTarget.subject as { memberId: string }).memberId
         : null,
     conversationId:
       input.accessTarget.scope?.kind === "conversation"
