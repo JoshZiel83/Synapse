@@ -962,20 +962,37 @@ export function createLocalFsBackend(
     hostRootWithSep,
     async start() {
       await fsp.mkdir(hostRootPath, { recursive: true })
-      // mkdir internal subtree under safeResolve-like guard: ensure no
-      // pre-existing symlink at /.synapse-internal/{tmp,restore}. realpath
-      // each and reject if it escapes root.
+      // Internal namespace integrity:
+      //   - /.synapse-internal and its tmp/restore children MUST be real
+      //     directories (not symlinks). A pre-existing
+      //     `.synapse-internal -> /public/internal` would let staging
+      //     files be aliased out through a list/read-visible path.
+      //   - After mkdir, lstat each and reject symlinks; verify realpath
+      //     equals the constructed host path (no in-root alias either).
       await fsp.mkdir(internalDirAbs, { recursive: true })
       await fsp.mkdir(internalTmpAbs, { recursive: true })
       await fsp.mkdir(internalRestoreAbs, { recursive: true })
       for (const dir of [internalDirAbs, internalTmpAbs, internalRestoreAbs]) {
+        const lst = await fsp.lstat(dir)
+        if (lst.isSymbolicLink()) {
+          throw new Error(
+            `vfs startup: ${dir} is a symlink; the reserved internal namespace must be a real directory`
+          )
+        }
+        if (!lst.isDirectory()) {
+          throw new Error(
+            `vfs startup: ${dir} is not a directory (kind=${lst.mode.toString(8)})`
+          )
+        }
         const real = await fsp.realpath(dir)
         if (real !== dir) {
-          if (!real.startsWith(hostRootWithSep)) {
-            throw new Error(
-              `vfs startup: ${dir} resolves to ${real} outside rootPath`
-            )
-          }
+          // Either an intermediate-component symlink, or the dir itself
+          // resolves elsewhere even though lstat says directory. Reject —
+          // we want the internal namespace addressable by exactly one
+          // host path.
+          throw new Error(
+            `vfs startup: ${dir} resolves to ${real}; reserved namespace must not alias another path (even inside root)`
+          )
         }
       }
     },

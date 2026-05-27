@@ -337,6 +337,43 @@ test("withGrantPrefixes isolates concurrent tool calls (no cross-talk)", async (
   }
 })
 
+test("start rejects when /.synapse-internal is a pre-existing symlink", async () => {
+  const root = freshRoot()
+  try {
+    // Pre-place a symlink at the reserved name pointing to a sibling
+    // in-root directory. Without the lstat check, runtime would happily
+    // mkdir-through it and stage tmp files there, where list_dir/fs_read
+    // could see them via the alias.
+    const aliasTarget = freshRoot("synapse-alias-")
+    symlinkSync(aliasTarget, join(root, ".synapse-internal"))
+    const be = createLocalFsBackend({ rootPath: root })
+    await assert.rejects(
+      () => be.start(),
+      /reserved internal namespace must be a real directory|reserved namespace must not alias/
+    )
+    rmSync(aliasTarget, { recursive: true, force: true })
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
+test("start rejects when /.synapse-internal/tmp is a symlink to another in-root dir", async () => {
+  const root = freshRoot()
+  try {
+    mkdirSync(join(root, "public"))
+    mkdirSync(join(root, ".synapse-internal"))
+    // Symlink tmp into a list-visible directory.
+    symlinkSync(join(root, "public"), join(root, ".synapse-internal", "tmp"))
+    const be = createLocalFsBackend({ rootPath: root })
+    await assert.rejects(
+      () => be.start(),
+      /reserved internal namespace must be a real directory|must not alias/
+    )
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+  }
+})
+
 test("list root excludes /.synapse-internal directory entry", async () => {
   const root = freshRoot()
   try {

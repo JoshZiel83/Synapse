@@ -57,6 +57,22 @@ pub struct State {
     pub cli: Cli,
     pub history: Mutex<history::HistoryStore>,
     pub index: Mutex<index::IndexStore>,
+    /// Tracks background fs.index.rebuild tasks so fs.index.status can
+    /// surface progress. Rebuild is long-running for large trees; the RPC
+    /// itself MUST return immediately with the task_id so the TS client's
+    /// short timeout doesn't kill the helper.
+    pub tasks: Mutex<std::collections::HashMap<String, RebuildTaskState>>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct RebuildTaskState {
+    pub task_id: String,
+    pub subtree: String,
+    /// "running" | "completed" | "failed"
+    pub status: String,
+    pub started_at: String,
+    pub finished_at: Option<String>,
+    pub error: Option<String>,
 }
 
 #[tokio::main]
@@ -76,11 +92,13 @@ async fn main() -> Result<()> {
         &cli.work_dir,
         &cli.fs_index_ignore,
         cli.tika_endpoint.as_deref(),
+        cli.max_extract_bytes,
     )?;
     let state = Arc::new(State {
         cli,
         history: Mutex::new(history),
         index: Mutex::new(index),
+        tasks: Mutex::new(std::collections::HashMap::new()),
     });
 
     let stdin = tokio::io::stdin();
@@ -196,16 +214,84 @@ async fn dispatch(
         "fs.index.rebuild" => {
             let input: rpc::IndexRebuildInput = serde_json::from_value(params)
                 .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
-            let mut idx = state.index.lock().await;
-            let out = idx.rebuild(&state.cli.root, input.subtree.as_deref())?;
-            Ok(serde_json::to_value(out).unwrap())
+            let subtree = input.subtree.clone().unwrap_or_else(|| "/".into());
+            // Validate subtree before queueing — bad input must error
+            // synchronously, not silently background a no-op.
+            let _ = crate::path::canonical(&subtree)?;
+            let task_id = format!("rebuild-{}", new_uuid_like());
+            let started_at = now_rfc3339_like();
+            let task = RebuildTaskState {
+                task_id: task_id.clone(),
+                subtree: subtree.clone(),
+                status: "running".into(),
+                started_at,
+                finished_at: None,
+                error: None,
+            };
+            state.tasks.lock().await.insert(task_id.clone(), task);
+            // Spawn the actual work as a background task. fs.index.rebuild
+            // for a multi-thousand-file subtree easily exceeds the 5s
+            // client-side RPC timeout; returning immediately + tracking
+            // status separately keeps the helper from being killed.
+            let state2 = state.clone();
+            let task_id2 = task_id.clone();
+            let subtree2 = subtree.clone();
+            tokio::task::spawn(async move {
+                // spawn_blocking around the sync rebuild so we don't tie
+                // up the dispatch worker for the duration of the walk.
+                let work_state = state2.clone();
+                let join = tokio::task::spawn_blocking(move || -> Result<(), String> {
+                    // Acquire the index lock synchronously inside the blocking
+                    // task by trying repeatedly via a runtime handle.
+                    let handle = tokio::runtime::Handle::current();
+                    let mut idx = handle.block_on(work_state.index.lock());
+                    idx.rebuild(&work_state.cli.root, Some(&subtree2))
+                        .map(|_| ())
+                        .map_err(|e| format!("{e}"))
+                })
+                .await;
+                let mut tasks = state2.tasks.lock().await;
+                if let Some(t) = tasks.get_mut(&task_id2) {
+                    t.finished_at = Some(now_rfc3339_like());
+                    match join {
+                        Ok(Ok(())) => t.status = "completed".into(),
+                        Ok(Err(msg)) => {
+                            t.status = "failed".into();
+                            t.error = Some(msg);
+                        }
+                        Err(join_err) => {
+                            t.status = "failed".into();
+                            t.error = Some(format!("join_error: {join_err}"));
+                        }
+                    }
+                }
+            });
+            Ok(serde_json::json!({ "task_id": task_id }))
         }
         "fs.index.status" => {
             let input: rpc::IndexStatusInput = serde_json::from_value(params)
                 .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
             let idx = state.index.lock().await;
-            let out = idx.status(input.subtree.as_deref().unwrap_or("/"))?;
-            Ok(serde_json::to_value(out).unwrap())
+            let mut out = serde_json::to_value(idx.status(
+                input.subtree.as_deref().unwrap_or("/"),
+            )?)
+            .unwrap();
+            drop(idx);
+            // Attach the most recent rebuild task status (if any) under
+            // `rebuild_task` so clients can poll progress without a
+            // separate RPC. Operators reading status.json get the full
+            // task table out-of-band.
+            let tasks = state.tasks.lock().await;
+            let latest = tasks
+                .values()
+                .max_by(|a, b| a.started_at.cmp(&b.started_at))
+                .cloned();
+            if let Some(t) = latest {
+                if let Value::Object(ref mut m) = out {
+                    m.insert("rebuild_task".into(), serde_json::to_value(t).unwrap());
+                }
+            }
+            Ok(out)
         }
         "fs.index.upsert" => {
             let input: rpc::IndexUpsertInput = serde_json::from_value(params)
@@ -259,4 +345,23 @@ async fn dispatch(
         }
         other => Err(RpcError::MethodNotFound(other.to_string())),
     }
+}
+
+fn new_uuid_like() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let ns = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    format!("{:016x}{:08x}", ns, std::process::id())
+}
+
+fn now_rfc3339_like() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let d = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let secs = d.as_secs();
+    let ms = d.subsec_millis();
+    format!("epoch:{secs}.{ms:03}")
 }

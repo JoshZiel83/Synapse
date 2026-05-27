@@ -90,7 +90,11 @@ const METHOD_TIMEOUT_OVERRIDES: Record<string, number> = {
   "fs.history.snapshot": 60_000,
   "fs.history.snapshot_delete": 60_000,
   "fs.extract.text": 60_000,
-  "fs.index.rebuild": 5_000, // returns task_id immediately
+  // Sidecar dispatches the actual walk to a background tokio task; the
+  // RPC itself just registers the task and returns a task_id, so the
+  // dispatch turnaround is fast. Keep the timeout modest but not 5s —
+  // generating the task_id + first SQLite writes can spike on slow disks.
+  "fs.index.rebuild": 15_000,
 }
 
 const STDERR_TAIL_BYTES = 4096
