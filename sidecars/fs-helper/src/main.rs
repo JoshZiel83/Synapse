@@ -296,10 +296,19 @@ async fn dispatch(
             // a long-running rebuild holds the index Mutex for the
             // duration of its work, so anything that gates on index.lock()
             // can't reliably surface rebuild_task=running. We snapshot
-            // tasks under their own short-lived lock, then try-lock the
-            // index briefly for the cheap counts; if the index is busy
-            // (rebuild holding it), return the task info immediately with
-            // a `doc_count_pending` marker instead of blocking the RPC.
+            // tasks under their own short-lived lock, then read the
+            // counts via a **separate read-only SQLite connection** so a
+            // /secret rebuild holding the index Mutex doesn't leak its
+            // existence to a /public status caller via a `doc_count_pending`
+            // sentinel. (The old design did `state.index.try_lock()` and
+            // returned `doc_count:-1, doc_count_pending:true` on failure;
+            // even after the runtime stripped the unauthorized rebuild_task
+            // field, that sentinel was a cross-subtree side channel that
+            // said "some rebuild is happening, just not one you're allowed
+            // to see".) WAL mode lets the read-only connection observe a
+            // consistent snapshot (possibly mid-rebuild stale, which is
+            // acceptable — `rebuild_task` already communicates progress
+            // to authorized callers).
             let task_snapshot: Option<RebuildTaskState> = {
                 let tasks = state.tasks.lock().await;
                 tasks
@@ -321,23 +330,22 @@ async fn dispatch(
                     .max_by(|a, b| a.started_at.cmp(&b.started_at))
                     .cloned()
             };
-            let try_lock = state.index.try_lock();
-            let mut out = match try_lock {
-                Ok(idx) => serde_json::to_value(idx.status(&requested_subtree)?)
-                    .unwrap(),
-                Err(_) => {
-                    // Index busy (rebuild in progress). Return a stub
-                    // status carrying just the subtree marker; the task
-                    // payload below is the load-bearing signal.
-                    serde_json::json!({
-                        "subtree": requested_subtree,
-                        "last_indexed_at": null,
-                        "doc_count": -1,
-                        "doc_count_pending": true,
-                        "queue_depth": 0,
-                        "errors": { "extract_failed": 0, "watcher_starved": 0 },
-                    })
-                }
+            // Read the per-subtree counts via a fresh read-only connection.
+            // No mutex contention, no busy-state side channel. If opening
+            // the read-only handle itself fails (rare; e.g. db not yet
+            // initialized), emit a quiet zero-stub that looks identical
+            // whether or not a sibling rebuild is in flight.
+            let mut out = match crate::index::open_status_conn(&state.cli.work_dir)
+                .and_then(|c| crate::index::compute_status(&c, &requested_subtree))
+            {
+                Ok(s) => serde_json::to_value(s).unwrap(),
+                Err(_) => serde_json::json!({
+                    "subtree": requested_subtree,
+                    "last_indexed_at": null,
+                    "doc_count": 0,
+                    "queue_depth": 0,
+                    "errors": { "extract_failed": 0, "watcher_starved": 0 },
+                }),
             };
             if let Some(t) = task_snapshot {
                 if let Value::Object(ref mut m) = out {

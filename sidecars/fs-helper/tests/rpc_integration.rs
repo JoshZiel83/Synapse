@@ -1037,3 +1037,161 @@ fn task_id_is_csprng_random_hex_not_timestamp_prefix() {
     }
     helper.stop();
 }
+
+#[test]
+fn rebuild_does_not_re_route_backslash_filenames_into_fake_prefix() {
+    // Regression: rebuild used to convert `\` -> `/` on host->VFS path
+    // generation, which on POSIX silently re-routes a real file named
+    // "public\leak.txt" into the VFS path "/public/leak.txt". A caller
+    // with grant prefix ["/public"] would then see content from a file
+    // that does NOT live under any "/public" directory on disk.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    // The leaky filename. Skip on systems where the filename actually
+    // can't be created (Windows test runners would refuse it; we only
+    // care about POSIX here, where the bug bites).
+    let leak_name = "public\\leak.txt";
+    let leak_path = root.join(leak_name);
+    if std::fs::write(&leak_path, "topsecret").is_err() {
+        // Filesystem refused the name (probably Windows) — bug not
+        // reachable here; bail without failing.
+        return;
+    }
+    // Also drop a legitimate /public/ok.txt with the same content so a
+    // mistaken match would look indistinguishable from a real hit.
+    std::fs::create_dir_all(root.join("public")).unwrap();
+    std::fs::write(root.join("public/ok.txt"), "topsecret").unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    let _ = helper.call(
+        1,
+        "fs.index.rebuild",
+        serde_json::json!({ "subtree": "/" }),
+    );
+    wait_for_rebuild_complete(&mut helper, "/");
+    let r = helper.call(
+        2,
+        "fs.search.content",
+        serde_json::json!({
+            "query": "topsecret",
+            "limit": 50, "offset": 0,
+            "allowed_path_prefixes": ["/public"],
+        }),
+    );
+    let hits = r["result"]["hits"].as_array().unwrap();
+    let paths: Vec<&str> = hits.iter().filter_map(|h| h["path"].as_str()).collect();
+    // /public/ok.txt is fine. The leaky file (whatever shape it gets
+    // indexed as, if at all) must NOT appear under /public/leak.txt.
+    assert!(
+        !paths.iter().any(|p| *p == "/public/leak.txt"),
+        "backslash filename leaked into /public/ search: {paths:?}",
+    );
+    // Sanity: legitimate /public file is still found.
+    assert!(
+        paths.iter().any(|p| *p == "/public/ok.txt"),
+        "legitimate /public hit missing: {paths:?}",
+    );
+    helper.stop();
+}
+
+#[test]
+fn status_on_unrelated_subtree_does_not_leak_busy_state_via_doc_count_pending() {
+    // Regression: while /secret rebuild held the index Mutex, a status
+    // call on /public used to fall back to a stub
+    // `{doc_count: -1, doc_count_pending: true, ...}`. A /public-only
+    // caller saw "no rebuild_task but doc_count_pending=true" — i.e.
+    // "some rebuild I'm not allowed to see is in flight". Fix routes
+    // status through a separate read-only SQLite connection; this test
+    // hammers /public status during a large /secret rebuild and asserts
+    // the sentinel never appears.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(root.join("secret")).unwrap();
+    std::fs::create_dir_all(root.join("public")).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    // Enough small files that the rebuild window is wide enough to
+    // race against status queries.
+    for i in 0..3000 {
+        std::fs::write(root.join(format!("secret/f{i}.txt")), "x").unwrap();
+    }
+    std::fs::write(root.join("public/ok.txt"), "y").unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    // Prime: index /public only so the db file exists. Critically, do
+    // NOT rebuild "/" here — that would leave a completed `/` task in
+    // the task table, which the sidecar's filter would surface as an
+    // ancestor task on every later /public status call (a separate,
+    // legitimate behavior covered by round-7 runtime stripping). We
+    // only want to test the busy-state side channel here.
+    helper.call(
+        0,
+        "fs.index.rebuild",
+        serde_json::json!({ "subtree": "/public" }),
+    );
+    wait_for_rebuild_complete(&mut helper, "/public");
+    // Kick off a fresh /secret rebuild and immediately start polling
+    // /public status.
+    helper.call(
+        1,
+        "fs.index.rebuild",
+        serde_json::json!({ "subtree": "/secret" }),
+    );
+    let mut id = 100i64;
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+    let mut saw_running = false;
+    let mut samples = 0;
+    loop {
+        if std::time::Instant::now() >= deadline {
+            break;
+        }
+        id += 1;
+        let s = helper.call(
+            id,
+            "fs.index.status",
+            serde_json::json!({ "subtree": "/public" }),
+        );
+        // /public must NEVER carry the leaked sentinel.
+        assert!(
+            s["result"].get("doc_count_pending").is_none(),
+            "/public status leaked doc_count_pending during /secret rebuild: {s}",
+        );
+        // doc_count for /public must be 0 or 1 (we only put one file).
+        let dc = s["result"]["doc_count"].as_i64().unwrap_or(i64::MIN);
+        assert!(
+            dc >= 0,
+            "/public status leaked negative doc_count: {s}",
+        );
+        // /public must NEVER see /secret's rebuild_task at the sidecar
+        // level (the prime's own /public task is fine).
+        if let Some(rt) = s["result"].get("rebuild_task") {
+            let sub = rt["subtree"].as_str().unwrap_or("");
+            assert!(
+                sub == "/public" || sub.starts_with("/public/"),
+                "/public status surfaced foreign rebuild_task: {s}",
+            );
+        }
+        samples += 1;
+        // Confirm the /secret rebuild is actually in flight; once it
+        // finishes we can stop polling.
+        id += 1;
+        let s2 = helper.call(
+            id,
+            "fs.index.status",
+            serde_json::json!({ "subtree": "/secret" }),
+        );
+        let secret_status = s2["result"]["rebuild_task"]["status"]
+            .as_str()
+            .unwrap_or("");
+        if secret_status == "running" {
+            saw_running = true;
+        }
+        if secret_status == "completed" {
+            break;
+        }
+    }
+    assert!(saw_running, "/secret rebuild never observed in 'running' state ({samples} samples)");
+    assert!(samples >= 5, "too few /public samples: {samples}");
+    helper.stop();
+}

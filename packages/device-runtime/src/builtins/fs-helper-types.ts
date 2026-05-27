@@ -94,7 +94,6 @@ export interface IndexStatusResult {
   subtree: string
   last_indexed_at: string | null
   doc_count: number
-  doc_count_pending?: boolean
   queue_depth: number
   errors: {
     extract_failed: number

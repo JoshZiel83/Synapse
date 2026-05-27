@@ -131,8 +131,38 @@ impl IndexStore {
             if rel.components().any(|c| ignores.iter().any(|i| *i == c.as_os_str().to_string_lossy())) {
                 continue;
             }
-            let canon_path = format!("/{}", rel.to_string_lossy().replace('\\', "/"));
             if !entry.file_type().is_file() { continue; }
+            // Build the VFS path by joining components with '/'. NEVER
+            // silently convert '\' to '/' — POSIX allows a literal
+            // backslash in a filename, so a real file named
+            // `public\leak.txt` would otherwise be indexed as the VFS
+            // path `/public/leak.txt` and bypass the runtime's per-
+            // prefix grant filter on indexed search (the search would
+            // post-filter and decide it really lives under `/public`).
+            // Push raw segment strings, then re-run `canonical()` to
+            // enforce the same VFS rules as every other path argument:
+            // reject backslash, drive-letter prefix, colon, DOS-reserved
+            // names, internal namespace. Anything canonical() refuses
+            // gets silently dropped from the index — better to under-
+            // index a weird filename than to index it under a path
+            // that the runtime would later mis-attribute.
+            let mut buf = String::from("/");
+            let mut malformed = false;
+            let mut first = true;
+            for c in rel.components() {
+                let s = match c.as_os_str().to_str() {
+                    Some(s) => s,
+                    None => { malformed = true; break; }
+                };
+                if !first { buf.push('/'); }
+                first = false;
+                buf.push_str(s);
+            }
+            if malformed { continue; }
+            let canon_path = match canonical(&buf) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
             self.upsert_host(p, &canon_path)?;
         }
         self.last_indexed_at = Some(now_stamp());
@@ -304,68 +334,7 @@ impl IndexStore {
     }
 
     pub fn status(&self, subtree: &str) -> Result<IndexStatusResult, RpcError> {
-        let canon = canonical(subtree)?;
-        // Compute doc_count, extract_failed, and last_indexed_at
-        // all within the requested subtree. Returning the global
-        // IndexStore.extract_failed counter or last_indexed_at would
-        // let a /public-only caller observe /secret's indexing activity
-        // (the failure count, the timestamp). Per-subtree aggregation is
-        // the right scope.
-        //
-        // `source` is recorded on every doc row by upsert_host; values
-        // that count as a failed extraction are gathered here. Successful
-        // extractions are "text" | "rich".
-        const FAILED_SOURCES: &[&str] = &[
-            "extract_failed",
-            "extract_oversize",
-            "no_tika",
-            "too_large",
-            "binary",
-            "read_failed",
-            "symlink_skipped",
-        ];
-        let mut stmt = self
-            .conn
-            .prepare("SELECT path, source, indexed_at FROM docs")?;
-        let rows =
-            stmt.query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, Option<String>>(1)?,
-                    r.get::<_, Option<String>>(2)?,
-                ))
-            })?;
-        let mut count: i64 = 0;
-        let mut extract_failed: i64 = 0;
-        let mut last_indexed_at: Option<String> = None;
-        for r in rows {
-            let (path, source, indexed_at) = r?;
-            if canon != "/" && !under_prefix(&path, &canon) {
-                continue;
-            }
-            count += 1;
-            if let Some(s) = &source {
-                if FAILED_SOURCES.iter().any(|f| *f == s.as_str()) {
-                    extract_failed += 1;
-                }
-            }
-            if let Some(ts) = indexed_at {
-                match &last_indexed_at {
-                    Some(cur) if cur.as_str() >= ts.as_str() => {}
-                    _ => last_indexed_at = Some(ts),
-                }
-            }
-        }
-        Ok(IndexStatusResult {
-            subtree: canon,
-            last_indexed_at,
-            doc_count: count,
-            queue_depth: 0,
-            errors: IndexErrors {
-                extract_failed,
-                watcher_starved: 0,
-            },
-        })
+        compute_status(&self.conn, subtree)
     }
 
     /// FTS5-backed content search. Emits up to `limit` hits under
@@ -539,4 +508,91 @@ fn tika_extract_blocking(
         return Err(format!("tika_http_{}", resp.status()));
     }
     resp.into_string().map_err(|e| format!("tika_body: {e}"))
+}
+
+/// Open a fresh **read-only** SQLite handle on the index. Used by
+/// `fs.index.status` so a status query can compute counts WITHOUT
+/// contending with a rebuild's `IndexStore` mutex. The previous design
+/// (`try_lock` + `doc_count_pending` stub fallback) leaked the busy
+/// state across subtrees: a /public-only caller could see
+/// `doc_count_pending:true` whenever ANY rebuild — including a sibling
+/// /secret one — held the index mutex, even after the runtime stripped
+/// the unauthorized `rebuild_task` field. WAL mode allows concurrent
+/// readers without writer contention, so a separate handle gets the
+/// real (possibly mid-rebuild stale) counts without the side channel.
+pub fn open_status_conn(work_dir: &Path) -> Result<Connection, RpcError> {
+    let db_path = work_dir.join("index.sqlite");
+    if !db_path.exists() {
+        return Err(RpcError::Internal("index_db_missing".into()));
+    }
+    let c = Connection::open_with_flags(
+        &db_path,
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY
+            | rusqlite::OpenFlags::SQLITE_OPEN_URI
+            | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+    )?;
+    // WAL readers must not try to switch journal mode; do nothing here.
+    Ok(c)
+}
+
+/// Compute index status from a SQLite handle. Factored out so both the
+/// owning `IndexStore::status` and the read-only fallback in
+/// `fs.index.status` can share the same SQL.
+pub fn compute_status(conn: &Connection, subtree: &str) -> Result<IndexStatusResult, RpcError> {
+    let canon = canonical(subtree)?;
+    // Per-subtree aggregation: returning the global IndexStore counters
+    // would let a /public-only caller observe /secret's indexing activity
+    // (failure count, last-indexed timestamp).
+    //
+    // `source` is recorded on every doc row by upsert_host; values
+    // that count as a failed extraction are gathered here. Successful
+    // extractions are "text" | "rich".
+    const FAILED_SOURCES: &[&str] = &[
+        "extract_failed",
+        "extract_oversize",
+        "no_tika",
+        "too_large",
+        "binary",
+        "read_failed",
+        "symlink_skipped",
+    ];
+    let mut stmt = conn.prepare("SELECT path, source, indexed_at FROM docs")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, String>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    let mut count: i64 = 0;
+    let mut extract_failed: i64 = 0;
+    let mut last_indexed_at: Option<String> = None;
+    for r in rows {
+        let (path, source, indexed_at) = r?;
+        if canon != "/" && !under_prefix(&path, &canon) {
+            continue;
+        }
+        count += 1;
+        if let Some(s) = &source {
+            if FAILED_SOURCES.iter().any(|f| *f == s.as_str()) {
+                extract_failed += 1;
+            }
+        }
+        if let Some(ts) = indexed_at {
+            match &last_indexed_at {
+                Some(cur) if cur.as_str() >= ts.as_str() => {}
+                _ => last_indexed_at = Some(ts),
+            }
+        }
+    }
+    Ok(IndexStatusResult {
+        subtree: canon,
+        last_indexed_at,
+        doc_count: count,
+        queue_depth: 0,
+        errors: IndexErrors {
+            extract_failed,
+            watcher_starved: 0,
+        },
+    })
 }
