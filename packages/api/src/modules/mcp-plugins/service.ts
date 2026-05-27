@@ -243,6 +243,9 @@ type InstallationAccessRow = AccessBindingRow & {
   access_target_type: RuntimeBindingScope
   conversation_id: string | null
   actor_id: string | null
+  // Round 9 review (P2): include remote_agent_id so dedup discriminates
+  // remote_agent targets from workspace/actor.
+  remote_agent_id: string | null
   workspace_member_id: string | null
 }
 
@@ -933,6 +936,11 @@ function buildInstallationAccessRow(
 ): InstallationAccessRow {
   const target = readAccessBindingTarget(row as any)
   const label = subjectScopeLabel(target)
+  // Round 9 review (P2): include remote_agent / remote_agent_in_conversation
+  // so those grants don't silently collapse to a "workspace" label.
+  // Downstream dedup compares grants by this string; collapsing
+  // remote_agent into workspace meant a second create of the same
+  // target missed the existing row and hit the DB unique constraint.
   let accessTargetType: RuntimeBindingScope
   switch (label) {
     case "workspace":
@@ -940,6 +948,8 @@ function buildInstallationAccessRow(
     case "conversation":
     case "actor":
     case "actor_in_conversation":
+    case "remote_agent":
+    case "remote_agent_in_conversation":
       accessTargetType = label
       break
     default:
@@ -948,6 +958,10 @@ function buildInstallationAccessRow(
   const actorId =
     target.subject.kind === "actor"
       ? (target.subject as { actorId: string }).actorId
+      : null
+  const remoteAgentId =
+    target.subject.kind === "remote_agent"
+      ? (target.subject as { remoteAgentId: string }).remoteAgentId
       : null
   const conversationId =
     target.scope?.kind === "conversation"
@@ -964,6 +978,7 @@ function buildInstallationAccessRow(
     installation_id: row.resource_id,
     access_target_type: accessTargetType,
     actor_id: actorId,
+    remote_agent_id: remoteAgentId,
     conversation_id: conversationId,
     workspace_member_id: workspaceMemberId,
   }
@@ -2450,10 +2465,18 @@ export async function grantPluginInstallationAccess(input: {
     buildError: (message) => new McpPluginError(400, message),
   })
 
+  // Round 9 review (P2): include remote_agent_id in the dedupe key.
+  // Without it, two remote_agent grants for different remote agents
+  // both have access_target_type="remote_agent" and were silently
+  // collapsed against each other.
   const accessTargetLabel = subjectScopeLabel(accessTarget)
   const accessTargetActorId =
     accessTarget.subject.kind === "actor"
       ? (accessTarget.subject as { actorId: string }).actorId
+      : null
+  const accessTargetRemoteAgentId =
+    accessTarget.subject.kind === "remote_agent"
+      ? (accessTarget.subject as { remoteAgentId: string }).remoteAgentId
       : null
   const accessTargetConversationId =
     accessTarget.scope?.kind === "conversation"
@@ -2470,6 +2493,7 @@ export async function grantPluginInstallationAccess(input: {
       entry.status === "active" &&
       entry.access_target_type === accessTargetLabel &&
       entry.actor_id === accessTargetActorId &&
+      entry.remote_agent_id === accessTargetRemoteAgentId &&
       entry.conversation_id === accessTargetConversationId &&
       entry.workspace_member_id === accessTargetWorkspaceMemberId
   )

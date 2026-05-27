@@ -324,6 +324,10 @@ type SkillAccessRow = AccessBindingRow & {
   bind_scope: RuntimeBindingScope
   conversation_id: string | null
   actor_id: string | null
+  // Round 9 review (P2): include remote_agent_id so dedup paths that
+  // currently key on (actor_id, conversation_id, workspace_member_id)
+  // can also discriminate remote_agent targets.
+  remote_agent_id: string | null
   workspace_member_id: string | null
 }
 
@@ -853,9 +857,14 @@ function compareBindingPriority(left: SkillAccessRow, right: SkillAccessRow) {
     active: 0,
     revoked: 1,
   }
+  // Round 9 review: include remote_agent_in_conversation / remote_agent
+  // alongside the actor variants so the priority order doesn't crash on
+  // a remote_agent grant.
   const scopeOrder: Record<RuntimeBindingScope, number> = {
     actor_in_conversation: 0,
+    remote_agent_in_conversation: 0,
     actor: 1,
+    remote_agent: 1,
     workspace_member: 2,
     conversation: 3,
     workspace: 4,
@@ -882,7 +891,9 @@ function compareVisibleBindingPriority(
   }
   const scopeOrder: Record<RuntimeBindingScope, number> = {
     actor_in_conversation: 0,
+    remote_agent_in_conversation: 0,
     actor: 1,
+    remote_agent: 1,
     workspace_member: 2,
     conversation: 3,
     workspace: 4,
@@ -1656,6 +1667,12 @@ async function loadInstalledSkillRows(params: {
 function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
   const target = readAccessBindingTarget(row as any)
   const label = subjectScopeLabel(target)
+  // Round 9 review (P2): include remote_agent / remote_agent_in_conversation
+  // in the label switch so those grants don't silently collapse to a
+  // "workspace" label. The dedup paths in skills/service.ts and
+  // mcp-plugins/service.ts compare grants by this string; without
+  // remote_agent here, a second create of the same remote_agent target
+  // would miss the existing row and crash on the DB unique constraint.
   let bindScope: RuntimeBindingScope
   switch (label) {
     case "workspace":
@@ -1663,6 +1680,8 @@ function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
     case "conversation":
     case "actor":
     case "actor_in_conversation":
+    case "remote_agent":
+    case "remote_agent_in_conversation":
       bindScope = label
       break
     default:
@@ -1671,6 +1690,10 @@ function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
   const actorId =
     target.subject.kind === "actor"
       ? (target.subject as { actorId: string }).actorId
+      : null
+  const remoteAgentId =
+    target.subject.kind === "remote_agent"
+      ? (target.subject as { remoteAgentId: string }).remoteAgentId
       : null
   const conversationId =
     target.scope?.kind === "conversation"
@@ -1688,6 +1711,7 @@ function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
     bind_scope: bindScope,
     conversation_id: conversationId,
     actor_id: actorId,
+    remote_agent_id: remoteAgentId,
     workspace_member_id: workspaceMemberId,
   }
 }
@@ -2913,14 +2937,21 @@ export async function grantInstalledSkillAccess(input: {
 
   // P2/P3 fix: include workspace_member_id in the dedupe key. Without it, two
   // different members both look like {workspace_member, null, null} and the
-  // P2/P3 fix: include workspace_member_id in the dedupe key. Without it, two
-  // different members both look like {workspace_member, null, null} and the
   // second grant is incorrectly treated as already-existing — silently
   // dropping the new member's binding.
+  //
+  // Round 9 review (P2): include remote_agent_id for the same reason. Two
+  // remote_agent grants for different remote agents both have
+  // bind_scope="remote_agent" and were silently deduped against each
+  // other before this fix.
   const accessTargetLabel = subjectScopeLabel(accessTarget)
   const accessTargetActorId =
     accessTarget.subject.kind === "actor"
       ? (accessTarget.subject as { actorId: string }).actorId
+      : null
+  const accessTargetRemoteAgentId =
+    accessTarget.subject.kind === "remote_agent"
+      ? (accessTarget.subject as { remoteAgentId: string }).remoteAgentId
       : null
   const accessTargetConversationId =
     accessTarget.scope?.kind === "conversation"
@@ -2937,6 +2968,7 @@ export async function grantInstalledSkillAccess(input: {
       row.status === "active" &&
       row.bind_scope === accessTargetLabel &&
       row.actor_id === accessTargetActorId &&
+      row.remote_agent_id === accessTargetRemoteAgentId &&
       row.conversation_id === accessTargetConversationId &&
       row.workspace_member_id === accessTargetWorkspaceMemberId
   )

@@ -290,6 +290,64 @@ test(
   }
 )
 
+test(
+  "validateConversationScopedAccessTarget(workspace_member + scope=conversation) requires an active participant — round-9 P2",
+  { timeout: 5 * 60_000 },
+  async () => {
+    // Round-9 review (P2): conversation_participants supports
+    // workspace_member, and runtime evaluator-scope tests already exercise
+    // workspace_member + scope=conv grants. The validator therefore must
+    // also gate on active membership for member targets — otherwise a
+    // controller could write "member M in conversation C" for a member
+    // who isn't actually in C.
+    await withTestDb(async (db) => {
+      const ownerId = await insertUser(db)
+      const workspaceId = await insertWorkspace(db, ownerId)
+      const conversationId = await insertConversation(db, workspaceId)
+      const memberId = await insertWorkspaceMember(db, workspaceId)
+
+      // No participant row yet → must reject.
+      await assert.rejects(
+        validateConversationScopedAccessTarget({
+          db,
+          target: {
+            subject: workspaceMemberRef(memberId),
+            scope: conversationRef(conversationId),
+          },
+          effectiveConversationTypeMask: 0b11111,
+          buildError: (m) => new Error(m),
+        }),
+        /active participant/
+      )
+
+      // Add the participant row → must accept.
+      const memberSubjectId = await upsertAccessSubject(db, {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId,
+      })
+      await db
+        .insertInto("conversation_participants")
+        .values({
+          conversation_id: conversationId,
+          participant_type: "workspace_member",
+          subject_id: memberSubjectId,
+          state: "active",
+        })
+        .execute()
+      const ok = await validateConversationScopedAccessTarget({
+        db,
+        target: {
+          subject: workspaceMemberRef(memberId),
+          scope: conversationRef(conversationId),
+        },
+        effectiveConversationTypeMask: 0b11111,
+        buildError: (m) => new Error(m),
+      })
+      assert.ok(ok)
+    })
+  }
+)
+
 async function insertUser(db: AnyDb): Promise<string> {
   const row = await db
     .insertInto("users")
@@ -359,6 +417,23 @@ async function insertRemoteAgent(
       name: `agent-${Math.random().toString(36).slice(2, 10)}`,
       title: "test remote agent",
       runtime_kind: "claude_code",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return row.id as string
+}
+
+async function insertWorkspaceMember(
+  db: AnyDb,
+  workspaceId: string
+): Promise<string> {
+  const userId = await insertUser(db)
+  const row = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: workspaceId,
+      user_id: userId,
+      trust_level: "member",
     } as any)
     .returning("id")
     .executeTakeFirstOrThrow()

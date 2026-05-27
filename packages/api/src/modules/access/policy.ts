@@ -139,12 +139,21 @@ async function loadConversationTargetRecord(
  * runtime path already matches (see loadVisibleAccessBindings
  * remote_agent_in_conversation branch). Same SQL shape, parametrized
  * over participant_type + subject_id.
+ *
+ * Round 9 review extension: also accepts `workspace_member` — the
+ * conversation_participants enum supports it (workspace_member / actor
+ * / remote_agent / external / system), evaluator-scope.test.ts already
+ * exercises workspace_member + scope=conversation, so the creation
+ * path must validate it too. Without this branch a controller could
+ * write a "member M in conversation C" grant for a member who isn't in
+ * C, then runtime would interpret it under the active-participant
+ * model — silent semantic mismatch.
  */
 async function isSubjectActiveParticipantInConversation(
   db: KyselyDb,
   params: {
     conversationId: string
-    participantType: "actor" | "remote_agent"
+    participantType: "actor" | "remote_agent" | "workspace_member"
     subjectId: string
   }
 ): Promise<boolean> {
@@ -177,9 +186,9 @@ export async function validateConversationScopedAccessTarget(params: {
   // remote-agent participation.
   let conversationId: string | null = null
   let activeParticipantCheck: {
-    participantType: "actor" | "remote_agent"
+    participantType: "actor" | "remote_agent" | "workspace_member"
     principalId: string
-    principalKind: "actor" | "remote_agent"
+    principalKind: "actor" | "remote_agent" | "workspace_member"
   } | null = null
   if (params.target.subject.kind === SUBJECT_KIND.CONVERSATION) {
     conversationId = (params.target.subject as { conversationId: string })
@@ -200,11 +209,24 @@ export async function validateConversationScopedAccessTarget(params: {
           .remoteAgentId,
         principalKind: "remote_agent",
       }
+    } else if (params.target.subject.kind === SUBJECT_KIND.WORKSPACE_MEMBER) {
+      // Round 9 review extension: workspace_member IS a valid
+      // conversation_participants kind — runtime supports
+      // workspace_member + scope=conv grants (see evaluator-scope tests).
+      // Treat them the same as actor/remote_agent here so creation can't
+      // write a "member M in conversation C" grant for a member who
+      // isn't actually in C.
+      activeParticipantCheck = {
+        participantType: "workspace_member",
+        principalId: (params.target.subject as { memberId: string }).memberId,
+        principalKind: "workspace_member",
+      }
     }
-    // Other subject kinds with scope=conversation (workspace_member,
-    // workspace, etc.) currently have no membership concept on
-    // conversation_participants — we only validate the conversation
-    // exists and matches the conversation-type policy.
+    // For subject=workspace + scope=conversation: workspace can never
+    // be a conversation_participants row (it's a group, not a participant)
+    // so we only validate that the conversation exists and matches the
+    // conversation-type policy. The runtime layer narrows visibility to
+    // callers actually inside conversation C separately.
   } else {
     // Not a conversation-scoped target — nothing to validate.
     return null
@@ -242,26 +264,42 @@ export async function validateConversationScopedAccessTarget(params: {
     return conversation
   }
 
-  const principalSubjectId = await upsertAccessSubject(
-    params.db,
-    activeParticipantCheck.principalKind === "actor"
-      ? {
-          kind: SUBJECT_KIND.ACTOR,
-          actorId: activeParticipantCheck.principalId,
-        }
-      : {
-          kind: SUBJECT_KIND.REMOTE_AGENT,
-          remoteAgentId: activeParticipantCheck.principalId,
-        }
-  )
+  let principalRef
+  switch (activeParticipantCheck.principalKind) {
+    case "actor":
+      principalRef = {
+        kind: SUBJECT_KIND.ACTOR,
+        actorId: activeParticipantCheck.principalId,
+      } as const
+      break
+    case "remote_agent":
+      principalRef = {
+        kind: SUBJECT_KIND.REMOTE_AGENT,
+        remoteAgentId: activeParticipantCheck.principalId,
+      } as const
+      break
+    case "workspace_member":
+      principalRef = {
+        kind: SUBJECT_KIND.WORKSPACE_MEMBER,
+        memberId: activeParticipantCheck.principalId,
+      } as const
+      break
+  }
+  const principalSubjectId = await upsertAccessSubject(params.db, principalRef)
   const hasActive = await isSubjectActiveParticipantInConversation(params.db, {
     conversationId,
     participantType: activeParticipantCheck.participantType,
     subjectId: principalSubjectId,
   })
   if (!hasActive) {
+    const label =
+      activeParticipantCheck.principalKind === "actor"
+        ? "actor"
+        : activeParticipantCheck.principalKind === "remote_agent"
+          ? "remote agent"
+          : "workspace member"
     throw params.buildError(
-      `Selected ${activeParticipantCheck.principalKind === "actor" ? "actor" : "remote agent"} must already be an active participant in the selected conversation.`
+      `Selected ${label} must already be an active participant in the selected conversation.`
     )
   }
 

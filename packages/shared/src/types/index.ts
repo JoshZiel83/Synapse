@@ -5368,6 +5368,8 @@ export type RuntimeBindingScope =
   | "conversation"
   | "actor"
   | "actor_in_conversation"
+  | "remote_agent"
+  | "remote_agent_in_conversation"
 export type PluginReuseScopeV2 =
   | "turn"
   | "session"
