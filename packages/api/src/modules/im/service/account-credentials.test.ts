@@ -40,6 +40,9 @@ const STUB_CAPS: MessageCapabilities = {
   supportsReply: false,
   supportsImage: false,
   supportsFile: false,
+  supportsVoice: false,
+  supportsVideo: false,
+  supportsInteractionPrompt: false,
   maxTextBytes: 1_000,
   directMentionPolicy: "attached_only",
 }
@@ -59,6 +62,8 @@ const stubConnector: TransportConnector = {
   transportKind: STUB_KIND,
   capability: {
     transportKind: STUB_KIND,
+    displayName: "Stub WeChat",
+    iconAssetPath: "/icon/weixin.svg",
     supportedConnectionModes: ["long_connection"],
     supportedEndpointTypes: ["direct"],
     supportsDirectMessages: true,
@@ -75,6 +80,10 @@ const stubConnector: TransportConnector = {
       normalized: { token: token.trim(), source: "normalized-by-stub" },
     }
   },
+  // NOTE: deliberately do NOT implement validateConfig on this stub —
+  // the "connector without validateConfig is no-op" test below depends
+  // on the absence. Other tests that need a validateConfig-rejecting
+  // stub register their own one-off connector for an unused kind.
   async startAccount() {
     throw new Error("stub")
   },
@@ -144,17 +153,21 @@ test("validateAndNormalizeAccountCredentials: disabled status skips validation",
   assert.deepEqual(out, { not: "valid" })
 })
 
-test("validateAndNormalizeAccountCredentials: invalid input throws connector errors", () => {
-  assert.throws(
-    () =>
-      validateAndNormalizeAccountCredentials({
-        transportKind: STUB_KIND,
-        connectionMode: "long_connection",
-        status: "active",
-        credentials: {},
-      }),
-    /token is required/
-  )
+test("validateAndNormalizeAccountCredentials: invalid input throws 400 transport_credentials_invalid", () => {
+  try {
+    validateAndNormalizeAccountCredentials({
+      transportKind: STUB_KIND,
+      connectionMode: "long_connection",
+      status: "active",
+      credentials: {},
+    })
+    assert.fail("expected throw")
+  } catch (err) {
+    const e = err as Error & { statusCode?: unknown; code?: unknown }
+    assert.match(e.message, /token is required/)
+    assert.equal(e.statusCode, 400)
+    assert.equal(e.code, "transport_credentials_invalid")
+  }
 })
 
 test("validateAndNormalizeAccountCredentials: returns connector normalized form", () => {
@@ -171,17 +184,31 @@ test("validateAndNormalizeAccountCredentials: returns connector normalized form"
   assert.equal(out.source, "normalized-by-stub")
 })
 
-test("validateAndNormalizeAccountCredentials: unknown transport_kind throws", () => {
-  assert.throws(
-    () =>
-      validateAndNormalizeAccountCredentials({
-        transportKind: "not-a-real-kind" as any,
-        connectionMode: "long_connection",
-        status: "active",
-        credentials: {},
-      }),
-    /no connector registered/i
-  )
+test("validateAndNormalizeAccountCredentials: unknown transport_kind throws 400 transport_kind_unsupported", () => {
+  try {
+    validateAndNormalizeAccountCredentials({
+      transportKind: "not-a-real-kind" as any,
+      connectionMode: "long_connection",
+      status: "active",
+      credentials: {},
+    })
+    assert.fail("expected throw")
+  } catch (err) {
+    const e = err as Error & { statusCode?: unknown; code?: unknown }
+    assert.match(e.message, /no connector registered/i)
+    assert.equal(e.statusCode, 400)
+    assert.equal(e.code, "transport_kind_unsupported")
+  }
+})
+
+test("validateAndNormalizeAccountConfig: disabled status skips validation", () => {
+  const out = validateAndNormalizeAccountConfig({
+    transportKind: STUB_KIND,
+    connectionMode: "long_connection",
+    status: "disabled",
+    config: { baseUrl: "ftp://invalid" },
+  })
+  assert.deepEqual(out, { baseUrl: "ftp://invalid" })
 })
 
 // ─── validateAndNormalizeAccountConfig ───

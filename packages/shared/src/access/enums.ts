@@ -46,9 +46,9 @@ export const ACCESS_RESOURCE_TYPE = {
   INSTALLED_SKILL: "installed_skill",
   PLUGIN_INSTALLATION: "plugin_installation",
   AUTOMATION_EVENT_SOURCE: "automation_event_source",
-  RELAY_DEVICE: "relay_device",
-  RELAY_EXPOSURE: "relay_exposure",
-  RELAY_CAPABILITY: "relay_capability",
+  DEVICE: "device",
+  DEVICE_EXPOSURE: "device_exposure",
+  DEVICE_CAPABILITY: "device_capability",
   CONVERSATION_ACTOR_CONTEXT: "conversation_actor_context",
   CONVERSATION: "conversation",
   MEMORY_SPACE: "memory_space",
@@ -67,9 +67,9 @@ export const ACCESS_RESOURCE_TYPES = [
   ACCESS_RESOURCE_TYPE.INSTALLED_SKILL,
   ACCESS_RESOURCE_TYPE.PLUGIN_INSTALLATION,
   ACCESS_RESOURCE_TYPE.AUTOMATION_EVENT_SOURCE,
-  ACCESS_RESOURCE_TYPE.RELAY_DEVICE,
-  ACCESS_RESOURCE_TYPE.RELAY_EXPOSURE,
-  ACCESS_RESOURCE_TYPE.RELAY_CAPABILITY,
+  ACCESS_RESOURCE_TYPE.DEVICE,
+  ACCESS_RESOURCE_TYPE.DEVICE_EXPOSURE,
+  ACCESS_RESOURCE_TYPE.DEVICE_CAPABILITY,
   ACCESS_RESOURCE_TYPE.CONVERSATION_ACTOR_CONTEXT,
   ACCESS_RESOURCE_TYPE.CONVERSATION,
   ACCESS_RESOURCE_TYPE.MEMORY_SPACE,
@@ -87,7 +87,7 @@ export type AccessResourceType = (typeof ACCESS_RESOURCE_TYPES)[number]
 export const ACCESS_BINDABLE_RESOURCE_TYPE = {
   INSTALLED_SKILL: "installed_skill",
   PLUGIN_INSTALLATION: "plugin_installation",
-  RELAY_CAPABILITY: "relay_capability",
+  DEVICE_CAPABILITY: "device_capability",
   AUTOMATION_EVENT_SOURCE: "automation_event_source",
   ACTOR: "actor",
   REMOTE_AGENT: "remote_agent",
@@ -96,7 +96,7 @@ export const ACCESS_BINDABLE_RESOURCE_TYPE = {
 export const ACCESS_BINDABLE_RESOURCE_TYPES = [
   ACCESS_BINDABLE_RESOURCE_TYPE.INSTALLED_SKILL,
   ACCESS_BINDABLE_RESOURCE_TYPE.PLUGIN_INSTALLATION,
-  ACCESS_BINDABLE_RESOURCE_TYPE.RELAY_CAPABILITY,
+  ACCESS_BINDABLE_RESOURCE_TYPE.DEVICE_CAPABILITY,
   ACCESS_BINDABLE_RESOURCE_TYPE.AUTOMATION_EVENT_SOURCE,
   ACCESS_BINDABLE_RESOURCE_TYPE.ACTOR,
   ACCESS_BINDABLE_RESOURCE_TYPE.REMOTE_AGENT,
@@ -122,12 +122,11 @@ export type AccessBindingStatus = (typeof ACCESS_BINDING_STATUSES)[number]
 
 /**
  * Provenance marker for binding rows — distinguishes manually-granted rows from
- * rows auto-created by lifecycle hooks (e.g. actor-default-open, relay auto-skill).
+ * rows auto-created by lifecycle hooks (e.g. actor-default-open).
  */
 export const ACCESS_BINDING_SOURCE = {
   MANUAL: "manual",
   DEFAULT_OPEN: "default_open",
-  RELAY_AUTO: "relay_auto",
   APPROVAL: "approval",
   SYSTEM: "system",
 } as const
@@ -135,7 +134,6 @@ export const ACCESS_BINDING_SOURCE = {
 export const ACCESS_BINDING_SOURCES = [
   ACCESS_BINDING_SOURCE.MANUAL,
   ACCESS_BINDING_SOURCE.DEFAULT_OPEN,
-  ACCESS_BINDING_SOURCE.RELAY_AUTO,
   ACCESS_BINDING_SOURCE.APPROVAL,
   ACCESS_BINDING_SOURCE.SYSTEM,
 ] as const

@@ -173,7 +173,7 @@ export async function getWorkspaceCapabilityConversationTypePolicyMap(
     map.set(workspaceId, {
       plugin_installation: DEFAULT_CONVERSATION_TYPE_MASK,
       installed_skill: DEFAULT_CONVERSATION_TYPE_MASK,
-      relay_capability: DEFAULT_CONVERSATION_TYPE_MASK,
+      device_capability: DEFAULT_CONVERSATION_TYPE_MASK,
     })
   }
 

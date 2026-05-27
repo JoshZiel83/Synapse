@@ -63,20 +63,21 @@ import {
   RELATIONSHIP_PROFILE_SUBJECT_TYPES,
   RELATIONSHIP_REQUEST_STATUSES,
   RELATIONSHIP_SCAN_OUTCOMES,
-  RELAY_ACCESS_DENIAL_KINDS,
-  RELAY_ACCESS_DENIAL_RESOLUTIONS,
-  RELAY_AUTHORIZATION_BROWSER_ACTIONS,
-  RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES,
-  RELAY_AUTHORIZATION_CAPABILITIES,
-  RELAY_AUTHORIZATION_COMMAND_EXECUTORS,
-  RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES,
-  RELAY_AUTHORIZATION_CUA_ACCESSES,
-  RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES,
-  RELAY_AUTHORIZATION_GRANT_RETENTIONS,
-  RELAY_AUTHORIZATION_GRANT_SCOPES,
-  RELAY_AUTHORIZATION_GRANT_STATUSES,
-  RELAY_AUTHORIZATION_PRESETS,
-  RELAY_AUTHORIZATION_REQUEST_MODES,
+  DEVICE_ACCESS_DENIAL_KINDS,
+  DEVICE_ACCESS_DENIAL_RESOLUTIONS,
+  RUNTIME_AUTHORIZATION_BROWSER_ACTIONS,
+  RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES,
+  RUNTIME_AUTHORIZATION_CAPABILITIES,
+  RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS,
+  RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES,
+  RUNTIME_AUTHORIZATION_CUA_ACCESSES,
+  RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES,
+  RUNTIME_AUTHORIZATION_GRANT_RETENTIONS,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPE,
+  RUNTIME_AUTHORIZATION_GRANT_SCOPES,
+  RUNTIME_AUTHORIZATION_GRANT_STATUSES,
+  RUNTIME_AUTHORIZATION_PRESETS,
+  RUNTIME_AUTHORIZATION_REQUEST_MODES,
   SESSION_COLLABORATION_MODES,
   SESSION_INTERRUPT_TYPES,
   SESSION_STATUSES,
@@ -113,8 +114,6 @@ import type {
   CommandlinePolicy as CommandlinePolicyBase,
   GrantPolicy as GrantPolicyBase,
 } from "../access/policies/index.js"
-
-export * from "./relay.js"
 
 // ============ Common ============
 export type UUID = string
@@ -575,12 +574,12 @@ export type AutomationCreatorKind = "workspace_member" | "session" | "system"
 export type AutomationTriggerKind = "schedule" | "event"
 export type AutomationSourceKind =
   | "clock"
-  | "relay"
+  | "device"
   | "webhook"
   | "internal"
   | "integration"
 export type AutomationEventProviderKind =
-  | "relay"
+  | "device"
   | "webhook"
   | "internal"
   | "integration"
@@ -834,9 +833,6 @@ export type EventType =
   | "chat.sync.event"
   | "runtime.updated"
   | "mcp.config.changed"
-  | "relay.connected"
-  | "relay.disconnected"
-  | "relay.servers_updated"
   | "chat.typing"
 
 export interface SystemEvent {
@@ -958,7 +954,7 @@ export type ActorRuntimeToolKind =
   | "callable"
   | "action"
   | "mcp_plugin"
-  | "mcp_relay"
+  | "mcp_device"
   | "provider_builtin"
   | "a2a_proxy"
 
@@ -1720,8 +1716,8 @@ export type PlatformAssetFileOriginSystem =
 export type FileParseRunStatus = (typeof FILE_PARSE_RUN_STATUSES)[number]
 export type FileParseOutputKind = (typeof FILE_PARSE_OUTPUT_KINDS)[number]
 
-export interface RelayMcpFileSourceMetadata {
-  kind: "relay_mcp"
+export interface DeviceMcpFileSourceMetadata {
+  kind: "device_mcp"
   deviceId: UUID
   deviceDisplayName?: string
   exposureId: UUID
@@ -1740,7 +1736,7 @@ export interface FileOriginSummary {
   providerKey?: string
   parentFileId?: UUID | null
   externalResourceKey?: string
-  details?: RelayMcpFileSourceMetadata | Record<string, unknown>
+  details?: DeviceMcpFileSourceMetadata | Record<string, unknown>
 }
 
 export interface FileCreateOriginInput {
@@ -1942,7 +1938,7 @@ export type ToolResultOrigin =
       serverName?: string
     }
   | {
-      kind: "mcp_relay"
+      kind: "mcp_device"
       deviceId: string
       deviceName?: string
       exposureId?: string
@@ -1968,7 +1964,7 @@ export type ToolResultOrigin =
 
 export const TOOL_RESULT_ORIGIN_KINDS = [
   "mcp_remote",
-  "mcp_relay",
+  "mcp_device",
   "callable_plugin",
   "builtin",
   "model_response",
@@ -2207,6 +2203,16 @@ export interface ToolDefinition {
     properties: Record<string, ToolParameterProperty>
     required: string[]
   }
+  // Origin metadata so consumers that surface tools to a model (e.g. the
+  // reverse-MCP endpoint that exposes Synapse tools to a remote agent) can
+  // render a "[device:Name]" / "[plugin:Name]" attribution. Optional because
+  // most ad-hoc ToolDefinitions don't have an upstream source.
+  source?: {
+    kind: "device_capability" | "plugin_installation" | "installed_skill"
+    displayName?: string
+    deviceName?: string
+  }
+  sourceType?: "builtin" | "mcp_plugin" | "mcp_device"
 }
 
 export interface ToolCall {
@@ -2312,19 +2318,19 @@ export interface CapabilityInvocationContext {
   providerCallId?: string
   namespacedToolName?: string
   toolName?: string
-  sourceType?: "builtin" | "mcp_plugin" | "relay_capability"
+  sourceType?: "builtin" | "mcp_plugin" | "device_capability"
 }
 
 export interface ToolSurfaceItem {
   id: string
   name: string
-  source: "builtin" | "plugin_installation" | "relay_capability"
+  source: "builtin" | "plugin_installation" | "device_capability"
 }
 
 export interface SkillSurfaceItem {
   id: string
   slug: string
-  source: "installed" | "auto_activated"
+  source: "installed"
 }
 
 export interface CapabilitySurface {
@@ -2388,7 +2394,7 @@ export type PluginTransport =
   | "builtin"
   | "stdio"
   | "http"
-  | "relay"
+  | "device"
   | "filesystem"
 export type ConversationBoundary = (typeof CONVERSATION_BOUNDARIES)[number]
 export type ConversationTypeKey = (typeof CONVERSATION_TYPE_KEYS)[number]
@@ -2405,12 +2411,12 @@ export type MarketplaceSourceType =
   | "official"
   | "workspace_upload"
   | "user_upload"
-  | "relay_derived"
+  | "device_derived"
 export type MarketplaceLineageKind =
   | "installed_copy"
   | "fork"
   | "share"
-  | "relay_derivation"
+  | "device_derivation"
 export type MarketplaceSyncMode =
   | "notify"
   | "manual_merge"
@@ -2425,7 +2431,7 @@ export type MarketplaceRequirementTargetKind = "package" | "tag"
 export type PluginInstallationMode =
   | "manual"
   | "seeded"
-  | "relay_derived"
+  | "device_derived"
   | "package_required"
   | "package_recommended"
 export type MarketplaceVersionStatus =
@@ -2942,7 +2948,7 @@ export interface AvailableSkillSummary {
   description: string
   version: string
   accessTarget: CapabilityAccessTarget
-  sourceKind?: "installed" | "relay_auto_loaded"
+  sourceKind?: "installed"
   entryPoint?: string
 }
 
@@ -3090,22 +3096,9 @@ export interface McpInstallation extends PluginInstallationView {
   plugin?: McpPlugin
 }
 
-export interface McpRelay {
+export interface McpDeviceServer {
   id: string
-  userId?: string
-  workspaceId?: string
-  name: string
-  authToken: string
-  isConnected: boolean
-  lastConnectedAt?: string
-  metadata: Record<string, unknown>
-  createdAt: string
-  updatedAt: string
-}
-
-export interface McpRelayServer {
-  id: string
-  relayId: string
+  deviceId: string
   name: string
   transport: "builtin" | "stdio" | "http"
   command?: string
@@ -3124,7 +3117,7 @@ export interface McpToolCallLog {
   actorId?: string
   userId?: string
   pluginId: string
-  relayId?: string
+  deviceId?: string
   toolName: string
   input: Record<string, unknown>
   output?: string
@@ -3141,7 +3134,7 @@ export interface McpEventLog {
   workspaceId?: string
   userId?: string
   pluginId?: string
-  relayId?: string
+  deviceId?: string
   eventType: string
   eventData: Record<string, unknown>
   createdAt: string
@@ -3184,14 +3177,9 @@ export type ConversationParticipantType =
 export type TransportKind = (typeof TRANSPORT_KINDS)[number]
 
 /**
- * Runtime guard for `TransportKind`. Use this instead of hard-coding
- * `value === "feishu" || value === "weixin"` — those checks have drifted
- * out of sync as new transports (wecom, etc.) land and break UI surfaces
- * like "via WeCom" labels, external-user transport-kind chips, and
- * mention-resolution dispatch.
- *
- * The narrowing return type lets callers safely assign the value into a
- * `TransportKind`-typed field.
+ * Runtime guard for `TransportKind`. Use instead of hard-coding
+ * `value === "feishu" || value === "weixin"` chains in dispatch sites —
+ * those drift out of sync when new transports land.
  */
 export function isTransportKind(value: unknown): value is TransportKind {
   return (
@@ -3201,11 +3189,12 @@ export function isTransportKind(value: unknown): value is TransportKind {
 }
 
 /**
- * User-facing label for a TransportKind. Centralized so frontend UI,
- * AI prompts, and notification copy all stay in sync as transports are
- * added. Returns the kind itself as a fallback when an unrecognized
- * value slips through (defensive — `isTransportKind` should usually
- * gate this first).
+ * Static fallback label for a `TransportKind`. Intentionally NOT
+ * exhaustiveness-checked: adding a new transport must not require
+ * editing this file. The authoritative display name is on
+ * `TransportConnectorCapability.displayName`; this helper only fires
+ * when the metadata provider hasn't mounted yet (client) or no
+ * connector is registered (server-side prose).
  */
 export function describeTransportKind(kind: TransportKind): string {
   switch (kind) {
@@ -3215,13 +3204,8 @@ export function describeTransportKind(kind: TransportKind): string {
       return "WeChat"
     case "wecom":
       return "WeCom"
-    default: {
-      // Exhaustiveness check — if a new TransportKind is added to the
-      // enum, TS will flag this branch as unreachable, forcing the
-      // author to add a case above.
-      const _exhaustive: never = kind
-      return String(_exhaustive)
-    }
+    default:
+      return String(kind)
   }
 }
 
@@ -3272,6 +3256,25 @@ export interface TransportConnectorCapability {
   supportedEndpointTypes: TransportEndpointType[]
   supportsDirectMessages: boolean
   supportsGroupMessages: boolean
+  /**
+   * User-facing label exposed via the connectors metadata API. Frontend
+   * components use this as the authoritative display name; the static
+   * `describeTransportKind` is only a fallback.
+   */
+  displayName: string
+  /**
+   * Public asset path for this connector's icon (served from
+   * `web-next/public`). Centralized so frontend doesn't hard-code
+   * `/icon/${kind}.svg` and per-kind UI variants don't drift apart.
+   */
+  iconAssetPath: string
+  /**
+   * UI feature flag: render the connector-specific base-URL config
+   * panel. Currently only Weixin v1 sets this true (gateway base URL).
+   * Replaces the previous `transportKind === "weixin"` hard-coded gate
+   * in the dashboard.
+   */
+  showsBaseUrlConfig?: boolean
 }
 
 export type TransportAccountOwnerScope =
@@ -3528,69 +3531,69 @@ export interface PlanApprovalInteractionSummary {
 export type InteractionDecision = (typeof INTERACTION_DECISIONS)[number]
 export type PlanApprovalDecision = (typeof PLAN_APPROVAL_DECISIONS)[number]
 
-export type RelayAuthorizationPreset =
-  (typeof RELAY_AUTHORIZATION_PRESETS)[number]
+export type RuntimeAuthorizationPreset =
+  (typeof RUNTIME_AUTHORIZATION_PRESETS)[number]
 
-export type RelayAuthorizationRequestMode =
-  (typeof RELAY_AUTHORIZATION_REQUEST_MODES)[number]
+export type RuntimeAuthorizationRequestMode =
+  (typeof RUNTIME_AUTHORIZATION_REQUEST_MODES)[number]
 
-export type RelayAccessDenialKind = (typeof RELAY_ACCESS_DENIAL_KINDS)[number]
+export type DeviceAccessDenialKind = (typeof DEVICE_ACCESS_DENIAL_KINDS)[number]
 
-export type RelayAccessDenialResolution =
-  (typeof RELAY_ACCESS_DENIAL_RESOLUTIONS)[number]
+export type DeviceAccessDenialResolution =
+  (typeof DEVICE_ACCESS_DENIAL_RESOLUTIONS)[number]
 
-export interface RelayAccessDenialDescriptor {
-  kind: RelayAccessDenialKind
-  resolution: RelayAccessDenialResolution
+export interface DeviceAccessDenialDescriptor {
+  kind: DeviceAccessDenialKind
+  resolution: DeviceAccessDenialResolution
 }
 
-export type RelayAuthorizationGrantScope =
-  (typeof RELAY_AUTHORIZATION_GRANT_SCOPES)[number]
+export type RuntimeAuthorizationGrantScope =
+  (typeof RUNTIME_AUTHORIZATION_GRANT_SCOPES)[number]
 
-export type RelayAuthorizationGrantRetention =
-  (typeof RELAY_AUTHORIZATION_GRANT_RETENTIONS)[number]
+export type RuntimeAuthorizationGrantRetention =
+  (typeof RUNTIME_AUTHORIZATION_GRANT_RETENTIONS)[number]
 
-export type RelayAuthorizationGrantStatus =
-  (typeof RELAY_AUTHORIZATION_GRANT_STATUSES)[number]
+export type RuntimeAuthorizationGrantStatus =
+  (typeof RUNTIME_AUTHORIZATION_GRANT_STATUSES)[number]
 
-export type RelayAuthorizationCapability =
-  (typeof RELAY_AUTHORIZATION_CAPABILITIES)[number]
+export type RuntimeAuthorizationCapability =
+  (typeof RUNTIME_AUTHORIZATION_CAPABILITIES)[number]
 
-export type RelayAuthorizationBrowserScopeType =
-  (typeof RELAY_AUTHORIZATION_BROWSER_SCOPE_TYPES)[number]
+export type RuntimeAuthorizationBrowserScopeType =
+  (typeof RUNTIME_AUTHORIZATION_BROWSER_SCOPE_TYPES)[number]
 
-export type RelayAuthorizationCommandExecutor =
-  (typeof RELAY_AUTHORIZATION_COMMAND_EXECUTORS)[number]
+export type RuntimeAuthorizationCommandExecutor =
+  (typeof RUNTIME_AUTHORIZATION_COMMAND_EXECUTORS)[number]
 
-export type RelayAuthorizationCommandMatchType =
-  (typeof RELAY_AUTHORIZATION_COMMAND_MATCH_TYPES)[number]
+export type RuntimeAuthorizationCommandMatchType =
+  (typeof RUNTIME_AUTHORIZATION_COMMAND_MATCH_TYPES)[number]
 
-export type RelayAuthorizationFilesystemAccess =
-  (typeof RELAY_AUTHORIZATION_FILESYSTEM_ACCESSES)[number]
+export type RuntimeAuthorizationFilesystemAccess =
+  (typeof RUNTIME_AUTHORIZATION_FILESYSTEM_ACCESSES)[number]
 
-export type RelayAuthorizationCUAAccess =
-  (typeof RELAY_AUTHORIZATION_CUA_ACCESSES)[number]
+export type RuntimeAuthorizationCUAAccess =
+  (typeof RUNTIME_AUTHORIZATION_CUA_ACCESSES)[number]
 
-export type RelayAuthorizationBrowserAction =
-  (typeof RELAY_AUTHORIZATION_BROWSER_ACTIONS)[number]
+export type RuntimeAuthorizationBrowserAction =
+  (typeof RUNTIME_AUTHORIZATION_BROWSER_ACTIONS)[number]
 
-export interface RelayAuthorizationFilesystemPolicy extends FilesystemPolicyBase {}
+export interface RuntimeAuthorizationFilesystemPolicy extends FilesystemPolicyBase {}
 
-export interface RelayAuthorizationCUAPolicy extends CUAPolicyBase {}
+export interface RuntimeAuthorizationCUAPolicy extends CUAPolicyBase {}
 
-export interface RelayAuthorizationBrowserPolicy extends BrowserPolicyBase {}
+export interface RuntimeAuthorizationBrowserPolicy extends BrowserPolicyBase {}
 
-export interface RelayAuthorizationCommandlinePolicy extends CommandlinePolicyBase {}
+export interface RuntimeAuthorizationCommandlinePolicy extends CommandlinePolicyBase {}
 
-export interface RelayAuthorizationRequestedAction {
-  capability: RelayAuthorizationCapability
+export interface RuntimeAuthorizationRequestedAction {
+  capability: RuntimeAuthorizationCapability
   toolName: string
   summary: string
   detail?: string
-  filesystem?: RelayAuthorizationFilesystemPolicy
-  cua?: RelayAuthorizationCUAPolicy
-  browser?: RelayAuthorizationBrowserPolicy
-  commandline?: RelayAuthorizationCommandlinePolicy & {
+  filesystem?: RuntimeAuthorizationFilesystemPolicy
+  cua?: RuntimeAuthorizationCUAPolicy
+  browser?: RuntimeAuthorizationBrowserPolicy
+  commandline?: RuntimeAuthorizationCommandlinePolicy & {
     commandText: string
   }
 }
@@ -3598,50 +3601,50 @@ export interface RelayAuthorizationRequestedAction {
 // P4: now derived from the Zod GrantPolicySchema (see
 // packages/shared/src/access/policies). Hand-written extension types below
 // (Summary/View) compose on top so they keep their extra identity fields.
-export type RelayAuthorizationGrantSpec = GrantPolicyBase
+export type RuntimeAuthorizationGrantSpec = GrantPolicyBase
 
-export interface RelayAuthorizationGrantOption {
+export interface RuntimeAuthorizationGrantOption {
   id: string
   summary: string
   detail?: string
-  grantSpec: RelayAuthorizationGrantSpec
+  grantSpec: RuntimeAuthorizationGrantSpec
 }
 
-export interface RelayAuthorizationGrantSummary extends RelayAuthorizationGrantSpec {
+export interface RuntimeAuthorizationGrantSummary extends RuntimeAuthorizationGrantSpec {
   id: UUID
-  scope: RelayAuthorizationGrantScope
-  retention: RelayAuthorizationGrantRetention
-  status: RelayAuthorizationGrantStatus
+  scope: RuntimeAuthorizationGrantScope
+  retention: RuntimeAuthorizationGrantRetention
+  status: RuntimeAuthorizationGrantStatus
   createdAt: Timestamp
   updatedAt: Timestamp
   consumedAt?: Timestamp
   revokedAt?: Timestamp
 }
 
-export interface RelayAuthorizationGrantView extends RelayAuthorizationGrantSummary {
+export interface RuntimeAuthorizationGrantView extends RuntimeAuthorizationGrantSummary {
   workspaceId: UUID
   deviceId: UUID
-  relayCapabilityId: UUID
+  deviceCapabilityId: UUID
   exposureId: UUID
   conversationId?: UUID
   actorId?: UUID
 }
 
-export interface RelayAuthorizationInteractionSummary {
+export interface RuntimeAuthorizationInteractionSummary {
   requestedToolName: string
-  relayToolStableKey: string
-  requestedAction: RelayAuthorizationRequestedAction
+  deviceToolStableKey: string
+  requestedAction: RuntimeAuthorizationRequestedAction
   reason: string
   deviceId: UUID
   deviceDisplayName: string
-  relayCapabilityId: UUID
+  deviceCapabilityId: UUID
   exposureId: UUID
   exposureDisplayName: string
-  grantOptions: RelayAuthorizationGrantOption[]
-  availablePresets: RelayAuthorizationPreset[]
-  approvedPreset?: RelayAuthorizationPreset
-  approvedGrant?: RelayAuthorizationGrantSummary
-  requestMode: RelayAuthorizationRequestMode
+  grantOptions: RuntimeAuthorizationGrantOption[]
+  availablePresets: RuntimeAuthorizationPreset[]
+  approvedPreset?: RuntimeAuthorizationPreset
+  approvedGrant?: RuntimeAuthorizationGrantSummary
+  requestMode: RuntimeAuthorizationRequestMode
 }
 
 export interface InteractionRequestSummaryBase {
@@ -3668,7 +3671,7 @@ export interface UserInputInteractionRequestSummary extends InteractionRequestSu
   target?: ConversationEntityRef
   userInput: UserInputInteractionSummary
   planApproval?: never
-  relayAuthorization?: never
+  runtimeAuthorization?: never
 }
 
 export interface PlanApprovalInteractionRequestSummary extends InteractionRequestSummaryBase {
@@ -3676,21 +3679,21 @@ export interface PlanApprovalInteractionRequestSummary extends InteractionReques
   target?: ConversationEntityRef
   userInput?: never
   planApproval: PlanApprovalInteractionSummary
-  relayAuthorization?: never
+  runtimeAuthorization?: never
 }
 
-export interface RelayAuthorizationInteractionRequestSummary extends InteractionRequestSummaryBase {
-  kind: "relay_authorization"
+export interface RuntimeAuthorizationInteractionRequestSummary extends InteractionRequestSummaryBase {
+  kind: "runtime_authorization"
   target?: never
   userInput?: never
   planApproval?: never
-  relayAuthorization: RelayAuthorizationInteractionSummary
+  runtimeAuthorization: RuntimeAuthorizationInteractionSummary
 }
 
 export type InteractionRequestSummary =
   | UserInputInteractionRequestSummary
   | PlanApprovalInteractionRequestSummary
-  | RelayAuthorizationInteractionRequestSummary
+  | RuntimeAuthorizationInteractionRequestSummary
 
 export type TaskNoticeStatus = (typeof TASK_NOTICE_STATUSES)[number]
 
@@ -4087,9 +4090,9 @@ export function summarizeConversationEvent(
       return `Plan approval requested from ${targetName}: ${title}`
     }
     const deviceName =
-      interaction.relayAuthorization?.deviceDisplayName?.trim() || "relay"
+      interaction.runtimeAuthorization?.deviceDisplayName?.trim() || "device"
     if (interaction.status === "cancelled") {
-      return `Relay authorization request was cancelled for ${deviceName}`
+      return `Runtime authorization request was cancelled for ${deviceName}`
     }
     if (interaction.status === "rejected") {
       const resolverName = interaction.resolvedBy?.name?.trim() || "A user"
@@ -4100,9 +4103,9 @@ export function summarizeConversationEvent(
       return `${resolverName} approved access for ${deviceName}`
     }
     if (interaction.status === "superseded") {
-      return `Relay authorization request was superseded for ${deviceName}`
+      return `Runtime authorization request was superseded for ${deviceName}`
     }
-    return `Relay authorization requested for ${deviceName}`
+    return `Runtime authorization requested for ${deviceName}`
   }
 
   return `[Event: ${eventType}]`
@@ -4425,15 +4428,15 @@ export interface ChatInteractionResolvePlanApprovalPayload {
   note?: string
 }
 
-export interface ChatInteractionResolveRelayAuthorizationApprovePayload {
+export interface ChatInteractionResolveRuntimeAuthorizationApprovePayload {
   answers?: never
   decision: "approve"
-  preset: RelayAuthorizationPreset
+  preset: RuntimeAuthorizationPreset
   selectedGrantOptionId: string
   note?: string
 }
 
-export interface ChatInteractionResolveRelayAuthorizationRejectPayload {
+export interface ChatInteractionResolveRuntimeAuthorizationRejectPayload {
   answers?: never
   decision: "reject"
   preset?: never
@@ -4444,8 +4447,8 @@ export interface ChatInteractionResolveRelayAuthorizationRejectPayload {
 export type ChatInteractionResolvePayload =
   | ChatInteractionResolveUserInputPayload
   | ChatInteractionResolvePlanApprovalPayload
-  | ChatInteractionResolveRelayAuthorizationApprovePayload
-  | ChatInteractionResolveRelayAuthorizationRejectPayload
+  | ChatInteractionResolveRuntimeAuthorizationApprovePayload
+  | ChatInteractionResolveRuntimeAuthorizationRejectPayload
 
 export type ChatInteractionResolveInput =
   ChatInteractionResolveCommandMetadata & ChatInteractionResolvePayload
@@ -4973,7 +4976,7 @@ export function isToolResultOrigin(value: unknown): value is ToolResultOrigin {
   switch (v.kind) {
     case "mcp_remote":
       return typeof v.serverKey === "string"
-    case "mcp_relay":
+    case "mcp_device":
       return (
         typeof v.deviceId === "string" &&
         typeof v.exposureStableKey === "string"
@@ -5381,7 +5384,7 @@ export type CatalogSourceKind =
   | "official"
   | "workspace"
   | "user"
-  | "relay"
+  | "device"
 export type CatalogVisibility = "public" | "workspace" | "private"
 export type CatalogVersionStatus =
   | "draft"
@@ -5392,7 +5395,7 @@ export type CatalogLineageKind =
   | "installed_copy"
   | "fork"
   | "share"
-  | "relay_projection"
+  | "device_projection"
 export type CatalogSyncMode =
   | "notify"
   | "manual_merge"
@@ -5415,7 +5418,7 @@ export type PluginReuseScopeV2 =
 export type ResourceAccessBindingResourceType =
   | "installed_skill"
   | "plugin_installation"
-  | "relay_capability"
+  | "device_capability"
   | "automation_event_source"
   | "actor"
   | "remote_agent"
@@ -5512,7 +5515,7 @@ export interface PluginRuntimePermissionRecord {
 
 export interface PluginPackageVersionSpecRecord {
   catalogVersionId: string
-  transport: "builtin" | "stdio" | "http" | "relay"
+  transport: "builtin" | "stdio" | "http" | "device"
   entryPoint?: string
   toolManifest: MarketplaceTool[]
   configSchema: Record<string, unknown>
@@ -5641,41 +5644,6 @@ export interface PluginMountRecord {
   status: "active" | "disabled" | "revoked"
   metadata: Record<string, unknown>
   createdByWorkspaceMemberId?: string
-  createdAt: string
-  updatedAt: string
-}
-
-export interface RelayDeviceRecord {
-  id: string
-  workspaceId: string
-  ownerWorkspaceMemberId?: string
-  title: string
-  description?: string
-  deviceType: string
-  platform?: string
-  publicKeyFingerprint: string
-  trustStatus: "pending" | "active" | "revoked" | "blocked"
-  createdAt: string
-  updatedAt: string
-}
-
-export interface RelayExposureRecord {
-  id: string
-  deviceId: string
-  syncSourceId?: string
-  stableKey: string
-  displayName: string
-  transport: "builtin" | "stdio" | "http" | "sse" | "custom"
-  runtimeStatus:
-    | "discovered"
-    | "starting"
-    | "healthy"
-    | "degraded"
-    | "failed"
-    | "quarantined"
-    | "offline"
-  projectedCatalogItemId?: string
-  metadata: Record<string, unknown>
   createdAt: string
   updatedAt: string
 }

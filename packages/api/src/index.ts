@@ -40,6 +40,7 @@ import automationModule from "./modules/automation/index.js"
 import filesModule from "./modules/files/index.js"
 import memoryModule from "./modules/memory/index.js"
 import mcpPluginsModule from "./modules/mcp-plugins/index.js"
+import devicesModule from "./modules/devices/index.js"
 import modelGroupsModule from "./modules/model-groups/index.js"
 import platformModule from "./modules/platform/index.js"
 import auditModule from "./modules/audit/index.js"
@@ -50,10 +51,6 @@ import {
 } from "./modules/im/runtime.js"
 import { syncConfiguredPlatformAdmins } from "./modules/platform/admin-service.js"
 import { initBuiltinRegistry } from "./modules/mcp-plugins/builtin/index.js"
-import {
-  initRelayManager,
-  shutdownAllRelays,
-} from "./modules/mcp-plugins/relay-manager.js"
 import {
   initInstanceManagerListeners,
   shutdownAllInstances,
@@ -133,20 +130,21 @@ async function main() {
       })
     }
 
-    // ZodError from `schema.parse(...)` in controllers carries no
-    // `statusCode`, so without this branch every validation failure
-    // (unknown key, bad URL scheme, missing required field, etc.)
-    // would be mapped to 500 below. Surface as 400 with a short
-    // summary so clients can show the field-level problem.
+    // Centralized ZodError → 400. Without this, per-transport
+    // controllers (Feishu, Weixin, WeCom, QQ, DingTalk, …) each have
+    // to wrap their `schema.parse()` in try/catch or the failure
+    // becomes a 500. Stable `code: "invalid_request"` lets clients
+    // discriminate validation errors from other 4xx codes; existing
+    // WeCom integration tests already rely on this constant.
     if (error instanceof ZodError) {
-      const issues = error.issues.slice(0, 5).map((issue) => ({
-        path: issue.path.join("."),
-        message: issue.message,
-      }))
       return reply.status(400).send({
-        error: issues.map((i) => `${i.path}: ${i.message}`).join("; "),
+        error: "validation failed",
         code: "invalid_request",
-        issues,
+        issues: error.issues.map((issue) => ({
+          path: issue.path,
+          code: issue.code,
+          message: issue.message,
+        })),
       })
     }
 
@@ -225,6 +223,7 @@ async function main() {
   await app.register(filesModule)
   await app.register(memoryModule)
   await app.register(mcpPluginsModule)
+  await app.register(devicesModule)
   await app.register(modelGroupsModule)
   await app.register(platformModule)
   await app.register(auditModule)
@@ -233,7 +232,6 @@ async function main() {
   try {
     await initBuiltinRegistry()
     initInstanceManagerListeners()
-    await initRelayManager()
   } catch (err) {
     console.error("Failed to initialize MCP runtime:", err)
     process.exit(1)
@@ -396,13 +394,6 @@ async function main() {
         3000
       ).catch((err) => {
         app.log.error({ err }, "Plugin instance shutdown timed out")
-      })
-      await waitWithTimeout(
-        "relay runtime shutdown",
-        shutdownAllRelays(),
-        3000
-      ).catch((err) => {
-        app.log.error({ err }, "Relay runtime shutdown timed out")
       })
       await waitWithTimeout("fastify close", app.close(), 5000).catch((err) => {
         app.log.error({ err }, "Fastify close timed out")

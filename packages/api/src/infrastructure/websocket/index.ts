@@ -12,7 +12,6 @@ import type {
   SystemEvent,
 } from "@synapse/shared"
 import { onEvent } from "../events/index.js"
-import { handleRelayConnection } from "../../modules/mcp-plugins/relay-manager.js"
 import { handleRemoteAgentDaemonConnection } from "../../modules/remote-agents/service.js"
 import { isShuttingDown } from "../shutdown/state.js"
 import { authenticateSessionToken } from "../../modules/auth/service.js"
@@ -360,25 +359,6 @@ export function setupWebSocket(app: FastifyInstance) {
           "WebSocket connections are temporarily unavailable while the server is shutting down.",
       })
     }
-  })
-
-  app.get("/ws/relay", { websocket: true }, (socket: any, req: any) => {
-    if (isShuttingDown()) {
-      try {
-        socket.send(
-          JSON.stringify({
-            type: "server.shutdown",
-            message: "Synapse API server is shutting down",
-            retryable: true,
-          })
-        )
-      } catch {}
-      try {
-        socket.close(1012, "service restart")
-      } catch {}
-      return
-    }
-    handleRelayConnection(socket, req, app)
   })
 
   app.get("/ws/remote-agents", { websocket: true }, (socket: any, req: any) => {

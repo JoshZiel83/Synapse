@@ -91,7 +91,7 @@ test("origin discriminator carries through for all 4 'tool_output' kinds", async
   const origins: ToolResultOrigin[] = [
     { kind: "mcp_remote", serverKey: "github" },
     {
-      kind: "mcp_relay",
+      kind: "mcp_device",
       deviceId: "dev-1",
       exposureStableKey: "synapse.builtin.filesystem.v1",
     },

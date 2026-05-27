@@ -7,9 +7,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION = "2026-05-25-drop-sessions-channel-type"
-const CURRENT_SCHEMA_DESCRIPTION =
-  "drop legacy session channel discriminator (external/API session removal); prior baseline: auth refactor (access_subjects registry + subject_id FKs across access/relationship/conversation tables); remote-agent per-conversation runtime sessions + fenced machine connections + delivery retry; IM transport-layer rewrite (connector abstraction, wecom enum, reaction tracking columns); chat refactor (participant_kind -> participant_type, relationship_target_type 'member' -> 'workspace_member', chat_push_tokens)"
+/**
+ * `schema_migrations.version` is `VARCHAR(64)` (see
+ * `ensureSchemaMigrationsTable` below). Keep the slug short — long
+ * names that drift past 64 chars cause `INSERT INTO schema_migrations`
+ * to error on a fresh bootstrap (`value too long for type
+ * character varying(64)`). Multi-feature releases should bump this to
+ * a single short slug; put narrative detail in
+ * `CURRENT_SCHEMA_DESCRIPTION` instead. A unit test in
+ * `bootstrap.test.ts` enforces the length invariant.
+ */
+export const CURRENT_SCHEMA_VERSION = "2026-05-28-im-connectors-shared-prep"
+export const CURRENT_SCHEMA_DESCRIPTION =
+  "IM connector shared prep: TransportConnectorCapability displayName/iconAssetPath/showsBaseUrlConfig, MessageCapabilities voice/video/interactionPrompt fields, polymorphic validateConfig/getBindingDefaults/planAccountRecoveryActions/getInteractionProjectionReadiness hooks, transactional updateTransportAccount + recovery executor, single connectors/register-all entrypoint. Schema unchanged from device-runtime-v3 cutover; this version bump documents the application-layer refactor that ships alongside."
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

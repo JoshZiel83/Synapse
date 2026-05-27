@@ -97,7 +97,7 @@ const shareConversationMessages: ShareConversationMessage[] = [
     title: "桌面浏览器访问申请",
     content:
       "共享 Actor 想继续操作你已接入的桌面浏览器，检查提交流程是否正常。",
-    items: ["申请方：Scout", "范围：当前会话", "资源：桌面 Relay / 浏览器"],
+    items: ["申请方：Scout", "范围：当前会话", "资源：桌面设备 / 浏览器"],
     status: "待你授权",
   },
   {

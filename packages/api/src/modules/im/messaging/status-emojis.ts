@@ -98,7 +98,7 @@ export const DEFAULT_TOOL_PATTERNS: readonly ToolPattern[] = [
   },
   {
     level: "tool",
-    needles: ["mcp", "relay", "tool", "invoke", "call"],
+    needles: ["mcp", "device", "tool", "invoke", "call"],
   },
 ]
 

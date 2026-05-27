@@ -25,10 +25,12 @@ import type {
 } from "@synapse/shared/types"
 import {
   CONVERSATION_PARTICIPANT_TYPE,
+  describeTransportKind,
   extractText,
   formatMentionText,
   getDefaultModelEngineKind,
   isToolResultOrigin,
+  isTransportKind,
   MCP_TOOL_NAMESPACE_SEPARATOR,
   normalizeCanonicalContentBlocks,
   resolveThreadSemantics,
@@ -36,7 +38,6 @@ import {
   textBlocks,
 } from "@synapse/shared"
 import { isPlanCollaborationMode } from "@synapse/shared/utils"
-import { describeTransportKind, isTransportKind } from "@synapse/shared"
 import type { SessionCollaborationMode } from "@synapse/shared/types"
 import { randomUUID } from "crypto"
 import { config } from "../../config/index.js"
@@ -85,6 +86,7 @@ import {
   updateToolCallStatus,
 } from "../execution/service.js"
 import { getSession } from "../session/service.js"
+import { getTransportConnectorCapability } from "../im/connectors/index.js"
 
 export { buildActorPrompt } from "./prompt-builder.js"
 
@@ -375,7 +377,10 @@ async function loadToolResolveConversationParticipants(params: {
         participantId: member.id,
         name: member.user_name || "User",
         title: transportKind
-          ? `Workspace member · reachable via ${describeTransportKind(transportKind)}`
+          ? `Workspace member · reachable via ${
+              getTransportConnectorCapability(transportKind)?.displayName ??
+              describeTransportKind(transportKind)
+            }`
           : "Workspace member",
         role: "Workspace member",
       })
@@ -1339,7 +1344,7 @@ export async function actorThink(
             metadata?: Record<string, unknown>
             responsePayload?: unknown
             // Phase 8 review: origin must be carried into failures so audit
-            // trails attribute the failure to the right transport (mcp_relay /
+            // trails attribute the failure to the right transport (mcp_device /
             // mcp_remote / callable_plugin) instead of falling back to the
             // synthesized {kind:"builtin"} default.
             origin?: ToolResultOrigin

@@ -1,4 +1,4 @@
-import { Worker } from "bullmq"
+import { UnrecoverableError, Worker } from "bullmq"
 import { CONVERSATION_PARTICIPANT_TYPE, QUEUE_NAMES } from "@synapse/shared"
 import type { TransportKind } from "@synapse/shared/types"
 import { redis } from "../infrastructure/redis/index.js"
@@ -10,10 +10,12 @@ import {
   getReachableTransportAddressForParticipant,
   getTransportAddressByExternalId,
   loadTransportMessageLinkForDelivery,
+  patchTransportMessageLinkMetadata,
   updateTransportMessageLinkStatus,
 } from "../modules/im/service.js"
 import { tryGetConnector } from "../modules/im/connectors/registry.js"
 import type { TransportConnector } from "../modules/im/connectors/types.js"
+import { PermanentTransportError } from "../modules/im/connectors/types.js"
 import {
   decodeFromConversationItem,
   type EncodedContentBlock,
@@ -57,6 +59,11 @@ function asObjectMetadata(value: unknown): Record<string, unknown> | undefined {
  * ilink contextToken from the address row). `resolveMentions` is the
  * shared participant-keyed resolver used to fill `externalId` in place
  * on each mention part before the connector send.
+ *
+ * `patchLinkMetadata` is the deep-merge helper exposed to the
+ * connector through `OutboundSendInput.patchLinkMetadata` — connectors
+ * persist per-attempt state (msg_seq reservation, in-flight markers,
+ * ambiguity flags) before the HTTP round-trip.
  */
 export interface ImTransportDeliveryDeps {
   loadLink: typeof loadTransportMessageLinkForDelivery
@@ -80,6 +87,7 @@ export interface ImTransportDeliveryDeps {
     input: ResolveMentionsInput
   ) => Promise<Map<string, ResolvedMention>>
   updateStatus: typeof updateTransportMessageLinkStatus
+  patchLinkMetadata: typeof patchTransportMessageLinkMetadata
   getBinding: typeof getConversationTransportBinding
   getItem: typeof getConversationFeedItemById
   decode: typeof decodeFromConversationItem
@@ -93,21 +101,36 @@ export interface ImTransportDeliveryResult {
 }
 
 /**
- * Pure handler body lifted out of the BullMQ Worker constructor so it can
- * be unit-tested with stub deps. The BullMQ wrapper at
- * startImTransportDeliveryWorker() is now 3 lines.
+ * Pure handler body lifted out of the BullMQ Worker constructor so it
+ * can be unit-tested with stub deps.
  *
- * Behavior is preserved 1:1 with the previous inline handler, including:
- *   - defensive parsing of jobData (may be null/undefined; linkId may be
- *     missing or non-string)
- *   - the try/catch that wraps everything from connector lookup through
- *     send + status update — any throw inside that block flips the link
- *     to status="failed" and re-throws so BullMQ retries per its policy
- *   - skipped-reason metadata for every short-circuit path
+ * Behavior contracts worth calling out:
+ *   - **Binding-changed check runs BEFORE the account-status check.**
+ *     A legitimate binding switch (the conversation rebound to a
+ *     freshly-active account, while the link's stale account is
+ *     disabled) must classify as `binding_changed` and not as
+ *     `account_disabled`; otherwise recovery code that scans for
+ *     `binding_changed` skipReason never sees the link.
+ *   - Connector errors are wrapped: `PermanentTransportError` becomes
+ *     BullMQ's `UnrecoverableError` so the job stops retrying; every
+ *     other error keeps the default retry behavior driven by
+ *     `IM_TRANSPORT_DELIVERY_JOB_DEFAULTS`.
+ *   - `OutboundSendResult.deliveryAmbiguous === true` accepts an
+ *     undefined `externalMessageId`, marks the link `sent` with
+ *     `external_message_id` NULL, and writes
+ *     `metadata.delivery.ambiguous = true`. A missing id without an
+ *     explicit ambiguous flag is treated as a connector bug and
+ *     raises `PermanentTransportError`.
  */
 export async function processImTransportDeliveryJob(
   jobData: { linkId?: unknown } | null | undefined,
-  deps: ImTransportDeliveryDeps
+  deps: ImTransportDeliveryDeps,
+  /**
+   * BullMQ `job.attemptsMade` at handler entry. The production wrapper
+   * (`startImTransportDeliveryWorker`) passes the BullMQ value; tests
+   * default to 0 when omitted to keep call-sites short.
+   */
+  attemptNumber: number = 0
 ): Promise<ImTransportDeliveryResult> {
   const linkId = nonEmptyString(jobData?.linkId)
   if (!linkId) {
@@ -134,6 +157,33 @@ export async function processImTransportDeliveryJob(
       reason: `already ${link.deliveryStatus}`,
     }
   }
+
+  // Binding-changed recovery: look at the *current* binding before
+  // trusting the link's stale account snapshot. If the binding has
+  // moved to a different (account, endpoint) pair, the link is stale
+  // — classify it `skipped` with `binding_changed` so recovery can
+  // requeue work onto the new binding. This MUST run before the
+  // `link.account.status !== "active"` early-return, because the
+  // common legitimate case is `old account disabled → new account
+  // active`. Without the swap, the link would forever look like
+  // "account_disabled" and never get rebound.
+  const binding = await deps.getBinding({
+    workspaceId: link.workspaceId,
+    conversationId: link.conversationId,
+  })
+  if (
+    binding &&
+    (binding.account.id !== link.transportAccountId ||
+      binding.endpoint.id !== link.transportEndpointId)
+  ) {
+    await deps.updateStatus({
+      linkId,
+      status: "skipped",
+      metadata: { skippedReason: "binding_changed" },
+    })
+    return { success: true, reason: "binding changed" }
+  }
+
   if (link.account.status !== "active") {
     await deps.updateStatus({
       linkId,
@@ -143,16 +193,10 @@ export async function processImTransportDeliveryJob(
     return { success: true, reason: "account disabled" }
   }
 
-  const binding = await deps.getBinding({
-    workspaceId: link.workspaceId,
-    conversationId: link.conversationId,
-  })
   if (
     !binding ||
     binding.account.status !== "active" ||
-    !binding.outboundEnabled ||
-    binding.account.id !== link.transportAccountId ||
-    binding.endpoint.id !== link.transportEndpointId
+    !binding.outboundEnabled
   ) {
     await deps.updateStatus({
       linkId,
@@ -162,9 +206,7 @@ export async function processImTransportDeliveryJob(
           ? "binding_missing"
           : binding.account.status !== "active"
             ? "account_disabled"
-            : !binding.outboundEnabled
-              ? "binding_disabled"
-              : "binding_changed",
+            : "binding_disabled",
       },
     })
     return { success: true, reason: "binding unavailable" }
@@ -274,7 +316,34 @@ export async function processImTransportDeliveryJob(
       message,
       replyTo,
       recipientAddressMetadata,
+      transportMessageLinkId: link.id,
+      linkMetadata: link.metadata ?? {},
+      attemptNumber,
+      patchLinkMetadata: (patch) =>
+        deps.patchLinkMetadata({ linkId: link.id, patch }),
     })
+
+    // Ambiguous-success path: connector knows the send was delivered
+    // but didn't get an id back (QQ duplicate msg_seq + prior
+    // unknown attempt). Stamp `delivery.ambiguous` and finish.
+    if (deliveryResult.deliveryAmbiguous) {
+      await deps.updateStatus({
+        linkId,
+        status: "sent",
+        metadata: { delivery: { ambiguous: true } },
+      })
+      return { success: true }
+    }
+
+    // Connector returned no id and no ambiguity flag — treat as a
+    // bug. PermanentTransportError so we don't retry-burn on a
+    // missing-implementation case.
+    if (!deliveryResult.externalMessageId) {
+      throw new PermanentTransportError(
+        `${connector.transportKind} sendMessage returned no externalMessageId and did not set deliveryAmbiguous`,
+        { code: "missing_external_message_id" }
+      )
+    }
 
     await deps.updateStatus({
       linkId,
@@ -282,12 +351,18 @@ export async function processImTransportDeliveryJob(
       externalMessageId: deliveryResult.externalMessageId,
     })
     return { success: true, messageId: deliveryResult.externalMessageId }
-  } catch (error: any) {
+  } catch (error: unknown) {
     await deps.updateStatus({
       linkId,
       status: "failed",
       error: error instanceof Error ? error.message : String(error),
     })
+    if (error instanceof PermanentTransportError) {
+      // BullMQ stops retrying when the worker throws
+      // `UnrecoverableError`. Preserve the original message so
+      // `metadata.lastError` and worker logs stay readable.
+      throw new UnrecoverableError(error.message)
+    }
     throw error
   }
 }
@@ -341,6 +416,7 @@ export function defaultImTransportDeliveryDeps(): ImTransportDeliveryDeps {
         },
       }),
     updateStatus: updateTransportMessageLinkStatus,
+    patchLinkMetadata: patchTransportMessageLinkMetadata,
     getBinding: getConversationTransportBinding,
     getItem: getConversationFeedItemById,
     decode: decodeFromConversationItem,
@@ -360,7 +436,8 @@ export function startImTransportDeliveryWorker() {
   const deps = defaultImTransportDeliveryDeps()
   const worker = new Worker(
     QUEUE_NAMES.IM_TRANSPORT_DELIVERY,
-    async (job) => processImTransportDeliveryJob(job.data, deps),
+    async (job) =>
+      processImTransportDeliveryJob(job.data, deps, job.attemptsMade),
     { connection: redis }
   )
 

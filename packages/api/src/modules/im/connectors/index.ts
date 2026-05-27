@@ -6,6 +6,10 @@
  * the registered connector instance. The legacy connectors/feishu.ts and
  * connectors/weixin.ts shells that exported standalone capability constants
  * are gone.
+ *
+ * `assert*` helpers throw `statusCode/code`-annotated errors so the
+ * global Fastify error handler maps them to clean 400s. Bare
+ * `throw new Error(...)` would surface as 500.
  */
 
 import type {
@@ -32,9 +36,6 @@ export function assertSupportedConnectionMode(
 ): void {
   const capability = getTransportConnectorCapability(transportKind)
   if (!capability) {
-    // The transportKind enum is closed but a stale row could in theory
-    // hit this. Treat as 400 (caller asked for something unsupported)
-    // rather than 500 — see the error handler in src/index.ts:127.
     throw Object.assign(
       new Error(`No connector registered for transport_kind=${transportKind}`),
       {
@@ -44,10 +45,6 @@ export function assertSupportedConnectionMode(
     )
   }
   if (!capability.supportedConnectionModes.includes(connectionMode)) {
-    // WeCom only supports long_connection but the generic POST
-    // /im/accounts accepts every value in TRANSPORT_CONNECTION_MODES
-    // for any kind — without statusCode/code here the resulting
-    // mismatch falls through to 500.
     throw Object.assign(
       new Error(
         `${transportKind} does not support connection mode ${connectionMode}`

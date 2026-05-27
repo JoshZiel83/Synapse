@@ -1212,10 +1212,10 @@ async function validateAutomationEventSourceProvider(
     }
   }
 
-  if (providerKind === "relay") {
+  if (providerKind === "device") {
     const normalizedRef = providerRef?.trim()
     if (!normalizedRef) {
-      throw new Error("relay event sources require providerRef")
+      throw new Error("device event sources require providerRef")
     }
     return {
       providerRef: normalizedRef,

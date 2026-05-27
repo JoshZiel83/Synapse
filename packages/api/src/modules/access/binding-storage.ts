@@ -21,7 +21,6 @@ import type {
 export type AccessBindingSource =
   | "manual"
   | "default_open"
-  | "relay_auto"
   | "approval"
   | "system"
 
@@ -58,8 +57,6 @@ export async function buildResourceAccessBindingInsertValues(
       input.resourceType === "installed_skill" ? input.resourceId : null,
     plugin_installation_id:
       input.resourceType === "plugin_installation" ? input.resourceId : null,
-    relay_capability_id:
-      input.resourceType === "relay_capability" ? input.resourceId : null,
     automation_event_source_id:
       input.resourceType === "automation_event_source"
         ? input.resourceId
@@ -250,8 +247,6 @@ export async function buildResourceAccessBindingInsertValuesOn(
       input.resourceType === "installed_skill" ? input.resourceId : null,
     plugin_installation_id:
       input.resourceType === "plugin_installation" ? input.resourceId : null,
-    relay_capability_id:
-      input.resourceType === "relay_capability" ? input.resourceId : null,
     automation_event_source_id:
       input.resourceType === "automation_event_source"
         ? input.resourceId
@@ -362,8 +357,6 @@ function resourceIdColumnFor(resourceType: AccessBindableResourceType) {
       return "binding.installed_skill_id"
     case "plugin_installation":
       return "binding.plugin_installation_id"
-    case "relay_capability":
-      return "binding.relay_capability_id"
     case "automation_event_source":
       return "binding.automation_event_source_id"
     case "actor":
@@ -404,7 +397,6 @@ export async function listGrantsForResource(
       "binding.resource_type",
       "binding.installed_skill_id",
       "binding.plugin_installation_id",
-      "binding.relay_capability_id",
       "binding.automation_event_source_id",
       "binding.actor_id",
       "binding.remote_agent_id",
@@ -542,7 +534,6 @@ function bindingRowSelectFor(
       "binding.resource_type",
       "binding.installed_skill_id",
       "binding.plugin_installation_id",
-      "binding.relay_capability_id",
       "binding.automation_event_source_id",
       "binding.actor_id",
       "binding.remote_agent_id",
@@ -748,8 +739,6 @@ function resourceIdColumnForRaw(resourceType: AccessBindableResourceType) {
       return "installed_skill_id"
     case "plugin_installation":
       return "plugin_installation_id"
-    case "relay_capability":
-      return "relay_capability_id"
     case "automation_event_source":
       return "automation_event_source_id"
     case "actor":

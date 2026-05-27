@@ -293,7 +293,7 @@ test("storage receives our ToolResultOrigin via origin.details.originKind", asyn
     {
       workspaceId: "ws",
       origin: {
-        kind: "mcp_relay",
+        kind: "mcp_device",
         deviceId: "dev-1",
         exposureStableKey: "synapse.builtin.filesystem.v1",
       },
@@ -302,7 +302,7 @@ test("storage receives our ToolResultOrigin via origin.details.originKind", asyn
   )
   assert.equal(saveBase64Calls.length, 1)
   assert.equal(saveBase64Calls[0].origin.family, "tool_output")
-  assert.equal(saveBase64Calls[0].origin.details.originKind, "mcp_relay")
+  assert.equal(saveBase64Calls[0].origin.details.originKind, "mcp_device")
   assert.equal(saveBase64Calls[0].origin.details.deviceId, "dev-1")
 })
 

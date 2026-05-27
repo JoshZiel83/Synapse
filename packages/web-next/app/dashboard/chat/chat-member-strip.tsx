@@ -23,6 +23,7 @@ import {
 } from "./runtime-ui"
 import ChatParticipantHoverCard from "./chat-participant-hover-card"
 import { CONVERSATION_PARTICIPANT_TYPE } from "@synapse/shared"
+import { useConnectorMetadata } from "@/lib/im-connector-metadata"
 import {
   getConversationMemberContactHref,
   getConversationMemberSubtitle,
@@ -94,6 +95,7 @@ export default function ChatMemberStrip({
 }: ChatMemberStripProps) {
   const router = useRouter()
   const isMobile = useIsMobile()
+  const connectorMetadata = useConnectorMetadata()
   const orderedMembers = orderMembers(
     members,
     runtimeByActor,
@@ -116,7 +118,10 @@ export default function ChatMemberStrip({
               ? runtimeByRemoteAgent?.[member.id]
               : undefined
         const href = getConversationMemberContactHref(member, contactBasePath)
-        const subtitle = getConversationMemberSubtitle(member)
+        const subtitle = getConversationMemberSubtitle(
+          member,
+          connectorMetadata
+        )
         const canOpen = Boolean(onMemberClick || href)
         const avatar = (
           <ChatAvatar

@@ -22,7 +22,6 @@ import {
   type ActorDoc,
   type ToolDefinition,
   type ToolResolveContext,
-  type TransportKind,
 } from "@synapse/shared"
 import type {
   CapabilityInvocationContext,
@@ -32,8 +31,6 @@ import type {
   InteractionInputQuestionDefinition,
   InteractionInputQuestionType,
   PlanChecklistStep,
-  RelayAuthorizationPreset,
-  RelayAuthorizationRequestMode,
 } from "@synapse/shared/types"
 import { rethrowToolExecutionError, throwToolError } from "./tool-errors.js"
 import { registerToolPlugin } from "./tool-plugins.js"
@@ -58,6 +55,7 @@ import {
 import { db } from "../../infrastructure/database/kysely.js"
 import { sql } from "kysely"
 import { getSession, updateSessionCollaboration } from "../session/service.js"
+import { getTransportConnectorCapability } from "../im/connectors/index.js"
 import {
   buildSessionPlanDraftState,
   requireSessionPlanDraftState,
@@ -96,18 +94,6 @@ import {
   createUserInputInteractionRequest,
   getInteractionRequestSummaryByTaskId,
 } from "../interactions/service.js"
-import { resolveRelayTargetForNamespacedTool } from "../mcp-plugins/tool-resolver.js"
-import {
-  callRelayTool,
-  cancelRelayToolTask,
-  loadRelayExposureCatalogSnapshot,
-} from "../mcp-plugins/relay-manager.js"
-import {
-  createRelayAuthorizationRequest,
-  waitForRelayAuthorizationResolution,
-} from "../relay-authorizations/requests.js"
-import { inferRelaySpecialAuthorizationPlan } from "../mcp-plugins/relay-special-mcp.js"
-import { normalizeMcpToolResult } from "../mcp-plugins/result-normalizer.js"
 
 type InviteableActor = {
   id: string
@@ -456,7 +442,10 @@ function buildSendToCandidates(
         ? participant.transport_kind
         : undefined
       const transportLabel = transportKind
-        ? `, reachable via ${describeTransportKind(transportKind)}`
+        ? `, reachable via ${
+            getTransportConnectorCapability(transportKind)?.displayName ??
+            describeTransportKind(transportKind)
+          }`
         : ""
       candidates.push({
         participantType: "workspace_member",
@@ -627,7 +616,7 @@ async function createGovernedToolCallTask(params: {
   executorKind:
     | "interaction_user_input"
     | "plan_approval"
-    | "relay_authorization"
+    | "runtime_authorization"
   deliveryPolicy: "human_interaction"
   requestPayload: Record<string, unknown>
   summary: string
@@ -737,59 +726,9 @@ async function cancelHumanInteractionTask(
   })
 }
 
-async function resolveRelayAuthorizationPlanOrThrow(params: {
-  actorId: string
-  workspaceId: string
-  sessionId: string
-  conversationId: string
-  workspaceMemberId?: string
-  relayToolName: string
-  toolArguments: Record<string, unknown>
-}) {
-  const relayTarget = await resolveRelayTargetForNamespacedTool({
-    actorId: params.actorId,
-    workspaceId: params.workspaceId,
-    sessionId: params.sessionId,
-    conversationId: params.conversationId,
-    namespacedToolName: params.relayToolName,
-  })
-  if (!relayTarget) {
-    throwToolError(
-      `Relay tool "${params.relayToolName}" is not currently available in this conversation.`
-    )
-  }
-  if (!relayTarget.runtimeSessionId) {
-    throwToolError(
-      "This relay tool does not have an active runtime session yet. Call the relay tool first, then request authorization."
-    )
-  }
-
-  const relayCatalog = await loadRelayExposureCatalogSnapshot(
-    relayTarget.deviceId,
-    relayTarget.exposureId
-  )
-  if (!relayCatalog) {
-    throwToolError("The relay exposure is not currently available.")
-  }
-
-  const authorizationPlan = inferRelaySpecialAuthorizationPlan({
-    toolStableKey: relayTarget.relayToolStableKey,
-    visibleToolName: relayTarget.visibleToolName,
-    toolInput: params.toolArguments,
-    exposureMetadata: relayCatalog.metadata,
-  })
-  if (!authorizationPlan) {
-    throwToolError(
-      "This relay tool call does not produce a relay authorization plan, or Synapse could not infer an authorization range for the requested action."
-    )
-  }
-
-  return {
-    relayTarget,
-    relayCatalog,
-    authorizationPlan,
-  }
-}
+// Device-runtime v3: relay subsystem removed. The previous
+// `resolveRuntimeAuthorizationPlanOrThrow` helper and the `request_runtime_authorization`
+// callable plugin were deleted alongside the relay tables in PR #20.
 
 function normalizeUserInputQuestionType(
   value: unknown
@@ -2190,240 +2129,12 @@ export function registerCallableToolPlugins(): void {
   })
 
   registerToolPlugin({
-    name: "request_relay_authorization",
-    kind: "callable",
-    definition: {
-      name: "request_relay_authorization",
-      description:
-        "Create a relay authorization request for a relay special MCP tool. Use this only when you need a server-side override for that exact relay action.",
-      parameters: {
-        type: "object",
-        properties: {
-          relayToolName: {
-            type: "string",
-            description:
-              "The exact namespaced relay tool name that needs authorization.",
-          },
-          reason: {
-            type: "string",
-            description: "Explain why this relay action is needed now.",
-          },
-          mode: {
-            type: "string",
-            enum: ["background", "blocking"],
-            description:
-              "Use blocking only when the actor must wait for approval or rejection before continuing. This tool does not execute the relay tool for you.",
-          },
-          toolArguments: {
-            type: "object",
-            description:
-              "The exact relay tool arguments to authorize on the server.",
-          },
-        },
-        required: ["relayToolName", "reason", "mode", "toolArguments"],
-      },
-    },
-    resolve: (ctx) => {
-      const conversationParticipants =
-        getToolContextConversationParticipants(ctx)
-      if (
-        !getToolContextConversationId(ctx) ||
-        !conversationParticipants?.length
-      ) {
-        return { active: false, definition: null as any }
-      }
-      const candidates = buildUserInteractionCandidatesFromEntries(
-        conversationParticipants
-      )
-      if (candidates.length === 0) {
-        return { active: false, definition: null as any }
-      }
-      return {
-        active: true,
-        definition: {
-          name: "request_relay_authorization",
-          description:
-            "Create a relay authorization request for a relay special MCP tool. If you choose blocking mode, Synapse will wait for approval or rejection before returning.",
-          parameters: {
-            type: "object",
-            properties: {
-              relayToolName: {
-                type: "string",
-                description:
-                  "The exact namespaced relay tool name that needs authorization.",
-              },
-              reason: {
-                type: "string",
-                description: "Explain why this relay action is needed now.",
-              },
-              mode: {
-                type: "string",
-                enum: ["background", "blocking"],
-                description:
-                  "Use blocking only when the actor must wait for approval or rejection before continuing. This tool does not execute the relay tool for you.",
-              },
-              toolArguments: {
-                type: "object",
-                description:
-                  "The exact relay tool arguments to authorize on the server.",
-              },
-            },
-            required: ["relayToolName", "reason", "mode", "toolArguments"],
-          },
-        },
-      }
-    },
-    execute: async (input) => {
-      const context = getToolExecutionContext()
-      if (!context) {
-        throwToolError("No session context available")
-      }
-
-      const session = await getSession(context.sessionId)
-      const conversationId = getThreadConversationId(session)
-      if (!session || !conversationId) {
-        throwToolError(
-          "Current session is not attached to a thread conversation"
-        )
-      }
-
-      const relayToolName = String((input as any).relayToolName || "").trim()
-      if (!relayToolName) {
-        throwToolError("relayToolName is required")
-      }
-      const reason = String((input as any).reason || "").trim()
-      if (!reason) {
-        throwToolError("reason is required")
-      }
-      const mode: RelayAuthorizationRequestMode =
-        (input as any).mode === "blocking" ? "blocking" : "background"
-      const toolArguments =
-        (input as any).toolArguments &&
-        typeof (input as any).toolArguments === "object" &&
-        !Array.isArray((input as any).toolArguments)
-          ? ((input as any).toolArguments as Record<string, unknown>)
-          : null
-      if (!toolArguments) {
-        throwToolError("toolArguments must be an object")
-      }
-
-      const { relayTarget, authorizationPlan } =
-        await resolveRelayAuthorizationPlanOrThrow({
-          actorId: context.actorId,
-          workspaceId: context.workspaceId,
-          sessionId: context.sessionId,
-          conversationId,
-          workspaceMemberId: context.workspaceMemberId,
-          relayToolName,
-          toolArguments,
-        })
-
-      let created
-      try {
-        created = await createRelayAuthorizationRequest({
-          source: {
-            workspaceId: context.workspaceId,
-            conversationId,
-            sessionId: context.sessionId,
-            actorId: context.actorId,
-            conversationKind: session.conversation_kind,
-            conversationBoundary: session.conversation_boundary,
-            workspaceMemberId: context.workspaceMemberId,
-            turnId: context.turnId,
-            sourceToolCallId: context.toolCallId,
-            sourceToolName: context.toolName || "request_relay_authorization",
-          },
-          relayTarget: {
-            relayCapabilityId: relayTarget.capabilityId,
-            relayDeviceId: relayTarget.deviceId,
-            relayExposureId: relayTarget.exposureId,
-            requestedToolName: relayTarget.visibleToolName,
-            relayToolStableKey: authorizationPlan.toolStableKey,
-            runtimeSessionId: relayTarget.runtimeSessionId || "",
-            relayDeviceDisplayName: relayTarget.deviceDisplayName,
-            relayExposureDisplayName: relayTarget.exposureDisplayName,
-          },
-          authorizationPlan,
-          requestMode: mode,
-          availablePresets: ["actor", "conversation", "workspace"],
-          reason,
-          sourceRequestArgs: toolArguments,
-        })
-      } catch (error) {
-        throwToolError(error instanceof Error ? error.message : String(error))
-      }
-
-      if (mode === "blocking") {
-        const waited = await waitForRelayAuthorizationResolution({
-          interactionId: created.interaction.id,
-          conversationId,
-          createdAt: created.interaction.createdAt,
-          onApproved: async (interaction) => interaction,
-        })
-        if (waited.status === "approved") {
-          return textResult(
-            JSON.stringify({
-              success: true,
-              taskId: created.task?.id,
-              interactionId: created.interaction.id,
-              approverCount: created.availableAuthorizerCount,
-              relayDevice: relayTarget.deviceDisplayName,
-              relayExposure: relayTarget.exposureDisplayName,
-              authorized: true,
-              retried: false,
-              relayToolName,
-              authorization: waited.approvedValue.relayAuthorization,
-            })
-          )
-        }
-        throwToolError(
-          waited.status === "superseded"
-            ? "Relay authorization request was superseded by a newer user message."
-            : waited.status === "rejected"
-              ? "Relay authorization request was rejected."
-              : waited.status === "cancelled"
-                ? "Relay authorization request was cancelled."
-                : "Relay authorization request did not complete successfully."
-        )
-      }
-
-      if (created.reused) {
-        return textResult(
-          JSON.stringify({
-            success: true,
-            interactionId: created.interaction.id,
-            relayDevice: relayTarget.deviceDisplayName,
-            relayExposure: relayTarget.exposureDisplayName,
-            message:
-              "A matching relay authorization request is already pending in this conversation.",
-          })
-        )
-      }
-
-      return textResult(
-        JSON.stringify({
-          success: true,
-          taskId: created.task?.id,
-          interactionId: created.interaction.id,
-          approverCount: created.availableAuthorizerCount,
-          relayDevice: relayTarget.deviceDisplayName,
-          relayExposure: relayTarget.exposureDisplayName,
-          message:
-            created.availableAuthorizerCount === 1
-              ? `Relay authorization request created. ${created.availableAuthorizers[0]!.name} can approve or reject it.`
-              : `Relay authorization request created. ${created.availableAuthorizerCount} current conversation users can approve or reject it.`,
-        })
-      )
-    },
-  })
-
-  registerToolPlugin({
     name: "list_tasks",
     kind: "callable",
     definition: {
       name: "list_tasks",
       description:
-        "List task-backed tool calls created in this session, including pending ask-user flows and async relay command execution.",
+        "List task-backed tool calls created in this session, including pending ask-user flows and async device command execution.",
       parameters: {
         type: "object",
         properties: {
@@ -2515,7 +2226,7 @@ export function registerCallableToolPlugins(): void {
       const interaction =
         task.executorKind === "interaction_user_input" ||
         task.executorKind === "plan_approval" ||
-        task.executorKind === "relay_authorization"
+        task.executorKind === "runtime_authorization"
           ? await getInteractionRequestSummaryByTaskId(task.id)
           : null
 
@@ -2535,7 +2246,7 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "cancel_task",
       description:
-        "Request cancellation for a task in this session. Human-interaction tasks cancel immediately; relay command tasks cancel best-effort.",
+        "Request cancellation for a task in this session. Human-interaction tasks cancel immediately; device command tasks cancel best-effort.",
       parameters: {
         type: "object",
         properties: {
@@ -2588,15 +2299,14 @@ export function registerCallableToolPlugins(): void {
         throwToolError(`Task "${task.id}" does not support cancellation.`)
       }
 
-      const updated =
-        task.executorKind === "relay_mcp"
-          ? await cancelRelayToolTask(task.id, reason)
-          : await cancelHumanInteractionTask(task, reason)
+      // Device-runtime v3: device_mcp executor was deleted along with the relay
+      // subsystem; only human-interaction tasks reach the cancel path now.
+      const updated = await cancelHumanInteractionTask(task, reason)
       const current = await loadSessionTaskOrThrow(context.sessionId, task.id)
       const interaction =
         current.executorKind === "interaction_user_input" ||
         current.executorKind === "plan_approval" ||
-        current.executorKind === "relay_authorization"
+        current.executorKind === "runtime_authorization"
           ? await getInteractionRequestSummaryByTaskId(current.id)
           : null
 
@@ -2620,14 +2330,14 @@ export function registerCallableToolPlugins(): void {
     definition: {
       name: "tail_task_output",
       description:
-        "Read the latest output chunks from a task-backed relay command execution in this session.",
+        "Read the latest output chunks from a task-backed device command execution in this session.",
       parameters: {
         type: "object",
         properties: {
           taskId: {
             type: "string",
             description:
-              "The exact task ID returned by a previous async relay command call.",
+              "The exact task ID returned by a previous async device command call.",
           },
           afterSeq: {
             type: "number",

@@ -20,6 +20,8 @@
 import { sql } from "kysely"
 import {
   db,
+  withDbTransaction,
+  type DatabaseTransaction,
   type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
 import { v4 as uuidv4 } from "uuid"
@@ -43,6 +45,11 @@ import {
   parseJsonObject,
   readTrimmedString,
 } from "./_helpers.js"
+import {
+  orderAccountRecoveryActions,
+  planAccountRecoveryActions,
+} from "./account-recovery-planner.js"
+import { reEnableAutoDisabledBindings } from "./recovery.js"
 
 // ───────────────────────── Assertions ─────────────────────────
 
@@ -486,13 +493,11 @@ export async function updateTransportAccount(params: {
   workspaceId: string
   accountId: string
   /**
-   * Optional guard: if supplied, the existing account's `transport_kind`
-   * must equal this value or the update is rejected. Per-transport
-   * controller routes (controller/feishu.ts, controller/wecom.ts) pass
-   * their own kind so that hitting `PUT /im/accounts/wecom/:id` against
-   * a Feishu account in the same workspace returns a clean error rather
-   * than silently rewriting the wrong account's display name / owner /
-   * inbound actor.
+   * Optional kind guard. When supplied (typically by per-transport
+   * routes like `PUT /im/accounts/feishu/:id`), the existing account
+   * must match this value or the call fails with
+   * `404 transport_account_kind_mismatch`. Generic routes that
+   * legitimately span kinds omit this.
    */
   expectedTransportKind?: TransportKind
   displayName?: string
@@ -511,17 +516,20 @@ export async function updateTransportAccount(params: {
     params.accountId
   )
   if (!existing) {
-    // statusCode lets the Fastify error handler in src/index.ts:137 surface
-    // this as a 404 rather than swallowing it into a 500.
+    // statusCode lets the Fastify error handler surface this as 404
+    // rather than swallowing it into 500.
     throw Object.assign(new Error("Transport account not found"), {
-      statusCode: 404,
-      code: "transport_account_not_found",
+      statusCode: 404 as const,
+      code: "transport_account_not_found" as const,
     })
   }
-  // Guard against PUT /im/accounts/<kind>/:id targeting a different
-  // transport_kind in the same workspace. Throws statusCode-404 (see
-  // assertExpectedTransportKind in account-credentials.ts).
-  assertExpectedTransportKind(existing, params.expectedTransportKind)
+  // Per-transport PUT routes pass `expectedTransportKind`; reject
+  // wrong-kind hits with a stable 404 + code instead of silently
+  // rewriting the wrong account.
+  assertExpectedTransportKind(
+    { transportKind: existing.transport_kind as TransportKind },
+    params.expectedTransportKind
+  )
 
   const nextConnectionMode =
     params.connectionMode ||
@@ -558,20 +566,14 @@ export async function updateTransportAccount(params: {
     status: nextStatus,
     credentials: mergedCredentials,
   })
-  // Config validation also goes through the connector. PUT with a body
-  // omitting `config` preserves the existing JSONB; PUT supplying
-  // `config` runs it through the connector's `validateConfig` before
-  // persist. This is the single enforcement point — the generic
-  // accountSchema can't validate per-connector config shape on its own.
-  const nextConfig =
-    params.config !== undefined
-      ? params.config
-      : parseJsonObject(existing.config)
   const normalizedConfig = validateAndNormalizeAccountConfig({
     transportKind: existing.transport_kind as TransportKind,
     connectionMode: nextConnectionMode,
     status: nextStatus,
-    config: nextConfig,
+    config:
+      params.config !== undefined
+        ? params.config
+        : parseJsonObject(existing.config),
   })
   const resolvedOwnerWorkspaceMemberId = await assertTransportAccountOwner({
     workspaceId: params.workspaceId,
@@ -597,30 +599,109 @@ export async function updateTransportAccount(params: {
     inboundActorMode: nextInboundActorMode,
     inboundActorId: nextInboundActorId,
   })
-  const row = await db
-    .updateTable("transport_accounts")
-    .set({
-      display_name: params.displayName?.trim() || existing.display_name,
-      owner_scope: nextOwnerScope,
-      owner_workspace_member_id: resolvedOwnerWorkspaceMemberId,
-      inbound_actor_mode: nextInboundActorMode,
-      inbound_actor_id: resolvedInboundActorId,
-      connection_mode: nextConnectionMode,
-      status: nextStatus,
-      credentials:
-        normalizedCredentials as TableInsert<"transport_accounts">["credentials"],
-      config: normalizedConfig as TableInsert<"transport_accounts">["config"],
-      metadata: (params.metadata !== undefined
-        ? params.metadata
-        : parseJsonObject(
-            existing.metadata
-          )) as TableInsert<"transport_accounts">["metadata"],
-      updated_at: sql`NOW()`,
-    })
-    .where("workspace_id", "=", params.workspaceId)
-    .where("id", "=", params.accountId)
-    .returningAll()
-    .executeTakeFirstOrThrow()
 
-  return normalizeAccountRow(row)
+  // Wrap UPDATE + recovery executor in one transaction so a
+  // half-applied state can't leave the account updated but the
+  // recovery side-effects skipped (or vice versa).
+  const updatedAccount = await withDbTransaction(async (tx) => {
+    const row = await tx
+      .updateTable("transport_accounts")
+      .set({
+        display_name: params.displayName?.trim() || existing.display_name,
+        owner_scope: nextOwnerScope,
+        owner_workspace_member_id: resolvedOwnerWorkspaceMemberId,
+        inbound_actor_mode: nextInboundActorMode,
+        inbound_actor_id: resolvedInboundActorId,
+        connection_mode: nextConnectionMode,
+        status: nextStatus,
+        credentials:
+          normalizedCredentials as TableInsert<"transport_accounts">["credentials"],
+        config: normalizedConfig as TableInsert<"transport_accounts">["config"],
+        metadata: (params.metadata !== undefined
+          ? params.metadata
+          : parseJsonObject(
+              existing.metadata
+            )) as TableInsert<"transport_accounts">["metadata"],
+        updated_at: sql`NOW()`,
+      })
+      .where("workspace_id", "=", params.workspaceId)
+      .where("id", "=", params.accountId)
+      .returningAll()
+      .executeTakeFirstOrThrow()
+
+    const previousSummary = normalizeAccountRow(existing)
+    const nextSummary = normalizeAccountRow(row)
+    const actions = orderAccountRecoveryActions(
+      planAccountRecoveryActions({
+        previous: previousSummary,
+        next: nextSummary,
+        incomingConfig: params.config,
+      })
+    )
+    await executeAccountRecoveryActions({
+      tx,
+      workspaceId: params.workspaceId,
+      actions,
+    })
+    return nextSummary
+  })
+
+  return updatedAccount
+}
+
+/**
+ * Generic dispatcher for recovery actions emitted by a connector's
+ * `planAccountRecoveryActions?()` hook. The set of `action.type`
+ * values is a closed enum on `AccountRecoveryAction` — adding a new
+ * type requires updating this switch (intentional: keeps the
+ * executor a single source of truth and prevents transport-specific
+ * branches from creeping into `accounts.ts`).
+ *
+ * Execution order is the responsibility of
+ * `orderAccountRecoveryActions` upstream; this loop just walks
+ * actions in the given order.
+ */
+async function executeAccountRecoveryActions(params: {
+  tx: DatabaseTransaction
+  workspaceId: string
+  actions: Array<
+    | { type: "reEnableAutoDisabledBindings"; reason: string }
+    | {
+        type: "recoverSkippedInteractionProjections"
+        eventKind:
+          | "account_status_activated"
+          | "connection_mode_changed_to_long_connection"
+          | "config_webhook_confirmed"
+      }
+  >
+}) {
+  for (const action of params.actions) {
+    switch (action.type) {
+      case "reEnableAutoDisabledBindings": {
+        await reEnableAutoDisabledBindings({
+          workspaceId: params.workspaceId,
+          reason: action.reason,
+          tx: params.tx,
+        })
+        break
+      }
+      case "recoverSkippedInteractionProjections": {
+        // No-op on `dev` — `interaction_transport_projections` does
+        // not exist in the dev schema. Wired up to a real helper
+        // when the QQ merge-prep lands its schema + recovery
+        // implementation. The placeholder dispatch is kept so
+        // `accounts.ts` stays closed-enum today and the QQ branch
+        // can simply replace the body.
+        break
+      }
+      default: {
+        const _exhaustive: never = action
+        // Defensive: never reachable as long as caller respects the
+        // typed `actions` array.
+        throw new Error(
+          `unknown AccountRecoveryAction type: ${JSON.stringify(_exhaustive)}`
+        )
+      }
+    }
+  }
 }

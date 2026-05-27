@@ -8,12 +8,6 @@ import { McpStdioClient } from "./mcp-stdio-client.js"
 import { getBuiltinHandler } from "./builtin/index.js"
 import { logEvent } from "./audit.js"
 import {
-  callRelayTool,
-  closeRelayRuntimeSession,
-  getConnectedRelaySessionId,
-  openRelayRuntimeSession,
-} from "./relay-manager.js"
-import {
   getRuntimeNodeId,
   initRuntimeControlPlane,
   registerRuntimeCommandHandler,
@@ -33,7 +27,7 @@ const MCP_INSTANCE_TTL_ACTOR = 2 * 60 * 60 * 1000
 const MCP_INSTANCE_TTL_CONVERSATION = 1 * 60 * 60 * 1000
 const MCP_INSTANCE_TTL_WORKSPACE = 24 * 60 * 60 * 1000
 
-type InstanceTransport = "builtin" | "stdio" | "http" | "relay" | string
+type InstanceTransport = "builtin" | "stdio" | "http" | "device" | string
 
 type McpInstanceParams = {
   pluginId: string
@@ -107,13 +101,13 @@ export interface McpInstance {
   workspaceId?: string
   configHash: string
   tools: ToolDefinition[]
-  // Relay-only metadata exposed at instance level so tool-resolver can
-  // build a correct mcp_relay origin BEFORE invoking execute (the
+  // Device-only metadata exposed at instance level so tool-resolver can
+  // build a correct mcp_device origin BEFORE invoking execute (the
   // per-tool runtime context with deviceId/exposureStableKey isn't
   // populated until ensureRuntimeSession runs inside execute). Without
   // this, the failure path or the first tool call gets mis-tagged as
   // mcp_remote — Phase 10 review fix.
-  relayMetadata?: {
+  deviceInstanceMetadata?: {
     deviceId: string
     exposureId: string
     exposureStableKey: string
@@ -581,122 +575,6 @@ async function createStdioInstance(
   }
 }
 
-async function createRelayInstance(
-  params: McpInstanceParams,
-  configHash: string
-): Promise<McpInstance> {
-  const deviceId =
-    typeof params.config.deviceId === "string" ? params.config.deviceId : ""
-  const exposureId =
-    typeof params.config.exposureId === "string" ? params.config.exposureId : ""
-  const exposureStableKey =
-    typeof params.config.exposureStableKey === "string"
-      ? params.config.exposureStableKey
-      : ""
-  if (!deviceId || !exposureId || !exposureStableKey) {
-    throw new Error(
-      "Relay instance config is missing device or exposure metadata"
-    )
-  }
-
-  let runtimeSessionId: string | undefined
-  let relaySessionId: string | null = null
-
-  const ensureRuntimeSession = async () => {
-    const currentRelaySessionId = await getConnectedRelaySessionId(deviceId)
-    if (!currentRelaySessionId) {
-      runtimeSessionId = undefined
-      relaySessionId = null
-      throw new Error(`Relay device ${deviceId} is not connected`)
-    }
-
-    if (
-      runtimeSessionId &&
-      relaySessionId &&
-      relaySessionId === currentRelaySessionId
-    ) {
-      return runtimeSessionId
-    }
-
-    runtimeSessionId = await openRelayRuntimeSession({
-      deviceId,
-      exposureId,
-      exposureStableKey,
-    })
-    relaySessionId = currentRelaySessionId
-    return runtimeSessionId
-  }
-
-  const executeRelayCall = async (
-    toolName: string,
-    input: Record<string, unknown>,
-    binding: unknown,
-    executionContext?: McpExecutionContext
-  ) => {
-    const nextRuntimeSessionId = await ensureRuntimeSession()
-    return callRelayTool({
-      conversationId: executionContext?.conversationId,
-      sessionId: executionContext?.sessionId,
-      requestedByWorkspaceMemberId: executionContext?.workspaceMemberId,
-      requestedByActorId: executionContext?.actorId,
-      relayCapabilityId: exposureId,
-      deviceId,
-      exposureId,
-      visibleToolName: toolName,
-      binding: binding as any,
-      args: input,
-      runtimeSessionId: nextRuntimeSessionId,
-    })
-  }
-
-  return {
-    pluginId: params.pluginId,
-    installationId: params.installationId,
-    pluginSlug: params.pluginSlug,
-    orgSlug: params.orgSlug,
-    transport: "relay",
-    scope: params.scope,
-    scopeId: params.scopeId,
-    workspaceId: params.workspaceId,
-    configHash,
-    tools: [],
-    // Phase 10: expose relay binding info so tool-resolver can synthesize
-    // a correct mcp_relay origin even before ensureRuntimeSession runs
-    // (which is what populates activeRelayToolContexts).
-    relayMetadata: {
-      deviceId,
-      exposureId,
-      exposureStableKey,
-    },
-    execute: async (toolName, input, executionContext) =>
-      executeRelayCall(
-        toolName,
-        input,
-        params.config.binding || {},
-        executionContext
-      ),
-    executeWithBinding: async (toolName, input, binding, executionContext) =>
-      executeRelayCall(toolName, input, binding, executionContext),
-    ensureRuntimeSession,
-    getRuntimeSessionId: () => runtimeSessionId,
-    shutdown: async () => {
-      const activeRuntimeSessionId = runtimeSessionId
-      runtimeSessionId = undefined
-      relaySessionId = null
-      if (activeRuntimeSessionId) {
-        await closeRelayRuntimeSession({
-          deviceId,
-          runtimeSessionId: activeRuntimeSessionId,
-        }).catch(() => undefined)
-      }
-    },
-    lastUsed: Date.now(),
-    createdAt: Date.now(),
-    idleTtlMs: params.idleTtlMs ?? getTTLForScope(params.scope),
-    maxAgeMs: params.maxAgeMs,
-  }
-}
-
 async function createTransportInstance(
   params: McpInstanceParams,
   key: string,
@@ -709,8 +587,6 @@ async function createTransportInstance(
       return createStdioInstance(params, configHash, key)
     case "http":
       return createHttpInstance(params, configHash)
-    case "relay":
-      return createRelayInstance(params, configHash)
     default:
       throw new Error(`Unsupported transport: ${params.transport}`)
   }

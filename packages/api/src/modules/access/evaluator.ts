@@ -18,9 +18,9 @@ type AccessResourceType =
   | "installed_skill"
   | "plugin_installation"
   | "automation_event_source"
-  | "relay_device"
-  | "relay_exposure"
-  | "relay_capability"
+  | "device"
+  | "device_exposure"
+  | "device_capability"
   | "conversation_actor_context"
   | "conversation"
   | "memory_space"
@@ -572,7 +572,7 @@ type ResourceGrantRow = {
 type BindableResourceTypeLocal =
   | "installed_skill"
   | "plugin_installation"
-  | "relay_capability"
+  | "device_capability"
   | "automation_event_source"
   | "actor"
   | "remote_agent"
@@ -582,7 +582,7 @@ function bindableResourceIdColumn(
 ):
   | "installed_skill_id"
   | "plugin_installation_id"
-  | "relay_capability_id"
+  | "device_capability_id"
   | "automation_event_source_id"
   | "actor_id"
   | "remote_agent_id" {
@@ -591,8 +591,8 @@ function bindableResourceIdColumn(
       return "installed_skill_id"
     case "plugin_installation":
       return "plugin_installation_id"
-    case "relay_capability":
-      return "relay_capability_id"
+    case "device_capability":
+      return "device_capability_id"
     case "automation_event_source":
       return "automation_event_source_id"
     case "actor":
@@ -622,7 +622,6 @@ async function listResourceGrantRows(
       sql<string>`COALESCE(
         binding.installed_skill_id::text,
         binding.plugin_installation_id::text,
-        binding.relay_capability_id::text,
         binding.automation_event_source_id::text,
         binding.actor_id::text,
         binding.remote_agent_id::text
@@ -827,7 +826,7 @@ async function listManageablePluginInstallationIds(
   return rows.map((row) => row.id)
 }
 
-async function listManageableRelayCapabilityIds(
+async function listManageableDeviceCapabilityIds(
   db: KyselyDb,
   subject: PermissionSubject,
   limit?: number
@@ -842,19 +841,21 @@ async function listManageableRelayCapabilityIds(
   }
 
   let query = db
-    .selectFrom("relay_capabilities as capability")
+    .selectFrom("device_capabilities as capability")
     .innerJoin(
-      "relay_exposures as exposure",
+      "device_exposures as exposure",
       "exposure.id",
       "capability.exposure_id"
     )
-    .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
+    .innerJoin("devices as device", "device.id", "exposure.device_id")
     .select("capability.id")
     .where("capability.workspace_id", "=", access.workspaceId)
     .where("capability.status", "=", "active")
     .orderBy("capability.updated_at", "desc")
 
-  if (!workspacePermissionFromAccess(access, "manage_relays")) {
+  // Only device_admin (manage_devices) can list every workspace's device
+  // capabilities; otherwise we surface only the ones the actor owns.
+  if (!workspacePermissionFromAccess(access, "manage_devices")) {
     query = query.where("device.owner_workspace_member_id", "=", access.id)
   }
 
@@ -944,91 +945,20 @@ async function hasPluginInstallationPermission(
   return canManage
 }
 
-async function hasRelayDevicePermission(
-  db: KyselyDb,
-  subject: PermissionSubject,
-  deviceId: string,
-  permission: string
-): Promise<boolean> {
-  const row = await db
-    .selectFrom("relay_devices")
-    .select(["workspace_id", "owner_workspace_member_id"])
-    .where("id", "=", deviceId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row) {
-    return false
-  }
-
-  if (subject.type === "user") {
-    if (permission !== "authorize_relay_authorization") {
-      return false
-    }
-    return hasPlatformPermission(db, subject, "manage")
-  }
-
-  if (subject.type !== "workspace_member") {
-    return false
-  }
-
-  const access = await loadWorkspaceMemberAccess(db, subject.id)
-  if (!access || access.workspaceId !== row.workspace_id) {
-    return false
-  }
-
-  const canManage =
-    workspacePermissionFromAccess(access, "manage_relays") ||
-    row.owner_workspace_member_id === access.id
-
-  switch (permission) {
-    case "view":
-    case "manage":
-    case "delete":
-    case "authorize_relay_authorization":
-      return canManage
-    default:
-      return false
-  }
-}
-
-async function hasRelayExposurePermission(
-  db: KyselyDb,
-  subject: PermissionSubject,
-  exposureId: string,
-  permission: string
-): Promise<boolean> {
-  const row = await db
-    .selectFrom("relay_exposures as exposure")
-    .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
-    .select(["device.id as device_id"])
-    .where("exposure.id", "=", exposureId)
-    .limit(1)
-    .executeTakeFirst()
-  if (!row?.device_id) {
-    return false
-  }
-  return hasRelayDevicePermission(
-    db,
-    subject,
-    row.device_id,
-    permission === "view" ? "view" : "manage"
-  )
-}
-
-async function hasRelayCapabilityPermission(
+async function hasDeviceCapabilityPermission(
   db: KyselyDb,
   subject: PermissionSubject,
   capabilityId: string,
   permission: string
 ): Promise<boolean> {
   const row = await db
-    .selectFrom("relay_capabilities as capability")
+    .selectFrom("device_capabilities as capability")
     .innerJoin(
-      "relay_exposures as exposure",
+      "device_exposures as exposure",
       "exposure.id",
       "capability.exposure_id"
     )
-    .innerJoin("relay_devices as device", "device.id", "exposure.device_id")
+    .innerJoin("devices as device", "device.id", "exposure.device_id")
     .select([
       "capability.workspace_id",
       "capability.status",
@@ -1045,9 +975,11 @@ async function hasRelayCapabilityPermission(
   if (
     permission === "use" ||
     permission === "view" ||
-    permission === "request_relay_authorization"
+    permission === "request_runtime_authorization"
   ) {
-    if (await hasResourceGrant(db, "relay_capability", capabilityId, subject)) {
+    if (
+      await hasResourceGrant(db, "device_capability", capabilityId, subject)
+    ) {
       return true
     }
   }
@@ -1061,17 +993,11 @@ async function hasRelayCapabilityPermission(
     return false
   }
 
+  // device_admin (manage_devices) can manage every device capability in
+  // the workspace; otherwise the binding owner is the only one allowed.
   const canManage =
-    workspacePermissionFromAccess(access, "manage_relays") ||
+    workspacePermissionFromAccess(access, "manage_devices") ||
     row.owner_workspace_member_id === access.id
-
-  if (
-    permission === "view" ||
-    permission === "use" ||
-    permission === "request_relay_authorization"
-  ) {
-    return canManage
-  }
   return canManage
 }
 
@@ -1563,22 +1489,8 @@ export async function checkPermission(
         params.resourceId,
         params.permission
       )
-    case "relay_device":
-      return hasRelayDevicePermission(
-        db,
-        params.subject,
-        params.resourceId,
-        params.permission
-      )
-    case "relay_exposure":
-      return hasRelayExposurePermission(
-        db,
-        params.subject,
-        params.resourceId,
-        params.permission
-      )
-    case "relay_capability":
-      return hasRelayCapabilityPermission(
+    case "device_capability":
+      return hasDeviceCapabilityPermission(
         db,
         params.subject,
         params.resourceId,
@@ -1667,19 +1579,19 @@ export async function lookupResources(
             params.limit
           )
         : []
-    case "relay_capability":
+    case "device_capability":
       return params.permission === "use" ||
         params.permission === "view" ||
-        params.permission === "request_relay_authorization"
+        params.permission === "request_runtime_authorization"
         ? finalizeResourceIdList(
             [
               await listGrantedResourceIds(
                 db,
-                "relay_capability",
+                "device_capability",
                 params.subject,
                 params.limit
               ),
-              await listManageableRelayCapabilityIds(
+              await listManageableDeviceCapabilityIds(
                 db,
                 params.subject,
                 params.limit

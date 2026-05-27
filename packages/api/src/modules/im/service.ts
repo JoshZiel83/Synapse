@@ -82,6 +82,7 @@ export {
 export {
   findTransportMessageLinkByExternalMessage,
   loadTransportMessageLinkForDelivery,
+  patchTransportMessageLinkMetadata,
   queueConversationTransportProjection,
   updateTransportMessageLinkStatus,
 } from "./service/delivery-links.js"

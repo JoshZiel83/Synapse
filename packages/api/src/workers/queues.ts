@@ -80,6 +80,29 @@ export async function enqueueAutomationExecutionJobs(executionIds: string[]) {
   )
 }
 
+/**
+ * BullMQ retry policy for IM transport delivery jobs. Without
+ * explicit attempts/backoff, BullMQ runs the job exactly once —
+ * meaning a transient network blip, expired access token, or 5xx
+ * from the platform turns into a permanent send failure. The
+ * outbound worker only sees `attemptNumber = 0` on every invocation
+ * and the `RetryableTransportError` machinery is dead.
+ *
+ * Defaults: 5 total attempts, exponential backoff capped by BullMQ's
+ * 30s default. Connectors that need different behavior should still
+ * throw `PermanentTransportError` to short-circuit, or
+ * `RetryableTransportError` to participate.
+ */
+export const IM_TRANSPORT_DELIVERY_JOB_DEFAULTS = {
+  attempts: 5,
+  backoff: {
+    type: "exponential" as const,
+    delay: 5_000,
+  },
+  removeOnComplete: { age: 3_600, count: 1_000 },
+  removeOnFail: { age: 86_400, count: 1_000 },
+} as const
+
 export async function enqueueTransportDeliveryJobs(linkIds: string[]) {
   const uniqueLinkIds = Array.from(
     new Set(linkIds.map((linkId) => linkId.trim()).filter(Boolean))
@@ -89,7 +112,10 @@ export async function enqueueTransportDeliveryJobs(linkIds: string[]) {
       imTransportDeliveryQueue.add(
         "deliver",
         { linkId },
-        { jobId: `im-transport-delivery-${linkId}` }
+        {
+          jobId: `im-transport-delivery-${linkId}`,
+          ...IM_TRANSPORT_DELIVERY_JOB_DEFAULTS,
+        }
       )
     )
   )

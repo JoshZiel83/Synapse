@@ -169,6 +169,27 @@ services:
     profiles:
       - certbot
 
+  # Device Runtime v3: reverse-tunnel edge (frps). Devices dial in here from
+  # arbitrary networks; proxied app endpoints stay on the internal docker
+  # network (only the API container reaches them). See
+  # docs/device-runtime-v3.md §4.4 / §7.3.
+  tunnel-edge:
+    image: snowdreamtech/frp:0.65.0
+    container_name: synapse-tunnel-edge
+    restart: unless-stopped
+    command: ["frps", "-c", "/etc/frp/frps.toml"]
+    volumes:
+      - ./infrastructure/frp/frps.toml:/etc/frp/frps.toml:ro
+    ports:
+      # Public control listener — frpc dials this from anywhere.
+      - "${SYNAPSE_TUNNEL_EDGE_PORT:-7000}:7000"
+      # vhost HTTP — proxied device MCP endpoints. NOT bound to a host port;
+      # only reachable via the synapse internal network.
+    networks:
+      - default
+    profiles:
+      - devices
+
 volumes:
   api_storage:
   certbot_etc:

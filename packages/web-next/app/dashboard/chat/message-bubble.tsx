@@ -19,9 +19,9 @@ import {
   INTERACTION_REQUEST_KIND,
 } from "@synapse/shared"
 import type {
-  RelayAuthorizationGrantSpec,
-  RelayAuthorizationPreset,
-  RelayAuthorizationRequestedAction,
+  RuntimeAuthorizationGrantSpec,
+  RuntimeAuthorizationPreset,
+  RuntimeAuthorizationRequestedAction,
 } from "@synapse/shared/types"
 import { useRouter } from "next/navigation"
 import { createPortal } from "react-dom"
@@ -78,6 +78,7 @@ import { cn, resolveFileUrl } from "@/lib/utils"
 import ChatAvatar from "./chat-avatar"
 import { getRuntimeDetail, getRuntimeLabel } from "./runtime-ui"
 import { buildReplyPreviewText, getEntityDisplayName } from "./reply-utils"
+import { useConnectorMetadata } from "@/lib/im-connector-metadata"
 import {
   formatTransportKindLabel,
   getAuthorContactHref,
@@ -347,9 +348,13 @@ function TransportSummary({
   transport?: ConversationMessageTransportContext
   transportDeliveries?: ConversationMessageTransportDelivery[]
 }) {
+  const connectorMetadata = useConnectorMetadata()
   const inboundLabel =
     transport?.direction === "inbound" && transport.transportKind
-      ? `via ${formatTransportKindLabel(transport.transportKind)}`
+      ? `via ${formatTransportKindLabel(
+          transport.transportKind,
+          connectorMetadata
+        )}`
       : null
   const outboundDeliveries = (transportDeliveries || []).filter(
     (delivery) => delivery.direction === "outbound"
@@ -370,7 +375,10 @@ function TransportSummary({
         </Badge>
       ) : null}
       {outboundDeliveries.map((delivery) => {
-        const transportLabel = formatTransportKindLabel(delivery.transportKind)
+        const transportLabel = formatTransportKindLabel(
+          delivery.transportKind,
+          connectorMetadata
+        )
         return (
           <Badge
             key={delivery.linkId}
@@ -486,7 +494,9 @@ function getInteractionStatusBadgeClassName(
   }
 }
 
-function formatRelayAuthorizationPresetLabel(preset: RelayAuthorizationPreset) {
+function formatRuntimeAuthorizationPresetLabel(
+  preset: RuntimeAuthorizationPreset
+) {
   switch (preset) {
     case "workspace":
       return "Always Allow"
@@ -500,8 +510,8 @@ function formatRelayAuthorizationPresetLabel(preset: RelayAuthorizationPreset) {
   }
 }
 
-function getRelayAuthorizationCapabilityIcon(
-  capability: RelayAuthorizationGrantSpec["capability"]
+function getRuntimeAuthorizationCapabilityIcon(
+  capability: RuntimeAuthorizationGrantSpec["capability"]
 ) {
   switch (capability) {
     case "filesystem":
@@ -516,7 +526,9 @@ function getRelayAuthorizationCapabilityIcon(
   }
 }
 
-function describeRelayAuthorizationSpec(scope: RelayAuthorizationGrantSpec) {
+function describeRuntimeAuthorizationSpec(
+  scope: RuntimeAuthorizationGrantSpec
+) {
   if (scope.capability === "filesystem" && scope.filesystem) {
     return {
       icon: FolderOpen,
@@ -580,11 +592,11 @@ function describeRelayAuthorizationSpec(scope: RelayAuthorizationGrantSpec) {
   }
 }
 
-function describeRelayAuthorizationRequestedAction(
-  action: RelayAuthorizationRequestedAction
+function describeRuntimeAuthorizationRequestedAction(
+  action: RuntimeAuthorizationRequestedAction
 ) {
   return {
-    icon: getRelayAuthorizationCapabilityIcon(action.capability),
+    icon: getRuntimeAuthorizationCapabilityIcon(action.capability),
     summary: action.summary,
     detail: action.detail,
   }
@@ -708,7 +720,7 @@ function InteractionStatusNote({
     return (
       <p className="text-xs text-muted-foreground">
         {viewerCanResolve
-          ? "You can choose how broadly to allow this relay action if you have relay authorization permission."
+          ? "You can choose how broadly to allow this device action if you have runtime authorization permission."
           : "Waiting for an authorized user to approve or reject."}
       </p>
     )
@@ -716,7 +728,7 @@ function InteractionStatusNote({
   if (interaction.status === "approved") {
     return (
       <p className="text-xs text-muted-foreground">
-        The relay authorization is active and the blocked action can continue.
+        The runtime authorization is active and the blocked action can continue.
       </p>
     )
   }
@@ -757,9 +769,10 @@ function InteractionCard({
   const [draftAnswers, setDraftAnswers] = useState<
     Record<string, DraftQuestionAnswer>
   >(() => buildDraftQuestionAnswers(interaction))
-  const [selectedRelayGrantOptionId, setSelectedRelayGrantOptionId] = useState<
-    string | null
-  >(interaction.relayAuthorization?.grantOptions[0]?.id || null)
+  const [selectedRuntimeGrantOptionId, setSelectedRuntimeGrantOptionId] =
+    useState<string | null>(
+      interaction.runtimeAuthorization?.grantOptions[0]?.id || null
+    )
 
   const viewerCanResolve = interaction.viewerCanResolve === true
   const canResolveUserInput =
@@ -772,23 +785,23 @@ function InteractionCard({
     Boolean(onResolveInteraction) &&
     viewerCanResolve &&
     interaction.status === "pending"
-  const canResolveRelayAuthorization =
-    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
+  const canResolveRuntimeAuthorization =
+    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
     Boolean(onResolveInteraction) &&
     viewerCanResolve &&
     interaction.status === "pending"
   const canResolve =
     canResolveUserInput ||
     canResolvePlanApproval ||
-    canResolveRelayAuthorization
+    canResolveRuntimeAuthorization
 
   useEffect(() => {
     setSubmittingAction(null)
     setSubmitError(null)
     setResolutionNoteDraft("")
     setDraftAnswers(buildDraftQuestionAnswers(interaction))
-    setSelectedRelayGrantOptionId(
-      interaction.relayAuthorization?.grantOptions[0]?.id || null
+    setSelectedRuntimeGrantOptionId(
+      interaction.runtimeAuthorization?.grantOptions[0]?.id || null
     )
   }, [interaction.id, interaction.revision, interaction.status])
 
@@ -1350,11 +1363,11 @@ function InteractionCard({
   }
 
   if (
-    interaction.kind === INTERACTION_REQUEST_KIND.RELAY_AUTHORIZATION &&
-    interaction.relayAuthorization
+    interaction.kind === INTERACTION_REQUEST_KIND.RUNTIME_AUTHORIZATION &&
+    interaction.runtimeAuthorization
   ) {
-    const relayAuthorization = interaction.relayAuthorization
-    if (!relayAuthorization) {
+    const runtimeAuthorization = interaction.runtimeAuthorization
+    if (!runtimeAuthorization) {
       return null
     }
 
@@ -1366,7 +1379,7 @@ function InteractionCard({
             className="rounded-full border-primary/20 bg-primary/5 text-primary"
           >
             <Shield className="mr-1 h-3 w-3" />
-            Relay Authorization
+            Runtime Authorization
           </Badge>
           <Badge
             variant="outline"
@@ -1381,10 +1394,10 @@ function InteractionCard({
 
         <div className="space-y-1.5">
           <p className="text-sm leading-6 font-medium text-foreground">
-            {`Authorize ${relayAuthorization.relayToolStableKey} on ${relayAuthorization.deviceDisplayName}`}
+            {`Authorize ${runtimeAuthorization.deviceToolStableKey} on ${runtimeAuthorization.deviceDisplayName}`}
           </p>
           <p className="text-xs leading-5 text-muted-foreground">
-            {relayAuthorization.reason}
+            {runtimeAuthorization.reason}
           </p>
         </div>
 
@@ -1394,7 +1407,7 @@ function InteractionCard({
               Exposure
             </div>
             <div className="mt-1 text-sm text-foreground">
-              {relayAuthorization.exposureDisplayName}
+              {runtimeAuthorization.exposureDisplayName}
             </div>
           </div>
           <div className="rounded-2xl border border-border/70 bg-muted/20 px-4 py-3">
@@ -1403,8 +1416,8 @@ function InteractionCard({
             </div>
             <div className="mt-2">
               {(() => {
-                const described = describeRelayAuthorizationRequestedAction(
-                  relayAuthorization.requestedAction
+                const described = describeRuntimeAuthorizationRequestedAction(
+                  runtimeAuthorization.requestedAction
                 )
                 const RequestedIcon = described.icon
                 return (
@@ -1423,15 +1436,15 @@ function InteractionCard({
               })()}
             </div>
           </div>
-          {relayAuthorization.approvedGrant ? (
+          {runtimeAuthorization.approvedGrant ? (
             <div className="rounded-2xl border border-emerald-500/25 bg-emerald-500/10 px-4 py-3">
               <div className="text-[11px] font-medium tracking-[0.08em] text-emerald-700/80 uppercase">
                 Approved Authorization
               </div>
               <div className="mt-2 space-y-2">
                 {(() => {
-                  const described = describeRelayAuthorizationSpec(
-                    relayAuthorization.approvedGrant
+                  const described = describeRuntimeAuthorizationSpec(
+                    runtimeAuthorization.approvedGrant
                   )
                   const ApprovedIcon = described.icon
                   return (
@@ -1448,10 +1461,10 @@ function InteractionCard({
                     </div>
                   )
                 })()}
-                {relayAuthorization.approvedPreset ? (
+                {runtimeAuthorization.approvedPreset ? (
                   <div className="text-[11px] text-emerald-700/80">
-                    {formatRelayAuthorizationPresetLabel(
-                      relayAuthorization.approvedPreset
+                    {formatRuntimeAuthorizationPresetLabel(
+                      runtimeAuthorization.approvedPreset
                     )}
                   </div>
                 ) : null}
@@ -1467,8 +1480,8 @@ function InteractionCard({
                 Authorization Range
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
-                {relayAuthorization.grantOptions.map((option) => {
-                  const selected = selectedRelayGrantOptionId === option.id
+                {runtimeAuthorization.grantOptions.map((option) => {
+                  const selected = selectedRuntimeGrantOptionId === option.id
                   return (
                     <Button
                       key={option.id}
@@ -1476,7 +1489,7 @@ function InteractionCard({
                       variant={selected ? "default" : "outline"}
                       size="sm"
                       disabled={Boolean(submittingAction)}
-                      onClick={() => setSelectedRelayGrantOptionId(option.id)}
+                      onClick={() => setSelectedRuntimeGrantOptionId(option.id)}
                       className="rounded-full"
                       title={option.detail}
                     >
@@ -1497,33 +1510,33 @@ function InteractionCard({
                 Applies To
               </div>
               <div className="mt-2 flex flex-wrap gap-2">
-                {relayAuthorization.availablePresets.map((preset) => (
+                {runtimeAuthorization.availablePresets.map((preset) => (
                   <Badge
                     key={preset}
                     variant="outline"
                     className="rounded-full"
                   >
-                    {formatRelayAuthorizationPresetLabel(preset)}
+                    {formatRuntimeAuthorizationPresetLabel(preset)}
                   </Badge>
                 ))}
               </div>
             </div>
 
             <div className="flex flex-wrap items-center gap-2">
-              {relayAuthorization.availablePresets.map((preset) => (
+              {runtimeAuthorization.availablePresets.map((preset) => (
                 <Button
                   key={preset}
                   type="button"
                   variant={preset === "once" ? "default" : "outline"}
                   disabled={
-                    Boolean(submittingAction) || !selectedRelayGrantOptionId
+                    Boolean(submittingAction) || !selectedRuntimeGrantOptionId
                   }
                   onClick={() =>
-                    selectedRelayGrantOptionId
+                    selectedRuntimeGrantOptionId
                       ? void submitResolution(`approve_${preset}`, {
                           decision: "approve",
                           preset,
-                          selectedGrantOptionId: selectedRelayGrantOptionId,
+                          selectedGrantOptionId: selectedRuntimeGrantOptionId,
                           note: resolutionNoteDraft.trim() || undefined,
                         })
                       : undefined
@@ -1535,7 +1548,7 @@ function InteractionCard({
                   ) : (
                     <CheckCircle2 className="mr-1 h-4 w-4" />
                   )}
-                  {formatRelayAuthorizationPresetLabel(preset)}
+                  {formatRuntimeAuthorizationPresetLabel(preset)}
                 </Button>
               ))}
               <Button
@@ -2457,6 +2470,7 @@ export default function MessageBubble({
 }: MessageBubbleProps) {
   const router = useRouter()
   const isMobile = useIsMobile()
+  const connectorMetadata = useConnectorMetadata()
   const isChildResult = role === "child_result"
   const isSystem = role === "system"
   const isError = role === "error"
@@ -2542,7 +2556,7 @@ export default function MessageBubble({
     }
     if (author?.participantType === CONVERSATION_PARTICIPANT_TYPE.EXTERNAL) {
       return authorMember
-        ? getConversationMemberSubtitle(authorMember)
+        ? getConversationMemberSubtitle(authorMember, connectorMetadata)
         : "External participant"
     }
     if (

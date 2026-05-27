@@ -38,6 +38,7 @@ import {
   type ConversationMessageSubtype,
   type ConversationParticipantType,
   type ConversationReplyRef,
+  isTransportKind,
 } from "@synapse/shared"
 import type {
   ConversationEntityRef,
@@ -59,7 +60,7 @@ import {
   executeSql,
   executeSqlOn,
 } from "../../infrastructure/database/kysely.js"
-import { isTransportKind, SUBJECT_KIND } from "@synapse/shared"
+import { SUBJECT_KIND } from "@synapse/shared"
 import {
   upsertAccessSubject,
   upsertAccessSubjectOn,

@@ -6,7 +6,6 @@ export type AccessBindableResourceType = Extract<
   AccessResourceType,
   | "installed_skill"
   | "plugin_installation"
-  | "relay_capability"
   | "automation_event_source"
   | "actor"
   | "remote_agent"
@@ -16,7 +15,6 @@ export type ResourceAccessBindingStorageRow = {
   resource_type: AccessBindableResourceType
   installed_skill_id: string | null
   plugin_installation_id: string | null
-  relay_capability_id: string | null
   automation_event_source_id: string | null
   actor_id: string | null
   remote_agent_id: string | null
@@ -53,7 +51,7 @@ export type AccessBindingRow = ResourceAccessBindingStorageRow & {
   subject_conversation_actor_context_id: string | null
   conversation_type_mask_override: number | null
   status: "active" | "revoked"
-  source: "manual" | "default_open" | "relay_auto" | "approval" | "system"
+  source: "manual" | "default_open" | "approval" | "system"
   created_by_workspace_member_id: string | null
   reason: string | null
   created_at: string
@@ -66,7 +64,6 @@ export function readAccessBindingResourceId(
     | "resource_type"
     | "installed_skill_id"
     | "plugin_installation_id"
-    | "relay_capability_id"
     | "automation_event_source_id"
     | "actor_id"
     | "remote_agent_id"
@@ -87,13 +84,6 @@ export function readAccessBindingResourceId(
         )
       }
       return row.plugin_installation_id
-    case "relay_capability":
-      if (!row.relay_capability_id) {
-        throw new Error(
-          "relay_capability_id is required for relay_capability bindings"
-        )
-      }
-      return row.relay_capability_id
     case "automation_event_source":
       if (!row.automation_event_source_id) {
         throw new Error(
@@ -128,8 +118,6 @@ export function buildResourceAccessBindingRef(input: {
       input.resourceType === "installed_skill" ? input.resourceId : null,
     plugin_installation_id:
       input.resourceType === "plugin_installation" ? input.resourceId : null,
-    relay_capability_id:
-      input.resourceType === "relay_capability" ? input.resourceId : null,
     automation_event_source_id:
       input.resourceType === "automation_event_source"
         ? input.resourceId

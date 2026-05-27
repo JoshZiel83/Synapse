@@ -91,13 +91,13 @@ async function startRuntimeForAccount(
         runtimeHandles.delete(account.id)
       }
       // Release the lease whenever `run()` exits — covers both the
-      // normal stop() path (handle.stop already releases too, but the
-      // call is token-guarded so a double-release is a no-op) AND the
-      // startup-failure path where startAccount throws (auth timeout,
-      // subscribe failure, etc.). Without this, a failed startup would
-      // leave the lease held until its 30s TTL elapses, blocking the
-      // next reconcile from re-trying after the operator fixes the
-      // bad credential / config.
+      // normal stop() path (handle.stop already releases too, but
+      // the call is token-guarded so a double-release is a no-op)
+      // AND the startup-failure path where startAccount throws
+      // (auth timeout, subscribe failure, etc). Without this, a
+      // failed startup would leave the lease held until its 30s TTL
+      // elapses, blocking the next reconcile from re-trying after
+      // the operator fixes the bad credential / config.
       await releaseTransportRuntimeLease(account.id, leaseToken).catch(
         () => undefined
       )
@@ -190,6 +190,14 @@ export async function handleFeishuWebhookRequest(params: {
   accountId: string
   headers: Record<string, unknown>
   body: unknown
+  /**
+   * Raw, unparsed HTTP body. Connectors that verify a signature over
+   * the original bytes (Feishu's encryption, or any future platform
+   * that signs the raw payload) need this passed through. Optional
+   * because internal callers that synthesise webhook envelopes
+   * (tests, replay) may not have a wire payload.
+   */
+  rawBody?: string
 }) {
   // Legacy route. Delegates to the new connector.handleWebhook path so the
   // logic lives in exactly one place. Public-controller.ts also has a
@@ -222,6 +230,7 @@ export async function handleFeishuWebhookRequest(params: {
     account,
     headers: params.headers,
     body: params.body,
+    rawBody: params.rawBody,
     emitInbound: async (envelope) => {
       await ingestInboundEnvelope({ account, envelope })
     },

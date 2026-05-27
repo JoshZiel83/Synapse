@@ -51,7 +51,7 @@ export const attachmentTypeColors: Record<string, string> = {
 export const transportLabels: Record<string, string> = {
   http: "Remote MCP",
   builtin: "Built-in",
-  relay: "Relay",
+  device: "Device",
   stdio: "Local",
 }
 

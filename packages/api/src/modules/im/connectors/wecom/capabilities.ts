@@ -14,6 +14,8 @@ import type { MessageCapabilities } from "../../messaging/degradation.js"
  */
 export const WECOM_CONNECTOR_CAPABILITY: TransportConnectorCapability = {
   transportKind: "wecom",
+  displayName: "WeCom",
+  iconAssetPath: "/icon/wecom.svg",
   supportedConnectionModes: ["long_connection"],
   supportedEndpointTypes: ["direct", "group"],
   supportsDirectMessages: true,
@@ -31,6 +33,11 @@ export const WECOM_MESSAGE_CAPABILITIES: MessageCapabilities = {
   supportsReply: false,
   supportsImage: false,
   supportsFile: false,
+  // v1 WeCom: text + markdown only. No audio/video upload path
+  // implemented; interaction-prompt projection not wired up.
+  supportsVoice: false,
+  supportsVideo: false,
+  supportsInteractionPrompt: false,
   maxTextBytes: 4096,
   directMentionPolicy: "attached_only",
 }
