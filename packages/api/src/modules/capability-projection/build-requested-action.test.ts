@@ -81,4 +81,38 @@ test("buildRequestedAction — fs_search keeps '/' so first-time callers get an 
   // "/" is the only honest answer when there's no scoping info available.
   assert.equal(action.filesystem?.access, "read")
   assert.deepEqual(action.filesystem?.pathPrefixes, ["/"])
+  assert.equal(action.filesystem?.scopeIsPushdown, true)
+})
+
+test("buildRequestedAction — fs_index_task_status sets scopeIsPushdown (no path/subtree at all)", () => {
+  const action = buildRequestedAction({
+    capability: "filesystem",
+    toolName: "device__cap__fs_index_task_status",
+    visibleToolName: "fs_index_task_status",
+    args: { task_id: "rebuild-123" },
+  })
+  assert.equal(action.filesystem?.access, "read")
+  assert.equal(action.filesystem?.scopeIsPushdown, true)
+  assert.deepEqual(action.filesystem?.pathPrefixes, ["/"])
+})
+
+test("buildRequestedAction — fs_history_list WITHOUT path sets scopeIsPushdown", () => {
+  const action = buildRequestedAction({
+    capability: "filesystem",
+    toolName: "device__cap__fs_history_list",
+    visibleToolName: "fs_history_list",
+    args: { limit: 50 },
+  })
+  assert.equal(action.filesystem?.scopeIsPushdown, true)
+})
+
+test("buildRequestedAction — fs_history_list WITH path projects normally (not pushdown)", () => {
+  const action = buildRequestedAction({
+    capability: "filesystem",
+    toolName: "device__cap__fs_history_list",
+    visibleToolName: "fs_history_list",
+    args: { path: "/repo/x.ts" },
+  })
+  assert.equal(action.filesystem?.scopeIsPushdown, undefined)
+  assert.deepEqual(action.filesystem?.pathPrefixes, ["/repo/x.ts"])
 })

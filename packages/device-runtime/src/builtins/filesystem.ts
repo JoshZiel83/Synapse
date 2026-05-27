@@ -951,19 +951,28 @@ async function handleFsRead(
   // Strict numeric validation BEFORE we hand off to readBytes — bare
   // asNumber would let NaN / -1 / 1.5 slip through and surface as
   // "Invalid array length" / "out of range" deeper in Buffer.alloc.
-  // Cap upper bound by maxReadBytes so a 2^53 offset can't try to
-  // pre-allocate.
+  //
+  // start_byte / end_byte are file-offset positions, NOT
+  // bytes-to-return. Their upper bound is the file size (enforced
+  // downstream in vfs.readBytes — `start > totalSize` rejects), NOT
+  // ctx.cfg.maxReadBytes; otherwise a 100MB file couldn't be read past
+  // the 5MB safety cap. Use Number.MAX_SAFE_INTEGER so we still reject
+  // NaN / negative / non-integer but don't artificially refuse honest
+  // offsets into large files.
   const startByte = validateByteOffset(
     args["start_byte"],
     "start_byte",
-    ctx.cfg.maxReadBytes
+    Number.MAX_SAFE_INTEGER
   )
   const endByte = validateByteOffset(
     args["end_byte"],
     "end_byte",
-    ctx.cfg.maxReadBytes
+    Number.MAX_SAFE_INTEGER
   )
   const lineRange = args["line_range"] as unknown
+  // max_bytes IS bounded by maxReadBytes — it's the "how much to return"
+  // cap, not the position. Read sites further cap to ctx.cfg.maxReadBytes
+  // anyway, but rejecting up front gives the caller a clearer error.
   const maxBytesArg = validatePositiveByteCount(
     args["max_bytes"],
     "max_bytes",

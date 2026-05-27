@@ -649,7 +649,14 @@ function unionWithDevice(
                   detail: requestedAction.detail,
                   grantSpec: {
                     capability: requestedAction.capability,
-                    filesystem: requestedAction.filesystem,
+                    // Strip the request-only `scopeIsPushdown` flag — it's
+                    // never persisted on a grant policy (request-side only).
+                    filesystem: requestedAction.filesystem
+                      ? {
+                          access: requestedAction.filesystem.access,
+                          pathPrefixes: requestedAction.filesystem.pathPrefixes,
+                        }
+                      : undefined,
                     cua: requestedAction.cua,
                     browser: requestedAction.browser,
                     commandline: requestedAction.commandline,
@@ -903,39 +910,40 @@ export function buildRequestedAction(args: {
       //   2. Subtree-scoped tools (fs_index_status/fs_index_rebuild) live
       //      under `args.subtree`, not `args.path`. Asking for "/" forced the
       //      caller to widen their grant or fall through to no match.
-      //   3. fs_search takes no path at all — it operates over whatever read
-      //      prefixes the envelope's grants already cover, so the projection
-      //      doesn't need to request a fresh prefix. We request "/" only
-      //      when nothing else fits, to keep the request user-rejectable
-      //      rather than silently succeeding.
+      //   3. Pushdown tools (fs_search, fs_history_list-without-path,
+      //      fs_index_task_status) operate over the caller's *existing*
+      //      read prefixes — they have no scope of their own. Requesting
+      //      "/" would force a scoped (/repo) user to widen; the matcher
+      //      flags such requests with `scopeIsPushdown:true` so any
+      //      compatible read grant satisfies them.
       const writeTools = new Set([
         "fs_write",
         "fs_edit",
         "fs_delete",
         "fs_history_restore",
       ])
-      // Tools that take their scope from `subtree` (index family).
-      const subtreeTools = new Set([
-        "fs_index_status",
-        "fs_index_rebuild",
-        "fs_index_task_status",
-      ])
+      // Tools that take their scope from `subtree` (index status/rebuild).
+      const subtreeTools = new Set(["fs_index_status", "fs_index_rebuild"])
       // Tools that have no path/subtree of their own and run over the
-      // caller's existing read grants. Requesting "/" would over-ask,
-      // so we surface a special pseudo-prefix that runtime/UI can show
-      // as "all your authorized subtrees" but the matcher won't widen.
-      const noScopeReadTools = new Set(["fs_search"])
+      // caller's existing read grants. The runtime evaluates them against
+      // envelope.runtime_authorization.grant_specs read prefixes; the
+      // projection's pathPrefixes is purely a request hint for the
+      // first-time-grant UX (the matcher ignores it via scopeIsPushdown).
+      //
+      // fs_history_list belongs here ONLY when args.path is absent —
+      // with a path it acts like a normal read tool. See
+      // handleHistoryList in filesystem.ts.
+      // fs_index_task_status has no path/subtree at all (just task_id).
+      const noScopeReadTools = new Set(["fs_search", "fs_index_task_status"])
+      const isPushdownHistoryList =
+        tool === "fs_history_list" && typeof args.args["path"] !== "string"
+      const isPushdown = noScopeReadTools.has(tool) || isPushdownHistoryList
       const access: "read" | "write" = writeTools.has(tool) ? "write" : "read"
       let pathPrefix: string
-      if (noScopeReadTools.has(tool)) {
-        // fs_search runs over existing prefixes; ask for "/" only so a
-        // brand-new caller without any fs grant gets a request to fill.
-        // A caller that already has narrower grants will short-circuit
-        // because runtimeAuthorizationGrantMatches sees the existing
-        // grants cover the requested action without needing to widen.
-        // We still emit "/" here so the *request* (when there's no
-        // existing coverage) gives the operator a clear "approve broad
-        // read?" choice rather than a meaningless empty-path request.
+      if (isPushdown) {
+        // "/"" is the only honest answer when there's no scoping info;
+        // first-time callers without any fs grant still need an
+        // approveable request, and "/" is what UI can render.
         pathPrefix = "/"
       } else if (subtreeTools.has(tool)) {
         const sub =
@@ -957,7 +965,11 @@ export function buildRequestedAction(args: {
         toolName: args.toolName,
         summary,
         detail,
-        filesystem: { access, pathPrefixes: [pathPrefix] },
+        filesystem: {
+          access,
+          pathPrefixes: [pathPrefix],
+          ...(isPushdown ? { scopeIsPushdown: true } : {}),
+        },
       }
     }
     case "commandline": {

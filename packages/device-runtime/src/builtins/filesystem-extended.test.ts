@@ -1380,3 +1380,31 @@ test("fs_read rejects zero max_bytes with invalid_request (must be positive)", a
     cleanup()
   }
 })
+
+test("fs_read can read later chunks of files larger than maxReadBytes", async () => {
+  const { mkdtempSync, writeFileSync, rmSync } = await import("node:fs")
+  const { tmpdir } = await import("node:os")
+  const { join } = await import("node:path")
+  const root = mkdtempSync(join(tmpdir(), "synapse-fs-read-large-"))
+  try {
+    // 16-byte file, maxReadBytes=5: read 2 bytes starting at offset 10.
+    writeFileSync(join(root, "big.bin"), "ABCDEFGHIJKLMNOP")
+    const builtin = createFilesystemBuiltin({
+      rootPath: root,
+      maxReadBytes: 5,
+      skipWorkDirAssertion: true,
+    })
+    const r = await builtin.invokeTool!({
+      toolName: "fs_read",
+      args: { path: "/big.bin", start_byte: 10, max_bytes: 2 },
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(r.isError, undefined, JSON.stringify(r._meta))
+    const body = JSON.parse((r.content[0] as { text: string }).text)
+    assert.equal(body.content, "KL")
+    rmSync(root, { recursive: true, force: true })
+  } catch (err) {
+    rmSync(root, { recursive: true, force: true })
+    throw err
+  }
+})

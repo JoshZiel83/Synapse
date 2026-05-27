@@ -3532,12 +3532,28 @@ export interface RuntimeAuthorizationBrowserPolicy extends BrowserPolicyBase {}
 
 export interface RuntimeAuthorizationCommandlinePolicy extends CommandlinePolicyBase {}
 
+/**
+ * RequestedAction-side filesystem block. Extends the grant-side policy with
+ * a `scopeIsPushdown` request-only signal: when set, the tool doesn't
+ * actually need a path scope of its own (fs_search / fs_history_list /
+ * fs_index_task_status all evaluate against the caller's existing read
+ * prefixes). The matcher reads this flag and ignores the requested
+ * `pathPrefixes` for grant-match purposes — any existing fs grant with
+ * compatible access satisfies the call.
+ *
+ * The flag never appears on a stored GrantPolicy; it lives on the
+ * in-memory RequestedAction only.
+ */
+export interface RuntimeAuthorizationRequestedActionFilesystem extends RuntimeAuthorizationFilesystemPolicy {
+  scopeIsPushdown?: boolean
+}
+
 export interface RuntimeAuthorizationRequestedAction {
   capability: RuntimeAuthorizationCapability
   toolName: string
   summary: string
   detail?: string
-  filesystem?: RuntimeAuthorizationFilesystemPolicy
+  filesystem?: RuntimeAuthorizationRequestedActionFilesystem
   cua?: RuntimeAuthorizationCUAPolicy
   browser?: RuntimeAuthorizationBrowserPolicy
   commandline?: RuntimeAuthorizationCommandlinePolicy & {

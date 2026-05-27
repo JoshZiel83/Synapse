@@ -193,3 +193,69 @@ test("conformance: commandline matcher", async (t) => {
     })
   }
 })
+
+// ─── scopeIsPushdown (post-review round 11) ─────────────────────────────────
+
+test("filesystemPolicyMatches: scopeIsPushdown matches any read grant regardless of path", async () => {
+  const grant = {
+    capability: "filesystem" as const,
+    filesystem: { access: "read" as const, pathPrefixes: ["/repo"] },
+  }
+  const action = {
+    capability: "filesystem" as const,
+    filesystem: {
+      access: "read" as const,
+      pathPrefixes: ["/"], // would normally NOT match /repo grant
+      scopeIsPushdown: true,
+    },
+  }
+  assert.equal(filesystemPolicyMatches(grant as any, action as any), true)
+})
+
+test("filesystemPolicyMatches: scopeIsPushdown still requires non-empty grant prefixes", async () => {
+  const grant = {
+    capability: "filesystem" as const,
+    filesystem: { access: "read" as const, pathPrefixes: [] },
+  }
+  const action = {
+    capability: "filesystem" as const,
+    filesystem: {
+      access: "read" as const,
+      pathPrefixes: ["/"],
+      scopeIsPushdown: true,
+    },
+  }
+  assert.equal(filesystemPolicyMatches(grant as any, action as any), false)
+})
+
+test("filesystemPolicyMatches: scopeIsPushdown + write request needs write grant (no escalation)", async () => {
+  const grant = {
+    capability: "filesystem" as const,
+    filesystem: { access: "read" as const, pathPrefixes: ["/repo"] },
+  }
+  const action = {
+    capability: "filesystem" as const,
+    filesystem: {
+      access: "write" as const,
+      pathPrefixes: ["/"],
+      scopeIsPushdown: true,
+    },
+  }
+  assert.equal(filesystemPolicyMatches(grant as any, action as any), false)
+})
+
+test("filesystemPolicyMatches: scopeIsPushdown + write grant covers read request", async () => {
+  const grant = {
+    capability: "filesystem" as const,
+    filesystem: { access: "write" as const, pathPrefixes: ["/repo"] },
+  }
+  const action = {
+    capability: "filesystem" as const,
+    filesystem: {
+      access: "read" as const,
+      pathPrefixes: ["/"],
+      scopeIsPushdown: true,
+    },
+  }
+  assert.equal(filesystemPolicyMatches(grant as any, action as any), true)
+})
