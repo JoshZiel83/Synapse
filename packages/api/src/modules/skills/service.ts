@@ -40,6 +40,7 @@ import {
 } from "../capabilities/conversation-type-policies.js"
 import {
   accessGrantTargetToSubjectRef,
+  accessGrantTargetScopeRef,
   buildResourceAccessBindingRef,
   mapAccessBindingToGrant,
   normalizeAccessBindingRow,
@@ -1847,6 +1848,7 @@ async function findSkillIdsByBindingFilter(params: {
     : null
 
   let subjectId: string | null | undefined = undefined
+  let scopeSubjectId: string | null | undefined = undefined
   if (target) {
     // P1b contract: resolve target → SubjectRef → access_subjects.id, then
     // filter bindings by subject_id. Returns no rows when the subject
@@ -1856,12 +1858,28 @@ async function findSkillIdsByBindingFilter(params: {
     if (!subjectId) {
       return []
     }
+    // P2 fix (post-D4 round 7 review): also resolve the scope subject so
+    // the listing reflects the exact (subject, scope) the caller asked
+    // about. Without this filter, asking for actor A in conversation C1
+    // returned bindings for actor A in any scope (including C2 or
+    // unscoped) — silently widening the listing.
+    const scopeRef = accessGrantTargetScopeRef(target)
+    if (scopeRef) {
+      const resolvedScopeId = await findAccessSubjectId(db, scopeRef)
+      if (!resolvedScopeId) {
+        return []
+      }
+      scopeSubjectId = resolvedScopeId
+    } else {
+      scopeSubjectId = null
+    }
   }
 
   return listResourceIdsForWorkspaceByBindingFilter(db, {
     workspaceId: params.workspaceId,
     resourceType: "installed_skill",
     subjectId: subjectId ?? null,
+    scopeSubjectId,
     actorId: subjectId ? null : (params.actorId ?? null),
     conversationId: subjectId ? null : (params.conversationId ?? null),
   })
@@ -1906,7 +1924,15 @@ async function ensureSkillBinding(
     }),
   })
   const subjectRef = accessGrantTargetToSubjectRef(grantTarget)
+  const scopeRef = accessGrantTargetScopeRef(grantTarget)
   const subjectId = await findAccessSubjectIdOn(client, subjectRef)
+  // P2 fix (post-D4 round 7 review): two skill bindings differing only in
+  // scope (e.g. actor A + scope=conv C1 vs actor A + scope=conv C2)
+  // must be treated as distinct rows. Resolve the scope subject id too so
+  // findActiveBindingIdByResourceAndSubject matches the right pair.
+  const scopeSubjectId = scopeRef
+    ? await findAccessSubjectIdOn(client, scopeRef)
+    : null
 
   const existingBindingId = subjectId
     ? await findActiveBindingIdByResourceAndSubject(client, {
@@ -1914,6 +1940,7 @@ async function ensureSkillBinding(
         resourceType: "installed_skill",
         resourceId: input.skillId,
         subjectId,
+        scopeSubjectId,
       })
     : null
 

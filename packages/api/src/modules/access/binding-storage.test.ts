@@ -464,6 +464,105 @@ test(
 )
 
 test(
+  "updateGrantTargets rewrites scope_subject_id alongside subject_id",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      // P3 regression (post-D4 round 7 review): a grant moving from
+      // scoped → unscoped, or from one conversation scope to another,
+      // must NOT leave the prior scope_subject_id on the row. Earlier
+      // updateGrantTargets only wrote subject_id, so the stale scope
+      // followed the binding into its new identity — visibility looked
+      // correct in tests that only exercised unscoped → unscoped (the
+      // pre-fix test above) but leaked in the scoped variants.
+      const workspaceId = await insertWorkspaceWithOwner(db)
+      const grantedActorId = await insertActor(db, workspaceId)
+      const targetActorId = await insertActor(db, workspaceId)
+      const convA = (
+        await db
+          .insertInto("conversations")
+          .values({
+            kind: "group",
+            boundary: "internal",
+            internal_workspace_id: workspaceId,
+            title: "conv A",
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow()
+      ).id as string
+      const convB = (
+        await db
+          .insertInto("conversations")
+          .values({
+            kind: "group",
+            boundary: "internal",
+            internal_workspace_id: workspaceId,
+            title: "conv B",
+          })
+          .returning("id")
+          .executeTakeFirstOrThrow()
+      ).id as string
+
+      // Insert with scope=convA.
+      const initial = await buildResourceAccessBindingInsertValues(db, {
+        workspaceId,
+        resourceType: "actor",
+        resourceId: targetActorId,
+        target: {
+          subject: actorRef(grantedActorId),
+          scope: conversationRef(convA),
+        },
+      })
+      const inserted = await db
+        .insertInto("resource_access_bindings")
+        .values(initial)
+        .returning("id")
+        .executeTakeFirstOrThrow()
+
+      // (1) Move to scope=convB. scope_subject_id must change.
+      await updateGrantTargets(db, {
+        bindingId: inserted.id as string,
+        newTarget: {
+          subject: actorRef(grantedActorId),
+          scope: conversationRef(convB),
+        },
+      })
+      const afterMoveScope = await db
+        .selectFrom("resource_access_bindings as binding")
+        .innerJoin(
+          "access_subjects as scope_subj",
+          "scope_subj.id",
+          "binding.scope_subject_id"
+        )
+        .select("scope_subj.conversation_id as conversation_id")
+        .where("binding.id", "=", inserted.id as string)
+        .executeTakeFirstOrThrow()
+      assert.equal(
+        afterMoveScope.conversation_id,
+        convB,
+        "scope_subject_id must follow the new target's scope (convB)"
+      )
+
+      // (2) Move to unscoped. scope_subject_id must become NULL.
+      await updateGrantTargets(db, {
+        bindingId: inserted.id as string,
+        newTarget: { subject: actorRef(grantedActorId) },
+      })
+      const afterUnscoped = await db
+        .selectFrom("resource_access_bindings")
+        .select("scope_subject_id")
+        .where("id", "=", inserted.id as string)
+        .executeTakeFirstOrThrow()
+      assert.equal(
+        afterUnscoped.scope_subject_id,
+        null,
+        "scope_subject_id must be cleared when the new target has no scope"
+      )
+    })
+  }
+)
+
+test(
   "describeAccessGrants returns the active grants plus a counter",
   { timeout: 5 * 60_000 },
   async () => {

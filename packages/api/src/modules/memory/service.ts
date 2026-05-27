@@ -1106,6 +1106,33 @@ export interface RecallMemoriesInput extends SearchMemoriesInput {
   queryBlocks?: CanonicalContentBlockInput[]
 }
 
+/**
+ * Whether the caller has a workspace-bound principal context — i.e. one
+ * that earns the reachability gate in search/recall. Originally this only
+ * accepted actor principals (the legacy "actor private" path), but
+ * workspace_member callers need the same gate or the candidate window
+ * fills with unreadable rows and the post-fetch authz filter throws away
+ * authorized rows along with them (LIMIT eats the budget).
+ *
+ * Returns false only when no principal can be resolved — that's the
+ * legacy unauthenticated list path, which keeps the wide-open candidate
+ * set so the post-fetch filter still has a chance to work.
+ */
+function hasPrincipalSearchContext(
+  input: Pick<
+    SearchMemoriesInput,
+    "actorId" | "workspaceMemberId" | "accessSubject"
+  >
+) {
+  if (input.accessSubject) {
+    return (
+      input.accessSubject.type === "actor" ||
+      input.accessSubject.type === "workspace_member"
+    )
+  }
+  return Boolean(input.actorId || input.workspaceMemberId)
+}
+
 function isActorSearchContext(
   input: Pick<
     SearchMemoriesInput,
@@ -1222,13 +1249,19 @@ function buildSearchFilters(
         : ["active"]
   conditions.push(sql`${item}.state::text = ANY(${states}::text[])`)
 
-  // Reachability gate: actor / workspace_member principal contexts only see
-  // spaces they have implicit owner access to, plus spaces with active
-  // space-level grants. The union of (ownerSpaceIds, grantSpaceIds) bounds
-  // the candidate set. When the caller has no principal context (e.g. legacy
-  // listMemories with just a target shape and no subject), we allow the full
-  // workspace's items through and rely on the post-fetch authz filter.
-  if (isActorSearchContext(input)) {
+  // Reachability gate: any workspace-bound principal (actor OR
+  // workspace_member) is restricted to spaces they have implicit owner
+  // access to plus spaces with active space-level grants. The union of
+  // (ownerSpaceIds, grantSpaceIds) bounds the candidate set so the SQL
+  // LIMIT doesn't push authorized rows out of the window before the
+  // post-fetch authz filter runs.
+  //
+  // Round-7 review fix: the old `isActorSearchContext` check excluded
+  // `workspace_member` from this gate, so dashboard search/recall hit
+  // the workspace's full memory_items, scored unreachable rows alongside
+  // authorized ones, and lost the latter to LIMIT. Broadened to any
+  // resolved principal context.
+  if (hasPrincipalSearchContext(input)) {
     const reachable = Array.from(new Set([...ownerSpaceIds, ...grantSpaceIds]))
     if (reachable.length === 0) {
       conditions.push(sql`FALSE`)

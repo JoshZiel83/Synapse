@@ -348,8 +348,16 @@ export async function revokeGrant(
 }
 
 /**
- * Replace the target of an existing binding with a new subject. Internally
- * upserts the new access_subjects row and points the binding at it.
+ * Replace the target of an existing binding with a new subject (and
+ * optional scope). Internally upserts the new access_subjects rows and
+ * points the binding at them.
+ *
+ * Post-D4 round 7 review (P3): also rewrites `scope_subject_id`. Earlier
+ * this only updated `subject_id`, so moving a grant from
+ * (subject=A, scope=C1) to (subject=A, scope=C2) — or scoped → unscoped —
+ * silently kept the old scope on the row. Now both columns are written
+ * in one statement: the new scope is the optional `scope` on the new
+ * target (null when unscoped).
  */
 export async function updateGrantTargets(
   db: KyselyDb,
@@ -359,10 +367,17 @@ export async function updateGrantTargets(
   }
 ): Promise<void> {
   const ref = accessGrantTargetToSubjectRef(input.newTarget)
+  const scopeRef = accessGrantTargetScopeRef(input.newTarget)
   const subjectId = await upsertAccessSubject(db, ref)
+  const scopeSubjectId = scopeRef
+    ? await upsertAccessSubject(db, scopeRef)
+    : null
   await db
     .updateTable("resource_access_bindings")
-    .set({ subject_id: subjectId })
+    .set({
+      subject_id: subjectId,
+      scope_subject_id: scopeSubjectId,
+    })
     .where("id", "=", input.bindingId)
     .execute()
 }
@@ -615,7 +630,16 @@ function resourceIdColumnForRaw(resourceType: AccessBindableResourceType) {
 }
 
 /**
- * Find an active binding by (resource, subject).
+ * Find an active binding by (resource, subject, scope?).
+ *
+ * Post-D4 round 7 review (P2): `scope_subject_id` is part of the binding's
+ * identity. Two grants (subject=actor A, scope=conversation C1) and
+ * (subject=actor A, scope=conversation C2) are distinct rows — collapsing
+ * them by subject_id alone meant a caller upserting the C2 grant would
+ * dedupe onto the C1 row (writing C2 inputs over the C1 binding's
+ * fingerprint) and lookups would return the wrong binding. The optional
+ * `scopeSubjectId` (null for unscoped) is matched with `IS NOT DISTINCT
+ * FROM` so NULL-vs-NULL and UUID-equality both work correctly.
  */
 export async function findActiveBindingIdByResourceAndSubject(
   client: QueryExecutor,
@@ -624,6 +648,7 @@ export async function findActiveBindingIdByResourceAndSubject(
     resourceType: AccessBindableResourceType
     resourceId: string
     subjectId: string
+    scopeSubjectId?: string | null
   }
 ): Promise<string | null> {
   const column = resourceIdColumnForRaw(input.resourceType)
@@ -633,10 +658,16 @@ export async function findActiveBindingIdByResourceAndSubject(
      WHERE workspace_id = $1
        AND ${column} = $2::uuid
        AND subject_id = $3::uuid
+       AND scope_subject_id IS NOT DISTINCT FROM $4::uuid
        AND status = 'active'
      ORDER BY created_at DESC
      LIMIT 1`,
-    [input.workspaceId, input.resourceId, input.subjectId]
+    [
+      input.workspaceId,
+      input.resourceId,
+      input.subjectId,
+      input.scopeSubjectId ?? null,
+    ]
   )
   return result.rows[0]?.id ?? null
 }
@@ -752,6 +783,12 @@ export async function getAccessBindingRowById(
 /**
  * Return the distinct resource ids in a workspace whose active bindings
  * match a subject-side filter.
+ *
+ * Post-D4 round 7 review (P2): `scopeSubjectId` filters by the exact
+ * scope (NULL = unscoped). Without this filter, asking "which skills
+ * has actor A in conversation C1 been bound to?" returned bindings for
+ * actor A in any scope — including C2 or unscoped — silently widening
+ * the listing. `IS NOT DISTINCT FROM` handles the NULL=NULL case.
  */
 export async function listResourceIdsForWorkspaceByBindingFilter(
   db: KyselyDb,
@@ -759,6 +796,13 @@ export async function listResourceIdsForWorkspaceByBindingFilter(
     workspaceId: string
     resourceType: AccessBindableResourceType
     subjectId?: string | null
+    /**
+     * Pass to filter by the scope_subject_id column too:
+     *   - omitted (undefined) → no scope filter, behaves as before
+     *   - null                → match unscoped bindings only
+     *   - UUID                → match bindings with this exact scope
+     */
+    scopeSubjectId?: string | null
     actorId?: string | null
     conversationId?: string | null
   }
@@ -783,6 +827,12 @@ export async function listResourceIdsForWorkspaceByBindingFilter(
       values.push(input.conversationId)
       conditions.push(`subj.conversation_id = $${values.length}::uuid`)
     }
+  }
+  if (input.scopeSubjectId !== undefined) {
+    values.push(input.scopeSubjectId)
+    conditions.push(
+      `binding.scope_subject_id IS NOT DISTINCT FROM $${values.length}::uuid`
+    )
   }
   const sqlText = `
     SELECT DISTINCT binding.${column}::text AS resource_id
