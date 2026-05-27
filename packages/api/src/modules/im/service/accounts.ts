@@ -44,6 +44,11 @@ import {
   parseJsonObject,
   readTrimmedString,
 } from "./_helpers.js"
+import { validateAndNormalizeAccountConfig } from "./account-config.js"
+import {
+  planAccountUpdateRecoveryActions,
+  type AccountUpdateRecoveryAction,
+} from "./account-recovery-planner.js"
 import { recoverSkippedProjectionsForRecoveryEvent } from "./recovery.js"
 
 // ───────────────────────── Assertions ─────────────────────────
@@ -445,6 +450,14 @@ export async function createTransportAccount(params: {
     inboundActorMode,
     inboundActorId: params.inboundActorId,
   })
+  // Per-transport config normalization — gate AT the service layer
+  // (rather than only in transport-specific controllers) so the
+  // generic /im/accounts route can't bypass it. Throws on invalid
+  // input; the API controller catches and maps to 400.
+  const normalizedConfig = validateAndNormalizeAccountConfig({
+    transportKind: params.transportKind,
+    config: params.config,
+  })
 
   const row = await db
     .insertInto("transport_accounts")
@@ -462,8 +475,7 @@ export async function createTransportAccount(params: {
       status: nextStatus,
       credentials:
         normalizedCredentials as TableInsert<"transport_accounts">["credentials"],
-      config: (params.config ||
-        {}) as TableInsert<"transport_accounts">["config"],
+      config: normalizedConfig as TableInsert<"transport_accounts">["config"],
       metadata: (params.metadata ||
         {}) as TableInsert<"transport_accounts">["metadata"],
       created_at: sql`NOW()`,
@@ -556,6 +568,20 @@ export async function updateTransportAccount(params: {
     inboundActorMode: nextInboundActorMode,
     inboundActorId: nextInboundActorId,
   })
+  // Per-transport config normalization on the update path. When the
+  // caller passes a config object we normalize THAT (so a bad value
+  // 400's at the API boundary); when the caller omits config we leave
+  // the existing row's stored config alone to avoid surprising the
+  // operator with retroactive rejection of legacy data on unrelated
+  // field updates.
+  const nextConfig =
+    params.config !== undefined
+      ? validateAndNormalizeAccountConfig({
+          transportKind: existing.transport_kind as TransportKind,
+          config: params.config,
+        })
+      : parseJsonObject(existing.config)
+
   const row = await db.transaction().execute(async (tx) => {
     const updated = await tx
       .updateTable("transport_accounts")
@@ -569,11 +595,7 @@ export async function updateTransportAccount(params: {
         status: nextStatus,
         credentials:
           normalizedCredentials as TableInsert<"transport_accounts">["credentials"],
-        config: (params.config !== undefined
-          ? params.config
-          : parseJsonObject(
-              existing.config
-            )) as TableInsert<"transport_accounts">["config"],
+        config: nextConfig as TableInsert<"transport_accounts">["config"],
         metadata: (params.metadata !== undefined
           ? params.metadata
           : parseJsonObject(
@@ -586,62 +608,36 @@ export async function updateTransportAccount(params: {
       .returningAll()
       .executeTakeFirstOrThrow()
 
-    // Recovery hooks: detect transitions that re-enable previously
-    // skipped interaction projections, and re-arm matching rows in
-    // the same tx so a crash between state change and recovery can't
-    // strand approvals.
-    const wasActive = (existing.status as string) === "active"
-    const isNowActive = nextStatus === "active"
-    if (!wasActive && isNowActive) {
-      await recoverSkippedProjectionsForRecoveryEvent(tx, {
-        kind: "account_status_activated",
-        transportAccountId: params.accountId,
+    // Recovery hooks: decide which transitions trigger a re-arm using
+    // a pure planner so the decision logic is unit-testable, then apply
+    // the actions in order. Actions that require binding flip
+    // (`reEnableAutoDisabledBindings: true`) MUST run the binding flip
+    // BEFORE the projection re-arm, otherwise the re-armed projection
+    // immediately skips again with `outbound_disabled`.
+    const actions: AccountUpdateRecoveryAction[] =
+      planAccountUpdateRecoveryActions({
+        transportKind: existing.transport_kind as TransportKind,
+        previousStatus: existing.status as string | undefined,
+        nextStatus,
+        previousConnectionMode: existing.connection_mode as string | undefined,
+        nextConnectionMode,
+        incomingConfig: params.config,
+        previousConfig: parseJsonObject(existing.config) as Record<
+          string,
+          unknown
+        >,
       })
-    }
-    const previousConnectionMode = existing.connection_mode as
-      | string
-      | undefined
-    if (
-      previousConnectionMode === "webhook" &&
-      nextConnectionMode === "long_connection"
-    ) {
-      // Long-connection accounts don't have the OQ2 gate; bindings that
-      // were auto-disabled because `webhookInboundConfirmed=false` are
-      // now safe to re-enable. Do this BEFORE the projection re-arm so
-      // the re-armed projection finds an enabled binding instead of
-      // immediately skipping again with `outbound_disabled`.
-      await reEnableAutoDisabledQqWebhookBindings(tx, params.accountId)
-      await recoverSkippedProjectionsForRecoveryEvent(tx, {
-        kind: "connection_mode_changed_to_long_connection",
-        transportAccountId: params.accountId,
-      })
-    }
-    if (
-      existing.transport_kind === "qq" &&
-      nextConnectionMode === "webhook" &&
-      params.config !== undefined
-    ) {
-      // Only fire when the QQ webhook account just got its OQ2 gate
-      // flipped on. We compare against the previous parsed config so
-      // a re-PUT of the same value doesn't fire spurious recoveries.
-      const previousConfig = parseJsonObject(existing.config) as Record<
-        string,
-        unknown
-      >
-      const wasConfirmed = previousConfig.webhookInboundConfirmed === true
-      const isNowConfirmed = params.config.webhookInboundConfirmed === true
-      if (!wasConfirmed && isNowConfirmed) {
-        // Same reason as connection_mode change above: auto-disabled
-        // bindings need outbound flipped on (and the marker cleared)
-        // before the projection retries, otherwise re-arming the
-        // projection only takes it one step closer to the same
-        // `outbound_disabled` skip.
+    for (const action of actions) {
+      if (
+        action.kind === "connection_mode_changed_to_long_connection" ||
+        action.kind === "config_webhook_confirmed"
+      ) {
         await reEnableAutoDisabledQqWebhookBindings(tx, params.accountId)
-        await recoverSkippedProjectionsForRecoveryEvent(tx, {
-          kind: "config_webhook_confirmed",
-          transportAccountId: params.accountId,
-        })
       }
+      await recoverSkippedProjectionsForRecoveryEvent(tx, {
+        kind: action.kind,
+        transportAccountId: params.accountId,
+      })
     }
     return updated
   })
