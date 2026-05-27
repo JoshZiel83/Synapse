@@ -696,3 +696,104 @@ test("PINNED_VERSION matches optionalDependencies entry in package.json", async 
     "package.json optionalDependencies must mirror PINNED_VERSION"
   )
 })
+
+// ─────────────────────── drift / sidecar-error invariants ───────────────────
+
+// The schema-drift fail-closed path is exercised end-to-end by the live e2e
+// (gated on SYNAPSE_BROWSER_MCP_LIVE_TEST) against the pinned sidecar. The
+// unit path injects mcpClientFactory which intentionally bypasses the drift
+// check — fakes can never satisfy the full pinned schema surface and false
+// drift would mask real test failures. The fail-closed contract itself is
+// verified by reading runDriftCheck + invokeTool source: missing/drifted
+// tools land in state.driftedTools, and invokeTool returns runtime_constraint
+// when state.driftedTools.has(toolName).
+
+test("sidecar isError on navigation is reported as runtime_constraint, not permission_denied", async () => {
+  const client = makeFakeClient({
+    handlers: {
+      new_page: async () => ({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "Could not find Google Chrome executable for channel 'stable'",
+          },
+        ],
+      }),
+    },
+  })
+  const provider = createChromeDevtoolsMcpBuiltin({
+    mcpClientFactory: async () => client,
+  })
+  const envelope = envWithGrants([
+    {
+      action: "write",
+      scope_type: "origin",
+      origin: "https://example.com",
+      operations: ["page.navigate"],
+    },
+  ])
+  const r = await provider.invokeTool!({
+    toolName: "new_page",
+    args: { url: "https://example.com" },
+    envelope,
+  })
+  assert.equal(r.isError, true)
+  // The visible content carries the real Chrome error text — diagnosable.
+  const text = (r.content[0] as { text?: string })?.text ?? ""
+  assert.match(text, /Could not find Google Chrome/)
+  // synapse_error must be runtime_constraint, NOT permission_denied.
+  assert.equal(
+    (r._meta?.synapse_error as { code?: string } | undefined)?.code,
+    "runtime_constraint"
+  )
+})
+
+test("permission_denied carries actionable suggestion + details for chat UX", async () => {
+  const client = makeFakeClient({
+    handlers: {
+      list_pages: async () => ({
+        structuredContent: [
+          { pageId: 0, url: "https://other.com", isActive: true },
+        ],
+      }),
+      take_snapshot: async () => ({
+        content: [{ type: "text", text: "snap" }],
+      }),
+    },
+  })
+  const provider = createChromeDevtoolsMcpBuiltin({
+    mcpClientFactory: async () => client,
+  })
+  const envelope = envWithGrants([
+    {
+      action: "read",
+      scope_type: "origin",
+      origin: "https://example.com",
+      operations: ["page.read"],
+    },
+  ])
+  const r = await provider.invokeTool!({
+    toolName: "take_snapshot",
+    args: {},
+    envelope,
+  })
+  assert.equal(r.isError, true)
+  const err = r._meta?.synapse_error as
+    | {
+        code?: string
+        message?: string
+        details?: Record<string, unknown>
+      }
+    | undefined
+  assert.equal(err?.code, "permission_denied")
+  assert.match(err?.message ?? "", /Settings → Runtime Authorizations/)
+  assert.equal(
+    (err?.details as { scopeSource?: string })?.scopeSource,
+    "runtime_active_page"
+  )
+  assert.equal(
+    (err?.details as { currentUrl?: string })?.currentUrl,
+    "https://other.com"
+  )
+})

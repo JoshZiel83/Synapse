@@ -110,6 +110,8 @@ interface InternalState {
   startupError: string | null
   /** chain mutex: every invokeTool awaits this then replaces it */
   mutex: Promise<void>
+  /** Tools the live sidecar disagrees with our pinned schemas on (fail-closed). */
+  driftedTools: Set<string>
 }
 
 interface ExposurePlan {
@@ -377,6 +379,7 @@ export function createChromeDevtoolsMcpBuiltin(
     sidecarHandle: null,
     startupError: null,
     mutex: Promise.resolve(),
+    driftedTools: new Set(),
   }
 
   // ── sidecar lifecycle ─────────────────────────────────────────────────────
@@ -431,46 +434,55 @@ export function createChromeDevtoolsMcpBuiltin(
     client: McpClient,
     log: RuntimeLogger
   ): Promise<void> {
+    // When tests inject `mcpClientFactory`, the fake will rarely populate
+    // every advertised tool's inputSchema. Skip drift in that case — the
+    // version-consistency test + the dedicated drift-fail-closed test
+    // exercise the production drift path with a purpose-built fake.
+    if (opts.mcpClientFactory) return
     try {
       const result = await client.listTools()
       const advertisedByName = new Map(
         result.tools.map((t) => [t.name, t.inputSchema])
       )
-      const requiredTools = new Set<string>()
-      for (const plan of exposurePlans) {
-        if (!plan.enabled) continue
-        for (const t of BROWSER_EXPOSURE_TOOLS[plan.key]) {
-          requiredTools.add(t)
-        }
-      }
-      const missing: string[] = []
-      const schemaDrift: string[] = []
       const expectedHashes =
         (staticSchemas as { hashes?: Record<string, string> }).hashes ?? {}
-      for (const t of requiredTools) {
-        if (!advertisedByName.has(t)) {
-          missing.push(t)
-          continue
+      const driftedTools = new Set<string>()
+      const driftedExposures = new Set<BrowserExposureKey>()
+      for (const plan of exposurePlans) {
+        if (!plan.enabled) continue
+        for (const toolName of BROWSER_EXPOSURE_TOOLS[plan.key]) {
+          if (!advertisedByName.has(toolName)) {
+            driftedTools.add(toolName)
+            driftedExposures.add(plan.key)
+            continue
+          }
+          const live = advertisedByName.get(toolName)
+          if (live === undefined) continue // present but undeclared schema
+          const expected = expectedHashes[toolName]
+          if (!expected) continue
+          const actual = createHash("sha256")
+            .update(canonicalizeJson(live))
+            .digest("hex")
+          if (actual !== expected) {
+            driftedTools.add(toolName)
+            driftedExposures.add(plan.key)
+          }
         }
-        const expected = expectedHashes[t]
-        if (!expected) continue // tool present but no recorded hash — skip
-        const actual = createHash("sha256")
-          .update(canonicalizeJson(advertisedByName.get(t)))
-          .digest("hex")
-        if (actual !== expected) schemaDrift.push(t)
       }
-      if (missing.length > 0 || schemaDrift.length > 0) {
-        state.status = "degraded"
-        state.disabledReason = [
-          missing.length > 0 ? `missing: ${missing.join(",")}` : null,
-          schemaDrift.length > 0
-            ? `schema drift: ${schemaDrift.join(",")}`
-            : null,
-        ]
-          .filter(Boolean)
-          .join("; ")
-        log.warn("chrome-devtools-mcp drift detected", { missing, schemaDrift })
+      if (driftedTools.size === 0) return
+      state.status = "degraded"
+      state.disabledReason = `tool schema drift: ${[...driftedTools].sort().join(",")}`
+      state.driftedTools = driftedTools
+      for (const plan of exposurePlans) {
+        if (driftedExposures.has(plan.key)) {
+          plan.enabled = false
+          plan.disabledReason = `schema drift in sidecar — refresh static schemas`
+        }
       }
+      log.warn("chrome-devtools-mcp drift detected — exposures disabled", {
+        driftedTools: [...driftedTools],
+        driftedExposures: [...driftedExposures],
+      })
     } catch (err) {
       state.status = "degraded"
       log.warn("chrome-devtools-mcp drift check failed", {
@@ -678,6 +690,19 @@ export function createChromeDevtoolsMcpBuiltin(
       })
     }
 
+    // per-tool drift fail-closed (clarification #34 hardening): if the
+    // pinned sidecar's schema for this tool no longer matches what we've
+    // advertised, we can't safely forward — the args we received may
+    // belong to an old schema that the live sidecar will reject in
+    // confusing ways, or worse, the new schema may accept arguments
+    // that bypass our authz reasoning.
+    if (state.driftedTools.has(toolName)) {
+      return toolErrorResult({
+        code: "runtime_constraint",
+        message: `tool ${toolName} schema drifted from pinned chrome-devtools-mcp@${PINNED_VERSION}; refresh static schemas and redeploy`,
+      })
+    }
+
     // sanitize
     const sanitized = sanitize(toolName, input.args)
     if (!sanitized.ok) return sanitized.result
@@ -746,18 +771,30 @@ export function createChromeDevtoolsMcpBuiltin(
     const scopeCheck = checkScope(grants, descriptor, targetUrl)
     if (!scopeCheck.ok) {
       const scope = resolveUrlScope(targetUrl)
+      const scopeSource =
+        effective.kind === "argument_url"
+          ? "args"
+          : effective.kind === "page_id"
+            ? "runtime_page_id"
+            : "runtime_active_page"
+      // Self-describing message — the structured `details` block is
+      // preserved across the API boundary (see capability-projection/
+      // service.ts) for future UI widgets, but until those land we make
+      // sure the visible text already tells the operator what to do.
+      const visibleMessage =
+        `${scopeCheck.reason}. ` +
+        `Required operation: ${descriptor.operation}. ` +
+        `Current URL: ${targetUrl}. ` +
+        `Open Settings → Runtime Authorizations to add a grant for ${
+          scope.origin ?? targetUrl
+        }.`
       return toolErrorResult({
         code: "permission_denied",
-        message: scopeCheck.reason,
+        message: visibleMessage,
         details: {
           currentUrl: targetUrl,
           neededOperations: [descriptor.operation],
-          scopeSource:
-            effective.kind === "argument_url"
-              ? "args"
-              : effective.kind === "page_id"
-                ? "runtime_page_id"
-                : "runtime_active_page",
+          scopeSource,
           origin: scope.origin,
           suggestion:
             "Add a grant for this origin via Settings → Runtime Authorizations",
@@ -777,6 +814,25 @@ export function createChromeDevtoolsMcpBuiltin(
       toolName === "new_page" ||
       toolName === "navigate_page_history"
     ) {
+      // If the sidecar itself reported an error (Chrome not installed,
+      // network failure, etc.), forward that verbatim — do NOT rewrite as a
+      // grant problem (clarification: post-check failures must not mask
+      // real sidecar/Chrome diagnostics).
+      if (result.isError) {
+        return {
+          content: (result.content ??
+            []) as CatalogToolInvocationResult["content"],
+          isError: true,
+          _meta: {
+            ...(result._meta ?? {}),
+            synapse_error: {
+              code: "runtime_constraint",
+              message:
+                "sidecar navigation failed; see content for upstream error",
+            },
+          },
+        }
+      }
       let nav = parseNavigationResult(result)
       // The 0.7.0 sidecar always sets includePages on navigation, so the
       // result text carries a `## Pages` section. If the parser comes up
@@ -799,9 +855,15 @@ export function createChromeDevtoolsMcpBuiltin(
           nav.pageId,
           "could not determine resolved URL"
         )
+        // Use `runtime_constraint`, NOT `permission_denied`: the navigation
+        // succeeded as far as the sidecar reported (result.isError was
+        // false above) but Synapse could not verify the resolved URL.
+        // Reporting this as a permission denial would mislead operators
+        // into thinking it's a grant issue when the real cause is upstream.
         return toolErrorResult({
-          code: "permission_denied",
-          message: "navigation post-check failed: no resolved URL",
+          code: "runtime_constraint",
+          message:
+            "navigation post-check failed: could not parse resolved URL from sidecar response",
           details: { remediated: true },
         })
       }
@@ -828,8 +890,16 @@ export function createChromeDevtoolsMcpBuiltin(
         )
         return toolErrorResult({
           code: "permission_denied",
-          message: `navigation resolved outside authorized scope: ${postCheck.reason}`,
-          details: { resolvedUrl, remediated: true },
+          message: `navigation resolved outside authorized scope: ${postCheck.reason}. Open Settings → Runtime Authorizations to add a grant for ${resolveUrlScope(resolvedUrl).origin ?? resolvedUrl}.`,
+          details: {
+            resolvedUrl,
+            remediated: true,
+            currentUrl: resolvedUrl,
+            neededOperations: [descriptor.operation],
+            scopeSource: "runtime_active_page",
+            suggestion:
+              "Add a grant for this origin via Settings → Runtime Authorizations",
+          },
         })
       }
     }

@@ -859,16 +859,38 @@ function unionWithDevice(
       )
     }
     if (!result.ok) {
-      return mcpErrorBlock(
-        `device dispatch failed (${result.error?.code}): ${result.error?.message}`
-      )
+      const err = result.error
+      // v3.1 — drift-fix: preserve the runtime's structured synapse_error
+      // so the chat UI can detect `details.scopeSource` / currentUrl etc.
+      // and surface the "Manual grant required" widget for the active-page
+      // UX (plan §clarification #33). Without this passthrough the
+      // `_meta.synapse_error.details` block emitted by the chrome-devtools-mcp
+      // provider's permission_denied path gets collapsed to plain text
+      // before chat ever sees it.
+      return {
+        content: [
+          textBlock(
+            `device dispatch failed (${err?.code}): ${err?.message}`
+          ) as CanonicalContentBlock,
+        ],
+        isError: true,
+        metadata: { synapse_error: err },
+      }
     }
     const tool = result.result as
-      | { content?: CanonicalContentBlock[]; isError?: boolean }
+      | {
+          content?: CanonicalContentBlock[]
+          isError?: boolean
+          _meta?: Record<string, unknown>
+        }
       | undefined
+    // Forward non-error _meta back to the planner too — runtime providers
+    // attach contextual data (e.g. synapse_list_pages) that the chat-side
+    // renderer may want to read.
     return {
       content: tool?.content ?? [],
       isError: tool?.isError,
+      metadata: tool?._meta,
     }
   }
 
