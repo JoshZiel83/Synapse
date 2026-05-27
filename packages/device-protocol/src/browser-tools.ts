@@ -19,8 +19,6 @@ export type BrowserToolTarget =
   | { kind: "current_page" }
   | { kind: "page_id"; argKey: string }
   | { kind: "all_pages" }
-  // navigate_page: args.url present → argument_url; otherwise current_page.
-  | { kind: "navigation_url_or_current_page"; argKey: string }
 
 export type EffectiveTarget =
   | { kind: "argument_url"; url: string }
@@ -100,24 +98,33 @@ export const BROWSER_TOOL_MAP: Record<string, BrowserToolDescriptor> = {
     enabledByDefault: true,
   },
   navigate_page: {
+    // chrome-devtools-mcp 0.7.0: schema is {url} — no `type` discriminator.
     exposure: "navigation",
     operation: "page.navigate",
     action: "write",
-    target: { kind: "navigation_url_or_current_page", argKey: "url" },
+    target: { kind: "argument_url", argKey: "url" },
+    enabledByDefault: true,
+  },
+  navigate_page_history: {
+    // back/forward on the currently selected page.
+    exposure: "navigation",
+    operation: "page.navigate",
+    action: "write",
+    target: { kind: "current_page" },
     enabledByDefault: true,
   },
   select_page: {
     exposure: "navigation",
     operation: "page.read",
     action: "read",
-    target: { kind: "page_id", argKey: "pageId" },
+    target: { kind: "page_id", argKey: "pageIdx" },
     enabledByDefault: true,
   },
   close_page: {
     exposure: "navigation",
     operation: "page.navigate",
     action: "write",
-    target: { kind: "page_id", argKey: "pageId" },
+    target: { kind: "page_id", argKey: "pageIdx" },
     enabledByDefault: true,
   },
   wait_for: {
@@ -150,15 +157,11 @@ export const BROWSER_TOOL_MAP: Record<string, BrowserToolDescriptor> = {
     target: { kind: "current_page" },
     enabledByDefault: true,
   },
-  get_console_message: {
-    exposure: "read",
-    operation: "console.read",
-    action: "read",
-    target: { kind: "current_page" },
-    enabledByDefault: true,
-  },
 
   // ── input ──────────────────────────────────────────────────────────────
+  // 0.7.0 input tools: click, hover, fill, drag, fill_form, upload_file +
+  // handle_dialog (lives in pages.js but classified as INPUT_AUTOMATION).
+  // `press_key` / `type_text` do not exist upstream.
   click: {
     exposure: "input",
     operation: "page.input",
@@ -187,20 +190,6 @@ export const BROWSER_TOOL_MAP: Record<string, BrowserToolDescriptor> = {
     target: { kind: "current_page" },
     enabledByDefault: true,
   },
-  press_key: {
-    exposure: "input",
-    operation: "page.input",
-    action: "write",
-    target: { kind: "current_page" },
-    enabledByDefault: true,
-  },
-  type_text: {
-    exposure: "input",
-    operation: "page.input",
-    action: "write",
-    target: { kind: "current_page" },
-    enabledByDefault: true,
-  },
   handle_dialog: {
     exposure: "input",
     operation: "page.input",
@@ -219,10 +208,12 @@ export const BROWSER_TOOL_MAP: Record<string, BrowserToolDescriptor> = {
     allowFlag: "network",
   },
   get_network_request: {
+    // 0.7.0: schema is {url}. The URL identifies the request AND is the
+    // authz target — no need for a separate current-page lookup.
     exposure: "network",
     operation: "network.body.read",
     action: "read",
-    target: { kind: "current_page" },
+    target: { kind: "argument_url", argKey: "url" },
     enabledByDefault: false,
     allowFlag: "network",
   },
@@ -295,25 +286,13 @@ export const BROWSER_EXPOSURE_TOOLS: Record<BrowserExposureKey, string[]> = {
     "list_pages",
     "new_page",
     "navigate_page",
+    "navigate_page_history",
     "select_page",
     "close_page",
     "wait_for",
   ],
-  read: [
-    "take_snapshot",
-    "take_screenshot",
-    "list_console_messages",
-    "get_console_message",
-  ],
-  input: [
-    "click",
-    "fill",
-    "fill_form",
-    "hover",
-    "press_key",
-    "type_text",
-    "handle_dialog",
-  ],
+  read: ["take_snapshot", "take_screenshot", "list_console_messages"],
+  input: ["click", "fill", "fill_form", "hover", "handle_dialog"],
   network: ["list_network_requests", "get_network_request"],
   performance: [
     "performance_start_trace",
@@ -342,7 +321,7 @@ export type EffectiveTargetResolution =
   | { ok: true; target: EffectiveTarget }
   | {
       ok: false
-      code: "missing_arg" | "navigate_page_type_mismatch"
+      code: "missing_arg"
       detail: string
     }
 
@@ -378,20 +357,5 @@ export function resolveEffectiveTarget(
     }
     case "all_pages":
       return { ok: true, target: { kind: "all_pages" } }
-    case "navigation_url_or_current_page": {
-      const url = args[t.argKey]
-      const type = args["type"]
-      if (typeof url === "string" && url.length > 0) {
-        if (type !== undefined && type !== "url") {
-          return {
-            ok: false,
-            code: "navigate_page_type_mismatch",
-            detail: `navigate_page: url provided but type is '${String(type)}'`,
-          }
-        }
-        return { ok: true, target: { kind: "argument_url", url } }
-      }
-      return { ok: true, target: { kind: "current_page" } }
-    }
   }
 }

@@ -271,11 +271,14 @@ test("navigate_page resolving to unauthorized origin triggers remediation", asyn
           return { content: [{ type: "text", text: "ok" }] }
         }
         return {
-          structuredContent: {
-            resolvedUrl: "https://blocked.com/landing",
-            pageId: 1,
-            success: true,
-          },
+          content: [
+            {
+              type: "text",
+              text: `# navigate_page response
+## Pages
+0: https://blocked.com/landing [selected]`,
+            },
+          ],
         }
       },
     },
@@ -293,7 +296,7 @@ test("navigate_page resolving to unauthorized origin triggers remediation", asyn
   ])
   const result = await provider.invokeTool!({
     toolName: "navigate_page",
-    args: { type: "url", url: "https://allowed.com" },
+    args: { url: "https://allowed.com" },
     envelope,
   })
   assert.equal(result.isError, true)
@@ -305,14 +308,17 @@ test("new_page falling outside grant triggers close_page remediation", async () 
   const client = makeFakeClient({
     handlers: {
       new_page: async () => ({
-        structuredContent: {
-          resolvedUrl: "https://blocked.com",
-          pageId: 7,
-          success: true,
-        },
+        content: [
+          {
+            type: "text",
+            text: `# new_page response
+## Pages
+0: https://blocked.com [selected]`,
+          },
+        ],
       }),
       close_page: async (args) => {
-        if (args?.pageId === 7) closed = true
+        if (args?.pageIdx === 0) closed = true
         return { content: [{ type: "text", text: "closed" }] }
       },
     },
@@ -373,7 +379,7 @@ test("list_pages filters unauthorized + non-web-scheme pages silently", async ()
   assert.equal(meta?.pages?.[0]?.url, "https://allowed.com")
 })
 
-test("close_page with pageId looks up URL via list_pages before authz", async () => {
+test("close_page with pageIdx looks up URL via list_pages before authz", async () => {
   let closed = false
   const client = makeFakeClient({
     handlers: {
@@ -384,7 +390,7 @@ test("close_page with pageId looks up URL via list_pages before authz", async ()
         ],
       }),
       close_page: async (args) => {
-        if (args?.pageId === 5) closed = true
+        if (args?.pageIdx === 5) closed = true
         return { content: [{ type: "text", text: "closed" }] }
       },
     },
@@ -402,7 +408,7 @@ test("close_page with pageId looks up URL via list_pages before authz", async ()
   ])
   const r = await provider.invokeTool!({
     toolName: "close_page",
-    args: { pageId: 5 },
+    args: { pageIdx: 5 },
     envelope,
   })
   assert.equal(r.isError ?? false, false)
@@ -476,18 +482,7 @@ test("file path blacklist rejects take_screenshot({filePath})", async () => {
   )
 })
 
-test("preserved console messages rejected", async () => {
-  const provider = createChromeDevtoolsMcpBuiltin({
-    mcpClientFactory: async () => makeFakeClient(),
-  })
-  const r = await provider.invokeTool!({
-    toolName: "list_console_messages",
-    args: { includePreservedMessages: true },
-  })
-  assert.equal(r.isError, true)
-})
-
-test("get_network_request without reqid is invalid_request", async () => {
+test("get_network_request requires url (per 0.7.0 schema; argument_url target)", async () => {
   const provider = createChromeDevtoolsMcpBuiltin({
     allowNetwork: true,
     mcpClientFactory: async () => makeFakeClient(),
@@ -501,8 +496,36 @@ test("get_network_request without reqid is invalid_request", async () => {
     (
       (r._meta?.synapse_error as { message?: string })?.message ?? ""
     ).toString(),
-    /reqid is required/
+    /missing required argument: url/
   )
+})
+
+test("get_network_request with matching grant + url forwards", async () => {
+  const client = makeFakeClient({
+    handlers: {
+      get_network_request: async () => ({
+        content: [{ type: "text", text: "ok" }],
+      }),
+    },
+  })
+  const provider = createChromeDevtoolsMcpBuiltin({
+    allowNetwork: true,
+    mcpClientFactory: async () => client,
+  })
+  const envelope = envWithGrants([
+    {
+      action: "read",
+      scope_type: "origin",
+      origin: "https://api.example.com",
+      operations: ["network.body.read"],
+    },
+  ])
+  const r = await provider.invokeTool!({
+    toolName: "get_network_request",
+    args: { url: "https://api.example.com/v1/x" },
+    envelope,
+  })
+  assert.equal(r.isError ?? false, false)
 })
 
 test("performance_start_trace with reload=true denies", async () => {
@@ -512,7 +535,7 @@ test("performance_start_trace with reload=true denies", async () => {
   })
   const r = await provider.invokeTool!({
     toolName: "performance_start_trace",
-    args: { reload: true },
+    args: { reload: true, autoStop: true },
   })
   assert.equal(r.isError, true)
 })
@@ -548,7 +571,7 @@ test("navigate_page argument_url with file: scheme rejected", async () => {
   ])
   const r = await provider.invokeTool!({
     toolName: "navigate_page",
-    args: { type: "url", url: "file:///etc/passwd" },
+    args: { url: "file:///etc/passwd" },
     envelope,
   })
   assert.equal(r.isError, true)

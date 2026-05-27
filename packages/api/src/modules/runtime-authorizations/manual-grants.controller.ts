@@ -22,12 +22,45 @@ import {
   BrowserGrantPolicyError,
   GrantPolicySchema,
 } from "@synapse/shared/access/policies"
+import {
+  BROWSER_EXPOSURE_TOOLS,
+  BROWSER_TOOL_MAP,
+} from "@synapse/device-protocol/browser-tools"
 import { createRuntimeAuthorizationGrant } from "./service.js"
 
 const manualGrantBodySchema = z.object({
   device_capability_id: z.string().uuid(),
   policy: z.unknown(), // validated below via GrantPolicySchema
 })
+
+/**
+ * For a given exposure stable_key (e.g. `builtin/browser/navigation`),
+ * return the set of BrowserOperation values that any tool in the exposure
+ * would ever request. Used to prevent operators from granting operations
+ * the exposure can't actually trigger.
+ *
+ * Returns `null` for exposures that aren't from the chrome-devtools-mcp
+ * provider (legacy `builtin/browser`, custom builtins, etc.) — those
+ * fall through to capability-level matching only.
+ */
+function allowedBrowserOperationsForExposureStableKey(
+  stableKey: string
+): Set<string> | null {
+  // Stable keys defined by BROWSER_EXPOSURE_STABLE_KEYS:
+  //   builtin/browser/{navigation,read,input,network,performance,script,extensions,webmcp}
+  const suffix = stableKey.startsWith("builtin/browser/")
+    ? stableKey.slice("builtin/browser/".length)
+    : null
+  if (!suffix) return null
+  const tools = (BROWSER_EXPOSURE_TOOLS as Record<string, string[]>)[suffix]
+  if (!tools) return null
+  const ops = new Set<string>()
+  for (const t of tools) {
+    const desc = BROWSER_TOOL_MAP[t]
+    if (desc) ops.add(desc.operation)
+  }
+  return ops
+}
 
 export function registerManualRuntimeAuthorizationGrantRoutes(
   app: FastifyInstance
@@ -95,6 +128,7 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           "d.id as device_id",
           "d.workspace_id as workspace_id",
           "dx.id as exposure_id",
+          "dx.stable_key as exposure_stable_key",
           "dx.builtin_kind as builtin_kind",
           "dx.runtime_status as runtime_status",
           "dc.status as status",
@@ -135,6 +169,34 @@ export function registerManualRuntimeAuthorizationGrantRoutes(
           message: `policy.capability=${policy.capability} but exposure.builtin_kind=${row.builtin_kind}`,
         })
         return
+      }
+
+      // v3.1: for browser grants, restrict operations to those the exposure
+      // actually serves. e.g. a `read` exposure must not be granted
+      // `script.evaluate` — that would produce a dead grant that no real
+      // tool call could ever use, and risks operators mis-understanding
+      // the blast radius of their approval.
+      if (
+        policy.capability === "browser" &&
+        policy.browser?.operations &&
+        policy.browser.operations.length > 0
+      ) {
+        const allowedOps = allowedBrowserOperationsForExposureStableKey(
+          row.exposure_stable_key as string
+        )
+        if (allowedOps) {
+          const bad = policy.browser.operations.filter(
+            (op) => !allowedOps.has(op)
+          )
+          if (bad.length > 0) {
+            reply.status(400).send({
+              code: "operations_not_allowed_for_exposure",
+              message: `operations not served by exposure ${row.exposure_stable_key}: ${bad.join(", ")}`,
+              allowed: [...allowedOps],
+            })
+            return
+          }
+        }
       }
 
       const session = (request as { session?: { workspaceMemberId?: string } })

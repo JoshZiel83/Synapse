@@ -6,7 +6,7 @@ import {
   parseSelectedPageUrl,
 } from "./chrome-devtools-mcp.parsers.js"
 
-test("parseListPagesResult — structured content array", () => {
+test("parseListPagesResult — structured content array (future-proof path)", () => {
   const parsed = parseListPagesResult({
     structuredContent: [
       { pageId: 0, url: "https://example.com", title: "A", selected: true },
@@ -19,51 +19,94 @@ test("parseListPagesResult — structured content array", () => {
   assert.equal(parsed.pages[1].isActive, false)
 })
 
-test("parseListPagesResult — structured content {pages: []}", () => {
-  const parsed = parseListPagesResult({
-    structuredContent: {
-      pages: [{ pageId: 7, url: "https://a.com", isActive: true }],
-    },
-  })
-  assert.equal(parsed.pages[0].pageId, 7)
-})
-
-test("parseListPagesResult — text fallback canonical format", () => {
+test("parseListPagesResult — 0.7.0 text format with ## Pages section", () => {
   const parsed = parseListPagesResult({
     content: [
       {
         type: "text",
-        text: "0: <selected> https://example.com — Example Domain\n1: https://other.com — Other",
+        text: `# list_pages response
+
+## Pages
+0: https://example.com [selected]
+1: https://other.com`,
       },
     ],
   })
   assert.equal(parsed.pages.length, 2)
+  assert.equal(parsed.pages[0].pageId, 0)
+  assert.equal(parsed.pages[0].url, "https://example.com")
   assert.equal(parsed.pages[0].isActive, true)
-  assert.equal(parsed.pages[1].url, "https://other.com")
+  assert.equal(parsed.pages[1].isActive, false)
+})
+
+test("parseListPagesResult — text with ## Pages and trailing ## Page content", () => {
+  const parsed = parseListPagesResult({
+    content: [
+      {
+        type: "text",
+        text: `# navigate_page response
+
+## Pages
+0: https://example.com
+1: https://allowed.com [selected]
+
+## Page content
+RootWebArea "x"`,
+      },
+    ],
+  })
+  assert.equal(parsed.pages.length, 2)
+  assert.equal(parsed.pages.find((p) => p.isActive)?.url, "https://allowed.com")
 })
 
 test("parseListPagesResult — empty content returns empty list", () => {
   assert.deepEqual(parseListPagesResult({}).pages, [])
 })
 
-test("parseNavigationResult — structured success", () => {
-  const r = parseNavigationResult({
-    structuredContent: {
-      resolvedUrl: "https://example.com/dashboard",
-      pageId: 2,
-      success: true,
-    },
+test("parseListPagesResult — text without Pages section returns empty", () => {
+  const parsed = parseListPagesResult({
+    content: [{ type: "text", text: "# something\nno pages here" }],
   })
-  assert.equal(r.resolvedUrl, "https://example.com/dashboard")
-  assert.equal(r.pageId, 2)
-  assert.equal(r.success, true)
+  assert.deepEqual(parsed.pages, [])
 })
 
-test("parseNavigationResult — text fallback extracts URL", () => {
+test("parseNavigationResult — pulls resolvedUrl from selected page in text", () => {
   const r = parseNavigationResult({
-    content: [{ type: "text", text: "navigated to https://example.com/x?y=1" }],
+    content: [
+      {
+        type: "text",
+        text: `# navigate_page response
+Navigation succeeded.
+
+## Pages
+0: https://example.com
+1: https://blocked.com [selected]`,
+      },
+    ],
   })
-  assert.equal(r.resolvedUrl, "https://example.com/x?y=1")
+  assert.equal(r.resolvedUrl, "https://blocked.com")
+  assert.equal(r.pageId, 1)
+})
+
+test("parseNavigationResult — exposes full pages list for caller scope check", () => {
+  const r = parseNavigationResult({
+    content: [
+      {
+        type: "text",
+        text: `# new_page response
+
+## Pages
+0: https://x.com
+1: https://y.com [selected]
+2: https://z.com`,
+      },
+    ],
+  })
+  assert.equal(r.pages.length, 3)
+  assert.deepEqual(
+    r.pages.map((p) => p.url),
+    ["https://x.com", "https://y.com", "https://z.com"]
+  )
 })
 
 test("parseNavigationResult — isError flips success", () => {
@@ -74,19 +117,23 @@ test("parseNavigationResult — isError flips success", () => {
   assert.equal(r.success, false)
 })
 
-test("parseSelectedPageUrl — finds the selected page", () => {
+test("parseSelectedPageUrl — finds the selected page in text", () => {
   const url = parseSelectedPageUrl({
-    structuredContent: [
-      { pageId: 0, url: "https://a", isActive: false },
-      { pageId: 1, url: "https://b", isActive: true },
+    content: [
+      {
+        type: "text",
+        text: `## Pages
+0: https://a [selected]
+1: https://b`,
+      },
     ],
   })
-  assert.equal(url, "https://b")
+  assert.equal(url, "https://a")
 })
 
 test("parseSelectedPageUrl — returns null when no page is selected", () => {
   const url = parseSelectedPageUrl({
-    structuredContent: [{ pageId: 0, url: "https://a", isActive: false }],
+    content: [{ type: "text", text: "## Pages\n0: https://a" }],
   })
   assert.equal(url, null)
 })

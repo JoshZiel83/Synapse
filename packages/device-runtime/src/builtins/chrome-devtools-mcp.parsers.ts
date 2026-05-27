@@ -1,11 +1,20 @@
-// chrome-devtools-mcp result parsers. Sidecar emits MCP `content[]` blocks
-// (typically text — the JSON-ish output the official server logs to stdout);
-// when `--experimentalStructuredContent` is on, results also carry a
-// `structuredContent` field with parseable objects. Parsers prefer structured
-// content; text fallback covers MVP setups where the experimental flag is
-// somehow disabled or differently named upstream.
+// chrome-devtools-mcp result parsers. 0.7.0 sidecar emits text content blocks
+// only — no structuredContent. Tool responses are formatted as:
+//   # <tool-name> response
+//   <optional response lines>
+//   ## Pages
+//   0: https://example.com [selected]
+//   1: https://other.com
+//   ## Page content
+//   <a11y snapshot>
+//   ...
+// `setIncludePages(true)` is called by every navigation/page tool AND by
+// list_pages, so both go through the same `## Pages` section extraction.
 //
-// Plan §Phase 5, clarification #8 (parsers as their own testable module).
+// Plan §Phase 5; reverified against
+// node_modules/chrome-devtools-mcp/build/src/McpResponse.js after the
+// 2026-05-27 drift report. structuredContent code paths kept for forward
+// compatibility (newer upstreams may emit it) but the real path is text.
 
 import type { McpCallToolResult } from "../mcp-stdio-sidecar.js"
 
@@ -23,18 +32,21 @@ export interface ParseListPagesResult {
 export interface ParseNavigationResult {
   resolvedUrl?: string
   pageId?: number
+  /** All pages reported in the response — caller can compare against grants. */
+  pages: ChromePageSummary[]
   success: boolean
 }
 
 /**
- * Parse a list_pages response. Prefers structured content (an array of
- * `{pageId,url,title,selected?}`) and falls back to scraping the canonical
- * text format. Returns an empty list rather than throwing — caller treats
- * "no pages" as a soft state.
+ * Parse a list_pages response. Prefers structured content (future-proofing);
+ * the live 0.7.0 sidecar emits a `## Pages` text section, which we extract
+ * with the regex below. Returns an empty list rather than throwing — caller
+ * treats "no pages" as a soft state.
  */
 export function parseListPagesResult(
   result: McpCallToolResult
 ): ParseListPagesResult {
+  // 1) structured (forward compatibility)
   const structured = result.structuredContent as unknown
   if (Array.isArray(structured)) {
     return { pages: structured.map(toPageSummary).filter(isPageSummary) }
@@ -48,58 +60,50 @@ export function parseListPagesResult(
     return { pages: arr.map(toPageSummary).filter(isPageSummary) }
   }
 
-  // Text fallback: chrome-devtools-mcp uses lines like
-  //   "0: <selected> https://example.com — Example Domain"
-  //   "1: https://other.com — Other"
-  const text = collectText(result)
-  if (!text) return { pages: [] }
-  const pages: ChromePageSummary[] = []
-  for (const rawLine of text.split(/\r?\n/)) {
-    const line = rawLine.trim()
-    if (!line) continue
-    const match = line.match(
-      /^(\d+)\s*:\s*(<selected>\s+)?(\S+)(?:\s+[—\-]\s+(.+))?$/
-    )
-    if (!match) continue
-    pages.push({
-      pageId: Number(match[1]),
-      url: match[3],
-      title: match[4]?.trim() || undefined,
-      isActive: Boolean(match[2]),
-    })
-  }
-  return { pages }
+  // 2) 0.7.0 text format
+  return { pages: extractPagesSectionFromText(collectText(result)) }
 }
 
-/** Parse `navigate_page` / `new_page` result. */
+/**
+ * Parse `navigate_page` / `new_page` / `navigate_page_history` result.
+ * 0.7.0 always includes the `## Pages` section after navigation (via
+ * `setIncludePages(true)`), so we use the *selected* page URL as the
+ * resolved URL — never the first URL found in arbitrary text.
+ */
 export function parseNavigationResult(
   result: McpCallToolResult
 ): ParseNavigationResult {
+  // structured (future)
   const structured = result.structuredContent as
     | {
         resolvedUrl?: string
         url?: string
         pageId?: number
         success?: boolean
+        pages?: unknown
       }
     | undefined
   if (structured && typeof structured === "object") {
+    const fromStructured: ChromePageSummary[] = Array.isArray(structured.pages)
+      ? structured.pages.map(toPageSummary).filter(isPageSummary)
+      : []
+    const active = fromStructured.find((p) => p.isActive)
     return {
-      resolvedUrl: structured.resolvedUrl ?? structured.url,
+      resolvedUrl: structured.resolvedUrl ?? structured.url ?? active?.url,
       pageId:
-        typeof structured.pageId === "number" ? structured.pageId : undefined,
+        typeof structured.pageId === "number"
+          ? structured.pageId
+          : (active?.pageId ?? undefined),
+      pages: fromStructured,
       success: structured.success !== false && !result.isError,
     }
   }
-  const text = collectText(result)
-  if (!text) {
-    return { success: !result.isError }
-  }
-  const urlMatch = text.match(/https?:\/\/\S+/)
-  const pageIdMatch = text.match(/page[_\s]?id[:=]?\s*(\d+)/i)
+  const pages = extractPagesSectionFromText(collectText(result))
+  const active = pages.find((p) => p.isActive)
   return {
-    resolvedUrl: urlMatch?.[0],
-    pageId: pageIdMatch ? Number(pageIdMatch[1]) : undefined,
+    resolvedUrl: active?.url,
+    pageId: active?.pageId,
+    pages,
     success: !result.isError,
   }
 }
@@ -113,6 +117,32 @@ export function parseSelectedPageUrl(result: McpCallToolResult): string | null {
 
 // ────────────────────────────── helpers ─────────────────────────────────────
 
+/**
+ * Extract `## Pages` section, then parse lines like
+ *   `0: https://example.com [selected]`
+ * `idx` matches `getPages()` order, `[selected]` flags the selected page.
+ */
+function extractPagesSectionFromText(text: string): ChromePageSummary[] {
+  if (!text) return []
+  const sectionMatch = text.match(/##\s*Pages\b([\s\S]*?)(?:\n##\s|$)/)
+  if (!sectionMatch) return []
+  const body = sectionMatch[1] ?? ""
+  const out: ChromePageSummary[] = []
+  for (const rawLine of body.split(/\r?\n/)) {
+    const line = rawLine.trim()
+    if (!line) continue
+    // `<idx>: <url>[ [selected]]`
+    const m = line.match(/^(\d+)\s*:\s*(\S+?)(\s+\[selected\])?$/)
+    if (!m) continue
+    out.push({
+      pageId: Number(m[1]),
+      url: m[2],
+      isActive: Boolean(m[3]),
+    })
+  }
+  return out
+}
+
 function toPageSummary(value: unknown): ChromePageSummary | null {
   if (!value || typeof value !== "object") return null
   const obj = value as Record<string, unknown>
@@ -121,9 +151,11 @@ function toPageSummary(value: unknown): ChromePageSummary | null {
       ? obj.pageId
       : typeof obj.page_id === "number"
         ? obj.page_id
-        : typeof obj.id === "number"
-          ? obj.id
-          : NaN
+        : typeof obj.pageIdx === "number"
+          ? obj.pageIdx
+          : typeof obj.id === "number"
+            ? obj.id
+            : NaN
   const url =
     typeof obj.url === "string"
       ? obj.url

@@ -18,6 +18,8 @@
 // Plan §Phase 5, clarifications #7/#8/#13/#14/#15/#21/#22/#23/#26/#27/#28/#30/#33/#34.
 
 import { satisfies as semverSatisfies } from "semver"
+import { createHash } from "node:crypto"
+import { existsSync } from "node:fs"
 import {
   browserPolicyAllows,
   resolveUrlScope,
@@ -82,13 +84,12 @@ export interface ChromeDevtoolsMcpBuiltinOptions {
   mcpExtraArgs?: string[]
   headless?: boolean
   isolatedProfile?: boolean
+  /** Reserved for forward compatibility; 0.7.0 has no --user-data-dir flag. */
   userDataDir?: string
   executablePath?: string
   channel?: "stable" | "beta" | "dev" | "canary"
   /** High-risk attach mode (existing Chrome with user cookies). */
   browserUrl?: string
-  /** High-risk attach mode alternative — websocket endpoint. */
-  wsEndpoint?: string
   /** High-risk: route traffic through proxy. */
   proxyServer?: string
   /** High-risk: skip TLS verification. */
@@ -225,53 +226,59 @@ function defaultSidecarCommand(
   logger: RuntimeLogger
 ): { command: string; args: string[] } {
   if (opts.mcpCommand) return opts.mcpCommand
-  // Try local node_modules/.bin first; npx is the absolute fallback.
+  // Try local node_modules/.bin first; npx is the fallback. existsSync gate
+  // ensures we actually fall through to npx when the local bin isn't there
+  // (e.g. CI without optionalDependencies installed) instead of spawning a
+  // ENOENT and surfacing it as "sidecar_exited".
   try {
     const localBin = new URL(
       "../../../../node_modules/.bin/chrome-devtools-mcp",
       import.meta.url
     )
-    // Existence check happens at spawn time; if it fails we'll surface it
-    // via onUnexpectedExit. We can't import("node:fs").existsSync here
-    // because describeExposures wants to stay sync-friendly.
-    return { command: localBin.pathname, args: [] }
+    const path = localBin.pathname
+    if (existsSync(path)) {
+      return { command: path, args: [] }
+    }
   } catch {
-    logger.warn(
-      "local chrome-devtools-mcp not resolvable — falling back to npx"
-    )
+    /* URL construction failed — fall through to npx */
   }
+  logger.warn(
+    "local chrome-devtools-mcp not found in node_modules/.bin — falling back to npx"
+  )
   return {
     command: "npx",
     args: ["-y", `chrome-devtools-mcp@${PINNED_VERSION}`],
   }
 }
 
+/**
+ * Build the sidecar argv. Only flags that chrome-devtools-mcp@0.7.0
+ * actually accepts (per build/src/cli.js): browserUrl, headless,
+ * executablePath, isolated, customDevtools, channel, logFile, viewport,
+ * proxyServer, acceptInsecureCerts. There is no `--no-usage-statistics`,
+ * `--redact-network-headers`, `--experimentalStructuredContent`, or
+ * `--category-*` flag in 0.7.0 — the sidecar registers every tool
+ * unconditionally regardless of category. Synapse-side filtering via
+ * BROWSER_TOOL_MAP is therefore the authoritative tool-surface gate, and
+ * we drop those flags so we don't pass garbage to the sidecar.
+ */
 function buildSafetyArgs(opts: ChromeDevtoolsMcpBuiltinOptions): string[] {
-  const args: string[] = [
-    "--no-usage-statistics",
-    "--no-performance-crux",
-    "--redact-network-headers=true",
-    "--experimentalStructuredContent",
-    `--category-network=${opts.allowNetwork === true}`,
-    `--category-performance=${opts.allowPerformance === true}`,
-    "--category-emulation=false",
-    "--categoryExtensions=false",
-    "--categoryExperimentalWebmcp=false",
-  ]
+  const args: string[] = []
   if (opts.userDataDir) {
-    args.push(`--user-data-dir=${opts.userDataDir}`)
+    // chrome-devtools-mcp does NOT expose a --user-data-dir flag in 0.7.0 —
+    // log a warning at provider construction time (see opts handling) and
+    // skip. The flag is reserved for forward compatibility.
   } else if (opts.isolatedProfile !== false) {
-    args.push("--isolated")
+    args.push("--isolated=true")
   }
   if (typeof opts.headless === "boolean") {
     args.push(`--headless=${opts.headless}`)
   }
-  if (opts.executablePath) args.push(`--executable-path=${opts.executablePath}`)
+  if (opts.executablePath) args.push(`--executablePath=${opts.executablePath}`)
   if (opts.channel) args.push(`--channel=${opts.channel}`)
-  if (opts.browserUrl) args.push(`--browser-url=${opts.browserUrl}`)
-  if (opts.wsEndpoint) args.push(`--ws-endpoint=${opts.wsEndpoint}`)
-  if (opts.proxyServer) args.push(`--proxy-server=${opts.proxyServer}`)
-  if (opts.acceptInsecureCerts) args.push("--accept-insecure-certs")
+  if (opts.browserUrl) args.push(`--browserUrl=${opts.browserUrl}`)
+  if (opts.proxyServer) args.push(`--proxyServer=${opts.proxyServer}`)
+  if (opts.acceptInsecureCerts) args.push("--acceptInsecureCerts=true")
   return args
 }
 
@@ -334,7 +341,7 @@ export function createChromeDevtoolsMcpBuiltin(
   )
 
   // High-risk mode warnings — once per process.
-  if (opts.browserUrl || opts.wsEndpoint) {
+  if (opts.browserUrl) {
     logger.warn(
       "ATTACH MODE ENABLED — sidecar will control existing Chrome with user cookies"
     )
@@ -355,6 +362,11 @@ export function createChromeDevtoolsMcpBuiltin(
   ) {
     logger.warn(
       "PERSISTENT PROFILE — sidecar may access cookies/storage from previous sessions"
+    )
+  }
+  if (opts.userDataDir) {
+    logger.warn(
+      "userDataDir option is reserved (chrome-devtools-mcp 0.7.0 has no --user-data-dir flag); ignored"
     )
   }
 
@@ -421,7 +433,9 @@ export function createChromeDevtoolsMcpBuiltin(
   ): Promise<void> {
     try {
       const result = await client.listTools()
-      const advertised = new Set(result.tools.map((t) => t.name))
+      const advertisedByName = new Map(
+        result.tools.map((t) => [t.name, t.inputSchema])
+      )
       const requiredTools = new Set<string>()
       for (const plan of exposurePlans) {
         if (!plan.enabled) continue
@@ -429,13 +443,33 @@ export function createChromeDevtoolsMcpBuiltin(
           requiredTools.add(t)
         }
       }
-      const missing = [...requiredTools].filter((t) => !advertised.has(t))
-      if (missing.length > 0) {
+      const missing: string[] = []
+      const schemaDrift: string[] = []
+      const expectedHashes =
+        (staticSchemas as { hashes?: Record<string, string> }).hashes ?? {}
+      for (const t of requiredTools) {
+        if (!advertisedByName.has(t)) {
+          missing.push(t)
+          continue
+        }
+        const expected = expectedHashes[t]
+        if (!expected) continue // tool present but no recorded hash — skip
+        const actual = createHash("sha256")
+          .update(canonicalizeJson(advertisedByName.get(t)))
+          .digest("hex")
+        if (actual !== expected) schemaDrift.push(t)
+      }
+      if (missing.length > 0 || schemaDrift.length > 0) {
         state.status = "degraded"
-        state.disabledReason = `sidecar missing tools: ${missing.join(",")}`
-        log.warn("chrome-devtools-mcp drift: sidecar missing required tools", {
-          missing,
-        })
+        state.disabledReason = [
+          missing.length > 0 ? `missing: ${missing.join(",")}` : null,
+          schemaDrift.length > 0
+            ? `schema drift: ${schemaDrift.join(",")}`
+            : null,
+        ]
+          .filter(Boolean)
+          .join("; ")
+        log.warn("chrome-devtools-mcp drift detected", { missing, schemaDrift })
       }
     } catch (err) {
       state.status = "degraded"
@@ -443,6 +477,22 @@ export function createChromeDevtoolsMcpBuiltin(
         error: (err as Error).message,
       })
     }
+  }
+
+  /** Stable JSON canonicalization for sha256 input. */
+  function canonicalizeJson(value: unknown): string {
+    if (value === undefined) return "null"
+    if (value === null || typeof value !== "object")
+      return JSON.stringify(value)
+    if (Array.isArray(value)) {
+      return `[${value.map(canonicalizeJson).join(",")}]`
+    }
+    const obj = value as Record<string, unknown>
+    return `{${Object.keys(obj)
+      .sort()
+      .filter((k) => obj[k] !== undefined)
+      .map((k) => `${JSON.stringify(k)}:${canonicalizeJson(obj[k])}`)
+      .join(",")}}`
   }
 
   // ── per-call mutex ────────────────────────────────────────────────────────
@@ -492,20 +542,10 @@ export function createChromeDevtoolsMcpBuiltin(
         }),
       }
     }
-    if (
-      (toolName === "list_console_messages" &&
-        args["includePreservedMessages"] === true) ||
-      (toolName === "list_network_requests" &&
-        args["includePreservedRequests"] === true)
-    ) {
-      return {
-        ok: false,
-        result: toolErrorResult({
-          code: "permission_denied",
-          message: "preserved cross-navigation data not allowed in v1",
-        }),
-      }
-    }
+    // chrome-devtools-mcp 0.7.0 `performance_start_trace.reload` is REQUIRED;
+    // reject the dangerous true value so callers must explicitly pass false.
+    // (reload=true triggers a page navigation as a side effect of starting
+    // the trace — should require page.navigate, not performance.trace.)
     if (toolName === "performance_start_trace" && args["reload"] === true) {
       return {
         ok: false,
@@ -513,15 +553,6 @@ export function createChromeDevtoolsMcpBuiltin(
           code: "permission_denied",
           message:
             "performance_start_trace with reload=true requires page.navigate grant (not supported in v1)",
-        }),
-      }
-    }
-    if (toolName === "get_network_request" && args["reqid"] === undefined) {
-      return {
-        ok: false,
-        result: toolErrorResult({
-          code: "invalid_request",
-          message: "reqid is required in v1",
         }),
       }
     }
@@ -655,10 +686,7 @@ export function createChromeDevtoolsMcpBuiltin(
     const eff = resolveEffectiveTarget(descriptor, sanitized.args)
     if (!eff.ok) {
       return toolErrorResult({
-        code:
-          eff.code === "navigate_page_type_mismatch"
-            ? "invalid_request"
-            : "invalid_request",
+        code: "invalid_request",
         message: eff.detail,
       })
     }
@@ -737,15 +765,6 @@ export function createChromeDevtoolsMcpBuiltin(
       })
     }
 
-    // ── get_console_message / get_network_request: ID gating ────────────────
-    if (toolName === "get_console_message") {
-      const idCheck = await checkConsoleId(client, args)
-      if (!idCheck.ok) return idCheck.result
-    } else if (toolName === "get_network_request") {
-      const idCheck = await checkNetworkId(client, args)
-      if (!idCheck.ok) return idCheck.result
-    }
-
     // ── forward to sidecar ───────────────────────────────────────────────────
     const result = await client.callTool({
       name: toolName,
@@ -753,37 +772,65 @@ export function createChromeDevtoolsMcpBuiltin(
     })
 
     // ── post-call enforcement: navigation remediation ───────────────────────
-    if (toolName === "navigate_page" || toolName === "new_page") {
-      const nav = parseNavigationResult(result)
+    if (
+      toolName === "navigate_page" ||
+      toolName === "new_page" ||
+      toolName === "navigate_page_history"
+    ) {
+      let nav = parseNavigationResult(result)
+      // The 0.7.0 sidecar always sets includePages on navigation, so the
+      // result text carries a `## Pages` section. If the parser comes up
+      // empty (no resolvedUrl AND no pages), do a follow-up list_pages to
+      // resolve. If that still doesn't give us a URL → fail closed +
+      // best-effort remediation.
+      if (!nav.resolvedUrl && nav.pages.length === 0) {
+        try {
+          const listed = await client.callTool({ name: "list_pages" })
+          nav = parseNavigationResult(listed)
+        } catch {
+          /* swallow — handled by the fail-closed below */
+        }
+      }
       const resolvedUrl = nav.resolvedUrl
-      if (resolvedUrl) {
-        if (!isWebScheme(resolvedUrl)) {
-          await remediateUnauthorizedNav(
-            client,
-            toolName,
-            nav.pageId,
-            "non-http(s) resolved URL"
-          )
-          return toolErrorResult({
-            code: "permission_denied",
-            message: `navigated to non-http(s) scheme: ${resolvedUrl}`,
-            details: { resolvedUrl, remediated: true },
-          })
-        }
-        const postCheck = checkScope(grants, descriptor, resolvedUrl)
-        if (!postCheck.ok) {
-          await remediateUnauthorizedNav(
-            client,
-            toolName,
-            nav.pageId,
-            postCheck.reason
-          )
-          return toolErrorResult({
-            code: "permission_denied",
-            message: `navigation resolved outside authorized scope: ${postCheck.reason}`,
-            details: { resolvedUrl, remediated: true },
-          })
-        }
+      if (!resolvedUrl) {
+        await remediateUnauthorizedNav(
+          client,
+          toolName,
+          nav.pageId,
+          "could not determine resolved URL"
+        )
+        return toolErrorResult({
+          code: "permission_denied",
+          message: "navigation post-check failed: no resolved URL",
+          details: { remediated: true },
+        })
+      }
+      if (!isWebScheme(resolvedUrl)) {
+        await remediateUnauthorizedNav(
+          client,
+          toolName,
+          nav.pageId,
+          "non-http(s) resolved URL"
+        )
+        return toolErrorResult({
+          code: "permission_denied",
+          message: `navigated to non-http(s) scheme: ${resolvedUrl}`,
+          details: { resolvedUrl, remediated: true },
+        })
+      }
+      const postCheck = checkScope(grants, descriptor, resolvedUrl)
+      if (!postCheck.ok) {
+        await remediateUnauthorizedNav(
+          client,
+          toolName,
+          nav.pageId,
+          postCheck.reason
+        )
+        return toolErrorResult({
+          code: "permission_denied",
+          message: `navigation resolved outside authorized scope: ${postCheck.reason}`,
+          details: { resolvedUrl, remediated: true },
+        })
       }
     }
 
@@ -807,19 +854,22 @@ export function createChromeDevtoolsMcpBuiltin(
         try {
           await client.callTool({
             name: "close_page",
-            arguments: { pageId },
+            arguments: { pageIdx: pageId },
           })
         } catch {
-          // close_page fails on the last page; fall through to about:blank.
+          // close_page fails on the last open page (CLOSE_PAGE_ERROR);
+          // fall through to about:blank navigate.
           await client.callTool({
             name: "navigate_page",
-            arguments: { type: "url", url: "about:blank" },
+            arguments: { url: "about:blank" },
           })
         }
       } else {
+        // navigate_page / navigate_page_history landed somewhere bad —
+        // in-place navigate to about:blank.
         await client.callTool({
           name: "navigate_page",
-          arguments: { type: "url", url: "about:blank" },
+          arguments: { url: "about:blank" },
         })
       }
     } catch (err) {
@@ -857,11 +907,12 @@ export function createChromeDevtoolsMcpBuiltin(
           type: "text",
           text:
             allowed.length === 0
-              ? "no authorized pages"
-              : allowed
+              ? "## Pages\n(no authorized pages)"
+              : "## Pages\n" +
+                allowed
                   .map(
                     (p) =>
-                      `${p.pageId}: ${p.isActive ? "<selected> " : ""}${p.url}${p.title ? " — " + p.title : ""}`
+                      `${p.pageId}: ${p.url}${p.isActive ? " [selected]" : ""}`
                   )
                   .join("\n"),
         },
@@ -870,96 +921,6 @@ export function createChromeDevtoolsMcpBuiltin(
         synapse_list_pages: { pages: allowed },
       },
     }
-  }
-
-  // ── ID gating for get_console_message / get_network_request ─────────────
-
-  async function checkConsoleId(
-    client: McpClient,
-    args: Record<string, unknown>
-  ): Promise<
-    { ok: true } | { ok: false; result: CatalogToolInvocationResult }
-  > {
-    const targetId = args["msgid"]
-    if (targetId === undefined) {
-      return {
-        ok: false,
-        result: toolErrorResult({
-          code: "invalid_request",
-          message: "msgid is required",
-        }),
-      }
-    }
-    const list = await client.callTool({
-      name: "list_console_messages",
-      arguments: { includePreservedMessages: false },
-    })
-    const ids = extractIdsFromList(list, ["msgid", "id"])
-    if (!ids.has(String(targetId))) {
-      return {
-        ok: false,
-        result: toolErrorResult({
-          code: "permission_denied",
-          message: "message not associated with currently authorized page",
-        }),
-      }
-    }
-    return { ok: true }
-  }
-
-  async function checkNetworkId(
-    client: McpClient,
-    args: Record<string, unknown>
-  ): Promise<
-    { ok: true } | { ok: false; result: CatalogToolInvocationResult }
-  > {
-    const targetId = args["reqid"]
-    if (targetId === undefined) {
-      return {
-        ok: false,
-        result: toolErrorResult({
-          code: "invalid_request",
-          message: "reqid is required",
-        }),
-      }
-    }
-    const list = await client.callTool({
-      name: "list_network_requests",
-      arguments: { includePreservedRequests: false },
-    })
-    const ids = extractIdsFromList(list, ["reqid", "id"])
-    if (!ids.has(String(targetId))) {
-      return {
-        ok: false,
-        result: toolErrorResult({
-          code: "permission_denied",
-          message: "request not associated with currently authorized page",
-        }),
-      }
-    }
-    return { ok: true }
-  }
-
-  function extractIdsFromList(
-    result: Awaited<ReturnType<McpClient["callTool"]>>,
-    idKeys: string[]
-  ): Set<string> {
-    const ids = new Set<string>()
-    const structured = result.structuredContent
-    const list = Array.isArray(structured)
-      ? structured
-      : Array.isArray((structured as { items?: unknown } | undefined)?.items)
-        ? (structured as { items: unknown[] }).items
-        : []
-    for (const item of list) {
-      if (item && typeof item === "object") {
-        for (const k of idKeys) {
-          const v = (item as Record<string, unknown>)[k]
-          if (v !== undefined) ids.add(String(v))
-        }
-      }
-    }
-    return ids
   }
 
   // ── CatalogProvider surface ──────────────────────────────────────────────

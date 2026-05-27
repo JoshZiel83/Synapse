@@ -182,7 +182,7 @@ async function main() {
       //         lean safe: --isolated, headless=false, redact-network-
       //         headers, no usage stats/CrUX, all categories off, neither
       //         extensions nor webmcp. High-risk flags
-      //         (--browser-url, --browser-ws-endpoint, --browser-proxy-server,
+      //         (--browser-url, --browser-proxy-server,
       //         --browser-accept-insecure-certs, --browser-user-data-dir,
       //         --browser-isolated=false) each emit a once-per-process warn.
       const browserProvider =
@@ -201,7 +201,6 @@ async function main() {
           "browser-executable-path",
           "browser-channel",
           "browser-url",
-          "browser-ws-endpoint",
           "browser-proxy-server",
           "browser-accept-insecure-certs",
           "browser-allow-script",
@@ -246,7 +245,6 @@ async function main() {
               | "canary"
               | undefined,
             browserUrl: getFlag(args.flags, "browser-url"),
-            wsEndpoint: getFlag(args.flags, "browser-ws-endpoint"),
             proxyServer: getFlag(args.flags, "browser-proxy-server"),
             acceptInsecureCerts: args.flags.has(
               "browser-accept-insecure-certs"

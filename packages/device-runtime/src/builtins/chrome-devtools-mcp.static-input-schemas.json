@@ -1,5 +1,373 @@
 {
-  "_comment": "Static input-schema fallback for chrome-devtools-mcp tools. Refreshed by scripts/refresh-browser-tool-schemas.ts against the pinned version. Provider falls back to a minimal {type:object} when a tool isn't present here.",
+  "_comment": "Static input-schema fallback. Refreshed by scripts/refresh-browser-tool-schemas.ts against chrome-devtools-mcp@0.7.0.",
   "_pinnedVersion": "0.7.0",
-  "schemas": {}
+  "schemas": {
+    "list_console_messages": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "click": {
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "The uid of an element on the page from the page content snapshot"
+        },
+        "dblClick": {
+          "type": "boolean",
+          "description": "Set to true for double clicks. Default is false."
+        }
+      },
+      "required": ["uid"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "fill": {
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "The uid of an element on the page from the page content snapshot"
+        },
+        "value": {
+          "type": "string",
+          "description": "The value to fill in"
+        }
+      },
+      "required": ["uid", "value"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "fill_form": {
+      "type": "object",
+      "properties": {
+        "elements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "uid": {
+                "type": "string",
+                "description": "The uid of the element to fill out"
+              },
+              "value": {
+                "type": "string",
+                "description": "Value for the element"
+              }
+            },
+            "required": ["uid", "value"],
+            "additionalProperties": false
+          },
+          "description": "Elements from snapshot to fill out."
+        }
+      },
+      "required": ["elements"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "hover": {
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "The uid of an element on the page from the page content snapshot"
+        }
+      },
+      "required": ["uid"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "get_network_request": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "The URL of the request."
+        }
+      },
+      "required": ["url"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "list_network_requests": {
+      "type": "object",
+      "properties": {
+        "pageSize": {
+          "type": "integer",
+          "exclusiveMinimum": 0,
+          "description": "Maximum number of requests to return. When omitted, returns all requests."
+        },
+        "pageIdx": {
+          "type": "integer",
+          "minimum": 0,
+          "description": "Page number to return (0-based). When omitted, returns the first page."
+        },
+        "resourceTypes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "document",
+              "stylesheet",
+              "image",
+              "media",
+              "font",
+              "script",
+              "texttrack",
+              "xhr",
+              "fetch",
+              "prefetch",
+              "eventsource",
+              "websocket",
+              "manifest",
+              "signedexchange",
+              "ping",
+              "cspviolationreport",
+              "preflight",
+              "fedcm",
+              "other"
+            ]
+          },
+          "description": "Filter requests to only return requests of the specified resource types. When omitted or empty, returns all requests."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "close_page": {
+      "type": "object",
+      "properties": {
+        "pageIdx": {
+          "type": "number",
+          "description": "The index of the page to close. Call list_pages to list pages."
+        }
+      },
+      "required": ["pageIdx"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "handle_dialog": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": ["accept", "dismiss"],
+          "description": "Whether to dismiss or accept the dialog"
+        },
+        "promptText": {
+          "type": "string",
+          "description": "Optional prompt text to enter into the dialog."
+        }
+      },
+      "required": ["action"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "list_pages": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "navigate_page": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "URL to navigate the page to"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Maximum wait time in milliseconds. If set to 0, the default timeout will be used."
+        }
+      },
+      "required": ["url"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "navigate_page_history": {
+      "type": "object",
+      "properties": {
+        "navigate": {
+          "type": "string",
+          "enum": ["back", "forward"],
+          "description": "Whether to navigate back or navigate forward in the selected pages history"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Maximum wait time in milliseconds. If set to 0, the default timeout will be used."
+        }
+      },
+      "required": ["navigate"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "new_page": {
+      "type": "object",
+      "properties": {
+        "url": {
+          "type": "string",
+          "description": "URL to load in a new page."
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Maximum wait time in milliseconds. If set to 0, the default timeout will be used."
+        }
+      },
+      "required": ["url"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "select_page": {
+      "type": "object",
+      "properties": {
+        "pageIdx": {
+          "type": "number",
+          "description": "The index of the page to select. Call list_pages to list pages."
+        }
+      },
+      "required": ["pageIdx"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "performance_analyze_insight": {
+      "type": "object",
+      "properties": {
+        "insightName": {
+          "type": "string",
+          "description": "The name of the Insight you want more information on. For example: \"DocumentLatency\" or \"LCPBreakdown\""
+        }
+      },
+      "required": ["insightName"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "performance_start_trace": {
+      "type": "object",
+      "properties": {
+        "reload": {
+          "type": "boolean",
+          "description": "Determines if, once tracing has started, the page should be automatically reloaded."
+        },
+        "autoStop": {
+          "type": "boolean",
+          "description": "Determines if the trace recording should be automatically stopped."
+        }
+      },
+      "required": ["reload", "autoStop"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "performance_stop_trace": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "take_screenshot": {
+      "type": "object",
+      "properties": {
+        "format": {
+          "type": "string",
+          "enum": ["png", "jpeg", "webp"],
+          "default": "png",
+          "description": "Type of format to save the screenshot as. Default is \"png\""
+        },
+        "quality": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 100,
+          "description": "Compression quality for JPEG and WebP formats (0-100). Higher values mean better quality but larger file sizes. Ignored for PNG format."
+        },
+        "uid": {
+          "type": "string",
+          "description": "The uid of an element on the page from the page content snapshot. If omitted takes a pages screenshot."
+        },
+        "fullPage": {
+          "type": "boolean",
+          "description": "If set to true takes a screenshot of the full page instead of the currently visible viewport. Incompatible with uid."
+        },
+        "filePath": {
+          "type": "string",
+          "description": "The absolute path, or a path relative to the current working directory, to save the screenshot to instead of attaching it to the response."
+        }
+      },
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "evaluate_script": {
+      "type": "object",
+      "properties": {
+        "function": {
+          "type": "string",
+          "description": "A JavaScript function to run in the currently selected page.\nExample without arguments: `() => {\n  return document.title\n}` or `async () => {\n  return await fetch(\"example.com\")\n}`.\nExample with arguments: `(el) => {\n  return el.innerText;\n}`\n"
+        },
+        "args": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "uid": {
+                "type": "string",
+                "description": "The uid of an element on the page from the page content snapshot"
+              }
+            },
+            "required": ["uid"],
+            "additionalProperties": false
+          },
+          "description": "An optional list of arguments to pass to the function."
+        }
+      },
+      "required": ["function"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "take_snapshot": {
+      "type": "object",
+      "properties": {},
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    },
+    "wait_for": {
+      "type": "object",
+      "properties": {
+        "text": {
+          "type": "string",
+          "description": "Text to appear on the page"
+        },
+        "timeout": {
+          "type": "integer",
+          "description": "Maximum wait time in milliseconds. If set to 0, the default timeout will be used."
+        }
+      },
+      "required": ["text"],
+      "additionalProperties": false,
+      "$schema": "http://json-schema.org/draft-07/schema#"
+    }
+  },
+  "hashes": {
+    "list_console_messages": "f973399805c1c233633f5196cf8e2ad40ee100b94996d711dcd030813b671bc5",
+    "click": "c36aff0cf9a09307a92652016d498caddcc37e93502414715aee014868504c71",
+    "fill": "0c6ed73ee999b732b13ec37babffe5d04092978202e72d23420d2be0c9d9a583",
+    "fill_form": "43491b5a3c67bcfdaf750d2e0ac4fc4935a9af2bb724d1c961b25c1c72fc0d48",
+    "hover": "3646c6d3361cce792082bbbb6029230cb33b352a08e02bc2531004b15062c32d",
+    "get_network_request": "0f81bebd1b3ede859461d775c85c5af0f1c1d6b0dd482584f5ba45fffc6b365d",
+    "list_network_requests": "244764d3b2d5989f3f278728cb740d4621272cc39d546b4da7cda807e4024144",
+    "close_page": "b40cd55f781de62cf8eca7f4241fb947f451efc7d503b23a5643192bb83f754c",
+    "handle_dialog": "5ac04d3ea8d567132ebdb944b03c0053dbc7548a916b7300f284379cdb3d28a2",
+    "list_pages": "f973399805c1c233633f5196cf8e2ad40ee100b94996d711dcd030813b671bc5",
+    "navigate_page": "263e323586b2ecbd94e9446b8cfc6a74dbd538769681564537cf2ced309d1083",
+    "navigate_page_history": "04dc3dd4f99eb8abf40c52104dc80bf79e9fa6c1ef7cc5fe97deac7ee5c3318d",
+    "new_page": "3f66304aaa40e07c411c5e7ce97d70b31d8bbd7625d881106106eaff4c813648",
+    "select_page": "d5ed9bd818c756364cd85cceb8c406d1945c6b9a0aa5de568806fb88f4b92614",
+    "performance_analyze_insight": "b0088031a92a200ead7aaf6b65fcd1980b6487c503199ce854f424e8603efb46",
+    "performance_start_trace": "13740c62ee5402783a8a7d6225a85ae8ece6bfb51fa600bf6e4eae207cd7da84",
+    "performance_stop_trace": "f973399805c1c233633f5196cf8e2ad40ee100b94996d711dcd030813b671bc5",
+    "take_screenshot": "308b6203231eaf517eb38cda584978471c927c7bfc701da44e3eaf3e2213a8c2",
+    "evaluate_script": "58c4527cfe5a28df91ed87aad626e4d31e246e04aef92a14f2e509407c92a2b6",
+    "take_snapshot": "f973399805c1c233633f5196cf8e2ad40ee100b94996d711dcd030813b671bc5",
+    "wait_for": "3177d9f53b50047741ac59e7209faded9e4370adad34fe0cc5ffe4629fea392a"
+  }
 }

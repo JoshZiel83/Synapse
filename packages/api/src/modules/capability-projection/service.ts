@@ -36,6 +36,7 @@ import { createHash } from "node:crypto"
 import {
   listActiveRuntimeAuthorizationGrantsForExposure,
   consumeRuntimeAuthorizationGrant,
+  prefilterBrowserGrants,
   runtimeAuthorizationGrantMatches,
 } from "../runtime-authorizations/service.js"
 import { createRuntimeAuthorizationRequest } from "../runtime-authorizations/requests.js"
@@ -514,14 +515,27 @@ function unionWithDevice(
       // origin / commandline command must not satisfy this dispatch. Build
       // the requestedAction up-front (same shape used by the authorization
       // request flow below) so server and UI agree on what's being asked.
+      //
+      // v3.1: browser splits into argument_url vs runtime-resolved targets.
+      // For runtime-resolved tools the requested action carries
+      // `scopeSource: runtime_*` with origin/host/registrableDomain all
+      // undefined — the generic matcher would refuse all candidates. We
+      // call `prefilterBrowserGrants` instead, which does action +
+      // operation coverage only and defers URL matching to the runtime.
       const requestedActionForCheck = buildRequestedAction({
         capability: row.builtin_kind,
         toolName,
         visibleToolName: row.visible_tool_name,
         args: sanitizedInput,
       })
+      const matcherForCheck =
+        row.builtin_kind === "browser" &&
+        requestedActionForCheck.browser?.scopeSource &&
+        requestedActionForCheck.browser.scopeSource !== "args"
+          ? prefilterBrowserGrants
+          : runtimeAuthorizationGrantMatches
       const applicable = subjectScoped.filter((g) =>
-        runtimeAuthorizationGrantMatches(g, requestedActionForCheck)
+        matcherForCheck(g, requestedActionForCheck)
       )
       for (const grant of applicable) {
         const spec: RuntimeAuthorizationGrantSpec = {
