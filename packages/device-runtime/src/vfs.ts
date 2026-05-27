@@ -1039,7 +1039,7 @@ export async function assertHelperWorkDirOutsideRoot(
   if (realWork === realRoot || realWork.startsWith(rootSep)) {
     throw new Error(
       `helperWorkDir (${realWork}) must not live under rootPath (${realRoot}); ` +
-        `history.sqlite + tantivy index would leak through list/read/search`
+        `history.sqlite + FTS5 index would leak through list/read/search`
     )
   }
 }

@@ -26,6 +26,7 @@ walkdir = "2"
 nucleo-matcher = "0.3"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 ureq = { version = "2", default-features = false, features = ["tls"] }
+getrandom = "0.2"
 
 [dev-dependencies]
 tempfile = "3"

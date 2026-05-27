@@ -327,7 +327,7 @@ const TOOLS: ToolDescriptor[] = [
     name: "fs_search",
     stable_key: "filesystem/search",
     description:
-      "Search the VFS. mode=content uses ripgrep (live) or tantivy (indexed). mode=path uses ripgrep --files (live) or nucleo fuzzy (indexed). indexed=true with regex/glob is rejected.",
+      "Search the VFS. mode=content uses ripgrep (live) or SQLite FTS5 with bm25 (indexed). mode=path uses ripgrep --files (live) or nucleo fuzzy (indexed). indexed=true with regex/glob is rejected.",
     input_schema: {
       type: "object",
       required: ["mode", "query"],
@@ -1887,6 +1887,24 @@ async function handleIndexStatus(
     ...(r as unknown as Record<string, unknown>),
   }
   delete rest.storage
+  // Re-authorize rebuild_task.subtree against the caller's grants. The
+  // sidecar surfaces ancestor tasks (e.g. a /-wide rebuild observed
+  // from a /public status query) which would leak rebuild activity +
+  // task_id to a narrow-grant caller. Drop the field if the caller
+  // can't read the task's subtree.
+  const rebuildTask = rest.rebuild_task as { subtree?: string } | undefined
+  if (envelope && rebuildTask?.subtree) {
+    let taskCanon: string | null = null
+    try {
+      taskCanon = canonicalVfsPath(rebuildTask.subtree)
+    } catch {
+      // Sidecar shouldn't ship a malformed subtree, but if so fail
+      // closed and drop the field.
+    }
+    if (taskCanon === null || !checkFsGrant(grants, "read", taskCanon)) {
+      delete rest.rebuild_task
+    }
+  }
   return {
     content: [{ type: "text", text: JSON.stringify(rest) }],
   }
@@ -1928,10 +1946,18 @@ async function handleIndexTaskStatus(
   if (!taskId) {
     throw new ToolFailure("invalid_request", "task_id is required")
   }
-  // Fetch first; the task's subtree decides authorization. If the
-  // sidecar reports not_found, surface it as a runtime_constraint —
-  // task_ids are high-entropy random hex so guess attacks aren't
-  // practical, and we don't leak existence information beyond that.
+  // Fetch first; the task's subtree decides authorization. Both
+  // "task does not exist" and "task exists but caller can't read its
+  // subtree" must surface the SAME error so a caller can't tell the
+  // difference by probing — otherwise the exists-vs-denied distinction
+  // is a side channel that would let an attacker learn task_ids belong
+  // to higher-privileged subtrees. (Random task_id alone isn't enough;
+  // if an attacker ever observes a leaked id elsewhere, the existence
+  // signal must still not be available.)
+  const denyError = new ToolFailure(
+    "runtime_constraint",
+    `task_not_found_or_denied: ${taskId}`
+  )
   let result: Awaited<
     ReturnType<NonNullable<typeof ctx.helper>["indexTaskStatus"]>
   >
@@ -1939,31 +1965,24 @@ async function handleIndexTaskStatus(
     result = await ctx.helper.indexTaskStatus({ task_id: taskId })
   } catch (err) {
     if (err instanceof FsHelperRpcError && err.rpcCode === -32004) {
-      throw new ToolFailure("runtime_constraint", `task_not_found: ${taskId}`)
+      throw denyError
     }
     throw err
   }
-  // Authorization: the caller must hold a read grant covering the
-  // task's subtree. Otherwise rejecting prevents a /public-only caller
-  // from observing a /secret rebuild's existence, failure, or path.
-  const taskCanonical = (() => {
+  if (envelope) {
+    let taskCanonical: string | null = null
     try {
-      return canonicalVfsPath(result.subtree)
+      taskCanonical = canonicalVfsPath(result.subtree)
     } catch {
       // Sidecar should never return a malformed subtree, but if it
       // does, fail closed.
-      return null
     }
-  })()
-  if (envelope) {
     if (
       taskCanonical === null ||
       !checkFsGrant(getFsGrants(envelope), "read", taskCanonical)
     ) {
-      throw new ToolFailure(
-        "permission_denied",
-        `fs_index_task_status: task subtree ${result.subtree} not covered by any filesystem grant`
-      )
+      // Same error as not_found — no exists-vs-denied side channel.
+      throw denyError
     }
   }
   return {

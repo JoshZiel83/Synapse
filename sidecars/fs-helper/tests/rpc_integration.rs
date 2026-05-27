@@ -994,3 +994,46 @@ fn empty_subtree_status_reports_zero_and_no_timestamp() {
     );
     helper.stop();
 }
+
+#[test]
+fn task_id_is_csprng_random_hex_not_timestamp_prefix() {
+    // task_id was previously epoch-nanoseconds + pid hex, which made
+    // adjacent rebuild ids guessable (the leading 16 hex chars varied
+    // only by sub-millisecond timing). Confirm 5 back-to-back rebuilds
+    // produce ids with NO common prefix beyond a few chars — true random
+    // 128-bit ids have ~negligible chance of a 4-char prefix collision.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    let mut ids: Vec<String> = Vec::new();
+    for i in 1..=5i64 {
+        let r = helper.call(i, "fs.index.rebuild", serde_json::json!({ "subtree": "/" }));
+        let id = r["result"]["task_id"].as_str().unwrap().to_string();
+        assert!(id.starts_with("rebuild-"), "got {id}");
+        // Hex body should be 32 chars (128 bits).
+        assert_eq!(id.len(), "rebuild-".len() + 32, "got {id}");
+        ids.push(id);
+        wait_for_rebuild_complete(&mut helper, "/");
+    }
+    // Pairwise compare the hex bodies; no two should share more than
+    // ~6 leading chars (vanishingly improbable for true random).
+    for i in 0..ids.len() {
+        for j in (i + 1)..ids.len() {
+            let a = &ids[i]["rebuild-".len()..];
+            let b = &ids[j]["rebuild-".len()..];
+            let common = a
+                .chars()
+                .zip(b.chars())
+                .take_while(|(x, y)| x == y)
+                .count();
+            assert!(
+                common < 12,
+                "task ids {a} / {b} share {common} leading hex chars — looks like the old timestamp scheme is back",
+            );
+        }
+    }
+    helper.stop();
+}

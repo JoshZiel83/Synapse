@@ -418,12 +418,26 @@ async fn dispatch(
 }
 
 fn new_uuid_like() -> String {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let ns = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    format!("{:016x}{:08x}", ns, std::process::id())
+    // CSPRNG-backed task id (16 bytes hex = 128 bits of entropy). The
+    // previous epoch-nanos + pid scheme was guessable; combined with the
+    // task_status RPC's exists-vs-denied distinction, an attacker could
+    // probe for task existence by trying nearby task_ids. Use getrandom
+    // so id space is unpredictable.
+    let mut buf = [0u8; 16];
+    if getrandom::getrandom(&mut buf).is_err() {
+        // Fall back to time+pid; better than failing the whole rebuild.
+        use std::time::{SystemTime, UNIX_EPOCH};
+        let ns = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        return format!("{:016x}{:08x}", ns, std::process::id());
+    }
+    let mut s = String::with_capacity(32);
+    for b in buf {
+        s.push_str(&format!("{b:02x}"));
+    }
+    s
 }
 
 fn now_rfc3339_like() -> String {

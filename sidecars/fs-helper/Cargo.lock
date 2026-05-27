@@ -1174,6 +1174,7 @@ dependencies = [
  "anyhow",
  "base64",
  "clap",
+ "getrandom 0.2.17",
  "hex",
  "mime_guess",
  "nucleo-matcher",

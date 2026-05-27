@@ -1178,7 +1178,7 @@ test("fs_index_task_status returns the task when grant covers its subtree", asyn
   }
 })
 
-test("fs_index_task_status denies when grant does NOT cover the task subtree", async () => {
+test("fs_index_task_status denies with same error as not_found (no side channel)", async () => {
   const { builtin, helper, cleanup } = await makeBuiltin({ enableIndex: true })
   try {
     helper.indexTaskStatus = async ({ task_id }) => ({
@@ -1195,13 +1195,20 @@ test("fs_index_task_status denies when grant does NOT cover the task subtree", a
       envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/public"] }]),
     })
     assert.equal(r.isError, true)
-    assert.equal(getMeta(r).synapse_error?.code, "permission_denied")
+    // Critical: same error code + message shape as a not_found, so a
+    // caller can't probe task existence by trying an id and comparing
+    // permission_denied vs task_not_found.
+    assert.equal(getMeta(r).synapse_error?.code, "runtime_constraint")
+    assert.match(
+      getMeta(r).synapse_error?.message ?? "",
+      /task_not_found_or_denied/
+    )
   } finally {
     cleanup()
   }
 })
 
-test("fs_index_task_status maps sidecar -32004 to task_not_found", async () => {
+test("fs_index_task_status maps sidecar -32004 to task_not_found_or_denied (same as denied)", async () => {
   const { builtin, helper, cleanup } = await makeBuiltin({ enableIndex: true })
   try {
     helper.indexTaskStatus = async () => {
@@ -1218,7 +1225,83 @@ test("fs_index_task_status maps sidecar -32004 to task_not_found", async () => {
       envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/"] }]),
     })
     assert.equal(r.isError, true)
-    assert.match(getMeta(r).synapse_error?.message ?? "", /task_not_found/)
+    assert.equal(getMeta(r).synapse_error?.code, "runtime_constraint")
+    assert.match(
+      getMeta(r).synapse_error?.message ?? "",
+      /task_not_found_or_denied/
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test("fs_index_status drops ancestor rebuild_task when caller can't read its subtree", async () => {
+  const { builtin, helper, cleanup } = await makeBuiltin({ enableIndex: true })
+  try {
+    // Sidecar reports a /-wide rebuild as the latest task. A /public-only
+    // caller asks for /public status — runtime must strip rebuild_task
+    // because the caller can't read /, even though /public is technically
+    // an "intersect" subtree of / (the sidecar's per-subtree filter
+    // surfaces ancestor tasks). Closes the global rebuild leak.
+    helper.indexStatus = async ({ subtree }) =>
+      ({
+        subtree: subtree ?? "/",
+        last_indexed_at: null,
+        doc_count: 0,
+        queue_depth: 0,
+        errors: { extract_failed: 0, watcher_starved: 0 },
+        rebuild_task: {
+          task_id: "rebuild-global",
+          subtree: "/",
+          status: "running" as const,
+          started_at: "2026-01-01T00:00:00.000Z",
+          finished_at: null,
+          error: null,
+        },
+      }) as never
+    const r = await builtin.invokeTool!({
+      toolName: "fs_index_status",
+      args: { subtree: "/public" },
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/public"] }]),
+    })
+    assert.equal(r.isError, undefined, JSON.stringify(r._meta))
+    const body = JSON.parse((r.content[0] as { text: string }).text)
+    assert.ok(
+      !("rebuild_task" in body),
+      `rebuild_task leaked to /public-only caller: ${JSON.stringify(body)}`
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test("fs_index_status keeps rebuild_task when caller's grant covers the task subtree", async () => {
+  const { builtin, helper, cleanup } = await makeBuiltin({ enableIndex: true })
+  try {
+    helper.indexStatus = async ({ subtree }) =>
+      ({
+        subtree: subtree ?? "/",
+        last_indexed_at: null,
+        doc_count: 0,
+        queue_depth: 0,
+        errors: { extract_failed: 0, watcher_starved: 0 },
+        rebuild_task: {
+          task_id: "rebuild-global",
+          subtree: "/",
+          status: "running" as const,
+          started_at: "2026-01-01T00:00:00.000Z",
+          finished_at: null,
+          error: null,
+        },
+      }) as never
+    const r = await builtin.invokeTool!({
+      toolName: "fs_index_status",
+      args: { subtree: "/" },
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(r.isError, undefined)
+    const body = JSON.parse((r.content[0] as { text: string }).text)
+    assert.equal(body.rebuild_task.task_id, "rebuild-global")
   } finally {
     cleanup()
   }
