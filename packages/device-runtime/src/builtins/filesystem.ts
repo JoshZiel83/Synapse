@@ -365,6 +365,18 @@ const TOOLS: ToolDescriptor[] = [
     },
     visible: (c, a) => c.enableRead && a.indexAvailable,
   },
+  {
+    name: "fs_index_task_status",
+    stable_key: "filesystem/index/task_status",
+    description:
+      "Look up a rebuild task by the id returned from fs_index_rebuild. The caller must hold a read grant covering the task's subtree.",
+    input_schema: {
+      type: "object",
+      required: ["task_id"],
+      properties: { task_id: { type: "string" } },
+    },
+    visible: (c, a) => c.enableRead && a.indexAvailable,
+  },
 ]
 
 const TOOL_BY_NAME = new Map<string, ToolDescriptor>(
@@ -770,6 +782,8 @@ async function dispatch(
       return handleIndexStatus(input.args, input.envelope, ctx)
     case "fs_index_rebuild":
       return handleIndexRebuild(input.args, input.envelope, ctx)
+    case "fs_index_task_status":
+      return handleIndexTaskStatus(input.args, input.envelope, ctx)
   }
   throw new ToolFailure("invalid_request", `unrouted tool: ${tool.name}`)
 }
@@ -1899,5 +1913,60 @@ async function handleIndexRebuild(
   const r = await ctx.helper.indexRebuild({ subtree: canonical })
   return {
     content: [{ type: "text", text: JSON.stringify(r) }],
+  }
+}
+
+async function handleIndexTaskStatus(
+  args: Record<string, unknown>,
+  envelope: OperationEnvelope | undefined,
+  ctx: DispatchCtx
+): Promise<CatalogToolInvocationResult> {
+  if (!ctx.helper) {
+    throw new ToolFailure("runtime_constraint", "index_disabled")
+  }
+  const taskId = asString(args["task_id"])
+  if (!taskId) {
+    throw new ToolFailure("invalid_request", "task_id is required")
+  }
+  // Fetch first; the task's subtree decides authorization. If the
+  // sidecar reports not_found, surface it as a runtime_constraint —
+  // task_ids are high-entropy random hex so guess attacks aren't
+  // practical, and we don't leak existence information beyond that.
+  let result: Awaited<
+    ReturnType<NonNullable<typeof ctx.helper>["indexTaskStatus"]>
+  >
+  try {
+    result = await ctx.helper.indexTaskStatus({ task_id: taskId })
+  } catch (err) {
+    if (err instanceof FsHelperRpcError && err.rpcCode === -32004) {
+      throw new ToolFailure("runtime_constraint", `task_not_found: ${taskId}`)
+    }
+    throw err
+  }
+  // Authorization: the caller must hold a read grant covering the
+  // task's subtree. Otherwise rejecting prevents a /public-only caller
+  // from observing a /secret rebuild's existence, failure, or path.
+  const taskCanonical = (() => {
+    try {
+      return canonicalVfsPath(result.subtree)
+    } catch {
+      // Sidecar should never return a malformed subtree, but if it
+      // does, fail closed.
+      return null
+    }
+  })()
+  if (envelope) {
+    if (
+      taskCanonical === null ||
+      !checkFsGrant(getFsGrants(envelope), "read", taskCanonical)
+    ) {
+      throw new ToolFailure(
+        "permission_denied",
+        `fs_index_task_status: task subtree ${result.subtree} not covered by any filesystem grant`
+      )
+    }
+  }
+  return {
+    content: [{ type: "text", text: JSON.stringify(result) }],
   }
 }

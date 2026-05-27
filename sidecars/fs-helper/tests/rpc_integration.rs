@@ -394,6 +394,33 @@ fn tika_indexing_does_not_panic_under_async_dispatch() {
     );
     assert!(r.get("error").is_none(), "rebuild errored: {r}");
 
+    // Rebuild is now async — poll status until the task is done before
+    // searching. Without this wait the search occasionally races the
+    // background tokio task and returns 0 hits.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut id = 100i64;
+    loop {
+        if std::time::Instant::now() >= deadline {
+            panic!("tika rebuild did not complete");
+        }
+        id += 1;
+        let s = send(
+            &mut child,
+            &mut reader,
+            id,
+            "fs.index.status",
+            serde_json::json!({ "subtree": "/" }),
+        );
+        if s["result"]
+            .get("rebuild_task")
+            .and_then(|t| t["status"].as_str())
+            == Some("completed")
+        {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+
     // Confirm the indexed content from Tika is searchable.
     let r2 = send(
         &mut child,
@@ -885,5 +912,85 @@ fn rebuild_task_table_caps_at_retention_window() {
         serde_json::json!({ "task_id": first_id.unwrap() }),
     );
     assert_eq!(bad["error"]["code"], -32004, "{bad}");
+    helper.stop();
+}
+
+#[test]
+fn status_errors_and_last_indexed_at_are_subtree_scoped() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(root.join("secret")).unwrap();
+    std::fs::create_dir_all(root.join("public")).unwrap();
+    // Plain text under /public (will index as source='text').
+    std::fs::write(root.join("public/ok.txt"), "ordinary text").unwrap();
+    // Rich-format PDF under /secret, no Tika endpoint → source='no_tika'
+    // and extract_failed bumps for /secret. /public must not see this.
+    std::fs::write(root.join("secret/leak.pdf"), b"%PDF-1.7 stub").unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    helper.call(1, "fs.index.rebuild", serde_json::json!({ "subtree": "/" }));
+    wait_for_rebuild_complete(&mut helper, "/");
+
+    let secret = helper.call(2, "fs.index.status", serde_json::json!({ "subtree": "/secret" }));
+    let public = helper.call(3, "fs.index.status", serde_json::json!({ "subtree": "/public" }));
+
+    // /secret reports 1 doc, 1 extract failure (no Tika), a timestamp.
+    assert_eq!(secret["result"]["doc_count"].as_i64(), Some(1), "{secret}");
+    assert_eq!(
+        secret["result"]["errors"]["extract_failed"].as_i64(),
+        Some(1),
+        "{secret}",
+    );
+    assert!(
+        secret["result"]["last_indexed_at"].as_str().is_some(),
+        "{secret}",
+    );
+    // /public reports 1 doc, 0 extract failures (the rich-format failure
+    // happened in a different subtree). Old code returned the GLOBAL
+    // extract_failed=1 here, leaking /secret's activity.
+    assert_eq!(public["result"]["doc_count"].as_i64(), Some(1), "{public}");
+    assert_eq!(
+        public["result"]["errors"]["extract_failed"].as_i64(),
+        Some(0),
+        "/public must not see /secret's extract failures: {public}",
+    );
+    // /public's last_indexed_at must come from its own docs only — the
+    // text file under it has a timestamp. The cross-leak check we care
+    // about is that a /public-only caller doesn't get a timestamp
+    // attributable to a /secret-only rebuild; here both subtrees have
+    // docs so any non-null value is acceptable as long as it matches the
+    // /public doc timeline.
+    let pub_ts = public["result"]["last_indexed_at"].as_str();
+    assert!(pub_ts.is_some(), "{public}");
+    helper.stop();
+}
+
+#[test]
+fn empty_subtree_status_reports_zero_and_no_timestamp() {
+    // /public has no docs; rebuild only touches /secret. /public status
+    // must not borrow /secret's timestamp.
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(root.join("secret")).unwrap();
+    std::fs::create_dir_all(root.join("public")).unwrap();
+    std::fs::write(root.join("secret/x.txt"), "y").unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    helper.call(1, "fs.index.rebuild", serde_json::json!({ "subtree": "/secret" }));
+    wait_for_rebuild_complete(&mut helper, "/secret");
+    let s = helper.call(2, "fs.index.status", serde_json::json!({ "subtree": "/public" }));
+    assert_eq!(s["result"]["doc_count"].as_i64(), Some(0), "{s}");
+    assert_eq!(
+        s["result"]["errors"]["extract_failed"].as_i64(),
+        Some(0),
+        "{s}",
+    );
+
+    assert!(
+        s["result"]["last_indexed_at"].is_null(),
+        "/public should have no timestamp; got {s}",
+    );
     helper.stop();
 }

@@ -22,6 +22,8 @@ import type {
   IndexRebuildResult,
   IndexStatusInput,
   IndexStatusResult,
+  IndexTaskStatusInput,
+  IndexTaskStatusResult,
   IndexUpsertInput,
   IndexRemoveInput,
   SearchContentInput,
@@ -122,6 +124,7 @@ export interface FsHelperClient {
 
   indexRebuild(input: IndexRebuildInput): Promise<IndexRebuildResult>
   indexStatus(input: IndexStatusInput): Promise<IndexStatusResult>
+  indexTaskStatus(input: IndexTaskStatusInput): Promise<IndexTaskStatusResult>
   indexUpsert(input: IndexUpsertInput): Promise<void>
   indexRemove(input: IndexRemoveInput): Promise<void>
 
@@ -293,6 +296,7 @@ export function createFsHelperClient(
     historyRestore: (input) => request("fs.history.restore", input),
     indexRebuild: (input) => request("fs.index.rebuild", input),
     indexStatus: (input) => request("fs.index.status", input),
+    indexTaskStatus: (input) => request("fs.index.task_status", input),
     indexUpsert: (input) => request<void>("fs.index.upsert", input),
     indexRemove: (input) => request<void>("fs.index.remove", input),
     searchContent: (input) => request("fs.search.content", input),

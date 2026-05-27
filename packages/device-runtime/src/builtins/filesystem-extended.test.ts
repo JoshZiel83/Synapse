@@ -1150,3 +1150,76 @@ test("fs_history_restore rejects when sidecar returns corrupt blob (sha mismatch
     rmSync(work, { recursive: true, force: true })
   }
 })
+
+test("fs_index_task_status returns the task when grant covers its subtree", async () => {
+  const { builtin, helper, cleanup } = await makeBuiltin({ enableIndex: true })
+  try {
+    // Fake helper records nothing about rebuild; we install an
+    // indexTaskStatus that returns a synthetic task.
+    helper.indexTaskStatus = async ({ task_id }) => ({
+      task_id,
+      subtree: "/allowed",
+      status: "completed" as const,
+      started_at: "2026-01-01T00:00:00.000Z",
+      finished_at: "2026-01-01T00:00:05.000Z",
+      error: null,
+    })
+    const r = await builtin.invokeTool!({
+      toolName: "fs_index_task_status",
+      args: { task_id: "rebuild-abc" },
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/allowed"] }]),
+    })
+    assert.equal(r.isError, undefined, JSON.stringify(r._meta))
+    const body = JSON.parse((r.content[0] as { text: string }).text)
+    assert.equal(body.task_id, "rebuild-abc")
+    assert.equal(body.subtree, "/allowed")
+  } finally {
+    cleanup()
+  }
+})
+
+test("fs_index_task_status denies when grant does NOT cover the task subtree", async () => {
+  const { builtin, helper, cleanup } = await makeBuiltin({ enableIndex: true })
+  try {
+    helper.indexTaskStatus = async ({ task_id }) => ({
+      task_id,
+      subtree: "/secret",
+      status: "completed" as const,
+      started_at: "2026-01-01T00:00:00.000Z",
+      finished_at: "2026-01-01T00:00:05.000Z",
+      error: null,
+    })
+    const r = await builtin.invokeTool!({
+      toolName: "fs_index_task_status",
+      args: { task_id: "rebuild-secret" },
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/public"] }]),
+    })
+    assert.equal(r.isError, true)
+    assert.equal(getMeta(r).synapse_error?.code, "permission_denied")
+  } finally {
+    cleanup()
+  }
+})
+
+test("fs_index_task_status maps sidecar -32004 to task_not_found", async () => {
+  const { builtin, helper, cleanup } = await makeBuiltin({ enableIndex: true })
+  try {
+    helper.indexTaskStatus = async () => {
+      const { FsHelperRpcError } = await import("./fs-helper-client.js")
+      throw new FsHelperRpcError(
+        "fs.index.task_status",
+        -32004,
+        "task rebuild-nope"
+      )
+    }
+    const r = await builtin.invokeTool!({
+      toolName: "fs_index_task_status",
+      args: { task_id: "rebuild-nope" },
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(r.isError, true)
+    assert.match(getMeta(r).synapse_error?.message ?? "", /task_not_found/)
+  } finally {
+    cleanup()
+  }
+})

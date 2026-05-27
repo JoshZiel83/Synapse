@@ -305,25 +305,64 @@ impl IndexStore {
 
     pub fn status(&self, subtree: &str) -> Result<IndexStatusResult, RpcError> {
         let canon = canonical(subtree)?;
-        let count: i64 = if canon == "/" {
-            self.conn.query_row("SELECT COUNT(*) FROM docs", [], |r| r.get(0))
-                .optional()?.unwrap_or(0)
-        } else {
-            let mut stmt = self.conn.prepare("SELECT path FROM docs")?;
-            let rows = stmt.query_map([], |r| r.get::<_, String>(0))?;
-            let mut n: i64 = 0;
-            for r in rows {
-                if under_prefix(&r?, &canon) { n += 1; }
+        // Compute doc_count, extract_failed, and last_indexed_at
+        // all within the requested subtree. Returning the global
+        // IndexStore.extract_failed counter or last_indexed_at would
+        // let a /public-only caller observe /secret's indexing activity
+        // (the failure count, the timestamp). Per-subtree aggregation is
+        // the right scope.
+        //
+        // `source` is recorded on every doc row by upsert_host; values
+        // that count as a failed extraction are gathered here. Successful
+        // extractions are "text" | "rich".
+        const FAILED_SOURCES: &[&str] = &[
+            "extract_failed",
+            "extract_oversize",
+            "no_tika",
+            "too_large",
+            "binary",
+            "read_failed",
+            "symlink_skipped",
+        ];
+        let mut stmt = self
+            .conn
+            .prepare("SELECT path, source, indexed_at FROM docs")?;
+        let rows =
+            stmt.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                ))
+            })?;
+        let mut count: i64 = 0;
+        let mut extract_failed: i64 = 0;
+        let mut last_indexed_at: Option<String> = None;
+        for r in rows {
+            let (path, source, indexed_at) = r?;
+            if canon != "/" && !under_prefix(&path, &canon) {
+                continue;
             }
-            n
-        };
+            count += 1;
+            if let Some(s) = &source {
+                if FAILED_SOURCES.iter().any(|f| *f == s.as_str()) {
+                    extract_failed += 1;
+                }
+            }
+            if let Some(ts) = indexed_at {
+                match &last_indexed_at {
+                    Some(cur) if cur.as_str() >= ts.as_str() => {}
+                    _ => last_indexed_at = Some(ts),
+                }
+            }
+        }
         Ok(IndexStatusResult {
             subtree: canon,
-            last_indexed_at: self.last_indexed_at.clone(),
+            last_indexed_at,
             doc_count: count,
             queue_depth: 0,
             errors: IndexErrors {
-                extract_failed: self.extract_failed,
+                extract_failed,
                 watcher_starved: 0,
             },
         })

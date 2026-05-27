@@ -94,11 +94,25 @@ export interface IndexStatusResult {
   subtree: string
   last_indexed_at: string | null
   doc_count: number
+  doc_count_pending?: boolean
   queue_depth: number
   errors: {
     extract_failed: number
     watcher_starved: number
   }
+  rebuild_task?: IndexTaskStatusResult
+}
+
+export interface IndexTaskStatusInput {
+  task_id: string
+}
+export interface IndexTaskStatusResult {
+  task_id: string
+  subtree: string
+  status: "running" | "completed" | "failed"
+  started_at: string
+  finished_at: string | null
+  error: string | null
 }
 export interface IndexUpsertInput {
   path: string
