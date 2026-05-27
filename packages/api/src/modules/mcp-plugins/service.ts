@@ -893,41 +893,33 @@ function normalizeAttachmentTarget(input: {
 /**
  * D3: collapse a stored InstallationAccessRow back into the canonical
  * ScopedSubjectTarget shape, for handing off to policy / write helpers.
+ *
+ * Round 10 review (P2): replaced the legacy label switch with a direct
+ * call to readAccessBindingTarget. The old switch defaulted any
+ * unrecognized `access_target_type` (including `remote_agent` /
+ * `remote_agent_in_conversation` — round 9 widened RuntimeBindingScope
+ * to admit those labels, but this reverse mapper was its own copy of
+ * the switch that wasn't updated) to a workspace target. That decoded
+ * remote_agent grants as workspace when callers like
+ * grantPluginInstallationAccess (update path) and updatePluginInstallation
+ * re-validated them — silently bypassing the conversation-scoped policy
+ * check and the active-participant gate.
+ *
+ * The row at runtime carries the bindingRowSelectFor projection
+ * (subject_kind + subject_*_via_join + scope_kind + scope_*_via_join)
+ * that readAccessBindingTarget needs, via loadAccessBindingsByInstallationIds
+ * → loadAccessBindingRowsForResources. InstallationAccessRow's type
+ * doesn't expose those fields, hence the `as any` cast.
  */
 function installationAccessRowToTarget(
-  row: Pick<
-    InstallationAccessRow,
-    | "access_target_type"
-    | "actor_id"
-    | "conversation_id"
-    | "workspace_member_id"
-    | "workspace_id"
-  >
+  row: InstallationAccessRow
 ): CapabilityAccessTarget {
-  switch (row.access_target_type) {
-    case "workspace":
-      return { subject: workspaceRef(row.workspace_id) }
-    case "workspace_member":
-      return row.workspace_member_id
-        ? { subject: workspaceMemberRef(row.workspace_member_id) }
-        : { subject: workspaceRef(row.workspace_id) }
-    case "actor":
-      return row.actor_id
-        ? { subject: actorRef(row.actor_id) }
-        : { subject: workspaceRef(row.workspace_id) }
-    case "conversation":
-      return row.conversation_id
-        ? { subject: conversationRef(row.conversation_id) }
-        : { subject: workspaceRef(row.workspace_id) }
-    case "actor_in_conversation":
-      return row.actor_id && row.conversation_id
-        ? {
-            subject: actorRef(row.actor_id),
-            scope: conversationRef(row.conversation_id),
-          }
-        : { subject: workspaceRef(row.workspace_id) }
-    default:
-      return { subject: workspaceRef(row.workspace_id) }
+  try {
+    return readAccessBindingTarget(row as any)
+  } catch {
+    // Defensive fallback for synthetic / legacy rows that lack the
+    // via_join projection. Behavior unchanged from the old fallback.
+    return { subject: workspaceRef(row.workspace_id) }
   }
 }
 
@@ -1156,40 +1148,6 @@ function defaultAccessTargetForAttachment(
       return { subject: actorRef(attachmentTarget.actorId) }
     case "workspace_member":
       return { subject: workspaceRef(workspaceId) }
-  }
-}
-
-function capabilityAccessTargetFromStored(input: {
-  workspaceId: string
-  targetType: RuntimeBindingScope | null | undefined
-  actorId?: string | null
-  conversationId?: string | null
-  workspaceMemberId?: string | null
-}): CapabilityAccessTarget {
-  switch (input.targetType || "workspace") {
-    case "workspace":
-      return { subject: workspaceRef(input.workspaceId) }
-    case "workspace_member":
-      return input.workspaceMemberId
-        ? { subject: workspaceMemberRef(input.workspaceMemberId) }
-        : { subject: workspaceRef(input.workspaceId) }
-    case "actor":
-      return input.actorId
-        ? { subject: actorRef(input.actorId) }
-        : { subject: workspaceRef(input.workspaceId) }
-    case "conversation":
-      return input.conversationId
-        ? { subject: conversationRef(input.conversationId) }
-        : { subject: workspaceRef(input.workspaceId) }
-    case "actor_in_conversation":
-      return input.actorId && input.conversationId
-        ? {
-            subject: actorRef(input.actorId),
-            scope: conversationRef(input.conversationId),
-          }
-        : { subject: workspaceRef(input.workspaceId) }
-    default:
-      return { subject: workspaceRef(input.workspaceId) }
   }
 }
 

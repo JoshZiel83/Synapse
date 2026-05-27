@@ -7,6 +7,7 @@ import {
   conversationRef,
   maskAllowsConversationType,
   normalizeConversationTypeMask,
+  remoteAgentRef,
   resolveEffectiveConversationTypeMask,
   resolveNarrowedConversationTypeMask,
   subjectScopeLabel,
@@ -108,16 +109,22 @@ import {
   type PreparedSkillSnapshot,
 } from "./mirror-import.js"
 
-// PR2/D3: SkillUseScope is the 5-value string label used by skill SQL
-// (`bind_scope`) and the controller input. Mirrors the historical
-// CapabilityAccessTargetType union and is derived from a ScopedSubjectTarget
-// via `subjectScopeLabel(target)` on the read side.
+// PR2/D3: SkillUseScope is the string label used by skill SQL
+// (`bind_scope`) and the controller input. Round 10 review (P2): extended
+// to include `remote_agent` / `remote_agent_in_conversation` so the
+// label round-trip through skillUseScopeFromTarget +
+// scopedTargetFromSkillUseScope is lossless for remote_agent targets —
+// otherwise attachSkillToInstallation would collapse a remote_agent
+// accessTarget down to "workspace" and silently drop the remote-agent
+// identity at bind time.
 type SkillUseScope =
   | "workspace"
   | "workspace_member"
   | "conversation"
   | "actor"
   | "actor_in_conversation"
+  | "remote_agent"
+  | "remote_agent_in_conversation"
 
 /**
  * D3: build a ScopedSubjectTarget from the legacy SkillUseScope label +
@@ -129,6 +136,7 @@ function scopedTargetFromSkillUseScope(input: {
   workspaceId: string
   workspaceMemberId?: string | null
   actorId?: string | null
+  remoteAgentId?: string | null
   conversationId?: string | null
 }): ScopedSubjectTarget {
   switch (input.useScope) {
@@ -166,6 +174,25 @@ function scopedTargetFromSkillUseScope(input: {
         subject: actorRef(input.actorId),
         scope: conversationRef(input.conversationId),
       }
+    case "remote_agent":
+      if (!input.remoteAgentId) {
+        throw new SkillError(
+          400,
+          "remoteAgentId is required for remote_agent scope"
+        )
+      }
+      return { subject: remoteAgentRef(input.remoteAgentId) }
+    case "remote_agent_in_conversation":
+      if (!input.remoteAgentId || !input.conversationId) {
+        throw new SkillError(
+          400,
+          "remoteAgentId and conversationId are required for remote_agent_in_conversation scope"
+        )
+      }
+      return {
+        subject: remoteAgentRef(input.remoteAgentId),
+        scope: conversationRef(input.conversationId),
+      }
   }
 }
 
@@ -182,6 +209,8 @@ function skillUseScopeFromTarget(target: ScopedSubjectTarget): SkillUseScope {
     case "conversation":
     case "actor":
     case "actor_in_conversation":
+    case "remote_agent":
+    case "remote_agent_in_conversation":
       return label
     default:
       return "workspace"
@@ -214,6 +243,11 @@ type SkillScopeTarget = {
   bindScope: RuntimeBindingScope
   useScope: SkillUseScope
   actorId: string | null
+  // Round 10 review (P2): include remoteAgentId so SkillScopeTarget
+  // can faithfully carry a remote_agent / remote_agent_in_conversation
+  // target through the legacy intermediate-shape pipeline (instead of
+  // silently collapsing the remote_agent identity into workspace).
+  remoteAgentId: string | null
   conversationId: string | null
 }
 
@@ -559,6 +593,7 @@ function assertRequiredSkillFile(
 function normalizeScopeTarget(input: {
   useScope: SkillUseScope
   actorId?: string | null
+  remoteAgentId?: string | null
   conversationId?: string | null
 }): SkillScopeTarget {
   switch (input.useScope) {
@@ -567,6 +602,20 @@ function normalizeScopeTarget(input: {
         bindScope: "workspace",
         useScope: "workspace",
         actorId: null,
+        remoteAgentId: null,
+        conversationId: null,
+      }
+    case "workspace_member":
+      // workspace_member-scoped skill bindings are individual approvals.
+      // The intermediate type doesn't carry the workspace_member_id (the
+      // upstream resolver already knows it) but we still need to map the
+      // useScope through so downstream switches don't fall to the
+      // "Unsupported skill scope" error.
+      return {
+        bindScope: "workspace_member",
+        useScope: "workspace_member",
+        actorId: null,
+        remoteAgentId: null,
         conversationId: null,
       }
     case "conversation":
@@ -580,6 +629,7 @@ function normalizeScopeTarget(input: {
         bindScope: "conversation",
         useScope: "conversation",
         actorId: null,
+        remoteAgentId: null,
         conversationId: input.conversationId,
       }
     case "actor":
@@ -590,6 +640,7 @@ function normalizeScopeTarget(input: {
         bindScope: "actor",
         useScope: "actor",
         actorId: input.actorId,
+        remoteAgentId: null,
         conversationId: null,
       }
     case "actor_in_conversation":
@@ -603,6 +654,35 @@ function normalizeScopeTarget(input: {
         bindScope: "actor_in_conversation",
         useScope: "actor_in_conversation",
         actorId: input.actorId,
+        remoteAgentId: null,
+        conversationId: input.conversationId,
+      }
+    case "remote_agent":
+      if (!input.remoteAgentId) {
+        throw new SkillError(
+          400,
+          "remoteAgentId is required for remote_agent scope"
+        )
+      }
+      return {
+        bindScope: "remote_agent",
+        useScope: "remote_agent",
+        actorId: null,
+        remoteAgentId: input.remoteAgentId,
+        conversationId: null,
+      }
+    case "remote_agent_in_conversation":
+      if (!input.remoteAgentId || !input.conversationId) {
+        throw new SkillError(
+          400,
+          "remoteAgentId and conversationId are required for remote_agent_in_conversation scope"
+        )
+      }
+      return {
+        bindScope: "remote_agent_in_conversation",
+        useScope: "remote_agent_in_conversation",
+        actorId: null,
+        remoteAgentId: input.remoteAgentId,
         conversationId: input.conversationId,
       }
     default:
@@ -1086,34 +1166,38 @@ function buildInstalledSkillPayload(
   }
 }
 
+/**
+ * Round 10 review (P2): collapse the legacy label switch into a direct
+ * call to readAccessBindingTarget. The old switch fell back to
+ * `workspace` for any unrecognized `bind_scope` — including `remote_agent`
+ * and `remote_agent_in_conversation` (round 9 widened RuntimeBindingScope
+ * to admit those labels, but this reverse mapper was a separate copy of
+ * the switch that wasn't updated). The mapper feeds into
+ * `validateConversationScopedAccessTarget` and
+ * `assertGrantConversationTypeOverrideAllowed` from
+ * updateInstalledSkill / updateInstalledSkillAccessGrant — so a
+ * remote_agent + scope=conversation grant being updated would silently
+ * decode as workspace, skipping the conversation-scoped policy check
+ * and the active-participant check.
+ *
+ * The row at runtime carries the bindingRowSelectFor `subject_kind` +
+ * `subject_*_via_join` + `scope_kind` + `scope_*_via_join` projection
+ * that readAccessBindingTarget needs (loadAccessBindingsBySkillIds runs
+ * the full SELECT). SkillAccessRow's type doesn't expose those fields,
+ * hence the `as any` cast.
+ */
 function skillBindingToAccessTarget(
   binding: SkillAccessRow,
   fallbackWorkspaceId: string
 ): CapabilityAccessTarget {
-  switch (binding.bind_scope) {
-    case "workspace":
-      return { subject: workspaceRef(fallbackWorkspaceId) }
-    case "workspace_member":
-      return binding.workspace_member_id
-        ? { subject: workspaceMemberRef(binding.workspace_member_id) }
-        : { subject: workspaceRef(fallbackWorkspaceId) }
-    case "actor":
-      return binding.actor_id
-        ? { subject: actorRef(binding.actor_id) }
-        : { subject: workspaceRef(fallbackWorkspaceId) }
-    case "conversation":
-      return binding.conversation_id
-        ? { subject: conversationRef(binding.conversation_id) }
-        : { subject: workspaceRef(fallbackWorkspaceId) }
-    case "actor_in_conversation":
-      return binding.actor_id && binding.conversation_id
-        ? {
-            subject: actorRef(binding.actor_id),
-            scope: conversationRef(binding.conversation_id),
-          }
-        : { subject: workspaceRef(fallbackWorkspaceId) }
-    default:
-      return { subject: workspaceRef(fallbackWorkspaceId) }
+  try {
+    return readAccessBindingTarget(binding as any)
+  } catch {
+    // Fallback if the row somehow lacks the via_join projection
+    // (legacy code path / synthetic rows). Returning a workspace target
+    // is safe-ish but reaches the same questionable place as before —
+    // log and keep behavior.
+    return { subject: workspaceRef(fallbackWorkspaceId) }
   }
 }
 
@@ -1945,6 +2029,7 @@ async function ensureSkillBinding(
       useScope: input.target.useScope,
       workspaceId: input.workspaceId,
       actorId: input.target.actorId || undefined,
+      remoteAgentId: input.target.remoteAgentId || undefined,
       conversationId: input.target.conversationId || undefined,
     }),
   })
@@ -2677,11 +2762,19 @@ export async function createWorkspaceSkill(input: {
     : null
   // D3: input.accessTarget is now a ScopedSubjectTarget; collapse to the
   // legacy SkillUseScope label for downstream SkillScopeTarget bookkeeping.
+  // Round 10 review (P2): also extract remoteAgentId so SkillScopeTarget
+  // doesn't drop the remote_agent identity when the target subject is
+  // a remote agent.
   const target = normalizeScopeTarget({
     useScope: skillUseScopeFromTarget(input.accessTarget),
     actorId:
       input.accessTarget.subject.kind === "actor"
         ? (input.accessTarget.subject as { actorId: string }).actorId
+        : null,
+    remoteAgentId:
+      input.accessTarget.subject.kind === "remote_agent"
+        ? (input.accessTarget.subject as { remoteAgentId: string })
+            .remoteAgentId
         : null,
     conversationId:
       input.accessTarget.scope?.kind === "conversation"
@@ -3103,6 +3196,11 @@ export async function installMarketplaceSkill(input: {
     actorId:
       input.accessTarget.subject.kind === "actor"
         ? (input.accessTarget.subject as { actorId: string }).actorId
+        : null,
+    remoteAgentId:
+      input.accessTarget.subject.kind === "remote_agent"
+        ? (input.accessTarget.subject as { remoteAgentId: string })
+            .remoteAgentId
         : null,
     conversationId:
       input.accessTarget.scope?.kind === "conversation"
