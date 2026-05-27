@@ -20,6 +20,7 @@
 import { sql } from "kysely"
 import {
   db,
+  type DatabaseTransaction,
   type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
 import { v4 as uuidv4 } from "uuid"
@@ -604,6 +605,12 @@ export async function updateTransportAccount(params: {
       previousConnectionMode === "webhook" &&
       nextConnectionMode === "long_connection"
     ) {
+      // Long-connection accounts don't have the OQ2 gate; bindings that
+      // were auto-disabled because `webhookInboundConfirmed=false` are
+      // now safe to re-enable. Do this BEFORE the projection re-arm so
+      // the re-armed projection finds an enabled binding instead of
+      // immediately skipping again with `outbound_disabled`.
+      await reEnableAutoDisabledQqWebhookBindings(tx, params.accountId)
       await recoverSkippedProjectionsForRecoveryEvent(tx, {
         kind: "connection_mode_changed_to_long_connection",
         transportAccountId: params.accountId,
@@ -624,6 +631,12 @@ export async function updateTransportAccount(params: {
       const wasConfirmed = previousConfig.webhookInboundConfirmed === true
       const isNowConfirmed = params.config.webhookInboundConfirmed === true
       if (!wasConfirmed && isNowConfirmed) {
+        // Same reason as connection_mode change above: auto-disabled
+        // bindings need outbound flipped on (and the marker cleared)
+        // before the projection retries, otherwise re-arming the
+        // projection only takes it one step closer to the same
+        // `outbound_disabled` skip.
+        await reEnableAutoDisabledQqWebhookBindings(tx, params.accountId)
         await recoverSkippedProjectionsForRecoveryEvent(tx, {
           kind: "config_webhook_confirmed",
           transportAccountId: params.accountId,
@@ -634,4 +647,29 @@ export async function updateTransportAccount(params: {
   })
 
   return normalizeAccountRow(row)
+}
+
+/**
+ * Flip every binding under this account that was system-auto-disabled
+ * because of the QQ webhook OQ2 gate back to `outbound_enabled=true`
+ * and remove the marker. Skips bindings the user manually disabled
+ * (`metadata.autoDisabledReason` absent or different) because we want
+ * those to stay how the user left them.
+ *
+ * Raw SQL because Kysely's typed `.set({metadata: sql\`...\`})` chokes
+ * on the json operator we need (`metadata - 'autoDisabledReason'`).
+ */
+async function reEnableAutoDisabledQqWebhookBindings(
+  tx: DatabaseTransaction,
+  transportAccountId: string
+): Promise<void> {
+  await sql`
+    UPDATE conversation_transport_bindings
+    SET outbound_enabled = TRUE,
+        metadata = metadata - 'autoDisabledReason',
+        updated_at = NOW()
+    WHERE transport_account_id = ${transportAccountId}
+      AND outbound_enabled = FALSE
+      AND metadata ->> 'autoDisabledReason' = 'webhook_inbound_unavailable'
+  `.execute(tx)
 }

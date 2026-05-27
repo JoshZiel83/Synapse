@@ -17,17 +17,66 @@
  */
 
 import type { FastifyInstance } from "fastify"
+import { z } from "zod"
 import {
   createTransportAccount,
   getTransportAccountById,
   updateTransportAccount,
 } from "../service.js"
+import { normalizeQqAccountConfig } from "../connectors/qq/qq-account-config.js"
 import {
   qqAccountSchema,
   refreshTransportRuntimeState,
   requireWorkspaceAction,
   updateQqAccountSchema,
 } from "./_shared.js"
+
+/**
+ * Normalize + validate the QQ config object that the API layer is about
+ * to persist. Without this, wildcard / IP / mis-cased hostnames would
+ * pass the lightweight `qqAccountSchema` (which only checks
+ * `z.string().min(1)`) and only blow up at outbound-send time as a
+ * generic `Error` retry. Funnel both create and update through here so
+ * the API boundary is the place that says "no" to invalid config.
+ *
+ * Returns either the normalized config (ready to persist) or a
+ * `FastifyReply`-shaped error tuple the caller forwards.
+ */
+function normalizeOrError(
+  raw: Record<string, unknown>
+):
+  | { ok: true; config: Record<string, unknown> }
+  | { ok: false; status: number; body: unknown } {
+  try {
+    const normalized = normalizeQqAccountConfig(raw)
+    // `normalizeQqAccountConfig` returns the parsed Zod type; cast back
+    // to the loose record shape the service layer takes.
+    return { ok: true, config: { ...(normalized as Record<string, unknown>) } }
+  } catch (err) {
+    if (err instanceof z.ZodError) {
+      return {
+        ok: false,
+        status: 400,
+        body: {
+          error: "invalid_qq_account_config",
+          issues: err.issues.map((issue) => ({
+            path: issue.path,
+            code: issue.code,
+            message: issue.message,
+          })),
+        },
+      }
+    }
+    return {
+      ok: false,
+      status: 400,
+      body: {
+        error: "invalid_qq_account_config",
+        message: err instanceof Error ? err.message : String(err),
+      },
+    }
+  }
+}
 
 export default async function imQqController(
   app: FastifyInstance
@@ -50,11 +99,17 @@ export default async function imQqController(
         clientSecret: body.clientSecret,
       }
       if (body.botSecret) credentials.botSecret = body.botSecret
-      const config: Record<string, unknown> = {
+      // Normalize + validate at the API boundary so wildcards / IP
+      // literals / bad casing are 400'd here, not at outbound-send time.
+      const configResult = normalizeOrError({
         webhookInboundConfirmed: body.webhookInboundConfirmed ?? false,
         allowProactiveBestEffort: body.allowProactiveBestEffort ?? false,
         configuredUrlDomains: body.configuredUrlDomains ?? [],
+      })
+      if (!configResult.ok) {
+        return reply.status(configResult.status).send(configResult.body)
       }
+      const config = configResult.config
 
       const account = await createTransportAccount({
         workspaceId,
@@ -124,7 +179,7 @@ export default async function imQqController(
           existing.config && typeof existing.config === "object"
             ? (existing.config as Record<string, unknown>)
             : {}
-        config = {
+        const merged: Record<string, unknown> = {
           ...existingConfig,
           ...(body.webhookInboundConfirmed !== undefined
             ? { webhookInboundConfirmed: body.webhookInboundConfirmed }
@@ -136,6 +191,15 @@ export default async function imQqController(
             ? { configuredUrlDomains: body.configuredUrlDomains }
             : {}),
         }
+        // Re-run normalization on the merged result so the new
+        // `configuredUrlDomains` (if any) is normalized AND any pre-existing
+        // garbage in the persisted config (from a pre-normalize-at-write
+        // deploy, or future schema additions) is checked one more time.
+        const configResult = normalizeOrError(merged)
+        if (!configResult.ok) {
+          return reply.status(configResult.status).send(configResult.body)
+        }
+        config = configResult.config
       }
 
       const account = await updateTransportAccount({

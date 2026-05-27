@@ -33,15 +33,18 @@
  *     content, msg_id or event_id, msg_seq, msg_reference}.
  *  Step 5/6 — On 2xx, mark attempt "delivered" + return externalMessageId.
  *     Network error → mark "unknown" + throw RetryableTransportError.
- *  Step 7 — On a QQ "duplicate msg_seq" response (codes vary by endpoint:
- *     `304022` / `304023` on the media-message path, `40034015` on the
- *     text-message path — both are documented as "message duplicate"
- *     elsewhere; see openclaw-qqbot src/api.ts for the field survey),
- *     if any prior attempt is in {unknown, unknown_assumed} the message
- *     was almost certainly delivered earlier — return {} (no
- *     externalMessageId) + mark deliveryAmbiguous="success_likely".
- *     Otherwise this is a genuine bug; throw PermanentTransportError
- *     with code qq_duplicate_msg_seq.
+ *  Step 7 — On a QQ "duplicate msg_seq" response, IF the
+ *     code appears in `QQ_DUPLICATE_MSG_SEQ_CODES` AND any prior attempt
+ *     is in {unknown, unknown_assumed}, the message was almost
+ *     certainly delivered earlier — return {} (no externalMessageId) +
+ *     mark deliveryAmbiguous="success_likely". The code allow-list is
+ *     intentionally empty in v1 (third-party error-code readings
+ *     turned out unreliable; see the constant's doc comment). Until
+ *     sandbox-verified codes are added, every duplicate-shaped response
+ *     falls through to the generic 4xx branch and the link is marked
+ *     failed — the operator sees the exact business code and can
+ *     investigate, instead of silently believing a never-sent message
+ *     was delivered.
  */
 
 import { redis } from "../../../../infrastructure/redis/index.js"
@@ -103,19 +106,34 @@ interface QqLinkMetadataState {
 const URL_PATTERN = /\bhttps?:\/\/([^\s<>"]+)/gi
 
 /**
- * QQ open platform "duplicate msg_seq" responses. Endpoint surface
- * varies:
- *   - text  /v2/.../messages (msg_type 0/2) → 40034015 in the v2 wiki.
- *   - media /v2/.../messages (msg_type 7)   → 304022 / 304023 in the
- *     media-message wiki (the 304xxx family carries upload/media result
- *     codes, and the duplicate cases are documented there separately).
+ * QQ open-platform error codes that mean "the platform already accepted
+ * a message with this (anchor, msg_seq) pair". When the previous attempt
+ * is marked `unknown` / `unknown_assumed`, the G6 step 7 branch turns a
+ * duplicate response into an ambiguous-success outcome — but only for
+ * codes we can ACTUALLY trust.
  *
- * Both mean "the platform already accepted a message with this
- * (anchor, msg_seq) pair"; the G6 step 7 ambiguous-success branch
- * treats them the same. Add new codes here as the QQ wiki splits new
- * surfaces off.
+ * Status: **empty** as of v1. Codes previously listed here (304022 /
+ * 304023 / 40034015) came from third-party readings; review against the
+ * local openclaw clone found `304023` is actually "推荐子频道超限"
+ * (subchannel recommendation limit exceeded), and the other two have no
+ * authoritative documentation backing the duplicate interpretation. If
+ * we left them in, an actual non-duplicate failure under those codes
+ * would be silently re-classified as "likely sent", and the user would
+ * see a message marked delivered that QQ never accepted.
+ *
+ * Population rule for v1.x: only add a code here AFTER a sandbox
+ * reproduction (force a duplicate msg_seq + capture the actual response
+ * code from QQ) OR a citation in the official QQ open-platform wiki.
+ * Each addition MUST come with a unit test in outbound.test.ts that
+ * asserts that exact code triggers the ambiguous-success path.
+ *
+ * In the meantime: a duplicate-shaped response falls through to the
+ * generic 4xx branch and the link is marked failed — operator sees the
+ * exact business code in `metadata.lastError` and can investigate. This
+ * is the strictly safer of the two trade-offs ("don't claim success"
+ * beats "claim success on a real failure").
  */
-const QQ_DUPLICATE_MSG_SEQ_CODES = new Set([304022, 304023, 40034015])
+export const QQ_DUPLICATE_MSG_SEQ_CODES: ReadonlySet<number> = new Set<number>()
 
 /**
  * Transient error codes the chunked-upload and message-send paths can
