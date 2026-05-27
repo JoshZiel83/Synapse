@@ -7,9 +7,19 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 const __filename = fileURLToPath(import.meta.url)
 const schemaSql = readFileSync(join(__dirname, "schema.sql"), "utf-8")
 
-const CURRENT_SCHEMA_VERSION = "2026-05-26-device-runtime-v3-merge-into-dev"
-const CURRENT_SCHEMA_DESCRIPTION =
-  "device runtime v3 cutover merged into dev: full device_* surface (devices, device_services, device_capabilities, device_exposures, device_tools, device_tool_revisions, device_catalog_revisions, device_control_plane_sessions, device_operations, device_operation_attempts, runtime_authorization_grants, interaction_runtime_authorization_requests with principal_remote_agent_id + principal_conversation_actor_context_id, tunnel_path_token); drop legacy relay_* tables/enums; combined with dev's drop of the legacy sessions.channel_type discriminator (every actor session is now conversation-scoped)"
+/**
+ * `schema_migrations.version` is `VARCHAR(64)` (see
+ * `ensureSchemaMigrationsTable` below). Keep the slug short — long
+ * names that drift past 64 chars cause `INSERT INTO schema_migrations`
+ * to error on a fresh bootstrap (`value too long for type
+ * character varying(64)`). Multi-feature releases should bump this to
+ * a single short slug; put narrative detail in
+ * `CURRENT_SCHEMA_DESCRIPTION` instead. A unit test in
+ * `bootstrap.test.ts` enforces the length invariant.
+ */
+export const CURRENT_SCHEMA_VERSION = "2026-05-28-im-connectors-shared-prep"
+export const CURRENT_SCHEMA_DESCRIPTION =
+  "IM connector shared prep: TransportConnectorCapability displayName/iconAssetPath/showsBaseUrlConfig, MessageCapabilities voice/video/interactionPrompt fields, polymorphic validateConfig/getBindingDefaults/planAccountRecoveryActions/getInteractionProjectionReadiness hooks, transactional updateTransportAccount + recovery executor, single connectors/register-all entrypoint. Schema unchanged from device-runtime-v3 cutover; this version bump documents the application-layer refactor that ships alongside."
 
 async function ensureSchemaMigrationsTable() {
   await executeSql(`

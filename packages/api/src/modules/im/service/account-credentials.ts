@@ -1,13 +1,14 @@
 /**
- * Pure credential helpers for the accounts domain. Kept DB-free so the
- * test suite can exercise them without pulling in `infrastructure/database`
- * (which creates a long-lived pg.Pool at module-load and prevents the
- * test process from exiting).
+ * Pure credential / config helpers for the accounts domain. Kept DB-free
+ * so the test suite can exercise them without pulling in
+ * `infrastructure/database` (which creates a long-lived pg.Pool at
+ * module-load and prevents the test process from exiting).
  *
  * Implementation lives here; accounts.ts re-exports for back-compat.
  */
 
 import type {
+  TransportAccountSummary,
   TransportConnectionMode,
   TransportKind,
 } from "@synapse/shared/types"
@@ -20,6 +21,10 @@ import { tryGetConnector } from "../connectors/registry.js"
  *
  * Disabled accounts skip validation entirely — they may legitimately have
  * blank or expired credentials waiting to be filled in.
+ *
+ * Throws an Error annotated with `statusCode: 400` and stable `code`
+ * fields so the Fastify error handler maps it to a clean 400 instead
+ * of swallowing into a 500.
  */
 export function validateAndNormalizeAccountCredentials(params: {
   transportKind: TransportKind
@@ -33,8 +38,11 @@ export function validateAndNormalizeAccountCredentials(params: {
   }
   const connector = tryGetConnector(params.transportKind)
   if (!connector) {
-    throw new Error(
-      `No connector registered for transport_kind=${params.transportKind}`
+    throw Object.assign(
+      new Error(
+        `No connector registered for transport_kind=${params.transportKind}`
+      ),
+      { statusCode: 400 as const, code: "transport_kind_unsupported" as const }
     )
   }
   const result = connector.validateCredentials({
@@ -45,7 +53,53 @@ export function validateAndNormalizeAccountCredentials(params: {
     const message = result.errors?.length
       ? result.errors.join("; ")
       : `${params.transportKind} credentials are invalid`
-    throw new Error(message)
+    throw Object.assign(new Error(message), {
+      statusCode: 400 as const,
+      code: "transport_credentials_invalid" as const,
+    })
+  }
+  return result.normalized || original
+}
+
+/**
+ * Validate the `transport_accounts.config` JSONB via the connector's
+ * optional `validateConfig?()` hook. Connectors without a config
+ * schema pass through (we deliberately do not enforce "no unknown
+ * keys" so new per-connector fields can land without coordinated
+ * cross-cutting changes).
+ *
+ * Disabled accounts also skip — they're allowed to hold partially
+ * invalid configs until re-enabled.
+ *
+ * Throws an Error annotated with `statusCode: 400` and stable `code`
+ * fields when invalid; mirrors `validateAndNormalizeAccountCredentials`.
+ */
+export function validateAndNormalizeAccountConfig(params: {
+  transportKind: TransportKind
+  connectionMode: TransportConnectionMode
+  status: "active" | "disabled" | "error"
+  config?: Record<string, unknown>
+}): Record<string, unknown> {
+  const original = params.config || {}
+  if (params.status === "disabled") {
+    return original
+  }
+  const connector = tryGetConnector(params.transportKind)
+  if (!connector || !connector.validateConfig) {
+    return original
+  }
+  const result = connector.validateConfig({
+    connectionMode: params.connectionMode,
+    config: original,
+  })
+  if (!result.ok) {
+    const message = result.errors?.length
+      ? result.errors.join("; ")
+      : `${params.transportKind} config is invalid`
+    throw Object.assign(new Error(message), {
+      statusCode: 400 as const,
+      code: "transport_config_invalid" as const,
+    })
   }
   return result.normalized || original
 }
@@ -60,4 +114,32 @@ export function mergeAccountCredentials(
   incoming: Record<string, unknown> | undefined
 ): Record<string, unknown> {
   return incoming ? { ...existing, ...incoming } : existing
+}
+
+/**
+ * Per-transport route guard. Per-kind PUT endpoints
+ * (`PUT /im/accounts/<kind>/:id`) pass their literal kind so that hitting
+ * the wrong kind by accountId returns a clean 404 with a stable code
+ * instead of silently rewriting the wrong account's metadata. Generic
+ * routes that legitimately span kinds omit the expected kind.
+ *
+ * The code is `transport_account_kind_mismatch` (not `_not_found`) so
+ * UI can distinguish "you supplied a wrong id under this kind" from
+ * "the row does not exist at all".
+ */
+export function assertExpectedTransportKind(
+  existing: Pick<TransportAccountSummary, "transportKind">,
+  expectedKind?: TransportKind
+): void {
+  if (!expectedKind) return
+  if (existing.transportKind === expectedKind) return
+  throw Object.assign(
+    new Error(
+      `Transport account is ${existing.transportKind}, expected ${expectedKind}`
+    ),
+    {
+      statusCode: 404 as const,
+      code: "transport_account_kind_mismatch" as const,
+    }
+  )
 }

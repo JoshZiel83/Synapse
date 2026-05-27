@@ -9,6 +9,8 @@
 import { sql } from "kysely"
 import {
   db,
+  withDbTransaction,
+  type DatabaseTransaction,
   type TableInsert,
 } from "../../../infrastructure/database/kysely.js"
 import { v4 as uuidv4 } from "uuid"
@@ -24,6 +26,44 @@ import {
   parseJsonObject,
 } from "./_helpers.js"
 import { getConversationTransportBinding } from "../service.js"
+
+/**
+ * Recursively merge `patch` into `target`, returning a new object.
+ * Plain objects are merged key-by-key; arrays and primitives in
+ * `patch` overwrite the matching slot wholesale (arrays merging is
+ * almost always wrong for delivery metadata, and the worker only
+ * needs object-level merge semantics).
+ *
+ * Used by `patchTransportMessageLinkMetadata` so writes to
+ * `metadata.delivery.*` from the sweeper don't clobber sibling
+ * `metadata.delivery.*` keys an in-flight `sendMessage` patched
+ * before it crashed (and vice versa).
+ */
+function deepMergePlainObjects(
+  target: Record<string, unknown>,
+  patch: Record<string, unknown>
+): Record<string, unknown> {
+  const out: Record<string, unknown> = { ...target }
+  for (const [key, value] of Object.entries(patch)) {
+    const existing = out[key]
+    if (
+      existing &&
+      typeof existing === "object" &&
+      !Array.isArray(existing) &&
+      value &&
+      typeof value === "object" &&
+      !Array.isArray(value)
+    ) {
+      out[key] = deepMergePlainObjects(
+        existing as Record<string, unknown>,
+        value as Record<string, unknown>
+      )
+    } else {
+      out[key] = value
+    }
+  }
+  return out
+}
 
 export async function queueConversationTransportProjection(params: {
   workspaceId: string
@@ -130,28 +170,97 @@ export async function updateTransportMessageLinkStatus(params: {
   externalMessageId?: string
   metadata?: Record<string, unknown>
   error?: string
+  tx?: DatabaseTransaction
 }) {
-  const extraMetadata = {
+  const extraMetadata: Record<string, unknown> = {
     ...(params.metadata || {}),
     ...(params.error ? { lastError: params.error } : {}),
   }
-  const row = await db
-    .updateTable("transport_message_links")
-    .set({
-      delivery_status: params.status,
-      ...(params.externalMessageId
-        ? { external_message_id: params.externalMessageId }
-        : {}),
-      metadata: sql`transport_message_links.metadata || ${JSON.stringify(extraMetadata)}::jsonb`,
-      ...(params.status === "sent"
-        ? { delivered_at: sql`COALESCE(delivered_at, NOW())` }
-        : {}),
-      updated_at: sql`NOW()`,
-    })
-    .where("id", "=", params.linkId)
-    .returningAll()
-    .executeTakeFirst()
-  return row ? normalizeTransportMessageLinkRow(row) : null
+  // Postgres jsonb `||` is a SHALLOW merge — writing
+  // `{ delivery: { lastSweeperRetryAt: ... } }` would replace the
+  // entire `delivery` subtree, blowing away `delivery.ambiguous` etc.
+  // Use `patchTransportMessageLinkMetadata` (deep merge in
+  // application code) to keep everything that shares a namespace.
+  return await runWithTransaction(params.tx, async (tx) => {
+    const existing = await tx
+      .selectFrom("transport_message_links")
+      .select("metadata")
+      .where("id", "=", params.linkId)
+      .forUpdate()
+      .executeTakeFirst()
+    const current = parseJsonObject(existing?.metadata)
+    const merged = deepMergePlainObjects(current, extraMetadata)
+    const row = await tx
+      .updateTable("transport_message_links")
+      .set({
+        delivery_status: params.status,
+        ...(params.externalMessageId
+          ? { external_message_id: params.externalMessageId }
+          : {}),
+        metadata: merged as TableInsert<"transport_message_links">["metadata"],
+        ...(params.status === "sent"
+          ? { delivered_at: sql`COALESCE(delivered_at, NOW())` }
+          : {}),
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", params.linkId)
+      .returningAll()
+      .executeTakeFirst()
+    return row ? normalizeTransportMessageLinkRow(row) : null
+  })
+}
+
+/**
+ * Deep-merge a JSON patch into `transport_message_links.metadata`.
+ * Called as `OutboundSendInput.patchLinkMetadata` from inside
+ * `connector.sendMessage` so connectors can persist per-attempt
+ * state (msg_seq, in-flight markers, ambiguity flags) before the
+ * HTTP round-trip, surviving a process crash mid-flight.
+ *
+ * Semantics:
+ *  - `SELECT … FOR UPDATE` locks the link row in the supplied
+ *    (or freshly opened) transaction so a parallel attempt on the
+ *    same link serializes after this one rather than racing.
+ *  - Application-level deep merge means writing
+ *    `{ delivery: { sweeperRetryCount: 3 } }` keeps any other
+ *    `metadata.delivery.*` keys intact (`delivery.ambiguous`,
+ *    `delivery.lastSweeperRetryAt`, …).
+ *  - Pass `tx` when composing with surrounding writes (e.g. the
+ *    worker's job-cleanup or sweeper SQL); omit to open a single-
+ *    shot transaction.
+ */
+export async function patchTransportMessageLinkMetadata(params: {
+  linkId: string
+  patch: Record<string, unknown>
+  tx?: DatabaseTransaction
+}): Promise<void> {
+  if (!params.patch || Object.keys(params.patch).length === 0) return
+  await runWithTransaction(params.tx, async (tx) => {
+    const existing = await tx
+      .selectFrom("transport_message_links")
+      .select("metadata")
+      .where("id", "=", params.linkId)
+      .forUpdate()
+      .executeTakeFirst()
+    const current = parseJsonObject(existing?.metadata)
+    const merged = deepMergePlainObjects(current, params.patch)
+    await tx
+      .updateTable("transport_message_links")
+      .set({
+        metadata: merged as TableInsert<"transport_message_links">["metadata"],
+        updated_at: sql`NOW()`,
+      })
+      .where("id", "=", params.linkId)
+      .execute()
+  })
+}
+
+async function runWithTransaction<T>(
+  tx: DatabaseTransaction | undefined,
+  fn: (tx: DatabaseTransaction) => Promise<T>
+): Promise<T> {
+  if (tx) return fn(tx)
+  return withDbTransaction(fn)
 }
 
 export async function loadTransportMessageLinkForDelivery(linkId: string) {

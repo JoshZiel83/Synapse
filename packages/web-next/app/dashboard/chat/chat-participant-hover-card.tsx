@@ -13,6 +13,7 @@ import {
   HoverCardTrigger,
 } from "@/components/ui/hover-card"
 import { useIsMobile } from "@/hooks/use-mobile"
+import { useConnectorMetadata } from "@/lib/im-connector-metadata"
 import type { ConversationMember } from "@/stores/chat-store"
 import ChatAvatar from "./chat-avatar"
 import {
@@ -20,6 +21,7 @@ import {
   getConversationMemberContactHref,
   getConversationMemberSubtitle,
   getConversationMemberTypeLabel,
+  type ConnectorMetadataMap,
 } from "./member-utils"
 import TransportKindIcon from "./transport-kind-icon"
 
@@ -32,7 +34,10 @@ function CompactDetail({ label, value }: { label: string; value: string }) {
   )
 }
 
-function getCompactNote(member: ConversationMember) {
+function getCompactNote(
+  member: ConversationMember,
+  metadata?: ConnectorMetadataMap
+) {
   if (member.participantType === CONVERSATION_PARTICIPANT_TYPE.ACTOR) {
     return member.title || member.role || "Actor"
   }
@@ -49,7 +54,10 @@ function getCompactNote(member: ConversationMember) {
     return "No workspace link"
   }
   if (member.transportKind) {
-    return `Reachable via ${formatTransportKindLabel(member.transportKind)}`
+    return `Reachable via ${formatTransportKindLabel(
+      member.transportKind,
+      metadata
+    )}`
   }
   return "Workspace user"
 }
@@ -71,16 +79,20 @@ export default function ChatParticipantHoverCard({
 }: ChatParticipantHoverCardProps) {
   const router = useRouter()
   const isMobile = useIsMobile()
+  const metadata = useConnectorMetadata()
 
   if (!member || isMobile) {
     return <>{children}</>
   }
 
-  const subtitle = getConversationMemberSubtitle(member)
+  const subtitle = getConversationMemberSubtitle(member, metadata)
   const typeLabel = getConversationMemberTypeLabel(member)
-  const transportLabel = formatTransportKindLabel(member.transportKind)
+  const transportLabel = formatTransportKindLabel(
+    member.transportKind,
+    metadata
+  )
   const contactHref = getConversationMemberContactHref(member, contactBasePath)
-  const compactNote = getCompactNote(member)
+  const compactNote = getCompactNote(member, metadata)
 
   return (
     <HoverCard>

@@ -1,8 +1,21 @@
 import test from "node:test"
 import assert from "node:assert/strict"
-import { decideBootstrapAction } from "./bootstrap.js"
+import { CURRENT_SCHEMA_VERSION, decideBootstrapAction } from "./bootstrap.js"
 
 const TEST_SCHEMA_VERSION = "test-schema-version"
+
+test("CURRENT_SCHEMA_VERSION fits the schema_migrations.version column", () => {
+  // `schema_migrations.version` is `VARCHAR(64)`; long slugs cause
+  // fresh DB bootstrap to error with `value too long for type
+  // character varying(64)`. Putting the assertion here gives anyone
+  // editing `bootstrap.ts` an immediate signal in CI before the
+  // failure shows up at boot time.
+  assert.ok(
+    CURRENT_SCHEMA_VERSION.length <= 64,
+    `CURRENT_SCHEMA_VERSION must be <=64 chars (was ${CURRENT_SCHEMA_VERSION.length}). ` +
+      `Use CURRENT_SCHEMA_DESCRIPTION for narrative detail.`
+  )
+})
 
 test("decideBootstrapAction noop when current version already recorded", () => {
   const result = decideBootstrapAction({

@@ -22,7 +22,12 @@ import type {
   TransportKind,
 } from "@synapse/shared/types"
 import { assertSupportedEndpointType } from "../connectors/index.js"
-import { normalizeBindingRow, parseJsonObject } from "./_helpers.js"
+import { tryGetConnector } from "../connectors/registry.js"
+import {
+  normalizeAccountRow,
+  normalizeBindingRow,
+  parseJsonObject,
+} from "./_helpers.js"
 import {
   assertConversationInboundActor,
   loadTransportAccountRow,
@@ -173,6 +178,32 @@ export async function upsertConversationTransportBinding(params: {
     inboundActorId: params.inboundActorId,
   })
 
+  // Connector-supplied binding defaults — currently used by transports
+  // (e.g. QQ) that need to default `outbound_enabled = false` plus a
+  // stable `metadata.autoDisabledReason` marker until a precondition
+  // (webhook confirmation, etc) is satisfied. Generic helper only
+  // applies the override when the caller did NOT pass an explicit
+  // `outboundEnabled`, so manual UI flips stay authoritative.
+  const connector = tryGetConnector(account.transport_kind as TransportKind)
+  const defaults = connector?.getBindingDefaults?.({
+    account: normalizeAccountRow(account),
+    endpoint: {
+      endpointType: params.endpointType,
+      externalId: params.endpointExternalId.trim(),
+    },
+  })
+  const effectiveOutboundEnabled =
+    params.outboundEnabled !== undefined
+      ? params.outboundEnabled
+      : (defaults?.outboundEnabled ?? true)
+  const baseMetadata = params.metadata || {}
+  const effectiveMetadata =
+    params.outboundEnabled === undefined &&
+    defaults?.outboundEnabled === false &&
+    defaults.metadata
+      ? { ...baseMetadata, ...defaults.metadata }
+      : baseMetadata
+
   await transaction(async (client) => {
     const endpointRow = await executeTakeFirst<{ id: string }>(
       client,
@@ -217,11 +248,11 @@ export async function upsertConversationTransportBinding(params: {
           conversation_id: params.conversationId,
           transport_account_id: params.transportAccountId,
           transport_endpoint_id: endpointId,
-          outbound_enabled: params.outboundEnabled ?? true,
+          outbound_enabled: effectiveOutboundEnabled,
           inbound_actor_mode: inboundActorMode,
           inbound_actor_id: inboundActorId,
-          metadata: (params.metadata ||
-            {}) as TableInsert<"conversation_transport_bindings">["metadata"],
+          metadata:
+            effectiveMetadata as TableInsert<"conversation_transport_bindings">["metadata"],
           created_at: sql`NOW()`,
           updated_at: sql`NOW()`,
         })
