@@ -177,3 +177,37 @@ test("normalizeBrowserGrantPolicy — scopeType=origin + extra host field reject
     "scopeType"
   )
 })
+
+test("normalizeBrowserGrantPolicy — action=read + write-only operation rejected", () => {
+  shouldThrow(
+    {
+      action: "read",
+      scopeType: "origin",
+      origin: "https://example.com",
+      operations: ["page.read", "page.input"], // page.input is write-only
+    },
+    "action",
+    /page\.input/
+  )
+})
+
+test("normalizeBrowserGrantPolicy — action=write covers any operation mix", () => {
+  const r = normalizeBrowserGrantPolicy({
+    action: "write",
+    scopeType: "origin",
+    origin: "https://example.com",
+    operations: ["page.read", "page.input", "page.navigate", "script.evaluate"],
+  })
+  assert.equal(r.action, "write")
+  assert.equal(r.operations?.length, 4)
+})
+
+test("normalizeBrowserGrantPolicy — action=read + read-only operations passes", () => {
+  const r = normalizeBrowserGrantPolicy({
+    action: "read",
+    scopeType: "origin",
+    origin: "https://example.com",
+    operations: ["page.read", "screenshot.capture", "console.read"],
+  })
+  assert.equal(r.action, "read")
+})

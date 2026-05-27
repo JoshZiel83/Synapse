@@ -304,6 +304,50 @@ export const BROWSER_EXPOSURE_TOOLS: Record<BrowserExposureKey, string[]> = {
   webmcp: [],
 }
 
+// ────────────────────────────── operation→action lookup ─────────────────────
+
+/**
+ * Minimum action level required to invoke each browser operation, derived
+ * from BROWSER_TOOL_MAP. A grant whose `action` doesn't cover this minimum
+ * will fail at runtime authorization — UI / API helpers should use this to
+ * auto-derive the right action when an operator builds a manual grant.
+ *
+ * write covers read; an operation listed as "write" here must be granted
+ * with action="write".
+ */
+export const BROWSER_OPERATION_REQUIRED_ACTION: Record<
+  BrowserOperation,
+  "read" | "write"
+> = (() => {
+  const map: Partial<Record<BrowserOperation, "read" | "write">> = {}
+  for (const desc of Object.values(BROWSER_TOOL_MAP)) {
+    const prior = map[desc.operation]
+    // If two tools share an operation but disagree on action, escalate
+    // to "write" (the stricter requirement).
+    map[desc.operation] =
+      prior === "write" || desc.action === "write" ? "write" : "read"
+  }
+  return map as Record<BrowserOperation, "read" | "write">
+})()
+
+/**
+ * True iff the supplied (action, operations[]) combination is internally
+ * consistent — i.e. `action` covers the minimum required action for every
+ * operation. Used by the manual-grant endpoint and the Settings UI to
+ * reject "action:read + operations:[page.input]" type misconfigurations
+ * that would silently produce a dead grant.
+ */
+export function browserActionCoversOperations(
+  action: "read" | "write",
+  operations: readonly BrowserOperation[]
+): { ok: true } | { ok: false; offending: BrowserOperation[] } {
+  if (action === "write") return { ok: true }
+  const offending = operations.filter(
+    (op) => BROWSER_OPERATION_REQUIRED_ACTION[op] === "write"
+  )
+  return offending.length === 0 ? { ok: true } : { ok: false, offending }
+}
+
 // ────────────────────────────── effective target resolver ───────────────────
 
 /**

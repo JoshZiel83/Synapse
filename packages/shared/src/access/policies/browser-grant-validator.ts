@@ -11,6 +11,7 @@
 // Bundle-safe; relies only on URL + tldts.
 
 import { getDomain } from "tldts"
+import { browserActionCoversOperations } from "@synapse/device-protocol/browser-tools"
 import type { BrowserPolicy } from "./browser.js"
 
 export class BrowserGrantPolicyError extends Error {
@@ -46,6 +47,23 @@ export function normalizeBrowserGrantPolicy(
   const operations = Array.from(
     new Set(policy.operations)
   ).sort() as BrowserPolicy["operations"]
+
+  // action coverage — write covers read, but a `read` grant cannot serve
+  // any of the write-only operations (page.navigate, page.input,
+  // script.evaluate, file.upload, extension.manage, webmcp.execute).
+  // Without this check a UI / API caller could write a grant that the
+  // shared matcher silently denies at runtime — "Grant created" success
+  // followed by a confusing "no grant covers …" denial when the tool
+  // retries. Fail at write time instead.
+  if (policy.action !== undefined && operations) {
+    const coverage = browserActionCoversOperations(policy.action, operations)
+    if (!coverage.ok) {
+      throw new BrowserGrantPolicyError(
+        `action=${policy.action} cannot cover operations: ${coverage.offending.join(", ")} (need action=write)`,
+        "action"
+      )
+    }
+  }
 
   // scopeType — required for browser; matcher refuses undefined anyway.
   if (!policy.scopeType) {
