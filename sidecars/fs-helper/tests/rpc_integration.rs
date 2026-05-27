@@ -189,6 +189,7 @@ fn index_subtree_isolation() {
         "fs.index.rebuild",
         serde_json::json!({ "subtree": "/" }),
     );
+    wait_for_rebuild_complete(&mut helper, "/");
     // Search with allowed_path_prefixes=["/foo"] must NOT return /foobar.
     let r = helper.call(
         2,
@@ -239,6 +240,7 @@ fn fts5_finds_multi_word_phrase_and_respects_prefix() {
         "fs.index.rebuild",
         serde_json::json!({ "subtree": "/" }),
     );
+    wait_for_rebuild_complete(&mut helper, "/");
     // Multi-word: only files containing both "quick" AND "brown" hit.
     let r = helper.call(
         2,
@@ -291,6 +293,7 @@ fn nucleo_path_search_orders_by_fuzzy_score() {
         "fs.index.rebuild",
         serde_json::json!({ "subtree": "/" }),
     );
+    wait_for_rebuild_complete(&mut helper, "/");
     let r = helper.call(
         2,
         "fs.search.path",
@@ -694,4 +697,193 @@ fn tika_indexing_sends_full_file_not_truncated_at_4mib() {
         got, payload_size,
         "Tika request body was {got} bytes, expected the full {payload_size} (was the file truncated at 4 MiB?)",
     );
+}
+
+#[test]
+fn fs_index_upsert_rejects_symlink_target() {
+    use std::os::unix::fs::symlink;
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    let outside = tmp.path().join("outside");
+    std::fs::create_dir_all(root.join("allowed")).unwrap();
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    // Sensitive content lives outside root.
+    std::fs::write(outside.join("secret.txt"), "TOP_SECRET_TOKEN").unwrap();
+    // Path inside root is a symlink to that sensitive file. From the
+    // user-VFS POV this is "/allowed/link.txt".
+    symlink(outside.join("secret.txt"), root.join("allowed/link.txt")).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    // The runtime would call fs.index.upsert after a write/edit. Even
+    // when issued directly, the sidecar must NOT follow the symlink and
+    // index the outside content.
+    let r = helper.call(
+        1,
+        "fs.index.upsert",
+        serde_json::json!({ "path": "/allowed/link.txt" }),
+    );
+    assert!(r.get("error").is_none(), "upsert errored: {r}");
+    // Now confirm search over /allowed cannot surface TOP_SECRET_TOKEN.
+    let s = helper.call(
+        2,
+        "fs.search.content",
+        serde_json::json!({
+            "query": "TOP_SECRET_TOKEN",
+            "limit": 50, "offset": 0,
+            "allowed_path_prefixes": ["/"],
+        }),
+    );
+    let hits = s["result"]["hits"].as_array().unwrap();
+    assert!(
+        hits.is_empty(),
+        "symlinked outside content leaked into FTS: {hits:?}",
+    );
+    helper.stop();
+}
+
+fn wait_for_rebuild_complete(helper: &mut Helper, subtree: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    let mut id = 9000i64;
+    loop {
+        if std::time::Instant::now() >= deadline {
+            panic!("rebuild did not complete for {subtree}");
+        }
+        id += 1;
+        let s = helper.call(
+            id,
+            "fs.index.status",
+            serde_json::json!({ "subtree": subtree }),
+        );
+        if s["result"]
+            .get("rebuild_task")
+            .and_then(|t| t["status"].as_str())
+            == Some("completed")
+        {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(30));
+    }
+}
+
+#[test]
+fn status_does_not_leak_other_subtree_rebuild_task() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(root.join("secret")).unwrap();
+    std::fs::create_dir_all(root.join("public")).unwrap();
+    std::fs::write(root.join("secret/leak.txt"), "hidden").unwrap();
+    std::fs::write(root.join("public/ok.txt"), "fine").unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    // Kick off a /secret rebuild and wait for it.
+    helper.call(1, "fs.index.rebuild", serde_json::json!({ "subtree": "/secret" }));
+    wait_for_rebuild_complete(&mut helper, "/secret");
+    // Now ask for /public status — it must NOT carry /secret's rebuild_task.
+    let s = helper.call(2, "fs.index.status", serde_json::json!({ "subtree": "/public" }));
+    let task = s["result"].get("rebuild_task");
+    assert!(
+        task.is_none(),
+        "/public status leaked rebuild_task from a sibling subtree: {s}",
+    );
+    // /secret status DOES see it (same subtree).
+    let s2 = helper.call(3, "fs.index.status", serde_json::json!({ "subtree": "/secret" }));
+    assert_eq!(
+        s2["result"]["rebuild_task"]["subtree"].as_str(),
+        Some("/secret"),
+    );
+    helper.stop();
+}
+
+#[test]
+fn status_returns_during_rebuild_without_blocking() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    // 800 files so the walk takes a measurable amount of time.
+    for i in 0..800 {
+        std::fs::write(root.join(format!("f{i}.txt")), format!("line {i}")).unwrap();
+    }
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    helper.call(1, "fs.index.rebuild", serde_json::json!({ "subtree": "/" }));
+    // Immediately query status — must return promptly even though the
+    // rebuild is still running. The key property: the call returns
+    // (not hangs) and surfaces rebuild_task.
+    let started = std::time::Instant::now();
+    let s = helper.call(2, "fs.index.status", serde_json::json!({ "subtree": "/" }));
+    let elapsed = started.elapsed();
+    assert!(
+        elapsed.as_millis() < 500,
+        "status blocked for {elapsed:?} during rebuild; expected sub-500ms",
+    );
+    let task = &s["result"]["rebuild_task"];
+    assert!(
+        task["status"].as_str() == Some("running")
+            || task["status"].as_str() == Some("completed"),
+        "status snapshot during rebuild: {s}",
+    );
+    wait_for_rebuild_complete(&mut helper, "/");
+    helper.stop();
+}
+
+#[test]
+fn task_status_rpc_returns_specific_task_by_id() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(root.join("a.txt"), "alpha").unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    let r = helper.call(1, "fs.index.rebuild", serde_json::json!({ "subtree": "/" }));
+    let task_id = r["result"]["task_id"].as_str().unwrap().to_string();
+    wait_for_rebuild_complete(&mut helper, "/");
+    let ts = helper.call(
+        2,
+        "fs.index.task_status",
+        serde_json::json!({ "task_id": task_id }),
+    );
+    assert_eq!(ts["result"]["status"].as_str(), Some("completed"));
+    assert_eq!(ts["result"]["subtree"].as_str(), Some("/"));
+    // Bogus id → -32004 not_found.
+    let bad = helper.call(
+        3,
+        "fs.index.task_status",
+        serde_json::json!({ "task_id": "rebuild-nope" }),
+    );
+    assert_eq!(bad["error"]["code"], -32004, "{bad}");
+    helper.stop();
+}
+
+#[test]
+fn rebuild_task_table_caps_at_retention_window() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("root");
+    let work = tmp.path().join("work");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::create_dir_all(&work).unwrap();
+    let mut helper = Helper::spawn(&root, &work);
+    // Fire 40 rebuilds back-to-back. The MAX_TASK_HISTORY cap is 32, so
+    // querying the first one's task_id should return not_found.
+    let mut first_id: Option<String> = None;
+    for i in 1..=40i64 {
+        let r = helper.call(i, "fs.index.rebuild", serde_json::json!({ "subtree": "/" }));
+        let id = r["result"]["task_id"].as_str().unwrap().to_string();
+        if first_id.is_none() {
+            first_id = Some(id);
+        }
+        // Wait for each so they finish in deterministic order; otherwise
+        // races could give a different start_at ordering.
+        wait_for_rebuild_complete(&mut helper, "/");
+    }
+    let bad = helper.call(
+        100,
+        "fs.index.task_status",
+        serde_json::json!({ "task_id": first_id.unwrap() }),
+    );
+    assert_eq!(bad["error"]["code"], -32004, "{bad}");
+    helper.stop();
 }

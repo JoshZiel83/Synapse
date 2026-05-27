@@ -109,4 +109,3 @@ async fn tika_extract(
     }
     res.text().await.map_err(|e| format!("tika_body: {e}"))
 }
-

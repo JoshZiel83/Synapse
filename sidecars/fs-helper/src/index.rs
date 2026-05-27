@@ -9,6 +9,7 @@ use std::path::Path;
 use rusqlite::{params, Connection, OptionalExtension};
 use walkdir::WalkDir;
 
+use crate::blobs::open_nofollow;
 use crate::path::{canonical, host_path, under_prefix};
 use crate::rpc::{IndexErrors, IndexRebuildResult, IndexStatusResult, RpcError};
 
@@ -171,14 +172,43 @@ impl IndexStore {
     }
 
     fn upsert_host(&mut self, host: &Path, canon_path: &str) -> Result<(), RpcError> {
-        let meta = match fs::metadata(host) { Ok(m) => m, Err(_) => return Ok(()) };
-        if !meta.is_file() { return Ok(()); }
+        // symlink_metadata (not metadata) so a symlink at the final
+        // component is reported as kind=symlink, not its target's kind.
+        // A symlink could legitimately exist at a user-VFS path, but its
+        // target may live outside root or in an unauthorized subtree —
+        // indexing the target's bytes would silently leak content.
+        // Strip any existing doc for this path and skip extraction.
+        let meta = match fs::symlink_metadata(host) {
+            Ok(m) => m,
+            Err(_) => {
+                // Vanished between RPC and here — remove if present.
+                self.remove(canon_path)?;
+                return Ok(());
+            }
+        };
+        if meta.file_type().is_symlink() {
+            self.remove(canon_path)?;
+            return Ok(());
+        }
+        if !meta.is_file() {
+            self.remove(canon_path)?;
+            return Ok(());
+        }
         let size = meta.len() as i64;
-        let mtime_ms = meta.modified().ok()
+        let mtime_ms = meta
+            .modified()
+            .ok()
             .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-            .map(|d| d.as_millis() as i64).unwrap_or(0);
-        let ext = host.extension().map(|e| e.to_string_lossy().to_string()).unwrap_or_default();
-        let mime = mime_guess::from_path(host).first_or_octet_stream().essence_str().to_string();
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0);
+        let ext = host
+            .extension()
+            .map(|e| e.to_string_lossy().to_string())
+            .unwrap_or_default();
+        let mime = mime_guess::from_path(host)
+            .first_or_octet_stream()
+            .essence_str()
+            .to_string();
         let (content, source) = self.extract_for_index(host, &mime, &ext, meta.len());
         let indexed_at = now_stamp();
         let tx = self.conn.transaction()?;
@@ -236,9 +266,17 @@ impl IndexStore {
             return (String::new(), "too_large");
         }
         let mut buf = Vec::with_capacity(size as usize);
-        let read_result = fs::File::open(host).and_then(|f| {
-            f.take(INDEX_CONTENT_CAP).read_to_end(&mut buf).map(|_| ())
-        });
+        // O_NOFOLLOW on the plaintext read path. upsert_host already
+        // symlink_metadata-checked, but a final-component symlink swap
+        // between that and this open would otherwise let us read a
+        // pointed-to target.
+        let read_result = (|| -> Result<(), String> {
+            let f = open_nofollow(host).map_err(|e| format!("{e}"))?;
+            f.take(INDEX_CONTENT_CAP)
+                .read_to_end(&mut buf)
+                .map(|_| ())
+                .map_err(|e| format!("{e}"))
+        })();
         if read_result.is_err() {
             self.extract_failed += 1;
             return (String::new(), "read_failed");
@@ -436,9 +474,15 @@ fn tika_extract_blocking(
     max_bytes: u64,
 ) -> Result<String, String> {
     let url = format!("{}/tika", endpoint.trim_end_matches('/'));
-    let meta = std::fs::metadata(host).map_err(|e| e.to_string())?;
+    // symlink_metadata + O_NOFOLLOW open: same anti-symlink-swap
+    // protection as the plaintext index path. If host is a symlink, error
+    // out so the caller marks extract_failed.
+    let meta = std::fs::symlink_metadata(host).map_err(|e| e.to_string())?;
+    if meta.file_type().is_symlink() {
+        return Err("symlink_not_followed".to_string());
+    }
     let cap = max_bytes.min(meta.len()) as usize;
-    let file = std::fs::File::open(host).map_err(|e| e.to_string())?;
+    let file = open_nofollow(host).map_err(|e| e.to_string())?;
     let mut buf = Vec::with_capacity(cap.min(64 * 1024));
     file.take(cap as u64)
         .read_to_end(&mut buf)

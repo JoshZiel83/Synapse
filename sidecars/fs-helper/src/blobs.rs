@@ -147,8 +147,9 @@ impl BlobStore {
 /// Open `src` with O_NOFOLLOW so a final-component symlink swap can't
 /// redirect us to a different file after path validation. On platforms
 /// without O_NOFOLLOW the symlink risk is documented as residual (plan §1
-/// Known limitations).
-fn open_nofollow(src: &Path) -> Result<fs::File, RpcError> {
+/// Known limitations). Exposed `pub(crate)` so index.rs can use the same
+/// helper.
+pub(crate) fn open_nofollow(src: &Path) -> Result<fs::File, RpcError> {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt;

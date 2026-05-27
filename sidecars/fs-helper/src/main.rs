@@ -228,7 +228,26 @@ async fn dispatch(
                 finished_at: None,
                 error: None,
             };
-            state.tasks.lock().await.insert(task_id.clone(), task);
+            // Insert + GC: bounded retention so a long-lived helper
+            // doesn't grow the task map indefinitely. Keep the most
+            // recent MAX_TASK_HISTORY by started_at; this includes the
+            // one we just inserted (newest).
+            {
+                let mut tasks = state.tasks.lock().await;
+                tasks.insert(task_id.clone(), task);
+                const MAX_TASK_HISTORY: usize = 32;
+                if tasks.len() > MAX_TASK_HISTORY {
+                    let mut by_age: Vec<(String, String)> = tasks
+                        .iter()
+                        .map(|(k, v)| (k.clone(), v.started_at.clone()))
+                        .collect();
+                    by_age.sort_by(|a, b| a.1.cmp(&b.1));
+                    let drop_n = tasks.len() - MAX_TASK_HISTORY;
+                    for (k, _) in by_age.into_iter().take(drop_n) {
+                        tasks.remove(&k);
+                    }
+                }
+            }
             // Spawn the actual work as a background task. fs.index.rebuild
             // for a multi-thousand-file subtree easily exceeds the 5s
             // client-side RPC timeout; returning immediately + tracking
@@ -271,27 +290,78 @@ async fn dispatch(
         "fs.index.status" => {
             let input: rpc::IndexStatusInput = serde_json::from_value(params)
                 .map_err(|e| RpcError::InvalidParams(e.to_string()))?;
-            let idx = state.index.lock().await;
-            let mut out = serde_json::to_value(idx.status(
-                input.subtree.as_deref().unwrap_or("/"),
-            )?)
-            .unwrap();
-            drop(idx);
-            // Attach the most recent rebuild task status (if any) under
-            // `rebuild_task` so clients can poll progress without a
-            // separate RPC. Operators reading status.json get the full
-            // task table out-of-band.
-            let tasks = state.tasks.lock().await;
-            let latest = tasks
-                .values()
-                .max_by(|a, b| a.started_at.cmp(&b.started_at))
-                .cloned();
-            if let Some(t) = latest {
+            let requested_subtree =
+                crate::path::canonical(input.subtree.as_deref().unwrap_or("/"))?;
+            // Read the task table FIRST without touching the index lock —
+            // a long-running rebuild holds the index Mutex for the
+            // duration of its work, so anything that gates on index.lock()
+            // can't reliably surface rebuild_task=running. We snapshot
+            // tasks under their own short-lived lock, then try-lock the
+            // index briefly for the cheap counts; if the index is busy
+            // (rebuild holding it), return the task info immediately with
+            // a `doc_count_pending` marker instead of blocking the RPC.
+            let task_snapshot: Option<RebuildTaskState> = {
+                let tasks = state.tasks.lock().await;
+                tasks
+                    .values()
+                    .filter(|t| {
+                        // Subtree-scoped: include tasks whose subtree is a
+                        // descendant OR ancestor of the requested subtree.
+                        // A status on `/public` must NOT see a `/secret`
+                        // rebuild (the user's repro), but a global
+                        // `/`-wide rebuild IS observable from any subtree
+                        // status (it affects everything).
+                        let s = t.subtree.as_str();
+                        crate::path::under_prefix(s, &requested_subtree)
+                            || crate::path::under_prefix(
+                                &requested_subtree,
+                                s,
+                            )
+                    })
+                    .max_by(|a, b| a.started_at.cmp(&b.started_at))
+                    .cloned()
+            };
+            let try_lock = state.index.try_lock();
+            let mut out = match try_lock {
+                Ok(idx) => serde_json::to_value(idx.status(&requested_subtree)?)
+                    .unwrap(),
+                Err(_) => {
+                    // Index busy (rebuild in progress). Return a stub
+                    // status carrying just the subtree marker; the task
+                    // payload below is the load-bearing signal.
+                    serde_json::json!({
+                        "subtree": requested_subtree,
+                        "last_indexed_at": null,
+                        "doc_count": -1,
+                        "doc_count_pending": true,
+                        "queue_depth": 0,
+                        "errors": { "extract_failed": 0, "watcher_starved": 0 },
+                    })
+                }
+            };
+            if let Some(t) = task_snapshot {
                 if let Value::Object(ref mut m) = out {
-                    m.insert("rebuild_task".into(), serde_json::to_value(t).unwrap());
+                    m.insert(
+                        "rebuild_task".into(),
+                        serde_json::to_value(t).unwrap(),
+                    );
                 }
             }
             Ok(out)
+        }
+        "fs.index.task_status" => {
+            let input: serde_json::Value = params;
+            let task_id = input
+                .get("task_id")
+                .and_then(|v| v.as_str())
+                .ok_or_else(|| {
+                    RpcError::InvalidParams("task_id required".into())
+                })?;
+            let tasks = state.tasks.lock().await;
+            match tasks.get(task_id) {
+                Some(t) => Ok(serde_json::to_value(t).unwrap()),
+                None => Err(RpcError::NotFound(format!("task {task_id}"))),
+            }
         }
         "fs.index.upsert" => {
             let input: rpc::IndexUpsertInput = serde_json::from_value(params)
