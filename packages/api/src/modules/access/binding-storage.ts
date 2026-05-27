@@ -805,6 +805,13 @@ export async function listResourceIdsForWorkspaceByBindingFilter(
     scopeSubjectId?: string | null
     actorId?: string | null
     conversationId?: string | null
+    // Round 13 review (P2): without these, callers that pass
+    // workspaceMemberId / remoteAgentId without an accompanying
+    // subjectId fell through to "no subject filter" and the helper
+    // returned every active binding in the workspace. Filter on the
+    // matching access_subjects column when subjectId isn't provided.
+    workspaceMemberId?: string | null
+    remoteAgentId?: string | null
   }
 ): Promise<string[]> {
   const column = resourceIdColumnForRaw(input.resourceType)
@@ -826,6 +833,14 @@ export async function listResourceIdsForWorkspaceByBindingFilter(
     if (input.conversationId) {
       values.push(input.conversationId)
       conditions.push(`subj.conversation_id = $${values.length}::uuid`)
+    }
+    if (input.workspaceMemberId) {
+      values.push(input.workspaceMemberId)
+      conditions.push(`subj.workspace_member_id = $${values.length}::uuid`)
+    }
+    if (input.remoteAgentId) {
+      values.push(input.remoteAgentId)
+      conditions.push(`subj.remote_agent_id = $${values.length}::uuid`)
     }
   }
   if (input.scopeSubjectId !== undefined) {

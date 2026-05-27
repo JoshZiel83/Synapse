@@ -239,7 +239,7 @@ type SkillAttachmentInput = {
   mediaType?: string
 }
 
-type SkillScopeTarget = {
+export type SkillScopeTarget = {
   bindScope: RuntimeBindingScope
   useScope: SkillUseScope
   actorId: string | null
@@ -361,7 +361,7 @@ type SkillSnapshotFileRow = {
   updated_at: string
 }
 
-type SkillAccessRow = AccessBindingRow & {
+export type SkillAccessRow = AccessBindingRow & {
   skill_id: string
   bind_scope: RuntimeBindingScope
   conversation_id: string | null
@@ -1017,7 +1017,7 @@ function selectInitialSkillGrant(accessRows: SkillAccessRow[]) {
   )[0]
 }
 
-function matchesScopeTarget(
+export function matchesScopeTarget(
   binding: SkillAccessRow,
   filter?: SkillScopeTarget
 ) {
@@ -1027,7 +1027,16 @@ function matchesScopeTarget(
   return (
     binding.bind_scope === filter.bindScope &&
     binding.actor_id === filter.actorId &&
-    binding.conversation_id === filter.conversationId
+    binding.conversation_id === filter.conversationId &&
+    // Round 13 review (P3): comparing only (bind_scope, actor_id,
+    // conversation_id) means two grants on the same skill with
+    // different workspace_member targets (A vs B) both match a query
+    // for A and the preferred-binding selection is arbitrary. Same
+    // hazard exists for remote_agent grants — bring both ids into the
+    // discriminator now so a future remote_agent list filter doesn't
+    // repeat the same bug.
+    binding.workspace_member_id === filter.workspaceMemberId &&
+    binding.remote_agent_id === filter.remoteAgentId
   )
 }
 
@@ -1767,7 +1776,7 @@ async function loadInstalledSkillRows(params: {
 // D3: legacy `legacyCapabilityAccessTargetOrThrow` / `legacyAccessGrantTargetOrThrow`
 // helpers removed — all CapabilityAccessTarget values are now ScopedSubjectTarget.
 
-function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
+export function buildSkillAccessRow(row: AccessBindingRow): SkillAccessRow {
   const target = readAccessBindingTarget(row as any)
   const label = subjectScopeLabel(target)
   // Round 9 review (P2): include remote_agent / remote_agent_in_conversation
@@ -2019,6 +2028,14 @@ async function findSkillIdsByBindingFilter(params: {
     scopeSubjectId,
     actorId: subjectId ? null : (params.actorId ?? null),
     conversationId: subjectId ? null : (params.conversationId ?? null),
+    // Round 13 review (P2): without this, callers that pass
+    // workspaceMemberId alone (no accessTargetType) bypassed the subject
+    // resolution branch above AND found no matching legacy filter
+    // condition, so the storage helper returned every active binding in
+    // the workspace. Downsink the legacy id to storage so it filters on
+    // subj.workspace_member_id, matching the actorId/conversationId
+    // legacy pattern.
+    workspaceMemberId: subjectId ? null : (params.workspaceMemberId ?? null),
   })
 }
 

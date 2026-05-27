@@ -10,6 +10,7 @@ import { withTestDb } from "../../test/helpers/db.js"
 import {
   buildResourceAccessBindingInsertValues,
   loadAccessBindingRowsForResources,
+  listResourceIdsForWorkspaceByBindingFilter,
 } from "../access/binding-storage.js"
 import { upsertAccessSubject } from "../access/subject-registry.js"
 import {
@@ -20,6 +21,11 @@ import {
   targetSupportsConversationTypeOverride,
   validateConversationScopedAccessTarget,
 } from "../access/policy.ts"
+import {
+  buildSkillAccessRow,
+  matchesScopeTarget,
+  type SkillScopeTarget,
+} from "./service.js"
 
 /**
  * Round 10 review (P3) regression for the remote_agent_in_conversation
@@ -495,3 +501,207 @@ test(
     })
   }
 )
+
+/**
+ * Round 13 review (P2) — list filter widening regression.
+ *
+ * `GET /skills?workspaceMemberId=<id>` (with no accessTargetType) used
+ * to pass the early-return guard in findSkillIdsByBindingFilter (the
+ * id is non-empty), then skip the resolveAccessGrantTarget branch
+ * (no accessTargetType), then fall through to
+ * listResourceIdsForWorkspaceByBindingFilter which only supported
+ * subjectId / actorId / conversationId. The workspaceMemberId was
+ * silently dropped, so the helper applied only (workspace_id +
+ * resource_type + active) filters and returned every active
+ * installed_skill binding in the workspace.
+ *
+ * The fix downsinks workspaceMemberId (and remoteAgentId, for
+ * symmetry and to avoid the same trap when a remote_agent list
+ * filter ships) into the storage helper as a legacy column filter
+ * (`subj.workspace_member_id = $`). Post-fix, the helper applies the
+ * member filter even without an accessTargetType.
+ */
+test(
+  "list filter by workspaceMemberId alone narrows correctly — round-13 P2",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const wsId = await newWorkspace(db)
+      const memberAId = await newMemberInWorkspace(db, wsId, "member-a")
+      const memberBId = await newMemberInWorkspace(db, wsId, "member-b")
+      const skillA = await newInstalledSkill(db, wsId)
+      const skillB = await newInstalledSkill(db, wsId)
+
+      // Two grants on two different skills, one per member.
+      await insertWorkspaceMemberSkillBinding(db, {
+        wsId,
+        skillId: skillA,
+        memberId: memberAId,
+      })
+      await insertWorkspaceMemberSkillBinding(db, {
+        wsId,
+        skillId: skillB,
+        memberId: memberBId,
+      })
+
+      // Pre-fix: workspaceMemberId-only filter returned both skill ids
+      // (the helper ignored the column and returned every active
+      // binding in the workspace). Post-fix: returns just the skill
+      // bound to member A.
+      const onlyA = await listResourceIdsForWorkspaceByBindingFilter(
+        db as any,
+        {
+          workspaceId: wsId,
+          resourceType: "installed_skill",
+          workspaceMemberId: memberAId,
+        }
+      )
+      assert.deepEqual(onlyA.sort(), [skillA].sort())
+
+      const onlyB = await listResourceIdsForWorkspaceByBindingFilter(
+        db as any,
+        {
+          workspaceId: wsId,
+          resourceType: "installed_skill",
+          workspaceMemberId: memberBId,
+        }
+      )
+      assert.deepEqual(onlyB.sort(), [skillB].sort())
+
+      // Sanity: no filter still returns everything in the workspace,
+      // confirming the fix narrowed only when the id was supplied
+      // (didn't accidentally always filter).
+      const all = await listResourceIdsForWorkspaceByBindingFilter(db as any, {
+        workspaceId: wsId,
+        resourceType: "installed_skill",
+      })
+      assert.deepEqual(all.sort(), [skillA, skillB].sort())
+    })
+  }
+)
+
+/**
+ * Round 13 review (P3) — payload binding selection regression.
+ *
+ * `matchesScopeTarget` previously compared only (bind_scope, actor_id,
+ * conversation_id). With two workspace_member grants A and B on the
+ * same skill, a filter for member A matched both rows — and which one
+ * got returned in the payload was arbitrary (depended on stable sort
+ * order in compareBindingPriority, which doesn't tie-break on member
+ * id). Fix: include workspace_member_id and remote_agent_id in the
+ * discriminator.
+ *
+ * This test exercises matchesScopeTarget directly against the SkillAccessRow
+ * shape the service builds from a real loadAccessBindingRowsForResources
+ * read — the same load-path chooseBindingMap uses internally.
+ */
+test(
+  "matchesScopeTarget discriminates workspace_member grants — round-13 P3",
+  { timeout: 5 * 60_000 },
+  async () => {
+    await withTestDb(async (db) => {
+      const wsId = await newWorkspace(db)
+      const memberAId = await newMemberInWorkspace(db, wsId, "member-a")
+      const memberBId = await newMemberInWorkspace(db, wsId, "member-b")
+      const skillId = await newInstalledSkill(db, wsId)
+
+      await insertWorkspaceMemberSkillBinding(db, {
+        wsId,
+        skillId,
+        memberId: memberAId,
+      })
+      await insertWorkspaceMemberSkillBinding(db, {
+        wsId,
+        skillId,
+        memberId: memberBId,
+      })
+
+      const rows = await loadAccessBindingRowsForResources(db, {
+        resourceType: "installed_skill",
+        resourceIds: [skillId],
+      })
+      assert.equal(rows.length, 2)
+
+      const skillRows = rows.map((r) =>
+        buildSkillAccessRow(normalizeAccessBindingRow(r as any) as any)
+      )
+
+      const filterA: SkillScopeTarget = {
+        bindScope: "workspace_member",
+        useScope: "workspace_member",
+        actorId: null,
+        remoteAgentId: null,
+        workspaceMemberId: memberAId,
+        conversationId: null,
+      }
+      const filterB: SkillScopeTarget = {
+        ...filterA,
+        workspaceMemberId: memberBId,
+      }
+
+      const matchA = skillRows.filter((r) => matchesScopeTarget(r, filterA))
+      const matchB = skillRows.filter((r) => matchesScopeTarget(r, filterB))
+
+      // Pre-fix: each filter matched both rows (member id was not
+      // checked) — the payload binding was whichever sort ordering
+      // returned first, not necessarily the requested member.
+      assert.equal(
+        matchA.length,
+        1,
+        "filter for member A must match exactly the A grant"
+      )
+      assert.equal(matchA[0]!.workspace_member_id, memberAId)
+
+      assert.equal(
+        matchB.length,
+        1,
+        "filter for member B must match exactly the B grant"
+      )
+      assert.equal(matchB[0]!.workspace_member_id, memberBId)
+    })
+  }
+)
+
+async function newMemberInWorkspace(
+  db: Kysely<any>,
+  wsId: string,
+  email: string
+): Promise<string> {
+  const user = await db
+    .insertInto("users")
+    .values({
+      email: `${email}-${rid()}@${NS}`,
+      name: email,
+      password_hash: "x",
+    })
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  const member = await db
+    .insertInto("workspace_members")
+    .values({
+      workspace_id: wsId,
+      user_id: user.id as string,
+      trust_level: "member",
+    } as any)
+    .returning("id")
+    .executeTakeFirstOrThrow()
+  return member.id as string
+}
+
+async function insertWorkspaceMemberSkillBinding(
+  db: Kysely<any>,
+  input: { wsId: string; skillId: string; memberId: string }
+): Promise<void> {
+  const bindingValues = await buildResourceAccessBindingInsertValues(db, {
+    workspaceId: input.wsId,
+    resourceType: "installed_skill",
+    resourceId: input.skillId,
+    target: {
+      subject: { kind: "workspace_member", memberId: input.memberId },
+    },
+  })
+  await db
+    .insertInto("resource_access_bindings")
+    .values(bindingValues)
+    .execute()
+}
