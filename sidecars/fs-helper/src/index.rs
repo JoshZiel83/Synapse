@@ -112,13 +112,6 @@ impl IndexStore {
         })
     }
 
-    fn is_ignored(&self, rel: &Path) -> bool {
-        rel.components().any(|c| {
-            let s = c.as_os_str().to_string_lossy();
-            self.ignore_segments.iter().any(|i| i == &s)
-        })
-    }
-
     pub fn rebuild(
         &mut self,
         root: &Path,
@@ -443,11 +436,6 @@ fn now_stamp() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let s = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
     format!("ts:{s}")
-}
-
-pub fn allowed(path: &str, prefixes: &[String]) -> bool {
-    if prefixes.is_empty() { return false; }
-    prefixes.iter().any(|p| under_prefix(path, p))
 }
 
 fn is_rich_format(mime: &str, ext: &str) -> bool {

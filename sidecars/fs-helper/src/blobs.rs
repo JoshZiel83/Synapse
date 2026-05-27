@@ -24,10 +24,6 @@ impl BlobStore {
         self.root.join(prefix).join(sha256)
     }
 
-    pub fn exists(&self, sha256: &str) -> bool {
-        self.blob_path(sha256).exists()
-    }
-
     /// Stream-copy `src` into a blob, double-hashing source + blob; verifies
     /// the source hash equals `expected_sha256` if provided. Returns
     /// (sha256, size, dedup_flag). Opens the source with `O_NOFOLLOW` so a
