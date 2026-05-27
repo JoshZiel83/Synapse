@@ -25,6 +25,7 @@ import type {
 import type { MessageCapabilities } from "../messaging/degradation.js"
 import {
   mergeAccountCredentials,
+  validateAndNormalizeAccountConfig,
   validateAndNormalizeAccountCredentials,
 } from "./account-credentials.js"
 
@@ -181,4 +182,185 @@ test("validateAndNormalizeAccountCredentials: unknown transport_kind throws", ()
       }),
     /no connector registered/i
   )
+})
+
+// ─── validateAndNormalizeAccountConfig ───
+//
+// Covers the dispatch hook that closes the bypass on the generic
+// `/im/accounts` route — without this, a POST with `transportKind: "wecom"`
+// + `config: {baseWsUrl: "http://..."}` would persist unvalidated despite
+// the per-route wecom schema rejecting `http://`.
+
+test("validateAndNormalizeAccountConfig: connector without validateConfig is no-op", () => {
+  // STUB_KIND's stub doesn't implement validateConfig. The helper must
+  // treat absent validator as "any config is fine" so existing
+  // connectors (feishu/weixin) keep working unchanged.
+  const out = validateAndNormalizeAccountConfig({
+    transportKind: STUB_KIND,
+    connectionMode: "long_connection",
+    status: "active",
+    config: { anyKey: "anyValue" },
+  })
+  assert.deepEqual(out, { anyKey: "anyValue" })
+})
+
+test("validateAndNormalizeAccountConfig: undefined config defaults to {}", () => {
+  const out = validateAndNormalizeAccountConfig({
+    transportKind: STUB_KIND,
+    connectionMode: "long_connection",
+    status: "active",
+    config: undefined,
+  })
+  assert.deepEqual(out, {})
+})
+
+test("validateAndNormalizeAccountConfig: connector validateConfig rejection throws", () => {
+  // Register a one-off stub for an unused kind that REJECTS any config
+  // with a `bad: true` field, mirroring how wecom rejects non-ws(s)://
+  // baseWsUrl. The throw is what surfaces to the API layer as a 4xx.
+  const TEST_KIND = "feishu" as const
+  const existing = tryGetConnector(TEST_KIND)
+  // Save and replace
+  const guardedStub: TransportConnector = {
+    transportKind: TEST_KIND,
+    capability: {
+      transportKind: TEST_KIND,
+      supportedConnectionModes: ["long_connection"],
+      supportedEndpointTypes: ["direct"],
+      supportsDirectMessages: true,
+      supportsGroupMessages: false,
+    },
+    messageCapabilities: STUB_CAPS,
+    validateCredentials: () => ({ ok: true, normalized: {} }),
+    validateConfig: (input) => {
+      if (input.config.bad === true) {
+        return {
+          ok: false,
+          errors: ["test-stub rejects {bad:true}"],
+        }
+      }
+      return { ok: true, normalized: input.config }
+    },
+    async startAccount() {
+      throw new Error("stub")
+    },
+    async sendMessage() {
+      throw new Error("stub")
+    },
+    createStatusReactionAdapter: () => null,
+    createTypingAdapter: () => null,
+    parseInboundMentions: () => ({ text: "", mentions: [] }),
+    renderOutboundMention: () => "",
+  }
+  registerConnector(guardedStub)
+  try {
+    assert.throws(
+      () =>
+        validateAndNormalizeAccountConfig({
+          transportKind: TEST_KIND,
+          connectionMode: "long_connection",
+          status: "active",
+          config: { bad: true },
+        }),
+      /rejects \{bad:true\}/
+    )
+    // Sanity: the same stub accepts the valid case.
+    const out = validateAndNormalizeAccountConfig({
+      transportKind: TEST_KIND,
+      connectionMode: "long_connection",
+      status: "active",
+      config: { ok: true },
+    })
+    assert.deepEqual(out, { ok: true })
+  } finally {
+    if (existing) registerConnector(existing)
+  }
+})
+
+test("validateAndNormalizeAccountConfig: disabled status skips validation", () => {
+  // Mirrors the credentials helper's disabled-status escape hatch:
+  // operators can stash a half-configured account without tripping
+  // validation. Use the rejecting stub above to prove the skip.
+  const TEST_KIND = "feishu" as const
+  const existing = tryGetConnector(TEST_KIND)
+  registerConnector({
+    transportKind: TEST_KIND,
+    capability: {
+      transportKind: TEST_KIND,
+      supportedConnectionModes: ["long_connection"],
+      supportedEndpointTypes: ["direct"],
+      supportsDirectMessages: true,
+      supportsGroupMessages: false,
+    },
+    messageCapabilities: STUB_CAPS,
+    validateCredentials: () => ({ ok: true, normalized: {} }),
+    validateConfig: () => ({ ok: false, errors: ["always rejects"] }),
+    async startAccount() {
+      throw new Error("stub")
+    },
+    async sendMessage() {
+      throw new Error("stub")
+    },
+    createStatusReactionAdapter: () => null,
+    createTypingAdapter: () => null,
+    parseInboundMentions: () => ({ text: "", mentions: [] }),
+    renderOutboundMention: () => "",
+  } satisfies TransportConnector)
+  try {
+    const out = validateAndNormalizeAccountConfig({
+      transportKind: TEST_KIND,
+      connectionMode: "long_connection",
+      status: "disabled",
+      config: { anything: true },
+    })
+    assert.deepEqual(out, { anything: true })
+  } finally {
+    if (existing) registerConnector(existing)
+  }
+})
+
+test("validateAndNormalizeAccountConfig: returns connector normalized form", () => {
+  const TEST_KIND = "feishu" as const
+  const existing = tryGetConnector(TEST_KIND)
+  registerConnector({
+    transportKind: TEST_KIND,
+    capability: {
+      transportKind: TEST_KIND,
+      supportedConnectionModes: ["long_connection"],
+      supportedEndpointTypes: ["direct"],
+      supportsDirectMessages: true,
+      supportsGroupMessages: false,
+    },
+    messageCapabilities: STUB_CAPS,
+    validateCredentials: () => ({ ok: true, normalized: {} }),
+    validateConfig: (input) => ({
+      ok: true,
+      // Drop unknown keys, return only the supported field.
+      normalized:
+        typeof input.config.url === "string"
+          ? { url: input.config.url.trim() }
+          : {},
+    }),
+    async startAccount() {
+      throw new Error("stub")
+    },
+    async sendMessage() {
+      throw new Error("stub")
+    },
+    createStatusReactionAdapter: () => null,
+    createTypingAdapter: () => null,
+    parseInboundMentions: () => ({ text: "", mentions: [] }),
+    renderOutboundMention: () => "",
+  } satisfies TransportConnector)
+  try {
+    const out = validateAndNormalizeAccountConfig({
+      transportKind: TEST_KIND,
+      connectionMode: "long_connection",
+      status: "active",
+      config: { url: "  wss://example  ", extra: "dropped" },
+    })
+    assert.deepEqual(out, { url: "wss://example" })
+  } finally {
+    if (existing) registerConnector(existing)
+  }
 })

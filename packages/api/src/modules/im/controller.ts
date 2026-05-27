@@ -31,6 +31,7 @@ import {
   updateAccountSchema,
 } from "./controller/_shared.js"
 import imFeishuController from "./controller/feishu.js"
+import imWecomController from "./controller/wecom.js"
 import imWeixinController from "./controller/weixin.js"
 
 export default async function imController(app: FastifyInstance) {
@@ -40,6 +41,7 @@ export default async function imController(app: FastifyInstance) {
   // Per-transport routes registered as plugins on the same app so they
   // inherit the auth + workspace middleware above.
   await imFeishuController(app)
+  await imWecomController(app)
   await imWeixinController(app)
 
   app.get<{ Params: { workspaceId: string } }>(

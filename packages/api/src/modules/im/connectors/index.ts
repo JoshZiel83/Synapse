@@ -32,13 +32,30 @@ export function assertSupportedConnectionMode(
 ): void {
   const capability = getTransportConnectorCapability(transportKind)
   if (!capability) {
-    throw new Error(
-      `No connector registered for transport_kind=${transportKind}`
+    // The transportKind enum is closed but a stale row could in theory
+    // hit this. Treat as 400 (caller asked for something unsupported)
+    // rather than 500 — see the error handler in src/index.ts:127.
+    throw Object.assign(
+      new Error(`No connector registered for transport_kind=${transportKind}`),
+      {
+        statusCode: 400 as const,
+        code: "transport_kind_unsupported" as const,
+      }
     )
   }
   if (!capability.supportedConnectionModes.includes(connectionMode)) {
-    throw new Error(
-      `${transportKind} does not support connection mode ${connectionMode}`
+    // WeCom only supports long_connection but the generic POST
+    // /im/accounts accepts every value in TRANSPORT_CONNECTION_MODES
+    // for any kind — without statusCode/code here the resulting
+    // mismatch falls through to 500.
+    throw Object.assign(
+      new Error(
+        `${transportKind} does not support connection mode ${connectionMode}`
+      ),
+      {
+        statusCode: 400 as const,
+        code: "transport_connection_mode_unsupported" as const,
+      }
     )
   }
 }
@@ -49,13 +66,23 @@ export function assertSupportedEndpointType(
 ): void {
   const capability = getTransportConnectorCapability(transportKind)
   if (!capability) {
-    throw new Error(
-      `No connector registered for transport_kind=${transportKind}`
+    throw Object.assign(
+      new Error(`No connector registered for transport_kind=${transportKind}`),
+      {
+        statusCode: 400 as const,
+        code: "transport_kind_unsupported" as const,
+      }
     )
   }
   if (!capability.supportedEndpointTypes.includes(endpointType)) {
-    throw new Error(
-      `${transportKind} does not support endpoint type ${endpointType}`
+    throw Object.assign(
+      new Error(
+        `${transportKind} does not support endpoint type ${endpointType}`
+      ),
+      {
+        statusCode: 400 as const,
+        code: "transport_endpoint_type_unsupported" as const,
+      }
     )
   }
 }

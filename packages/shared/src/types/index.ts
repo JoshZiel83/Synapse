@@ -3182,6 +3182,49 @@ export type ConversationParticipantType =
   (typeof CONVERSATION_PARTICIPANT_TYPES)[number]
 
 export type TransportKind = (typeof TRANSPORT_KINDS)[number]
+
+/**
+ * Runtime guard for `TransportKind`. Use this instead of hard-coding
+ * `value === "feishu" || value === "weixin"` — those checks have drifted
+ * out of sync as new transports (wecom, etc.) land and break UI surfaces
+ * like "via WeCom" labels, external-user transport-kind chips, and
+ * mention-resolution dispatch.
+ *
+ * The narrowing return type lets callers safely assign the value into a
+ * `TransportKind`-typed field.
+ */
+export function isTransportKind(value: unknown): value is TransportKind {
+  return (
+    typeof value === "string" &&
+    (TRANSPORT_KINDS as readonly string[]).includes(value)
+  )
+}
+
+/**
+ * User-facing label for a TransportKind. Centralized so frontend UI,
+ * AI prompts, and notification copy all stay in sync as transports are
+ * added. Returns the kind itself as a fallback when an unrecognized
+ * value slips through (defensive — `isTransportKind` should usually
+ * gate this first).
+ */
+export function describeTransportKind(kind: TransportKind): string {
+  switch (kind) {
+    case "feishu":
+      return "Feishu"
+    case "weixin":
+      return "WeChat"
+    case "wecom":
+      return "WeCom"
+    default: {
+      // Exhaustiveness check — if a new TransportKind is added to the
+      // enum, TS will flag this branch as unreachable, forcing the
+      // author to add a case above.
+      const _exhaustive: never = kind
+      return String(_exhaustive)
+    }
+  }
+}
+
 export type TransportConnectionMode =
   (typeof TRANSPORT_CONNECTION_MODES)[number]
 export type TransportEndpointType = (typeof TRANSPORT_ENDPOINT_TYPES)[number]
@@ -4763,8 +4806,7 @@ function isConversationEntityRef(
     (entity.transportAddressId === undefined ||
       typeof entity.transportAddressId === "string") &&
     (entity.transportKind === undefined ||
-      entity.transportKind === "feishu" ||
-      entity.transportKind === "weixin") &&
+      isTransportKind(entity.transportKind)) &&
     (entity.name === undefined || typeof entity.name === "string") &&
     (entity.title === undefined || typeof entity.title === "string") &&
     (entity.role === undefined || typeof entity.role === "string") &&

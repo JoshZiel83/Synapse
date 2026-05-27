@@ -115,6 +115,20 @@ export interface CredentialValidationResult {
   normalized?: Record<string, unknown>
 }
 
+// ───────────────────────── Config ─────────────────────────
+
+export interface ConfigValidationInput {
+  connectionMode: TransportConnectionMode
+  config: Record<string, unknown>
+}
+
+export interface ConfigValidationResult {
+  ok: boolean
+  errors?: string[]
+  /** Server-side regularized form (e.g. wecom's `{baseWsUrl}` after alias merging). */
+  normalized?: Record<string, unknown>
+}
+
 // ───────────────────────── Mentions ─────────────────────────
 
 export interface ParsedInboundMention {
@@ -179,6 +193,18 @@ export interface TransportConnector {
   validateCredentials(
     input: CredentialValidationInput
   ): CredentialValidationResult
+
+  /**
+   * Optional: validate the `transport_accounts.config` JSONB shape.
+   * Used for connector-specific config fields the generic
+   * `accountSchema.config: z.record(z.unknown())` can't constrain on
+   * its own. Example: WeCom rejects a `baseWsUrl` that isn't
+   * `ws(s)://`. Connectors that don't care about config can omit this
+   * entirely — the service helper treats absence as "any config is
+   * acceptable". When provided, the optional `normalized` field is the
+   * shape persisted to DB (alias-merged, trimmed, etc).
+   */
+  validateConfig?(input: ConfigValidationInput): ConfigValidationResult
 
   startAccount(ctx: AccountStartContext): Promise<RunningAccount>
 

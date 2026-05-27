@@ -2,6 +2,8 @@
 
 import {
   CONVERSATION_PARTICIPANT_TYPE,
+  describeTransportKind,
+  isTransportKind,
   type ConversationEntityRef,
 } from "@synapse/shared"
 
@@ -38,15 +40,8 @@ export function getConversationMemberTypeLabel(member: ConversationMember) {
 export function formatTransportKindLabel(
   kind: ConversationMember["transportKind"]
 ) {
-  if (!kind) return undefined
-  switch (kind) {
-    case "feishu":
-      return "Feishu"
-    case "weixin":
-      return "WeChat"
-    default:
-      return String(kind)
-  }
+  if (!isTransportKind(kind)) return undefined
+  return describeTransportKind(kind)
 }
 
 export function getConversationMemberContactHref(

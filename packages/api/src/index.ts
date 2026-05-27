@@ -3,6 +3,7 @@ import cors from "@fastify/cors"
 import cookie from "@fastify/cookie"
 import websocket from "@fastify/websocket"
 import multipart from "@fastify/multipart"
+import { ZodError } from "zod"
 import { config } from "./config/index.js"
 import {
   assertRequiredSchema,
@@ -129,6 +130,23 @@ async function main() {
       return reply.status(400).send({
         error: "Invalid request",
         code: "invalid_request",
+      })
+    }
+
+    // ZodError from `schema.parse(...)` in controllers carries no
+    // `statusCode`, so without this branch every validation failure
+    // (unknown key, bad URL scheme, missing required field, etc.)
+    // would be mapped to 500 below. Surface as 400 with a short
+    // summary so clients can show the field-level problem.
+    if (error instanceof ZodError) {
+      const issues = error.issues.slice(0, 5).map((issue) => ({
+        path: issue.path.join("."),
+        message: issue.message,
+      }))
+      return reply.status(400).send({
+        error: issues.map((i) => `${i.path}: ${i.message}`).join("; "),
+        code: "invalid_request",
+        issues,
       })
     }
 

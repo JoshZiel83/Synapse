@@ -70,6 +70,13 @@ type WeixinFormState = TransportAccountOwnerFormState & {
   baseUrl: string
 }
 
+type WecomFormState = TransportAccountOwnerFormState & {
+  displayName: string
+  botId: string
+  secret: string
+  baseWsUrl: string
+}
+
 type WorkspaceDirectoryMember = {
   id: string
   userId: string
@@ -116,6 +123,17 @@ const EMPTY_FEISHU_FORM: FeishuFormState = {
 const EMPTY_WEIXIN_FORM: WeixinFormState = {
   displayName: "",
   baseUrl: "",
+  ownerScope: "workspace",
+  ownerWorkspaceMemberId: "",
+  inboundActorMode: "none",
+  inboundActorId: "",
+}
+
+const EMPTY_WECOM_FORM: WecomFormState = {
+  displayName: "",
+  botId: "",
+  secret: "",
+  baseWsUrl: "",
   ownerScope: "workspace",
   ownerWorkspaceMemberId: "",
   inboundActorMode: "none",
@@ -483,6 +501,7 @@ export default function ImPage() {
   const [refreshing, setRefreshing] = useState(false)
   const [creatingFeishu, setCreatingFeishu] = useState(false)
   const [creatingWeixin, setCreatingWeixin] = useState(false)
+  const [creatingWecom, setCreatingWecom] = useState(false)
   const [savingAccountId, setSavingAccountId] = useState<string | null>(null)
   const [disconnectingAccountId, setDisconnectingAccountId] = useState<
     string | null
@@ -512,6 +531,7 @@ export default function ImPage() {
     useState<FeishuFormState>(EMPTY_FEISHU_FORM)
   const [weixinForm, setWeixinForm] =
     useState<WeixinFormState>(EMPTY_WEIXIN_FORM)
+  const [wecomForm, setWecomForm] = useState<WecomFormState>(EMPTY_WECOM_FORM)
   const [weixinSession, setWeixinSession] =
     useState<WeixinQrLoginSessionSummary | null>(null)
   const [weixinQrImageUrl, setWeixinQrImageUrl] = useState<string | null>(null)
@@ -830,6 +850,81 @@ export default function ImPage() {
     }
   }
 
+  async function handleCreateWecomAccount() {
+    if (!workspaceId) return
+    setCreatingWecom(true)
+    setError(null)
+    if (
+      wecomForm.ownerScope === "workspace_member" &&
+      !wecomForm.ownerWorkspaceMemberId
+    ) {
+      setError("Select a workspace member owner for the WeCom account.")
+      setCreatingWecom(false)
+      return
+    }
+    if (
+      wecomForm.inboundActorMode === "specified_actor" &&
+      !wecomForm.inboundActorId
+    ) {
+      setError("Select an actor for inbound routing.")
+      setCreatingWecom(false)
+      return
+    }
+    if (!wecomForm.botId.trim() || !wecomForm.secret.trim()) {
+      setError("BotID and Secret are required for the WeCom account.")
+      setCreatingWecom(false)
+      return
+    }
+    try {
+      await api.createWecomTransportAccount(workspaceId, {
+        displayName: wecomForm.displayName.trim() || "WeCom Bot",
+        botId: wecomForm.botId.trim(),
+        secret: wecomForm.secret.trim(),
+        baseWsUrl: wecomForm.baseWsUrl.trim() || undefined,
+        ownerScope: wecomForm.ownerScope,
+        ownerWorkspaceMemberId:
+          wecomForm.ownerScope === "workspace_member"
+            ? wecomForm.ownerWorkspaceMemberId
+            : null,
+        inboundActorMode: wecomForm.inboundActorMode,
+        inboundActorId:
+          wecomForm.inboundActorMode === "specified_actor"
+            ? wecomForm.inboundActorId
+            : null,
+        connectionMode: "long_connection",
+      })
+      setWecomForm((current) => ({
+        ...EMPTY_WECOM_FORM,
+        ownerScope: current.ownerScope,
+        ownerWorkspaceMemberId:
+          current.ownerScope === "workspace_member"
+            ? current.ownerWorkspaceMemberId
+            : "",
+        inboundActorMode:
+          current.ownerScope === "workspace_member"
+            ? current.inboundActorMode
+            : current.inboundActorMode === "follow_owner_chief_actor"
+              ? "none"
+              : current.inboundActorMode,
+        inboundActorId:
+          current.inboundActorMode === "specified_actor"
+            ? current.inboundActorId
+            : "",
+      }))
+      await loadData(true)
+      toast.success("WeCom account created")
+    } catch (createError) {
+      console.error("Failed to create WeCom account:", createError)
+      setError(
+        createError instanceof Error
+          ? createError.message
+          : "Failed to create WeCom account"
+      )
+    } finally {
+      setCreatingWecom(false)
+    }
+  }
+
   async function handleStartWeixinQr() {
     if (!workspaceId) return
     setCreatingWeixin(true)
@@ -1082,11 +1177,11 @@ export default function ImPage() {
             <div>
               <CardTitle className="text-2xl">IM</CardTitle>
               <CardDescription className="mt-1 max-w-3xl">
-                Connect Feishu and WeChat as shared workspace accounts or bind
-                the login to a specific workspace member. Each external direct
-                chat or group chat still creates its own workspace conversation
-                automatically. Session routing and address ownership mapping are
-                managed here, not in the chat page.
+                Connect Feishu, WeChat, and WeCom as shared workspace accounts
+                or bind the login to a specific workspace member. Each external
+                direct chat or group chat still creates its own workspace
+                conversation automatically. Session routing and address
+                ownership mapping are managed here, not in the chat page.
               </CardDescription>
             </div>
             <Button
@@ -1298,6 +1393,144 @@ export default function ImPage() {
                 disabled={creatingFeishu}
               >
                 {creatingFeishu ? "Creating..." : "Create Feishu account"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Bot className="size-4" />
+              Add WeCom AI Bot (long connection)
+            </CardTitle>
+            <CardDescription>
+              Enter the smart-bot BotID and Secret from the WeCom admin console
+              (API mode &gt; long connection). Synapse opens a persistent
+              WebSocket to wss://openws.work.weixin.qq.com — no public callback
+              URL required. v1 supports text and markdown only; image / file /
+              template_card are out of scope.
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="wecom-display-name">Display name</Label>
+                <Input
+                  id="wecom-display-name"
+                  value={wecomForm.displayName}
+                  onChange={(event) =>
+                    setWecomForm((current) => ({
+                      ...current,
+                      displayName: event.target.value,
+                    }))
+                  }
+                  placeholder="WeCom AI Bot"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="wecom-base-ws-url">
+                  Base WSS URL (optional)
+                </Label>
+                <Input
+                  id="wecom-base-ws-url"
+                  value={wecomForm.baseWsUrl}
+                  onChange={(event) =>
+                    setWecomForm((current) => ({
+                      ...current,
+                      baseWsUrl: event.target.value,
+                    }))
+                  }
+                  placeholder="wss://openws.work.weixin.qq.com"
+                />
+              </div>
+            </div>
+            <div className="grid gap-4 md:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="wecom-bot-id">BotID</Label>
+                <Input
+                  id="wecom-bot-id"
+                  value={wecomForm.botId}
+                  onChange={(event) =>
+                    setWecomForm((current) => ({
+                      ...current,
+                      botId: event.target.value,
+                    }))
+                  }
+                  placeholder="bot id from WeCom admin"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label htmlFor="wecom-secret">Secret</Label>
+                <Input
+                  id="wecom-secret"
+                  type="password"
+                  value={wecomForm.secret}
+                  onChange={(event) =>
+                    setWecomForm((current) => ({
+                      ...current,
+                      secret: event.target.value,
+                    }))
+                  }
+                  placeholder="bot secret"
+                />
+              </div>
+            </div>
+
+            <TransportAccountOwnerFields
+              idPrefix="wecom"
+              ownerScope={wecomForm.ownerScope}
+              ownerWorkspaceMemberId={wecomForm.ownerWorkspaceMemberId}
+              workspaceMembers={sortedWorkspaceMembers}
+              onOwnerScopeChange={(value) =>
+                setWecomForm((current) => ({
+                  ...current,
+                  ownerScope: value,
+                  ownerWorkspaceMemberId:
+                    value === "workspace" ? "" : current.ownerWorkspaceMemberId,
+                  inboundActorMode:
+                    value === "workspace" &&
+                    current.inboundActorMode === "follow_owner_chief_actor"
+                      ? "none"
+                      : current.inboundActorMode,
+                }))
+              }
+              onOwnerWorkspaceMemberIdChange={(value) =>
+                setWecomForm((current) => ({
+                  ...current,
+                  ownerWorkspaceMemberId: value,
+                }))
+              }
+            />
+
+            <TransportAccountInboundActorFields
+              idPrefix="wecom"
+              ownerScope={wecomForm.ownerScope}
+              inboundActorMode={wecomForm.inboundActorMode}
+              inboundActorId={wecomForm.inboundActorId}
+              actors={actorOptions}
+              onInboundActorModeChange={(value) =>
+                setWecomForm((current) => ({
+                  ...current,
+                  inboundActorMode: value,
+                  inboundActorId:
+                    value === "specified_actor" ? current.inboundActorId : "",
+                }))
+              }
+              onInboundActorIdChange={(value) =>
+                setWecomForm((current) => ({
+                  ...current,
+                  inboundActorId: value,
+                }))
+              }
+            />
+
+            <div className="flex justify-end">
+              <Button
+                onClick={() => void handleCreateWecomAccount()}
+                disabled={creatingWecom}
+              >
+                {creatingWecom ? "Creating..." : "Create WeCom account"}
               </Button>
             </div>
           </CardContent>
@@ -1733,7 +1966,7 @@ export default function ImPage() {
           ) : sessions.length === 0 ? (
             <div className="rounded-2xl border border-dashed px-4 py-4 text-sm text-muted-foreground">
               No IM sessions discovered yet. Send a message to the bot from
-              Feishu or WeChat to create one automatically.
+              Feishu, WeChat, or WeCom to create one automatically.
             </div>
           ) : (
             sessions.map((session) => {

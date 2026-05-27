@@ -85,11 +85,22 @@ async function startRuntimeForAccount(
         )
       }
     })
-    .finally(() => {
+    .finally(async () => {
       const current = runtimeHandles.get(account.id)
       if (current?.fingerprint === fingerprint) {
         runtimeHandles.delete(account.id)
       }
+      // Release the lease whenever `run()` exits — covers both the
+      // normal stop() path (handle.stop already releases too, but the
+      // call is token-guarded so a double-release is a no-op) AND the
+      // startup-failure path where startAccount throws (auth timeout,
+      // subscribe failure, etc.). Without this, a failed startup would
+      // leave the lease held until its 30s TTL elapses, blocking the
+      // next reconcile from re-trying after the operator fixes the
+      // bad credential / config.
+      await releaseTransportRuntimeLease(account.id, leaseToken).catch(
+        () => undefined
+      )
     })
 
   runtimeHandles.set(account.id, {

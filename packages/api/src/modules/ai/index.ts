@@ -36,6 +36,7 @@ import {
   textBlocks,
 } from "@synapse/shared"
 import { isPlanCollaborationMode } from "@synapse/shared/utils"
+import { describeTransportKind, isTransportKind } from "@synapse/shared"
 import type { SessionCollaborationMode } from "@synapse/shared/types"
 import { randomUUID } from "crypto"
 import { config } from "../../config/index.js"
@@ -365,17 +366,16 @@ async function loadToolResolveConversationParticipants(params: {
           `Conversation ${params.conversationId} has workspace participant ${member.id} without workspace_member_id`
         )
       }
-      const transportKind =
-        member.transport_kind === "feishu" || member.transport_kind === "weixin"
-          ? member.transport_kind
-          : undefined
+      const transportKind = isTransportKind(member.transport_kind)
+        ? member.transport_kind
+        : undefined
       entries.push({
         participantType: "workspace_member",
         id: workspaceMemberId,
         participantId: member.id,
         name: member.user_name || "User",
         title: transportKind
-          ? `Workspace member · reachable via ${transportKind === "feishu" ? "Feishu" : "WeChat"}`
+          ? `Workspace member · reachable via ${describeTransportKind(transportKind)}`
           : "Workspace member",
         role: "Workspace member",
       })

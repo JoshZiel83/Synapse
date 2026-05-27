@@ -2,6 +2,7 @@
 
 import Image from "next/image"
 import type { TransportKind } from "@synapse/shared"
+import { describeTransportKind } from "@synapse/shared"
 import { cn } from "@/lib/utils"
 
 interface TransportKindIconProps {
@@ -17,7 +18,7 @@ export default function TransportKindIcon({
 }: TransportKindIconProps) {
   if (!kind) return null
 
-  const label = kind === "feishu" ? "Feishu" : "WeChat"
+  const label = describeTransportKind(kind)
 
   return (
     <span

@@ -59,11 +59,15 @@ import {
  * back-compat.
  */
 export {
+  assertExpectedTransportKind,
   mergeAccountCredentials,
+  validateAndNormalizeAccountConfig,
   validateAndNormalizeAccountCredentials,
 } from "./account-credentials.js"
 import {
+  assertExpectedTransportKind,
   mergeAccountCredentials,
+  validateAndNormalizeAccountConfig,
   validateAndNormalizeAccountCredentials,
 } from "./account-credentials.js"
 
@@ -428,6 +432,12 @@ export async function createTransportAccount(params: {
     status: nextStatus,
     credentials: params.credentials,
   })
+  const normalizedConfig = validateAndNormalizeAccountConfig({
+    transportKind: params.transportKind,
+    connectionMode: params.connectionMode,
+    status: nextStatus,
+    config: params.config,
+  })
   const ownerScope = params.ownerScope || "workspace"
   const ownerWorkspaceMemberId = await assertTransportAccountOwner({
     workspaceId: params.workspaceId,
@@ -460,8 +470,7 @@ export async function createTransportAccount(params: {
       status: nextStatus,
       credentials:
         normalizedCredentials as TableInsert<"transport_accounts">["credentials"],
-      config: (params.config ||
-        {}) as TableInsert<"transport_accounts">["config"],
+      config: normalizedConfig as TableInsert<"transport_accounts">["config"],
       metadata: (params.metadata ||
         {}) as TableInsert<"transport_accounts">["metadata"],
       created_at: sql`NOW()`,
@@ -476,6 +485,16 @@ export async function createTransportAccount(params: {
 export async function updateTransportAccount(params: {
   workspaceId: string
   accountId: string
+  /**
+   * Optional guard: if supplied, the existing account's `transport_kind`
+   * must equal this value or the update is rejected. Per-transport
+   * controller routes (controller/feishu.ts, controller/wecom.ts) pass
+   * their own kind so that hitting `PUT /im/accounts/wecom/:id` against
+   * a Feishu account in the same workspace returns a clean error rather
+   * than silently rewriting the wrong account's display name / owner /
+   * inbound actor.
+   */
+  expectedTransportKind?: TransportKind
   displayName?: string
   ownerScope?: TransportAccountOwnerScope
   ownerWorkspaceMemberId?: string | null
@@ -492,8 +511,17 @@ export async function updateTransportAccount(params: {
     params.accountId
   )
   if (!existing) {
-    throw new Error("Transport account not found")
+    // statusCode lets the Fastify error handler in src/index.ts:137 surface
+    // this as a 404 rather than swallowing it into a 500.
+    throw Object.assign(new Error("Transport account not found"), {
+      statusCode: 404,
+      code: "transport_account_not_found",
+    })
   }
+  // Guard against PUT /im/accounts/<kind>/:id targeting a different
+  // transport_kind in the same workspace. Throws statusCode-404 (see
+  // assertExpectedTransportKind in account-credentials.ts).
+  assertExpectedTransportKind(existing, params.expectedTransportKind)
 
   const nextConnectionMode =
     params.connectionMode ||
@@ -529,6 +557,21 @@ export async function updateTransportAccount(params: {
     connectionMode: nextConnectionMode,
     status: nextStatus,
     credentials: mergedCredentials,
+  })
+  // Config validation also goes through the connector. PUT with a body
+  // omitting `config` preserves the existing JSONB; PUT supplying
+  // `config` runs it through the connector's `validateConfig` before
+  // persist. This is the single enforcement point — the generic
+  // accountSchema can't validate per-connector config shape on its own.
+  const nextConfig =
+    params.config !== undefined
+      ? params.config
+      : parseJsonObject(existing.config)
+  const normalizedConfig = validateAndNormalizeAccountConfig({
+    transportKind: existing.transport_kind as TransportKind,
+    connectionMode: nextConnectionMode,
+    status: nextStatus,
+    config: nextConfig,
   })
   const resolvedOwnerWorkspaceMemberId = await assertTransportAccountOwner({
     workspaceId: params.workspaceId,
@@ -566,11 +609,7 @@ export async function updateTransportAccount(params: {
       status: nextStatus,
       credentials:
         normalizedCredentials as TableInsert<"transport_accounts">["credentials"],
-      config: (params.config !== undefined
-        ? params.config
-        : parseJsonObject(
-            existing.config
-          )) as TableInsert<"transport_accounts">["config"],
+      config: normalizedConfig as TableInsert<"transport_accounts">["config"],
       metadata: (params.metadata !== undefined
         ? params.metadata
         : parseJsonObject(
