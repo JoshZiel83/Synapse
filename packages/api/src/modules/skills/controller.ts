@@ -179,6 +179,11 @@ const skillAccessGrantUpdateSchema = z.object({
 const listInstalledSkillsQuerySchema = z.object({
   accessTargetType: accessTargetTypeSchema.optional(),
   actorId: z.string().uuid().optional(),
+  // Round 12 review (P3): workspace_member filter mode needs the id
+  // to resolve a SubjectRef. Without it,
+  // scopedTargetFromSkillUseScope("workspace_member") in
+  // findSkillIdsByBindingFilter throws on missing workspaceMemberId.
+  workspaceMemberId: z.string().uuid().optional(),
   conversationId: z.string().uuid().optional(),
   sourceSkillId: z.string().uuid().optional(),
 })
@@ -383,14 +388,20 @@ export function registerSkillRoutes(app: FastifyInstance) {
         )
         if (!allowed) return
 
-        const { accessTargetType, actorId, conversationId, sourceSkillId } =
-          listInstalledSkillsQuerySchema.parse(request.query || {}) as z.infer<
-            typeof listInstalledSkillsQuerySchema
-          >
+        const {
+          accessTargetType,
+          actorId,
+          workspaceMemberId,
+          conversationId,
+          sourceSkillId,
+        } = listInstalledSkillsQuerySchema.parse(
+          request.query || {}
+        ) as z.infer<typeof listInstalledSkillsQuerySchema>
 
         const skills = await listInstalledSkills(workspaceId, {
           accessTargetType,
           actorId,
+          workspaceMemberId,
           conversationId,
           sourceSkillId,
         })

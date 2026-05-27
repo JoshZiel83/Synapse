@@ -1924,6 +1924,7 @@ async function chooseBindingMap(
   filters?: {
     accessTargetType?: SkillUseScope
     actorId?: string
+    workspaceMemberId?: string
     conversationId?: string
   }
 ) {
@@ -1932,6 +1933,7 @@ async function chooseBindingMap(
     ? normalizeScopeTarget({
         useScope: filters.accessTargetType,
         actorId: filters.actorId,
+        workspaceMemberId: filters.workspaceMemberId,
         conversationId: filters.conversationId,
       })
     : undefined
@@ -1957,9 +1959,15 @@ async function findSkillIdsByBindingFilter(params: {
   workspaceId: string
   accessTargetType?: SkillUseScope
   actorId?: string
+  workspaceMemberId?: string
   conversationId?: string
 }) {
-  if (!params.accessTargetType && !params.actorId && !params.conversationId) {
+  if (
+    !params.accessTargetType &&
+    !params.actorId &&
+    !params.workspaceMemberId &&
+    !params.conversationId
+  ) {
     return null
   }
 
@@ -1970,6 +1978,7 @@ async function findSkillIdsByBindingFilter(params: {
           useScope: params.accessTargetType,
           workspaceId: params.workspaceId,
           actorId: params.actorId,
+          workspaceMemberId: params.workspaceMemberId,
           conversationId: params.conversationId,
         }),
       })
@@ -2888,6 +2897,13 @@ export async function listInstalledSkills(
   filters?: {
     accessTargetType?: SkillUseScope
     actorId?: string
+    // Round 12 review (P3): workspace_member filter requires the id so
+    // the underlying scopedTargetFromSkillUseScope("workspace_member")
+    // call can build a SubjectRef. Previously the filter mode accepted
+    // accessTargetType=workspace_member from the controller but the
+    // service had no way to receive the id, so the filter crashed at
+    // "workspaceMemberId is required for workspace_member scope".
+    workspaceMemberId?: string
     conversationId?: string
     sourceSkillId?: string
   }
@@ -2896,6 +2912,7 @@ export async function listInstalledSkills(
     workspaceId,
     accessTargetType: filters?.accessTargetType,
     actorId: filters?.actorId,
+    workspaceMemberId: filters?.workspaceMemberId,
     conversationId: filters?.conversationId,
   })
   if (filteredSkillIds && filteredSkillIds.length === 0) {
@@ -2914,6 +2931,7 @@ export async function listInstalledSkills(
     chooseBindingMap(skillIds, {
       accessTargetType: filters?.accessTargetType,
       actorId: filters?.actorId,
+      workspaceMemberId: filters?.workspaceMemberId,
       conversationId: filters?.conversationId,
     }),
     loadSkillSnapshotFilesMap(rows.map((row) => row.current_snapshot_id)),
