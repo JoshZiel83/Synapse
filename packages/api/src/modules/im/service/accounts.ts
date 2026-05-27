@@ -654,12 +654,18 @@ export async function updateTransportAccount(params: {
  *
  * Raw SQL because Kysely's typed `.set({metadata: sql\`...\`})` chokes
  * on the json operator we need (`metadata - 'autoDisabledReason'`).
+ *
+ * Split into a builder + executor so the contract test
+ * (`accounts.re-enable-bindings.test.ts`) can compile the SQL offline
+ * and assert the exact UPDATE/WHERE/SET clauses, while production still
+ * runs through the live Kysely transaction. Without this, the JS
+ * predicate in account-recovery-planner.ts could drift from the actual
+ * SQL WHERE clause without any test catching it.
  */
-async function reEnableAutoDisabledQqWebhookBindings(
-  tx: DatabaseTransaction,
+export function buildReEnableAutoDisabledQqWebhookBindingsSql(
   transportAccountId: string
-): Promise<void> {
-  await sql`
+) {
+  return sql`
     UPDATE conversation_transport_bindings
     SET outbound_enabled = TRUE,
         metadata = metadata - 'autoDisabledReason',
@@ -667,5 +673,14 @@ async function reEnableAutoDisabledQqWebhookBindings(
     WHERE transport_account_id = ${transportAccountId}
       AND outbound_enabled = FALSE
       AND metadata ->> 'autoDisabledReason' = 'webhook_inbound_unavailable'
-  `.execute(tx)
+  `
+}
+
+async function reEnableAutoDisabledQqWebhookBindings(
+  tx: DatabaseTransaction,
+  transportAccountId: string
+): Promise<void> {
+  await buildReEnableAutoDisabledQqWebhookBindingsSql(
+    transportAccountId
+  ).execute(tx)
 }
