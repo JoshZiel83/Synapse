@@ -443,7 +443,26 @@ function unionWithDevice(
         row.visible_tool_name,
         sanitizedInput
       )
-      if (denial) return mcpErrorBlock(denial)
+      if (denial) {
+        // Preserve the structured (code, details) so the downstream UI /
+        // model can distinguish capability-disabled from invalid-request
+        // from scheme-violation without parsing bracketed text.
+        return {
+          content: [
+            textBlock(
+              `${denial.code}: ${denial.message}`
+            ) as CanonicalContentBlock,
+          ],
+          isError: true,
+          metadata: {
+            synapse_error: {
+              code: denial.code,
+              message: denial.message,
+              details: denial.details,
+            },
+          },
+        }
+      }
     }
     // canonicalized arguments — the device verifier rejects envelopes whose
     // input_hash doesn't match the actual `arguments` it received.
@@ -943,34 +962,57 @@ function mcpErrorBlock(message: string): NormalizedMcpToolResult {
 // v3.1 browser preflight (plan §#3, #13, #14, #17, #18). Runs in
 // dispatchDeviceTool BEFORE grant lookup so disabled exposures, unknown tools,
 // scheme violations, and navigate_page arg-shape mismatches never spawn an
-// empty authorization request. Returns the user-facing error message or null
-// if the call may continue.
+// empty authorization request. Returns a structured denial — caller wraps
+// it into NormalizedMcpToolResult.metadata.synapse_error so the upstream
+// SynapseError code/details survive the API edge instead of being
+// flattened to a bracketed text string.
+interface BrowserPreflightDenial {
+  code: "runtime_constraint" | "invalid_request"
+  message: string
+  details?: Record<string, unknown>
+}
+
 function browserPreflightDeny(
   row: DeviceCapabilityToolRow,
   visibleToolName: string,
   args: Record<string, unknown>
-): string | null {
+): BrowserPreflightDenial | null {
   const metadata = row.exposure_metadata
   if (
     metadata &&
     typeof metadata === "object" &&
     (metadata as { enabled?: unknown }).enabled === false
   ) {
-    const reason =
+    const disabledReason =
       typeof (metadata as { disabledReason?: unknown }).disabledReason ===
       "string"
-        ? ` (${(metadata as { disabledReason: string }).disabledReason})`
-        : ""
-    return `[runtime_constraint] capability disabled${reason}: ${row.exposure_stable_key}`
+        ? (metadata as { disabledReason: string }).disabledReason
+        : undefined
+    return {
+      code: "runtime_constraint",
+      message: `capability disabled${disabledReason ? ` (${disabledReason})` : ""}: ${row.exposure_stable_key}`,
+      details: {
+        exposureStableKey: row.exposure_stable_key,
+        ...(disabledReason ? { disabledReason } : {}),
+      },
+    }
   }
   const lookup = visibleToolName.toLowerCase()
   const descriptor = BROWSER_TOOL_MAP[lookup]
   if (!descriptor) {
-    return `[invalid_request] unknown browser tool: ${visibleToolName}`
+    return {
+      code: "invalid_request",
+      message: `unknown browser tool: ${visibleToolName}`,
+      details: { visibleToolName },
+    }
   }
   const effective = resolveEffectiveTarget(descriptor, args)
   if (!effective.ok) {
-    return `[invalid_request] ${effective.detail}`
+    return {
+      code: "invalid_request",
+      message: effective.detail,
+      details: { reason: effective.code },
+    }
   }
   if (effective.target.kind === "argument_url") {
     let parsed: URL | null = null
@@ -980,10 +1022,18 @@ function browserPreflightDeny(
       // fall through; parsed === null below triggers deny
     }
     if (!parsed) {
-      return `[invalid_request] url is not parseable: ${effective.target.url}`
+      return {
+        code: "invalid_request",
+        message: `url is not parseable: ${effective.target.url}`,
+        details: { url: effective.target.url },
+      }
     }
     if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-      return `[invalid_request] url scheme not allowed: ${parsed.protocol}`
+      return {
+        code: "invalid_request",
+        message: `url scheme not allowed: ${parsed.protocol}`,
+        details: { url: effective.target.url, scheme: parsed.protocol },
+      }
     }
   }
   return null

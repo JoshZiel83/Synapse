@@ -797,3 +797,108 @@ test("permission_denied carries actionable suggestion + details for chat UX", as
     "https://other.com"
   )
 })
+
+test("sidecar isError on list_pages (current_page path) forwarded as runtime_constraint", async () => {
+  const client = makeFakeClient({
+    handlers: {
+      list_pages: async () => ({
+        isError: true,
+        content: [
+          {
+            type: "text",
+            text: "Could not find Google Chrome executable for channel 'stable'",
+          },
+        ],
+      }),
+      take_snapshot: async () => ({
+        content: [{ type: "text", text: "snap" }],
+      }),
+    },
+  })
+  const provider = createChromeDevtoolsMcpBuiltin({
+    mcpClientFactory: async () => client,
+  })
+  const envelope = envWithGrants([
+    {
+      action: "read",
+      scope_type: "origin",
+      origin: "https://example.com",
+      operations: ["page.read"],
+    },
+  ])
+  const r = await provider.invokeTool!({
+    toolName: "take_snapshot",
+    args: {},
+    envelope,
+  })
+  assert.equal(r.isError, true)
+  // Must NOT be permission_denied: the failure is upstream, not authz.
+  assert.equal(
+    (r._meta?.synapse_error as { code?: string } | undefined)?.code,
+    "runtime_constraint"
+  )
+  const text = (r.content[0] as { text?: string })?.text ?? ""
+  assert.match(text, /Could not find Google Chrome/)
+})
+
+test("sidecar isError on list_pages (all_pages / list_pages tool) forwarded as runtime_constraint", async () => {
+  const client = makeFakeClient({
+    handlers: {
+      list_pages: async () => ({
+        isError: true,
+        content: [{ type: "text", text: "sidecar exploded" }],
+      }),
+    },
+  })
+  const provider = createChromeDevtoolsMcpBuiltin({
+    mcpClientFactory: async () => client,
+  })
+  const envelope = envWithGrants([
+    {
+      action: "read",
+      scope_type: "origin",
+      origin: "https://example.com",
+      operations: ["page.read"],
+    },
+  ])
+  const r = await provider.invokeTool!({
+    toolName: "list_pages",
+    args: {},
+    envelope,
+  })
+  assert.equal(r.isError, true)
+  assert.equal(
+    (r._meta?.synapse_error as { code?: string } | undefined)?.code,
+    "runtime_constraint"
+  )
+})
+
+test("onUnexpectedExit nulls state.client — next call ensureSidecar fails fast", async () => {
+  // No mcpClientFactory; we want to exercise the real spawn + exit path.
+  // Use a process that exits immediately so onUnexpectedExit fires.
+  const provider = createChromeDevtoolsMcpBuiltin({
+    mcpCommand: {
+      command: process.execPath,
+      args: ["-e", "setTimeout(()=>process.exit(0), 30)"],
+    },
+  })
+  // First invocation may initialize-fail OR succeed-then-immediately-exit;
+  // either way, after the dust settles the state should be unusable.
+  const first = await provider.invokeTool!({
+    toolName: "click",
+    args: { uid: "x" },
+  })
+  assert.equal(first.isError, true)
+  // Give onUnexpectedExit a tick to fire (it's transport.onclose-driven).
+  await new Promise((r) => setTimeout(r, 100))
+  const second = await provider.invokeTool!({
+    toolName: "click",
+    args: { uid: "x" },
+  })
+  assert.equal(second.isError, true)
+  const errMsg = (
+    (second._meta?.synapse_error as { message?: string })?.message ?? ""
+  ).toString()
+  // Must surface as a sidecar/runtime_constraint problem, not as authz.
+  assert.match(errMsg, /sidecar|exited|unavailable|runtime_constraint/i)
+})

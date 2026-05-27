@@ -385,8 +385,11 @@ export function createChromeDevtoolsMcpBuiltin(
   // ── sidecar lifecycle ─────────────────────────────────────────────────────
 
   async function ensureSidecar(): Promise<McpClient | null> {
-    if (state.client) return state.client
+    // Check startupError FIRST: an abnormal exit sets this before any
+    // future invokeTool — without this gate the cached state.client
+    // (now backed by a dead child process) would still be returned.
     if (state.startupError) return null
+    if (state.client) return state.client
     if (nodeDisabledReason) {
       state.startupError = nodeDisabledReason
       return null
@@ -411,6 +414,11 @@ export function createChromeDevtoolsMcpBuiltin(
           onUnexpectedExit: (reason) => {
             state.status = "degraded"
             state.startupError = `sidecar_exited: ${reason}`
+            // Drop the dead client + handle so the next ensureSidecar()
+            // sees `state.startupError` and fails fast rather than
+            // handing back a stale client whose underlying child is gone.
+            state.client = null
+            state.sidecarHandle = null
             logger.error("chrome-devtools-mcp sidecar exited", { reason })
           },
         })
@@ -423,6 +431,8 @@ export function createChromeDevtoolsMcpBuiltin(
     } catch (err) {
       state.startupError = (err as Error).message
       state.status = "degraded"
+      state.client = null
+      state.sidecarHandle = null
       logger.error("chrome-devtools-mcp sidecar startup failed", {
         error: state.startupError,
       })
@@ -615,6 +625,30 @@ export function createChromeDevtoolsMcpBuiltin(
 
   // ── target resolution (mutex-required for all but argument_url) ──────────
 
+  /**
+   * If the sidecar reported `isError`, forward the upstream error verbatim
+   * as a `runtime_constraint` — never let it bleed into an authz or
+   * client-validation error message (clarification: a Chrome failure must
+   * not look like a grant problem).
+   */
+  function sidecarErrorPassthrough(
+    result: Awaited<ReturnType<McpClient["callTool"]>>,
+    context: string
+  ): CatalogToolInvocationResult | null {
+    if (!result.isError) return null
+    return {
+      content: (result.content ?? []) as CatalogToolInvocationResult["content"],
+      isError: true,
+      _meta: {
+        ...(result._meta ?? {}),
+        synapse_error: {
+          code: "runtime_constraint",
+          message: `sidecar ${context} failed; see content for upstream error`,
+        },
+      },
+    }
+  }
+
   async function resolveTargetUrl(
     target: EffectiveTarget,
     client: McpClient
@@ -627,6 +661,8 @@ export function createChromeDevtoolsMcpBuiltin(
         return { ok: true, url: target.url }
       case "current_page": {
         const listResult = await client.callTool({ name: "list_pages" })
+        const passthrough = sidecarErrorPassthrough(listResult, "list_pages")
+        if (passthrough) return { ok: false, result: passthrough }
         const url = parseSelectedPageUrl(listResult)
         if (!url) {
           return {
@@ -641,6 +677,8 @@ export function createChromeDevtoolsMcpBuiltin(
       }
       case "page_id": {
         const listResult = await client.callTool({ name: "list_pages" })
+        const passthrough = sidecarErrorPassthrough(listResult, "list_pages")
+        if (passthrough) return { ok: false, result: passthrough }
         const parsed = parseListPagesResult(listResult)
         const page = parsed.pages.find((p) => p.pageId === target.pageId)
         if (!page) {
@@ -744,6 +782,8 @@ export function createChromeDevtoolsMcpBuiltin(
         name: toolName,
         arguments: args,
       })
+      const passthrough = sidecarErrorPassthrough(listResult, toolName)
+      if (passthrough) return passthrough
       return filterListPagesByGrants(listResult, grants)
     }
 
@@ -842,6 +882,11 @@ export function createChromeDevtoolsMcpBuiltin(
       if (!nav.resolvedUrl && nav.pages.length === 0) {
         try {
           const listed = await client.callTool({ name: "list_pages" })
+          // If even the fallback list_pages errored, the sidecar is in
+          // trouble — surface that verbatim instead of pretending the
+          // earlier nav call's failure was an authz issue.
+          const passthrough = sidecarErrorPassthrough(listed, "list_pages")
+          if (passthrough) return passthrough
           nav = parseNavigationResult(listed)
         } catch {
           /* swallow — handled by the fail-closed below */
