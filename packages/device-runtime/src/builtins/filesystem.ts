@@ -494,6 +494,60 @@ function validateLimit(
   return value
 }
 
+/**
+ * Validate a byte-offset argument: non-negative integer, finite, ≤ max.
+ * Undefined returns undefined (caller chooses the default). Centralized
+ * so fs_read can't pass NaN / -1 / 1.5 down to Buffer.alloc and surface
+ * as a confusing internal "Invalid array length" error.
+ */
+function validateByteOffset(
+  value: unknown,
+  name: string,
+  max: number
+): number | undefined {
+  if (value === undefined) return undefined
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value < 0 ||
+    value > max
+  ) {
+    throw new ToolFailure(
+      "invalid_request",
+      `${name}_out_of_range: must be integer in [0, ${max}]`
+    )
+  }
+  return value
+}
+
+/**
+ * Validate a positive byte-count argument (max_bytes-like): finite,
+ * integer, > 0, ≤ max. Mirrors validateByteOffset's strictness so
+ * fs_read fails closed with a clear message instead of constructing a
+ * pathological Buffer.
+ */
+function validatePositiveByteCount(
+  value: unknown,
+  name: string,
+  max: number
+): number | undefined {
+  if (value === undefined) return undefined
+  if (
+    typeof value !== "number" ||
+    !Number.isFinite(value) ||
+    !Number.isInteger(value) ||
+    value <= 0 ||
+    value > max
+  ) {
+    throw new ToolFailure(
+      "invalid_request",
+      `${name}_out_of_range: must be positive integer in (0, ${max}]`
+    )
+  }
+  return value
+}
+
 class ToolFailure extends Error {
   constructor(
     public code: "invalid_request" | "permission_denied" | "runtime_constraint",
@@ -894,10 +948,27 @@ async function handleFsRead(
     )
   }
   const encoding = asString(args["encoding"]) === "base64" ? "base64" : "utf-8"
-  const startByte = asNumber(args["start_byte"])
-  const endByte = asNumber(args["end_byte"])
+  // Strict numeric validation BEFORE we hand off to readBytes — bare
+  // asNumber would let NaN / -1 / 1.5 slip through and surface as
+  // "Invalid array length" / "out of range" deeper in Buffer.alloc.
+  // Cap upper bound by maxReadBytes so a 2^53 offset can't try to
+  // pre-allocate.
+  const startByte = validateByteOffset(
+    args["start_byte"],
+    "start_byte",
+    ctx.cfg.maxReadBytes
+  )
+  const endByte = validateByteOffset(
+    args["end_byte"],
+    "end_byte",
+    ctx.cfg.maxReadBytes
+  )
   const lineRange = args["line_range"] as unknown
-  const maxBytesArg = asNumber(args["max_bytes"])
+  const maxBytesArg = validatePositiveByteCount(
+    args["max_bytes"],
+    "max_bytes",
+    ctx.cfg.maxReadBytes
+  )
   if (
     lineRange !== undefined &&
     (startByte !== undefined || endByte !== undefined)

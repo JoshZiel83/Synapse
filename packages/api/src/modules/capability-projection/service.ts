@@ -879,7 +879,9 @@ function principalKindFor(principal: DevicePrincipal): OperationPrincipalKind {
  *   - cua_capture_display / cua_list_displays: access='read'.
  *   - filesystem list_dir: access='read'.
  */
-function buildRequestedAction(args: {
+// Exported for tests; not part of the module's stable surface (no consumers
+// outside this file at runtime).
+export function buildRequestedAction(args: {
   capability: "filesystem" | "commandline" | "browser" | "cua" | null
   toolName: string
   /** The unnamespaced tool name as the device exposes it (e.g. "bash",
@@ -892,10 +894,62 @@ function buildRequestedAction(args: {
   const tool = (args.visibleToolName ?? args.toolName).toLowerCase()
   switch (args.capability) {
     case "filesystem": {
-      const path =
-        typeof args.args["path"] === "string"
-          ? (args.args["path"] as string)
-          : "/"
+      // v3.1 — per-tool action/path projection.
+      // Old code returned `access:"read"` + `pathPrefixes:["/"]` for every
+      // filesystem tool. That's wrong on two axes:
+      //   1. Writers (fs_write/fs_edit/fs_delete/fs_history_restore) need a
+      //      `write` grant; treating them as read produced a request that the
+      //      device runtime then denied — silent dead-loop for the operator.
+      //   2. Subtree-scoped tools (fs_index_status/fs_index_rebuild) live
+      //      under `args.subtree`, not `args.path`. Asking for "/" forced the
+      //      caller to widen their grant or fall through to no match.
+      //   3. fs_search takes no path at all — it operates over whatever read
+      //      prefixes the envelope's grants already cover, so the projection
+      //      doesn't need to request a fresh prefix. We request "/" only
+      //      when nothing else fits, to keep the request user-rejectable
+      //      rather than silently succeeding.
+      const writeTools = new Set([
+        "fs_write",
+        "fs_edit",
+        "fs_delete",
+        "fs_history_restore",
+      ])
+      // Tools that take their scope from `subtree` (index family).
+      const subtreeTools = new Set([
+        "fs_index_status",
+        "fs_index_rebuild",
+        "fs_index_task_status",
+      ])
+      // Tools that have no path/subtree of their own and run over the
+      // caller's existing read grants. Requesting "/" would over-ask,
+      // so we surface a special pseudo-prefix that runtime/UI can show
+      // as "all your authorized subtrees" but the matcher won't widen.
+      const noScopeReadTools = new Set(["fs_search"])
+      const access: "read" | "write" = writeTools.has(tool) ? "write" : "read"
+      let pathPrefix: string
+      if (noScopeReadTools.has(tool)) {
+        // fs_search runs over existing prefixes; ask for "/" only so a
+        // brand-new caller without any fs grant gets a request to fill.
+        // A caller that already has narrower grants will short-circuit
+        // because runtimeAuthorizationGrantMatches sees the existing
+        // grants cover the requested action without needing to widen.
+        // We still emit "/" here so the *request* (when there's no
+        // existing coverage) gives the operator a clear "approve broad
+        // read?" choice rather than a meaningless empty-path request.
+        pathPrefix = "/"
+      } else if (subtreeTools.has(tool)) {
+        const sub =
+          typeof args.args["subtree"] === "string"
+            ? (args.args["subtree"] as string)
+            : "/"
+        pathPrefix = sub
+      } else {
+        const path =
+          typeof args.args["path"] === "string"
+            ? (args.args["path"] as string)
+            : "/"
+        pathPrefix = path
+      }
       // VFS paths are virtual-absolute (rooted at "/"); normalizePathPrefix
       // on both sides will canonicalize them.
       return {
@@ -903,7 +957,7 @@ function buildRequestedAction(args: {
         toolName: args.toolName,
         summary,
         detail,
-        filesystem: { access: "read", pathPrefixes: [path] },
+        filesystem: { access, pathPrefixes: [pathPrefix] },
       }
     }
     case "commandline": {

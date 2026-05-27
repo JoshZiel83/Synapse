@@ -899,12 +899,22 @@ export function createLocalFsBackend(
       const childCanonical =
         canonical === "/" ? `/${e.name}` : `${canonical}/${e.name}`
       try {
-        const st = await fsp.stat(resolve(target, e.name))
+        // lstat — NOT stat — so symlinks don't leak target existence /
+        // mtime through their resolved target. A `/public/link →
+        // /secret/file` symlink under a `/public` read grant must not
+        // expose `secret/file`'s metadata; nor should broken links be
+        // silently filtered (their existence is itself a side channel).
+        const st = await fsp.lstat(resolve(target, e.name))
+        const isSymlink = st.isSymbolicLink()
         out.push({
           name: e.name,
           path: childCanonical,
-          kind: e.isDirectory() ? "directory" : "file",
-          size: e.isFile() ? st.size : undefined,
+          // Surface symlinks explicitly so the caller knows the entry is
+          // a link, not a regular file/dir. mtime comes from the link
+          // itself; size is left undefined for links (the file size of
+          // a symlink isn't a useful number to expose).
+          kind: isSymlink ? "symlink" : e.isDirectory() ? "directory" : "file",
+          size: !isSymlink && e.isFile() ? st.size : undefined,
           writable: true,
           modTime: st.mtime.toISOString(),
         })

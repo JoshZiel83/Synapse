@@ -79,3 +79,44 @@ test("VfsService local backend rejects ../ escapes", async () => {
     rmSync(root, { recursive: true, force: true })
   }
 })
+
+test("VfsService list_dir uses lstat — symlink kind exposed, target metadata withheld", async () => {
+  const { symlinkSync } = await import("node:fs")
+  const root = mkdtempSync(join(tmpdir(), "synapse-vfs-symlink-"))
+  // Create a SECRET file outside the root; the symlink would otherwise
+  // leak its size + mtime through fs.stat().
+  const secretDir = mkdtempSync(join(tmpdir(), "synapse-vfs-secret-"))
+  const secretPath = join(secretDir, "secret.txt")
+  writeFileSync(secretPath, "leak-this-is-30-bytes-of-secret")
+  try {
+    mkdirSync(join(root, "public"))
+    writeFileSync(join(root, "public", "real.txt"), "ok")
+    // /public/link → /<secretDir>/secret.txt
+    symlinkSync(secretPath, join(root, "public", "link"))
+    // Plus a broken link to verify it isn't silently skipped — its mere
+    // existence is itself a side channel.
+    symlinkSync("/nonexistent/target", join(root, "public", "broken"))
+
+    const backend = createLocalFsBackend({ rootPath: root })
+    const svc = createVfsService({ backend })
+    await svc.start()
+    const entries = await svc.list("/public")
+    const names = entries.map((e) => e.name).sort()
+    assert.deepEqual(names, ["broken", "link", "real.txt"])
+    const link = entries.find((e) => e.name === "link")!
+    const broken = entries.find((e) => e.name === "broken")!
+    const real = entries.find((e) => e.name === "real.txt")!
+    // Symlinks must surface as kind="symlink", NOT "file"/"directory".
+    assert.equal(link.kind, "symlink")
+    assert.equal(broken.kind, "symlink")
+    assert.equal(real.kind, "file")
+    // Symlinks must NOT leak the target's size.
+    assert.equal(link.size, undefined)
+    assert.equal(broken.size, undefined)
+    // Real file's size IS exposed (no leak — it's inside the root).
+    assert.equal(real.size, 2)
+  } finally {
+    rmSync(root, { recursive: true, force: true })
+    rmSync(secretDir, { recursive: true, force: true })
+  }
+})

@@ -1306,3 +1306,77 @@ test("fs_index_status keeps rebuild_task when caller's grant covers the task sub
     cleanup()
   }
 })
+
+// ─── numeric validation (post-review round 10) ─────────────────────────────
+
+test("fs_read rejects non-integer start_byte with invalid_request", async () => {
+  const { builtin, cleanup } = await makeBuiltin()
+  try {
+    const r = await builtin.invokeTool!({
+      toolName: "fs_read",
+      args: { path: "/x.txt", start_byte: 1.5 },
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(r.isError, true)
+    assert.equal(getMeta(r).synapse_error?.code, "invalid_request")
+    assert.match(
+      getMeta(r).synapse_error?.message ?? "",
+      /start_byte_out_of_range/
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test("fs_read rejects negative end_byte with invalid_request", async () => {
+  const { builtin, cleanup } = await makeBuiltin()
+  try {
+    const r = await builtin.invokeTool!({
+      toolName: "fs_read",
+      args: { path: "/x.txt", end_byte: -1 },
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(r.isError, true)
+    assert.equal(getMeta(r).synapse_error?.code, "invalid_request")
+    assert.match(
+      getMeta(r).synapse_error?.message ?? "",
+      /end_byte_out_of_range/
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test("fs_read rejects NaN max_bytes with invalid_request", async () => {
+  const { builtin, cleanup } = await makeBuiltin()
+  try {
+    const r = await builtin.invokeTool!({
+      toolName: "fs_read",
+      args: { path: "/x.txt", max_bytes: Number.NaN },
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(r.isError, true)
+    assert.equal(getMeta(r).synapse_error?.code, "invalid_request")
+    assert.match(
+      getMeta(r).synapse_error?.message ?? "",
+      /max_bytes_out_of_range/
+    )
+  } finally {
+    cleanup()
+  }
+})
+
+test("fs_read rejects zero max_bytes with invalid_request (must be positive)", async () => {
+  const { builtin, cleanup } = await makeBuiltin()
+  try {
+    const r = await builtin.invokeTool!({
+      toolName: "fs_read",
+      args: { path: "/x.txt", max_bytes: 0 },
+      envelope: makeEnvelope([{ access: "read", pathPrefixes: ["/"] }]),
+    })
+    assert.equal(r.isError, true)
+    assert.equal(getMeta(r).synapse_error?.code, "invalid_request")
+  } finally {
+    cleanup()
+  }
+})
